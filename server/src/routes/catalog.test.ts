@@ -79,6 +79,7 @@ const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null, 
     metaStore: { qualifiedMeta: () => options.bound ?? ({}) } as unknown as LibraryMetaStore,
     externalIds: { ids: async () => ({}) } as unknown as ExternalIdStore,
     subtitleDelay: () => 0,
+    mediaSources: {} as unknown as CatalogDeps["mediaSources"],
   };
   const app = express();
   app.use(express.json());

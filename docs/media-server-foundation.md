@@ -5,16 +5,22 @@ document describes what exists in `server/src/media-server-*.ts`, its limits and
 the honest integration gates it leaves open. No public route, UI, startup wiring
 or playable source is exposed by this stage.
 
+This document describes the MS-1 foundation as it was delivered, and its module
+contract still holds. The feature built on it — routes, startup wiring, playback,
+artwork, subtitles, personal state, remote cards and the removal lifecycle — is
+documented in [media-server-management.md](media-server-management.md), which is
+the current contract.
+
 The product contract and delivery split live in [planning PR #395](https://github.com/NickRabit/stremio-offline/pull/395)
 and its media-server-libraries documents, which are deliberately not duplicated here.
 The measured provider results live in that PR's separate spike report and are
 not copied into this branch.
 
-## What ships now, and what does not
+## What MS-1 shipped, and what came later
 
-MS-1 is deliberately split. This stage delivers tested internal modules only:
+MS-1 was deliberately split, and the second column has since been delivered:
 
-| Delivered now | Deferred (MS-2 and later) |
+| Delivered by MS-1 | Delivered since (MS-2 and later) |
 | --- | --- |
 | Persisted records, public/admin projections, canonical identity | `index.ts` startup wiring, environment variables, `backup.ts` and `routes/settings.ts` integration |
 | Validated configuration service on `Store.update` | Public HTTP routes, member/admin role allow-listing |
@@ -22,11 +28,9 @@ MS-1 is deliberately split. This stage delivers tested internal modules only:
 | Per-instance scoped JSON transport | Original-media proxy, FFmpeg, subtitle fetch, artwork |
 | Typed metadata provider | Cached index, download admission, personal progress/Home |
 
-Nothing here is reachable by a client. There is no environment variable that
-wires these modules into the running server yet, and none is advertised as
-working. Filesystem libraries, scanning, downloads and the existing settings
-backup behave exactly as before: the new `State` fields are optional and are
-absent from anything the servers already produce.
+Filesystem libraries, scanning and downloads are unchanged by the remote feature.
+The new `State` fields are optional, so a state written before them keeps its
+shape, and an older settings backup simply carries no remote configuration.
 
 ## Types, records and identity
 
@@ -116,9 +120,12 @@ behind, not even a partial write.
 Validation is typed *and* runtime: every method re-reads its input, so callers
 passing parsed untrusted data cannot bypass it with a cast.
 
-The ordinary settings backup is unchanged and keeps its pre-existing secrets; it
-specifically does not export the media-server connections, remote libraries or
-their credential references.
+The ordinary settings backup is version 3 and carries the media-server
+configuration as metadata: the connections and their attached libraries, with no
+secret reference, grant, generation, enabled flag, timestamp or token. Importing
+one replaces the remote configuration atomically with the settings and the
+add-ons, disabled and with no grants, so a restored connection is signed in
+again. See [media-server-management.md](media-server-management.md#backup-and-restore).
 
 ## Token vault
 
@@ -170,8 +177,8 @@ Operational contracts:
 - The key's owner must match the runtime UID. A `chown` migration is a
   deliberate deployment recovery, never a silent application repair; the vault
   will not quietly fix or recreate an owner-mismatched key.
-- The desktop application still needs its own persistent key lifecycle. Do not
-  treat a temporary session value as the key.
+- The desktop application now maintains a persistent installation key; see
+  [Desktop media-server credentials](desktop-media-servers.md).
 
 ## Scoped transport
 

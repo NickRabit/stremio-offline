@@ -58,6 +58,9 @@ class ApiClient(
   private val downloadJson = Json { ignoreUnknownKeys = true; explicitNulls = false; encodeDefaults = false }
   /** Progress carries the artwork and addon only when the player knew them. */
   private val progressJson = Json { ignoreUnknownKeys = true; explicitNulls = false; encodeDefaults = false }
+  /** A remote-state PATCH carries only the fields the caller set: a `null` field is dropped and
+   *  an explicit `false` still travels. */
+  private val patchJson = Json { ignoreUnknownKeys = true; explicitNulls = false; encodeDefaults = false }
   private val mediaType = "application/json; charset=utf-8".toMediaType()
 
   private val client = baseClient.newBuilder()
@@ -468,6 +471,89 @@ class ApiClient(
     val payload = downloadJson.encodeToString(ClientLogBundleDto.serializer(), bundle)
     val body = request(Request.Builder().url(address.resolve("/api/client-log/bundle")).post(payload.toRequestBody(mediaType)).build())
     return body.decode<ClientLogBundleResultDto>()?.id ?: throw ApiError(ApiFailure.Generic)
+  }
+
+  /** Every remote library this account may see, in the order the server arranged them. */
+  override suspend fun remoteLibraries(): List<RemoteLibraryDto> =
+    request(Request.Builder().url(address.resolve("/api/remote-libraries")).get().build())
+      .decode<RemoteLibrariesPageDto>()?.libraries ?: throw ApiError(ApiFailure.Generic)
+
+  /** One page of a remote library. The server filters, sorts and pages; the app never re-sorts. */
+  override suspend fun remoteItems(
+    libraryId: String,
+    limit: Int,
+    cursor: String?,
+    search: String?,
+    type: String?,
+  ): RemoteItemsPageDto {
+    val query = buildString {
+      append("?limit=").append(limit)
+      if (!cursor.isNullOrEmpty()) append("&cursor=").append(encode(cursor))
+      if (!search.isNullOrEmpty()) append("&search=").append(encode(search))
+      if (!type.isNullOrEmpty()) append("&type=").append(encode(type))
+    }
+    return request(Request.Builder().url(address.resolve(remoteItemsPath(libraryId) + query)).get().build())
+      .decode<RemoteItemsPageDto>() ?: throw ApiError(ApiFailure.Generic)
+  }
+
+  override suspend fun remoteItem(libraryId: String, itemId: String): RemoteItemDetailDto =
+    request(Request.Builder().url(address.resolve("${remoteItemsPath(libraryId)}/${encode(itemId)}")).get().build())
+      .decode<RemoteItemDetailDto>() ?: throw ApiError(ApiFailure.Generic)
+
+  /** The episodes of one series or season, paged the same way as the item list. */
+  override suspend fun remoteEpisodes(
+    libraryId: String,
+    itemId: String,
+    limit: Int,
+    cursor: String?,
+  ): RemoteItemsPageDto {
+    val query = buildString {
+      append("?limit=").append(limit)
+      if (!cursor.isNullOrEmpty()) append("&cursor=").append(encode(cursor))
+    }
+    return request(
+      Request.Builder().url(address.resolve("${remoteItemsPath(libraryId)}/${encode(itemId)}/episodes$query")).get().build(),
+    ).decode<RemoteItemsPageDto>() ?: throw ApiError(ApiFailure.Generic)
+  }
+
+  override suspend fun remoteSources(libraryId: String, itemId: String): List<StreamDto> =
+    request(
+      Request.Builder().url(address.resolve("${remoteItemsPath(libraryId)}/${encode(itemId)}/sources")).get().build(),
+    ).decode<RemoteSourcesDto>()?.streams ?: emptyList()
+
+  override suspend fun remoteItemState(libraryId: String, itemId: String): RemoteItemStateDto =
+    request(Request.Builder().url(address.resolve("${remoteStatePath(libraryId, itemId)}")).get().build())
+      .decode<RemoteItemStateDto>() ?: throw ApiError(ApiFailure.Generic)
+
+  /** The exact body the PATCH takes: only the fields the caller set, `false` included. */
+  override suspend fun patchRemoteItemState(
+    libraryId: String,
+    itemId: String,
+    patch: RemoteItemStatePatch,
+  ): RemoteItemStateDto {
+    val payload = patchJson.encodeToString(RemoteItemStatePatch.serializer(), patch)
+    return request(
+      Request.Builder().url(address.resolve(remoteStatePath(libraryId, itemId))).patch(payload.toRequestBody(mediaType)).build(),
+    ).decode<RemoteItemStateDto>() ?: throw ApiError(ApiFailure.Generic)
+  }
+
+  private fun remoteItemsPath(libraryId: String): String = "/api/remote-libraries/" + encode(libraryId) + "/items"
+
+  private fun remoteStatePath(libraryId: String, itemId: String): String =
+    remoteItemsPath(libraryId) + "/" + encode(itemId) + "/state"
+
+  /** External-id matched versions of one catalogue title or episode; each id is encoded. */
+  override suspend fun remoteMatchedStreams(libraryId: String, type: String, catalogId: String): List<StreamDto> {
+    val path = "/api/remote-libraries/" + encode(libraryId) + "/streams/" + encode(type) + "/" + encode(catalogId)
+    return request(Request.Builder().url(address.resolve(path)).get().build())
+      .decode<RemoteSourcesDto>()?.streams ?: emptyList()
+  }
+
+  override suspend fun remotePersonal(filter: String, skip: Int, limit: Int): RemotePersonalPage {
+    val query = "?filter=" + encode(filter) + "&skip=" + skip + "&limit=" + limit
+    val page = request(Request.Builder().url(address.resolve("/api/remote-libraries/personal$query")).get().build())
+      .decode<RemotePersonalPageDto>() ?: throw ApiError(ApiFailure.Generic)
+    return RemotePersonalPage(remotePersonalCards(page), page.total, page.partial)
   }
 
   override suspend fun saveProgress(

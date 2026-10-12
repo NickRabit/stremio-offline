@@ -71,6 +71,8 @@ import cz.stremiooffline.tv.ui.catalog.SearchScreen
 import cz.stremiooffline.tv.ui.detail.DetailData
 import cz.stremiooffline.tv.ui.detail.DetailScreen
 import cz.stremiooffline.tv.ui.detail.PlayTarget
+import cz.stremiooffline.tv.ui.detail.RemoteDetailData
+import cz.stremiooffline.tv.ui.detail.RemoteDetailScreen
 import cz.stremiooffline.tv.ui.favorites.FavoritesRoute
 import cz.stremiooffline.tv.ui.home.HomeAction
 import cz.stremiooffline.tv.ui.home.HomeScreen
@@ -134,12 +136,16 @@ fun Shell(
 
   var detail by remember { mutableStateOf<DetailData?>(null) }
   var catalogDetail by remember { mutableStateOf<CatalogDetailArgs?>(null) }
+  /** One native remote item's detail over the library; its versions play through the same player. */
+  var remoteDetail by remember { mutableStateOf<RemoteDetailData?>(null) }
   var player by remember { mutableStateOf<PlayTarget?>(null) }
   /** The streams of the title the player is on: the catalogue reports them while addons answer. */
   var playerSources by remember { mutableStateOf(OfferedSources()) }
   /** The same for a play that started from the library: the title its file is bound to is looked
    *  up under the player and reported here, and stays empty for a file with no binding. */
   var librarySources by remember { mutableStateOf(OfferedSources()) }
+  /** Bumped by the panel's own Try again, so the library-bound discovery reloads on its own. */
+  var librarySourcesRetry by remember { mutableIntStateOf(0) }
   /** The source the player ended on, so the title underneath keeps naming what was watched. */
   var playedSourceId by remember { mutableStateOf<String?>(null) }
   // A section takes the remote back when a detail or a player over it closes; a detail takes it
@@ -216,7 +222,7 @@ fun Shell(
       true
     },
     onBackToExit = onExitApp,
-    railHidden = detail != null || catalogDetail != null,
+    railHidden = detail != null || catalogDetail != null || remoteDetail != null,
   ) { focusRequester ->
     val section = current
     // The holder keeps each section's list state and selection across the swap.
@@ -225,6 +231,10 @@ fun Shell(
         Section.Library -> LibraryRoute(
           api = api,
           onOpenDetail = { detail = it },
+          onOpenRemoteItem = { libraryId, libraryName, provider, item ->
+            remoteDetail = RemoteDetailData(libraryId = libraryId, libraryName = libraryName, provider = provider, item = item)
+          },
+          remoteRestoreToken = detailReturnToken,
           restoreToken = returnToken,
           refreshToken = libraryRefreshToken,
           pushPath = libraryPush,
@@ -234,6 +244,7 @@ fun Shell(
           api = api,
           onOpenDetail = { detail = it },
           onOpenCatalog = { catalogDetail = it },
+          onOpenRemote = { remoteDetail = it },
           restoreToken = returnToken,
           refreshToken = resumeRefreshToken,
         )
@@ -241,6 +252,7 @@ fun Shell(
           api = api,
           onOpenDetail = { detail = it },
           onOpenCatalog = { catalogDetail = it },
+          onOpenRemote = { remoteDetail = it },
           onOpenLibrary = { path ->
             libraryPush = path
             shellState.pick(Section.Library)
@@ -288,6 +300,7 @@ fun Shell(
                 shellState.pick(Section.Library)
               }
               is HomeAction.OpenCatalog -> catalogDetail = action.args
+              is HomeAction.OpenRemote -> remoteDetail = action.data
             }
           },
         )
@@ -349,25 +362,48 @@ fun Shell(
     )
   }
 
+  val openRemoteDetail = remoteDetail
+  if (openRemoteDetail != null) OverlayFocusTrap(fenced = player == null) {
+    RemoteDetailScreen(
+      api = api,
+      data = openRemoteDetail,
+      imageUrl = { path -> path?.let(api::url) },
+      onPlay = {
+        // A remote play offers the target's own versions; the catalogue and library loaders are
+        // never asked about a remote item.
+        player = it
+      },
+      onBack = {
+        remoteDetail = null
+        returnToken++
+      },
+      backEnabled = player == null,
+      restoreToken = detailReturnToken,
+    )
+  }
+
   val openPlayer = player
   if (openPlayer != null) {
     // A play from the library asks the addons about the title its file is bound to. The loading
     // runs beside the session, never before it: Play starts at once and the list arrives under
     // it. Leaving the player takes the effect out of the composition and cancels the loading.
-    LaunchedEffect(openPlayer) {
+    LaunchedEffect(openPlayer, librarySourcesRetry) {
       librarySources = OfferedSources()
       LibraryPlaySources(api).load(openPlayer) { librarySources = it }
     }
-    val playerSourcesNow = playerSourcesFor(openPlayer, playerSources, librarySources)
+    val sourcesNow = playerSourcesFor(openPlayer, playerSources, librarySources)
     PlayerScreen(
       api = api,
       target = openPlayer,
-      sources = playerSourcesNow.streams,
-      sourcesLoading = playerSourcesNow.loading,
+      sources = sourcesNow.streams,
+      sourcesLoading = sourcesNow.loading,
+      sourcesRemoteFailure = sourcesNow.remoteFailure,
+      // The catalogue owns its own discovery; only the library-bound loader is reloaded here.
+      onSourcesRetry = if (openPlayer.catalogue) null else ({ librarySourcesRetry++ }),
       onExit = { endedSourceId ->
         playedSourceId = endedSourceId
         player = null
-        if (detail != null || catalogDetail != null) detailReturnToken++ else returnToken++
+        if (detail != null || catalogDetail != null || remoteDetail != null) detailReturnToken++ else returnToken++
       },
     )
   }
@@ -388,13 +424,15 @@ private fun OverlayFocusTrap(fenced: Boolean, content: @Composable () -> Unit) {
   ) { content() }
 }
 
-/** The two lists a play can be offered, kept apart so neither can lend the other its title:
- *  [catalogue] is the one the catalogue detail keeps reporting, which a play it started keeps,
- *  and [library] is the one the library loader gathered for the file a library play opened.
- *  A library play that could not be resolved simply has nothing there -- no Sources button, as
- *  before. Kept here so the expression can be tested without a whole shell. */
+/** The list of sources a play is offered. A native remote play offers the item's own versions and
+ *  nothing else: the server mints them, so no catalogue or library lookup is asked about it. The
+ *  two local lists stay apart so neither can lend the other its title -- [catalogue] is the one
+ *  the catalogue detail keeps reporting, and [library] is the one the library loader gathered for
+ *  the file a library play opened. A library play that could not be resolved simply has nothing
+ *  there -- no Sources button, as before. Kept here so the expression can be tested without a
+ *  whole shell. */
 internal fun playerSourcesFor(target: PlayTarget, catalogue: OfferedSources, library: OfferedSources): OfferedSources =
-  if (target.catalogue) catalogue else library
+  if (target.remoteItem != null) OfferedSources(target.remoteSources) else if (target.catalogue) catalogue else library
 
 
 /**

@@ -121,7 +121,26 @@ export function parseHomeCatalogRowId(row: string): { addonKey: string; type: st
 
 export interface HomeProgress { position: number; duration: number }
 
+export interface RemoteHomeCard {
+  kind: "remote";
+  key: string;
+  title: string;
+  provider: "jellyfin" | "emby";
+  libraryId: string;
+  libraryName: string;
+  itemId: string;
+  itemType: "movie" | "series" | "episode";
+  mediaSourceId?: string;
+  season?: number;
+  episode?: number;
+  poster?: string;
+  wide?: string;
+  progress?: HomeProgress;
+  updatedAt: string;
+}
+
 export type HomeCard =
+  | RemoteHomeCard
   | { kind: "resume-file"; key: string; title: string; subtitle?: string; poster?: string; wide?: string;
       path: string; progress: HomeProgress; season?: number; episode?: number;
       updatedAt: string; forgetKeys: string[] }
@@ -215,6 +234,7 @@ export interface ResumeCatalogueItem {
 export interface ResumeSources {
   catalogue: ResumeCatalogueItem[];
   files: ResumeFileItem[];
+  remote?: RemoteHomeCard[];
 }
 
 export function boundCards<T>(items: T[], limit: number = HOME_ROW_LIMIT): { items: T[]; hasMore: boolean } {
@@ -233,7 +253,7 @@ const compareCandidates = (left: ResumeCandidate, right: ResumeCandidate) =>
   || (left.source === right.source ? 0 : left.source === "file" ? -1 : 1)
   || left.item.key.localeCompare(right.item.key);
 
-function cardFor(candidates: ResumeCandidate[]): Extract<HomeCard, { kind: "resume-file" | "resume-catalogue" }> {
+function cardFor(candidates: ResumeCandidate[]): Extract<HomeCard, { kind: "resume-file" | "resume-catalogue" | "remote" }> {
   const forgetKeys = [...new Set(candidates.map((candidate) => candidate.item.key))].sort();
   const playable = candidates.filter((candidate) => !isPending(candidate));
   const winner = [...(playable.length ? playable : candidates)].sort(compareCandidates)[0]!;
@@ -284,6 +304,7 @@ function resumeGroups(sources: ResumeSources): ResumeGroup[] {
       file: bucket.some((candidate) => candidate.source === "file"),
       catalogue: bucket.some((candidate) => candidate.source === "catalogue"),
     }))
+    .concat((sources.remote ?? []).map((card) => ({ card, file: false, catalogue: false })))
     .sort((a, b) => b.card.updatedAt.localeCompare(a.card.updatedAt) || a.card.key.localeCompare(b.card.key));
 }
 
@@ -292,24 +313,24 @@ export function mergeResume(sources: ResumeSources, limit: number = HOME_ROW_LIM
   return boundCards(resumeGroups(sources).map((group) => group.card), limit);
 }
 
-export type ResumeFilter = "all" | "library" | "catalog";
+export type ResumeFilter = "all" | "library" | "catalog" | "remote";
 
 /** The filter a Continue watching request asks for: anything but a card kind means all. */
 export const parseResumeFilter = (value: unknown): ResumeFilter =>
-  value === "library" || value === "catalog" ? value : "all";
+  value === "library" || value === "catalog" || value === "remote" ? value : "all";
 
 /** One merged card and the sources it stands for. A folded show that kept a local copy
  *  counts under both filters, whichever kind won the card. */
 interface ResumeGroup { card: ResumeCard; file: boolean; catalogue: boolean }
 
-export type ResumeCard = Extract<HomeCard, { kind: "resume-file" | "resume-catalogue" }>;
+export type ResumeCard = Extract<HomeCard, { kind: "resume-file" | "resume-catalogue" | "remote" }>;
 
 /** One page of the same merged list Home draws, filtered by card kind. `total` counts every
  *  card the filter keeps, so paging past the Home bound stays stable. */
 export function resumePage(sources: ResumeSources, options: { filter?: ResumeFilter; skip?: number; limit?: number } = {}):
   { items: ResumeCard[]; total: number; hasMore: boolean } {
   const filter = options.filter ?? "all";
-  const kept = resumeGroups(sources).filter((group) => filter === "all" || (filter === "library" ? group.file : group.catalogue));
+  const kept = resumeGroups(sources).filter((group) => filter === "all" || (filter === "library" ? group.file : filter === "remote" ? group.card.kind === "remote" : group.catalogue));
   const cards = kept.map((group) => group.card);
   const skip = Math.max(0, options.skip ?? 0);
   const limit = Math.max(1, options.limit ?? HOME_ROW_LIMIT);

@@ -71,9 +71,16 @@ export const USER_ALLOWED: Rule[] = [
   // Remote media-server metadata an account was granted. Read-only and GET-only: every
   // administration path under /media-servers stays administrator-only by absence.
   { method: "GET", pattern: /^\/remote-libraries$/ },
+  { method: "GET", pattern: /^\/remote-libraries\/personal$/ },
   { method: "GET", pattern: /^\/remote-libraries\/[^/]+\/items$/ },
   { method: "GET", pattern: /^\/remote-libraries\/[^/]+\/items\/[^/]+\/episodes$/ },
   { method: "GET", pattern: /^\/remote-libraries\/[^/]+\/items\/[^/]+$/ },
+  { method: "GET", pattern: /^\/remote-libraries\/[^/]+\/items\/[^/]+\/sources$/ },
+  { method: "GET", pattern: /^\/remote-libraries\/[^/]+\/items\/[^/]+\/artwork\/(Primary|Backdrop)$/ },
+  { method: "GET", pattern: /^\/remote-libraries\/[^/]+\/streams\/[^/]+\/[^/]+$/ },
+  { method: "GET", pattern: /^\/remote-libraries\/[^/]+\/items\/[^/]+\/state$/ },
+  // The account's own position and favourite for a verified remote item: personal, not management.
+  { method: "PATCH", pattern: /^\/remote-libraries\/[^/]+\/items\/[^/]+\/state$/ },
   { method: "GET", pattern: /^\/home$/ },
   { method: "GET", pattern: /^\/home\/layout$/ },
   { method: "GET", pattern: /^\/catalogs$/ },

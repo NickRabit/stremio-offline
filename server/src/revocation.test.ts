@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { AirPlayAccess } from "./airplay-access.js";
+import { createSession } from "./auth.js";
 import type { DownloadJob, DownloadSelection } from "./downloads.js";
 import { MediaResources, type ResourceOwner } from "./media-resources.js";
-import { Revocations, type ActiveTransfer, type RevocationDeps } from "./revocation.js";
+import { remoteSecretStamp, sealRemoteContent } from "./media-server-reference.js";
+import type { MediaConnectionRecord, RemoteLibraryRecord } from "./media-server-types.js";
+import { accessLost, contentOf, Revocations, type AccessSource, type ActiveTransfer, type RevocationDeps } from "./revocation.js";
 import type { DeviceDownloadTicket } from "./media-resources.js";
+import type { UserRecord } from "./users.js";
 
 const owner = (userId: string, sid = `${userId}-phone`): ResourceOwner =>
   ({ userId, sid, expiresAt: Number.MAX_SAFE_INTEGER });
@@ -26,7 +30,7 @@ function harness(jobs: DownloadJob[] = []) {
   const deviceTickets = new Map<string, DeviceDownloadTicket>();
   const playbackOwners = new Map<string, { owner: ResourceOwner; resourceId: string }>();
   const deps: RevocationDeps = {
-    source: { users: () => [], addons: () => [], libraries: () => [] },
+    source: { users: () => [], addons: () => [], libraries: () => [], mediaConnections: () => [], remoteLibraries: () => [] },
     resources,
     airplay: new AirPlayAccess(resources),
     playbackOwners,
@@ -49,7 +53,8 @@ function harness(jobs: DownloadJob[] = []) {
     },
   };
   const track = (transfer: ActiveTransfer) => { activeMedia.add(transfer); return transfer; };
-  return { deps, revocations: new Revocations(deps), paused, removed, destroyed, stopped, followsRemoved, activeMedia, deviceTickets, playbackOwners, track };
+  const airplay = deps.airplay;
+  return { deps, revocations: new Revocations(deps), resources, airplay, paused, removed, destroyed, stopped, followsRemoved, activeMedia, deviceTickets, playbackOwners, track };
 }
 
 const transfer = (who: ResourceOwner, extra: Partial<ActiveTransfer> = {}): ActiveTransfer => {
@@ -167,4 +172,141 @@ test("a queue that cannot save the removal does not stop an account from being d
   await h.revocations.deleteUser("usr_a");
 
   assert.deepEqual(h.followsRemoved, ["usr_a"], "the rest of the account still goes");
+});
+
+const CONNECTION_A = `mconn_${"a".repeat(32)}`;
+const CONNECTION_B = `mconn_${"d".repeat(32)}`;
+const REMOTE_LIBRARY = `rlib_${"b".repeat(32)}`;
+
+const remoteSecret = "remote-secret-a";
+const remoteSid = "sid-a";
+
+const remoteConnection = (over: Partial<MediaConnectionRecord> = {}): MediaConnectionRecord => ({
+  id: CONNECTION_A, provider: "jellyfin", name: "Home", baseUrl: "http://media.example",
+  allowLan: false, allowLoopback: false, serverId: "server-1", accountId: "account-1",
+  enabled: true, generation: 2, secretRef: `msecret_${"f".repeat(32)}`, addedAt: "2026-01-01T00:00:00.000Z", ...over,
+});
+
+const remoteLibrary = (over: Partial<RemoteLibraryRecord> = {}): RemoteLibraryRecord => ({
+  id: REMOTE_LIBRARY, connectionId: CONNECTION_A, remoteId: "remote-1", name: "Movies",
+  type: "movie", enabled: true, order: 0, allowedUsers: ["usr_a"], showOnHome: true, showInContinueWatching: true, ...over,
+});
+
+const remoteUser = (over: Partial<UserRecord> = {}): UserRecord => ({
+  id: "usr_a", username: "a", passwordHash: "scrypt$aa$bb", secret: remoteSecret, role: "user",
+  createdAt: "2026-01-01T00:00:00.000Z", permissions: { downloadToLibrary: true, downloadToDevice: true },
+  permissionsVersion: 0, ...over,
+});
+
+const remoteSource = (over: { user?: UserRecord; connection?: MediaConnectionRecord; library?: RemoteLibraryRecord } = {}): AccessSource => ({
+  users: () => [over.user ?? remoteUser()],
+  addons: () => [],
+  libraries: () => [],
+  mediaConnections: () => [over.connection ?? remoteConnection()],
+  remoteLibraries: () => [over.library ?? remoteLibrary()],
+});
+
+const sealedRemote = (who: ResourceOwner, over: { connectionId?: string; secretStamp?: string; expiresAt?: number } = {}) => sealRemoteContent({
+  provider: "jellyfin", serverId: "server-1", accountId: "account-1", itemId: "item-1",
+  connectionId: over.connectionId ?? CONNECTION_A, libraryId: REMOTE_LIBRARY, generation: 2, mediaSourceId: "v1",
+  owner: { userId: who.userId, sid: who.sid, expiresAt: over.expiresAt ?? who.expiresAt, secretStamp: over.secretStamp ?? "c".repeat(64) },
+});
+
+test("contentOf resolves a sealed remote stream and refuses a malformed attempt", () => {
+  const who = owner("usr_a", remoteSid);
+  const content = contentOf({ addonKey: "addon", url: sealedRemote(who) });
+  assert.equal(content.libraryId, REMOTE_LIBRARY);
+  assert.equal(content.addonKey, "addon");
+  assert.ok(content.remote);
+  assert.throws(() => contentOf({ url: "media-server:garbage" }), { status: 404 });
+});
+
+test("accessLost denies any remote download and re-checks the remote record", () => {
+  const secret = remoteSecret;
+  const token = createSession(secret, "usr_a", Date.now() + 3_600_000, remoteSid);
+  const claim = { userId: "usr_a", sid: remoteSid, token, permissionsVersion: 0 };
+  const ref = {
+    provider: "jellyfin" as const, serverId: "server-1", accountId: "account-1", itemId: "item-1",
+    connectionId: CONNECTION_A, libraryId: REMOTE_LIBRARY, generation: 2, mediaSourceId: "v1",
+    owner: { userId: "usr_a", sid: remoteSid, expiresAt: Number.MAX_SAFE_INTEGER, secretStamp: remoteSecretStamp(secret) },
+  };
+  assert.equal(accessLost(remoteSource(), claim, { remote: ref }), false);
+  assert.equal(accessLost(remoteSource(), claim, { remote: ref, libraryId: REMOTE_LIBRARY }), false);
+  assert.equal(accessLost(remoteSource(), claim, { remote: ref, permission: "downloadToLibrary" }), true, "a remote original is never saved");
+  assert.equal(accessLost(remoteSource({ user: remoteUser({ secret: "rotated" }) }), claim, { remote: ref }), true, "a password change is caught");
+  assert.equal(accessLost(remoteSource({ connection: remoteConnection({ generation: 3 }) }), claim, { remote: ref }), true, "a generation change is caught");
+  assert.equal(accessLost(remoteSource({ library: remoteLibrary({ enabled: false }) }), claim, { remote: ref }), true, "a disabled library is caught");
+  assert.equal(accessLost(remoteSource(), claim, { remote: { ...ref, owner: { ...ref.owner, sid: "other" } } }), true, "the claim session must own the reference");
+});
+
+test("accessLost denies a remote download even for an administrator with an unchanged counter", () => {
+  const secret = remoteSecret;
+  const token = createSession(secret, "usr_a", Date.now() + 3_600_000, remoteSid);
+  const claim = { userId: "usr_a", sid: remoteSid, token, permissionsVersion: 0 };
+  const ref = {
+    provider: "jellyfin" as const, serverId: "server-1", accountId: "account-1", itemId: "item-1",
+    connectionId: CONNECTION_A, libraryId: REMOTE_LIBRARY, generation: 2, mediaSourceId: "v1",
+    owner: { userId: "usr_a", sid: remoteSid, expiresAt: Number.MAX_SAFE_INTEGER, secretStamp: remoteSecretStamp(secret) },
+  };
+  const adminSource = remoteSource({ user: remoteUser({ role: "admin" }) });
+  assert.equal(accessLost(adminSource, claim, { remote: ref, permission: "downloadToDevice" }), true);
+});
+
+test("a connection sweep stops remote resources, playback and AirPlay without the records", async () => {
+  const h = harness([]);
+  const who = owner("usr_a", remoteSid);
+  const mine = h.resources.add({ url: sealedRemote(who) }, who, "source");
+  const other = h.resources.add({ url: sealedRemote(who, { connectionId: CONNECTION_B }) }, who, "source");
+  const active = h.track(transfer(who, { resourceId: mine }));
+  h.playbackOwners.set("play-remote", { owner: who, resourceId: mine });
+  h.playbackOwners.set("play-other", { owner: who, resourceId: other });
+  h.airplay.create("play-remote", who, mine);
+
+  await h.revocations.stopContent({ connectionId: CONNECTION_A });
+
+  assert.equal((active as unknown as { destroyed: boolean }).destroyed, true, "the active response is destroyed");
+  assert.deepEqual(h.stopped, ["play-remote"], "only the swept connection's playback stops");
+  assert.equal(h.airplay.url("play-remote", "http://x/"), "http://x/", "the AirPlay grant is gone");
+  assert.throws(() => h.resources.get(mine, who.sid, "source"), { status: 404 });
+  assert.equal(h.resources.get(other, who.sid, "source").stream.url !== undefined, true, "the other connection survives");
+});
+
+test("stopUnreachable revokes a remote resource whose grant was withdrawn", async () => {
+  const h = harness([]);
+  const who = owner("usr_a", remoteSid);
+  const stream = { url: sealedRemote(who, { secretStamp: remoteSecretStamp(remoteSecret) }) };
+  const resourceId = h.resources.add(stream, who, "source");
+  const user = remoteUser();
+  h.deps.source = remoteSource({ user, library: remoteLibrary({ allowedUsers: [] }) });
+
+  await h.revocations.stopUnreachable(user);
+
+  assert.throws(() => h.resources.get(resourceId, who.sid, "source"), { status: 404 });
+});
+
+test("stopResource reaches one resource and its readers, and nothing else", async () => {
+  const h = harness([]);
+  const who = owner("usr_a", remoteSid);
+  const stream = { url: sealedRemote(who) };
+  const media = h.resources.mediaStream(stream, who);
+  const other = h.resources.mediaStream({ url: "https://other.test/film.mp4" }, who);
+  const child = h.resources.add({ url: "https://other.test/sub" }, who, "subtitle", media.resourceId);
+  const active = h.track(transfer(who, { resourceId: media.resourceId }));
+  const untouched = h.track(transfer(who, { resourceId: other.resourceId }));
+  h.playbackOwners.set("play-mine", { owner: who, resourceId: media.resourceId });
+  h.playbackOwners.set("play-other", { owner: who, resourceId: other.resourceId });
+  h.airplay.create("play-mine", who, media.resourceId);
+  h.airplay.create("play-other", who, other.resourceId);
+
+  await h.revocations.stopResource(media.resourceId);
+
+  assert.equal((active as unknown as { destroyed: boolean }).destroyed, true);
+  assert.equal((untouched as unknown as { destroyed: boolean }).destroyed, false);
+  assert.deepEqual(h.stopped, ["play-mine"], "only the named resource's session stops");
+  assert.equal(h.airplay.url("play-mine", "http://x/"), "http://x/", "its AirPlay grant is gone");
+  assert.match(h.airplay.url("play-other", "http://x/"), /airplay=/, "the unrelated grant stays");
+  assert.throws(() => h.resources.get(media.resourceId, who.sid, "media"), { status: 404 });
+  assert.throws(() => h.resources.get(child, who.sid, "subtitle"), { status: 404 }, "the child goes with the parent");
+  assert.equal(h.resources.get(other.resourceId, who.sid, "media").stream.url, "https://other.test/film.mp4");
+  assert.deepEqual(h.paused, [], "the queue is never touched");
 });

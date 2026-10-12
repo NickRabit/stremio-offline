@@ -34,6 +34,7 @@ export interface ProviderItem {
   seriesId?: string;
   season?: number;
   episode?: number;
+  episodeEnd?: number;
   providerIds: { imdb?: string; tmdb?: string; tvdb?: string };
   durationTicks?: number;
 }
@@ -50,6 +51,8 @@ export interface ProviderVersion {
   container?: string;
   size?: number;
   durationTicks?: number;
+  /** External text subtitles the provider offers for this exact file version. */
+  externalSubtitles?: Array<{ index: number; language?: string; title?: string }>;
 }
 
 export interface MediaServerProvider {
@@ -66,6 +69,9 @@ export interface MediaServerProvider {
 const LIBRARIES_MAX = MEDIA_SERVER_LIMITS.libraries;
 const ANCESTORS_MAX = 128;
 const VERSIONS_MAX = 200;
+const EXTERNAL_SUBTITLES_MAX = 64;
+const SUBTITLE_INDEX_MAX = 1023;
+const SUBTITLE_TEXT_CODECS = new Set(["subrip", "srt"]);
 const PROVIDER_ID_MAX = 512;
 const CURSOR_MAX = 8192;
 const CURSOR_JSON_BYTES_MAX = 6144;
@@ -150,9 +156,40 @@ function providerItem(raw: unknown): ProviderItem {
   if (season !== undefined) result.season = season;
   const episode = optionalSafeInt(item.IndexNumber);
   if (episode !== undefined) result.episode = episode;
+  if (item.IndexNumberEnd !== undefined && item.IndexNumberEnd !== null) {
+    const episodeEnd = optionalSafeInt(item.IndexNumberEnd);
+    if (episodeEnd === undefined) throw invalidResponse("The media-server episode range is malformed.");
+    result.episodeEnd = episodeEnd;
+  }
   const durationTicks = optionalSafeInt(item.RunTimeTicks);
   if (durationTicks !== undefined) result.durationTicks = durationTicks;
   return result;
+}
+
+/** External text subtitles one file version offers. Only a text SubRip track with a bounded
+ *  integer index is read; an embedded track, a URL/Path/DeliveryUrl-bearing entry or any other
+ *  codec is skipped, so no guessed index or address is ever sealed into a reference. */
+function readExternalSubtitles(source: Record<string, unknown>): Array<{ index: number; language?: string; title?: string }> {
+  const raw = source.MediaStreams;
+  if (!Array.isArray(raw)) return [];
+  const subtitles: Array<{ index: number; language?: string; title?: string }> = [];
+  for (const entry of raw) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
+    const stream = entry as Record<string, unknown>;
+    if (stream.Type !== "Subtitle" || stream.IsExternal !== true) continue;
+    if (typeof stream.Codec !== "string" || !SUBTITLE_TEXT_CODECS.has(stream.Codec.toLowerCase())) continue;
+    const index = stream.Index;
+    if (typeof index !== "number" || !Number.isSafeInteger(index) || index < 0 || index > SUBTITLE_INDEX_MAX) continue;
+    if (subtitles.some((item) => item.index === index)) continue;
+    if (subtitles.length >= EXTERNAL_SUBTITLES_MAX) throw invalidResponse("The media-server version offers too many subtitles.");
+    const subtitle: { index: number; language?: string; title?: string } = { index };
+    const language = optionalString(stream.Language, 64);
+    if (language !== undefined) subtitle.language = language;
+    const title = optionalString(stream.Title, MEDIA_SERVER_LIMITS.name);
+    if (title !== undefined) subtitle.title = title;
+    subtitles.push(subtitle);
+  }
+  return subtitles;
 }
 
 /** The measured mapping: `movies`/`tvshows` map to the two kinds, a CollectionFolder with no
@@ -404,6 +441,8 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
       if (size !== undefined) version.size = size;
       const durationTicks = optionalSafeInt(source.RunTimeTicks);
       if (durationTicks !== undefined) version.durationTicks = durationTicks;
+      const externalSubtitles = readExternalSubtitles(source);
+      if (externalSubtitles.length) version.externalSubtitles = externalSubtitles;
       versions.push(version);
     }
     return versions;

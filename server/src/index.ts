@@ -85,7 +85,11 @@ import { HomeCatalogCache, homeCatalogTargets } from "./home-catalogs.js";
 import { registerPlaybackRoutes } from "./routes/playback.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerUsersRoutes } from "./routes/users.js";
-import { MediaServerManager } from "./media-server-manager.js";
+import { MediaServerManager, type MediaServerAuthority } from "./media-server-manager.js";
+import { MediaServerPersonal } from "./media-server-personal.js";
+import { MediaServerPlaybackGuard, readMediaServerPlaybackConfig } from "./media-server-playback.js";
+import { isRemoteMediaStream } from "./media-server-reference.js";
+import { MediaServerSources } from "./media-server-sources.js";
 import { MediaServerSecrets } from "./media-server-secrets.js";
 
 const STREAM_SORTS = new Set(["recommended", "size-desc", "size-asc", "addon"]);
@@ -108,6 +112,8 @@ const clientLogs = new ClientLogStore(DATA_DIR);
  *  remote connections. With no key configured the vault stays unavailable and the app boots. */
 const mediaServerVault = new MediaServerSecrets(path.join(DATA_DIR, "media-server-secrets"), process.env.MEDIA_SERVER_KEY_FILE);
 const mediaServers = new MediaServerManager(store, mediaServerVault);
+const mediaServerSources = new MediaServerSources(store, mediaServers, mediaResources);
+const mediaServerPersonal = new MediaServerPersonal(store, mediaServers);
 let markServerReady!: () => void;
 const serverReady = new Promise<void>((resolve) => { markServerReady = resolve; });
 await store.load();
@@ -374,6 +380,14 @@ const ownerOf = (req: express.Request): ResourceOwner => {
   if (!session) throw new ResourceError(401, "AUTH_REQUIRED");
   return { userId: session.userId, sid: session.sid, expiresAt: session.expiresAt };
 };
+
+/** The acting account as the media-server surface reads it: its current id and secret, with the
+ *  route's own access gate re-run on every authority check. */
+const authorityOf = (req: express.Request): MediaServerAuthority => {
+  const user = currentUser(req);
+  if (!user) throw new ResourceError(401, "AUTH_REQUIRED");
+  return { actor: { id: user.id, secret: user.secret }, assertCurrent: () => requireAccess(req) };
+};
 const sourceOf = (req: express.Request): StreamItem => {
   if (["stream", "url", "headers", "path"].some((key) => key in (req.body ?? {}))) throw new ResourceError(400, "UNSAFE_SOURCE_INPUT");
   return mediaResources.get(String(req.body?.sourceId ?? ""), ownerOf(req).sid, "source").stream;
@@ -441,7 +455,13 @@ const pruneDeviceDownloadTickets = () => {
  *  one session, a disabled or deleted account reaches everything it held, and a library or
  *  an addon reaches only the resources that touch it. */
 const revocations = new Revocations({
-  source: { users: () => store.users(), addons: () => store.addons(), libraries: () => store.libraries() },
+  source: {
+    users: () => store.users(),
+    addons: () => store.addons(),
+    libraries: () => store.libraries(),
+    mediaConnections: () => store.mediaConnections(),
+    remoteLibraries: () => store.remoteLibraries(),
+  },
   resources: mediaResources,
   airplay: airplayAccess,
   playbackOwners,
@@ -466,6 +486,21 @@ const permissionsChanged = (before: UserRecord, after: UserRecord) => revocation
 /** One account's hold on one library or addon. Passing no user sweeps everybody,
  *  which is what a global disable needs. */
 const stopContentAccess = (opts: StopContentOptions) => revocations.stopContent(opts);
+
+// Wired only now that the revocation sweeps exist: a media-server change reaches them through
+// the scope this callback carries, never through a manager-internal list of live resources.
+mediaServers.setContentInvalidator((scope) => revocations.stopContent(scope));
+
+/** Re-authorizes live remote resources on a timer, because an upstream server enforces a
+ *  policy change unreliably; a failure or a timeout stops the resource through the revocations. */
+const mediaServerGuard = new MediaServerPlaybackGuard({
+  sources: mediaServerSources,
+  resources: mediaResources,
+  playbackOwners,
+  activeMedia,
+  revocations,
+}, readMediaServerPlaybackConfig());
+mediaServerGuard.start();
 
 /** The re-check half: whether the request may still be answered. `session` means it no
  *  longer signs anybody in, `rights` that what it asked for was taken away while it waited. */
@@ -535,10 +570,15 @@ const countBytes = (res: express.Response, meta: TrafficMeta, session?: string |
   res.end = ((...args: unknown[]) => { measure(args[0]); return end(...args); }) as typeof res.end;
 };
 
-/** Library playback reads a file from disk; catalogue playback goes out through the proxy. */
-const playbackMeta = (stream: StreamItem): TrafficMeta => stream.url?.startsWith("file://")
-  ? { source: "library", provider: "knihovna", title: path.basename(stream.url.slice(7)), kind: "other" }
-  : statMeta({ source: "catalog", url: stream.url, title: sourceTitle(stream) || providerOf(stream.url), addonKey: stream.addonKey, addonName: stream.addonName });
+/** Library playback reads a file from disk; catalogue playback goes out through the proxy.
+ *  A verified remote item is counted by its safe label: the sealed address never reaches the
+ *  stats, a client log or any response. */
+const playbackMeta = (stream: StreamItem): TrafficMeta => {
+  if (isRemoteMediaStream(stream)) return { source: "catalog", provider: "media-server", title: sourceTitle(stream) || "Remote item", kind: "other" };
+  return stream.url?.startsWith("file://")
+    ? { source: "library", provider: "knihovna", title: path.basename(stream.url.slice(7)), kind: "other" }
+    : statMeta({ source: "catalog", url: stream.url, title: sourceTitle(stream) || providerOf(stream.url), addonKey: stream.addonKey, addonName: stream.addonName });
+};
 
 // Without a sign-in only the server status and the sign-in itself are open. /api/proxy
 // especially must not be public, or anyone could pull foreign addresses through this server.
@@ -999,7 +1039,7 @@ registerCatalogRoutes(app, {
   // name the episode a bound file holds.
   libraryUnits: () => libraryUnits({ stale: true }),
   ownRecord: (relative, records) => ownRecord(relative, records),
-  metaStore, externalIds, subtitleDelay,
+  metaStore, externalIds, subtitleDelay, mediaSources: mediaServerSources,
 });
 /** `stale` is for a caller that only renders what it gets: it may be answered with the last
  *  walk while the next one runs. Anything that acts on the tree asks for a current one. */
@@ -2246,7 +2286,7 @@ const curate = registerCurateRoutes(app, { ...routeContext, candidates: libraryC
 // route exists.
 const homeCatalogs = new HomeCatalogCache();
 const warmHomeCatalogs = () => { if (!homeCatalogs.idle) homeCatalogs.warm(homeCatalogTargets(store.addons())); };
-registerHomeRoutes(app, { ...routeContext, homeCatalogs, personal, completedJobs: () => queue.list(), newEpisodes: (ownerUserId, watched) => followService.newEpisodes(ownerUserId, watched), describeLibraryPath, locateFileArtwork, locateFolderArtworkPair, thumbUrl, scheduleFileArtwork, scheduleFolderArtwork, wirePath, dataOf, markersOf, progressOf, metaStore, seen, suggestionRows: curate.suggestionRows });
+registerHomeRoutes(app, { ...routeContext, homeCatalogs, personal, remotePersonal: mediaServerPersonal, authorityOf, completedJobs: () => queue.list(), newEpisodes: (ownerUserId, watched) => followService.newEpisodes(ownerUserId, watched), describeLibraryPath, locateFileArtwork, locateFolderArtworkPair, thumbUrl, scheduleFileArtwork, scheduleFolderArtwork, wirePath, dataOf, markersOf, progressOf, metaStore, seen, suggestionRows: curate.suggestionRows });
 
 registerDeviceRoutes(app, { ...routeContext, stats, countBytes, deviceDownloadTickets, deviceTransfers, DEVICE_TICKET_TTL, httpSourceOf, libraryTarget, mediaSource, ownerOf, pruneDeviceDownloadTickets, statMeta, trackMedia });
 registerDownloadRoutes(app, { ...routeContext, queue, deviceTransfers, jobView, sourceOf, mediaSource, posterOf, rememberTitle, titleKey, saveCatalogPoster, libraryKey, cachedMeta, prefsOf, defaultDownloadLibrary: downloadDefaultLibrary });
@@ -2255,9 +2295,9 @@ const freeSpace = async (target: string) => {
   catch { return { path: target }; }
 };
 registerDiagnosticsRoutes(app, { ...routeContext, stats, playback, throughput, queue, libraryScan, playbackMeta, freeSpace, clientLogs, dataDir: DATA_DIR });
-registerSettingsRoutes(app, { ...routeContext, STREAM_SORTS, accountIdOf, invalidateLibrary, metaCache, metaStore, mutateData, prefsOf, queue, streamCache });
-registerMediaServerRoutes(app, { ...routeContext, mediaServers });
-registerPlaybackRoutes(app, { ...routeContext, airplayAccess, airplayRequest, answerHeaders, countBytes, httpSourceOf, internalMediaRequest, libraryTarget, noteSourceQuiet, ownerOf, playback, playbackMeta, playbackOwners, playbackResponse, prefsOf, quietSources, rangeCache, safeInspection, sleep, sourceIsQuiet, stats, subtitleDelay, trackMedia, SOURCE_ATTEMPTS, SOURCE_RETRY_MS, SOURCE_RESUMES, SOURCE_HEADER_MS, SOURCE_QUIET_HEADER_MS });
+registerSettingsRoutes(app, { ...routeContext, STREAM_SORTS, accountIdOf, invalidateLibrary, mediaServers, metaCache, metaStore, mutateData, prefsOf, queue, streamCache });
+registerMediaServerRoutes(app, { ...routeContext, mediaServers, mediaSources: mediaServerSources, remotePersonal: mediaServerPersonal, ownerOf });
+registerPlaybackRoutes(app, { ...routeContext, mediaSources: mediaServerSources, mediaServerGuard, airplayAccess, airplayRequest, answerHeaders, countBytes, httpSourceOf, internalMediaRequest, libraryTarget, noteSourceQuiet, ownerOf, playback, playbackMeta, playbackOwners, playbackResponse, prefsOf, quietSources, rangeCache, safeInspection, sleep, sourceIsQuiet, stats, subtitleDelay, trackMedia, SOURCE_ATTEMPTS, SOURCE_RETRY_MS, SOURCE_RESUMES, SOURCE_HEADER_MS, SOURCE_QUIET_HEADER_MS });
 
 app.all(["/api/proxy", "/api/subtitle", "/api/library/file"], (_req, res) => {
   res.status(410).setHeader("cache-control", "private, no-store").json({ error: "This media API has been retired.", code: "UNSAFE_SOURCE_INPUT" });
@@ -2367,7 +2407,7 @@ const shutdown = createShutdown({
   maintenance,
   followService,
   killRunningMedia,
-  flushes: [() => stats.activity.flush(), () => images.flush(), () => artworks.flush(), () => metaStore.flush(), () => seen.flush(), () => libraryOps.flush(), () => mediaServers.close()],
+  flushes: [() => stats.activity.flush(), () => images.flush(), () => artworks.flush(), () => metaStore.flush(), () => seen.flush(), () => libraryOps.flush(), () => mediaServerGuard.close(), () => mediaServers.close()],
   store,
   flushLog,
   log,

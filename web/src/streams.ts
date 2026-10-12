@@ -92,17 +92,28 @@ export const isLocalStream = (stream: Stream): boolean => stream.kind === "libra
  *  string, so a leading control character can never collide with an addon of the same name. */
 export const LOCAL_SOURCE = "\u0000local";
 
+/** The source filter value one remote library stands for, prefixed the same collision-safe way. */
+export const REMOTE_SOURCE_PREFIX = "\u0000remote:";
+export const remoteSourceFilter = (libraryId: string): string => `${REMOTE_SOURCE_PREFIX}${libraryId}`;
+export const remoteFilterId = (filter: string): string | undefined =>
+  filter.startsWith(REMOTE_SOURCE_PREFIX) ? filter.slice(REMOTE_SOURCE_PREFIX.length) : undefined;
+
+export const isRemoteStream = (stream: Stream): boolean => Boolean(stream.provider || stream.remoteItem);
+
 /** Local files lead the unfiltered recommended and addon-priority lists. Other sorts rank them
  *  with addon rows, while a named addon and the dedicated local filter stay exclusive. */
 export function catalogSourceRows(
   local: Stream[], addonStreams: Stream[], filter: string, sort: StreamSort = "recommended",
   preferredLanguage = "en", priority: Map<string, number> = new Map(), titleLanguage?: string,
+  remote: Stream[] = [],
 ): Stream[] {
   if (filter === LOCAL_SOURCE) return local;
+  const remoteId = remoteFilterId(filter);
+  if (remoteId !== undefined) return remote.filter((stream) => stream.libraryId === remoteId);
   if (filter) return addonStreams;
-  if (sort === "recommended") return [...local, ...addonStreams];
-  if (sort === "addon") return [...local, ...arrangeStreams(addonStreams, { addon: "", language: "", sort }, preferredLanguage, priority, titleLanguage)];
-  return arrangeStreams([...addonStreams, ...local], { addon: "", language: "", sort }, preferredLanguage, priority, titleLanguage);
+  if (sort === "recommended") return [...local, ...remote, ...addonStreams];
+  if (sort === "addon") return [...local, ...remote, ...arrangeStreams(addonStreams, { addon: "", language: "", sort }, preferredLanguage, priority, titleLanguage)];
+  return arrangeStreams([...addonStreams, ...local, ...remote], { addon: "", language: "", sort }, preferredLanguage, priority, titleLanguage);
 }
 
 /** A new episode should stay with the provider the viewer chose when it can, while still
@@ -132,6 +143,7 @@ export function pickNextEpisodeStream(streams: Stream[], current: Stream | null,
 
 export function streamBadge(stream: Stream): string {
   if (isLocalStream(stream)) return "LOCAL";
+  if (stream.provider) return stream.provider.toUpperCase();
   if (stream.playable) return "HTTP";
   if (stream.kind === "torrent") return "RD";
   return "EXT";
@@ -139,6 +151,9 @@ export function streamBadge(stream: Stream): string {
 
 export function canQueue(stream: Stream, debridConfigured: boolean): boolean {
   if (isLocalStream(stream)) return false;
+  // A remote media-server source is read-only in this stage: it is watched through the
+  // server's proxy, never downloaded, and no addon path may pick it up.
+  if (stream.provider || stream.remoteItem || stream.capabilities?.downloadToLibrary === false) return false;
   return stream.playable || (stream.kind === "torrent" && debridConfigured);
 }
 

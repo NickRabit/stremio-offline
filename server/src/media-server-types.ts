@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import type { ProviderItem } from "./media-server-provider.js";
 
 export type MediaServerKind = "jellyfin" | "emby";
 export const MEDIA_SERVER_KINDS: readonly MediaServerKind[] = ["jellyfin", "emby"];
@@ -147,9 +148,11 @@ export interface PublicRemoteLibrary {
   showOnHome: boolean;
   showInContinueWatching: boolean;
   capabilities: RemoteCapabilities;
+  /** The provider of the stored connection, when it still exists. Never a secret or address. */
+  provider?: MediaServerKind;
 }
 
-export const publicRemoteLibrary = (record: RemoteLibraryRecord): PublicRemoteLibrary => ({
+export const publicRemoteLibrary = (record: RemoteLibraryRecord, provider?: MediaServerKind): PublicRemoteLibrary => ({
   id: record.id,
   connectionId: record.connectionId,
   remoteId: record.remoteId,
@@ -160,11 +163,27 @@ export const publicRemoteLibrary = (record: RemoteLibraryRecord): PublicRemoteLi
   showOnHome: record.showOnHome,
   showInContinueWatching: record.showInContinueWatching,
   capabilities: READ_ONLY_MEDIA_CAPABILITIES,
+  ...(provider === undefined ? {} : { provider }),
 });
 
-export const adminRemoteLibrary = (record: RemoteLibraryRecord): PublicRemoteLibrary & { allowedUsers: string[] } => ({
-  ...publicRemoteLibrary(record),
+export const adminRemoteLibrary = (record: RemoteLibraryRecord, provider?: MediaServerKind): PublicRemoteLibrary & { allowedUsers: string[] } => ({
+  ...publicRemoteLibrary(record, provider),
   allowedUsers: [...record.allowedUsers],
+});
+
+/** A provider item as the interface may see it: the internal shape plus the two same-origin
+ *  artwork paths the client loads instead of any upstream address. Built only from an encoded
+ *  local library and item handle and a fixed image role, so a cached provider row can never
+ *  turn into a client-admitted URL. */
+export type PublicRemoteItem = ProviderItem & { poster: string; wide: string };
+
+export const remoteArtworkPath = (libraryId: string, itemId: string, imageType: "Primary" | "Backdrop"): string =>
+  `/api/remote-libraries/${encodeURIComponent(libraryId)}/items/${encodeURIComponent(itemId)}/artwork/${imageType}`;
+
+export const publicRemoteItem = (item: ProviderItem, libraryId: string): PublicRemoteItem => ({
+  ...item,
+  poster: remoteArtworkPath(libraryId, item.id, "Primary"),
+  wide: remoteArtworkPath(libraryId, item.id, "Backdrop"),
 });
 
 export type MediaServerErrorCode =

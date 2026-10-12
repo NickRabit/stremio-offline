@@ -8,10 +8,11 @@ import { ForbiddenError } from "./roles.js";
 import { ResourceError } from "./media-resources.js";
 import { MediaServerIndex } from "./media-server-index.js";
 import { MediaServerManager, type MediaServerAuthority } from "./media-server-manager.js";
-import type { MediaServerProvider, ProviderItem, ProviderLibrary, RemoteAccountPolicy } from "./media-server-provider.js";
+import type { MediaServerProvider, ProviderItem, ProviderLibrary, ProviderVersion, RemoteAccountPolicy } from "./media-server-provider.js";
+import { openRemoteContent, remoteSecretStamp, sealRemoteContent, type RemoteContentRef } from "./media-server-reference.js";
 import { MediaServerSecrets } from "./media-server-secrets.js";
 import type { MediaServerTransport } from "./media-server-security.js";
-import { MediaServerError } from "./media-server-types.js";
+import { MediaServerError, remoteProgressKey } from "./media-server-types.js";
 import { Store } from "./store.js";
 import { emptyUserData, type UserRecord } from "./users.js";
 
@@ -49,6 +50,12 @@ class FakeServer {
   items: Record<string, ProviderItem[]> = {};
   detailOf: Record<string, ProviderItem> = {};
   ancestorsOf: Record<string, string[]> = {};
+  versionsOf: Record<string, ProviderVersion[]> = {};
+  original: { status?: number; headers?: Record<string, string>; error?: MediaServerError } | undefined;
+  originalCalls = 0;
+  originalCancelled = 0;
+  asset: { bytes: Uint8Array; contentType: string } | undefined;
+  assetRequests: Array<Record<string, unknown>> = [];
   calls: string[] = [];
   errors: Record<string, MediaServerError> = {};
   nudge: Nudge | undefined;
@@ -91,11 +98,28 @@ const stubProvider = (server: FakeServer): MediaServerProvider => ({
     return clone(item);
   },
   ancestors: async (_token, _account, itemId) => { await server.run("ancestors"); return [...(server.ancestorsOf[itemId] ?? [])]; },
-  versions: async () => { throw new MediaServerError("not-found", "no versions"); },
+  versions: async (_token, _account, itemId) => { await server.run("versions"); return clone(server.versionsOf[itemId] ?? []); },
 });
 
 const stubTransport = (server: FakeServer): MediaServerTransport => ({
   requestJson: async () => { throw new Error("the stub provider does not use the transport"); },
+  requestAsset: async (request) => {
+    server.assetRequests.push(request as unknown as Record<string, unknown>);
+    await server.run("asset");
+    if (!server.asset) throw new Error("no asset response is configured");
+    return { bytes: server.asset.bytes, contentType: server.asset.contentType };
+  },
+  requestOriginal: async () => {
+    server.originalCalls += 1;
+    await server.run("original");
+    const spec = server.original;
+    if (!spec) throw new Error("no original response is configured");
+    if (spec.error) throw spec.error;
+    return new Response(new ReadableStream<Uint8Array>({ cancel: () => { server.originalCancelled += 1; } }), {
+      status: spec.status ?? 200,
+      ...(spec.headers ? { headers: spec.headers } : {}),
+    });
+  },
   close: async () => { server.closed += 1; },
 });
 
@@ -109,13 +133,25 @@ interface Harness {
   admin: MediaServerAuthority;
   bob: MediaServerAuthority;
   carol: MediaServerAuthority;
+  /** Observes the state exactly as one write landed it. */
+  onWrite(fn: (state: { mediaSecretCleanup?: string[] }) => void): void;
+  /** How many writes the store has taken, so a pass that changes nothing can be told apart
+   *  from one that rewrote the state. */
+  writes(): number;
   revoke(): void;
   demoteOnNextWrite(): void;
   revokeBeforeNextWrite(): void;
   close(): Promise<void>;
 }
 
-const mount = async (options: { users?: UserRecord[]; key?: boolean } = {}): Promise<Harness> => {
+const mount = async (options: {
+  users?: UserRecord[];
+  key?: boolean;
+  remoteMedia?: Record<string, Record<string, unknown>>;
+  connections?: unknown[];
+  libraries?: unknown[];
+  cleanupIntervalMs?: number;
+} = {}): Promise<Harness> => {
   const dir = await mkdtemp(path.join(tmpdir(), "media-manager-"));
   const users = options.users ?? [admin, bob, carol];
   await writeFile(path.join(dir, "state.json"), JSON.stringify({
@@ -124,8 +160,13 @@ const mount = async (options: { users?: UserRecord[]; key?: boolean } = {}): Pro
     settings: {},
     defaultsInstalled: true,
     users,
-    userData: Object.fromEntries(users.map((user) => [user.id, emptyUserData()])),
+    userData: Object.fromEntries(users.map((user) => [user.id, {
+      ...emptyUserData(),
+      ...(options.remoteMedia?.[user.id] === undefined ? {} : { remoteMedia: options.remoteMedia[user.id] }),
+    }])),
     libraries: [],
+    ...(options.connections === undefined ? {} : { mediaConnections: options.connections }),
+    ...(options.libraries === undefined ? {} : { remoteLibraries: options.libraries }),
   }));
   const keyFile = path.join(dir, "secret.key");
   if (options.key !== false) await writeFile(keyFile, randomBytes(32), { mode: 0o600 });
@@ -138,6 +179,7 @@ const mount = async (options: { users?: UserRecord[]; key?: boolean } = {}): Pro
     providerFactory: () => stubProvider(server),
     transportFactory: () => stubTransport(server),
     index,
+    ...(options.cleanupIntervalMs === undefined ? {} : { cleanupIntervalMs: options.cleanupIntervalMs }),
   });
   await manager.initialize();
 
@@ -151,17 +193,23 @@ const mount = async (options: { users?: UserRecord[]; key?: boolean } = {}): Pro
   const write = store.update.bind(store);
   let demote = false;
   let revokeOnWrite = false;
+  let onWrite: ((state: { mediaSecretCleanup?: string[] }) => void) | undefined;
+  let writes = 0;
   (store as unknown as { update(mutate: (state: { users?: UserRecord[] }) => void): Promise<void> }).update = (mutate) => {
+    writes += 1;
     if (revokeOnWrite) { revokeOnWrite = false; revoked = true; }
-    if (!demote) return write(mutate);
+    const observe = (state: { users?: UserRecord[]; mediaSecretCleanup?: string[] }) => { mutate(state); onWrite?.(state); };
+    if (!demote) return write(observe);
     demote = false;
     void write((state) => { state.users = (state.users ?? []).map((user) => user.id === ADA ? { ...user, role: "user" } : user); });
-    return write(mutate);
+    return write(observe);
   };
 
   return {
     dir, store, vault, server, manager, index,
     admin: authority(admin), bob: authority(bob), carol: authority(carol),
+    onWrite: (fn) => { onWrite = fn; },
+    writes: () => writes,
     revoke: () => { revoked = true; },
     demoteOnNextWrite: () => { demote = true; },
     revokeBeforeNextWrite: () => { revokeOnWrite = true; },
@@ -854,5 +902,533 @@ test("the connection runtime cache is reused for one generation and rebuilt afte
     const view = await harness.manager.listConnections(harness.admin);
     assert.equal(view.connections[0]!.status, "disabled");
     assert.equal(view.connections[0]!.enabled, false);
+  });
+});
+
+const until = async (predicate: () => boolean): Promise<void> => {
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  throw new Error("the awaited condition was never reached");
+};
+
+const deferred = <T = void>(): { promise: Promise<T>; resolve: (value: T) => void } => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => { resolve = settle; });
+  return { promise, resolve };
+};
+
+const seedPlayable = async (harness: Harness, itemId = "m1") => {
+  const connection = await connect(harness);
+  harness.server.libraries.push({ id: "lib-1", name: "Library lib-1", type: "movie" });
+  const library = await harness.manager.attachLibrary(harness.admin, connection.id, { remoteId: "lib-1" });
+  harness.server.detailOf[itemId] = { id: itemId, name: "Movie", type: "movie", providerIds: {} };
+  harness.server.ancestorsOf[itemId] = ["lib-1"];
+  harness.server.versionsOf[itemId] = [{ id: "v1", name: "1080p", container: "mkv" }];
+  return { connection, library };
+};
+
+const refFor = (harness: Harness, connectionId: string, libraryId: string, itemId: string, mediaSourceId: string): RemoteContentRef => {
+  const connection = harness.store.mediaConnections().find((candidate) => candidate.id === connectionId)!;
+  const sealed = sealRemoteContent({
+    provider: connection.provider, serverId: connection.serverId, accountId: connection.accountId,
+    itemId, connectionId: connection.id, libraryId, generation: connection.generation, mediaSourceId,
+    owner: { userId: admin.id, sid: "admin-sid", expiresAt: Date.now() + 3_600_000, secretStamp: remoteSecretStamp(admin.secret) },
+  });
+  return openRemoteContent(sealed)!;
+};
+
+test("itemVersions returns ordinary file versions with the verified identity and no address", async () => {
+  await withHarness(async (harness) => {
+    const { connection, library } = await seedPlayable(harness);
+    const result = await harness.manager.itemVersions(harness.admin, library.id, "m1");
+    assert.equal(result.item.id, "m1");
+    assert.deepEqual(result.versions.map((version) => version.id), ["v1"]);
+    assert.equal(result.identity.provider, "jellyfin");
+    assert.equal(result.identity.itemId, "m1");
+    assert.equal(result.connectionId, connection.id);
+    assert.equal(result.libraryId, library.id);
+    assert.equal(result.generation, connection.generation);
+    assert.equal(result.libraryName, "Library lib-1");
+    assert.equal(JSON.stringify(result).includes("media-server:"), false);
+  });
+});
+
+test("itemVersions rejects a non-playable item and an item from a sibling library", async () => {
+  await withHarness(async (harness) => {
+    const { library } = await seedPlayable(harness);
+    harness.server.detailOf["series-1"] = { id: "series-1", name: "Show", type: "series", providerIds: {} };
+    harness.server.ancestorsOf["series-1"] = ["lib-1"];
+    await assert.rejects(harness.manager.itemVersions(harness.admin, library.id, "series-1"), { code: "invalid-input" });
+    harness.server.detailOf["sibling"] = { id: "sibling", name: "Elsewhere", type: "movie", providerIds: {} };
+    harness.server.ancestorsOf["sibling"] = ["lib-other"];
+    await assert.rejects(harness.manager.itemVersions(harness.admin, library.id, "sibling"), { code: "not-found" });
+  });
+});
+
+test("revalidateOriginal requires the named source version and the owning actor", async () => {
+  await withHarness(async (harness) => {
+    const { connection, library } = await seedPlayable(harness);
+    const good = refFor(harness, connection.id, library.id, "m1", "v1");
+    await harness.manager.revalidateOriginal(harness.admin, good);
+    harness.server.versionsOf["m1"] = [{ id: "v2" }];
+    await assert.rejects(harness.manager.revalidateOriginal(harness.admin, good), { code: "not-found" });
+    const otherOwner = { ...good, owner: { ...good.owner, userId: bob.id } };
+    await assert.rejects(harness.manager.revalidateOriginal(harness.admin, otherOwner), { status: 404 });
+  });
+});
+
+test("openOriginal returns the original response only while everything is current", async () => {
+  await withHarness(async (harness) => {
+    const { connection, library } = await seedPlayable(harness);
+    harness.server.original = { status: 206, headers: { "content-range": "bytes 0-1/2" } };
+    const ref = refFor(harness, connection.id, library.id, "m1", "v1");
+    const response = await harness.manager.openOriginal(harness.admin, ref, { method: "GET", range: "bytes=0-1" });
+    assert.equal(response.status, 206);
+    assert.equal(harness.server.originalCalls, 1);
+  });
+});
+
+test("openOriginal cancels the body when the generation changes while headers are awaited", async () => {
+  await withHarness(async (harness) => {
+    const { connection, library } = await seedPlayable(harness);
+    harness.server.original = { status: 200 };
+    let entered!: () => void;
+    const reached = new Promise<void>((resolve) => { entered = resolve; });
+    const gate = deferred();
+    harness.server.nudge = { op: "original", wait: gate.promise, entered };
+    const ref = refFor(harness, connection.id, library.id, "m1", "v1");
+    const pending = harness.manager.openOriginal(harness.admin, ref, { method: "GET" });
+    await reached;
+    await harness.manager.patchConnection(harness.admin, connection.id, { enabled: false });
+    gate.resolve();
+    await assert.rejects(pending, (error: MediaServerError) => ["stale-generation", "not-found"].includes(error.code));
+    assert.equal(harness.server.originalCancelled, 1, "the body was cancelled, not handed over");
+  });
+});
+
+test("openOriginal refuses a revoked preflight without touching the transport", async () => {
+  await withHarness(async (harness) => {
+    const { connection, library } = await seedPlayable(harness);
+    let entered!: () => void;
+    const reached = new Promise<void>((resolve) => { entered = resolve; });
+    const gate = deferred();
+    harness.server.nudge = { op: "versions", wait: gate.promise, entered };
+    const ref = refFor(harness, connection.id, library.id, "m1", "v1");
+    const pending = harness.manager.openOriginal(harness.admin, ref, { method: "GET" });
+    await reached;
+    await harness.manager.patchConnection(harness.admin, connection.id, { enabled: false });
+    gate.resolve();
+    await assert.rejects(pending, (error: MediaServerError) => ["stale-generation", "not-found"].includes(error.code));
+    assert.equal(harness.server.originalCalls, 0, "no bytes were requested");
+  });
+});
+
+test("a 401 from the original transport invalidates the connection and notifies the invalidator", async () => {
+  await withHarness(async (harness) => {
+    const { connection, library } = await seedPlayable(harness);
+    const scopes: unknown[] = [];
+    harness.manager.setContentInvalidator(async (scope) => { scopes.push(scope); });
+    harness.server.original = { error: new MediaServerError("authentication-required", "reauthentication required") };
+    const ref = refFor(harness, connection.id, library.id, "m1", "v1");
+    await assert.rejects(harness.manager.openOriginal(harness.admin, ref, { method: "GET" }), { code: "authentication-required" });
+    assert.deepEqual(scopes, [{ connectionId: connection.id }]);
+    const view = await harness.manager.listConnections(harness.admin);
+    assert.equal(view.connections[0]!.status, "reauthentication-required");
+  });
+});
+
+test("the content invalidator is registered once and awaited for scoped writes", async () => {
+  await withHarness(async (harness) => {
+    const { connection, library } = await seedPlayable(harness);
+    const scopes: unknown[] = [];
+    harness.manager.setContentInvalidator(async (scope) => { scopes.push(scope); });
+    assert.throws(() => harness.manager.setContentInvalidator(async () => undefined), /already registered/);
+    await harness.manager.patchConnection(harness.admin, connection.id, { enabled: false });
+    assert.deepEqual(scopes, [{ connectionId: connection.id }]);
+    await harness.manager.patchConnection(harness.admin, connection.id, { name: "Renamed" });
+    assert.equal(scopes.length, 1, "a rename does not stop playback");
+    await harness.manager.patchLibrary(harness.admin, library.id, { allowedUsers: [bob.id] });
+    assert.equal(scopes.length, 1, "adding a grant does not interrupt existing viewers");
+    await harness.manager.patchLibrary(harness.admin, library.id, { allowedUsers: [] });
+    assert.deepEqual(scopes.at(-1), { libraryId: library.id, userId: bob.id });
+  });
+});
+
+test("a runtime installed by a concurrent read during a reauthentication is closed, not orphaned", async () => {
+  await withHarness(async (harness) => {
+    const { connection, library } = await seedPlayable(harness);
+    const gate = deferred();
+    const realRemove = harness.vault.remove.bind(harness.vault);
+    let held = false;
+    (harness.vault as unknown as { remove(ref: string): Promise<void> }).remove = async (ref: string) => {
+      if (!held) { held = true; await gate.promise; }
+      return realRemove(ref);
+    };
+    const reauth = harness.manager.reauthenticate(harness.admin, connection.id, { username: "reader", password: "reader-password" });
+    await until(() => harness.store.mediaConnections()[0]?.generation === 1);
+    // Calling this installs the new generation's runtime before it awaits the vault read.
+    const read = harness.manager.discoverLibraries(harness.admin, connection.id);
+    gate.resolve();
+    await read;
+    await reauth;
+    // The old runtime was closed by the generation change, the concurrent one by the replacement.
+    assert.equal(harness.server.closed, 2, "the runtime a concurrent read installed was closed");
+    assert.equal((await harness.vault.references()).length, 1, "the secret vault was not disturbed");
+  });
+});
+
+/** A library whose snapshot and detail reads agree, so a match can be proved and then moved. */
+const seedMatchLibrary = async (harness: Harness, items: ProviderItem[]) => {
+  const connection = await connect(harness);
+  harness.server.libraries.push({ id: "lib-1", name: "Library lib-1", type: "mixed" });
+  harness.server.items["lib-1"] = items;
+  for (const item of items) {
+    harness.server.detailOf[item.id] = item;
+    harness.server.ancestorsOf[item.id] = ["lib-1"];
+  }
+  const library = await harness.manager.attachLibrary(harness.admin, connection.id, { remoteId: "lib-1" });
+  return { connection, library };
+};
+
+test("matchingItems proves each candidate and drops one whose metadata moved", async () => {
+  await withHarness(async (harness) => {
+    const { library } = await seedMatchLibrary(harness, [
+      { id: "m1", name: "Alien", type: "movie", providerIds: { imdb: "tt1" } },
+      { id: "m2", name: "Aliens", type: "movie", providerIds: { imdb: "tt2" } },
+      { id: "m3", name: "Alien", type: "movie", providerIds: { imdb: "tt1", tmdb: "3" } },
+    ]);
+    assert.deepEqual((await harness.manager.matchingItems(harness.admin, library.id, "movie", "tt1")).map((item) => item.id), ["m1", "m3"], "an exact id matches every legitimate copy");
+    assert.deepEqual(await harness.manager.matchingItems(harness.admin, library.id, "movie", "NotAnId"), [], "an unsupported id is an empty answer, not an error");
+    assert.deepEqual(await harness.manager.matchingItems(harness.admin, library.id, "series", "tt1"), [], "a series id without an episode number names nothing");
+    // The snapshot still carries tt1, but the fresh detail now disagrees: nothing matches.
+    harness.server.detailOf["m1"] = { id: "m1", name: "Alien", type: "movie", providerIds: { imdb: "tt9" } };
+    assert.deepEqual((await harness.manager.matchingItems(harness.admin, library.id, "movie", "tt1")).map((item) => item.id), ["m3"], "only the copy whose metadata still agrees survives");
+  });
+});
+
+test("matchingItems resolves an episode only through a proven series parent and a single range", async () => {
+  await withHarness(async (harness) => {
+    const show: ProviderItem = { id: "show", name: "Show", type: "series", providerIds: { imdb: "tt1" } };
+    const { library } = await seedMatchLibrary(harness, [
+      show,
+      { id: "e1", name: "E1", type: "episode", seriesId: "show", season: 1, episode: 2, providerIds: {} },
+      { id: "multi", name: "Multi", type: "episode", seriesId: "show", season: 1, episode: 4, episodeEnd: 5, providerIds: {} },
+    ]);
+    assert.deepEqual((await harness.manager.matchingItems(harness.admin, library.id, "series", "tt1:1:2")).map((item) => item.id), ["e1"]);
+    assert.deepEqual(await harness.manager.matchingItems(harness.admin, library.id, "series", "tt1:1:4"), [], "a multi-episode range is not a single match");
+    harness.server.detailOf["show"] = { id: "show", name: "Show", type: "series", providerIds: { imdb: "tt9" } };
+    assert.deepEqual(await harness.manager.matchingItems(harness.admin, library.id, "series", "tt1:1:2"), [], "the series proof is re-read, never trusted from the snapshot");
+  });
+});
+
+test("matchedVersions returns the verified versions and bounds the stream budget", async () => {
+  await withHarness(async (harness) => {
+    const { library } = await seedMatchLibrary(harness, [
+      { id: "m1", name: "Alien", type: "movie", providerIds: { imdb: "tt1" } },
+    ]);
+    harness.server.versionsOf["m1"] = [{ id: "v1", name: "1080p" }, { id: "v2", name: "720p" }];
+    const results = await harness.manager.matchedVersions(harness.admin, library.id, "movie", "tt1");
+    assert.deepEqual(results.map((entry) => entry.item.id), ["m1"]);
+    assert.deepEqual(results[0]!.versions.map((version) => version.id), ["v1", "v2"]);
+    const many = Array.from({ length: 201 }, (_value, index) => ({ id: `v${index}` }));
+    harness.server.versionsOf["m1"] = many;
+    await assert.rejects(harness.manager.matchedVersions(harness.admin, library.id, "movie", "tt1"), { code: "response-too-large" });
+  });
+});
+
+test("an id this app cannot match is answered before the library is scanned", async () => {
+  await withHarness(async (harness) => {
+    const { library } = await seedMatchLibrary(harness, [
+      { id: "m1", name: "Alien", type: "movie", providerIds: { imdb: "tt1" } },
+    ]);
+    const scans = () => harness.server.calls.filter((call) => call === "items").length;
+    const before = scans();
+    assert.deepEqual(await harness.manager.matchingItems(harness.admin, library.id, "movie", "NotAnId"), []);
+    assert.deepEqual(await harness.manager.matchedVersions(harness.admin, library.id, "series", "tt1"), [], "a series id without an episode number names nothing");
+    assert.equal(scans(), before, "no snapshot was built for an id that names nothing");
+    assert.equal(harness.server.calls.includes("detail"), false, "and no item was read");
+  });
+});
+
+test("matchedVersions returns an episode whose series still carries the matched id", async () => {
+  await withHarness(async (harness) => {
+    const { library } = await seedMatchLibrary(harness, [
+      { id: "showA", name: "Show A", type: "series", providerIds: { imdb: "tt1" } },
+      { id: "e1", name: "E1", type: "episode", seriesId: "showA", season: 1, episode: 2, providerIds: {} },
+    ]);
+    harness.server.versionsOf["e1"] = [{ id: "v1", name: "1080p" }];
+    const results = await harness.manager.matchedVersions(harness.admin, library.id, "series", "tt1:1:2");
+    assert.deepEqual(results.map((entry) => entry.item.id), ["e1"]);
+    assert.deepEqual(results[0]!.versions.map((version) => version.id), ["v1"]);
+  });
+});
+
+test("matchedVersions drops an episode that moved to another series while its versions were read", async () => {
+  await withHarness(async (harness) => {
+    const { library } = await seedMatchLibrary(harness, [
+      { id: "showA", name: "Show A", type: "series", providerIds: { imdb: "tt1" } },
+      { id: "showB", name: "Show B", type: "series", providerIds: { imdb: "tt2" } },
+      { id: "e1", name: "E1", type: "episode", seriesId: "showA", season: 1, episode: 2, providerIds: {} },
+    ]);
+    // The provider moves the episode to a different series, keeping its numbering, after the
+    // match proved the first parent: the second read of the episode no longer names it.
+    const first = harness.server.detailOf["e1"]!;
+    let reads = 0;
+    Object.defineProperty(harness.server.detailOf, "e1", {
+      configurable: true,
+      get: () => (reads++ === 0 ? first : { ...first, seriesId: "showB" }),
+    });
+    harness.server.versionsOf["e1"] = [{ id: "v1", name: "1080p" }];
+    assert.deepEqual(await harness.manager.matchedVersions(harness.admin, library.id, "series", "tt1:1:2"), [],
+      "an episode that left the matched series mints nothing");
+  });
+});
+
+test("matchedVersions drops an episode whose series ids moved while its versions were read", async () => {
+  await withHarness(async (harness) => {
+    const { library } = await seedMatchLibrary(harness, [
+      { id: "showA", name: "Show A", type: "series", providerIds: { imdb: "tt1" } },
+      { id: "e1", name: "E1", type: "episode", seriesId: "showA", season: 1, episode: 2, providerIds: {} },
+    ]);
+    // The parent proof is repeated after the versions read: a series whose ids moved in
+    // between no longer names this catalogue id.
+    Object.defineProperty(harness.server, "versionsOf", {
+      configurable: true,
+      get: () => {
+        harness.server.detailOf["showA"] = { ...harness.server.detailOf["showA"]!, providerIds: { imdb: "tt9" } };
+        return { e1: [{ id: "v1", name: "1080p" }] };
+      },
+    });
+    assert.deepEqual(await harness.manager.matchedVersions(harness.admin, library.id, "series", "tt1:1:2"), []);
+  });
+});
+
+test("verifyLibrary proves the live session and refuses a disabled connection", async () => {
+  await withHarness(async (harness) => {
+    const { connection, library } = await seedMatchLibrary(harness, [
+      { id: "m1", name: "Alien", type: "movie", providerIds: {} },
+    ]);
+    await harness.manager.verifyLibrary(harness.admin, library.id);
+    await harness.manager.patchConnection(harness.admin, connection.id, { enabled: false });
+    await assert.rejects(harness.manager.verifyLibrary(harness.admin, library.id), { code: "not-found" });
+  });
+});
+
+test("readArtwork reads bounded bytes for a fixed role and refuses other roles and items", async () => {
+  await withHarness(async (harness) => {
+    const { library } = await seedMatchLibrary(harness, [
+      { id: "m1", name: "Alien", type: "movie", providerIds: {} },
+      { id: "show", name: "Show", type: "series", providerIds: {} },
+    ]);
+    harness.server.asset = { bytes: new Uint8Array([1, 2, 3]), contentType: "image/png" };
+    const asset = await harness.manager.readArtwork(harness.admin, library.id, "show", "Backdrop");
+    assert.deepEqual([...asset.bytes], [1, 2, 3]);
+    assert.equal(asset.contentType, "image/png");
+    assert.deepEqual(harness.server.assetRequests.at(-1), { kind: "artwork", itemId: "show", imageType: "Backdrop" });
+    await assert.rejects(harness.manager.readArtwork(harness.admin, library.id, "m1", "Logo"), { code: "invalid-input" });
+    await assert.rejects(harness.manager.readArtwork(harness.admin, library.id, "missing", "Primary"), { code: "not-found" });
+  });
+});
+
+test("readSubtitle proves the exact external index and refuses an original reference", async () => {
+  await withHarness(async (harness) => {
+    const { connection, library } = await seedMatchLibrary(harness, [
+      { id: "m1", name: "Alien", type: "movie", providerIds: {} },
+    ]);
+    harness.server.versionsOf["m1"] = [{ id: "v1", name: "1080p", externalSubtitles: [{ index: 2, language: "eng" }] }];
+    harness.server.asset = { bytes: new TextEncoder().encode("1\n00:00:01,000 --> 00:00:02,000\nHi\n"), contentType: "application/x-subrip" };
+    const ref: RemoteContentRef = {
+      provider: "jellyfin", serverId: "server-1", accountId: "user-1", itemId: "m1",
+      connectionId: connection.id, libraryId: library.id, generation: connection.generation, mediaSourceId: "v1", subtitleIndex: 2,
+      owner: { userId: ADA, sid: "sid-1", expiresAt: Date.now() + 60_000, secretStamp: remoteSecretStamp(admin.secret) },
+    };
+    const asset = await harness.manager.readSubtitle(harness.admin, ref);
+    assert.equal(new TextDecoder().decode(asset.bytes).includes("-->"), true);
+    assert.deepEqual(harness.server.assetRequests.at(-1), { kind: "subtitle", itemId: "m1", mediaSourceId: "v1", index: 2 });
+    await assert.rejects(harness.manager.readSubtitle(harness.admin, { ...ref, subtitleIndex: 3 }), { code: "not-found" }, "an index the provider no longer lists is refused");
+    await assert.rejects(harness.manager.readSubtitle(harness.admin, { ...ref, subtitleIndex: undefined }), { code: "not-found" }, "an original reference is not a subtitle");
+    await assert.rejects(harness.manager.revalidateOriginal(harness.admin, ref), { code: "not-found" }, "a subtitle reference never revalidates as media");
+    await assert.rejects(harness.manager.openOriginal(harness.admin, ref, { method: "GET" }), { code: "not-found" });
+  });
+});
+
+/** One canonical stored history row, as the personal module would have written it. */
+const historyRow = (itemId: string, remoteLibraryId: string): Record<string, unknown> => ({
+  key: remoteProgressKey({ provider: "jellyfin", serverId: "server-1", accountId: "user-1", itemId }),
+  provider: "jellyfin", serverId: "server-1", accountId: "user-1", itemId, remoteLibraryId,
+  type: "movie", name: "Alien", position: 10, duration: 100, favorite: false, watched: false,
+  updatedAt: "2026-01-01T00:00:00.000Z",
+});
+
+const seedHistory = (harness: Harness, userId: string, rows: Record<string, unknown>) =>
+  harness.store.update((state) => {
+    const data = state.userData?.[userId];
+    if (data) data.remoteMedia = rows;
+  });
+
+const storedRow = (harness: Harness, userId: string, itemId: string, remoteLibraryId: string) =>
+  (harness.store.userData(userId).remoteMedia ?? {})[historyRow(itemId, remoteLibraryId).key as string] as
+    { orphanedAt?: string; position?: number } | undefined;
+
+test("removing a connection keeps the stored history until it is asked to forget it", async () => {
+  await withHarness(async (harness) => {
+    const { connection } = await seedMatchLibrary(harness, [movie("m1")]);
+    await seedHistory(harness, ADA, { [historyRow("m1", "lib-1").key as string]: historyRow("m1", "lib-1") });
+    await harness.manager.removeConnection(harness.admin, connection.id);
+    assert.equal(typeof storedRow(harness, ADA, "m1", "lib-1")?.orphanedAt, "string", "the row stays, invisibly, with the thirty days running");
+    assert.equal(harness.store.mediaConnections().length, 0);
+  });
+  await withHarness(async (harness) => {
+    const { connection } = await seedMatchLibrary(harness, [movie("m1")]);
+    await seedHistory(harness, ADA, { [historyRow("m1", "lib-1").key as string]: historyRow("m1", "lib-1") });
+    await harness.manager.removeConnection(harness.admin, connection.id, undefined, { forget: true });
+    assert.equal(storedRow(harness, ADA, "m1", "lib-1"), undefined, "forget deletes it at once");
+  });
+});
+
+test("a removal takes only its own upstream library and refuses an option it does not know", async () => {
+  await withHarness(async (harness) => {
+    const { connection } = await seedMatchLibrary(harness, [movie("m1")]);
+    harness.server.libraries.push({ id: "lib-2", name: "Library lib-2", type: "movie" });
+    const second = await harness.manager.attachLibrary(harness.admin, connection.id, { remoteId: "lib-2" });
+    const first = harness.store.remoteLibraries().find((library) => library.remoteId === "lib-1")!;
+    await seedHistory(harness, ADA, {
+      [historyRow("m1", "lib-1").key as string]: historyRow("m1", "lib-1"),
+      [historyRow("m2", "lib-2").key as string]: historyRow("m2", "lib-2"),
+    });
+    await harness.manager.deleteLibrary(harness.admin, first.id);
+    assert.equal(typeof storedRow(harness, ADA, "m1", "lib-1")?.orphanedAt, "string", "the removed library's rows start their countdown");
+    assert.equal(storedRow(harness, ADA, "m2", "lib-2")?.orphanedAt, undefined, "a library still attached is untouched");
+    await assert.rejects(harness.manager.deleteLibrary(harness.admin, second.id, undefined, { nope: true }), { code: "invalid-input" });
+    await assert.rejects(harness.manager.deleteLibrary(harness.admin, second.id, undefined, { forget: "yes" }), { code: "invalid-input" });
+    assert.equal(harness.store.remoteLibraries().length, 1, "a refused option changes nothing");
+  });
+});
+
+test("reattaching the same verified library takes its history back", async () => {
+  await withHarness(async (harness) => {
+    const { connection } = await seedMatchLibrary(harness, [movie("m1")]);
+    const library = harness.store.remoteLibraries()[0]!;
+    await seedHistory(harness, ADA, { [historyRow("m1", "lib-1").key as string]: historyRow("m1", "lib-1") });
+    await harness.manager.deleteLibrary(harness.admin, library.id);
+    assert.equal(typeof storedRow(harness, ADA, "m1", "lib-1")?.orphanedAt, "string");
+    await harness.manager.attachLibrary(harness.admin, connection.id, { remoteId: "lib-1" });
+    const kept = storedRow(harness, ADA, "m1", "lib-1");
+    assert.equal(kept?.orphanedAt, undefined, "the countdown is gone");
+    assert.equal(kept?.position, 10, "and the row itself is untouched");
+  });
+});
+
+test("a settings restore replaces the remote configuration in the same write as the settings", async () => {
+  await withHarness(async (harness) => {
+    const connection = await connect(harness);
+    seedLibrary(harness, "lib-1", [movie("m1")]);
+    const library = await harness.manager.attachLibrary(harness.admin, connection.id, { remoteId: "lib-1" });
+    await harness.manager.patchLibrary(harness.admin, library.id, { allowedUsers: [BOB] });
+    const oldRef = harness.store.mediaConnections()[0]!.secretRef as string;
+    const bumpedBefore = harness.store.users().find((user) => user.id === BOB)!.permissionsVersion;
+    const exported = harness.manager.exportConfiguration(harness.admin);
+    const revokedContent: string[] = [];
+    harness.manager.setContentInvalidator(async (scope) => { if (scope.connectionId) revokedContent.push(scope.connectionId); });
+    let ranMutator = 0;
+    let replacementWrite: { connections: number; autoScan: boolean | undefined; queued: string[] } | undefined;
+    harness.onWrite((state) => {
+      const connections = ((state as { mediaConnections?: unknown[] }).mediaConnections ?? []).length;
+      const refs = [...(state.mediaSecretCleanup ?? [])];
+      if (connections === 1 && refs.includes(oldRef)) replacementWrite = { connections, autoScan: (state as { settings?: { libraryAutoScan?: boolean } }).settings?.libraryAutoScan, queued: refs };
+    });
+    await harness.manager.restoreSettingsConfiguration(harness.admin, exported, (state) => {
+      ranMutator += 1;
+      state.settings.libraryAutoScan = false;
+    });
+    assert.equal(ranMutator, 1, "the caller's settings mutator ran inside the one update");
+    assert.equal(replacementWrite?.connections, 1, "the replacement landed in one write");
+    assert.equal(replacementWrite?.autoScan, false, "together with the settings the same file carried");
+    assert.equal(harness.store.settings().libraryAutoScan, false);
+    const [restored] = harness.store.mediaConnections();
+    assert.notEqual(restored!.id, connection.id, "a fresh local handle");
+    assert.equal(restored!.enabled, false, "requiring a sign-in again");
+    assert.equal(restored!.secretRef, undefined, "and never a credential");
+    assert.deepEqual(harness.store.remoteLibraries()[0]!.allowedUsers, [], "grants never come out of a file");
+    assert.equal(replacementWrite?.queued.includes(oldRef), true, "the replaced credential was queued durably for deletion");
+    assert.equal(revokedContent.includes(connection.id), true, "what ran on the replaced connection was torn down");
+    assert.equal(harness.store.users().find((user) => user.id === BOB)!.permissionsVersion, bumpedBefore + 1, "the account that lost its grant is told");
+  });
+});
+
+test("a settings restore that is refused before its write changes nothing", async () => {
+  await withHarness(async (harness) => {
+    const connection = await connect(harness);
+    seedLibrary(harness, "lib-1", [movie("m1")]);
+    const library = await harness.manager.attachLibrary(harness.admin, connection.id, { remoteId: "lib-1" });
+    const exported = harness.manager.exportConfiguration(harness.admin);
+    const snapshot = () => JSON.stringify({ connections: harness.store.mediaConnections(), libraries: harness.store.remoteLibraries() });
+    const before = snapshot();
+    const dangling = { version: 1, connections: [], libraries: [{ ...exported.libraries[0], connectionId: "mconn_" + "0".repeat(32) }] };
+    await assert.rejects(harness.manager.restoreSettingsConfiguration(harness.admin, dangling, () => { throw new Error("must not run"); }), { code: "invalid-input" });
+    assert.equal(snapshot(), before, "a configuration that does not stand on its own is refused before anything is written");
+    harness.revokeBeforeNextWrite();
+    await assert.rejects(harness.manager.restoreSettingsConfiguration(harness.admin, exported, () => undefined), ResourceError);
+    assert.equal(snapshot(), before, "a revoked session writes nothing");
+    assert.equal(harness.store.remoteLibraries()[0]!.id, library.id);
+  });
+});
+
+test("startup and the periodic sweep expire orphaned history and mark a detached row once", async () => {
+  const now = Date.parse("2026-06-01T00:00:00.000Z");
+  const thirtyOneDaysAgo = new Date(now - 31 * 24 * 60 * 60 * 1000).toISOString();
+  const connection = {
+    id: `mconn_${"1".repeat(32)}`, provider: "jellyfin", name: "Media", baseUrl: "http://media.example",
+    allowLan: false, allowLoopback: false, serverId: "server-1", accountId: "user-1", enabled: true, generation: 0,
+    addedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const library = {
+    id: `rlib_${"2".repeat(32)}`, connectionId: connection.id, remoteId: "lib-1", name: "Library lib-1", type: "movie",
+    enabled: true, order: 0, allowedUsers: [], showOnHome: true, showInContinueWatching: true,
+  };
+  const rows = {
+    [historyRow("expired", "lib-1").key as string]: { ...historyRow("expired", "lib-1"), orphanedAt: thirtyOneDaysAgo },
+    [historyRow("legacy", "lib-gone").key as string]: historyRow("legacy", "lib-gone"),
+    [historyRow("live", "lib-1").key as string]: historyRow("live", "lib-1"),
+  };
+  const harness = await mount({ users: [admin], remoteMedia: { [ADA]: rows }, connections: [connection], libraries: [library], cleanupIntervalMs: 20 });
+  try {
+    assert.deepEqual(Object.keys(harness.store.userData(ADA).remoteMedia ?? {}).sort(),
+      [historyRow("legacy", "lib-gone").key, historyRow("live", "lib-1").key].sort(),
+      "the expired row is gone and the legacy one survives its first marking");
+    assert.equal(typeof storedRow(harness, ADA, "legacy", "lib-gone")?.orphanedAt, "string", "a detached row starts its countdown now");
+    assert.equal(storedRow(harness, ADA, "live", "lib-1")?.orphanedAt, undefined, "an attached row is never marked");
+    const writes = harness.writes();
+    await new Promise((resolve) => setTimeout(resolve, 70));
+    assert.equal(harness.writes(), writes, "a sweep with nothing to do never rewrites the state");
+  } finally {
+    await harness.close();
+  }
+});
+
+test("settings restore atomically recovers matching history and marks removed attachments", async () => {
+  await withHarness(async (harness) => {
+    await seedMatchLibrary(harness, [movie("m1")]);
+    const exported = harness.manager.exportConfiguration(harness.admin);
+    const recent = new Date(Date.now() - 60_000).toISOString();
+    const expired = new Date(Date.now() - 31 * 86_400_000).toISOString();
+    const rows = [
+      { ...historyRow("retained", "lib-1"), orphanedAt: recent },
+      historyRow("detached", "lib-2"),
+      { ...historyRow("expired", "lib-1"), orphanedAt: expired },
+    ];
+    await seedHistory(harness, ADA, Object.fromEntries(rows.map((row) => [row.key as string, row])));
+    let observed = false;
+    harness.onWrite(() => {
+      if (harness.store.mediaConnections()[0]?.enabled !== false) return;
+      observed = true;
+      assert.equal(storedRow(harness, ADA, "retained", "lib-1")?.orphanedAt, undefined);
+      assert.equal(typeof storedRow(harness, ADA, "detached", "lib-2")?.orphanedAt, "string");
+      assert.equal(storedRow(harness, ADA, "expired", "lib-1"), undefined);
+    });
+    await harness.manager.restoreSettingsConfiguration(harness.admin, exported, () => undefined);
+    assert.equal(observed, true);
   });
 });

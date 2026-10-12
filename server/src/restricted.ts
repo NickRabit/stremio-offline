@@ -48,6 +48,7 @@ export const DENIED_GETS: Rule[] = [
   // connection inventory; member metadata stays readable under the plain sign-in gate.
   { method: "GET", pattern: /^\/media-servers$/ },
   { method: "GET", pattern: /^\/media-servers\/export$/ },
+  { method: "GET", pattern: /^\/media-servers\/libraries$/ },
   { method: "GET", pattern: /^\/media-servers\/[^/]+\/libraries$/ },
 ];
 
@@ -63,6 +64,7 @@ export const ALLOWED_MUTATIONS: Rule[] = [
   { method: "POST", pattern: /^\/progress$/ },
   { method: "POST", pattern: /^\/progress\/forget$/ },
   { method: "DELETE", pattern: /^\/progress\/[^/]+$/ },
+  { method: "PATCH", pattern: /^\/remote-libraries\/[^/]+\/items\/[^/]+\/state$/ },
   { method: "POST", pattern: /^\/library\/favorite$/ },
   { method: "POST", pattern: /^\/library\/folder$/ },
   { method: "POST", pattern: /^\/library\/ops$/ },

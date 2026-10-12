@@ -9,6 +9,8 @@ import { TrailerPlayer } from "./TrailerPlayer";
 import { IdentifyDialog } from "./IdentifyDialog";
 import { AddonManager } from "./AddonManager";
 import { LibraryManagerDialog, libraryTypeLabel } from "./LibraryManager";
+import { RemoteLibraryBrowser } from "./RemoteLibraryBrowser";
+import { RemotePersonalShelf } from "./RemotePersonalShelf";
 import { PosterMosaic, TileArt } from "./TileArt";
 import { MoveDialog } from "./MoveDialog";
 import { SaveTargetDialog } from "./SaveTargetDialog";
@@ -23,7 +25,7 @@ import { report } from "./diagnostics";
 import { label, titleLanguage } from "./languages";
 import { locale, localeTag, setLocale, t, useI18n, type Key } from "./i18n";
 import { catalogTypeTag } from "./catalog-labels";
-import { addonNotices, canQueue, catalogSourceRows, filmHasNoSource, isLocalStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, repickStream, streamBadge, streamLanguages, streamSize, visibleCatalogStreams, type StreamSort } from "./streams";
+import { addonNotices, canQueue, catalogSourceRows, filmHasNoSource, isLocalStream, isRemoteStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, remoteFilterId, remoteSourceFilter, repickStream, streamBadge, streamLanguages, streamSize, visibleCatalogStreams, type StreamSort } from "./streams";
 import { parseSearchScope } from "./search-scope";
 import { createLiveSearch, type LiveSearch, type LiveSearchState } from "./live-search";
 import { rankByTitle } from "./title-match";
@@ -45,7 +47,7 @@ import { MoreMenu, type MoreItem } from "./MoreMenu";
 import { MediaGallery, type GalleryImage, type GalleryKind } from "./MediaGallery";
 import { SettingsPage } from "./SettingsPage";
 import { resolveStartView } from "./start-view";
-import type { Addon, BuildInfo, BrowseItem, BrowseLibrary, BrowseResult, DeviceTransfer, DownloadsViewPrefs, FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem, FollowView, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, LibraryViewPrefs, NewEpisode, ProgressEntry, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, Stream, Subtitle, Trailer, Video, SearchState } from "./types";
+import type { Addon, BuildInfo, BrowseItem, BrowseLibrary, BrowseResult, DeviceTransfer, DownloadsViewPrefs, FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem, FollowView, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, LibraryViewPrefs, MediaServerProvider, NewEpisode, ProgressEntry, RemoteLibrary, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, Stream, Subtitle, Trailer, Video, SearchState } from "./types";
 
 /** The names of the linked sites. They are trademarks, not interface text, so they are
  *  spelled the same in every language and live here rather than in the catalogues. */
@@ -72,6 +74,8 @@ const legacyLibraryView = (): LibraryViewPrefs | null => {
 const forgetLegacy = () => { try { for (const key of LEGACY_KEYS) localStorage.removeItem(`library-${key}`); } catch { /* storage may be unavailable */ } };
 
 type View = "home" | "catalog" | "library" | "resume" | "favorites" | "following" | "downloads" | "stats" | "addons" | "settings";
+/** One accessible remote library and the sources it reported for the title on screen. */
+type RemoteGroup = { libraryId: string; name: string; provider: MediaServerProvider; order: number; streams: Stream[]; error: string };
 type PlaybackAnchor = { kind: "catalog" | "library"; key: string };
 /** What a list is looking at, in terms the layout cannot invalidate: the item on top and
  *  how far it sits into the view. A rotation rewrites every pixel offset; this survives. */
@@ -84,6 +88,7 @@ type PlaybackReturn = {
   anchor?: PlaybackAnchor & { element: HTMLElement; ratio: number };
 };
 const streamLabel = (item: Stream) => item.name || item.title?.split("\n")[0] || item.description?.split("\n")[0] || "Stream";
+const abortedRequest = (error: unknown) => error instanceof DOMException && error.name === "AbortError";
 
 /** Addons name types freely; only the two we filter by have a translation. */
 const typeLabel = (type: string) => type === "movie" ? t("catalog.movies") : type === "series" ? t("catalog.series") : type;
@@ -197,6 +202,18 @@ export function App() {
   const [selectedCatalog, setSelectedCatalog] = useState(""); const [search, setSearch] = useState(""); const [items, setItems] = useState<Meta[]>([]); const [selected, setSelected] = useState<Meta | null>(null); const [selectedSummary, setSelectedSummary] = useState<Meta | null>(null); const [selectedDownloadTitle, setSelectedDownloadTitle] = useState("");
   const [selectedVideo, setSelectedVideo] = useState<Video | null>(null); const [streams, setStreams] = useState<Stream[]>([]); const [localStreams, setLocalStreams] = useState<Stream[]>([]); const [localLoading, setLocalLoading] = useState(false); const [selectedStream, setSelectedStream] = useState<Stream | null>(null); const [subtitles, setSubtitles] = useState<Subtitle[]>([]); const [localEpisode, setLocalEpisode] = useState(false); const [playbackPreferences, setPlaybackPreferences] = useState<{ audioLanguage?: string; subtitleLanguage?: string | null }>({});
   const nextEpisodePrefetchRef = useRef<{ id: string; promise: Promise<{ streams: Stream[]; subtitles: Subtitle[] }> } | null>(null);
+  const [remoteGroups, setRemoteGroups] = useState<RemoteGroup[]>([]);
+  const [remoteLoading, setRemoteLoading] = useState(0);
+  const [remoteDiscoveryError, setRemoteDiscoveryError] = useState("");
+  const [remoteLibraries, setRemoteLibraries] = useState<RemoteLibrary[]>([]);
+  const [remoteTarget, setRemoteTarget] = useState<{ libraryId: string; itemId: string; nonce: number } | null>(null);
+  const [personalRefresh, setPersonalRefresh] = useState(0);
+  const remoteAbortRef = useRef<AbortController | null>(null);
+  const remoteEpochRef = useRef(0);
+  const remoteTargetForRef = useRef<{ type: string; id: string } | null>(null);
+  const remoteNextPrefetchRef = useRef<{ id: string; libraryId: string; controller: AbortController; promise: Promise<Stream[]> } | null>(null);
+  const remoteTargetNonce = useRef(0);
+  useEffect(() => () => { remoteAbortRef.current?.abort(); remoteNextPrefetchRef.current?.controller.abort(); }, []);
   const [sourcesLoaded, setSourcesLoaded] = useState(false); const [metaLoading, setMetaLoading] = useState(false);
   const [titleLinks, setTitleLinks] = useState<SiteLink[]>([]);
   const [libraryLinks, setLibraryLinks] = useState<Record<string, SiteLink[]>>({});
@@ -1029,6 +1046,10 @@ export function App() {
   const resetCatalog = (pick?: { addonKey: string; type: string; id: string }) => {
     navigated.current = true;
     live.cancel();
+    cancelRemoteWork();
+    setRemoteGroups([]);
+    setRemoteLoading(0);
+    setRemoteDiscoveryError("");
     setCatalogCompact(false);
     const firstCatalog = (pick && catalogs.find((catalog) => catalog.addonKey === pick.addonKey && catalog.type === pick.type && catalog.id === pick.id)) ?? catalogs[0];
     scrollByView.current.catalog = 0;
@@ -1049,6 +1070,8 @@ export function App() {
    * and the page position are restored. */
   const openView = (target: View) => {
     navigated.current = true;
+    // Leaving the Library drops the one-shot remote target, so coming back shows the list.
+    if (target !== "library") setRemoteTarget(null);
     if (target !== view) { setView(target); return; }
     scrollByView.current[target] = 0;
     if (target === "catalog") resetCatalog();
@@ -1271,6 +1294,8 @@ export function App() {
   // The follow of the title on screen. A slow answer for a title that is already gone is
   // dropped; a failure leaves the chip in the not-followed state and never blocks the detail.
   const selectedIdRef = useRef<string | null>(null);
+  const selectedStreamRef = useRef<Stream | null>(null);
+  selectedStreamRef.current = selectedStream;
   selectedIdRef.current = selected?.id ?? null;
   const followLoadedFor = useRef<string | null>(null);
   useEffect(() => {
@@ -1689,12 +1714,19 @@ export function App() {
   const localByLanguage = useMemo(
     () => streamLanguage ? localStreams.filter((stream) => streamLanguages(stream, metaLanguage).includes(streamLanguage)) : localStreams,
     [localStreams, streamLanguage, metaLanguage]);
+  const remoteSelected = remoteFilterId(streamAddon);
+  // The language filter is applied per group, so the menu counts and the rows agree.
+  const remoteByLanguage = useMemo(
+    () => remoteGroups.map((group) => ({ ...group, streams: streamLanguage ? group.streams.filter((stream) => streamLanguages(stream, metaLanguage).includes(streamLanguage)) : group.streams })),
+    [remoteGroups, streamLanguage, metaLanguage]);
+  const remoteFlat = useMemo(() => remoteByLanguage.flatMap((group) => group.streams), [remoteByLanguage]);
+  const remoteFilterStreams = remoteSelected === undefined ? [] : remoteByLanguage.find((group) => group.libraryId === remoteSelected)?.streams ?? [];
   const byAddon = useMemo(
     () => addonFilter ? listedStreams.filter((stream) => stream.addonName === addonFilter) : listedStreams,
     [listedStreams, addonFilter]);
   const languageSources = useMemo(
-    () => localSelected ? localStreams : streamAddon ? byAddon : [...byAddon, ...localStreams],
-    [localSelected, localStreams, streamAddon, byAddon]);
+    () => localSelected ? localStreams : remoteSelected !== undefined ? remoteFilterStreams : streamAddon ? byAddon : [...byAddon, ...localStreams, ...remoteFlat],
+    [localSelected, localStreams, remoteSelected, remoteFilterStreams, streamAddon, byAddon, remoteFlat]);
 
   const streamAddons = useMemo(() => {
     const counts = new Map<string, number>();
@@ -1712,25 +1744,30 @@ export function App() {
   }, [languageSources, streamLanguage, metaLanguage]);
   // Recommended keeps a local copy first; alternate sort modes rank it together with addon rows.
   const sourceRows = useMemo(
-    () => catalogSourceRows(localByLanguage, visibleStreams, streamAddon, streamSort, settings.audioLanguage, addonPriority, metaLanguage),
-    [localByLanguage, visibleStreams, streamAddon, streamSort, settings.audioLanguage, addonPriority, metaLanguage]);
-  const sourceTotal = localSelected ? localStreams.length : offered.length + (streamAddon ? 0 : localStreams.length);
-  const hasPlayableMovieSource = selected?.type === "movie" && sourcesLoaded && (offered.some((stream) => stream.playable) || localStreams.some((stream) => stream.playable));
-  /** A film is worth following for its release only once every addon has answered and none had a source: while they are still asking, the chip would flash up and vanish. */
-  const movieHasNoSource = selected?.type === "movie" && filmHasNoSource({ loaded: sourcesLoaded, pending: pendingSources, playable: hasPlayableMovieSource });
+    () => catalogSourceRows(localByLanguage, visibleStreams, streamAddon, streamSort, settings.audioLanguage, addonPriority, metaLanguage, remoteFlat),
+    [localByLanguage, visibleStreams, streamAddon, streamSort, settings.audioLanguage, addonPriority, metaLanguage, remoteFlat]);
+  const sourceTotal = localSelected ? localStreams.length
+    : remoteSelected !== undefined ? remoteFilterStreams.length
+    : offered.length + (streamAddon ? 0 : localStreams.length + remoteFlat.length);
+  const hasPlayableMovieSource = selected?.type === "movie" && sourcesLoaded && (offered.some((stream) => stream.playable) || localStreams.some((stream) => stream.playable) || remoteFlat.some((stream) => stream.playable));
+  const movieHasNoSource = selected?.type === "movie" && filmHasNoSource({ loaded: sourcesLoaded, pending: pendingSources + remoteLoading + (localLoading ? 1 : 0), playable: hasPlayableMovieSource });
   // The chosen source decides what is still loading: the addon answers or the local probe.
-  const sourcesPending = localSelected ? localLoading : pendingSources > 0;
+  const sourcesPending = (localSelected ? localLoading : pendingSources > 0) || remoteLoading > 0;
   // When a filter removes the chosen source, the pick moves to the first one left -- unless
   // the film is already playing on it, when moving it would restart playback on another source.
   useEffect(() => {
     const preferred = pickDefaultStream(sourceRows) ?? null;
     const next = repickStream({
-      playing: playerOpen, picked: pickedRef.current, pending: pendingSources + (localLoading ? 1 : 0),
-      upgrade: Boolean(preferred && isLocalStream(preferred) && selectedStream && !isLocalStream(selectedStream)),
+      playing: playerOpen, picked: pickedRef.current, pending: pendingSources + (localLoading ? 1 : 0) + remoteLoading,
+      // A late local copy or remote group replaces an automatic addon pick; an explicit pick
+      // and a playing source stay where they are (repickStream keeps both).
+      upgrade: Boolean(preferred && selectedStream && (
+        (isLocalStream(preferred) && !isLocalStream(selectedStream))
+        || (isRemoteStream(preferred) && !isLocalStream(selectedStream) && !isRemoteStream(selectedStream)))),
       visible: sourceRows, selected: selectedStream, preferred,
     });
     if (next.move) setSelectedStream(next.to);
-  }, [sourceRows, localStreams, pendingSources, localLoading, playerOpen]);
+  }, [sourceRows, localStreams, pendingSources, localLoading, remoteLoading, playerOpen]);
 
   const catalogProgress = (item: Meta) => resume.find((entry) => item.type === "series"
     ? entry.series?.id === item.id
@@ -1765,13 +1802,79 @@ export function App() {
       return [] as Stream[];
     }
   };
+  const remoteProviderLabel = (provider: MediaServerProvider) =>
+    t(provider === "emby" ? "mediaServer.provider.emby" : "mediaServer.provider.jellyfin");
+  const cancelRemoteWork = () => {
+    remoteAbortRef.current?.abort();
+    remoteEpochRef.current += 1;
+    remoteNextPrefetchRef.current?.controller.abort();
+    remoteNextPrefetchRef.current = null;
+  };
+  const remoteLibraryLabel = (libraryId: string) => {
+    const library = remoteLibraries.find((row) => row.id === libraryId);
+    return library ? `${remoteProviderLabel(library.provider)} · ${library.name}` : libraryId;
+  };
+  // A library's failure stays in its own row and never becomes a toast.
+  const loadRemoteLibrary = async (library: { id: string; name: string; provider: MediaServerProvider; order: number }, type: string, id: string, epoch: number, signal?: AbortSignal) => {
+    setRemoteLoading((count) => count + 1);
+    try {
+      const streams = await api.remoteLibraryStreams(library.id, type, id, signal);
+      if (epoch !== remoteEpochRef.current) return;
+      setRemoteGroups((previous) => previous.map((group) => group.libraryId === library.id ? { ...group, streams, error: "" } : group));
+    } catch (error) {
+      if (epoch !== remoteEpochRef.current || abortedRequest(error)) return;
+      setRemoteGroups((previous) => previous.map((group) => group.libraryId === library.id ? { ...group, streams: [], error: describeError(error) } : group));
+    } finally {
+      if (epoch === remoteEpochRef.current) setRemoteLoading((count) => Math.max(0, count - 1));
+    }
+  };
+  const loadRemoteGroups = async (type: string, id: string) => {
+    remoteAbortRef.current?.abort();
+    const controller = new AbortController();
+    remoteAbortRef.current = controller;
+    const epoch = ++remoteEpochRef.current;
+    remoteTargetForRef.current = { type, id };
+    setRemoteGroups([]);
+    setRemoteLoading(1);
+    setRemoteDiscoveryError("");
+    let libraries: RemoteLibrary[];
+    try {
+      libraries = await api.remoteLibraries({ timeoutMs: 3_000, signal: controller.signal });
+    } catch (error) {
+      if (epoch !== remoteEpochRef.current || abortedRequest(error)) return;
+      setRemoteLoading(0);
+      setRemoteLibraries([]);
+      setRemoteDiscoveryError(t("sources.remoteUnavailable"));
+      return;
+    }
+    if (epoch !== remoteEpochRef.current) return;
+    setRemoteLoading(0);
+    const ordered = [...libraries].sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
+    setRemoteLibraries(ordered);
+    setRemoteGroups(ordered.map((library) => ({ libraryId: library.id, name: library.name, provider: library.provider, order: library.order, streams: [], error: "" })));
+    await Promise.all(ordered.map((library) => loadRemoteLibrary(library, type, id, epoch, controller.signal)));
+  };
+  const retryRemoteLibrary = (libraryId: string) => {
+    const target = remoteTargetForRef.current;
+    const library = remoteLibraries.find((row) => row.id === libraryId);
+    if (!target || !library) return;
+    setRemoteGroups((previous) => previous.map((group) => group.libraryId === libraryId ? { ...group, error: "" } : group));
+    void loadRemoteLibrary(library, target.type, target.id, remoteEpochRef.current, remoteAbortRef.current?.signal);
+  };
+  const retryRemoteGroups = () => {
+    const target = remoteTargetForRef.current;
+    if (target) void loadRemoteGroups(target.type, target.id);
+  };
   /** Each addon is asked separately, so results show up as they arrive instead of waiting for the slowest. */
   const fetchSources = async (type: string, id: string, video?: Video) => {
     const request = ++sourcesRequestRef.current;
     const stale = () => request !== sourcesRequestRef.current;
+    cancelRemoteWork();
     setSelectedVideo(video ?? null); setSourcesLoaded(false); setBusy(true);
     setStreams([]); setLocalStreams([]); setLocalLoading(false); setSelectedStream(null); setSubtitles([]); setPendingSources(0);
     pickedRef.current = false;
+    // Remote libraries are asked separately: an addon or subtitle failure cannot hide them.
+    void loadRemoteGroups(type, id);
     // Local copies are asked for beside the addons and outside the try: an addon or subtitle
     // failure must not drop them.
     setLocalLoading(true);
@@ -1824,6 +1927,7 @@ export function App() {
   };
   const closeMeta = () => {
     sourcesRequestRef.current += 1;
+    cancelRemoteWork();
     linksRequestRef.current += 1;
     trailerRequestRef.current += 1;
     setSelected(null); setSelectedSummary(null); setSelectedDownloadTitle(""); setSelectedVideo(null); setStreams([]); setLocalStreams([]); setLocalLoading(false); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false); setGalleryIndex(null); setDetailCompact(false); setTitleLinks([]); setTitleTrailer(null);
@@ -1849,21 +1953,76 @@ export function App() {
     if (!playerOpen || localStream || !selected || !nextCatalogEpisode?.id) return;
     const id = nextCatalogEpisode.id;
     const type = selected.type || currentCatalog?.type || "series";
+    const current = selectedStreamRef.current;
+    if (current && isRemoteStream(current) && current.remoteItem) {
+      // The next episode of a remote source is looked for on that one library, never elsewhere.
+      const libraryId = current.remoteItem.libraryId;
+      remoteNextPrefetchRef.current?.controller.abort();
+      const controller = new AbortController();
+      const promise = api.remoteLibraryStreams(libraryId, type, id, controller.signal);
+      void promise.catch(() => undefined);
+      remoteNextPrefetchRef.current = { id, libraryId, controller, promise };
+      return;
+    }
     const promise = fetchEpisodeSources(type, id);
     // The viewer may never ask for this one, and nobody would be waiting to hear it failed.
     void promise.catch(() => undefined);
     nextEpisodePrefetchRef.current = { id, promise };
   }, [playerOpen, localStream, selected?.id, selected?.type, nextCatalogEpisode?.id, currentCatalog?.type]);
+  const stopPlayback = () => { setPlayerOpen(false); setLocalStream(null); setLocalEpisode(false); setPlaybackPreferences({}); };
+  /** Remote hand-off: the same library and version, or that episode's own selector. */
+  const playNextRemoteEpisode = async (type: string, id: string, current: Stream, episode: Video) => {
+    const libraryId = current.remoteItem!.libraryId;
+    const request = sourcesRequestRef.current;
+    const titleId = selectedIdRef.current;
+    const sourceId = current.sourceId;
+    const remoteEpoch = remoteEpochRef.current;
+    const stale = () => request !== sourcesRequestRef.current || remoteEpoch !== remoteEpochRef.current
+      || titleId !== selectedIdRef.current || selectedStreamRef.current?.sourceId !== sourceId
+      || !playerOpenRef.current;
+    const prefetched = remoteNextPrefetchRef.current;
+    const usePrefetch = prefetched?.id === id && prefetched.libraryId === libraryId;
+    let streams: Stream[] = [];
+    let failure: unknown = null;
+    try {
+      streams = usePrefetch ? await prefetched!.promise : await api.remoteLibraryStreams(libraryId, type, id);
+    } catch (error) {
+      if (abortedRequest(error) || stale()) return false;
+      failure = error;
+    }
+    if (usePrefetch) remoteNextPrefetchRef.current = null;
+    if (stale()) return false;
+    const wanted = current.name?.trim();
+    const pick = failure || !wanted ? null : streams.find((stream) => stream.provider === current.provider && stream.name?.trim() === wanted) ?? null;
+    setSelectedVideo(episode); setEpisodesOpen(false);
+    setStreams([]); setLocalStreams([]); setLocalLoading(false); setSubtitles([]); setPendingSources(0);
+    setRemoteDiscoveryError("");
+    setRemoteGroups([{ libraryId, name: current.libraryName ?? "", provider: current.provider!, order: 0, streams, error: failure ? describeError(failure) : "" }]);
+    setRemoteLoading(0);
+    setSourcesLoaded(true);
+    if (pick) {
+      setSelectedStream(pick); pickedRef.current = true;
+      return Boolean(pick.playable);
+    }
+    // No verified version: playback stops and this episode's real list is shown.
+    setSelectedStream(null); pickedRef.current = false;
+    stopPlayback();
+    return false;
+  };
   const playNextCatalogEpisode = async () => {
     if (!selected || !nextCatalogEpisode || nextBusyRef.current) return false;
     nextBusyRef.current = true; setNextBusy(true);
     const currentStream = selectedStream;
+    const type = selected.type || currentCatalog?.type || "series";
+    const id = nextCatalogEpisode.id || selected.id;
+    if (currentStream && isRemoteStream(currentStream) && currentStream.remoteItem) {
+      try { return await playNextRemoteEpisode(type, id, currentStream, nextCatalogEpisode); }
+      finally { nextBusyRef.current = false; setNextBusy(false); }
+    }
     const request = ++sourcesRequestRef.current;
     const stale = () => request !== sourcesRequestRef.current;
     setSelectedVideo(nextCatalogEpisode); setEpisodesOpen(false); setSourcesLoaded(false); setBusy(true);
     setStreams([]); setLocalStreams([]); setLocalLoading(false); setSelectedStream(null); setSubtitles([]); setPendingSources(0); pickedRef.current = false;
-    const type = selected.type || currentCatalog?.type || "series";
-    const id = nextCatalogEpisode.id || selected.id;
     // The new episode's local copies are looked up too; they must not change what is about to
     // play, and the repick guard on `playerOpen` keeps the playing source in place.
     setLocalLoading(true);
@@ -1939,7 +2098,7 @@ export function App() {
   };
 
   const downloadStreamToDevice = async () => {
-    if (!selectedStream?.playable) return false;
+    if (!selectedStream?.playable || isRemoteStream(selectedStream)) return false;
     try {
       const filename = await saveToDevice({ title: videoTitle, stream: selectedStream, media: selectedMedia() });
       notify(t("save.startedViaServer", { filename }));
@@ -1991,11 +2150,13 @@ export function App() {
    *  itself, a new episode opens its show the way the Library's row does, and a suggestion opens
    *  the dialog the library page opens. */
   const homePlay = (card: HomeCard) => {
+    if (card.kind === "remote") { openRemoteCard(card); return; }
     if (card.kind === "resume-catalogue" || card.kind === "episode" || card.kind === "discovery" || card.kind === "confirm" || card.kind === "favorite-catalogue") return;
     const title = card.kind === "favorite" || card.kind === "recent" || card.kind === "tonight" ? card.label : card.title;
     void playLocal(title, card.path, card.poster, (card.kind === "resume-file" || card.kind === "completed" || card.kind === "recent") && card.season != null);
   };
   const homeOpen = (card: HomeCard) => {
+    if (card.kind === "remote") { openRemoteCard(card); return; }
     if (card.kind === "episode" || card.kind === "discovery") { void openFromCatalog({ type: card.type, id: card.kind === "episode" ? card.metaId : card.id, name: card.name, poster: card.poster }); return; }
     if (card.kind === "confirm") { setSuggestionsOpen(true); return; }
     if (card.kind === "favorite-catalogue") { void openFromCatalog({ type: card.type, id: card.id, name: card.name, poster: card.poster }); return; }
@@ -2014,9 +2175,27 @@ export function App() {
     else if (target === "favorites") openView("favorites");
     else if (target === "confirm") setSuggestionsOpen(true);
   };
+  /** Opens a remote card's item in the Library's native browser. */
+  const openRemoteCard = (card: Extract<HomeCard, { kind: "remote" }>) => {
+    navigated.current = true;
+    remoteTargetNonce.current += 1;
+    setRemoteTarget({ libraryId: card.libraryId, itemId: card.itemId, nonce: remoteTargetNonce.current });
+    setView("library");
+  };
+  const refreshPersonal = () => {
+    setPersonalRefresh((value) => value + 1);
+    home.refresh(["resume", "favorites"]);
+  };
   /** The Continue watching view's menu action: forgetting every key a card stands for, then
    *  re-reading both lists, so a card that stays cannot look removed and come back on a poll. */
   const forgetResume = (card: HomeCard) => {
+    if (card.kind === "remote") {
+      if (!window.confirm(t("home.forgetConfirm", { title: card.title }))) return;
+      // Only the position is cleared; the remote favourite and watched flags are kept.
+      void api.saveRemoteState(card.libraryId, card.itemId, { position: 0, duration: 0 })
+        .then(() => { void loadResume(resumeFilter, 0); home.refresh(["resume"]); refreshPersonal(); }, fail);
+      return;
+    }
     if (card.kind !== "resume-file" && card.kind !== "resume-catalogue") return;
     if (!window.confirm(t("home.forgetConfirm", { title: card.title }))) return;
     void api.forgetManyProgress(card.forgetKeys)
@@ -2078,7 +2257,7 @@ export function App() {
         rows={home.rows} order={home.order} shape={settings.homeTileShape} onToggleShape={() => void toggleShape("homeTileShape")}
         onRetry={(row) => home.refresh([row])} onShowAll={homeShowAll} onPlay={homePlay} onOpenCatalogue={homeOpen}
         onShuffle={(row, shuffle) => home.refresh([row], { shuffle })} onVisible={home.reveal} onOpenCatalog={(row) => { const pick = parseHomeCatalogRowId(row); if (pick) resetCatalog(pick); }}
-        onReveal={revealInLibrary} onForgotten={() => home.refresh(["resume"])} onError={fail}/>}
+        onReveal={revealInLibrary} onForgotten={refreshPersonal} onError={fail}/>}
       {view === "catalog" && <section className={`catalog-view ${catalogCompact ? "catalog-compact" : ""}`} {...chromeGestures(() => gridRef.current)} onFocusCapture={(event) => {
         if ((event.target as HTMLElement).closest(".searchbar,.filterbar")) setCatalogCompact(false);
       }}><Heading eyebrow={t("catalog.eyebrow")} title={t("catalog.title")}/>
@@ -2206,11 +2385,13 @@ export function App() {
             <div className="detail-workflow">
             {selected.videos?.length ? !(chosenEpisode && sourcesLoaded) && <div className={`episodes ${chosenEpisode ? "collapsed" : ""}`}>{chosenEpisode ?? <><div className="subhead episode-head"><h3>{t("episodes.heading")}</h3><div className="episode-tools">{seasons.length > 1 && <select className="season-select" aria-label={t("episodes.season")} value={activeSeason ?? ""} onChange={(event) => setSeason(Number(event.target.value))}>{seasons.map((value) => <option key={value} value={value}>{value === 0 ? t("episodes.specials") : t("episodes.seasonNumber", { season: value })}</option>)}</select>}{activeSeason != null && <button title={activeSeason === 0 ? t("episodes.downloadSpecials") : t("episodes.downloadSeason", { season: activeSeason })} onClick={() => void enqueueEpisodes("season")}><Download/> {activeSeason === 0 ? t("episodes.specials") : t("episodes.seasonShort", { season: activeSeason })}</button>}<button title={t("episodes.downloadShow")} onClick={() => void enqueueEpisodes("series")}><Download/> {t("episodes.wholeShow")}</button>{selectedVideo ? <button onClick={() => setEpisodesOpen(false)}>{t("common.collapse")}</button> : <span>{visibleEpisodes.length}</span>}</div></div><div className="episode-list" onScroll={(event) => compactOnScroll(event, detailCompact, setDetailCompact, true)}>{visibleEpisodes.map((video, index) => <button key={video.id || index} className={selectedVideo?.id === video.id ? "selected" : ""} onClick={() => { setEpisodesOpen(false); void loadSources(video); }}><b>{video.season != null ? `${String(video.season).padStart(2,"0")}×${String(video.episode || 0).padStart(2,"0")}` : index + 1}</b><span>{video.title || video.name || t("episodes.one")}</span><ChevronRight/></button>)}</div></>}</div> : !sourcesLoaded && <button className="primary wide" onClick={() => loadSources()} disabled={busy}>{t("sources.load")}</button>}
             {sourcesLoaded && (!selected.videos?.length || !episodesOpen) && <div className="sources"><div className={`subhead ${chosenEpisode ? "sources-episode" : ""}`}>{chosenEpisode ?? <h3>{t("sources.heading")}</h3>}<span>{sourceRows.length === sourceTotal ? sourceTotal : t("sources.ofTotal", { shown: sourceRows.length, total: sourceTotal })}{pendingSources > 0 ? ` · ${t("sources.loadingFrom", { count: pendingSources })}` : ""}</span></div>
-              {(offered.length > 1 || localStreams.length > 0) && <div className="stream-filters">
+              {(offered.length > 1 || localStreams.length > 0 || remoteGroups.length > 0) && <div className="stream-filters">
                 <label><span>{t("sources.addon")}</span><select value={streamAddon} onChange={(event) => setStreamAddon(event.target.value)}>
-                  <option value="">{t("sources.allAddons")} ({byLanguage.length + localByLanguage.length})</option>
+                  <option value="">{t("sources.allAddons")} ({byLanguage.length + localByLanguage.length + remoteFlat.length})</option>
                   {(localStreams.length > 0 || localSelected) && <option value={LOCAL_SOURCE}>{t("sources.localFilter")} ({localStreams.length})</option>}
                   {streamAddons.map(([name, count]) => <option key={name} value={name}>{name} ({count})</option>)}
+                  {remoteByLanguage.map((group) => <option key={group.libraryId} value={remoteSourceFilter(group.libraryId)}>{remoteProviderLabel(group.provider)} · {group.name} ({group.streams.length})</option>)}
+                  {remoteSelected !== undefined && !remoteByLanguage.some((group) => group.libraryId === remoteSelected) && <option value={streamAddon}>{remoteLibraryLabel(remoteSelected)} (0)</option>}
                 </select></label>
                 {streamLangs.length > 0 && <label><span>{t("auth.language")}</span><select value={streamLanguage} onChange={(event) => setStreamLanguage(event.target.value)}>
                   <option value="">{t("sources.anyLanguage")} ({languageSources.length})</option>
@@ -2222,23 +2403,38 @@ export function App() {
                   <option value="size-asc">{t("sources.sortSmallest")}</option>
                   <option value="addon">{t("sources.sortAddon")}</option>
                 </select></label>
-              </div>}<div className="stream-list" onScroll={(event) => compactOnScroll(event, detailCompact, setDetailCompact, true)}>{sourceRows.map((stream, index) => { const local = isLocalStream(stream); const probedLanguages = local && selectedStream === stream ? [...new Set((inspection?.audioTracks ?? []).map((track) => track.language).filter((language): language is string => Boolean(language)))] : []; const languagesForRow = probedLanguages.length ? probedLanguages : streamLanguages(stream, metaLanguage); return <button key={index} className={selectedStream === stream ? "selected" : ""} title={local ? t("sources.localHint") : undefined} onClick={() => { pickedRef.current = true; setSelectedStream(stream); }}><i className={local ? "local" : stream.kind === "torrent" ? "rd" : stream.playable ? undefined : "ext"}>{local ? <><HardDrive/>{t("sources.localBadge")}</> : streamBadge(stream)}</i><span><strong>{local ? stream.behaviorHints?.filename ?? streamLabel(stream) : streamLabel(stream)}</strong><small>{local ? stream.libraryName : stream.addonName}</small></span><span className="stream-meta">{streamSize(stream) ? <b>{bytes(streamSize(stream))}</b> : null}<small>{languagesForRow.map((code) => <em className="lang-badge" key={code} title={probedLanguages.length ? t("sources.audioInFile") : t("sources.languageGuess")}>{label(code)}</em>)}</small></span>{selectedStream === stream && <Check/>}</button>; })}</div>
+              </div>}<div className="stream-list" onScroll={(event) => compactOnScroll(event, detailCompact, setDetailCompact, true)}>{sourceRows.map((stream, index) => {
+                const local = isLocalStream(stream);
+                const remote = isRemoteStream(stream);
+                const probedLanguages = local && selectedStream === stream ? [...new Set((inspection?.audioTracks ?? []).map((track) => track.language).filter((language): language is string => Boolean(language)))] : [];
+                const languagesForRow = probedLanguages.length ? probedLanguages : streamLanguages(stream, metaLanguage);
+                return <button key={index} className={selectedStream === stream ? "selected" : ""} title={local ? t("sources.localHint") : remote ? t("sources.remoteHint") : undefined} onClick={() => { pickedRef.current = true; setSelectedStream(stream); }}>
+                  <i className={local ? "local" : remote ? "remote" : stream.kind === "torrent" ? "rd" : stream.playable ? undefined : "ext"}>{local ? <><HardDrive/>{t("sources.localBadge")}</> : streamBadge(stream)}</i>
+                  <span><strong>{local ? stream.behaviorHints?.filename ?? streamLabel(stream) : streamLabel(stream)}</strong><small>{local ? stream.libraryName : remote ? [stream.provider ? remoteProviderLabel(stream.provider) : "", stream.libraryName].filter(Boolean).join(" · ") : stream.addonName}</small></span>
+                  <span className="stream-meta">{streamSize(stream) ? <b>{bytes(streamSize(stream))}</b> : null}<small>{languagesForRow.map((code) => <em className="lang-badge" key={code} title={probedLanguages.length ? t("sources.audioInFile") : t("sources.languageGuess")}>{label(code)}</em>)}</small></span>
+                  {selectedStream === stream && <Check/>}
+                </button>;
+              })}</div>
               {!sourceRows.length && sourcesPending && <div className="no-sources">{t("sources.asking")}</div>}
-              {!sourceRows.length && !sourcesPending && (!offered.length || localSelected) && <div className="no-sources">{t("sources.none")}</div>}
+              {!sourceRows.length && !sourcesPending && (!offered.length || localSelected || remoteSelected !== undefined) && <div className="no-sources">{t("sources.none")}</div>}
               {Boolean(offered.length) && !sourceRows.length && !sourcesPending && !localSelected && hiddenTorrents && !addonFilter && !streamLanguage && <div className="no-sources">{t("sources.onlyTorrentsBefore")} <button className="link-button" onClick={() => openView("settings")}>{t("nav.settings")}</button> {t("sources.onlyTorrentsAfter")}</div>}
               {Boolean(offered.length) && !sourceRows.length && !sourcesPending && !localSelected && !(hiddenTorrents && !addonFilter && !streamLanguage) && <div className="no-sources">{t("sources.noneMatchFilter", { count: offered.length })} <button className="link-button" onClick={() => { setStreamAddon(""); setStreamLanguage(""); }}>{t("sources.clearFilters")}</button></div>}
               {notices.map((notice) => <p className="notice" key={notice.sourceId}><b>{notice.addonName}</b> {noticeText(notice)}</p>)}
+              {remoteDiscoveryError && <p className="notice" role="alert"><b>{t("mediaServer.remoteTitle")}</b> {remoteDiscoveryError} <button className="link-button" onClick={() => retryRemoteGroups()}>{t("home.retry")}</button></p>}
+              {remoteGroups.filter((group) => group.error).map((group) => <p className="notice" role="alert" key={group.libraryId}><b>{remoteProviderLabel(group.provider)} · {group.name}</b> {t("sources.remoteFailed")} <button className="link-button" onClick={() => retryRemoteLibrary(group.libraryId)}>{t("home.retry")}</button></p>)}
               {selectedStream?.kind === "torrent" && <p className="notice">{t("sources.torrentNotice")}</p>}
               <div className="source-footer"><div className="source-info"><Subtitles/> {t("sources.subtitleCount", { count: selectedLocalPath ? 0 : subtitles.length + (selectedStream?.subtitles?.length || 0) })}
                 {inspection && <> · <b>{t("sources.audioInFile")}</b> {inspection.audioTracks.length ? inspection.audioTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}
                 · <b>{t("sources.subtitlesInFile")}</b> {inspection.subtitleTracks.length ? inspection.subtitleTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}</>}
-              {selectedStream?.playable && !inspection && <> · {t("sources.probing")}</>}</div><div className="action-slot"><div className="actions"><button className="primary" disabled={!canPlay} onClick={startCatalogPlayback}><CirclePlay/> {t("player.play")}</button>{selectedLocalPath ? <button onClick={() => revealInLibrary(selectedLocalPath)}><FolderOpen/> {t("library.showInLibrary")}</button> : <div className="split-button"><button disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} onClick={() => void enqueue()}><HardDrive/> {t("save.toLibrary")}</button><button className="split-button-toggle" disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} aria-haspopup="dialog" aria-label={t("save.toLibraryElsewhere")} title={t("save.toLibraryElsewhere")} onClick={() => setSaveTargetOpen(true)}><ChevronDown/></button></div>}<button disabled={!canPlay} onClick={() => { if (selectedLocalPath) void downloadLibraryFile(selectedLocalPath); else void downloadStreamToDevice(); }}><Download/> {t("save.toDevice")}</button></div></div></div>
+              {selectedStream?.playable && !inspection && <> · {t("sources.probing")}</>}</div><div className="action-slot"><div className="actions"><button className="primary" disabled={!canPlay} onClick={startCatalogPlayback}><CirclePlay/> {t("player.play")}</button>{selectedLocalPath ? <button onClick={() => revealInLibrary(selectedLocalPath)}><FolderOpen/> {t("library.showInLibrary")}</button> : <div className="split-button"><button disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} onClick={() => void enqueue()}><HardDrive/> {t("save.toLibrary")}</button><button className="split-button-toggle" disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} aria-haspopup="dialog" aria-label={t("save.toLibraryElsewhere")} title={t("save.toLibraryElsewhere")} onClick={() => setSaveTargetOpen(true)}><ChevronDown/></button></div>}<button disabled={!canPlay || Boolean(selectedStream && isRemoteStream(selectedStream))} onClick={() => { if (selectedLocalPath) void downloadLibraryFile(selectedLocalPath); else void downloadStreamToDevice(); }}><Download/> {t("save.toDevice")}</button></div></div></div>
             </div>}
             </div>
           </> : <Empty icon={<Film/>} title={t("catalog.pickTitle")} text={t("catalog.pickText")}/>}</section></div>
         </>}
       </section>}
       {view === "library" && <section className={`library-page${libraryCompact ? " library-compact" : ""}`} {...chromeGestures(() => browseScrollRef.current)} onKeyDown={(event) => { if (event.key === "Escape") setMenuFor(null); }} onClick={() => menuFor && setMenuFor(null)}><Heading eyebrow={t("library.eyebrow")} title={t("library.title")}/>
+        <RemoteLibraryBrowser audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} onError={fail}
+          {...(remoteTarget ? { initialTarget: remoteTarget } : {})} onPersonalChange={refreshPersonal}/>
         <div className="panel browse-panel">
         <div className="browse-head">
         <div className="browse-bar">
@@ -2439,12 +2635,16 @@ export function App() {
         items={resumeCards} busy={resumeBusy} shape={settings.resumeTileShape} onToggleShape={() => void toggleShape("resumeTileShape")} actions={resumeActions}
         hasMore={resumeCards.length < resumeCardsTotal} loadingMore={resumeLoadingMore}
         onLoadMore={() => void loadResume(resumeFilter, resumeCards.length)}/>}
-      {view === "favorites" && <FavoritesView
-        filter={favoritesFilter} onFilter={setFavoritesFilter}
-        items={favorites} busy={favoritesBusy} shape={settings.favoritesTileShape} onToggleShape={() => void toggleShape("favoritesTileShape")}
-        onPlay={openFavorite} onOpenFolder={openFavorite} onOpenCatalog={(item: FavoriteCatalogItem) => void openFromCatalog(item)}
-        hasMore={favorites.length < favoritesTotal} loadingMore={favoritesLoadingMore}
-        onLoadMore={() => void loadFavorites(favoritesFilter, favorites.length)}/>}
+      {view === "favorites" && <>
+        <FavoritesView
+          filter={favoritesFilter} onFilter={setFavoritesFilter}
+          items={favorites} busy={favoritesBusy} shape={settings.favoritesTileShape} onToggleShape={() => void toggleShape("favoritesTileShape")}
+          onPlay={openFavorite} onOpenFolder={openFavorite} onOpenCatalog={(item: FavoriteCatalogItem) => void openFromCatalog(item)}
+          hasMore={favorites.length < favoritesTotal} loadingMore={favoritesLoadingMore}
+          onLoadMore={() => void loadFavorites(favoritesFilter, favorites.length)}/>
+        <RemotePersonalShelf refreshToken={personalRefresh} shape={settings.favoritesTileShape}
+          onOpen={homeOpen} onForgotten={refreshPersonal} onError={fail}/>
+      </>}
       {view === "downloads" && <Downloads jobs={downloads} deviceTransfers={deviceTransfers} libraries={libraries} halt={queueHalt} admin={session!.role === "admin"} refresh={loadDownloads} onError={fail} onReveal={revealInLibrary} prefs={views.downloads} onPrefs={persistDownloadPrefs}/>}
       {view === "stats" && <StatsPanel key={statsReset} onError={fail}/>}
       {view === "following" && <FollowingPage canRetain={session!.role === "admin"} follows={follows} newEpisodes={newEpisodes} languages={languages} libraries={libraries} addons={addons} shape={settings.followingTileShape} onToggleShape={() => void toggleShape("followingTileShape")} audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} onChanged={applyFollowChange} onOpenSeries={(item) => void openFromCatalog(item)} onNotify={notify}/>}
@@ -2467,7 +2667,7 @@ export function App() {
       onToggleFavorite={localStream?.localPath || selected ? () => void togglePlayerFavorite() : undefined}
       onDownload={enqueue}
       onDeviceDownload={() => localStream?.localPath ? downloadLibraryFile(localStream.localPath) : downloadStreamToDevice()}
-      onClose={() => { setPlayerOpen(false); setLocalStream(null); setLocalEpisode(false); setPlaybackPreferences({}); }}/>
+      onClose={stopPlayback}/>
     {libraryManagerOpen && <LibraryManagerDialog restricted={restricted || !admin} onClose={() => setLibraryManagerOpen(false)} onChanged={refreshLibraries} onError={fail} onNotify={notify}/>}
     {movePath && <MoveDialog path={movePath.path} paths={movePath.paths} copy={movePath.copy} label={movePath.label}
       itemType={movePath.type} libraries={libraries} onClose={() => setMovePath(null)}

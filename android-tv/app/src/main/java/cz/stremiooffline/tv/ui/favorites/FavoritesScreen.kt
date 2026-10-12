@@ -1,6 +1,7 @@
 package cz.stremiooffline.tv.ui.favorites
 
 import androidx.annotation.StringRes
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -14,10 +15,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -29,6 +35,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.tv.material3.Border
+import androidx.tv.material3.ClickableSurfaceDefaults
+import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.BrowseItem
@@ -44,6 +53,7 @@ import cz.stremiooffline.tv.ui.components.PosterCard
 import cz.stremiooffline.tv.ui.components.ShimmerCards
 import cz.stremiooffline.tv.ui.components.leftToNeighbour
 import cz.stremiooffline.tv.ui.detail.DetailData
+import cz.stremiooffline.tv.ui.detail.RemoteDetailData
 import cz.stremiooffline.tv.ui.theme.Tokens
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -53,6 +63,11 @@ fun favoritesFilterTag(filter: FavoriteFilter): String = "favorites_filter_" + f
 /** The grid key of one favourite, and the tag a test focuses it by. */
 fun favoriteCardTag(item: FavoriteItemDto): String = item.key
 
+fun favoritesSegmentTag(segment: FavoritesSegment): String = "favorites_segment_" + segment.name
+
+/** Which half of Favourites is on screen. */
+enum class FavoritesSegment { Local, MediaServers }
+
 /** The one Favourites section: a merged grid of library and catalogue stars, narrowed by filter
  *  chips. A library entry opens the library detail (browsing a folder first), a catalogue entry
  *  opens the catalogue detail. */
@@ -61,12 +76,15 @@ fun FavoritesRoute(
   api: TvApi,
   onOpenDetail: (DetailData) -> Unit,
   onOpenCatalog: (CatalogDetailArgs) -> Unit,
+  /** A remote media-server star opens its own playable detail. */
+  onOpenRemote: (RemoteDetailData) -> Unit = {},
   /** A library folder that is not one title's own files opens the library at that path instead. */
   onOpenLibrary: (String) -> Unit = {},
   modifier: Modifier = Modifier,
   restoreToken: Int = 0,
   refreshToken: Int = 0,
 ) {
+  var segment by rememberSaveable { mutableStateOf(FavoritesSegment.Local) }
   val viewModel = viewModel<FavoritesViewModel>(factory = FavoritesViewModel.factory(api))
   LaunchedEffect(Unit) { viewModel.start() }
   // Re-entering the section, or returning from a detail: the star state may have changed.
@@ -110,6 +128,19 @@ fun FavoritesRoute(
       fontWeight = FontWeight.ExtraBold,
       letterSpacing = (-0.8).sp,
     )
+    FavoritesSegments(segment = segment, onSelect = { segment = it })
+    if (segment == FavoritesSegment.MediaServers) {
+      RemotePersonalRoute(
+        api = api,
+        imageUrl = { path -> path?.let(api::url) },
+        filter = "favorites",
+        onOpenRemote = onOpenRemote,
+        modifier = Modifier.weight(1f).fillMaxWidth(),
+        restoreToken = restoreToken,
+        refreshToken = refreshToken,
+      )
+      return@Column
+    }
     Row(horizontalArrangement = Arrangement.spacedBy(9.dp), verticalAlignment = Alignment.CenterVertically) {
       FavoriteFilter.entries.forEachIndexed { index, filter ->
         FocusButton(
@@ -165,6 +196,45 @@ fun FavoritesRoute(
             }
           }
         }
+      }
+    }
+  }
+}
+
+/** The Files & catalog / Media servers switch. The remote half loads on its own, so an offline
+ *  media server never breaks the local grid. */
+@Composable
+private fun FavoritesSegments(segment: FavoritesSegment, onSelect: (FavoritesSegment) -> Unit) {
+  Row(
+    modifier = Modifier.focusGroup(),
+    horizontalArrangement = Arrangement.spacedBy(9.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    FavoritesSegment.entries.forEach { entry ->
+      val label = stringResource(
+        if (entry == FavoritesSegment.Local) R.string.favorites_tab_local else R.string.favorites_tab_servers,
+      )
+      var focused by remember { mutableStateOf(false) }
+      val shape = RoundedCornerShape(8.dp)
+      Surface(
+        onClick = { onSelect(entry) },
+        modifier = Modifier
+          .testTag(favoritesSegmentTag(entry))
+          .onFocusChanged { focused = it.isFocused },
+        shape = ClickableSurfaceDefaults.shape(shape = shape),
+        scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
+        border = ClickableSurfaceDefaults.border(
+          border = Border(BorderStroke(1.dp, if (entry == segment) Tokens.Accent else Tokens.Line), shape = shape),
+          focusedBorder = Border(BorderStroke(1.5.dp, Tokens.Accent2), shape = shape),
+        ),
+        colors = ClickableSurfaceDefaults.colors(
+          containerColor = if (entry == segment) Tokens.Accent.copy(alpha = 0.15f) else Tokens.Panel2,
+          contentColor = if (entry == segment) Tokens.Accent2 else Tokens.Text,
+          focusedContainerColor = Tokens.Panel2,
+          focusedContentColor = Tokens.Text,
+        ),
+      ) {
+        Text(label, fontSize = 12.5.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp))
       }
     }
   }

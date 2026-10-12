@@ -100,6 +100,12 @@ export function Home({ jobs, addons, admin, onShowDownloads, onAction, rows, ord
   };
 
   const forget = (card: HomeCard) => {
+    if (card.kind === "remote") {
+      if (!window.confirm(t("home.forgetConfirm", { title: card.title }))) return;
+      // Forgetting a remote card clears its position only; the favourite and watched flags stay.
+      void api.saveRemoteState(card.libraryId, card.itemId, { position: 0, duration: 0 }).then(onForgotten, onError);
+      return;
+    }
     if (card.kind !== "resume-file" && card.kind !== "resume-catalogue") return;
     if (!window.confirm(t("home.forgetConfirm", { title: card.title }))) return;
     void api.forgetManyProgress(card.forgetKeys).then(onForgotten, onError);

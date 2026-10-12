@@ -1,15 +1,17 @@
-# Media-server management and authorized metadata (MS-2)
+# Media-server management and authorized metadata
 
-Status: shipping backend API, no client UI yet. Administrators connect a Jellyfin
-or Emby account and attach its libraries; members granted a library may browse its
-metadata. There is **no playback, artwork, subtitle, download or personal-state
-route in this stage**, and no client can reach a remote media URL through it. The
-filesystem libraries, the scanner and every existing consumer are unchanged.
+Status: the server side of the feature is complete. An administrator connects a
+Jellyfin or Emby account, attaches its libraries and grants them to accounts. A
+granted member browses the remote metadata, plays the original files, keeps
+their own progress, artwork and external subtitles, and sees their own remote
+cards on Home and Continue watching. The filesystem libraries, the scanner and
+every existing consumer are unchanged.
 
 This document is the operator- and reviewer-facing contract for the code in
-`server/src/media-server-manager.ts`, `media-server-index.ts`,
-`routes/media-servers.ts` and the foundation modules they build on
-([MS-1](media-server-foundation.md)).
+`server/src/media-server-*.ts`, its routes under `server/src/routes/`, and the
+foundation modules they build on ([MS-1](media-server-foundation.md)). Client
+work is documented where that client lives; nothing here promises a release or
+interface gate this server does not itself enforce.
 
 ## What an administrator gets
 
@@ -17,28 +19,34 @@ All administration is `POST`/`PATCH`/`DELETE` under `/api/media-servers`, behind
 the ordinary sign-in, password-change and restricted-mode gates, and is
 administrator-only in the route table itself. In restricted mode the admin reads
 below are refused as well, because they name remote addresses and account ids;
-the member metadata stays readable. Both the role table and the restricted-mode
-tables match the path the router actually matched — case-insensitively and with a
-single optional trailing slash, never decoding or collapsing interior slashes —
-so `/api/Media-Servers/` or `/api/media-servers/export/` cannot slip past a rule.
+the member metadata stays readable. The restricted-mode tables match the path the router actually matched —
+case-insensitively and with a single optional trailing slash, never decoding or
+collapsing interior slashes — so `/api/Media-Servers/` or
+`/api/media-servers/export/` cannot slip past a rule. Member role rules require
+the canonical lower-case path without a trailing slash; variants fail closed.
 
 | Method and path | Effect |
 | --- | --- |
 | `GET /api/media-servers` | `{ connections: [...], keyConfigured }`. Each connection is the admin projection plus a runtime `status` (`disabled`, `available`, `unavailable`, `reauthentication-required`, `identity-changed`). `keyConfigured` only says a key path was supplied, never that it is readable. |
 | `POST /api/media-servers` | Creates a connection from exactly `provider`, `name`, `baseUrl`, `allowLan`, `allowLoopback`, `username`, `password`. Any other field is refused before any network call. |
 | `PATCH /api/media-servers/:id` | Changes only `name` and `enabled`. A rename changes nothing derived, so it neither bumps the generation nor throws away live work; toggling `enabled` bumps the generation, cancels staged scans and moves the permission stamp of every ordinary account granted one of its libraries. |
-| `DELETE /api/media-servers/:id` | Removes the connection and its attached libraries and queues its token file for deletion. No remote session is reported or logged out. |
+| `DELETE /api/media-servers/:id` | Removes the connection and its attached libraries and queues its token file for deletion. Its stored history is kept invisibly for 30 days; `?forget=true` deletes it at once. No remote session is reported or logged out. |
 | `POST /api/media-servers/:id/reauthenticate` | Signs in again with `{ username, password }`; requires the same verified server/account identity. |
 | `GET /api/media-servers/:id/libraries` | `{ items: ProviderLibrary[] }` — the libraries the stored account can currently see. |
 | `POST /api/media-servers/:id/libraries` | Attaches one remote library from `{ remoteId, name?, order?, showOnHome?, showInContinueWatching? }`; the remote name and type come from verified discovery. New libraries are granted to nobody. |
 | `PATCH /api/remote-libraries/:id` | Local configuration only: `name`, `enabled`, `order`, `showOnHome`, `showInContinueWatching`, `allowedUsers`. `root`, `writeArtwork`, `type`, `remoteId`, `connectionId` and any download flag are refused. |
-| `DELETE /api/remote-libraries/:id` | Removes the local attachment. The remote server is never mutated and no local history is discarded. |
+| `DELETE /api/remote-libraries/:id` | Removes the local attachment. Its stored history is kept invisibly for 30 days; `?forget=true` deletes it at once. The remote server is never mutated. |
 | `GET /api/media-servers/export` | The metadata-only configuration export (`version`, connections, libraries). No secret references, grants, generations or timestamps. |
 | `POST /api/media-servers/import` | Additively restores an export: fresh handles, connections and libraries land **disabled** with no grants and no secrets, and a duplicate remote account refuses the whole batch. Its own body parser allows up to 8 MiB, above the ordinary 256 KiB. |
 
 Only the exact import path gets that larger parser: a path that merely starts with
 it keeps the ordinary 256 KiB ceiling. `GET` handlers take no body and no query
 unless their contract names one, and reject either before any network call.
+
+Both removals take no body and one optional query, `forget`, whose only accepted
+values are the exact strings `true` and `false`. Anything else — an array, a
+nested key, another field, a body — is refused before the manager is asked to
+change anything.
 
 An imported connection has no credential yet, and that does **not** block it:
 `POST /api/media-servers/:id/reauthenticate` performs the first credential binding
@@ -51,7 +59,9 @@ generates the local handle, writes the encrypted token to the vault and then, in
 a single guarded state write, installs the enabled connection. A refusal or a
 failed save removes the just-written token file; if that removal cannot be
 persisted, startup reconciliation finds the unbound file later. No password is
-retained and no token is ever returned.
+retained and no token is ever returned. Each connection uses its own stable
+upstream device identity, so signing in on an imported instance does not replace
+another instance's token through a shared device identifier.
 
 ## What a member gets
 
@@ -61,10 +71,21 @@ retained and no token is ever returned.
 | `GET /api/remote-libraries/:id/items` | Bounded browse: `limit` (default 100, 1–200), opaque `cursor`, `search` (≤256 chars, case-insensitive name substring) and exact `type` (`movie`/`series`/`season`/`episode`). |
 | `GET /api/remote-libraries/:id/items/:itemId` | `{ item, capabilities }` for the current authorized item. |
 | `GET /api/remote-libraries/:id/items/:itemId/episodes` | `limit` and `cursor` only; the parent must be a verified `series` or `season`. |
+| `GET /api/remote-libraries/:id/items/:itemId/sources` | The verified ordinary file versions of one playable item as sealed, source-owned streams. Each carries its external text subtitles as sealed references. No upstream address or token is returned. |
+| `GET /api/remote-libraries/:id/streams/:type/:catalogId` | The verified sources behind one exact external id (`ttN`, `tmdb:N`, `tvdb:N`, or a series episode `ttN:S:E`). The snapshot only finds candidates; every candidate is re-read and re-matched before its versions are minted, and an id this app does not match exactly answers `{ streams: [] }`. |
+| `GET /api/remote-libraries/:id/items/:itemId/artwork/:imageType` | Fixed `Primary`/`Backdrop` artwork bytes, read through the scoped transport. Always private, `no-store`, `nosniff`; an `If-None-Match` never short-circuits the authorization. Missing artwork answers `404` and the client falls back. |
+| `GET /api/remote-libraries/:id/items/:itemId/state`, `PATCH …/state` | The account's own position, duration, favourite, watched and chosen version for a verified item. Kept apart from the generic progress map, so a `remote:` key never resolves through the filesystem or catalogue parsers. |
+| `GET /api/remote-libraries/personal?filter=resume\|favorites&skip&limit` | The account's own resume or favourite cards, each library confirmed against the live remote policy first. A library that cannot be confirmed is dropped and the answer is marked `partial`; `skip` is 0–1000 and `limit` 1–120. The whole projection runs under one budget — 1.5 s for Home, 5 s otherwise, two confirmations at a time — and every card is re-proved against the account, the connection, the remote identity, the upstream library and the switches as they stand before the JSON leaves. |
 
-Every response carries `stale: false` and `capabilities` with every capability
-false. Unknown, malformed or denied libraries and items all answer the same
-`404 err.libraryNotFound`, so a guessed id tells nothing.
+Paged browse, episode and detail responses also carry same-origin `poster` and
+`wide` artwork paths, built only from the encoded local library and item handle
+and a fixed image role. The client loads those paths; a cached provider row can
+never become a client-admitted URL.
+
+Paged browse and episode responses carry `stale: false`; content responses
+carry `capabilities` with every capability false. Unknown or denied libraries
+and items answer the same `404 err.libraryNotFound`, so a guessed id tells
+nothing. Malformed item identifiers answer `400 err.invalidRequest`.
 
 ## Authorization, per request
 
@@ -180,15 +201,69 @@ since been revoked must not itself require that revoked authority.
 
 ### Backup and restore
 
-- **Metadata only.** `GET /api/media-servers/export` (and the restore contract)
-  carries no secrets, grants or tokens. It is safe to keep with ordinary backups.
+- **Metadata only.** `GET /api/media-servers/export` and the settings backup both
+  carry the configuration as metadata: the provider, the name and address, the
+  verified server and account ids, and each attached library with its name, type,
+  order and the two switches. No secret reference, enabled flag, generation,
+  grant, timestamp, user name or token is ever copied, whatever shape the caller
+  hands in. Both files are safe to keep with ordinary backups.
+- **The settings backup is version 3.** From that version it also carries the
+  remote configuration, so the ordinary settings file is a complete description
+  of the instance's settings and its media-server attachments. A version 1 or 2
+  file carries none, and importing one leaves the current remote configuration
+  exactly as it stands.
+- **Importing a version 3 file replaces the remote configuration** with fresh
+  local handles, disabled, with no grants and no secrets — the same contract as
+  `POST /api/media-servers/import`. The settings, the add-ons and the replacement
+  land in **one** state write after every manifest has been fetched, so a bad
+  file changes nothing, and a connection replaced this way needs an
+  administrator to sign in again. Importing one's own backup is the normal case
+  and works, because the old records are replaced rather than merged: nothing of
+  the previous credential or grant survives by accident. The interface should say
+  this before an import runs.
 - **Full recovery.** Restoring working remote connections needs three things
   together: the state file, the encrypted vault directory
   (`DATA_PATH/media-server-secrets`) and the key file. Whoever holds all three
   holds the tokens — treat that set as a credential. A missing key is **not**
-  replaced or regenerated; existing references simply fail to decrypt.
-- The ordinary settings backup is unchanged and does not include media-server
-  connections, remote libraries or their credential references.
+  replaced or regenerated; existing references simply fail to decrypt, and every
+  remote read fails closed with `err.mediaServerKey`.
+
+## Removal and stored history
+
+An account's own remote progress, favourites, watched flags and chosen version
+live in that account's `remoteMedia` map, keyed by the canonical remote identity
+(`remote:` plus the SHA-256 of `[provider, serverId, accountId, itemId]`). They
+stay local: no upstream server is ever told about them, and no removal writes to
+one.
+
+- **Removing a library or a connection keeps that history by default.** The rows
+  stay on disk, are not projected anywhere and start a 30-day countdown measured
+  from the removal itself — never from the row's last update, and never from a
+  disable, an outage or a withdrawn grant.
+- **Scope is the exact identity and upstream library.** A removal takes the rows
+  of the same provider, server id and account id, and — for a library — only that
+  upstream library id. The same server under a different account is a different
+  identity and is never touched.
+- **A matching attachment still holds its rows.** Disabling a connection or a
+  library keeps its metadata, history and grants, and starts no countdown.
+  Reattaching the same verified identity and upstream library within the 30 days
+  takes the history back; an attachment never brings grants with it.
+- **A removal never extends a countdown**, so removing the same thing twice does
+  not push the deadline back, and a library whose 30 days have run out is gone
+  for good.
+- **`?forget=true` deletes the rows at once**, for every account, in the same
+  atomic write as the removal. Nothing upstream is contacted and no media file
+  is touched.
+- **A sweep runs at startup and every 60 s.** It drops rows whose 30 days are
+  over and starts the countdown for rows an attachment no longer holds — rows a
+  previous version left behind, whose countdown begins when they are first seen.
+  It never touches a live attachment, never moves a permission stamp, never
+  cancels a source, and writes nothing at all when it has nothing to do. It is
+  internal maintenance and runs without an actor, like the vault drain.
+- **Only a canonical row counts.** A stored row is recognised only when the map
+  key, the stored key and the canonical key of the identity it carries all agree.
+  A malformed row is never marked, recovered or purged, so it can never stand in
+  for another identity.
 
 ## Failure mapping
 
@@ -231,8 +306,14 @@ services:
 With the variable unset the container still boots, lists no connections and
 refuses to store a credential with a clear message. Key rotation is not
 supported: changing the key without re-authenticating makes existing tokens
-undecryptable by design, and the desktop application still needs its own
-persistent key lifecycle.
+undecryptable by design. The desktop application creates and preserves its own
+installation key outside the replaceable backend directory; see
+[Desktop media-server credentials](desktop-media-servers.md).
+
+Active remote playback is revalidated every 30 seconds, with a five-second
+verification deadline. Local revocations invalidate resources immediately; an
+upstream policy change is caught by the periodic guard, which stops playback
+when authorization cannot be confirmed.
 
 ## Measured upstream limits
 
@@ -245,9 +326,32 @@ setup returned no views and is explicitly **unverified/unsupported** in this
 configuration. Unknown policy fields remain a documented compatibility limit;
 this stage does not claim exhaustive remote parental-policy support.
 
-## Not in this stage
+## What this feature deliberately does not do
 
-No original-media proxy, FFmpeg, transcode, artwork, subtitle, download, Home or
-personal-state route; no client or Android TV change; no ordinary settings-backup
-integration; no remote history or media mutation. Remote items are metadata only
-until the playback stage lands.
+- **No write reaches the media server.** Rename, move, delete, identify, artwork
+  upload, playback reporting and progress reporting all stay out; a remote
+  library and its history are local records only.
+- **Nothing is transcoded upstream.** An original file is proxied byte-for-byte
+  (ranges included) through the scoped transport, and anything that has to be
+  converted — a stream the client cannot play directly, an external subtitle
+  track — is converted here, on this machine, with the local FFmpeg. No transcode
+  session is asked of Jellyfin or Emby.
+- **Provider subtitles are external SRT only.** External SRT/SubRip tracks are
+  read through the scoped proxy and converted to VTT locally. Other provider
+  sidecar formats are not offered.
+- **Browsing does not need a catalogue id.** A remote item that matches no
+  catalogue entry is browsable, searchable, playable and remembers its own
+  progress. Catalogue matching is only what the `streams/:type/:catalogId`
+  route adds.
+- **Matching is exact-id only.** `ttN`, `tmdb:N`, `tvdb:N` and a series episode
+  `ttN:S:E`. There is no title, filename or path matching, no fuzzy match and no
+  external id conversion: an id this app cannot match exactly answers with an
+  empty list rather than a guess, and an episode must still prove its series
+  after every read that could have moved it.
+- **A remote failure stays local to its own half.** A failed remote read drops
+  the remote part of a row or marks it `partial`; the filesystem rows, the
+  add-on rows and the other destinations are unaffected, and no cached remote
+  answer is ever served as fresh.
+- **The vault fails closed.** With no key, or with an unreadable one, every
+  remote read refuses with `err.mediaServerKey`; the app still starts and the
+  filesystem half keeps working.

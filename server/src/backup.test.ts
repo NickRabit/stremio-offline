@@ -81,7 +81,7 @@ test("a backup carries the libraries and a rule that names one survives a round 
   }];
 
   const backup = createSettingsBackup(settings, addons, [films, series]);
-  assert.equal(backup.version, 2);
+  assert.equal(backup.version, 3);
   assert.deepEqual(backup.libraries, [
     { id: films.id, name: "Films", type: "movie", root: "/downloads/Films" },
     { id: series.id, name: "Series", type: "series", root: "/downloads/Series" },
@@ -139,4 +139,49 @@ test("a version 1 backup still imports, with no libraries and no rules", () => {
   const remapped = remapBackupLibraries(parsed, []);
   assert.deepEqual(remapped.remaps, []);
   assert.equal(remapped.addons[0]!.downloadSettings.movie.subfolder, "Filmy", "the old rules are kept");
+});
+
+test("a version 3 backup carries the media-server metadata and strips everything else", () => {
+  const connectionId = `mconn_${"1".repeat(32)}`;
+  const mediaServers = {
+    version: 1,
+    connections: [{
+      id: connectionId, provider: "jellyfin", name: "Home", baseUrl: "https://media.example",
+      allowLan: false, allowLoopback: false, serverId: "server-1", accountId: "account-1",
+      // A caller that hands a whole stored record in must not be able to smuggle these through.
+      secretRef: `msecret_${"a".repeat(32)}`, enabled: true, generation: 4, grants: ["usr_00000001"],
+      password: "hunter2", token: "token-value", username: "reader",
+    }],
+    libraries: [{
+      id: `rlib_${"2".repeat(32)}`, connectionId, remoteId: "remote-1", name: "Films", type: "movie",
+      order: 0, showOnHome: true, showInContinueWatching: false, enabled: true, allowedUsers: ["usr_00000001"],
+    }],
+  };
+  const backup = createSettingsBackup(defaultSettings(), [], [], mediaServers);
+  assert.equal(backup.version, 3);
+  assert.deepEqual(Object.keys(backup.mediaServers!.connections[0]!).sort(),
+    ["accountId", "allowLan", "allowLoopback", "baseUrl", "id", "name", "provider", "serverId"]);
+  assert.deepEqual(Object.keys(backup.mediaServers!.libraries[0]!).sort(),
+    ["connectionId", "id", "name", "order", "remoteId", "showInContinueWatching", "showOnHome", "type"]);
+  const serialized = JSON.stringify(backup);
+  for (const forbidden of ["secretRef", "msecret_", "hunter2", "token-value", "reader", "generation", "allowedUsers", "enabled"]) {
+    assert.equal(serialized.includes(forbidden), false, `${forbidden} never reaches a backup`);
+  }
+  assert.deepEqual(parseSettingsBackup(JSON.parse(serialized)).mediaServers, backup.mediaServers, "the metadata survives a round trip");
+});
+
+test("a version 3 backup has to carry a media-server configuration that stands on its own", () => {
+  const file = (mediaServers: unknown) => ({ format: "stremio-offline-settings", version: 3, settings: {}, addons: [], mediaServers });
+  assert.throws(() => parseSettingsBackup(file(undefined)), /media servers in the backup are not valid/);
+  assert.throws(() => parseSettingsBackup(file({ version: 2, connections: [], libraries: [] })), /media servers in the backup are not valid/);
+  assert.throws(() => parseSettingsBackup(file({ version: 1, connections: [{ id: "not-a-handle", provider: "jellyfin", name: "x", baseUrl: "https://m.example", allowLan: false, allowLoopback: false, serverId: "s", accountId: "a" }], libraries: [] })), /media servers in the backup are not valid/);
+  const dangling = { version: 1, connections: [], libraries: [{ id: `rlib_${"2".repeat(32)}`, connectionId: `mconn_${"1".repeat(32)}`, remoteId: "r", name: "Films", type: "movie", order: 0, showOnHome: true, showInContinueWatching: true }] };
+  assert.throws(() => parseSettingsBackup(file(dangling)), /media servers in the backup are not valid/);
+});
+
+test("a version 1 or 2 backup carries no media-server configuration at all", () => {
+  for (const version of [1, 2]) {
+    const parsed = parseSettingsBackup({ format: "stremio-offline-settings", version, settings: {}, addons: [] });
+    assert.equal("mediaServers" in parsed, false, `a version ${version} file leaves the remote configuration alone`);
+  }
 });

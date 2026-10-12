@@ -631,3 +631,27 @@ test("/api/search routes are refused without a session, the way dataOf refuses",
   assert.equal(clear.status, 401);
   assert.deepEqual(harness.data(ALICE).search, undefined);
 });
+
+test("the generic progress map refuses the reserved remote prefix end to end", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const key = `remote:${"a".repeat(64)}`;
+
+  const write = await api(harness.base, "/api/progress", { method: "POST", user: ALICE, body: { key, position: 5, duration: 10, title: "Remote" } });
+  assert.equal(write.status, 404, "a forged remote key cannot be written");
+  assert.equal(Object.keys(harness.data(ALICE).progress ?? {}).length, 0, "nothing entered the generic map");
+
+  const read = await api(harness.base, `/api/progress/${encodeURIComponent(key)}`, { user: ALICE });
+  assert.equal(read.status, 200);
+  assert.equal(await read.json(), null, "an unknown remote read answers null, never foreign metadata");
+
+  const list = await api(harness.base, "/api/progress", { user: ALICE });
+  assert.equal(list.status, 200);
+  assert.deepEqual(await list.json(), [], "no remote row appears in the list");
+
+  const forget = await api(harness.base, "/api/progress/forget", { method: "POST", user: ALICE, body: { keys: [key] } });
+  assert.equal(forget.status, 204);
+
+  const remove = await api(harness.base, `/api/progress/${encodeURIComponent(key)}`, { method: "DELETE", user: ALICE });
+  assert.equal(remove.status, 404, "deleting a remote key touches nothing");
+});

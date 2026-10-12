@@ -343,3 +343,45 @@ test("a typed transport error is propagated untouched, never softened", async ()
   const missing = fixture(() => new MediaServerError("not-found", "missing", 404));
   await assert.rejects(missing.provider.detail("tok", "user-1", "gone"), { code: "not-found", status: 404 });
 });
+
+test("versions read only external text subtitles with a bounded integer index", async () => {
+  const { provider } = fixture(() => ({
+    MediaSources: [{
+      Id: "v1", Protocol: "File",
+      MediaStreams: [
+        { Type: "Subtitle", IsExternal: true, Index: 0, Codec: "subrip", Language: "eng", Title: "English", DeliveryUrl: "https://evil.example/srt" },
+        { Type: "Subtitle", IsExternal: true, Index: 2, Codec: "srt", Language: "en" },
+        { Type: "Subtitle", IsExternal: false, Index: 3, Codec: "subrip" },
+        { Type: "Subtitle", IsExternal: true, Index: 4, Codec: "ass" },
+        { Type: "Subtitle", IsExternal: true, Index: -1, Codec: "subrip" },
+        { Type: "Subtitle", IsExternal: true, Index: 1.5, Codec: "subrip" },
+        { Type: "Audio", IsExternal: true, Index: 6, Codec: "aac" },
+        { Type: "Subtitle", IsExternal: true, Index: 0, Codec: "srt" },
+        { Type: "Subtitle", IsExternal: true, Index: 1024, Codec: "srt" },
+      ],
+    }],
+  }));
+  const versions = await provider.versions("tok", "user-1", "item-1");
+  assert.deepEqual(versions[0]!.externalSubtitles, [
+    { index: 0, language: "eng", title: "English" },
+    { index: 2, language: "en" },
+  ], "only external text tracks with a valid unique index are kept, and no URL is read");
+  assert.equal(JSON.stringify(versions).includes("/srt"), false, "no address from the stream reaches the version");
+});
+
+test("versions refuse a version that offers too many external subtitles", async () => {
+  const { provider } = fixture(() => ({
+    MediaSources: [{
+      Id: "v1", Protocol: "File",
+      MediaStreams: Array.from({ length: 65 }, (_value, index) => ({ Type: "Subtitle", IsExternal: true, Index: index, Codec: "subrip" })),
+    }],
+  }));
+  await assert.rejects(provider.versions("tok", "user-1", "item-1"), { code: "invalid-response" });
+});
+
+test("an episode keeps its IndexNumberEnd as a range and refuses a malformed one", async () => {
+  const { provider } = fixture(() => ({ Id: "e1", Name: "Ep", Type: "Episode", IndexNumber: 2, IndexNumberEnd: 3 }));
+  assert.deepEqual(await provider.detail("tok", "user-1", "e1"), { id: "e1", name: "Ep", type: "episode", episode: 2, episodeEnd: 3, providerIds: {} });
+  const malformed = fixture(() => ({ Id: "e1", Name: "Ep", Type: "Episode", IndexNumber: 2, IndexNumberEnd: "3" }));
+  await assert.rejects(malformed.provider.detail("tok", "user-1", "e1"), { code: "invalid-response" });
+});

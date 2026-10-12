@@ -2,12 +2,13 @@ import { stat } from "node:fs/promises";
 import type express from "express";
 import { allowedAddons } from "../addons.js";
 import type { DeviceTransfers } from "../device-transfers.js";
-import { ownerMayDownload, type AudioMode, type DownloadQueue, type DownloadSelection, type SubtitleMode } from "../downloads.js";
+import { isRemoteDownloadSource, ownerMayDownload, remoteDownloadRefused, type AudioMode, type DownloadQueue, type DownloadSelection, type SubtitleMode } from "../downloads.js";
 import { AppError } from "../errors.js";
 import { normalizeLanguage } from "../language.js";
 import { log } from "../logger.js";
 import { libraryVisible, resolveLibraryPath, type LibraryRecord, type Viewer } from "../libraries.js";
 import { defaultDownloadSettings, exactSubfolder, targetLibrary, type MediaInfo } from "../naming.js";
+import { REMOTE_LIBRARY_ID } from "../media-server-types.js";
 import { titleLanguage } from "../ranking.js";
 import type { UserPrefs } from "../store.js";
 import type { DownloadTargetSettings, MetaItem, StreamItem } from "../types.js";
@@ -52,6 +53,7 @@ const explicitTargetFor = (deps: SelectionDeps) => async (req: express.Request, 
   const item = typeof value === "object" ? value as Record<string, unknown> : undefined;
   const libraryId = typeof item?.libraryId === "string" ? item.libraryId.trim() : "";
   if (!libraryId) throw new AppError("Invalid download destination.", "err.invalidDownloadTarget");
+  if (REMOTE_LIBRARY_ID.test(libraryId)) throw remoteDownloadRefused();
   const libraries = deps.store.libraries();
   const library = libraries.find((entry) => entry.id === libraryId);
   if (!library || !libraryVisible(library, viewerOf(deps.currentUser(req)))) {
@@ -155,6 +157,7 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
     const owner = currentUser(req);
     assertMayQueue(req);
     const stream = sourceOf(req);
+    if (isRemoteDownloadSource(stream)) throw remoteDownloadRefused();
     const media = mediaSource(req.body.media);
     const addon = store.addons().find((item) => item.key === stream.addonKey);
     const settings = addon?.downloadSettings ?? defaultDownloadSettings();

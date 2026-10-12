@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { MediaServerConfiguration } from "./media-server-store.js";
+import { MediaServerConfiguration, prepareMediaServerConfiguration, projectMediaServerConfiguration } from "./media-server-store.js";
 import { newConnectionId, newRemoteLibraryId } from "./media-server-types.js";
 import { Store } from "./store.js";
 
@@ -294,6 +294,45 @@ test("restore bounds the configuration before any write", async () => {
     };
     await assert.rejects(config.restoreConfiguration(many), { code: "invalid-input" });
     assert.deepEqual(store.mediaConnections(), []);
+  });
+});
+
+test("preparing a configuration validates it and mints fresh handles without touching the store", async () => {
+  await run(async ({ config, store }) => {
+    const created = await config.addConnection(connectionInput());
+    await config.attachLibrary(created.id, libraryInput());
+    const exported = config.exportConfiguration();
+    const before = JSON.stringify({ connections: store.mediaConnections(), libraries: store.remoteLibraries() });
+    const prepared = prepareMediaServerConfiguration(exported);
+    assert.notEqual(prepared.connections[0]!.id, created.id, "a fresh local handle");
+    assert.equal(prepared.connections[0]!.enabled, false);
+    assert.equal(prepared.connections[0]!.generation, 0);
+    assert.equal(prepared.connections[0]!.secretRef, undefined);
+    assert.deepEqual(prepared.libraries[0]!.allowedUsers, [], "grants never come out of a file");
+    assert.equal(prepared.libraries[0]!.connectionId, prepared.connections[0]!.id, "the attachment follows the fresh handle");
+    assert.equal(JSON.stringify({ connections: store.mediaConnections(), libraries: store.remoteLibraries() }), before, "preparing writes nothing");
+    assert.throws(() => prepareMediaServerConfiguration({ version: 1, connections: [], libraries: [{ ...exported.libraries[0], connectionId: newConnectionId() }] }), { code: "invalid-input" });
+  });
+});
+
+test("the backup projection keeps to the export allowlist and drops whatever else a record carries", async () => {
+  await run(async ({ config }) => {
+    const created = await config.addConnection(connectionInput());
+    await config.attachLibrary(created.id, libraryInput());
+    const exported = config.exportConfiguration();
+    const whole = {
+      version: 1,
+      connections: [{ ...exported.connections[0], secretRef: "msecret_" + "e".repeat(32), enabled: true, generation: 7, allowedUsers: ["usr_00000001"], password: "hunter2", token: "token-value" }],
+      libraries: [{ ...exported.libraries[0], enabled: true, allowedUsers: ["usr_00000001"] }],
+    };
+    const projected = projectMediaServerConfiguration(whole);
+    assert.deepEqual(Object.keys(projected.connections[0]!).sort(), ["accountId", "allowLan", "allowLoopback", "baseUrl", "id", "name", "provider", "serverId"]);
+    assert.deepEqual(Object.keys(projected.libraries[0]!).sort(), ["connectionId", "id", "name", "order", "remoteId", "showInContinueWatching", "showOnHome", "type"]);
+    const serialized = JSON.stringify(projected);
+    for (const forbidden of ["msecret_", "hunter2", "token-value", "generation", "allowedUsers", "enabled"]) {
+      assert.equal(serialized.includes(forbidden), false, `${forbidden} never reaches a backup`);
+    }
+    assert.throws(() => projectMediaServerConfiguration({ ...whole, extra: true }), { code: "invalid-input" }, "a file that is not the configuration shape is refused");
   });
 });
 

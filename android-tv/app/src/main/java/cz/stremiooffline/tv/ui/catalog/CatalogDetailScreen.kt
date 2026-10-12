@@ -66,6 +66,7 @@ import cz.stremiooffline.tv.data.MediaDto
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.ProgressEntryDto
+import cz.stremiooffline.tv.data.RemoteLibraryDto
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.TvApi
@@ -89,6 +90,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 
 const val TagCatalogPrimary = "catalog_primary"
 const val TagCatalogStartOver = "catalog_start_over"
@@ -124,11 +126,24 @@ internal val CatalogNoticeKind = SemanticsPropertyKey<CatalogNotice>("CatalogNot
 /** One slow addon must not hold a play back longer once something playable has arrived. */
 const val PLAY_WHEN_READY_TIMEOUT_MS = 8_000L
 
+/** The independent remote group deadlines: listing the libraries is quick, matching one is not. */
+const val REMOTE_DISCOVERY_TIMEOUT_MS = 3_000L
+const val REMOTE_MATCH_TIMEOUT_MS = 8_000L
+
 fun seasonChipTag(season: Int): String = "season_chip_$season"
 fun episodeCardTag(video: VideoDto): String = "episode_card_${video.id ?: video.label}"
 
-/** The Sources panel's rows as the catalogue gathered them, and whether the addons still owe one. */
-data class OfferedSources(val streams: List<StreamDto> = emptyList(), val loading: Boolean = false)
+/** A remote source-group failure the player's panel names: the libraries that could not be
+ *  reached, or a general failure when even the library list was unavailable. */
+data class RemoteSourcesFailure(val labels: List<String> = emptyList(), val discovery: Boolean = false)
+
+/** The Sources panel's rows as the loader gathered them, whether more are still owed, and any
+ *  remote group that failed. */
+data class OfferedSources(
+  val streams: List<StreamDto> = emptyList(),
+  val loading: Boolean = false,
+  val remoteFailure: RemoteSourcesFailure? = null,
+)
 
 /** The catalogue title detail: the library's layout for a movie or a series, with sources. */
 @Composable
@@ -203,6 +218,9 @@ fun CatalogDetailScreen(
   var libraryPanelOpen by remember { mutableStateOf(false) }
   var pendingLibraryStream by remember { mutableStateOf<StreamDto?>(null) }
   val ui = remember { DetailUiState() }
+  // The remote source groups load on their own, so a slow or offline media server cannot hold
+  // back the local copy or the addons; held in one object to keep this screen's local count low.
+  val remote = remember { RemoteSourcesState() }
 
   val context = LocalContext.current
   val queuedText = stringResource(R.string.save_queued)
@@ -300,6 +318,9 @@ fun CatalogDetailScreen(
     sourcesFailed = false
     queuedSourceId = null
     notice(null)
+    remote.groups = emptyList()
+    remote.pending = 0
+    remote.discoveryFailed = false
     val id = streamVideoId
     if (id == null) {
       sourcesLoaded = true
@@ -358,6 +379,56 @@ fun CatalogDetailScreen(
     }
   }
 
+  // The remote groups load on their own: the authorized libraries are listed once, then each is
+  // asked for its externally matched versions in its own child, and a group publishes the moment
+  // it answers. This effect is separate from the local/addon one, so a slow or offline media
+  // server can neither cancel a sibling nor hold a playable source back.
+  LaunchedEffect(streamsKey, sourcesRetry) {
+    val request = ++remote.request
+    remote.groups = emptyList()
+    remote.pending = 0
+    remote.discoveryFailed = false
+    val id = streamVideoId
+    if (id == null) return@LaunchedEffect
+    val libraries = try {
+      withTimeoutOrNull(REMOTE_DISCOVERY_TIMEOUT_MS) { api.remoteLibraries() }
+    } catch (cancelled: CancellationException) {
+      throw cancelled
+    } catch (_: ApiError) {
+      null
+    }
+    if (request != remote.request) return@LaunchedEffect
+    if (libraries == null) {
+      remote.discoveryFailed = true
+      return@LaunchedEffect
+    }
+    remote.libraries = libraries
+    remote.pending = libraries.size
+    if (libraries.isEmpty()) return@LaunchedEffect
+    val updates = Mutex()
+    coroutineScope {
+      libraries.forEach { library ->
+        launch {
+          val part = try {
+            withTimeoutOrNull(REMOTE_MATCH_TIMEOUT_MS) { api.remoteMatchedStreams(library.id, streamType, id) }
+          } catch (cancelled: CancellationException) {
+            throw cancelled
+          } catch (_: ApiError) {
+            null
+          }
+          updates.withLock {
+            if (request != remote.request) return@withLock
+            val match = RemoteMatch(library.id, library.provider, library.name, part.orEmpty(), failed = part == null)
+            // Configured order is kept whatever order the answers arrive in.
+            remote.groups = (remote.groups.filterNot { it.libraryId == library.id } + match)
+              .sortedBy { entry -> remote.libraries.indexOfFirst { it.id == entry.libraryId } }
+            remote.pending -= 1
+          }
+        }
+      }
+    }
+  }
+
   LaunchedEffect(meta.id) { runCatching { primaryFocus.requestFocus() } }
   // The player covers this screen, so on return re-read the stored position to keep Resume honest.
   LaunchedEffect(restoreToken) {
@@ -374,7 +445,7 @@ fun CatalogDetailScreen(
   // Merged, sorted and filtered once per change of the raw list or the filters, never on a
   // focus-driven recomposition: parsing hundreds of sizes and languages on every move is what
   // ground the real TV to a halt.
-  val lists = remember(streams, addons, settings, meta.language, filters, localStreams) {
+  val lists = remember(streams, addons, settings, meta.language, filters, localStreams, remote.groups) {
     Streams.sourceLists(
       streams = streams,
       addons = addons,
@@ -383,6 +454,7 @@ fun CatalogDetailScreen(
       showTorrents = settings.realDebridConfigured,
       metaLanguage = meta.language,
       local = localStreams,
+      remote = remote.groups.map { it.group() },
     )
   }
   val offered = lists.offered
@@ -395,9 +467,13 @@ fun CatalogDetailScreen(
   val preferredStream = Streams.pickDefaultStream(rows)
   val chosenStream = selectedStream?.takeIf { pickedStream && rows.contains(it) }
   val activeStream = chosenStream ?: selectedStream?.takeIf { rows.contains(it) } ?: preferredStream
+  val remoteAsking = remote.pending > 0
+  val remoteStreams = remote.groups.flatMap { it.streams }
+  val remoteFailedLabels = remote.groups.filter { it.failed }.map { it.label }
+  val remoteFailed = remote.discoveryFailed || remoteFailedLabels.isNotEmpty()
   // Asking covers both "the addon list has not answered" and "some addon still owes a list".
   val sourcesAsking = !sourcesFailed && (!sourcesLoaded || pendingSources > 0)
-  val anyAsking = sourcesAsking || localLoading
+  val anyAsking = sourcesAsking || localLoading || remoteAsking
   // While no playable stream has arrived the primary action is a spinner, not a promise to play.
   val findingSources = activeStream?.playable != true && anyAsking
   val canQueueActive = activeStream != null && Streams.canQueue(activeStream, settings.realDebridConfigured)
@@ -406,10 +482,14 @@ fun CatalogDetailScreen(
   // A local pick can always be played, and keeps the "no sources" note away: a local copy is a
   // source even before the addons answered.
   val localActive = activeStream != null && Streams.isLocalStream(activeStream)
-  // Nothing visible to play: either no addon offers a source, or only a torrent it cannot open.
-  val emptyText = if (offered.isEmpty()) noSourcesText else torrentText
+  // Nothing visible to play: no local copy, no remote match and no addon source at all. A chosen
+  // remote group that matched nothing reads the same way -- no addon silently stands in for it.
+  val remoteOnly = Streams.remoteFilterLibrary(filters.addon) != null
+  val nothingAtAll = (offered.isEmpty() && localStreams.isEmpty() && remoteStreams.isEmpty()) || remoteOnly
+  val emptyText = if (nothingAtAll) noSourcesText else torrentText
   // The empty state is a note; a list holding only torrents is a failure.
-  val emptyKind = if (offered.isEmpty()) CatalogNotice.Neutral else CatalogNotice.Failure
+  val emptyKind = if (nothingAtAll) CatalogNotice.Neutral else CatalogNotice.Failure
+  val totalSources = offered.size + localStreams.size + remoteStreams.size
 
   // A later addon may outrank the one already picked, but only while the viewer has not chosen.
   LaunchedEffect(rows, anyAsking) {
@@ -427,7 +507,9 @@ fun CatalogDetailScreen(
 
   // The player's own Sources panel gets the same list, the local copies included, and it keeps
   // growing while the addons answer.
-  LaunchedEffect(rows, anyAsking) { onSources(OfferedSources(rows, anyAsking)) }
+  LaunchedEffect(rows, anyAsking, remoteFailed, remote.discoveryFailed) {
+    onSources(OfferedSources(rows, anyAsking, if (remoteFailed) RemoteSourcesFailure(remoteFailedLabels, remote.discoveryFailed) else null))
+  }
 
   // A switch made inside the player has to carry back: the detail keeps naming the source the
   // viewer actually watched, and Play offers it again.
@@ -540,17 +622,22 @@ fun CatalogDetailScreen(
         ),
       )
     } else {
+      // A remote-matched version carries its own opaque identity and its own version list; no
+      // catalogue progress is invented for it, so the controller resumes from the remote state.
+      val remoteItem = stream.remoteItem
       onPlay(
         PlayTarget(
-          key = progressKey,
+          key = remoteItem?.progressKey?.takeIf { it.isNotBlank() } ?: progressKey,
           title = playerTitle,
-          resume = resuming,
+          resume = if (remoteItem != null) true else resuming,
           sourceId = stream.sourceId,
           poster = args.meta.poster ?: meta.poster,
           addonKey = args.addonKey,
           subtitleType = streamType,
           subtitleTarget = streamVideoId,
           catalogue = true,
+          remoteItem = remoteItem,
+          remoteSources = Streams.remoteVersionsOf(remoteItem, remoteStreams),
         ),
       )
     }
@@ -674,10 +761,11 @@ fun CatalogDetailScreen(
       stream?.playable == true -> {
         pickedStream = true
         selectedStream = stream
+        val remoteItem = stream.remoteItem
         onPlay(
           PlayTarget(
-            progressKey,
-            playerTitle,
+            key = remoteItem?.progressKey?.takeIf { it.isNotBlank() } ?: progressKey,
+            title = playerTitle,
             resume = false,
             sourceId = stream.sourceId,
             poster = args.meta.poster ?: meta.poster,
@@ -685,6 +773,8 @@ fun CatalogDetailScreen(
             subtitleType = streamType,
             subtitleTarget = streamVideoId,
             catalogue = true,
+            remoteItem = remoteItem,
+            remoteSources = Streams.remoteVersionsOf(remoteItem, remoteStreams),
           ),
         )
       }
@@ -753,6 +843,9 @@ fun CatalogDetailScreen(
     pendingSources = 0
     sourcesLoaded = false
     sourcesFailed = false
+    remote.groups = emptyList()
+    remote.pending = 0
+    remote.discoveryFailed = false
     queuedSourceId = null
     notice(null)
   }
@@ -983,7 +1076,7 @@ fun CatalogDetailScreen(
           val local = Streams.isLocalStream(stream)
           val label = if (local) stream.behaviorHints?.filename ?: streamLabel(stream) else streamLabel(stream)
           val caption = listOfNotNull(
-            (if (local) stream.libraryName else stream.addonName)?.takeIf { it.isNotBlank() },
+            sourceGroupName(stream)?.takeIf { it.isNotBlank() },
             label.takeIf { it.isNotBlank() },
             formatSize(Streams.streamSize(stream)),
           ).joinToString(" · ")
@@ -1049,21 +1142,24 @@ fun CatalogDetailScreen(
         anyChosen = chosenStream != null,
         titleLanguage = titleLanguage,
         asking = anyAsking,
-        failed = sourcesFailed,
+        // A remote-only failure with nothing else to show takes the failure block; with rows on
+        // screen it is a note instead, so the playable sources are never hidden.
+        failed = sourcesFailed || (remoteFailed && nothingAtAll),
         notices = notices,
         emptyText = emptyText,
-        failureText = loadErrorText,
+        failureText = if (remoteFailed && nothingAtAll) remoteFailureText(remoteFailedLabels) else loadErrorText,
         onRetry = { sourcesRetry++ },
         retryTag = TagCatalogRetry,
-        filters = if (offered.size > 1) chips else emptyList(),
+        filters = if (totalSources > 1) chips else emptyList(),
         onFilterSelect = { chip, key ->
           sourceFilters.select(chip, key)
         },
-        countText = if (offered.size > 1) {
-          stringResource(R.string.sources_of_total, rows.size, offered.size + localStreams.size)
+        countText = if (totalSources > 1) {
+          stringResource(R.string.sources_of_total, rows.size, totalSources)
         } else {
           null
         },
+        remoteNote = remoteNotice(remoteFailed, remoteFailedLabels),
         initialFocus = sourcesPanelFocus,
       )
     }
@@ -1383,3 +1479,49 @@ private class DetailUiState {
   val series = SeriesDownloadState()
   val caption = ActionCaption()
 }
+
+/** One remote library's matched versions of the open title or episode, and whether it failed. */
+data class RemoteMatch(
+  val libraryId: String,
+  val provider: String,
+  val libraryName: String,
+  val streams: List<StreamDto> = emptyList(),
+  val failed: Boolean = false,
+) {
+  val label: String get() = listOf(provider, libraryName).filter { it.isNotBlank() }.joinToString(" · ")
+  fun group(): Streams.RemoteGroup = Streams.RemoteGroup(libraryId, provider, libraryName, streams)
+}
+
+/** The remote source groups of one title or episode, in one object so the screen keeps a single
+ *  local: the libraries it found, the groups that answered, whether discovery failed, how many
+ *  are still owed and the request generation a late answer is checked against. */
+private class RemoteSourcesState {
+  var libraries by mutableStateOf<List<RemoteLibraryDto>>(emptyList())
+  var groups by mutableStateOf<List<RemoteMatch>>(emptyList())
+  var discoveryFailed by mutableStateOf(false)
+  var pending by mutableIntStateOf(0)
+  var request by mutableIntStateOf(0)
+}
+
+/** The group a stream belongs to, for the caption: the library for a local copy, `provider ·
+ *  library` for a remote version, the addon otherwise. */
+internal fun sourceGroupName(stream: StreamDto): String? = when {
+  Streams.isLocalStream(stream) -> stream.libraryName
+  Streams.isRemoteStream(stream) ->
+    listOfNotNull(stream.provider, stream.libraryName).filter { it.isNotBlank() }.joinToString(" · ")
+  else -> stream.addonName
+}.takeIf { !it.isNullOrBlank() }
+
+/** The remote failure line: which libraries could not be reached, else a plain failure. */
+@Composable
+internal fun remoteNotice(failed: Boolean, labels: List<String>): String? = when {
+  !failed -> null
+  labels.isEmpty() -> stringResource(R.string.media_server_error)
+  else -> stringResource(R.string.media_server_group_failed, labels.joinToString(", "))
+}
+
+/** The failure text for the panel's own block when only the remote groups failed. */
+@Composable
+internal fun remoteFailureText(labels: List<String>): String =
+  if (labels.isEmpty()) stringResource(R.string.media_server_error)
+  else stringResource(R.string.media_server_group_failed, labels.joinToString(", "))

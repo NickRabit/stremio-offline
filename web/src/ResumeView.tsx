@@ -8,12 +8,14 @@ const FILTERS = [
   { value: "all", label: "resume.filterAll" },
   { value: "library", label: "resume.filterLibrary" },
   { value: "catalog", label: "resume.filterCatalog" },
-] as const satisfies ReadonlyArray<{ value: ResumeFilter; label: "resume.filterAll" | "resume.filterLibrary" | "resume.filterCatalog" }>;
+  { value: "remote", label: "resume.filterRemote" },
+] as const satisfies ReadonlyArray<{ value: ResumeFilter; label: "resume.filterAll" | "resume.filterLibrary" | "resume.filterCatalog" | "resume.filterRemote" }>;
 
 const EMPTY = {
   all: { title: "resume.emptyAllTitle", text: "resume.emptyAllText" },
   library: { title: "resume.emptyLibraryTitle", text: "resume.emptyLibraryText" },
   catalog: { title: "resume.emptyCatalogTitle", text: "resume.emptyCatalogText" },
+  remote: { title: "resume.emptyRemoteTitle", text: "resume.emptyRemoteText" },
 } as const;
 
 /** The one Continue watching section: the same merged cards Home's resume row draws, paged

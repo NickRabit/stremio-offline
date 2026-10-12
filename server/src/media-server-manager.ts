@@ -1,6 +1,19 @@
 import { AppError } from "./errors.js";
 import { log } from "./logger.js";
+import { remoteLibraryVisibleTo } from "./media-server-access.js";
 import { ResourceError } from "./media-resources.js";
+import { isRemoteContentRef, remoteSecretStamp, type RemoteContentRef } from "./media-server-reference.js";
+import {
+  connectionScope,
+  forgetRemovedHistory,
+  historySweepPending,
+  markDetachedHistory,
+  markRemovedHistory,
+  purgeExpiredHistory,
+  retainHistoryOnAttach,
+  sweepRemoteHistory,
+} from "./media-server-retention.js";
+import { remoteIdsMatch, remoteMatchCandidates, remoteMatchTarget, type RemoteMatchTarget } from "./media-server-match.js";
 import { MediaServerIndex, type MediaServerSnapshotKey, type SnapshotScan } from "./media-server-index.js";
 import {
   createMediaServerProvider,
@@ -8,15 +21,18 @@ import {
   type ProviderItem,
   type ProviderItemType,
   type ProviderLibrary,
+  type ProviderVersion,
 } from "./media-server-provider.js";
-import { createMediaServerTransport, normalizeMediaServerUrl, type MediaServerTransport, type MediaServerTransportConfig } from "./media-server-security.js";
+import { createMediaServerTransport, normalizeMediaServerUrl, type MediaServerAsset, type MediaServerTransport, type MediaServerTransportConfig } from "./media-server-security.js";
 import type { MediaServerSecrets } from "./media-server-secrets.js";
 import {
+  MEDIA_SERVER_CONFIGURATION_MAX_BYTES,
   MediaServerConfiguration,
   bool,
   boundedString,
   checkKeys,
   order as libraryOrder,
+  prepareMediaServerConfiguration,
   verifiedKey,
   type MediaServerConfigurationExport,
 } from "./media-server-store.js";
@@ -32,16 +48,19 @@ import {
   adminRemoteLibrary,
   newConnectionId,
   newRemoteLibraryId,
+  publicRemoteItem,
   publicRemoteLibrary,
   type AdminMediaConnection,
   type MediaConnectionRecord,
   type MediaServerKind,
+  type PublicRemoteItem,
   type PublicRemoteLibrary,
   type RemoteCapabilities,
+  type RemoteIdentity,
   type RemoteLibraryRecord,
 } from "./media-server-types.js";
 import { ForbiddenError, assertStillAdmin } from "./roles.js";
-import type { Store } from "./store.js";
+import type { State, Store } from "./store.js";
 import { bumpPermissions, dormantGrants, findUserById, usersToBump, type UserRecord } from "./users.js";
 
 /** The verified identity behind a request. `assertCurrent` is the route's own access gate
@@ -57,7 +76,7 @@ export type AdminConnectionView = AdminMediaConnection & { status: MediaServerCo
 export type AdminLibraryView = ReturnType<typeof adminRemoteLibrary>;
 
 export interface MediaServerBrowsePage {
-  items: ProviderItem[];
+  items: PublicRemoteItem[];
   total: number;
   asOf: string;
   stale: false;
@@ -66,8 +85,27 @@ export interface MediaServerBrowsePage {
 }
 
 export interface MediaServerDetail {
-  item: ProviderItem;
+  item: PublicRemoteItem;
   capabilities: RemoteCapabilities;
+}
+
+/** One playable item with every ordinary file version behind it, plus the verified identity
+ *  and the local handles a caller seals into references. Carries no URL, path or token. */
+export interface MediaServerItemVersions {
+  item: ProviderItem;
+  versions: ProviderVersion[];
+  identity: RemoteIdentity;
+  connectionId: string;
+  libraryId: string;
+  generation: number;
+  libraryName: string;
+}
+
+/** What a content mutation took away. A scope with no fields means everything. */
+export interface MediaServerInvalidationScope {
+  connectionId?: string;
+  libraryId?: string;
+  userId?: string;
 }
 
 export interface MediaServerManagerSeams {
@@ -87,7 +125,9 @@ const SCAN_PAGE_LIMIT = 200;
 const SCAN_PAGE_MAX = 50;
 const SCAN_ITEM_MAX = 10_000;
 const SCAN_BYTES_MAX = 5 * 1024 * 1024;
-const EXPORT_MAX_BYTES = 8 * 1024 * 1024;
+const MATCH_CANDIDATE_MAX = 40;
+const MATCH_STREAM_MAX = 200;
+const EXPORT_MAX_BYTES = MEDIA_SERVER_CONFIGURATION_MAX_BYTES;
 const CURSOR_MAX = 8192;
 const CURSOR_JSON_MAX = 6144;
 const SEARCH_MAX = 256;
@@ -104,6 +144,16 @@ const invalid = (message: string): MediaServerError => new MediaServerError("inv
 const notFound = (message: string): MediaServerError => new MediaServerError("not-found", message);
 const busy = (message: string): MediaServerError => new MediaServerError("busy", message);
 const stale = (): MediaServerError => new MediaServerError("stale-generation", "The media-server configuration changed; start again.");
+
+/** The one optional flag a removal takes. A misspelled key or a non-boolean value is refused
+ *  rather than ignored, so a removal never runs with a setting the caller did not mean. */
+const readForgetOption = (options: unknown): boolean => {
+  if (options === undefined) return false;
+  const record = checkKeys(options, ["forget"], "The media-server removal");
+  if (record.forget === undefined) throw invalid("The media-server removal names nothing to change.");
+  return bool(record.forget, "forget");
+};
+
 const identityChanged = (): MediaServerError => new MediaServerError("identity-changed", "The media-server identity is not the configured one.");
 const closedError = (): MediaServerError => new MediaServerError("closed", "The media-server manager is closed.");
 const cancelled = (): MediaServerError => new MediaServerError("cancelled", "The media-server request was cancelled.");
@@ -206,26 +256,25 @@ interface CachedRuntime {
   provider: MediaServerProvider;
 }
 
+/** One proved live session: the token, the provider behind it, its transport and the view
+ *  list the account may reach. Held for the length of a single request so several reads
+ *  share one identity proof. */
+interface LiveSession {
+  token: string;
+  provider: MediaServerProvider;
+  transport: MediaServerTransport;
+  libraries: ProviderLibrary[];
+}
+
 interface StatusRecord {
   generation: number;
   secretRef: string | undefined;
   status: MediaServerConnectionStatus;
 }
 
-/** Whether one account may see one attached remote library, as the state stands now. A
- *  disabled resource, a connection whose identity is not verified, or a grant list that
- *  does not name the account all answer no; an empty list is administrator-only. */
-export const remoteLibraryVisibleTo = (
-  connections: readonly MediaConnectionRecord[],
-  library: RemoteLibraryRecord,
-  user: Pick<UserRecord, "id" | "role">,
-): boolean => {
-  const connection = connections.find((candidate) => candidate.id === library.connectionId);
-  if (!connection || !connection.enabled || !library.enabled) return false;
-  if (!connection.serverId || !connection.accountId || !connection.secretRef) return false;
-  if (user.role === "admin") return true;
-  return library.allowedUsers.includes(user.id);
-};
+// Re-exported so existing callers keep importing it from the manager; the pure
+// implementation lives beside the other remote-access helpers.
+export { remoteLibraryVisibleTo };
 
 /** The administration and authorized-browsing surface over the persisted records. Every
  *  request-facing method takes the caller's authority first, re-reads the acting account
@@ -245,11 +294,13 @@ export class MediaServerManager {
   private readonly lifetime = new AbortController();
   private readonly loginTransports = new Set<MediaServerTransport>();
   private credentialChain: Promise<unknown> = Promise.resolve();
+  private maintenance: Promise<void> | undefined;
   private cleanupTimer: NodeJS.Timeout | undefined;
   private activeNetwork = 0;
   private mutationInFlight = false;
   private closed = false;
   private initialized = false;
+  private contentInvalidator: ((scope: MediaServerInvalidationScope) => Promise<void>) | undefined;
 
   constructor(
     private readonly store: Store,
@@ -278,9 +329,11 @@ export class MediaServerManager {
       try { await this.serializedCredential(() => this.reconcileVault()); }
       catch (error) { log("WARN", "Media-server secret reconciliation was deferred", { reason: error instanceof MediaServerError ? error.code : "unavailable" }); }
     }
-    this.cleanupTimer = setInterval(() => { void this.drainCleanup(); }, this.cleanupIntervalMs);
+    this.cleanupTimer = setInterval(() => {
+      void this.runMaintenance().catch(() => log("WARN", "Media-server maintenance was deferred"));
+    }, this.cleanupIntervalMs);
     this.cleanupTimer.unref?.();
-    await this.drainCleanup();
+    await this.runMaintenance();
   }
 
   async close(): Promise<void> {
@@ -294,6 +347,14 @@ export class MediaServerManager {
     const logins = [...this.loginTransports];
     this.loginTransports.clear();
     await Promise.allSettled([...transports, ...logins].map((transport) => transport.close()));
+  }
+
+  /** Registers the one callback that tears down live remote content when a write takes it
+   *  away. Only one owner may register; a second registration is a wiring mistake and fails
+   *  loudly rather than silently replacing the first. */
+  setContentInvalidator(callback: (scope: MediaServerInvalidationScope) => Promise<void>): void {
+    if (this.contentInvalidator) throw new Error("A media-server content invalidator is already registered.");
+    this.contentInvalidator = callback;
   }
 
   async listConnections(authority: MediaServerAuthority): Promise<{ connections: AdminConnectionView[]; keyConfigured: boolean }> {
@@ -390,21 +451,31 @@ export class MediaServerManager {
       });
       // A rename changes nothing derived, so it neither bumps the generation nor throws away
       // live work; a visibility change does both.
-      if (generationChanged) this.invalidateRuntime(connectionId);
+      if (generationChanged) {
+        this.invalidateRuntime(connectionId);
+        await this.invalidateContent({ connectionId });
+      }
       log("INFO", "Media-server connection updated", { actor: actor.username, connectionId });
       return this.adminConnectionView(updated);
     });
   }
 
-  async removeConnection(authority: MediaServerAuthority, id: unknown, signal?: AbortSignal): Promise<void> {
+  /** Removes one connection and its attachments. The stored history is kept, invisibly and
+   *  for thirty days, unless the caller asks to forget it, which deletes it at once in the
+   *  same atomic write as the removal. */
+  async removeConnection(authority: MediaServerAuthority, id: unknown, signal?: AbortSignal, options?: unknown): Promise<void> {
     const request = this.requestSignal(signal);
     const actor = this.requireAdmin(authority, request);
     const connectionId = this.requireConnectionId(id);
+    const forget = readForgetOption(options);
     await this.adminMutation(async () => {
       await this.store.update((state) => {
         this.assertWriteAuthority(state, authority, request);
         const connection = (state.mediaConnections ?? []).find((candidate) => candidate.id === connectionId);
         if (!connection) throw notFound("That media-server connection does not exist.");
+        const scope = connectionScope(connection);
+        if (forget) forgetRemovedHistory(state, scope);
+        else markRemovedHistory(state, scope, this.clock(), { connectionIds: [connectionId] });
         const removed = (state.remoteLibraries ?? []).filter((library) => library.connectionId === connectionId);
         const affected = this.granteeIds(state.users, removed);
         state.mediaConnections = (state.mediaConnections ?? []).filter((candidate) => candidate.id !== connectionId);
@@ -413,6 +484,7 @@ export class MediaServerManager {
         if (affected.length) state.users = bumpPermissions(state.users ?? [], affected);
       });
       this.invalidateRuntime(connectionId);
+      await this.invalidateContent({ connectionId });
       await this.drainCleanup();
       log("INFO", "Media-server connection removed", { actor: actor.username, connectionId });
     });
@@ -466,6 +538,7 @@ export class MediaServerManager {
           throw error;
         }
         this.invalidateRuntime(connectionId);
+        await this.invalidateContent({ connectionId });
         await this.drainCleanup();
         this.cacheRuntime(connectionId, { generation: updated.generation, secretRef: updated.secretRef, transport, provider });
         cached = true;
@@ -511,6 +584,10 @@ export class MediaServerManager {
         const libraries = state.remoteLibraries ?? [];
         if (libraries.length >= MEDIA_SERVER_LIMITS.libraries) throw invalid("Too many remote libraries.");
         if (libraries.some((library) => library.connectionId === connection.id && library.remoteId === remoteId)) throw invalid("That remote library is already attached.");
+        // An attachment of the very same verified identity and upstream library takes its
+        // history back: whatever removal started a countdown for it stops now.
+        purgeExpiredHistory(state, this.clock());
+        retainHistoryOnAttach(state, connectionScope(connection), remoteId);
         installed = {
           id: newRemoteLibraryId(), connectionId: connection.id, remoteId, name: name ?? discovered.name,
           type: discovered.type, enabled: true, order, allowedUsers: [], showOnHome, showInContinueWatching,
@@ -536,6 +613,8 @@ export class MediaServerManager {
     return this.adminMutation(async () => {
       let updated!: RemoteLibraryRecord;
       let changed = false;
+      let enabledChanged = false;
+      let removedUsers: string[] = [];
       await this.store.update((state) => {
         this.assertWriteAuthority(state, authority, request);
         const library = (state.remoteLibraries ?? []).find((candidate) => candidate.id === libraryId);
@@ -562,6 +641,8 @@ export class MediaServerManager {
         changed = next.name !== library.name || next.enabled !== library.enabled || next.order !== library.order
           || next.showOnHome !== library.showOnHome || next.showInContinueWatching !== library.showInContinueWatching
           || JSON.stringify(next.allowedUsers) !== JSON.stringify(library.allowedUsers);
+        enabledChanged = next.enabled !== library.enabled;
+        removedUsers = before.filter((id) => !next.allowedUsers.includes(id) && findUserById(state.users ?? [], id)?.role === "user");
         // A grant edit or a visibility switch is a permission change for the ordinary
         // accounts on either side of it; a rename or a reorder is not.
         const permissionChange = JSON.stringify(next.allowedUsers) !== JSON.stringify(before) || next.enabled !== library.enabled;
@@ -576,15 +657,20 @@ export class MediaServerManager {
         updated = structuredClone(next);
       });
       if (changed) this.invalidateRuntime(updated.connectionId);
+      if (enabledChanged) await this.invalidateContent({ libraryId });
+      for (const userId of removedUsers) await this.invalidateContent({ libraryId, userId });
       log("INFO", "Remote library updated", { actor: actor.username, libraryId });
       return adminRemoteLibrary(updated);
     });
   }
 
-  async deleteLibrary(authority: MediaServerAuthority, id: unknown, signal?: AbortSignal): Promise<void> {
+  /** Removes one attached library. Its stored history is kept, invisibly and for thirty days,
+   *  unless the caller asks to forget it, which deletes it at once in the same atomic write. */
+  async deleteLibrary(authority: MediaServerAuthority, id: unknown, signal?: AbortSignal, options?: unknown): Promise<void> {
     const request = this.requestSignal(signal);
     const actor = this.requireAdmin(authority, request);
     const libraryId = this.requireLibraryId(id);
+    const forget = readForgetOption(options);
     await this.adminMutation(async () => {
       let connectionId = "";
       await this.store.update((state) => {
@@ -592,11 +678,20 @@ export class MediaServerManager {
         const library = (state.remoteLibraries ?? []).find((candidate) => candidate.id === libraryId);
         if (!library) throw notFound("That remote library does not exist.");
         connectionId = library.connectionId;
+        const connection = (state.mediaConnections ?? []).find((candidate) => candidate.id === connectionId);
+        // A record whose connection is already gone has no verified identity to scope its
+        // history by; the removal itself still goes through, as it always did.
+        if (connection) {
+          const scope = { ...connectionScope(connection), remoteLibraryId: library.remoteId };
+          if (forget) forgetRemovedHistory(state, scope);
+          else markRemovedHistory(state, scope, this.clock(), { libraryIds: [libraryId] });
+        }
         const affected = this.granteeIds(state.users, [library]);
         state.remoteLibraries = (state.remoteLibraries ?? []).filter((candidate) => candidate.id !== libraryId);
         if (affected.length) state.users = bumpPermissions(state.users ?? [], affected);
       });
       this.index.invalidateLibrary(libraryId);
+      await this.invalidateContent({ libraryId });
       log("INFO", "Remote library removed", { actor: actor.username, libraryId, connectionId });
     });
   }
@@ -614,9 +709,13 @@ export class MediaServerManager {
     await this.adminMutation(async () => {
       // The guard runs inside the restore's own mutating update, so a demotion during a slow
       // body upload cannot land a restored configuration.
+      const replacedConnections = this.store.mediaConnections().map((connection) => connection.id);
       const guarded = new MediaServerConfiguration(this.store, { beforeWrite: (state) => this.assertWriteAuthority(state, authority, request) });
       await guarded.restoreConfiguration(body);
       this.requireAdmin(authority, request);
+      // A restored configuration may have replaced any connection or library, so nothing live
+      // can be assumed to still exist.
+      for (const connectionId of replacedConnections) await this.invalidateContent({ connectionId });
     });
     return {
       connections: this.store.mediaConnections().map((connection) => this.adminConnectionView(connection)),
@@ -624,12 +723,75 @@ export class MediaServerManager {
     };
   }
 
+  /** Replaces the stored remote configuration with one prepared from a settings backup,
+   *  atomically with the settings and addon changes that backup carries. The metadata is
+   *  prepared -- and so the whole configuration validated -- before the write; inside the one
+   *  mutating update the caller's own mutator still proves the actor is an administrator, no
+   *  credential or grant survives the replacement, the previous secret references go onto the
+   *  durable cleanup queue and every ordinary account whose grant the replacement took away
+   *  has its permission stamp moved. Nothing is read back or written before the update, and
+   *  the actor is re-checked after the awaited cleanup. */
+  async restoreSettingsConfiguration(
+    authority: MediaServerAuthority,
+    metadata: unknown,
+    mutateSettings: (state: State) => void,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const request = this.requestSignal(signal);
+    this.requireAdmin(authority, request);
+    const prepared = prepareMediaServerConfiguration(metadata);
+    await this.adminMutation(async () => {
+      const replaced: string[] = [];
+      await this.store.update((state) => {
+        this.assertWriteAuthority(state, authority, request);
+        mutateSettings(state);
+        this.assertWriteAuthority(state, authority, request);
+        const previousConnections = state.mediaConnections ?? [];
+        const previousLibraries = state.remoteLibraries ?? [];
+        replaced.push(...previousConnections.map((connection) => connection.id));
+        state.mediaConnections = prepared.connections;
+        state.remoteLibraries = prepared.libraries;
+        const now = this.clock();
+        purgeExpiredHistory(state, now);
+        for (const library of prepared.libraries) {
+          const connection = prepared.connections.find((candidate) => candidate.id === library.connectionId)!;
+          retainHistoryOnAttach(state, connectionScope(connection), library.remoteId);
+        }
+        markDetachedHistory(state, now);
+        state.mediaSecretCleanup = this.appendCleanup(
+          state.mediaSecretCleanup,
+          previousConnections.map((connection) => connection.secretRef).filter((ref): ref is string => ref !== undefined),
+        );
+        const affected = this.granteeIds(state.users, previousLibraries);
+        if (affected.length) state.users = bumpPermissions(state.users ?? [], affected);
+      });
+      for (const connectionId of replaced) {
+        this.invalidateRuntime(connectionId);
+        await this.invalidateContent({ connectionId });
+      }
+      await this.drainCleanup();
+      this.requireAdmin(authority, request);
+      log("INFO", "The media-server configuration was restored from a settings backup", { connections: prepared.connections.length, libraries: prepared.libraries.length });
+    });
+  }
+
   async visibleLibraries(authority: MediaServerAuthority, signal?: AbortSignal): Promise<PublicRemoteLibrary[]> {
     const request = this.requestSignal(signal);
     const user = this.currentActor(authority, request);
     const libraries = this.visibleFor(user);
     this.currentActor(authority, request);
-    return libraries.map((library) => publicRemoteLibrary(library));
+    const connections = this.store.mediaConnections();
+    return libraries.map((library) => publicRemoteLibrary(library, connections.find((candidate) => candidate.id === library.connectionId)?.provider));
+  }
+
+  /** Every attached remote library, disabled ones included, with the provider of its stored
+   *  connection. Administrator-only and no upstream work: the attachment records are enough. */
+  async listAdminLibraries(authority: MediaServerAuthority): Promise<Array<AdminLibraryView & { provider?: MediaServerKind }>> {
+    this.requireAdmin(authority);
+    const connections = this.store.mediaConnections();
+    const libraries = this.store.remoteLibraries();
+    this.requireAdmin(authority);
+    return libraries.map((library) => ({ ...adminRemoteLibrary(library, connections.find((candidate) => candidate.id === library.connectionId)?.provider) }));
   }
 
   async browseItems(authority: MediaServerAuthority, libraryId: unknown, query: unknown, signal?: AbortSignal): Promise<MediaServerBrowsePage> {
@@ -659,7 +821,7 @@ export class MediaServerManager {
     if (offset > filtered.length) throw invalid("The media-server cursor is out of range.");
     const slice = filtered.slice(offset, offset + limit);
     const page: MediaServerBrowsePage = {
-      items: slice.map((item) => structuredClone(item)),
+      items: slice.map((item) => publicRemoteItem(structuredClone(item), library.id)),
       total: filtered.length,
       asOf: snapshot.asOf,
       stale: false,
@@ -683,7 +845,7 @@ export class MediaServerManager {
     const ancestors = await this.upstream(connection, request, () => session.provider.ancestors(session.token, connection.accountId, item.id, request));
     if (!ancestors.includes(library.remoteId)) throw notFound("That item is not in this library.");
     this.recheckContent(authority, request, library.id, connection);
-    return { item: structuredClone(item), capabilities: READ_ONLY_MEDIA_CAPABILITIES };
+    return { item: publicRemoteItem(structuredClone(item), library.id), capabilities: READ_ONLY_MEDIA_CAPABILITIES };
   }
 
   async itemEpisodes(authority: MediaServerAuthority, libraryId: unknown, itemId: unknown, query: unknown, signal?: AbortSignal): Promise<MediaServerBrowsePage> {
@@ -718,7 +880,7 @@ export class MediaServerManager {
     if (offset > episodes.length) throw invalid("The media-server cursor is out of range.");
     const slice = episodes.slice(offset, offset + limit);
     const page: MediaServerBrowsePage = {
-      items: slice.map((item) => structuredClone(item)),
+      items: slice.map((item) => publicRemoteItem(structuredClone(item), library.id)),
       total: episodes.length,
       asOf: snapshot.asOf,
       stale: false,
@@ -728,6 +890,191 @@ export class MediaServerManager {
       page.cursor = encodeCursor({ v: 1, s: snapshot.id, l: library.id, g: connection.generation, a: user.id, q: "", t: "", p: parentId, o: offset + slice.length });
     }
     return page;
+  }
+
+  /** Every ordinary file version of one playable item, re-reading the acting account and the
+   *  local records after each awaited step. Only a movie or an episode has media to hand over;
+   *  the answer carries no URL, path or token. */
+  async itemVersions(authority: MediaServerAuthority, libraryId: unknown, itemId: unknown, signal?: AbortSignal): Promise<MediaServerItemVersions> {
+    const request = this.requestSignal(signal);
+    const user = this.currentActor(authority, request);
+    const library = this.requireVisibleLibrary(user, libraryId);
+    const connection = this.requireConnection(library.connectionId);
+    const requested = requestItemId(itemId);
+    const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId }, request);
+    return this.versionsUnder(authority, request, library, connection, session, requested);
+  }
+
+  /** Proves the acting account may still reach one attached library: the current actor, a
+   *  visible library and its captured connection, then a live session that re-reads the
+   *  identity, the account policy and the view list, and a content re-check afterwards. It
+   *  reads no upstream payload and writes nothing, so it is the confirmation a projection
+   *  needs without the item-shaped answers the browse routes carry. */
+  async verifyLibrary(authority: MediaServerAuthority, libraryId: unknown, signal?: AbortSignal): Promise<void> {
+    const request = this.requestSignal(signal);
+    const user = this.currentActor(authority, request);
+    const library = this.requireVisibleLibrary(user, libraryId);
+    const connection = this.requireConnection(library.connectionId);
+    await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId }, request);
+    this.recheckContent(authority, request, library.id, connection);
+  }
+
+  /** The verified playable items behind one exact external id. Authorization comes first, then
+   *  a bounded snapshot and a fresh detail read for every candidate: the snapshot alone never
+   *  proves a match after metadata changes, a drifted title is dropped, and an id this app does
+   *  not match exactly is an empty answer rather than an error. Only an exact namespaced id is
+   *  matched; there is no fuzzy title or path lookup and no external network conversion. */
+  async matchingItems(authority: MediaServerAuthority, libraryId: unknown, type: unknown, catalogId: unknown, signal?: AbortSignal): Promise<ProviderItem[]> {
+    const request = this.requestSignal(signal);
+    const user = this.currentActor(authority, request);
+    const library = this.requireVisibleLibrary(user, libraryId);
+    const connection = this.requireConnection(library.connectionId);
+    const target = remoteMatchTarget(String(type), String(catalogId));
+    if (!target) return this.unmatchable(authority, request, library, connection);
+    const { items } = await this.matchUnder(authority, request, library, connection, target);
+    return items;
+  }
+
+  /** The verified original versions behind one exact external id, each re-read after the match
+   *  so a candidate whose metadata moved mints no sources. An episode is proved again against
+   *  its series after its versions, under the same captured connection and generation, so an
+   *  episode that moved to another series -- or a series whose ids moved -- is dropped before
+   *  any address is minted. The public stream budget is bounded here rather than truncated. */
+  async matchedVersions(authority: MediaServerAuthority, libraryId: unknown, type: unknown, catalogId: unknown, signal?: AbortSignal): Promise<MediaServerItemVersions[]> {
+    const request = this.requestSignal(signal);
+    const user = this.currentActor(authority, request);
+    const library = this.requireVisibleLibrary(user, libraryId);
+    const connection = this.requireConnection(library.connectionId);
+    const target = remoteMatchTarget(String(type), String(catalogId));
+    if (!target) return this.unmatchable(authority, request, library, connection);
+    const { session, items } = await this.matchUnder(authority, request, library, connection, target);
+    const out: MediaServerItemVersions[] = [];
+    let streams = 0;
+    for (const item of items) {
+      const versions = await this.versionsUnder(authority, request, library, connection, session, item.id);
+      if (!this.freshMatch(target, versions.item)) continue;
+      if (target.type === "episode") {
+        const seriesId = versions.item.seriesId;
+        if (seriesId === undefined || seriesId !== item.seriesId) continue;
+        const parent = await this.verifiedDetail(authority, request, library, connection, session, seriesId);
+        if (parent.type !== "series" || !remoteIdsMatch(target.ids, parent.providerIds)) continue;
+      }
+      streams += versions.versions.length;
+      if (streams > MATCH_STREAM_MAX) throw new MediaServerError("response-too-large", "The media-server match has too many sources.");
+      out.push(versions);
+    }
+    return out;
+  }
+
+  /** One item's official artwork, read only through the scoped binary transport after a fresh
+   *  detail and ancestry proof. The image role is one of two fixed values and the item may be of
+   *  any kind; the answer is bounded validated bytes and their content type, never a URL. */
+  async readArtwork(authority: MediaServerAuthority, libraryId: unknown, itemId: unknown, imageType: unknown, signal?: AbortSignal): Promise<MediaServerAsset> {
+    const request = this.requestSignal(signal);
+    if (imageType !== "Primary" && imageType !== "Backdrop") throw invalid("The media-server image type is not supported.");
+    const user = this.currentActor(authority, request);
+    const library = this.requireVisibleLibrary(user, libraryId);
+    const connection = this.requireConnection(library.connectionId);
+    const requested = requestItemId(itemId);
+    const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId }, request);
+    await this.verifiedDetail(authority, request, library, connection, session, requested);
+    const asset = await this.upstream(connection, request, () => session.transport.requestAsset({ kind: "artwork", itemId: requested, imageType }, session.token, request));
+    this.recheckContent(authority, request, library.id, connection);
+    return { bytes: new Uint8Array(asset.bytes), contentType: asset.contentType };
+  }
+
+  /** One sealed external subtitle. The reference must name an ordinary file version whose
+   *  provider entry still lists that exact index as an external text track; only then does the
+   *  scoped transport read the bytes, and the reference is re-proved afterwards. A reference
+   *  with no subtitle index, or one the provider no longer offers, is refused. */
+  async readSubtitle(authority: MediaServerAuthority, ref: RemoteContentRef, signal?: AbortSignal): Promise<MediaServerAsset> {
+    const request = this.requestSignal(signal);
+    if (!isRemoteContentRef(ref)) throw notFound("That media-server subtitle does not exist.");
+    const index = ref.subtitleIndex;
+    if (index === undefined) throw notFound("That media-server subtitle does not exist.");
+    const { library, connection } = this.recheckRef(authority, request, ref);
+    const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId }, request);
+    this.recheckRef(authority, request, ref);
+    const item = await this.upstream(connection, request, () => session.provider.detail(session.token, connection.accountId, ref.itemId, request));
+    this.recheckRef(authority, request, ref);
+    if (item.id !== ref.itemId) throw new MediaServerError("invalid-response", "The media-server item identity changed.");
+    const ancestors = await this.upstream(connection, request, () => session.provider.ancestors(session.token, connection.accountId, item.id, request));
+    if (!ancestors.includes(library.remoteId)) throw notFound("That item is not in this library.");
+    this.recheckRef(authority, request, ref);
+    if (item.type !== "movie" && item.type !== "episode") throw invalid("That item has no playable media.");
+    const versions = await this.upstream(connection, request, () => session.provider.versions(session.token, connection.accountId, item.id, request));
+    this.recheckRef(authority, request, ref);
+    if (!versions.some((version) => version.id === ref.mediaSourceId && version.externalSubtitles?.some((entry) => entry.index === index))) {
+      throw notFound("That media-server subtitle is no longer available.");
+    }
+    const asset = await this.upstream(connection, request, () => session.transport.requestAsset({ kind: "subtitle", itemId: ref.itemId, mediaSourceId: ref.mediaSourceId, index }, session.token, request));
+    this.recheckRef(authority, request, ref);
+    return { bytes: new Uint8Array(asset.bytes), contentType: asset.contentType };
+  }
+
+  /** Proves a sealed reference still names a live, permitted original: the actor owns it, the
+   *  records still match, and the named version is still an ordinary file. Reads no bytes and
+   *  writes no upstream history. */
+  async revalidateOriginal(authority: MediaServerAuthority, ref: RemoteContentRef, signal?: AbortSignal): Promise<void> {
+    const request = this.requestSignal(signal);
+    if (!isRemoteContentRef(ref)) throw notFound("That media-server item does not exist.");
+    if (ref.subtitleIndex !== undefined) throw notFound("That media-server item does not exist.");
+    const { library, connection } = this.recheckRef(authority, request, ref);
+    const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId }, request);
+    this.recheckRef(authority, request, ref);
+    const item = await this.upstream(connection, request, () => session.provider.detail(session.token, connection.accountId, ref.itemId, request));
+    this.recheckRef(authority, request, ref);
+    if (item.id !== ref.itemId) throw new MediaServerError("invalid-response", "The media-server item identity changed.");
+    const ancestors = await this.upstream(connection, request, () => session.provider.ancestors(session.token, connection.accountId, item.id, request));
+    if (!ancestors.includes(library.remoteId)) throw notFound("That item is not in this library.");
+    this.recheckRef(authority, request, ref);
+    if (item.type !== "movie" && item.type !== "episode") throw invalid("That item has no playable media.");
+    const versions = await this.upstream(connection, request, () => session.provider.versions(session.token, connection.accountId, item.id, request));
+    this.recheckRef(authority, request, ref);
+    if (!versions.some((version) => version.id === ref.mediaSourceId)) throw notFound("That media-server source is no longer available.");
+  }
+
+  /** Opens one original file over the binary transport. The full preflight runs first, the
+   *  token is read only for this operation, and the result is re-checked before any body
+   *  leaves the manager; a stale or denied result has its body cancelled. The request shares
+   *  the manager lifetime, so a shutdown or a connection change aborts it. */
+  async openOriginal(authority: MediaServerAuthority, ref: RemoteContentRef, args: { method: "GET" | "HEAD"; range?: string }, signal?: AbortSignal): Promise<Response> {
+    const request = this.requestSignal(signal);
+    if (!isRemoteContentRef(ref)) throw notFound("That media-server item does not exist.");
+    if (ref.subtitleIndex !== undefined) throw notFound("That media-server item does not exist.");
+    if (!args || (args.method !== "GET" && args.method !== "HEAD")) throw invalid("The media-server request method is not supported.");
+    if (args.range !== undefined && (typeof args.range !== "string" || args.range.length > 128)) throw invalid("The media-server byte range is malformed.");
+    const { library, connection } = this.recheckRef(authority, request, ref);
+    const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId }, request);
+    this.recheckRef(authority, request, ref);
+    const item = await this.upstream(connection, request, () => session.provider.detail(session.token, connection.accountId, ref.itemId, request));
+    this.recheckRef(authority, request, ref);
+    if (item.id !== ref.itemId) throw new MediaServerError("invalid-response", "The media-server item identity changed.");
+    const ancestors = await this.upstream(connection, request, () => session.provider.ancestors(session.token, connection.accountId, item.id, request));
+    if (!ancestors.includes(library.remoteId)) throw notFound("That item is not in this library.");
+    this.recheckRef(authority, request, ref);
+    const versions = await this.upstream(connection, request, () => session.provider.versions(session.token, connection.accountId, item.id, request));
+    this.recheckRef(authority, request, ref);
+    if (!versions.some((version) => version.id === ref.mediaSourceId)) throw notFound("That media-server source is no longer available.");
+    const response = await this.upstream(connection, request, () => session.transport.requestOriginal(
+      { itemId: ref.itemId, mediaSourceId: ref.mediaSourceId, method: args.method, ...(args.range === undefined ? {} : { range: args.range }) },
+      session.token,
+      request,
+    ));
+    const abortBody = () => { void response.body?.cancel().catch(() => undefined); };
+    try {
+      this.recheckRef(authority, request, ref);
+      this.checkLive(request);
+    } catch (error) {
+      abortBody();
+      throw error;
+    }
+    if (request.aborted) {
+      abortBody();
+      throw cancelled();
+    }
+    request.addEventListener("abort", abortBody, { once: true });
+    return response;
   }
 
   private requestSignal(signal?: AbortSignal): AbortSignal {
@@ -782,6 +1129,137 @@ export class MediaServerManager {
     const library = this.requireVisibleLibrary(user, libraryId);
     const fresh = this.requireConnection(library.connectionId);
     if (!this.sameConnection(fresh, connection)) throw stale();
+  }
+
+  /** One upstream detail read proved to be the item asked for and to still sit in the library,
+   *  with the acting authority and the local records re-checked after every await. */
+  private async verifiedDetail(
+    authority: MediaServerAuthority,
+    signal: AbortSignal,
+    library: RemoteLibraryRecord,
+    connection: MediaConnectionRecord,
+    session: { token: string; provider: MediaServerProvider },
+    itemId: string,
+  ): Promise<ProviderItem> {
+    const item = await this.upstream(connection, signal, () => session.provider.detail(session.token, connection.accountId, itemId, signal));
+    this.recheckContent(authority, signal, library.id, connection);
+    if (item.id !== itemId) throw new MediaServerError("invalid-response", "The media-server item identity changed.");
+    const ancestors = await this.upstream(connection, signal, () => session.provider.ancestors(session.token, connection.accountId, item.id, signal));
+    if (!ancestors.includes(library.remoteId)) throw notFound("That item is not in this library.");
+    this.recheckContent(authority, signal, library.id, connection);
+    return item;
+  }
+
+  /** The exact-id match re-applied to a freshly read item: a movie by its shared namespaced id,
+   *  or an episode by season and episode with no multi-episode range. */
+  private freshMatch(target: RemoteMatchTarget, item: ProviderItem): boolean {
+    if (target.type === "movie") return item.type === "movie" && remoteIdsMatch(target.ids, item.providerIds);
+    return item.type === "episode" && item.season === target.season && item.episode === target.episode
+      && (item.episodeEnd === undefined || item.episodeEnd === item.episode);
+  }
+
+  /** An id this app does not match exactly is an empty answer, never an error -- but only
+   *  after the live session and the local records have been proved, and before the index is
+   *  asked for a snapshot it could never use. */
+  private async unmatchable(
+    authority: MediaServerAuthority,
+    request: AbortSignal,
+    library: RemoteLibraryRecord,
+    connection: MediaConnectionRecord,
+  ): Promise<[]> {
+    await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId }, request);
+    this.recheckContent(authority, request, library.id, connection);
+    return [];
+  }
+
+  /** One live session, one bounded snapshot and the freshly proved items behind one exact
+   *  external id, shared by `matchingItems` and `matchedVersions` so both prove the same
+   *  identity under the same captured connection and generation. */
+  private async matchUnder(
+    authority: MediaServerAuthority,
+    request: AbortSignal,
+    library: RemoteLibraryRecord,
+    connection: MediaConnectionRecord,
+    target: RemoteMatchTarget,
+  ): Promise<{ session: LiveSession; items: ProviderItem[] }> {
+    const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId }, request);
+    this.recheckContent(authority, request, library.id, connection);
+    const snapshot = await this.index.resolve(this.snapshotKey(connection, library), {
+      scan: (scanSignal) => this.scanLibrary(authority, connection, library, session.token, session.provider, scanSignal, request),
+    });
+    this.recheckContent(authority, request, library.id, connection);
+    const candidates = remoteMatchCandidates(snapshot.items, target);
+    if (candidates.length > MATCH_CANDIDATE_MAX) throw new MediaServerError("response-too-large", "The media-server match has too many candidates.");
+    const parents = new Map<string, boolean>();
+    const items: ProviderItem[] = [];
+    for (const candidate of candidates) {
+      const fresh = await this.verifiedDetail(authority, request, library, connection, session, candidate.id);
+      if (!this.freshMatch(target, fresh)) continue;
+      if (target.type === "episode") {
+        const seriesId = fresh.seriesId;
+        if (seriesId === undefined) continue;
+        let proven = parents.get(seriesId);
+        if (proven === undefined) {
+          const parent = await this.verifiedDetail(authority, request, library, connection, session, seriesId);
+          proven = parent.type === "series" && remoteIdsMatch(target.ids, parent.providerIds);
+          parents.set(seriesId, proven);
+        }
+        if (!proven) continue;
+      }
+      items.push(fresh);
+    }
+    return { session, items };
+  }
+
+  /** The versions of one item read inside an already proved session: the detail, the ancestry
+   *  proof, the playable check and the version list, with the local records re-checked after
+   *  every await. */
+  private async versionsUnder(
+    authority: MediaServerAuthority,
+    request: AbortSignal,
+    library: RemoteLibraryRecord,
+    connection: MediaConnectionRecord,
+    session: LiveSession,
+    requested: string,
+  ): Promise<MediaServerItemVersions> {
+    this.recheckContent(authority, request, library.id, connection);
+    const item = await this.upstream(connection, request, () => session.provider.detail(session.token, connection.accountId, requested, request));
+    this.recheckContent(authority, request, library.id, connection);
+    if (item.id !== requested) throw new MediaServerError("invalid-response", "The media-server item identity changed.");
+    const ancestors = await this.upstream(connection, request, () => session.provider.ancestors(session.token, connection.accountId, item.id, request));
+    if (!ancestors.includes(library.remoteId)) throw notFound("That item is not in this library.");
+    this.recheckContent(authority, request, library.id, connection);
+    if (item.type !== "movie" && item.type !== "episode") throw invalid("That item has no playable media.");
+    const versions = await this.upstream(connection, request, () => session.provider.versions(session.token, connection.accountId, item.id, request));
+    this.recheckContent(authority, request, library.id, connection);
+    return {
+      item: structuredClone(item),
+      versions: versions.map((version) => ({ ...version })),
+      identity: { provider: connection.provider, serverId: connection.serverId, accountId: connection.accountId, itemId: item.id },
+      connectionId: connection.id,
+      libraryId: library.id,
+      generation: connection.generation,
+      libraryName: library.name,
+    };
+  }
+
+  /** Re-reads the records a sealed reference names and refuses when any of them moved: the
+   *  actor must be the owner with an unchanged secret and a live session, and the library,
+   *  connection, identity and generation exactly the configured ones. */
+  private recheckRef(authority: MediaServerAuthority, signal: AbortSignal, ref: RemoteContentRef): { library: RemoteLibraryRecord; connection: MediaConnectionRecord } {
+    const user = this.currentActor(authority, signal);
+    if (!(ref.owner.expiresAt > Date.now()) || user.id !== ref.owner.userId || user.revoked?.[ref.owner.sid] || ref.owner.secretStamp !== remoteSecretStamp(user.secret)) {
+      throw new ResourceError(404, "RESOURCE_NOT_FOUND");
+    }
+    const connections = this.store.mediaConnections();
+    const library = this.store.remoteLibraries().find((candidate) => candidate.id === ref.libraryId);
+    if (!library || library.connectionId !== ref.connectionId) throw notFound("That remote library does not exist.");
+    if (!remoteLibraryVisibleTo(connections, library, user)) throw notFound("That remote library does not exist.");
+    const connection = connections.find((candidate) => candidate.id === ref.connectionId);
+    if (!connection || !connection.enabled || !connection.secretRef) throw invalid("That media-server connection is disabled.");
+    if (connection.provider !== ref.provider || connection.serverId !== ref.serverId
+      || connection.accountId !== ref.accountId || connection.generation !== ref.generation) throw stale();
+    return { library, connection };
   }
 
   private requireConnectionId(value: unknown): string {
@@ -884,11 +1362,33 @@ export class MediaServerManager {
   private markReauthentication(connection: MediaConnectionRecord): void {
     this.dropRuntime(connection.id);
     this.statuses.set(connection.id, { generation: connection.generation, secretRef: connection.secretRef, status: "reauthentication-required" });
+    this.notifyContent({ connectionId: connection.id });
   }
 
   private markIdentityChanged(connection: MediaConnectionRecord): void {
     this.dropRuntime(connection.id);
     this.statuses.set(connection.id, { generation: connection.generation, secretRef: connection.secretRef, status: "identity-changed" });
+    this.notifyContent({ connectionId: connection.id });
+  }
+
+  /** Starts an invalidation without waiting for it, for a 401 or an identity change that must
+   *  reach live content at once. A failure is logged and never resurrects the state. */
+  private notifyContent(scope: MediaServerInvalidationScope): void {
+    const callback = this.contentInvalidator;
+    if (!callback) return;
+    void callback(scope).catch((error: unknown) =>
+      log("WARN", "Media-server content invalidation failed", { reason: error instanceof Error ? error.message : String(error) }));
+  }
+
+  /** Awaits an invalidation for a write that is reporting completion. A failure is logged and
+   *  never rolls the write back. */
+  private async invalidateContent(scope: MediaServerInvalidationScope): Promise<void> {
+    const callback = this.contentInvalidator;
+    if (!callback) return;
+    try { await callback(scope); }
+    catch (error) {
+      log("WARN", "Media-server content invalidation failed", { reason: error instanceof Error ? error.message : String(error) });
+    }
   }
 
   /** Forgets everything derived from one connection without claiming a new status: the next
@@ -908,7 +1408,15 @@ export class MediaServerManager {
   }
 
   private cacheRuntime(connectionId: string, runtime: CachedRuntime): void {
-    while (this.runtimes.size >= RUNTIME_MAX) {
+    // A concurrent read can install a runtime for the same handle while a reauthentication
+    // awaits its cleanup; closing any different runtime under the handle before replacing it
+    // is what keeps a live binary transport from being orphaned outside the map.
+    const existing = this.runtimes.get(connectionId);
+    if (existing && existing !== runtime) {
+      this.runtimes.delete(connectionId);
+      void existing.transport.close().catch(() => undefined);
+    }
+    while (this.runtimes.size >= RUNTIME_MAX && !this.runtimes.has(connectionId)) {
       const oldest = this.runtimes.keys().next().value as string | undefined;
       if (oldest === undefined) break;
       const evicted = this.runtimes.get(oldest);
@@ -939,7 +1447,7 @@ export class MediaServerManager {
     connection: MediaConnectionRecord,
     options: { libraryRemoteId?: string },
     signal: AbortSignal,
-  ): Promise<{ token: string; provider: MediaServerProvider; libraries: ProviderLibrary[] }> {
+  ): Promise<LiveSession> {
     this.checkLive(signal);
     if (!connection.secretRef) throw new MediaServerError("secret-unavailable", "That media-server connection has no stored credential.");
     const binding = { connectionId: connection.id, provider: connection.provider, serverId: connection.serverId, accountId: connection.accountId };
@@ -972,7 +1480,7 @@ export class MediaServerManager {
           throw new MediaServerError("forbidden", "The media-server account cannot reach that library.");
         }
       }
-      return { token, provider: runtime.provider, libraries };
+      return { token, provider: runtime.provider, transport: runtime.transport, libraries };
     } catch (error) {
       if (error instanceof MediaServerError && error.code === "authentication-required") this.markReauthentication(connection);
       throw error;
@@ -1072,6 +1580,46 @@ export class MediaServerManager {
     } catch {
       log("WARN", "A media-server secret could not be cleaned up; startup reconciliation will retry");
     }
+  }
+
+  /** The periodic work: the secret-cleanup drain and the history sweep, coalesced so a pass
+   *  still running never overlaps the next tick. Both are internal maintenance and run
+   *  without an actor, like the vault reconciliation. */
+  private runMaintenance(): Promise<void> {
+    if (this.maintenance) return this.maintenance;
+    const run = (async () => {
+      try {
+        await this.drainCleanup();
+        await this.sweepHistory();
+      } finally {
+        this.maintenance = undefined;
+      }
+    })();
+    this.maintenance = run;
+    return run;
+  }
+
+  /** One pass over every account's stored remote history. The records are read first: a pass
+   *  with nothing to expire and nothing to mark writes nothing at all. It never touches a live
+   *  attachment, never moves a permission stamp and never cancels a source. */
+  private async sweepHistory(): Promise<void> {
+    const now = this.clock();
+    if (!historySweepPending(this.historyView(), now)) return;
+    let changed = false;
+    await this.store.update((state) => { changed = sweepRemoteHistory(state, now); });
+    if (changed) log("INFO", "Remote media history was swept");
+  }
+
+  /** The history-bearing records as a read-only view, so a pass can ask whether it has
+   *  anything to do without writing. `store.userData` answers the live row, never a copy. */
+  private historyView() {
+    const users = this.store.users();
+    return {
+      users,
+      userData: Object.fromEntries(users.map((user) => [user.id, this.store.userData(user.id)])),
+      mediaConnections: this.store.mediaConnections(),
+      remoteLibraries: this.store.remoteLibraries(),
+    };
   }
 
   private drainCleanup(): Promise<void> {

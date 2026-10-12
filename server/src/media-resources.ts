@@ -1,5 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { INTERNAL_TOKEN } from "./auth.js";
+import { isRemoteMediaStream, openRemoteContent } from "./media-server-reference.js";
+import { READ_ONLY_MEDIA_CAPABILITIES, remoteProgressKey } from "./media-server-types.js";
 import type { PublicStream, StreamItem } from "./types.js";
 import type { MediaInfo } from "./naming.js";
 
@@ -94,7 +96,15 @@ export const mediaChildPath = (parentId: string, url: string) => `/api/media/${p
 export const isInternalMediaPath = (path: string) =>
   /^(?:\/api)?\/media\/[A-Za-z0-9_-]{43}(?:\/u\/[A-Za-z0-9_-]+)?$/.test(path);
 
+/** A sealed address that opens to an external-subtitle reference. Only such a reference may be
+ *  advertised as a subtitle, and only the owner it was sealed for may read it. */
+export const isRemoteSubtitleStream = (stream: Pick<StreamItem, "url">): boolean => {
+  if (!isRemoteMediaStream(stream)) return false;
+  return openRemoteContent(stream.url)?.subtitleIndex !== undefined;
+};
+
 export function streamKind(stream: StreamItem): PublicStream["kind"] {
+  if (isRemoteMediaStream(stream)) return openRemoteContent(stream.url) ? "remote" : "unsupported";
   if (stream.url?.startsWith("file://")) return "library";
   if (/^https?:\/\//i.test(stream.url ?? "")) return "remote";
   if (infoHashOf(stream) || /^magnet:/i.test(stream.url ?? "")) return "torrent";
@@ -102,6 +112,7 @@ export function streamKind(stream: StreamItem): PublicStream["kind"] {
 }
 
 function normalizedStream(input: StreamItem): StreamItem {
+  if (isRemoteMediaStream(input) && !openRemoteContent(input.url)) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
   const headers = new Headers(input.behaviorHints?.proxyHeaders?.request);
   for (const name of ["host", "connection", "content-length", "transfer-encoding", "x-forwarded-for", "forwarded"]) headers.delete(name);
   const infoHash = infoHashOf(input);
@@ -179,6 +190,7 @@ export class MediaResources {
     this.prune();
     if (owner.expiresAt <= this.now()) throw new ResourceError(410, "RESOURCE_EXPIRED");
     if (parent) this.get(parent, owner.sid, "media");
+    this.assertRemoteOwner(stream, owner, scope);
     const normalized = normalizedStream(stream);
     const serialized = JSON.stringify(normalized);
     const key = createHash("sha256").update(JSON.stringify([owner.sid, scope, parent, serialized, unique ? randomBytes(16).toString("hex") : ""])).digest("hex");
@@ -255,6 +267,7 @@ export class MediaResources {
   path(stream: StreamItem): string {
     const claimed = this.bindings.get(stream);
     if (claimed) return `/api/media/${claimed}`;
+    if (isRemoteMediaStream(stream)) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
     let id = this.internalBindings.get(stream);
     const record = id ? this.entries.get(id) : undefined;
     if (!record || record.expiresAt <= this.now()) {
@@ -282,22 +295,48 @@ export class MediaResources {
     const kind = streamKind(stream);
     const sourceId = this.add(stream, owner, "source", undefined, false, bill);
     const record = this.get(sourceId, owner.sid, "source").stream;
-    return {
+    const result: PublicStream = {
       sourceId, kind, playable: kind === "remote" || kind === "library",
       name: record.name, title: record.title, description: record.description,
       addonKey: record.addonKey, addonName: record.addonName,
       behaviorHints: { filename: record.behaviorHints?.filename, videoSize: record.behaviorHints?.videoSize,
         bingeGroup: record.behaviorHints?.bingeGroup },
-      subtitles: (stream.subtitles ?? []).filter((item) => /^https?:\/\//i.test(item.url) || (kind === "library" && item.url.startsWith("file://"))).map((item) => ({
+      subtitles: (stream.subtitles ?? []).filter((item) => isRemoteSubtitleStream(item) || /^https?:\/\//i.test(item.url) || (kind === "library" && item.url.startsWith("file://"))).map((item) => ({
         // The addon travels with it, the way `GET /api/subtitles` mints one: a record that
         // names no content cannot be recognised by the sweep that runs when an addon is
         // removed or withdrawn, and the re-check at hand-over has nothing to check against.
         // A subtitle inside a stream listing belongs to the addon that offered the stream
         // unless it says otherwise; a library sidecar names its library through the url.
-        subtitleId: this.add({ url: item.url, addonKey: item.addonKey ?? stream.addonKey }, owner, "subtitle"),
+        subtitleId: this.add({ url: item.url, addonKey: item.addonKey ?? stream.addonKey, ...(item.title ? { title: item.title } : {}) }, owner, "subtitle"),
         lang: safeSourceText(item.lang, stream), addonName: safeSourceText(item.addonName, stream),
+        ...(item.title ? { title: safeSourceText(item.title, stream) } : {}),
       })),
     };
+    if (kind === "remote") {
+      const ref = openRemoteContent(record.url);
+      if (ref) {
+        result.capabilities = READ_ONLY_MEDIA_CAPABILITIES;
+        result.provider = ref.provider;
+        result.libraryId = ref.libraryId;
+        result.remoteItem = { libraryId: ref.libraryId, itemId: ref.itemId, mediaSourceId: ref.mediaSourceId, progressKey: remoteProgressKey(ref) };
+      }
+    }
+    return result;
+  }
+
+  /** A sealed remote source is only recorded for the session it was sealed for, and never
+   *  outlives the reference it names. An original is never admitted as a subtitle, and a
+   *  subtitle never as source or media: only the scope the reference was sealed for is
+   *  accepted. A malformed attempt is refused, not stored. */
+  private assertRemoteOwner(stream: StreamItem, owner: ResourceOwner, scope: ResourceScope): void {
+    if (!isRemoteMediaStream(stream)) return;
+    const ref = openRemoteContent(stream.url);
+    if (!ref || ref.owner.userId !== owner.userId || ref.owner.sid !== owner.sid || !(owner.expiresAt <= ref.owner.expiresAt)) {
+      throw new ResourceError(404, "RESOURCE_NOT_FOUND");
+    }
+    if (scope === "subtitle" ? ref.subtitleIndex === undefined : ref.subtitleIndex !== undefined) {
+      throw new ResourceError(404, "RESOURCE_NOT_FOUND");
+    }
   }
 }
 

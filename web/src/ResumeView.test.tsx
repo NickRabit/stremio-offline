@@ -43,12 +43,14 @@ const cards = () => [...host.querySelectorAll<HTMLButtonElement>(".browse-grid .
 const click = async (element: HTMLElement) => { await act(async () => { element.click(); await Promise.resolve(); }); };
 
 describe("ResumeView", () => {
-  it("offers the three filters and reports the chosen one", async () => {
+  it("offers library, catalogue and remote filters and reports the chosen one", async () => {
     const { onFilter } = await render({ filter: "all", items: [file()] });
-    expect(chips().map((button) => button.textContent)).toEqual(["All", "In library", "From catalog"]);
+    expect(chips().map((button) => button.textContent)).toEqual(["All", "In library", "From catalog", "Media servers"]);
     expect(chips()[0]!.getAttribute("aria-pressed")).toBe("true");
     await click(chips()[1]!);
     expect(onFilter).toHaveBeenCalledWith("library");
+    await click(chips()[3]!);
+    expect(onFilter).toHaveBeenCalledWith("remote");
   });
 
   it("draws the Favourites grid and reports the page shape setting", async () => {

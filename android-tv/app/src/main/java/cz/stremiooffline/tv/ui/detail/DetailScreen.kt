@@ -50,6 +50,8 @@ import cz.stremiooffline.tv.episodeCode
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.ProgressDto
+import cz.stremiooffline.tv.data.RemoteItemContext
+import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.playback.Progress
 import cz.stremiooffline.tv.ui.components.CardRowInset
 import cz.stremiooffline.tv.ui.catalog.ActionCaption
@@ -98,6 +100,11 @@ data class PlayTarget(
    *  detail offers, the title's own library copy included; a library view or a Continue card
    *  leaves it false and gets no catalogue sources at all. */
   val catalogue: Boolean = false,
+  /** Set only for a native media-server play: the opaque remote identity and the stable progress
+   *  key the player stores state under. No path, addon or catalogue flag stands in for it. */
+  val remoteItem: RemoteItemContext? = null,
+  /** The versions of one remote item the player offers; empty for every other kind of play. */
+  val remoteSources: List<StreamDto> = emptyList(),
 )
 
 /** Everything the title detail draws: the artwork, the meta line and the files that sit under it. */

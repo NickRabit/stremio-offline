@@ -10,7 +10,11 @@ import express from "express";
 import type { AirPlayAccess } from "../airplay-access.js";
 import type { SessionInfo } from "../auth.js";
 import { flushLog, initLogger, readLog, setLevel } from "../logger.js";
-import type { ResourceOwner } from "../media-resources.js";
+import { mediaResources as registry, MediaResources, type ResourceOwner } from "../media-resources.js";
+import type { MediaServerManager } from "../media-server-manager.js";
+import { MediaServerPlaybackGuard } from "../media-server-playback.js";
+import { sealRemoteContent } from "../media-server-reference.js";
+import { MediaServerSources } from "../media-server-sources.js";
 import type { PlaybackManager } from "../playback.js";
 import type { RangeCache } from "../range-cache.js";
 import type { StatsLog } from "../stats.js";
@@ -20,15 +24,24 @@ import type { UserRecord } from "../users.js";
 import { registerPlaybackRoutes, type PlaybackDeps } from "./playback.js";
 
 const ID = "pb_000001";
-const RESOURCE = "res_000001";
 const TOKEN = "airplay-token";
 const ADA: ResourceOwner = { userId: "usr_00000001", sid: "sid-ada", expiresAt: Date.now() + 3_600_000 };
 const BOB: ResourceOwner = { userId: "usr_00000002", sid: "sid-bob", expiresAt: Date.now() + 3_600_000 };
+// The guard is fail-closed, so the fake session owns a real media resource in the registry.
+const RESOURCE = registry.mediaStream({ url: "https://example.test/video.mp4" } as StreamItem, ADA).resourceId;
+const sealedRemote = (): string => sealRemoteContent({
+  provider: "jellyfin", serverId: "server-1", accountId: "account-1", itemId: "item-1",
+  connectionId: `mconn_${"a".repeat(32)}`, libraryId: `rlib_${"b".repeat(32)}`, generation: 2, mediaSourceId: "v1",
+  owner: { userId: ADA.userId, sid: ADA.sid, expiresAt: ADA.expiresAt, secretStamp: "c".repeat(64) },
+});
 
 interface Harness {
   base: string;
   attended: string[];
   stopped: string[];
+  mediaSources: MediaServerSources;
+  playbackOwners: Map<string, { owner: ResourceOwner; resourceId: string }>;
+  seedRemote(): string;
   close(): Promise<void>;
 }
 
@@ -40,6 +53,17 @@ const mount = async (): Promise<Harness> => {
   const sessions = { ada: ADA, bob: BOB };
   const userOf = (req: express.Request) => (req.header("x-user") === "bob" ? "bob" : "ada");
   const ownerOf = (req: express.Request) => sessions[userOf(req)];
+  const playbackOwners = new Map([[ID, { owner: ADA, resourceId: RESOURCE }]]);
+  const resources = new MediaResources();
+  const mediaSources = new MediaServerSources(
+    { users: () => [], mediaConnections: () => [], remoteLibraries: () => [] } as unknown as Store,
+    {} as unknown as MediaServerManager,
+    resources,
+  );
+  const mediaServerGuard = new MediaServerPlaybackGuard({
+    sources: mediaSources, resources, playbackOwners, activeMedia: new Set(),
+    revocations: { stopResource: async () => undefined },
+  }, { intervalMs: 30_000, timeoutMs: 5_000 });
 
   const deps: PlaybackDeps = {
     store: { addons: () => [], libraries: () => [] } as unknown as Store,
@@ -67,9 +91,16 @@ const mount = async (): Promise<Harness> => {
       attended: (id: string) => { attended.push(id); },
       stop: async (id: string) => { stopped.push(id); },
       directory: () => "/tmp/session-generation",
+      preview: async () => undefined,
+      sidecar: async () => undefined,
+      seek: async () => ({ id: ID, url: "u" }),
+      escalate: async () => ({ id: ID, url: "u" }),
+      track: async () => ({ id: ID, url: "u" }),
     } as unknown as PlaybackManager,
+    mediaSources,
+    mediaServerGuard,
     playbackMeta: () => ({ source: "catalog", provider: "example.test", title: "title", kind: "other" }),
-    playbackOwners: new Map([[ID, { owner: ADA, resourceId: RESOURCE }]]),
+    playbackOwners,
     playbackResponse: (value) => value,
     prefsOf: () => defaultPrefs(),
     quietSources: new Map(),
@@ -101,6 +132,9 @@ const mount = async (): Promise<Harness> => {
     base: `http://127.0.0.1:${port}`,
     attended,
     stopped,
+    mediaSources,
+    playbackOwners,
+    seedRemote: () => registry.mediaStream({ url: sealedRemote() } as StreamItem, ADA).resourceId,
     close: async () => {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -198,4 +232,53 @@ test("GET /api/playback/:id/:generation/:file refuses a filename with a slash or
 
   const slash = await rawGet(harness.base, `/api/playback/${ID}/gen/a%2Fb.m3u8`, "ada");
   assert.equal(slash.status, 400);
+});
+
+test("a session whose media resource was removed is refused and stopped, while a sibling continues", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const doomed = harness.seedRemote();
+  harness.playbackOwners.set("pb_doomed", { owner: ADA, resourceId: doomed });
+  const alive = registry.mediaStream({ url: "https://example.test/sibling.mp4" } as StreamItem, ADA).resourceId;
+  harness.playbackOwners.set("pb_alive", { owner: ADA, resourceId: alive });
+  // The resource is revoked while the playback owner survives: the fail-closed guard must deny.
+  registry.remove(doomed);
+
+  const denied = await api(harness.base, "/api/playback/pb_doomed/preview", { user: "ada" });
+  assert.equal(denied.status, 404);
+  assert.ok(harness.stopped.includes("pb_doomed"), "the leaked session is stopped");
+
+  const ok = await api(harness.base, "/api/playback/pb_alive/preview", { user: "ada" });
+  assert.equal(ok.status, 204, "the unrelated session is untouched");
+});
+
+test("the remote media proxy forwards HEAD and range and binds the resource owner", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const openCalls: Array<{ method: string; range?: string; owner: ResourceOwner }> = [];
+  const sources = harness.mediaSources as unknown as {
+    open(stream: StreamItem, owner: ResourceOwner, args: { method: string; range?: string }, signal?: AbortSignal): Promise<Response>;
+    assertCurrent(): void;
+  };
+  sources.assertCurrent = () => undefined;
+  sources.open = async (_stream, owner, args) => {
+    openCalls.push({ method: args.method, range: args.range, owner });
+    if (args.method === "HEAD") return new Response(null, { status: 206, headers: { "content-range": "bytes 0-9/10" } });
+    return new Response(new Uint8Array([1, 2, 3]), { status: 206, headers: { "content-range": "bytes 0-9/10", "content-type": "video/mp4" } });
+  };
+  const resourceId = harness.seedRemote();
+
+  const head = await api(harness.base, `/api/media/${resourceId}`, { method: "HEAD", user: "ada" });
+  assert.equal(head.status, 206);
+  assert.equal(head.headers.get("cache-control"), "private, no-store");
+  assert.equal(openCalls.at(-1)!.method, "HEAD");
+
+  const ranged = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: "bytes=0-2" } });
+  assert.equal(ranged.status, 206);
+  await ranged.arrayBuffer();
+  assert.equal(openCalls.at(-1)!.range, "bytes=0-2", "the range reaches the scoped transport");
+  assert.equal(openCalls.at(-1)!.owner.userId, ADA.userId, "the owner is the resource's, not the caller's");
+
+  const denied = await api(harness.base, `/api/media/${resourceId}`, { user: "bob" });
+  assert.equal(denied.status, 404, "the wrong session cannot read another owner's resource");
 });

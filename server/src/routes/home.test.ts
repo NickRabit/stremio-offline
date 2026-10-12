@@ -207,6 +207,12 @@ const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number
   const homeDeps: HomeDeps = {
     ...personalDeps,
     personal,
+    // The remote half is empty here; the media-server card projection has its own suite.
+    remotePersonal: {
+      cards: async () => ({ items: [], total: 0 }),
+      assertCardsCurrent: () => undefined,
+    } as unknown as HomeDeps["remotePersonal"],
+    authorityOf: () => ({ actor: { id: "usr_00000001", secret: "unused" }, assertCurrent: () => undefined }),
     completedJobs: () => { if (state.completedThrows) throw new Error("the queue is unavailable"); return state.completed; },
     newEpisodes: (ownerUserId, watched) => {
       if (state.episodesThrows) throw new Error("the follows are unavailable");

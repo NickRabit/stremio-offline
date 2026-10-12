@@ -33,7 +33,31 @@ export interface MediaServerTransport {
     token?: string,
     signal?: AbortSignal,
   ): Promise<unknown>;
+  requestOriginal(args: OriginalMediaRequest, token: string, signal?: AbortSignal): Promise<Response>;
+  requestAsset(request: MediaServerAssetRequest, token: string, signal?: AbortSignal): Promise<MediaServerAsset>;
   close(): Promise<void>;
+}
+
+/** The only original-media request the transport can make: a fixed static stream path built from
+ *  two opaque ids, a GET or HEAD, and at most one HTTP byte range. No URL, path, arbitrary header
+ *  or body is accepted. */
+export interface OriginalMediaRequest {
+  itemId: string;
+  mediaSourceId: string;
+  method: "GET" | "HEAD";
+  range?: string;
+}
+
+/** The only binary assets the transport can fetch: fixed official artwork and one subtitle track.
+ *  The caller names an item and a fixed image role or subtitle index; a URL, query, header,
+ *  method or output format is never part of the request. */
+export type MediaServerAssetRequest =
+  | { kind: "artwork"; itemId: string; imageType: "Primary" | "Backdrop" }
+  | { kind: "subtitle"; itemId: string; mediaSourceId: string; index: number };
+
+export interface MediaServerAsset {
+  bytes: Uint8Array;
+  contentType: string;
 }
 
 export interface MediaServerTransportConfig extends MediaServerAddressPolicy {
@@ -54,11 +78,34 @@ export interface MediaServerTransportSeams {
   /** Extra dispatcher connect options. Tests pin `family` to prove a mixed-family answer set
    *  is refused before family filtering; the address guard is always applied. */
   connectOptions?: Record<string, unknown>;
+  /** Shorter original-stream deadlines for tests: a positive integer no greater than the
+   *  production default. Anything else is refused when the transport is built. */
+  originalHeaderMs?: number;
+  originalIdleMs?: number;
+  originalLifetimeMs?: number;
 }
 
 const MAX_CONCURRENCY = 4;
 const DEADLINE_MS = 10_000;
 const MAX_RETRY_AFTER_MS = 300_000;
+const ORIGINAL_MAX_CONCURRENCY = 8;
+const ORIGINAL_HEADER_MS = 10_000;
+const ORIGINAL_IDLE_MS = 30_000;
+const ORIGINAL_LIFETIME_MS = 6 * 60 * 60 * 1000;
+const ORIGINAL_RANGE_MAX = 128;
+const ORIGINAL_HEADER_TYPE_MAX = 256;
+const ORIGINAL_HEADER_ETAG_MAX = 512;
+const ORIGINAL_HEADER_DATE_MAX = 128;
+
+/** Separate streaming pool and deadlines for original-media reads. Metadata keeps its own
+ *  4-request pool and single 10s deadline; the two never share capacity. */
+export const MEDIA_SERVER_ORIGINAL_LIMITS = Object.freeze({
+  concurrency: ORIGINAL_MAX_CONCURRENCY,
+  headerMs: ORIGINAL_HEADER_MS,
+  idleMs: ORIGINAL_IDLE_MS,
+  lifetimeMs: ORIGINAL_LIFETIME_MS,
+  rangeMax: ORIGINAL_RANGE_MAX,
+});
 const CLIENT = "Stremio Offline";
 const DEVICE = "Server";
 const DEVICE_ID = "stremio-offline-server";
@@ -284,6 +331,75 @@ const statusError = (status: number, headers: Headers): MediaServerError => {
   return new MediaServerError("unavailable", "The media server refused the request.", status);
 };
 
+const invalidResponse = (message: string): MediaServerError => new MediaServerError("invalid-response", message);
+
+/** A copied header must be short, non-empty and printable ASCII: it can never carry a control
+ *  character, a folded value or an unbounded remote string. */
+const PRINTABLE_HEADER = /^[\x20-\x7e]+$/;
+const boundedHeader = (value: string | null, max: number): string | undefined =>
+  value !== null && value.length > 0 && value.length <= max && PRINTABLE_HEADER.test(value) ? value : undefined;
+
+const normalizedAcceptRanges = (value: string | null): "bytes" | "none" | undefined => {
+  if (value === null) return undefined;
+  const lower = value.trim().toLowerCase();
+  return lower === "bytes" || lower === "none" ? lower : undefined;
+};
+
+/** A present Content-Length must be a canonical, safe, non-negative integer. */
+function contentLengthValue(value: string | null): number | undefined {
+  if (value === null) return undefined;
+  if (!CANONICAL_DECIMAL.test(value)) throw invalidResponse("The media server sent an invalid length.");
+  const length = Number(value);
+  if (!Number.isSafeInteger(length)) throw invalidResponse("The media server sent an invalid length.");
+  return length;
+}
+
+/** A 206 carries `bytes N-M/T` with `T` an integer greater than `M`; `*` is not a valid total. */
+function satisfiedContentRange(value: string | null): { start: number; end: number; total: number } {
+  const match = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(value ?? "");
+  if (!match) throw invalidResponse("The media server sent an invalid content range.");
+  const start = Number(match[1]);
+  const end = Number(match[2]);
+  const total = Number(match[3]);
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || !Number.isSafeInteger(total) || end < start || total <= end) {
+    throw invalidResponse("The media server sent an invalid content range.");
+  }
+  return { start, end, total };
+}
+
+/** A 416 unsatisfied range carries only the total size; the byte span is always a star. */
+function unsatisfiedContentRange(value: string | null): number {
+  const match = /^bytes \*\/(\d+)$/.exec(value ?? "");
+  if (!match) throw invalidResponse("The media server sent an invalid content range.");
+  const total = Number(match[1]);
+  if (!Number.isSafeInteger(total)) throw invalidResponse("The media server sent an invalid content range.");
+  return total;
+}
+
+/** Build the only headers that leave the transport: validated length, range, accept-ranges and
+ *  bounded content-type/etag/last-modified. Location, cookies, auth, remote error payloads, the
+ *  server name, the upstream URL/status text and every other header are dropped. */
+function sanitizedMediaHeaders(status: number, upstream: Headers): Headers {
+  const out = new Headers();
+  const length = contentLengthValue(upstream.get("content-length"));
+  if (status === 206) {
+    const range = satisfiedContentRange(upstream.get("content-range"));
+    if (length !== undefined && length !== range.end - range.start + 1) {
+      throw invalidResponse("The media server sent an inconsistent length.");
+    }
+    out.set("content-range", `bytes ${range.start}-${range.end}/${range.total}`);
+  }
+  if (length !== undefined) out.set("content-length", String(length));
+  const acceptRanges = normalizedAcceptRanges(upstream.get("accept-ranges"));
+  if (acceptRanges) out.set("accept-ranges", acceptRanges);
+  out.set("content-type", boundedHeader(upstream.get("content-type"), ORIGINAL_HEADER_TYPE_MAX) ?? "application/octet-stream");
+  const etag = boundedHeader(upstream.get("etag"), ORIGINAL_HEADER_ETAG_MAX);
+  if (etag) out.set("etag", etag);
+  const lastModified = boundedHeader(upstream.get("last-modified"), ORIGINAL_HEADER_DATE_MAX);
+  if (lastModified) out.set("last-modified", lastModified);
+  return out;
+}
+
 /** The id fields that become URL path segments. They may be opaque punctuation but never an
  *  empty, dot, separator, escape, control or query-bearing string. */
 function pathSegment(value: unknown, field: string): string {
@@ -328,6 +444,195 @@ const itemTypes = (value: unknown): string => {
   if (!tokens.length || tokens.some((token) => !ITEM_TYPES.has(token))) throw invalid("The media-server item types are not allowed.");
   return tokens.join(",");
 };
+
+const ORIGINAL_ARGUMENT_KEYS: readonly string[] = ["itemId", "mediaSourceId", "method", "range"];
+const ORIGINAL_REQUIRED_KEYS: readonly string[] = ["itemId", "mediaSourceId", "method"];
+const CANONICAL_DECIMAL = /^(0|[1-9][0-9]*)$/;
+const BYTE_RANGE = /^bytes=(\d*)-(\d*)$/;
+
+/** A canonical, safe decimal integer: no sign, no leading zeros, within the safe integer range. */
+function canonicalDecimal(text: string): number {
+  if (!CANONICAL_DECIMAL.test(text)) throw invalid("The media-server range is not allowed.");
+  const value = Number(text);
+  if (!Number.isSafeInteger(value)) throw invalid("The media-server range is not allowed.");
+  return value;
+}
+
+/** One HTTP byte range, canonicalized to `bytes=N-M`, `bytes=N-` or `bytes=-N`. Whitespace,
+ *  multiple ranges, signs, leading zeros, a reversed span, a zero suffix and anything longer than
+ *  the bound are all refused, so no caller text can reach the header verbatim. */
+function originalRange(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0 || value.length > ORIGINAL_RANGE_MAX) {
+    throw invalid("The media-server range is not allowed.");
+  }
+  const match = BYTE_RANGE.exec(value);
+  if (!match) throw invalid("The media-server range is not allowed.");
+  const [, rawStart, rawEnd] = match;
+  if (rawStart === "" && rawEnd === "") throw invalid("The media-server range is not allowed.");
+  if (rawStart !== "" && rawEnd !== "") {
+    const start = canonicalDecimal(rawStart);
+    const end = canonicalDecimal(rawEnd);
+    if (end < start) throw invalid("The media-server range is not allowed.");
+    return `bytes=${start}-${end}`;
+  }
+  if (rawStart !== "") return `bytes=${canonicalDecimal(rawStart)}-`;
+  const suffix = canonicalDecimal(rawEnd);
+  if (suffix <= 0) throw invalid("The media-server range is not allowed.");
+  return `bytes=-${suffix}`;
+}
+
+/** Reject unknown keys, missing fields, malformed types and an unsupported method before any
+ *  network work. The two ids follow the same bounds and escaping rules as every path segment. */
+function checkOriginalRequest(args: unknown): OriginalMediaRequest {
+  if (typeof args !== "object" || args === null || Array.isArray(args)
+    || ![Object.prototype, null].includes(Object.getPrototypeOf(args))
+    || Reflect.ownKeys(args).some((key) => typeof key !== "string")) {
+    throw invalid("The media-server request arguments are malformed.");
+  }
+  const record = args as Record<string, unknown>;
+  for (const key of Object.keys(record)) {
+    if (!ORIGINAL_ARGUMENT_KEYS.includes(key)) throw invalid("The media-server request has an unknown argument.");
+  }
+  for (const key of ORIGINAL_REQUIRED_KEYS) {
+    if (!Object.hasOwn(record, key)) throw invalid(`The media-server request is missing ${key}.`);
+  }
+  const itemId = pathSegment(record.itemId, "itemId");
+  const mediaSourceId = pathSegment(record.mediaSourceId, "mediaSourceId");
+  if (record.method !== "GET" && record.method !== "HEAD") throw invalid("The media-server request method is not allowed.");
+  const range = record.range === undefined ? undefined : originalRange(record.range);
+  return { itemId, mediaSourceId, method: record.method, range };
+}
+
+const ASSET_TYPE_MAX = 256;
+const ASSET_ARTWORK_MAX_BYTES = 5 * 1024 * 1024;
+const ASSET_SUBTITLE_MAX_BYTES = 1 * 1024 * 1024;
+const ASSET_SUBTITLE_MAX_INDEX = 1023;
+const ASSET_ARTWORK_KEYS: readonly string[] = ["kind", "itemId", "imageType"];
+const ASSET_SUBTITLE_KEYS: readonly string[] = ["kind", "itemId", "mediaSourceId", "index"];
+const ARTWORK_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const SUBTITLE_TYPES = new Set(["text/plain", "application/x-subrip", "application/srt", "text/srt", "application/octet-stream"]);
+const MEDIA_TYPE = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/;
+/** One SubRip cue timing line: numeric `hh:mm:ss,mmm --> hh:mm:ss,mmm` with valid minute/second
+ *  fields. A body without at least one such line is not a subtitle. */
+const SRT_TIMING = /(\d{1,3}):(\d{2}):(\d{2}),(\d{3})\s*-->\s*(\d{1,3}):(\d{2}):(\d{2}),(\d{3})/;
+
+/** Accept only a plain object with exactly the fields one asset kind allows. A symbol key, an
+ *  accessor, an inherited or spoofed prototype, an unknown field and a wrong-typed value are all
+ *  refused before any DNS or network work. */
+function checkAssetRequest(args: unknown): MediaServerAssetRequest {
+  if (typeof args !== "object" || args === null || Array.isArray(args)
+    || ![Object.prototype, null].includes(Object.getPrototypeOf(args))) {
+    throw invalid("The media-server asset request is malformed.");
+  }
+  for (const key of Reflect.ownKeys(args)) {
+    const descriptor = typeof key === "string" ? Object.getOwnPropertyDescriptor(args, key) : undefined;
+    if (typeof key !== "string" || !descriptor || !("value" in descriptor)) {
+      throw invalid("The media-server asset request is malformed.");
+    }
+  }
+  const record = args as Record<string, unknown>;
+  const kind = Object.hasOwn(record, "kind") ? record.kind : undefined;
+  if (kind !== "artwork" && kind !== "subtitle") throw invalid("The media-server asset request kind is not allowed.");
+  const allowed = kind === "artwork" ? ASSET_ARTWORK_KEYS : ASSET_SUBTITLE_KEYS;
+  for (const key of Reflect.ownKeys(record)) {
+    if (typeof key !== "string" || !allowed.includes(key)) throw invalid("The media-server asset request has an unknown argument.");
+  }
+  for (const key of allowed) {
+    if (!Object.hasOwn(record, key)) throw invalid(`The media-server asset request is missing ${key}.`);
+  }
+  const itemId = pathSegment(record.itemId, "itemId");
+  if (kind === "artwork") {
+    const imageType = record.imageType;
+    if (imageType !== "Primary" && imageType !== "Backdrop") throw invalid("The media-server image type is not allowed.");
+    return { kind: "artwork", itemId, imageType };
+  }
+  const mediaSourceId = pathSegment(record.mediaSourceId, "mediaSourceId");
+  const index = record.index;
+  if (typeof index !== "number" || !Number.isSafeInteger(index) || index < 0 || index > ASSET_SUBTITLE_MAX_INDEX) {
+    throw invalid("The media-server subtitle index is out of range.");
+  }
+  return { kind: "subtitle", itemId, mediaSourceId, index };
+}
+
+/** The declared media type, lower-cased and stripped of parameters, from a bounded printable
+ *  header. It is checked against the kind's allow-list and the actual bytes. */
+function assetContentType(value: string | null): string {
+  if (value === null || value.length === 0 || value.length > ASSET_TYPE_MAX || !PRINTABLE_HEADER.test(value)) {
+    throw invalidResponse("The media server declared an invalid asset type.");
+  }
+  const semi = value.indexOf(";");
+  const type = (semi === -1 ? value : value.slice(0, semi)).trim().toLowerCase();
+  if (!MEDIA_TYPE.test(type)) throw invalidResponse("The media server declared an invalid asset type.");
+  return type;
+}
+
+function assetTypeAllowed(kind: "artwork" | "subtitle", mediaType: string): void {
+  const allowed = kind === "artwork" ? ARTWORK_TYPES : SUBTITLE_TYPES;
+  if (!allowed.has(mediaType)) {
+    throw invalidResponse(`The media server declared an unsupported ${kind} type.`);
+  }
+}
+
+/** The canonical image type from the leading bytes, or undefined for anything that is not a
+ *  permitted raster format. SVG, HTML, GIF and unknown content land on undefined. */
+function detectImageType(bytes: Uint8Array): string | undefined {
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47
+    && bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a) return "image/png";
+  if (bytes.length >= 12 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46
+    && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return "image/webp";
+  return undefined;
+}
+
+/** A subtitle must decode as UTF-8, carry no NUL and contain at least one valid SubRip timing
+ *  line; HTML, JSON, binary or any text without a real time range is refused. */
+function checkSubtitleText(bytes: Uint8Array): void {
+  if (bytes.includes(0)) throw invalidResponse("The media server subtitle is not text.");
+  let text: string;
+  try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+  catch { throw invalidResponse("The media server subtitle is not valid UTF-8 text."); }
+  if (/^[<{[]/.test(text.trimStart())) throw invalidResponse("The media server subtitle is not SubRip text.");
+  const match = SRT_TIMING.exec(text);
+  if (!match || Number(match[2]) > 59 || Number(match[3]) > 59 || Number(match[6]) > 59 || Number(match[7]) > 59) {
+    throw invalidResponse("The media server subtitle is not SubRip timing text.");
+  }
+}
+
+/** Read an asset body under its size cap, watching both the declared length and the running
+ *  total. A reader cancel is fired but never awaited so a stuck cancel cannot hold the slot. */
+async function readAssetBytes(response: Response, signal: AbortSignal, timedOut: () => boolean, limit: number): Promise<Uint8Array> {
+  const body = response.body;
+  if (!body) return new Uint8Array(0);
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await guard(reader.read(), signal, timedOut);
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > limit) throw new MediaServerError("response-too-large", "The media server asset is too large.");
+      chunks.push(value);
+    }
+  } catch (error) {
+    void reader.cancel().catch(() => undefined);
+    throw error;
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  return bytes;
+}
+
+/** A test seam may only shorten a deadline, never extend it or invent a non-integer one. */
+function seamDeadline(value: unknown, fallback: number): number {
+  if (value === undefined) return fallback;
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0 || value > fallback) {
+    throw invalid("The media-server test deadline is invalid.");
+  }
+  return value;
+}
 
 /** Reject unknown, missing or wrong-typed arguments before anything leaves the process. The
  *  unknown-name message is fixed: a property key is untrusted and may itself be a credential. */
@@ -590,12 +895,357 @@ export function createMediaServerTransport(
     }
   }
 
+  const originalHeaderMs = seamDeadline(seams.originalHeaderMs, ORIGINAL_HEADER_MS);
+  const originalIdleMs = seamDeadline(seams.originalIdleMs, ORIGINAL_IDLE_MS);
+  const originalLifetimeMs = seamDeadline(seams.originalLifetimeMs, ORIGINAL_LIFETIME_MS);
+
+  interface OriginalRecord {
+    controller: AbortController;
+    abort: () => void;
+  }
+  const originals = new Set<OriginalRecord>();
+
+  /** Stream one original media file through the same DNS/socket guard as metadata, under a
+   *  separate 8-request pool. The returned Response resolves once headers are validated; its
+   *  slot, agent and controller live until the body completes, is cancelled, errors or the
+   *  transport closes -- never only until the headers. */
+  async function requestOriginal(args: OriginalMediaRequest, token: string, signal?: AbortSignal): Promise<Response> {
+    let request = checkOriginalRequest(args);
+    const bearer = validateMediaServerToken(token);
+    if (request.range?.startsWith("bytes=-")) {
+      // Emby 4.9 treats suffix ranges as offsets from zero; send an explicit measured span.
+      const head = await requestOriginal({ itemId: request.itemId, mediaSourceId: request.mediaSourceId, method: "HEAD" }, bearer, signal);
+      const rawLength = head.headers.get("content-length");
+      if (rawLength === null) throw invalidResponse("The media server did not provide the original length.");
+      const length = Number(rawLength);
+      if (length === 0) return new Response(null, { status: 416, headers: { "content-range": "bytes */0" } });
+      request = { ...request, range: `bytes=${Math.max(0, length - Number(request.range.slice(7)))}-${length - 1}` };
+    }
+    // Only the fixed static original-file path is ever built: the normalized base, an encoded
+    // item segment and a fixed `/stream` with fixed Static/MediaSourceId query entries.
+    const url = `${baseUrl}/Videos/${encodeURIComponent(request.itemId)}/stream?Static=true&MediaSourceId=${encodeURIComponent(request.mediaSourceId)}`;
+
+    if (closed) throw new MediaServerError("closed", "The media-server transport is closed.");
+    if (originals.size >= ORIGINAL_MAX_CONCURRENCY) {
+      throw new MediaServerError("busy", "Too many media-server streams are in flight.");
+    }
+
+    const controller = new AbortController();
+    let failure: MediaServerError | undefined;
+    const isTimedOut = (): boolean => failure?.code === "timeout";
+    const abortWith = (error: MediaServerError): void => {
+      if (!failure) failure = error;
+      controller.abort();
+    };
+    const onAbort = (): void => abortWith(new MediaServerError("cancelled", "The media-server request was cancelled."));
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+
+    const headerTimer = setTimeout(
+      () => abortWith(new MediaServerError("timeout", "The media server did not answer in time.")),
+      originalHeaderMs,
+    );
+    const lifetimeTimer = setTimeout(
+      () => abortWith(new MediaServerError("timeout", "The media-server stream exceeded its lifetime.")),
+      originalLifetimeMs,
+    );
+    let idleTimer: NodeJS.Timeout | undefined;
+
+    let agent: Agent | undefined;
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let upstreamBody: ReadableStream<Uint8Array> | null = null;
+    let downstream: ReadableStreamDefaultController<Uint8Array> | undefined;
+    let released = false;
+    const record: OriginalRecord = {
+      controller,
+      abort: () => abortWith(new MediaServerError("closed", "The media-server transport is closed.")),
+    };
+    originals.add(record);
+
+    /** Release exactly once: clear every deadline, drop the slot and the agent, and abort the
+     *  upstream request. A never-settling reader cancel is fired but never awaited. */
+    const release = (): void => {
+      if (released) return;
+      released = true;
+      clearTimeout(headerTimer);
+      clearTimeout(lifetimeTimer);
+      clearTimeout(idleTimer);
+      signal?.removeEventListener("abort", onAbort);
+      controller.signal.removeEventListener("abort", terminate);
+      void (reader ? reader.cancel() : upstreamBody?.cancel())?.catch(() => undefined);
+      originals.delete(record);
+      controller.abort();
+      if (agent) {
+        agents.delete(agent);
+        void agent.destroy().catch(() => undefined);
+      }
+    };
+
+    const terminate = (): void => {
+      if (released) return;
+      const error = failure ?? new MediaServerError("cancelled", "The media-server request was cancelled.");
+      release();
+      downstream?.error(error);
+    };
+    controller.signal.addEventListener("abort", terminate, { once: true });
+
+    try {
+      await validateHost(new URL(url).hostname.replace(/^\[|\]$/g, ""), controller.signal, isTimedOut);
+      if (closed) throw new MediaServerError("closed", "The media-server transport is closed.");
+      if (controller.signal.aborted) throw failure ?? new MediaServerError("cancelled", "The media-server request was cancelled.");
+
+      const headers: Record<string, string> = {
+        accept: "application/octet-stream",
+        "accept-encoding": "identity",
+        authorization: `MediaBrowser Client="${CLIENT}", Device="${DEVICE}", DeviceId="${deviceId}", Version="${CLIENT_VERSION}", Token="${bearer}"`,
+        "x-emby-token": bearer,
+      };
+      if (request.range !== undefined) headers.range = request.range;
+      const init: RequestInit = { method: request.method, headers, redirect: "error" };
+
+      if (!seams.fetch) {
+        agent = new Agent({ connect: { ...seams.connectOptions, lookup: createLookup(controller.signal, isTimedOut) as unknown as import("node:net").LookupFunction } });
+        agents.add(agent);
+      }
+      const sendFetch: MediaServerFetch = seams.fetch ?? ((target, options) =>
+        undiciFetch(target, { ...options, dispatcher: agent } as Parameters<typeof undiciFetch>[1]) as unknown as Promise<Response>);
+      const response = await guard(sendFetch(url, { ...init, signal: controller.signal }), controller.signal, isTimedOut);
+      upstreamBody = response.body;
+      clearTimeout(headerTimer);
+
+      const status = response.status;
+      if (status !== 200 && status !== 206 && status !== 416) {
+        void response.body?.cancel().catch(() => undefined);
+        throw statusError(status, new Headers(response.headers));
+      }
+      const upstream = new Headers(response.headers);
+      // `accept-encoding: identity` is a request preference; if the server compressed anyway the
+      // bytes are a transformation we must refuse rather than forward silently.
+      if (status !== 416) {
+        const encoding = upstream.get("content-encoding");
+        if (encoding !== null && encoding.trim().toLowerCase() !== "identity") {
+          void response.body?.cancel().catch(() => undefined);
+          throw invalidResponse("The media server transformed the media stream.");
+        }
+      }
+
+      if (status === 416) {
+        const total = unsatisfiedContentRange(upstream.get("content-range"));
+        void response.body?.cancel().catch(() => undefined);
+        const out = new Headers();
+        out.set("content-range", `bytes */${total}`);
+        const acceptRanges = normalizedAcceptRanges(upstream.get("accept-ranges"));
+        if (acceptRanges) out.set("accept-ranges", acceptRanges);
+        release();
+        return new Response(null, { status: 416, headers: out });
+      }
+
+      const out = sanitizedMediaHeaders(status, upstream);
+      if (status === 206) {
+        const span = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(out.get("content-range") ?? "")!;
+        const [start, end, total] = span.slice(1).map(Number);
+        const range = /^bytes=(\d*)-(\d*)$/.exec(request.range ?? "");
+        if (!range) throw invalidResponse("The media server sent an unrequested range.");
+        const expectedStart = range[1] ? Number(range[1]) : Math.max(0, total! - Number(range[2]));
+        const expectedEnd = range[1] && range[2] ? Math.min(Number(range[2]), total! - 1) : total! - 1;
+        if (start !== expectedStart || end !== expectedEnd) throw invalidResponse("The media server answered a different range.");
+      }
+      if (request.method === "HEAD") {
+        void response.body?.cancel().catch(() => undefined);
+        release();
+        return new Response(null, { status, headers: out });
+      }
+
+      const body = response.body;
+      if (!body) throw invalidResponse("The media server sent no media body.");
+      reader = body.getReader();
+      const expected = out.has("content-length") ? Number(out.get("content-length"))
+        : status === 206 ? (() => { const span = /^bytes (\d+)-(\d+)\//.exec(out.get("content-range")!)!; return Number(span[2]) - Number(span[1]) + 1; })()
+        : undefined;
+      let delivered = 0;
+      const armIdle = (): void => {
+        clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => abortWith(new MediaServerError("timeout", "The media server stopped sending data.")), originalIdleMs);
+      };
+      const stream = new ReadableStream<Uint8Array>({
+        start(value) { downstream = value; },
+        async pull(downstream) {
+          if (released) return;
+          armIdle();
+          let result: ReadableStreamReadResult<Uint8Array>;
+          try {
+            result = await guard(reader!.read(), controller.signal, isTimedOut);
+          } catch (error) {
+            // A cancel or a close may have released the slot while this read was pending; the
+            // stream is already settled, so there is nothing left to report.
+            if (released) return;
+            clearTimeout(idleTimer);
+            const mapped = failure ?? mapTransportError(error, controller.signal, isTimedOut);
+            release();
+            downstream.error(mapped);
+            return;
+          }
+          if (released) return;
+          clearTimeout(idleTimer);
+          if (result.done) {
+            release();
+            if (expected !== undefined && delivered !== expected) {
+              downstream.error(invalidResponse("The media server ended the media stream early."));
+              return;
+            }
+            downstream.close();
+            return;
+          }
+          if (result.value) {
+            delivered += result.value.byteLength;
+            if (expected !== undefined && delivered > expected) {
+              release();
+              downstream.error(invalidResponse("The media server sent too many media bytes."));
+              return;
+            }
+            downstream.enqueue(result.value);
+          }
+        },
+        cancel() {
+          clearTimeout(idleTimer);
+          void reader!.cancel().catch(() => undefined);
+          abortWith(new MediaServerError("cancelled", "The media-server request was cancelled."));
+          release();
+        },
+      });
+      return new Response(stream, { status, headers: out });
+    } catch (error) {
+      // Map the failure before releasing: release aborts the controller, and an aborted signal
+      // must not turn a redirect or an upstream error into a plain cancel.
+      const mapped = failure ?? mapTransportError(error, controller.signal, isTimedOut);
+      release();
+      throw mapped;
+    }
+  }
+
+  /** Fetch one fixed artwork image or subtitle track through the same connection, DNS, socket and
+   *  redirect guard as metadata, under the metadata pool's four slots and single deadline. The
+   *  body is read incrementally under its kind's cap and validated before it is returned. */
+  async function requestAsset(request: MediaServerAssetRequest, token: string, signal?: AbortSignal): Promise<MediaServerAsset> {
+    const checked = checkAssetRequest(request);
+    const bearer = validateMediaServerToken(token);
+    const limit = checked.kind === "artwork" ? ASSET_ARTWORK_MAX_BYTES : ASSET_SUBTITLE_MAX_BYTES;
+    const url = checked.kind === "artwork"
+      ? `${baseUrl}/Items/${encodeURIComponent(checked.itemId)}/Images/${checked.imageType}?MaxWidth=640&Quality=85&Format=Jpg`
+      : `${baseUrl}/Videos/${encodeURIComponent(checked.itemId)}/${encodeURIComponent(checked.mediaSourceId)}/Subtitles/${checked.index}/Stream.srt`;
+
+    if (closed) throw new MediaServerError("closed", "The media-server transport is closed.");
+    if (active.size >= MAX_CONCURRENCY) throw new MediaServerError("busy", "Too many media-server requests are in flight.");
+
+    const controller = new AbortController();
+    let failure: MediaServerError | undefined;
+    const isTimedOut = (): boolean => failure?.code === "timeout";
+    const abortWith = (error: MediaServerError): void => {
+      if (!failure) failure = error;
+      controller.abort();
+    };
+    const onAbort = (): void => abortWith(new MediaServerError("cancelled", "The media-server request was cancelled."));
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+    const timeout = setTimeout(
+      () => abortWith(new MediaServerError("timeout", "The media server did not answer in time.")),
+      DEADLINE_MS,
+    );
+    active.add(controller);
+    let agent: Agent | undefined;
+
+    try {
+      await validateHost(new URL(url).hostname.replace(/^\[|\]$/g, ""), controller.signal, isTimedOut);
+      if (closed) throw new MediaServerError("closed", "The media-server transport is closed.");
+      if (controller.signal.aborted) throw failure ?? abortError(isTimedOut());
+
+      const headers: Record<string, string> = {
+        accept: checked.kind === "artwork" ? "image/*" : "text/plain",
+        "accept-encoding": "identity",
+        authorization: `MediaBrowser Client="${CLIENT}", Device="${DEVICE}", DeviceId="${deviceId}", Version="${CLIENT_VERSION}", Token="${bearer}"`,
+        "x-emby-token": bearer,
+      };
+      const init: RequestInit = { method: "GET", headers, redirect: "error" };
+
+      if (!seams.fetch) {
+        agent = new Agent({ connect: { ...seams.connectOptions, lookup: createLookup(controller.signal, isTimedOut) as unknown as import("node:net").LookupFunction } });
+        agents.add(agent);
+      }
+      const sendFetch: MediaServerFetch = seams.fetch ?? ((target, options) =>
+        undiciFetch(target, { ...options, dispatcher: agent } as Parameters<typeof undiciFetch>[1]) as unknown as Promise<Response>);
+      // A fetch that settles only after the abort or deadline is lost to the guard, so its body
+      // is cancelled here rather than left open.
+      const response = await guard(
+        sendFetch(url, { ...init, signal: controller.signal }).then((value) => {
+          if (controller.signal.aborted) {
+            void value.body?.cancel().catch(() => undefined);
+            throw failure ?? abortError(isTimedOut());
+          }
+          return value;
+        }),
+        controller.signal,
+        isTimedOut,
+      );
+
+      const upstream = new Headers(response.headers);
+      let mediaType = "";
+      let declared: number | undefined;
+      try {
+        if (response.status !== 200) throw statusError(response.status, upstream);
+        const encoding = upstream.get("content-encoding");
+        if (encoding !== null && encoding.trim().toLowerCase() !== "identity") {
+          throw invalidResponse("The media server transformed the asset.");
+        }
+        declared = contentLengthValue(upstream.get("content-length"));
+        if (declared !== undefined && declared > limit) {
+          throw new MediaServerError("response-too-large", "The media server asset is too large.");
+        }
+        mediaType = assetContentType(upstream.get("content-type"));
+        assetTypeAllowed(checked.kind, mediaType);
+      } catch (error) {
+        void response.body?.cancel().catch(() => undefined);
+        throw error;
+      }
+
+      const bytes = await readAssetBytes(response, controller.signal, isTimedOut, limit);
+      if (declared !== undefined && bytes.byteLength !== declared) {
+        throw invalidResponse("The media server ended the asset early.");
+      }
+
+      let contentType: string;
+      if (checked.kind === "artwork") {
+        const detected = detectImageType(bytes);
+        if (!detected) throw invalidResponse("The media server sent content that is not a supported image.");
+        if (detected !== mediaType) throw invalidResponse("The media server image type does not match its content.");
+        contentType = detected;
+      } else {
+        checkSubtitleText(bytes);
+        contentType = "application/x-subrip";
+      }
+      return { bytes, contentType };
+    } catch (error) {
+      throw failure ?? mapTransportError(error, controller.signal, isTimedOut);
+    } finally {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", onAbort);
+      active.delete(controller);
+      controller.abort();
+      if (agent) {
+        agents.delete(agent);
+        await agent.destroy().catch(() => undefined);
+      }
+    }
+  }
+
   return {
     requestJson,
+    requestOriginal,
+    requestAsset,
     async close() {
       closed = true;
       for (const controller of active) controller.abort();
       active.clear();
+      for (const original of [...originals]) original.abort();
       await Promise.all([...agents].map((agent) => agent.destroy().catch(() => undefined)));
     },
   };

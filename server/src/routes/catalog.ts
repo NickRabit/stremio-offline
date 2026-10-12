@@ -10,7 +10,10 @@ import { episodeNumberOf, knownTitleEntry, unitFor, type LibraryMetaRecord, type
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { mediaResources, ResourceError, safeSourceText, type ResourceOwner } from "../media-resources.js";
 import { readMediaText } from "../media-playlist.js";
+import { isRemoteMediaStream } from "../media-server-reference.js";
+import type { MediaServerSources } from "../media-server-sources.js";
 import { guardedFetch } from "../outbound.js";
+import { contentOf } from "../revocation.js";
 import type { UserPrefs } from "../store.js";
 import { trailerFor } from "../trailers.js";
 import type { MetaItem, StreamItem } from "../types.js";
@@ -34,10 +37,11 @@ export interface CatalogDeps extends RouteContext {
   metaStore: LibraryMetaStore;
   externalIds: ExternalIdStore;
   subtitleDelay(value: unknown): number;
+  mediaSources: MediaServerSources;
 }
 
 export function registerCatalogRoutes(app: express.Application, deps: CatalogDeps): void {
-  const { store, currentUser, cachedMeta, prefsOf, libraryTarget, ownerOf, trackMedia, libraryKey, localCopies, libraryUnits, ownRecord, metaStore, externalIds, subtitleDelay, requireAccess } = deps;
+  const { store, currentUser, cachedMeta, prefsOf, libraryTarget, ownerOf, trackMedia, libraryKey, localCopies, libraryUnits, ownRecord, metaStore, externalIds, subtitleDelay, mediaSources, requireAccess } = deps;
 
   /** The addons this caller may use, read once per request. A disabled addon is left out
    *  later by the helpers that honour `enabled`; visibility narrows an enabled addon only. */
@@ -218,6 +222,31 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     if ("url" in req.query || "headers" in req.query) throw new ResourceError(400, "UNSAFE_SOURCE_INPUT");
     const owner = ownerOf(req);
     const resource = mediaResources.get(String(req.params.subtitleId), owner.sid, "subtitle");
+    // A media-server subtitle is a sealed reference, never a URL: it is read through the
+    // scoped transport, converted locally and guarded again before it is sent. A malformed
+    // media-server attempt refuses here rather than reaching the generic URL fetch below.
+    if (isRemoteMediaStream(resource.stream)) {
+      const need = contentOf(resource.stream);
+      requireAccess(req, need);
+      mediaResources.get(resource.id, owner.sid, "subtitle");
+      trackMedia(owner, res, resource.parent ?? resource.id);
+      const controller = new AbortController();
+      res.once("close", () => { if (!res.writableEnded) controller.abort(); });
+      const asset = await mediaSources.readSubtitle(resource.stream, owner, controller.signal);
+      let text = new TextDecoder().decode(asset.bytes);
+      if (!text.trimStart().startsWith("WEBVTT")) text = `WEBVTT\n\n${text.replace(/^\ufeff/, "").replace(/\r/g, "").replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2").replace(/^\d+\n(?=\d{2}:\d{2}:\d{2}[.,]\d{3} -->)/gm, "")}`;
+      const shift = (Number(req.query.offset) || 0) - subtitleDelay(req.query.delay);
+      if (shift) text = shiftVtt(text, shift);
+      // The session, the grant and the resource are all re-read after the await and the
+      // conversion, so a revocation that landed while the bytes were in flight refuses.
+      requireAccess(req, need);
+      mediaResources.get(resource.id, owner.sid, "subtitle");
+      if (res.destroyed || res.writableEnded) return;
+      return void res.type("text/vtt; charset=utf-8")
+        .setHeader("cache-control", "private, no-store")
+        .setHeader("x-content-type-options", "nosniff")
+        .send(text);
+    }
     // Re-checked against the addon it came from, the way a stream is: the resource may have
     // been minted while the account still had it.
     requireAccess(req, { addonKey: resource.stream.addonKey });

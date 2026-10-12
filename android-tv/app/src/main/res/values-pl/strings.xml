@@ -270,4 +270,43 @@
   <string name="settings_search_history_confirm">Usunąć historię wyszukiwania?</string>
   <string name="settings_search_history_cleared">Historia wyszukiwania usunięta.</string>
   <string name="sources_local_filter">Pliki lokalne</string>
+
+  <!-- Media-server read-only libraries (translated). -->
+  <string name="media_server_tab_files">Pliki</string>
+  <string name="media_server_tab_servers">Serwery multimediów</string>
+  <string name="media_server_pick_title">Wybierz bibliotekę</string>
+  <string name="media_server_read_only">Tylko do odczytu</string>
+  <string name="media_server_search_label">Szukaj</string>
+  <string name="media_server_search_action">Szukaj</string>
+  <string name="media_server_filter_all">Wszystko</string>
+  <string name="media_server_filter_movies">Filmy</string>
+  <string name="media_server_filter_series">Seriale</string>
+  <string name="media_server_load_more">Wczytaj więcej</string>
+  <string name="media_server_error">Nie udało się wczytać biblioteki multimediów.</string>
+  <string name="media_server_offline">Serwer multimediów nie odpowiada.</string>
+  <string name="media_server_empty">Z tym kontem nie udostępniono żadnej biblioteki serwera multimediów.</string>
+  <string name="media_server_empty_items">Ta biblioteka jest pusta.</string>
+  <string name="media_server_no_matches">Brak wyników wyszukiwania.</string>
+  <string name="media_server_eyebrow">Na serwerze multimediów</string>
+  <string name="media_server_eyebrow_episode">%1$s · odcinek</string>
+  <string name="media_server_state_local">Pozycja i preferencja są zapisane na tym serwerze tylko dla tej aplikacji.</string>
+  <string name="media_server_versions">Wersje</string>
+  <string name="media_server_versions_available">Dostępnych wersji: %1$s</string>
+  <string name="media_server_finding_versions">Szukanie wersji…</string>
+  <string name="media_server_sources_empty">Ten element nie ma odtwarzalnej wersji.</string>
+  <string name="media_server_sources_error">Nie udało się wczytać wersji.</string>
+  <string name="media_server_source_badge">Zdalne</string>
+  <string name="media_server_source_hint">Z serwera multimediów — tylko do odczytu</string>
+  <string name="media_server_mark_watched">Oznacz jako obejrzane</string>
+  <string name="media_server_unwatch">Oznacz jako nieobejrzane</string>
+  <string name="media_server_download_unavailable">Elementu z serwera multimediów nie można pobrać.</string>
+  <string name="media_server_state_error">Nie udało się wczytać zapisanej pozycji.</string>
+  <string name="media_server_group_failed">Nie udało się wczytać: %1$s.</string>
+  <string name="media_server_personal_empty">Jeszcze nic tu nie ma.</string>
+  <string name="resume_filter_remote">Serwery multimediów</string>
+  <string name="resume_empty_remote_title">Nic niedokończonego na serwerze multimediów</string>
+  <string name="resume_empty_remote_text">Elementy rozpoczęte na serwerze multimediów pojawią się tutaj.</string>
+  <string name="favorites_tab_local">Pliki i katalog</string>
+  <string name="favorites_tab_servers">Serwery multimediów</string>
+  <string name="media_server_personal_partial">Nie udało się wczytać niektórych elementów.</string>
 </resources>

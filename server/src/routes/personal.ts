@@ -243,6 +243,9 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
    *  one. A catalogue title key is not a path and travels untouched. */
   const storedProgressKey = (key: string) => key.startsWith("file:") ? `file:${libraryKey(key.slice(5))}` : key;
   const wireProgressKey = (key: string) => key.startsWith("file:") ? `file:${wirePath(key.slice(5))}` : key;
+  // The reserved prefix of the per-account remote map. The generic progress map never holds
+  // one, so a forged key is refused at the door and a read of one never returns a row.
+  const isRemoteProgressKey = (key: string) => key.startsWith("remote:");
   /** The `series` field of a report: the body names the series, and whatever it leaves
    *  out the episode key fills in. An id that is not a non-empty string means no series. */
   const reportedSeries = (key: string, title: string, body: unknown): ProgressSeries | undefined => {
@@ -275,6 +278,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     // from the resume list: it is the same row, read through a different door.
     const grouped = groupSeriesProgress(Object.entries(all)
       .filter(([, value]) => !value.path || pathVisible(value.path, viewer, libraries))
+      .filter(([key]) => !isRemoteProgressKey(key))
       .map(([key, value]) => ({ ...value, key })));
     const allowed = new Set(allowedAddons(store.addons(), viewer).map((addon) => addon.key));
     const shown = grouped.flatMap((row) => (row.series ? [row.series.id] : []));
@@ -329,7 +333,9 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     res.json((await progressRows(req)).items);
   }));
   app.get("/api/progress/:key", (req, res) => {
-    const found = progressOf(dataOf(req))[storedProgressKey(String(req.params.key))];
+    const raw = String(req.params.key);
+    if (isRemoteProgressKey(raw)) return void res.json(null);
+    const found = progressOf(dataOf(req))[storedProgressKey(raw)];
     const visible = !found?.path || pathVisible(found.path, viewerOf(currentUser(req)), store.libraries());
     res.json(found && visible ? { ...found, poster: images.proxied(found.poster) } : null);
   });
@@ -340,6 +346,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     const position = Number(req.body.position) || 0;
     const duration = Number(req.body.duration) || 0;
     if (!key) throw new AppError("Missing title key.", "err.missingTitleKey");
+    if (isRemoteProgressKey(key)) throw new AppError("The item was not found.", "err.itemNotFound", 404);
     await updateData(req, (data) => {
       const all = { ...progressOf(data) };
       const previous = all[key];
@@ -382,6 +389,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     res.status(204).end();
   }));
   app.delete("/api/progress/:key", asyncRoute(async (req, res) => {
+    if (isRemoteProgressKey(String(req.params.key))) return void res.status(404).end();
     await updateData(req, (data) => {
       const key = storedProgressKey(String(req.params.key));
       const all = { ...progressOf(data) };
@@ -405,7 +413,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     const raw = (req.body ?? {}) as { keys?: unknown };
     if (!Array.isArray(raw.keys)) throw new AppError("The forget request names no keys.", "err.invalidRequest");
     if (raw.keys.length > HOME_FORGET_LIMIT) throw new AppError("Too many keys to forget at once.", "err.invalidRequest");
-    const keys = raw.keys.map((key) => storedProgressKey(String(key)));
+    const keys = raw.keys.map((key) => storedProgressKey(String(key))).filter((key) => !isRemoteProgressKey(key));
     if (!keys.length) return res.status(204).end();
     await updateData(req, (data) => {
       const all = { ...progressOf(data) };

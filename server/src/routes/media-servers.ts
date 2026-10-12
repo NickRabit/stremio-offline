@@ -5,10 +5,16 @@ import { ResourceError } from "../media-resources.js";
 import { ForbiddenError } from "../roles.js";
 import { MediaServerError, isMediaServerError } from "../media-server-types.js";
 import type { MediaServerAuthority, MediaServerManager } from "../media-server-manager.js";
+import type { MediaServerPersonal, RemoteCards } from "../media-server-personal.js";
+import type { MediaServerSources } from "../media-server-sources.js";
+import type { ResourceOwner } from "../media-resources.js";
 import { asyncRoute, type RouteContext } from "./context.js";
 
 export interface MediaServersDeps extends RouteContext {
   mediaServers: MediaServerManager;
+  mediaSources: MediaServerSources;
+  remotePersonal: MediaServerPersonal;
+  ownerOf(req: express.Request): ResourceOwner;
 }
 
 /** Fixed English text for every mapped failure. The internal message is never forwarded: a
@@ -75,6 +81,10 @@ const toHttpError = (error: MediaServerError): AppError => {
 
 const malformed = (message: string): MediaServerError => new MediaServerError("invalid-input", message);
 
+/** The client went away before an answer could be written: nothing is sent and nothing is
+ *  logged beyond the debug line, so a disconnect never becomes a 500. */
+class ClientGone extends Error {}
+
 const assertNoBody = (req: express.Request): void => {
   if (req.body !== undefined || Number(req.header("content-length") ?? 0) > 0 || req.header("transfer-encoding")) {
     throw malformed("The media-server request must not carry a body.");
@@ -87,14 +97,61 @@ const assertNoQuery = (query: unknown): void => {
   if (Object.keys(query as object).length > 0) throw malformed("The media-server request has an unknown query field.");
 };
 
-export function registerMediaServerRoutes(app: express.Application, deps: MediaServersDeps): void {
-  const { mediaServers, currentUser, requireAccess } = deps;
+const CARD_QUERY_KEYS = ["filter", "skip", "limit"];
+const CARD_SKIP_MAX = 1000;
+const CARD_LIMIT_MAX = 120;
+const CARD_LIMIT_DEFAULT = 20;
+const REMOVAL_QUERY_KEYS = ["forget"];
 
-  const handle = (
+/** What one removal may carry: a body is refused, the only query key is `forget` and its only
+ *  values are the two exact strings. Anything else -- an array, a nested object, another key --
+ *  is refused before the manager is asked to change anything. */
+const removalOptions = (req: express.Request): { forget?: boolean } | undefined => {
+  assertNoBody(req);
+  const query = req.query as Record<string, unknown>;
+  for (const key of Object.keys(query)) {
+    if (!REMOVAL_QUERY_KEYS.includes(key)) throw malformed("The media-server request has an unknown query field.");
+  }
+  const raw = query.forget;
+  if (raw === undefined) return undefined;
+  if (raw !== "true" && raw !== "false") throw malformed("The media-server forget flag is not supported.");
+  return { forget: raw === "true" };
+};
+
+/** The personal card list takes three fixed query fields and nothing else: a required filter,
+ *  a bounded skip and a bounded page. A body is refused like every other media-server read. */
+const cardOptions = (req: express.Request): { filter: "resume" | "favorites"; skip: number; limit: number } => {
+  assertNoBody(req);
+  const query = req.query as Record<string, unknown>;
+  for (const key of Object.keys(query)) {
+    if (!CARD_QUERY_KEYS.includes(key)) throw malformed("The media-server request has an unknown query field.");
+  }
+  const filter = query.filter;
+  if (filter !== "favorites" && filter !== "resume") throw malformed("The remote card filter is required.");
+  const bounded = (raw: unknown, fallback: number, min: number, max: number): number => {
+    if (raw === undefined || raw === "") return fallback;
+    if (typeof raw !== "string" || !/^\d{1,4}$/.test(raw)) throw malformed("The remote card page is out of range.");
+    const value = Number(raw);
+    if (value < min || value > max) throw malformed("The remote card page is out of range.");
+    return value;
+  };
+  return { filter, skip: bounded(query.skip, 0, 0, CARD_SKIP_MAX), limit: bounded(query.limit, CARD_LIMIT_DEFAULT, 1, CARD_LIMIT_MAX) };
+};
+
+export function registerMediaServerRoutes(app: express.Application, deps: MediaServersDeps): void {
+  const { mediaServers, mediaSources, remotePersonal, ownerOf, currentUser, requireAccess } = deps;
+
+  /** The one request guard: the acting account, the captured library and connection, the abort
+   *  wiring, and every re-check the response boundary repeats before a byte or a JSON value
+   *  leaves. `after` runs between those checks and the send, for a route that carries its own
+   *  projection proof. */
+  const guardRequest = async <T>(
+    req: express.Request,
+    res: express.Response,
+    member: boolean,
     fn: (req: express.Request, authority: MediaServerAuthority, signal: AbortSignal) => Promise<unknown>,
-    status = 200,
-    member = false,
-  ): express.RequestHandler => asyncRoute(async (req, res) => {
+    after?: (authority: MediaServerAuthority, result: T) => void,
+  ): Promise<T> => {
     const user = currentUser(req);
     if (!user) throw new ResourceError(401, "AUTH_REQUIRED");
     const permissionStamp = user.permissionsVersion;
@@ -106,7 +163,7 @@ export function registerMediaServerRoutes(app: express.Application, deps: MediaS
     req.on("aborted", onClose);
     res.on("close", onClose);
     try {
-      const result = await fn(req, authority, controller.signal);
+      const result = (await fn(req, authority, controller.signal)) as T;
       authority.assertCurrent();
       const current = currentUser(req);
       if (!current || current.id !== authority.actor.id || current.secret !== authority.actor.secret || current.disabled || current.mustChangePassword) {
@@ -125,12 +182,12 @@ export function registerMediaServerRoutes(app: express.Application, deps: MediaS
         }
       }
       if (controller.signal.aborted) throw new MediaServerError("cancelled", "The media-server request was cancelled.");
-      if (status === 204) res.status(status).end();
-      else res.status(status).json(result);
+      after?.(authority, result);
+      return result;
     } catch (error) {
       if (isMediaServerError(error) && (error.code === "cancelled" || error.code === "closed") && controller.signal.aborted) {
         log("DEBUG", "Media-server request ended with the client", { path: req.path });
-        return;
+        throw new ClientGone();
       }
       if (error instanceof AppError || error instanceof ResourceError) throw error;
       if (isMediaServerError(error)) throw toHttpError(error);
@@ -139,6 +196,22 @@ export function registerMediaServerRoutes(app: express.Application, deps: MediaS
       req.off("aborted", onClose);
       res.off("close", onClose);
     }
+  };
+
+  const handle = (
+    fn: (req: express.Request, authority: MediaServerAuthority, signal: AbortSignal) => Promise<unknown>,
+    status = 200,
+    member = false,
+  ): express.RequestHandler => asyncRoute(async (req, res) => {
+    let result: unknown;
+    try {
+      result = await guardRequest(req, res, member, fn);
+    } catch (error) {
+      if (error instanceof ClientGone) return;
+      throw error;
+    }
+    if (status === 204) res.status(status).end();
+    else res.status(status).json(result);
   });
 
   const body = (req: express.Request): unknown => req.body ?? {};
@@ -147,6 +220,11 @@ export function registerMediaServerRoutes(app: express.Application, deps: MediaS
     assertNoBody(req);
     assertNoQuery(req.query);
     return mediaServers.listConnections(authority);
+  }));
+  app.get("/api/media-servers/libraries", handle(async (req, authority) => {
+    assertNoBody(req);
+    assertNoQuery(req.query);
+    return { libraries: await mediaServers.listAdminLibraries(authority) };
   }));
   app.get("/api/media-servers/export", handle(async (req, authority) => {
     assertNoBody(req);
@@ -169,20 +247,76 @@ export function registerMediaServerRoutes(app: express.Application, deps: MediaS
   app.patch("/api/media-servers/:id", handle(async (req, authority, signal) =>
     mediaServers.patchConnection(authority, req.params.id, body(req), signal)));
   app.delete("/api/media-servers/:id", handle(async (req, authority, signal) =>
-    mediaServers.removeConnection(authority, req.params.id, signal), 204));
+    mediaServers.removeConnection(authority, req.params.id, signal, removalOptions(req)), 204));
   app.patch("/api/remote-libraries/:id", handle(async (req, authority, signal) =>
     mediaServers.patchLibrary(authority, req.params.id, body(req), signal)));
   app.delete("/api/remote-libraries/:id", handle(async (req, authority, signal) =>
-    mediaServers.deleteLibrary(authority, req.params.id, signal), 204));
+    mediaServers.deleteLibrary(authority, req.params.id, signal, removalOptions(req)), 204));
   app.get("/api/remote-libraries", handle(async (req, authority, signal) => {
     assertNoBody(req);
     assertNoQuery(req.query);
     return { libraries: await mediaServers.visibleLibraries(authority, signal) };
   }, 200, true));
+  // Registered before the `:id` routes so the two-segment personal path is never read as a
+  // library handle, and its projections are covered by the guard that reads every captured
+  // library, not only one.
+  app.get("/api/remote-libraries/personal", asyncRoute(async (req, res) => {
+    const options = cardOptions(req);
+    let result: RemoteCards;
+    try {
+      result = await guardRequest(
+        req, res, true,
+        (_request, authority, signal) => remotePersonal.cards(authority, options, signal),
+        (authority, value) => remotePersonal.assertCardsCurrent(authority, value),
+      );
+    } catch (error) {
+      if (error instanceof ClientGone) return;
+      throw error;
+    }
+    res.status(200).json(result);
+  }));
   app.get("/api/remote-libraries/:id/items/:itemId/episodes", handle(async (req, authority, signal) => {
     assertNoBody(req);
     return mediaServers.itemEpisodes(authority, req.params.id, req.params.itemId, req.query, signal);
   }, 200, true));
+  app.get("/api/remote-libraries/:id/items/:itemId/sources", handle(async (req, authority, signal) => {
+    assertNoBody(req);
+    assertNoQuery(req.query);
+    return { streams: await mediaSources.list(authority, ownerOf(req), String(req.params.id), String(req.params.itemId), signal) };
+  }, 200, true));
+  app.get("/api/remote-libraries/:id/streams/:type/:catalogId", handle(async (req, authority, signal) => {
+    assertNoBody(req);
+    assertNoQuery(req.query);
+    return { streams: await mediaSources.matched(authority, ownerOf(req), String(req.params.id), String(req.params.type), String(req.params.catalogId), signal) };
+  }, 200, true));
+  // Fixed Primary|Backdrop only, no query and no body: the bytes are read through the scoped
+  // transport and sent private with nosniff. An If-None-Match never short-circuits the read.
+  app.get("/api/remote-libraries/:id/items/:itemId/artwork/:imageType", asyncRoute(async (req, res) => {
+    let asset: Awaited<ReturnType<MediaServerManager["readArtwork"]>>;
+    try {
+      asset = await guardRequest(req, res, true, (request, authority, signal) => {
+        assertNoBody(request);
+        assertNoQuery(request.query);
+        return mediaServers.readArtwork(authority, request.params.id, request.params.itemId, String(request.params.imageType), signal);
+      });
+    } catch (error) {
+      if (error instanceof ClientGone) return;
+      throw error;
+    }
+    res.status(200)
+      .setHeader("content-type", asset.contentType)
+      .setHeader("cache-control", "private, no-store")
+      .setHeader("x-content-type-options", "nosniff")
+      .setHeader("content-length", String(asset.bytes.byteLength))
+      .end(Buffer.from(asset.bytes));
+  }));
+  app.get("/api/remote-libraries/:id/items/:itemId/state", handle(async (req, authority, signal) => {
+    assertNoBody(req);
+    assertNoQuery(req.query);
+    return remotePersonal.read(authority, req.params.id, req.params.itemId, signal);
+  }, 200, true));
+  app.patch("/api/remote-libraries/:id/items/:itemId/state", handle(async (req, authority, signal) =>
+    remotePersonal.patch(authority, req.params.id, req.params.itemId, body(req), signal), 200, true));
   app.get("/api/remote-libraries/:id/items/:itemId", handle(async (req, authority, signal) => {
     assertNoBody(req);
     assertNoQuery(req.query);

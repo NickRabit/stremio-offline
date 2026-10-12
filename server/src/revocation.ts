@@ -4,7 +4,10 @@ import { readSession } from "./auth.js";
 import { jobLibraryId, mayDownloadToDevice, mayDownloadToLibrary, type DownloadJob } from "./downloads.js";
 import { libraryVisible, parseLibraryPath, type LibraryRecord, type Viewer } from "./libraries.js";
 import { log } from "./logger.js";
-import type { DeviceDownloadTicket, MediaResources, ResourceOwner } from "./media-resources.js";
+import { remoteContentAccessible, remoteLibraryVisibleTo, type RemoteAccessSource } from "./media-server-access.js";
+import { isRemoteMediaStream, openRemoteContent, type RemoteContentRef } from "./media-server-reference.js";
+import { REMOTE_LIBRARY_ID } from "./media-server-types.js";
+import { ResourceError, type DeviceDownloadTicket, type MediaResources, type ResourceOwner } from "./media-resources.js";
 import type { AddonRecord, StreamItem } from "./types.js";
 import { findUserById, type UserRecord } from "./users.js";
 
@@ -31,11 +34,12 @@ export interface AccessNeed {
   permission?: "downloadToLibrary" | "downloadToDevice";
   addonKey?: string;
   libraryId?: string;
+  /** The verified remote original this request is about to hand over. */
+  remote?: RemoteContentRef;
 }
 
 /** The state the re-check reads. Structural, so this module stays free of the store. */
-export interface AccessSource {
-  users(): UserRecord[];
+export interface AccessSource extends RemoteAccessSource {
   addons(): AddonRecord[];
   libraries(): LibraryRecord[];
 }
@@ -57,25 +61,46 @@ export function accessLost(source: AccessSource, claim: AccessClaim | undefined,
   if (!session || session.userId !== claim.userId || session.sid !== claim.sid) return true;
   const viewer: Viewer = { id: user.id, role: user.role };
   if (need.libraryId !== undefined) {
-    const library = source.libraries().find((item) => item.id === need.libraryId);
-    if (!library || !library.enabled || !libraryVisible(library, viewer)) return true;
+    if (REMOTE_LIBRARY_ID.test(need.libraryId)) {
+      const library = source.remoteLibraries().find((item) => item.id === need.libraryId);
+      if (!library || !remoteLibraryVisibleTo(source.mediaConnections(), library, viewer)) return true;
+    } else {
+      const library = source.libraries().find((item) => item.id === need.libraryId);
+      if (!library || !library.enabled || !libraryVisible(library, viewer)) return true;
+    }
+  }
+  if (need.remote !== undefined) {
+    // The grant, the connection generation and the owner session all have to still line up.
+    if (need.remote.owner.userId !== claim.userId || need.remote.owner.sid !== claim.sid) return true;
+    if (!remoteContentAccessible(source, need.remote)) return true;
   }
   if (need.addonKey !== undefined) {
     const addon = source.addons().find((item) => item.key === need.addonKey);
     if (!addon || !addon.enabled || !addonAllowed(addon, viewer)) return true;
   }
-  if (user.permissionsVersion !== claim.permissionsVersion) {
-    // The counter moved, so the right has to re-resolve from the account as it stands now
-    // rather than be assumed: an edit that took it away and one that gave it back look the
-    // same from here.
-    if (need.permission === "downloadToLibrary" && !mayDownloadToLibrary(user)) return true;
-    if (need.permission === "downloadToDevice" && !mayDownloadToDevice(user)) return true;
+  if (need.permission === "downloadToLibrary" || need.permission === "downloadToDevice") {
+    // No download path accepts a remote original, whatever the account is allowed to do.
+    if (need.remote !== undefined) return true;
+    if (user.permissionsVersion !== claim.permissionsVersion) {
+      // The counter moved, so the right has to re-resolve from the account as it stands now
+      // rather than be assumed: an edit that took it away and one that gave it back look the
+      // same from here.
+      if (need.permission === "downloadToLibrary" && !mayDownloadToLibrary(user)) return true;
+      if (need.permission === "downloadToDevice" && !mayDownloadToDevice(user)) return true;
+    }
   }
   return false;
 }
 
-/** What a stream belongs to: the addon that named it, or the library its file lives in. */
-export function contentOf(stream: Pick<StreamItem, "addonKey" | "url">): { addonKey?: string; libraryId?: string } {
+/** What a stream belongs to: the addon that named it, the library its file lives in, or the
+ *  verified remote original its sealed address names. A malformed media-server attempt is
+ *  denied rather than read as a stream with no content. */
+export function contentOf(stream: Pick<StreamItem, "addonKey" | "url">): { addonKey?: string; libraryId?: string; remote?: RemoteContentRef } {
+  if (isRemoteMediaStream(stream)) {
+    const remote = openRemoteContent(stream.url);
+    if (!remote) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
+    return { addonKey: stream.addonKey, libraryId: remote.libraryId, remote };
+  }
   return {
     addonKey: stream.addonKey,
     libraryId: typeof stream.url === "string" && stream.url.startsWith("file://")
@@ -124,11 +149,12 @@ export interface RevocationDeps {
   follows?: { removeOwner(userId: string): Promise<unknown> };
 }
 
-/** The two causes that are not a user or a piece of content: one library or addon, held by
- *  one account (or by everybody, when no user is named). */
-export interface StopContentOptions { userId?: string; libraryId?: string; addonKey?: string }
+/** The causes that are not a user: one library, addon or connection, held by one account (or
+ *  by everybody, when no user is named). A connection scope is what a change to records that
+ *  no longer exist -- a removed connection -- is swept by. */
+export interface StopContentOptions { userId?: string; libraryId?: string; addonKey?: string; connectionId?: string }
 
-interface Content { addonKey?: string; libraryId?: string }
+interface Content { addonKey?: string; libraryId?: string; remote?: RemoteContentRef }
 
 export class Revocations {
   constructor(private deps: RevocationDeps) {}
@@ -177,6 +203,16 @@ export class Revocations {
     await this.stopUserTransfers(userId);
   }
 
+  /** One resource by id, and only that resource: the sweep a periodic remote revalidation
+   *  reaches for. It reaches the response reading it, the playback session behind it and the
+   *  AirPlay grant that names it, and leaves the queue and every other resource alone. */
+  async stopResource(resourceId: string): Promise<void> {
+    this.deps.resources.remove(resourceId);
+    for (const active of this.deps.activeMedia) if (active.resourceId === resourceId) active.res.destroy();
+    for (const [id, owned] of this.deps.playbackOwners) if (owned.resourceId === resourceId) await this.deps.stopPlayback(id);
+    this.deps.airplay.removeWhere((grant) => grant.resourceId === resourceId);
+  }
+
   private async stopUserTransfers(userId: string): Promise<void> {
     this.deps.resources.revokeUser(userId);
     for (const active of this.deps.activeMedia) if (active.owner.userId === userId) active.res.destroy();
@@ -190,6 +226,7 @@ export class Revocations {
   async stopContent(opts: StopContentOptions): Promise<void> {
     const matches = (owner: ResourceOwner, content: Content): boolean => {
       if (opts.userId !== undefined && owner.userId !== opts.userId) return false;
+      if (opts.connectionId !== undefined && content.remote?.connectionId === opts.connectionId) return true;
       if (opts.addonKey !== undefined && content.addonKey === opts.addonKey) return true;
       if (opts.libraryId !== undefined && content.libraryId === opts.libraryId) return true;
       return false;
@@ -215,11 +252,19 @@ export class Revocations {
   async stopUnreachable(user: UserRecord): Promise<void> {
     const viewer: Viewer = { id: user.id, role: user.role };
     const libraries = this.deps.source.libraries();
+    const remoteLibraries = this.deps.source.remoteLibraries();
+    const connections = this.deps.source.mediaConnections();
     const addons = this.deps.source.addons();
     const lost = (content: Content): boolean => {
+      if (content.remote !== undefined && !remoteContentAccessible(this.deps.source, content.remote)) return true;
       if (content.libraryId !== undefined) {
-        const library = libraries.find((item) => item.id === content.libraryId);
-        if (!library || !library.enabled || !libraryVisible(library, viewer)) return true;
+        if (REMOTE_LIBRARY_ID.test(content.libraryId)) {
+          const library = remoteLibraries.find((item) => item.id === content.libraryId);
+          if (!library || !remoteLibraryVisibleTo(connections, library, viewer)) return true;
+        } else {
+          const library = libraries.find((item) => item.id === content.libraryId);
+          if (!library || !library.enabled || !libraryVisible(library, viewer)) return true;
+        }
       }
       if (content.addonKey !== undefined) {
         const addon = addons.find((item) => item.key === content.addonKey);

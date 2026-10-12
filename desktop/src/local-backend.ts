@@ -6,6 +6,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { renameWithRetry } from "./fs-retry.js";
+import { MEDIA_SERVER_KEY_FILE_ENV, mediaServerKeyPath, prepareDesktopMediaKey, type PrepareMediaServerKey } from "./local-media-key.js";
 import { defaultLocalSettings, readLocalSettings, type LocalSettings } from "./local-settings.js";
 import { parseServerOrigin, type ServerOrigin } from "./origin.js";
 import { pathFor } from "./platform.js";
@@ -113,6 +114,9 @@ export interface LocalBackendOptions {
   tools?: MediaTools | null;
   /** The FFmpeg found on the system, used in place of the bundled one when the settings say so. */
   systemTools?: MediaTools | null;
+  /** Locates or creates the persistent media-server key before the child is forked. The default
+   *  never replaces an existing key and never mints one when encrypted credentials already exist. */
+  prepareMediaServerKey?: PrepareMediaServerKey;
   /** What the running child reports about its traffic, published or not. */
   onActivity?: (activity: { streaming: boolean; downloading: boolean }) => void;
   readyTimeoutMs?: number;
@@ -273,6 +277,11 @@ export function localBackendEnv(
   env.PORT = String(port);
   env.DATA_DIR = path.join(userDataDir, INSTANCE_DIRECTORY);
   env.DOWNLOAD_DIR = settings.downloadDir ?? path.join(userDataDir, DOWNLOADS_DIRECTORY);
+  // A deployment override is kept exact; otherwise the child gets the default path, so the web UI
+  // can store credentials without the user setting anything up. Reading the file is the child's job.
+  if ((env[MEDIA_SERVER_KEY_FILE_ENV] ?? "").trim().length === 0) {
+    env[MEDIA_SERVER_KEY_FILE_ENV] = mediaServerKeyPath(userDataDir, platform);
+  }
   // Off leaves an inherited value alone: a developer running from a terminal keeps their own.
   if (settings.allowPrivateAddons) env.ALLOW_PRIVATE_ADDONS = "1";
   if (platform === "darwin") env.PATH = macosPath(env.PATH, directoryExists);
@@ -464,8 +473,23 @@ export class LocalBackend {
     const { options } = this;
     this.launchedWith = settings;
     const toolsOverride = settings.useSystemFfmpeg ? options.systemTools ?? null : null;
+    const platform = process.platform;
+    // The key is prepared before the child exists, so a first-run key is in place for the very
+    // first credential write. A declined preparation still returns the intended path: the child
+    // reads the file itself and fails that one operation closed.
+    const prepareKey: PrepareMediaServerKey = options.prepareMediaServerKey
+      ?? ((dir, parent, target) => prepareDesktopMediaKey(dir, parent, target, options.log));
+    let keyFile: string;
+    try {
+      const prepared = await prepareKey(options.userDataDir, process.env, platform);
+      keyFile = typeof prepared === "string" && prepared.trim().length > 0 ? prepared : mediaServerKeyPath(options.userDataDir, platform);
+    } catch {
+      keyFile = mediaServerKeyPath(options.userDataDir, platform);
+    }
+    const env = localBackendEnv(process.env, options.userDataDir, port, platform, isDirectory, settings, options.tools ?? null, isCharacterDevice, toolsOverride);
+    env[MEDIA_SERVER_KEY_FILE_ENV] = keyFile;
     const child = options.fork(options.entry, {
-      env: localBackendEnv(process.env, options.userDataDir, port, process.platform, isDirectory, settings, options.tools ?? null, isCharacterDevice, toolsOverride),
+      env,
       cwd: options.userDataDir,
       stdio: "inherit",
       serviceName: SERVICE_NAME,

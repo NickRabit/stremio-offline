@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isInternalMediaPath, mediaChildPath, MediaResources, openMediaUrl, ResourceError, sealedMediaUrl } from "./media-resources.js";
+import { isInternalMediaPath, mediaChildPath, MediaResources, openMediaUrl, ResourceError, sealedMediaUrl, streamKind } from "./media-resources.js";
+import { isRemoteMediaStream, openRemoteContent, sealRemoteContent } from "./media-server-reference.js";
 
 const owner = { userId: "user-a", sid: "owner-a", expiresAt: 10_000_000 };
 const source = { url: "https://provider-canary.test/private-canary?token=query-canary", title: "Movie query-canary", behaviorHints: { proxyHeaders: { request: { Authorization: "Bearer header-canary" } } }, subtitles: [{ url: "https://subtitle-canary.test/sub?secret=sub-canary", lang: "cs" }] };
+const sealedFor = (over: { userId?: string; sid?: string; expiresAt?: number } = {}) => sealRemoteContent({
+  provider: "jellyfin", serverId: "server-1", accountId: "account-1", itemId: "item-1",
+  connectionId: `mconn_${"a".repeat(32)}`, libraryId: `rlib_${"b".repeat(32)}`,
+  generation: 2, mediaSourceId: "source-1",
+  owner: { userId: over.userId ?? owner.userId, sid: over.sid ?? owner.sid, expiresAt: over.expiresAt ?? owner.expiresAt, secretStamp: "c".repeat(64) },
+});
 
 test("a raw infoHash is a torrent, not a playable HTTP source", () => {
   const registry = new MediaResources(() => 0);
@@ -38,6 +45,7 @@ test("public sources allowlist fields and never contain provider addresses or en
     for (const value of [secret, encodeURIComponent(secret), Buffer.from(secret).toString("base64"), Buffer.from(secret).toString("base64url")]) assert.ok(!serialized.includes(value), value);
   }
   assert.equal(publicSource.playable, true);
+  assert.equal(publicSource.capabilities, undefined);
   assert.equal("url" in publicSource, false);
   assert.equal("unknown" in publicSource, false);
   assert.equal("proxyHeaders" in publicSource.behaviorHints, false);
@@ -198,4 +206,44 @@ test("internal probe paths renew after expiry without reviving playback claims",
   now = owner.expiresAt;
   assert.equal(registry.path(expiredClaim.stream), `/api/media/${expiredClaim.resourceId}`);
   assert.throws(() => registry.get(expiredClaim.resourceId, owner.sid, "media"), { status: 410 });
+});
+
+test("a valid sealed media-server source is a remote stream without leaking its address", () => {
+  const registry = new MediaResources(() => 0);
+  const sealed = sealedFor();
+  const publicSource = registry.publicStream({ url: sealed }, owner);
+  assert.equal(publicSource.kind, "remote");
+  assert.equal(publicSource.playable, true);
+  assert.equal(publicSource.provider, "jellyfin");
+  assert.equal(publicSource.libraryId, `rlib_${"b".repeat(32)}`);
+  assert.equal(publicSource.capabilities?.downloadToLibrary, false);
+  assert.ok(publicSource.remoteItem);
+  assert.equal(publicSource.remoteItem!.mediaSourceId, "source-1");
+  const stored = registry.get(publicSource.sourceId, owner.sid, "source").stream;
+  assert.equal(stored.url, sealed, "the signed address survives normalization");
+  assert.equal(isRemoteMediaStream(structuredClone(stored)), true, "and survives a structured clone");
+  assert.equal(openRemoteContent(stored.url)!.itemId, "item-1");
+  assert.equal(JSON.stringify(publicSource).includes("media-server:"), false);
+});
+
+test("a malformed media-server attempt is refused instead of falling back to a generic source", () => {
+  const registry = new MediaResources(() => 0);
+  assert.equal(streamKind({ url: "media-server:garbage" }), "unsupported");
+  assert.equal(streamKind({ url: sealedFor() }), "remote");
+  assert.throws(() => registry.publicStream({ url: "media-server:garbage" }, owner), { status: 404, code: "RESOURCE_NOT_FOUND" });
+  assert.throws(() => registry.listing([{ url: "media-server:garbage" }], owner), { status: 404 });
+});
+
+test("an unbound remote source cannot become an internal probe address", () => {
+  const registry = new MediaResources(() => 0);
+  assert.throws(() => registry.path({ url: sealedFor() }), { status: 404, code: "RESOURCE_NOT_FOUND" });
+  const claimed = registry.mediaStream({ url: sealedFor() }, owner);
+  assert.equal(registry.path(claimed.stream), `/api/media/${claimed.resourceId}`, "a bound remote still has a wire path");
+});
+
+test("a sealed source is only recorded for the session it was sealed for", () => {
+  const registry = new MediaResources(() => 0);
+  assert.throws(() => registry.publicStream({ url: sealedFor({ sid: "other" }) }, owner), { status: 404 });
+  assert.throws(() => registry.publicStream({ url: sealedFor({ userId: "user-b" }) }, owner), { status: 404 });
+  assert.throws(() => registry.publicStream({ url: sealedFor({ expiresAt: owner.expiresAt - 1 }) }, owner), { status: 404 });
 });

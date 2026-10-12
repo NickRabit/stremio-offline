@@ -1,8 +1,9 @@
 import type { Locale } from "./i18n";
 import type { DownloadSnapshot as ServerDownloadSnapshot, PublicDownload } from "../../server/src/api-types";
 import type { HomeLayout } from "../../server/src/home";
+import type { MediaServerConfigurationExport } from "../../server/src/media-server-store";
 export type { FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem } from "../../server/src/favorites";
-export type { ResumeCard, ResumeFilter } from "../../server/src/home";
+export type { RemoteHomeCard, ResumeCard, ResumeFilter } from "../../server/src/home";
 export type DownloadLayout = "flat" | "structured";
 export interface DownloadTargetSettings {
   subfolder: string;
@@ -41,7 +42,65 @@ export interface Stream {
   sourceId: string; kind: "remote" | "library" | "torrent" | "unsupported"; playable: boolean; localPath?: string; libraryName?: string; name?: string; title?: string; description?: string;
   subtitles?: Subtitle[]; addonKey?: string; addonName?: string;
   behaviorHints?: { notWebReady?: boolean; filename?: string; videoSize?: number; bingeGroup?: string };
+  /** Set on a source that belongs to a remote Jellyfin/Emby library, never on an addon stream. */
+  provider?: MediaServerProvider;
+  libraryId?: string;
+  /** What this source may be used for. Absent on every non-remote stream. */
+  capabilities?: RemoteCapabilities;
+  /** The remote identity a player reports position and favorites against; only a remote source carries one. */
+  remoteItem?: RemoteStreamContext;
 }
+
+export type MediaServerProvider = "jellyfin" | "emby";
+export type MediaServerStatus = "disabled" | "available" | "unavailable" | "reauthentication-required" | "identity-changed";
+/** One connection as the administrator list answers it, runtime status included. */
+export interface MediaServerConnection {
+  id: string; provider: MediaServerProvider; name: string; baseUrl: string;
+  allowLan: boolean; allowLoopback: boolean;
+  serverId?: string; accountId?: string; enabled: boolean; generation: number; configured: boolean;
+  status: MediaServerStatus;
+}
+/** One library the stored account can currently see, from a discovery call. */
+export interface ProviderLibrary { id: string; name: string; type: LibraryType }
+/** One attached remote library as the administrator list answers it. */
+export interface AdminRemoteLibrary {
+  id: string; connectionId: string; remoteId: string; name: string; type: LibraryType;
+  enabled: boolean; order: number; showOnHome: boolean; showInContinueWatching: boolean;
+  /** The accounts granted this library. Empty means administrators only. */
+  allowedUsers: string[];
+}
+/** What a remote library or source may be used for. Every flag is false in this stage. */
+export interface RemoteCapabilities {
+  rename: boolean; move: boolean; delete: boolean; identify: boolean;
+  writeArtwork: boolean; downloadToLibrary: boolean; downloadToDevice: boolean;
+}
+/** The member projection of one attached library: no address, no account, no grants. */
+export interface RemoteLibrary {
+  id: string; connectionId: string; remoteId: string; name: string; type: LibraryType;
+  enabled: boolean; order: number; showOnHome: boolean; showInContinueWatching: boolean;
+  provider: MediaServerProvider; capabilities: RemoteCapabilities;
+}
+export type RemoteItemType = "movie" | "series" | "season" | "episode";
+export interface RemoteItem {
+  id: string; name: string; type: RemoteItemType; parentId?: string; seriesId?: string;
+  season?: number; episode?: number;
+  providerIds: { imdb?: string; tmdb?: string; tvdb?: string };
+  durationTicks?: number;
+  /** Same-origin, content-authorized artwork; never an upstream address. */
+  poster?: string; wide?: string;
+}
+/** One page of a remote listing, cursor included and always opaque to the caller. */
+export interface RemoteItemPage {
+  items: RemoteItem[]; total: number; asOf: string; stale: boolean;
+  cursor?: string; capabilities: RemoteCapabilities;
+}
+/** The locally stored playback state of one remote item. */
+export interface RemoteItemState {
+  key: string; position: number; duration: number; favorite: boolean; watched: boolean;
+  mediaSourceId?: string; updatedAt?: string;
+}
+/** The remote identity a remote stream is played and reported under. */
+export interface RemoteStreamContext { libraryId: string; itemId: string; mediaSourceId: string; progressKey: string }
 export interface QueueHalt { reason: "storage"; at: string; message: string; messageKey?: string }
 /** One queued job as the server hands it out; the shape lives with the queue it describes. */
 export type Download = PublicDownload;
@@ -159,8 +218,13 @@ type AdminOnlySetting =
  *  else is missing the ones above, and the interface keeps its own defaults for them. */
 export type SettingsView = Omit<Settings, AdminOnlySetting> & Partial<Pick<Settings, AdminOnlySetting>>;
 export type SettingsPatch = Partial<Omit<Settings, "realDebridConfigured" | "tmdbConfigured" | "homeLayout">> & { homeLayout?: HomeLayout | null; realDebridToken?: string; tmdbApiKey?: string };
+/** The media-server metadata a version 3 backup adds: the server's own metadata-only export,
+ *  reused so a credential, generation or grant can never reach a settings file. */
+export type SettingsBackupMediaServers = MediaServerConfigurationExport;
 export interface SettingsBackup {
-  format: "stremio-offline-settings"; version: 1; exportedAt: string; settings: Settings;
+  format: "stremio-offline-settings"; version: number; exportedAt: string; settings: Settings;
+  libraries?: Array<{ id: string; name: string; type: LibraryType; root: string }>;
+  mediaServers?: SettingsBackupMediaServers;
   addons: Array<{ manifestUrl: string; role: Addon["role"]; enabled: boolean; globalSearch: boolean; showOnHome?: boolean; homeCatalogs?: string[]; addedAt: string; downloadSettings: AddonDownloadSettings }>;
 }
 export interface Capabilities { h264: boolean; hevc: boolean; hevc10: boolean; vp8: boolean; vp9: boolean; av1: boolean; aac: boolean; mp3: boolean; opus: boolean; vorbis: boolean; ac3: boolean; eac3: boolean; flac: boolean }

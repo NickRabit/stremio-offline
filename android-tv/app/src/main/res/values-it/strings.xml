@@ -260,4 +260,43 @@
   <string name="settings_search_history_confirm">Cancellare la cronologia delle ricerche?</string>
   <string name="settings_search_history_cleared">Cronologia delle ricerche cancellata.</string>
   <string name="sources_local_filter">File locali</string>
+
+  <!-- Media-server read-only libraries (translated). -->
+  <string name="media_server_tab_files">File</string>
+  <string name="media_server_tab_servers">Server multimediali</string>
+  <string name="media_server_pick_title">Scegli una libreria</string>
+  <string name="media_server_read_only">Sola lettura</string>
+  <string name="media_server_search_label">Cerca</string>
+  <string name="media_server_search_action">Cerca</string>
+  <string name="media_server_filter_all">Tutto</string>
+  <string name="media_server_filter_movies">Film</string>
+  <string name="media_server_filter_series">Serie</string>
+  <string name="media_server_load_more">Carica altro</string>
+  <string name="media_server_error">Impossibile caricare la libreria multimediale.</string>
+  <string name="media_server_offline">Il server multimediale non risponde.</string>
+  <string name="media_server_empty">Nessuna libreria di server multimediali è condivisa con questo account.</string>
+  <string name="media_server_empty_items">Questa libreria è vuota.</string>
+  <string name="media_server_no_matches">Nessun risultato per la ricerca.</string>
+  <string name="media_server_eyebrow">Su un server multimediale</string>
+  <string name="media_server_eyebrow_episode">%1$s · episodio</string>
+  <string name="media_server_state_local">Posizione e preferenza sono memorizzate su questo server, solo per questa app.</string>
+  <string name="media_server_versions">Versioni</string>
+  <string name="media_server_versions_available">%1$s versioni disponibili</string>
+  <string name="media_server_finding_versions">Ricerca delle versioni…</string>
+  <string name="media_server_sources_empty">Questo elemento non ha versioni riproducibili.</string>
+  <string name="media_server_sources_error">Impossibile caricare le versioni.</string>
+  <string name="media_server_source_badge">Remoto</string>
+  <string name="media_server_source_hint">Da un server multimediale — sola lettura</string>
+  <string name="media_server_mark_watched">Segna come visto</string>
+  <string name="media_server_unwatch">Segna come non visto</string>
+  <string name="media_server_download_unavailable">Un elemento di un server multimediale non può essere scaricato.</string>
+  <string name="media_server_state_error">Impossibile caricare la posizione salvata.</string>
+  <string name="media_server_group_failed">Impossibile caricare %1$s.</string>
+  <string name="media_server_personal_empty">Qui non c\'è ancora nulla.</string>
+  <string name="resume_filter_remote">Server multimediali</string>
+  <string name="resume_empty_remote_title">Niente di iniziato su un server multimediale</string>
+  <string name="resume_empty_remote_text">Gli elementi avviati da un server multimediale compaiono qui.</string>
+  <string name="favorites_tab_local">File e catalogo</string>
+  <string name="favorites_tab_servers">Server multimediali</string>
+  <string name="media_server_personal_partial">Alcuni elementi non sono stati caricati.</string>
 </resources>

@@ -50,6 +50,9 @@ export interface MediaServerConfigurationExport {
   libraries: ExportedRemoteLibrary[];
 }
 
+/** The largest configuration a backup or an import may carry. */
+export const MEDIA_SERVER_CONFIGURATION_MAX_BYTES = 8 * 1024 * 1024;
+
 const invalid = (message: string): MediaServerError => new MediaServerError("invalid-input", message);
 const notFound = (message: string): MediaServerError => new MediaServerError("not-found", message);
 const stale = (): MediaServerError => new MediaServerError("stale-generation", "The media-server connection changed; start again.");
@@ -278,61 +281,125 @@ export class MediaServerConfiguration {
    *  minted, connections and libraries land disabled with no grants and no secret, and a
    *  duplicate verified account or a dangling reference refuses the whole batch. */
   async restoreConfiguration(input: unknown): Promise<void> {
-    const root = checkKeys(input, ["version", "connections", "libraries"], "The media-server configuration");
-    if (root.version !== 1) throw invalid("The media-server configuration version is not supported.");
-    if (!Array.isArray(root.connections) || !Array.isArray(root.libraries)) throw invalid("The media-server configuration is malformed.");
-    if (root.connections.length > MEDIA_SERVER_LIMITS.connections || root.libraries.length > MEDIA_SERVER_LIMITS.libraries) {
-      throw invalid("The media-server configuration is too large.");
-    }
-    const idMap = new Map<string, string>();
-    const seenConnectionIds = new Set<string>();
-    const seenVerified = new Set<string>();
-    const connections: MediaConnectionRecord[] = [];
-    for (const raw of root.connections) {
-      const record = checkKeys(raw, EXPORT_CONNECTION_KEYS, "The exported connection");
-      const oldId = boundedString(record.id, MEDIA_SERVER_LIMITS.upstreamId, "connection id");
-      if (!MEDIA_CONNECTION_ID.test(oldId)) throw invalid("The exported connection id is malformed.");
-      if (seenConnectionIds.has(oldId)) throw invalid("The exported configuration repeats a connection id.");
-      seenConnectionIds.add(oldId);
-      const fields = readConnectionFields(record);
-      const key = verifiedKey(fields.provider, fields.serverId, fields.accountId);
-      if (seenVerified.has(key)) throw invalid("The exported configuration repeats a remote account.");
-      seenVerified.add(key);
-      const id = newConnectionId();
-      idMap.set(oldId, id);
-      connections.push({ id, ...fields, enabled: false, generation: 0, addedAt: new Date().toISOString() });
-    }
-    const libraries: RemoteLibraryRecord[] = [];
-    const seenLibraryIds = new Set<string>();
-    const seenRemote = new Set<string>();
-    for (const raw of root.libraries) {
-      const record = checkKeys(raw, EXPORT_LIBRARY_KEYS, "The exported library");
-      const oldId = boundedString(record.id, MEDIA_SERVER_LIMITS.upstreamId, "library id");
-      if (!REMOTE_LIBRARY_ID.test(oldId)) throw invalid("The exported library id is malformed.");
-      if (seenLibraryIds.has(oldId)) throw invalid("The exported configuration repeats a library id.");
-      seenLibraryIds.add(oldId);
-      const oldConnectionId = boundedString(record.connectionId, MEDIA_SERVER_LIMITS.upstreamId, "connection id");
-      const connectionId = idMap.get(oldConnectionId);
-      if (!connectionId) throw invalid("The exported configuration has a dangling library connection.");
-      const fields = readLibraryFields(record);
-      const key = JSON.stringify([connectionId, fields.remoteId]);
-      if (seenRemote.has(key)) throw invalid("The exported configuration repeats a remote library.");
-      seenRemote.add(key);
-      libraries.push({ id: newRemoteLibraryId(), connectionId, ...fields, enabled: false, allowedUsers: [] });
-    }
+    const prepared = prepareMediaServerConfiguration(input);
     await this.store.update((state) => {
       this.guard(state);
       const existing = state.mediaConnections ?? [];
       const existingLibraries = state.remoteLibraries ?? [];
-      if (existing.length + connections.length > MEDIA_SERVER_LIMITS.connections) throw invalid("Too many media-server connections.");
-      if (existingLibraries.length + libraries.length > MEDIA_SERVER_LIMITS.libraries) throw invalid("Too many remote libraries.");
-      for (const incoming of connections) {
+      if (existing.length + prepared.connections.length > MEDIA_SERVER_LIMITS.connections) throw invalid("Too many media-server connections.");
+      if (existingLibraries.length + prepared.libraries.length > MEDIA_SERVER_LIMITS.libraries) throw invalid("Too many remote libraries.");
+      for (const incoming of prepared.connections) {
         if (existing.some((connection) => verifiedKey(connection.provider, connection.serverId, connection.accountId) === verifiedKey(incoming.provider, incoming.serverId, incoming.accountId))) {
           throw invalid("That remote account is already connected.");
         }
       }
-      state.mediaConnections = [...existing, ...connections];
-      state.remoteLibraries = [...existingLibraries, ...libraries];
+      state.mediaConnections = [...existing, ...prepared.connections];
+      state.remoteLibraries = [...existingLibraries, ...prepared.libraries];
     });
   }
+}
+
+const asRecord = (value: unknown, context: string): Record<string, unknown> => {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw invalid(`${context} is malformed.`);
+  return value as Record<string, unknown>;
+};
+
+/** One exported connection, projected through the allowlist: a secret reference, an enabled
+ *  flag, a generation, a grant, a token or a user name can never ride along, whatever shape the
+ *  caller hands in, and the fields the format does carry are validated as they are picked. */
+const pickExportedConnection = (value: Record<string, unknown>): ExportedMediaConnection => {
+  const record: Record<string, unknown> = {};
+  for (const key of EXPORT_CONNECTION_KEYS) if (value[key] !== undefined) record[key] = value[key];
+  const id = boundedString(record.id, MEDIA_SERVER_LIMITS.upstreamId, "connection id");
+  if (!MEDIA_CONNECTION_ID.test(id)) throw invalid("The exported connection id is malformed.");
+  return { id, ...readConnectionFields(record) };
+};
+
+/** The same for one attached library. `connectionId` is a local handle and only its shape is
+ *  checked here; whether it names an exported connection is the batch's business. */
+const pickExportedLibrary = (value: Record<string, unknown>): ExportedRemoteLibrary => {
+  const record: Record<string, unknown> = {};
+  for (const key of EXPORT_LIBRARY_KEYS) if (value[key] !== undefined) record[key] = value[key];
+  const id = boundedString(record.id, MEDIA_SERVER_LIMITS.upstreamId, "library id");
+  if (!REMOTE_LIBRARY_ID.test(id)) throw invalid("The exported library id is malformed.");
+  const connectionId = boundedString(record.connectionId, MEDIA_SERVER_LIMITS.upstreamId, "connection id");
+  return { id, connectionId, ...readLibraryFields(record) };
+};
+
+const readExportRoot = (input: unknown): Record<string, unknown> => {
+  const root = checkKeys(input, ["version", "connections", "libraries"], "The media-server configuration");
+  if (root.version !== 1) throw invalid("The media-server configuration version is not supported.");
+  if (!Array.isArray(root.connections) || !Array.isArray(root.libraries)) throw invalid("The media-server configuration is malformed.");
+  if (root.connections.length > MEDIA_SERVER_LIMITS.connections || root.libraries.length > MEDIA_SERVER_LIMITS.libraries) {
+    throw invalid("The media-server configuration is too large.");
+  }
+  return root;
+};
+
+/** Reads and validates a whole exported configuration. Every row must carry exactly the
+ *  exported fields and a batch that repeats a handle, repeats a remote account or points at a
+ *  connection it does not carry is refused whole. Nothing is written and no handle is minted,
+ *  so the reader is safe to use as the parse step of a backup, before any manifest is fetched. */
+function readConfigurationExport(input: unknown): { connections: ExportedMediaConnection[]; libraries: ExportedRemoteLibrary[] } {
+  const root = readExportRoot(input);
+  const connections: ExportedMediaConnection[] = [];
+  const seenConnectionIds = new Set<string>();
+  const seenVerified = new Set<string>();
+  for (const raw of root.connections as unknown[]) {
+    const connection = pickExportedConnection(checkKeys(raw, EXPORT_CONNECTION_KEYS, "The exported connection"));
+    if (seenConnectionIds.has(connection.id)) throw invalid("The exported configuration repeats a connection id.");
+    seenConnectionIds.add(connection.id);
+    const key = verifiedKey(connection.provider, connection.serverId, connection.accountId);
+    if (seenVerified.has(key)) throw invalid("The exported configuration repeats a remote account.");
+    seenVerified.add(key);
+    connections.push(connection);
+  }
+  const libraries: ExportedRemoteLibrary[] = [];
+  const seenLibraryIds = new Set<string>();
+  const seenRemote = new Set<string>();
+  for (const raw of root.libraries as unknown[]) {
+    const library = pickExportedLibrary(checkKeys(raw, EXPORT_LIBRARY_KEYS, "The exported library"));
+    if (seenLibraryIds.has(library.id)) throw invalid("The exported configuration repeats a library id.");
+    seenLibraryIds.add(library.id);
+    if (!seenConnectionIds.has(library.connectionId)) throw invalid("The exported configuration has a dangling library connection.");
+    const key = JSON.stringify([library.connectionId, library.remoteId]);
+    if (seenRemote.has(key)) throw invalid("The exported configuration repeats a remote library.");
+    seenRemote.add(key);
+    libraries.push(library);
+  }
+  return { connections, libraries };
+}
+
+/** The metadata-only projection of a configuration, exactly as a backup carries it. Unlike a
+ *  restore, a row that carries more than the export format is projected rather than refused:
+ *  the extra fields are dropped, never copied. */
+export function projectMediaServerConfiguration(input: unknown): MediaServerConfigurationExport {
+  const root = readExportRoot(input);
+  return {
+    version: 1,
+    connections: (root.connections as unknown[]).map((raw) => pickExportedConnection(asRecord(raw, "The exported connection"))),
+    libraries: (root.libraries as unknown[]).map((raw) => pickExportedLibrary(asRecord(raw, "The exported library"))),
+  };
+}
+
+/** What a restore installs: every exported handle is only a reference, so fresh local handles
+ *  are minted here, connections and libraries land disabled with no grants and no secret, and
+ *  nothing that was exported can name a credential. Pure and synchronous, so a caller may
+ *  validate a whole configuration before it writes anything or fetches a manifest. */
+export function prepareMediaServerConfiguration(input: unknown): { connections: MediaConnectionRecord[]; libraries: RemoteLibraryRecord[] } {
+  const exported = readConfigurationExport(input);
+  const idMap = new Map<string, string>();
+  const connections: MediaConnectionRecord[] = exported.connections.map((connection) => {
+    const id = newConnectionId();
+    idMap.set(connection.id, id);
+    return { ...connection, id, enabled: false, generation: 0, addedAt: new Date().toISOString() };
+  });
+  const libraries: RemoteLibraryRecord[] = exported.libraries.map((library) => ({
+    ...library,
+    id: newRemoteLibraryId(),
+    connectionId: idMap.get(library.connectionId) as string,
+    enabled: false,
+    allowedUsers: [],
+  }));
+  return { connections, libraries };
 }

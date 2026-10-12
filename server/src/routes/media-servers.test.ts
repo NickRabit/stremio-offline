@@ -9,12 +9,14 @@ import path from "node:path";
 import { test } from "node:test";
 import express from "express";
 import { messageKeyOf } from "../errors.js";
-import { ResourceError } from "../media-resources.js";
+import { MediaResources, ResourceError } from "../media-resources.js";
 import { MediaServerManager } from "../media-server-manager.js";
+import { MediaServerPersonal } from "../media-server-personal.js";
 import type { MediaServerProvider, ProviderItem, RemoteAccountPolicy } from "../media-server-provider.js";
+import { MediaServerSources } from "../media-server-sources.js";
 import { MediaServerSecrets } from "../media-server-secrets.js";
 import type { MediaServerTransport } from "../media-server-security.js";
-import { MediaServerError } from "../media-server-types.js";
+import { MediaServerError, remoteProgressKey } from "../media-server-types.js";
 import { roleMiddleware } from "../roles.js";
 import { restrictedMiddleware } from "../restricted.js";
 import { Store } from "../store.js";
@@ -48,6 +50,7 @@ class FakeServer {
   items: Record<string, ProviderItem[]> = { "lib-1": [movie("m1", "Alien")] };
   detailOf: Record<string, ProviderItem> = { m1: movie("m1", "Alien") };
   ancestorsOf: Record<string, string[]> = { m1: ["lib-1"] };
+  versionsOf: Record<string, Array<{ id: string; name?: string; container?: string }>> = { m1: [{ id: "v1", name: "1080p" }] };
   errors: Record<string, MediaServerError> = {};
   nudge: { op: string; wait: Promise<void>; entered?: () => void } | undefined;
 
@@ -66,10 +69,15 @@ const provider = (server: FakeServer): MediaServerProvider => ({
   pageItems: async (_token, _account, libraryId) => { await server.run("items"); return { items: structuredClone(server.items[libraryId] ?? []), total: (server.items[libraryId] ?? []).length }; },
   detail: async (_token, _account, itemId) => { await server.run("detail"); const item = server.detailOf[itemId]; if (!item) throw new MediaServerError("not-found", "missing"); return structuredClone(item); },
   ancestors: async (_token, _account, itemId) => { await server.run("ancestors"); return [...(server.ancestorsOf[itemId] ?? [])]; },
-  versions: async () => [],
+  versions: async (_token, _account, itemId) => { await server.run("versions"); return structuredClone(server.versionsOf[itemId] ?? []); },
 });
 
-const transport: MediaServerTransport = { requestJson: async () => { throw new Error("unused"); }, close: async () => undefined };
+const transport: MediaServerTransport = {
+  requestJson: async () => { throw new Error("unused"); },
+  requestAsset: async () => { throw new Error("unused asset transport"); },
+  requestOriginal: async () => { throw new Error("unused"); },
+  close: async () => undefined,
+};
 
 interface Harness {
   base: string;
@@ -126,7 +134,11 @@ const mount = async (): Promise<Harness> => {
   app.use(express.json({ limit: "256kb" }));
   app.use("/api", roleMiddleware({ isOpen: () => false, isInternal: () => false, roleOf: (req) => currentUser(req)?.role }));
   app.use("/api", restrictedMiddleware({ isOpen: () => false, isInternal: () => false }));
-  registerMediaServerRoutes(app, { ...ctx, mediaServers: manager });
+  const resources = new MediaResources();
+  const mediaSources = new MediaServerSources(store, manager, resources);
+  const remotePersonal = new MediaServerPersonal(store, manager);
+  const ownerOf = (req: express.Request) => ({ userId: currentUser(req)?.id ?? ADA, sid: "routes-sid", expiresAt: Date.now() + 3_600_000 });
+  registerMediaServerRoutes(app, { ...ctx, mediaServers: manager, mediaSources, remotePersonal, ownerOf });
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     const status = typeof (error as { status?: unknown }).status === "number" ? (error as { status: number }).status : 400;
     const retryAfterMs = (error as { retryAfterMs?: unknown }).retryAfterMs;
@@ -428,5 +440,96 @@ test("import requires an administrator and restores nothing until the body is va
     assert.equal(JSON.stringify(exported).includes("msecret_"), false);
     const imported = await api(harness.base, "/api/media-servers/import", { method: "POST", body: exported });
     assert.equal(imported.status, 400, "a duplicate account is refused whole");
+  });
+});
+
+test("the admin library inventory lists every attachment with its provider", async () => {
+  await withHarness(async (harness) => {
+    const response = await api(harness.base, "/api/media-servers/libraries");
+    assert.equal(response.status, 200);
+    const body = await response.json() as { libraries: Array<{ id: string; provider?: string; allowedUsers: string[] }> };
+    assert.equal(body.libraries.length, 1);
+    assert.equal(body.libraries[0]!.id, harness.libraryId);
+    assert.equal(body.libraries[0]!.provider, "jellyfin");
+    assert.deepEqual(body.libraries[0]!.allowedUsers, [BOB]);
+    assert.equal((await api(harness.base, "/api/media-servers/libraries", { user: BOB })).status, 403, "a member is refused");
+  });
+});
+
+test("a granted member lists verified sources and their own item state without an address", async () => {
+  await withHarness(async (harness) => {
+    const sources = await api(harness.base, `/api/remote-libraries/${harness.libraryId}/items/m1/sources`, { user: BOB });
+    assert.equal(sources.status, 200);
+    const body = await sources.json() as { streams: Array<{ kind: string; provider?: string; libraryName?: string; remoteItem?: { itemId: string } }> };
+    assert.equal(body.streams.length, 1);
+    assert.equal(body.streams[0]!.kind, "remote");
+    assert.equal(body.streams[0]!.provider, "jellyfin");
+    assert.equal(body.streams[0]!.libraryName, "Films");
+    assert.equal(body.streams[0]!.remoteItem?.itemId, "m1");
+    assert.equal(JSON.stringify(body).includes("media-server:"), false);
+
+    const state = await api(harness.base, `/api/remote-libraries/${harness.libraryId}/items/m1/state`, { user: BOB });
+    assert.equal(state.status, 200);
+    const row = await state.json() as { key: string; favorite: boolean };
+    assert.match(row.key, /^remote:[0-9a-f]{64}$/);
+    assert.equal(row.favorite, false);
+
+    const patched = await api(harness.base, `/api/remote-libraries/${harness.libraryId}/items/m1/state`, { method: "PATCH", user: BOB, body: { favorite: true, position: 5 } });
+    assert.equal(patched.status, 200);
+    assert.equal((await patched.json() as { favorite: boolean }).favorite, true);
+    const reread = await (await api(harness.base, `/api/remote-libraries/${harness.libraryId}/items/m1/state`, { user: BOB })).json() as { favorite: boolean; position: number };
+    assert.equal(reread.favorite, true);
+    assert.equal(reread.position, 5);
+
+    assert.equal((await api(harness.base, `/api/remote-libraries/${harness.libraryId}/items/m1/state`, { method: "PATCH", user: BOB, body: { name: "x" } })).status, 400);
+    harness.server.detailOf.s1 = { id: "s1", name: "Series", type: "series", providerIds: {} };
+    harness.server.ancestorsOf.s1 = ["lib-1"];
+    assert.equal((await api(harness.base, `/api/remote-libraries/${harness.libraryId}/items/s1/state`, { method: "PATCH", user: BOB, body: { position: 3 } })).status, 400);
+  });
+});
+
+/** One canonical stored history row for the administrator. */
+const seedHistory = (harness: Harness) => {
+  const key = remoteProgressKey({ provider: "jellyfin", serverId: "server-1", accountId: "user-1", itemId: "m1" });
+  return harness.store.update((state) => {
+    const data = state.userData![ADA]!;
+    data.remoteMedia = {
+      [key]: {
+        key, provider: "jellyfin", serverId: "server-1", accountId: "user-1", itemId: "m1", remoteLibraryId: "lib-1",
+        type: "movie", name: "Alien", position: 5, duration: 100, favorite: false, watched: false,
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    };
+  }).then(() => key);
+};
+
+test("a removal query is one exact flag and a body is refused before anything changes", async () => {
+  await withHarness(async (harness) => {
+    const key = await seedHistory(harness);
+    for (const query of ["?forget[]=true", "?forget=yes", "?forget=1", "?forget=true&other=1", "?FORGET=true"]) {
+      const refused = await api(harness.base, `/api/remote-libraries/${harness.libraryId}${query}`, { method: "DELETE" });
+      assert.equal(refused.status, 400, query);
+      assert.equal((await refused.json() as { messageKey?: string }).messageKey, "err.invalidRequest", query);
+    }
+    assert.equal((await api(harness.base, `/api/remote-libraries/${harness.libraryId}`, { method: "DELETE", body: {} })).status, 400, "a removal carries no body");
+    assert.equal((await api(harness.base, `/api/media-servers/${harness.connectionId}`, { method: "DELETE", body: { forget: true } })).status, 400);
+    assert.equal(harness.store.remoteLibraries().length, 1, "a refused removal left everything in place");
+    assert.equal(harness.store.mediaConnections().length, 1);
+    assert.equal((harness.store.userData(ADA).remoteMedia as Record<string, unknown>)[key] !== undefined, true, "and touched no history");
+  });
+});
+
+test("a removal keeps the history unless the exact flag forgets it", async () => {
+  await withHarness(async (harness) => {
+    const key = await seedHistory(harness);
+    assert.equal((await api(harness.base, `/api/remote-libraries/${harness.libraryId}?forget=false`, { method: "DELETE" })).status, 204);
+    const kept = (harness.store.userData(ADA).remoteMedia as Record<string, { orphanedAt?: string }>)[key]!;
+    assert.equal(typeof kept.orphanedAt, "string", "the row survives its library with the thirty days running");
+  });
+  await withHarness(async (harness) => {
+    const key = await seedHistory(harness);
+    assert.equal((await api(harness.base, `/api/media-servers/${harness.connectionId}?forget=true`, { method: "DELETE" })).status, 204);
+    assert.equal((harness.store.userData(ADA).remoteMedia as Record<string, unknown>)[key], undefined, "forget removes it at once");
+    assert.deepEqual(harness.store.remoteLibraries(), [], "together with the connection's libraries");
   });
 });

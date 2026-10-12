@@ -154,7 +154,13 @@ const mount = async (options: {
   const playbackOwners = new Map<string, { owner: ResourceOwner; resourceId: string }>();
   const stoppedPlayback: string[] = [];
   const revocations = new Revocations({
-    source: { users: () => store.users(), addons: () => store.addons(), libraries: () => store.libraries() },
+    source: {
+      users: () => store.users(),
+      addons: () => store.addons(),
+      libraries: () => store.libraries(),
+      mediaConnections: () => store.mediaConnections(),
+      remoteLibraries: () => store.remoteLibraries(),
+    },
     resources,
     airplay: new AirPlayAccess(resources),
     playbackOwners,

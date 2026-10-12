@@ -5,6 +5,7 @@ import { test } from "node:test";
 import {
   assertMediaServerAddress,
   createMediaServerTransport,
+  MEDIA_SERVER_ORIGINAL_LIMITS,
   normalizeMediaServerUrl,
   type LookupAddress,
 } from "./media-server-security.js";
@@ -48,6 +49,25 @@ const json = (res: http.ServerResponse, value: unknown, status = 200) => {
 };
 
 const open = (origin: string) => createMediaServerTransport({ baseUrl: origin, allowLan: false, allowLoopback: true });
+
+const readMedia = async (body: ReadableStream<Uint8Array> | null): Promise<Buffer> => {
+  if (!body) return Buffer.alloc(0);
+  const reader = body.getReader();
+  const chunks: Buffer[] = [];
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks);
+};
+
+/** A cooperative upstream stream that emits headers but never ends on its own, so a test can
+ *  prove the streaming slot outlives the response headers. */
+const heldMedia = (): Response => new Response(
+  new ReadableStream<Uint8Array>({ start() { /* stays open until released or cancelled */ } }),
+  { status: 200 },
+);
 
 test("normalizeMediaServerUrl keeps the origin and base path and strips one final slash", () => {
   assert.equal(normalizeMediaServerUrl("http://media.example"), "http://media.example");
@@ -634,5 +654,466 @@ test("an aborted socket lookup cannot borrow another request's lifetime", { time
     releaseSecond?.(answers);
     await transport.close();
     await fixture.close();
+  }
+});
+
+test("the original transport builds the fixed static path, auth and sanitized headers", async () => {
+  let fixture: Fixture | undefined;
+  try {
+    const data = Buffer.from("0123456789abcdef");
+    fixture = await startServer((req, res) => {
+      const match = /^bytes=(\d+)-(\d+)$/.exec(String(req.headers.range ?? ""));
+      if (req.method === "HEAD") {
+        res.writeHead(200, {
+          "content-length": String(data.length),
+          "accept-ranges": "bytes",
+          "content-type": "video/mp4",
+          etag: '"v1"',
+          "last-modified": "Wed, 21 Oct 2015 07:28:00 GMT",
+          "set-cookie": "secret=1",
+          server: "Jellyfin",
+          location: "/nope",
+        });
+        res.end();
+        return;
+      }
+      if (match) {
+        const start = Number(match[1]);
+        const end = Number(match[2]);
+        res.writeHead(206, {
+          "content-range": `bytes ${start}-${end}/${data.length}`,
+          "content-length": String(end - start + 1),
+          "accept-ranges": "bytes",
+          "content-type": "video/mp4",
+        });
+        res.end(data.subarray(start, end + 1));
+        return;
+      }
+      res.writeHead(200, { "content-length": String(data.length), "content-type": "video/mp4" });
+      res.end(data);
+    });
+    const transport = createMediaServerTransport({ baseUrl: `${fixture.origin}/prefix`, allowLan: false, allowLoopback: true, deviceId: "mconn_original-identity" });
+
+    const ranged = await transport.requestOriginal({ itemId: "it-1", mediaSourceId: "ms-1", method: "GET", range: "bytes=4-7" }, "tok");
+    assert.equal(ranged.status, 206);
+    assert.equal((await readMedia(ranged.body)).toString("utf8"), "4567");
+    assert.equal(ranged.headers.get("content-range"), "bytes 4-7/16");
+    assert.equal(ranged.headers.get("content-length"), "4");
+    assert.equal(ranged.headers.get("accept-ranges"), "bytes");
+    assert.equal(ranged.url, "", "the sanitized response carries no upstream URL");
+    assert.equal(ranged.statusText, "", "the sanitized response carries no upstream status text");
+    const request = fixture.requests[0];
+    assert.equal(request.method, "GET");
+    assert.equal(request.url, "/prefix/Videos/it-1/stream?Static=true&MediaSourceId=ms-1");
+    assert.equal(request.url.includes("tok"), false, "the token never appears in the request line");
+    assert.equal(request.headers.range, "bytes=4-7");
+    assert.equal(request.headers.accept, "application/octet-stream");
+    // Undici appends its own `accept-encoding: identity` when a Range header is present, so the
+    // upstream may see the coding twice; the only coding sent is still identity.
+    const codings = String(request.headers["accept-encoding"]).split(",").map((value) => value.trim());
+    assert.ok(codings.length >= 1 && codings.every((value) => value === "identity"), "no compression is requested");
+    assert.equal(request.headers["x-emby-token"], "tok");
+    assert.match(request.headers.authorization ?? "", /DeviceId="mconn_original-identity"/);
+    assert.match(request.headers.authorization ?? "", /Token="tok"/);
+
+    const head = await transport.requestOriginal({ itemId: "it-1", mediaSourceId: "ms-1", method: "HEAD" }, "tok");
+    assert.equal(head.status, 200);
+    assert.equal(head.body, null, "a HEAD response has no body");
+    assert.equal(head.headers.get("content-length"), "16");
+    assert.equal(head.headers.get("etag"), '"v1"');
+    assert.equal(head.headers.get("last-modified"), "Wed, 21 Oct 2015 07:28:00 GMT");
+    assert.equal(head.headers.get("content-type"), "video/mp4");
+    assert.equal(head.headers.get("set-cookie"), null, "cookies are never copied");
+    assert.equal(head.headers.get("server"), null, "the upstream server name is dropped");
+    assert.equal(head.headers.get("location"), null, "Location is never copied");
+    assert.equal(fixture.requests[1].method, "HEAD");
+    assert.equal(fixture.requests[1].headers.range, undefined);
+    await transport.close();
+  } finally {
+    await fixture?.close();
+  }
+});
+
+test("original arguments are validated before any network work", async () => {
+  let fixture: Fixture | undefined;
+  try {
+    fixture = await startServer((_req, res) => { res.writeHead(200); res.end(); });
+    const transport = open(fixture.origin);
+    const good = { itemId: "it", mediaSourceId: "ms", method: "GET" } as const;
+    const calls: Array<[string, () => Promise<unknown>]> = [
+      ["unknown key", () => transport.requestOriginal({ ...good, url: "http://evil" } as never, "tok")],
+      ["raw path", () => transport.requestOriginal({ ...good, path: "/x" } as never, "tok")],
+      ["header injection", () => transport.requestOriginal({ ...good, headers: { range: "bytes=0-1" } } as never, "tok")],
+      ["missing method", () => transport.requestOriginal({ itemId: "it", mediaSourceId: "ms" } as never, "tok")],
+      ["unsupported method", () => transport.requestOriginal({ ...good, method: "POST" } as never, "tok")],
+      ["null request", () => transport.requestOriginal(null as never, "tok")],
+      ["array request", () => transport.requestOriginal([] as never, "tok")],
+      ["item separator", () => transport.requestOriginal({ ...good, itemId: "a/b" }, "tok")],
+      ["item dot segment", () => transport.requestOriginal({ ...good, itemId: ".." }, "tok")],
+      ["empty media source", () => transport.requestOriginal({ ...good, mediaSourceId: "" }, "tok")],
+      ["range of the wrong type", () => transport.requestOriginal({ ...good, range: 5 } as never, "tok")],
+      ["a token that cannot be sent", () => transport.requestOriginal(good, 'bad"token')],
+    ];
+    for (const [label, call] of calls) await assert.rejects(call(), { code: "invalid-input" }, label);
+    assert.equal(fixture.requests.length, 0, "a refused original request never reaches the socket");
+    await transport.close();
+  } finally {
+    await fixture?.close();
+  }
+});
+
+test("exactly one canonical byte range is accepted and canonicalized", async () => {
+  let fixture: Fixture | undefined;
+  try {
+    fixture = await startServer((req, res) => { res.writeHead(200, { "content-length": req.method === "HEAD" ? "10" : "0" }); res.end(); });
+    const transport = open(fixture.origin);
+    const base = { itemId: "it", mediaSourceId: "ms", method: "GET" } as const;
+    const accepted: Array<[string, string]> = [
+      ["bytes=0-0", "bytes=0-0"],
+      ["bytes=0-3", "bytes=0-3"],
+      ["bytes=5-", "bytes=5-"],
+      ["bytes=-5", "bytes=5-9"],
+      ["bytes=0-", "bytes=0-"],
+    ];
+    for (const [input, expected] of accepted) {
+      const response = await transport.requestOriginal({ ...base, range: input }, "tok");
+      await response.body?.cancel();
+      assert.equal(fixture.requests.at(-1)?.headers.range, expected, input);
+    }
+    const before = fixture.requests.length;
+    for (const input of [
+      "", "bytes=", "bytes=-", "bytes=-0", "bytes=3-1", "bytes=0-1,3-4", "bytes=0 - 1", "bytes=+1-2",
+      "bytes=01-2", "bytes= 0-1", "bytes=0-1\r\nX: y", "items=0-1", "bytes=1-2-3",
+      "bytes=99999999999999999999-1", "bytes=-99999999999999999999", "bytes=0-1\\", `bytes=${"0".repeat(123)}`,
+    ]) {
+      await assert.rejects(transport.requestOriginal({ ...base, range: input } as never, "tok"), { code: "invalid-input" }, input);
+    }
+    assert.equal(fixture.requests.length, before, "an invalid range never reaches the socket");
+    await transport.close();
+  } finally {
+    await fixture?.close();
+  }
+});
+
+test("original statuses map to typed errors and a 416 keeps only its sanitized range", async () => {
+  let fixture: Fixture | undefined;
+  try {
+    const leak = "UPSTREAM-SECRET-PAYLOAD";
+    fixture = await startServer((req, res) => {
+      const id = new URL(req.url ?? "/", "http://placeholder").pathname.split("/")[2];
+      if (id === "st401") { res.writeHead(401, { "content-type": "text/plain", "set-cookie": "s=1" }); res.end(leak); return; }
+      if (id === "st403") { res.writeHead(403); res.end(leak); return; }
+      if (id === "st404") { res.writeHead(404); res.end(leak); return; }
+      if (id === "st429") { res.writeHead(429, { "retry-after": "600" }); res.end(leak); return; }
+      if (id === "st500") { res.writeHead(500); res.end(leak); return; }
+      if (id === "st416") { res.writeHead(416, { "content-range": "bytes */100", "content-length": String(leak.length), "content-type": "text/html" }); res.end(leak); return; }
+      res.writeHead(200, { "content-length": "0" }); res.end();
+    });
+    const transport = open(fixture.origin);
+    const call = (itemId: string) => transport.requestOriginal({ itemId, mediaSourceId: "ms", method: "GET" }, "tok");
+    const fails = async (itemId: string, code: string, status?: number) => {
+      const error = await call(itemId).then(() => undefined, (value) => value as MediaServerError);
+      assert.equal(error?.code, code, itemId);
+      if (status !== undefined) assert.equal(error?.status, status, itemId);
+      assert.equal(error?.message.includes(leak), false, itemId);
+    };
+    await fails("st401", "authentication-required", 401);
+    await fails("st403", "forbidden", 403);
+    await fails("st404", "not-found", 404);
+    await fails("st500", "unavailable", 500);
+    const limited = await call("st429").then(() => undefined, (value) => value as MediaServerError);
+    assert.equal(limited?.code, "rate-limited");
+    assert.equal(limited?.retryAfterMs, 300_000, "the hint is clamped");
+
+    const unsatisfied = await call("st416");
+    assert.equal(unsatisfied.status, 416);
+    assert.equal(unsatisfied.body, null);
+    assert.equal(unsatisfied.headers.get("content-range"), "bytes */100");
+    assert.equal(unsatisfied.headers.get("content-length"), null, "the error-document length is not copied");
+    await transport.close();
+  } finally {
+    await fixture?.close();
+  }
+});
+
+test("malformed 206, length and encoding responses are refused", async () => {
+  const closedStream = () => new ReadableStream<Uint8Array>({ start(controller) { controller.close(); } });
+  const cases: Array<[string, () => Response]> = [
+    ["206 without content-range", () => new Response(closedStream(), { status: 206 })],
+    ["206 with a wildcard total", () => new Response(closedStream(), { status: 206, headers: { "content-range": "bytes 0-3/*" } })],
+    ["206 with an inconsistent length", () => new Response(closedStream(), { status: 206, headers: { "content-range": "bytes 0-3/10", "content-length": "5" } })],
+    ["206 with a reversed span", () => new Response(closedStream(), { status: 206, headers: { "content-range": "bytes 5-3/10" } })],
+    ["200 with a malformed length", () => new Response("x", { status: 200, headers: { "content-length": "abc" } })],
+    ["a non-identity encoding", () => new Response("x", { status: 200, headers: { "content-encoding": "x-custom" } })],
+    ["a 200 without a body", () => new Response(null, { status: 200 })],
+  ];
+  for (const [label, build] of cases) {
+    const transport = createMediaServerTransport({ baseUrl: "http://127.0.0.1", allowLan: false, allowLoopback: true }, { fetch: async () => build() });
+    await assert.rejects(transport.requestOriginal({ itemId: "it", mediaSourceId: "ms", method: "GET" }, "tok"), { code: "invalid-response" }, label);
+    await transport.close();
+  }
+});
+
+test("only safe bounded headers are copied and content-type defaults", async () => {
+  const transport = createMediaServerTransport({ baseUrl: "http://127.0.0.1", allowLan: false, allowLoopback: true }, {
+    fetch: async () => new Response("x", {
+      status: 200,
+      headers: { "content-type": "x".repeat(300), "accept-ranges": "millimeters", etag: "e".repeat(600), "last-modified": "d".repeat(200) },
+    }),
+  });
+  const response = await transport.requestOriginal({ itemId: "it", mediaSourceId: "ms", method: "GET" }, "tok");
+  assert.equal(response.headers.get("content-type"), "application/octet-stream", "an oversized content-type falls back");
+  assert.equal(response.headers.get("accept-ranges"), null);
+  assert.equal(response.headers.get("etag"), null, "an oversized etag is dropped");
+  assert.equal(response.headers.get("last-modified"), null, "an oversized date is dropped");
+  assert.equal(response.headers.get("content-length"), null, "no length is invented");
+  assert.equal((await readMedia(response.body)).toString("utf8"), "x");
+  await transport.close();
+});
+
+test("eight originals stream independently in their own pool while metadata runs", async () => {
+  let streams = 0;
+  const transport = createMediaServerTransport({ baseUrl: "http://127.0.0.1", allowLan: false, allowLoopback: true }, {
+    fetch: async (url) => {
+      if (url.includes("/stream")) { streams += 1; return heldMedia(); }
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+  const open = (id: string) => transport.requestOriginal({ itemId: id, mediaSourceId: "ms", method: "GET" }, "tok");
+  const held = await Promise.all(Array.from({ length: 8 }, (_value, index) => open(`it-${index}`)));
+  assert.equal(held.length, 8);
+  assert.equal(streams, 8);
+  await assert.rejects(open("it-9"), { code: "busy" }, "all eight slots stay occupied after headers");
+  assert.deepEqual(await transport.requestJson("info", {}), { ok: true }, "metadata keeps its separate pool");
+
+  await held[0].body?.cancel();
+  const ninth = await open("it-9");
+  assert.equal(streams, 9, "cancelling one original frees exactly one slot");
+  await ninth.body?.cancel();
+
+  await transport.close();
+  assert.equal(await held[1].body!.getReader().read().then(() => "resolved", (error) => (error as MediaServerError).code), "closed");
+  await assert.rejects(open("it-10"), { code: "closed" }, "a new original after close is refused");
+  // The remaining bodies were already errored by close, so cancelling them rejects with the same
+  // stored error; that is exactly the intended "error rather than quietly complete" behaviour.
+  await Promise.all(held.slice(2).map((response) => response.body!.cancel().then(() => "cancelled", (error) => (error as MediaServerError).code)));
+});
+
+test("an original that never answers times out and frees its slot", async () => {
+  let first = true;
+  const transport = createMediaServerTransport({ baseUrl: "http://127.0.0.1", allowLan: false, allowLoopback: true }, {
+    originalHeaderMs: 25,
+    fetch: async () => {
+      if (first) { first = false; return new Promise<Response>(() => { /* never settles without an abort */ }); }
+      return new Response("x", { status: 200, headers: { "content-length": "1" } });
+    },
+  });
+  await assert.rejects(transport.requestOriginal({ itemId: "t", mediaSourceId: "ms", method: "GET" }, "tok"), { code: "timeout" });
+  const ok = await transport.requestOriginal({ itemId: "t", mediaSourceId: "ms", method: "GET" }, "tok");
+  assert.equal((await readMedia(ok.body)).toString("utf8"), "x", "the slot was released");
+  await transport.close();
+});
+
+test("a stalled original body hits the idle deadline", async () => {
+  const transport = createMediaServerTransport({ baseUrl: "http://127.0.0.1", allowLan: false, allowLoopback: true }, {
+    originalIdleMs: 25,
+    originalLifetimeMs: 60_000,
+    fetch: async () => new Response(new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new Uint8Array([7])); } }), { status: 200 }),
+  });
+  const response = await transport.requestOriginal({ itemId: "t", mediaSourceId: "ms", method: "GET" }, "tok");
+  const reader = response.body!.getReader();
+  const first = await reader.read();
+  assert.deepEqual([...(first.value ?? [])], [7]);
+  await assert.rejects(reader.read(), { code: "timeout" });
+  await transport.close();
+});
+
+test("an original stream that outlives its lifetime is aborted", async () => {
+  const transport = createMediaServerTransport({ baseUrl: "http://127.0.0.1", allowLan: false, allowLoopback: true }, {
+    originalLifetimeMs: 25,
+    fetch: async () => heldMedia(),
+  });
+  const response = await transport.requestOriginal({ itemId: "t", mediaSourceId: "ms", method: "GET" }, "tok");
+  await assert.rejects(response.body!.getReader().read(), { code: "timeout" }, "the lifetime deadline fires before the idle one");
+  await transport.close();
+});
+
+test("a caller abort before headers cancels and frees the slot", async () => {
+  let first = true;
+  const transport = createMediaServerTransport({ baseUrl: "http://127.0.0.1", allowLan: false, allowLoopback: true }, {
+    fetch: async () => {
+      if (first) { first = false; return new Promise<Response>(() => { /* never settles */ }); }
+      return new Response("x", { status: 200, headers: { "content-length": "1" } });
+    },
+  });
+  const controller = new AbortController();
+  const pending = assert.rejects(transport.requestOriginal({ itemId: "t", mediaSourceId: "ms", method: "GET" }, "tok", controller.signal), { code: "cancelled" });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  controller.abort();
+  await pending;
+  const ok = await transport.requestOriginal({ itemId: "t", mediaSourceId: "ms", method: "GET" }, "tok");
+  assert.equal((await readMedia(ok.body)).toString("utf8"), "x");
+  await transport.close();
+});
+
+test("a caller abort during the body errors the readable and frees the slot", async () => {
+  const transport = createMediaServerTransport({ baseUrl: "http://127.0.0.1", allowLan: false, allowLoopback: true }, {
+    fetch: async () => new Response(new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new Uint8Array([1])); } }), { status: 200 }),
+  });
+  const controller = new AbortController();
+  const response = await transport.requestOriginal({ itemId: "t", mediaSourceId: "ms", method: "GET" }, "tok", controller.signal);
+  const reader = response.body!.getReader();
+  await reader.read();
+  controller.abort();
+  await assert.rejects(reader.read(), { code: "cancelled" });
+  await transport.close();
+});
+
+test("a stalled upstream cancel cannot hold the slot or block close", async () => {
+  let first = true;
+  const transport = createMediaServerTransport({ baseUrl: "http://127.0.0.1", allowLan: false, allowLoopback: true }, {
+    fetch: async () => {
+      if (first) {
+        first = false;
+        return new Response(new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new Uint8Array([1])); }, cancel() { return new Promise<void>(() => { /* never settles */ }); } }), { status: 200 });
+      }
+      return new Response("y", { status: 200, headers: { "content-length": "1" } });
+    },
+  });
+  const response = await transport.requestOriginal({ itemId: "t", mediaSourceId: "ms", method: "GET" }, "tok");
+  await response.body!.cancel();
+  const ok = await transport.requestOriginal({ itemId: "t", mediaSourceId: "ms", method: "GET" }, "tok");
+  assert.equal((await readMedia(ok.body)).toString("utf8"), "y", "the slot was freed despite the stalled cancel");
+  const outcome = await Promise.race([
+    transport.close().then(() => "closed"),
+    new Promise((resolve) => setTimeout(() => resolve("hung"), 500)),
+  ]);
+  assert.equal(outcome, "closed");
+});
+
+test("an upstream body failure becomes a fixed error and frees the slot", async () => {
+  let first = true;
+  const transport = createMediaServerTransport({ baseUrl: "http://127.0.0.1", allowLan: false, allowLoopback: true }, {
+    fetch: async () => {
+      if (first) { first = false; return new Response(new ReadableStream<Uint8Array>({ start(controller) { controller.error(new Error("UPSTREAM-SECRET")); } }), { status: 200 }); }
+      return new Response("z", { status: 200, headers: { "content-length": "1" } });
+    },
+  });
+  const response = await transport.requestOriginal({ itemId: "t", mediaSourceId: "ms", method: "GET" }, "tok");
+  const error = await response.body!.getReader().read().then(() => undefined, (value) => value as MediaServerError);
+  assert.equal(error?.code, "unavailable");
+  assert.equal(error?.message.includes("UPSTREAM-SECRET"), false);
+  const ok = await transport.requestOriginal({ itemId: "t", mediaSourceId: "ms", method: "GET" }, "tok");
+  assert.equal((await readMedia(ok.body)).toString("utf8"), "z", "the slot was released");
+  await transport.close();
+});
+
+test("the original transport reuses the full DNS, opt-in and redirect guard", async () => {
+  const policy = { allowLan: false, allowLoopback: false };
+  const never = () => { throw new Error("fetch must not run"); };
+
+  const blocked = createMediaServerTransport({ baseUrl: "http://media.example", ...policy }, { lookupAll: async () => [{ address: "169.254.1.1", family: 4 }], fetch: never });
+  await assert.rejects(blocked.requestOriginal({ itemId: "t", mediaSourceId: "ms", method: "GET" }, "tok"), { code: "unsafe-address" });
+  await blocked.close();
+
+  const mixed = createMediaServerTransport({ baseUrl: "http://media.example", ...policy }, { lookupAll: async () => [{ address: "93.184.216.34", family: 4 }, { address: "10.0.0.1", family: 4 }], fetch: never });
+  await assert.rejects(mixed.requestOriginal({ itemId: "t", mediaSourceId: "ms", method: "GET" }, "tok"), { code: "unsafe-address" });
+  await mixed.close();
+
+  assert.throws(() => createMediaServerTransport({ baseUrl: "http://10.0.0.1", allowLan: false, allowLoopback: false }), { code: "unsafe-address" });
+  assert.doesNotThrow(() => createMediaServerTransport({ baseUrl: "http://10.0.0.1", allowLan: true, allowLoopback: false }));
+
+  let fixture: Fixture | undefined;
+  try {
+    fixture = await startServer((_req, res) => { res.writeHead(302, { location: "/elsewhere" }); res.end(); });
+    const redirect = open(fixture.origin);
+    await assert.rejects(redirect.requestOriginal({ itemId: "t", mediaSourceId: "ms", method: "GET" }, "tok"), { code: "invalid-response" });
+    await redirect.close();
+  } finally {
+    await fixture?.close();
+  }
+
+  let call = 0;
+  const lookupAll = async () => {
+    call += 1;
+    return call === 1 ? [{ address: "93.184.216.34", family: 4 }] : [{ address: "169.254.10.10", family: 4 }];
+  };
+  const rebind = createMediaServerTransport({ baseUrl: "http://media.example", ...policy }, { lookupAll });
+  try {
+    await assert.rejects(rebind.requestOriginal({ itemId: "t", mediaSourceId: "ms", method: "GET" }, "tok"), { code: "unsafe-address" });
+    assert.ok(call >= 2, "the socket-time lookup was consulted");
+  } finally {
+    await rebind.close();
+  }
+});
+
+test("original test deadlines are bounded at construction", () => {
+  assert.equal(MEDIA_SERVER_ORIGINAL_LIMITS.concurrency, 8);
+  assert.equal(MEDIA_SERVER_ORIGINAL_LIMITS.headerMs, 10_000);
+  assert.equal(MEDIA_SERVER_ORIGINAL_LIMITS.idleMs, 30_000);
+  assert.equal(MEDIA_SERVER_ORIGINAL_LIMITS.lifetimeMs, 6 * 60 * 60 * 1000);
+  assert.equal(MEDIA_SERVER_ORIGINAL_LIMITS.rangeMax, 128);
+  const base = { baseUrl: "http://127.0.0.1", allowLan: false, allowLoopback: true };
+  for (const bad of [0, -1, 1.5, 20_001, Number.POSITIVE_INFINITY, Number.NaN, "10"]) {
+    assert.throws(() => createMediaServerTransport(base, { originalHeaderMs: bad as never }), { code: "invalid-input" }, String(bad));
+  }
+  assert.throws(() => createMediaServerTransport(base, { originalIdleMs: 30_001 }), { code: "invalid-input" });
+  assert.throws(() => createMediaServerTransport(base, { originalLifetimeMs: 6 * 60 * 60 * 1000 + 1 }), { code: "invalid-input" });
+  assert.doesNotThrow(() => createMediaServerTransport(base, { originalHeaderMs: 10_000, originalIdleMs: 1, originalLifetimeMs: 5 }));
+});
+
+test("aborting a backpressured original frees its slot and cancels the upstream immediately", async () => {
+  let cancelled = 0;
+  const transport = createMediaServerTransport({ baseUrl: "http://127.0.0.1", allowLan: false, allowLoopback: true }, {
+    fetch: async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new Uint8Array([1, 2, 3])); },
+      cancel() { cancelled += 1; },
+    })),
+  });
+  const request = { itemId: "movie", mediaSourceId: "version", method: "GET" as const };
+  const controller = new AbortController();
+  const responses: Response[] = [];
+  try {
+    responses.push(await transport.requestOriginal(request, "safe-token", controller.signal));
+    for (let count = 1; count < 8; count += 1) responses.push(await transport.requestOriginal(request, "safe-token"));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    controller.abort();
+    assert.equal(cancelled, 1);
+    responses.push(await transport.requestOriginal(request, "safe-token"));
+    await assert.rejects(responses[0]!.arrayBuffer(), { code: "cancelled" });
+    await transport.close();
+    assert.equal(cancelled, 9);
+    await assert.rejects(responses[1]!.arrayBuffer(), { code: "closed" });
+  } finally {
+    for (const response of responses) await response.body?.cancel().catch(() => undefined);
+    await transport.close();
+  }
+});
+
+test("original media refuses a different range and incomplete or overlong bodies", async () => {
+  const samples: Array<{ status: number; headers: Record<string, string>; bytes: number[]; range?: string; headersFail: boolean }> = [
+    { status: 206, headers: { "content-range": "bytes 0-2/6" }, bytes: [1, 2, 3], range: "bytes=3-5", headersFail: true },
+    { status: 200, headers: { "content-length": "4" }, bytes: [1, 2, 3], range: undefined, headersFail: false },
+    { status: 200, headers: { "content-length": "2" }, bytes: [1, 2, 3], range: undefined, headersFail: false },
+    { status: 206, headers: { "content-range": "bytes 3-5/6" }, bytes: [1, 2], range: "bytes=3-5", headersFail: false },
+  ];
+  for (const sample of samples) {
+    let cancelled = false;
+    const transport = createMediaServerTransport({ baseUrl: "http://127.0.0.1", allowLan: false, allowLoopback: true }, {
+      fetch: async () => new Response(new ReadableStream<Uint8Array>({
+        start(controller) { controller.enqueue(new Uint8Array(sample.bytes)); controller.close(); },
+        cancel() { cancelled = true; },
+      }), { status: sample.status, headers: sample.headers }),
+    });
+    try {
+      const pending = transport.requestOriginal({ itemId: "movie", mediaSourceId: "version", method: "GET", range: sample.range }, "safe-token");
+      if (sample.headersFail) {
+        await assert.rejects(pending, { code: "invalid-response" });
+        assert.equal(cancelled, true);
+      } else {
+        const response = await pending;
+        await assert.rejects(response.arrayBuffer(), { code: "invalid-response" });
+      }
+    } finally { await transport.close(); }
   }
 });

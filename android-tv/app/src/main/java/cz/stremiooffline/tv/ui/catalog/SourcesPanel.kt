@@ -110,6 +110,8 @@ fun SourcesPanel(
   onFilterSelect: (chipKey: String, optionKey: String) -> Unit = { _, _ -> },
   /** The `shown of total` line beside the chips; null hides it. */
   countText: String? = null,
+  /** A red line under the rows naming a remote group that could not be reached; null hides it. */
+  remoteNote: String? = null,
   modifier: Modifier = Modifier,
   initialFocus: FocusRequester? = null,
 ) {
@@ -257,6 +259,22 @@ fun SourcesPanel(
       }
       if (notices.isNotEmpty()) {
         items(notices) { notice -> Text(Streams.noticeText(notice), color = Tokens.Muted, fontSize = 10.5.sp, lineHeight = 15.sp) }
+      }
+      // A remote group failure with rows on screen is a retryable note; when the panel is already
+      // showing its own failure block, that block carries the text and the Retry instead.
+      if (remoteNote != null && !failed) {
+        item(key = "remote_note") {
+          Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(remoteNote, color = Tokens.Red, fontSize = 10.5.sp, lineHeight = 15.sp)
+            if (onRetry != null) {
+              FocusButton(
+                text = tryAgainText,
+                onClick = { onRetry.invoke() },
+                modifier = Modifier.then(if (retryTag != null) Modifier.testTag(retryTag) else Modifier),
+              )
+            }
+          }
+        }
       }
     }
   }
@@ -435,9 +453,15 @@ internal fun SourceRow(
 ) {
   val shape = RoundedCornerShape(8.dp)
   val local = Streams.isLocalStream(stream)
-  val badge = if (local) stringResource(R.string.sources_local_badge) else Streams.streamBadge(stream)
+  val remote = Streams.isRemoteStream(stream)
+  val badge = when {
+    local -> stringResource(R.string.sources_local_badge)
+    remote -> stringResource(R.string.media_server_source_badge)
+    else -> Streams.streamBadge(stream)
+  }
   val badgeColour = when {
     local -> Tokens.Accent2
+    remote -> Tokens.Accent2
     badge == "HTTP" -> Tokens.Green
     badge == "RD" -> Tokens.Accent
     else -> Tokens.Muted
@@ -447,7 +471,20 @@ internal fun SourceRow(
     addAll(Streams.streamLanguages(stream, titleLanguage).map { Languages.label(it) })
   }
   val localHint = stringResource(R.string.sources_local_hint)
-  val rowModifier = if (local) modifier.semantics { contentDescription = localHint } else modifier
+  val remoteHint = stringResource(R.string.media_server_source_hint)
+  val rowModifier = when {
+    local -> modifier.semantics { contentDescription = localHint }
+    remote -> modifier.semantics { contentDescription = remoteHint }
+    else -> modifier
+  }
+  // A remote version names the server and library it comes from, so a viewer sees which account
+  // and which collection a row belongs to before playing it.
+  val sourceName = when {
+    remote -> listOfNotNull(stream.provider?.takeIf { it.isNotBlank() }, stream.libraryName?.takeIf { it.isNotBlank() })
+      .joinToString(" · ")
+    local -> stream.libraryName.orEmpty()
+    else -> stream.addonName.orEmpty()
+  }
   Surface(
     onClick = onClick,
     modifier = rowModifier.fillMaxWidth(),
@@ -477,7 +514,7 @@ internal fun SourceRow(
       ) {
         Text(badge, color = badgeColour, fontSize = 10.sp, fontWeight = FontWeight.Bold)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-          Text(if (local) stream.libraryName.orEmpty() else stream.addonName.orEmpty(), color = Tokens.Muted, fontSize = 9.5.sp, maxLines = 1)
+          Text(sourceName, color = Tokens.Muted, fontSize = 9.5.sp, maxLines = 1)
           Text(
             if (local) stream.behaviorHints?.filename ?: streamLabel(stream) else streamLabel(stream),
             fontSize = 12.5.sp,
@@ -544,7 +581,14 @@ internal fun sourceFilterChips(
       SourceFilterChip(
         key = "addon",
         title = addonTitle,
-        value = if (streamAddon == Streams.LOCAL_FILTER) localLabel else streamAddon.ifEmpty { allAddonsLabel },
+        value = when {
+          streamAddon == Streams.LOCAL_FILTER -> localLabel
+          else -> options.remoteGroups.firstOrNull { it.value == streamAddon }?.label
+            // A chosen remote group whose descriptor is gone (offline discovery) keeps its id
+            // rather than silently falling back to the addon list.
+            ?: Streams.remoteFilterLibrary(streamAddon)
+            ?: streamAddon.ifEmpty { allAddonsLabel }
+        },
         selectedKey = streamAddon,
         options = listOf(SourceFilterOption("", allAddonsLabel)) +
           // The viewer's own copies, as on the web: offered while there are any, and kept while chosen.
@@ -553,6 +597,10 @@ internal fun sourceFilterChips(
           } else {
             emptyList()
           }) +
+          // One remote choice per library, labelled `provider · library` with its row count.
+          options.remoteGroups.map { group ->
+            SourceFilterOption(group.value, if (group.count > 0) "${group.label} · ${group.count}" else group.label)
+          } +
           options.addons.map { SourceFilterOption(it.value, it.value) },
       ),
     )

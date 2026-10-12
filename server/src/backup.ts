@@ -1,5 +1,6 @@
 import type { AddonDownloadSettings, AddonRecord, AddonRole } from "./types.js";
 import { normalizeDownloadSettings } from "./naming.js";
+import { prepareMediaServerConfiguration, projectMediaServerConfiguration, type MediaServerConfigurationExport } from "./media-server-store.js";
 import { defaultSettings, type Settings } from "./store.js";
 import { isUiLanguage, normalizeLanguage } from "./language.js";
 import { AppError } from "./errors.js";
@@ -9,9 +10,11 @@ import { sameFile, toPosix, type LibraryRecord, type LibraryType } from "./libra
 
 export const BACKUP_FORMAT = "stremio-offline-settings";
 /** 2 adds the library roster, so a rule that names a library survives the trip to another
- *  instance by root and then by name. Version 1 files still import. */
-export const BACKUP_VERSION = 2;
-const READABLE_VERSIONS = [1, 2];
+ *  instance by root and then by name. 3 adds the media-server metadata, so the attached
+ *  connections and their libraries travel with the settings while no credential does.
+ *  Version 1 and 2 files still import. */
+export const BACKUP_VERSION = 3;
+const READABLE_VERSIONS = [1, 2, 3];
 const ROLES = new Set<AddonRole>(["catalog", "source", "both"]);
 const STREAM_SORTS = new Set(["recommended", "size-desc", "size-asc", "addon"]);
 const TILE_SIZES = new Set(["compact", "small", "medium", "large"]);
@@ -44,6 +47,10 @@ export interface SettingsBackup {
   settings: Settings;
   libraries: BackupLibrary[];
   addons: BackupAddon[];
+  /** Present from version 3 on: the media-server connections and libraries as metadata only.
+   *  An older file carries none, and an import then leaves the current remote configuration
+   *  exactly as it is. */
+  mediaServers?: MediaServerConfigurationExport;
 }
 
 const object = (value: unknown): Record<string, unknown> => {
@@ -51,12 +58,18 @@ const object = (value: unknown): Record<string, unknown> => {
   return value as Record<string, unknown>;
 };
 
-export function createSettingsBackup(settings: Settings, addons: AddonRecord[], libraries: LibraryRecord[] = []): SettingsBackup {
+export function createSettingsBackup(
+  settings: Settings,
+  addons: AddonRecord[],
+  libraries: LibraryRecord[] = [],
+  mediaServers: unknown = { version: 1, connections: [], libraries: [] },
+): SettingsBackup {
   return {
     format: BACKUP_FORMAT,
     version: BACKUP_VERSION,
     exportedAt: new Date().toISOString(),
     settings: structuredClone(settings),
+    mediaServers: projectMediaServerConfiguration(mediaServers),
     libraries: libraries.map(({ id, name, type, root }) => ({ id, name, type, root: toPosix(root) })),
     addons: addons.map(({ manifestUrl, role, enabled, globalSearch, showOnHome, homeCatalogs, addedAt, downloadSettings }) => ({
       manifestUrl, role, enabled, globalSearch,
@@ -129,6 +142,10 @@ export function parseSettingsBackup(value: unknown): Omit<SettingsBackup, "expor
   const version = Number(root.version);
   if (root.format !== BACKUP_FORMAT || !READABLE_VERSIONS.includes(version)) throw new AppError("This is not a Stremio Offline settings backup.", "err.backupUnsupported");
   if (!Array.isArray(root.addons) || root.addons.length > 100) throw new AppError("The addon list in the backup is not valid.", "err.backupAddons");
+  // A version 3 file carries the media-server setup, and the whole of it is validated here,
+  // before a single manifest is fetched or anything is written. A file from before then
+  // carries none, and the import leaves the current remote configuration alone.
+  const mediaServers = version >= 3 ? readMediaServerConfiguration(root.mediaServers) : undefined;
   const addons = root.addons.map((raw, index): BackupAddon => {
     const item = object(raw);
     const manifestUrl = typeof item.manifestUrl === "string" ? item.manifestUrl.trim() : "";
@@ -153,7 +170,20 @@ export function parseSettingsBackup(value: unknown): Omit<SettingsBackup, "expor
     settings: parseSettings(root.settings),
     libraries: Array.isArray(root.libraries) ? root.libraries.map(parseLibrary) : [],
     addons,
+    ...(mediaServers === undefined ? {} : { mediaServers }),
   };
+}
+
+/** The media-server half of a version 3 backup. It has to stand on its own: a bad handle, a
+ *  dangling attachment or a repeated remote account refuses the whole file here rather than
+ *  after an addon has been fetched. */
+function readMediaServerConfiguration(value: unknown): MediaServerConfigurationExport {
+  try {
+    prepareMediaServerConfiguration(value);
+    return projectMediaServerConfiguration(value);
+  } catch {
+    throw new AppError("The media servers in the backup are not valid.", "err.backupFormat");
+  }
 }
 
 /** A roster entry of a backup. A malformed one is dropped rather than failing the import:

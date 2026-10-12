@@ -64,6 +64,7 @@ class ResumeNavigationTest {
           ResumeFilter.All -> true
           ResumeFilter.Library -> it is HomeCard.ResumeFile
           ResumeFilter.Catalog -> it is HomeCard.ResumeCatalogue
+          ResumeFilter.Remote -> it is HomeCard.Remote
         }
       }
       return ResumePage(items, items.size, false)
