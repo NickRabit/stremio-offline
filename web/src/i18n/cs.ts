@@ -604,6 +604,7 @@ export const cs: Catalog = {
   "sources.probing": "zjišťuji stopy…",
   "sources.localBadge": "Lokální",
   "sources.localHint": "Už je ve vaší knihovně — přehrává se z disku serveru",
+  "sources.localFilter": "Lokální soubory",
 
   // První spuštění bez doplňků.
   "onboarding.title": "Přidejte první Stremio doplněk",
@@ -1150,12 +1151,10 @@ export const cs: Catalog = {
   "settings.libraryShapeHint": "Plakáty na výšku, nebo obrázky na šířku tam, kde je knihovna má.",
   "settings.shape.poster": "Na výšku (výchozí)",
   "settings.shape.wide": "Na šířku",
-  "settings.catalogTiles": "Velikost položek katalogu",
-  "settings.catalogTilesHint": "Kolik plakátů se vejde do řádku katalogu.",
+  "settings.tileSize": "Velikost dlaždic",
+  "settings.tileSizeHint": "Velikost dlaždic na domovské stránce, v katalogu, knihovně, oblíbených a pokračování ve sledování.",
   "settings.startView": "Úvodní stránka",
   "settings.startViewHint": "Stránka, na které se aplikace otevře. Výchozí je Katalog.",
-  "settings.libraryTiles": "Velikost položek knihovny",
-  "settings.libraryTilesHint": "Velikost náhledů v mřížce knihovny.",
   "settings.tile.compact": "Kompaktní",
   "settings.tile.small": "Malé",
   "settings.tile.medium": "Střední (výchozí)",

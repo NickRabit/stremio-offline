@@ -609,6 +609,7 @@ export const en = {
   "sources.probing": "reading the tracks…",
   "sources.localBadge": "Local",
   "sources.localHint": "Already in your library — plays from the server's disk",
+  "sources.localFilter": "Local files",
 
   // First run with no addons.
   "onboarding.title": "Add your first Stremio addon",
@@ -1155,12 +1156,10 @@ export const en = {
   "settings.libraryShapeHint": "Portrait posters or landscape artwork, when the library has it.",
   "settings.shape.poster": "Portrait (default)",
   "settings.shape.wide": "Landscape",
-  "settings.catalogTiles": "Catalog tile size",
-  "settings.catalogTilesHint": "How many posters fit in a catalog row.",
+  "settings.tileSize": "Tile size",
+  "settings.tileSizeHint": "Size of tiles across the home page, catalog, library, favorites and continue watching.",
   "settings.startView": "Start page",
   "settings.startViewHint": "The page the app opens on. Catalogue unless you choose otherwise.",
-  "settings.libraryTiles": "Library tile size",
-  "settings.libraryTilesHint": "Thumbnail size in the library grid.",
   "settings.tile.compact": "Compact",
   "settings.tile.small": "Small",
   "settings.tile.medium": "Medium (default)",

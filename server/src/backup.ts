@@ -79,10 +79,13 @@ function parseSettings(value: unknown): Settings {
   const subtitleLanguage = normalizeLanguage(String(source.subtitleLanguage ?? "")) ?? fallback.subtitleLanguage;
   const downloadTitleLanguage = source.downloadTitleLanguage === "ui" ? "ui" : normalizeLanguage(String(source.downloadTitleLanguage ?? "")) ?? fallback.downloadTitleLanguage;
   const streamSort = String(source.streamSort ?? "");
-  const catalogTileSize = String(source.catalogTileSize ?? "");
-  const libraryTileSize = String(source.libraryTileSize ?? "");
+  const tileSize = String(source.tileSize ?? source.libraryTileSize ?? source.catalogTileSize ?? "");
   const catalogTileShape = String(source.catalogTileShape ?? "");
   const libraryTileShape = String(source.libraryTileShape ?? "");
+  const favoritesTileShape = String(source.favoritesTileShape ?? "");
+  const resumeTileShape = String(source.resumeTileShape ?? "");
+  const followingTileShape = String(source.followingTileShape ?? "");
+  const sharedLibraryShape = TILE_SHAPES.has(libraryTileShape) ? libraryTileShape as Settings["libraryTileShape"] : undefined;
   const homeTileShape = String(source.homeTileShape ?? "");
   const startView = String(source.startView ?? "");
   const libraryShelf = String(source.libraryShelf ?? "");
@@ -102,10 +105,12 @@ function parseSettings(value: unknown): Settings {
     libraryScanPauseOnDownload: boolean("libraryScanPauseOnDownload"),
     secureMode: boolean("secureMode"),
     addonRefreshHours: normalizeRefreshHours(source.addonRefreshHours ?? fallback.addonRefreshHours),
-    catalogTileSize: TILE_SIZES.has(catalogTileSize) ? catalogTileSize as Settings["catalogTileSize"] : fallback.catalogTileSize,
-    libraryTileSize: TILE_SIZES.has(libraryTileSize) ? libraryTileSize as Settings["libraryTileSize"] : fallback.libraryTileSize,
+    tileSize: TILE_SIZES.has(tileSize) ? tileSize as Settings["tileSize"] : fallback.tileSize,
     catalogTileShape: TILE_SHAPES.has(catalogTileShape) ? catalogTileShape as Settings["catalogTileShape"] : fallback.catalogTileShape,
     libraryTileShape: TILE_SHAPES.has(libraryTileShape) ? libraryTileShape as Settings["libraryTileShape"] : fallback.libraryTileShape,
+    favoritesTileShape: TILE_SHAPES.has(favoritesTileShape) ? favoritesTileShape as Settings["favoritesTileShape"] : sharedLibraryShape ?? fallback.favoritesTileShape,
+    resumeTileShape: TILE_SHAPES.has(resumeTileShape) ? resumeTileShape as Settings["resumeTileShape"] : sharedLibraryShape ?? fallback.resumeTileShape,
+    followingTileShape: TILE_SHAPES.has(followingTileShape) ? followingTileShape as Settings["followingTileShape"] : sharedLibraryShape ?? fallback.followingTileShape,
     homeTileShape: TILE_SHAPES.has(homeTileShape) ? homeTileShape as Settings["homeTileShape"] : fallback.homeTileShape,
     startView: START_VIEWS.has(startView) ? startView as Settings["startView"] : fallback.startView,
     libraryShelf: LIBRARY_SHELVES.has(libraryShelf) ? libraryShelf as Settings["libraryShelf"] : fallback.libraryShelf,

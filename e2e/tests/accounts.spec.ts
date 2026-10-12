@@ -177,7 +177,7 @@ test.describe("accounts", () => {
       }
       expect(ownSettings.uiLanguage, "its own half arrives whole").toBe("cs");
       expect(Object.keys(ownSettings), "what the ordinary interface behaves on stays").toEqual(
-        expect.arrayContaining(["secureMode", "realDebridConfigured", "streamSort", "libraryTileSize"]));
+        expect.arrayContaining(["secureMode", "realDebridConfigured", "streamSort", "tileSize"]));
       // The export is administrator-only for a reason: it carries the raw tokens.
       expect((await guestPage.request.get("/api/settings/export")).status(),
         "the one settings route that hands out the tokens stays shut").toBe(403);

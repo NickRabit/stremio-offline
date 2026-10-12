@@ -10,7 +10,7 @@ const library = (over: Partial<LibraryRecord> & { id: string; root: string }): L
 });
 
 test("a backup keeps the settings, the order and the addon's sensitive URL", () => {
-  const settings = { ...defaultSettings(), concurrentDownloads: 4, audioLanguage: "sk", realDebridToken: "rd-secret", libraryScanPauseOnDownload: true, catalogTileShape: "wide" as const, libraryTileShape: "wide" as const, homeTileShape: "poster" as const, startView: "home" as const, libraryShelf: "favorites" as const, homeLayout: { order: ["resume", "favorites"], hidden: ["recent"], feeds: [] } };
+  const settings = { ...defaultSettings(), concurrentDownloads: 4, audioLanguage: "sk", realDebridToken: "rd-secret", libraryScanPauseOnDownload: true, catalogTileShape: "wide" as const, libraryTileShape: "wide" as const, favoritesTileShape: "poster" as const, resumeTileShape: "wide" as const, followingTileShape: "poster" as const, homeTileShape: "poster" as const, startView: "home" as const, libraryShelf: "favorites" as const, homeLayout: { order: ["resume", "favorites"], hidden: ["recent"], feeds: [] } };
   const backup = createSettingsBackup(settings, [{
     key: "secret-key", manifestUrl: "https://example.com/token/abc/manifest.json", role: "source", enabled: false, globalSearch: false,
     addedAt: "2026-01-01T00:00:00.000Z", downloadSettings: defaultDownloadSettings(),
@@ -21,6 +21,9 @@ test("a backup keeps the settings, the order and the addon's sensitive URL", () 
   assert.equal(parseSettingsBackup(backup).settings.libraryScanPauseOnDownload, true);
   assert.equal(parseSettingsBackup(backup).settings.catalogTileShape, "wide");
   assert.equal(parseSettingsBackup(backup).settings.libraryTileShape, "wide");
+  assert.equal(parseSettingsBackup(backup).settings.favoritesTileShape, "poster");
+  assert.equal(parseSettingsBackup(backup).settings.resumeTileShape, "wide");
+  assert.equal(parseSettingsBackup(backup).settings.followingTileShape, "poster");
   assert.equal(parseSettingsBackup(backup).settings.homeTileShape, "poster", "the Home tile shape survives a backup round trip");
   assert.equal(parseSettingsBackup(backup).settings.startView, "home", "the start page survives a backup round trip");
   assert.equal(parseSettingsBackup(backup).settings.libraryShelf, "favorites", "the library shelf survives a backup round trip");
@@ -44,6 +47,9 @@ test("an import refuses a foreign format and normalises the values", () => {
   assert.equal(parsed.settings.libraryScanPauseOnDownload, false);
   assert.equal(parsed.settings.catalogTileShape, "poster");
   assert.equal(parsed.settings.libraryTileShape, "poster");
+  assert.equal(parsed.settings.favoritesTileShape, "poster");
+  assert.equal(parsed.settings.resumeTileShape, "poster");
+  assert.equal(parsed.settings.followingTileShape, "poster");
   assert.equal(parsed.settings.homeTileShape, "wide");
   assert.equal(parsed.settings.startView, "catalog");
   assert.equal(parsed.settings.downloadTitleLanguage, "sk");
@@ -56,6 +62,9 @@ test("an import refuses a foreign format and normalises the values", () => {
   });
   assert.equal(junk.settings.catalogTileShape, "poster");
   assert.equal(junk.settings.libraryTileShape, "poster");
+  assert.equal(junk.settings.favoritesTileShape, "poster");
+  assert.equal(junk.settings.resumeTileShape, "poster");
+  assert.equal(junk.settings.followingTileShape, "poster");
   assert.equal(junk.settings.homeTileShape, "wide");
   assert.equal(junk.settings.startView, "catalog");
   assert.equal(junk.settings.libraryShelf, "resume", "a shelf the backup never named falls back to Continue");

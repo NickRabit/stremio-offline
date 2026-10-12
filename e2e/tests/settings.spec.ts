@@ -5,15 +5,15 @@ test.describe("settings", () => {
     await page.goto("/");
     await page.getByRole("button", { name: "Nastavení", exact: true }).click();
 
-    const tileSize = page.getByRole("combobox", { name: "Velikost položek katalogu" });
+    const tileSize = page.getByRole("combobox", { name: "Velikost dlaždic" });
     await tileSize.selectOption("large");
     await expect(page.getByText("Nastavení uloženo.")).toBeVisible();
 
     await page.reload();
     await page.getByRole("button", { name: "Nastavení", exact: true }).click();
-    await expect(page.getByRole("combobox", { name: "Velikost položek katalogu" })).toHaveValue("large");
+    await expect(page.getByRole("combobox", { name: "Velikost dlaždic" })).toHaveValue("large");
 
-    await page.getByRole("combobox", { name: "Velikost položek katalogu" }).selectOption("medium");
+    await page.getByRole("combobox", { name: "Velikost dlaždic" }).selectOption("medium");
   });
 
   test("downloaded titles follow the interface language unless overridden", async ({ page }) => {

@@ -82,9 +82,22 @@ export function pickDefaultStream(streams: Stream[]): Stream | undefined {
 /** A copy that already exists in one of the viewer's libraries. */
 export const isLocalStream = (stream: Stream): boolean => stream.kind === "library";
 
-/** The list a source panel shows: local copies above the addon streams, never sorted or
- *  filtered with them. */
-export const catalogSourceList = (local: Stream[], addonStreams: Stream[]): Stream[] => [...local, ...addonStreams];
+/** The source filter value that stands for the viewer's own copies. A manifest name is a plain
+ *  string, so a leading control character can never collide with an addon of the same name. */
+export const LOCAL_SOURCE = "\u0000local";
+
+/** Local files lead the unfiltered recommended and addon-priority lists. Other sorts rank them
+ *  with addon rows, while a named addon and the dedicated local filter stay exclusive. */
+export function catalogSourceRows(
+  local: Stream[], addonStreams: Stream[], filter: string, sort: StreamSort = "recommended",
+  preferredLanguage = "en", priority: Map<string, number> = new Map(), titleLanguage?: string,
+): Stream[] {
+  if (filter === LOCAL_SOURCE) return local;
+  if (filter) return addonStreams;
+  if (sort === "recommended") return [...local, ...addonStreams];
+  if (sort === "addon") return [...local, ...arrangeStreams(addonStreams, { addon: "", language: "", sort }, preferredLanguage, priority, titleLanguage)];
+  return arrangeStreams([...addonStreams, ...local], { addon: "", language: "", sort }, preferredLanguage, priority, titleLanguage);
+}
 
 /** A new episode should stay with the provider the viewer chose when it can, while still
  * choosing that provider's best language and size variant. */

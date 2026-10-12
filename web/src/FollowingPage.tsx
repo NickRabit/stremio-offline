@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { BellRing, ChevronLeft, ChevronRight, Film } from "lucide-react";
 import { api, describeError } from "./api";
+import { ShapeToggle } from "./app-chrome";
 import { copyText } from "./clipboard";
 import { FollowDialog } from "./FollowDialog";
 import { Heading } from "./settings-ui";
+import { TileArt } from "./TileArt";
 import { localeTag, serverText, t, useI18n } from "./i18n";
-import type { ActivityItem, Addon, CalendarEpisodeState, CalendarItem, UndatedCalendarItem, FollowView, LibraryView, NewEpisode } from "./types";
+import type { ActivityItem, Addon, CalendarEpisodeState, CalendarItem, UndatedCalendarItem, FollowView, LibraryView, NewEpisode, TileShape } from "./types";
 
 interface FollowingPageProps {
   follows: FollowView[];
@@ -14,6 +16,8 @@ interface FollowingPageProps {
   languages: Array<{ code: string; name: string }>;
   libraries: LibraryView[];
   addons: Addon[];
+  shape: TileShape;
+  onToggleShape: () => void;
   audioLanguage: string;
   subtitleLanguage: string;
   onChanged: (id: string, follow: FollowView | null) => void;
@@ -52,7 +56,7 @@ const LEGEND: CalendarEpisodeState[] = ["upcoming", "released", "queued", "waiti
 
 const DAY_MS = 24 * 60 * 60_000;
 
-export function FollowingPage({ follows, newEpisodes, canRetain = false, languages, libraries, addons, audioLanguage, subtitleLanguage, onChanged, onOpenSeries, onNotify }: FollowingPageProps) {
+export function FollowingPage({ follows, newEpisodes, canRetain = false, languages, libraries, addons, shape, onToggleShape, audioLanguage, subtitleLanguage, onChanged, onOpenSeries, onNotify }: FollowingPageProps) {
   useI18n();
   const [tab, setTab] = useState<Tab>("overview");
   const [openId, setOpenId] = useState<string | null>(null);
@@ -78,7 +82,7 @@ export function FollowingPage({ follows, newEpisodes, canRetain = false, languag
         }}>{t(TAB_LABEL[name])}</button>)}
     </div>
     <div className="following-panel" role="tabpanel" id={`following-panel-${tab}`} aria-labelledby={`following-tab-${tab}`} tabIndex={0}>
-      {tab === "overview" && <Overview follows={follows} newEpisodes={newEpisodes} onOpen={setOpenId} onOpenSeries={onOpenSeries}/>}
+      {tab === "overview" && <Overview follows={follows} newEpisodes={newEpisodes} shape={shape} onToggleShape={onToggleShape} onOpen={setOpenId} onOpenSeries={onOpenSeries}/>}
       {tab === "calendar" && <CalendarTab onOpenSeries={onOpenSeries} onNotify={onNotify}/>}
       {tab === "activity" && <ActivityTab onNotify={onNotify}/>}
     </div>
@@ -115,16 +119,19 @@ function NewEpisodesSection({ episodes, onOpen }: { episodes: NewEpisode[]; onOp
   </section>;
 }
 
-function Overview({ follows, newEpisodes, onOpen, onOpenSeries }: {
+function Overview({ follows, newEpisodes, shape, onToggleShape, onOpen, onOpenSeries }: {
   follows: FollowView[];
   newEpisodes: NewEpisode[];
+  shape: TileShape;
+  onToggleShape: () => void;
   onOpen: (id: string) => void;
   onOpenSeries: FollowingPageProps["onOpenSeries"];
 }) {
   useI18n();
   const section = <NewEpisodesSection episodes={newEpisodes} onOpen={(episode) => onOpenSeries({ type: episode.type, id: episode.metaId, name: episode.name, poster: episode.poster })}/>;
-  if (!follows.length) return <>{section}<div className="empty"><i><BellRing/></i><h3>{t("following.emptyTitle")}</h3><p>{t("following.emptyText")}</p></div></>;
-  return <>{section}<div className="following-grid">
+  const shapeToggle = <div className="following-tools"><ShapeToggle shape={shape} onToggle={onToggleShape}/></div>;
+  if (!follows.length) return <>{section}{shapeToggle}<div className="empty"><i><BellRing/></i><h3>{t("following.emptyTitle")}</h3><p>{t("following.emptyText")}</p></div></>;
+  return <>{section}{shapeToggle}<div className={`browse-grid following-grid tile-shape-${shape}`}>
     {sortFollows(follows).map((follow) => {
       const line = follow.type === "movie"
         ? follow.movie?.released ? t("follow.movieRelease", { date: formatDay(follow.movie.released) })
@@ -139,18 +146,16 @@ function Overview({ follows, newEpisodes, onOpen, onOpenSeries }: {
         follow.downloads.waiting ? t("follow.countWaiting", { count: follow.downloads.waiting }) : "",
         follow.downloads.completed ? t("follow.countCompleted", { count: follow.downloads.completed }) : "",
       ].filter(Boolean);
-      return <button type="button" className="following-card" key={follow.id} onClick={() => onOpen(follow.id)}>
-        <span className="following-card-art">{follow.poster ? <img src={follow.poster} alt="" loading="lazy"/> : <Film/>}</span>
-        <span className="following-card-copy">
-          <strong>{follow.name}</strong>
-          <small className="following-card-line">{line}</small>
-          <span className="following-chips">
-            {follow.autoDownload && <span className="following-chip">{t("follow.autoJob")}</span>}
-            {!follow.enabled && <span className="following-chip paused">{t("follow.pausedBadge")}</span>}
-            {follow.downloads.attention > 0 && <span className="following-chip attention">{t("following.attentionCount", { count: follow.downloads.attention })}</span>}
-          </span>
-          {countParts.length > 0 && <small className="following-counts">{t("follow.counts", { parts: countParts.join(" · ") })}</small>}
+      return <button type="button" className="browse-item" data-kind="follow" key={follow.id} onClick={() => onOpen(follow.id)}>
+        <span className="browse-art"><TileArt shape={shape} poster={follow.poster} fallback={<Film/>}/></span>
+        <strong>{follow.name}</strong>
+        <span className="following-card-line">{line}</span>
+        <span className="following-chips">
+          {follow.autoDownload && <span className="following-chip">{t("follow.autoJob")}</span>}
+          {!follow.enabled && <span className="following-chip paused">{t("follow.pausedBadge")}</span>}
+          {follow.downloads.attention > 0 && <span className="following-chip attention">{t("following.attentionCount", { count: follow.downloads.attention })}</span>}
         </span>
+        {countParts.length > 0 && <span className="following-counts">{t("follow.counts", { parts: countParts.join(" · ") })}</span>}
       </button>;
     })}
   </div></>;

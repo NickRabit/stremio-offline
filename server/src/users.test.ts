@@ -178,7 +178,7 @@ const singleAccountState = (): MigratableState => ({
     uiLanguage: "cs",
     audioLanguage: "cs",
     trackProgress: false,
-    catalogTileSize: "large",
+    tileSize: "large",
     libraryScanPauseOnDownload: true,
   },
   favorites: ["/media/film.mkv"],
@@ -209,7 +209,7 @@ test("the one account becomes the administrator and its data moves under the use
   assert.deepEqual(data?.watchlist, { "tt1": { type: "movie", id: "tt1" } });
   assert.deepEqual(data?.progress, { "tt2": { position: 10, duration: 100, title: "Neco" } });
   assert.deepEqual(data?.watchedSeries, { "tt3": { season: 1, episode: 2 } });
-  assert.deepEqual(data?.prefs, { uiLanguage: "cs", audioLanguage: "cs", trackProgress: false, catalogTileSize: "large" });
+  assert.deepEqual(data?.prefs, { uiLanguage: "cs", audioLanguage: "cs", trackProgress: false, tileSize: "large" });
   assert.deepEqual(state.settings, { concurrentDownloads: 4, libraryScanPauseOnDownload: true });
   assert.equal(state.favorites, undefined);
   assert.equal(state.watchlist, undefined);

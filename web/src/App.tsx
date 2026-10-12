@@ -23,7 +23,7 @@ import { report } from "./diagnostics";
 import { label, titleLanguage } from "./languages";
 import { locale, localeTag, setLocale, t, useI18n, type Key } from "./i18n";
 import { catalogTypeTag } from "./catalog-labels";
-import { addonNotices, canQueue, catalogSourceList, isLocalStream, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, repickStream, streamBadge, streamLanguages, streamSize, visibleCatalogStreams, type StreamSort } from "./streams";
+import { addonNotices, canQueue, catalogSourceRows, isLocalStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, repickStream, streamBadge, streamLanguages, streamSize, visibleCatalogStreams, type StreamSort } from "./streams";
 import { parseSearchScope } from "./search-scope";
 import { createLiveSearch, type LiveSearch, type LiveSearchState } from "./live-search";
 import { rankByTitle } from "./title-match";
@@ -208,7 +208,7 @@ export function App() {
   const [bulkDownload, setBulkDownload] = useState<{ label: string; title: string; type: string; episodes: Array<{ id: string; season?: number; episode?: number; title?: string }>; media: { id?: string; metaType?: string; poster?: string; background?: string; gallery?: Array<{ url: string; kind: GalleryKind }> } } | null>(null);
   const [downloads, setDownloads] = useState<DownloadJob[]>([]); const [queueHalt, setQueueHalt] = useState<QueueHalt | null>(null); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState(""); const [playerOpen, setPlayerOpen] = useState(false);
   const [deviceTransfers, setDeviceTransfers] = useState<DeviceTransfer[]>([]);
-  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: locale(), audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, catalogTileSize: "medium", libraryTileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", homeTileShape: "wide", startView: "catalog", libraryShelf: "resume", realDebridConfigured: false, tmdbConfigured: false });
+  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: locale(), audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, tileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", favoritesTileShape: "poster", resumeTileShape: "poster", followingTileShape: "poster", homeTileShape: "wide", startView: "catalog", libraryShelf: "resume", realDebridConfigured: false, tmdbConfigured: false });
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [session, setSession] = useState<Session | null | undefined>(undefined);
@@ -1199,7 +1199,7 @@ export function App() {
   }, [selectedStream]);
   /** The shape buttons save like any other setting, but without the toast: one per click
    *  while somebody flips back and forth is noise. A refused save puts the grid back. */
-  const toggleShape = async (key: "catalogTileShape" | "libraryTileShape" | "homeTileShape") => {
+  const toggleShape = async (key: "catalogTileShape" | "libraryTileShape" | "favoritesTileShape" | "resumeTileShape" | "followingTileShape" | "homeTileShape") => {
     const before = settings[key];
     const next = before === "wide" ? "poster" : "wide";
     setSettings((current: AppSettings) => ({ ...current, [key]: next }));
@@ -1676,34 +1676,48 @@ export function App() {
     () => settings.realDebridConfigured ? offered : offered.filter((stream) => stream.kind !== "torrent"),
     [offered, settings.realDebridConfigured]);
   const hiddenTorrents = listedStreams.length < offered.length;
+  // The local filter is not an addon name, so the addon filtering and sorting never see it.
+  const addonFilter = streamAddon === LOCAL_SOURCE ? "" : streamAddon;
+  const localSelected = streamAddon === LOCAL_SOURCE;
   const visibleStreams = useMemo(
-    () => visibleCatalogStreams(listedStreams, { addon: streamAddon, language: streamLanguage, sort: streamSort }, settings.audioLanguage, addonPriority, true, metaLanguage),
-    [listedStreams, streamAddon, streamLanguage, streamSort, settings.audioLanguage, addonPriority, metaLanguage]);
+    () => visibleCatalogStreams(listedStreams, { addon: addonFilter, language: streamLanguage, sort: streamSort }, settings.audioLanguage, addonPriority, true, metaLanguage),
+    [listedStreams, addonFilter, streamLanguage, streamSort, settings.audioLanguage, addonPriority, metaLanguage]);
   // The counts in each menu apply to what passes the other filter, or they would contradict each other.
   const byLanguage = useMemo(
     () => streamLanguage ? listedStreams.filter((stream) => streamLanguages(stream, metaLanguage).includes(streamLanguage)) : listedStreams,
     [listedStreams, streamLanguage, metaLanguage]);
+  const localByLanguage = useMemo(
+    () => streamLanguage ? localStreams.filter((stream) => streamLanguages(stream, metaLanguage).includes(streamLanguage)) : localStreams,
+    [localStreams, streamLanguage, metaLanguage]);
   const byAddon = useMemo(
-    () => streamAddon ? listedStreams.filter((stream) => stream.addonName === streamAddon) : listedStreams,
-    [listedStreams, streamAddon]);
+    () => addonFilter ? listedStreams.filter((stream) => stream.addonName === addonFilter) : listedStreams,
+    [listedStreams, addonFilter]);
+  const languageSources = useMemo(
+    () => localSelected ? localStreams : streamAddon ? byAddon : [...byAddon, ...localStreams],
+    [localSelected, localStreams, streamAddon, byAddon]);
 
   const streamAddons = useMemo(() => {
     const counts = new Map<string, number>();
     for (const stream of byLanguage) { const name = stream.addonName ?? "?"; counts.set(name, (counts.get(name) ?? 0) + 1); }
     // The chosen addon has to stay in the menu even when nothing is left for it, or the field empties.
-    if (streamAddon && !counts.has(streamAddon)) counts.set(streamAddon, 0);
+    if (addonFilter && !counts.has(addonFilter)) counts.set(addonFilter, 0);
     const rank = (name: string) => addonPriority.get(name) ?? Number.MAX_SAFE_INTEGER;
     return [...counts.entries()].sort((a, b) => (rank(a[0]) - rank(b[0])) || (b[1] - a[1]));
-  }, [byLanguage, streamAddon, addonPriority]);
+  }, [byLanguage, addonFilter, addonPriority]);
   const streamLangs = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const stream of byAddon) for (const code of streamLanguages(stream, metaLanguage)) counts.set(code, (counts.get(code) ?? 0) + 1);
+    for (const stream of languageSources) for (const code of streamLanguages(stream, metaLanguage)) counts.set(code, (counts.get(code) ?? 0) + 1);
     if (streamLanguage && !counts.has(streamLanguage)) counts.set(streamLanguage, 0);
     return [...counts.entries()].sort((a, b) => b[1] - a[1]);
-  }, [byAddon, streamLanguage, metaLanguage]);
-  // Local copies sit above the addon streams in the list that is rendered and picked from;
-  // everything else (filters, counts, notices) stays on the addon streams alone.
-  const sourceRows = useMemo(() => catalogSourceList(localStreams, visibleStreams), [localStreams, visibleStreams]);
+  }, [languageSources, streamLanguage, metaLanguage]);
+  // Recommended keeps a local copy first; alternate sort modes rank it together with addon rows.
+  const sourceRows = useMemo(
+    () => catalogSourceRows(localByLanguage, visibleStreams, streamAddon, streamSort, settings.audioLanguage, addonPriority, metaLanguage),
+    [localByLanguage, visibleStreams, streamAddon, streamSort, settings.audioLanguage, addonPriority, metaLanguage]);
+  const sourceTotal = localSelected ? localStreams.length : offered.length + (streamAddon ? 0 : localStreams.length);
+  const hasPlayableMovieSource = selected?.type === "movie" && sourcesLoaded && (offered.some((stream) => stream.playable) || localStreams.some((stream) => stream.playable));
+  // The chosen source decides what is still loading: the addon answers or the local probe.
+  const sourcesPending = localSelected ? localLoading : pendingSources > 0;
   // When a filter removes the chosen source, the pick moves to the first one left -- unless
   // the film is already playing on it, when moving it would restart playback on another source.
   useEffect(() => {
@@ -2034,7 +2048,7 @@ export function App() {
   ];
   const moreActive = view === "favorites" || view === "resume" || view === "following" || view === "addons" || view === "settings" || view === "stats";
 
-  return <div className={`app-shell catalog-tiles-${settings.catalogTileSize} library-tiles-${settings.libraryTileSize} catalog-shape-${settings.catalogTileShape} library-shape-${settings.libraryTileShape} home-shape-${settings.homeTileShape}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
+  return <div className={`app-shell tile-size-${settings.tileSize} catalog-shape-${settings.catalogTileShape} library-shape-${settings.libraryTileShape} home-shape-${settings.homeTileShape}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
     <header className="topbar"><button className="brand brand-home" title={t("app.goToCleanCatalog")} aria-label={t("app.goToCleanCatalog")} onClick={() => resetCatalog()}><div className="brand-mark"><CirclePlay/></div><div><small>{t("auth.brandEyebrow")}</small><h1>Stremio <span>Offline</span></h1></div></button><div className="topbar-right">{restricted && <div className="restricted-chip">{t("restricted.chip")}</div>}<div className="online"><i/> {t("app.serverOnline")}</div>
       <div className="topbar-user"><span className="topbar-user-name">
         <strong title={t("auth.signedInAs", { username: session?.username ?? "" })}>{session?.username}</strong>
@@ -2186,17 +2200,18 @@ export function App() {
           </section><section ref={detailRef} className={`panel detail-panel ${selected ? "mobile-open" : ""} ${selected?.videos?.length && episodesOpen ? "series-episodes-layout" : ""} ${sourcesLoaded && (selected?.videos?.length ? selectedVideo && !episodesOpen : true) ? "series-sources-layout" : ""} ${detailCompact ? "hero-compact" : ""}`}>{selected ? <>
             <div className="mobile-detail-head"><button onClick={selected.videos?.length && selectedVideo && !episodesOpen ? () => setEpisodesOpen(true) : closeMeta}><ChevronLeft/> {t(selected.videos?.length && selectedVideo && !episodesOpen ? "episodes.heading" : "catalog.results")}</button><strong>{selected.name}</strong></div>
             <div className="detail-primary"><div className={`hero ${selected.videos?.length ? "series-hero" : ""} ${galleryImages.length ? "has-gallery" : ""}`} style={selected.background ? { backgroundImage: `linear-gradient(90deg,#121721 25%,transparent),url(${selected.background})` } : undefined}><div className="detail-copy">{titleChips(titleTrailer, titleLinks, <><button className={`watch-star ${inWatchlist(selected.type, selected.id) ? "on" : ""}`} title={t(inWatchlist(selected.type, selected.id) ? "watchlist.remove" : "watchlist.add")}
-                onClick={() => void toggleWatchlist(selected)}><Star/></button><span className="pill">{t(selected.type === "series" ? "catalog.oneSeries" : "catalog.oneMovie")}</span>{(selected.type === "series" || selected.type === "movie" || Boolean(selected.videos?.length)) && (detailFollow ? <button className="follow-chip on" onClick={() => setFollowDialogOpen(true)}><BellRing/>{t("follow.following")}{detailFollow.autoDownload && <span className="follow-chip-download" aria-hidden="true" title={t("follow.autoOnHint")}><Download/></span>}</button> : <button className="follow-chip" onClick={() => setFollowStart(selected)}><Bell/>{t("follow.follow")}</button>)}</>)}<h2>{selected.name}</h2><p className="meta-line">{imdbRating(selected) && <b className="imdb-rating" title={t("catalog.imdbRating", { rating: imdbRating(selected)! })}><Star/>{imdbRating(selected)}</b>}{imdbRating(selected) && [selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).length ? " · " : ""}{[selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).join(" · ")}</p><div className="catalog-description" aria-busy={metaLoading}><p className="description-preview" aria-hidden={metaLoading ? true : undefined}>{metaLoading ? skeletonLines : (selected.description || t("catalog.noDescription"))}</p><details key={selected.id}><summary>{t("catalog.description")}</summary><p tabIndex={0}>{metaLoading ? skeletonLines : (selected.description || t("catalog.noDescription"))}</p></details></div></div>{galleryImages.length > 0 && <button className={`gallery-open ${galleryImages[0].shape}`} onClick={() => setGalleryIndex(0)} title={t("gallery.openHint")}><img src={galleryImages[0].url} alt="" onError={hideBroken}/><span><Images/> {galleryImages.length > 1 ? t("gallery.stillCount", { count: galleryImages.length }) : t("gallery.enlarge")}</span></button>}</div></div>
+                onClick={() => void toggleWatchlist(selected)}><Star/></button>{(selected.type === "series" || selected.type === "movie" || Boolean(selected.videos?.length)) && (detailFollow ? <button className="follow-chip on" onClick={() => setFollowDialogOpen(true)}><BellRing/>{t("follow.following")}{detailFollow.autoDownload && <span className="follow-chip-download" aria-hidden="true" title={t("follow.autoOnHint")}><Download/></span>}</button> : !hasPlayableMovieSource && <button className="follow-chip" onClick={() => setFollowStart(selected)}><Bell/>{t("follow.follow")}</button>)}<span className="pill">{t(selected.type === "series" ? "catalog.oneSeries" : "catalog.oneMovie")}</span></>)}<h2>{selected.name}</h2><p className="meta-line">{imdbRating(selected) && <b className="imdb-rating" title={t("catalog.imdbRating", { rating: imdbRating(selected)! })}><Star/>{imdbRating(selected)}</b>}{imdbRating(selected) && [selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).length ? " · " : ""}{[selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).join(" · ")}</p><div className="catalog-description" aria-busy={metaLoading}><p className="description-preview" aria-hidden={metaLoading ? true : undefined}>{metaLoading ? skeletonLines : (selected.description || t("catalog.noDescription"))}</p><details key={selected.id}><summary>{t("catalog.description")}</summary><p tabIndex={0}>{metaLoading ? skeletonLines : (selected.description || t("catalog.noDescription"))}</p></details></div></div>{galleryImages.length > 0 && <button className={`gallery-open ${galleryImages[0].shape}`} onClick={() => setGalleryIndex(0)} title={t("gallery.openHint")}><img src={galleryImages[0].url} alt="" onError={hideBroken}/><span><Images/> {galleryImages.length > 1 ? t("gallery.stillCount", { count: galleryImages.length }) : t("gallery.enlarge")}</span></button>}</div></div>
             <div className="detail-workflow">
             {selected.videos?.length ? !(chosenEpisode && sourcesLoaded) && <div className={`episodes ${chosenEpisode ? "collapsed" : ""}`}>{chosenEpisode ?? <><div className="subhead episode-head"><h3>{t("episodes.heading")}</h3><div className="episode-tools">{seasons.length > 1 && <select className="season-select" aria-label={t("episodes.season")} value={activeSeason ?? ""} onChange={(event) => setSeason(Number(event.target.value))}>{seasons.map((value) => <option key={value} value={value}>{value === 0 ? t("episodes.specials") : t("episodes.seasonNumber", { season: value })}</option>)}</select>}{activeSeason != null && <button title={activeSeason === 0 ? t("episodes.downloadSpecials") : t("episodes.downloadSeason", { season: activeSeason })} onClick={() => void enqueueEpisodes("season")}><Download/> {activeSeason === 0 ? t("episodes.specials") : t("episodes.seasonShort", { season: activeSeason })}</button>}<button title={t("episodes.downloadShow")} onClick={() => void enqueueEpisodes("series")}><Download/> {t("episodes.wholeShow")}</button>{selectedVideo ? <button onClick={() => setEpisodesOpen(false)}>{t("common.collapse")}</button> : <span>{visibleEpisodes.length}</span>}</div></div><div className="episode-list" onScroll={(event) => compactOnScroll(event, detailCompact, setDetailCompact, true)}>{visibleEpisodes.map((video, index) => <button key={video.id || index} className={selectedVideo?.id === video.id ? "selected" : ""} onClick={() => { setEpisodesOpen(false); void loadSources(video); }}><b>{video.season != null ? `${String(video.season).padStart(2,"0")}×${String(video.episode || 0).padStart(2,"0")}` : index + 1}</b><span>{video.title || video.name || t("episodes.one")}</span><ChevronRight/></button>)}</div></>}</div> : !sourcesLoaded && <button className="primary wide" onClick={() => loadSources()} disabled={busy}>{t("sources.load")}</button>}
-            {sourcesLoaded && (!selected.videos?.length || !episodesOpen) && <div className="sources"><div className={`subhead ${chosenEpisode ? "sources-episode" : ""}`}>{chosenEpisode ?? <h3>{t("sources.heading")}</h3>}<span>{visibleStreams.length === offered.length ? offered.length + localStreams.length : t("sources.ofTotal", { shown: visibleStreams.length + localStreams.length, total: offered.length + localStreams.length })}{pendingSources > 0 ? ` · ${t("sources.loadingFrom", { count: pendingSources })}` : ""}</span></div>
-              {offered.length > 1 && <div className="stream-filters">
+            {sourcesLoaded && (!selected.videos?.length || !episodesOpen) && <div className="sources"><div className={`subhead ${chosenEpisode ? "sources-episode" : ""}`}>{chosenEpisode ?? <h3>{t("sources.heading")}</h3>}<span>{sourceRows.length === sourceTotal ? sourceTotal : t("sources.ofTotal", { shown: sourceRows.length, total: sourceTotal })}{pendingSources > 0 ? ` · ${t("sources.loadingFrom", { count: pendingSources })}` : ""}</span></div>
+              {(offered.length > 1 || localStreams.length > 0) && <div className="stream-filters">
                 <label><span>{t("sources.addon")}</span><select value={streamAddon} onChange={(event) => setStreamAddon(event.target.value)}>
-                  <option value="">{t("sources.allAddons")} ({byLanguage.length})</option>
+                  <option value="">{t("sources.allAddons")} ({byLanguage.length + localByLanguage.length})</option>
+                  {(localStreams.length > 0 || localSelected) && <option value={LOCAL_SOURCE}>{t("sources.localFilter")} ({localStreams.length})</option>}
                   {streamAddons.map(([name, count]) => <option key={name} value={name}>{name} ({count})</option>)}
                 </select></label>
                 {streamLangs.length > 0 && <label><span>{t("auth.language")}</span><select value={streamLanguage} onChange={(event) => setStreamLanguage(event.target.value)}>
-                  <option value="">{t("sources.anyLanguage")} ({byAddon.length})</option>
+                  <option value="">{t("sources.anyLanguage")} ({languageSources.length})</option>
                   {streamLangs.map(([code, count]) => <option key={code} value={code}>{label(code)} ({count})</option>)}
                 </select></label>}
                 <label><span>{t("common.sorting")}</span><select value={streamSort} onChange={(event) => setStreamSort(event.target.value as StreamSort)}>
@@ -2205,11 +2220,11 @@ export function App() {
                   <option value="size-asc">{t("sources.sortSmallest")}</option>
                   <option value="addon">{t("sources.sortAddon")}</option>
                 </select></label>
-              </div>}<div className="stream-list" onScroll={(event) => compactOnScroll(event, detailCompact, setDetailCompact, true)}>{sourceRows.map((stream, index) => { const local = isLocalStream(stream); return <button key={index} className={selectedStream === stream ? "selected" : ""} title={local ? t("sources.localHint") : undefined} onClick={() => { pickedRef.current = true; setSelectedStream(stream); }}><i className={local ? "local" : stream.kind === "torrent" ? "rd" : stream.playable ? undefined : "ext"}>{local ? <><HardDrive/>{t("sources.localBadge")}</> : streamBadge(stream)}</i><span><strong>{local ? stream.behaviorHints?.filename ?? streamLabel(stream) : streamLabel(stream)}</strong><small>{local ? stream.libraryName : stream.addonName}</small></span><span className="stream-meta">{streamSize(stream) ? <b>{bytes(streamSize(stream))}</b> : null}<small>{streamLanguages(stream, metaLanguage).map((code) => <em className="lang-badge" key={code} title={t("sources.languageGuess")}>{label(code)}</em>)}</small></span>{selectedStream === stream && <Check/>}</button>; })}</div>
-              {!offered.length && pendingSources === 0 && !localLoading && localStreams.length === 0 && <div className="no-sources">{t("sources.none")}</div>}
-              {!offered.length && pendingSources > 0 && localStreams.length === 0 && <div className="no-sources">{t("sources.asking")}</div>}
-              {Boolean(offered.length) && !visibleStreams.length && localStreams.length === 0 && hiddenTorrents && !streamAddon && !streamLanguage && <div className="no-sources">{t("sources.onlyTorrentsBefore")} <button className="link-button" onClick={() => openView("settings")}>{t("nav.settings")}</button> {t("sources.onlyTorrentsAfter")}</div>}
-              {Boolean(offered.length) && !visibleStreams.length && localStreams.length === 0 && !(hiddenTorrents && !streamAddon && !streamLanguage) && <div className="no-sources">{t("sources.noneMatchFilter", { count: offered.length })} <button className="link-button" onClick={() => { setStreamAddon(""); setStreamLanguage(""); }}>{t("sources.clearFilters")}</button></div>}
+              </div>}<div className="stream-list" onScroll={(event) => compactOnScroll(event, detailCompact, setDetailCompact, true)}>{sourceRows.map((stream, index) => { const local = isLocalStream(stream); const probedLanguages = local && selectedStream === stream ? [...new Set((inspection?.audioTracks ?? []).map((track) => track.language).filter((language): language is string => Boolean(language)))] : []; const languagesForRow = probedLanguages.length ? probedLanguages : streamLanguages(stream, metaLanguage); return <button key={index} className={selectedStream === stream ? "selected" : ""} title={local ? t("sources.localHint") : undefined} onClick={() => { pickedRef.current = true; setSelectedStream(stream); }}><i className={local ? "local" : stream.kind === "torrent" ? "rd" : stream.playable ? undefined : "ext"}>{local ? <><HardDrive/>{t("sources.localBadge")}</> : streamBadge(stream)}</i><span><strong>{local ? stream.behaviorHints?.filename ?? streamLabel(stream) : streamLabel(stream)}</strong><small>{local ? stream.libraryName : stream.addonName}</small></span><span className="stream-meta">{streamSize(stream) ? <b>{bytes(streamSize(stream))}</b> : null}<small>{languagesForRow.map((code) => <em className="lang-badge" key={code} title={probedLanguages.length ? t("sources.audioInFile") : t("sources.languageGuess")}>{label(code)}</em>)}</small></span>{selectedStream === stream && <Check/>}</button>; })}</div>
+              {!sourceRows.length && sourcesPending && <div className="no-sources">{t("sources.asking")}</div>}
+              {!sourceRows.length && !sourcesPending && (!offered.length || localSelected) && <div className="no-sources">{t("sources.none")}</div>}
+              {Boolean(offered.length) && !sourceRows.length && !sourcesPending && !localSelected && hiddenTorrents && !addonFilter && !streamLanguage && <div className="no-sources">{t("sources.onlyTorrentsBefore")} <button className="link-button" onClick={() => openView("settings")}>{t("nav.settings")}</button> {t("sources.onlyTorrentsAfter")}</div>}
+              {Boolean(offered.length) && !sourceRows.length && !sourcesPending && !localSelected && !(hiddenTorrents && !addonFilter && !streamLanguage) && <div className="no-sources">{t("sources.noneMatchFilter", { count: offered.length })} <button className="link-button" onClick={() => { setStreamAddon(""); setStreamLanguage(""); }}>{t("sources.clearFilters")}</button></div>}
               {notices.map((notice) => <p className="notice" key={notice.sourceId}><b>{notice.addonName}</b> {noticeText(notice)}</p>)}
               {selectedStream?.kind === "torrent" && <p className="notice">{t("sources.torrentNotice")}</p>}
               <div className="source-footer"><div className="source-info"><Subtitles/> {t("sources.subtitleCount", { count: selectedLocalPath ? 0 : subtitles.length + (selectedStream?.subtitles?.length || 0) })}
@@ -2419,18 +2434,18 @@ export function App() {
       {view === "addons" && <AddonManager addons={addons} libraries={libraries} restricted={restricted} admin={admin} onChanged={refresh} onNotify={notify} onError={fail}/>} 
       {view === "resume" && <ResumeView
         filter={resumeFilter} onFilter={setResumeFilter}
-        items={resumeCards} busy={resumeBusy} shape={settings.homeTileShape} actions={resumeActions}
+        items={resumeCards} busy={resumeBusy} shape={settings.resumeTileShape} onToggleShape={() => void toggleShape("resumeTileShape")} actions={resumeActions}
         hasMore={resumeCards.length < resumeCardsTotal} loadingMore={resumeLoadingMore}
         onLoadMore={() => void loadResume(resumeFilter, resumeCards.length)}/>}
       {view === "favorites" && <FavoritesView
         filter={favoritesFilter} onFilter={setFavoritesFilter}
-        items={favorites} busy={favoritesBusy} shape={settings.libraryTileShape}
+        items={favorites} busy={favoritesBusy} shape={settings.favoritesTileShape} onToggleShape={() => void toggleShape("favoritesTileShape")}
         onPlay={openFavorite} onOpenFolder={openFavorite} onOpenCatalog={(item: FavoriteCatalogItem) => void openFromCatalog(item)}
         hasMore={favorites.length < favoritesTotal} loadingMore={favoritesLoadingMore}
         onLoadMore={() => void loadFavorites(favoritesFilter, favorites.length)}/>}
       {view === "downloads" && <Downloads jobs={downloads} deviceTransfers={deviceTransfers} libraries={libraries} halt={queueHalt} admin={session!.role === "admin"} refresh={loadDownloads} onError={fail} onReveal={revealInLibrary} prefs={views.downloads} onPrefs={persistDownloadPrefs}/>}
       {view === "stats" && <StatsPanel key={statsReset} onError={fail}/>}
-      {view === "following" && <FollowingPage canRetain={session!.role === "admin"} follows={follows} newEpisodes={newEpisodes} languages={languages} libraries={libraries} addons={addons} audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} onChanged={applyFollowChange} onOpenSeries={(item) => void openFromCatalog(item)} onNotify={notify}/>}
+      {view === "following" && <FollowingPage canRetain={session!.role === "admin"} follows={follows} newEpisodes={newEpisodes} languages={languages} libraries={libraries} addons={addons} shape={settings.followingTileShape} onToggleShape={() => void toggleShape("followingTileShape")} audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} onChanged={applyFollowChange} onOpenSeries={(item) => void openFromCatalog(item)} onNotify={notify}/>}
       {view === "settings" && <SettingsPage build={buildInfo} restricted={restricted} settings={settings} search={searchState} onSearch={(next) => { if (!next.saveHistory || !next.recent.length) recordIntent.current = null; setSearchState(next); }} languages={languages} libraries={libraries} session={session!} onSession={setSession} onSave={saveSettings} onLibrariesChanged={refreshLibraries} onImported={async (backup) => {
         const restored = await api.importSettings(backup);
         setSettings(restored.settings);

@@ -62,12 +62,36 @@ const openCatalog = async (page: Page, label: RegExp) => {
   await select.selectOption({ label: labels.find((text) => label.test(text))! });
 };
 
-test("a movie already in the library leads its sources and plays the library file", async ({ page, request }) => {
+const sourceFilter = (page: Page) => page.locator(".detail-panel").getByRole("combobox", { name: "Doplněk" });
+
+/** A filter entry by its text, once the panel has drawn it; the local one carries a
+ *  client-only sentinel as its value, so it is picked by the label the viewer reads. */
+const chooseSource = async (page: Page, text: string) => {
+  const filter = sourceFilter(page);
+  let value = "";
+  await expect.poll(async () => {
+    const options = await filter.locator("option").evaluateAll((entries) =>
+      entries.map((entry) => ({ value: (entry as HTMLOptionElement).value, text: entry.textContent ?? "" })));
+    const match = options.find((entry) => entry.text.startsWith(text));
+    value = match?.value ?? "";
+    return Boolean(match);
+  }).toBe(true);
+  await filter.selectOption({ value });
+};
+
+const chooseAll = async (page: Page) => {
+  await expect(sourceFilter(page)).toBeVisible();
+  await sourceFilter(page).selectOption({ index: 0 });
+};
+
+test("a movie already in the library offers its file under the local filter and plays it", async ({ page, request }) => {
   await openCatalog(page, /Filmy/);
   await page.getByRole("button", { name: /Zkušební film/ }).click();
 
   const detail = page.locator(".detail-panel");
   const rows = detail.locator(".stream-list button");
+  await chooseSource(page, "Lokální soubory");
+  await expect(rows).toHaveCount(1);
   await expect(rows.first().locator("i.local")).toContainText("Lokální");
   await expect(rows.first()).toContainText(movieFile);
   await expect(rows.first()).toHaveClass(/selected/);
@@ -97,20 +121,31 @@ test("a movie already in the library leads its sources and plays the library fil
   await expect(card.locator(".resume-bar")).toHaveCount(1);
 });
 
-test("the addon filter never hides the local copy", async ({ page }) => {
+test("the source filter keeps the local copy apart from the addon streams", async ({ page }) => {
   await openCatalog(page, /Filmy/);
   await page.getByRole("button", { name: /Zkušební film/ }).click();
 
   const detail = page.locator(".detail-panel");
   const rows = detail.locator(".stream-list button");
-  await detail.getByRole("combobox", { name: "Doplněk" }).selectOption("E2E doplněk");
 
-  await expect(rows).toHaveCount(3);
+  // A named addon hides the copy already on disk.
+  await chooseSource(page, "E2E doplněk");
+  await expect(rows).toHaveCount(2);
+  await expect(rows.locator("i.local")).toHaveCount(0);
+  await expect(rows.first()).toContainText("E2E 1080p");
+
+  await chooseSource(page, "Lokální soubory");
+  await expect(rows).toHaveCount(1);
   await expect(rows.first().locator("i.local")).toContainText("Lokální");
-  await expect(rows.nth(1)).toContainText("E2E 1080p");
+  await expect(rows.first()).toContainText(movieFile);
+
+  await chooseAll(page);
+  await expect(rows).toHaveCount(3);
+  await expect(rows.locator("i.local")).toHaveCount(1);
+  await expect(rows.first().locator("i.local")).toContainText("Lokální");
 });
 
-test("an episode leads with its own local copy and a later one has none", async ({ page }) => {
+test("an episode has its own local copy and a later one has none", async ({ page }) => {
   await openCatalog(page, /Seriály/);
   await page.getByRole("button", { name: /Zkušební seriál/ }).click();
 
@@ -120,15 +155,18 @@ test("an episode leads with its own local copy and a later one has none", async 
   await detail.getByRole("button", { name: /První díl/ }).click();
 
   const rows = detail.locator(".stream-list button");
+  await chooseSource(page, "Lokální soubory");
+  await expect(rows).toHaveCount(1);
   await expect(rows.first().locator("i.local")).toContainText("Lokální");
   await expect(rows.first()).toContainText("Lokální seriál S01E01.webm");
   await expect(rows.first()).toHaveClass(/selected/);
 
-  // S02E01 has no file, so the addon sources lead exactly as they did before.
+  // S02E01 has no local file, so its addon rows remain unchanged.
   await detail.getByRole("button", { name: "Změnit" }).click();
   await detail.getByRole("combobox", { name: "Série" }).selectOption("2");
   await detail.getByRole("button", { name: /Nová série/ }).click();
 
+  await chooseAll(page);
   await expect(detail.locator(".stream-list button i.local")).toHaveCount(0);
   await expect(rows.first()).toContainText("E2E 1080p");
 });

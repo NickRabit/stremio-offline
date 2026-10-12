@@ -228,7 +228,7 @@ export interface MigratableState {
 export const PERSONAL_SETTINGS = [
   "uiLanguage", "audioLanguage", "subtitleLanguage", "downloadTitleLanguage",
   "mergeByName", "streamSort", "trackProgress", "showResumeRow",
-  "catalogTileSize", "libraryTileSize", "catalogTileShape", "libraryTileShape", "homeTileShape",
+  "tileSize", "catalogTileSize", "libraryTileSize", "favoritesTileSize", "resumeTileSize", "followingTileSize", "catalogTileShape", "libraryTileShape", "favoritesTileShape", "resumeTileShape", "followingTileShape", "homeTileShape",
   "startView",
   "libraryShelf",
   "homeLayout",

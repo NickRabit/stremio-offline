@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addonNotices, arrangeStreams, canQueue, catalogSourceList, isLocalStream, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, streamBadge, streamLanguages, streamSize, streamText, visibleCatalogStreams, repickStream, type StreamFilters } from "./streams";
+import { addonNotices, arrangeStreams, canQueue, catalogSourceRows, isLocalStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, streamBadge, streamLanguages, streamSize, streamText, visibleCatalogStreams, repickStream, type StreamFilters } from "./streams";
 import type { Stream } from "./types";
 
 const stream = (parts: Partial<Stream>): Stream => ({ sourceId: "source", kind: "remote", playable: true, ...parts });
@@ -217,17 +217,43 @@ describe("local copies", () => {
     expect(canQueue(local, true)).toBe(false);
   });
 
-  it("puts local copies above the addon streams and picks the first one", () => {
-    const rows = catalogSourceList([local], [addon]);
-    expect(rows).toEqual([local, addon]);
-    expect(pickDefaultStream(rows)).toBe(local);
+  it("puts local copies first in All with recommended sorting, and keeps named-addon/local filters exclusive", () => {
+    expect(catalogSourceRows([local], [addon], "")).toEqual([local, addon]);
+    expect(catalogSourceRows([local], [addon], "Luna")).toEqual([addon]);
+    expect(catalogSourceRows([local], [addon], LOCAL_SOURCE)).toEqual([local]);
   });
 
-  it("keeps a local copy out of the addon and language filters", () => {
-    // The addon rows are filtered on their own; the local entry is prepended afterwards.
+  it("ranks local copies with addon sources for size sorts and first for addon priority", () => {
+    const small = stream({ kind: "library", name: "Local small", localPath: "lib/Small.mkv", behaviorHints: { videoSize: 500 } });
+    const large = stream({ kind: "library", name: "Local large", localPath: "lib/Large.mkv", behaviorHints: { videoSize: 3000 } });
+    const medium = stream({ name: "Addon medium", addonName: "Luna", behaviorHints: { videoSize: 1500 } });
+    expect(catalogSourceRows([small, large], [medium], "", "size-desc").map((item) => item.name)).toEqual(["Local large", "Addon medium", "Local small"]);
+    expect(catalogSourceRows([small, large], [medium], "", "size-asc").map((item) => item.name)).toEqual(["Local small", "Addon medium", "Local large"]);
+    expect(catalogSourceRows([small, large], [medium], "", "addon").map((item) => item.name)).toEqual(["Local small", "Local large", "Addon medium"]);
+  });
+
+  it("picks the local copy when the local entry is the chosen source", () => {
+    expect(pickDefaultStream(catalogSourceRows([local], [addon], LOCAL_SOURCE))).toBe(local);
+  });
+
+  it("keeps local copies out of named addon filters while allowing All to include them", () => {
     const visible = visibleCatalogStreams([addon], filters({ addon: "Nope" }), "cs", new Map(), true);
     expect(visible).toEqual([]);
-    expect(catalogSourceList([local], visible)).toEqual([local]);
+    expect(catalogSourceRows([local], visible, LOCAL_SOURCE)).toEqual([local]);
+    expect(catalogSourceRows([local], visible, "")).toEqual([local]);
+  });
+
+  it("keeps the local rows in their own order, untouched by the addon sort", () => {
+    const first = stream({ kind: "library", name: "First", localPath: "lib/1.mkv" });
+    const second = stream({ kind: "library", name: "Second", localPath: "lib/2.mkv" });
+    const sorted = arrangeStreams([addon], filters({ sort: "size-desc" }), "cs");
+    expect(catalogSourceRows([first, second], sorted, LOCAL_SOURCE).map((item) => item.name)).toEqual(["First", "Second"]);
+  });
+
+  it("keeps local copies ineligible for downloads when All includes them", () => {
+    const rows = catalogSourceRows([local], visibleCatalogStreams([addon], filters(), "cs", new Map(), true), "");
+    expect(rows[0]).toBe(local);
+    expect(canQueue(rows[0], true)).toBe(false);
   });
 });
 

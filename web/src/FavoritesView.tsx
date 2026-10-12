@@ -1,5 +1,5 @@
 import { Film, FolderOpen, Star } from "lucide-react";
-import { Empty } from "./app-chrome";
+import { Empty, ShapeToggle } from "./app-chrome";
 import { t } from "./i18n";
 import { TileArt } from "./TileArt";
 import type { FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem, TileShape } from "./types";
@@ -24,12 +24,13 @@ const percent = (item: FavoriteLibraryItem): number | null =>
 /** The one Favourites section: library stars and catalogue stars in one grid, filtered by a
  *  segmented control. A library entry opens the folder or plays the file the way the library
  *  does; a catalogue entry opens its detail. */
-export function FavoritesView({ filter, onFilter, items, busy, shape, onPlay, onOpenFolder, onOpenCatalog, hasMore, loadingMore, onLoadMore }: {
+export function FavoritesView({ filter, onFilter, items, busy, shape, onToggleShape, onPlay, onOpenFolder, onOpenCatalog, hasMore, loadingMore, onLoadMore }: {
   filter: FavoriteFilter;
   onFilter: (filter: FavoriteFilter) => void;
   items: FavoriteItem[];
   busy: boolean;
   shape: TileShape;
+  onToggleShape: () => void;
   onPlay: (item: FavoriteLibraryItem) => void;
   onOpenFolder: (item: FavoriteLibraryItem) => void;
   onOpenCatalog: (item: FavoriteCatalogItem) => void;
@@ -44,13 +45,14 @@ export function FavoritesView({ filter, onFilter, items, busy, shape, onPlay, on
       <div className="library-shelf-segments" role="radiogroup" aria-label={t("favorites.title")}>
         {FILTERS.map((entry) => <button key={entry.value} type="button" className={filter === entry.value ? "active" : ""} aria-pressed={filter === entry.value} onClick={() => onFilter(entry.value)}>{t(entry.label)}</button>)}
       </div>
+      <ShapeToggle shape={shape} onToggle={onToggleShape}/>
     </div>
     {busy && !items.length
       ? <div className="loading">{t("common.loading")}</div>
       : !items.length
         ? <Empty icon={<Star/>} title={t(empty.title)} text={t(empty.text)}/>
         : <>
-          <div className="browse-grid favorites-grid">
+          <div className={`browse-grid favorites-grid tile-shape-${shape}`}>
             {items.map((item) => item.kind === "library"
               ? <button key={`library:${item.path}`} className="browse-item" data-path={item.path} data-kind="favorite-library"
                   onClick={() => item.itemKind === "folder" ? onOpenFolder(item) : onPlay(item)}>

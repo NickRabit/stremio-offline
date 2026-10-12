@@ -1,5 +1,5 @@
 import { History } from "lucide-react";
-import { Empty } from "./app-chrome";
+import { Empty, ShapeToggle } from "./app-chrome";
 import { HomeCard, type HomeCardActions } from "./HomeCard";
 import { t } from "./i18n";
 import type { ResumeCard, ResumeFilter, TileShape } from "./types";
@@ -20,12 +20,13 @@ const EMPTY = {
  *  past that row's bound and filtered by card kind. A library card plays from the library, a
  *  catalogue card opens the episode it remembers, and the menu forgets the progress behind
  *  the card. */
-export function ResumeView({ filter, onFilter, items, busy, shape, actions, hasMore, loadingMore, onLoadMore }: {
+export function ResumeView({ filter, onFilter, items, busy, shape, onToggleShape, actions, hasMore, loadingMore, onLoadMore }: {
   filter: ResumeFilter;
   onFilter: (filter: ResumeFilter) => void;
   items: ResumeCard[];
   busy: boolean;
   shape: TileShape;
+  onToggleShape: () => void;
   actions: HomeCardActions;
   hasMore: boolean;
   loadingMore: boolean;
@@ -38,13 +39,14 @@ export function ResumeView({ filter, onFilter, items, busy, shape, actions, hasM
       <div className="library-shelf-segments" role="radiogroup" aria-label={t("resume.title")}>
         {FILTERS.map((entry) => <button key={entry.value} type="button" className={filter === entry.value ? "active" : ""} aria-pressed={filter === entry.value} onClick={() => onFilter(entry.value)}>{t(entry.label)}</button>)}
       </div>
+      <ShapeToggle shape={shape} onToggle={onToggleShape}/>
     </div>
     {busy && !items.length
       ? <div className="loading">{t("common.loading")}</div>
       : !items.length
         ? <Empty icon={<History/>} title={t(empty.title)} text={t(empty.text)}/>
         : <>
-          <div className="browse-grid section-grid">
+          <div className={`browse-grid section-grid favorites-grid tile-shape-${shape}`}>
             {items.map((card) => <HomeCard key={card.key} card={card} shape={shape} actions={actions}/>)}
           </div>
           {hasMore && <div className="load-more">{loadingMore ? <span>{t("common.loadingMore")}</span> : <button onClick={onLoadMore}>{t("common.loadMore")}</button>}</div>}
