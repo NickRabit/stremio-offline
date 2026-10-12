@@ -6,7 +6,7 @@ import { ExternalIdStore, imdbOf, siteLinks } from "../external-ids.js";
 import { images } from "../images.js";
 import { normalizeLanguage } from "../language.js";
 import { libraryFor, libraryVisible, parseLibraryPath, posixBase, type Viewer } from "../libraries.js";
-import { knownTitleEntry } from "../library-match.js";
+import { episodeNumberOf, knownTitleEntry, unitFor, type LibraryMetaRecord, type TitleUnit } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { mediaResources, ResourceError, safeSourceText, type ResourceOwner } from "../media-resources.js";
 import { readMediaText } from "../media-playlist.js";
@@ -27,13 +27,17 @@ export interface CatalogDeps extends RouteContext {
   libraryKey(value: string): string;
   /** The caller's library copies of one catalogue title or episode, in answer order. */
   localCopies(type: string, id: string, viewer: Viewer): Promise<Array<{ key: string; libraryId: string; libraryName: string; path: string; size: number }>>;
+  /** The title units of the current walks, and the binding stored on one path itself. Both are
+   *  what the identity route derives an episode number from. */
+  libraryUnits(): Promise<TitleUnit[]>;
+  ownRecord(relative: string, records: Record<string, LibraryMetaRecord>): LibraryMetaRecord | undefined;
   metaStore: LibraryMetaStore;
   externalIds: ExternalIdStore;
   subtitleDelay(value: unknown): number;
 }
 
 export function registerCatalogRoutes(app: express.Application, deps: CatalogDeps): void {
-  const { store, currentUser, cachedMeta, prefsOf, libraryTarget, ownerOf, trackMedia, libraryKey, localCopies, metaStore, externalIds, subtitleDelay, requireAccess } = deps;
+  const { store, currentUser, cachedMeta, prefsOf, libraryTarget, ownerOf, trackMedia, libraryKey, localCopies, libraryUnits, ownRecord, metaStore, externalIds, subtitleDelay, requireAccess } = deps;
 
   /** The addons this caller may use, read once per request. A disabled addon is left out
    *  later by the helpers that honour `enabled`; visibility narrows an enabled addon only. */
@@ -112,6 +116,30 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     if (!entry) return res.json({ links: [] });
     const ids = (await externalIds.ids(entry.record.id)) ?? {};
     res.json({ links: siteLinks(entry.record.type, entry.record.id, ids, language) });
+  }));
+  /** The catalogue title a library file is bound to, so a play that started from the library can
+   *  ask the addons about it the way the catalogue detail does. A path the caller may not see, an
+   *  invalid path and a file with no binding all answer an empty object, which the client reads as
+   *  "no sources": none of them is an error. */
+  app.get("/api/library/title", asyncRoute(async (req, res) => {
+    res.setHeader("cache-control", "private, no-store");
+    const raw = String(req.query.path ?? "").trim();
+    const key = raw ? boundKey(raw, viewerOf(currentUser(req))) : undefined;
+    const records = metaStore.qualifiedMeta();
+    const entry = key ? knownTitleEntry(key, records) : undefined;
+    if (!key || !entry) return res.json({});
+    const record = entry.record;
+    // The clicked file's own number, derived exactly as the identity route derives it, so a
+    // series file names the video id the addon stream endpoint takes for its episode.
+    const numbers = record.type === "series"
+      ? episodeNumberOf(key, ownRecord(key, records), { loose: unitFor(key, await libraryUnits())?.kind === "series" })
+      : undefined;
+    res.json({
+      type: record.type,
+      id: record.id,
+      name: record.name ?? "",
+      ...(numbers ? { videoId: `${record.id}:${numbers.season}:${numbers.episode}` } : {}),
+    });
   }));
   /** The sites worth checking before watching. Wikidata supplies two ids, the catalogue id
    *  the rest; when it cannot be reached the links it would have added are simply missing. */

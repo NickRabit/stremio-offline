@@ -24,6 +24,7 @@ import cz.stremiooffline.tv.data.HomeLayoutDto
 import cz.stremiooffline.tv.data.HomeLayoutResponseDto
 import cz.stremiooffline.tv.data.LanguageDto
 import cz.stremiooffline.tv.data.LibraryDto
+import cz.stremiooffline.tv.data.LibraryTitleDto
 import cz.stremiooffline.tv.data.MediaDto
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.NextFileDto
@@ -217,6 +218,20 @@ open class FakeTvApi : TvApi {
   }
 
   override suspend fun librarySource(path: String): SourceDto = SourceDto(sourceId = "src:$path")
+
+  /** The title each library path is bound to; a path not listed here is unbound. */
+  var libraryTitleValues: MutableMap<String, LibraryTitleDto> = mutableMapOf()
+  val libraryTitleRequests: MutableList<String> = mutableListOf()
+  var libraryTitleFailure: ApiError? = null
+  /** Held open until the test releases it, so a play can be watched while the lookup is out. */
+  var libraryTitleGate: CompletableDeferred<Unit>? = null
+
+  override suspend fun libraryTitle(path: String): LibraryTitleDto? {
+    libraryTitleRequests += path
+    libraryTitleGate?.let { withContext(currentCoroutineContext()) { it.await() } }
+    libraryTitleFailure?.let { throw it }
+    return libraryTitleValues[path]
+  }
 
   override suspend fun progress(key: String): ProgressDto? = progressValues[key]
 

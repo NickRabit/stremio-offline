@@ -79,6 +79,7 @@ export const USER_ALLOWED: Rule[] = [
   { method: "GET", pattern: /^\/trailer\/[^/]+\/[^/]+$/ },
   { method: "GET", pattern: /^\/library\/links$/ },
   { method: "GET", pattern: /^\/library\/trailer$/ },
+  { method: "GET", pattern: /^\/library\/title$/ },
   { method: "GET", pattern: /^\/image\/[^/]+$/ },
   { method: "GET", pattern: /^\/stream-sources\/[^/]+\/[^/]+$/ },
   { method: "GET", pattern: /^\/streams\/[^/]+\/[^/]+$/ },

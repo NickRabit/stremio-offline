@@ -98,6 +98,11 @@ interface TvApi : LibraryApi, FavoritesApi, ResumeApi, DetailApi, PlaybackApi, C
   suspend fun serverVersion(): String
   suspend fun librarySource(path: String): SourceDto
 
+  /** The catalogue title the library file at [path] is bound to (`GET /api/library/title`), or
+   *  null when it has no binding, the path names nothing this account may see, or the call
+   *  failed. Either way the file offers no addon sources. */
+  suspend fun libraryTitle(path: String): LibraryTitleDto?
+
   /** The addon subtitles offered for one catalogue title or episode. */
   suspend fun subtitles(type: String, id: String): List<AddonSubtitleDto>
 

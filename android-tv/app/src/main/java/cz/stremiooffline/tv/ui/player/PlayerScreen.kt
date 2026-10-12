@@ -161,6 +161,9 @@ fun PlayerScreen(
   var restoreFocus by remember { mutableStateOf<FocusRequester?>(null) }
   var nextEpisode by remember { mutableStateOf<NextEpisode?>(null) }
   var nextCard by remember { mutableStateOf(false) }
+  // A next episode replaces the file the caller's list was gathered for, so its addon rows name
+  // the episode that just ended. The list is dropped with it rather than offered for the new file.
+  var fileReplaced by remember { mutableStateOf(false) }
   // The correction lives with this playback, not beyond it.
   var delaySeconds by remember(target.key) { mutableDoubleStateOf(0.0) }
   var cues by remember { mutableStateOf<List<VttCue>>(emptyList()) }
@@ -248,6 +251,7 @@ fun PlayerScreen(
   fun startNext() {
     val next = currentNext ?: return
     nextCard = false
+    fileReplaced = true
     delaySeconds = 0.0
     cues = emptyList()
     title = next.title
@@ -267,6 +271,7 @@ fun PlayerScreen(
     addonSubtitles = emptyList()
     nextEpisode = null
     nextCard = false
+    fileReplaced = false
     tracksOpen = false
     diagnosticsOpen = false
     sourcesOpen = false
@@ -287,8 +292,10 @@ fun PlayerScreen(
   }
 
   // The sources the caller offers in its own order; an addon's notice is not a source. A play the
-  // catalogue never started has none, so both the button and the panel stay away.
-  val offeredSources = Streams.offeredStreams(sources)
+  // catalogue never started has none, so both the button and the panel stay away. A next episode
+  // replaces the file those sources belong to, and they go with it.
+  val offeredSources = Streams.offeredStreams(if (fileReplaced) emptyList() else sources)
+  val sourcesAsking = sourcesLoading && !fileReplaced
   // The row the session plays: an addon one by its source id, a library copy by the path it plays.
   // A blank source id names no source, so it marks no row; a source id match wins over a path one,
   // because an addon source chosen over a library file leaves that file's path on the session.
@@ -586,7 +593,7 @@ fun PlayerScreen(
   val qualityText = qualityLabel(quality)
   // Both panels act on the running session, so their buttons wait for it: a choice made before
   // the first descriptor lands would be dropped.
-  val sourcesShown = state.started && (offeredSources.size > 1 || sourcesLoading)
+  val sourcesShown = state.started && (offeredSources.size > 1 || sourcesAsking)
   val qualityShown = state.started
 
   PlayerOverlayShell(
@@ -684,7 +691,7 @@ fun PlayerScreen(
           },
           default = Streams.pickDefaultStream(offeredSources),
           playing = playingSource,
-          asking = sourcesLoading,
+          asking = sourcesAsking,
           emptyText = stringResource(R.string.sources_none),
           failureText = stringResource(R.string.tv_load_error),
           initialFocus = sourcesEntry,

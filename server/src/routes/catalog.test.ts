@@ -5,7 +5,7 @@ import { test } from "node:test";
 import express from "express";
 import { messageKeyOf } from "../errors.js";
 import type { ExternalIdStore } from "../external-ids.js";
-import type { LibraryMetaRecord } from "../library-match.js";
+import type { LibraryMetaRecord, TitleUnit } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { LibraryRecord } from "../libraries.js";
 import type { Store, UserPrefs } from "../store.js";
@@ -45,6 +45,7 @@ const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null, 
   bound?: Record<string, LibraryMetaRecord>;
   access?: CatalogDeps["requireAccess"];
   localCopies?: CatalogDeps["localCopies"];
+  units?: TitleUnit[];
 } = {}): Promise<Harness> => {
   const viewer = options.viewer === undefined ? admin : options.viewer;
   const lookups: Harness["lookups"] = [];
@@ -73,6 +74,8 @@ const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null, 
     trackMedia: () => undefined,
     libraryKey: (value) => value,
     localCopies: options.localCopies ?? (async () => []),
+    libraryUnits: async () => options.units ?? [],
+    ownRecord: (relative, records) => (records[relative]?.id ? records[relative] : undefined),
     metaStore: { qualifiedMeta: () => options.bound ?? ({}) } as unknown as LibraryMetaStore,
     externalIds: { ids: async () => ({}) } as unknown as ExternalIdStore,
     subtitleDelay: () => 0,
@@ -199,6 +202,64 @@ test("an administrator still reads a binding in a library nobody was granted", a
 
   const response = await api(harness.base, `/api/library/links?path=${encodeURIComponent("lib_00000001/Films/Heat")}`);
   assert.deepEqual(await response.json(), { links: [{ site: "imdb", url: "https://www.imdb.com/title/tt1/" }] });
+});
+
+/** What a play that started from the library needs: the title its file is bound to, so the
+ *  addons can be asked about it. Anything the caller may not see is answered like an unbound
+ *  file, which is what the player reads as "no sources". */
+test("GET /api/library/title answers the title of a bound file for an ordinary account", async (t) => {
+  const bound = { "lib_00000001/Films/Heat": { type: "movie", id: "tt1", name: "Heat" } };
+  const harness = await mount([], null, { libraries: [library("lib_00000001", [alice.id])], viewer: alice, bound });
+  t.after(harness.close);
+
+  const response = await api(harness.base, `/api/library/title?path=${encodeURIComponent("lib_00000001/Films/Heat")}`);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("cache-control"), "private, no-store");
+  assert.deepEqual(await response.json(), { type: "movie", id: "tt1", name: "Heat" });
+});
+
+test("GET /api/library/title names the episode id of a bound series file", async (t) => {
+  const bound = { "lib_00000001/Shows/Show": { type: "series", id: "tt5", name: "Show" } };
+  const harness = await mount([], null, { libraries: [library("lib_00000001", [alice.id])], viewer: alice, bound });
+  t.after(harness.close);
+
+  const response = await api(harness.base, `/api/library/title?path=${encodeURIComponent("lib_00000001/Shows/Show/S01/Show.S01E02.mkv")}`);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { type: "series", id: "tt5", name: "Show", videoId: "tt5:1:2" });
+});
+
+test("GET /api/library/title answers an empty object for a file with no binding", async (t) => {
+  const harness = await mount([], null, { libraries: [library("lib_00000001", [alice.id])], viewer: alice });
+  t.after(harness.close);
+
+  const response = await api(harness.base, `/api/library/title?path=${encodeURIComponent("lib_00000001/Films/Loose.mkv")}`);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {});
+});
+
+test("GET /api/library/title answers an empty object for a library the caller may not see", async (t) => {
+  const bound = { "lib_00000001/Films/Heat": { type: "movie", id: "tt1", name: "Heat" } };
+  const harness = await mount([], null, {
+    libraries: [library("lib_00000001"), library("lib_00000002", [alice.id])],
+    viewer: alice,
+    bound,
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, `/api/library/title?path=${encodeURIComponent("lib_00000001/Films/Heat")}`);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {});
+});
+
+test("GET /api/library/title answers an empty object for an invalid path", async (t) => {
+  const harness = await mount([], null, { libraries: [library("lib_00000001", [alice.id])], viewer: alice });
+  t.after(harness.close);
+
+  for (const path of ["", "lib_99999999/Films/Heat", "lib_00000001/../etc/passwd"]) {
+    const response = await api(harness.base, `/api/library/title?path=${encodeURIComponent(path)}`);
+    assert.equal(response.status, 200, path);
+    assert.deepEqual(await response.json(), {}, path);
+  }
 });
 
 const searchable = [{ type: "movie", id: "top", name: "Top", extra: [{ name: "search" }] }];

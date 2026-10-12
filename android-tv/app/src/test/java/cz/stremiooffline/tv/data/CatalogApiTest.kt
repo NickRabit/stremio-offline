@@ -5,6 +5,7 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -154,6 +155,29 @@ class CatalogApiTest {
     client(start()).streams("series", "tt1:1:2")
 
     assertEquals("/api/streams/series/tt1%3A1%3A2", server.takeRequest().path)
+  }
+
+  @Test
+  fun `the title of a library file carries its path`() = runTest {
+    server.enqueue(MockResponse().setBody("""{"type":"series","id":"tt5","videoId":"tt5:1:2","name":"Show"}"""))
+    val title = client(start()).libraryTitle("Shows/Show S01/E02.mkv")
+
+    assertEquals("/api/library/title?path=Shows%2FShow%20S01%2FE02.mkv", server.takeRequest().path)
+    assertEquals("tt5:1:2", title?.videoId)
+  }
+
+  @Test
+  fun `an unbound library file answers null`() = runTest {
+    server.enqueue(MockResponse().setBody("{}"))
+
+    assertNull(client(start()).libraryTitle("Filmy/Loose.mkv"))
+  }
+
+  @Test
+  fun `a refused library title answers null`() = runTest {
+    server.enqueue(MockResponse().setResponseCode(403).setBody("""{"error":"nope"}"""))
+
+    assertNull(client(start()).libraryTitle("Filmy/Loose.mkv"))
   }
 
   @Test
