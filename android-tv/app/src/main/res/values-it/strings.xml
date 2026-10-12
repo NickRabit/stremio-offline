@@ -60,6 +60,7 @@
   <string name="tv_default">Predefinito</string>
   <string name="tv_chosen_source">Fonte</string>
   <string name="tv_search_hint">Digita un titolo e premi Fine.</string>
+  <string name="tv_voice_search">Ricerca vocale</string>
   <string name="tv_finding_sources">Ricerca delle fonti…</string>
   <string name="tv_play_when_ready">Avvio quando le fonti saranno pronte…</string>
   <string name="catalog_title">Cosa vuoi guardare?</string>

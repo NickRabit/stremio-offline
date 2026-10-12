@@ -44,12 +44,6 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.graphics.vector.PathBuilder
-import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -68,6 +62,7 @@ import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.data.SearchScope
 import cz.stremiooffline.tv.diagnostics.AppLog
 import cz.stremiooffline.tv.ui.components.BrandMark
+import cz.stremiooffline.tv.ui.components.outlineIcon
 import cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs
 import cz.stremiooffline.tv.ui.catalog.CatalogDetailScreen
 import cz.stremiooffline.tv.ui.catalog.CatalogScreen
@@ -610,25 +605,7 @@ fun Hint(text: String, modifier: Modifier = Modifier) {
   }
 }
 
-private fun icon(name: String, builder: PathBuilder.() -> Unit): ImageVector =
-  ImageVector.Builder(
-    name = name,
-    defaultWidth = 24.dp,
-    defaultHeight = 24.dp,
-    viewportWidth = 24f,
-    viewportHeight = 24f,
-  ).apply {
-    path(
-      stroke = SolidColor(Color.White),
-      strokeLineWidth = 2f,
-      strokeLineCap = StrokeCap.Round,
-      strokeLineJoin = StrokeJoin.Round,
-      pathBuilder = builder,
-    )
-  }.build()
-
-
-private val SearchIcon = icon("Search") {
+private val SearchIcon = outlineIcon("Search") {
   moveTo(4f, 11f)
   arcTo(7f, 7f, 0f, isMoreThanHalf = true, isPositiveArc = true, x1 = 18f, y1 = 11f)
   arcTo(7f, 7f, 0f, isMoreThanHalf = true, isPositiveArc = true, x1 = 4f, y1 = 11f)
@@ -637,7 +614,7 @@ private val SearchIcon = icon("Search") {
   lineTo(16.5f, 16.5f)
 }
 
-private val HomeIcon = icon("Home") {
+private val HomeIcon = outlineIcon("Home") {
   moveTo(3f, 10.5f)
   lineTo(12f, 3f)
   lineTo(21f, 10.5f)
@@ -651,7 +628,7 @@ private val HomeIcon = icon("Home") {
   lineTo(19f, 9f)
 }
 
-private val CatalogIcon = icon("Catalog") {
+private val CatalogIcon = outlineIcon("Catalog") {
   moveTo(5f, 4f)
   lineTo(5f, 20f)
   moveTo(10f, 4f)
@@ -660,7 +637,7 @@ private val CatalogIcon = icon("Catalog") {
   lineTo(20f, 19.5f)
 }
 
-private val LibraryIcon = icon("Library") {
+private val LibraryIcon = outlineIcon("Library") {
   moveTo(5f, 12f)
   lineTo(19f, 12f)
   arcTo(2f, 2f, 0f, isMoreThanHalf = false, isPositiveArc = true, x1 = 21f, y1 = 14f)
@@ -679,7 +656,7 @@ private val LibraryIcon = icon("Library") {
   lineTo(7.01f, 16f)
 }
 
-private val HistoryIcon = icon("History") {
+private val HistoryIcon = outlineIcon("History") {
   moveTo(12f, 3f)
   arcTo(9f, 9f, 0f, isMoreThanHalf = true, isPositiveArc = true, x1 = 12f, y1 = 21f)
   arcTo(9f, 9f, 0f, isMoreThanHalf = true, isPositiveArc = true, x1 = 12f, y1 = 3f)
@@ -689,7 +666,7 @@ private val HistoryIcon = icon("History") {
   lineTo(15.5f, 14f)
 }
 
-private val StarIcon = icon("Star") {
+private val StarIcon = outlineIcon("Star") {
   moveTo(12f, 3.5f)
   lineTo(14.6f, 9f)
   lineTo(20.6f, 9.9f)

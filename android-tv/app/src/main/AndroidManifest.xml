@@ -10,6 +10,13 @@
       android:name="android.hardware.touchscreen"
       android:required="false" />
 
+  <!-- Android 11 up cannot see the speech recognizer without this declaration. -->
+  <queries>
+    <intent>
+      <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
+    </intent>
+  </queries>
+
   <application
       android:allowBackup="false"
       android:banner="@drawable/banner"

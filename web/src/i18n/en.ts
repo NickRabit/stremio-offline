@@ -1654,6 +1654,7 @@ export const en = {
   "tv.default": "Default",
   "tv.chosenSource": "Source",
   "tv.searchHint": "Type a title, then press Done.",
+  "tv.voiceSearch": "Voice search",
   "tv.findingSources": "Finding sources…",
   "tv.playWhenReady": "Starting when sources are ready…",
   "tv.myListEmpty": "Titles you star appear here.",

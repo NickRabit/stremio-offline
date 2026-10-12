@@ -60,6 +60,7 @@
   <string name="tv_default">Domyślne</string>
   <string name="tv_chosen_source">Źródło</string>
   <string name="tv_search_hint">Wpisz tytuł i naciśnij Gotowe.</string>
+  <string name="tv_voice_search">Wyszukiwanie głosowe</string>
   <string name="tv_finding_sources">Szukam źródeł…</string>
   <string name="tv_play_when_ready">Uruchomię, gdy źródła będą gotowe…</string>
   <string name="catalog_title">Co chcesz obejrzeć?</string>

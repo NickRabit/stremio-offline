@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -31,6 +32,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.tv.material3.Icon
 import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.SearchScope
@@ -48,6 +50,7 @@ const val TagSearchField = "search_field"
 const val TagSearchInput = "search_input"
 const val TagSearchRetry = "search_retry"
 const val TagSearchScopeChip = "search_scope_chip"
+const val TagSearchVoice = "search_voice"
 const val TagSearchScopePanel = "search_scope_panel"
 const val TagSearchScopeAll = "search_scope_all"
 
@@ -66,6 +69,10 @@ fun SearchScreen(
   modifier: Modifier = Modifier,
   /** Back to the catalogue when Search was opened from its Hledat chip. */
   onBackToCatalog: (() -> Unit)? = null,
+  /** Whether a recognizer answers here; the mic button and the remote's mic key follow it. */
+  voiceAvailable: Boolean = voiceSearchAvailable(),
+  /** Test seam: answers a mic press without a device. Null asks the platform recognizer. */
+  voiceLauncher: VoiceLauncher? = null,
 ) {
   val viewModel = viewModel<SearchViewModel>(factory = SearchViewModel.factory(api))
   val state = viewModel.state
@@ -81,6 +88,17 @@ fun SearchScreen(
   fun open(item: cz.stremiooffline.tv.data.MetaDto) =
     onOpenDetail(CatalogDetailArgs(item, item.addonName.orEmpty(), item.type ?: "movie"))
 
+  // A heard query is a typed one: the field shows it and the same submit runs, so whatever a
+  // submit records it records here too.
+  fun onVoice(spoken: String) {
+    val query = spoken.trim()
+    if (query.isEmpty()) return
+    text = query
+    viewModel.submit(query)
+  }
+
+  val voice = rememberVoiceSearch(voiceAvailable, onVoiceResult = ::onVoice, launcher = voiceLauncher)
+
   // Registered before the panel's own handler, so Back closes the panel first and
   // only returns to the catalogue when nothing is over the screen.
   if (onBackToCatalog != null) BackHandler { onBackToCatalog() }
@@ -89,7 +107,10 @@ fun SearchScreen(
   LaunchedEffect(Unit) { runCatching { fieldFocus.requestFocus() } }
 
   Column(
-    modifier = modifier.fillMaxSize().padding(start = Tokens.SafeX, top = Tokens.SafeY, end = Tokens.SafeX),
+    modifier = modifier
+      .fillMaxSize()
+      .padding(start = Tokens.SafeX, top = Tokens.SafeY, end = Tokens.SafeX)
+      .voiceKey(voice),
     verticalArrangement = Arrangement.spacedBy(9.dp),
   ) {
     Text(
@@ -111,7 +132,7 @@ fun SearchScreen(
         testTag = TagSearchField,
         inputTestTag = TagSearchInput,
         onSubmit = { viewModel.submit(text) },
-        modifier = Modifier.width(520.dp),
+        modifier = Modifier.width(430.dp),
       )
       Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(
@@ -131,6 +152,21 @@ fun SearchScreen(
             .focusRequester(scopeFocus)
             .testTag(TagSearchScopeChip)
             .leftToNeighbour(fieldFocus),
+        )
+      }
+      // The mic is the row's last stop: LEFT walks back to the chip the same way the chip walks
+      // back to the field, because the shell's LEFT exit would otherwise send it to the rail.
+      if (voice.available) {
+        FocusButton(
+          text = stringResource(R.string.tv_voice_search),
+          onClick = voice.start,
+          leading = { Icon(MicIcon, contentDescription = null, modifier = Modifier.size(16.dp)) },
+          contentDescription = stringResource(R.string.tv_voice_search),
+          labelMaxWidth = 240.dp,
+          modifier = Modifier
+            .height(38.dp)
+            .testTag(TagSearchVoice)
+            .leftToNeighbour(scopeFocus),
         )
       }
     }

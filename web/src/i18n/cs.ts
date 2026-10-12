@@ -1648,6 +1648,7 @@ export const cs: Catalog = {
   "tv.default": "Výchozí",
   "tv.chosenSource": "Zdroj",
   "tv.searchHint": "Napište název a stiskněte Hotovo.",
+  "tv.voiceSearch": "Hlasové vyhledávání",
   "tv.findingSources": "Hledám zdroje…",
   "tv.playWhenReady": "Spustím, až budou zdroje načtené…",
   "tv.myListEmpty": "Tituly označené hvězdičkou najdete tady.",

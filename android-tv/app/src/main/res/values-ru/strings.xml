@@ -60,6 +60,7 @@
   <string name="tv_default">По умолчанию</string>
   <string name="tv_chosen_source">Источник</string>
   <string name="tv_search_hint">Введите название и нажмите Готово.</string>
+  <string name="tv_voice_search">Голосовой поиск</string>
   <string name="tv_finding_sources">Поиск источников…</string>
   <string name="tv_play_when_ready">Запущу, когда источники будут готовы…</string>
   <string name="catalog_title">Что вы хотите посмотреть?</string>

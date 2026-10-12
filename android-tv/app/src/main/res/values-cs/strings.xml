@@ -60,6 +60,7 @@
   <string name="tv_default">Výchozí</string>
   <string name="tv_chosen_source">Zdroj</string>
   <string name="tv_search_hint">Napište název a stiskněte Hotovo.</string>
+  <string name="tv_voice_search">Hlasové vyhledávání</string>
   <string name="tv_finding_sources">Hledám zdroje…</string>
   <string name="tv_play_when_ready">Spustím, až budou zdroje načtené…</string>
   <string name="catalog_title">Co chcete sledovat?</string>
