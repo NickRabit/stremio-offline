@@ -40,7 +40,7 @@ export function FavoritesView({ filter, onFilter, items, busy, shape, onPlay, on
   const empty = EMPTY[filter];
   return <div className="favorites-view">
     <div className="heading"><small>{t("home.eyebrow")}</small><h2>{t("favorites.title")}</h2></div>
-    <div className="filterbar favorites-filter">
+    <div className="filterbar section-filter">
       <div className="library-shelf-segments" role="radiogroup" aria-label={t("favorites.title")}>
         {FILTERS.map((entry) => <button key={entry.value} type="button" className={filter === entry.value ? "active" : ""} aria-pressed={filter === entry.value} onClick={() => onFilter(entry.value)}>{t(entry.label)}</button>)}
       </div>

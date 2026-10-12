@@ -6,10 +6,11 @@ import { images } from "../images.js";
 import { allowedAddons } from "../addons.js";
 import { HomeCatalogCache, homeCatalogOfferings, homeCatalogTargets, type HomeCatalogTarget } from "../home-catalogs.js";
 import {
-  HOME_BUILTIN_LABELS, HOME_BUILTIN_ROWS, HOME_CANDIDATES, HOME_LOOKUP_DEADLINE_MS, HOME_MARKER_LIMIT, HOME_ROW_LIMIT,
+  HOME_BUILTIN_LABELS, HOME_BUILTIN_ROWS, HOME_CANDIDATES, HOME_LOOKUP_DEADLINE_MS, HOME_MARKER_LIMIT, HOME_RESUME_FILE_LIMIT, HOME_ROW_LIMIT,
   arrangeHomeRows, boundCards, homeCatalogRowId, homeFeedSelectionKey, homeRowOrder, mergeResume, parseHomeLayout,
+  parseResumeFilter, resumePage,
   type HomeCard, type HomeLayout, type HomeLayoutEntry, type HomeLayoutResponse, type HomeResponse, type HomeRow, type HomeRowError, type HomeRowId,
-  type BuiltinHomeRowId, type ResumeCatalogueItem, type ResumeFileItem,
+  type BuiltinHomeRowId, type ResumeCatalogueItem, type ResumeFileItem, type ResumeSources,
 } from "../home.js";
 import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, showsInFavorites, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
 import { isPathWithin, type BrowseItem } from "../library.js";
@@ -163,7 +164,12 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     return { poster: await thumbUrl("dir", relative, art), wide: await thumbUrl("dir", relative, wide, "wide") };
   };
 
-  const resumeRow = async (req: express.Request): Promise<HomeRow> => {
+  /** The two Continue watching sources, permission-filtered: the catalogue's stored progress
+   *  and next-episode markers, and the library files the account left part-watched. Home's
+   *  `resume` row and `GET /api/resume` read this one builder. On Home a library or add-on
+   *  switched off the Home page drops out; the Continue watching section applies only the
+   *  destination's own `showInContinueWatching` switch. */
+  const resumeSources = async (req: express.Request, home: boolean): Promise<{ sources: ResumeSources; partial: boolean; pending: boolean }> => {
     const [progress, resume] = await Promise.all([
       personal.progressRows(req, {
         markerLimit: HOME_MARKER_LIMIT, deadlineMs: homeLookupDeadlineMs, addonFilter: true,
@@ -171,16 +177,19 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
         // would leave the other half behind; the merge does the real cut to 20.
         limit: Number.POSITIVE_INFINITY,
       }),
-      personal.libraryResumeItems(req, { onHome: true }),
+      // Every file candidate, whatever page of the merged list the caller asked for: the
+      // stored positions are bounded already, and the merge is what pages. Home only ever
+      // draws 20, so it keeps the smaller bound; the section may reach every file.
+      personal.libraryResumeItems(req, { onHome: home, skip: 0, limit: home ? 120 : HOME_RESUME_FILE_LIMIT }),
     ]);
     // The addon's own switches for the row, as the catalogue row reads them: a row whose addon
-    // is gone, or that never recorded one, stays.
+    // is gone, or that never recorded one, stays. Home also drops an add-on switched off there.
     const addons = store.addons();
     const catalogue: ResumeCatalogueItem[] = progress.items
       .filter((row) => !row.key.startsWith("file:"))
       .filter((row) => {
         const addon = addons.find((entry) => entry.key === row.addonKey);
-        return addon?.showInContinueWatching !== false && addon?.showOnHome !== false;
+        return addon?.showInContinueWatching !== false && (!home || addon?.showOnHome !== false);
       })
       .map((row) => {
         const series = row.series;
@@ -209,8 +218,13 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
       ...(typeof item.episode === "number" ? { episode: item.episode } : {}),
       ...(item.seriesId ? { seriesId: item.seriesId, seriesType: item.seriesType } : {}),
     }));
-    const merged = mergeResume({ catalogue, files });
-    return { status: "ok", items: merged.items, hasMore: merged.hasMore, ...(progress.partial ? { partial: true } : {}) };
+    return { sources: { catalogue, files }, partial: progress.partial, pending: resume.pending };
+  };
+
+  const resumeRow = async (req: express.Request): Promise<HomeRow> => {
+    const { sources, partial } = await resumeSources(req, true);
+    const merged = mergeResume(sources);
+    return { status: "ok", items: merged.items, hasMore: merged.hasMore, ...(partial ? { partial: true } : {}) };
   };
 
   const completedRow = async (_req: express.Request, viewer: Viewer): Promise<HomeRow> => {
@@ -554,6 +568,27 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     }));
     const response: HomeResponse = { generatedAt: new Date().toISOString(), order, rows };
     res.json(response);
+  }));
+
+  /** The one Continue watching list for the signed-in account: it carries Home's merged list
+   *  past the row's bound, filtered by card kind. The only difference from Home's row is that
+   *  this destination honours just `showInContinueWatching`, not the Home switches. Every card
+   *  keeps the shape Home draws, so the interface renders both with one component. */
+  app.get("/api/resume", asyncRoute(async (req, res) => {
+    res.set("Cache-Control", "private, no-store");
+    const { sources, partial, pending } = await resumeSources(req, false);
+    const page = resumePage(sources, {
+      filter: parseResumeFilter(req.query.filter),
+      skip: Math.max(0, Number(req.query.skip) || 0),
+      limit: Math.max(1, Math.min(120, Number(req.query.limit) || HOME_ROW_LIMIT)),
+    });
+    res.json({
+      items: page.items, total: page.total,
+      // A page is pending when a card on it still lacks a poster, and the library source
+      // reports a file still waiting for artwork or metadata.
+      pending: pending || page.items.some((item) => !item.poster),
+      ...(partial ? { partial: true } : {}),
+    });
   }));
 
   app.get("/api/home/layout", asyncRoute(async (req, res) => {

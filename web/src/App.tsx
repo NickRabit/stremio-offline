@@ -17,7 +17,7 @@ import { SuggestionsDialog } from "./SuggestionsDialog";
 import { SeriesDownloadDialog } from "./SeriesDownloadDialog";
 import { FollowDialog, toEpisodes } from "./FollowDialog";
 import { FollowingPage } from "./FollowingPage";
-import { LibraryShelf } from "./LibraryShelf";
+import { ResumeView } from "./ResumeView";
 import { StatsPanel } from "./Stats";
 import { report } from "./diagnostics";
 import { label, titleLanguage } from "./languages";
@@ -29,24 +29,23 @@ import { createLiveSearch, type LiveSearch, type LiveSearchState } from "./live-
 import { rankByTitle } from "./title-match";
 import { CandidatePool, suggest, type Suggestion } from "./search-suggestions";
 import { galleryPayload, gridArt, localizedDownloadTitle, mergeMetaDetail } from "./meta";
-import { catalogResumeEntries, localResumeEntries } from "./resume-visibility";
-import { resumeTarget, resumeVideo, type ResumeTarget } from "./resume-target";
+import { resumeVideo, type ResumeTarget } from "./resume-target";
 import { trailerAction } from "./trailers";
 import { emptyViews, prefsFor, scopeOf, withDownloads, withExtra, withLibrary } from "./views";
 import { Empty, Nav, Onboarding } from "./app-chrome";
 import { FavoritesView } from "./FavoritesView";
 import { Downloads } from "./DownloadsPage";
 import { Home } from "./Home";
+import type { HomeCardActions } from "./HomeCard";
 import { useHome } from "./useHome";
 import type { ShowAllTarget } from "./home-cards";
 import type { HomeCard } from "../../server/src/home";
 import { parseHomeCatalogRowId } from "../../server/src/home";
 import { MoreMenu, type MoreItem } from "./MoreMenu";
-import { fmtEta } from "./download-format";
 import { MediaGallery, type GalleryImage, type GalleryKind } from "./MediaGallery";
 import { SettingsPage } from "./SettingsPage";
 import { resolveStartView } from "./start-view";
-import type { Addon, BuildInfo, BrowseFile, BrowseItem, BrowseLibrary, BrowseResult, DeviceTransfer, DownloadsViewPrefs, FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem, FollowView, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, LibraryViewPrefs, NewEpisode, ProgressEntry, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, Stream, Subtitle, Trailer, Video, SearchState } from "./types";
+import type { Addon, BuildInfo, BrowseItem, BrowseLibrary, BrowseResult, DeviceTransfer, DownloadsViewPrefs, FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem, FollowView, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, LibraryViewPrefs, NewEpisode, ProgressEntry, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, Stream, Subtitle, Trailer, Video, SearchState } from "./types";
 
 /** The names of the linked sites. They are trademarks, not interface text, so they are
  *  spelled the same in every language and live here rather than in the catalogues. */
@@ -72,7 +71,7 @@ const legacyLibraryView = (): LibraryViewPrefs | null => {
 };
 const forgetLegacy = () => { try { for (const key of LEGACY_KEYS) localStorage.removeItem(`library-${key}`); } catch { /* storage may be unavailable */ } };
 
-type View = "home" | "catalog" | "library" | "favorites" | "following" | "downloads" | "stats" | "addons" | "settings";
+type View = "home" | "catalog" | "library" | "resume" | "favorites" | "following" | "downloads" | "stats" | "addons" | "settings";
 type PlaybackAnchor = { kind: "catalog" | "library"; key: string };
 /** What a list is looking at, in terms the layout cannot invalidate: the item on top and
  *  how far it sits into the view. A rotation rewrites every pixel offset; this survives. */
@@ -85,11 +84,6 @@ type PlaybackReturn = {
   anchor?: PlaybackAnchor & { element: HTMLElement; ratio: number };
 };
 const streamLabel = (item: Stream) => item.name || item.title?.split("\n")[0] || item.description?.split("\n")[0] || "Stream";
-/** A Continue watching tile: the stored position plus the season, the episode number and the
- *  show, which only the preview answers. A tile without them offers no next episode.
- *  `series` comes from the library row, which knows the show by name; the catalogue's own
- *  `series` on a progress entry describes an episode key and never reaches this strip. */
-type ResumeTile = Omit<ProgressEntry, "series"> & Partial<Pick<BrowseFile, "season" | "episode" | "series">>;
 
 /** Addons name types freely; only the two we filter by have a translation. */
 const typeLabel = (type: string) => type === "movie" ? t("catalog.movies") : type === "series" ? t("catalog.series") : type;
@@ -219,7 +213,11 @@ export function App() {
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [session, setSession] = useState<Session | null | undefined>(undefined);
   const home = useHome({ active: view === "home", account: session?.username ?? null, admin: session?.role === "admin", playerOpen });
-  const [resumePreview, setResumePreview] = useState<BrowseResult | null>(null);
+  const [resumeCards, setResumeCards] = useState<ResumeCard[]>([]);
+  const [resumeCardsTotal, setResumeCardsTotal] = useState(0);
+  const [resumeFilter, setResumeFilter] = useState<ResumeFilter>("all");
+  const [resumeBusy, setResumeBusy] = useState(false);
+  const [resumeLoadingMore, setResumeLoadingMore] = useState(false);
   const [favorites, setFavorites] = useState<FavoriteItem[]>([]);
   const [favoritesTotal, setFavoritesTotal] = useState(0);
   const [favoritesFilter, setFavoritesFilter] = useState<FavoriteFilter>("all");
@@ -405,6 +403,16 @@ export function App() {
       setFavoritesTotal(page.total);
     } catch (error) { fail(error); }
     finally { setFavoritesBusy(false); setFavoritesLoadingMore(false); }
+  };
+  /** The one Continue watching list, the same first page Home draws, carried past its bound. */
+  const loadResume = async (filter = resumeFilter, skip = 0) => {
+    if (skip) setResumeLoadingMore(true); else setResumeBusy(true);
+    try {
+      const page = await api.resumeList({ filter, skip, limit: 60 });
+      setResumeCards((previous) => skip && previous.length ? [...previous, ...page.items] : page.items);
+      setResumeCardsTotal(page.total);
+    } catch (error) { fail(error); }
+    finally { setResumeBusy(false); setResumeLoadingMore(false); }
   };
   /** A library star opens the folder or plays the file the way the library does; a catalogue
    *  star opens its detail. */
@@ -602,9 +610,7 @@ export function App() {
   const folderMeta = (item: Extract<BrowseItem, { kind: "folder" }>) =>
     [item.year, t("library.fileCount", { count: item.fileCount }), bytes(item.size)].filter(Boolean).join(" · ");
   const fileMeta = (item: Extract<BrowseItem, { kind: "file" }>) =>
-    browsePath === ":resume" && item.progress
-      ? t("library.remaining", { time: fmtEta(Math.max(0, item.progress.duration - item.progress.position)) })
-      : [item.year, bytes(item.size)].filter(Boolean).join(" · ");
+    [item.year, bytes(item.size)].filter(Boolean).join(" · ");
   const descriptionLine = (item: TreeItem) => item.description
     ? (item.catalogName ? `${item.catalogName} · ${item.description}` : item.description)
     : item.match === "suggested" && item.suggestion
@@ -667,7 +673,7 @@ export function App() {
   const linksRequestRef = useRef(0); const trailerRequestRef = useRef(0); const askedLibraryLinks = useRef(new Set<string>()); const askedLibraryTrailers = useRef(new Set<string>());
   const loadingRef = useRef(false); const requestRef = useRef(0); const itemsRef = useRef<Meta[]>([]); const gridRef = useRef<HTMLDivElement>(null); const browseScrollRef = useRef<HTMLDivElement | null>(null); const detailRef = useRef<HTMLElement>(null);
   const searchAbortRef = useRef<AbortController | null>(null);
-  const loadedSearchRef = useRef<{ query: string; scope: string; type: string; genre: string; virtual: string; catalog: string; reset: number } | null>(null);
+  const loadedSearchRef = useRef<{ query: string; scope: string; type: string; genre: string; catalog: string; reset: number } | null>(null);
   const playerOpenRef = useRef(false); const playbackReturn = useRef<PlaybackReturn | null>(null);
   const viewAnchor = useRef<ViewAnchor | null>(null); const anchorFrozen = useRef(false); const anchorFrame = useRef(0);
   // A toolbar folds to give a scrolling list more room. A list that already fits has nothing to
@@ -683,11 +689,7 @@ export function App() {
     const settled = window.setTimeout(unfoldIfFits, 450);
     return () => { observer.disconnect(); window.clearTimeout(settled); };
   }, [view, libraryCompact, catalogCompact, items, browse]);
-  // The built-in lists look like a catalogue, they just do not come from an addon.
-  const VIRTUAL = { resume: ":resume" } as const;
-  const virtualCatalog = selectedCatalog === VIRTUAL.resume ? selectedCatalog : "";
-  const currentCatalog = virtualCatalog ? undefined
-    : catalogs.find((catalog) => `${catalog.addonKey}:${catalog.type}:${catalog.id}` === selectedCatalog) ?? catalogs[0];
+  const currentCatalog = catalogs.find((catalog) => `${catalog.addonKey}:${catalog.type}:${catalog.id}` === selectedCatalog) ?? catalogs[0];
   const searchRequired = Boolean(currentCatalog?.extra?.some((extra) => extra.name === "search" && extra.isRequired));
   const downloadTitleLanguage = settings.downloadTitleLanguage === "ui" ? settings.uiLanguage : settings.downloadTitleLanguage;
   const baseDownloadTitle = selectedDownloadTitle || selected?.name || "Video";
@@ -1051,6 +1053,7 @@ export function App() {
     scrollByView.current[target] = 0;
     if (target === "catalog") resetCatalog();
     else if (target === "library") resetLibrary();
+    else if (target === "resume") setResumeFilter("all");
     else if (target === "favorites") setFavoritesFilter("all");
     else if (target === "stats") setStatsReset((value) => value + 1);
     // The catalogue and the library scroll in a box of their own, so the document offset is not
@@ -1203,15 +1206,6 @@ export function App() {
     try { const saved = await api.updateSettings({ [key]: next }); setSettings((current: AppSettings) => ({ ...current, ...saved })); }
     catch (e) { setSettings((current: AppSettings) => ({ ...current, [key]: before })); fail(e); }
   };
-  /** The library shelf's segment saves like a shape: optimistic, silent, and put back on
-   *  failure so the clicked segment never sticks without the write behind it. */
-  const chooseLibraryShelf = async (segment: AppSettings["libraryShelf"]) => {
-    const before = settings.libraryShelf;
-    setSettings((current: AppSettings) => ({ ...current, libraryShelf: segment }));
-    try { const saved = await api.updateSettings({ libraryShelf: segment }); setSettings((current: AppSettings) => ({ ...current, ...saved })); }
-    catch (e) { setSettings((current: AppSettings) => ({ ...current, libraryShelf: before })); fail(e); }
-  };
-
   const saveSettings = async (patch: SettingsPatch) => {
     const { realDebridToken: _token, tmdbApiKey: _apiKey, ...rest } = patch;
     // Clearing the Home layout is stored as its absence, so the optimistic state drops the
@@ -1231,9 +1225,7 @@ export function App() {
     try {
       const options = { skip, limit: 60, sort: browseSort, order: browseDesc ? "desc" : "asc", seed: browseSeed.current };
       // Favorites include entries from the entire library tree.
-      const page = target === ":resume"
-        ? await api.resumeLibrary({ ...options, query: browseQuery })
-        : target === ":favorites"
+      const page = target === ":favorites"
         ? await api.favorites(options)
         : await api.browse({ ...options, path: target, query: browseQuery, unconfirmed: onlyUnconfirmed });
       if (request !== browseRequest.current || wanted !== browseLocation.current) return;
@@ -1247,9 +1239,7 @@ export function App() {
     const request = browseRequest.current;
     try {
       const options = { limit: Math.max(60, limit), sort: browseSort, order: browseDesc ? "desc" : "asc", seed: browseSeed.current };
-      const page = browsePath === ":resume"
-        ? await api.resumeLibrary({ ...options, query: browseQuery })
-        : browsePath === ":favorites"
+      const page = browsePath === ":favorites"
         ? await api.favorites(options)
         : await api.browse({ ...options, path: browsePath, query: browseQuery, unconfirmed: onlyUnconfirmed });
       if (location === browseLocation.current && request === browseRequest.current) setBrowse(page);
@@ -1262,6 +1252,12 @@ export function App() {
     setFavorites([]); setFavoritesTotal(0);
     void loadFavorites(favoritesFilter, 0);
   }, [ready, view, favoritesFilter]);
+  useEffect(() => {
+    if (!ready || view !== "resume") return;
+    // The previous filter's cards and its own "load more" must not stay under the new one.
+    setResumeCards([]); setResumeCardsTotal(0);
+    void loadResume(resumeFilter, 0);
+  }, [ready, view, resumeFilter]);
   // The player's star writes the library favourite, which the view does not read: closing the
   // player re-reads the list, so a star removed there disappears from its card.
   const playerWasOpen = useRef(false);
@@ -1270,6 +1266,7 @@ export function App() {
     if (!playerWasOpen.current) return;
     playerWasOpen.current = false;
     if (view === "favorites") void loadFavorites(favoritesFilter, 0);
+    if (view === "resume") void loadResume(resumeFilter, 0);
   }, [playerOpen]);
   // The follow of the title on screen. A slow answer for a title that is already gone is
   // dropped; a failure leaves the chip in the not-followed state and never blocks the detail.
@@ -1308,13 +1305,6 @@ export function App() {
     }, playerOpen ? 0 : 900);
     return () => clearTimeout(timer);
   }, [ready, view, playerOpen]);
-  useEffect(() => {
-    if (!ready || view !== "library" || browsePath || browseQuery) return;
-    let cancelled = false;
-    void api.resumeLibrary({ limit: 8 }).then((result) => { if (!cancelled) setResumePreview(result); }).catch(() => { if (!cancelled) setResumePreview(null); });
-    return () => { cancelled = true; };
-  }, [ready, view, browse, browsePath, browseQuery]);
-
   // While the user is somewhere other than the library, idle time goes into the root listing
   // and the pictures it will draw, so the first visit finds them warm. Best-effort: the
   // ordinary request on entry stays the authoritative one, and a cancelled pass starts nothing.
@@ -1550,7 +1540,7 @@ export function App() {
   };
 
   const loadPage = async (reset: boolean) => {
-    if (!submittedQuery && !virtualCatalog && !currentCatalog) return;
+    if (!submittedQuery && !currentCatalog) return;
     // Paging may be dropped, a new query may not -- that one has to override the run before it.
     if (!reset && loadingRef.current) return;
     const request = reset ? ++requestRef.current : requestRef.current;
@@ -1578,9 +1568,6 @@ export function App() {
           firstPageOk.current = submittedQuery;
           if (recordIntent.current === submittedQuery) { recordIntent.current = null; recordSearch(submittedQuery); }
         }
-      } else if (virtualCatalog) {
-        // The content is derived, so there is nothing to load here.
-        setHasMore(false);
       } else {
         const metas = await api.catalog(currentCatalog!, "", from, activeGenre);
         if (stale()) return;
@@ -1621,7 +1608,7 @@ export function App() {
   // A changed catalogue, query or filter starts from the first page. The scope only
   // decides what a search asks for, so on its own it reloads nothing.
   useEffect(() => {
-    const snapshot = { query: submittedQuery, scope: searchScopeValue, type: typeFilter, genre: activeGenre, virtual: virtualCatalog, catalog: `${currentCatalog?.addonKey}:${currentCatalog?.type}:${currentCatalog?.id}`, reset: catalogReset };
+    const snapshot = { query: submittedQuery, scope: searchScopeValue, type: typeFilter, genre: activeGenre, catalog: `${currentCatalog?.addonKey}:${currentCatalog?.type}:${currentCatalog?.id}`, reset: catalogReset };
     const previous = loadedSearchRef.current;
     loadedSearchRef.current = snapshot;
     firstPageOk.current = null;
@@ -1631,11 +1618,11 @@ export function App() {
     // other reset -- new scope, filter, catalogue or built-in list -- starts from nothing.
     const queryOnly = previous !== null && previous.query !== "" && snapshot.query !== "" && previous.query !== snapshot.query
       && previous.scope === snapshot.scope && previous.type === snapshot.type && previous.genre === snapshot.genre
-      && previous.virtual === snapshot.virtual && previous.catalog === snapshot.catalog && previous.reset === snapshot.reset;
+      && previous.catalog === snapshot.catalog && previous.reset === snapshot.reset;
     if (!queryOnly) { itemsRef.current = []; setItems([]); setSourceCount(0); }
     setSkip(0); setCursor(""); setHasMore(false); void loadPage(true);
   },
-    [submittedQuery, submittedQuery && searchScopeValue, typeFilter, activeGenre, virtualCatalog, currentCatalog?.addonKey, currentCatalog?.type, currentCatalog?.id, catalogReset]);
+    [submittedQuery, submittedQuery && searchScopeValue, typeFilter, activeGenre, currentCatalog?.addonKey, currentCatalog?.type, currentCatalog?.id, catalogReset]);
   // Entering search starts from the addon order; browse keeps its own sort untouched.
   useEffect(() => { setSearchSort(searchStateRef.current?.defaultOrder === "titleMatch" ? "titleMatch" : "default"); }, [Boolean(submittedQuery)]);
 
@@ -1729,28 +1716,6 @@ export function App() {
     if (next.move) setSelectedStream(next.to);
   }, [sourceRows, localStreams, pendingSources, localLoading, playerOpen]);
 
-  const catalogResume = useMemo(() => catalogResumeEntries(resume, addons), [resume, addons]);
-  /** Each Continue watching row with the episode it remembers, in the server's order. */
-  const catalogResumeTargets = useMemo(() => catalogResume.map((entry) => resumeTarget(entry)), [catalogResume]);
-  /** The same rows by the key the grid gives its tiles. */
-  const catalogResumeTargetByKey = useMemo(() => new Map<string, ResumeTarget>(catalogResumeTargets.map((target) => [
-    `${target.meta.type || "movie"}:${target.meta.id}`, target,
-  ] as const)), [catalogResumeTargets]);
-  /** The built-in lists are computed from memory; they must not go through a full load,
-   *  which would drop the selected title. */
-  const virtualItems = useMemo<Meta[]>(() => {
-    if (virtualCatalog === VIRTUAL.resume) return catalogResumeTargets.map((target) => target.meta);
-    return [];
-  }, [virtualCatalog, catalogResumeTargets]);
-  useEffect(() => {
-    if (!virtualCatalog) return;
-    itemsRef.current = virtualItems; setItems(virtualItems); setHasMore(false);
-  }, [virtualCatalog, virtualItems]);
-
-  // The library preview includes existing local files; catalog progress stays separate.
-  const localResume = useMemo<ResumeTile[]>(() => resumePreview
-    ? resumePreview.items.flatMap((item) => item.kind === "file" && item.progress ? [{ key: `file:${item.path}`, path: item.path, title: item.label, poster: item.poster, season: item.season, series: item.series, updatedAt: item.modified, ...item.progress }] : [])
-    : localResumeEntries(resume, libraries), [resumePreview, resume, libraries]);
   const catalogProgress = (item: Meta) => resume.find((entry) => item.type === "series"
     ? entry.series?.id === item.id
     : entry.key === `${item.type || "movie"}:${item.id}`);
@@ -1762,16 +1727,13 @@ export function App() {
 
   const visibleItems = useMemo(() => {
     const year = (item: Meta) => Number(String(item.releaseInfo ?? item.year ?? "").slice(0, 4)) || 0;
-    // The built-in lists carry their own meaningful order: last watched first, last added
-    // to the list. General sorting would only break it.
-    if (virtualCatalog) return items;
     const list = settings.mergeByName ? groupByName(items) : [...items];
     const active = submittedQuery ? searchSort : sort;
     if (active === "titleMatch") return rankByTitle(list, submittedQuery);
     if (active === "name") list.sort((a, b) => a.name.localeCompare(b.name, localeTag()));
     else if (active === "year") list.sort((a, b) => year(b) - year(a));
     return list;
-  }, [items, sort, searchSort, submittedQuery, settings.mergeByName, virtualCatalog]);
+  }, [items, sort, searchSort, submittedQuery, settings.mergeByName]);
   const activeSort = submittedQuery ? searchSort : sort;
   const suggestions = suggestOpen && view === "catalog"
     ? suggest({ draft: search, recent: searchState?.saveHistory ? searchState.recent : [], candidates: pool.list(), addonKey: searchScope.addonKey, type: effectiveTypeFilter || undefined })
@@ -2008,16 +1970,6 @@ export function App() {
     await loadDownloads();
   };
 
-  /** The library's own Continue watching list or its favourites list. Both drop the filters
-   *  that would hide what they open, the way the library's own links do. */
-  const openHomeLibraryList = (target: ":resume" | ":favorites") => {
-    navigated.current = true;
-    setMenuFor(null); setFromFavorites(false); setBrowseQuery("");
-    setBrowsePath(target);
-    scrollByView.current.library = 0;
-    setView("library");
-  };
-
   /** A Home media card's action, by kind: a file plays, a catalogue entry opens the remembered
    *  episode the way a catalogue Continue-watching tile does, a favourite or Tonight folder opens
    *  itself, a new episode opens its show the way the Library's row does, and a suggestion opens
@@ -2041,12 +1993,20 @@ export function App() {
     navigated.current = true;
     if (target === "downloads") openView("downloads");
     else if (target === "following") openView("following");
+    else if (target === "resume") openView("resume");
     else if (target === "library") openView("library");
     else if (target === "favorites") openView("favorites");
     else if (target === "confirm") setSuggestionsOpen(true);
-    else if (target === "catalog-resume") { setView("catalog"); setSelectedCatalog(VIRTUAL.resume); }
-    else openHomeLibraryList(target === "library-resume" ? ":resume" : ":favorites");
   };
+  /** The Continue watching view's menu action: forgetting every key a card stands for, then
+   *  re-reading both lists, so a card that stays cannot look removed and come back on a poll. */
+  const forgetResume = (card: HomeCard) => {
+    if (card.kind !== "resume-file" && card.kind !== "resume-catalogue") return;
+    if (!window.confirm(t("home.forgetConfirm", { title: card.title }))) return;
+    void api.forgetManyProgress(card.forgetKeys)
+      .then(() => { void loadResume(resumeFilter, 0); home.refresh(["resume"]); }, fail);
+  };
+  const resumeActions: HomeCardActions = { play: homePlay, open: homeOpen, reveal: revealInLibrary, forget: forgetResume };
 
   const activeLibraryOp = libraryOps.find((job) => job.status === "running" || job.status === "paused");
   const operationProgress = activeLibraryOp
@@ -2066,12 +2026,13 @@ export function App() {
   const followingBadge = (newEpisodes.length + follows.reduce((sum, follow) => sum + follow.downloads.attention, 0)) || undefined;
   const moreItems: MoreItem[] = [
     { key: "favorites", icon: <Star/>, label: t("nav.favorites"), active: view === "favorites", onSelect: () => openView("favorites") },
+    { key: "resume", icon: <History/>, label: t("nav.resume"), active: view === "resume", onSelect: () => openView("resume") },
     { key: "following", icon: <BellRing/>, label: t("nav.following"), badge: followingBadge, active: view === "following", onSelect: () => openView("following") },
     { key: "addons", icon: <PackagePlus/>, label: t("nav.addons"), badge: addons.length, active: view === "addons", onSelect: () => openView("addons") },
     { key: "settings", icon: <Settings/>, label: t("nav.settings"), active: view === "settings", onSelect: () => openView("settings") },
     ...(session!.role === "admin" ? [{ key: "stats", icon: <BarChart3/>, label: t("nav.stats"), active: view === "stats", onSelect: () => openView("stats") }] : []),
   ];
-  const moreActive = view === "favorites" || view === "following" || view === "addons" || view === "settings" || view === "stats";
+  const moreActive = view === "favorites" || view === "resume" || view === "following" || view === "addons" || view === "settings" || view === "stats";
 
   return <div className={`app-shell catalog-tiles-${settings.catalogTileSize} library-tiles-${settings.libraryTileSize} catalog-shape-${settings.catalogTileShape} library-shape-${settings.libraryTileShape} home-shape-${settings.homeTileShape}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
     <header className="topbar"><button className="brand brand-home" title={t("app.goToCleanCatalog")} aria-label={t("app.goToCleanCatalog")} onClick={() => resetCatalog()}><div className="brand-mark"><CirclePlay/></div><div><small>{t("auth.brandEyebrow")}</small><h1>Stremio <span>Offline</span></h1></div></button><div className="topbar-right">{restricted && <div className="restricted-chip">{t("restricted.chip")}</div>}<div className="online"><i/> {t("app.serverOnline")}</div>
@@ -2086,6 +2047,7 @@ export function App() {
       <Nav icon={<Library/>} label={t("nav.catalog")} active={view === "catalog"} onClick={() => openView("catalog")}/>
       <Nav icon={<HardDrive/>} label={t("nav.library")} active={view === "library"} onClick={() => openView("library")}/>
       <Nav secondary icon={<Star/>} label={t("nav.favorites")} active={view === "favorites"} onClick={() => openView("favorites")}/>
+      <Nav secondary icon={<History/>} label={t("nav.resume")} active={view === "resume"} onClick={() => openView("resume")}/>
       <Nav secondary icon={<BellRing/>} label={t("nav.following")} active={view === "following"} badge={followingBadge} onClick={() => openView("following")}/>
       <Nav icon={<Download/>} label={t("nav.downloads")} active={view === "downloads"} badge={downloads.filter((job) => job.status === "checking" || job.status === "downloading" || job.status === "queued" || job.status === "waiting").length} onClick={() => openView("downloads")}/>
       <Nav secondary icon={<PackagePlus/>} label={t("nav.addons")} active={view === "addons"} badge={addons.length} onClick={() => openView("addons")}/>
@@ -2163,7 +2125,6 @@ export function App() {
                 </>
               : <>
                   <label className="catalog-filter"><span>{t("catalog.browse")}</span><select className="catalog-select" aria-label={t("catalog.browse")} value={selectedCatalog} onChange={(e) => setSelectedCatalog(e.target.value)}>
-                    <option value={VIRTUAL.resume}>▸ {t("library.continueWatching")} ({catalogResume.length})</option>
                     {catalogs.map((catalog) => <option key={`${catalog.addonKey}:${catalog.type}:${catalog.id}`} value={`${catalog.addonKey}:${catalog.type}:${catalog.id}`}>{catalog.addonName} · {catalog.name || catalog.id} ({catalogTypeTag(catalog.type)})</option>)}
                   </select></label>
                   {genreOptions.length > 0 && <label><span>{t("catalog.genre")}</span><select aria-label={t("catalog.genre")} value={activeGenre} onChange={(e) => setGenre(e.target.value)}><option value="">{t("catalog.allGenres")}</option>{genreOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>}
@@ -2199,15 +2160,9 @@ export function App() {
               {visibleItems.map((item) => {
                 const klic = `${item.type || "movie"}:${item.id}`;
                 const postup = catalogProgress(item);
-                const resumeRow = virtualCatalog === VIRTUAL.resume ? catalogResumeTargetByKey.get(klic) : undefined;
                 const vSeznamu = inWatchlist(item.type, item.id);
-                const episodeRow = resumeRow?.episode ? episodeLabel({ season: resumeRow.episode.season, episode: resumeRow.episode.number }) : undefined;
-                // A row left behind by a finished episode is not being watched yet: it says so
-                // instead of pretending to hold a position.
-                const metadata = episodeRow
-                  ? [postup?.pending ? t("library.nextEpisode") : null, episodeRow].filter(Boolean).join(" · ")
-                  : [item.releaseInfo || item.year, submittedQuery ? (item.sources ?? [item.addonName]).filter(Boolean).join(", ") : null].filter(Boolean).join(" · ") || item.type;
-                return <button key={klic} data-catalog-key={klic} className={`poster-card ${selected?.id === item.id ? "selected" : ""}`} onClick={() => { if (submittedQuery) actOnSearch(submittedQuery); void openMeta(item, resumeRow?.episode); }}>
+                const metadata = [item.releaseInfo || item.year, submittedQuery ? (item.sources ?? [item.addonName]).filter(Boolean).join(", ") : null].filter(Boolean).join(" · ") || item.type;
+                return <button key={klic} data-catalog-key={klic} className={`poster-card ${selected?.id === item.id ? "selected" : ""}`} onClick={() => { if (submittedQuery) actOnSearch(submittedQuery); void openMeta(item); }}>
                   <span className="poster-wrap">
                     <TileArt shape={settings.catalogTileShape} poster={item.poster} wide={item.background} fallback={<div className="poster-fallback"><Film/></div>}/>
                     {vSeznamu && <i className="fav-mark"><Star/></i>}
@@ -2277,7 +2232,6 @@ export function App() {
               <ChevronRight/>
               <button disabled={browsePath === ":favorites"} onClick={() => { setBrowseQuery(""); setBrowsePath(":favorites"); }}>{t("favorite.off")}</button>
             </span>}
-            {browsePath === ":resume" && <span><ChevronRight/><button disabled>{t("library.continueWatching")}</button></span>}
             {!browsePath.startsWith(":") && browsePath.split("/").filter(Boolean).map((part, index, all) => <span key={part + index}>
               <ChevronRight/>
               {/* Segment zero is a library id; the id is never shown. */}
@@ -2294,7 +2248,7 @@ export function App() {
               setBrowseDesc(next === "added" || next === "size");
               persistLibraryPrefs({ sort: next, order: next === "added" || next === "size" ? "desc" : "asc" });
             }}>
-              <option value="name">{t("library.sortName")}</option><option value="added">{t(browsePath === ":resume" ? "library.sortLastWatched" : "library.sortAdded")}</option>
+              <option value="name">{t("library.sortName")}</option><option value="added">{t("library.sortAdded")}</option>
               <option value="size">{t("library.sortSize")}</option><option value="random">{t("library.sortRandom")}</option>
             </select>}
             {!libraryList && <button title={t(browseDesc ? "common.descending" : "common.ascending")} onClick={() => { setBrowseDesc((value) => !value); persistLibraryPrefs({ order: browseDesc ? "asc" : "desc" }); }} disabled={browseSort === "random"}>
@@ -2303,7 +2257,7 @@ export function App() {
             {/* Only while the scan has something waiting: with nothing to confirm the filter
                 would list an empty folder and say nothing about why. */}
             {!libraryList && suggestionCount > 0 && <button className={onlyUnconfirmed ? "active-filter" : ""} title={t("library.onlyUnconfirmed")}
-              aria-pressed={onlyUnconfirmed} disabled={browsePath === ":favorites" || browsePath === ":resume"}
+              aria-pressed={onlyUnconfirmed} disabled={browsePath === ":favorites"}
               onClick={() => setOnlyUnconfirmed((value) => !value)}><Sparkles/></button>}
             {!libraryList && <button title={t(browseView === "grid" ? "library.viewRows" : "library.viewTiles")} onClick={() => { setBrowseView((value) => value === "grid" ? "list" : "grid"); persistLibraryPrefs({ view: browseView === "grid" ? "list" : "grid" }); }}>
               {browseView === "grid" ? <List/> : <LayoutGrid/>}
@@ -2384,20 +2338,6 @@ export function App() {
           compactOnScroll(event, libraryCompact, setLibraryCompact);
           scheduleViewAnchor();
         }}>
-        {!browsePath && !browseQuery && <LibraryShelf
-          segment={settings.libraryShelf}
-          showResume={settings.showResumeRow}
-          resume={localResume.slice(0, 8)}
-          resumeTotal={resumePreview?.total ?? localResume.length}
-          episodes={newEpisodes}
-          follows={follows}
-          onSegment={(segment) => void chooseLibraryShelf(segment)}
-          onPlayResume={(item) => { if (item.path) void playLocal(item.title, item.path, item.poster, item.season != null); }}
-          onRevealResume={(path) => revealInLibrary(path)}
-          onOpenEpisode={(episode) => void openFromCatalog({ type: episode.type, id: episode.metaId, name: episode.name, poster: episode.poster })}
-          onShowResume={() => { setBrowseQuery(""); setFromFavorites(false); setMenuFor(null); setBrowsePath(":resume"); }}
-          onShowEpisodes={() => openView("following")}
-        />}
         {!browsePath && !scanHintDismissed && !libraryScan?.finishedAt && (browse?.total ?? 0) >= 10 && <div className="library-scan-hint" role="status">
           <span>{t("library.scanHint")}</span>
           <button type="button" onClick={dismissScanHint}>{t("library.dismissHint")}</button>
@@ -2408,7 +2348,7 @@ export function App() {
         </div>}
         {!browse || !browse.items.length
           ? (browseBusy ? <div className="loading">{t("common.loading")}</div>
-            : <Empty icon={<HardDrive/>} title={t(browseQuery ? "library.emptyFilterTitle" : onlyUnconfirmed ? "library.emptyUnconfirmedTitle" : browsePath === ":resume" ? "library.emptyResumeTitle" : browsePath === ":favorites" ? "library.emptyFavoritesTitle" : "library.emptyTitle")} text={t(browseQuery ? "library.emptyFilterText" : onlyUnconfirmed ? "library.emptyUnconfirmedText" : browsePath === ":resume" ? "library.emptyResumeText" : browsePath === ":favorites" ? "library.emptyFavoritesText" : "library.emptyText")}/>)
+            : <Empty icon={<HardDrive/>} title={t(browseQuery ? "library.emptyFilterTitle" : onlyUnconfirmed ? "library.emptyUnconfirmedTitle" : browsePath === ":favorites" ? "library.emptyFavoritesTitle" : "library.emptyTitle")} text={t(browseQuery ? "library.emptyFilterText" : onlyUnconfirmed ? "library.emptyUnconfirmedText" : browsePath === ":favorites" ? "library.emptyFavoritesText" : "library.emptyText")}/>)
           : <>
             <div className={browseView === "grid" ? "browse-grid" : "browse-rows"}>
               {browse.items.map((item) => item.kind === "library"
@@ -2477,6 +2417,11 @@ export function App() {
         </div>
       </section>}
       {view === "addons" && <AddonManager addons={addons} libraries={libraries} restricted={restricted} admin={admin} onChanged={refresh} onNotify={notify} onError={fail}/>} 
+      {view === "resume" && <ResumeView
+        filter={resumeFilter} onFilter={setResumeFilter}
+        items={resumeCards} busy={resumeBusy} shape={settings.homeTileShape} actions={resumeActions}
+        hasMore={resumeCards.length < resumeCardsTotal} loadingMore={resumeLoadingMore}
+        onLoadMore={() => void loadResume(resumeFilter, resumeCards.length)}/>}
       {view === "favorites" && <FavoritesView
         filter={favoritesFilter} onFilter={setFavoritesFilter}
         items={favorites} busy={favoritesBusy} shape={settings.libraryTileShape}

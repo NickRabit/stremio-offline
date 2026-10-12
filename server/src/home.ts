@@ -7,6 +7,9 @@ export const HOME_CANDIDATES = 30;
 export const HOME_MARKER_LIMIT = 20;
 export const HOME_LOOKUP_DEADLINE_MS = 1500;
 export const HOME_FORGET_LIMIT = 50;
+/** How many part-watched library files the merged Continue watching list reads before it
+ *  pages them. The public `/api/library/resume` keeps its own, smaller ceiling. */
+export const HOME_RESUME_FILE_LIMIT = 2000;
 /** How many row ids and extra feeds one personal layout may name. A body over either is refused. */
 export const HOME_LAYOUT_ROW_LIMIT = 200;
 export const HOME_LAYOUT_FEED_LIMIT = 50;
@@ -263,7 +266,7 @@ function cardFor(candidates: ResumeCandidate[]): Extract<HomeCard, { kind: "resu
 
 /** Merge the two Continue watching sources into one card per verified show. Only equal,
  *  non-empty series ids merge; an unknown identity stays its own card. */
-export function mergeResume(sources: ResumeSources, limit: number = HOME_ROW_LIMIT): { items: HomeCard[]; hasMore: boolean } {
+function resumeGroups(sources: ResumeSources): ResumeGroup[] {
   const candidates: ResumeCandidate[] = [
     ...sources.files.map((item): ResumeCandidate => ({ source: "file", identity: item.seriesId || undefined, item })),
     ...sources.catalogue.map((item): ResumeCandidate => ({ source: "catalogue", identity: item.seriesId || undefined, item })),
@@ -275,7 +278,40 @@ export function mergeResume(sources: ResumeSources, limit: number = HOME_ROW_LIM
     const bucket = groups.get(candidate.identity);
     if (bucket) bucket.push(candidate); else groups.set(candidate.identity, [candidate]);
   }
-  const cards = [...groups.values(), ...singles.map((candidate) => [candidate])].map(cardFor);
-  cards.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.key.localeCompare(b.key));
-  return boundCards(cards, limit);
+  return [...groups.values(), ...singles.map((candidate) => [candidate])]
+    .map((bucket) => ({
+      card: cardFor(bucket),
+      file: bucket.some((candidate) => candidate.source === "file"),
+      catalogue: bucket.some((candidate) => candidate.source === "catalogue"),
+    }))
+    .sort((a, b) => b.card.updatedAt.localeCompare(a.card.updatedAt) || a.card.key.localeCompare(b.card.key));
+}
+
+/** Merge the two Continue watching sources into one card per verified show, cut to the row. */
+export function mergeResume(sources: ResumeSources, limit: number = HOME_ROW_LIMIT): { items: HomeCard[]; hasMore: boolean } {
+  return boundCards(resumeGroups(sources).map((group) => group.card), limit);
+}
+
+export type ResumeFilter = "all" | "library" | "catalog";
+
+/** The filter a Continue watching request asks for: anything but a card kind means all. */
+export const parseResumeFilter = (value: unknown): ResumeFilter =>
+  value === "library" || value === "catalog" ? value : "all";
+
+/** One merged card and the sources it stands for. A folded show that kept a local copy
+ *  counts under both filters, whichever kind won the card. */
+interface ResumeGroup { card: ResumeCard; file: boolean; catalogue: boolean }
+
+export type ResumeCard = Extract<HomeCard, { kind: "resume-file" | "resume-catalogue" }>;
+
+/** One page of the same merged list Home draws, filtered by card kind. `total` counts every
+ *  card the filter keeps, so paging past the Home bound stays stable. */
+export function resumePage(sources: ResumeSources, options: { filter?: ResumeFilter; skip?: number; limit?: number } = {}):
+  { items: ResumeCard[]; total: number; hasMore: boolean } {
+  const filter = options.filter ?? "all";
+  const kept = resumeGroups(sources).filter((group) => filter === "all" || (filter === "library" ? group.file : group.catalogue));
+  const cards = kept.map((group) => group.card);
+  const skip = Math.max(0, options.skip ?? 0);
+  const limit = Math.max(1, options.limit ?? HOME_ROW_LIMIT);
+  return { items: cards.slice(skip, skip + limit), total: cards.length, hasMore: skip + limit < cards.length };
 }

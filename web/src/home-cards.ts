@@ -43,19 +43,19 @@ export function relativeAge(iso: string, now: number, locale: string): string {
   return format.format(-Math.round(seconds / 86_400), "day");
 }
 
-export type ShowAllTarget = "library-resume" | "catalog-resume" | "downloads" | "favorites" | "following" | "library" | "confirm";
+export type ShowAllTarget = "resume" | "downloads" | "favorites" | "following" | "library" | "confirm";
 
 /** Where "Show all" goes, or nothing when the row has no more than what it shows. Favourites
- *  always offers the library's list; Continue watching picks the library when it holds a local
- *  card and the catalogue otherwise. */
-export function showAllTarget(row: HomeRowId, cards: HomeCard[], hasMore: boolean): ShowAllTarget | undefined {
+ *  and Continue watching always offer their one section; the rest wait for "more". */
+export function showAllTarget(row: HomeRowId, hasMore: boolean): ShowAllTarget | undefined {
   if (row === "episodes") return "following";
   if (row === "confirm") return "confirm";
   if (row === "tonight") return undefined;
   if (row.startsWith("catalog:")) return undefined;
   if (row === "recent") return hasMore ? "library" : undefined;
   if (row === "favorites") return "favorites";
+  if (row === "resume") return "resume";
   if (!hasMore) return undefined;
   if (row === "completed") return "downloads";
-  return cards.some((card) => card.kind === "resume-file") ? "library-resume" : "catalog-resume";
+  return undefined;
 }

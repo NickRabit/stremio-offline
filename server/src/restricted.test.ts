@@ -49,6 +49,7 @@ test("secret GETs match DENIED_GETS and ordinary GETs do not", () => {
   assert.equal(isDeniedGet("GET", "/catalogs"), false);
   assert.equal(isDeniedGet("GET", "/downloads"), false);
   assert.equal(isDeniedGet("GET", "/watchlist"), false);
+  assert.equal(isDeniedGet("GET", "/resume"), false, "the account's own Continue watching list stays readable");
   assert.equal(isDeniedGet("GET", "/playback/x/1/master.m3u8"), false);
   assert.equal(isDeniedGet("POST", "/settings/export"), false);
   assert.equal(isDeniedGet("GET", "/libraries/browse"), true, "the picker names directories on the host");
@@ -65,6 +66,7 @@ test("ALLOWED_MUTATIONS covers the demo writes and omits configuration", () => {
   assert.equal(isAllowedMutation("POST", "/search/history/forget"), true);
   assert.equal(isAllowedMutation("DELETE", "/search/history"), true);
   assert.equal(isAllowedMutation("POST", "/progress"), true);
+  assert.equal(isAllowedMutation("POST", "/progress/forget"), true);
   assert.equal(isAllowedMutation("DELETE", "/progress/movie:tt1"), true);
   assert.equal(isAllowedMutation("POST", "/library/favorite"), true);
   assert.equal(isAllowedMutation("POST", "/library/source"), true);

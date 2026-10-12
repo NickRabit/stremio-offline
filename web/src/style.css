@@ -1946,5 +1946,11 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 
 /* One Favourites section: a plate of the account's own stars, above the library and the catalogue. */
 .favorites-view{display:grid;gap:6px}
-.favorites-filter{justify-content:space-between}
+.section-view{display:grid;gap:6px}
+/* The three filters share one row at any width: equal slots, no wrapping, a shorter pill on a phone. */
+.section-filter{justify-content:space-between;display:block}
+.section-filter .library-shelf-segments{flex-wrap:nowrap;width:100%}
+.section-filter .library-shelf-segments button{flex:1 1 0;min-width:0;padding:0 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+@media(min-width:701px){.section-filter .library-shelf-segments{width:auto}.section-filter .library-shelf-segments button{flex:0 0 auto;padding:0 14px}}
 .favorites-grid{margin-top:4px}
+.section-grid{margin-top:4px}

@@ -2,6 +2,7 @@ import type { Locale } from "./i18n";
 import type { DownloadSnapshot as ServerDownloadSnapshot, PublicDownload } from "../../server/src/api-types";
 import type { HomeLayout } from "../../server/src/home";
 export type { FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem } from "../../server/src/favorites";
+export type { ResumeCard, ResumeFilter } from "../../server/src/home";
 export type DownloadLayout = "flat" | "structured";
 export interface DownloadTargetSettings {
   subfolder: string;
@@ -325,7 +326,7 @@ export interface BrowseResult { path: string; items: BrowseItem[]; total: number
 export type LibrarySort = "name" | "added" | "size" | "random";
 export type LibraryOrder = "asc" | "desc";
 export type LibraryLayout = "grid" | "list";
-export type ExtraView = ":favorites" | ":resume";
+export type ExtraView = ":favorites";
 export type DownloadSort = "order" | "titleSort" | "createdAt" | "startedAt" | "completedAt" | "duration";
 export type DownloadStatusFilter = "" | "queued" | "waiting" | "checking" | "downloading" | "paused" | "completed" | "failed";
 export type DownloadDateField = "createdAt" | "startedAt" | "completedAt";

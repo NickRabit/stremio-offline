@@ -60,7 +60,7 @@ export function HomeShelf({ row, title, state, shape, actions, onRetry, onShowAl
   if (!state || state.status === "idle") return null;
   const empty = state.items.length === 0;
   if (state.status === "ok" && empty && !state.partial) return null;
-  const target = showAllTarget(row, state.items, state.hasMore);
+  const target = showAllTarget(row, state.hasMore);
 
   return <section className="home-row" data-row={row}>
     <div className="subhead">

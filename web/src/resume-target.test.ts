@@ -1,40 +1,6 @@
 import { expect, it } from "vitest";
-import { resumeTarget, resumeVideo } from "./resume-target";
-import type { ProgressEntry, Video } from "./types";
-
-const entry = (over: Partial<ProgressEntry> & { key: string }): ProgressEntry => ({
-  position: 120, duration: 2400, title: "Title", updatedAt: "2026-09-01T00:00:00.000Z", ...over,
-});
-
-it("opens a grouped series row as the series and remembers its episode", () => {
-  const row = entry({
-    key: "series:tt0944947:1:5", title: "Městečko South Park · Volcano", poster: "tt0944947.jpg",
-    series: { id: "tt0944947", name: "Městečko South Park", season: 1, episode: 5 },
-  });
-  expect(resumeTarget(row)).toEqual({
-    meta: { id: "tt0944947", type: "series", name: "Městečko South Park", poster: "tt0944947.jpg" },
-    episode: { key: "series:tt0944947:1:5", season: 1, number: 5 },
-  });
-});
-
-it("derives the series of a row stored before the field existed", () => {
-  const row = entry({ key: "series:tt0944947:1:5", title: "Show · S01E05" });
-  expect(resumeTarget(row)).toEqual({
-    meta: { id: "tt0944947", type: "series", name: "Show", poster: undefined },
-    episode: { key: "series:tt0944947:1:5", season: 1, number: 5 },
-  });
-});
-
-it("opens a movie row as itself", () => {
-  const row = entry({ key: "movie:tt1", title: "Zkušební film", poster: "tt1.jpg" });
-  expect(resumeTarget(row)).toEqual({ meta: { id: "tt1", type: "movie", name: "Zkušební film", poster: "tt1.jpg" } });
-});
-
-it("opens a local file as itself instead of inventing a series", () => {
-  const row = entry({ key: "file:lib_ab12cd34/Show/01.mkv", title: "Show · S01E05" });
-  expect(resumeTarget(row).episode).toBeUndefined();
-  expect(resumeTarget(row).meta).toEqual({ id: "lib_ab12cd34/Show/01.mkv", type: "file", name: "Show · S01E05", poster: undefined });
-});
+import { resumeVideo } from "./resume-target";
+import type { Video } from "./types";
 
 it("finds the episode the season and number point at", () => {
   const videos: Video[] = [{ id: "tt0944947:1:4", season: 1, episode: 4 }, { id: "tt0944947:1:5", season: 1, episode: 5 }];

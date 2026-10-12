@@ -29,11 +29,36 @@ describe("one Favourites section in the shell", () => {
     expect(app).not.toContain("catalog.myList");
     expect(app).not.toContain("VIRTUAL.watchlist");
   });
+});
 
-  it("removed the library's Favourites shelf entry and the favorites-only toggle", () => {
-    const shelf = source("./LibraryShelf.tsx");
-    expect(shelf).not.toContain("library.shelf.favorites");
-    expect(shelf).not.toContain("onShowFavorites");
+describe("one Continue watching section in the shell", () => {
+  const app = source("./App.tsx");
+
+  it("puts a Continue watching destination in the sidebar and renders its view", () => {
+    expect(app).toContain('label={t("nav.resume")}');
+    expect(app).toContain('view === "resume" && <ResumeView');
+  });
+
+  it("keeps the compact bar at five slots by folding Continue watching into More", () => {
+    expect(app).toContain('secondary icon={<History/>} label={t("nav.resume")}');
+    expect(app).toContain('{ key: "resume", icon: <History/>');
+    expect(app).toMatch(/moreActive = [^;]*view === "resume"/);
+  });
+
+  it("removed the catalogue's Continue watching picker row and the library shelf", () => {
+    expect(app).not.toContain("VIRTUAL.resume");
+    expect(app).not.toContain("catalogResume");
+    expect(app).not.toContain("LibraryShelf");
+    expect(app).not.toContain("chooseLibraryShelf");
     expect(app).not.toContain('t("library.onlyFavorites")');
+  });
+
+  it("removed the library's own resume list and every entry point into it", () => {
+    expect(app).not.toContain('":resume"');
+    expect(app).not.toContain("resumeLibrary");
+    expect(app).not.toContain("NewEpisodesRow");
+    expect(source("./api.ts")).not.toContain("resumeLibrary");
+    expect(source("./views.ts")).not.toContain(":resume");
+    expect(source("./types.ts")).not.toMatch(/ExtraView =[^;]*:resume/);
   });
 });

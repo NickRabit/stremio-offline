@@ -4,9 +4,6 @@ import { goToView } from "../nav";
 
 test.beforeEach(async ({ request }) => {
   await resetViews(request);
-  // The shelf remembers its segment on the shared account. Put Continue back so a
-  // test that opened Favourites does not hand the next one that row.
-  await request.patch("/api/settings", { data: { libraryShelf: "resume" } });
 });
 
 const poster = (color: string) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="240" height="360"><rect width="240" height="360" fill="${color}"/><circle cx="120" cy="130" r="70" fill="#ffffff22"/><path d="M0 360L130 170L240 360" fill="#00000033"/></svg>`)}`;
@@ -26,9 +23,9 @@ test("library cards and folder navigation", async ({ page }, testInfo) => {
   });
   await page.goto("/");
   await page.getByRole("button", { name: "Knihovna", exact: true }).click();
-  const shelf = page.locator(".library-shelf");
-  // The shelf's Favourites segment is where the library used to keep a second Favourites entry.
-  await expect(shelf.getByRole("button", { name: "Oblíbené", exact: true })).toHaveCount(0);
+  // Continue watching and Favourites are one section each in the navigation now, so the
+  // library root draws no shelf of its own.
+  await expect(page.locator(".library-shelf")).toHaveCount(0);
   if (testInfo.project.name === "mobile") {
     await expect(page.getByRole("button", { name: "Prohledat knihovnu", exact: true })).toBeHidden();
     const tools = page.getByRole("button", { name: "Nástroje knihovny", exact: true });
@@ -129,29 +126,34 @@ test("empty favorites explain how to add titles", async ({ page }) => {
   await expect(page.getByText("Žádné oblíbené v katalogu", { exact: true })).toBeVisible();
 });
 
-test("show all opens the complete resume collection", async ({ page }) => {
-  const entries = Array.from({ length: 10 }, (_, index) => ({ ...file, path: `resume-${index}.mp4`, label: `Rozkoukaný film ${index}`, progress: { position: 120, duration: 2400 } }));
-  await page.route("**/api/library/resume?*", (route) => {
-    const params = new URL(route.request().url()).searchParams;
-    const filtered = entries.filter((item) => item.label.includes(params.get("query") || ""));
-    return route.fulfill({ json: { path: ":resume", items: filtered.slice(0, Number(params.get("limit") || 60)), total: filtered.length, pending: false } });
+test("the Continue watching section merges both kinds, filters and pages them", async ({ page }) => {
+  // The merged Home shape: a library card and a catalogue card in one list.
+  const fileCard = (index: number) => ({ kind: "resume-file", key: `file:resume-${index}.mp4`, title: `Rozkoukaný film ${index}`, path: `resume-${index}.mp4`, progress: { position: 120, duration: 2400 }, updatedAt: "2026-09-01T00:00:00.000Z", forgetKeys: [`file:resume-${index}.mp4`] });
+  const catalogCard = { kind: "resume-catalogue", key: "movie:tt9", title: "Z katalogu", type: "movie", id: "tt9", name: "Z katalogu", progress: { position: 60, duration: 600 }, updatedAt: "2026-09-01T00:00:00.000Z", forgetKeys: ["movie:tt9"] };
+  const all = [catalogCard, ...Array.from({ length: 9 }, (_, index) => fileCard(index))];
+  const filters: string[] = [];
+  await page.route("**/api/resume?*", (route) => {
+    const filter = new URL(route.request().url()).searchParams.get("filter") || "all";
+    filters.push(filter);
+    const kept = filter === "library" ? all.filter((item) => item.kind === "resume-file")
+      : filter === "catalog" ? all.filter((item) => item.kind === "resume-catalogue") : all;
+    return route.fulfill({ json: { items: kept, total: kept.length, pending: false } });
   });
   await page.goto("/");
-  await page.getByRole("button", { name: "Knihovna", exact: true }).click();
-  await expect(page.locator(".resume-strip .browse-item")).toHaveCount(8);
-  await page.getByRole("button", { name: "Zobrazit vše (10)" }).click();
-  await expect(page.locator(".crumbs")).toContainText("Pokračovat ve sledování");
-  await expect(page.locator(".browse-grid .library-open")).toHaveCount(10);
-  await expect(page.locator(".browse-grid .library-action").first()).toHaveText("Pokračovat");
-  await page.getByRole("textbox", { name: "Filtrovat knihovnu" }).fill("film 9");
-  await expect(page.locator(".browse-grid .library-open")).toHaveCount(1);
-  await page.getByRole("button", { name: "Zobrazit po řádcích" }).click();
-  await expect(page.locator(".browse-rows .library-open")).toHaveCount(1);
+  await goToView(page, "Pokračovat ve sledování");
+  const grid = page.locator(".section-grid");
+  await expect(grid.locator(".browse-item")).toHaveCount(10);
+  await page.getByRole("button", { name: "V knihovně", exact: true }).click();
+  await expect(grid.locator(".browse-item")).toHaveCount(9);
+  await expect(grid.locator('[data-kind="resume-catalogue"]')).toHaveCount(0);
+  await page.getByRole("button", { name: "Z katalogu", exact: true }).click();
+  await expect(grid.locator(".browse-item")).toHaveCount(1);
+  await expect(grid.locator('[data-kind="resume-catalogue"]')).toContainText("Z katalogu");
+  await page.getByRole("button", { name: "Vše", exact: true }).click();
+  await expect(grid.locator(".browse-item")).toHaveCount(10);
+  expect(filters).toContain("library");
+  expect(filters).toContain("catalog");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await page.getByRole("textbox", { name: "Filtrovat knihovnu" }).fill("nic takového");
-  await expect(page.getByText("Nic neodpovídá filtru", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "O složku zpět" }).click();
-  await expect(page.getByRole("button", { name: "Zobrazit vše (10)" })).toBeVisible();
 });
 
 test("showing a finished download highlights the file in a crowded folder", async ({ page }) => {

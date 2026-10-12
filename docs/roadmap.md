@@ -101,9 +101,13 @@ Shipped in `main`; implementation details live in the linked guides.
   list, one section in the navigation) and the titles waiting for a match on one page;
   selected add-on catalog feeds have their own lazy-loaded carousels. The
   account can choose its start page, arrange which rows show and in what order,
-  and add catalogue feeds from the addons it may use.
+  and add catalogue feeds from the addons it may use. There is one **Continue
+  watching** section in the navigation as well, the merged Home row paged and
+  filtered, and the library's own shelf and the catalogue's Continue watching
+  entry are gone; the new episodes of followed series live on the planner.
   Compact navigation has five slots and a More menu on phones and short
-  landscape screens; Favourites folds into More there. [Home page](home-spec.md).
+  landscape screens; Favourites and Continue watching fold into More there.
+  [Home page](home-spec.md).
 - **Statistics and diagnostics**: traffic by source, active streams, admin
   activity history, grouped errors and redacted logs.
   [Activity history](users.md#activity-history), [Diagnostics](troubleshooting.md).
@@ -148,7 +152,11 @@ Favourites and, for administrators, To confirm, beside the catalogue and the
 library. Each library and add-on has a **Show on Home** switch, each account
 chooses its start page (Catalogue unless it says otherwise), and each account
 arranges its own Home: which rows show, their order, and extra catalogue feeds
-from the addons it may use. What is left:
+from the addons it may use. **Continue watching** is also one section in the
+navigation, like Favourites: the merged Home row paged past its bound and
+filtered by card kind, with the library shelf and the catalogue's own Continue
+watching entry gone. The new episodes of followed series sit at the top of the
+planner's Overview tab. What is left:
 
 - the instance's **Show on Home** switches and catalogue selection stay the
   default every account starts from;

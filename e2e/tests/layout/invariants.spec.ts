@@ -6,7 +6,7 @@ import { goToView, menuItem } from "../nav";
 // screen sideways, controls too small to hit, the wrong navigation for the size --
 // and unlike screenshots they never need refreshing.
 
-const VIEWS = ["Domů", "Katalog", "Knihovna", "Oblíbené", "Stahování", "Doplňky", "Nastavení", "Statistiky"] as const;
+const VIEWS = ["Domů", "Katalog", "Knihovna", "Oblíbené", "Pokračovat ve sledování", "Stahování", "Doplňky", "Nastavení", "Statistiky"] as const;
 // What the compact navigation keeps on screen; the rest sits behind More.
 const COMPACT = ["Domů", "Katalog", "Knihovna", "Stahování", "Více"] as const;
 
@@ -111,7 +111,7 @@ test.describe("layout invariants", () => {
     await expect(page.locator("aside.sidebar nav button:visible")).toHaveCount(COMPACT.length);
     await more.click();
     await expect(more).toHaveAttribute("aria-expanded", "true");
-    for (const name of ["Oblíbené", "Sledované", "Doplňky", "Nastavení", "Statistiky", "Odhlásit"]) {
+    for (const name of ["Oblíbené", "Pokračovat ve sledování", "Sledované", "Doplňky", "Nastavení", "Statistiky", "Odhlásit"]) {
       await expect(menuItem(page, name), `${name} is in More`).toBeVisible();
     }
     const menu = (await page.getByRole("menu").boundingBox())!;
@@ -326,17 +326,13 @@ test.describe("layout invariants", () => {
       await dialogPrimary.click();
       await expect(dialog).toHaveCount(0);
 
-      await openView(page, "Knihovna");
-      const row = page.locator(".library-shelf");
-      await row.getByRole("button", { name: "Nové díly", exact: true }).click();
-      await expect(row).toBeVisible();
-      await expect(row).toContainText("Sledované seriály (1)");
-      const libraryOverflow = await horizontalOverflow(page);
-      expect(libraryOverflow.offenders, "elements past the right edge in the Library row").toEqual([]);
-      expect(libraryOverflow.scrollWidth, "the Library row overflows horizontally").toBeLessThanOrEqual(libraryOverflow.clientWidth + 1);
+      await openView(page, "Sledované");
+      await expect(page.locator(".following-grid")).toContainText("Zkušební seriál");
+      const plannerOverflow = await horizontalOverflow(page);
+      expect(plannerOverflow.offenders, "elements past the right edge on the planner").toEqual([]);
+      expect(plannerOverflow.scrollWidth, "the planner overflows horizontally").toBeLessThanOrEqual(plannerOverflow.clientWidth + 1);
     } finally {
       for (const follow of await apiFollows(request).catch(() => [])) await request.delete(`/api/follows/${follow.id}`);
-      await request.patch("/api/settings", { data: { libraryShelf: "resume" } }).catch(() => undefined);
     }
   });
 });

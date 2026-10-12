@@ -27,8 +27,7 @@ describe("scopeOf", () => {
     expect(scopeOf("Films", ["lib_aaaaaaaa", "lib_bbbbbbbb"])).toEqual({ kind: "none" });
   });
 
-  it("reads the two extra folders as themselves", () => {
-    expect(scopeOf(":resume", ["lib_aaaaaaaa"])).toEqual({ kind: "extra", id: ":resume" });
+  it("reads the Favourites folder as itself", () => {
     expect(scopeOf(":favorites", ["lib_aaaaaaaa"])).toEqual({ kind: "extra", id: ":favorites" });
   });
 
@@ -38,10 +37,6 @@ describe("scopeOf", () => {
 });
 
 describe("prefsFor", () => {
-  it("defaults the resume folder to the last watched descending", () => {
-    expect(prefsFor(empty(), scopeOf(":resume", []))).toMatchObject({ sort: "added", order: "desc" });
-  });
-
   it("defaults a library to the name ascending", () => {
     expect(prefsFor(empty(), scopeOf("lib_aaaaaaaa", []))).toMatchObject({ sort: "name", order: "asc" });
   });
