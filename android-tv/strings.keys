@@ -243,3 +243,4 @@ settings.clearSearchHistory
 settings.clearSearchHistoryHint
 settings.searchHistoryConfirm
 settings.searchHistoryCleared
+sources.localFilter

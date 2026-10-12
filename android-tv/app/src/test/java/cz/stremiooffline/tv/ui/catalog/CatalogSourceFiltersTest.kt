@@ -176,6 +176,59 @@ class CatalogSourceFiltersTest {
     compose.onNodeWithTag(TagSourcesCount).assertTextContains("1 of 2")
   }
 
+  private fun withLibraryCopy(api: FakeTvApi) {
+    api.localStreamsResult = listOf(
+      StreamDto(
+        sourceId = "loc1", kind = "library", playable = true, name = "Heat.mkv", title = "Heat.mkv",
+        localPath = "Filmy/Heat (1995)/Heat.mkv", libraryName = "Filmy",
+      ),
+    )
+  }
+
+  /** Opens the addon menu and moves to the option [index]. */
+  private fun openAddonMenuAt(index: Int) {
+    press(Key.DirectionUp)
+    press(Key.DirectionRight)
+    press(Key.DirectionCenter)
+    repeat(index) { press(Key.DirectionDown) }
+    compose.onNodeWithTag(sourceFilterOptionTag(index)).assertIsFocused()
+    press(Key.DirectionCenter)
+  }
+
+  @Test
+  fun `the addon filter offers the library copies as Local files and shows them alone`() {
+    val api = FakeTvApi()
+    twoAddons(api)
+    withLibraryCopy(api)
+    mount(api)
+    compose.waitForIdle()
+
+    openSources()
+    // All, Local files, then the addons.
+    openAddonMenuAt(1)
+
+    compose.onNodeWithTag(sourceFilterTag("addon")).assertTextContains("Local files", substring = true)
+    compose.onNodeWithTag(sourceRowTag(0)).assertTextContains("Heat.mkv")
+    compose.onNodeWithTag(sourceRowTag(1)).assertDoesNotExist()
+  }
+
+  @Test
+  fun `choosing a named addon leaves the library copy out of the list`() {
+    val api = FakeTvApi()
+    twoAddons(api)
+    withLibraryCopy(api)
+    mount(api)
+    compose.waitForIdle()
+
+    openSources()
+    compose.onNodeWithTag(sourceRowTag(0)).assertTextContains("Heat.mkv")
+    openAddonMenuAt(2)
+
+    compose.onNodeWithTag(sourceFilterTag("addon")).assertTextContains("Alpha", substring = true)
+    compose.onNodeWithTag(sourceRowTag(0)).assertTextContains("Alpha")
+    compose.onNodeWithTag(sourceRowTag(1)).assertDoesNotExist()
+  }
+
   @Test
   fun `choosing a language filters the rows`() {
     val api = FakeTvApi()

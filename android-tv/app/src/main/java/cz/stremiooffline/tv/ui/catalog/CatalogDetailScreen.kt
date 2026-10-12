@@ -374,7 +374,7 @@ fun CatalogDetailScreen(
   // Merged, sorted and filtered once per change of the raw list or the filters, never on a
   // focus-driven recomposition: parsing hundreds of sizes and languages on every move is what
   // ground the real TV to a halt.
-  val lists = remember(streams, addons, settings, meta.language, filters) {
+  val lists = remember(streams, addons, settings, meta.language, filters, localStreams) {
     Streams.sourceLists(
       streams = streams,
       addons = addons,
@@ -382,15 +382,16 @@ fun CatalogDetailScreen(
       preferredLanguage = settings.audioLanguage ?: "en",
       showTorrents = settings.realDebridConfigured,
       metaLanguage = meta.language,
+      local = localStreams,
     )
   }
   val offered = lists.offered
   val visible = lists.visible
   val notices = lists.notices
   val titleLanguage = lists.titleLanguage
-  // Local copies sit above the addon streams in the list that is drawn and picked from; the
-  // filters, counts and notices keep using the addon streams alone.
-  val rows = remember(localStreams, visible) { Streams.catalogSourceList(localStreams, visible) }
+  // The list that is drawn and picked from: the library copies arranged with the addon streams the
+  // way the web does (Streams.catalogSourceList); counts and notices keep using the addon streams.
+  val rows = lists.rows
   val preferredStream = Streams.pickDefaultStream(rows)
   val chosenStream = selectedStream?.takeIf { pickedStream && rows.contains(it) }
   val activeStream = chosenStream ?: selectedStream?.takeIf { rows.contains(it) } ?: preferredStream

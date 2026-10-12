@@ -269,4 +269,5 @@
   <string name="settings_clear_search_history_hint">História pozerania zostane.</string>
   <string name="settings_search_history_confirm">Vymazať históriu hľadania?</string>
   <string name="settings_search_history_cleared">História hľadania vymazaná.</string>
+  <string name="sources_local_filter">Lokálne súbory</string>
 </resources>

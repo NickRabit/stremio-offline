@@ -259,4 +259,5 @@
   <string name="settings_clear_search_history_hint">Tu historial de reproducción se conserva.</string>
   <string name="settings_search_history_confirm">¿Borrar tu historial de búsqueda?</string>
   <string name="settings_search_history_cleared">Historial de búsqueda borrado.</string>
+  <string name="sources_local_filter">Archivos locales</string>
 </resources>

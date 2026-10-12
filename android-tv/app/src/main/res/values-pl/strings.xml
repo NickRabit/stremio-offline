@@ -269,4 +269,5 @@
   <string name="settings_clear_search_history_hint">Historia oglądania zostaje.</string>
   <string name="settings_search_history_confirm">Usunąć historię wyszukiwania?</string>
   <string name="settings_search_history_cleared">Historia wyszukiwania usunięta.</string>
+  <string name="sources_local_filter">Pliki lokalne</string>
 </resources>
