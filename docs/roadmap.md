@@ -28,7 +28,7 @@ metadata store, or scheduler for each platform.
 | 3 | Guided library split | Offer the documented carve-out and folder-change path as a guided flow from the library manager. |
 | 4 | Queue controls | Optional quiet hours, aggregate speed limit, and a completion notice; current download limits cover concurrency, not these controls. |
 | 5 | Library bulk rename | Rename by pattern after the remaining destructive-operation recovery boundaries are established. |
-| Planned | Jellyfin and Emby libraries | Native read-only libraries, per-library grants, proxy/FFmpeg and local history. [Specification](media-server-libraries-spec.md). |
+| Implemented | Jellyfin and Emby libraries | Native read-only libraries, per-library grants, proxy/FFmpeg and local history. [Specification](media-server-libraries-spec.md). |
 | Later | Desktop distribution and external automation | Test clean install/upgrade on real target systems; signing/notarization need credentials. The *arr bridge remains a spec/probe, not a supported integration. |
 
 This is a suggested order, not a commitment to bundle unrelated work. Physical
@@ -525,10 +525,9 @@ Keep the existing [maintenance measurement contract](roadmap-delivery-spec.md#ma
 track invalid/duplicate issues, independently caught defects, human decisions,
 regressions and flaky tests. Green CI and model agreement are evidence, not proof.
 
-## Planned: Jellyfin and Emby libraries
+## Jellyfin and Emby libraries
 
-Agreed direction on 2026-10-12; not implemented and not assigned a delivery
-position ahead of the household safety work above. The
+Implemented for web, desktop and Android TV. The
 [implementation specification](media-server-libraries-spec.md) owns the scope,
 provider boundaries, acceptance criteria and suggested delivery stages.
 
@@ -544,10 +543,10 @@ provider boundaries, acceptance criteria and suggested delivery stages.
   the same authorization/revocation guarantees as existing libraries.
 
 The [repository analysis](media-server-libraries-analysis.md) and
-[delivery tasks](media-server-libraries-tasks.md) define the read-only boundary
-and sequential implementation. Start with a real-server feasibility check of original-media access, subtitles
-and history isolation on both products. Remote transcoding, direct client
-connections, remote history synchronization and remote-source downloads are
+[delivery tasks](media-server-libraries-tasks.md) record the read-only boundary
+and sequential implementation. Original-media access, external SRT subtitles
+and history isolation are verified against local Docker instances of both
+products. Remote transcoding, direct client connections, remote history synchronization and remote-source downloads are
 later work. Nuvio is an architectural reference, not a compatibility guarantee.
 
 ## Later

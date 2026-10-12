@@ -270,12 +270,10 @@
   <string name="settings_search_history_confirm">Vymazať históriu hľadania?</string>
   <string name="settings_search_history_cleared">História hľadania vymazaná.</string>
   <string name="sources_local_filter">Lokálne súbory</string>
-
-  <!-- Media-server read-only libraries (translated). -->
   <string name="media_server_tab_files">Súbory</string>
   <string name="media_server_tab_servers">Mediálne servery</string>
   <string name="media_server_pick_title">Vyberte knižnicu</string>
-  <string name="media_server_read_only">Iba na čítanie</string>
+  <string name="media_server_read_only">Len na čítanie</string>
   <string name="media_server_search_label">Hľadať</string>
   <string name="media_server_search_action">Hľadať</string>
   <string name="media_server_filter_all">Všetko</string>
@@ -284,8 +282,8 @@
   <string name="media_server_load_more">Načítať ďalšie</string>
   <string name="media_server_error">Mediálnu knižnicu sa nepodarilo načítať.</string>
   <string name="media_server_offline">Mediálny server neodpovedá.</string>
-  <string name="media_server_empty">S týmto účtom nie je zdieľaná žiadna knižnica mediálneho servera.</string>
-  <string name="media_server_empty_items">Táto knižnica je prázdna.</string>
+  <string name="media_server_empty_shared">S týmto účtom nie je zdieľaná žiadna knižnica mediálneho servera.</string>
+  <string name="media_server_empty_items">V tejto knižnici nie je čo zobraziť.</string>
   <string name="media_server_no_matches">Hľadanie nič nenájde.</string>
   <string name="media_server_eyebrow">V mediálnom serveri</string>
   <string name="media_server_eyebrow_episode">%1$s · epizóda</string>
@@ -297,15 +295,15 @@
   <string name="media_server_sources_error">Verzie sa nepodarilo načítať.</string>
   <string name="media_server_source_badge">Vzdialené</string>
   <string name="media_server_source_hint">Z mediálneho servera — iba na čítanie</string>
-  <string name="media_server_mark_watched">Označiť ako zhliadnuté</string>
+  <string name="media_server_mark_watched">Označiť ako vzhliadnuté</string>
   <string name="media_server_unwatch">Označiť ako nezhliadnuté</string>
   <string name="media_server_download_unavailable">Položku z mediálneho servera nie je možné stiahnuť.</string>
   <string name="media_server_state_error">Uloženú polohu sa nepodarilo načítať.</string>
   <string name="media_server_group_failed">%1$s sa nepodarilo načítať.</string>
   <string name="media_server_personal_empty">Zatiaľ tu nič nie je.</string>
   <string name="resume_filter_remote">Mediálne servery</string>
-  <string name="resume_empty_remote_title">Nič nedopozerané na mediálnom serveri</string>
-  <string name="resume_empty_remote_text">Položky, ktoré spustíte z mediálneho servera, sa zobrazia tu.</string>
+  <string name="resume_empty_remote_title">Žiadny priebeh zo serverov</string>
+  <string name="resume_empty_remote_text">Tu sa objavia tituly, ktoré sledujete z pripojeného servera Jellyfin alebo Emby.</string>
   <string name="favorites_tab_local">Súbory a katalóg</string>
   <string name="favorites_tab_servers">Mediálne servery</string>
   <string name="media_server_personal_partial">Niektoré položky sa nepodarilo načítať.</string>

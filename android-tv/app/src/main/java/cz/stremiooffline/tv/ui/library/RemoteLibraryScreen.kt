@@ -25,6 +25,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -56,6 +57,9 @@ import cz.stremiooffline.tv.ui.components.PosterCard
 import cz.stremiooffline.tv.ui.components.ShimmerCards
 import cz.stremiooffline.tv.ui.components.TvSpinner
 import cz.stremiooffline.tv.ui.components.TvTextField
+import cz.stremiooffline.tv.ui.detail.PlayTarget
+import cz.stremiooffline.tv.ui.detail.RemoteDetailData
+import cz.stremiooffline.tv.ui.detail.RemoteDetailScreen
 import cz.stremiooffline.tv.ui.theme.Tokens
 import kotlinx.coroutines.android.awaitFrame
 
@@ -84,6 +88,8 @@ fun RemoteLibraryRoute(
   onBackToFiles: () -> Unit = {},
   modifier: Modifier = Modifier,
   restoreToken: Int = 0,
+  /** False while a detail or the player covers this half, so a hidden Back never pops its stack. */
+  backEnabled: Boolean = true,
 ) {
   val viewModel = viewModel<RemoteLibraryViewModel>(factory = RemoteLibraryViewModel.factory(api))
   LaunchedEffect(segment) {
@@ -101,12 +107,12 @@ fun RemoteLibraryRoute(
   val gridFocus = remember { FocusRequester() }
   val loadMoreFocus = remember { FocusRequester() }
   val errorFocus = remember { FocusRequester() }
-  val requesters = remember { mutableMapOf<String, FocusRequester>() }
+  val requesters = remember(levelKey) { mutableMapOf<String, FocusRequester>() }
 
   var query by remember { mutableStateOf("") }
   var committed by remember { mutableStateOf("") }
 
-  BackHandler(enabled = segment == LibrarySegment.Servers) {
+  BackHandler(enabled = segment == LibrarySegment.Servers && backEnabled) {
     if (!viewModel.back()) onBackToFiles()
   }
 
@@ -117,7 +123,7 @@ fun RemoteLibraryRoute(
 
   // A page change focuses the card last used on this level, else the first card; Back restores the
   // card that opened the level because the selection is kept per level rather than cleared.
-  LaunchedEffect(levelKey, items.size, segment, restoreToken) {
+  LaunchedEffect(levelKey, items.size, state.libraries.size, segment, restoreToken) {
     if (segment != LibrarySegment.Servers) return@LaunchedEffect
     awaitFrame()
     val remembered = viewModel.selectedFor(levelKey)?.let { requesters[it] }
@@ -149,6 +155,109 @@ fun RemoteLibraryRoute(
           onOpenItem = onOpenItem,
         )
       }
+    }
+  }
+}
+
+/**
+ * One remote series opened from a Home or Favourites card. Its episodes come from the library's
+ * episodes route and are drawn by the same [ItemBrowser] as the Servers half, in a view-model of
+ * its own so the Library section never loses its own. An episode opens the playable detail as a
+ * nested child; Back returns to the grid with the card that opened it focused, then closes this.
+ */
+@Composable
+internal fun RemoteSeriesScreen(
+  api: RemoteLibraryApi,
+  data: RemoteDetailData,
+  imageUrl: (String?) -> String?,
+  onPlay: (PlayTarget) -> Unit,
+  onBack: () -> Unit,
+  backEnabled: Boolean = true,
+  restoreToken: Int = 0,
+) {
+  val viewModel = viewModel<RemoteLibraryViewModel>(
+    key = "remote-series:${data.libraryId}:${data.item.id}",
+    factory = RemoteLibraryViewModel.factory(api),
+  )
+  LaunchedEffect(data.libraryId, data.item.id) {
+    viewModel.openSeries(data.libraryId, data.libraryName, data.provider, data.item)
+  }
+  DisposableEffect(Unit) { onDispose { viewModel.onHidden() } }
+
+  var episode by remember { mutableStateOf<RemoteDetailData?>(null) }
+  var returnToken by remember { mutableIntStateOf(0) }
+
+  BackHandler(enabled = backEnabled) { onBack() }
+
+  val state = viewModel.state
+  val level = state.current
+  val items = level?.state?.items ?: emptyList()
+  val levelKey = level?.key.orEmpty()
+
+  val gridFocus = remember { FocusRequester() }
+  val loadMoreFocus = remember { FocusRequester() }
+  val errorFocus = remember { FocusRequester() }
+  val searchSurface = remember { FocusRequester() }
+  val requesters = remember(levelKey) { mutableMapOf<String, FocusRequester>() }
+
+  // A page change focuses the card last used; coming back from an episode restores the card that
+  // opened it, so the viewer lands where they left rather than on the first card.
+  LaunchedEffect(levelKey, items.size, restoreToken, returnToken, episode) {
+    if (episode != null) return@LaunchedEffect
+    awaitFrame()
+    val remembered = viewModel.selectedFor(levelKey)?.let { requesters[it] }
+    val requester = remembered ?: requesters.values.firstOrNull() ?: gridFocus
+    runCatching { requester.requestFocus() }
+  }
+
+  Box(Modifier.fillMaxSize()) {
+    if (episode == null) Column(Modifier.fillMaxSize().padding(start = Tokens.SafeX, top = Tokens.SafeY, end = Tokens.SafeX)) {
+      Box(Modifier.weight(1f).fillMaxWidth()) {
+        if (level == null) {
+          ShimmerCards()
+        } else {
+          ItemBrowser(
+            level = level,
+            items = items,
+            imageUrl = imageUrl,
+            viewModel = viewModel,
+            query = "",
+            committed = "",
+            onQuery = {},
+            onSubmit = {},
+            requesters = requesters,
+            searchSurface = searchSurface,
+            gridFocus = gridFocus,
+            loadMoreFocus = loadMoreFocus,
+            errorFocus = errorFocus,
+            onOpenItem = { libraryId, libraryName, provider, item ->
+              episode = RemoteDetailData(
+                libraryId = libraryId,
+                libraryName = libraryName,
+                provider = provider,
+                item = item,
+                seriesName = data.item.name,
+              )
+            },
+          )
+        }
+      }
+    }
+
+    val openEpisode = episode
+    if (openEpisode != null) {
+      RemoteDetailScreen(
+        api = api,
+        data = openEpisode,
+        imageUrl = imageUrl,
+        onPlay = onPlay,
+        onBack = {
+          episode = null
+          returnToken++
+        },
+        backEnabled = backEnabled,
+        restoreToken = returnToken + restoreToken,
+      )
     }
   }
 }
@@ -298,6 +407,7 @@ private fun ItemBrowser(
 ) {
   val search = level.state
   val isSearchable = level is RemoteLevel.Items
+  val appendRetryFocus = remember { FocusRequester() }
 
   Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(9.dp)) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
@@ -324,28 +434,54 @@ private fun ItemBrowser(
     }
 
     Box(Modifier.weight(1f).fillMaxWidth()) {
-      when {
-        search.loading -> ShimmerCards()
-        search.error != null -> RemoteErrorPanel(search.error, { viewModel.retry() }, errorFocus)
-        // Rows may be filtered out entirely while a cursor still holds more: keep the Load more.
-        items.isEmpty() && !search.hasMore -> Text(
-          if (committed.isNotEmpty()) stringResource(R.string.media_server_no_matches) else stringResource(R.string.media_server_empty_items),
-          color = Tokens.Muted,
-          fontSize = 12.sp,
-        )
-        else -> ItemGrid(
-          items = items,
-          imageUrl = imageUrl,
-          isEpisodes = level is RemoteLevel.Episodes,
-          hasMore = search.hasMore,
-          loadingMore = search.loadingMore,
-          levelKey = level.key,
-          viewModel = viewModel,
-          requesters = requesters,
-          gridFocus = gridFocus,
-          loadMoreFocus = loadMoreFocus,
-          onOpen = { onOpenItem(level.libraryId, level.libraryName, level.provider, it) },
-        )
+      Column(Modifier.fillMaxSize()) {
+        // A page that failed or a cursor the server rejected never replaces the loaded rows: the
+        // notice and its Retry sit above the grid, which stays focusable underneath.
+        if ((search.appendError != null || search.staleCursor) && items.isNotEmpty()) {
+          Row(
+            Modifier.fillMaxWidth().padding(bottom = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(11.dp),
+          ) {
+            Text(
+              stringResource(R.string.media_server_error),
+              color = Tokens.Red,
+              fontSize = 11.sp,
+              maxLines = 1,
+              modifier = Modifier.weight(1f),
+            )
+            FocusButton(
+              stringResource(R.string.tv_try_again),
+              onClick = { if (search.staleCursor) viewModel.retry() else viewModel.retryAppend() },
+              modifier = Modifier.focusRequester(appendRetryFocus),
+            )
+          }
+        }
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+          when {
+            search.loading -> ShimmerCards()
+            search.error != null -> RemoteErrorPanel(search.error, { viewModel.retry() }, errorFocus)
+            // Rows may be filtered out entirely while a cursor still holds more: keep the Load more.
+            items.isEmpty() && !search.hasMore -> Text(
+              if (committed.isNotEmpty()) stringResource(R.string.media_server_no_matches) else stringResource(R.string.media_server_empty_items),
+              color = Tokens.Muted,
+              fontSize = 12.sp,
+            )
+            else -> ItemGrid(
+              items = items,
+              imageUrl = imageUrl,
+              isEpisodes = level is RemoteLevel.Episodes,
+              hasMore = search.hasMore,
+              loadingMore = search.loadingMore,
+              levelKey = level.key,
+              viewModel = viewModel,
+              requesters = requesters,
+              gridFocus = gridFocus,
+              loadMoreFocus = loadMoreFocus,
+              onOpen = { onOpenItem(level.libraryId, level.libraryName, level.provider, it) },
+            )
+          }
+        }
       }
     }
   }

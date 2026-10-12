@@ -154,6 +154,8 @@ fun CatalogDetailScreen(
   onPlay: (PlayTarget) -> Unit,
   onBack: () -> Unit,
   restoreToken: Int = 0,
+  /** Bumped from outside while the player is up, so its Sources panel can re-read the groups. */
+  retryToken: Int = 0,
   /** The source the player was left on, if it was left on one; the caption and the next Play
    *  then name it, the way they do a row the viewer picked here. */
   playedSourceId: String? = null,
@@ -318,9 +320,6 @@ fun CatalogDetailScreen(
     sourcesFailed = false
     queuedSourceId = null
     notice(null)
-    remote.groups = emptyList()
-    remote.pending = 0
-    remote.discoveryFailed = false
     val id = streamVideoId
     if (id == null) {
       sourcesLoaded = true
@@ -382,10 +381,13 @@ fun CatalogDetailScreen(
   // The remote groups load on their own: the authorized libraries are listed once, then each is
   // asked for its externally matched versions in its own child, and a group publishes the moment
   // it answers. This effect is separate from the local/addon one, so a slow or offline media
-  // server can neither cancel a sibling nor hold a playable source back.
-  LaunchedEffect(streamsKey, sourcesRetry) {
+  // server can neither cancel a sibling nor hold a playable source back. A retry of the same
+  // title (the player's own Sources Retry bumps it) keeps the groups already answered, so a healthy
+  // remote row is never hidden while the failed library is asked again; a new title starts clean.
+  LaunchedEffect(streamsKey, sourcesRetry, retryToken) {
     val request = ++remote.request
-    remote.groups = emptyList()
+    if (remote.key != streamsKey) remote.groups = emptyList()
+    remote.key = streamsKey
     remote.pending = 0
     remote.discoveryFailed = false
     val id = streamVideoId
@@ -1142,12 +1144,12 @@ fun CatalogDetailScreen(
         anyChosen = chosenStream != null,
         titleLanguage = titleLanguage,
         asking = anyAsking,
-        // A remote-only failure with nothing else to show takes the failure block; with rows on
-        // screen it is a note instead, so the playable sources are never hidden.
-        failed = sourcesFailed || (remoteFailed && nothingAtAll),
+        // A failure only stands in for the list when there is nothing to show: a nonempty filtered
+        // list is never hidden by a group that failed, which stays a note beside the rows instead.
+        failed = (sourcesFailed || remoteFailed) && rows.isEmpty(),
         notices = notices,
         emptyText = emptyText,
-        failureText = if (remoteFailed && nothingAtAll) remoteFailureText(remoteFailedLabels) else loadErrorText,
+        failureText = if (remoteFailed && rows.isEmpty()) remoteFailureText(remoteFailedLabels) else loadErrorText,
         onRetry = { sourcesRetry++ },
         retryTag = TagCatalogRetry,
         filters = if (totalSources > 1) chips else emptyList(),
@@ -1501,6 +1503,8 @@ private class RemoteSourcesState {
   var discoveryFailed by mutableStateOf(false)
   var pending by mutableIntStateOf(0)
   var request by mutableIntStateOf(0)
+  /** The title or episode the groups belong to, so a retry of the same one can keep them. */
+  var key: String? = null
 }
 
 /** The group a stream belongs to, for the caption: the library for a local copy, `provider ·

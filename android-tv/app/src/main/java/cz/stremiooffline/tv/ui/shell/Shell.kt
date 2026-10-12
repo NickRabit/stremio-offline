@@ -146,6 +146,8 @@ fun Shell(
   var librarySources by remember { mutableStateOf(OfferedSources()) }
   /** Bumped by the panel's own Try again, so the library-bound discovery reloads on its own. */
   var librarySourcesRetry by remember { mutableIntStateOf(0) }
+  /** Bumped by the panel's own Try again, so a catalogue title's remote discovery reloads. */
+  var catalogueSourcesRetry by remember { mutableIntStateOf(0) }
   /** The source the player ended on, so the title underneath keeps naming what was watched. */
   var playedSourceId by remember { mutableStateOf<String?>(null) }
   // A section takes the remote back when a detail or a player over it closes; a detail takes it
@@ -210,6 +212,10 @@ fun Shell(
     }
   }
 
+  // A detail or the player covers the section it was opened from; the hidden section's own Back
+  // handlers must not consume Back while it is up.
+  val overlayOpen = detail != null || catalogDetail != null || remoteDetail != null || player != null
+
   ShellScaffold(
     username = username,
     start = start,
@@ -239,6 +245,7 @@ fun Shell(
           refreshToken = libraryRefreshToken,
           pushPath = libraryPush,
           onPushConsumed = { libraryPush = null },
+          backEnabled = !overlayOpen,
         )
         Section.Resume -> ResumeRoute(
           api = api,
@@ -359,6 +366,7 @@ fun Shell(
         returnToken++
       },
       restoreToken = detailReturnToken,
+      retryToken = catalogueSourcesRetry,
     )
   }
 
@@ -398,8 +406,9 @@ fun Shell(
       sources = sourcesNow.streams,
       sourcesLoading = sourcesNow.loading,
       sourcesRemoteFailure = sourcesNow.remoteFailure,
-      // The catalogue owns its own discovery; only the library-bound loader is reloaded here.
-      onSourcesRetry = if (openPlayer.catalogue) null else ({ librarySourcesRetry++ }),
+      // The catalogue detail owns its own discovery; its Retry re-reads it through the token, and
+      // a library-bound play reloads the loader it is bound to.
+      onSourcesRetry = if (openPlayer.catalogue) ({ catalogueSourcesRetry++ }) else ({ librarySourcesRetry++ }),
       onExit = { endedSourceId ->
         playedSourceId = endedSourceId
         player = null

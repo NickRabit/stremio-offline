@@ -34,6 +34,10 @@ import cz.stremiooffline.tv.data.ProgressEntryDto
 import cz.stremiooffline.tv.data.ResumeFilter
 import cz.stremiooffline.tv.data.ResumePage
 import cz.stremiooffline.tv.data.RecentSearchDto
+import cz.stremiooffline.tv.data.RemoteItemDto
+import cz.stremiooffline.tv.data.RemoteItemStateDto
+import cz.stremiooffline.tv.data.RemoteItemsPageDto
+import cz.stremiooffline.tv.data.RemoteLibraryDto
 import cz.stremiooffline.tv.data.SearchStateDto
 import cz.stremiooffline.tv.data.SearchResultDto
 import cz.stremiooffline.tv.data.SearchScope
@@ -173,6 +177,26 @@ open class FakeTvApi : TvApi {
   var homeLayoutPatchMessage: String? = null
   var downloadsValue: DownloadsResponseDto = DownloadsResponseDto()
   var downloadsRequests = 0
+
+  var remoteLibrariesValue: List<RemoteLibraryDto>? = emptyList()
+  var remoteLibrariesFailure: ApiFailure? = null
+  var remoteLibrariesCalls = 0
+  /** One page per `libraryId|cursor` (`libraryId|` is the first, uncursored page). */
+  var remoteItemsPages: MutableMap<String, RemoteItemsPageDto> = mutableMapOf()
+  val remoteItemsRequests: MutableList<Pair<String, String?>> = mutableListOf()
+  var remoteItemsFailure: ApiError? = null
+  /** One page per `itemId|cursor`. */
+  var remoteEpisodesPages: MutableMap<String, RemoteItemsPageDto> = mutableMapOf()
+  val remoteEpisodesRequests: MutableList<Triple<String, String, String?>> = mutableListOf()
+  var remoteSourcesValue: List<StreamDto> = emptyList()
+  var remoteSourcesFailure: ApiError? = null
+  val remoteSourcesRequests: MutableList<Pair<String, String>> = mutableListOf()
+  var remoteStateValue: RemoteItemStateDto = RemoteItemStateDto()
+  var remoteStateFailure: ApiError? = null
+  /** One answer per `libraryId|type|id`; a key in [remoteMatchFailures] refuses instead. */
+  val remoteMatchValues: MutableMap<String, List<StreamDto>> = mutableMapOf()
+  val remoteMatchFailures: MutableSet<String> = mutableSetOf()
+  val remoteMatchRequests: MutableList<String> = mutableListOf()
 
   var clientLogLines: MutableList<Triple<String, String, Map<String, String>?>> = mutableListOf()
   var bundles: MutableList<ClientLogBundleDto> = mutableListOf()
@@ -439,6 +463,53 @@ open class FakeTvApi : TvApi {
   override suspend fun downloads(): DownloadsResponseDto {
     downloadsRequests += 1
     return downloadsValue
+  }
+
+  override suspend fun remoteLibraries(): List<RemoteLibraryDto> {
+    remoteLibrariesCalls += 1
+    remoteLibrariesFailure?.let { throw ApiError(it) }
+    return remoteLibrariesValue ?: throw ApiError(ApiFailure.Generic)
+  }
+
+  override suspend fun remoteItems(
+    libraryId: String,
+    limit: Int,
+    cursor: String?,
+    search: String?,
+    type: String?,
+  ): RemoteItemsPageDto {
+    remoteItemsRequests += libraryId to cursor
+    remoteItemsFailure?.let { throw it }
+    return remoteItemsPages["$libraryId|${cursor ?: ""}"] ?: RemoteItemsPageDto()
+  }
+
+  override suspend fun remoteEpisodes(
+    libraryId: String,
+    itemId: String,
+    limit: Int,
+    cursor: String?,
+  ): RemoteItemsPageDto {
+    remoteEpisodesRequests += Triple(libraryId, itemId, cursor)
+    remoteItemsFailure?.let { throw it }
+    return remoteEpisodesPages["$itemId|${cursor ?: ""}"] ?: RemoteItemsPageDto()
+  }
+
+  override suspend fun remoteSources(libraryId: String, itemId: String): List<StreamDto> {
+    remoteSourcesRequests += libraryId to itemId
+    remoteSourcesFailure?.let { throw it }
+    return remoteSourcesValue
+  }
+
+  override suspend fun remoteItemState(libraryId: String, itemId: String): RemoteItemStateDto {
+    remoteStateFailure?.let { throw it }
+    return remoteStateValue
+  }
+
+  override suspend fun remoteMatchedStreams(libraryId: String, type: String, catalogId: String): List<StreamDto> {
+    val key = "$libraryId|$type|$catalogId"
+    remoteMatchRequests += key
+    if (key in remoteMatchFailures) throw ApiError(ApiFailure.Generic)
+    return remoteMatchValues[key] ?: emptyList()
   }
 
   override suspend fun clientLog(level: String, message: String, context: Map<String, String>?) {

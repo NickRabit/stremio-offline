@@ -270,8 +270,6 @@
   <string name="settings_search_history_confirm">Usunąć historię wyszukiwania?</string>
   <string name="settings_search_history_cleared">Historia wyszukiwania usunięta.</string>
   <string name="sources_local_filter">Pliki lokalne</string>
-
-  <!-- Media-server read-only libraries (translated). -->
   <string name="media_server_tab_files">Pliki</string>
   <string name="media_server_tab_servers">Serwery multimediów</string>
   <string name="media_server_pick_title">Wybierz bibliotekę</string>
@@ -284,8 +282,8 @@
   <string name="media_server_load_more">Wczytaj więcej</string>
   <string name="media_server_error">Nie udało się wczytać biblioteki multimediów.</string>
   <string name="media_server_offline">Serwer multimediów nie odpowiada.</string>
-  <string name="media_server_empty">Z tym kontem nie udostępniono żadnej biblioteki serwera multimediów.</string>
-  <string name="media_server_empty_items">Ta biblioteka jest pusta.</string>
+  <string name="media_server_empty_shared">Z tym kontem nie udostępniono żadnej biblioteki serwera multimediów.</string>
+  <string name="media_server_empty_items">Nie ma nic do pokazania w tej bibliotece.</string>
   <string name="media_server_no_matches">Brak wyników wyszukiwania.</string>
   <string name="media_server_eyebrow">Na serwerze multimediów</string>
   <string name="media_server_eyebrow_episode">%1$s · odcinek</string>
@@ -303,9 +301,9 @@
   <string name="media_server_state_error">Nie udało się wczytać zapisanej pozycji.</string>
   <string name="media_server_group_failed">Nie udało się wczytać: %1$s.</string>
   <string name="media_server_personal_empty">Jeszcze nic tu nie ma.</string>
-  <string name="resume_filter_remote">Serwery multimediów</string>
-  <string name="resume_empty_remote_title">Nic niedokończonego na serwerze multimediów</string>
-  <string name="resume_empty_remote_text">Elementy rozpoczęte na serwerze multimediów pojawią się tutaj.</string>
+  <string name="resume_filter_remote">Serwery multimedialne</string>
+  <string name="resume_empty_remote_title">Brak zdalnego postępu</string>
+  <string name="resume_empty_remote_text">Tytuły oglądane z podłączonego serwera Jellyfin lub Emby pojawią się tutaj.</string>
   <string name="favorites_tab_local">Pliki i katalog</string>
   <string name="favorites_tab_servers">Serwery multimediów</string>
   <string name="media_server_personal_partial">Nie udało się wczytać niektórych elementów.</string>

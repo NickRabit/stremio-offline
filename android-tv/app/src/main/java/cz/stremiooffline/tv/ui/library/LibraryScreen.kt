@@ -65,6 +65,8 @@ fun LibraryRoute(
   /** A folder a Home card asked to reveal; opened once and then cleared by the caller. */
   pushPath: String? = null,
   onPushConsumed: () -> Unit = {},
+  /** False while a detail or the player covers this section, so a hidden Back never pops it. */
+  backEnabled: Boolean = true,
   pendingDelayMs: Long = 1_500L,
 ) {
   var segment by rememberSaveable { mutableStateOf(LibrarySegment.Files) }
@@ -101,7 +103,7 @@ fun LibraryRoute(
 
   // The filesystem breadcrumb only owns Back while the files half is showing; the remote half
   // pops its own stack through RemoteLibraryRoute below.
-  BackHandler(enabled = segment == LibrarySegment.Files && state.pages.size > 1) {
+  BackHandler(enabled = segment == LibrarySegment.Files && state.pages.size > 1 && backEnabled) {
     restoreKey = openedBy.removeLastOrNull() ?: ""
     if (viewModel.back()) backToken++
   }
@@ -233,6 +235,7 @@ fun LibraryRoute(
         onBackToFiles = { segment = LibrarySegment.Files },
         modifier = Modifier.weight(1f),
         restoreToken = restoreToken + remoteRestoreToken,
+        backEnabled = backEnabled,
       )
     }
   }

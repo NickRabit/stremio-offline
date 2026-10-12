@@ -260,8 +260,6 @@
   <string name="settings_search_history_confirm">Apagar seu histórico de pesquisa?</string>
   <string name="settings_search_history_cleared">Histórico de pesquisa apagado.</string>
   <string name="sources_local_filter">Arquivos locais</string>
-
-  <!-- Media-server read-only libraries (translated). -->
   <string name="media_server_tab_files">Arquivos</string>
   <string name="media_server_tab_servers">Servidores de mídia</string>
   <string name="media_server_pick_title">Escolha uma biblioteca</string>
@@ -274,8 +272,8 @@
   <string name="media_server_load_more">Carregar mais</string>
   <string name="media_server_error">Não foi possível carregar a biblioteca de mídia.</string>
   <string name="media_server_offline">O servidor de mídia não está respondendo.</string>
-  <string name="media_server_empty">Nenhuma biblioteca de servidor de mídia é compartilhada com esta conta.</string>
-  <string name="media_server_empty_items">Esta biblioteca está vazia.</string>
+  <string name="media_server_empty_shared">Nenhuma biblioteca de servidor de mídia é compartilhada com esta conta.</string>
+  <string name="media_server_empty_items">Não há nada para mostrar nesta biblioteca.</string>
   <string name="media_server_no_matches">Nada corresponde à sua pesquisa.</string>
   <string name="media_server_eyebrow">Em um servidor de mídia</string>
   <string name="media_server_eyebrow_episode">%1$s · episódio</string>
@@ -294,8 +292,8 @@
   <string name="media_server_group_failed">Não foi possível carregar %1$s.</string>
   <string name="media_server_personal_empty">Ainda não há nada aqui.</string>
   <string name="resume_filter_remote">Servidores de mídia</string>
-  <string name="resume_empty_remote_title">Nada começado num servidor de mídia</string>
-  <string name="resume_empty_remote_text">Os itens que você inicia num servidor de mídia aparecem aqui.</string>
+  <string name="resume_empty_remote_title">Sem progresso remoto</string>
+  <string name="resume_empty_remote_text">Os títulos que você assiste de um servidor Jellyfin ou Emby conectado aparecem aqui.</string>
   <string name="favorites_tab_local">Arquivos e catálogo</string>
   <string name="favorites_tab_servers">Servidores de mídia</string>
   <string name="media_server_personal_partial">Alguns itens não puderam ser carregados.</string>

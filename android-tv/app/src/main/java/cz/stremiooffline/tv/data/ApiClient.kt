@@ -33,6 +33,9 @@ class ApiError(
   /** The server's own English message, when it sent one; the interface prefers it to a
    *  catalogue line for a refusal it can explain precisely. */
   val serverMessage: String? = null,
+  /** The HTTP status the refusal carried, when it came from a response; a caller that must tell
+   *  one refusal from another (a stale paging cursor, say) reads it rather than the mapped failure. */
+  val status: Int? = null,
 ) : Exception(serverMessage ?: failure.name)
 
 data class ServerStatus(val version: String)
@@ -582,10 +585,10 @@ class ApiClient(
       // the interface shows the message when it can explain a failure better than a generic line.
       val error = readBody(response).decodeOrNull<ErrorBody>()
       when (response.code) {
-        401 -> throw ApiError(ApiFailure.SessionExpired, serverMessage = error?.error)
-        403 -> throw ApiError(ApiFailure.Forbidden, serverMessage = error?.error)
-        404, 410 -> throw ApiError(ApiFailure.NotFound, serverMessage = error?.error)
-        else -> throw ApiError(ApiFailure.Generic, serverMessage = error?.error)
+        401 -> throw ApiError(ApiFailure.SessionExpired, serverMessage = error?.error, status = response.code)
+        403 -> throw ApiError(ApiFailure.Forbidden, serverMessage = error?.error, status = response.code)
+        404, 410 -> throw ApiError(ApiFailure.NotFound, serverMessage = error?.error, status = response.code)
+        else -> throw ApiError(ApiFailure.Generic, serverMessage = error?.error, status = response.code)
       }
     }
   }

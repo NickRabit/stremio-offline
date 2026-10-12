@@ -34,6 +34,10 @@ data class RemoteItemsState(
   val loading: Boolean = false,
   val loadingMore: Boolean = false,
   val error: RemoteErrorKind? = null,
+  /** A page after the first failed while its rows stayed: the notice sits beside the grid. */
+  val appendError: RemoteErrorKind? = null,
+  /** The server rejected the cursor. The rows stay; an explicit retry starts the listing again. */
+  val staleCursor: Boolean = false,
   val nextCursor: String? = null,
   val total: Int = 0,
   val search: String = "",
@@ -148,6 +152,13 @@ class RemoteLibraryViewModel(private val api: RemoteLibraryApi) : ViewModel() {
     startLevel(level)
   }
 
+  /** Opens one series straight at its episodes, without browsing the rest of its library. */
+  fun openSeries(libraryId: String, libraryName: String, provider: String, item: RemoteItemDto) {
+    val level = RemoteLevel.Episodes(libraryId, libraryName, provider, item.name, item.id)
+    state = state.copy(levels = listOf(level))
+    startLevel(level)
+  }
+
   /** Pops one level, cancelling its load; false when the stack is already at the picker. */
   fun back(): Boolean {
     if (state.levels.isEmpty()) return false
@@ -182,8 +193,18 @@ class RemoteLibraryViewModel(private val api: RemoteLibraryApi) : ViewModel() {
     val level = state.current ?: return
     val current = level.state
     if (current.loading || current.loadingMore || !current.hasMore) return
-    updateItems(level) { it.copy(loadingMore = true, error = null) }
+    updateItems(level) { it.copy(loadingMore = true, error = null, appendError = null, staleCursor = false) }
     request(currentLevel(level) ?: return, cursor = current.nextCursor, append = true)
+  }
+
+  /** Retries the page that failed, keeping the rows already loaded. */
+  fun retryAppend() {
+    val level = state.current ?: return
+    val current = level.state
+    if (current.loading || current.loadingMore) return
+    val cursor = current.nextCursor ?: return reload(level)
+    updateItems(level) { it.copy(loadingMore = true, appendError = null, staleCursor = false) }
+    request(currentLevel(level) ?: return, cursor = cursor, append = true)
   }
 
   /** A committed query; never fired per keystroke. It resets the level to its first page. */
@@ -203,7 +224,7 @@ class RemoteLibraryViewModel(private val api: RemoteLibraryApi) : ViewModel() {
 
   /** A new level with no rows yet; it loads its first page straight away. */
   private fun startLevel(level: RemoteLevel) {
-    updateItems(level) { it.copy(loading = true, error = null) }
+    updateItems(level) { it.copy(loading = true, error = null, appendError = null, staleCursor = false) }
     request(level, cursor = null, append = false)
   }
 
@@ -216,7 +237,16 @@ class RemoteLibraryViewModel(private val api: RemoteLibraryApi) : ViewModel() {
   /** Empties a level and sets it loading, so a search, a filter change or a retry starts clean. */
   private fun clearForLoad(level: RemoteLevel, change: (RemoteItemsState) -> RemoteItemsState) {
     updateItems(level) {
-      change(it).copy(items = emptyList(), loading = true, loadingMore = false, error = null, nextCursor = null, total = 0)
+      change(it).copy(
+        items = emptyList(),
+        loading = true,
+        loadingMore = false,
+        error = null,
+        appendError = null,
+        staleCursor = false,
+        nextCursor = null,
+        total = 0,
+      )
     }
   }
 
@@ -235,10 +265,12 @@ class RemoteLibraryViewModel(private val api: RemoteLibraryApi) : ViewModel() {
         val items = presentable(level, page.items)
         updateItems(level) {
           it.copy(
-            items = if (append) it.items + items else items,
+            items = if (append) mergeAppended(it.items, items) else items,
             loading = false,
             loadingMore = false,
             error = null,
+            appendError = null,
+            staleCursor = false,
             nextCursor = page.cursor,
             total = page.total,
           )
@@ -247,9 +279,26 @@ class RemoteLibraryViewModel(private val api: RemoteLibraryApi) : ViewModel() {
         throw cancelled
       } catch (error: Throwable) {
         if (mine != itemsEpoch) return@launch
-        updateItems(level) { it.copy(loading = false, loadingMore = false, error = kindOf(error)) }
+        val kind = kindOf(error)
+        // A cursor the server no longer accepts cannot be retried: drop it and let an explicit
+        // retry start the listing again. The rows already loaded stay until that retry.
+        val stale = append && (error as? ApiError)?.status == 409
+        updateItems(level) {
+          when {
+            stale -> it.copy(loading = false, loadingMore = false, error = null, appendError = null, nextCursor = null, staleCursor = true)
+            append -> it.copy(loading = false, loadingMore = false, error = null, appendError = kind)
+            else -> it.copy(loading = false, loadingMore = false, error = kind, appendError = null, staleCursor = false)
+          }
+        }
       }
     }
+  }
+
+  /** One page appended after another: an id already shown is never drawn twice. */
+  private fun mergeAppended(existing: List<RemoteItemDto>, added: List<RemoteItemDto>): List<RemoteItemDto> {
+    if (added.isEmpty()) return existing
+    val seen = existing.mapTo(HashSet()) { it.id }
+    return existing + added.filter { seen.add(it.id) }
   }
 
   /** The library root presents movies and series only; episodes and seasons never appear there

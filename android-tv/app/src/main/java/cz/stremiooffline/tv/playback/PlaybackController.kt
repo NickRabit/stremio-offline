@@ -365,6 +365,8 @@ class PlaybackController(
       return Progress.resumePosition(stored.position, stored.duration) ?: 0.0
     }
     val state = readRemoteState(context) ?: return 0.0
+    // An item marked watched has no position to resume: like the web, it starts from the beginning.
+    if (state.watched) return 0.0
     if (state.mediaSourceId == null || state.mediaSourceId != context.mediaSourceId) return 0.0
     return Progress.resumePosition(state.position, state.duration) ?: 0.0
   }

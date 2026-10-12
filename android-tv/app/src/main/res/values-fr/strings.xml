@@ -260,8 +260,6 @@
   <string name="settings_search_history_confirm">Effacer votre historique de recherche ?</string>
   <string name="settings_search_history_cleared">Historique de recherche effacé.</string>
   <string name="sources_local_filter">Fichiers locaux</string>
-
-  <!-- Media-server read-only libraries (translated). -->
   <string name="media_server_tab_files">Fichiers</string>
   <string name="media_server_tab_servers">Serveurs multimédia</string>
   <string name="media_server_pick_title">Choisir une bibliothèque</string>
@@ -274,8 +272,8 @@
   <string name="media_server_load_more">Charger plus</string>
   <string name="media_server_error">Impossible de charger la bibliothèque multimédia.</string>
   <string name="media_server_offline">Le serveur multimédia ne répond pas.</string>
-  <string name="media_server_empty">Aucune bibliothèque de serveur multimédia n\'est partagée avec ce compte.</string>
-  <string name="media_server_empty_items">Cette bibliothèque est vide.</string>
+  <string name="media_server_empty_shared">Aucune bibliothèque de serveur multimédia n\'est partagée avec ce compte.</string>
+  <string name="media_server_empty_items">Rien à afficher dans cette bibliothèque.</string>
   <string name="media_server_no_matches">Rien ne correspond à votre recherche.</string>
   <string name="media_server_eyebrow">Sur un serveur multimédia</string>
   <string name="media_server_eyebrow_episode">%1$s · épisode</string>
@@ -293,9 +291,9 @@
   <string name="media_server_state_error">Impossible de charger votre position enregistrée.</string>
   <string name="media_server_group_failed">Impossible de charger %1$s.</string>
   <string name="media_server_personal_empty">Rien ici pour l\'instant.</string>
-  <string name="resume_filter_remote">Serveurs multimédia</string>
-  <string name="resume_empty_remote_title">Rien de commencé sur un serveur multimédia</string>
-  <string name="resume_empty_remote_text">Les éléments que vous démarrez sur un serveur multimédia apparaissent ici.</string>
+  <string name="resume_filter_remote">Serveurs multimédias</string>
+  <string name="resume_empty_remote_title">Aucune progression distante</string>
+  <string name="resume_empty_remote_text">Les titres que vous regardez depuis un serveur Jellyfin ou Emby connecté apparaissent ici.</string>
   <string name="favorites_tab_local">Fichiers et catalogue</string>
   <string name="favorites_tab_servers">Serveurs multimédia</string>
   <string name="media_server_personal_partial">Certains éléments n\'ont pas pu être chargés.</string>

@@ -286,7 +286,9 @@ function RemoveDialog({ removal, busy, error, onDismiss, onConfirm }: {
       <button type="button" className="danger" disabled={busy} onClick={() => onConfirm(forget)}>{t("common.remove")}</button>
     </>}>
     <p className="identify-hint">{t(removal.kind === "connection" ? "mediaServer.removeConnectionHint" : "mediaServer.removeLibraryHint", { name })}</p>
-    <Checkbox checked={forget} disabled={busy} onChange={setForget}>{t("mediaServer.forgetLocal")}</Checkbox>
+    <div className="library-edit-controls">
+      <Checkbox checked={forget} disabled={busy} onChange={setForget}>{t("mediaServer.forgetLocal")}</Checkbox>
+    </div>
     <p className="identify-hint">{t("mediaServer.forgetLocalHint")}</p>
     <p className="identify-hint">{t("mediaServer.removeHistoryHint")}</p>
   </Dialog>;

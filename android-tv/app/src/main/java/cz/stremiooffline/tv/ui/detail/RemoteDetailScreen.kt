@@ -1,5 +1,6 @@
 package cz.stremiooffline.tv.ui.detail
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
@@ -49,6 +50,7 @@ import cz.stremiooffline.tv.ui.catalog.ReplayIcon
 import cz.stremiooffline.tv.ui.catalog.SourcesPanel
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
+import cz.stremiooffline.tv.ui.library.RemoteSeriesScreen
 import cz.stremiooffline.tv.ui.theme.Tokens
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.android.awaitFrame
@@ -90,7 +92,24 @@ fun RemoteDetailScreen(
   backEnabled: Boolean = true,
   restoreToken: Int = 0,
 ) {
+  // A series has no playable versions of its own: its card opens the episode grid instead.
+  if (data.item.type == "series" || data.item.type == "season") {
+    RemoteSeriesScreen(
+      api = api,
+      data = data,
+      imageUrl = imageUrl,
+      onPlay = onPlay,
+      onBack = onBack,
+      backEnabled = backEnabled,
+      restoreToken = restoreToken,
+    )
+    return
+  }
+
   val scope = rememberCoroutineScope()
+  // Back over an item detail closes it; a hidden section-level handler must never take it, and the
+  // versions panel installed later in this composition still closes first.
+  BackHandler(enabled = backEnabled) { onBack() }
   val identity = data.libraryId to data.item.id
   val live = rememberUpdatedState(identity)
 
@@ -159,15 +178,15 @@ fun RemoteDetailScreen(
   val stateLoaded = state != null && !stateError
   val stored = state
   val savedSourceId = stored?.mediaSourceId
+  val favorite = stored?.favorite == true
+  val watched = stored?.watched == true
   // The version the viewer last watched leads, so its Resume is the one offered.
   val primary = sources.firstOrNull { it.remoteItem?.mediaSourceId != null && it.remoteItem.mediaSourceId == savedSourceId }
     ?: sources.firstOrNull()
-  // Resume is offered only for the same version that stored the position; any other version, or an
-  // unknown one, has no compatible position and starts from the beginning.
-  val resuming = stateLoaded && savedSourceId != null && primary?.remoteItem?.mediaSourceId == savedSourceId &&
+  // Resume is offered only for the same version that stored the position and never for an item
+  // already marked watched; any other version, or an unknown one, starts from the beginning.
+  val resuming = stateLoaded && savedSourceId != null && !watched && primary?.remoteItem?.mediaSourceId == savedSourceId &&
     Progress.resumePosition(stored?.position ?: 0.0, stored?.duration ?: 0.0) != null
-  val favorite = stored?.favorite == true
-  val watched = stored?.watched == true
 
   fun play(source: StreamDto?, resume: Boolean) {
     val context = source?.remoteItem ?: return

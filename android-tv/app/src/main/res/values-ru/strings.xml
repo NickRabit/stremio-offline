@@ -270,8 +270,6 @@
   <string name="settings_search_history_confirm">Удалить историю поиска?</string>
   <string name="settings_search_history_cleared">История поиска удалена.</string>
   <string name="sources_local_filter">Локальные файлы</string>
-
-  <!-- Media-server read-only libraries (translated). -->
   <string name="media_server_tab_files">Файлы</string>
   <string name="media_server_tab_servers">Медиасерверы</string>
   <string name="media_server_pick_title">Выберите библиотеку</string>
@@ -284,8 +282,8 @@
   <string name="media_server_load_more">Загрузить ещё</string>
   <string name="media_server_error">Не удалось загрузить медиатеку.</string>
   <string name="media_server_offline">Медиасервер не отвечает.</string>
-  <string name="media_server_empty">С этой учётной записью не поделились ни одной библиотекой медиасервера.</string>
-  <string name="media_server_empty_items">Эта библиотека пуста.</string>
+  <string name="media_server_empty_shared">С этой учётной записью не поделились ни одной библиотекой медиасервера.</string>
+  <string name="media_server_empty_items">В этой библиотеке нечего показать.</string>
   <string name="media_server_no_matches">Ничего не найдено.</string>
   <string name="media_server_eyebrow">На медиасервере</string>
   <string name="media_server_eyebrow_episode">%1$s · эпизод</string>
@@ -304,8 +302,8 @@
   <string name="media_server_group_failed">Не удалось загрузить %1$s.</string>
   <string name="media_server_personal_empty">Здесь пока ничего нет.</string>
   <string name="resume_filter_remote">Медиасерверы</string>
-  <string name="resume_empty_remote_title">Ничего недосмотренного на медиасервере</string>
-  <string name="resume_empty_remote_text">Элементы, запущенные с медиасервера, появятся здесь.</string>
+  <string name="resume_empty_remote_title">Нет удалённого прогресса</string>
+  <string name="resume_empty_remote_text">Здесь появятся тайтлы, которые вы смотрите с подключённого сервера Jellyfin или Emby.</string>
   <string name="favorites_tab_local">Файлы и каталог</string>
   <string name="favorites_tab_servers">Медиасерверы</string>
   <string name="media_server_personal_partial">Некоторые элементы не удалось загрузить.</string>
