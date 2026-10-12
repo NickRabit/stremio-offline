@@ -63,6 +63,7 @@ import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.Versions
 import cz.stremiooffline.tv.data.ClientCapabilitiesDto
 import cz.stremiooffline.tv.data.LanguageDto
+import cz.stremiooffline.tv.data.SearchStateDto
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.data.TvPreferences
 import cz.stremiooffline.tv.diagnostics.AppLog
@@ -92,12 +93,15 @@ const val TagSettingsRowSubtitle = "settings_row_subtitle"
 const val TagSettingsRowStartView = "settings_row_start_view"
 const val TagSettingsRowHomeLayout = "settings_row_home_layout"
 const val TagSettingsRowPreferConversion = "settings_row_prefer_conversion"
+const val TagSettingsRowClearHistory = "settings_row_clear_history"
 const val TagSettingsRowDevice = "settings_row_device"
 const val TagSettingsRowVersion = "settings_row_version"
 const val TagSettingsRowDiagnostics = "settings_row_diagnostics"
 const val TagSettingsPanel = "settings_panel"
 const val TagSettingsSignOutCancel = "settings_sign_out_cancel"
 const val TagSettingsSignOutConfirm = "settings_sign_out_confirm"
+const val TagSettingsClearHistoryCancel = "settings_clear_history_cancel"
+const val TagSettingsClearHistoryConfirm = "settings_clear_history_confirm"
 const val TagSettingsError = "settings_error"
 
 fun settingsOptionTag(kind: String, code: String): String = "settings_${kind}_option_$code"
@@ -106,7 +110,7 @@ fun settingsOptionTag(kind: String, code: String): String = "settings_${kind}_op
  *  else -- the same value drives the row's label, the panel's tint and the panel's focus. */
 private val START_VIEWS = listOf("home", "catalog", "library")
 
-private enum class SettingsPanel { SignOut, UiLanguage, AudioLanguage, SubtitleLanguage, StartView, HomeLayout }
+private enum class SettingsPanel { SignOut, UiLanguage, AudioLanguage, SubtitleLanguage, StartView, HomeLayout, ClearHistory }
 
 /** The Device/Version line: the model, the Android release and what the device plays, all from
  *  the capability DTO the player already builds. */
@@ -117,6 +121,8 @@ fun SettingsRoute(
   focusRequester: FocusRequester,
   onSignOut: () -> Unit,
   onLocale: (String) -> Unit,
+  /** Reports a finished action to the shell's notice; the cleared history is shown this way. */
+  onHint: (String) -> Unit = {},
 ) {
   val viewModel = viewModel<SettingsViewModel>(factory = SettingsViewModel.factory(api, onLocale))
   val context = LocalContext.current
@@ -168,6 +174,10 @@ fun SettingsRoute(
     },
     diagnosticsValue = diagnosticsValue,
     onSendDiagnostics = { viewModel.sendDiagnostics(appVersion, device, AppLog.readCrash(crashFile)) },
+    searchState = viewModel.searchState,
+    cleared = viewModel.historyCleared,
+    onClearSearchHistory = viewModel::clearSearchHistory,
+    onHint = onHint,
     onSignOut = onSignOut,
     focusRequester = focusRequester,
   )
@@ -203,6 +213,10 @@ fun SettingsScreen(
   onPreferConversion: () -> Unit,
   diagnosticsValue: String? = null,
   onSendDiagnostics: () -> Unit = {},
+  searchState: SearchStateDto? = null,
+  cleared: Int = 0,
+  onClearSearchHistory: () -> Unit = {},
+  onHint: (String) -> Unit = {},
   onSignOut: () -> Unit,
   focusRequester: FocusRequester,
 ) {
@@ -215,9 +229,20 @@ fun SettingsScreen(
   val subtitleFocus = remember { FocusRequester() }
   val startFocus = remember { FocusRequester() }
   val homeFocus = remember { FocusRequester() }
+  val clearHistoryFocus = remember { FocusRequester() }
   val panelFocus = remember { FocusRequester() }
 
   LaunchedEffect(Unit) { runCatching { focusRequester.requestFocus() } }
+
+  // A clear that landed is reported once through the shell's notice, never again on re-entry.
+  val clearedText = stringResource(R.string.settings_search_history_cleared)
+  var reportedClears by remember { mutableStateOf(cleared) }
+  LaunchedEffect(cleared) {
+    if (cleared > reportedClears) {
+      reportedClears = cleared
+      onHint(clearedText)
+    }
+  }
 
   // A frame after a panel closes the opener row is back in the tree, so focus can return to it.
   LaunchedEffect(panel) {
@@ -331,6 +356,15 @@ fun SettingsScreen(
         },
         modifier = Modifier.testTag(TagSettingsRowHomeLayout).focusRequester(homeFocus),
       )
+      // Only worth offering while the account actually keeps a history.
+      if (searchState?.saveHistory != false && searchState?.recent?.isNotEmpty() == true) {
+        SettingsRow(
+          label = stringResource(R.string.settings_clear_search_history),
+          value = stringResource(R.string.settings_clear_search_history_hint),
+          onClick = { openPanel(SettingsPanel.ClearHistory, clearHistoryFocus) },
+          modifier = Modifier.testTag(TagSettingsRowClearHistory).focusRequester(clearHistoryFocus),
+        )
+      }
       ToggleRow(
         label = stringResource(R.string.tv_prefer_conversion),
         note = stringResource(R.string.tv_prefer_conversion_note),
@@ -467,6 +501,28 @@ fun SettingsScreen(
       onClose = { closePanel() },
       modifier = Modifier.testTag(TagSettingsPanel),
     )
+    SettingsPanel.ClearHistory -> SidePanel(
+      title = stringResource(R.string.settings_search_history),
+      onClose = { closePanel() },
+      modifier = Modifier.testTag(TagSettingsPanel),
+      initialFocus = panelFocus,
+    ) {
+      Text(stringResource(R.string.settings_search_history_confirm), color = Tokens.Muted, fontSize = 12.sp, lineHeight = 17.sp)
+      Spacer(Modifier.height(4.dp))
+      Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+        FocusButton(
+          text = stringResource(R.string.common_cancel),
+          onClick = { closePanel() },
+          modifier = Modifier.focusRequester(panelFocus).testTag(TagSettingsClearHistoryCancel),
+        )
+        FocusButton(
+          text = stringResource(R.string.settings_clear_search_history),
+          onClick = { closePanel(); onClearSearchHistory() },
+          kind = FocusButtonKind.Primary,
+          modifier = Modifier.testTag(TagSettingsClearHistoryConfirm),
+        )
+      }
+    }
   }
 }
 

@@ -32,6 +32,8 @@ import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.ProgressEntryDto
 import cz.stremiooffline.tv.data.ResumeFilter
 import cz.stremiooffline.tv.data.ResumePage
+import cz.stremiooffline.tv.data.RecentSearchDto
+import cz.stremiooffline.tv.data.SearchStateDto
 import cz.stremiooffline.tv.data.SearchResultDto
 import cz.stremiooffline.tv.data.SearchScope
 import cz.stremiooffline.tv.data.SearchableCatalogDto
@@ -146,6 +148,13 @@ open class FakeTvApi : TvApi {
   var failSearch = false
   var searchableValue: List<SearchableCatalogDto> = emptyList()
   var searchableCalls = 0
+  var searchStateValue: SearchStateDto = SearchStateDto()
+  var searchStateCalls = 0
+  var searchStateFailure: ApiFailure? = null
+  /** Every `recordSearch()` the code called, in order, whether or not saving was on. */
+  val recordedSearches: MutableList<String> = mutableListOf()
+  val forgottenSearches: MutableList<String> = mutableListOf()
+  var clearHistoryCalls = 0
 
   var homeHandler: (List<String>) -> HomeResponseDto = { HomeResponseDto() }
   var homeRequests: MutableList<List<String>> = mutableListOf()
@@ -243,6 +252,33 @@ open class FakeTvApi : TvApi {
     searchRequests += SearchRequest(query, cursor, scope)
     if (failSearch) throw ApiError(ApiFailure.Generic)
     return searchPages[cursor ?: ""] ?: SearchResultDto()
+  }
+
+  override suspend fun searchState(): SearchStateDto {
+    searchStateCalls += 1
+    searchStateFailure?.let { throw ApiError(it) }
+    return searchStateValue
+  }
+
+  /** Mirrors the server: trims, dedupes, caps at twenty and ignores a query while saving is off. */
+  override suspend fun recordSearch(query: String) {
+    recordedSearches += query
+    val trimmed = query.trim()
+    if (!searchStateValue.saveHistory || trimmed.isEmpty()) return
+    val recent = searchStateValue.recent.filterNot { it.query == trimmed }
+    searchStateValue = searchStateValue.copy(recent = (listOf(RecentSearchDto(trimmed, usedAt = "now")) + recent).take(20))
+  }
+
+  override suspend fun forgetSearch(query: String): SearchStateDto {
+    forgottenSearches += query
+    searchStateValue = searchStateValue.copy(recent = searchStateValue.recent.filterNot { it.query == query })
+    return searchStateValue
+  }
+
+  override suspend fun clearSearchHistory(): SearchStateDto {
+    clearHistoryCalls += 1
+    searchStateValue = searchStateValue.copy(recent = emptyList())
+    return searchStateValue
   }
 
   override suspend fun meta(type: String, id: String, language: String?): MetaDto {

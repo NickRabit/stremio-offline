@@ -70,6 +70,52 @@ class CatalogApiTest {
   }
 
   @Test
+  fun `search state reads the shared history`() = runTest {
+    server.enqueue(
+      MockResponse().setBody("""{"saveHistory":true,"liveSearch":false,"defaultOrder":"titleMatch","recent":[{"query":"Heat","usedAt":"2026-01-01T00:00:00.000Z"}]}""")
+    )
+    val state = client(start()).searchState()
+
+    assertEquals("/api/search/state", server.takeRequest().path)
+    assertEquals("Heat", state.recent.single().query)
+    assertEquals("titleMatch", state.defaultOrder)
+  }
+
+  @Test
+  fun `recording a search posts just the query`() = runTest {
+    server.enqueue(MockResponse().setResponseCode(204))
+    client(start()).recordSearch("Heat")
+
+    val request = server.takeRequest()
+    assertEquals("/api/search/history", request.path)
+    assertEquals("POST", request.method)
+    assertEquals("""{"query":"Heat"}""", request.body.readUtf8())
+  }
+
+  @Test
+  fun `forgetting a search posts the query and answers the new state`() = runTest {
+    server.enqueue(MockResponse().setBody("""{"saveHistory":true,"liveSearch":true,"defaultOrder":"source","recent":[]}"""))
+    val state = client(start()).forgetSearch("Heat")
+
+    val request = server.takeRequest()
+    assertEquals("/api/search/history/forget", request.path)
+    assertEquals("POST", request.method)
+    assertEquals("""{"query":"Heat"}""", request.body.readUtf8())
+    assertTrue(state.recent.isEmpty())
+  }
+
+  @Test
+  fun `clearing the history deletes and answers the new state`() = runTest {
+    server.enqueue(MockResponse().setBody("""{"saveHistory":true,"liveSearch":true,"defaultOrder":"source","recent":[]}"""))
+    val state = client(start()).clearSearchHistory()
+
+    val request = server.takeRequest()
+    assertEquals("/api/search/history", request.path)
+    assertEquals("DELETE", request.method)
+    assertTrue(state.recent.isEmpty())
+  }
+
+  @Test
   fun `meta asks for the language of the interface`() = runTest {
     server.enqueue(MockResponse().setBody("""{"id":"tt1","type":"movie","name":"It"}"""))
     client(start()).meta("movie", "tt1", "en")

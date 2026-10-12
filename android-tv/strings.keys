@@ -236,3 +236,10 @@ saveTarget.defaultLibrary
 saveTarget.noLibrary
 episodes.bulkAdded
 episodes.bulkSkipped
+catalog.suggestRecent
+common.remove
+settings.searchHistory
+settings.clearSearchHistory
+settings.clearSearchHistoryHint
+settings.searchHistoryConfirm
+settings.searchHistoryCleared

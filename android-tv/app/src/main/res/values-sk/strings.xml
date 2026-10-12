@@ -262,4 +262,11 @@
     <item quantity="many">%1$s preskočené, už v poradí.</item>
     <item quantity="other">%1$s preskočených, už v poradí.</item>
   </plurals>
+  <string name="catalog_suggest_recent">Nedávne hľadanie</string>
+  <string name="common_remove">Odstrániť</string>
+  <string name="settings_search_history">História hľadania</string>
+  <string name="settings_clear_search_history">Vymazať históriu hľadania</string>
+  <string name="settings_clear_search_history_hint">História pozerania zostane.</string>
+  <string name="settings_search_history_confirm">Vymazať históriu hľadania?</string>
+  <string name="settings_search_history_cleared">História hľadania vymazaná.</string>
 </resources>

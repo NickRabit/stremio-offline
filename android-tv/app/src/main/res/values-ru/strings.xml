@@ -262,4 +262,11 @@
     <item quantity="many">%1$s пропущено, уже в очереди.</item>
     <item quantity="other">%1$s пропущено, уже в очереди.</item>
   </plurals>
+  <string name="catalog_suggest_recent">Недавний поиск</string>
+  <string name="common_remove">Удалить</string>
+  <string name="settings_search_history">История поиска</string>
+  <string name="settings_clear_search_history">Очистить историю поиска</string>
+  <string name="settings_clear_search_history_hint">История просмотра останется.</string>
+  <string name="settings_search_history_confirm">Удалить историю поиска?</string>
+  <string name="settings_search_history_cleared">История поиска удалена.</string>
 </resources>

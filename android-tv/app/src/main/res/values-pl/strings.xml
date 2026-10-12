@@ -262,4 +262,11 @@
     <item quantity="many">%1$s pominiętych, już w kolejce.</item>
     <item quantity="other">%1$s pominięte, już w kolejce.</item>
   </plurals>
+  <string name="catalog_suggest_recent">Ostatnie wyszukiwanie</string>
+  <string name="common_remove">Usuń</string>
+  <string name="settings_search_history">Historia wyszukiwania</string>
+  <string name="settings_clear_search_history">Wyczyść historię wyszukiwania</string>
+  <string name="settings_clear_search_history_hint">Historia oglądania zostaje.</string>
+  <string name="settings_search_history_confirm">Usunąć historię wyszukiwania?</string>
+  <string name="settings_search_history_cleared">Historia wyszukiwania usunięta.</string>
 </resources>

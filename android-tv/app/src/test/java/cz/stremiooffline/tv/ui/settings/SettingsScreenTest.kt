@@ -24,6 +24,8 @@ import androidx.compose.ui.test.pressKey
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import cz.stremiooffline.tv.R
+import cz.stremiooffline.tv.data.RecentSearchDto
+import cz.stremiooffline.tv.data.SearchStateDto
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.TvPreferences
@@ -274,6 +276,46 @@ class SettingsScreenTest {
     press(Key.DirectionRight)
     press(Key.DirectionCenter)
     assertEquals(1, signOuts)
+  }
+
+  @Test
+  fun `the clear history row opens the confirm panel and only confirm clears`() {
+    val api = fake()
+    api.searchStateValue = SearchStateDto(recent = listOf(RecentSearchDto("Heat", "now")))
+    mount(api)
+    repeat(7) { press(Key.DirectionDown) }
+    focusRow(TagSettingsRowClearHistory)
+
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagSettingsClearHistoryCancel).assertExists()
+    compose.onNodeWithTag(TagSettingsClearHistoryConfirm).assertExists()
+    assertEquals(0, api.clearHistoryCalls)
+
+    // Cancel closes the panel and clears nothing.
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagSettingsPanel).assertDoesNotExist()
+    assertEquals(0, api.clearHistoryCalls)
+    focusRow(TagSettingsRowClearHistory)
+
+    // Reopening and stepping to the confirm button clears the history.
+    press(Key.DirectionCenter)
+    press(Key.DirectionRight)
+    press(Key.DirectionCenter)
+    assertEquals(1, api.clearHistoryCalls)
+  }
+
+  @Test
+  fun `the clear history row is hidden when nothing is kept`() {
+    mount(fake())
+    compose.onNodeWithTag(TagSettingsRowClearHistory).assertDoesNotExist()
+  }
+
+  @Test
+  fun `the clear history row is hidden while the account saves no history`() {
+    val api = fake()
+    api.searchStateValue = SearchStateDto(saveHistory = false, recent = listOf(RecentSearchDto("Heat", "now")))
+    mount(api)
+    compose.onNodeWithTag(TagSettingsRowClearHistory).assertDoesNotExist()
   }
 
   @Test

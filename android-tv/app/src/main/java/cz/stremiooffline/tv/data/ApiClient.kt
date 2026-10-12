@@ -342,6 +342,27 @@ class ApiClient(
       ?: throw ApiError(ApiFailure.Generic)
   }
 
+  /** The account's search preferences and recent queries, shared with the web. */
+  override suspend fun searchState(): SearchStateDto =
+    request(Request.Builder().url(address.resolve("/api/search/state")).get().build())
+      .decode<SearchStateDto>() ?: throw ApiError(ApiFailure.Generic)
+
+  /** Best effort by contract: the server answers 204 whether or not it kept the query. */
+  override suspend fun recordSearch(query: String) {
+    val payload = json.encodeToString(SearchQueryRequest.serializer(), SearchQueryRequest(query))
+    request(Request.Builder().url(address.resolve("/api/search/history")).post(payload.toRequestBody(mediaType)).build())
+  }
+
+  override suspend fun forgetSearch(query: String): SearchStateDto {
+    val payload = json.encodeToString(SearchQueryRequest.serializer(), SearchQueryRequest(query))
+    return request(Request.Builder().url(address.resolve("/api/search/history/forget")).post(payload.toRequestBody(mediaType)).build())
+      .decode<SearchStateDto>() ?: throw ApiError(ApiFailure.Generic)
+  }
+
+  override suspend fun clearSearchHistory(): SearchStateDto =
+    request(Request.Builder().url(address.resolve("/api/search/history")).delete().build())
+      .decode<SearchStateDto>() ?: throw ApiError(ApiFailure.Generic)
+
   override suspend fun meta(type: String, id: String, language: String?): MetaDto {
     val suffix = if (!language.isNullOrEmpty()) "?language=" + encode(language) else ""
     return request(Request.Builder().url(address.resolve("/api/meta/" + encode(type) + "/" + encode(id) + suffix)).get().build()).decode()
@@ -531,6 +552,10 @@ private data class HomeLayoutPatch(val homeLayout: HomeLayoutDto? = null)
 
 @Serializable
 private data class FavoriteRequest(val path: String, val favorite: Boolean)
+
+/** The one field the search history writes carry. */
+@Serializable
+private data class SearchQueryRequest(val query: String)
 
 @Serializable
 private data class ForgetRequest(val keys: List<String>)

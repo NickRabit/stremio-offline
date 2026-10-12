@@ -150,6 +150,14 @@ fun Shell(
   var libraryPush by remember { mutableStateOf<String?>(null) }
   var hint by remember { mutableStateOf<String?>(null) }
   val hintScope = rememberCoroutineScope()
+  // A short notice over the content: Home's own messages and Settings' confirmed actions.
+  fun showHint(text: String) {
+    hint = text
+    hintScope.launch {
+      delay(2_500)
+      if (hint == text) hint = null
+    }
+  }
   // A crash the previous run left is worth one line on the way in; sending it is a Settings row.
   val crashContext = LocalContext.current
   val crashHint = crashContext.getString(R.string.tv_crash_hint)
@@ -263,13 +271,7 @@ fun Shell(
         Section.Home -> HomeScreen(
           api = api,
           refreshToken = homeRefreshToken + returnToken + detailReturnToken,
-          onHint = { text ->
-            hint = text
-            hintScope.launch {
-              delay(2_500)
-              if (hint == text) hint = null
-            }
-          },
+          onHint = ::showHint,
           onAction = { action ->
             when (action) {
               is HomeAction.Play -> {
@@ -291,6 +293,7 @@ fun Shell(
           focusRequester = focusRequester,
           onSignOut = onSignOut,
           onLocale = onLocale,
+          onHint = ::showHint,
         )
       }
     }
