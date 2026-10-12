@@ -28,6 +28,7 @@ metadata store, or scheduler for each platform.
 | 3 | Guided library split | Offer the documented carve-out and folder-change path as a guided flow from the library manager. |
 | 4 | Queue controls | Optional quiet hours, aggregate speed limit, and a completion notice; current download limits cover concurrency, not these controls. |
 | 5 | Library bulk rename | Rename by pattern after the remaining destructive-operation recovery boundaries are established. |
+| Planned | Jellyfin and Emby libraries | Native, admin-managed server connections with per-library user grants, catalogue sources, our proxy/FFmpeg and local per-user history. [Specification](media-server-libraries-spec.md). |
 | Later | Desktop distribution and external automation | Test clean install/upgrade on real target systems; signing/notarization need credentials. The *arr bridge remains a spec/probe, not a supported integration. |
 
 This is a suggested order, not a commitment to bundle unrelated work. Physical
@@ -523,6 +524,29 @@ FFmpeg concurrency and render cost before proposing performance changes.
 Keep the existing [maintenance measurement contract](roadmap-delivery-spec.md#maintenance-measurement):
 track invalid/duplicate issues, independently caught defects, human decisions,
 regressions and flaky tests. Green CI and model agreement are evidence, not proof.
+
+## Planned: Jellyfin and Emby libraries
+
+Agreed direction on 2026-10-12; not implemented and not assigned a delivery
+position ahead of the household safety work above. The
+[implementation specification](media-server-libraries-spec.md) owns the scope,
+provider boundaries, acceptance criteria and suggested delivery stages.
+
+- Administrators connect Jellyfin/Emby accounts, select their remote libraries
+  and grant each library to local users. Users do not need remote logins.
+- Remote libraries appear in Library, search and Home. Confidently matched
+  movies/episodes also appear as sources alongside local copies and addons.
+- All media flows through our backend proxy. The remote server provides original
+  media; our existing playback planner/FFmpeg handles client compatibility.
+- History and favourites remain local and per user. Do not merge household
+  activity into the shared remote account's history.
+- Keep remote media management read-only, with explicit unavailable states and
+  the same authorization/revocation guarantees as existing libraries.
+
+Start with a real-server feasibility check of original-media access, subtitles
+and history isolation on both products. Remote transcoding, direct client
+connections, remote history synchronization and remote-source downloads are
+later work. Nuvio is an architectural reference, not a compatibility guarantee.
 
 ## Later
 
