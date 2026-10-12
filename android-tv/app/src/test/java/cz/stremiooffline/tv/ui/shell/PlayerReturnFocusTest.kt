@@ -22,6 +22,7 @@ import cz.stremiooffline.tv.data.StreamSourceDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.catalog.TagCatalogPrimary
 import cz.stremiooffline.tv.ui.catalog.posterTag
+import cz.stremiooffline.tv.ui.player.TAG_OSD_PLAY
 import cz.stremiooffline.tv.ui.player.TAG_OVERLAY_ROOT
 import org.junit.After
 import org.junit.Before
@@ -97,5 +98,36 @@ class PlayerReturnFocusTest {
     compose.waitForIdle()
 
     compose.onNodeWithTag(TagCatalogPrimary).assertIsFocused()
+  }
+
+  @Test
+  fun `a player opened from a catalogue detail owns the remote and shows its controls`() {
+    val title = MetaDto(id = "tt1", type = "movie", name = "It")
+    val api = FakeTvApi().apply {
+      settingsValue = SettingsResponse(uiLanguage = "en", audioLanguage = "en", streamSort = "recommended")
+      catalogsValue = listOf(CatalogDto(addonKey = "a", addonName = "Cinemeta", type = "movie", id = "top", name = "Popular"))
+      catalogPages["a"] = listOf(listOf(title))
+      streamSourcesValues["movie:tt1"] = listOf(StreamSourceDto("s", "Source"))
+      addonStreams["movie:tt1|s"] = listOf(StreamDto(sourceId = "src1", kind = "remote", playable = true, title = "1080p", addonName = "Source"))
+    }
+    scenario.onActivity { activity ->
+      activity.setContent { Shell(start = Section.Catalog, api = api, username = "demo", onSignOut = {}) }
+    }
+    compose.waitForIdle()
+
+    press(Key.DirectionDown)
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { runCatching { compose.onNodeWithTag(TagCatalogPrimary).assertIsFocused() }.isSuccess }
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { compose.onAllNodes(androidx.compose.ui.test.hasTestTag(TAG_OVERLAY_ROOT)).fetchSemanticsNodes().isNotEmpty() }
+
+    // The detail underneath must not keep the remote: the player takes it (its root while the
+    // controls are hidden, the play button while they are up).
+    val playerHasRemote = {
+      listOf(TAG_OVERLAY_ROOT, TAG_OSD_PLAY).any { tag ->
+        runCatching { compose.onNodeWithTag(tag).assertIsFocused() }.isSuccess
+      }
+    }
+    compose.waitUntil(5_000) { playerHasRemote() }
   }
 }

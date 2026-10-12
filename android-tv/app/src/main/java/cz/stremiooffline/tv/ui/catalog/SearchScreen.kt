@@ -132,7 +132,7 @@ fun SearchScreen(
         testTag = TagSearchField,
         inputTestTag = TagSearchInput,
         onSubmit = { viewModel.submit(text) },
-        modifier = Modifier.width(430.dp),
+        modifier = Modifier.width(520.dp),
       )
       Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(
@@ -158,13 +158,13 @@ fun SearchScreen(
       // back to the field, because the shell's LEFT exit would otherwise send it to the rail.
       if (voice.available) {
         FocusButton(
-          text = stringResource(R.string.tv_voice_search),
+          text = "",
           onClick = voice.start,
-          leading = { Icon(MicIcon, contentDescription = null, modifier = Modifier.size(16.dp)) },
+          kind = FocusButtonKind.Icon,
+          leading = { Icon(MicIcon, contentDescription = null, modifier = Modifier.size(18.dp)) },
           contentDescription = stringResource(R.string.tv_voice_search),
-          labelMaxWidth = 240.dp,
           modifier = Modifier
-            .height(38.dp)
+            .size(38.dp)
             .testTag(TagSearchVoice)
             .leftToNeighbour(scopeFocus),
         )
@@ -235,6 +235,9 @@ private fun typeTag(type: String): String = when (type) {
   "series" -> stringResource(R.string.catalog_type_series)
   else -> type
 }
+
+/** The catalogues of an addon sit under its header, indented so the groups read at a glance. */
+private val ScopeIndent = 22.dp
 
 private sealed interface ScopeRow {
   val selected: Boolean
@@ -334,13 +337,13 @@ private fun SearchScopePanel(
             text = allCatalogsText + if (row.globalSearch) "" else " ·",
             selected = row.selected,
             onClick = { onPick(SearchScope(addonKey = row.addonKey)) },
-            modifier = Modifier.testTag(scopeAddonTag(row.addonKey)).then(entryModifier),
+            modifier = Modifier.padding(start = ScopeIndent).testTag(scopeAddonTag(row.addonKey)).then(entryModifier),
           )
           is ScopeRow.Catalog -> PanelOption(
             text = "${row.name} (${typeTag(row.type)})" + if (row.globalSearch) "" else " ·",
             selected = row.selected,
             onClick = { onPick(SearchScope(row.addonKey, row.type, row.id)) },
-            modifier = Modifier.testTag(scopeCatalogTag(row.type, row.id)).then(entryModifier),
+            modifier = Modifier.padding(start = ScopeIndent).testTag(scopeCatalogTag(row.type, row.id)).then(entryModifier),
           )
         }
       }
@@ -352,7 +355,7 @@ private fun SearchScopePanel(
  *  searched, the web's note. */
 @Composable
 private fun ScopeGroupHeader(name: String, note: String?, modifier: Modifier = Modifier) {
-  Column(modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+  Column(modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 2.dp), verticalArrangement = Arrangement.spacedBy(1.dp)) {
     Text(name, color = Tokens.Text, fontSize = 12.sp, fontWeight = FontWeight.Bold)
     if (note != null) Text(note, color = Tokens.Muted, fontSize = 9.5.sp)
   }

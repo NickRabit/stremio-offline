@@ -297,7 +297,7 @@ fun Shell(
   }
 
   val openDetail = detail
-  if (openDetail != null) OverlayFocusTrap {
+  if (openDetail != null) OverlayFocusTrap(fenced = player == null) {
     DetailScreen(
       detail = openDetail,
       imageUrl = { path -> path?.let(api::url) },
@@ -318,7 +318,7 @@ fun Shell(
   }
 
   val openCatalogDetail = catalogDetail
-  if (openCatalogDetail != null) OverlayFocusTrap {
+  if (openCatalogDetail != null) OverlayFocusTrap(fenced = player == null) {
     CatalogDetailScreen(
       api = api,
       args = openCatalogDetail,
@@ -360,14 +360,16 @@ fun Shell(
 }
 
 /** A detail covers the section it was opened from, which stays composed underneath. Without this
- *  fence a sideways move past the last button jumps into the hidden section's cards. */
+ *  fence a sideways move past the last button jumps into the hidden section's cards. The fence
+ *  is lifted while the player is up: a fenced detail refuses to hand the remote to anything
+ *  outside it, the player's own root included, and the controls then never answered. */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-private fun OverlayFocusTrap(content: @Composable () -> Unit) {
+private fun OverlayFocusTrap(fenced: Boolean, content: @Composable () -> Unit) {
   Box(
     Modifier
       .fillMaxSize()
-      .focusProperties { exit = { FocusRequester.Cancel } }
+      .then(if (fenced) Modifier.focusProperties { exit = { FocusRequester.Cancel } } else Modifier)
       .focusGroup(),
   ) { content() }
 }

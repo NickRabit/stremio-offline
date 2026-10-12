@@ -90,7 +90,6 @@ class VoiceSearchScreenTest {
   fun `the mic sits right of the scope chip`() {
     mount(FakeTvApi())
 
-    compose.onNodeWithTag(TagSearchVoice).assertTextContains("Voice search")
     compose.onNodeWithContentDescription("Voice search").assertExists()
 
     press(Key.DirectionRight)

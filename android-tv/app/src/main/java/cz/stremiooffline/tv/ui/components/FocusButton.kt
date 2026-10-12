@@ -98,9 +98,10 @@ fun FocusButton(
   ) {
     if (leading != null) {
       leading()
-      Spacer(Modifier.width(8.dp))
+      if (text.isNotEmpty()) Spacer(Modifier.width(8.dp))
     }
-    Text(text, fontSize = 12.5.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    // An icon-only button passes no text and is named by its content description.
+    if (text.isNotEmpty()) Text(text, fontSize = 12.5.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
   }
 }
 
