@@ -33,6 +33,9 @@ const sweepGrants = (state: State, id: string): void => {
   state.addons = state.addons.map((addon) => addon.allowedUsers?.includes(id)
     ? { ...addon, allowedUsers: addon.allowedUsers.filter((entry) => entry !== id) }
     : addon);
+  state.remoteLibraries = (state.remoteLibraries ?? []).map((library) => library.allowedUsers.includes(id)
+    ? { ...library, allowedUsers: library.allowedUsers.filter((entry) => entry !== id) }
+    : library);
 };
 
 export function registerUsersRoutes(app: express.Application, deps: UsersDeps): void {
@@ -62,6 +65,8 @@ export function registerUsersRoutes(app: express.Application, deps: UsersDeps): 
       : store.libraries().filter((library) => (library.visibleTo ?? []).includes(user.id)).length,
     addons: user.role === "admin" ? 0
       : store.addons().filter((addon) => (addon.allowedUsers ?? []).includes(user.id)).length,
+    remoteLibraries: user.role === "admin" ? 0
+      : store.remoteLibraries().filter((library) => library.allowedUsers.includes(user.id)).length,
   });
 
   /** One action, one line naming who did it and to whom, both by name and id: a hash in the

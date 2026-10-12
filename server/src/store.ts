@@ -122,7 +122,10 @@ export interface State { schemaVersion?: number;
    *  `libraries()` consumer keeps its local-only contract. */
   mediaConnections?: MediaConnectionRecord[];
   /** Remote libraries attached to those connections. */
-  remoteLibraries?: RemoteLibraryRecord[] }
+  remoteLibraries?: RemoteLibraryRecord[];
+  /** Secret-vault references whose ciphertext file is waiting to be deleted. Internal
+   *  only: it never leaves the process except as a store write, and never names a token. */
+  mediaSecretCleanup?: string[] }
 const baseInstanceSettings: InstanceSettings = { concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, defaultMovieLibrary: "", defaultSeriesLibrary: "", realDebridToken: "", tmdbApiKey: "" };
 const basePrefs: UserPrefs = { uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, tileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", favoritesTileShape: "poster", resumeTileShape: "poster", followingTileShape: "poster", homeTileShape: "wide", startView: "catalog", libraryShelf: "resume" };
 
@@ -161,6 +164,12 @@ export interface StoreHooks {
 
 export class Store {
   private state: State;
+  /** Whether a real `state.json` has been read or written successfully in this process.
+   *  Startup reconciliation that deletes files must not run off a swallowed ENOENT. */
+  private persisted = false;
+  /** Whether a loaded or saved state actually carried the media-server fields. A legacy
+   *  state from before those existed must not authorize deleting a newer vault. */
+  private mediaState = false;
   private readonly filename: string;
   private readonly downloadDir: string;
   private readonly writeState: (file: string, data: string) => Promise<void>;
@@ -174,6 +183,9 @@ export class Store {
     await mkdir(path.dirname(this.filename), { recursive: true });
     try {
       const loaded = JSON.parse(await readFile(this.filename, "utf8")) as Partial<State>;
+      this.persisted = true;
+      this.mediaState = Object.prototype.hasOwnProperty.call(loaded, "mediaConnections")
+        || Object.prototype.hasOwnProperty.call(loaded, "mediaSecretCleanup");
       const fresh = initialState(this.downloadDir);
       // `migrate` answers Czech for a state written before the interface spoke anything else.
       // A state that already has users is past that point: the language is the person's and
@@ -274,6 +286,14 @@ export class Store {
   libraries() { return this.state.libraries ?? []; }
   mediaConnections(): MediaConnectionRecord[] { return structuredClone(this.state.mediaConnections ?? []); }
   remoteLibraries(): RemoteLibraryRecord[] { return structuredClone(this.state.remoteLibraries ?? []); }
+  mediaSecretCleanup(): string[] { return [...(this.state.mediaSecretCleanup ?? [])]; }
+  /** True once a state file has actually been read or written here. A missing or corrupt
+   *  file leaves it false, so a reconciliation step must not treat an empty in-memory state
+   *  as proof that the vault's files are orphans. */
+  hasPersistedState(): boolean { return this.persisted; }
+  /** True once a state that owned `mediaConnections` or `mediaSecretCleanup` was read or
+   *  written. The in-memory default that has neither is not proof that the vault is orphaned. */
+  hasMediaServerState(): boolean { return this.mediaState; }
   grants() { return this.state.grants ?? []; }
   departed() { return this.state.departed ?? []; }
   private chain: Promise<void> = Promise.resolve();
@@ -296,6 +316,11 @@ export class Store {
         const temp = `${this.filename}.tmp`;
         await this.writeState(temp, JSON.stringify(this.state, null, 2));
         await renameWithRetry(temp, this.filename);
+        this.persisted = true;
+        if (!this.mediaState) {
+          this.mediaState = Object.prototype.hasOwnProperty.call(this.state, "mediaConnections")
+            || Object.prototype.hasOwnProperty.call(this.state, "mediaSecretCleanup");
+        }
       } catch (error) {
         this.state = before;
         // The state carries the account and the addon tokens, so only the reason is recorded.

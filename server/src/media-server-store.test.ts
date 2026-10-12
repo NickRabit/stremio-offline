@@ -52,6 +52,58 @@ const libraryInput = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
+test("a beforeWrite guard runs inside every mutating update and refuses the whole write", async () => {
+  await run(async ({ store }) => {
+    const seen: number[] = [];
+    const guarded = new MediaServerConfiguration(store, { beforeWrite: (state) => { seen.push((state.mediaConnections ?? []).length); } });
+    const created = await guarded.addConnection(connectionInput());
+    await guarded.attachLibrary(created.id, libraryInput());
+    await guarded.setEnabled(created.id, false);
+    await guarded.removeConnection(created.id);
+    assert.deepEqual(seen, [0, 1, 1, 1], "the guard ran for every write, before it landed");
+
+    const refusing = new MediaServerConfiguration(store, { beforeWrite: () => { throw new Error("stale authority"); } });
+    await assert.rejects(refusing.addConnection(connectionInput()), /stale authority/);
+    assert.deepEqual(store.mediaConnections(), [], "a refused guard leaves nothing behind");
+  });
+});
+
+test("hasPersistedState tracks a real read or write, not a speculative mutation", async () => {
+  await run(async ({ dataDir, store, config }) => {
+    assert.equal(store.hasPersistedState(), false, "load() swallowed a missing file");
+    assert.equal(store.hasMediaServerState(), false);
+    await config.addConnection(connectionInput());
+    assert.equal(store.hasPersistedState(), true);
+    assert.equal(store.hasMediaServerState(), true, "the write that carried mediaConnections is proof");
+    const reopened = new Store(dataDir, path.dirname(dataDir));
+    assert.equal(reopened.hasPersistedState(), false, "a fresh store has read nothing");
+    assert.equal(reopened.hasMediaServerState(), false);
+    await reopened.load();
+    assert.equal(reopened.hasPersistedState(), true);
+    assert.equal(reopened.hasMediaServerState(), true, "the loaded state owned mediaConnections");
+  });
+});
+
+test("hasMediaServerState stays false for a state written before the fields existed", async () => {
+  await run(async ({ dataDir, store }) => {
+    await store.update((state) => { state.addons = state.addons ?? []; });
+    assert.equal(store.hasPersistedState(), true);
+    assert.equal(store.hasMediaServerState(), false, "a legacy save is not proof that the vault is orphaned");
+    void dataDir;
+  });
+});
+
+test("the cleanup queue accessor clones and is absent by default", async () => {
+  await run(async ({ store, config }) => {
+    assert.deepEqual(store.mediaSecretCleanup(), []);
+    await store.update((state) => { state.mediaSecretCleanup = ["msecret_00000000000000000000000000000001"]; });
+    const queue = store.mediaSecretCleanup();
+    queue.push("msecret_00000000000000000000000000000002");
+    assert.deepEqual(store.mediaSecretCleanup(), ["msecret_00000000000000000000000000000001"], "the returned array is a copy");
+    void config;
+  });
+});
+
 test("the clone accessors isolate persisted state from accidental mutation", async () => {
   await run(async ({ config, store }) => {
     const created = await config.addConnection(connectionInput());

@@ -200,6 +200,35 @@ disabled/offline/empty are distinct; grant removal during fetch publishes no
 results; local root/scanner/default-target behaviour is unchanged; restore and
 reattach start admin-only; connection removal deletes the correct secret.
 
+### MS-2 delivery note (management + bounded index only)
+
+The first MS-2 delivery ships the administration API, the member metadata
+browsing API and the bounded in-memory index, and deliberately leaves the rest
+of this task for later work. Delivered: connection create/patch/remove/
+reauthenticate/discovery/attachment, remote-library patch/delete, metadata-only
+export and additive import, the member list/browse/detail/episodes reads, the
+bounded snapshot cache with cursor binding, the grant and generation rules, the
+dashboard `remoteLibraries` count, the secret-cleanup queue with startup
+reconciliation, and the fixed error mapping. MS-2's exact contracts live in
+[media-server-management.md](media-server-management.md).
+
+A cached snapshot is never a permission or a fallback: every read repeats the
+live identity, account-policy, view and ancestry checks, is bound to the
+request's abort signal, and fails closed when a refresh fails (the previous
+snapshot survives only for an exact cursor). Imported connections are disabled
+and secret-less and take their first credential through reauthentication, and
+startup cleanup only deletes a vault file when a state that once carried the
+media-server fields was actually loaded or written.
+
+Deferred on purpose: the **shared Library DTO** that mixes filesystem and remote
+entries, **artwork**, the **ordinary settings-backup** integration (the remote
+export/import is a dedicated admin route instead), and every **client surface**
+(web and Android TV). The member routes are GET-only and carry metadata only;
+there is no artwork, play, source or download route yet, and no remote media
+URL is ever accepted or returned. Where this section's earlier text says
+"resolve 404 the same way for inaccessible/unknown", that holds for the content
+routes delivered here.
+
 ## MS-3: content-bound resources, matching and playback
 
 Goal: allowed remote items play through our existing proxy/FFmpeg with stable

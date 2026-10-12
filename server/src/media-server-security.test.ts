@@ -143,14 +143,23 @@ test("the transport builds the exact metadata request and headers", async () => 
   let fixture: Fixture | undefined;
   try {
     fixture = await startServer((_req, res) => json(res, { Id: "server-1", Version: "12.2.0" }));
-    const transport = createMediaServerTransport({ baseUrl: `${fixture.origin}/prefix`, allowLan: false, allowLoopback: true });
+    const transport = createMediaServerTransport({ baseUrl: `${fixture.origin}/prefix`, allowLan: false, allowLoopback: true, deviceId: "mconn_fixture-identity" });
     const info = await transport.requestJson("info", {});
     assert.deepEqual(info, { Id: "server-1", Version: "12.2.0" });
     assert.equal(fixture.requests[0].url, "/prefix/System/Info/Public");
     assert.equal(fixture.requests[0].headers.authorization?.includes("Token="), false, "no token is sent where none is needed");
+    assert.match(fixture.requests[0].headers.authorization ?? "", /DeviceId="mconn_fixture-identity"/);
     await transport.close();
   } finally {
     await fixture?.close();
+  }
+});
+
+test("device identity is bounded and cannot inject an authorization header field", () => {
+  for (const deviceId of ["", "x".repeat(65), 'device", Token="injected', "device\r\nheader", 123]) {
+    assert.throws(() => createMediaServerTransport({
+      baseUrl: "http://127.0.0.1", allowLan: false, allowLoopback: true, deviceId: deviceId as string,
+    }), { code: "invalid-input" });
   }
 });
 
@@ -163,7 +172,7 @@ test("items carries only the fixed allow-listed query and drops raw path fields"
     const query = new URLSearchParams(fixture.requests[0].url.split("?")[1]);
     assert.equal(query.get("Recursive"), "true");
     assert.equal(query.get("IncludeItemTypes"), "Movie,Series,Season,Episode");
-    assert.equal(query.get("Fields"), "ProviderIds,ParentId");
+    assert.equal(query.get("Fields"), "ProviderIds,ParentId,SeriesInfo");
     assert.equal(query.get("EnableUserData"), "false");
     assert.equal(query.get("ParentId"), "lib-1");
     assert.equal(query.get("StartIndex"), "0");

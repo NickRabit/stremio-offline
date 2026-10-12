@@ -37,6 +37,7 @@ export const MEDIA_SERVER_LIMITS = Object.freeze({
   libraries: 1024,
   requestBody: 16 * 1024,
   responseBody: 2 * 1024 * 1024,
+  secretCleanup: 2048,
 });
 
 export type RemoteLibraryType = "movie" | "series" | "mixed";
@@ -181,6 +182,8 @@ export type MediaServerErrorCode =
   | "invalid-response"
   | "response-too-large"
   | "stale-generation"
+  | "identity-changed"
+  | "unsupported-policy"
   | "secret-key-unavailable"
   | "secret-unavailable";
 

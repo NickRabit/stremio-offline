@@ -78,12 +78,15 @@ import { registerDiagnosticsRoutes } from "./routes/diagnostics.js";
 import { registerDownloadRoutes } from "./routes/downloads.js";
 import { calendarFeedHandler, registerFollowRoutes } from "./routes/follows.js";
 import { registerLibrariesRoutes } from "./routes/libraries.js";
+import { registerMediaServerRoutes } from "./routes/media-servers.js";
 import { registerPersonalRoutes } from "./routes/personal.js";
 import { registerHomeRoutes } from "./routes/home.js";
 import { HomeCatalogCache, homeCatalogTargets } from "./home-catalogs.js";
 import { registerPlaybackRoutes } from "./routes/playback.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerUsersRoutes } from "./routes/users.js";
+import { MediaServerManager } from "./media-server-manager.js";
+import { MediaServerSecrets } from "./media-server-secrets.js";
 
 const STREAM_SORTS = new Set(["recommended", "size-desc", "size-asc", "addon"]);
 const DATA_DIR = process.env.DATA_DIR ?? "/data";
@@ -101,9 +104,14 @@ const followStore = new FollowStore(DATA_DIR);
 const seen = new LibrarySeenStore(DATA_DIR);
 /** The log bundles clients upload, one JSON file each under the data directory. */
 const clientLogs = new ClientLogStore(DATA_DIR);
+/** The encrypted provider tokens and the administration/browsing service over the stored
+ *  remote connections. With no key configured the vault stays unavailable and the app boots. */
+const mediaServerVault = new MediaServerSecrets(path.join(DATA_DIR, "media-server-secrets"), process.env.MEDIA_SERVER_KEY_FILE);
+const mediaServers = new MediaServerManager(store, mediaServerVault);
 let markServerReady!: () => void;
 const serverReady = new Promise<void>((resolve) => { markServerReady = resolve; });
 await store.load();
+await mediaServers.initialize();
 await metaStore.load();
 await externalIds.load();
 await followStore.load();
@@ -499,6 +507,16 @@ app.use("/api", (req, res, next) => {
 // the route's own ceiling, so a bundle that is over it is refused with the catalogue key
 // rather than Express's bare 413.
 app.use("/api/client-log/bundle", express.json({ limit: "1mb" }));
+// A remote media-server export may exceed the ordinary body while staying bounded. The parser
+// is applied by an exact-path predicate, not a prefix mount, so only the import route gets the
+// larger ceiling: a path that merely starts with it keeps the ordinary one. The predicated
+// parser sits above the route's 8 MiB ceiling so an over-limit body still gets the key.
+const mediaImportBody = express.json({ limit: "9mb" });
+const isMediaServerImportPath = (path: string): boolean => {
+  const trimmed = path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path;
+  return trimmed.toLowerCase() === "/api/media-servers/import";
+};
+app.use((req, res, next) => req.method === "POST" && isMediaServerImportPath(req.path) ? mediaImportBody(req, res, next) : next());
 app.use(express.json({ limit: "256kb" }));
 /** Measures how much the response actually sends and reports it to the statistics.
  * It counts at write time, so what the client asked for and then abandoned by closing
@@ -2238,6 +2256,7 @@ const freeSpace = async (target: string) => {
 };
 registerDiagnosticsRoutes(app, { ...routeContext, stats, playback, throughput, queue, libraryScan, playbackMeta, freeSpace, clientLogs, dataDir: DATA_DIR });
 registerSettingsRoutes(app, { ...routeContext, STREAM_SORTS, accountIdOf, invalidateLibrary, metaCache, metaStore, mutateData, prefsOf, queue, streamCache });
+registerMediaServerRoutes(app, { ...routeContext, mediaServers });
 registerPlaybackRoutes(app, { ...routeContext, airplayAccess, airplayRequest, answerHeaders, countBytes, httpSourceOf, internalMediaRequest, libraryTarget, noteSourceQuiet, ownerOf, playback, playbackMeta, playbackOwners, playbackResponse, prefsOf, quietSources, rangeCache, safeInspection, sleep, sourceIsQuiet, stats, subtitleDelay, trackMedia, SOURCE_ATTEMPTS, SOURCE_RETRY_MS, SOURCE_RESUMES, SOURCE_HEADER_MS, SOURCE_QUIET_HEADER_MS });
 
 app.all(["/api/proxy", "/api/subtitle", "/api/library/file"], (_req, res) => {
@@ -2348,7 +2367,7 @@ const shutdown = createShutdown({
   maintenance,
   followService,
   killRunningMedia,
-  flushes: [() => stats.activity.flush(), () => images.flush(), () => artworks.flush(), () => metaStore.flush(), () => seen.flush(), () => libraryOps.flush()],
+  flushes: [() => stats.activity.flush(), () => images.flush(), () => artworks.flush(), () => metaStore.flush(), () => seen.flush(), () => libraryOps.flush(), () => mediaServers.close()],
   store,
   flushLog,
   log,

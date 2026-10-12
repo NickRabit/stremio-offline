@@ -38,6 +38,7 @@ export interface MediaServerTransport {
 
 export interface MediaServerTransportConfig extends MediaServerAddressPolicy {
   baseUrl: string;
+  deviceId?: string;
 }
 
 export interface LookupAddress {
@@ -394,7 +395,9 @@ function buildRequest(baseUrl: string, operation: MediaServerOperationName, args
       const query = new URLSearchParams();
       query.set("Recursive", "true");
       query.set("IncludeItemTypes", itemTypes(args.includeItemTypes));
-      query.set("Fields", "ProviderIds,ParentId");
+      // SeriesInfo is what makes SeriesId come back on episode rows in the measured
+      // Jellyfin 12.2.0 / Emby 4.9.3.0 responses; a row without it is never guessed.
+      query.set("Fields", "ProviderIds,ParentId,SeriesInfo");
       query.set("EnableUserData", "false");
       query.set("ParentId", pathSegment(args.parentId, "parentId"));
       query.set("StartIndex", String(boundedIndex(args.startIndex, "startIndex", 1_000_000_000) ?? 0));
@@ -431,6 +434,8 @@ export function createMediaServerTransport(
 ): MediaServerTransport {
   const policy: MediaServerAddressPolicy = checkPolicy({ allowLan: config.allowLan, allowLoopback: config.allowLoopback });
   const baseUrl = normalizeMediaServerUrl(config.baseUrl);
+  const deviceId = config.deviceId ?? DEVICE_ID;
+  if (typeof deviceId !== "string" || !/^[a-zA-Z0-9_-]{1,64}$/.test(deviceId)) throw invalid("The media-server device identity is invalid.");
   const resolveAll = seams.lookupAll ?? systemLookupAll;
   let pendingLookups = 0;
   const lookupAll: LookupAll = (hostname, options) => {
@@ -543,7 +548,7 @@ export function createMediaServerTransport(
 
       const headers: Record<string, string> = {
         accept: "application/json",
-        authorization: `MediaBrowser Client="${CLIENT}", Device="${DEVICE}", DeviceId="${DEVICE_ID}", Version="${CLIENT_VERSION}"`,
+        authorization: `MediaBrowser Client="${CLIENT}", Device="${DEVICE}", DeviceId="${deviceId}", Version="${CLIENT_VERSION}"`,
       };
       if (built.body !== undefined) headers["content-type"] = "application/json";
       if (bearer !== undefined) {

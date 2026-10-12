@@ -1,4 +1,4 @@
-import type { Store } from "./store.js";
+import type { State, Store } from "./store.js";
 import {
   MediaServerError,
   MEDIA_CONNECTION_ID,
@@ -60,13 +60,13 @@ const nextGeneration = (generation: number): number => {
   return generation + 1;
 };
 
-const CONNECTION_KEYS = ["provider", "name", "baseUrl", "allowLan", "allowLoopback", "serverId", "accountId", "enabled"];
-const LIBRARY_KEYS = ["remoteId", "name", "type", "enabled", "order", "showOnHome", "showInContinueWatching"];
-const EXPORT_CONNECTION_KEYS = ["id", "provider", "name", "baseUrl", "allowLan", "allowLoopback", "serverId", "accountId"];
-const EXPORT_LIBRARY_KEYS = ["id", "connectionId", "remoteId", "name", "type", "order", "showOnHome", "showInContinueWatching"];
-const LIBRARY_TYPES: readonly RemoteLibraryType[] = ["movie", "series", "mixed"];
+export const CONNECTION_KEYS = ["provider", "name", "baseUrl", "allowLan", "allowLoopback", "serverId", "accountId", "enabled"];
+export const LIBRARY_KEYS = ["remoteId", "name", "type", "enabled", "order", "showOnHome", "showInContinueWatching"];
+export const EXPORT_CONNECTION_KEYS = ["id", "provider", "name", "baseUrl", "allowLan", "allowLoopback", "serverId", "accountId"];
+export const EXPORT_LIBRARY_KEYS = ["id", "connectionId", "remoteId", "name", "type", "order", "showOnHome", "showInContinueWatching"];
+export const LIBRARY_TYPES: readonly RemoteLibraryType[] = ["movie", "series", "mixed"];
 
-function checkKeys(value: unknown, allowed: readonly string[], context: string): Record<string, unknown> {
+export function checkKeys(value: unknown, allowed: readonly string[], context: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw invalid(`${context} is malformed.`);
   for (const key of Object.keys(value)) {
     if (!allowed.includes(key)) throw invalid(`${context} has an unknown field.`);
@@ -74,27 +74,27 @@ function checkKeys(value: unknown, allowed: readonly string[], context: string):
   return value as Record<string, unknown>;
 }
 
-const boundedString = (value: unknown, max: number, field: string): string => {
+export const boundedString = (value: unknown, max: number, field: string): string => {
   if (typeof value !== "string" || value.length === 0 || value.length > max) throw invalid(`The media-server ${field} is missing or too long.`);
   return value;
 };
 
-const bool = (value: unknown, field: string): boolean => {
+export const bool = (value: unknown, field: string): boolean => {
   if (typeof value !== "boolean") throw invalid(`The media-server ${field} must be a boolean.`);
   return value;
 };
 
-const remoteType = (value: unknown): RemoteLibraryType => {
+export const remoteType = (value: unknown): RemoteLibraryType => {
   if (typeof value !== "string" || !LIBRARY_TYPES.includes(value as RemoteLibraryType)) throw invalid("The media-server library type is not supported.");
   return value as RemoteLibraryType;
 };
 
-const order = (value: unknown): number => {
+export const order = (value: unknown): number => {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw invalid("The media-server library order is not a non-negative integer.");
   return value;
 };
 
-function readConnectionFields(record: Record<string, unknown>) {
+export function readConnectionFields(record: Record<string, unknown>) {
   if (!MEDIA_SERVER_KINDS.includes(record.provider as MediaConnectionRecord["provider"])) throw invalid("The media-server provider is not supported.");
   return {
     provider: record.provider as MediaConnectionRecord["provider"],
@@ -107,7 +107,7 @@ function readConnectionFields(record: Record<string, unknown>) {
   };
 }
 
-function readLibraryFields(record: Record<string, unknown>) {
+export function readLibraryFields(record: Record<string, unknown>) {
   return {
     remoteId: boundedString(record.remoteId, MEDIA_SERVER_LIMITS.upstreamId, "library id"),
     name: boundedString(record.name, MEDIA_SERVER_LIMITS.name, "library name"),
@@ -120,14 +120,25 @@ function readLibraryFields(record: Record<string, unknown>) {
 
 /** A JSON tuple, not a NUL join: upstream ids may themselves contain a control byte, so a
  *  joined string could map two different identities to one key. */
-const verifiedKey = (provider: string, serverId: string, accountId: string): string =>
+export const verifiedKey = (provider: string, serverId: string, accountId: string): string =>
   JSON.stringify([provider, serverId, accountId]);
+
+/** A synchronous guard run at the top of every mutating update, so an authority that has
+ *  gone stale during an awaited network call cannot land a write. Internal legacy callers
+ *  pass nothing and keep their old behaviour. */
+export interface MediaServerConfigurationOptions {
+  beforeWrite?: (state: State) => void;
+}
 
 /** The validated internal configuration surface. Every method reads and writes through the
  *  store's serialized `update`, so a duplicate or a dangling reference is refused atomically
  *  and a failed call leaves nothing behind. */
 export class MediaServerConfiguration {
-  constructor(private readonly store: Store) {}
+  constructor(private readonly store: Store, private readonly options: MediaServerConfigurationOptions = {}) {}
+
+  private guard(state: State): void {
+    this.options.beforeWrite?.(state);
+  }
 
   async addConnection(input: MediaConnectionInput): Promise<MediaConnectionRecord> {
     const record = checkKeys(input, CONNECTION_KEYS, "The media-server connection");
@@ -136,6 +147,7 @@ export class MediaServerConfiguration {
     const id = newConnectionId();
     let created: MediaConnectionRecord | undefined;
     await this.store.update((state) => {
+      this.guard(state);
       const list = state.mediaConnections ?? [];
       if (list.length >= MEDIA_SERVER_LIMITS.connections) throw invalid("Too many media-server connections.");
       if (list.some((connection) => verifiedKey(connection.provider, connection.serverId, connection.accountId) === verifiedKey(fields.provider, fields.serverId, fields.accountId))) {
@@ -155,6 +167,7 @@ export class MediaServerConfiguration {
     const id = newRemoteLibraryId();
     let created: RemoteLibraryRecord | undefined;
     await this.store.update((state) => {
+      this.guard(state);
       const connection = (state.mediaConnections ?? []).find((candidate) => candidate.id === connectionId);
       if (!connection) throw notFound("That media-server connection does not exist.");
       if (!connection.enabled) throw invalid("That media-server connection is disabled.");
@@ -174,6 +187,7 @@ export class MediaServerConfiguration {
     if (typeof connectionId !== "string" || !MEDIA_CONNECTION_ID.test(connectionId)) throw invalid("The media-server connection id is malformed.");
     if (typeof enabled !== "boolean") throw invalid("The media-server enabled flag must be a boolean.");
     await this.store.update((state) => {
+      this.guard(state);
       const connection = (state.mediaConnections ?? []).find((candidate) => candidate.id === connectionId);
       if (!connection) throw notFound("That media-server connection does not exist.");
       if (connection.enabled === enabled) return;
@@ -188,6 +202,7 @@ export class MediaServerConfiguration {
     if (typeof connectionId !== "string" || !MEDIA_CONNECTION_ID.test(connectionId)) throw invalid("The media-server connection id is malformed.");
     let secretRefsToRemove: string[] = [];
     await this.store.update((state) => {
+      this.guard(state);
       const connection = (state.mediaConnections ?? []).find((candidate) => candidate.id === connectionId);
       if (!connection) throw notFound("That media-server connection does not exist.");
       secretRefsToRemove = connection.secretRef ? [connection.secretRef] : [];
@@ -217,6 +232,7 @@ export class MediaServerConfiguration {
     await vault.get({ connectionId, provider: snapshot.provider, serverId: snapshot.serverId, accountId: snapshot.accountId }, ref);
     let secretRefsToRemove: string[] = [];
     await this.store.update((state) => {
+      this.guard(state);
       const connection = (state.mediaConnections ?? []).find((candidate) => candidate.id === connectionId);
       if (!connection) throw notFound("That media-server connection does not exist.");
       if (connection.generation !== expectedGeneration
@@ -305,6 +321,7 @@ export class MediaServerConfiguration {
       libraries.push({ id: newRemoteLibraryId(), connectionId, ...fields, enabled: false, allowedUsers: [] });
     }
     await this.store.update((state) => {
+      this.guard(state);
       const existing = state.mediaConnections ?? [];
       const existingLibraries = state.remoteLibraries ?? [];
       if (existing.length + connections.length > MEDIA_SERVER_LIMITS.connections) throw invalid("Too many media-server connections.");

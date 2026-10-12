@@ -1297,6 +1297,13 @@ export const en = {
   // Server failures. The key travels with the response; the server's English text
   // stands in for anything not listed here.
   "err.restricted": "This instance is in restricted mode.",
+  "err.mediaServerBusy": "The media server is busy. Try again shortly.",
+  "err.mediaServerUnavailable": "The media server is unavailable.",
+  "err.mediaServerLogin": "The media-server connection needs an administrator to sign in again.",
+  "err.mediaServerKey": "The media-server secret key is unavailable.",
+  "err.mediaServerStale": "The media-server configuration changed. Try again.",
+  "err.mediaServerIdentity": "The media-server identity changed. Recreate the connection.",
+  "err.mediaServerRestricted": "This media-server account has unsupported restrictions.",
   "err.notAllowed": "This account may not do that.",
   "err.homeLayoutShape": "A Home layout must list an order, the hidden rows and the feeds.",
   "err.lastAdmin": "The last administrator cannot be removed.",

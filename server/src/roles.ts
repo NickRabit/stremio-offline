@@ -68,6 +68,12 @@ export const USER_ALLOWED: Rule[] = [
   { method: "GET", pattern: /^\/library\/previous\/[^/]+$/ },
   { method: "POST", pattern: /^\/library\/source$/ },
   { method: "GET", pattern: /^\/libraries$/ },
+  // Remote media-server metadata an account was granted. Read-only and GET-only: every
+  // administration path under /media-servers stays administrator-only by absence.
+  { method: "GET", pattern: /^\/remote-libraries$/ },
+  { method: "GET", pattern: /^\/remote-libraries\/[^/]+\/items$/ },
+  { method: "GET", pattern: /^\/remote-libraries\/[^/]+\/items\/[^/]+\/episodes$/ },
+  { method: "GET", pattern: /^\/remote-libraries\/[^/]+\/items\/[^/]+$/ },
   { method: "GET", pattern: /^\/home$/ },
   { method: "GET", pattern: /^\/home\/layout$/ },
   { method: "GET", pattern: /^\/catalogs$/ },

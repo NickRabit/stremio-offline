@@ -1291,6 +1291,13 @@ export const cs: Catalog = {
 
   // Chyby ze serveru.
   "err.restricted": "Tato instance běží v omezeném režimu.",
+  "err.mediaServerBusy": "Mediální server je zaneprázdněný. Zkus to za chvíli.",
+  "err.mediaServerUnavailable": "Mediální server není dostupný.",
+  "err.mediaServerLogin": "Připojení k mediálnímu serveru vyžaduje nové přihlášení správce.",
+  "err.mediaServerKey": "Klíč k přihlašovacím údajům mediálního serveru není dostupný.",
+  "err.mediaServerStale": "Nastavení mediálního serveru se změnilo. Zkus to znovu.",
+  "err.mediaServerIdentity": "Identita mediálního serveru se změnila. Vytvoř připojení znovu.",
+  "err.mediaServerRestricted": "Tento účet mediálního serveru má nepodporovaná omezení.",
   "err.notAllowed": "Tento účet na to nemá oprávnění.",
   "err.homeLayoutShape": "Domovská obrazovka musí uvádět pořadí, skryté řady a zdroje.",
   "err.lastAdmin": "Posledního administrátora nelze odebrat.",

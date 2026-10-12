@@ -55,6 +55,34 @@ test("secret GETs match DENIED_GETS and ordinary GETs do not", () => {
   assert.equal(isDeniedGet("GET", "/libraries/browse"), true, "the picker names directories on the host");
   assert.equal(isDeniedGet("GET", "/libraries/grants"), true);
   assert.equal(isDeniedGet("GET", "/libraries"), false, "the list stays readable, minus the roots");
+  assert.equal(isDeniedGet("GET", "/media-servers"), true, "the admin inventory names remote addresses and account ids");
+  assert.equal(isDeniedGet("GET", "/media-servers/export"), true, "the remote export names server addresses too");
+  assert.equal(isDeniedGet("GET", "/media-servers/mconn_00000000000000000000000000000001/libraries"), true);
+  assert.equal(isDeniedGet("GET", "/media-servers/mconn_00000000000000000000000000000001"), false, "there is no such admin GET");
+  assert.equal(isDeniedGet("GET", "/media-servers-other"), false, "the pattern does not widen to a prefix");
+  assert.equal(isDeniedGet("GET", "/remote-libraries"), false, "granted remote metadata stays readable");
+  assert.equal(isDeniedGet("GET", "/remote-libraries/rlib_00000000000000000000000000000001/items"), false);
+  assert.equal(isDeniedGet("GET", "/remote-libraries/rlib_00000000000000000000000000000001/items/item-1"), false);
+});
+
+test("deny rules see the path the router matched: case and one trailing slash", () => {
+  for (const path of ["/media-servers", "/media-servers/", "/MEDIA-SERVERS", "/Media-Servers/"]) {
+    assert.equal(isDeniedGet("GET", path), true, path);
+  }
+  for (const path of ["/settings/export/", "/SETTINGS/EXPORT", "/logs/", "/LOGS", "/libraries/browse/", "/addons/abc/export/"]) {
+    assert.equal(isDeniedGet("GET", path), true, path);
+  }
+  assert.equal(isDeniedGet("GET", `/media-servers/${"mconn_0".padEnd(38, "0")}/libraries/`), true);
+  // Near misses that are not the same route as far as the router is concerned.
+  assert.equal(isDeniedGet("GET", "/media-servers-extra"), false);
+  assert.equal(isDeniedGet("GET", "/media-servers/abc"), false);
+  assert.equal(isDeniedGet("GET", "/logs/extra"), false);
+  assert.equal(isDeniedGet("GET", "/logs//"), false, "only one trailing slash is an equivalence");
+  // Member metadata stays readable, and no write is exempted.
+  assert.equal(isDeniedGet("GET", "/remote-libraries/"), false);
+  assert.equal(isDeniedGet("GET", "/remote-libraries/x/items/"), false);
+  assert.equal(isAllowedMutation("POST", "/Media-Servers/Import"), false);
+  assert.equal(isAllowedMutation("DELETE", "/Remote-Libraries/x/"), false);
 });
 
 test("ALLOWED_MUTATIONS covers the demo writes and omits configuration", () => {
@@ -104,6 +132,10 @@ test("ALLOWED_MUTATIONS covers the demo writes and omits configuration", () => {
   assert.equal(isAllowedMutation("DELETE", "/progress"), false);
   assert.equal(isAllowedMutation("POST", "/settings/import"), false);
   assert.equal(isAllowedMutation("DELETE", "/logs"), false);
+  assert.equal(isAllowedMutation("POST", "/media-servers"), false, "media-server administration is not a demo write");
+  assert.equal(isAllowedMutation("POST", "/media-servers/import"), false);
+  assert.equal(isAllowedMutation("POST", "/media-servers/mconn_00000000000000000000000000000001/libraries"), false);
+  assert.equal(isAllowedMutation("DELETE", "/remote-libraries/rlib_00000000000000000000000000000001"), false);
 });
 
 test("logoutDenied blocks only everywhere:true while the flag is on", (t) => {

@@ -42,6 +42,40 @@ async function withFixture(run: (fixture: Fixture) => Promise<void>): Promise<vo
   finally { await rm(created.root, { recursive: true, force: true }); }
 }
 
+test("keyConfigured only reports whether a path was supplied, never the path", async () => {
+  await withFixture(async ({ directory, keyFile }) => {
+    assert.equal(new MediaServerSecrets(directory, keyFile).keyConfigured(), true);
+    assert.equal(new MediaServerSecrets(directory, undefined).keyConfigured(), false);
+  });
+});
+
+test("references lists the handles the vault holds, ignoring its own temp files and junk", async () => {
+  await withFixture(async ({ directory, keyFile }) => {
+    const vault = new MediaServerSecrets(directory, keyFile);
+    assert.deepEqual(await vault.references(), [], "a missing directory is empty, not an error");
+    const first = await vault.put(binding(), "one");
+    const second = await vault.put(binding(), "two");
+    await writeFile(path.join(directory, "not-a-handle"), "junk");
+    await writeFile(path.join(directory, `.${first}.deadbeef.tmp`), "temp");
+    const listed = await vault.references();
+    assert.deepEqual(listed, [first, second].sort());
+  });
+});
+
+test("references fails closed on an unsafe vault directory", async () => {
+  if (isWin) return;
+  await withFixture(async ({ root, directory, keyFile }) => {
+    const vault = new MediaServerSecrets(directory, keyFile);
+    await vault.put(binding(), "one");
+    await chmod(directory, 0o755);
+    const insecure = new MediaServerSecrets(directory, keyFile);
+    await assert.rejects(insecure.references(), { code: "secret-unavailable" });
+    await chmod(directory, 0o700);
+    assert.equal((await vault.references()).length, 1);
+    void root;
+  });
+});
+
 test("a token round-trips and a 8192-byte token is accepted", async () => {
   await withFixture(async ({ directory, keyFile }) => {
     const vault = new MediaServerSecrets(directory, keyFile);
