@@ -151,9 +151,11 @@ fun PlayerScreen(
   var diagnosticsOpen by remember { mutableStateOf(false) }
   var sourcesOpen by remember { mutableStateOf(false) }
   var qualityOpen by remember { mutableStateOf(false) }
-  // A source switch that has not landed yet: what to retry, and where to go back to.
-  var switchTarget by remember { mutableStateOf<String?>(null) }
-  var previousSourceId by remember { mutableStateOf<String?>(null) }
+  // A source switch that has not landed yet: the target to retry, the target to go back to, and
+  // the position both must resume at.
+  var switchTarget by remember { mutableStateOf<PlayTarget?>(null) }
+  var previousTarget by remember { mutableStateOf<PlayTarget?>(null) }
+  var switchAt by remember { mutableDoubleStateOf(0.0) }
   // The button that opened a panel takes the remote back once the panel and its focus trap are
   // gone; the request waits for the frame that removed them.
   var restoreFocus by remember { mutableStateOf<FocusRequester?>(null) }
@@ -270,37 +272,96 @@ fun PlayerScreen(
     sourcesOpen = false
     qualityOpen = false
     switchTarget = null
-    previousSourceId = null
+    previousTarget = null
+    switchAt = 0.0
     cues = emptyList()
   }
 
   /** The account's languages and the addon subtitles, read fresh before every start. */
-  suspend fun readAccount() {
+  suspend fun readAccount(from: PlayTarget = currentTarget) {
     addonFetched = true
     settings = runCatching { api.settings() }.getOrDefault(SettingsResponse())
-    val type = currentTarget.subtitleType
-    val id = currentTarget.subtitleTarget
+    val type = from.subtitleType
+    val id = from.subtitleTarget
     addonSubtitles = if (type != null && id != null) runCatching { api.subtitles(type, id) }.getOrDefault(emptyList()) else emptyList()
   }
 
-  // The sources the caller offers in its own order; an addon's notice is not a source. A library
-  // file has none, so both the button and the panel stay away.
+  // The sources the caller offers in its own order; an addon's notice is not a source. A play the
+  // catalogue never started has none, so both the button and the panel stay away.
   val offeredSources = Streams.offeredStreams(sources)
-  val playingSource = offeredSources.firstOrNull { it.sourceId == state.sourceId }
+  // The row the session plays: an addon one by its source id, a library copy by the path it plays.
+  // A blank source id names no source, so it marks no row; a source id match wins over a path one,
+  // because an addon source chosen over a library file leaves that file's path on the session.
+  val playingSource = offeredSources.firstOrNull { it.sourceId.isNotBlank() && it.sourceId == state.sourceId }
+    ?: offeredSources.firstOrNull { Streams.isLocalStream(it) && it.localPath != null && it.localPath == currentTarget.path }
   val quality = qualityChoice(state.quality, state.escalatedByViewer)
+
+  /**
+   * The target a chosen row switches to. A library copy becomes the file's own session, with the
+   * file's key and name; an addon row keeps the session's key, title and path, so a switch away
+   * from a library file stays on that one file's progress.
+   */
+  fun switchTargetOf(stream: StreamDto): PlayTarget {
+    val path = stream.localPath
+    if (Streams.isLocalStream(stream) && path != null) {
+      return PlayTarget(
+        key = Progress.libraryKey(path),
+        title = stream.behaviorHints?.filename?.takeIf { it.isNotBlank() } ?: currentTarget.title,
+        resume = false,
+        path = path,
+        poster = currentTarget.poster,
+        catalogue = true,
+      )
+    }
+    return PlayTarget(
+      key = currentTarget.key,
+      title = currentTarget.title,
+      resume = false,
+      path = currentTarget.path,
+      sourceId = stream.sourceId,
+      poster = currentTarget.poster,
+      addonKey = currentTarget.addonKey,
+      subtitleType = currentTarget.subtitleType,
+      subtitleTarget = currentTarget.subtitleTarget,
+      catalogue = true,
+    )
+  }
+
+  /** Starts [target] at [at], leaving the outgoing session saved and deleted behind it. */
+  fun startSwitch(target: PlayTarget, at: Double) {
+    title = target.title
+    currentTarget = target
+    scope.launch {
+      // The addon subtitle ids are minted per sign-in session, so the new one gets fresh ones.
+      readAccount(target)
+      controller.start(
+        sourceId = target.sourceId,
+        key = target.key,
+        title = target.title,
+        path = target.path,
+        resume = false,
+        poster = target.poster,
+        addonKey = target.addonKey,
+        subtitles = addonSubtitles,
+        audioPreference = settings.audioLanguage,
+        subtitlePreference = settings.subtitleLanguage,
+        at = at,
+        // The source is minted inside the controller, after the outgoing session is closed.
+        mint = target.path?.let { path -> { runCatching { api.librarySource(path) }.getOrNull()?.sourceId?.takeIf { it.isNotBlank() } } },
+      )
+    }
+  }
 
   /** Choosing a row: the one already playing only closes the panel, any other starts a new session. */
   fun chooseSource(stream: StreamDto) {
     sourcesOpen = false
     restoreFocus = sourcesFocus
-    if (stream.sourceId == state.sourceId) return
-    previousSourceId = state.sourceId
-    switchTarget = stream.sourceId
-    scope.launch {
-      // The addon subtitle ids are minted per session, so the new one gets fresh ones.
-      readAccount()
-      controller.switchSource(stream.sourceId, addonSubtitles, settings.audioLanguage, settings.subtitleLanguage)
-    }
+    if (playingSource === stream) return
+    val target = switchTargetOf(stream)
+    previousTarget = currentTarget
+    switchTarget = target
+    switchAt = controller.position
+    startSwitch(target, switchAt)
   }
 
   fun chooseQuality(quality: Int?) {
@@ -313,7 +374,7 @@ fun PlayerScreen(
   LaunchedEffect(state.started) {
     if (state.started) {
       switchTarget = null
-      previousSourceId = null
+      previousTarget = null
     }
   }
 
@@ -520,7 +581,7 @@ fun PlayerScreen(
   }
   val subtitleText = activeCue(cues, position)?.takeIf { it.isNotBlank() }
   // The Sources panel opens on the row that is playing; without it, on the first row.
-  val sourcesIndex = offeredSources.indexOfFirst { it.sourceId == state.sourceId }.let { if (it >= 0) it else 0 }
+  val sourcesIndex = playingSource?.let { offeredSources.indexOf(it) }?.takeIf { it >= 0 } ?: 0
   val sourcesTitle = stringResource(R.string.sources_heading)
   val qualityText = qualityLabel(quality)
   // Both panels act on the running session, so their buttons wait for it: a choice made before
@@ -665,18 +726,17 @@ fun PlayerScreen(
       }
 
       state.error?.let {
-        val failedSource = switchTarget
-        val previousSource = previousSourceId
+        val failed = switchTarget
+        val previous = previousTarget
         ErrorPanel(
           onRetry = {
             // Try again always re-reads the account: the addon subtitle ids are minted per sign-in
             // session and short-lived, so a started session cannot reuse the ones it began with.
-            scope.launch {
-              if (failedSource != null) {
-                // Try again is the new source, not the one the player started with.
-                readAccount()
-                controller.switchSource(failedSource, addonSubtitles, settings.audioLanguage, settings.subtitleLanguage)
-              } else {
+            // Try again is the new source, not the one the player started with.
+            if (failed != null) {
+              startSwitch(failed, switchAt)
+            } else {
+              scope.launch {
                 playerRetry(
                   started = state.started,
                   readAccount = { readAccount() },
@@ -687,14 +747,7 @@ fun PlayerScreen(
             }
           },
           onBack = leave,
-          onBackToSource = previousSource?.let { back ->
-            {
-              scope.launch {
-                readAccount()
-                controller.switchSource(back, addonSubtitles, settings.audioLanguage, settings.subtitleLanguage)
-              }
-            }
-          },
+          onBackToSource = previous?.let { back -> { startSwitch(back, switchAt) } },
         )
       }
     },

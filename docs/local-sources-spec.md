@@ -49,7 +49,6 @@ the server's web interface and bundle the same server) and the Android TV app.
 - Merging the catalogue resume position with the file's. The catalogue detail
   keeps reading its own progress key; see [Progress](#progress).
 - Badges on the catalogue grid tiles. A possible follow-up.
-- Offering local copies inside the player's own source switcher.
 
 ## Server
 
@@ -204,13 +203,15 @@ mixed into the list the filters, counts and notices are computed from.
     catalogue view; it takes an optional anchor argument and the catalogue
     passes its own `{ kind: "catalog", key: "<type>:<id>" }`.
   - TV: `PlayTarget(key = Progress.libraryKey(localPath), path = localPath,
-    sourceId = null, …)`, the same target the library detail builds; the player
-    mints the source through `librarySource(path)`. Ordinary local Play uses
-    `resume = true` so the player reads the file's own progress even when the
-    catalogue has none; do not copy the catalogue's `resuming` boolean.
-    Start over builds the same target with `resume = false`. Omit catalogue
-    `subtitleType` and `subtitleTarget` on local targets, so subtitles come
-    from the library source just as they do for a Library play.
+    sourceId = null, catalogue = true, …)`, the same target the library detail
+    builds plus the marker that the catalogue started this play (see
+    [The player](#the-player)); the player mints the source through
+    `librarySource(path)`. Ordinary local Play uses `resume = true` so the
+    player reads the file's own progress even when the catalogue has none; do
+    not copy the catalogue's `resuming` boolean. Start over builds the same
+    target with `resume = false`. Omit catalogue `subtitleType` and
+    `subtitleTarget` on local targets, so subtitles come from the library
+    source just as they do for a Library play.
 - **To library** (and its target menu) is not offered: `canQueue` answers false
   for `kind === "library"` on both clients (it used to answer true for any
   playable stream, which would queue a download of a file that is on disk), and
@@ -229,12 +230,28 @@ mixed into the list the filters, counts and notices are computed from.
 - A local play behaves like a library play everywhere: progress key
   `file:<localPath>`, favourites star on the file, previous/next file, device
   download of the file.
-- The player's source switcher does not list local entries, and a local play
-  gets no catalogue sources to switch to. On TV the detail keeps reporting
-  `OfferedSources` while the player is open, so clearing them once on Play is
-  not enough: `Shell.kt` passes `sources = emptyList()` (and `sourcesLoading =
-  false`) to `PlayerScreen` whenever the target has a `path`. The
-  `OfferedSources` the detail reports contain addon streams only.
+- A play the catalogue detail started keeps its **full source list** in the
+  player: the local copies first, in the detail's order, then the addon streams
+  the detail shows. That holds whether the play started on an addon row or on a
+  local row, so from either start the viewer can jump to any other source,
+  including the library copy. A play the catalogue never started — the Library
+  view, a Continue card of a library file, a next-episode play — still gets no
+  catalogue sources, whatever the detail underneath reports.
+- The list reaches the player through the detail's existing `onSources`; the
+  detail keeps reporting while the player is open, so the list can still be
+  loading and the panel already shows that state. On TV the marker for this is
+  `PlayTarget.catalogue`, which `CatalogDetailScreen` sets on every play it
+  starts and `playerSourcesFor` in `Shell.kt` reads; the TV detail reports the
+  local and addon rows together, not the addon rows alone.
+- Choosing an addon row starts that source at the position the player is at,
+  from a local session or an addon one alike. Choosing a local row starts the
+  library file the same way — the file's own key, `Progress.libraryKey(path)`,
+  minted through `librarySource(path)` — and continues at the current position
+  rather than at the file's saved progress. A switch that fails offers the
+  **Back to the previous source** recovery in both directions.
+- The panel marks the playing row by what the session actually plays: an addon
+  row by its `sourceId`, a local row by `localPath` equal to the target's
+  `path`. A blank `sourceId` names no source, so it never marks a row.
 
 ### Progress
 
@@ -247,6 +264,18 @@ for a series (`mergeResume` in `server/src/home.ts` joins on the series id), so
 a movie that already had catalogue progress from an earlier addon play keeps
 its two Continue watching cards, as it does today. Both are listed as known
 limitations in the user documentation.
+
+A source switch inside the player keeps one progress key for the viewing:
+
+- starting on a local row, a switch to an addon row **keeps the file's key**
+  (`file:<localPath>`), so the same viewing does not split into a file entry
+  and a catalogue entry; the file's Continue watching row is the one that
+  moves;
+- starting on an addon row, a switch to another addon row keeps the catalogue
+  key, and a switch to a local row takes that **file's** key, as any local play
+  does;
+- the position carries across either way: the new session starts at the
+  position the old one had.
 
 ## Strings
 
@@ -290,12 +319,15 @@ it to `android-tv/strings.keys` if TV does not use it yet.
 7. With every addon removed, the local row still appears and plays.
 8. A client against a server without the endpoint shows the addon sources as
    before, with no error.
-9. On TV, a local play offers no source switching in the player, even while
-   addons are still answering for the title underneath.
+9. On TV, a play started from the catalogue detail — on a local row or on an
+   addon row — offers the title's full source list in the player, the local
+   rows first, and switching to any of them continues at the current position,
+   while addons are still answering for the title underneath.
 10. Two encodes sharing a file-keyed title unit both appear, unless one has an
     explicit different binding or Unmatch.
 11. A local answer arriving after all addons replaces only an automatic pick;
     it never interrupts playback or replaces an explicit choice.
 12. Addon discovery or subtitle lookup failure does not prevent local playback.
 13. On TV, ordinary local Play resumes saved file progress even without
-    catalogue progress; Start over starts at zero.
+    catalogue progress; Start over starts at zero. Both are catalogue plays,
+    so both keep the title's source list in the player.

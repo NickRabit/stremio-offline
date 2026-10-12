@@ -377,11 +377,12 @@ private fun OverlayFocusTrap(fenced: Boolean, content: @Composable () -> Unit) {
   ) { content() }
 }
 
-/** A library play switches sources through the Library view, not the catalogue, so the player
- *  gets no catalogue sources while the target carries a [PlayTarget.path]. Kept here so the
- *  expression can be tested without a whole shell. */
+/** Only a play the catalogue detail started may switch between that title's sources, a library
+ *  copy of it included. A library view or a Continue card knows no such list, whatever the
+ *  catalogue underneath still reports. Kept here so the expression can be tested without a
+ *  whole shell. */
 internal fun playerSourcesFor(target: PlayTarget, reported: OfferedSources): OfferedSources =
-  if (target.path != null) OfferedSources() else reported
+  if (target.catalogue) reported else OfferedSources()
 
 
 /**

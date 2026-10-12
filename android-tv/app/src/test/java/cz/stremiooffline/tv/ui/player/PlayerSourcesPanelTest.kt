@@ -10,8 +10,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
@@ -20,8 +23,10 @@ import androidx.compose.ui.test.pressKey
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.AddonSubtitleDto
+import cz.stremiooffline.tv.data.BehaviorHintsDto
 import cz.stremiooffline.tv.data.ClientCapabilitiesDto
 import cz.stremiooffline.tv.data.PlaybackDescriptorDto
+import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.ui.FakeTvApi
@@ -50,6 +55,16 @@ class PlayerSourcesPanelTest {
 
   private val alpha = StreamDto(sourceId = "srcA", kind = "remote", playable = true, name = "small", title = "Czech 1 GB", addonName = "Alpha")
   private val beta = StreamDto(sourceId = "srcB", kind = "remote", playable = true, name = "big", title = "Czech 8 GB", addonName = "Beta")
+  private val local = StreamDto(
+    // The server mints a source id for a local row too, but the row must not need one: the panel
+    // marks it by the path it plays, so a blank id names no source and marks no second row.
+    sourceId = "",
+    kind = "library",
+    playable = true,
+    localPath = "Filmy/Heat.mkv",
+    libraryName = "Filmy",
+    behaviorHints = BehaviorHintsDto(filename = "Heat.mkv"),
+  )
 
   private fun mount(
     api: FakeTvApi,
@@ -58,6 +73,7 @@ class PlayerSourcesPanelTest {
     loading: Boolean = false,
     subtitleType: String? = null,
     subtitleTarget: String? = null,
+    resume: Boolean = false,
   ) {
     compose.setContent {
       PlayerScreen(
@@ -65,7 +81,7 @@ class PlayerSourcesPanelTest {
         target = PlayTarget(
           key = "movie:tt1",
           title = "It",
-          resume = false,
+          resume = resume,
           sourceId = sourceId,
           subtitleType = subtitleType,
           subtitleTarget = subtitleTarget,
@@ -73,6 +89,25 @@ class PlayerSourcesPanelTest {
         onExit = {},
         sources = sources,
         sourcesLoading = loading,
+      )
+    }
+    compose.waitForIdle()
+  }
+
+  /** A play the catalogue detail started from one of the viewer's own library files. */
+  private fun mountLocal(api: FakeTvApi, sources: List<StreamDto>, resume: Boolean = true) {
+    compose.setContent {
+      PlayerScreen(
+        api = api,
+        target = PlayTarget(
+          key = "file:Filmy/Heat.mkv",
+          title = "Heat",
+          resume = resume,
+          path = "Filmy/Heat.mkv",
+          catalogue = true,
+        ),
+        onExit = {},
+        sources = sources,
       )
     }
     compose.waitForIdle()
@@ -194,6 +229,119 @@ class PlayerSourcesPanelTest {
 
     compose.onNodeWithTag(TagSourcesPanel).assertDoesNotExist()
     assertEquals(listOf("srcB"), api.startedSources)
+  }
+
+  // The owner's TV report: a play that started from a library copy of a catalogue title had no
+  // source switcher at all, and the copy was missing from the one an addon play had.
+  @Test
+  fun `a local play from the catalogue lists the file as playing above the addon rows`() {
+    val api = FakeTvApi()
+    mountLocal(api, listOf(local, alpha, beta))
+    compose.waitUntil(5_000) { api.startedSources.size == 1 }
+
+    focusSources()
+    press(Key.DirectionCenter)
+
+    compose.onNodeWithTag(sourceRowTag(0)).assert(hasText("Local"))
+    compose.onNodeWithTag(sourceRowTag(0)).assert(hasText("Playing"))
+    compose.onNodeWithTag(sourceRowTag(1)).assert(hasText("Alpha"))
+    compose.onNodeWithTag(sourceRowTag(2)).assert(hasText("Beta"))
+    // The playing mark belongs to the file alone: a blank source id must not mark a second row.
+    compose.onAllNodesWithText("Playing").assertCountEquals(1)
+  }
+
+  @Test
+  fun `choosing an addon row from a local play switches at the position the file is at`() {
+    val api = FakeTvApi()
+    api.progressValues["file:Filmy/Heat.mkv"] = ProgressDto(position = 600.0, duration = 3_600.0)
+    mountLocal(api, listOf(local, alpha, beta))
+    compose.waitUntil(5_000) { api.startedSources.size == 1 }
+    assertEquals(600.0, api.startedTimes.first(), 0.001)
+
+    focusSources()
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(sourceRowTag(0)).assertIsFocused()
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(sourceRowTag(1)).assertIsFocused()
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { api.startedSources.size == 2 }
+
+    assertEquals(listOf("src:Filmy/Heat.mkv", "srcA"), api.startedSources)
+    assertEquals(600.0, api.startedTimes.last(), 0.001)
+    compose.onNodeWithTag(TagSourcesPanel).assertDoesNotExist()
+  }
+
+  @Test
+  fun `choosing the local row from an addon play starts the file at the position`() {
+    val api = FakeTvApi()
+    api.progressValues["movie:tt1"] = ProgressDto(position = 600.0, duration = 3_600.0)
+    mount(api, listOf(local, alpha, beta), sourceId = "srcB", resume = true)
+    compose.waitUntil(5_000) { api.startedSources.size == 1 }
+
+    focusSources()
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(sourceRowTag(0)).assert(hasText("Local"))
+    // The addon source the session plays is the marked row; the file's blank id marks nothing.
+    compose.onNodeWithTag(sourceRowTag(2)).assert(hasText("Playing"))
+    compose.onAllNodesWithText("Playing").assertCountEquals(1)
+
+    // The playing row is Beta at the bottom; UP twice reaches the local row above the addons.
+    press(Key.DirectionUp)
+    press(Key.DirectionUp)
+    compose.onNodeWithTag(sourceRowTag(0)).assertIsFocused()
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { api.startedSources.size == 2 }
+
+    assertEquals(listOf("srcB", "src:Filmy/Heat.mkv"), api.startedSources)
+    // The switch continues where the addon session was, not at the file's own saved progress.
+    assertEquals(api.startedTimes.first(), api.startedTimes.last(), 0.001)
+    // The OSD names the file the session now plays.
+    compose.onNodeWithText("Heat.mkv").assertExists()
+  }
+
+  @Test
+  fun `a failed switch from a local play goes back to the file that was playing`() {
+    val api = FailOneSourceApi("srcA")
+    mountLocal(api, listOf(local, alpha, beta))
+    compose.waitUntil(5_000) { api.startedSources.size == 1 }
+
+    focusSources()
+    press(Key.DirectionCenter)
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(sourceRowTag(1)).assertIsFocused()
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { api.startedSources.size == 2 }
+    compose.onNodeWithText("Back to the previous source").assertExists()
+
+    press(Key.DirectionRight)
+    compose.onNodeWithText("Back to the previous source").assertIsFocused()
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { api.startedSources.size == 3 }
+
+    assertEquals(listOf("src:Filmy/Heat.mkv", "srcA", "src:Filmy/Heat.mkv"), api.startedSources)
+  }
+
+  @Test
+  fun `a failed local switch from an addon play goes back to the addon source`() {
+    val api = FailOneSourceApi("src:Filmy/Heat.mkv")
+    mount(api, listOf(local, alpha, beta), sourceId = "srcB")
+    compose.waitUntil(5_000) { api.startedSources.size == 1 }
+
+    focusSources()
+    press(Key.DirectionCenter)
+    press(Key.DirectionUp)
+    press(Key.DirectionUp)
+    compose.onNodeWithTag(sourceRowTag(0)).assertIsFocused()
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { api.startedSources.size == 2 }
+    compose.onNodeWithText("Back to the previous source").assertExists()
+
+    press(Key.DirectionRight)
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { api.startedSources.size == 3 }
+
+    assertEquals(listOf("srcB", "src:Filmy/Heat.mkv", "srcB"), api.startedSources)
+    compose.onNodeWithText("It").assertExists()
   }
 
   @Test
@@ -382,6 +530,23 @@ class PlayerSourcesPanelTest {
       startedCapabilities += capabilities
       if (sourceId == "srcB") throw ApiError(ApiFailure.Unreachable)
       return PlaybackDescriptorDto(id = "p1", url = "stream.mp4")
+    }
+  }
+
+  /** One named source refuses to start, so a switch in either direction can fail. */
+  private class FailOneSourceApi(private val failFor: String) : FakeTvApi() {
+    override suspend fun startPlayback(
+      sourceId: String,
+      capabilities: ClientCapabilitiesDto,
+      time: Double,
+      subtitleIds: List<String>,
+    ): PlaybackDescriptorDto {
+      startedSources += sourceId
+      startedTimes += time
+      startedCapabilities += capabilities
+      startedSubtitleIds += subtitleIds
+      if (sourceId == failFor) throw ApiError(ApiFailure.Unreachable)
+      return PlaybackDescriptorDto(id = "p$sourceId", url = "stream.mp4")
     }
   }
 }

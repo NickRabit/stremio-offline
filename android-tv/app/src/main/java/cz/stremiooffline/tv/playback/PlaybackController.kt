@@ -214,8 +214,13 @@ class PlaybackController(
     carrySubtitle: SubtitleChoice? = null,
   ) = StartPlan(sourceId, key, title, path, explicitTime, resume, poster, addonKey, subtitles, audioPreference, subtitlePreference, library = path != null, mint = mint, carrySubtitle = carrySubtitle)
 
+  /**
+   * Starts a session for [key]. [sourceId] is a source the server already handed out; when it is
+   * absent [mint] produces one after the outgoing session is closed. [at] is an explicit position,
+   * which a resume reads from the stored progress instead.
+   */
   fun start(
-    sourceId: String,
+    sourceId: String?,
     key: String,
     title: String,
     path: String?,
@@ -225,9 +230,11 @@ class PlaybackController(
     subtitles: List<AddonSubtitleDto> = emptyList(),
     audioPreference: String? = null,
     subtitlePreference: String? = null,
+    at: Double? = null,
+    mint: (suspend () -> String?)? = null,
   ) {
     if (released) return
-    begin(startPlan(sourceId, key, title, path, null, resume, poster, addonKey, subtitles, audioPreference, subtitlePreference))
+    begin(startPlan(sourceId, key, title, path, at, resume, poster, addonKey, subtitles, audioPreference, subtitlePreference, mint))
   }
 
   /** Starts the next library file: the old session is saved and deleted before the new start. */
