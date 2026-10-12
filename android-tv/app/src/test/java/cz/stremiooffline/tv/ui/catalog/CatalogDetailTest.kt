@@ -13,6 +13,8 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -405,7 +407,7 @@ class CatalogDetailTest {
     press(Key.DirectionCenter)
 
     assertEquals(listOf("srcA"), api.queuedSourceIds)
-    compose.onNodeWithTag(TagCatalogToLibrary).assertTextContains("Queued", substring = true)
+    compose.onNodeWithTag(TagCatalogToLibrary).assert(hasContentDescription("Queued", substring = true))
   }
 
   @Test
@@ -922,6 +924,21 @@ class CatalogDetailTest {
     compose.waitForIdle()
 
     compose.onNodeWithText("MOVIE").assertExists()
+  }
+
+  @Test
+  fun `an icon action names itself beside the row while it holds the remote`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    api.streamsValues["movie:tt1"] = listOf(stream("s1", name = "FullHD"))
+    api.progressValues["movie:tt1"] = ProgressDto(38.6, 120.0)
+    mount(api, movieArgs())
+    compose.waitForIdle()
+
+    // Icons carry their name as the description only; no text node says it until one is focused.
+    compose.onNodeWithText("Forget progress").assertDoesNotExist()
+    focusFromLeft(TagCatalogForget)
+    compose.onNodeWithText("Forget progress").assertExists()
   }
 
   @Test

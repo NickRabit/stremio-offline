@@ -66,6 +66,9 @@ fun PlayerOverlayShell(
   position: Double,
   duration: Double,
   playing: Boolean,
+  /** What the play button shows: Pause while the player intends to play, even while it is still
+   *  buffering, so the button does not flip from Play to Pause a moment after the start. */
+  pauseShown: Boolean = playing,
   onSeek: (Double) -> Unit,
   onTogglePause: () -> Unit,
   onExit: () -> Unit,
@@ -259,7 +262,7 @@ fun PlayerOverlayShell(
         eyebrow = eyebrow,
         position = shownPosition,
         duration = duration,
-        playing = playing,
+        playing = pauseShown,
         playFocus = playFocus,
         onBack10 = { seekBy(-SEEK_STEP_SECONDS) },
         onForward10 = { seekBy(SEEK_STEP_SECONDS) },

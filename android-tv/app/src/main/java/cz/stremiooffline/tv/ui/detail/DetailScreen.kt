@@ -52,6 +52,10 @@ import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.playback.Progress
 import cz.stremiooffline.tv.ui.components.CardRowInset
+import cz.stremiooffline.tv.ui.catalog.ActionCaption
+import cz.stremiooffline.tv.ui.catalog.ActionIconButton
+import cz.stremiooffline.tv.ui.catalog.ForgetIcon
+import cz.stremiooffline.tv.ui.catalog.ReplayIcon
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
 import cz.stremiooffline.tv.ui.components.WideCard
@@ -174,6 +178,7 @@ fun DetailScreen(
   var favouriteBusy by remember(detail.gridPath) { mutableStateOf(false) }
   var forgetPanelOpen by remember { mutableStateOf(false) }
   var forgetting by remember { mutableStateOf(false) }
+  val caption = remember { ActionCaption() }
   // The card's own keys stop counting once they have been forgotten.
   var forgotten by remember { mutableStateOf(false) }
   LaunchedEffect(detail.gridPath, restoreToken) {
@@ -329,27 +334,35 @@ fun DetailScreen(
           modifier = Modifier.focusRequester(primaryFocus).testTag(TagDetailPrimary),
         )
         if (resuming) {
-          FocusButton(
-            text = stringResource(R.string.tv_start_over),
+          ActionIconButton(
+            label = stringResource(R.string.tv_start_over),
+            icon = ReplayIcon,
             onClick = { playFile?.let { onPlay(PlayTarget(Progress.libraryKey(it.path), it.label, resume = false, path = it.path)) } },
+            caption = caption,
             modifier = Modifier.testTag(TagDetailStartOver),
           )
         }
         if (forgetKeys.isNotEmpty()) {
-          FocusButton(
-            text = stringResource(R.string.tv_forget_progress),
+          ActionIconButton(
+            label = stringResource(R.string.tv_forget_progress),
+            icon = ForgetIcon,
             onClick = { forgetPanelOpen = true },
             enabled = !forgetting,
+            caption = caption,
             modifier = Modifier.testTag(TagDetailForget),
           )
         }
-        FocusButton(
-          text = if (favourite) "★" else "☆",
+        ActionIconButton(
+          label = stringResource(if (favourite) R.string.favorite_remove else R.string.favorite_add),
+          icon = null,
+          glyph = if (favourite) "★" else "☆",
           onClick = { toggleFavourite() },
-          kind = FocusButtonKind.Icon,
-          contentDescription = stringResource(if (favourite) R.string.favorite_remove else R.string.favorite_add),
+          caption = caption,
           modifier = Modifier.testTag(TagDetailFavourite),
         )
+        if (caption.text.isNotEmpty()) {
+          Text(caption.text, color = Tokens.Muted, fontSize = 12.sp, maxLines = 1)
+        }
       }
       if (current.files.size > 1) {
         Spacer(Modifier.height(3.dp))
