@@ -99,7 +99,9 @@ fun SidePanel(
         .focusGroup()
         .focusProperties { exit = { FocusRequester.Cancel } }
         .focusRequester(panelFocus)
-        .focusable(enabled = initialFocus == null)
+        // Focusable even when the caller names its first row: a disabled focus target puts the
+        // panel's own controls (the source filter chips) out of the focus system's reach.
+        .focusable()
         .background(Brush.verticalGradient(listOf(Tokens.Panel, Color(0xFF11161E))), PanelShape)
         .padding(horizontal = 24.dp, vertical = Tokens.SafeY),
       verticalArrangement = Arrangement.spacedBy(10.dp),

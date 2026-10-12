@@ -69,6 +69,16 @@ sources.heading
 sources.none
 sources.localBadge
 sources.localHint
+sources.addon
+sources.allAddons
+sources.anyLanguage
+sources.ofTotal
+sources.sortRecommended
+sources.sortLargest
+sources.sortSmallest
+sources.sortAddon
+auth.language
+common.sorting
 save.toLibrary
 save.queued
 player.play

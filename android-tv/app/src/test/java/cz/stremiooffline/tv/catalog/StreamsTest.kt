@@ -6,6 +6,7 @@ import cz.stremiooffline.tv.data.BehaviorHintsDto
 import cz.stremiooffline.tv.data.StreamDto
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** One JVM test per `web/src/streams.test.ts` case that covers a ported function. */
@@ -250,9 +251,64 @@ class StreamsTest {
   fun `offeredStreams drops a source the addon sent twice`() {
     val twice = stream(sourceId = "s1", name = "FullHD", title = "Czech 1 GB", addonName = "alpha")
     assertEquals(listOf("s1"), Streams.offeredStreams(listOf(twice, twice)).map { it.sourceId })
-    val lists = Streams.sourceLists(listOf(twice, twice), emptyList(), StreamSort.Recommended, "cs", true, null)
+    val lists = Streams.sourceLists(listOf(twice, twice), emptyList(), filters(sort = StreamSort.Recommended), "cs", true, null)
     assertEquals(1, lists.offered.size)
     assertEquals(1, lists.visible.size)
+  }
+
+  @Test
+  fun `sourceLists filters the visible list by addon and language`() {
+    val all = listOf(
+      stream(sourceId = "a1", name = "Czech 1 GB", addonName = "Alpha"),
+      stream(sourceId = "b1", name = "English 8 GB", addonName = "Beta"),
+    )
+    assertEquals(listOf("a1"), Streams.sourceLists(all, emptyList(), filters(addon = "Alpha"), "en", true, null).visible.map { it.sourceId })
+    assertEquals(listOf("b1"), Streams.sourceLists(all, emptyList(), filters(language = "en"), "en", true, null).visible.map { it.sourceId })
+  }
+
+  @Test
+  fun `filterOptions orders addons by priority and then by how many streams they offered`() {
+    val all = listOf(
+      stream(sourceId = "a1", name = "A one", addonName = "Alpha"),
+      stream(sourceId = "b1", name = "B one", addonName = "Beta"),
+      stream(sourceId = "a2", name = "A two", addonName = "Alpha"),
+      stream(sourceId = "g1", name = "G one", addonName = "Gamma"),
+    )
+    val options = Streams.filterOptions(all, filters(), mapOf("Beta" to 0, "Alpha" to 1))
+    assertEquals(listOf("Beta", "Alpha", "Gamma"), options.addons.map { it.value })
+    assertEquals(listOf(1, 2, 1), options.addons.map { it.count })
+  }
+
+  @Test
+  fun `filterOptions counts a language once per stream that carries it`() {
+    val all = listOf(
+      stream(sourceId = "a1", name = "Czech 1 GB", addonName = "Alpha"),
+      stream(sourceId = "b1", name = "Czech 8 GB", addonName = "Beta"),
+      stream(sourceId = "b2", name = "English 2 GB", addonName = "Beta"),
+    )
+    val options = Streams.filterOptions(all, filters())
+    assertEquals(listOf("cs", "en"), options.languages.map { it.value })
+    assertEquals(listOf(2, 1), options.languages.map { it.count })
+  }
+
+  @Test
+  fun `filterOptions counts each menu against what passes the other`() {
+    val all = listOf(
+      stream(sourceId = "a1", name = "Czech 1 GB", addonName = "Alpha"),
+      stream(sourceId = "b1", name = "English 8 GB", addonName = "Beta"),
+    )
+    assertEquals(listOf("Beta"), Streams.filterOptions(all, filters(language = "en")).addons.map { it.value })
+    assertEquals(listOf("cs"), Streams.filterOptions(all, filters(addon = "Alpha")).languages.map { it.value })
+  }
+
+  @Test
+  fun `filterOptions keeps a chosen addon or language that the other filter emptied`() {
+    val all = listOf(
+      stream(sourceId = "a1", name = "Czech 1 GB", addonName = "Alpha"),
+      stream(sourceId = "b1", name = "English 8 GB", addonName = "Beta"),
+    )
+    assertTrue(Streams.filterOptions(all, filters(addon = "Beta", language = "cs")).addons.any { it.value == "Beta" && it.count == 0 })
+    assertTrue(Streams.filterOptions(all, filters(addon = "Alpha", language = "en")).languages.any { it.value == "en" && it.count == 0 })
   }
 
   @Test

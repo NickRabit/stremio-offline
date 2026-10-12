@@ -70,6 +70,16 @@
   <string name="sources_none">Nessun componente aggiuntivo di origine attivo ha uno streaming per questo titolo.</string>
   <string name="sources_local_badge">Locale</string>
   <string name="sources_local_hint">Già nella tua libreria — viene riprodotto dal disco del server</string>
+  <string name="sources_addon">Componente aggiuntivo</string>
+  <string name="sources_all_addons">Tutto</string>
+  <string name="sources_any_language">Qualsiasi</string>
+  <string name="sources_of_total">%1$s di %2$s</string>
+  <string name="sources_sort_recommended">Consigliato</string>
+  <string name="sources_sort_largest">Prima il più grande</string>
+  <string name="sources_sort_smallest">Prima il più piccolo</string>
+  <string name="sources_sort_addon">Per priorità del componente aggiuntivo</string>
+  <string name="auth_language">Lingua</string>
+  <string name="common_sorting">Ordinamento</string>
   <string name="save_to_library">In libreria</string>
   <string name="save_queued">In coda</string>
   <string name="player_play">Gioca</string>

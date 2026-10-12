@@ -70,6 +70,16 @@
   <string name="sources_none">Kein aktives Quell-Add-on verfügt über einen Stream für diesen Titel.</string>
   <string name="sources_local_badge">Lokal</string>
   <string name="sources_local_hint">Bereits in deiner Bibliothek — wird von der Festplatte des Servers abgespielt</string>
+  <string name="sources_addon">Addon</string>
+  <string name="sources_all_addons">Alle</string>
+  <string name="sources_any_language">Irgendein</string>
+  <string name="sources_of_total">%1$s von %2$s</string>
+  <string name="sources_sort_recommended">Empfohlen</string>
+  <string name="sources_sort_largest">Das Größte zuerst</string>
+  <string name="sources_sort_smallest">Das Kleinste zuerst</string>
+  <string name="sources_sort_addon">Nach Add-on-Priorität</string>
+  <string name="auth_language">Sprache</string>
+  <string name="common_sorting">Sortieren</string>
   <string name="save_to_library">Zur Bibliothek</string>
   <string name="save_queued">In der Warteschlange</string>
   <string name="player_play">Spielen</string>

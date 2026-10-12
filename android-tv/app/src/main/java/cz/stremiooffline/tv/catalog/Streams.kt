@@ -168,21 +168,63 @@ object Streams {
     }
   }
 
+  /** One choice of a source filter: its wire value and how many of the offered streams carry it. */
+  data class StreamCount(val value: String, val count: Int)
+
+  /** The addon and language choices the filter bar offers, derived the way the web derives them:
+   *  each menu is counted against what passes the other one, so two filters never contradict. */
+  data class SourceFilterOptions(
+    val addons: List<StreamCount>,
+    val languages: List<StreamCount>,
+  )
+
+  fun filterOptions(
+    listed: List<StreamDto>,
+    filters: StreamFilters,
+    priority: Map<String, Int> = emptyMap(),
+    titleLanguage: String? = null,
+  ): SourceFilterOptions {
+    val byLanguage = if (filters.language.isEmpty()) listed
+    else listed.filter { streamLanguages(it, titleLanguage).contains(filters.language) }
+    val byAddon = if (filters.addon.isEmpty()) listed
+    else listed.filter { it.addonName == filters.addon }
+
+    val addonCounts = LinkedHashMap<String, Int>()
+    for (stream in byLanguage) {
+      val name = stream.addonName ?: "?"
+      addonCounts[name] = (addonCounts[name] ?: 0) + 1
+    }
+    // The chosen addon stays in the menu even when the language filter left it nothing, or the chip would empty.
+    if (filters.addon.isNotEmpty() && !addonCounts.containsKey(filters.addon)) addonCounts[filters.addon] = 0
+    val addons = addonCounts.map { StreamCount(it.key, it.value) }
+      .sortedWith(compareBy({ priority[it.value] ?: Int.MAX_VALUE }, { -it.count }))
+
+    val languageCounts = LinkedHashMap<String, Int>()
+    for (stream in byAddon) for (code in streamLanguages(stream, titleLanguage)) {
+      languageCounts[code] = (languageCounts[code] ?: 0) + 1
+    }
+    if (filters.language.isNotEmpty() && !languageCounts.containsKey(filters.language)) languageCounts[filters.language] = 0
+    val languages = languageCounts.map { StreamCount(it.key, it.value) }.sortedByDescending { it.count }
+
+    return SourceFilterOptions(addons, languages)
+  }
+
   /** The sources of one title after the addons that answered have been merged, sorted and
-   *  filtered: the list the panel draws, the one the player holds, and the addon notices. Built
-   *  once per change of the raw [streams] and then remembered by the caller, so a focus move does
-   *  not re-parse hundreds of sizes and languages. */
+   *  filtered: the list the panel draws, the one the player holds, the addon notices, and the
+   *  choices the filter bar offers. Built once per change of the raw [streams] and then
+   *  remembered by the caller, so a focus move does not re-parse hundreds of sizes and languages. */
   data class SourceLists(
     val offered: List<StreamDto>,
     val visible: List<StreamDto>,
     val notices: List<StreamDto>,
     val titleLanguage: String?,
+    val options: SourceFilterOptions,
   )
 
   fun sourceLists(
     streams: List<StreamDto>,
     addons: List<AddonDto>,
-    sort: StreamSort,
+    filters: StreamFilters,
     preferredLanguage: String,
     showTorrents: Boolean,
     metaLanguage: String?,
@@ -190,8 +232,9 @@ object Streams {
     val offered = offeredStreams(streams)
     val priority = addons.mapIndexed { index, addon -> addon.manifest.name to index }.toMap()
     val titleLanguage = Languages.titleLanguage(metaLanguage)
-    val visible = visibleCatalogStreams(offered, StreamFilters(sort = sort), preferredLanguage, priority, showTorrents, titleLanguage)
-    return SourceLists(offered, visible, addonNotices(streams), titleLanguage)
+    val listed = if (showTorrents) offered else offered.filter { it.kind != "torrent" }
+    val visible = arrangeStreams(listed, filters, preferredLanguage, priority, titleLanguage)
+    return SourceLists(offered, visible, addonNotices(streams), titleLanguage, filterOptions(listed, filters, priority, titleLanguage))
   }
 
   /** One line per message; addons repeat the same notice on every request. */
