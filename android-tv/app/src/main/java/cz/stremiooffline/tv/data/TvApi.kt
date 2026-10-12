@@ -57,6 +57,15 @@ interface CatalogApi {
   /** Queues one source; [target] names the library the viewer picked, or is null to let the
    *  server pick the addon's own default. */
   suspend fun download(title: String, sourceId: String, media: MediaDto, target: DownloadTargetDto? = null): DownloadResult
+  /** Queues a whole series at once; each episode picks its own source when it downloads. */
+  suspend fun downloadBulk(
+    title: String,
+    type: String,
+    episodes: List<BulkEpisodeDto>,
+    selection: DownloadSelectionDto,
+    media: BulkMediaDto,
+    target: DownloadTargetDto? = null,
+  ): BulkDownloadResult
 }
 
 /** The Home rows, asked by name so a retry touches only the row it names. */

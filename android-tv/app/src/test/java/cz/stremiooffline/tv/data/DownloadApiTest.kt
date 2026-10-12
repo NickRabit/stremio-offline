@@ -76,6 +76,41 @@ class DownloadApiTest {
     }
   }
 
+  @Test
+  fun `the bulk body is the one the route reads`() = runTest {
+    server.enqueue(MockResponse().setBody("""{"added":2,"skipped":1}"""))
+
+    val answer = client(start()).downloadBulk(
+      title = "Show",
+      type = "series",
+      episodes = listOf(BulkEpisodeDto("e1", 1, 1, "Pilot")),
+      selection = DownloadSelectionDto(
+        addonKeys = listOf("alpha", "beta"),
+        sourceStrategy = "largest",
+        audioLanguage = "en",
+        audioMode = "listed",
+        subtitleMode = "optional",
+        subtitleLanguage = "cs",
+        fallbackSubtitleLanguage = "en",
+      ),
+      media = BulkMediaDto(id = "tt1", metaType = "series", poster = "p.jpg"),
+      target = DownloadTargetDto("shows"),
+    )
+
+    val request = server.takeRequest()
+    assertEquals("/api/downloads/bulk", request.path)
+    assertEquals(
+      """{"title":"Show","type":"series",""" +
+        """"episodes":[{"id":"e1","season":1,"episode":1,"title":"Pilot"}],""" +
+        """"selection":{"addonKeys":["alpha","beta"],"sourceStrategy":"largest","audioLanguage":"en",""" +
+        """"audioMode":"listed","subtitleMode":"optional","subtitleLanguage":"cs","fallbackSubtitleLanguage":"en"},""" +
+        """"media":{"id":"tt1","metaType":"series","poster":"p.jpg"},"target":{"libraryId":"shows"}}""",
+      request.body.readUtf8(),
+    )
+    assertEquals(2, answer.added)
+    assertEquals(1, answer.skipped)
+  }
+
   private fun start(): ServerAddress {
     server.start()
     return ServerAddress.parse(server.url("/").toString())!!
