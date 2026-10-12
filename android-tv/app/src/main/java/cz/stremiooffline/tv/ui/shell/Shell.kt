@@ -240,7 +240,6 @@ fun Shell(
           onOpenRemoteItem = { libraryId, libraryName, provider, item ->
             remoteDetail = RemoteDetailData(libraryId = libraryId, libraryName = libraryName, provider = provider, item = item)
           },
-          remoteRestoreToken = detailReturnToken,
           restoreToken = returnToken,
           refreshToken = libraryRefreshToken,
           pushPath = libraryPush,
@@ -293,7 +292,7 @@ fun Shell(
         )
         Section.Home -> HomeScreen(
           api = api,
-          refreshToken = homeRefreshToken + returnToken + detailReturnToken,
+          refreshToken = homeRefreshToken + returnToken,
           onHint = ::showHint,
           onAction = { action ->
             when (action) {

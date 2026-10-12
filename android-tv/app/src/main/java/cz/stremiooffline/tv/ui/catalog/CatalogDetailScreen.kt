@@ -66,6 +66,7 @@ import cz.stremiooffline.tv.data.MediaDto
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.ProgressEntryDto
+import cz.stremiooffline.tv.data.RemoteItemStateDto
 import cz.stremiooffline.tv.data.RemoteLibraryDto
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.StreamDto
@@ -186,6 +187,7 @@ fun CatalogDetailScreen(
   // discarded even if its coroutine cancellation has not run yet.
   var localRequest by remember { mutableIntStateOf(0) }
   var localProgress by remember { mutableStateOf<ProgressDto?>(null) }
+  val remoteProgress = remember { RemoteProgressState() }
   var pendingSources by remember { mutableIntStateOf(0) }
   var sourcesLoaded by remember { mutableStateOf(false) }
   var sourcesFailed by remember { mutableStateOf(false) }
@@ -527,18 +529,38 @@ fun CatalogDetailScreen(
   val resumeEpisode = if (isSeries) Resume.resumeVideo(meta.videos.orEmpty(), resumeEntry?.let { Resume.resumeTarget(it).episode }) else null
   val storedPosition = if (isSeries) resumeEntry?.position ?: 0.0 else movieProgress?.position ?: 0.0
   val storedDuration = if (isSeries) resumeEntry?.duration ?: 0.0 else movieProgress?.duration ?: 0.0
-  val progressPosition = if (localActive) localProgress?.position ?: 0.0 else storedPosition
-  val progressDuration = if (localActive) localProgress?.duration ?: 0.0 else storedDuration
-  // The local file has its own progress key, so a catalogue row has no bearing on its resume.
-  val resuming = if (localActive) {
-    localProgress?.let { Progress.resumePosition(it.position, it.duration) != null } == true
-  } else {
-    Progress.resumePosition(storedPosition, storedDuration) != null &&
+  // A matched remote version carries its own row, keyed by its opaque identity and the version the
+  // viewer picked: the read below fills [remoteProgress] for exactly that identity.
+  val activeRemoteItem = activeStream?.remoteItem
+  val remoteIdentity = activeRemoteItem?.let { listOf(it.libraryId, it.itemId, it.mediaSourceId.orEmpty()) }
+  val remoteRow = remoteProgress.row.takeIf { remoteProgress.key == remoteIdentity }
+  // A local file and a remote version each keep their own progress; only an addon row falls back to
+  // the catalogue. A remote row still arriving, or one that failed, reads as no progress at all.
+  val progressPosition = when {
+    localActive -> localProgress?.position ?: 0.0
+    activeRemoteItem != null -> remoteRow?.position ?: 0.0
+    else -> storedPosition
+  }
+  val progressDuration = when {
+    localActive -> localProgress?.duration ?: 0.0
+    activeRemoteItem != null -> remoteRow?.duration ?: 0.0
+    else -> storedDuration
+  }
+  val resuming = when {
+    localActive -> localProgress?.let { Progress.resumePosition(it.position, it.duration) != null } == true
+    // Only the version that stored the position may resume, and never an item marked watched.
+    activeRemoteItem != null -> remoteRow?.let {
+      !it.watched && it.mediaSourceId != null && it.mediaSourceId == activeRemoteItem.mediaSourceId &&
+        Progress.resumePosition(it.position, it.duration) != null
+    } == true
+    else -> Progress.resumePosition(storedPosition, storedDuration) != null &&
       (selectedVideo == null || selectedVideo?.id == resumeEpisode?.id)
   }
   // Every stored key this title stands for: the card's own keys when it came from Continue
   // watching, the local file's own key for a local pick, a show's stored episode otherwise.
   val forgetKeys: List<String> = when {
+    // Remote history uses its own local endpoint; catalogue Forget cannot delete that row.
+    activeRemoteItem != null -> emptyList()
     args.forgetKeys.isNotEmpty() && !ui.forget.done -> args.forgetKeys
     localActive && localProgress?.let { it.position > 0 } == true ->
       activeStream?.localPath?.let { listOf(Progress.libraryKey(it)) }.orEmpty()
@@ -553,6 +575,27 @@ fun CatalogDetailScreen(
   LaunchedEffect(activeStream?.localPath, restoreToken) {
     val path = activeStream?.takeIf(Streams::isLocalStream)?.localPath
     localProgress = if (path == null) null else runCatching { api.progress(Progress.libraryKey(path)) }.getOrNull()
+  }
+
+  // The active remote version's own row, re-read for its identity, the chosen version and the
+  // restore token. The row is cleared first, so a replaced source or a read still under way shows
+  // Play, and a late answer for an earlier identity is dropped.
+  LaunchedEffect(remoteIdentity, restoreToken) {
+    val request = ++remoteProgress.request
+    remoteProgress.key = null
+    remoteProgress.row = null
+    val item = activeRemoteItem ?: return@LaunchedEffect
+    if (item.libraryId.isBlank() || item.itemId.isBlank()) return@LaunchedEffect
+    val loaded = try {
+      api.remoteItemState(item.libraryId, item.itemId)
+    } catch (cancelled: CancellationException) {
+      throw cancelled
+    } catch (_: ApiError) {
+      return@LaunchedEffect
+    }
+    if (request != remoteProgress.request) return@LaunchedEffect
+    remoteProgress.row = loaded
+    remoteProgress.key = remoteIdentity
   }
 
   val baseTitle = localizedTitle(args.meta, meta, settings.uiLanguage)
@@ -624,14 +667,14 @@ fun CatalogDetailScreen(
         ),
       )
     } else {
-      // A remote-matched version carries its own opaque identity and its own version list; no
-      // catalogue progress is invented for it, so the controller resumes from the remote state.
+      // A remote-matched version carries its own opaque identity and its own version list; its
+      // resume flag follows the remote row the detail read, and the controller re-checks it.
       val remoteItem = stream.remoteItem
       onPlay(
         PlayTarget(
           key = remoteItem?.progressKey?.takeIf { it.isNotBlank() } ?: progressKey,
           title = playerTitle,
-          resume = if (remoteItem != null) true else resuming,
+          resume = resuming,
           sourceId = stream.sourceId,
           poster = args.meta.poster ?: meta.poster,
           addonKey = args.addonKey,
@@ -1505,6 +1548,13 @@ private class RemoteSourcesState {
   var request by mutableIntStateOf(0)
   /** The title or episode the groups belong to, so a retry of the same one can keep them. */
   var key: String? = null
+}
+
+/** The local remote-state row and the identity/generation it was read for. */
+private class RemoteProgressState {
+  var key: List<String>? by mutableStateOf<List<String>?>(null)
+  var row: RemoteItemStateDto? by mutableStateOf<RemoteItemStateDto?>(null)
+  var request by mutableIntStateOf(0)
 }
 
 /** The group a stream belongs to, for the caption: the library for a local copy, `provider ·

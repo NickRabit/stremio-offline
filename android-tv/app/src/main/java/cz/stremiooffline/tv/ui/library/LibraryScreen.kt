@@ -58,7 +58,6 @@ fun LibraryRoute(
   /** A native remote item was opened; the shell shows its detail and plays its versions. */
   onOpenRemoteItem: (libraryId: String, libraryName: String, provider: String, item: RemoteItemDto) -> Unit = { _, _, _, _ -> throw UnsupportedOperationException("Remote item opened without a handler") },
   /** Bumped when a remote detail or its player closes, so the remote grid restores its focus. */
-  remoteRestoreToken: Int = 0,
   modifier: Modifier = Modifier,
   restoreToken: Int = 0,
   refreshToken: Int = 0,
@@ -234,7 +233,7 @@ fun LibraryRoute(
         onOpenItem = onOpenRemoteItem,
         onBackToFiles = { segment = LibrarySegment.Files },
         modifier = Modifier.weight(1f),
-        restoreToken = restoreToken + remoteRestoreToken,
+        restoreToken = restoreToken,
         backEnabled = backEnabled,
       )
     }

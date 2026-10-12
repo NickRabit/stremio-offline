@@ -990,6 +990,29 @@ test("openOriginal returns the original response only while everything is curren
   });
 });
 
+test("display-only library edits keep live sources and browse cursors usable", async () => {
+  await withHarness(async (harness) => {
+    const { connection, library } = await seedPlayable(harness);
+    harness.server.items["lib-1"] = [movie("m1"), movie("m2")];
+    harness.server.original = { status: 206 };
+    const ref = refFor(harness, connection.id, library.id, "m1", "v1");
+    const first = await harness.manager.browseItems(harness.admin, library.id, { limit: "1" });
+    assert.ok(first.cursor);
+    const generation = harness.store.mediaConnections()[0]!.generation;
+    const closed = harness.server.closed;
+    await harness.manager.patchLibrary(harness.admin, library.id, {
+      name: "Renamed library", order: 8, showOnHome: false, showInContinueWatching: false,
+    });
+    assert.equal(harness.store.mediaConnections()[0]!.generation, generation);
+    assert.equal(harness.server.closed, closed, "a display edit keeps the active transport alive");
+    const second = await harness.manager.browseItems(harness.admin, library.id, { limit: "1", cursor: first.cursor });
+    assert.deepEqual(second.items.map((item) => item.id), ["m2"]);
+    const original = await harness.manager.openOriginal(harness.admin, ref, { method: "GET", range: "bytes=0-1" });
+    assert.equal(original.status, 206);
+    await original.body?.cancel();
+  });
+});
+
 test("openOriginal cancels the body when the generation changes while headers are awaited", async () => {
   await withHarness(async (harness) => {
     const { connection, library } = await seedPlayable(harness);

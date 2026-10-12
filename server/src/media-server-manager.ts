@@ -612,7 +612,7 @@ export class MediaServerManager {
     const requestedUsers = record.allowedUsers === undefined ? undefined : this.readAllowedUsers(record.allowedUsers);
     return this.adminMutation(async () => {
       let updated!: RemoteLibraryRecord;
-      let changed = false;
+      let permissionChange = false;
       let enabledChanged = false;
       let removedUsers: string[] = [];
       await this.store.update((state) => {
@@ -638,15 +638,12 @@ export class MediaServerManager {
           }
           next.allowedUsers = [...wanted];
         }
-        changed = next.name !== library.name || next.enabled !== library.enabled || next.order !== library.order
-          || next.showOnHome !== library.showOnHome || next.showInContinueWatching !== library.showInContinueWatching
-          || JSON.stringify(next.allowedUsers) !== JSON.stringify(library.allowedUsers);
         enabledChanged = next.enabled !== library.enabled;
         removedUsers = before.filter((id) => !next.allowedUsers.includes(id) && findUserById(state.users ?? [], id)?.role === "user");
         // A grant edit or a visibility switch is a permission change for the ordinary
         // accounts on either side of it; a rename or a reorder is not.
-        const permissionChange = JSON.stringify(next.allowedUsers) !== JSON.stringify(before) || next.enabled !== library.enabled;
-        if (changed) connection.generation = bumpGeneration(connection.generation);
+        permissionChange = JSON.stringify(next.allowedUsers) !== JSON.stringify(before) || next.enabled !== library.enabled;
+        if (permissionChange) connection.generation = bumpGeneration(connection.generation);
         state.remoteLibraries = (state.remoteLibraries ?? []).map((candidate) => candidate.id === libraryId ? next : candidate);
         if (permissionChange) {
           const affected = this.granteeIds(state.users, [next]).concat(this.granteeIds(state.users, [library]));
@@ -656,7 +653,7 @@ export class MediaServerManager {
         }
         updated = structuredClone(next);
       });
-      if (changed) this.invalidateRuntime(updated.connectionId);
+      if (permissionChange) this.invalidateRuntime(updated.connectionId);
       if (enabledChanged) await this.invalidateContent({ libraryId });
       for (const userId of removedUsers) await this.invalidateContent({ libraryId, userId });
       log("INFO", "Remote library updated", { actor: actor.username, libraryId });

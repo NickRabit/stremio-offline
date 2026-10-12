@@ -11,6 +11,8 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
@@ -111,6 +113,17 @@ class RemoteLibraryBackTest {
     compose.waitUntil(5_000) { api.remoteItemsRequests.isNotEmpty() }
     compose.waitForIdle()
     compose.onNodeWithTag(remoteItemTag("movie1")).assertIsFocused()
+    api.remoteItemsPages["rlibA|"] = RemoteItemsPageDto(
+      items = listOf(RemoteItemDto(id = "movie2", name = "Another movie", type = "movie")),
+      total = 1,
+    )
+    compose.onNodeWithTag(remoteFilterTag("Movies")).performSemanticsAction(SemanticsActions.RequestFocus)
+    compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
+    compose.waitUntil(5_000) { api.remoteItemsRequests.size >= 2 }
+    compose.waitForIdle()
+    compose.onNodeWithTag(remoteItemTag("movie1")).assertDoesNotExist()
+    compose.onNodeWithTag(remoteItemTag("movie2")).assertIsFocused()
     host!!.onBackPressedDispatcher.onBackPressed()
     compose.waitForIdle()
     compose.onNodeWithTag(remoteLibraryTag("rlibA")).assertIsFocused()

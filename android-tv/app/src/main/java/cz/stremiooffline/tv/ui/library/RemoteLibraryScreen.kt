@@ -123,8 +123,8 @@ fun RemoteLibraryRoute(
 
   // A page change focuses the card last used on this level, else the first card; Back restores the
   // card that opened the level because the selection is kept per level rather than cleared.
-  LaunchedEffect(levelKey, items.size, state.libraries.size, segment, restoreToken) {
-    if (segment != LibrarySegment.Servers) return@LaunchedEffect
+  LaunchedEffect(levelKey, items.map { it.id }, state.libraries.map { it.id }, segment, restoreToken, backEnabled) {
+    if (segment != LibrarySegment.Servers || !backEnabled) return@LaunchedEffect
     awaitFrame()
     val remembered = viewModel.selectedFor(levelKey)?.let { requesters[it] }
     val requester = remembered ?: requesters.values.firstOrNull() ?: gridFocus
@@ -202,7 +202,7 @@ internal fun RemoteSeriesScreen(
 
   // A page change focuses the card last used; coming back from an episode restores the card that
   // opened it, so the viewer lands where they left rather than on the first card.
-  LaunchedEffect(levelKey, items.size, restoreToken, returnToken, episode) {
+  LaunchedEffect(levelKey, items.map { it.id }, restoreToken, returnToken, episode) {
     if (episode != null) return@LaunchedEffect
     awaitFrame()
     val remembered = viewModel.selectedFor(levelKey)?.let { requesters[it] }
@@ -343,7 +343,10 @@ private fun LibraryPicker(
             itemsIndexed(state.libraries, key = { _, library -> library.id }) { _, library ->
               val key = "library:${library.id}"
               val requester = remember(key) { FocusRequester() }
-              requesters[key] = requester
+              DisposableEffect(key, requester) {
+                requesters[key] = requester
+                onDispose { if (requesters[key] === requester) requesters.remove(key) }
+              }
               RemoteLibraryCard(
                 library = library,
                 onClick = { viewModel.openLibrary(library) },
@@ -512,7 +515,10 @@ private fun ItemGrid(
     ) {
       itemsIndexed(items, key = { _, item -> item.id }) { index, item ->
         val requester = remember(item.id) { FocusRequester() }
-        requesters[item.id] = requester
+        DisposableEffect(item.id, requester) {
+          requesters[item.id] = requester
+          onDispose { if (requesters[item.id] === requester) requesters.remove(item.id) }
+        }
         PosterCard(
           name = item.name,
           imageUrl = imageUrl(item.poster),
