@@ -2660,6 +2660,7 @@ export function App() {
           {...(liveLocalItem?.kind === "file" && liveLocalItem.progress ? { progress: liveLocalItem.progress } : {})}
           onToggleFavorite={(favorite) => void toggleFavorite(localDetail.item.path, favorite)}
           onResetProgress={() => void forgetWatched(localDetail.item.path)}
+          onOpenFolder={() => { if (localDetail.item.kind === "folder") goLocalFolder(localDetail.item.path); }}
           onPlay={(stream) => {
             const clicked = localDetail.item;
             void playLocal(clicked.kind === "file" ? clicked.label : clicked.name, stream.localPath ?? clicked.path, clicked.poster,
@@ -2699,7 +2700,8 @@ export function App() {
                       <i className="browse-badge">{item.fileCount}</i>{item.favorite && <i className="fav-mark"><Star/></i>}
                     </>}
                     title={item.name} meta={folderMeta(item)} description={descriptionLine(item)}
-                    action={<><FolderOpen/> {t("library.openFolder")} <ChevronRight/></>}>
+                    action={item.match === "matched" && item.titleType === "movie"
+                      ? <>{t("home.openTitle")}<ChevronRight/></> : <><FolderOpen/> {t("library.openFolder")} <ChevronRight/></>}>
                     {selectionMode && <button className="browse-select" aria-label={t("library.selectItem", { name: item.name })} aria-pressed={selectedPaths.has(item.path)} onClick={(event) => { event.stopPropagation(); toggleSelection(item.path); }}>{selectedPaths.has(item.path) && <Check/>}</button>}
                     {!selectionMode && (item.gallery ?? 0) > 0 && <button className="browse-gallery" aria-label={t("gallery.openStored", { name: item.name })} title={t("gallery.openStored", { name: item.name })} onClick={(event) => { event.stopPropagation(); void openStoredGallery(item.path); }}><Images/></button>}
                     {!selectionMode && <LibraryItemMenu name={item.name} open={menuFor === item.path} onToggle={() => openMenu(item)}>

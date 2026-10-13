@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Star } from "lucide-react";
+import { Check, FolderOpen, Star } from "lucide-react";
 import { api, describeError } from "./api";
 import { bytes } from "./settings-ui";
 import { t, useI18n } from "./i18n";
@@ -15,13 +15,14 @@ interface Props {
   onToggleFavorite: (favorite: boolean) => void;
   onResetProgress: () => void;
   onPlay: (stream: Stream) => void;
+  onOpenFolder?: () => void;
 }
 
 /** The local counterpart of a remote title's detail: it discovers the exact file and, when the
  *  file or its folder is bound to a title, the other copies of that same title, then hands them to
  *  the shared shell. The catalogue hero, the synopsis and the source picker are the ones a remote
  *  library uses. */
-export function LocalLibraryDetail({ item, favorite, progress, onToggleFavorite, onResetProgress, onPlay }: Props) {
+export function LocalLibraryDetail({ item, favorite, progress, onToggleFavorite, onResetProgress, onPlay, onOpenFolder }: Props) {
   useI18n();
   const [sources, setSources] = useState<Stream[] | null>(null);
   const [error, setError] = useState("");
@@ -105,6 +106,7 @@ export function LocalLibraryDetail({ item, favorite, progress, onToggleFavorite,
     {...(item.description ? { description: item.description } : {})}
     chips={chips}
     actions={<>
+      {!isFile && onOpenFolder && <button type="button" onClick={onOpenFolder}><FolderOpen/> {t("library.openFolder")}</button>}
       <button type="button" aria-pressed={favorite} onClick={() => onToggleFavorite(!favorite)}>
         <Star fill={favorite ? "currentColor" : "none"}/> {t("mediaServer.favorite")}
       </button>

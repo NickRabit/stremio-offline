@@ -432,6 +432,23 @@ describe("RemoteLibraryBrowser preferences and detail", () => {
     expect(host.querySelector(".remote-detail .hero h2")!.textContent).toBe("Target");
   });
 
+  it("keeps full series metadata after returning from an episode without reloading its list", async () => {
+    const show: RemoteItem = { id: "show", name: "Show", type: "series", providerIds: {} };
+    const episode: RemoteItem = { id: "episode", name: "Pilot", type: "episode", season: 1, episode: 1, seriesId: "show", providerIds: {} };
+    browse = (url) => json(page(url.searchParams.get("type") === "episode" ? [episode] : [show]));
+    item = (url) => json({ item: url.pathname.endsWith("/show") ? { ...show, overview: "A complete series description." } : episode, capabilities });
+    await openRootLibrary();
+    await act(async () => tileButtons()[0]!.click());
+    await flush();
+    expect(host.querySelector(".description-preview")!.textContent).toContain("complete series");
+    await act(async () => tileButtons()[0]!.click());
+    await flush();
+    await act(async () => host.querySelector<HTMLButtonElement>(".library-back")!.click());
+    await flush();
+    expect(host.querySelector(".description-preview")!.textContent).toContain("complete series");
+    expect(calls.browse.filter(url => url.searchParams.get("type") === "episode")).toHaveLength(1);
+  });
+
   it("keeps the title usable when detail metadata is malformed", async () => {
     browse = () => json(page([movie("m1", "One")]));
     item = () => json({});

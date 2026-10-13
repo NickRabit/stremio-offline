@@ -147,6 +147,15 @@ describe("LocalLibraryDetail discovery", () => {
 });
 
 describe("LocalLibraryDetail actions", () => {
+  it("keeps file management reachable from a movie folder detail", async () => {
+    const onOpenFolder = vi.fn();
+    await render({ kind: "folder", path: "Movie", name: "Movie", fileCount: 2, size: 100 }, { onOpenFolder });
+    const open = [...host.querySelectorAll<HTMLButtonElement>(".library-detail-actions button")].find(button => button.textContent?.includes("Open folder"));
+    expect(open).toBeDefined();
+    await click(open!);
+    expect(onOpenFolder).toHaveBeenCalledOnce();
+  });
+
   it("toggles the clicked library item's favorite and resets its position", async () => {
     const { onToggleFavorite, props } = await render(file(), { favorite: true, progress: { position: 10, duration: 100 } });
     await click(host.querySelector(".library-detail-actions button"));

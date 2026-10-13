@@ -79,7 +79,7 @@ another instance's token through a shared device identifier.
 | `GET /api/remote-libraries/:id/items/:itemId/state`, `PATCH …/state` | The account's own position, duration, favourite, watched and chosen version for a verified item. Kept apart from the generic progress map, so a `remote:` key never resolves through the filesystem or catalogue parsers. |
 | `GET /api/remote-libraries/personal?filter=resume\|favorites&skip&limit` | The account's own resume or favourite cards, each library confirmed against the live remote policy first. A library that cannot be confirmed is dropped and the answer is marked `partial`; `skip` is 0–1000 and `limit` 1–120. The whole projection runs under one budget — 1.5 s for Home, 5 s otherwise, two confirmations at a time — and every card is re-proved against the account, the connection, the remote identity, the upstream library and the switches as they stand before the JSON leaves. |
 
-Paged browse, episode and detail responses also carry optional bounded overview,
+Detailed item responses carry optional bounded overview,
 year, genres, run time, size and creation time, plus same-origin `poster` and
 `wide` artwork paths. Known absent image roles are omitted. These paths are built only from the encoded local
 library and item handle
@@ -413,7 +413,7 @@ Web root tiles, folder/file rows and overflow shells share the local library's
 components. Remote menus offer local favorites and watched state, with personal
 state fetched on menu opening rather than once per tile. Folder and season
 items navigate; they do not become playable sources. Remote metadata stays
-read-only, and provider paths, credentials and image addresses never enter the
+read-only, and provider paths, credentials and upstream image addresses never enter the
 client projection.
 
 Remote grids use the shared artwork component. A missing preferred image falls
@@ -421,6 +421,36 @@ back to the other role and then an icon; changing tile proportions cannot retain
 an error class from an older image. Failed mosaic cells are removed instead of
 leaving an empty collage.
 
+
+## Shared web library detail
+
+A local file or a matched movie folder opens a detail page instead of starting
+playback. The detail retains an Open folder action for managing the individual files.
+Unmatched, mixed and series folders keep their normal navigation.
+Local and remote playable titles share the same hero, synopsis, metadata and
+source picker; a matched local title uses its catalogue name while the selected
+file name stays visible beside Play.
+
+The largest playable version with a reported file size is the default. Unknown
+sizes retain the provider's order, and a user's explicit choice survives a
+refresh of the same title. The arrow beside Play opens a keyboard-accessible
+picker, focuses the current choice and returns focus on close. It accepts the
+same public stream shape as catalogue sources, without fetching add-on sources
+for library details in this stage.
+
+Local discovery reads the clicked file and its identity once, then lists exact
+copies of the bound movie or episode. A failed identity lookup does not hide a
+playable file. Playback resolves only the selected copy again so its sidecar
+subtitles and permissions are current. Remote discovery keeps the existing
+scoped source and local-history paths.
+
+Remote listings and episode lists load their next page near the end of their
+scroll pane, with one request in flight and no automatic retry after an error.
+The manual button remains a fallback. Breadcrumbs include the current item;
+Back and sidebar navigation restore the local listing's position and focus.
+The remote root block is shown only at the library root, so an opened local
+folder owns its full page and scroll pane. Mobile folding uses the established
+library chrome.
 
 ## Upstream request budget
 

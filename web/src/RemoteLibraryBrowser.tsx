@@ -366,7 +366,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
         setEpisodes({ items: [], total: 0, loading: false, error: describeError(error) });
       });
     return () => { controller.abort(); if (episodeEpoch.current === epoch) episodeEpoch.current += 1; cancelEpisodesMore(); };
-  }, [selected, series, episodeNonce]);
+  }, [selected, series?.id, episodeNonce]);
 
   // Read detail metadata once; merging it does not restart sources or personal state.
   useEffect(() => {
@@ -383,6 +383,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
         if (!full || full.id !== itemId) return;
         if (epoch !== metaEpoch.current || controller.signal.aborted || selectedRef.current?.id !== library.id) return;
         setDetail((current) => current && current.id === itemId ? mergeDetailMeta(current, full) : current);
+        if (full.type === "series") setSeries((current) => current?.id === itemId ? mergeDetailMeta(current, full) : current);
       })
       .catch(() => undefined);
     return () => { controller.abort(); if (metaEpoch.current === epoch) metaEpoch.current += 1; };
