@@ -130,4 +130,45 @@ class PlayerReturnFocusTest {
     }
     compose.waitUntil(5_000) { playerHasRemote() }
   }
+
+  @Test
+  fun `the screen stays on while a catalogue play is up and is released when it closes`() {
+    val title = MetaDto(id = "tt1", type = "movie", name = "It")
+    val api = FakeTvApi().apply {
+      settingsValue = SettingsResponse(uiLanguage = "en", audioLanguage = "en", streamSort = "recommended")
+      catalogsValue = listOf(CatalogDto(addonKey = "a", addonName = "Cinemeta", type = "movie", id = "top", name = "Popular"))
+      catalogPages["a"] = listOf(listOf(title))
+      streamSourcesValues["movie:tt1"] = listOf(StreamSourceDto("s", "Source"))
+      addonStreams["movie:tt1|s"] = listOf(StreamDto(sourceId = "src1", kind = "remote", playable = true, title = "1080p", addonName = "Source"))
+    }
+    scenario.onActivity { activity ->
+      activity.setContent { Shell(start = Section.Catalog, api = api, username = "demo", onSignOut = {}) }
+    }
+    compose.waitForIdle()
+    val keepOn = {
+      var value = false
+      scenario.onActivity { activity ->
+        // The flag sits on the composition's own view, a few levels under the content frame.
+        fun anyKeepsScreenOn(view: android.view.View): Boolean =
+          view.keepScreenOn || (view is android.view.ViewGroup && (0 until view.childCount).any { anyKeepsScreenOn(view.getChildAt(it)) })
+        value = anyKeepsScreenOn(activity.findViewById(android.R.id.content))
+      }
+      value
+    }
+    org.junit.Assert.assertFalse(keepOn())
+
+    press(Key.DirectionDown)
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { runCatching { compose.onNodeWithTag(TagCatalogPrimary).assertIsFocused() }.isSuccess }
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { compose.onAllNodes(androidx.compose.ui.test.hasTestTag(TAG_OVERLAY_ROOT)).fetchSemanticsNodes().isNotEmpty() }
+    compose.waitUntil(5_000) { keepOn() }
+
+    repeat(3) {
+      if (compose.onAllNodes(androidx.compose.ui.test.hasTestTag(TAG_OVERLAY_ROOT)).fetchSemanticsNodes().isEmpty()) return@repeat
+      back()
+    }
+    compose.waitForIdle()
+    org.junit.Assert.assertFalse(keepOn())
+  }
 }
