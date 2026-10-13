@@ -131,9 +131,13 @@ with an account from this server.
   never silently swapped for a different one.
 - macOS asks once whether to accept incoming connections the first time. If it
   was refused, allow the app in **System Settings → Network → Firewall**.
-- The Mac is kept from idle sleep only while something is playing, and only
-  through `powerSaveBlocker.start("prevent-app-suspension")`. Closing the lid
-  still puts it to sleep.
+- The Mac is kept from idle sleep while a download runs, or while sharing is on
+  and something is streaming, through
+  `powerSaveBlocker.start("prevent-app-suspension")`. Closing the lid still
+  puts it to sleep. A video playing in this window holds a separate
+  `prevent-display-sleep` blocker so the screen stays on; pausing, the end of
+  the film, or leaving the page releases it. A phone watching through a shared
+  server does not turn this screen on.
 
 ## Choosing a library folder
 

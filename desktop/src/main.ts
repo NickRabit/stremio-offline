@@ -17,6 +17,7 @@ import {
   type ServerProfile,
 } from "./connection-file.js";
 import { mayTrashDownloadDirReal, OWNERSHIP_FILE, prepareDownloadDir, readOwnership, suggestedDownloadDir, writeOwnership, type Ownership, type Places } from "./download-dir.js";
+import { attachDisplayGuard, DisplayGuard } from "./display-guard.js";
 import { isDeviceTicketDownload } from "./downloads.js";
 import { catalogue } from "./i18n.js";
 import { layout, type PageMode } from "./layout.js";
@@ -119,6 +120,8 @@ let ffmpegLine: string | null = null;
 /** The system FFmpeg a Linux desktop may run instead of the bundled one, found once at startup. */
 let systemFfmpeg: SystemFfmpeg | null = null;
 const sleepGuard = new SleepGuard(powerSaveBlocker);
+const displayGuard = new DisplayGuard(powerSaveBlocker);
+let detachDisplay: (() => void) | null = null;
 /** Quitting retires the page itself, so a window closing on the way out does not wait for it again. */
 let quitting = false;
 /** The user said yes in the quit dialog; the next `before-quit` goes through. */
@@ -584,6 +587,8 @@ const retireRemote = async (): Promise<void> => {
 const destroyRemote = () => {
   const current = shell;
   if (!current?.remote) return;
+  detachDisplay?.();
+  detachDisplay = null;
   current.window.contentView.removeChildView(current.remote);
   if (!current.remote.webContents.isDestroyed()) current.remote.webContents.close();
   current.remote = null;
@@ -686,6 +691,7 @@ const wireRemote = (remote: WebContentsView) => {
     if (shell?.remote !== remote || !isMainFrame || errorCode === ABORTED || !connected) return;
     failConnected(loadFailure ?? "unreachable");
   });
+  detachDisplay = attachDisplayGuard(contents, displayGuard);
 };
 
 const mountRemote = (partition: string, serverOrigin: () => string | null, preload?: string): WebContentsView | null => {
@@ -1733,6 +1739,7 @@ if (process.argv.includes(SMOKE_LOCAL_BACKEND)) {
     localStreaming = false;
     localDownloading = false;
     syncAwake();
+    displayGuard.reset();
     backendShutdown = retireRemote().then(closeLocalBackend).finally(() => {
       backendShutdownComplete = true;
       tray?.destroy();
