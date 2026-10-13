@@ -887,19 +887,21 @@ test("closing the manager rejects a queued network request", async () => {
     const four = deferred();
     harness.server.nudge = { op: "info", wait: held.promise, entered: () => { entered += 1; if (entered === 4) four.resolve(); } };
     const running = [0, 1, 2, 3].map(() => harness.manager.discoverLibraries(harness.admin, connection.id));
+    const settledRunning = Promise.allSettled(running);
     await four.promise;
     const queued = harness.manager.discoverLibraries(harness.admin, connection.id);
     for (let spins = 0; spins < 1000 && netQueueLength(harness) < 1; spins += 1) await tick();
     assert.equal(netQueueLength(harness), 1, "the request reached the queue");
-    const closing = harness.manager.close();
-    await assert.rejects(queued, (error: MediaServerError) => {
+    const rejected = assert.rejects(queued, (error: MediaServerError) => {
       assert.ok(["closed", "cancelled"].includes(error.code), error.code);
       return true;
     });
+    const closing = harness.manager.close();
+    await rejected;
     held.resolve();
     harness.server.nudge = undefined;
     await closing;
-    await Promise.allSettled(running);
+    await settledRunning;
     assert.equal(netQueueLength(harness), 0, "no waiter is left behind after a close");
     assert.equal(netActive(harness), 0, "every reserved slot was released");
   }, { coalesceReads: false });
