@@ -223,9 +223,9 @@ test("a remote film's versions open a picker that defaults to the largest", asyn
   const panel = page.locator(".remote-browse-panel");
   await panel.locator(".browse-item").filter({ hasText: "Film One" }).locator(".library-open").click();
   const detail = panel.locator(".library-title-detail");
-  // The versions live behind the arrow now, with the largest as the default.
+  // The versions live behind the arrow now, with the largest as the default; the picker is the
+  // only place a version is named.
   await expect(detail.locator(".remote-streams")).toHaveCount(0);
-  await expect(detail.locator(".library-detail-source")).toContainText("1080p");
   await detail.getByRole("button", { name: "Vybrat zdroj" }).click();
   const dialog = page.getByRole("dialog", { name: "Vybrat zdroj" });
   const rows = dialog.locator(".remote-streams button");

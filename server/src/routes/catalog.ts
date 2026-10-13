@@ -16,13 +16,14 @@ import { guardedFetch } from "../outbound.js";
 import { contentOf } from "../revocation.js";
 import type { UserPrefs } from "../store.js";
 import { trailerFor } from "../trailers.js";
+import { tmdbGallery, type TmdbGalleryPicture } from "../tmdb.js";
 import type { MetaItem, StreamItem } from "../types.js";
 import { shiftVtt } from "../vtt.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 
 export interface CatalogDeps extends RouteContext {
   tmdbProvider(language: string): MetaProvider | undefined;
-  cachedMeta(type: string, id: string, language?: string, viewer?: Viewer): Promise<MetaItem | null>;
+  cachedMeta(type: string, id: string, language?: string, viewer?: Viewer, opts?: { artwork?: boolean }): Promise<MetaItem | null>;
   prefsOf(req?: express.Request): UserPrefs;
   libraryTarget(value: string, viewer: Viewer | undefined): Promise<string>;
   ownerOf(req: express.Request): ResourceOwner;
@@ -67,6 +68,19 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     return trailerFor(allowedAddons(store.addons(), viewer), type, id, language, apiKey ? { apiKey, language } : undefined);
   };
 
+  const galleryCache = new Map<string, { at: number; promise: Promise<TmdbGalleryPicture[]> }>();
+  const detailGallery = (type: string, id: string, language: string) => {
+    const apiKey = store.settings().tmdbApiKey;
+    if (!apiKey || (type !== "movie" && type !== "series") || !/^(tt[0-9]+|tmdb:[0-9]+)$/.test(id)) return Promise.resolve([]);
+    const key = `${type}:${id}:${language}:${apiKey}`;
+    const cached = galleryCache.get(key);
+    if (cached && Date.now() - cached.at < 30 * 60_000) return cached.promise;
+    const entry = { at: Date.now(), promise: tmdbGallery(type, id, { apiKey, language }).catch(() => []) };
+    galleryCache.set(key, entry);
+    if (galleryCache.size > 128) galleryCache.delete(galleryCache.keys().next().value!);
+    return entry.promise;
+  };
+
   app.get("/api/catalogs", (req, res) => res.json(inOrder(req).filter((a) => a.enabled && a.role !== "source").flatMap((addon) => (addon.manifest.catalogs ?? []).map((item) => ({ ...item, addonKey: addon.key, addonName: addon.manifest.name })) )));
   app.get("/api/catalog", asyncRoute(async (req, res) => {
     // Switched off as well as allowed: `usable` narrows by who is asking, and the listing
@@ -94,9 +108,16 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
   app.get("/api/searchable", (req, res) => res.json(searchableCatalogs(inOrder(req)).map(({ addon, definition }) => ({ addonKey: addon.key, addonName: addon.manifest.name, globalSearch: addon.globalSearch, type: definition.type, id: definition.id, name: definition.name ?? definition.id }))));
   app.get("/api/meta/:type/:id", asyncRoute(async (req, res) => {
     const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
-    const meta = await cachedMeta(String(req.params.type), String(req.params.id), language, viewerOf(currentUser(req)));
+    // The detail page is the one reader that wants the wider backdrop, so it asks for the
+    // artwork reading and keeps a Metahub background at its full size.
+    const meta = await cachedMeta(String(req.params.type), String(req.params.id), language, viewerOf(currentUser(req)), { artwork: true });
     if (!meta) throw new AppError("The metadata was not found.", "err.metaNotFound", 404);
-    res.json(images.rewriteMeta(meta));
+    if (req.query.gallery === "1") {
+      const gallery = await detailGallery(String(req.params.type), String(req.params.id), language);
+      res.json(images.rewriteMeta({ ...meta, images: gallery.map((image) => ({ ...image, shape: image.kind === "poster" ? "poster" : "wide" })) }, true));
+      return;
+    }
+    res.json(images.rewriteMeta(meta, true));
   }));
   app.get("/api/library/trailer", asyncRoute(async (req, res) => {
     const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;

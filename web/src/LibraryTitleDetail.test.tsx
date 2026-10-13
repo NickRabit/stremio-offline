@@ -41,6 +41,7 @@ const rerender = (over: Partial<LibraryTitleDetailProps>) => {
 const click = (element: Element | null) => act(() => { (element as HTMLElement).click(); });
 const playButton = () => host.querySelector<HTMLButtonElement>(".library-detail-play button.primary")!;
 const pickerRows = () => [...document.querySelectorAll<HTMLButtonElement>(".library-source-card .remote-streams button")];
+const chosenRow = () => pickerRows().find((row) => row.getAttribute("aria-pressed") === "true");
 
 describe("LibraryTitleDetail sources", () => {
   it("plays the single source with no picker arrow", () => {
@@ -54,15 +55,15 @@ describe("LibraryTitleDetail sources", () => {
   it("defaults a multi-version title to the largest and lets another be chosen", () => {
     const sources = [remote("s1", "720p", 800_000_000), remote("s2", "1080p", 3_000_000_000), remote("s3", "Small", 10)];
     render({ sources });
-    expect(host.querySelector(".library-detail-source")!.textContent).toContain("1080p");
     click(host.querySelector<HTMLButtonElement>(".split-button-toggle"));
     const rows = pickerRows();
     expect(rows).toHaveLength(3);
-    expect(rows[0]!.textContent).toContain("1080p");
-    expect(rows[0]!.getAttribute("aria-pressed")).toBe("true");
+    expect(chosenRow()!.textContent).toContain("1080p");
     click(rows[2]!);
-    expect(host.querySelector(".library-detail-source")!.textContent).toContain("Small");
     expect(document.querySelector(".library-source-card")).toBeNull();
+    // The picker is the one place a version is named; reopening it shows which one plays.
+    click(host.querySelector<HTMLButtonElement>(".split-button-toggle"));
+    expect(chosenRow()!.textContent).toContain("Small");
   });
 
   it("keeps an explicit choice across a refresh of the same title and resets for a new one", () => {
@@ -70,12 +71,14 @@ describe("LibraryTitleDetail sources", () => {
     render({ sources });
     click(host.querySelector<HTMLButtonElement>(".split-button-toggle"));
     click(pickerRows()[1]!);
-    expect(host.querySelector(".library-detail-source")!.textContent).toContain("720p");
     // A refresh hands brand-new objects but the same identities.
     rerender({ sources: [remote("s1", "1080p", 3_000_000_000), remote("s2", "720p", 1)] });
-    expect(host.querySelector(".library-detail-source")!.textContent).toContain("720p");
+    click(host.querySelector<HTMLButtonElement>(".split-button-toggle"));
+    expect(chosenRow()!.textContent).toContain("720p");
+    // Another title opens over this one, so the picker closes with it before the arrow reopens it.
     rerender({ identityKey: "t2", sources: [remote("s1", "1080p", 3_000_000_000), remote("s2", "720p", 1)] });
-    expect(host.querySelector(".library-detail-source")!.textContent).toContain("1080p");
+    click(host.querySelector<HTMLButtonElement>(".split-button-toggle"));
+    expect(chosenRow()!.textContent).toContain("1080p");
   });
 
   it("disables Play while loading and shows the status", () => {
@@ -114,11 +117,28 @@ describe("LibraryTitleDetail sources", () => {
     expect(host.querySelector("img.broken")).toBeNull();
   });
 
-  it("shows the shared hero and the synopsis disclosure", () => {
+  it("shows the shared hero, the poster in its own corner and the whole synopsis", () => {
     render({ poster: "/poster.jpg", description: "A quiet film." });
     expect(host.querySelector(".hero.library-detail-hero")).not.toBeNull();
     expect(host.querySelector(".library-detail-poster img")?.getAttribute("src")).toBe("/poster.jpg");
-    expect(host.querySelector(".description-preview")!.textContent).toBe("A quiet film.");
+    expect(host.querySelector(".library-detail-synopsis")!.textContent).toBe("A quiet film.");
+    // No disclosure and no clamp: the full text is simply read.
+    expect(host.querySelector(".library-title-detail details")).toBeNull();
+  });
+
+  it("draws the play, favorite, watched and open-folder controls on one row", () => {
+    const onToggleFavorite = vi.fn();
+    const onToggleWatched = vi.fn();
+    const onOpenFolder = vi.fn();
+    render({ sources: [remote("s1", "1080p", 1)], favorite: true, watched: false, onToggleFavorite, onToggleWatched, onOpenFolder });
+    const row = host.querySelector(".library-detail-actions")!;
+    expect(row.querySelector(".library-detail-play button.primary")).not.toBeNull();
+    click(row.querySelector('button[aria-label="Remove from favorites"]'));
+    expect(onToggleFavorite).toHaveBeenCalledWith(false);
+    click(row.querySelector('button[aria-label="Mark watched"]'));
+    expect(onToggleWatched).toHaveBeenCalled();
+    click([...row.querySelectorAll("button")].find((button) => button.textContent?.includes("Open folder")) ?? null);
+    expect(onOpenFolder).toHaveBeenCalled();
   });
 });
 

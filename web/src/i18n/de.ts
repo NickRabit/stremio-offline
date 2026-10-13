@@ -580,7 +580,7 @@ export const de: Catalog = {
   "onboarding.action": "Fügen Sie ein Manifest hinzu",
   "onboarding.noneGranted": "Für dieses Konto wurde noch kein Add-on zur Verfügung gestellt. Ein Administrator entscheidet, welche er verwenden darf.",
   "library.eyebrow": "BIBLIOTHEK",
-  "library.title": "Heruntergeladene Dateien",
+  "library.title": "Deine Bibliotheken",
   "library.nextEpisode": "Nächste Folge",
   "library.showAll": "Alle anzeigen",
   "library.showInLibrary": "In der Bibliothek anzeigen",

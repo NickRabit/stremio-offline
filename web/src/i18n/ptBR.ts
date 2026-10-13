@@ -580,7 +580,7 @@ export const ptBR: Catalog = {
   "onboarding.action": "Adicionar um manifesto",
   "onboarding.noneGranted": "Nenhum complemento foi disponibilizado para esta conta ainda. Um administrador decide quais pode usar.",
   "library.eyebrow": "BIBLIOTECA",
-  "library.title": "Arquivos baixados",
+  "library.title": "Suas bibliotecas",
   "library.nextEpisode": "Próximo episódio",
   "library.showAll": "Mostrar tudo",
   "library.showInLibrary": "Mostrar na biblioteca",

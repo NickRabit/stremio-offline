@@ -580,7 +580,7 @@ export const ru: Catalog = {
   "onboarding.action": "Добавить манифест",
   "onboarding.noneGranted": "Для этой учетной записи пока не доступен ни один аддон. Администратор решает, какие из них он может использовать.",
   "library.eyebrow": "БИБЛИОТЕКА",
-  "library.title": "Загруженные файлы",
+  "library.title": "Ваши библиотеки",
   "library.nextEpisode": "Следующий выпуск",
   "library.showAll": "Показать все",
   "library.showInLibrary": "Показать в библиотеке",

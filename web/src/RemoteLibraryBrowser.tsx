@@ -7,11 +7,13 @@ import { LibraryItem, LibraryItemMenu } from "./library-item";
 import { LibraryTile } from "./library-tile";
 import { LibraryTitleDetail } from "./LibraryTitleDetail";
 import { Player } from "./Player";
-import { DetailDescription, DetailHero } from "./DetailHero";
+import { DetailHero, LIBRARY_HERO_EMPTY_GRADIENT, LIBRARY_HERO_GRADIENT, useBackdrop } from "./DetailHero";
 import { RemoteFolderArt, RemoteLibraryArt, RemoteTileArt } from "./remote-mosaic";
+import { TitleChips } from "./TitleChips";
 import { createCompactOnScroll } from "./scroll-fold";
-import { bytes } from "./settings-ui";
-import type { LibraryType, LibraryViewPrefs, MediaServerProvider, RemoteBrowseMode, RemoteItem, RemoteItemState, RemoteItemType, RemoteLibrary, Stream, TileShape, UserViews } from "./types";
+import { bytes, hideBroken } from "./settings-ui";
+import { catalogueRef, useTitleEnrichment } from "./title-enrichment";
+import type { LibraryType, LibraryViewPrefs, MediaServerProvider, RemoteBrowseMode, RemoteItem, RemoteItemState, RemoteItemType, RemoteLibrary, Stream, TileShape, Trailer, UserViews } from "./types";
 
 interface Props {
   onRootPresenceChange?: (visible: boolean) => void;
@@ -34,6 +36,14 @@ interface Props {
   initialTarget?: { libraryId: string; itemId: string; nonce: number };
   /** A favourite, a watched flag or a position changed here, so Home and the shelf re-read. */
   onPersonalChange?: () => void;
+  /** The reader's interface language, so the catalogue is asked in it. */
+  uiLanguage: string;
+  /** Secure Mode, which decides how the trailer chip behaves. */
+  secureMode: boolean;
+  /** The app owns the trailer overlay; the chip only asks for it. */
+  onTrailer: (trailer: Trailer) => void;
+  /** Bumped when the sidebar returns to the Library: the browser drops back to the roots. */
+  resetSignal?: number;
 }
 
 type Status = { items: RemoteItem[]; cursor?: string; total: number; loading: boolean; error: string };
@@ -114,7 +124,7 @@ const groupEpisodes = (items: RemoteItem[]) => {
   return [...groups.entries()].map(([season, group]) => ({ season, items: group }));
 };
 
-export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLanguage, subtitleLanguage, onError, libraryTileShape, onToggleLibraryShape, views, onPersistPrefs, onOpenChange, compact, onCompactChange, initialTarget, onPersonalChange }: Props) {
+export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLanguage, subtitleLanguage, onError, libraryTileShape, onToggleLibraryShape, views, onPersistPrefs, onOpenChange, compact, onCompactChange, initialTarget, onPersonalChange, uiLanguage, secureMode, onTrailer, resetSignal }: Props) {
   useI18n();
   const [libraries, setLibraries] = useState<RemoteLibrary[] | null>(null);
   const [librariesError, setLibrariesError] = useState("");
@@ -446,6 +456,32 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     // The page that draws the local listing may outlive this browser; make sure it comes back.
     onOpenChange(false);
   }, []);
+
+  // The sidebar's Library entry returns to the roots from anywhere: a remote library, a folder,
+  // a title or the player. It is a deliberate jump to the top, so no offset or focus comes back.
+  const resetSeen = useRef(resetSignal ?? 0);
+  useEffect(() => {
+    if (resetSignal === undefined || resetSignal === resetSeen.current) return;
+    resetSeen.current = resetSignal;
+    closeMenu();
+    cancelItemsMore();
+    cancelEpisodesMore();
+    cancelHandoff();
+    pendingFocus.current = null;
+    pendingRootFocus.current = null;
+    savedScroll.current = 0;
+    setSelected(null);
+    setStack([]);
+    setListing(emptyStatus());
+    setDetail(null);
+    needsDetailMeta.current = false;
+    setSeries(null);
+    setSources(null);
+    setState(null);
+    setSearchInput("");
+    setQuery("");
+    onOpenChange(false);
+  }, [resetSignal]);
 
   // One next page arrives on its own as the listing nears its end: an observer on the sentinel
   // the manual button already sits in, rooted in the scroll pane, with the scroll handler as the
@@ -792,24 +828,30 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     }
   };
 
+  // The catalogue identity this record carries and the title's extra facts. An episode is asked
+  // about through its series, never its own ids, and nothing is guessed without a valid id; a
+  // folder or a season has no title to ask after. Not one of these calls happens for a listing row.
+  const catalogue = detail?.type === "movie" || detail?.type === "series"
+    ? catalogueRef(detail.type, detail.providerIds)
+    : detail?.type === "episode" ? catalogueRef("series", series?.providerIds) : null;
+  const enrichment = useTitleEnrichment(catalogue ? { kind: "catalogue", ref: catalogue } : null, catalogue, uiLanguage);
+  const detailBackdrops: Array<string | undefined> = detail
+    ? [enrichment.meta?.background, detail.wide, detail.type === "episode" ? series?.wide : undefined]
+    : [];
+  // The series hero draws its backdrop through the shared hero, so only it probes here.
+  const seriesBackdrop = useBackdrop(detail?.type === "series" ? detailBackdrops : []);
+
   if (!librariesError && !targetError && (libraries === null || !libraries.length)) return null;
 
   const grouped = groupEpisodes(episodes.items);
   const previewKey = { libraryId: selected?.id ?? "", generation: nonce };
 
-  /** The provider and kind labels a remote title shows, with an episode's numbering and its
-   *  series for context. */
-  const detailChips = (item: RemoteItem): ReactNode[] => {
-    const chips: ReactNode[] = [
-      <span className="pill" key="provider">{t(providerKey(selected!.provider))}</span>,
-      <span className="pill" key="type">{t(itemTypeKey(item.type))}</span>,
-    ];
-    if (item.type === "episode") {
-      chips.push(<span className="pill" key="episode">{t("mediaServer.episodeLabel", { season: item.season ?? 0, episode: item.episode ?? 0 })}</span>);
-      if (series) chips.push(<span className="pill" key="series">{series.name}</span>);
-    }
-    return chips;
-  };
+  /** One kind pill, the trailer and the sites, in the same row the catalogue draws: no provider,
+   *  library or series-name chip, and an episode's numbering travels under the title instead. */
+  const detailChips = (item: RemoteItem): ReactNode =>
+    <TitleChips
+      kind={t(item.type === "movie" ? "catalog.oneMovie" : item.type === "series" ? "catalog.oneSeries" : "episodes.one")}
+      trailer={enrichment.trailer} links={enrichment.links} onTrailer={onTrailer} secureMode={secureMode}/>;
   /** The metadata line: what the provider normalized, plus the genres it gave. */
   const detailFacts = (item: RemoteItem): string =>
     [itemFacts(item), (item.genres ?? []).join(" · ")].filter(Boolean).join(" · ");
@@ -818,10 +860,10 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   const seriesHeroCopy = (item: RemoteItem): ReactNode => {
     const facts = detailFacts(item);
     return <>
-      <div className="title-chips">{detailChips(item)}</div>
+      {detailChips(item)}
       <h2>{item.name}</h2>
       {facts && <p className="meta-line">{facts}</p>}
-      <DetailDescription text={item.overview} identityKey={item.id}/>
+      <p className="library-detail-synopsis">{item.overview || t("catalog.noDescription")}</p>
     </>;
   };
   const detailCrumb = (item: RemoteItem) =>
@@ -869,13 +911,19 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   };
 
   return <>
-    {!selected && !hideRoots && libraries && libraries.length > 0 && <section className="remote-libraries" ref={rootRef} aria-label={t("mediaServer.remoteTitle")}>
-      <div className="remote-libraries-head">
-        <h3>{t("mediaServer.remoteTitle")}</h3>
-        <small>{t("mediaServer.remoteHint")}</small>
+    {!selected && !hideRoots && libraries && libraries.length > 0 && <section className="panel browse-panel remote-libraries" ref={rootRef} aria-label={t("mediaServer.remoteTitle")}>
+      {/* The remote roots are the same panel the local listing is, so the two blocks share their
+          heading, borders and grid padding; only the label says which is which. */}
+      <div className="browse-head">
+        <div className="browse-bar">
+          <nav className="crumbs" aria-label={t("library.breadcrumbs")}>
+            <span className="crumbs-title"><HardDrive/> {t("mediaServer.remoteTitle")}</span>
+          </nav>
+        </div>
       </div>
-      <div className="browse-grid">
-        {libraries.map((library) => {
+      <div className="browse-scroll">
+        <div className="browse-grid">
+          {libraries.map((library) => {
           const key = `root:${library.id}`;
           return <LibraryTile key={library.id} path={library.id}
             name={library.name}
@@ -887,7 +935,8 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
             art={<RemoteLibraryArt libraryId={library.id} enabled={library.mosaic !== false} generation={0} target={artRef(key)} poster={library.poster}/>}
             onOpen={() => openLibrary(library)}
           />;
-        })}
+          })}
+        </div>
       </div>
     </section>}
     {librariesError && <div className="remote-error" role="alert">
@@ -954,7 +1003,9 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
           {listing.loading && listing.items.length > 0 && <div className="loading" role="status">{t("common.loadingMore")}</div>}
         </>}
         {detail && detail.type === "series" && <div className="remote-detail">
-          <DetailHero className="library-detail-hero" background={detail.wide || detail.poster} copy={seriesHeroCopy(detail)}/>
+          <DetailHero className="library-detail-hero" background={seriesBackdrop} gradient={LIBRARY_HERO_GRADIENT} emptyGradient={LIBRARY_HERO_EMPTY_GRADIENT}
+            gallery={detail.poster ? <div className="library-detail-poster"><img key={detail.poster} src={detail.poster} alt="" onError={hideBroken}/></div> : undefined}
+            copy={seriesHeroCopy(detail)}/>
           <div className="subhead remote-episodes-head"><h3>{t("mediaServer.episodes")}</h3><span>{detail.name}</span></div>
           {episodes.error && <div className="remote-error" role="alert">
             <span>{episodes.error}</span>
@@ -975,20 +1026,18 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
           <LibraryTitleDetail
             identityKey={detail.id}
             title={detail.name}
-            {...(detail.wide ? { wide: detail.wide } : {})}
+            {...(detail.type === "episode" ? { subtitle: t("mediaServer.episodeLabel", { season: detail.season ?? 0, episode: detail.episode ?? 0 }) } : {})}
             {...(detail.poster ? { poster: detail.poster } : {})}
+            backdrops={detailBackdrops}
             {...(detailFacts(detail) ? { facts: detailFacts(detail) } : {})}
             {...(detail.overview ? { description: detail.overview } : {})}
             chips={detailChips(detail)}
-            actions={<>
-              <button type="button" disabled={!state} aria-pressed={state?.favorite ?? false} onClick={() => void toggleState({ favorite: !(state?.favorite ?? false) })}>
-                <Star fill={state?.favorite ? "currentColor" : "none"}/> {t("mediaServer.favorite")}
-              </button>
-              <button type="button" disabled={!state} aria-pressed={state?.watched ?? false} onClick={() => void toggleState({ watched: !(state?.watched ?? false) })}>
-                <Check/> {state?.watched ? t("mediaServer.markUnwatched") : t("mediaServer.markWatched")}
-              </button>
-              {state?.watched && <i className="library-badge">{t("mediaServer.watched")}</i>}
-            </>}
+            favorite={state?.favorite ?? false}
+            favoriteDisabled={!state}
+            onToggleFavorite={(next) => void toggleState({ favorite: next })}
+            watched={state?.watched ?? false}
+            watchedDisabled={!state}
+            onToggleWatched={() => void toggleState({ watched: !(state?.watched ?? false) })}
             sources={sources}
             {...(sourceError ? { sourceError } : {})}
             onRetry={retryDetail}
@@ -999,7 +1048,6 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
             <span>{stateError}</span>
             <button type="button" onClick={retryDetail}>{t("mediaServer.retry")}</button>
           </div>}
-          <p className="identify-hint">{t("mediaServer.localStateNote")}</p>
         </div>}
       </div>
     </div>}

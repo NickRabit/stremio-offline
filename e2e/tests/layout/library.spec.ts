@@ -70,7 +70,7 @@ test("library cards and folder navigation", async ({ page }, testInfo) => {
   await page.keyboard.press("Escape");
   await expect(page.locator(".browse-actions")).toHaveCount(0);
   await page.getByRole("button", { name: /Seriály.*Otevřít složku/ }).click();
-  await expect(page.getByRole("button", { name: /Dlouhý název.*Pokračovat/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Dlouhý název.*Otevřít titul/ })).toBeVisible();
   await page.getByRole("button", { name: "O složku zpět" }).click();
   await page.getByRole("button", { name: "Zobrazit po řádcích" }).click();
   await expect(page.locator(".browse-rows .library-open")).toHaveCount(3);

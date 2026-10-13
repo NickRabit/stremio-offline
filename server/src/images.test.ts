@@ -12,6 +12,9 @@ await initLogger(await mkdtemp(path.join(os.tmpdir(), "stremio-images-log-")));
 
 const PNG = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
 const REMOTE = "https://images.example/poster/tt1234.jpg?token=secret";
+const PLAIN = "https://cdn.example/backdrop.jpg";
+const MEDIUM = "https://images.metahub.space/background/medium/tt0903747/img";
+const DETAIL = 1920;
 const DAY = 24 * 60 * 60 * 1000;
 
 const imageResponse = (body: Buffer = PNG, type = "image/png", status = 200) =>
@@ -201,6 +204,67 @@ test("only the background is narrowed on the way to the cache", async () => {
     "https://images.metahub.space/logo/medium/tt0903747/img",
     "https://images.metahub.space/background/medium/tt0903747/still.jpg",
   ]);
+});
+
+test("the default reading still narrows a backdrop to its tile", async () => {
+  const { proxy } = await harness();
+  const listing = proxy.rewriteMeta({ id: "tt1", type: "movie", name: "Film", background: MEDIUM });
+  assert.equal(listing.background, proxy.proxied(narrowArtwork(MEDIUM)), "the listing hands out the narrow tile");
+  const detail = proxy.rewriteMeta({ id: "tt1", type: "movie", name: "Film", background: MEDIUM }, true);
+  assert.notEqual(detail.background, listing.background, "the detail is a different, wider picture");
+});
+
+test("a detail backdrop keeps the full-width address", async () => {
+  const { proxy, calls } = await harness();
+  const meta = proxy.rewriteMeta({ id: "tt1", type: "movie", name: "Film", background: MEDIUM }, true);
+  await proxy.fetch(String(meta.background).split("/").pop()!);
+  assert.deepEqual(calls, [MEDIUM], "the full Metahub backdrop is fetched, not the small tile");
+});
+
+test("a detail variant never reuses the tile the listing cached", async () => {
+  const { proxy, calls } = await harness();
+  const listing = proxy.proxied(PLAIN)!;
+  const detail = proxy.proxied(PLAIN, DETAIL)!;
+  assert.notEqual(detail, listing, "the same address gets a different id per width");
+  await proxy.fetch(listing.split("/").pop()!);
+  await proxy.fetch(detail.split("/").pop()!);
+  assert.deepEqual(calls, [PLAIN, PLAIN], "the wider picture is fetched rather than served from the tile");
+});
+
+test("a detail gallery keeps the wider address while the poster stays a tile", async () => {
+  const { proxy } = await harness();
+  const meta = proxy.rewriteMeta({ id: "tt1", type: "movie", name: "Film", poster: PLAIN, images: [PLAIN] }, true);
+  const gallery = (meta.images as string[])[0]!;
+  assert.equal(gallery, proxy.proxied(PLAIN, DETAIL), "the wide gallery entry is registered at the detail width");
+  assert.equal(meta.poster, proxy.proxied(PLAIN), "the poster keeps the tile width");
+});
+
+test("a detail width survives an index reload before the bytes exist", async () => {
+  const { proxy, dir } = await harness();
+  const id = proxy.proxied(PLAIN, DETAIL)!.split("/").pop()!;
+  await proxy.flush();
+
+  const restarted = new ImageProxy(dir, 1024 * 1024, 0, async () => { throw new Error("must not fetch"); });
+  await restarted.load();
+  // Force the loaded map back to disk; a reload that dropped the width would lose it here.
+  restarted.proxied("https://cdn.example/other.jpg");
+  await restarted.flush();
+  const stored = JSON.parse(await readFile(path.join(dir, "index.json"), "utf8")) as Record<string, { width?: number }>;
+  assert.equal(stored[id]!.width, DETAIL, "a variant with no bytes keeps its width across a reload");
+});
+
+test("a width nobody serves is clamped to the listing tile", async () => {
+  const { dir } = await harness();
+  const id = "bogusbogusbogusbogusbogusbogus12";
+  await writeFile(path.join(dir, "index.json"), JSON.stringify({ [id]: { url: PLAIN, at: Date.now(), width: 1234 } }));
+
+  const restarted = new ImageProxy(dir, 1024 * 1024, 0, async () => imageResponse());
+  await restarted.load();
+  restarted.proxied("https://cdn.example/other.jpg");
+  await restarted.flush();
+  const stored = JSON.parse(await readFile(path.join(dir, "index.json"), "utf8")) as Record<string, { url?: string; width?: number }>;
+  assert.equal(stored[id]!.url, PLAIN);
+  assert.equal(stored[id]!.width, undefined, "an unknown width reads as the listing width");
 });
 
 test("a picture over the cap is turned away before any resize", async () => {

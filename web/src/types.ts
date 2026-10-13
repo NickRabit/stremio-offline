@@ -35,7 +35,7 @@ export interface Meta {
 export interface SearchResult { items: Meta[]; cursor: string; hasMore: boolean; sources: number }
 export interface Video { id?: string; title?: string; name?: string; season?: number; episode?: number; released?: string; overview?: string; thumbnail?: string; [key: string]: unknown }
 export interface Subtitle { subtitleId: string; lang?: string; addonName?: string }
-/** One site worth checking before watching, in the order the server sent it. */
+/** One site worth checking before watching; the interface draws them in its own fixed order. */
 export interface SiteLink { site: "csfd" | "tmdb" | "imdb"; url: string }
 export interface Trailer { youtubeId: string; title?: string; provider: "cinemeta" | "tmdb" }
 export interface Stream {
@@ -90,8 +90,8 @@ export interface RemoteLibrary {
   /** Effective display settings as the member projection answers them; absent on records
    *  written before these existed, so the client keeps the defaults. */
   browseMode?: RemoteBrowseMode; mosaic?: boolean; showInFavorites?: boolean;
-  /** The library root's own same-origin poster, when the provider has one. Present means the tile
-   *  draws it instead of asking for a child mosaic; absent falls back to the bounded preview. */
+  /** The library root's own same-origin poster, when the provider has one. With mosaics on it is
+   *  only the empty-preview fallback; with mosaics off the tile draws it as its picture. */
   poster?: string;
 }
 export type RemoteItemType = "movie" | "series" | "season" | "episode" | "folder";

@@ -68,8 +68,8 @@ test("a local file opens its own detail instead of playing, and Back returns to 
 test("the largest copy is the default and the arrow opens the picker", async ({ page }) => {
   await openDetail(page);
   const detail = page.locator(".library-title-detail");
-  await expect(detail.locator(".library-detail-source")).toContainText(largerCopy);
   const arrow = detail.getByRole("button", { name: "Vybrat zdroj" });
+  // The picker is the one place a version is named, so the default is read by reopening it.
   await arrow.click();
   const dialog = page.getByRole("dialog", { name: "Vybrat zdroj" });
   const rows = dialog.locator(".remote-streams button");
@@ -78,17 +78,17 @@ test("the largest copy is the default and the arrow opens the picker", async ({ 
   await expect(rows.first()).toContainText(largerCopy);
   await rows.nth(1).click();
   await expect(dialog).toHaveCount(0);
-  await expect(detail.locator(".library-detail-source")).toContainText(otherCopy);
   // Escape closes the picker and hands focus back to the arrow.
   await arrow.click();
   await expect(dialog).toBeVisible();
+  await expect(dialog.locator('.remote-streams button[aria-pressed="true"]')).toContainText(otherCopy);
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
   await expect(arrow).toBeFocused();
 });
 
 
-test("leaving a local detail keeps the root listing's offset and focus", async ({ page }) => {
+test("the sidebar's Library entry returns the section to its root", async ({ page }) => {
   await page.route("**/api/remote-libraries", route => route.fulfill({ json: { libraries: [{
     id: `rlib_${"2".repeat(32)}`, connectionId: "connection", remoteId: "root", name: "Remote roots", type: "movie",
     enabled: true, order: 0, showOnHome: true, showInContinueWatching: true, mosaic: false, provider: "emby",
@@ -97,8 +97,9 @@ test("leaving a local detail keeps the root listing's offset and focus", async (
   expect(offset).toBeGreaterThan(0);
   await goToView(page, "Katalog");
   await goToView(page, "Knihovna");
+  // A fresh start: the detail is gone, the root is at the top and nothing is focused back.
   await expect(page.locator(".library-title-detail")).toHaveCount(0);
   await expect(page.locator(".library-page")).toHaveClass(/library-remote-roots/);
-  await expect(page.locator(`[data-path="${movieFile}"] .library-open`)).toBeFocused();
-  await expect.poll(async () => Math.abs(await page.locator(".library-page").evaluate(node => node.scrollTop) - offset)).toBeLessThan(3);
+  await expect.poll(async () => await page.locator(".library-page").evaluate(node => node.scrollTop)).toBe(0);
+  await expect(page.locator(`[data-path="${movieFile}"] .library-open`)).not.toBeFocused();
 });

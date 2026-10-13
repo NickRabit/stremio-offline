@@ -323,9 +323,11 @@ export const api = {
   remoteBrowse: (libraryId: string, options: { parentId?: string; mode?: RemoteBrowseMode; limit?: number; cursor?: string; search?: string; type?: RemoteItemType; sort?: RemoteBrowseSort; order?: RemoteBrowseOrder; signal?: AbortSignal } = {}) =>
     request<RemoteItemPage>(`/api/remote-libraries/${encodeURIComponent(libraryId)}/browse?${q({ parentId: options.parentId, mode: options.mode, limit: options.limit ?? 60, cursor: options.cursor, search: options.search, type: options.type, sort: options.sort, order: options.order })}`, { signal: options.signal }),
   /** Up to four authorized artwork URLs drawn from a library root or one folder, for the tile
-   *  mosaic. A library with mosaics off answers an empty list without touching the provider. */
-  remotePreview: (libraryId: string, parentId?: string, signal?: AbortSignal) =>
-    request<{ posters: string[] }>(`/api/remote-libraries/${encodeURIComponent(libraryId)}/preview?${q({ parentId })}`, { signal }),
+   *  mosaic. A library with mosaics off answers an empty list without touching the provider.
+   *  `preferChildren` asks for the children's own artwork instead of one composited library
+   *  picture, which is only wanted for a root tile that draws the local collage. */
+  remotePreview: (libraryId: string, parentId?: string, signal?: AbortSignal, preferChildren = false) =>
+    request<{ posters: string[] }>(`/api/remote-libraries/${encodeURIComponent(libraryId)}/preview?${q({ parentId, artwork: preferChildren ? "children" : undefined })}`, { signal }),
   remoteItem: (libraryId: string, itemId: string, signal?: AbortSignal) =>
     request<{ item: RemoteItem; capabilities: RemoteItemPage["capabilities"] }>(`/api/remote-libraries/${encodeURIComponent(libraryId)}/items/${encodeURIComponent(itemId)}`, { signal }),
   remoteEpisodes: (libraryId: string, itemId: string, options: { limit?: number; cursor?: string; signal?: AbortSignal } = {}) =>

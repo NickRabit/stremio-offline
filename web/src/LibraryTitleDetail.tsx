@@ -1,27 +1,37 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, CirclePlay, X } from "lucide-react";
-import { DetailDescription, DetailHero } from "./DetailHero";
+import { Check, ChevronDown, CirclePlay, FolderOpen, RotateCcw, Star, X } from "lucide-react";
+import { DetailHero, LIBRARY_HERO_EMPTY_GRADIENT, LIBRARY_HERO_GRADIENT, useBackdrop } from "./DetailHero";
 import { bytes, hideBroken } from "./settings-ui";
 import { t, useI18n } from "./i18n";
 import { defaultSource, orderSources, playableSources, sourceIdentity, sourceName } from "./library-detail-sources";
 import type { Stream } from "./types";
 
 export interface LibraryTitleDetailProps {
-  /** Rebuilds the synopsis disclosure and scopes the viewer's source choice to one title. */
+  /** Scopes the viewer's source choice to one title, so another title opens with a fresh default. */
   identityKey: string;
   title: string;
   /** A line of context under the title, such as an episode's own numbering. */
   subtitle?: string;
   poster?: string;
-  wide?: string;
+  /** The backdrops to try, best first: the first one that loads is the hero. Never a poster. */
+  backdrops?: Array<string | undefined>;
   /** The metadata line: what the catalogue, the provider or the file record said. */
   facts?: ReactNode;
   description?: string;
-  /** The kind, provider and library labels, as pills. */
+  /** The title's chips, drawn by the shared row so a library matches the catalogue. */
   chips?: ReactNode;
-  /** The favorite and watched controls, which stay local to whichever library owns the title. */
-  actions?: ReactNode;
+  /** The favorite control, present wherever the owner of the title can toggle it. */
+  favorite?: boolean;
+  onToggleFavorite?: (favorite: boolean) => void;
+  favoriteDisabled?: boolean;
+  /** The watched control; absent when the owner has nothing to mark. */
+  watched?: boolean;
+  onToggleWatched?: () => void;
+  watchedDisabled?: boolean;
+  watchedLabel?: string;
+  /** The owner's own "open folder" control, drawn last on the one action row. */
+  onOpenFolder?: () => void;
   /** The playable versions, or null while they are still being read. */
   sources: Stream[] | null;
   sourceError?: string;
@@ -39,8 +49,9 @@ const sizeLabel = (stream: Stream) => {
 /** The one detail body a playable title shares, local or remote: the catalogue hero, the synopsis
  *  and the sources with a split Play button. The provider-specific parts arrive as props, so the
  *  two containers cannot drift apart and a future add-on stream joins the same selector. */
-export function LibraryTitleDetail({ identityKey, title, subtitle, poster, wide, facts, description, chips, actions, sources, sourceError, onRetry, onPlay, sourceBadge }: LibraryTitleDetailProps) {
+export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backdrops, facts, description, chips, favorite, onToggleFavorite, favoriteDisabled, watched, onToggleWatched, watchedDisabled, watchedLabel, onOpenFolder, sources, sourceError, onRetry, onPlay, sourceBadge }: LibraryTitleDetailProps) {
   useI18n();
+  const backdrop = useBackdrop(backdrops ?? []);
   const [chosen, setChosen] = useState<{ identity: string; key: string } | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const arrowRef = useRef<HTMLButtonElement | null>(null);
@@ -60,40 +71,45 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, wide,
     ? pickable.find((stream) => sourceIdentity(stream) === chosen.key) : undefined) ?? defaultSource(pickable);
   const multiple = pickable.length > 1;
   const badgeOf = (stream: Stream) => sourceBadge?.(stream) || stream.libraryName || t("sources.localBadge");
-  const summary = selected ? [sourceName(selected), sizeLabel(selected), selected.libraryName].filter(Boolean).join(" · ") : "";
   const choose = (stream: Stream) => {
     setChosen({ identity: identityKey, key: sourceIdentity(stream) });
     setPickerOpen(false);
   };
 
   const copy = <>
-    {chips && <div className="title-chips">{chips}</div>}
+    {chips}
     <h2>{title}</h2>
     {subtitle && <p className="meta-line">{subtitle}</p>}
     {facts && <p className="meta-line">{facts}</p>}
-    <DetailDescription text={description} identityKey={identityKey}/>
+    <p className="library-detail-synopsis">{description || t("catalog.noDescription")}</p>
   </>;
 
   return <div className="library-title-detail">
-    <DetailHero className="library-detail-hero" background={wide || poster}
+    <DetailHero className="library-detail-hero" background={backdrop} gradient={LIBRARY_HERO_GRADIENT} emptyGradient={LIBRARY_HERO_EMPTY_GRADIENT}
       gallery={poster ? <div className="library-detail-poster"><img key={poster} src={poster} alt="" onError={hideBroken}/></div> : undefined}
       copy={copy}/>
-    {actions && <div className="library-detail-actions">{actions}</div>}
-    <div className="subhead"><h3>{t("mediaServer.versions")}</h3></div>
     {sourceError ? <div className="remote-error" role="alert">
       <span>{sourceError}</span>
       {onRetry && <button type="button" onClick={onRetry}>{t("home.retry")}</button>}
     </div> : sources === null ? <div className="loading" role="status">{t("common.loading")}</div>
       : !pickable.length ? <><p className="identify-hint">{t("mediaServer.noSources")}</p><p className="identify-hint">{t("mediaServer.noSourcesHint")}</p></> : null}
-    <div className="actions library-detail-play">
-      {multiple ? <div className="split-button">
-        <button className="primary" disabled={!selected} onClick={() => selected && onPlay(selected)}><CirclePlay/> {t("player.play")}</button>
-        <button ref={arrowRef} type="button" className="split-button-toggle" aria-haspopup="dialog" aria-expanded={pickerOpen}
-          aria-label={t("library.chooseSource")} title={t("library.chooseSource")} onClick={() => setPickerOpen(true)}><ChevronDown/></button>
+    <div className="library-detail-actions">
+      <div className="actions library-detail-play">
+        {multiple ? <div className="split-button">
+          <button className="primary" disabled={!selected} onClick={() => selected && onPlay(selected)}><CirclePlay/> {t("player.play")}</button>
+          <button ref={arrowRef} type="button" className="split-button-toggle" aria-haspopup="dialog" aria-expanded={pickerOpen}
+            aria-label={t("library.chooseSource")} title={t("library.chooseSource")} onClick={() => setPickerOpen(true)}><ChevronDown/></button>
+        </div>
+          : <button className="primary" disabled={!selected} onClick={() => selected && onPlay(selected)}><CirclePlay/> {t("player.play")}</button>}
       </div>
-        : <button className="primary" disabled={!selected} onClick={() => selected && onPlay(selected)}><CirclePlay/> {t("player.play")}</button>}
+      {onToggleFavorite && <button type="button" className="icon-button" aria-pressed={favorite ?? false} disabled={favoriteDisabled ?? false}
+        aria-label={t(favorite ? "favorite.remove" : "favorite.add")} title={t(favorite ? "favorite.remove" : "favorite.add")}
+        onClick={() => onToggleFavorite(!(favorite ?? false))}><Star fill={favorite ? "currentColor" : "none"}/></button>}
+      {onToggleWatched && <button type="button" className="icon-button" aria-pressed={watched} disabled={watchedDisabled ?? false}
+        aria-label={(watchedLabel ?? t(watched ? "mediaServer.markUnwatched" : "mediaServer.markWatched"))} title={(watchedLabel ?? t(watched ? "mediaServer.markUnwatched" : "mediaServer.markWatched"))}
+        onClick={() => onToggleWatched()}>{watched === undefined ? <RotateCcw/> : <Check/>}</button>}
+      {onOpenFolder && <button type="button" onClick={onOpenFolder}><FolderOpen/> {t("library.openFolder")}</button>}
     </div>
-    {summary && <p className="identify-hint library-detail-source">{summary}</p>}
     {pickerOpen && <SourcePicker sources={pickable} selected={selected} badgeOf={badgeOf} onSelect={choose} onClose={() => setPickerOpen(false)}/>}
   </div>;
 }

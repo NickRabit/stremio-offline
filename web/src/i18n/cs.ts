@@ -614,7 +614,7 @@ export const cs: Catalog = {
 
   // Knihovna.
   "library.eyebrow": "KNIHOVNA",
-  "library.title": "Stažené soubory",
+  "library.title": "Vaše knihovny",
   "library.nextEpisode": "Další díl",
   "library.showAll": "Zobrazit vše",
   "library.showInLibrary": "Zobrazit v knihovně",

@@ -580,7 +580,7 @@ export const es: Catalog = {
   "onboarding.action": "Agregar un manifiesto",
   "onboarding.noneGranted": "Aún no se ha puesto ningún complemento disponible para esta cuenta. Un administrador decide cuáles puede utilizar.",
   "library.eyebrow": "BIBLIOTECA",
-  "library.title": "Archivos descargados",
+  "library.title": "Tus bibliotecas",
   "library.nextEpisode": "Próximo episodio",
   "library.showAll": "Mostrar todo",
   "library.showInLibrary": "Mostrar en la biblioteca",

@@ -897,18 +897,25 @@ const cachedMeta = async (
   id: string,
   language: string = prefsOf().uiLanguage,
   viewer?: Viewer,
-  opts: { fresh?: boolean; interactive?: boolean } = {},
+  opts: { fresh?: boolean; interactive?: boolean; artwork?: boolean } = {},
 ) => {
   // The answer is merged from every candidate addon, so it cannot be filtered after the
   // fact: the allowance is part of the key, or one person's grants would decide what
   // another sees. A caller with no viewer reads every addon, as the background work needs.
   const sources = viewer ? allowedAddons(store.addons(), viewer) : store.addons();
-  const key = `${type}:${id}:${language}:${viewer ? sources.map((addon) => addon.key).join(",") : "*"}`;
+  // The detail reading asks for the pictures as well, and its answer differs, so the two
+  // never share a cache entry.
+  const key = `${type}:${id}:${language}:${opts.artwork ? "artwork:" : ""}${viewer ? sources.map((addon) => addon.key).join(",") : "*"}`;
   // `fresh` reads past the cache but still records its answer, so a scheduled check sees
   // what the providers say now without leaving the next reader to ask again.
   const hit = opts.fresh ? undefined : metaCache.get(key);
   if (hit && Date.now() - hit.at < 6 * 60 * 60_000) return hit.value;
-  const value = await metadata(sources, type, id, language, tmdbProvider(language), opts.interactive ?? viewer !== undefined).catch(() => null);
+  const value = await metadata(
+    sources, type, id, language,
+    opts.artwork ? tmdbArtworkProvider(language) : tmdbProvider(language),
+    opts.interactive ?? viewer !== undefined,
+    opts.artwork === true,
+  ).catch(() => null);
   if (metaCache.size > 300) metaCache.clear();
   // A failed lookup is not an answer: caching it would hold a title empty for six hours.
   if (value) metaCache.set(key, { value, at: Date.now() });

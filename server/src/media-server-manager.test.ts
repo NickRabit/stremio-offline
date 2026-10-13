@@ -2218,6 +2218,17 @@ test("root child mosaics read one bounded page and never walk folders", async ()
   });
 });
 
+test("a film root mosaic reads one native title page instead of posterless physical folders", async () => {
+  await withHarness(async (harness) => {
+    const library = await directoryLibrary(harness, "movies", "movie");
+    harness.server.directories["movies"] = [{ ...movie("film"), hasPrimaryImage: true, primaryImageTag: "poster" }];
+    const preview = await harness.manager.previewDirectory(harness.admin, library.id, undefined, undefined, true);
+    assert.equal(preview.posters.length, 1);
+    assert.equal(harness.server.directoryCalls.length, 1);
+    assert.deepEqual(harness.server.directoryCalls[0]!.options, { mode: "titles", type: "movie", limit: 12 });
+  });
+});
+
 test("previewDirectory refuses an aborted or revoked request", async () => {
   await withHarness(async (harness) => {
     const library = await directoryLibrary(harness, "music");

@@ -17,7 +17,7 @@ import { registerCatalogRoutes, type CatalogDeps } from "./catalog.js";
 
 interface Harness {
   base: string;
-  lookups: Array<{ type: string; id: string; language?: string }>;
+  lookups: Array<{ type: string; id: string; language?: string; artwork?: boolean }>;
   close(): Promise<void>;
 }
 
@@ -67,7 +67,7 @@ const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null, 
     requireAccess: options.access ?? (() => undefined),
     stopContentAccess: async () => undefined,
     tmdbProvider: () => undefined,
-    cachedMeta: async (type, id, language) => { lookups.push({ type, id, language }); return meta; },
+    cachedMeta: async (type, id, language, _viewer, opts) => { lookups.push({ type, id, language, ...(opts?.artwork ? { artwork: true } : {}) }); return meta; },
     prefsOf: () => ({ uiLanguage: "cs" }) as UserPrefs,
     libraryTarget: async (value) => value,
     ownerOf: () => ({ userId: "usr_00000001", sid: "session-1", expiresAt: Number.MAX_SAFE_INTEGER }),
@@ -156,7 +156,7 @@ test("GET /api/meta/:type/:id falls back to the caller's uiLanguage", async (t) 
   t.after(harness.close);
   const response = await api(harness.base, "/api/meta/movie/tt1");
   assert.equal(response.status, 200);
-  assert.deepEqual(harness.lookups, [{ type: "movie", id: "tt1", language: "cs" }]);
+  assert.deepEqual(harness.lookups, [{ type: "movie", id: "tt1", language: "cs", artwork: true }]);
 });
 
 test("GET /api/meta/:type/:id prefers the language named by the query", async (t) => {
@@ -164,7 +164,26 @@ test("GET /api/meta/:type/:id prefers the language named by the query", async (t
   t.after(harness.close);
   const response = await api(harness.base, "/api/meta/movie/tt1?language=de");
   assert.equal(response.status, 200);
-  assert.deepEqual(harness.lookups, [{ type: "movie", id: "tt1", language: "de" }]);
+  assert.deepEqual(harness.lookups, [{ type: "movie", id: "tt1", language: "de", artwork: true }]);
+});
+
+test("GET /api/meta/:type/:id reads the artwork metadata", async (t) => {
+  const harness = await mount([], { id: "tt1", type: "movie", name: "Film" });
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/meta/movie/tt1");
+  assert.equal(response.status, 200);
+  assert.deepEqual(harness.lookups, [{ type: "movie", id: "tt1", language: "cs", artwork: true }], "the detail route asks for the wider artwork");
+});
+
+test("an explicit gallery request keeps metadata usable without a TMDB key", async (t) => {
+  const harness = await mount([], { id: "tt1", type: "movie", name: "Film", background: "https://images.example/background.jpg" });
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/meta/movie/tt1?gallery=1");
+  assert.equal(response.status, 200);
+  const meta = await response.json() as MetaItem;
+  assert.equal(meta.name, "Film");
+  assert.deepEqual(meta.images, []);
+  assert.deepEqual(harness.lookups, [{ type: "movie", id: "tt1", language: "cs", artwork: true }]);
 });
 
 const library = (id: string, visibleTo?: string[]): LibraryRecord => ({

@@ -232,7 +232,9 @@ export async function addonMetadata(addon: AddonRecord, type: string, id: string
   return { ...response.meta, ...(language ? { nameLanguage: language } : {}) };
 }
 
-export async function metadata(addons: AddonRecord[], type: string, id: string, preferredLanguage?: string, provider?: MetaProvider, interactive = false) {
+/** `requireArtwork` keeps the loop going past a description that carries no backdrop, so a
+ *  later addon can supply one. Only the explicit detail request asks for it. */
+export async function metadata(addons: AddonRecord[], type: string, id: string, preferredLanguage?: string, provider?: MetaProvider, interactive = false, requireArtwork = false) {
   let best: MetaItem | null = null;
   if (provider) {
     try { best = await provider(type, id); }
@@ -247,7 +249,7 @@ export async function metadata(addons: AddonRecord[], type: string, id: string, 
       const meta = await addonMetadata(addon, type, id, interactive);
       if (!meta) continue;
       best = best ? fillMissingMeta(best, meta) : meta;
-      if (best.description && (type !== "series" || (best.videos?.length ?? 0) > 0)) return best;
+      if (best.description && (type !== "series" || (best.videos?.length ?? 0) > 0) && (!requireArtwork || Boolean(best.background))) return best;
     } catch { /* try next metadata provider */ }
   }
   return best;

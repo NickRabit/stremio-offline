@@ -580,7 +580,7 @@ export const fr: Catalog = {
   "onboarding.action": "Ajouter un manifeste",
   "onboarding.noneGranted": "Aucun module complémentaire n'a encore été mis à disposition pour ce compte. Un administrateur décide lesquels il peut utiliser.",
   "library.eyebrow": "BIBLIOTHÈQUE",
-  "library.title": "Fichiers téléchargés",
+  "library.title": "Vos bibliothèques",
   "library.nextEpisode": "Épisode suivant",
   "library.showAll": "Afficher tout",
   "library.showInLibrary": "Afficher dans la bibliothèque",

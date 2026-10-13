@@ -580,7 +580,7 @@ export const it: Catalog = {
   "onboarding.action": "Aggiungi un manifesto",
   "onboarding.noneGranted": "Nessun componente aggiuntivo è stato ancora reso disponibile per questo account. Un amministratore decide quali può utilizzare.",
   "library.eyebrow": "BIBLIOTECA",
-  "library.title": "File scaricati",
+  "library.title": "Le tue librerie",
   "library.nextEpisode": "Prossimo episodio",
   "library.showAll": "Mostra tutto",
   "library.showInLibrary": "Mostra in biblioteca",

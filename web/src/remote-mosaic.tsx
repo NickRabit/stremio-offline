@@ -2,6 +2,7 @@ import { useEffect, useState, type RefObject } from "react";
 import { HardDrive, FolderOpen } from "lucide-react";
 import { api } from "./api";
 import { t } from "./i18n";
+import { hideBroken } from "./settings-ui";
 import { PosterMosaic, TileArt } from "./TileArt";
 import type { TileShape } from "./types";
 
@@ -39,7 +40,7 @@ type TileRef = RefObject<HTMLElement | null>;
  * after the first request, and the component keeps its answer until it unmounts or its key
  * changes -- so the cache lives no longer than the authorized listing that drew it.
  */
-export function useRemotePosters({ libraryId, parentId, enabled, generation }: PreviewKey, target: TileRef): string[] {
+export function useRemotePosters({ libraryId, parentId, enabled, generation }: PreviewKey, target: TileRef, preferChildren = false): string[] {
   const [posters, setPosters] = useState<string[]>([]);
   useEffect(() => {
     setPosters([]);
@@ -49,7 +50,7 @@ export function useRemotePosters({ libraryId, parentId, enabled, generation }: P
     const load = () => {
       void withPreviewSlot(() => {
         if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
-        return api.remotePreview(libraryId, parentId, controller.signal);
+        return api.remotePreview(libraryId, parentId, controller.signal, preferChildren);
       })
         .then((answer) => { if (live) setPosters(answer.posters); })
         .catch(() => undefined);
@@ -68,15 +69,22 @@ export function useRemotePosters({ libraryId, parentId, enabled, generation }: P
   return posters;
 }
 
-/** A remote root library's picture: the library's own poster when it has one, a collage of its
- *  first films, one film, or the drive icon. A library that carries its own poster asks for no
- *  child mosaic at all; a missing one keeps the bounded, visibility-gated preview. */
+/** The fan of posters the local library tile already draws, reused for a remote root so the two
+ *  roots look alike. Broken posters drop out; the container underneath stays. */
+function LibraryCollage({ posters }: { posters: string[] }) {
+  return <span className="library-preview-collage" aria-hidden="true">
+    {posters.map((url) => <img key={url} src={url} alt="" loading="lazy" onError={hideBroken}/>)}
+  </span>;
+}
+
+/** A remote root library's picture: a collage of its films, one film, the library's own poster or
+ *  the drive icon. With mosaics on the collage is the picture and the library's own poster only
+ *  stands in for an empty preview; with mosaics off the own poster is drawn as it is. */
 export function RemoteLibraryArt(props: PreviewKey & { target: TileRef; poster?: string }) {
   const { target, poster, ...key } = props;
-  const posters = useRemotePosters({ ...key, enabled: key.enabled && !poster }, target);
-  if (poster) return <TileArt shape="poster" poster={poster} fallback={<HardDrive/>}/>;
-  if (posters.length > 1) return <PosterMosaic posters={posters} label={t("library.mosaicAlt", { count: posters.length })} fallback={<HardDrive/>}/>;
-  return <TileArt shape="poster" poster={posters[0]} fallback={<HardDrive/>}/>;
+  const posters = useRemotePosters(key, target, true);
+  if (posters.length > 1) return <LibraryCollage posters={posters}/>;
+  return <TileArt shape="poster" poster={key.enabled ? posters[0] ?? poster : poster} fallback={<HardDrive/>}/>;
 }
 
 /** A remote folder's picture: the same mosaic the local folder tile draws, or the ordinary

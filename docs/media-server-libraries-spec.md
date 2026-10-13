@@ -202,11 +202,16 @@ optional catalogue artwork and links. Episode enrichment uses the series identit
 for artwork and links while retaining the episode's own synopsis. Missing or failed
 metadata never prevents playback, and a poster is never enlarged into a backdrop.
 Remote Backdrop requests use a maximum width of 1920 pixels; Primary posters remain
-at 640 pixels. Both retain the existing image byte cap and artwork request pool.
+at 640 pixels. Explicit catalogue detail metadata also registers a separate 1920px
+background cache variant, preserving the 640px listing optimization and never
+reusing an old tile as a detail backdrop. TMDB detail metadata includes artwork,
+and metadata fallback continues past an overview that lacks a backdrop. Both retain the existing image byte cap and artwork request pool.
 
 Root mosaics use the local library's poster fan layout. An explicit
 `artwork=children` preview reads one page of at most twelve immediate children and
-returns at most four posters; it never walks nested directories. Ordinary folder
+returns at most four posters. Mixed roots use immediate children; movie/series
+roots use one native title query so physical folders without artwork do not
+hide the posters. The client never walks nested directories. Ordinary folder
 previews retain their own-poster-first behavior, seasons never preview children,
 and disabling mosaics makes no preview request.
 

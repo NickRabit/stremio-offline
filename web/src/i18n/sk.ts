@@ -580,7 +580,7 @@ export const sk: Catalog = {
   "onboarding.action": "Pridajte manifest",
   "onboarding.noneGranted": "Pre tento účet zatiaľ nebol sprístupnený žiadny doplnok. Správca rozhodne, ktoré z nich môže použiť.",
   "library.eyebrow": "KNIŽNICA",
-  "library.title": "Stiahnuté súbory",
+  "library.title": "Vaše knižnice",
   "library.nextEpisode": "Ďalšia epizóda",
   "library.showAll": "Zobraziť všetky",
   "library.showInLibrary": "Zobraziť v knižnici",

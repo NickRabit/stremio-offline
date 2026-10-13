@@ -1987,15 +1987,21 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 .media-server-grants .library-check{font-size:11px}
 .media-server-grant-info{display:flex;align-items:center;justify-content:space-between;gap:9px;font-size:11px;color:var(--muted)}
 
-.remote-libraries{display:grid;gap:12px;margin-bottom:16px;padding:16px 18px;border:1px solid var(--line);border-radius:14px;background:linear-gradient(150deg,#191f2af5,#11161ef5);box-shadow:0 16px 50px #0003}
-.remote-libraries-head{display:grid;gap:4px}
-.remote-libraries-head h3{margin:0;font-size:15px}
-.remote-libraries-head small{font-size:11px;line-height:1.5;color:var(--muted)}
-/* One hero for a playable title, local or remote, so the two details cannot drift apart. */
-.library-detail-hero{min-height:190px;margin:0 0 2px;padding:18px}
-.library-detail-hero .detail-copy h2{font-size:22px;margin:9px 0 4px}
+/* The remote roots wear the same panel as the local listing: the heading, the borders and the
+   grid padding come from .browse-panel, and only the gap between the two blocks is added here. */
+.remote-libraries{flex:none;margin-bottom:16px}
+.remote-libraries .browse-scroll{overflow:visible}
+/* The crumb that names a block instead of stepping back through one. */
+.crumbs-title{display:inline-flex;align-items:center;gap:6px;padding:4px 6px;font-size:12px;color:var(--text)}
+/* One hero for a playable title, local or remote, so the two details cannot drift apart: a tall
+   cinematic backdrop with the copy resting on a readable wash at its foot. */
+.library-detail-hero{min-height:420px;margin:0 0 2px;padding:26px;display:grid;align-content:start}
+.library-detail-hero .detail-copy{max-width:760px}
+.library-detail-hero .detail-copy h2{font-size:30px;margin:10px 0 5px;line-height:1.14}
 .library-detail-hero .detail-copy p{margin:6px 0}
-@media(max-width:700px){.library-detail-hero{min-height:150px;padding:14px}.library-detail-hero .detail-copy h2{font-size:19px}}
+.library-detail-synopsis{margin:9px 0 0;max-width:680px;font-size:13px;line-height:1.6;color:#dce3ed}
+@media(max-width:700px){.library-detail-hero{min-height:240px;padding:16px}.library-detail-hero .detail-copy h2{font-size:21px}.library-detail-synopsis{font-size:12px}}
+@media(max-height:500px) and (orientation:landscape){.library-detail-hero{min-height:190px;padding:14px}}
 .remote-personal{margin-top:26px}
 .remote-episodes-head span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .remote-season{margin:8px 0 2px;font-size:10px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)}
@@ -2009,7 +2015,6 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 .library-detail-poster{position:absolute;right:13px;top:13px;width:72px;height:92px;border-radius:7px;overflow:hidden;border:1px solid #ffffff1f;background:#252d39}
 .library-detail-poster img{width:100%;height:100%;object-fit:cover}
 .library-detail-play{justify-content:flex-start}
-.library-detail-source{margin:-4px 0 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .library-source-card{width:min(560px,100%)}
 .library-source-list{max-height:none}
 @media(max-width:700px){.library-detail-poster{width:58px;height:78px;right:8px;top:8px}}
@@ -2026,4 +2031,5 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 main.view-library>.library-page.library-remote-roots{overflow-y:auto;overscroll-behavior:contain}
 .library-remote-roots>.remote-libraries{flex:none}
 main.view-library>.library-remote-roots>.browse-panel{flex:none;min-height:240px;overflow:visible}
+.library-remote-roots>.browse-panel.remote-libraries{min-height:0}
 .library-remote-roots>.browse-panel>.browse-scroll{overflow:visible}

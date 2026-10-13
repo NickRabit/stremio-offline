@@ -165,6 +165,24 @@ test("without a provider the first addon with a description ends the loop", asyn
   assert.equal(calls.length, 1);
 });
 
+test("the artwork reading reads on past a localized description until a backdrop appears", async () => {
+  const czech = { ...metaAddon("czech"), manifestUrl: "https://czech.example/manifest.json?language=cs" };
+  const cinemeta = metaAddon("com.linvo.cinemeta");
+  const calls: string[] = [];
+  await withStubbedAddons((url) => {
+    calls.push(String(url));
+    // The Czech addon supplies the localized description but no picture; Cinemeta has the backdrop.
+    if (String(url).includes("czech.example")) return json({ meta: { id: "tt3", type: "movie", name: "Film", description: "Popis" } });
+    return json({ meta: { id: "tt3", type: "movie", name: "Film", background: "https://img.example/backdrop.jpg" } });
+  }, async () => {
+    const result = await metadata([czech, cinemeta], "movie", "tt3", "cs", undefined, false, true);
+    if (!result) throw new Error("expected metadata");
+    assert.equal(result.description, "Popis", "the localized description wins");
+    assert.equal(result.background, "https://img.example/backdrop.jpg", "and the later addon fills the missing backdrop");
+  });
+  assert.equal(calls.length, 2, "the loop does not stop on a description without artwork");
+});
+
 test("a disabled addon is refused for an administrator too, where enabled is enforced", async () => {
   const disabledMeta = { ...metaAddon("cinemeta"), enabled: false };
   const disabledStream = { ...metaAddon("streamer"), enabled: false, role: "source" as const, manifest: { ...metaAddon("streamer").manifest, resources: ["stream"] } };

@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { RemoteLibraryBrowser } from "./RemoteLibraryBrowser";
 import { setLocale } from "./i18n";
+import { clearTitleEnrichment } from "./title-enrichment";
 import { emptyViews } from "./views";
 import type { RemoteCapabilities, RemoteItem, RemoteItemPage, RemoteLibrary } from "./types";
 
@@ -33,7 +34,7 @@ let preview: Handler;
 let sources: Handler;
 let item: Handler;
 let state: Handler;
-const calls = { browse: [] as URL[], preview: [] as URL[], sources: [] as URL[], item: [] as URL[], state: [] as Array<{ method: string; body: unknown }>, stateUrls: [] as string[] };
+const calls = { browse: [] as URL[], preview: [] as URL[], sources: [] as URL[], item: [] as URL[], state: [] as Array<{ method: string; body: unknown }>, stateUrls: [] as string[], title: [] as string[] };
 
 /** A controllable IntersectionObserver: tiles only ask for a preview once it fires. */
 class FakeIntersectionObserver {
@@ -57,8 +58,9 @@ let host: HTMLDivElement;
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   setLocale("en");
+  clearTitleEnrichment();
   FakeIntersectionObserver.live = [];
-  calls.browse = []; calls.preview = []; calls.sources = []; calls.item = []; calls.state = []; calls.stateUrls = [];
+  calls.browse = []; calls.preview = []; calls.sources = []; calls.item = []; calls.state = []; calls.stateUrls = []; calls.title = [];
   libraries = [library()];
   browse = () => json(page([]));
   preview = () => json({ posters: [] });
@@ -83,6 +85,12 @@ beforeEach(() => {
       return Promise.resolve(state(url, init));
     }
     if (/^\/api\/remote-libraries\/[^/]+\/items\/[^/]+$/.test(path)) { calls.item.push(url); return Promise.resolve(item(url, init)); }
+    if (path.startsWith("/api/meta/") || path.startsWith("/api/links/") || path.startsWith("/api/trailer/")) {
+      calls.title.push(path);
+      if (path.startsWith("/api/links/")) return Promise.resolve(json({ links: [{ site: "imdb", url: "https://www.imdb.com/title/tt5000" }] }));
+      if (path.startsWith("/api/trailer/")) return Promise.resolve(json({ trailer: null }));
+      return Promise.resolve(json({ id: "tt5000", type: "movie", name: "One", background: "/catalogue-backdrop.jpg" }));
+    }
     return Promise.resolve(json({}, 404));
   }));
   host = document.createElement("div");
@@ -110,6 +118,7 @@ const render = async (over: Partial<Parameters<typeof RemoteLibraryBrowser>[0]> 
     libraryTileShape: "poster", onToggleLibraryShape: vi.fn(),
     views: emptyViews(), onPersistPrefs, onOpenChange,
     compact: false, onCompactChange: vi.fn(), onPersonalChange: vi.fn(),
+    uiLanguage: "en", secureMode: true, onTrailer: vi.fn(),
     ...over,
   };
   await act(async () => { root.render(<RemoteLibraryBrowser {...props}/>); });
@@ -393,7 +402,7 @@ describe("RemoteLibraryBrowser preferences and detail", () => {
     await flush();
     // Two versions open a picker behind the arrow, not an always-visible list.
     expect(host.querySelector(".library-title-detail .remote-streams")).toBeNull();
-    const favorite = host.querySelectorAll<HTMLButtonElement>(".library-detail-actions button")[0]!;
+    const favorite = host.querySelector<HTMLButtonElement>('.library-detail-actions button[aria-label="Add to favorites"]')!;
     expect(favorite.disabled).toBe(false);
     await click(favorite);
     expect(calls.state.at(-1)).toEqual({ method: "PATCH", body: { favorite: true } });
@@ -402,6 +411,42 @@ describe("RemoteLibraryBrowser preferences and detail", () => {
     expect(rows).toHaveLength(2);
     expect(rows[0]!.getAttribute("aria-pressed")).toBe("true");
     expect(rows[0]!.textContent).toContain("1080p");
+  });
+
+  it("asks the catalogue nothing until a title's own detail is opened", async () => {
+    const identified: RemoteItem = { ...movie("m1", "One"), providerIds: { imdb: "tt5000" } };
+    browse = () => json(page([identified]));
+    await openRootLibrary();
+    expect(calls.title).toEqual([]);
+    await click(tileButtons()[0]!);
+    await flush();
+    expect(calls.title).toContain("/api/meta/movie/tt5000");
+    expect(calls.title).toContain("/api/links/movie/tt5000");
+    expect(calls.title).toContain("/api/trailer/movie/tt5000");
+  });
+
+  it("asks an episode's links through its series, never the episode's own ids", async () => {
+    const show: RemoteItem = { id: "ser1", name: "Show", type: "series", providerIds: { imdb: "tt7000" } };
+    const episode: RemoteItem = { id: "e1", name: "Pilot", type: "episode", season: 1, episode: 1, providerIds: { imdb: "tt9999" } };
+    browse = (url) => url.searchParams.get("type") === "episode" ? json(page([episode])) : json(page([show]));
+    await openRootLibrary();
+    await click(tileButtons()[0]!);
+    await click(tileButtons()[0]!);
+    await flush();
+    expect(calls.title).toContain("/api/meta/series/tt7000");
+    expect(calls.title.some((path) => path.includes("tt9999"))).toBe(false);
+  });
+
+  it("drops a library, folder or title and returns to the roots when the sidebar says so", async () => {
+    browse = () => json(page([movie("m1", "One")]));
+    const { props } = await render();
+    await click(host.querySelector(".remote-libraries .library-open")!);
+    await click(host.querySelector(".browse-panel .library-open")!);
+    expect(host.querySelector(".library-title-detail")).not.toBeNull();
+    await act(async () => { root.render(<RemoteLibraryBrowser {...props} resetSignal={1}/>); });
+    await flush();
+    expect(host.querySelector(".library-title-detail")).toBeNull();
+    expect(host.querySelector(".remote-libraries")).not.toBeNull();
   });
 
   it("reads a series' episodes as one more lazy page and groups them by season", async () => {
@@ -440,12 +485,12 @@ describe("RemoteLibraryBrowser preferences and detail", () => {
     await openRootLibrary();
     await act(async () => tileButtons()[0]!.click());
     await flush();
-    expect(host.querySelector(".description-preview")!.textContent).toContain("complete series");
+    expect(host.querySelector(".library-detail-synopsis")!.textContent).toContain("complete series");
     await act(async () => tileButtons()[0]!.click());
     await flush();
     await act(async () => host.querySelector<HTMLButtonElement>(".library-back")!.click());
     await flush();
-    expect(host.querySelector(".description-preview")!.textContent).toContain("complete series");
+    expect(host.querySelector(".library-detail-synopsis")!.textContent).toContain("complete series");
     expect(calls.browse.filter(url => url.searchParams.get("type") === "episode")).toHaveLength(1);
   });
 
@@ -468,7 +513,7 @@ describe("RemoteLibraryBrowser preferences and detail", () => {
     expect(host.querySelector(".browse-panel .library-desc")!.textContent).toBe("A quiet film.");
     await click(tileButtons()[0]!);
     expect([...host.querySelectorAll(".remote-detail .meta-line")].map((node) => node.textContent)).toEqual(["2021 · 1h 25m · Drama"]);
-    expect(host.querySelector(".remote-detail .description-preview")!.textContent).toBe("A quiet film.");
+    expect(host.querySelector(".remote-detail .library-detail-synopsis")!.textContent).toBe("A quiet film.");
   });
 
   it("reads a title's full record once as a grid row opens and keeps it across the merge", async () => {
@@ -480,7 +525,7 @@ describe("RemoteLibraryBrowser preferences and detail", () => {
     // One read, never one per render: folding the facts in must not restart anything.
     expect(calls.item.filter((url) => url.pathname.endsWith("/items/m1"))).toHaveLength(1);
     expect(calls.sources).toHaveLength(1);
-    expect(host.querySelector(".remote-detail .description-preview")!.textContent).toBe("A full description.");
+    expect(host.querySelector(".remote-detail .library-detail-synopsis")!.textContent).toBe("A full description.");
     expect([...host.querySelectorAll(".remote-detail .meta-line")].map((node) => node.textContent)).toEqual(["Drama"]);
   });
 
@@ -516,10 +561,28 @@ describe("RemoteLibraryBrowser lazy mosaics", () => {
     expect(host.querySelector(".remote-libraries .browse-art svg")).not.toBeNull();
   });
 
-  it("draws a library root's own poster and asks for no preview of it", async () => {
+  it("draws the children's collage for a root and leaves the library's own poster aside", async () => {
     libraries = [library({ poster: "/own-root.jpg" })];
+    preview = () => json({ posters: ["/a.jpg", "/b.jpg"] });
+    await render();
+    await flush();
+    expect(calls.preview.at(-1)!.searchParams.get("artwork")).toBe("children");
+    expect(host.querySelector(".remote-libraries .library-preview-collage")).not.toBeNull();
+    expect([...host.querySelectorAll(".remote-libraries .browse-art img")].every((img) => img.getAttribute("src") !== "/own-root.jpg")).toBe(true);
+  });
+
+  it("keeps a library root's own poster when its mosaic is off and asks for nothing", async () => {
+    libraries = [library({ mosaic: false, poster: "/own-root.jpg" })];
     await render();
     expect(calls.preview).toHaveLength(0);
+    expect(host.querySelector(".remote-libraries .browse-art img")?.getAttribute("src")).toBe("/own-root.jpg");
+  });
+
+  it("falls back to the library's own poster when the child preview comes back empty", async () => {
+    libraries = [library({ poster: "/own-root.jpg" })];
+    preview = () => json({ posters: [] });
+    await render();
+    await flush();
     expect(host.querySelector(".remote-libraries .browse-art img")?.getAttribute("src")).toBe("/own-root.jpg");
   });
 
@@ -528,6 +591,14 @@ describe("RemoteLibraryBrowser lazy mosaics", () => {
     await openRootLibrary();
     expect(calls.preview.filter((url) => url.searchParams.get("parentId") === "f1")).toHaveLength(0);
     expect([...host.querySelectorAll(".browse-panel .browse-art img")].some((img) => img.getAttribute("src") === "/folder.jpg")).toBe(true);
+  });
+
+  it("asks a folder for its own poster-first preview, never the children mode", async () => {
+    browse = () => json(page([folder("f1", "Show")]));
+    await openRootLibrary();
+    const asked = calls.preview.filter((url) => url.searchParams.get("parentId") === "f1");
+    expect(asked.length).toBeGreaterThan(0);
+    expect(asked[0]!.searchParams.get("artwork")).toBeNull();
   });
 
   it("never asks for a preview of a season tile", async () => {
@@ -675,7 +746,7 @@ it("keeps the favorite learned in detail on its tile after Back", async () => {
   await render();
   await click(host.querySelector(".remote-libraries .library-open")!);
   await click(host.querySelector(".browse-panel .library-open")!);
-  expect(host.querySelector(".library-detail-actions button")?.getAttribute("aria-pressed")).toBe("true");
+  expect(host.querySelector('.library-detail-actions button[aria-label="Remove from favorites"]')?.getAttribute("aria-pressed")).toBe("true");
   await click(host.querySelector(".library-back")!);
   expect(host.querySelector(".fav-mark")).not.toBeNull();
 });

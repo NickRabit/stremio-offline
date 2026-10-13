@@ -580,7 +580,7 @@ export const pl: Catalog = {
   "onboarding.action": "Dodaj manifest",
   "onboarding.noneGranted": "Żaden dodatek nie został jeszcze udostępniony dla tego konta. Administrator decyduje, z których może skorzystać.",
   "library.eyebrow": "BIBLIOTEKA",
-  "library.title": "Pobrane pliki",
+  "library.title": "Twoje biblioteki",
   "library.nextEpisode": "Następny odcinek",
   "library.showAll": "Pokaż wszystko",
   "library.showInLibrary": "Pokaż w bibliotece",

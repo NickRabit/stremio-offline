@@ -619,7 +619,7 @@ export const en = {
 
   // Library.
   "library.eyebrow": "LIBRARY",
-  "library.title": "Downloaded files",
+  "library.title": "Your libraries",
   "library.nextEpisode": "Next episode",
   "library.showAll": "Show all",
   "library.showInLibrary": "Show in library",

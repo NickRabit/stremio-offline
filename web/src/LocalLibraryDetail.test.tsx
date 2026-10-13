@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { LocalLibraryDetail, type LocalDetailItem } from "./LocalLibraryDetail";
 import { setLocale } from "./i18n";
+import { clearTitleEnrichment } from "./title-enrichment";
 import type { IdentityPreview, Stream } from "./types";
 
 const json = (body: unknown, status = 200) =>
@@ -22,7 +23,9 @@ type Handler = (url: URL, init?: RequestInit) => Response | Promise<Response>;
 let source: Handler;
 let identityHandler: Handler;
 let copies: Handler;
-const calls = { source: [] as URL[], identity: [] as URL[], localStreams: [] as URL[] };
+let links: Handler;
+let trailer: Handler;
+const calls = { source: [] as URL[], identity: [] as URL[], localStreams: [] as URL[], meta: [] as URL[], links: [] as URL[], trailer: [] as URL[] };
 
 const deferred = <T,>() => {
   let resolve!: (value: T) => void;
@@ -36,15 +39,21 @@ let host: HTMLDivElement;
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   setLocale("en");
-  calls.source = []; calls.identity = []; calls.localStreams = [];
+  clearTitleEnrichment();
+  calls.source = []; calls.identity = []; calls.localStreams = []; calls.meta = []; calls.links = []; calls.trailer = [];
   source = () => json({ sourceId: "exact", kind: "library", playable: true, behaviorHints: { filename: "Heat.mkv" } });
   identityHandler = () => json(identity());
   copies = () => json([]);
+  links = () => json({ links: [] });
+  trailer = () => json({ trailer: null });
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), "http://localhost");
     const path = url.pathname;
     if (path === "/api/library/source") { calls.source.push(url); return Promise.resolve(source(url, init)); }
     if (path === "/api/library/identity") { calls.identity.push(url); return Promise.resolve(identityHandler(url, init)); }
+    if (path === "/api/library/links") { calls.links.push(url); return Promise.resolve(links(url, init)); }
+    if (path === "/api/library/trailer") { calls.trailer.push(url); return Promise.resolve(trailer(url, init)); }
+    if (path.startsWith("/api/meta/")) { calls.meta.push(url); return Promise.resolve(json({ id: "x", type: "movie", name: "X", background: "/catalogue-backdrop.jpg" })); }
     if (/^\/api\/local-streams\/[^/]+\/[^/]+$/.test(path)) { calls.localStreams.push(url); return Promise.resolve(copies(url, init)); }
     return Promise.resolve(json({}, 404));
   }));
@@ -63,7 +72,7 @@ const flush = () => act(async () => { await new Promise((done) => setTimeout(don
 const render = async (item: LocalDetailItem, over: Partial<Parameters<typeof LocalLibraryDetail>[0]> = {}) => {
   const onPlay = vi.fn();
   const onToggleFavorite = vi.fn();
-  const props = { item, favorite: false, onPlay, onToggleFavorite, onResetProgress: vi.fn(), ...over };
+  const props = { item, favorite: false, onPlay, onToggleFavorite, onResetProgress: vi.fn(), uiLanguage: "en", secureMode: true, onTrailer: vi.fn(), ...over };
   await act(async () => { root.render(<LocalLibraryDetail {...props}/>); });
   await flush();
   return { onPlay, onToggleFavorite, props };
@@ -78,8 +87,8 @@ describe("LocalLibraryDetail discovery", () => {
     expect(calls.source).toHaveLength(1);
     expect(calls.identity).toHaveLength(1);
     expect(calls.localStreams).toHaveLength(0);
-    expect(host.querySelector(".library-detail-source")!.textContent).toContain("Heat.mkv");
-    expect(host.querySelector(".library-detail-source")!.textContent).toContain("2.0 GB");
+    expect(host.querySelector(".library-title-detail h2")!.textContent).toBe("Heat.mkv");
+    expect([...host.querySelectorAll(".library-detail-hero .meta-line")].map((node) => node.textContent)).toContain("2.0 GB");
     await click(host.querySelector(".library-detail-play button.primary"));
     expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ localPath: "Films/Heat.mkv" }));
   });
@@ -89,7 +98,7 @@ describe("LocalLibraryDetail discovery", () => {
     await render(file());
     expect(host.querySelector(".remote-error")).toBeNull();
     expect(host.querySelector(".library-detail-play button.primary")!.hasAttribute("disabled")).toBe(false);
-    expect(host.querySelector(".library-detail-source")!.textContent).toContain("Heat.mkv");
+    expect(host.querySelector(".library-title-detail h2")!.textContent).toBe("Heat.mkv");
   });
 
   it("merges the copies of one title, drops the duplicate of the clicked file and defaults to the largest", async () => {
@@ -102,7 +111,6 @@ describe("LocalLibraryDetail discovery", () => {
     expect(calls.localStreams[0]!.pathname).toBe("/api/local-streams/movie/tt1");
     await openPicker();
     expect(rows()).toHaveLength(2);
-    expect(host.querySelector(".library-detail-source")!.textContent).toContain("Heat.1080p.mkv");
     expect(rows()[0]!.getAttribute("aria-pressed")).toBe("true");
     expect(rows()[0]!.textContent).toContain("Heat.1080p.mkv");
   });
@@ -158,9 +166,32 @@ describe("LocalLibraryDetail actions", () => {
 
   it("toggles the clicked library item's favorite and resets its position", async () => {
     const { onToggleFavorite, props } = await render(file(), { favorite: true, progress: { position: 10, duration: 100 } });
-    await click(host.querySelector(".library-detail-actions button"));
+    await click(host.querySelector('.library-detail-actions button[aria-label="Remove from favorites"]'));
     expect(onToggleFavorite).toHaveBeenCalledWith(false);
-    await click(host.querySelectorAll(".library-detail-actions button")[1]);
+    expect(host.querySelector('.library-detail-actions button[aria-label="Mark as unwatched"]')?.hasAttribute("aria-pressed")).toBe(false);
+    await click(host.querySelector('.library-detail-actions button[aria-label="Mark as unwatched"]'));
     expect(props.onResetProgress).toHaveBeenCalled();
+  });
+
+  it("keeps the favorite control pressed state and drops the watched one when there is nothing to clear", async () => {
+    await render(file(), { favorite: true });
+    const favorite = host.querySelector('.library-detail-actions button[aria-label="Remove from favorites"]');
+    expect(favorite?.getAttribute("aria-pressed")).toBe("true");
+    expect(host.querySelector('.library-detail-actions button[aria-label="Mark as unwatched"]')).toBeNull();
+  });
+
+  it("asks the catalogue with the identity the source lookup already found, and never stretches the poster", async () => {
+    identityHandler = () => json(identity({ bound: { type: "movie", id: "tt1", name: "Heat" } }));
+    copies = () => json([copy("Films/Heat.mkv", "Heat.mkv", 2_000_000_000)]);
+    await render(file({ poster: "/poster.jpg" }));
+    expect(calls.identity).toHaveLength(1);
+    await flush();
+    expect(calls.meta.map((url) => url.pathname)).toEqual(["/api/meta/movie/tt1"]);
+    // The file has no wide artwork, so the catalogue backdrop stands in for it; the poster keeps
+    // its own corner and is never stretched across the hero.
+    const hero = host.querySelector<HTMLElement>(".hero.library-detail-hero")!;
+    expect(hero.style.backgroundImage).toContain("/catalogue-backdrop.jpg");
+    expect(hero.style.backgroundImage).not.toContain("/poster.jpg");
+    expect(host.querySelector(".library-detail-poster img")?.getAttribute("src")).toBe("/poster.jpg");
   });
 });

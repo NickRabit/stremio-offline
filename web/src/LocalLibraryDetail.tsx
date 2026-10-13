@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, FolderOpen, Star } from "lucide-react";
 import { api, describeError } from "./api";
 import { bytes } from "./settings-ui";
 import { t, useI18n } from "./i18n";
 import { LibraryTitleDetail } from "./LibraryTitleDetail";
-import type { BrowseFile, BrowseFolder, IdentityPreview, Stream } from "./types";
+import { TitleChips } from "./TitleChips";
+import { useTitleEnrichment, type CatalogueRef } from "./title-enrichment";
+import type { BrowseFile, BrowseFolder, IdentityPreview, Stream, Trailer } from "./types";
 
 export type LocalDetailItem = ({ kind: "folder" } & BrowseFolder) | ({ kind: "file" } & BrowseFile);
 
@@ -16,17 +17,24 @@ interface Props {
   onResetProgress: () => void;
   onPlay: (stream: Stream) => void;
   onOpenFolder?: () => void;
+  /** The reader's interface language, so the catalogue is asked in it. */
+  uiLanguage: string;
+  /** Secure Mode, which decides how the trailer chip behaves. */
+  secureMode: boolean;
+  /** The app owns the trailer overlay; the chip only asks for it. */
+  onTrailer: (trailer: Trailer) => void;
 }
 
 /** The local counterpart of a remote title's detail: it discovers the exact file and, when the
  *  file or its folder is bound to a title, the other copies of that same title, then hands them to
  *  the shared shell. The catalogue hero, the synopsis and the source picker are the ones a remote
  *  library uses. */
-export function LocalLibraryDetail({ item, favorite, progress, onToggleFavorite, onResetProgress, onPlay, onOpenFolder }: Props) {
+export function LocalLibraryDetail({ item, favorite, progress, onToggleFavorite, onResetProgress, onPlay, onOpenFolder, uiLanguage, secureMode, onTrailer }: Props) {
   useI18n();
   const [sources, setSources] = useState<Stream[] | null>(null);
   const [error, setError] = useState("");
   const [nonce, setNonce] = useState(0);
+  const [bound, setBound] = useState<CatalogueRef | null>(null);
   const epoch = useRef(0);
   const isFile = item.kind === "file";
 
@@ -36,6 +44,7 @@ export function LocalLibraryDetail({ item, favorite, progress, onToggleFavorite,
     const live = () => mine === epoch.current && !controller.signal.aborted;
     setSources(null);
     setError("");
+    setBound(null);
     const run = async () => {
       try {
         if (isFile) {
@@ -52,6 +61,7 @@ export function LocalLibraryDetail({ item, favorite, progress, onToggleFavorite,
           try {
             const identity = await api.libraryIdentity(item.path, controller.signal);
             if (!live()) return;
+            setBound(boundRef(identity));
             const id = identity.bound ? episodeId(identity, item) : null;
             if (id) copies = await api.localStreams(identity.bound!.type, id, controller.signal);
           } catch { /* the extra copies are best effort; the exact file still plays */ }
@@ -73,6 +83,7 @@ export function LocalLibraryDetail({ item, favorite, progress, onToggleFavorite,
         // a failure here is a real one: a single guessed file must never be passed off as them.
         const identity = await api.libraryIdentity(item.path, controller.signal);
         if (!live()) return;
+        setBound(boundRef(identity));
         if (!identity.bound || identity.bound.type !== "movie") { setSources([]); return; }
         const copies = await api.localStreams("movie", identity.bound.id, controller.signal);
         if (!live()) return;
@@ -87,32 +98,30 @@ export function LocalLibraryDetail({ item, favorite, progress, onToggleFavorite,
     return () => { controller.abort(); if (epoch.current === mine) epoch.current += 1; };
   }, [item.path, nonce]);
 
-  const libraryName = sources?.find((stream) => stream.libraryName)?.libraryName;
+  // The catalogue identity the source resolution already found: the series of an episode, or the
+  // film itself. Its metadata supplies a backdrop and never replaces the file's own synopsis.
+  const enrichment = useTitleEnrichment({ kind: "local", path: item.path }, bound, uiLanguage);
   const episode = isFile && item.season != null;
   const title = item.catalogName || (isFile ? item.label : item.name);
-  const chips = [
-    <span className="pill" key="type">{t(episode ? "episodes.one" : "catalog.oneMovie")}</span>,
-    libraryName ? <span className="pill" key="library">{libraryName}</span> : null,
-  ];
+  const chips = <TitleChips kind={t(episode ? "episodes.one" : "catalog.oneMovie")} trailer={enrichment.trailer} links={enrichment.links}
+    onTrailer={onTrailer} secureMode={secureMode}/>;
   const facts = [item.year, sources?.length === 1 && item.size ? bytes(item.size) : ""].filter(Boolean).join(" · ");
+  // The file's own wide artwork first, the catalogue's backdrop standing in only when it has none.
+  const backdrops = [item.wide, enrichment.meta?.background];
 
   return <div className="library-local-detail" data-path={item.path} tabIndex={-1}><LibraryTitleDetail
     identityKey={item.path}
     title={title}
     {...(episode ? { subtitle: t("mediaServer.episodeLabel", { season: item.season ?? 0, episode: item.episode ?? 0 }) } : {})}
     {...(item.poster ? { poster: item.poster } : {})}
-    {...(item.wide ? { wide: item.wide } : {})}
+    backdrops={backdrops}
     {...(facts ? { facts } : {})}
     {...(item.description ? { description: item.description } : {})}
     chips={chips}
-    actions={<>
-      {!isFile && onOpenFolder && <button type="button" onClick={onOpenFolder}><FolderOpen/> {t("library.openFolder")}</button>}
-      <button type="button" aria-pressed={favorite} onClick={() => onToggleFavorite(!favorite)}>
-        <Star fill={favorite ? "currentColor" : "none"}/> {t("mediaServer.favorite")}
-      </button>
-      {progress && <button type="button" onClick={onResetProgress}><Check/> {t("library.markUnwatched")}</button>}
-
-    </>}
+    favorite={favorite}
+    onToggleFavorite={onToggleFavorite}
+    {...(progress ? { watchedLabel: t("library.markUnwatched"), onToggleWatched: onResetProgress } : {})}
+    {...(!isFile && onOpenFolder ? { onOpenFolder } : {})}
     sources={sources}
     {...(error ? { sourceError: error } : {})}
     onRetry={() => setNonce((value) => value + 1)}
@@ -130,4 +139,12 @@ export function episodeId(identity: IdentityPreview, item: LocalDetailItem): str
   const episode = (item.kind === "file" ? item.episode : undefined) ?? identity.parsed?.episode ?? bound.episode;
   if (season == null || episode == null) return null;
   return `${bound.id}:${season}:${episode}`;
+}
+
+/** The catalogue identity a bound library item already carries, so the enrichment never has to
+ *  resolve it a second time. A binding that is neither a film nor a show is not a title. */
+export function boundRef(identity: IdentityPreview): CatalogueRef | null {
+  const bound = identity.bound;
+  if (!bound || (bound.type !== "movie" && bound.type !== "series")) return null;
+  return { type: bound.type, id: bound.id };
 }

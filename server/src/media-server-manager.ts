@@ -1172,7 +1172,9 @@ export class MediaServerManager {
     this.recheckContent(authority, request, library.id, connection);
     if (tag !== undefined && (!preferChildren || requestedParent !== undefined)) return { posters: [remoteArtworkPath(library.id, root, "Primary", tag)] };
     const page = await this.upstream(connection, request, () => session.provider.pageDirectory(session.token, connection.accountId, root, {
-      mode: "folders", limit: 12,
+      mode: preferChildren && requestedParent === undefined && library.type !== "mixed" ? "titles" : "folders",
+      ...(preferChildren && requestedParent === undefined && library.type !== "mixed" ? { type: library.type } : {}),
+      limit: 12,
     }, request));
     this.recheckContent(authority, request, library.id, connection);
     for (const item of page.items) this.putProof(this.proofOf(user, library, connection, item));

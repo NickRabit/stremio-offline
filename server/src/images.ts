@@ -23,6 +23,7 @@ const PREFIX = "/api/image/";
 const MAX_BYTES = 8 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 20_000;
 const TILE_WIDTH = 640;
+const DETAIL_WIDTH = 1920;
 const FFMPEG_TIMEOUT_MS = 15_000;
 
 const EXTENSIONS: Record<string, string> = {
@@ -59,6 +60,14 @@ export function narrowArtwork(url: string): string {
 export const imageId = (url: string) => createHash("sha256").update(url).digest("base64url").slice(0, 32);
 export const isProxiedImage = (value: string) => value.startsWith(PREFIX);
 
+/** Two widths exist: the listing tile and the wider detail backdrop. Anything else is the
+ *  listing width, so a stored id can never name a size this cache does not serve. */
+const artworkWidth = (width: number) => (width === DETAIL_WIDTH ? DETAIL_WIDTH : TILE_WIDTH);
+
+/** The listing id stays the plain hash of the address; a wider variant mixes the width in, so
+ *  the two never share a cache entry and a cached tile is never handed back as a backdrop. */
+const idFor = (url: string, width: number) => (width === TILE_WIDTH ? imageId(url) : imageId(`${width}\n${url}`));
+
 const jpegWidth = (data: Buffer) => {
   let offset = 2;
   while (offset + 9 <= data.length) {
@@ -93,6 +102,8 @@ interface Entry {
   /** Set once the bytes are on disk; the file is `<id>.<ext>`. */
   ext?: string;
   bytes?: number;
+  /** The wider detail backdrop; absent means the listing tile. */
+  width?: number;
   at: number;
 }
 
@@ -151,8 +162,12 @@ export class ImageProxy {
     for (const [id, entry] of Object.entries(stored)) {
       if (!entry?.url) continue;
       const at = Number.isFinite(entry.at) && entry.at > 0 ? entry.at : this.now();
+      // The width has to survive a restart even before the bytes exist: the id the page holds
+      // already names the size, and serving it smaller would hand back a different picture.
+      const width = entry.width === DETAIL_WIDTH ? DETAIL_WIDTH : undefined;
+      const sized = width ? { width } : {};
       const onDisk = entry.ext && files.has(`${id}.${entry.ext}`);
-      this.index.set(id, onDisk ? { ...entry, at } : { url: entry.url, at });
+      this.index.set(id, onDisk ? { url: entry.url, ext: entry.ext, bytes: entry.bytes, at, ...sized } : { url: entry.url, at, ...sized });
       if (onDisk) files.delete(`${id}.${entry.ext}`);
     }
     // Anything the index does not know about cannot be served, so it is only waste.
@@ -230,14 +245,16 @@ export class ImageProxy {
     if (this.dirty) { this.dirty = false; await this.writeIndex(); }
   }
 
-  /** Remote address in, opaque link out. Anything already local is left alone. */
-  proxied(value?: string): string | undefined {
+  /** Remote address in, opaque link out. Anything already local is left alone. A width other
+   *  than the listing tile registers a separate entry, so a wider picture is its own file. */
+  proxied(value?: string, width: number = TILE_WIDTH): string | undefined {
     if (!value) return value ?? undefined;
     if (!secureMode() || !/^https?:\/\//i.test(value)) return value;
-    const id = imageId(value);
+    const target = artworkWidth(width);
+    const id = idFor(value, target);
     const known = this.index.get(id);
     if (known) known.at = this.now();
-    else this.index.set(id, { url: value, at: this.now() });
+    else this.index.set(id, { url: value, at: this.now(), ...(target === DETAIL_WIDTH ? { width: target } : {}) });
     this.save();
     return `${PREFIX}${id}`;
   }
@@ -252,20 +269,22 @@ export class ImageProxy {
 
   /** Whatever the interface may put in an `<img>`: the named fields, episode stills and
    *  the loose gallery arrays addons attach. */
-  private rewriteGallery(value: unknown): unknown {
+  private rewriteGallery(value: unknown, width: number = TILE_WIDTH): unknown {
     if (!Array.isArray(value)) return value;
     return value.map((entry) => {
-      if (typeof entry === "string") return this.proxied(entry);
+      if (typeof entry === "string") return this.proxied(entry, width);
       if (!entry || typeof entry !== "object") return entry;
       const item = entry as Record<string, unknown>;
       const next = { ...item };
-      for (const key of ["url", "src"]) if (typeof item[key] === "string") next[key] = this.proxied(item[key] as string);
+      for (const key of ["url", "src"]) if (typeof item[key] === "string") next[key] = this.proxied(item[key] as string, width);
       return next;
     });
   }
 
-  rewriteMeta<T extends MetaItem>(item: T): T {
-    const background = typeof item.background === "string" ? narrowArtwork(item.background) : item.background;
+  rewriteMeta<T extends MetaItem>(item: T, detail = false): T {
+    const width = detail ? DETAIL_WIDTH : TILE_WIDTH;
+    // The listing narrows a Metahub backdrop to a tile; the detail page draws it full width.
+    const background = typeof item.background === "string" ? (detail ? item.background : narrowArtwork(item.background)) : item.background;
     // Secure mode off still narrows a background: the page then loads it from the CDN itself.
     if (!secureMode()) return background === item.background ? item : { ...item, background };
     const videos = item.videos?.map((video) => {
@@ -273,12 +292,12 @@ export class ImageProxy {
       return thumbnail === video.thumbnail ? video : { ...video, thumbnail };
     });
     const galleries: Record<string, unknown> = {};
-    for (const key of ["images", "screenshots"]) if (key in item) galleries[key] = this.rewriteGallery(item[key]);
+    for (const key of ["images", "screenshots"]) if (key in item) galleries[key] = this.rewriteGallery(item[key], width);
     return {
       ...item,
       ...galleries,
       poster: this.proxied(item.poster),
-      background: this.proxied(background),
+      background: this.proxied(background, width),
       logo: typeof item.logo === "string" ? this.proxied(item.logo) : item.logo,
       ...(videos ? { videos } : {}),
     };
@@ -286,17 +305,19 @@ export class ImageProxy {
 
   private path(id: string, ext: string) { return path.join(this.dir, `${id}.${ext}`); }
 
-  /** Fewer bytes on disk: the fetched picture is re-encoded once, or comes back as it was. */
-  private async downscale(data: Buffer, ext: string): Promise<Buffer> {
+  /** Fewer bytes on disk: the fetched picture is re-encoded once, or comes back as it was.
+   *  A picture already at or under the target width is never scaled up. */
+  private async downscale(data: Buffer, ext: string, width: number = TILE_WIDTH): Promise<Buffer> {
     if (ext === "svg" || ext === "gif") return data;
-    const width = imageWidth(data);
-    if (width !== undefined && width <= TILE_WIDTH) return data;
+    const target = artworkWidth(width);
+    const current = imageWidth(data);
+    if (current !== undefined && current <= target) return data;
     const temp = path.join(this.dir, `.resize-${randomUUID()}`);
     try {
       await writeFile(temp, data, { mode: 0o600 });
       const { stdout } = await promisify(execFile)(ffmpegPath(), [
         "-hide_banner", "-loglevel", "error", "-nostdin", "-threads", "1", "-i", temp,
-        "-vf", "scale='min(640,iw)':-2", "-q:v", "5", "-c:v", "mjpeg", "-f", "image2pipe", "pipe:1",
+        "-vf", `scale='min(${target},iw)':-2`, "-q:v", "5", "-c:v", "mjpeg", "-f", "image2pipe", "pipe:1",
       ], { encoding: "buffer", timeout: FFMPEG_TIMEOUT_MS, killSignal: "SIGKILL", maxBuffer: MAX_BYTES * 2 });
       return stdout.length && stdout.length < data.length ? stdout : data;
     } catch (error) {
@@ -340,7 +361,7 @@ export class ImageProxy {
       const fetched = Buffer.from(await response.arrayBuffer());
       if (!fetched.length || fetched.length > MAX_BYTES) return rejected(`${fetched.length} bytes`);
       await mkdir(this.dir, { recursive: true });
-      const data = await this.downscale(fetched, ext);
+      const data = await this.downscale(fetched, ext, entry.width ?? TILE_WIDTH);
       // The same buffer back means nothing was re-encoded; mjpeg output is a jpeg.
       const storedExt = data === fetched ? ext : "jpg";
       const target = this.path(id, storedExt);

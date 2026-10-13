@@ -14,6 +14,7 @@ import { LocalLibraryDetail } from "./LocalLibraryDetail";
 import { DetailDescription, DetailHero } from "./DetailHero";
 import { LibraryItem, LibraryItemMenu } from "./library-item";
 import { LibraryTile } from "./library-tile";
+import { TitleChips } from "./TitleChips";
 import { RemotePersonalShelf } from "./RemotePersonalShelf";
 import { PosterMosaic, TileArt } from "./TileArt";
 import { MoveDialog } from "./MoveDialog";
@@ -36,7 +37,6 @@ import { rankByTitle } from "./title-match";
 import { CandidatePool, suggest, type Suggestion } from "./search-suggestions";
 import { galleryPayload, gridArt, localizedDownloadTitle, mergeMetaDetail } from "./meta";
 import { resumeVideo, type ResumeTarget } from "./resume-target";
-import { trailerAction } from "./trailers";
 import { emptyViews, prefsFor, scopeOf, withDownloads, withExtra, withLibrary } from "./views";
 import { Empty, Nav, Onboarding } from "./app-chrome";
 import { FavoritesView } from "./FavoritesView";
@@ -52,10 +52,6 @@ import { MediaGallery, type GalleryImage, type GalleryKind } from "./MediaGaller
 import { SettingsPage } from "./SettingsPage";
 import { resolveStartView } from "./start-view";
 import type { Addon, BuildInfo, BrowseItem, BrowseLibrary, BrowseResult, DeviceTransfer, DownloadsViewPrefs, FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem, FollowView, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, LibraryViewPrefs, MediaServerProvider, NewEpisode, ProgressEntry, RemoteLibrary, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, Stream, Subtitle, Trailer, Video, SearchState } from "./types";
-
-/** The names of the linked sites. They are trademarks, not interface text, so they are
- *  spelled the same in every language and live here rather than in the catalogues. */
-const SITE_LINKS: Record<SiteLink["site"], string> = { csfd: "ČSFD", tmdb: "TMDB", imdb: "IMDb" };
 
 /** The library choices this browser kept before they moved onto the account. Read once and
  *  handed to the visible libraries; private mode may forbid storage, hence the try/catch. */
@@ -231,6 +227,9 @@ export function App() {
   const [titleTrailer, setTitleTrailer] = useState<Trailer | null>(null);
   const [libraryTrailers, setLibraryTrailers] = useState<Record<string, Trailer | null>>({});
   const [trailerOpen, setTrailerOpen] = useState<Trailer | null>(null);
+  /** Bumped when the Library entry returns the section to its root, so the remote browser drops
+   *  its own library, folder or title without being remounted. */
+  const [libraryReset, setLibraryReset] = useState(0);
   const [episodesOpen, setEpisodesOpen] = useState(true);
   const [season, setSeason] = useState<number | null>(null);
   const [bulkDownload, setBulkDownload] = useState<{ label: string; title: string; type: string; episodes: Array<{ id: string; season?: number; episode?: number; title?: string }>; media: { id?: string; metaType?: string; poster?: string; background?: string; gallery?: Array<{ url: string; kind: GalleryKind }> } } | null>(null);
@@ -570,26 +569,6 @@ export function App() {
       await loadBrowse(browsePath);
     } catch (error) { fail(error); }
   };
-  /** The links row, rendered the same way under the description and in the library menu. */
-  const titleLinksRow = (links: SiteLink[]) => links.length > 0 && <div className="title-links">
-    {links.map((link) => <a key={link.site} href={link.url} target="_blank" rel="noopener noreferrer"
-      title={t("links.openOn", { site: SITE_LINKS[link.site] })}>{SITE_LINKS[link.site]}</a>)}
-  </div>;
-  const trailerPill = (trailer: Trailer | null) => {
-    const action = trailerAction(trailer, settings.secureMode);
-    if (!action) return null;
-    return action.kind === "external"
-      ? <a className="trailer-action" href={action.href} target="_blank" rel="noopener noreferrer" title={t("trailers.openHint")}>{t("trailers.openOnYouTube")}</a>
-      : <button className="trailer-action" title={t("trailers.openHint")} onClick={() => setTrailerOpen(action.trailer)}>{t("trailers.watch")}</button>;
-  };
-  /** Everything that identifies a title, as one row of chips of one size: the watchlist star and
-   *  the kind where there is one, then the trailer and the sites that know the title. The
-   *  catalogue detail and a library menu render the same row, so they look the same. */
-  const titleChips = (trailer: Trailer | null, links: SiteLink[], leading?: ReactNode) => {
-    const trailerChip = trailerPill(trailer);
-    if (!leading && !trailerChip && !links.length) return null;
-    return <div className="title-chips">{leading}{trailerChip}{titleLinksRow(links)}</div>;
-  };
   /** A menu is asked about once per path per session; the answer is chrome either way. */
   const loadLibraryLinks = (item: TreeItem) => {
     if (item.match !== "matched" || askedLibraryLinks.current.has(item.path)) return;
@@ -705,7 +684,7 @@ export function App() {
   const [pendingSources, setPendingSources] = useState(0);
   const pickedRef = useRef(false); const sourcesRequestRef = useRef(0);
   const linksRequestRef = useRef(0); const trailerRequestRef = useRef(0); const askedLibraryLinks = useRef(new Set<string>()); const askedLibraryTrailers = useRef(new Set<string>());
-  const loadingRef = useRef(false); const requestRef = useRef(0); const itemsRef = useRef<Meta[]>([]); const gridRef = useRef<HTMLDivElement>(null); const browseScrollRef = useRef<HTMLDivElement | null>(null); const detailRef = useRef<HTMLElement>(null);
+  const loadingRef = useRef(false); const requestRef = useRef(0); const itemsRef = useRef<Meta[]>([]); const gridRef = useRef<HTMLDivElement>(null); const browseScrollRef = useRef<HTMLDivElement | null>(null); const libraryPageRef = useRef<HTMLElement | null>(null); const detailRef = useRef<HTMLElement>(null);
   const searchAbortRef = useRef<AbortController | null>(null);
   const loadedSearchRef = useRef<{ query: string; scope: string; type: string; genre: string; catalog: string; reset: number } | null>(null);
   const playerOpenRef = useRef(false); const playbackReturn = useRef<PlaybackReturn | null>(null);
@@ -1085,10 +1064,17 @@ export function App() {
     setEpisodesOpen(true); setSeason(null); setCatalogReset((value) => value + 1);
   };
   const resetLibrary = () => {
+    pendingLocalFocus.current = null;
+    localDetailScroll.current = 0;
+    localDetailScroller.current = null;
     setLibraryCompact(false);
     setMenuFor(null); setFromFavorites(false); setBrowseFocus(null);
     setLocalDetail(null);
     setBrowsePath(""); setBrowseQuery("");
+    // The remote browser keeps its own library, folder and title; the signal drops all of it and
+    // the one-shot remote target goes with them, so the section starts at the top.
+    setRemoteTarget(null);
+    setLibraryReset((value) => value + 1);
   };
   /** Clicking the section we are already in resets it; otherwise the last filters
    * and the page position are restored. */
@@ -1096,16 +1082,27 @@ export function App() {
     navigated.current = true;
     // Leaving the Library drops the one-shot remote target, so coming back shows the list.
     if (target !== "library") setRemoteTarget(null);
+    // The Library entry is the way back to the root from anywhere, another view, a folder or a
+    // remote title included; nothing is remembered for it.
+    if (target === "library") {
+      scrollByView.current.library = 0;
+      setView("library");
+      resetLibrary();
+      // At the root the page itself is the scroller, so the inner pane alone is not enough.
+      if (libraryPageRef.current) libraryPageRef.current.scrollTop = 0;
+      if (browseScrollRef.current) browseScrollRef.current.scrollTop = 0;
+      window.scrollTo(0, 0);
+      return;
+    }
     if (target !== view) { setView(target); return; }
     scrollByView.current[target] = 0;
     if (target === "catalog") resetCatalog();
-    else if (target === "library") resetLibrary();
     else if (target === "resume") setResumeFilter("all");
     else if (target === "favorites") setFavoritesFilter("all");
     else if (target === "stats") setStatsReset((value) => value + 1);
     // The catalogue and the library scroll in a box of their own, so the document offset is not
     // the one that holds their position.
-    const list = target === "catalog" ? gridRef.current : target === "library" ? browseScrollRef.current : null;
+    const list = target === "catalog" ? gridRef.current : null;
     if (list) list.scrollTop = 0;
     window.scrollTo(0, 0);
   };
@@ -2475,8 +2472,8 @@ export function App() {
             <div className="mobile-detail-head"><button onClick={selected.videos?.length && selectedVideo && !episodesOpen ? () => setEpisodesOpen(true) : closeMeta}><ChevronLeft/> {t(selected.videos?.length && selectedVideo && !episodesOpen ? "episodes.heading" : "catalog.results")}</button><strong>{selected.name}</strong></div>
             <div className="detail-primary"><DetailHero className={selected.videos?.length ? "series-hero" : ""} background={selected.background}
               gallery={galleryImages.length > 0 ? <button className={`gallery-open ${galleryImages[0].shape}`} onClick={() => setGalleryIndex(0)} title={t("gallery.openHint")}><img src={galleryImages[0].url} alt="" onError={hideBroken}/><span><Images/> {galleryImages.length > 1 ? t("gallery.stillCount", { count: galleryImages.length }) : t("gallery.enlarge")}</span></button> : undefined}
-              copy={<>{titleChips(titleTrailer, titleLinks, <><button className={`watch-star ${inWatchlist(selected.type, selected.id) ? "on" : ""}`} title={t(inWatchlist(selected.type, selected.id) ? "watchlist.remove" : "watchlist.add")}
-                onClick={() => void toggleWatchlist(selected)}><Star/></button>{(selected.type === "series" || selected.type === "movie" || Boolean(selected.videos?.length)) && (detailFollow ? <button className="follow-chip on" onClick={() => setFollowDialogOpen(true)}><BellRing/>{t("follow.following")}{detailFollow.autoDownload && <span className="follow-chip-download" aria-hidden="true" title={t("follow.autoOnHint")}><Download/></span>}</button> : (selected.type !== "movie" || movieHasNoSource) && <button className="follow-chip" onClick={() => setFollowStart(selected)}><Bell/>{t("follow.follow")}</button>)}<span className="pill">{t(selected.type === "series" ? "catalog.oneSeries" : "catalog.oneMovie")}</span></>)}<h2>{selected.name}</h2><p className="meta-line">{imdbRating(selected) && <b className="imdb-rating" title={t("catalog.imdbRating", { rating: imdbRating(selected)! })}><Star/>{imdbRating(selected)}</b>}{imdbRating(selected) && [selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).length ? " · " : ""}{[selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).join(" · ")}</p><DetailDescription text={selected.description} loading={metaLoading} identityKey={selected.id} skeleton={skeletonLines}/></>}/></div>
+              copy={<><TitleChips leading={<><button className={`watch-star ${inWatchlist(selected.type, selected.id) ? "on" : ""}`} title={t(inWatchlist(selected.type, selected.id) ? "watchlist.remove" : "watchlist.add")}
+                onClick={() => void toggleWatchlist(selected)}><Star/></button>{(selected.type === "series" || selected.type === "movie" || Boolean(selected.videos?.length)) && (detailFollow ? <button className="follow-chip on" onClick={() => setFollowDialogOpen(true)}><BellRing/>{t("follow.following")}{detailFollow.autoDownload && <span className="follow-chip-download" aria-hidden="true" title={t("follow.autoOnHint")}><Download/></span>}</button> : (selected.type !== "movie" || movieHasNoSource) && <button className="follow-chip" onClick={() => setFollowStart(selected)}><Bell/>{t("follow.follow")}</button>)}</>} kind={t(selected.type === "series" ? "catalog.oneSeries" : "catalog.oneMovie")} trailer={titleTrailer} links={titleLinks} onTrailer={setTrailerOpen} secureMode={settings.secureMode}/><h2>{selected.name}</h2><p className="meta-line">{imdbRating(selected) && <b className="imdb-rating" title={t("catalog.imdbRating", { rating: imdbRating(selected)! })}><Star/>{imdbRating(selected)}</b>}{imdbRating(selected) && [selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).length ? " · " : ""}{[selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).join(" · ")}</p><DetailDescription text={selected.description} loading={metaLoading} identityKey={selected.id} skeleton={skeletonLines}/></>}/></div>
             <div className="detail-workflow">
             {selected.videos?.length ? !(chosenEpisode && sourcesLoaded) && <div className={`episodes ${chosenEpisode ? "collapsed" : ""}`}>{chosenEpisode ?? <><div className="subhead episode-head"><h3>{t("episodes.heading")}</h3><div className="episode-tools">{seasons.length > 1 && <select className="season-select" aria-label={t("episodes.season")} value={activeSeason ?? ""} onChange={(event) => setSeason(Number(event.target.value))}>{seasons.map((value) => <option key={value} value={value}>{value === 0 ? t("episodes.specials") : t("episodes.seasonNumber", { season: value })}</option>)}</select>}{activeSeason != null && <button title={activeSeason === 0 ? t("episodes.downloadSpecials") : t("episodes.downloadSeason", { season: activeSeason })} onClick={() => void enqueueEpisodes("season")}><Download/> {activeSeason === 0 ? t("episodes.specials") : t("episodes.seasonShort", { season: activeSeason })}</button>}<button title={t("episodes.downloadShow")} onClick={() => void enqueueEpisodes("series")}><Download/> {t("episodes.wholeShow")}</button>{selectedVideo ? <button onClick={() => setEpisodesOpen(false)}>{t("common.collapse")}</button> : <span>{visibleEpisodes.length}</span>}</div></div><div className="episode-list" onScroll={(event) => compactOnScroll(event, detailCompact, setDetailCompact, true)}>{visibleEpisodes.map((video, index) => <button key={video.id || index} className={selectedVideo?.id === video.id ? "selected" : ""} onClick={() => { setEpisodesOpen(false); void loadSources(video); }}><b>{video.season != null ? `${String(video.season).padStart(2,"0")}×${String(video.episode || 0).padStart(2,"0")}` : index + 1}</b><span>{video.title || video.name || t("episodes.one")}</span><ChevronRight/></button>)}</div></>}</div> : !sourcesLoaded && <button className="primary wide" onClick={() => loadSources()} disabled={busy}>{t("sources.load")}</button>}
             {sourcesLoaded && (!selected.videos?.length || !episodesOpen) && <div className="sources"><div className={`subhead ${chosenEpisode ? "sources-episode" : ""}`}>{chosenEpisode ?? <h3>{t("sources.heading")}</h3>}<span>{sourceRows.length === sourceTotal ? sourceTotal : t("sources.ofTotal", { shown: sourceRows.length, total: sourceTotal })}{pendingSources > 0 ? ` · ${t("sources.loadingFrom", { count: pendingSources })}` : ""}</span></div>
@@ -2527,13 +2524,14 @@ export function App() {
           </> : <Empty icon={<Film/>} title={t("catalog.pickTitle")} text={t("catalog.pickText")}/>}</section></div>
         </>}
       </section>}
-      {view === "library" && <section className={`library-page${remoteRootsPresent && !remoteOpen && !browsePath && !localDetail ? " library-remote-roots" : ""}${(remoteOpen ? remoteCompact : libraryCompact) ? " library-compact" : ""}`} {...chromeGestures(() => browseScrollRef.current)} onKeyDown={(event) => { if (event.key === "Escape") setMenuFor(null); }} onClick={() => menuFor && setMenuFor(null)}><Heading eyebrow={t("library.eyebrow")} title={t("library.title")}/>
+      {view === "library" && <section ref={libraryPageRef} className={`library-page${remoteRootsPresent && !remoteOpen && !browsePath && !localDetail ? " library-remote-roots" : ""}${(remoteOpen ? remoteCompact : libraryCompact) ? " library-compact" : ""}`} {...chromeGestures(() => browseScrollRef.current)} onKeyDown={(event) => { if (event.key === "Escape") setMenuFor(null); }} onClick={() => menuFor && setMenuFor(null)}><Heading eyebrow={t("library.eyebrow")} title={t("library.title")}/>
         <RemoteLibraryBrowser onRootPresenceChange={setRemoteRootsPresent} hideRoots={Boolean(browsePath) || Boolean(localDetail)} audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} onError={fail}
           libraryTileShape={settings.libraryTileShape} onToggleLibraryShape={() => void toggleShape("libraryTileShape")}
           views={views} onPersistPrefs={persistRemotePrefs}
           onOpenChange={(open) => { setRemoteOpen(open); if (!open) setRemoteCompact(false); }}
           compact={remoteCompact} onCompactChange={setRemoteCompact}
-          {...(remoteTarget ? { initialTarget: remoteTarget } : {})} onPersonalChange={refreshPersonal}/>
+          {...(remoteTarget ? { initialTarget: remoteTarget } : {})} onPersonalChange={refreshPersonal}
+          uiLanguage={settings.uiLanguage} secureMode={settings.secureMode} onTrailer={setTrailerOpen} resetSignal={libraryReset}/>
         {!remoteOpen && <div className="panel browse-panel">
         <div className="browse-head">
         <div className="browse-bar">
@@ -2654,13 +2652,14 @@ export function App() {
           compactOnScroll(event, libraryCompact, setLibraryCompact);
           scheduleViewAnchor();
         }}>
-        {localDetail ? <LocalLibraryDetail
+        {localDetail ? <LocalLibraryDetail key={localDetail.item.path}
           item={localDetail.item}
           favorite={liveLocalItem?.favorite ?? localDetail.item.favorite ?? false}
           {...(liveLocalItem?.kind === "file" && liveLocalItem.progress ? { progress: liveLocalItem.progress } : {})}
           onToggleFavorite={(favorite) => void toggleFavorite(localDetail.item.path, favorite)}
           onResetProgress={() => void forgetWatched(localDetail.item.path)}
           onOpenFolder={() => { if (localDetail.item.kind === "folder") goLocalFolder(localDetail.item.path); }}
+          uiLanguage={settings.uiLanguage} secureMode={settings.secureMode} onTrailer={setTrailerOpen}
           onPlay={(stream) => {
             const clicked = localDetail.item;
             void playLocal(clicked.kind === "file" ? clicked.label : clicked.name, stream.localPath ?? clicked.path, clicked.poster,
@@ -2705,7 +2704,7 @@ export function App() {
                     {selectionMode && <button className="browse-select" aria-label={t("library.selectItem", { name: item.name })} aria-pressed={selectedPaths.has(item.path)} onClick={(event) => { event.stopPropagation(); toggleSelection(item.path); }}>{selectedPaths.has(item.path) && <Check/>}</button>}
                     {!selectionMode && (item.gallery ?? 0) > 0 && <button className="browse-gallery" aria-label={t("gallery.openStored", { name: item.name })} title={t("gallery.openStored", { name: item.name })} onClick={(event) => { event.stopPropagation(); void openStoredGallery(item.path); }}><Images/></button>}
                     {!selectionMode && <LibraryItemMenu name={item.name} open={menuFor === item.path} onToggle={() => openMenu(item)}>
-                      {item.match === "matched" && titleChips(libraryTrailers[item.path] ?? null, libraryLinks[item.path] ?? [])}
+                      {item.match === "matched" && <TitleChips trailer={libraryTrailers[item.path] ?? null} links={libraryLinks[item.path] ?? []} onTrailer={setTrailerOpen} secureMode={settings.secureMode}/>}
                       {admin && matchActions(item)}
                       <button onClick={() => void toggleFavorite(item.path, !item.favorite)}><Star/> {t(item.favorite ? "favorite.remove" : "favorite.add")}</button>
                       {admin && <>
@@ -2726,7 +2725,7 @@ export function App() {
                     {selectionMode && <button className="browse-select" aria-label={t("library.selectItem", { name: item.label })} aria-pressed={selectedPaths.has(item.path)} onClick={(event) => { event.stopPropagation(); toggleSelection(item.path); }}>{selectedPaths.has(item.path) && <Check/>}</button>}
                     {!selectionMode && (item.gallery ?? 0) > 0 && <button className="browse-gallery" aria-label={t("gallery.openStored", { name: item.label })} title={t("gallery.openStored", { name: item.label })} onClick={(event) => { event.stopPropagation(); void openStoredGallery(item.path); }}><Images/></button>}
                     {!selectionMode && <LibraryItemMenu name={item.label} open={menuFor === item.path} onToggle={() => openMenu(item)}>
-                      {item.match === "matched" && titleChips(libraryTrailers[item.path] ?? null, libraryLinks[item.path] ?? [])}
+                      {item.match === "matched" && <TitleChips trailer={libraryTrailers[item.path] ?? null} links={libraryLinks[item.path] ?? []} onTrailer={setTrailerOpen} secureMode={settings.secureMode}/>}
                       {admin && matchActions(item)}
                       <button onClick={() => void toggleFavorite(item.path, !item.favorite)}><Star/> {t(item.favorite ? "favorite.remove" : "favorite.add")}</button>
                       {item.progress && <button onClick={() => revealInLibrary(item.path)}><HardDrive/> {t("library.showInLibrary")}</button>}
