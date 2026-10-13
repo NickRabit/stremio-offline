@@ -8,6 +8,7 @@ import { label, pickAddonSubtitle } from "./languages";
 import { hostOf, report } from "./diagnostics";
 import { releaseMediaElement, AHEAD_CATCHUP_MS, HLS_PLAYER_CONFIG, ignoreHlsErrorDuringRestart, planDecodeRecovery, planSeek, recordDecodeRecover, watchRemuxStart, waitForSeekable } from "./player-hls";
 import { clampVolume, readVolume, writeVolume } from "./player-volume";
+import { PlaybackWakeLock, screenWakeLock } from "./playback-wake-lock";
 import { progressToSave } from "./player-progress";
 import { detectCapabilities } from "./capabilities";
 import { t, useI18n, type Key } from "./i18n";
@@ -299,6 +300,8 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const [addonSubtitle, setAddonSubtitle] = useState<Subtitle | null>(null);
   const [offset, setOffset] = useState(0);
   const [paused, setPaused] = useState(true);
+  const [userPaused, setUserPaused] = useState(false);
+  const [playbackFailed, setPlaybackFailed] = useState(false);
   const [time, setTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [scrub, setScrub] = useState<number | null>(null);
@@ -472,6 +475,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     if (video) { video.pause(); video.removeAttribute("src"); video.load(); }
     clearBuffering();
     setError(message);
+    setPlaybackFailed(true);
     const id = sessionRef.current;
     if (id) void api.stopPlayback(id).catch(() => undefined);
   };
@@ -528,6 +532,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     else {
       report("ERROR", "The browser supports neither MSE nor native HLS", { ...context(), userAgent: navigator.userAgent });
       setError(t("player.noHls"));
+      setPlaybackFailed(true);
     }
   };
 
@@ -561,7 +566,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   useEffect(() => {
     if (!open || !stream?.playable || !videoRef.current) return;
     let disposed = false; const video = videoRef.current; const epoch = ++seekEpochRef.current;
-    setError(""); setBuffering(true); setTime(0); setDuration(0); setOffset(0); setScrub(null); setSession(null); setAddonSubtitle(null);
+    setError(""); setUserPaused(false); setPlaybackFailed(false); setBuffering(true); setTime(0); setDuration(0); setOffset(0); setScrub(null); setSession(null); setAddonSubtitle(null);
     timeRef.current = 0; offsetRef.current = 0; probeDurationRef.current = 0; seekingRef.current = false; pendingSeekRef.current = null;
     reportRef.current = { position: 0, duration: 0 }; setResumedFrom(0);
     stallsRef.current = []; setQualityHint(null); setDownloadState("idle");
@@ -592,9 +597,13 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
         if (subtitlePreferenceRef.current !== null) setAddonSubtitle(pickAddonSubtitle(addonSubtitles, subtitlePreferenceRef.current ?? subtitleLanguage, created.audioTracks[created.audioTrack]?.language, audioPreferenceRef.current));
       }
     }).catch((value) => {
+      // A newer film already owns the player. Writing here would put the old failure on it
+      // and drop the screen lock under a film that is starting.
+      if (disposed) return;
       const message = value instanceof Error ? value.message : String(value);
       report("ERROR", `Playback did not start: ${message}`, { ...context(), phase: "start", capabilities: capabilities() });
       setError(describeError(value));
+      setPlaybackFailed(true);
     }).finally(() => { if (!disposed) setBuffering(false); });
     return () => {
       disposed = true; detach();
@@ -655,7 +664,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     const autoplay = !video.paused;
     // Keep the last frame. The previous HLS generation stays served for a few
     // seconds, so destroying it here only produced a black screen and bufferStalledError.
-    seekInFlightRef.current = true; seekingRef.current = true; setBuffering(true); setError(""); setSeekKept(false);
+    seekInFlightRef.current = true; seekingRef.current = true; setBuffering(true); setError(""); setPlaybackFailed(false); setSeekKept(false);
     video.pause();
     // A session started to recover from one the server had forgotten. If the viewer closes the
     // film or moves on before it is taken up, nothing else knows about it, and it would convert
@@ -699,6 +708,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       const message = value instanceof Error ? value.message : String(value);
       report("ERROR", `Seek failed: ${message}`, { ...context(), phase: "seek", target: Math.round(bounded) });
       if (epoch === seekEpochRef.current) setError(describeError(value));
+      setPlaybackFailed(true);
     }
     finally {
       if (started && started !== sessionRef.current) void api.stopPlayback(started).catch(() => undefined);
@@ -743,7 +753,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     const id = sessionRef.current; if (!id) return;
     const at = timeRef.current;
     const video = videoRef.current;
-    seekInFlightRef.current = true; seekingRef.current = true; setBuffering(true); setError("");
+    seekInFlightRef.current = true; seekingRef.current = true; setBuffering(true); setError(""); setPlaybackFailed(false);
     video?.pause();
     try {
       // If the connection fails on the way, the server still performs the switch and the two
@@ -759,9 +769,12 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       }
     }
     catch (value) {
+      // The film changed while the switch was in flight. The new one has its own lock.
+      if (sessionRef.current !== id) return;
       const message = value instanceof Error ? value.message : String(value);
       report("ERROR", `Track switch failed: ${message}`, { ...context(), phase: "track", changes });
       setError(describeError(value));
+      setPlaybackFailed(true);
     }
     finally { seekInFlightRef.current = false; seekingRef.current = false; setBuffering(false); }
   };
@@ -859,7 +872,12 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     return () => window.removeEventListener("pagehide", leaving);
   }, [open]);
 
-  const toggle = () => { const video = videoRef.current; if (!video) return; if (video.paused) void video.play().catch(() => undefined); else video.pause(); };
+  const toggle = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) { setUserPaused(false); void video.play().catch(() => undefined); }
+    else { setUserPaused(true); video.pause(); }
+  };
 
   const clearControlsTimer = () => {
     if (controlsTimerRef.current === undefined) return;
@@ -1014,6 +1032,20 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     }, 80);
   };
 
+  // The screen stays on for as long as the viewer means to watch, and goes back to sleeping on a
+  // pause, a failed session or the player closing. A browser with no API, or one that refuses the
+  // request, changes nothing about playback.
+  useEffect(() => {
+    const lock = new PlaybackWakeLock(screenWakeLock(navigator), () => document.visibilityState === "visible");
+    const sync = () => lock.update(open && !userPaused && !playbackFailed);
+    sync();
+    document.addEventListener("visibilitychange", sync);
+    return () => {
+      document.removeEventListener("visibilitychange", sync);
+      void lock.release();
+    };
+  }, [open, userPaused, playbackFailed]);
+
   useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => {
@@ -1068,7 +1100,12 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       else revealControls();
     }}>
       <video ref={videoRef} playsInline disableRemotePlayback x-webkit-airplay="deny"
-        onPlay={() => { setPaused(false); cancelNext(); }} onPause={() => setPaused(true)} onSeeking={cancelNext}
+        onPlay={() => {
+          setPaused(false);
+          // A failed seek or track change leaves the lock off. Playing again means it recovered.
+          setPlaybackFailed(false);
+          cancelNext();
+        }} onPause={() => setPaused(true)} onSeeking={cancelNext}
         onEnded={() => {
           // Nothing follows, so the film is over: the player steps aside and leaves the
           // detail view on screen instead of sitting on the last frame.
