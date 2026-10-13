@@ -79,6 +79,9 @@ fun PlayerOverlayShell(
   initiallyShown: Boolean = true,
   /** Bumped when the controls have to come back, as they do after the background. */
   showControls: Int = 0,
+  /** Bumped when the window comes back, including from the screensaver, so the remote has a
+   *  target again even if the controls never left. */
+  reclaimFocus: Int = 0,
   /** Bumped when the server refused a seek; the message shows for [SEEK_KEPT_MS]. */
   seekKept: Int = 0,
   /** A panel or the next-episode card is up: it owns the D-pad, Back and the auto-hide timer. */
@@ -186,6 +189,10 @@ fun PlayerOverlayShell(
   // The hidden state needs a focus target of its own: the video is not focusable, so without this
   // the remote went dead once the OSD was gone.
   LaunchedEffect(controls) {
+    if (controls) runCatching { playFocus.requestFocus() } else runCatching { rootFocus.requestFocus() }
+  }
+  LaunchedEffect(reclaimFocus) {
+    if (reclaimFocus == 0) return@LaunchedEffect
     if (controls) runCatching { playFocus.requestFocus() } else runCatching { rootFocus.requestFocus() }
   }
 

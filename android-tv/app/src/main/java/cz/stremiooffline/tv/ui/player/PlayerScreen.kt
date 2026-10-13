@@ -2,7 +2,12 @@
 
 package cz.stremiooffline.tv.ui.player
 
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
+import android.os.PowerManager
 import android.view.ViewGroup
 import androidx.annotation.OptIn
 import androidx.compose.foundation.background
@@ -138,9 +143,12 @@ fun PlayerScreen(
   // The set stays awake for as long as the viewer means to be watching and nothing has failed.
   KeepScreenOn(enabled = wantsPlay && state.error == null)
   var position by remember { mutableDoubleStateOf(0.0) }
-  // Coming back from the background starts a fresh session paused, at the position left behind.
-  var backgroundPosition by remember { mutableStateOf<Double?>(null) }
+  // Set once the session has been released. Coming back starts a fresh one, paused, at the
+  // position left behind. A screensaver does not set this: the same session stays.
+  var parked by remember { mutableStateOf(false) }
   var startPaused by remember { mutableStateOf(false) }
+  // The window lost its target while a screensaver or another activity covered it.
+  var reclaimFocus by remember { mutableIntStateOf(0) }
   var settings by remember { mutableStateOf(SettingsResponse()) }
   var addonSubtitles by remember { mutableStateOf<List<AddonSubtitleDto>>(emptyList()) }
   var addonFetched by remember { mutableStateOf(false) }
@@ -524,22 +532,39 @@ fun PlayerScreen(
     if (!sidecarActive && addonChoice == null) cues = emptyList()
   }
 
-  DisposableEffect(lifecycle) {
+  // Home, Recents and the screen turning off release the session. The screensaver stops the
+  // activity too, but the viewer is still on this film: deleting the session there left the remote
+  // with nothing to focus until a new one had been opened.
+  fun park() {
+    if (parked) return
+    parked = true
+    AppLog.info("Playback parked")
+    resumed = false
+    exoPlayer.pause()
+    loadedUrl = null
+    controller.stop()
+    PlayerLeave.requested = false
+  }
+
+  DisposableEffect(lifecycle, context) {
     val observer = LifecycleEventObserver { _, event ->
       when (event) {
         Lifecycle.Event.ON_STOP -> {
-          AppLog.info("Lifecycle stop")
-          resumed = false
-          exoPlayer.pause()
-          backgroundPosition = controller.position
-          // The session is gone, so even an unchanged address must be prepared again.
-          loadedUrl = null
-          controller.stop()
+          val interactive = (context.getSystemService(Context.POWER_SERVICE) as PowerManager).isInteractive
+          if (releasePlaybackOnStop(PlayerLeave.requested, interactive, PlayerDream.active)) {
+            park()
+          } else {
+            AppLog.info("Screensaver stop")
+            exoPlayer.pause()
+          }
         }
         Lifecycle.Event.ON_START -> {
-          if (backgroundPosition == null) return@LifecycleEventObserver
+          // Visible again, so a dream that ended without its broadcast cannot suppress the next leave.
+          PlayerDream.active = false
+          reclaimFocus++
+          if (!parked) return@LifecycleEventObserver
           AppLog.info("Lifecycle start")
-          backgroundPosition = null
+          parked = false
           resumed = true
           startPaused = true
           nextCard = false
@@ -548,8 +573,31 @@ fun PlayerScreen(
         else -> Unit
       }
     }
+    val receiver = object : BroadcastReceiver() {
+      override fun onReceive(ctx: Context?, intent: Intent?) {
+        when (intent?.action) {
+          Intent.ACTION_DREAMING_STARTED -> PlayerDream.active = true
+          Intent.ACTION_DREAMING_STOPPED -> PlayerDream.active = false
+          // Standby after a screensaver never stops the activity a second time.
+          Intent.ACTION_SCREEN_OFF -> park()
+        }
+      }
+    }
+    val filter = IntentFilter().apply {
+      addAction(Intent.ACTION_DREAMING_STARTED)
+      addAction(Intent.ACTION_DREAMING_STOPPED)
+      addAction(Intent.ACTION_SCREEN_OFF)
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+    } else {
+      context.registerReceiver(receiver, filter)
+    }
     lifecycle.addObserver(observer)
-    onDispose { lifecycle.removeObserver(observer) }
+    onDispose {
+      lifecycle.removeObserver(observer)
+      context.unregisterReceiver(receiver)
+    }
   }
 
   // A fatal playback error goes to the server once, through the rate-limited single-line route;
@@ -607,6 +655,7 @@ fun PlayerScreen(
     // Before the server answers there is no path to name; a failed start must not claim direct play.
     eyebrow = if (state.started) stringResource(pathLabel(diagPath(state.mode, state.copyAudio))) else "",
     playFocus = playFocus,
+    reclaimFocus = reclaimFocus,
     seekKept = state.seekKept,
     modal = tracksOpen || diagnosticsOpen || sourcesOpen || qualityOpen || nextCard || state.error != null,
     onSeek = { controller.seekTo(it) },

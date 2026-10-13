@@ -14,6 +14,7 @@ import cz.stremiooffline.tv.ui.detail.PlayTarget
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -32,6 +33,11 @@ import org.robolectric.annotation.Config
 class PlayerScreenPollTest {
 
   @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
+
+  @After fun resetBackground() {
+    PlayerLeave.requested = false
+    PlayerDream.active = false
+  }
 
   private fun mount(api: FakeTvApi, target: PlayTarget) {
     compose.setContent {
@@ -56,6 +62,7 @@ class PlayerScreenPollTest {
     mount(api, PlayTarget(key = "series:tt1:1:1", title = "It", resume = false, sourceId = "src1"))
 
     compose.waitUntil(5_000) { api.sidecarRequests.size >= 3 }
+    PlayerLeave.requested = true
     compose.activityRule.scenario.moveToState(Lifecycle.State.CREATED)
     compose.waitForIdle()
     val stopped = api.sidecarRequests.size
@@ -86,6 +93,7 @@ class PlayerScreenPollTest {
     assertEquals("sid", api.subtitleTextRequests.first().first)
     val stopped = api.subtitleTextRequests.size
 
+    PlayerLeave.requested = true
     compose.activityRule.scenario.moveToState(Lifecycle.State.CREATED)
     compose.waitForIdle()
     compose.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
