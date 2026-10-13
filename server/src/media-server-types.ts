@@ -43,6 +43,12 @@ export const MEDIA_SERVER_LIMITS = Object.freeze({
 
 export type RemoteLibraryType = "movie" | "series" | "mixed";
 
+/** How a remote library is listed natively: one provider page per request. `folders` walks the
+ *  library hierarchy (`Recursive=false`, `Folder` admitted), `titles` lists the media titles
+ *  (`Recursive=true`, no `Folder`). */
+export type RemoteBrowseMode = "folders" | "titles";
+export const REMOTE_BROWSE_MODES: readonly RemoteBrowseMode[] = ["folders", "titles"];
+
 export interface MediaConnectionRecord {
   id: string;
   provider: MediaServerKind;
@@ -69,7 +75,26 @@ export interface RemoteLibraryRecord {
   allowedUsers: string[];
   showOnHome: boolean;
   showInContinueWatching: boolean;
+  /** Optional, backward-compatible display settings. Absent stays absent on the record so an
+   *  old record, export or backup keeps its exact shape; the projection resolves the default. */
+  browseMode?: RemoteBrowseMode;
+  mosaic?: boolean;
+  showInFavorites?: boolean;
 }
+
+/** The effective browse mode of a record: an explicit choice wins, otherwise a mixed library
+ *  (Emby Music, say) is a folder tree and a movie or series library is a flat title list. */
+export const effectiveBrowseMode = (record: Pick<RemoteLibraryRecord, "type" | "browseMode">): RemoteBrowseMode =>
+  record.browseMode === "folders" || record.browseMode === "titles"
+    ? record.browseMode
+    : record.type === "mixed" ? "folders" : "titles";
+
+/** Whether the mosaic preview is on: only an explicit `false` turns it off. */
+export const effectiveMosaic = (record: Pick<RemoteLibraryRecord, "mosaic">): boolean => record.mosaic !== false;
+
+/** Whether the library feeds the favourites destination: only an explicit `false` opts out. */
+export const effectiveShowInFavorites = (record: Pick<RemoteLibraryRecord, "showInFavorites">): boolean =>
+  record.showInFavorites !== false;
 
 export interface RemoteCapabilities {
   rename: false;
@@ -147,6 +172,10 @@ export interface PublicRemoteLibrary {
   order: number;
   showOnHome: boolean;
   showInContinueWatching: boolean;
+  /** Resolved display settings: the effective values the interface renders. */
+  browseMode: RemoteBrowseMode;
+  mosaic: boolean;
+  showInFavorites: boolean;
   capabilities: RemoteCapabilities;
   /** The provider of the stored connection, when it still exists. Never a secret or address. */
   provider?: MediaServerKind;
@@ -162,6 +191,9 @@ export const publicRemoteLibrary = (record: RemoteLibraryRecord, provider?: Medi
   order: record.order,
   showOnHome: record.showOnHome,
   showInContinueWatching: record.showInContinueWatching,
+  browseMode: effectiveBrowseMode(record),
+  mosaic: effectiveMosaic(record),
+  showInFavorites: effectiveShowInFavorites(record),
   capabilities: READ_ONLY_MEDIA_CAPABILITIES,
   ...(provider === undefined ? {} : { provider }),
 });
@@ -171,20 +203,30 @@ export const adminRemoteLibrary = (record: RemoteLibraryRecord, provider?: Media
   allowedUsers: [...record.allowedUsers],
 });
 
-/** A provider item as the interface may see it: the internal shape plus the two same-origin
- *  artwork paths the client loads instead of any upstream address. Built only from an encoded
- *  local library and item handle and a fixed image role, so a cached provider row can never
- *  turn into a client-admitted URL. */
-export type PublicRemoteItem = ProviderItem & { poster: string; wide: string };
+/** A provider item as the interface may see it: the internal shape (never an image flag) plus
+ *  the same-origin artwork paths the client loads instead of any upstream address. A path is
+ *  omitted only when the provider metadata proves that role absent, so an unknown fact keeps
+ *  the legacy URL. Two optional paths built from an encoded local library and item handle and
+ *  a fixed image role can never turn a cached provider row into a client-admitted URL. */
+export type PublicRemoteItem = Omit<ProviderItem, "hasPrimaryImage" | "hasBackdropImage"> & { poster?: string; wide?: string };
 
 export const remoteArtworkPath = (libraryId: string, itemId: string, imageType: "Primary" | "Backdrop"): string =>
   `/api/remote-libraries/${encodeURIComponent(libraryId)}/items/${encodeURIComponent(itemId)}/artwork/${imageType}`;
 
 export const publicRemoteItem = (item: ProviderItem, libraryId: string): PublicRemoteItem => ({
-  ...item,
-  poster: remoteArtworkPath(libraryId, item.id, "Primary"),
-  wide: remoteArtworkPath(libraryId, item.id, "Backdrop"),
+  ...scrubInternalItemFields(item),
+  ...(item.hasPrimaryImage === false ? {} : { poster: remoteArtworkPath(libraryId, item.id, "Primary") }),
+  ...(item.hasBackdropImage === false ? {} : { wide: remoteArtworkPath(libraryId, item.id, "Backdrop") }),
 });
+
+/** Internal provider-only facts never reach a client projection. */
+const scrubInternalItemFields = (item: ProviderItem): Omit<ProviderItem, "hasPrimaryImage" | "hasBackdropImage"> => {
+  if (item.hasPrimaryImage === undefined && item.hasBackdropImage === undefined) return item;
+  const clone: ProviderItem = { ...item };
+  delete clone.hasPrimaryImage;
+  delete clone.hasBackdropImage;
+  return clone;
+};
 
 export type MediaServerErrorCode =
   | "invalid-input"

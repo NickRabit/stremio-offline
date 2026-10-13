@@ -1,6 +1,6 @@
 import { serverText, t } from "./i18n";
 import type { SaveTarget } from "./save-target";
-import type { StatsActivityPage, ActiveStream, ActivityItem, CalendarItem, UndatedCalendarItem, ClientLogBundle, ClientLogSummary, Diagnostics, BuildInfo, AuthStatus, StatsSummary, AdminRemoteLibrary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, FavoriteFilter, FavoriteItem, FollowDefaults, FollowEpisodeRow, FollowPreview, FollowStartMode, FollowView, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryMatchResult, LibraryOp, LibraryOpsState, MediaServerConnection, MediaServerProvider, NewEpisode, ProgressEntry, ProviderLibrary, RemoteHomeCard, RemoteItem, RemoteItemPage, RemoteItemState, RemoteLibrary, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchPreferences, SearchResult, SearchState, SearchableCatalog, SiteLink, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, SettingsView, Stream, Subtitle, Trailer, UserAccount, UserPermissions, UserRole } from "./types";
+import type { StatsActivityPage, ActiveStream, ActivityItem, CalendarItem, UndatedCalendarItem, ClientLogBundle, ClientLogSummary, Diagnostics, BuildInfo, AuthStatus, StatsSummary, AdminRemoteLibrary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, FavoriteFilter, FavoriteItem, FollowDefaults, FollowEpisodeRow, FollowPreview, FollowStartMode, FollowView, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryMatchResult, LibraryOp, LibraryOpsState, MediaServerConnection, MediaServerProvider, NewEpisode, ProgressEntry, ProviderLibrary, RemoteBrowseMode, RemoteBrowseOrder, RemoteBrowseSort, RemoteHomeCard, RemoteItem, RemoteItemPage, RemoteItemState, RemoteItemType, RemoteLibrary, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchPreferences, SearchResult, SearchState, SearchableCatalog, SiteLink, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, SettingsView, Stream, Subtitle, Trailer, UserAccount, UserPermissions, UserRole } from "./types";
 import type { HomeLayoutResponse, HomeResponse, HomeRowId } from "../../server/src/home";
 
 /** The status code has to reach the top, or a sign-out is indistinguishable from an ordinary error. */
@@ -297,7 +297,7 @@ export const api = {
     request<AdminRemoteLibrary>(`/api/media-servers/${encodeURIComponent(id)}/libraries`, { method: "POST", body: JSON.stringify(body) }),
   /** Every attached library, disabled ones included: what the administrator list works on. */
   adminRemoteLibraries: () => request<{ libraries: AdminRemoteLibrary[] }>("/api/media-servers/libraries").then((answer) => answer.libraries),
-  updateRemoteLibrary: (id: string, patch: { name?: string; enabled?: boolean; order?: number; showOnHome?: boolean; showInContinueWatching?: boolean; allowedUsers?: string[] }) =>
+  updateRemoteLibrary: (id: string, patch: { name?: string; enabled?: boolean; order?: number; showOnHome?: boolean; showInContinueWatching?: boolean; allowedUsers?: string[]; browseMode?: RemoteBrowseMode; mosaic?: boolean; showInFavorites?: boolean }) =>
     request<AdminRemoteLibrary>(`/api/remote-libraries/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
   /** Detaching a library revokes access now; forgetting also drops every account's local
    *  history and favorites for it. */
@@ -316,6 +316,14 @@ export const api = {
     request<{ items: RemoteHomeCard[]; total: number; partial?: boolean }>(`/api/remote-libraries/personal?${q({ filter, skip: options.skip, limit: options.limit ?? 40 })}`, { signal: options.signal }),
   remoteItems: (libraryId: string, options: { limit?: number; cursor?: string; search?: string; type?: string; signal?: AbortSignal } = {}) =>
     request<RemoteItemPage>(`/api/remote-libraries/${encodeURIComponent(libraryId)}/items?${q({ limit: options.limit ?? 100, cursor: options.cursor, search: options.search, type: options.type })}`, { signal: options.signal }),
+  /** One bounded page of a remote library or one folder inside it. `parentId` absent means the
+   *  attached root; the cursor, search, sort and order all stay inside that same directory. */
+  remoteBrowse: (libraryId: string, options: { parentId?: string; mode?: RemoteBrowseMode; limit?: number; cursor?: string; search?: string; type?: RemoteItemType; sort?: RemoteBrowseSort; order?: RemoteBrowseOrder; signal?: AbortSignal } = {}) =>
+    request<RemoteItemPage>(`/api/remote-libraries/${encodeURIComponent(libraryId)}/browse?${q({ parentId: options.parentId, mode: options.mode, limit: options.limit ?? 60, cursor: options.cursor, search: options.search, type: options.type, sort: options.sort, order: options.order })}`, { signal: options.signal }),
+  /** Up to four authorized artwork URLs drawn from a library root or one folder, for the tile
+   *  mosaic. A library with mosaics off answers an empty list without touching the provider. */
+  remotePreview: (libraryId: string, parentId?: string, signal?: AbortSignal) =>
+    request<{ posters: string[] }>(`/api/remote-libraries/${encodeURIComponent(libraryId)}/preview?${q({ parentId })}`, { signal }),
   remoteItem: (libraryId: string, itemId: string, signal?: AbortSignal) =>
     request<{ item: RemoteItem; capabilities: RemoteItemPage["capabilities"] }>(`/api/remote-libraries/${encodeURIComponent(libraryId)}/items/${encodeURIComponent(itemId)}`, { signal }),
   remoteEpisodes: (libraryId: string, itemId: string, options: { limit?: number; cursor?: string; signal?: AbortSignal } = {}) =>

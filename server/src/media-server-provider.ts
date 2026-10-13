@@ -24,7 +24,31 @@ export interface ProviderLibrary {
   type: RemoteLibraryType;
 }
 
-export type ProviderItemType = "movie" | "series" | "season" | "episode";
+export type ProviderItemType = "movie" | "series" | "season" | "episode" | "folder";
+
+/** A folder is navigable but never playable and never a catalogue match. */
+export const PLAYABLE_ITEM_TYPES: readonly ProviderItemType[] = ["movie", "episode"];
+
+export type ProviderSort = "name" | "added" | "size";
+export type ProviderOrder = "asc" | "desc";
+export const PROVIDER_SORTS: readonly ProviderSort[] = ["name", "added", "size"];
+export const PROVIDER_ORDERS: readonly ProviderOrder[] = ["asc", "desc"];
+
+/** One native browse page: exactly the arguments a client may choose, mapped one-to-one onto
+ *  the fixed transport operation. `mode` decides `Recursive` and whether `Folder` is admitted. */
+export interface ProviderDirectoryOptions {
+  mode: "folders" | "titles";
+  limit?: number;
+  cursor?: string;
+  search?: string;
+  type?: ProviderItemType;
+  sort?: ProviderSort;
+  order?: ProviderOrder;
+}
+
+export const DIRECTORY_MEDIA_TYPES = "Movie,Series,Season,Episode,MusicVideo";
+export const DIRECTORY_FOLDER_TYPES = `Folder,${DIRECTORY_MEDIA_TYPES}`;
+export const DIRECTORY_TITLE_TYPES = "Movie,Series,MusicVideo";
 
 export interface ProviderItem {
   id: string;
@@ -37,6 +61,14 @@ export interface ProviderItem {
   episodeEnd?: number;
   providerIds: { imdb?: string; tmdb?: string; tvdb?: string };
   durationTicks?: number;
+  overview?: string; year?: number; genres?: string[]; size?: number; addedAt?: string;
+  /** Internal only: whether the provider row carries an actual Primary image tag. Never part of
+   *  a client projection; the mosaic preview uses it to prefer tiles that have real artwork. */
+  hasPrimaryImage?: boolean;
+  /** Internal only: whether the provider row carries an actual Backdrop image. Never part of a
+   *  client projection; the item projection omits the wide path only when this is explicitly
+   *  false, so a row that never reported image metadata keeps the legacy path. */
+  hasBackdropImage?: boolean;
 }
 
 export interface ProviderPage {
@@ -61,6 +93,9 @@ export interface MediaServerProvider {
   currentAccount(token: string, accountId: string, signal?: AbortSignal): Promise<{ accountId: string; policy: RemoteAccountPolicy }>;
   listLibraries(token: string, accountId: string, signal?: AbortSignal): Promise<ProviderLibrary[]>;
   pageItems(token: string, accountId: string, libraryId: string, options?: { cursor?: string; limit?: number; search?: string }, signal?: AbortSignal): Promise<ProviderPage>;
+  /** One native browse page of `parentId`: a folder's children or a library's titles. The
+   *  options map strictly onto the fixed transport operation; one page per request, no scan. */
+  pageDirectory(token: string, accountId: string, parentId: string, options: ProviderDirectoryOptions, signal?: AbortSignal): Promise<ProviderPage>;
   detail(token: string, accountId: string, itemId: string, signal?: AbortSignal): Promise<ProviderItem>;
   ancestors(token: string, accountId: string, itemId: string, signal?: AbortSignal): Promise<string[]>;
   versions(token: string, accountId: string, itemId: string, signal?: AbortSignal): Promise<ProviderVersion[]>;
@@ -73,10 +108,12 @@ const EXTERNAL_SUBTITLES_MAX = 64;
 const SUBTITLE_INDEX_MAX = 1023;
 const SUBTITLE_TEXT_CODECS = new Set(["subrip", "srt"]);
 const PROVIDER_ID_MAX = 512;
+const IMAGE_TAG_MAX = 512;
 const CURSOR_MAX = 8192;
 const CURSOR_JSON_BYTES_MAX = 6144;
 const CURSOR_OFFSET_MAX = 1_000_000_000;
 const SEARCH_MAX = 256;
+const DIRECTORY_LIMIT_DEFAULT = 60;
 
 const invalid = (message: string): MediaServerError => new MediaServerError("invalid-input", message);
 const invalidResponse = (message: string): MediaServerError => new MediaServerError("invalid-response", message);
@@ -120,7 +157,39 @@ const ITEM_TYPES = new Map<string, ProviderItemType>([
   ["Series", "series"],
   ["Season", "season"],
   ["Episode", "episode"],
+  ["Folder", "folder"],
 ]);
+
+const DIRECTORY_ITEM_TYPE_NAMES: ReadonlyMap<ProviderItemType, string> = new Map([
+  ["movie", "Movie"],
+  ["series", "Series"],
+  ["season", "Season"],
+  ["episode", "Episode"],
+]);
+
+const SORT_BY: Record<ProviderSort, string> = { name: "SortName", added: "DateCreated", size: "Size" };
+const SORT_ORDER: Record<ProviderOrder, string> = { asc: "Ascending", desc: "Descending" };
+
+/** The provider row's Primary image tag, read only as a truthy non-empty string. */
+function hasPrimaryImage(raw: unknown): boolean {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return false;
+  const primary = (raw as Record<string, unknown>).Primary;
+  return typeof primary === "string" && primary.length > 0;
+}
+
+/** A legacy `ImageTags.Backdrop` entry is the same truthy non-empty bounded string shape. */
+function hasBackdropTag(raw: unknown): boolean {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return false;
+  const backdrop = (raw as Record<string, unknown>).Backdrop;
+  return typeof backdrop === "string" && backdrop.length > 0 && backdrop.length <= IMAGE_TAG_MAX;
+}
+
+/** `BackdropImageTags` proves presence only when it is an array carrying at least one bounded
+ *  non-empty string: an empty or malformed list is the metadata's own statement of absence. */
+function hasBackdropImages(raw: unknown): boolean {
+  if (!Array.isArray(raw)) return false;
+  return raw.some((tag) => typeof tag === "string" && tag.length > 0 && tag.length <= IMAGE_TAG_MAX);
+}
 
 function readProviderIds(raw: unknown): { imdb?: string; tmdb?: string; tvdb?: string } {
   const result: { imdb?: string; tmdb?: string; tvdb?: string } = {};
@@ -164,6 +233,27 @@ function providerItem(raw: unknown): ProviderItem {
   }
   const durationTicks = optionalSafeInt(item.RunTimeTicks);
   if (durationTicks !== undefined) result.durationTicks = durationTicks;
+  const overview = optionalString(item.Overview, 4096);
+  if (overview !== undefined) result.overview = overview;
+  const year = optionalSafeInt(item.ProductionYear);
+  if (year !== undefined && year >= 1800 && year <= 3000) result.year = year;
+  if (Array.isArray(item.Genres)) {
+    const genres = item.Genres.slice(0, 20).flatMap((value) => {
+      const genre = optionalString(value, 128);
+      return genre === undefined ? [] : [genre];
+    });
+    if (genres.length) result.genres = [...new Set(genres)];
+  }
+  const size = optionalSafeInt(item.Size);
+  if (size !== undefined) result.size = size;
+  const addedAt = optionalString(item.DateCreated, 64);
+  if (addedAt !== undefined && Number.isFinite(Date.parse(addedAt))) result.addedAt = new Date(addedAt).toISOString();
+  if (item.ImageTags !== undefined) result.hasPrimaryImage = hasPrimaryImage(item.ImageTags);
+  if (item.BackdropImageTags !== undefined) {
+    result.hasBackdropImage = hasBackdropImages(item.BackdropImageTags);
+  } else if (item.ImageTags !== undefined) {
+    result.hasBackdropImage = hasBackdropTag(item.ImageTags);
+  }
   return result;
 }
 
@@ -293,6 +383,46 @@ function decodeCursor(cursor: unknown): CursorBinding {
   return decoded;
 }
 
+/** A directory cursor binds the whole query identity -- account, parent, mode, type, search and
+ *  the sort pair -- so a cursor from one listing can never be replayed against another. */
+interface DirectoryCursorBinding {
+  o: number;
+  a: string;
+  p: string;
+  m: string;
+  t: string;
+  q: string;
+  s: string;
+  r: string;
+}
+
+const encodeDirectoryCursor = (binding: DirectoryCursorBinding): string =>
+  Buffer.from(JSON.stringify(binding), "utf8").toString("base64url");
+
+function decodeDirectoryCursor(cursor: unknown): DirectoryCursorBinding {
+  if (typeof cursor !== "string" || cursor.length === 0 || cursor.length > CURSOR_MAX) throw invalid("The media-server paging cursor is malformed.");
+  const json = Buffer.from(cursor, "base64url");
+  if (json.length === 0 || json.length > CURSOR_JSON_BYTES_MAX) throw invalid("The media-server paging cursor is malformed.");
+  let parsed: unknown;
+  try { parsed = JSON.parse(json.toString("utf8")); }
+  catch { throw invalid("The media-server paging cursor is malformed."); }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw invalid("The media-server paging cursor is malformed.");
+  const { o, a, p, m, t, q, s, r } = parsed as Record<string, unknown>;
+  if (typeof o !== "number" || !Number.isSafeInteger(o) || o < 0 || o > CURSOR_OFFSET_MAX
+    || !cursorString(a, MEDIA_SERVER_LIMITS.upstreamId, false)
+    || !cursorString(p, MEDIA_SERVER_LIMITS.upstreamId, false)
+    || !cursorString(m, 16, false)
+    || !cursorString(t, 32, true)
+    || !cursorString(q, SEARCH_MAX, true)
+    || !cursorString(s, 16, false)
+    || !cursorString(r, 16, false)) {
+    throw invalid("The media-server paging cursor is malformed.");
+  }
+  const decoded: DirectoryCursorBinding = { o, a, p, m, t, q, s, r };
+  if (encodeDirectoryCursor(decoded) !== cursor) throw invalid("The media-server paging cursor is not canonical.");
+  return decoded;
+}
+
 /** A source is an ordinary safe file only when it is a local file that carries none of the
  *  remote, infinite, opening/closing or live markers. A marker present as anything other than
  *  an explicit `false` (a truthy string, say) is kept out rather than trusted. */
@@ -409,6 +539,75 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
     return page;
   }
 
+  /** One page of a native browse: a folder's children (folders mode) or a library's titles
+   *  (titles mode). It reads exactly one provider page and never walks a cursor itself. */
+  async function pageDirectory(
+    token: string,
+    accountId: string,
+    parentId: string,
+    options: ProviderDirectoryOptions,
+    signal?: AbortSignal,
+  ): Promise<ProviderPage> {
+    if (typeof parentId !== "string" || parentId.length === 0 || parentId.length > MEDIA_SERVER_LIMITS.upstreamId) {
+      throw invalid("The media-server parent id is missing or too long.");
+    }
+    const mode = options?.mode;
+    if (mode !== "folders" && mode !== "titles") throw invalid("The media-server browse mode is not supported.");
+    const limit = options.limit ?? DIRECTORY_LIMIT_DEFAULT;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw invalid("The media-server page limit is out of range.");
+    const search = options.search;
+    if (search !== undefined && (typeof search !== "string" || search.length === 0 || search.length > SEARCH_MAX)) {
+      throw invalid("The media-server search term is not allowed.");
+    }
+    const type = options.type;
+    if (type !== undefined && !DIRECTORY_ITEM_TYPE_NAMES.has(type)) throw invalid("The media-server item type is not supported.");
+    const sort: ProviderSort = options.sort ?? "name";
+    if (!PROVIDER_SORTS.includes(sort)) throw invalid("The media-server sort is not supported.");
+    const order: ProviderOrder = options.order ?? "asc";
+    if (!PROVIDER_ORDERS.includes(order)) throw invalid("The media-server order is not supported.");
+    let offset = 0;
+    if (options.cursor !== undefined) {
+      const decoded = decodeDirectoryCursor(options.cursor);
+      if (decoded.a !== accountId || decoded.p !== parentId || decoded.m !== mode || decoded.t !== (type ?? "")
+        || decoded.q !== (search ?? "") || decoded.s !== sort || decoded.r !== order) {
+        throw invalid("The media-server paging cursor does not belong to this query.");
+      }
+      offset = decoded.o;
+    }
+    const filteredTypes = type === "movie" ? "Movie,MusicVideo" : type === "series" && mode === "folders"
+      ? "Series,Season,Episode" : type === undefined ? undefined : DIRECTORY_ITEM_TYPE_NAMES.get(type);
+    const includeItemTypes = filteredTypes === undefined
+      ? mode === "folders" ? DIRECTORY_FOLDER_TYPES : DIRECTORY_TITLE_TYPES
+      : mode === "folders" ? `Folder,${filteredTypes}` : filteredTypes;
+    const args = {
+      userId: accountId,
+      parentId,
+      includeItemTypes,
+      recursive: mode === "titles",
+      sortBy: type === "episode" && sort === "name" ? "ParentIndexNumber,IndexNumber,SortName" : SORT_BY[sort],
+      sortOrder: SORT_ORDER[order],
+      startIndex: offset,
+      limit,
+      ...(search !== undefined ? { searchTerm: search } : {}),
+    };
+    const response = asObject(await transport.requestJson("directory", args, token, signal), "The browse response");
+    if (!Array.isArray(response.Items)) throw invalidResponse("The browse response has no item array.");
+    const total = response.TotalRecordCount;
+    if (typeof total !== "number" || !Number.isSafeInteger(total) || total < 0 || total > CURSOR_OFFSET_MAX) {
+      throw invalidResponse("The browse response has no supported total.");
+    }
+    const items = response.Items.map((raw) => providerItem(raw));
+    if (items.length > limit) throw invalidResponse("The browse page returned more items than requested.");
+    if (offset + items.length > total || (items.length === 0 && offset < total)) {
+      throw invalidResponse("The browse page is inconsistent with its total.");
+    }
+    const page: ProviderPage = { items, total };
+    if (items.length > 0 && offset + items.length < total) {
+      page.cursor = encodeDirectoryCursor({ o: offset + items.length, a: accountId, p: parentId, m: mode, t: type ?? "", q: search ?? "", s: sort, r: order });
+    }
+    return page;
+  }
+
   async function detail(token: string, accountId: string, itemId: string, signal?: AbortSignal): Promise<ProviderItem> {
     const item = providerItem(await transport.requestJson("detail", { userId: accountId, itemId }, token, signal));
     if (item.id !== itemId) throw invalidResponse("The media-server detail response is for another item.");
@@ -449,5 +648,5 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
     return versions;
   }
 
-  return { verifyIdentity, authenticate, currentAccount, listLibraries, pageItems, detail, ancestors, versions };
+  return { verifyIdentity, authenticate, currentAccount, listLibraries, pageItems, pageDirectory, detail, ancestors, versions };
 }

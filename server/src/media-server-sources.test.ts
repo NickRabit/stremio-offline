@@ -42,6 +42,7 @@ class FakeServer {
   ancestorsOf: Record<string, string[]> = {};
   versionsOf: Record<string, ProviderVersion[]> = {};
   items: Record<string, ProviderItem[]> = {};
+  directories: Record<string, ProviderItem[]> = {};
   originalCalls = 0;
   assetResult: { bytes: Uint8Array; contentType: string } | undefined;
   assetRequests: Array<Record<string, unknown>> = [];
@@ -57,6 +58,7 @@ const stubProvider = (server: FakeServer): MediaServerProvider => ({
   currentAccount: async () => { await server.run(); return { accountId: server.accountId, policy: clone(server.policy) }; },
   listLibraries: async () => { await server.run(); return clone(server.libraries); },
   pageItems: async (_token, _account, libraryId) => { await server.run(); return { items: clone(server.items[libraryId] ?? []), total: (server.items[libraryId] ?? []).length }; },
+  pageDirectory: async (_token, _account, parentId) => { await server.run(); return { items: clone(server.directories[parentId] ?? []), total: (server.directories[parentId] ?? []).length }; },
   detail: async (_token, _account, itemId) => {
     await server.run();
     const item = server.detailOf[itemId];
@@ -113,6 +115,7 @@ const mount = async (): Promise<Harness> => {
     providerFactory: () => stubProvider(server),
     transportFactory: () => stubTransport(server),
     index: new MediaServerIndex(),
+    networkStartIntervalMs: 0,
   });
   await manager.initialize();
 

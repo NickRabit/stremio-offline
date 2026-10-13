@@ -6,6 +6,16 @@ import {
 } from "./views.js";
 
 const LIBRARY = "lib_0000000a";
+const REMOTE_LIBRARY = `rlib_${"a".repeat(32)}`;
+
+test("a remote library keeps its own view preferences under the rlib_ handle", () => {
+  const parsed = parseViews({ libraries: { [REMOTE_LIBRARY]: { sort: "added", order: "desc", view: "list" } } });
+  assert.deepEqual(parsed.libraries[REMOTE_LIBRARY], { sort: "added", order: "desc", favoritesOnly: false, view: "list" });
+  const merged = applyPatch(parsed, { libraries: { [REMOTE_LIBRARY]: { sort: "size", order: "asc", favoritesOnly: true, view: "list" } } });
+  assert.deepEqual(merged.libraries[REMOTE_LIBRARY], { sort: "size", order: "asc", favoritesOnly: true, view: "list" });
+  assert.deepEqual(parseViews(merged).libraries[REMOTE_LIBRARY], merged.libraries[REMOTE_LIBRARY], "the remote prefs survive a round trip");
+  assert.deepEqual(applyPatch(emptyViews(), { libraries: { "not-an-id": { sort: "name" } } }).libraries, {}, "a random key is still dropped");
+});
 
 test("parseViews reads nothing, or junk, as the empty object", () => {
   assert.deepEqual(parseViews(undefined), emptyViews());

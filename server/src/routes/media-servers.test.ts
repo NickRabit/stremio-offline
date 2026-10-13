@@ -48,6 +48,8 @@ class FakeServer {
   policy: RemoteAccountPolicy = { disabled: false, mediaPlayback: true, allFolders: true, folderIds: [], hasAdditionalRestrictions: false };
   libraries = [{ id: "lib-1", name: "Films", type: "movie" as const }];
   items: Record<string, ProviderItem[]> = { "lib-1": [movie("m1", "Alien")] };
+  directories: Record<string, ProviderItem[]> = {};
+  directoryCalls: Array<{ parentId: string; options: Record<string, unknown> }> = [];
   detailOf: Record<string, ProviderItem> = { m1: movie("m1", "Alien") };
   ancestorsOf: Record<string, string[]> = { m1: ["lib-1"] };
   versionsOf: Record<string, Array<{ id: string; name?: string; container?: string }>> = { m1: [{ id: "v1", name: "1080p" }] };
@@ -67,6 +69,11 @@ const provider = (server: FakeServer): MediaServerProvider => ({
   currentAccount: async () => { await server.run("user"); return { accountId: server.accountId, policy: structuredClone(server.policy) }; },
   listLibraries: async () => { await server.run("views"); return structuredClone(server.libraries); },
   pageItems: async (_token, _account, libraryId) => { await server.run("items"); return { items: structuredClone(server.items[libraryId] ?? []), total: (server.items[libraryId] ?? []).length }; },
+  pageDirectory: async (_token, _account, parentId, options) => {
+    await server.run("directory");
+    server.directoryCalls.push({ parentId, options: options as unknown as Record<string, unknown> });
+    return { items: structuredClone(server.directories[parentId] ?? []), total: (server.directories[parentId] ?? []).length };
+  },
   detail: async (_token, _account, itemId) => { await server.run("detail"); const item = server.detailOf[itemId]; if (!item) throw new MediaServerError("not-found", "missing"); return structuredClone(item); },
   ancestors: async (_token, _account, itemId) => { await server.run("ancestors"); return [...(server.ancestorsOf[itemId] ?? [])]; },
   versions: async (_token, _account, itemId) => { await server.run("versions"); return structuredClone(server.versionsOf[itemId] ?? []); },
@@ -105,6 +112,7 @@ const mount = async (): Promise<Harness> => {
   const manager = new MediaServerManager(store, new MediaServerSecrets(path.join(dir, "vault"), keyFile), {
     providerFactory: () => provider(server),
     transportFactory: () => transport,
+    networkStartIntervalMs: 0,
   });
   await manager.initialize();
 
@@ -255,6 +263,30 @@ test("a granted member can list and browse, and the list never carries grants or
     const detail = await api(harness.base, `/api/remote-libraries/${harness.libraryId}/items/m1`, { user: BOB });
     assert.equal(detail.status, 200);
     assert.equal(((await detail.json()) as { item: ProviderItem }).item.id, "m1");
+  });
+});
+
+test("a granted member browses and previews natively, and only GET reaches those paths", async () => {
+  await withHarness(async (harness) => {
+    harness.server.directories["lib-1"] = [movie("m1", "Alien")];
+    const browse = await api(harness.base, `/api/remote-libraries/${harness.libraryId}/browse?mode=folders`, { user: BOB });
+    assert.equal(browse.status, 200);
+    const page = await browse.json() as { items: ProviderItem[]; total: number; stale: boolean };
+    assert.deepEqual(page.items.map((item) => item.id), ["m1"]);
+    assert.equal(page.total, 1);
+    assert.equal(page.stale, false);
+
+    const preview = await api(harness.base, `/api/remote-libraries/${harness.libraryId}/preview`, { user: BOB });
+    assert.equal(preview.status, 200);
+    assert.deepEqual(await preview.json(), { posters: [`/api/remote-libraries/${harness.libraryId}/items/m1/artwork/Primary`] });
+
+    // A write at the same path is not on the member allow-list: the role gate refuses it.
+    assert.equal((await api(harness.base, `/api/remote-libraries/${harness.libraryId}/browse`, { method: "POST", user: BOB, body: {} })).status, 403);
+    assert.equal((await api(harness.base, `/api/remote-libraries/${harness.libraryId}/preview`, { method: "PATCH", user: BOB, body: {} })).status, 403);
+
+    assert.equal((await api(harness.base, `/api/remote-libraries/${harness.libraryId}/browse?mode=grid`, { user: BOB })).status, 400);
+    assert.equal((await api(harness.base, `/api/remote-libraries/${harness.libraryId}/preview?nope=1`, { user: BOB })).status, 400);
+    assert.equal((await api(harness.base, `/api/remote-libraries/${harness.libraryId}/browse`, { user: BOB })).status, 200);
   });
 });
 

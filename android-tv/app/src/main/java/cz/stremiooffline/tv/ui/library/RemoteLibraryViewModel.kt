@@ -15,6 +15,8 @@ import cz.stremiooffline.tv.data.RemoteLibraryDto
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 /** Which half of the Library section is on screen. */
 enum class LibrarySegment { Files, Servers }
@@ -46,34 +48,53 @@ data class RemoteItemsState(
   val hasMore: Boolean get() = nextCursor != null
 }
 
-/** One level of the remote navigation. */
+/** One artwork answer for a library root or folder tile: loading, ready posters or a failure that
+ *  leaves the plain folder icon. */
+sealed interface RemotePreviewState {
+  data object Loading : RemotePreviewState
+  data class Ready(val posters: List<String>) : RemotePreviewState
+  data object Failed : RemotePreviewState
+}
+
+/** One level of the remote navigation. A folder keeps its opaque parent id, so two folders with the
+ *  same number of children never share an identity. */
 sealed interface RemoteLevel {
   val libraryId: String
   val libraryName: String
   val provider: String
+  val title: String
+  /** Whether this level's root and folder tiles may load a preview mosaic at all. */
+  val mosaic: Boolean
   val state: RemoteItemsState
 
   /** A stable identity for one stack position. */
   val key: String
 
-  /** The library root: movies and series only. Episodes and seasons are never presented here. */
-  data class Items(
+  /** A library root or one folder inside it. Folders and their media share the level; episodes and
+   *  seasons are only ever listed through [Episodes]. */
+  data class Directory(
     override val libraryId: String,
     override val libraryName: String,
     override val provider: String,
-    val title: String,
+    override val title: String,
+    /** The opaque upstream parent: null at the attached root, the folder's own id below it. */
+    val parentId: String?,
+    /** `folders` lists this directory's children, `titles` is the flat listing. */
+    val mode: String,
+    override val mosaic: Boolean,
     override val state: RemoteItemsState = RemoteItemsState(),
   ) : RemoteLevel {
-    override val key: String get() = "items:$libraryId:$title"
+    override val key: String get() = "dir:$libraryId:${parentId ?: "root"}:$mode"
   }
 
-  /** A series or season whose episodes come from the episodes route. */
+  /** A series whose episodes load lazily through the browse route, one page at a time. */
   data class Episodes(
     override val libraryId: String,
     override val libraryName: String,
     override val provider: String,
-    val title: String,
+    override val title: String,
     val itemId: String,
+    override val mosaic: Boolean = false,
     override val state: RemoteItemsState = RemoteItemsState(),
   ) : RemoteLevel {
     override val key: String get() = "episodes:$libraryId:$itemId"
@@ -95,6 +116,9 @@ const val REMOTE_PICKER_KEY = "libraries"
  * The read-only media-server browser. A level's first page clears the level before it loads; a
  * "load more" only appends. Every load carries the epoch it was asked under, and Back, a segment
  * change or unmount cancels the jobs and advances the epoch, so a late answer can never land.
+ *
+ * A root or folder tile asks for its preview mosaic only while it is composed, at most
+ * [MAX_PREVIEWS] requests at once, cancelled when the level or the half changes.
  */
 class RemoteLibraryViewModel(private val api: RemoteLibraryApi) : ViewModel() {
 
@@ -105,11 +129,19 @@ class RemoteLibraryViewModel(private val api: RemoteLibraryApi) : ViewModel() {
   var selection by mutableStateOf<Map<String, String>>(emptyMap())
     private set
 
+  /** Poster mosaics for roots and folders, keyed by [previewKey]. */
+  var previews by mutableStateOf<Map<String, RemotePreviewState>>(emptyMap())
+    private set
+
   private var librariesJob: Job? = null
   private var listJob: Job? = null
   /** Separate guards, so starting an item load never invalidates a libraries load and vice versa. */
   private var librariesEpoch = 0
   private var itemsEpoch = 0
+
+  private val previewJobs = mutableMapOf<String, Job>()
+  private val previewSlots = Semaphore(MAX_PREVIEWS)
+  private var previewEpoch = 0
 
   fun selectedFor(key: String): String? = selection[key]
 
@@ -117,7 +149,38 @@ class RemoteLibraryViewModel(private val api: RemoteLibraryApi) : ViewModel() {
     selection = selection + (key to value)
   }
 
+  fun preview(key: String): RemotePreviewState? = previews[key]
+
+  /**
+   * Asks for one root or folder mosaic. The composed tile calls this; the cache and the running
+   * jobs dedupe, and a library with the mosaic off never fetches at all.
+   */
+  fun loadPreview(key: String, libraryId: String, parentId: String?, mosaic: Boolean) {
+    if (!mosaic) return
+    val known = previews[key]
+    if (known is RemotePreviewState.Ready || known is RemotePreviewState.Failed) return
+    if (previewJobs.containsKey(key)) return
+    previews = previews + (key to RemotePreviewState.Loading)
+    val generation = previewEpoch
+    previewJobs[key] = viewModelScope.launch {
+      try {
+        val posters = previewSlots.withPermit { api.remotePreview(libraryId, parentId).posters }
+        if (generation != previewEpoch) return@launch
+        previews = previews + (key to RemotePreviewState.Ready(posters))
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (_: Throwable) {
+        if (generation == previewEpoch) previews = previews + (key to RemotePreviewState.Failed)
+      } finally {
+        // A cancelled job is replaced by cancelPreviews, which clears the map itself.
+        if (generation == previewEpoch) previewJobs.remove(key)
+      }
+    }
+  }
+
   fun loadLibraries() {
+    cancelPreviews()
+    previews = emptyMap()
     val mine = ++librariesEpoch
     librariesJob?.cancel()
     state = state.copy(librariesLoading = true, librariesError = null)
@@ -136,8 +199,35 @@ class RemoteLibraryViewModel(private val api: RemoteLibraryApi) : ViewModel() {
   }
 
   fun openLibrary(library: RemoteLibraryDto) {
-    val level = RemoteLevel.Items(library.id, library.name, library.provider, library.name)
+    cancelPreviews()
+    val level = RemoteLevel.Directory(
+      libraryId = library.id,
+      libraryName = library.name,
+      provider = library.provider,
+      title = library.name,
+      parentId = null,
+      mode = effectiveMode(library),
+      mosaic = library.mosaic,
+    )
     state = state.copy(levels = listOf(level))
+    startLevel(level)
+  }
+
+  /** Opens one folder as a nested directory, keeping its opaque parent id. */
+  fun openFolder(item: RemoteItemDto) {
+    if (item.type != "folder" && item.type != "season") return
+    val current = state.current as? RemoteLevel.Directory ?: return
+    cancelPreviews()
+    val level = RemoteLevel.Directory(
+      libraryId = current.libraryId,
+      libraryName = current.libraryName,
+      provider = current.provider,
+      title = item.name,
+      parentId = item.id,
+      mode = FOLDERS_MODE,
+      mosaic = current.mosaic,
+    )
+    state = state.copy(levels = state.levels + level)
     startLevel(level)
   }
 
@@ -148,12 +238,14 @@ class RemoteLibraryViewModel(private val api: RemoteLibraryApi) : ViewModel() {
         RemoteLevel.Episodes(current.libraryId, current.libraryName, current.provider, item.name, item.id)
       else -> return
     }
+    cancelPreviews()
     state = state.copy(levels = state.levels + level)
     startLevel(level)
   }
 
   /** Opens one series straight at its episodes, without browsing the rest of its library. */
   fun openSeries(libraryId: String, libraryName: String, provider: String, item: RemoteItemDto) {
+    cancelPreviews()
     val level = RemoteLevel.Episodes(libraryId, libraryName, provider, item.name, item.id)
     state = state.copy(levels = listOf(level))
     startLevel(level)
@@ -162,6 +254,7 @@ class RemoteLibraryViewModel(private val api: RemoteLibraryApi) : ViewModel() {
   /** Pops one level, cancelling its load; false when the stack is already at the picker. */
   fun back(): Boolean {
     if (state.levels.isEmpty()) return false
+    cancelPreviews()
     cancelLoads()
     state = state.copy(levels = state.levels.dropLast(1))
     return true
@@ -169,6 +262,7 @@ class RemoteLibraryViewModel(private val api: RemoteLibraryApi) : ViewModel() {
 
   /** The view left the screen: no in-flight answer may be applied after this. */
   fun onHidden() {
+    cancelPreviews()
     cancelLoads()
   }
 
@@ -209,14 +303,14 @@ class RemoteLibraryViewModel(private val api: RemoteLibraryApi) : ViewModel() {
 
   /** A committed query; never fired per keystroke. It resets the level to its first page. */
   fun search(query: String) {
-    val level = state.current as? RemoteLevel.Items ?: return
+    val level = state.current as? RemoteLevel.Directory ?: return
     if (level.state.search == query) return
     clearForLoad(level) { it.copy(search = query) }
     request(currentLevel(level) ?: return, cursor = null, append = false)
   }
 
   fun filter(type: RemoteTypeFilter) {
-    val level = state.current as? RemoteLevel.Items ?: return
+    val level = state.current as? RemoteLevel.Directory ?: return
     if (level.state.type == type) return
     clearForLoad(level) { it.copy(type = type) }
     request(currentLevel(level) ?: return, cursor = null, append = false)
@@ -257,9 +351,23 @@ class RemoteLibraryViewModel(private val api: RemoteLibraryApi) : ViewModel() {
     listJob = viewModelScope.launch {
       try {
         val page = when (level) {
-          is RemoteLevel.Episodes -> api.remoteEpisodes(level.libraryId, level.itemId, PAGE, cursor)
-          is RemoteLevel.Items ->
-            api.remoteItems(level.libraryId, PAGE, cursor, level.state.search.ifEmpty { null }, level.state.type.wire)
+          is RemoteLevel.Episodes -> api.remoteBrowse(
+            libraryId = level.libraryId,
+            limit = BROWSE_LIMIT,
+            cursor = cursor,
+            type = EPISODE_TYPE,
+            parentId = level.itemId,
+            mode = TITLES_MODE,
+          )
+          is RemoteLevel.Directory -> api.remoteBrowse(
+            libraryId = level.libraryId,
+            limit = BROWSE_LIMIT,
+            cursor = cursor,
+            search = level.state.search.ifEmpty { null },
+            type = level.state.type.wire,
+            parentId = level.parentId,
+            mode = level.mode,
+          )
         }
         if (mine != itemsEpoch) return@launch
         val items = presentable(level, page.items)
@@ -301,14 +409,35 @@ class RemoteLibraryViewModel(private val api: RemoteLibraryApi) : ViewModel() {
     return existing + added.filter { seen.add(it.id) }
   }
 
-  /** The library root presents movies and series only; episodes and seasons never appear there
-   *  even though paging continues. Episodes are ordered season, then episode, then name, with a
-   *  missing season reading as the specials season 0. */
+  /**
+   * What a page presents. A folders level keeps every folder whatever the filter is, so the
+   * hierarchy is never flattened; its media is narrowed to the filter in place. The flat titles
+   * listing lets the server do the filtering and only drops the episodes and seasons that would
+   * clutter it. Episodes are ordered season, then episode, then name, missing season reads as 0.
+   */
   private fun presentable(level: RemoteLevel, items: List<RemoteItemDto>): List<RemoteItemDto> =
     when (level) {
       is RemoteLevel.Episodes -> items.sortedWith(compareBy({ it.season ?: 0 }, { it.episode ?: 0 }, { it.name }))
-      is RemoteLevel.Items -> items.filter { it.type != "episode" && it.type != "season" }
+      is RemoteLevel.Directory ->
+        if (level.mode == FOLDERS_MODE) filterFolders(items, level.state.type)
+        else items.filter { it.type != "episode" && it.type != "season" }
     }
+
+  /** A folders level filtered by type: every folder survives, only the media narrows. */
+  private fun filterFolders(items: List<RemoteItemDto>, type: RemoteTypeFilter): List<RemoteItemDto> =
+    when (type) {
+      RemoteTypeFilter.All -> items
+      RemoteTypeFilter.Movies -> items.filter { it.type == "folder" || it.type == "movie" }
+      RemoteTypeFilter.Series -> items.filter { it.type in setOf("folder", "series", "season", "episode") }
+    }
+
+  /** Cancels every running mosaic load; finished answers stay cached for a return. */
+  private fun cancelPreviews() {
+    previewEpoch++
+    previewJobs.values.forEach { it.cancel() }
+    previewJobs.clear()
+    previews = previews.filterValues { it !is RemotePreviewState.Loading }
+  }
 
   private fun cancelLoads() {
     librariesEpoch++
@@ -321,7 +450,7 @@ class RemoteLibraryViewModel(private val api: RemoteLibraryApi) : ViewModel() {
       librariesLoading = false,
       levels = state.levels.map { level ->
         when (level) {
-          is RemoteLevel.Items -> level.copy(state = level.state.copy(loading = false, loadingMore = false))
+          is RemoteLevel.Directory -> level.copy(state = level.state.copy(loading = false, loadingMore = false))
           is RemoteLevel.Episodes -> level.copy(state = level.state.copy(loading = false, loadingMore = false))
         }
       },
@@ -336,7 +465,7 @@ class RemoteLibraryViewModel(private val api: RemoteLibraryApi) : ViewModel() {
     if (index < 0) return
     val current = state.levels[index]
     val next = when (current) {
-      is RemoteLevel.Items -> current.copy(state = transform(current.state))
+      is RemoteLevel.Directory -> current.copy(state = transform(current.state))
       is RemoteLevel.Episodes -> current.copy(state = transform(current.state))
     }
     val levels = state.levels.toMutableList()
@@ -348,7 +477,23 @@ class RemoteLibraryViewModel(private val api: RemoteLibraryApi) : ViewModel() {
     if ((error as? ApiError)?.failure == ApiFailure.Unreachable) RemoteErrorKind.Offline else RemoteErrorKind.Failed
 
   companion object {
-    const val PAGE = 100
+    /** The page size the browse route defaults to; the client never asks for a scan. */
+    const val BROWSE_LIMIT = 60
+    const val FOLDERS_MODE = "folders"
+    const val TITLES_MODE = "titles"
+    const val EPISODE_TYPE = "episode"
+    /** At most two preview mosaics are fetched at once, as the web client does. */
+    const val MAX_PREVIEWS = 2
+
+    /** The cache key of one root or folder tile's mosaic. */
+    fun previewKey(libraryId: String, parentId: String?): String = "$libraryId|${parentId ?: ""}"
+
+    /** A mixed library browses folders by default; movies and series browse flat titles. */
+    fun effectiveMode(library: RemoteLibraryDto): String {
+      val chosen = library.browseMode
+      if (chosen == FOLDERS_MODE || chosen == TITLES_MODE) return chosen
+      return if (library.type == "mixed") FOLDERS_MODE else TITLES_MODE
+    }
 
     fun factory(api: RemoteLibraryApi) = viewModelFactory { initializer { RemoteLibraryViewModel(api) } }
   }

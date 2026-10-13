@@ -266,6 +266,99 @@ test("status codes map to typed errors, rate limits carry a clamped retry hint",
   }
 });
 
+/** A transport whose fetch is stubbed, so the cooldown can be driven without a socket. */
+const stubbed = (fetch: (url: string) => Promise<Response>) =>
+  createMediaServerTransport({ baseUrl: "http://media.example", allowLan: false, allowLoopback: false }, {
+    lookupAll: async () => [{ address: "93.184.216.34", family: 4 }],
+    fetch: (url) => fetch(url),
+  });
+
+const failed = async (work: Promise<unknown>): Promise<MediaServerError> =>
+  work.then(() => { throw new Error("expected a rejection"); }, (error) => error as MediaServerError);
+
+test("a metadata 429 puts the transport in cooldown and blocks later JSON, asset and original work", async () => {
+  let fetches = 0;
+  const transport = stubbed(async () => {
+    fetches += 1;
+    return new Response("{}", { status: 429, headers: { "retry-after": "2" } });
+  });
+  const limited = await failed(transport.requestJson("user", { userId: "u1" }, "tok"));
+  assert.equal(limited.code, "rate-limited");
+  assert.equal(limited.status, 429);
+  assert.equal(limited.retryAfterMs, 2_000, "the parsed hint is reported");
+  assert.equal(fetches, 1);
+
+  // Every transport operation is answered locally with the remaining hint; none opens a socket.
+  const blocked = [
+    await failed(transport.requestJson("user", { userId: "u1" }, "tok")),
+    await failed(transport.requestAsset({ kind: "artwork", itemId: "i1", imageType: "Primary" }, "tok")),
+    await failed(transport.requestOriginal({ itemId: "i1", mediaSourceId: "ms", method: "HEAD" }, "tok")),
+  ];
+  for (const error of blocked) {
+    assert.equal(error.code, "rate-limited");
+    assert.equal(error.status, 429);
+    assert.ok((error.retryAfterMs ?? 0) > 0 && (error.retryAfterMs ?? 0) <= 2_000, `remaining hint ${error.retryAfterMs}`);
+  }
+  assert.equal(fetches, 1, "a cooling transport performs no fetch");
+  await transport.close();
+});
+
+test("a 429 with no Retry-After parks the transport for the default thirty seconds", async () => {
+  let fetches = 0;
+  const transport = stubbed(async () => { fetches += 1; return new Response("{}", { status: 429 }); });
+  const limited = await failed(transport.requestJson("info", {}));
+  assert.equal(limited.code, "rate-limited");
+  assert.equal(limited.retryAfterMs, 30_000, "the default cooldown is reported when the header is absent");
+  const blocked = await failed(transport.requestJson("info", {}));
+  assert.ok((blocked.retryAfterMs ?? 0) > 29_000 && (blocked.retryAfterMs ?? 0) <= 30_000, `remaining hint ${blocked.retryAfterMs}`);
+  assert.equal(fetches, 1);
+  await transport.close();
+});
+
+test("the cooldown expires on its own and a Retry-After is capped at five minutes", async () => {
+  let status = 429;
+  const transport = stubbed(async () => status === 429
+    ? new Response("{}", { status: 429, headers: { "retry-after": "0.05" } })
+    : new Response(JSON.stringify({ Id: "server-1" }), { status: 200, headers: { "content-type": "application/json" } }));
+  const first = await failed(transport.requestJson("info", {}));
+  assert.equal(first.retryAfterMs, 50);
+  const still = await failed(transport.requestJson("info", {}));
+  assert.equal(still.code, "rate-limited", "the cooldown is still armed");
+  status = 200;
+  await new Promise((resolve) => setTimeout(resolve, 90));
+  assert.deepEqual(await transport.requestJson("info", {}), { Id: "server-1" }, "an expired cooldown lets the request through");
+  await transport.close();
+
+  const capped = stubbed(async () => new Response("{}", { status: 429, headers: { "retry-after": "99999" } }));
+  const limited = await failed(capped.requestJson("info", {}));
+  assert.equal(limited.retryAfterMs, 300_000, "the applied cooldown never exceeds the cap");
+  await capped.close();
+});
+
+test("a 429 observed while another request is preparing stops it before the socket is opened", async () => {
+  let fetches = 0;
+  let releaseLookup!: () => void;
+  const lookupGate = new Promise<void>((resolve) => { releaseLookup = resolve; });
+  let firstLookup = true;
+  const transport = createMediaServerTransport({ baseUrl: "http://media.example", allowLan: false, allowLoopback: false }, {
+    lookupAll: async () => {
+      if (firstLookup) { firstLookup = false; }
+      else await lookupGate;
+      return [{ address: "93.184.216.34", family: 4 }];
+    },
+    fetch: async () => { fetches += 1; return new Response("{}", { status: 429, headers: { "retry-after": "5" } }); },
+  });
+  const leading = transport.requestJson("info", {});
+  const trailing = transport.requestJson("info", {});
+  const first = await failed(leading);
+  assert.equal(first.code, "rate-limited");
+  releaseLookup();
+  const second = await failed(trailing);
+  assert.equal(second.code, "rate-limited", "the prepared request is refused once the cooldown is armed");
+  assert.equal(fetches, 1, "only the request that saw the 429 reached the socket");
+  await transport.close();
+});
+
 test("a redirect is refused and an oversized body is cut off", async () => {
   let redirect: Fixture | undefined;
   let big: Fixture | undefined;
@@ -821,15 +914,17 @@ test("original statuses map to typed errors and a 416 keeps only its sanitized r
     await fails("st403", "forbidden", 403);
     await fails("st404", "not-found", 404);
     await fails("st500", "unavailable", 500);
-    const limited = await call("st429").then(() => undefined, (value) => value as MediaServerError);
-    assert.equal(limited?.code, "rate-limited");
-    assert.equal(limited?.retryAfterMs, 300_000, "the hint is clamped");
 
     const unsatisfied = await call("st416");
     assert.equal(unsatisfied.status, 416);
     assert.equal(unsatisfied.body, null);
     assert.equal(unsatisfied.headers.get("content-range"), "bytes */100");
     assert.equal(unsatisfied.headers.get("content-length"), null, "the error-document length is not copied");
+
+    // A 429 parks the whole transport, so it is the last request this fixture takes.
+    const limited = await call("st429").then(() => undefined, (value) => value as MediaServerError);
+    assert.equal(limited?.code, "rate-limited");
+    assert.equal(limited?.retryAfterMs, 300_000, "the hint is clamped");
     await transport.close();
   } finally {
     await fixture?.close();
@@ -1115,5 +1210,57 @@ test("original media refuses a different range and incomplete or overlong bodies
         await assert.rejects(response.arrayBuffer(), { code: "invalid-response" });
       }
     } finally { await transport.close(); }
+  }
+});
+
+test("directory pins Recursive, the folder-admitting type set, the fixed sort pair and drops every other field", async () => {
+  const captured: string[] = [];
+  const transport = createMediaServerTransport({ baseUrl: "http://media.example", allowLan: false, allowLoopback: false }, {
+    lookupAll: async () => [{ address: "93.184.216.34", family: 4 }],
+    fetch: async (url) => {
+      captured.push(url);
+      return new Response(JSON.stringify({ Items: [], TotalRecordCount: 0 }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+  const query = (index: number) => new URL(captured[index]!).searchParams;
+  try {
+    await transport.requestJson("directory", {
+      userId: "user-1", parentId: "library-1", includeItemTypes: "Folder,Movie,Series,Season,Episode,MusicVideo",
+      recursive: false, sortBy: "SortName", sortOrder: "Ascending", startIndex: 0, limit: 60,
+    }, "safe-token");
+    assert.equal(query(0).get("Recursive"), "false");
+    assert.equal(query(0).get("IncludeItemTypes"), "Folder,Movie,Series,Season,Episode,MusicVideo");
+    assert.equal(query(0).get("SortBy"), "SortName");
+    assert.equal(query(0).get("SortOrder"), "Ascending");
+    assert.equal(query(0).get("StartIndex"), "0");
+    assert.equal(query(0).get("Limit"), "60");
+    assert.ok(query(0).get("Fields")?.includes("ImageTags"), "the directory query asks for image tags");
+    assert.equal(query(0).get("SearchTerm"), null);
+
+    await transport.requestJson("directory", {
+      userId: "user-1", parentId: "series-1", includeItemTypes: "Episode",
+      recursive: true, sortBy: "Size", sortOrder: "Descending", limit: 4, searchTerm: "alien",
+    }, "safe-token");
+    assert.equal(query(1).get("Recursive"), "true");
+    assert.equal(query(1).get("IncludeItemTypes"), "Episode");
+    assert.equal(query(1).get("SortBy"), "Size");
+    assert.equal(query(1).get("SortOrder"), "Descending");
+    assert.equal(query(1).get("SearchTerm"), "alien");
+
+    const rejected: Array<[string, Record<string, unknown>]> = [
+      ["unknown field", { userId: "u", parentId: "p", includeItemTypes: "Movie", recursive: false, sortBy: "SortName", sortOrder: "Ascending", rawUrl: "/x" }],
+      ["non-boolean recursion", { userId: "u", parentId: "p", includeItemTypes: "Movie", recursive: "false", sortBy: "SortName", sortOrder: "Ascending" }],
+      ["unsupported type", { userId: "u", parentId: "p", includeItemTypes: "Music", recursive: false, sortBy: "SortName", sortOrder: "Ascending" }],
+      ["unsupported sort", { userId: "u", parentId: "p", includeItemTypes: "Movie", recursive: false, sortBy: "Name", sortOrder: "Ascending" }],
+      ["unsupported order", { userId: "u", parentId: "p", includeItemTypes: "Movie", recursive: false, sortBy: "SortName", sortOrder: "asc" }],
+      ["raw parent path", { userId: "u", parentId: "a/b", includeItemTypes: "Movie", recursive: false, sortBy: "SortName", sortOrder: "Ascending" }],
+      ["limit out of range", { userId: "u", parentId: "p", includeItemTypes: "Movie", recursive: false, sortBy: "SortName", sortOrder: "Ascending", limit: 201 }],
+    ];
+    for (const [label, args] of rejected) {
+      await assert.rejects(transport.requestJson("directory", args as never, "safe-token"), { code: "invalid-input" }, label);
+    }
+    assert.equal(captured.length, 2, "a refused directory request never reaches the socket");
+  } finally {
+    await transport.close();
   }
 });

@@ -9,6 +9,7 @@ import {
   newConnectionId,
   newRemoteLibraryId,
   type MediaConnectionRecord,
+  type RemoteBrowseMode,
   type RemoteLibraryRecord,
   type RemoteLibraryType,
 } from "./media-server-types.js";
@@ -42,6 +43,11 @@ export interface ExportedRemoteLibrary {
   order: number;
   showOnHome: boolean;
   showInContinueWatching: boolean;
+  /** Optional display settings. Absent in an old file and absent in a new export of an old
+   *  record, so a backup that predates them keeps its exact shape. */
+  browseMode?: RemoteBrowseMode;
+  mosaic?: boolean;
+  showInFavorites?: boolean;
 }
 
 export interface MediaServerConfigurationExport {
@@ -64,9 +70,9 @@ const nextGeneration = (generation: number): number => {
 };
 
 export const CONNECTION_KEYS = ["provider", "name", "baseUrl", "allowLan", "allowLoopback", "serverId", "accountId", "enabled"];
-export const LIBRARY_KEYS = ["remoteId", "name", "type", "enabled", "order", "showOnHome", "showInContinueWatching"];
+export const LIBRARY_KEYS = ["remoteId", "name", "type", "enabled", "order", "showOnHome", "showInContinueWatching", "browseMode", "mosaic", "showInFavorites"];
 export const EXPORT_CONNECTION_KEYS = ["id", "provider", "name", "baseUrl", "allowLan", "allowLoopback", "serverId", "accountId"];
-export const EXPORT_LIBRARY_KEYS = ["id", "connectionId", "remoteId", "name", "type", "order", "showOnHome", "showInContinueWatching"];
+export const EXPORT_LIBRARY_KEYS = ["id", "connectionId", "remoteId", "name", "type", "order", "showOnHome", "showInContinueWatching", "browseMode", "mosaic", "showInFavorites"];
 export const LIBRARY_TYPES: readonly RemoteLibraryType[] = ["movie", "series", "mixed"];
 
 export function checkKeys(value: unknown, allowed: readonly string[], context: string): Record<string, unknown> {
@@ -97,6 +103,11 @@ export const order = (value: unknown): number => {
   return value;
 };
 
+const browseMode = (value: unknown): RemoteBrowseMode => {
+  if (value === "folders" || value === "titles") return value;
+  throw invalid("The media-server browse mode is not supported.");
+};
+
 export function readConnectionFields(record: Record<string, unknown>) {
   if (!MEDIA_SERVER_KINDS.includes(record.provider as MediaConnectionRecord["provider"])) throw invalid("The media-server provider is not supported.");
   return {
@@ -111,6 +122,9 @@ export function readConnectionFields(record: Record<string, unknown>) {
 }
 
 export function readLibraryFields(record: Record<string, unknown>) {
+  const mode = record.browseMode === undefined ? undefined : browseMode(record.browseMode);
+  const mosaic = record.mosaic === undefined ? undefined : bool(record.mosaic, "mosaic");
+  const showInFavorites = record.showInFavorites === undefined ? undefined : bool(record.showInFavorites, "showInFavorites");
   return {
     remoteId: boundedString(record.remoteId, MEDIA_SERVER_LIMITS.upstreamId, "library id"),
     name: boundedString(record.name, MEDIA_SERVER_LIMITS.name, "library name"),
@@ -118,6 +132,9 @@ export function readLibraryFields(record: Record<string, unknown>) {
     order: order(record.order),
     showOnHome: bool(record.showOnHome, "showOnHome"),
     showInContinueWatching: bool(record.showInContinueWatching, "showInContinueWatching"),
+    ...(mode === undefined ? {} : { browseMode: mode }),
+    ...(mosaic === undefined ? {} : { mosaic }),
+    ...(showInFavorites === undefined ? {} : { showInFavorites }),
   };
 }
 
@@ -273,6 +290,9 @@ export class MediaServerConfiguration {
         order: library.order,
         showOnHome: library.showOnHome,
         showInContinueWatching: library.showInContinueWatching,
+        ...(library.browseMode === undefined ? {} : { browseMode: library.browseMode }),
+        ...(library.mosaic === undefined ? {} : { mosaic: library.mosaic }),
+        ...(library.showInFavorites === undefined ? {} : { showInFavorites: library.showInFavorites }),
       })),
     };
   }

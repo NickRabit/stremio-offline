@@ -99,11 +99,12 @@ const boundedCount = (value: unknown, fallback: number, max: number): number => 
 
 /** Whether one attached library belongs in a card projection: the switch the destination
  *  honours is still on. Only an explicit false opts a library out, the same way a record
- *  written before the switches existed reads as on. */
+ *  written before the switches existed reads as on. Resume honours the continue-watching
+ *  switch; favourites honours its own, never the continue-watching one. */
 const cardLibraryWanted = (filter: "resume" | "favorites", onHome: boolean, library: RemoteLibraryRecord): boolean =>
   filter === "resume"
     ? library.showInContinueWatching !== false && (!onHome || library.showOnHome !== false)
-    : !onHome || library.showOnHome !== false;
+    : library.showInFavorites !== false && (!onHome || library.showOnHome !== false);
 
 /** The whole-projection budget of one card run. It owns a child signal that follows the
  *  caller's abort and fires once the budget is spent, which is the signal every confirmation
@@ -360,6 +361,7 @@ export class MediaServerPersonal {
   async patch(authority: MediaServerAuthority, libraryId: unknown, itemId: unknown, body: unknown, signal?: AbortSignal): Promise<RemoteItemState> {
     const patch = readPatch(body);
     const resolved = await this.resolve(authority, libraryId, itemId, signal);
+    if (resolved.item.type === "folder") throw invalid("That folder has no personal playback state.");
     if (!resolved.playable && (patch.position !== undefined || patch.duration !== undefined || patch.mediaSourceId !== undefined)) {
       throw invalid("That item has no playable media.");
     }

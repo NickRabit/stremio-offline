@@ -38,6 +38,7 @@ import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.RemoteItemStateDto
 import cz.stremiooffline.tv.data.RemoteItemsPageDto
 import cz.stremiooffline.tv.data.RemoteLibraryDto
+import cz.stremiooffline.tv.data.RemotePreviewDto
 import cz.stremiooffline.tv.data.SearchStateDto
 import cz.stremiooffline.tv.data.SearchResultDto
 import cz.stremiooffline.tv.data.SearchScope
@@ -188,6 +189,17 @@ open class FakeTvApi : TvApi {
   /** One page per `itemId|cursor`. */
   var remoteEpisodesPages: MutableMap<String, RemoteItemsPageDto> = mutableMapOf()
   val remoteEpisodesRequests: MutableList<Triple<String, String, String?>> = mutableListOf()
+  /** Dedicated browse answers keyed by `libraryId|parentId|cursor`; a miss falls back below. */
+  var remoteBrowsePages: MutableMap<String, RemoteItemsPageDto> = mutableMapOf()
+  /** Every browse call, with the full query it carried, so a test can name the request. */
+  val remoteBrowseRequests: MutableList<RemoteBrowseRequest> = mutableListOf()
+  var remoteBrowseFailure: ApiError? = null
+  /** The posters every preview answers with; a test may gate or fail the call. */
+  var remotePreviewValue: List<String> = emptyList()
+  val remotePreviewRequests: MutableList<Pair<String, String?>> = mutableListOf()
+  var remotePreviewFailure: ApiError? = null
+  /** Held open until the test releases it, so preview concurrency can be watched. */
+  var remotePreviewGate: CompletableDeferred<Unit>? = null
   var remoteSourcesValue: List<StreamDto> = emptyList()
   var remoteSourcesFailure: ApiError? = null
   val remoteSourcesRequests: MutableList<Pair<String, String>> = mutableListOf()
@@ -483,6 +495,41 @@ open class FakeTvApi : TvApi {
     return remoteItemsPages["$libraryId|${cursor ?: ""}"] ?: RemoteItemsPageDto()
   }
 
+  override suspend fun remoteBrowse(
+    libraryId: String,
+    limit: Int,
+    cursor: String?,
+    search: String?,
+    type: String?,
+    parentId: String?,
+    mode: String?,
+    sort: String?,
+    order: String?,
+  ): RemoteItemsPageDto {
+    remoteBrowseRequests += RemoteBrowseRequest(libraryId, limit, cursor, search, type, parentId, mode, sort, order)
+    remoteBrowseFailure?.let { throw it }
+    remoteBrowsePages["$libraryId|${parentId ?: ""}|${cursor ?: ""}"]?.let { return it }
+    // The older suites only seeded the snapshot maps; answer from those and keep their counters
+    // alive, so a pre-browse test still drives the same listing through the new route.
+    return when {
+      parentId != null && (type == "episode" || mode == "titles") -> {
+        remoteEpisodesRequests += Triple(libraryId, parentId, cursor)
+        remoteEpisodesPages["$parentId|${cursor ?: ""}"] ?: RemoteItemsPageDto()
+      }
+      else -> {
+        remoteItemsRequests += libraryId to cursor
+        remoteItemsPages["$libraryId|${cursor ?: ""}"] ?: RemoteItemsPageDto()
+      }
+    }
+  }
+
+  override suspend fun remotePreview(libraryId: String, parentId: String?): RemotePreviewDto {
+    remotePreviewRequests += libraryId to parentId
+    remotePreviewGate?.await()
+    remotePreviewFailure?.let { throw it }
+    return RemotePreviewDto(remotePreviewValue)
+  }
+
   override suspend fun remoteEpisodes(
     libraryId: String,
     itemId: String,
@@ -621,6 +668,18 @@ open class FakeTvApi : TvApi {
 data class CatalogRequest(val addonKey: String, val type: String, val id: String, val skip: Int, val genre: String?)
 
 data class SearchRequest(val query: String, val cursor: String?, val scope: SearchScope)
+
+data class RemoteBrowseRequest(
+  val libraryId: String,
+  val limit: Int,
+  val cursor: String?,
+  val search: String?,
+  val type: String?,
+  val parentId: String?,
+  val mode: String?,
+  val sort: String?,
+  val order: String?,
+)
 
 fun file(
   path: String,

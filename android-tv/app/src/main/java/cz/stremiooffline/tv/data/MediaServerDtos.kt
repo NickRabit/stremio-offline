@@ -21,6 +21,12 @@ data class RemoteLibraryDto(
   val order: Int = 0,
   val showOnHome: Boolean = false,
   val showInContinueWatching: Boolean = false,
+  /** `folders` or `titles`; absent means the effective setting the server derives from the type. */
+  val browseMode: String? = null,
+  /** Whether this library may show preview mosaics; absent means yes. */
+  val mosaic: Boolean = true,
+  /** Whether this library takes part in the viewer's Favourites; absent means yes. */
+  val showInFavorites: Boolean = true,
   val capabilities: RemoteCapabilitiesDto = RemoteCapabilitiesDto(),
 )
 
@@ -142,6 +148,13 @@ data class RemotePersonalPageDto(
   val items: List<JsonObject> = emptyList(),
   val total: Int = 0,
   val partial: Boolean = false,
+)
+
+/** The `GET /api/remote-libraries/:libraryId/preview` answer: up to four same-origin authorized
+ *  poster URLs for one library root or folder, never an upstream URL. Empty means no artwork. */
+@Serializable
+data class RemotePreviewDto(
+  val posters: List<String> = emptyList(),
 )
 
 data class RemotePersonalPage(val items: List<HomeCard>, val total: Int, val partial: Boolean)

@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -44,12 +43,14 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.Border
 import androidx.tv.material3.ClickableSurfaceDefaults
+import androidx.tv.material3.Icon
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.RemoteLibraryApi
 import cz.stremiooffline.tv.data.RemoteLibraryDto
+import cz.stremiooffline.tv.ui.catalog.FolderIcon
 import cz.stremiooffline.tv.ui.components.CardRowInset
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
@@ -67,6 +68,7 @@ const val TagLibrarySegments = "library_segments"
 const val TagRemoteLoadMore = "remote_load_more"
 const val TagRemoteSearchField = "remote_search_field"
 const val TagRemoteSearchSubmit = "remote_search_submit"
+const val TagRemoteBreadcrumb = "remote_breadcrumb"
 
 fun remoteSearchTag(key: String): String = "remote_search_$key"
 fun remoteFilterTag(key: String): String = "remote_filter_$key"
@@ -117,7 +119,7 @@ fun RemoteLibraryRoute(
   }
 
   LaunchedEffect(levelKey) {
-    committed = (level as? RemoteLevel.Items)?.state?.search.orEmpty()
+    committed = (level as? RemoteLevel.Directory)?.state?.search.orEmpty()
     query = committed
   }
 
@@ -134,9 +136,19 @@ fun RemoteLibraryRoute(
   Column(
     modifier = modifier.fillMaxSize().padding(start = Tokens.SafeX, top = Tokens.SafeY, end = Tokens.SafeX),
   ) {
+    // The path back to the library, so a nested folder is never a dead end on screen.
+    if (state.levels.size > 1) {
+      Text(
+        state.levels.joinToString("  ›  ") { it.title },
+        color = Tokens.Muted,
+        fontSize = 10.sp,
+        fontWeight = FontWeight.Medium,
+        modifier = Modifier.testTag(TagRemoteBreadcrumb).padding(bottom = 6.dp),
+      )
+    }
     Box(Modifier.weight(1f).fillMaxWidth()) {
       if (level == null) {
-        LibraryPicker(state, viewModel, requesters, gridFocus, errorFocus)
+        LibraryPicker(state, viewModel, imageUrl, requesters, gridFocus, errorFocus)
       } else {
         ItemBrowser(
           level = level,
@@ -160,8 +172,8 @@ fun RemoteLibraryRoute(
 }
 
 /**
- * One remote series opened from a Home or Favourites card. Its episodes come from the library's
- * episodes route and are drawn by the same [ItemBrowser] as the Servers half, in a view-model of
+ * One remote series opened from a Home or Favourites card. Its episodes page lazily through the
+ * browse route and are drawn by the same [ItemBrowser] as the Servers half, in a view-model of
  * its own so the Library section never loses its own. An episode opens the playable detail as a
  * nested child; Back returns to the grid with the card that opened it focused, then closes this.
  */
@@ -315,6 +327,7 @@ private fun SegmentButton(text: String, selected: Boolean, onClick: () -> Unit, 
 private fun LibraryPicker(
   state: RemoteLibraryState,
   viewModel: RemoteLibraryViewModel,
+  imageUrl: (String?) -> String?,
   requesters: MutableMap<String, FocusRequester>,
   gridFocus: FocusRequester,
   errorFocus: FocusRequester,
@@ -347,11 +360,18 @@ private fun LibraryPicker(
                 requesters[key] = requester
                 onDispose { if (requesters[key] === requester) requesters.remove(key) }
               }
-              RemoteLibraryCard(
-                library = library,
+              RemoteArtTile(
+                title = library.name,
+                libraryId = library.id,
+                parentId = null,
+                mosaic = library.mosaic,
+                container = true,
+                viewModel = viewModel,
+                imageUrl = imageUrl,
+                cardTag = remoteLibraryTag(library.id),
+                caption = libraryCaption(library.provider),
                 onClick = { viewModel.openLibrary(library) },
                 modifier = Modifier
-                  .testTag(remoteLibraryTag(library.id))
                   .focusRequester(requester)
                   .onFocusChanged { if (it.isFocused) viewModel.select(REMOTE_PICKER_KEY, key) },
               )
@@ -363,30 +383,48 @@ private fun LibraryPicker(
   }
 }
 
+/**
+ * One library root or folder tile, drawn exactly like an ordinary library card: the same
+ * [PosterCard] with the preview mosaic and shape. A container without artwork falls back to the
+ * plain folder/drive icon; the provider and read-only note stay as the secondary caption.
+ */
 @Composable
-private fun RemoteLibraryCard(library: RemoteLibraryDto, onClick: () -> Unit, modifier: Modifier = Modifier) {
-  val shape = RoundedCornerShape(10.dp)
-  Surface(
-    onClick = onClick,
-    modifier = modifier.size(150.dp, 150.dp),
-    shape = ClickableSurfaceDefaults.shape(shape = shape),
-    scale = ClickableSurfaceDefaults.scale(focusedScale = 1.06f),
-    border = ClickableSurfaceDefaults.border(
-      border = Border(BorderStroke(1.dp, Tokens.Line), shape = shape),
-      focusedBorder = Border(BorderStroke(2.dp, Tokens.Accent2), shape = shape),
-    ),
-    colors = ClickableSurfaceDefaults.colors(
-      containerColor = Tokens.Panel,
-      contentColor = Tokens.Text,
-      focusedContainerColor = Tokens.Panel2,
-      focusedContentColor = Tokens.Text,
-    ),
-  ) {
-    Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-      Text(providerLabel(library.provider), color = Tokens.Accent2, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-      Text(library.name, color = Tokens.Text, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, maxLines = 3, overflow = TextOverflow.Ellipsis)
-      Spacer(Modifier.weight(1f))
-      Text(stringResource(R.string.media_server_read_only), color = Tokens.Muted, fontSize = 10.sp)
+private fun RemoteArtTile(
+  title: String,
+  libraryId: String,
+  parentId: String?,
+  mosaic: Boolean,
+  container: Boolean,
+  viewModel: RemoteLibraryViewModel,
+  imageUrl: (String?) -> String?,
+  cardTag: String,
+  caption: String,
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+  poster: String? = null,
+  wide: String? = null,
+) {
+  val key = RemoteLibraryViewModel.previewKey(libraryId, parentId)
+  // Only a composed tile asks, so an off-screen folder never fetches; the cache dedupes repeats.
+  LaunchedEffect(key, mosaic, viewModel.preview(key) == null) { viewModel.loadPreview(key, libraryId, parentId, mosaic) }
+  val posters = if (mosaic) (viewModel.preview(key) as? RemotePreviewState.Ready)?.posters.orEmpty() else emptyList()
+  val art = posters.mapNotNull(imageUrl)
+  Box {
+    PosterCard(
+      name = title,
+      imageUrl = imageUrl(poster) ?: art.firstOrNull(),
+      fallbackImageUrl = imageUrl(wide),
+      progress = null,
+      caption = caption,
+      cardTag = cardTag,
+      mosaic = art,
+      onClick = onClick,
+      modifier = modifier,
+    )
+    if (container && art.isEmpty() && poster == null && wide == null) {
+      Box(Modifier.size(110.dp, 165.dp), contentAlignment = Alignment.Center) {
+        Icon(FolderIcon, contentDescription = null, tint = Tokens.Muted, modifier = Modifier.size(46.dp))
+      }
     }
   }
 }
@@ -409,13 +447,13 @@ private fun ItemBrowser(
   onOpenItem: (libraryId: String, libraryName: String, provider: String, item: RemoteItemDto) -> Unit,
 ) {
   val search = level.state
-  val isSearchable = level is RemoteLevel.Items
+  val isDirectory = level is RemoteLevel.Directory
   val appendRetryFocus = remember { FocusRequester() }
 
   Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(9.dp)) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
       Text(
-        level.title(),
+        level.title,
         color = Tokens.Text,
         fontSize = 22.sp,
         fontWeight = FontWeight.ExtraBold,
@@ -423,10 +461,10 @@ private fun ItemBrowser(
         overflow = TextOverflow.Ellipsis,
         modifier = Modifier.weight(1f),
       )
-      if (isSearchable) TypeFilterChips(state = search, onFilter = { viewModel.filter(it) })
+      if (isDirectory) TypeFilterChips(state = search, onFilter = { viewModel.filter(it) })
     }
 
-    if (isSearchable) {
+    if (isDirectory) {
       SearchBar(
         label = stringResource(R.string.media_server_search_label),
         value = query,
@@ -471,17 +509,19 @@ private fun ItemBrowser(
               fontSize = 12.sp,
             )
             else -> ItemGrid(
+              level = level,
               items = items,
               imageUrl = imageUrl,
-              isEpisodes = level is RemoteLevel.Episodes,
-              hasMore = search.hasMore,
-              loadingMore = search.loadingMore,
-              levelKey = level.key,
               viewModel = viewModel,
               requesters = requesters,
               gridFocus = gridFocus,
               loadMoreFocus = loadMoreFocus,
-              onOpen = { onOpenItem(level.libraryId, level.libraryName, level.provider, it) },
+              onOpen = { item ->
+                // A folder opens one directory level deeper; it is never playable, so it never
+                // reaches the shell's item detail.
+                if (item.type == "folder" || item.type == "season") viewModel.openFolder(item)
+                else onOpenItem(level.libraryId, level.libraryName, level.provider, item)
+              },
             )
           }
         }
@@ -492,18 +532,18 @@ private fun ItemBrowser(
 
 @Composable
 private fun ItemGrid(
+  level: RemoteLevel,
   items: List<RemoteItemDto>,
   imageUrl: (String?) -> String?,
-  isEpisodes: Boolean,
-  hasMore: Boolean,
-  loadingMore: Boolean,
-  levelKey: String,
   viewModel: RemoteLibraryViewModel,
   requesters: MutableMap<String, FocusRequester>,
   gridFocus: FocusRequester,
   loadMoreFocus: FocusRequester,
   onOpen: (RemoteItemDto) -> Unit,
 ) {
+  val isEpisodes = level is RemoteLevel.Episodes
+  val hasMore = level.state.hasMore
+  val loadingMore = level.state.loadingMore
   BoxWithConstraints(Modifier.fillMaxSize()) {
     val columns = (((maxWidth.value + 18f) / 128f).toInt()).coerceAtLeast(1)
     LazyVerticalGrid(
@@ -519,23 +559,42 @@ private fun ItemGrid(
           requesters[item.id] = requester
           onDispose { if (requesters[item.id] === requester) requesters.remove(item.id) }
         }
-        PosterCard(
-          name = item.name,
-          imageUrl = imageUrl(item.poster),
-          fallbackImageUrl = imageUrl(item.wide),
-          progress = null,
-          caption = if (isEpisodes) episodeCaption(item) else null,
-          cardTag = remoteItemTag(item.id),
-          onClick = { onOpen(item) },
-          modifier = Modifier
-            .focusRequester(requester)
-            .onFocusChanged {
-              if (it.isFocused) {
-                viewModel.select(levelKey, item.id)
-                if (index >= items.size - columns) viewModel.loadMore()
-              }
-            },
-        )
+        val focus = Modifier
+          .focusRequester(requester)
+          .onFocusChanged {
+            if (it.isFocused) {
+              viewModel.select(level.key, item.id)
+              if (index >= items.size - columns) viewModel.loadMore()
+            }
+          }
+        if (item.type == "folder" || item.type == "season") {
+          RemoteArtTile(
+            title = item.name,
+            libraryId = level.libraryId,
+            parentId = item.id,
+            mosaic = level.mosaic,
+            container = true,
+            viewModel = viewModel,
+            imageUrl = imageUrl,
+            cardTag = remoteItemTag(item.id),
+            poster = item.poster,
+            wide = item.wide,
+            caption = stringResource(R.string.media_server_read_only),
+            onClick = { onOpen(item) },
+            modifier = focus,
+          )
+        } else {
+          PosterCard(
+            name = item.name,
+            imageUrl = imageUrl(item.poster),
+            fallbackImageUrl = imageUrl(item.wide),
+            progress = null,
+            caption = if (isEpisodes) episodeCaption(item) else null,
+            cardTag = remoteItemTag(item.id),
+            onClick = { onOpen(item) },
+            modifier = focus,
+          )
+        }
       }
       if (hasMore) {
         item(key = "load_more") {
@@ -648,15 +707,15 @@ private fun RemoteErrorPanel(kind: RemoteErrorKind?, onRetry: () -> Unit, focus:
   }
 }
 
+@Composable
+private fun libraryCaption(provider: String): String =
+  listOfNotNull(providerLabel(provider).takeIf { it.isNotBlank() }, stringResource(R.string.media_server_read_only))
+    .joinToString(" · ")
+
 private fun providerLabel(provider: String): String = when (provider.lowercase()) {
   "jellyfin" -> "Jellyfin"
   "emby" -> "Emby"
   else -> provider
-}
-
-private fun RemoteLevel.title(): String = when (this) {
-  is RemoteLevel.Items -> title
-  is RemoteLevel.Episodes -> title
 }
 
 private fun episodeCaption(item: RemoteItemDto): String =

@@ -53,6 +53,11 @@ export interface Stream {
 
 export type MediaServerProvider = "jellyfin" | "emby";
 export type MediaServerStatus = "disabled" | "available" | "unavailable" | "reauthentication-required" | "identity-changed";
+/** How a native remote listing walks the upstream tree. `folders` keeps the provider's own
+ *  hierarchy; `titles` flattens one directory and hides folders. */
+export type RemoteBrowseMode = "folders" | "titles";
+export type RemoteBrowseSort = "name" | "added" | "size";
+export type RemoteBrowseOrder = "asc" | "desc";
 /** One connection as the administrator list answers it, runtime status included. */
 export interface MediaServerConnection {
   id: string; provider: MediaServerProvider; name: string; baseUrl: string;
@@ -68,6 +73,9 @@ export interface AdminRemoteLibrary {
   enabled: boolean; order: number; showOnHome: boolean; showInContinueWatching: boolean;
   /** The accounts granted this library. Empty means administrators only. */
   allowedUsers: string[];
+  /** Display-only settings. Absent means the effective default: mixed libraries browse
+   *  folders, movie/series libraries browse titles, and both mosaic and Favourites are on. */
+  browseMode?: RemoteBrowseMode; mosaic?: boolean; showInFavorites?: boolean;
 }
 /** What a remote library or source may be used for. Every flag is false in this stage. */
 export interface RemoteCapabilities {
@@ -79,13 +87,19 @@ export interface RemoteLibrary {
   id: string; connectionId: string; remoteId: string; name: string; type: LibraryType;
   enabled: boolean; order: number; showOnHome: boolean; showInContinueWatching: boolean;
   provider: MediaServerProvider; capabilities: RemoteCapabilities;
+  /** Effective display settings as the member projection answers them; absent on records
+   *  written before these existed, so the client keeps the defaults. */
+  browseMode?: RemoteBrowseMode; mosaic?: boolean; showInFavorites?: boolean;
 }
-export type RemoteItemType = "movie" | "series" | "season" | "episode";
+export type RemoteItemType = "movie" | "series" | "season" | "episode" | "folder";
 export interface RemoteItem {
   id: string; name: string; type: RemoteItemType; parentId?: string; seriesId?: string;
   season?: number; episode?: number;
   providerIds: { imdb?: string; tmdb?: string; tvdb?: string };
   durationTicks?: number;
+  /** Normalized, bounded metadata the server projects from the provider. Absent when the
+   *  provider does not say it; never an upstream file path. */
+  overview?: string; year?: number; genres?: string[]; size?: number; addedAt?: string;
   /** Same-origin, content-authorized artwork; never an upstream address. */
   poster?: string; wide?: string;
 }

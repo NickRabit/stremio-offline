@@ -33,8 +33,8 @@ the canonical lower-case path without a trailing slash; variants fail closed.
 | `DELETE /api/media-servers/:id` | Removes the connection and its attached libraries and queues its token file for deletion. Its stored history is kept invisibly for 30 days; `?forget=true` deletes it at once. No remote session is reported or logged out. |
 | `POST /api/media-servers/:id/reauthenticate` | Signs in again with `{ username, password }`; requires the same verified server/account identity. |
 | `GET /api/media-servers/:id/libraries` | `{ items: ProviderLibrary[] }` — the libraries the stored account can currently see. |
-| `POST /api/media-servers/:id/libraries` | Attaches one remote library from `{ remoteId, name?, order?, showOnHome?, showInContinueWatching? }`; the remote name and type come from verified discovery. New libraries are granted to nobody. |
-| `PATCH /api/remote-libraries/:id` | Local configuration only: `name`, `enabled`, `order`, `showOnHome`, `showInContinueWatching`, `allowedUsers`. `root`, `writeArtwork`, `type`, `remoteId`, `connectionId` and any download flag are refused. |
+| `POST /api/media-servers/:id/libraries` | Attaches one remote library from `{ remoteId, name?, order?, showOnHome?, showInContinueWatching?, showInFavorites?, browseMode?, mosaic? }`; the remote name and type come from verified discovery. New libraries are granted to nobody. |
+| `PATCH /api/remote-libraries/:id` | Local configuration only: `name`, `enabled`, `order`, `showOnHome`, `showInContinueWatching`, `showInFavorites`, `browseMode`, `mosaic`, `allowedUsers`. `root`, `writeArtwork`, `type`, `remoteId`, `connectionId` and any download flag are refused. |
 | `DELETE /api/remote-libraries/:id` | Removes the local attachment. Its stored history is kept invisibly for 30 days; `?forget=true` deletes it at once. The remote server is never mutated. |
 | `GET /api/media-servers/export` | The metadata-only configuration export (`version`, connections, libraries). No secret references, grants, generations or timestamps. |
 | `POST /api/media-servers/import` | Additively restores an export: fresh handles, connections and libraries land **disabled** with no grants and no secrets, and a duplicate remote account refuses the whole batch. Its own body parser allows up to 8 MiB, above the ordinary 256 KiB. |
@@ -68,6 +68,8 @@ another instance's token through a shared device identifier.
 | Method and path | Effect |
 | --- | --- |
 | `GET /api/remote-libraries` | `{ libraries: [...] }` — the public remote-library projections the account may see. No upstream call: the names come from the local attachment. Never carries grants, server or account ids, the address or a secret reference. |
+| `GET /api/remote-libraries/:id/browse` | Native browsing: `limit` (default 60, 1–200), opaque `cursor`, optional `parentId`, `mode` (`folders`/`titles`), `search`, `type`, `sort` (`name`/`added`/`size`) and `order` (`asc`/`desc`). Reads one provider page, preserving folders in folder mode. Cursors are bound to the actor, library generation and complete browse context. |
+| `GET /api/remote-libraries/:id/preview` | Optional `parentId`; at most four same-origin poster paths from a bounded traversal (eight pages, four levels), loaded only for visible mosaic tiles. A disabled mosaic reads no provider pages. |
 | `GET /api/remote-libraries/:id/items` | Bounded browse: `limit` (default 100, 1–200), opaque `cursor`, `search` (≤256 chars, case-insensitive name substring) and exact `type` (`movie`/`series`/`season`/`episode`). |
 | `GET /api/remote-libraries/:id/items/:itemId` | `{ item, capabilities }` for the current authorized item. |
 | `GET /api/remote-libraries/:id/items/:itemId/episodes` | `limit` and `cursor` only; the parent must be a verified `series` or `season`. |
@@ -77,8 +79,10 @@ another instance's token through a shared device identifier.
 | `GET /api/remote-libraries/:id/items/:itemId/state`, `PATCH …/state` | The account's own position, duration, favourite, watched and chosen version for a verified item. Kept apart from the generic progress map, so a `remote:` key never resolves through the filesystem or catalogue parsers. |
 | `GET /api/remote-libraries/personal?filter=resume\|favorites&skip&limit` | The account's own resume or favourite cards, each library confirmed against the live remote policy first. A library that cannot be confirmed is dropped and the answer is marked `partial`; `skip` is 0–1000 and `limit` 1–120. The whole projection runs under one budget — 1.5 s for Home, 5 s otherwise, two confirmations at a time — and every card is re-proved against the account, the connection, the remote identity, the upstream library and the switches as they stand before the JSON leaves. |
 
-Paged browse, episode and detail responses also carry same-origin `poster` and
-`wide` artwork paths, built only from the encoded local library and item handle
+Paged browse, episode and detail responses also carry optional bounded overview,
+year, genres, run time, size and creation time, plus same-origin `poster` and
+`wide` artwork paths. Known absent image roles are omitted. These paths are built only from the encoded local
+library and item handle
 and a fixed image role. The client loads those paths; a cached provider row can
 never become a client-admitted URL.
 
@@ -357,3 +361,50 @@ this stage does not claim exhaustive remote parental-policy support.
   filesystem half keeps working.
 
 Music-video libraries are available in the mixed-library layout. Their clips use the standalone video playback controls and local history; their provider IDs do not participate in catalogue movie matching. Audio-only music libraries remain excluded.
+
+
+## Native browsing and presentation
+
+Mixed libraries default to folder browsing; movie and series libraries default
+to all titles. Each attachment can change this independently. Series episode
+pages use numeric season/episode ordering before pagination. Folder browsing
+never loads every descendant to draw its first page.
+
+Web root tiles, folder/file rows and overflow shells share the local library's
+components. Remote menus offer local favorites and watched state, with personal
+state fetched on menu opening rather than once per tile. Folder and season
+items navigate; they do not become playable sources. Remote metadata stays
+read-only, and provider paths, credentials and image addresses never enter the
+client projection.
+
+Remote grids use the shared artwork component. A missing preferred image falls
+back to the other role and then an icon; changing tile proportions cannot retain
+an error class from an older image. Failed mosaic cells are removed instead of
+leaving an empty collage.
+
+
+## Upstream request budget
+
+Native lists read one provider page at a time, with a default of 60 items.
+Remote artwork is mounted near the visible viewport; mosaic discovery has two
+client slots and a bounded traversal, and changing tile shape does not repeat
+that discovery. Known absent image roles are not requested.
+
+Metadata and artwork share at most four active network operations globally.
+Each connection admits at most one new operation every 125 ms, with bounded,
+abortable waiting queues. Dispatch is paced again after global saturation so
+queued work cannot catch up in a burst. Original streaming bytes use their
+separate transport pool.
+
+Concurrent identity, account-policy and view-list reads on the same runtime
+share their in-flight result. Settled permission results are not cached, and
+each caller repeats its own current actor, generation and grant checks. In a
+four-artwork fixture burst this reduces metadata calls from twelve to three,
+and total upstream operations from twenty-four to fifteen.
+
+An upstream `429` puts metadata, images and new stream requests on that
+transport into a shared cooldown: the supplied `Retry-After`, bounded to five
+minutes, or thirty seconds when absent. Calls during cooldown make no DNS or
+HTTP request. There are no automatic retry loops. The upstream client identity
+remains Stremio Offline; request pacing does not imply that an operator who
+allows only the official Jellyfin client permits this application.

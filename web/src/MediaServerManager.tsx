@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowDown, ArrowUp, Check, KeyRound, Library, Pencil, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import { api, describeError } from "./api";
 import { t, useI18n } from "./i18n";
-import type { AdminRemoteLibrary, LibraryType, MediaServerConnection, MediaServerProvider, MediaServerStatus, ProviderLibrary, UserAccount } from "./types";
+import type { AdminRemoteLibrary, LibraryType, MediaServerConnection, MediaServerProvider, MediaServerStatus, ProviderLibrary, RemoteBrowseMode, UserAccount } from "./types";
 
 const PROVIDER_KEY: Record<MediaServerProvider, "mediaServer.provider.jellyfin" | "mediaServer.provider.emby"> = {
   jellyfin: "mediaServer.provider.jellyfin",
@@ -399,17 +399,21 @@ function DiscoverDialog({ connection, attached, busy, error, onClose, onAttach }
 function RemoteLibraryDialog({ library, users, usersError, busy, error, onRetryUsers, onClose, onSave, onRequestRemove, onReorder }: {
   library: AdminRemoteLibrary; users: UserAccount[] | null; usersError: string; busy: boolean; error: string;
   onRetryUsers: () => void; onClose: () => void;
-  onSave: (patch: { name: string; enabled: boolean; showOnHome: boolean; showInContinueWatching: boolean; allowedUsers: string[] }) => Promise<boolean>;
+  onSave: (patch: { name: string; enabled: boolean; showOnHome: boolean; showInContinueWatching: boolean; allowedUsers: string[]; browseMode: RemoteBrowseMode; mosaic: boolean; showInFavorites: boolean }) => Promise<boolean>;
   onRequestRemove: () => void; onReorder: (delta: number) => Promise<boolean>;
 }) {
   const [draft, setDraft] = useState(() => ({
     name: library.name, enabled: library.enabled,
     showOnHome: library.showOnHome, showInContinueWatching: library.showInContinueWatching,
+    mosaic: library.mosaic !== false, showInFavorites: library.showInFavorites !== false,
+    browseMode: library.browseMode ?? (library.type === "mixed" ? "folders" : "titles") as RemoteBrowseMode,
     allowedUsers: new Set(library.allowedUsers),
   }));
   const loaded = users !== null;
   const dirty = draft.name.trim() !== library.name || draft.enabled !== library.enabled
     || draft.showOnHome !== library.showOnHome || draft.showInContinueWatching !== library.showInContinueWatching
+    || draft.mosaic !== (library.mosaic !== false) || draft.showInFavorites !== (library.showInFavorites !== false)
+    || draft.browseMode !== (library.browseMode ?? (library.type === "mixed" ? "folders" : "titles"))
     || [...draft.allowedUsers].sort().join(",") !== [...library.allowedUsers].sort().join(",");
 
   const toggleUser = (id: string, on: boolean) => setDraft((current) => {
@@ -425,6 +429,7 @@ function RemoteLibraryDialog({ library, users, usersError, busy, error, onRetryU
         onClick={() => void onSave({
           name: draft.name.trim(), enabled: draft.enabled,
           showOnHome: draft.showOnHome, showInContinueWatching: draft.showInContinueWatching,
+          mosaic: draft.mosaic, showInFavorites: draft.showInFavorites, browseMode: draft.browseMode,
           allowedUsers: [...draft.allowedUsers],
         }).then((done) => { if (done) onClose(); })}>{t("common.save")}</button>
     </>}>
@@ -443,9 +448,18 @@ function RemoteLibraryDialog({ library, users, usersError, busy, error, onRetryU
     </section>
     <section className="library-edit-section">
       <div className="library-picker-section-head"><h3>{t("mediaServer.presentationHeading")}</h3></div>
+      <label className="media-server-field"><span>{t("mediaServer.browseMode")}</span>
+        <select value={draft.browseMode} aria-label={t("mediaServer.browseMode")} disabled={busy} onChange={(event) => setDraft((current) => ({ ...current, browseMode: event.target.value as RemoteBrowseMode }))}>
+          <option value="folders">{t("mediaServer.browseMode.folders")}</option>
+          <option value="titles">{t("mediaServer.browseMode.titles")}</option>
+        </select>
+      </label>
       <div className="library-edit-controls">
         <Checkbox checked={draft.showOnHome} disabled={busy} onChange={(value) => setDraft((current) => ({ ...current, showOnHome: value }))}>{t("library.showOnHome")}</Checkbox>
         <Checkbox checked={draft.showInContinueWatching} disabled={busy} onChange={(value) => setDraft((current) => ({ ...current, showInContinueWatching: value }))}>{t("library.showInContinueWatching")}</Checkbox>
+        <Checkbox checked={draft.mosaic} disabled={busy} onChange={(value) => setDraft((current) => ({ ...current, mosaic: value }))}>{t("library.mosaic")}</Checkbox>
+        <Checkbox checked={draft.showInFavorites} disabled={busy} onChange={(value) => setDraft((current) => ({ ...current, showInFavorites: value }))}>{t("library.showInFavorites")}</Checkbox>
+        <p className="identify-hint">{t("library.showInFavoritesHint")}</p>
       </div>
     </section>
     <section className="library-edit-section">

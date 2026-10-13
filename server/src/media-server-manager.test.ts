@@ -36,6 +36,8 @@ const carol = account({ id: CAROL, username: "carol" });
 
 const movie = (id: string, name = `Movie ${id}`): ProviderItem => ({ id, name, type: "movie", providerIds: {} });
 const episode = (id: string, over: Partial<ProviderItem>): ProviderItem => ({ id, name: `Episode ${id}`, type: "episode", providerIds: {}, ...over });
+const folder = (id: string, over: Partial<ProviderItem> = {}): ProviderItem => ({ id, name: `Folder ${id}`, type: "folder", providerIds: {}, ...over });
+const artMovie = (id: string): ProviderItem => ({ id, name: `Movie ${id}`, type: "movie", providerIds: {}, hasPrimaryImage: true });
 
 interface Nudge { op: string; wait: Promise<void>; entered?: () => void }
 
@@ -48,6 +50,9 @@ class FakeServer {
   policy: RemoteAccountPolicy = { disabled: false, mediaPlayback: true, allFolders: true, folderIds: [], hasAdditionalRestrictions: false };
   libraries: ProviderLibrary[] = [];
   items: Record<string, ProviderItem[]> = {};
+  directories: Record<string, ProviderItem[]> = {};
+  directoryCalls: Array<{ parentId: string; options: Record<string, unknown> }> = [];
+  directoryOverride: ((parentId: string, options: { cursor?: string; limit?: number }) => FakePage) | undefined;
   detailOf: Record<string, ProviderItem> = {};
   ancestorsOf: Record<string, string[]> = {};
   versionsOf: Record<string, ProviderVersion[]> = {};
@@ -57,20 +62,34 @@ class FakeServer {
   asset: { bytes: Uint8Array; contentType: string } | undefined;
   assetRequests: Array<Record<string, unknown>> = [];
   calls: string[] = [];
+  /** The wall-clock time of each provider operation start, for the pacing assertions. */
+  startTimes: number[] = [];
   errors: Record<string, MediaServerError> = {};
   nudge: Nudge | undefined;
   pageOverride: ((options: { cursor?: string; limit?: number }) => FakePage) | undefined;
   closed = 0;
+  /** Provider operations live at once, and the high-water mark across a test. */
+  activeOps = 0;
+  maxActiveOps = 0;
 
   async run(operation: string): Promise<void> {
     this.calls.push(operation);
-    const error = this.errors[operation];
-    if (error) throw error;
-    if (this.nudge?.op === operation) { this.nudge.entered?.(); await this.nudge.wait; }
+    this.startTimes.push(Date.now());
+    this.activeOps += 1;
+    if (this.activeOps > this.maxActiveOps) this.maxActiveOps = this.activeOps;
+    try {
+      const error = this.errors[operation];
+      if (error) throw error;
+      if (this.nudge?.op === operation) { this.nudge.entered?.(); await this.nudge.wait; }
+    } finally {
+      this.activeOps -= 1;
+    }
   }
 }
 
 const clone = <T>(value: T): T => structuredClone(value);
+
+const tick = (): Promise<void> => new Promise<void>((resolve) => setImmediate(resolve));
 
 const stubProvider = (server: FakeServer): MediaServerProvider => ({
   verifyIdentity: async () => { await server.run("info"); return { serverId: server.serverId, version: "1.0.0" }; },
@@ -87,6 +106,17 @@ const stubProvider = (server: FakeServer): MediaServerProvider => ({
     const all = server.items[libraryId] ?? [];
     const offset = options?.cursor ? Number(Buffer.from(options.cursor, "base64url").toString("utf8")) : 0;
     const limit = options?.limit ?? 100;
+    const slice = all.slice(offset, offset + limit);
+    const next = offset + slice.length < all.length ? Buffer.from(String(offset + slice.length), "utf8").toString("base64url") : undefined;
+    return { items: clone(slice), total: all.length, ...(next === undefined ? {} : { cursor: next }) };
+  },
+  pageDirectory: async (_token, _account, parentId, options) => {
+    await server.run("directory");
+    server.directoryCalls.push({ parentId, options: options as unknown as Record<string, unknown> });
+    if (server.directoryOverride) return server.directoryOverride(parentId, options);
+    const all = server.directories[parentId] ?? [];
+    const offset = options?.cursor ? Number(Buffer.from(options.cursor, "base64url").toString("utf8")) : 0;
+    const limit = options?.limit ?? 60;
     const slice = all.slice(offset, offset + limit);
     const next = offset + slice.length < all.length ? Buffer.from(String(offset + slice.length), "utf8").toString("base64url") : undefined;
     return { items: clone(slice), total: all.length, ...(next === undefined ? {} : { cursor: next }) };
@@ -151,6 +181,8 @@ const mount = async (options: {
   connections?: unknown[];
   libraries?: unknown[];
   cleanupIntervalMs?: number;
+  networkStartIntervalMs?: number;
+  coalesceReads?: boolean;
 } = {}): Promise<Harness> => {
   const dir = await mkdtemp(path.join(tmpdir(), "media-manager-"));
   const users = options.users ?? [admin, bob, carol];
@@ -179,6 +211,10 @@ const mount = async (options: {
     providerFactory: () => stubProvider(server),
     transportFactory: () => stubTransport(server),
     index,
+    // The identical-live-session tests own the network lane, so none of the shared harness pays
+    // the production 125ms start interval; a test proves the pacing with its own short interval.
+    networkStartIntervalMs: options.networkStartIntervalMs ?? 0,
+    ...(options.coalesceReads === undefined ? {} : { coalesceReads: options.coalesceReads }),
     ...(options.cleanupIntervalMs === undefined ? {} : { cleanupIntervalMs: options.cleanupIntervalMs }),
   });
   await manager.initialize();
@@ -217,7 +253,10 @@ const mount = async (options: {
   };
 };
 
-const withHarness = async (run: (harness: Harness) => Promise<void>, options: { users?: UserRecord[]; key?: boolean } = {}) => {
+const withHarness = async (
+  run: (harness: Harness) => Promise<void>,
+  options: { users?: UserRecord[]; key?: boolean; networkStartIntervalMs?: number; coalesceReads?: boolean } = {},
+) => {
   const harness = await mount(options);
   try { await run(harness); }
   finally { await harness.close(); }
@@ -234,6 +273,28 @@ const seedLibrary = (harness: Harness, id: string, items: ProviderItem[]) => {
   harness.server.items[id] = items;
   for (const item of items) harness.server.ancestorsOf[item.id] = [id];
 };
+
+/** How many operations wait in the manager's network queue (the bound this suite owns). */
+const netQueueLength = (harness: Harness): number =>
+  (harness.manager as unknown as { netWaiters: unknown[] }).netWaiters.length;
+
+/** How many network slots are reserved right now, admitted operations plus handed-over ones. */
+const netActive = (harness: Harness): number =>
+  (harness.manager as unknown as { activeNetwork: number }).activeNetwork;
+
+/** The live-session reads currently shared on one connection's runtime. */
+const inflightReads = (harness: Harness, connectionId: string): Map<string, { controller: AbortController; subscribers: number }> =>
+  (harness.manager as unknown as { runtimes: Map<string, { inflight: Map<string, { controller: AbortController; subscribers: number }> }> })
+    .runtimes.get(connectionId)?.inflight ?? new Map();
+
+/** How many operations wait for one connection's start pacing. */
+const pacerQueueLength = (harness: Harness, connectionId: string): number =>
+  (harness.manager as unknown as { runtimes: Map<string, { pacer: { waiters: unknown[] } }> })
+    .runtimes.get(connectionId)?.pacer.waiters.length ?? 0;
+
+/** How many callers currently share one connection's in-flight read. */
+const subscribersOf = (harness: Harness, connectionId: string, key: string): number | undefined =>
+  inflightReads(harness, connectionId).get(key)?.subscribers;
 
 test("a connection is created enabled with a stored token and never returns the token", async () => {
   await withHarness(async (harness) => {
@@ -720,16 +781,26 @@ test("episodes group by a proven series id or season parent and omit unproven ro
   });
 });
 
-test("the network lane is bounded and admin mutations never queue behind each other", async () => {
+test("the network lane queues beyond four and admin mutations never queue behind each other", async () => {
   await withHarness(async (harness) => {
     const connection = await connect(harness);
-    const held = (() => { let release!: () => void; const wait = new Promise<void>((resolve) => { release = resolve; }); return { wait, release }; })();
-    harness.server.nudge = { op: "info", wait: held.wait };
+    const held = deferred();
+    let entered = 0;
+    const four = deferred();
+    harness.server.nudge = { op: "info", wait: held.promise, entered: () => { entered += 1; if (entered === 4) four.resolve(); } };
     const running = [0, 1, 2, 3].map(() => harness.manager.discoverLibraries(harness.admin, connection.id));
-    await assert.rejects(harness.manager.discoverLibraries(harness.admin, connection.id), { code: "busy" }, "a fifth network call is refused rather than queued");
-    held.release();
+    const queued = harness.manager.discoverLibraries(harness.admin, connection.id);
+    await four.promise;
+    await until(() => netQueueLength(harness) === 1);
+    let settled = false;
+    void queued.then(() => { settled = true; }, () => { settled = true; });
+    await tick();
+    assert.equal(settled, false, "a fifth network call waits in the queue instead of being refused");
+    assert.equal(harness.server.calls.filter((call) => call === "info").length, 4, "only four operations are live");
+    assert.equal(netQueueLength(harness), 1, "the fifth call is the one waiting");
+    held.resolve();
     harness.server.nudge = undefined;
-    await Promise.all(running);
+    await Promise.all([...running, queued]);
 
     const login = (() => { let release!: () => void; const wait = new Promise<void>((resolve) => { release = resolve; }); return { wait, release }; })();
     harness.server.nudge = { op: "login", wait: login.wait };
@@ -741,7 +812,74 @@ test("the network lane is bounded and admin mutations never queue behind each ot
     await assert.rejects(simultaneous, { code: "busy" }, "a second admin mutation is refused immediately");
     await creating;
     harness.server.accountId = "user-1";
-  });
+  }, { coalesceReads: false });
+});
+
+test("a queued network request is removed and cancelled the moment its caller aborts", async () => {
+  await withHarness(async (harness) => {
+    const connection = await connect(harness);
+    const held = deferred();
+    let entered = 0;
+    const four = deferred();
+    harness.server.nudge = { op: "info", wait: held.promise, entered: () => { entered += 1; if (entered === 4) four.resolve(); } };
+    const running = [0, 1, 2, 3].map(() => harness.manager.discoverLibraries(harness.admin, connection.id));
+    await four.promise;
+    const controller = new AbortController();
+    const queued = harness.manager.discoverLibraries(harness.admin, connection.id, controller.signal);
+    for (let spins = 0; spins < 1000 && netQueueLength(harness) < 1; spins += 1) await tick();
+    assert.equal(netQueueLength(harness), 1, "the request reached the queue");
+    controller.abort();
+    await assert.rejects(queued, { code: "cancelled" });
+    assert.equal(netQueueLength(harness), 0, "the aborted entry left the queue at once");
+    held.resolve();
+    harness.server.nudge = undefined;
+    await Promise.all(running);
+  }, { coalesceReads: false });
+});
+
+test("closing the manager rejects a queued network request", async () => {
+  await withHarness(async (harness) => {
+    const connection = await connect(harness);
+    const held = deferred();
+    let entered = 0;
+    const four = deferred();
+    harness.server.nudge = { op: "info", wait: held.promise, entered: () => { entered += 1; if (entered === 4) four.resolve(); } };
+    const running = [0, 1, 2, 3].map(() => harness.manager.discoverLibraries(harness.admin, connection.id));
+    await four.promise;
+    const queued = harness.manager.discoverLibraries(harness.admin, connection.id);
+    for (let spins = 0; spins < 1000 && netQueueLength(harness) < 1; spins += 1) await tick();
+    assert.equal(netQueueLength(harness), 1, "the request reached the queue");
+    const closing = harness.manager.close();
+    await assert.rejects(queued, (error: MediaServerError) => {
+      assert.ok(["closed", "cancelled"].includes(error.code), error.code);
+      return true;
+    });
+    held.resolve();
+    harness.server.nudge = undefined;
+    await closing;
+    await Promise.allSettled(running);
+    assert.equal(netQueueLength(harness), 0, "no waiter is left behind after a close");
+    assert.equal(netActive(harness), 0, "every reserved slot was released");
+  }, { coalesceReads: false });
+});
+
+test("the pending queue refuses a request beyond its 128-waiter bound", async () => {
+  await withHarness(async (harness) => {
+    const connection = await connect(harness);
+    const held = deferred();
+    let entered = 0;
+    const four = deferred();
+    harness.server.nudge = { op: "info", wait: held.promise, entered: () => { entered += 1; if (entered === 4) four.resolve(); } };
+    const running = [0, 1, 2, 3].map(() => harness.manager.discoverLibraries(harness.admin, connection.id));
+    await four.promise;
+    const waiting = Array.from({ length: 128 }, () => harness.manager.discoverLibraries(harness.admin, connection.id));
+    for (let spins = 0; spins < 100000 && netQueueLength(harness) < 128; spins += 1) await tick();
+    assert.equal(netQueueLength(harness), 128, "the queue fills to its bound");
+    await assert.rejects(harness.manager.discoverLibraries(harness.admin, connection.id), { code: "busy" }, "one beyond the bound is refused");
+    held.resolve();
+    harness.server.nudge = undefined;
+    await Promise.all([...running, ...waiting]);
+  }, { coalesceReads: false });
 });
 
 test("removing a connection queues and drains its secret, never touching a live one", async () => {
@@ -773,7 +911,7 @@ const reconcile = async (state: unknown | undefined, run: (harness: { vault: Med
     const store = new Store(path.join(root, "data"), root);
     await store.load();
     const server = new FakeServer();
-    const manager = new MediaServerManager(store, vault, { providerFactory: () => stubProvider(server), transportFactory: () => stubTransport(server) });
+    const manager = new MediaServerManager(store, vault, { providerFactory: () => stubProvider(server), transportFactory: () => stubTransport(server), networkStartIntervalMs: 0 });
     await manager.initialize();
     await run({ vault, manager, store });
     await manager.close();
@@ -1255,6 +1393,260 @@ test("readArtwork reads bounded bytes for a fixed role and refuses other roles a
   });
 });
 
+test("more than four concurrent artwork reads all succeed with at most four operations live", async () => {
+  await withHarness(async (harness) => {
+    const items = ["a1", "a2", "a3", "a4", "a5", "a6"].map((id) => movie(id));
+    const { library } = await seedMatchLibrary(harness, items);
+    harness.server.asset = { bytes: new Uint8Array([1, 2, 3]), contentType: "image/png" };
+    harness.server.maxActiveOps = 0;
+    const held = deferred();
+    let entered = 0;
+    const four = deferred();
+    harness.server.nudge = { op: "info", wait: held.promise, entered: () => { entered += 1; if (entered === 4) four.resolve(); } };
+    const reads = items.map((item) => harness.manager.readArtwork(harness.admin, library.id, item.id, "Primary"));
+    await four.promise;
+    assert.equal(harness.server.maxActiveOps, 4, "the lane admits exactly four operations, no more");
+    held.resolve();
+    harness.server.nudge = undefined;
+    const assets = await Promise.all(reads);
+    assert.equal(assets.length, 6, "every artwork request is served");
+    assert.ok(assets.every((asset) => asset.contentType === "image/png"));
+    assert.ok(assets.every((asset) => asset.bytes.length === 3));
+    assert.ok(harness.server.maxActiveOps <= 4, "the transport never sees more than four operations");
+  }, { coalesceReads: false });
+});
+
+test("an authority revoked while an artwork read is queued never returns bytes", async () => {
+  await withHarness(async (harness) => {
+    const items = ["a1", "a2", "a3", "a4", "a5"].map((id) => movie(id));
+    const { library } = await seedMatchLibrary(harness, items);
+    harness.server.asset = { bytes: new Uint8Array([9]), contentType: "image/png" };
+    const held = deferred();
+    let entered = 0;
+    const four = deferred();
+    harness.server.nudge = { op: "info", wait: held.promise, entered: () => { entered += 1; if (entered === 4) four.resolve(); } };
+    const running = items.slice(0, 4).map((item) => harness.manager.readArtwork(harness.admin, library.id, item.id, "Primary").then(() => "ok", (error: unknown) => error));
+    await four.promise;
+    const queued = harness.manager.readArtwork(harness.admin, library.id, "a5", "Primary");
+    for (let spins = 0; spins < 1000 && netQueueLength(harness) < 1; spins += 1) await tick();
+    assert.equal(netQueueLength(harness), 1, "the fifth artwork read is queued behind the live four");
+    harness.revoke();
+    held.resolve();
+    harness.server.nudge = undefined;
+    await assert.rejects(queued, ResourceError, "a rejected authority reaches the read before any artwork call");
+    assert.equal(harness.server.assetRequests.length, 0, "no artwork bytes were read for the queued request");
+    const settled = await Promise.all(running);
+    assert.ok(settled.every((outcome) => outcome instanceof ResourceError), "the live reads are refused the same way");
+  }, { coalesceReads: false });
+});
+
+test("a burst of distinct artwork reads shares one live session and still proves every item", async () => {
+  await withHarness(async (harness) => {
+    const items = ["a1", "a2", "a3", "a4"].map((id) => artMovie(id));
+    const { connection, library } = await seedMatchLibrary(harness, items);
+    harness.server.asset = { bytes: new Uint8Array([1, 2, 3]), contentType: "image/png" };
+    const before = harness.server.calls.length;
+    const burst = () => harness.server.calls.slice(before);
+    const held = deferred();
+    const entered = deferred();
+    harness.server.nudge = { op: "info", wait: held.promise, entered: () => entered.resolve() };
+    const running = items.map((item) => harness.manager.readArtwork(harness.admin, library.id, item.id, "Primary"));
+    await entered.promise;
+    await until(() => subscribersOf(harness, connection.id, "identity") === items.length);
+    assert.equal(burst().filter((call) => call === "info").length, 1, "one identity read stands in for the whole burst");
+    assert.equal(burst().filter((call) => call === "user").length, 0, "the account read waits behind the shared identity");
+    held.resolve();
+    harness.server.nudge = undefined;
+    const assets = await Promise.all(running);
+    assert.equal(assets.length, items.length, "every distinct artwork is served");
+    assert.equal(inflightReads(harness, connection.id).size, 0, "no settled read is left behind");
+    assert.equal(burst().filter((call) => call === "info").length, 1, "identity is proved once");
+    assert.equal(burst().filter((call) => call === "user").length, 1, "the account is read once");
+    assert.equal(burst().filter((call) => call === "views").length, 1, "the library list is read once");
+    assert.equal(burst().filter((call) => call === "detail").length, items.length, "each artwork still proves its own item");
+    assert.equal(burst().filter((call) => call === "asset").length, items.length, "each artwork is fetched");
+  });
+});
+
+test("one subscriber's abort never cancels another caller's shared read", async () => {
+  await withHarness(async (harness) => {
+    const items = ["a1", "a2"].map((id) => artMovie(id));
+    const { connection, library } = await seedMatchLibrary(harness, items);
+    harness.server.asset = { bytes: new Uint8Array([7]), contentType: "image/png" };
+    const before = harness.server.calls.length;
+    const held = deferred();
+    const entered = deferred();
+    harness.server.nudge = { op: "info", wait: held.promise, entered: () => entered.resolve() };
+    const controller = new AbortController();
+    const aborted = harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary", controller.signal);
+    const other = harness.manager.readArtwork(harness.admin, library.id, "a2", "Primary");
+    await entered.promise;
+    await until(() => subscribersOf(harness, connection.id, "identity") === items.length);
+    assert.equal(subscribersOf(harness, connection.id, "identity"), 2, "both callers share the read");
+    controller.abort();
+    await assert.rejects(aborted, { code: "cancelled" });
+    assert.equal(subscribersOf(harness, connection.id, "identity"), 1, "the other subscriber is untouched");
+    held.resolve();
+    harness.server.nudge = undefined;
+    const asset = await other;
+    assert.equal(asset.contentType, "image/png", "the remaining subscriber still completes");
+    assert.equal(harness.server.calls.slice(before).filter((call) => call === "info").length, 1, "the shared read was never restarted");
+  });
+});
+
+test("a revocation during a shared read refuses only the revoked caller", async () => {
+  await withHarness(async (harness) => {
+    const items = ["a1", "a2"].map((id) => artMovie(id));
+    const { connection, library } = await seedMatchLibrary(harness, items);
+    harness.server.asset = { bytes: new Uint8Array([7]), contentType: "image/png" };
+    const held = deferred();
+    const entered = deferred();
+    harness.server.nudge = { op: "info", wait: held.promise, entered: () => entered.resolve() };
+    let revoked = false;
+    const doomed: MediaServerAuthority = {
+      actor: { id: ADA, secret: admin.secret },
+      assertCurrent: () => { if (revoked) throw new ResourceError(401, "AUTH_REQUIRED"); },
+    };
+    const failing = harness.manager.readArtwork(doomed, library.id, "a1", "Primary");
+    const other = harness.manager.readArtwork(harness.admin, library.id, "a2", "Primary");
+    await entered.promise;
+    await until(() => subscribersOf(harness, connection.id, "identity") === items.length);
+    revoked = true;
+    held.resolve();
+    harness.server.nudge = undefined;
+    await assert.rejects(failing, ResourceError, "a revoked caller is refused after the shared await");
+    const asset = await other;
+    assert.equal(asset.contentType, "image/png", "the other caller still completes");
+    assert.equal(harness.server.assetRequests.length, 1, "the revoked caller fetched no artwork bytes");
+  });
+});
+
+test("the last subscriber leaving cancels the shared read and a later call rereads", async () => {
+  await withHarness(async (harness) => {
+    const { connection, library } = await seedMatchLibrary(harness, [artMovie("a1")]);
+    harness.server.asset = { bytes: new Uint8Array([7]), contentType: "image/png" };
+    const before = harness.server.calls.length;
+    const held = deferred();
+    const entered = deferred();
+    harness.server.nudge = { op: "info", wait: held.promise, entered: () => entered.resolve() };
+    const first = new AbortController();
+    const second = new AbortController();
+    const a = harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary", first.signal);
+    const b = harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary", second.signal);
+    await entered.promise;
+    await until(() => subscribersOf(harness, connection.id, "identity") === 2);
+    const entry = inflightReads(harness, connection.id).get("identity");
+    assert.equal(entry?.subscribers, 2);
+    first.abort();
+    second.abort();
+    await assert.rejects(a, { code: "cancelled" });
+    await assert.rejects(b, { code: "cancelled" });
+    assert.equal(entry?.controller.signal.aborted, true, "the shared read was cancelled with the last subscriber");
+    assert.equal(inflightReads(harness, connection.id).size, 0, "no settled entry is left behind");
+    held.resolve();
+    harness.server.nudge = undefined;
+    const asset = await harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary");
+    assert.equal(asset.bytes.length, 1, "a later call re-proves and succeeds");
+    assert.equal(harness.server.calls.slice(before).filter((call) => call === "info").length, 2, "the later call performed a fresh read");
+  });
+});
+
+test("a failed shared read leaves no entry, so the next call re-proves and succeeds", async () => {
+  await withHarness(async (harness) => {
+    const { connection, library } = await seedMatchLibrary(harness, [artMovie("a1")]);
+    harness.server.asset = { bytes: new Uint8Array([7]), contentType: "image/png" };
+    harness.server.errors = { info: new MediaServerError("unavailable", "down") };
+    await assert.rejects(harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary"), { code: "unavailable" });
+    assert.equal(inflightReads(harness, connection.id).size, 0, "the failed read is not cached");
+    harness.server.errors = {};
+    const asset = await harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary");
+    assert.equal(asset.bytes.length, 1);
+  });
+});
+
+test("two connections never share a live-session read", async () => {
+  await withHarness(async (harness) => {
+    const first = await connect(harness);
+    harness.server.accountId = "user-2";
+    const second = await connect(harness, { username: "second-reader" });
+    harness.server.accountId = "user-1";
+    const held = deferred();
+    let entered = 0;
+    const both = deferred();
+    harness.server.nudge = { op: "info", wait: held.promise, entered: () => { entered += 1; if (entered === 2) both.resolve(); } };
+    const a = harness.manager.discoverLibraries(harness.admin, first.id);
+    const b = harness.manager.discoverLibraries(harness.admin, second.id);
+    await both.promise;
+    assert.equal(harness.server.calls.filter((call) => call === "info").length, 2, "each connection proves its own identity");
+    held.resolve();
+    harness.server.nudge = undefined;
+    await Promise.allSettled([a, b]);
+  });
+});
+
+test("upstream starts on one connection are spaced by the configured interval", async () => {
+  await withHarness(async (harness) => {
+    const items = ["a1", "a2", "a3", "a4"].map((id) => artMovie(id));
+    const { library } = await seedMatchLibrary(harness, items);
+    harness.server.asset = { bytes: new Uint8Array([1]), contentType: "image/png" };
+    harness.server.startTimes.length = 0;
+    harness.server.calls.length = 0;
+    await Promise.all(items.map((item) => harness.manager.readArtwork(harness.admin, library.id, item.id, "Primary")));
+    const times = harness.server.startTimes;
+    assert.ok(times.length >= 6, `enough operations were paced (${times.length})`);
+    for (let index = 1; index < times.length; index += 1) {
+      const gap = times[index]! - times[index - 1]!;
+      assert.ok(gap >= 15, `start ${index} came ${gap}ms after the previous one`);
+    }
+  }, { networkStartIntervalMs: 30 });
+});
+
+test("an idle connection releases no catch-up burst", async () => {
+  await withHarness(async (harness) => {
+    const items = ["a1", "a2"].map((id) => artMovie(id));
+    const { library } = await seedMatchLibrary(harness, items);
+    harness.server.asset = { bytes: new Uint8Array([1]), contentType: "image/png" };
+    await harness.manager.verifyLibrary(harness.admin, library.id);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    harness.server.startTimes.length = 0;
+    const running = items.map((item) => harness.manager.readArtwork(harness.admin, library.id, item.id, "Primary"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.ok(harness.server.startTimes.length <= 1, `no burst inside the first interval (${harness.server.startTimes.length} starts)`);
+    await Promise.all(running);
+    const times = harness.server.startTimes;
+    for (let index = 1; index < times.length; index += 1) {
+      assert.ok(times[index]! - times[index - 1]! >= 15, `start ${index} was not spaced`);
+    }
+  }, { networkStartIntervalMs: 40 });
+});
+
+test("a connection's pacing queue refuses a request beyond its 128-waiter bound", async () => {
+  await withHarness(async (harness) => {
+    // A login is not paced, so the connection is ready before the burst; every burst caller
+    // reaches the pacer with its own live-session read because the reads are not shared here.
+    const connection = await connect(harness);
+    const controllers = Array.from({ length: 200 }, () => new AbortController());
+    let refused = 0;
+    const outcomes = controllers.map((controller) =>
+      harness.manager.discoverLibraries(harness.admin, connection.id, controller.signal).then(() => "ok", (error: unknown) => {
+        if (error instanceof MediaServerError && error.code === "busy") refused += 1;
+        return error;
+      }));
+    let settled: PromiseSettledResult<unknown>[] = [];
+    try {
+      await until(() => pacerQueueLength(harness, connection.id) >= 128 && refused > 0);
+      assert.equal(pacerQueueLength(harness, connection.id), 128, "the pacing queue fills to its bound");
+    } finally {
+      for (const controller of controllers) controller.abort();
+      settled = await Promise.allSettled(outcomes);
+    }
+    assert.ok(
+      settled.some((result) => result.status === "fulfilled" && result.value instanceof MediaServerError && result.value.code === "busy"),
+      "the arrival beyond the bound is refused",
+    );
+  }, { networkStartIntervalMs: 100_000, coalesceReads: false });
+});
+
 test("readSubtitle proves the exact external index and refuses an original reference", async () => {
   await withHarness(async (harness) => {
     const { connection, library } = await seedMatchLibrary(harness, [
@@ -1454,4 +1846,252 @@ test("settings restore atomically recovers matching history and marks removed at
     await harness.manager.restoreSettingsConfiguration(harness.admin, exported, () => undefined);
     assert.equal(observed, true);
   });
+});
+
+const directoryLibrary = async (harness: Harness, remoteId: string, type: "movie" | "series" | "mixed" = "mixed", move: Record<string, unknown> = {}) => {
+  const connection = harness.store.mediaConnections()[0] ?? await connect(harness);
+  harness.server.libraries.push({ id: remoteId, name: `Library ${remoteId}`, type });
+  return harness.manager.attachLibrary(harness.admin, connection.id, { remoteId, ...move });
+};
+
+test("browseDirectory reads one provider page for the root and never touches the snapshot index", async () => {
+  await withHarness(async (harness) => {
+    const library = await directoryLibrary(harness, "music");
+    harness.server.directories["music"] = [folder("f1"), movie("m1", "Alien"), movie("m2", "Aliens")];
+    let snapshotCalls = 0;
+    (harness.index as unknown as { resolve: () => Promise<never> }).resolve = async () => {
+      snapshotCalls += 1;
+      throw new Error("the native browse must not use the snapshot index");
+    };
+
+    const page = await harness.manager.browseDirectory(harness.admin, library.id, {});
+    assert.equal(snapshotCalls, 0, "the native browse never asks for a snapshot");
+    assert.deepEqual(page.items.map((item) => item.id), ["f1", "m1", "m2"]);
+    assert.equal(page.items[0].type, "folder");
+    assert.equal(page.items[0].poster, `/api/remote-libraries/${library.id}/items/f1/artwork/Primary`);
+    assert.equal(page.total, 3);
+    assert.equal(page.stale, false);
+    assert.equal(page.cursor, undefined);
+    assert.deepEqual(page.capabilities, { rename: false, move: false, delete: false, identify: false, writeArtwork: false, downloadToLibrary: false, downloadToDevice: false });
+    assert.equal(harness.server.calls.includes("items"), false, "the recursive items operation is not used");
+    assert.equal(harness.server.directoryCalls.at(-1)!.options.limit, 60, "the folder default page size");
+    assert.equal(harness.server.directoryCalls.at(-1)!.options.mode, "folders", "a mixed library defaults to folders");
+  });
+});
+
+test("browseDirectory pages a nested folder and binds the cursor to every axis", async () => {
+  await withHarness(async (harness) => {
+    const library = await directoryLibrary(harness, "music");
+    harness.server.directories["music"] = [folder("seasonA")];
+    harness.server.detailOf["seasonA"] = folder("seasonA", { parentId: "music" });
+    harness.server.ancestorsOf["seasonA"] = ["music"];
+    harness.server.directories["seasonA"] = [movie("m1"), movie("m2"), movie("m3")];
+
+    const first = await harness.manager.browseDirectory(harness.admin, library.id, { parentId: "seasonA", limit: "2" });
+    assert.deepEqual(first.items.map((item) => item.id), ["m1", "m2"]);
+    assert.equal(first.total, 3);
+    assert.ok(first.cursor);
+    const second = await harness.manager.browseDirectory(harness.admin, library.id, { parentId: "seasonA", limit: "2", cursor: first.cursor });
+    assert.deepEqual(second.items.map((item) => item.id), ["m3"]);
+    assert.equal(second.cursor, undefined);
+
+    const providerCursorBefore = harness.server.directoryCalls.length;
+    for (const mismatch of [{ parentId: "music" }, { sort: "added" }, { search: "x" }, { mode: "titles" }, { type: "movie" }]) {
+      await assert.rejects(
+        harness.manager.browseDirectory(harness.admin, library.id, { parentId: "seasonA", limit: "2", cursor: first.cursor, ...mismatch }),
+        { code: "stale-generation" },
+        JSON.stringify(mismatch),
+      );
+    }
+    assert.equal(harness.server.directoryCalls.length, providerCursorBefore, "a mismatched cursor is refused before any provider call");
+
+    await harness.manager.patchLibrary(harness.admin, library.id, { allowedUsers: [BOB] });
+    await assert.rejects(harness.manager.browseDirectory(harness.bob, library.id, { parentId: "seasonA", limit: "2", cursor: first.cursor }), { code: "stale-generation" });
+
+    await assert.rejects(harness.manager.browseDirectory(harness.admin, library.id, { mode: "grid" }), { code: "invalid-input" });
+    await assert.rejects(harness.manager.browseDirectory(harness.admin, library.id, { sort: "date" }), { code: "invalid-input" });
+    await assert.rejects(harness.manager.browseDirectory(harness.admin, library.id, { type: "folder" }), { code: "invalid-input" });
+    await assert.rejects(harness.manager.browseDirectory(harness.admin, library.id, { unknown: "1" }), { code: "invalid-input" });
+  });
+});
+
+test("browseDirectory refuses a nested parent that is not inside the granted library or is not browsable", async () => {
+  await withHarness(async (harness) => {
+    const library = await directoryLibrary(harness, "music");
+    harness.server.detailOf["outside"] = folder("outside");
+    harness.server.ancestorsOf["outside"] = ["other-library"];
+    await assert.rejects(harness.manager.browseDirectory(harness.admin, library.id, { parentId: "outside" }), { code: "not-found" });
+
+    harness.server.detailOf["movie-parent"] = movie("movie-parent");
+    harness.server.ancestorsOf["movie-parent"] = ["music"];
+    await assert.rejects(harness.manager.browseDirectory(harness.admin, library.id, { parentId: "movie-parent" }), { code: "invalid-input" });
+  });
+});
+
+test("a grant revoked while a browse is waiting is refused before the page is returned", async () => {
+  await withHarness(async (harness) => {
+    const library = await directoryLibrary(harness, "music");
+    harness.server.directories["music"] = [movie("m1")];
+    await harness.manager.patchLibrary(harness.admin, library.id, { allowedUsers: [BOB] });
+
+    const held = (() => { let release!: () => void; const wait = new Promise<void>((resolve) => { release = resolve; }); return { wait, release }; })();
+    const entered = (() => { let signal!: () => void; const promise = new Promise<void>((resolve) => { signal = resolve; }); return { promise, signal }; })();
+    harness.server.nudge = { op: "directory", wait: held.wait, entered: entered.signal };
+    const browsing = harness.manager.browseDirectory(harness.bob, library.id, {});
+    await entered.promise;
+    await harness.manager.patchLibrary(harness.admin, library.id, { allowedUsers: [] });
+    held.release();
+    harness.server.nudge = undefined;
+    await assert.rejects(browsing, { code: "not-found" });
+  });
+});
+
+test("a folder is navigable and its artwork is served, but it is never playable", async () => {
+  await withHarness(async (harness) => {
+    const library = await directoryLibrary(harness, "music");
+    harness.server.directories["music"] = [folder("f1")];
+    harness.server.detailOf["f1"] = folder("f1");
+    harness.server.ancestorsOf["f1"] = ["music"];
+    harness.server.asset = { bytes: Uint8Array.from([0xff, 0xd8, 0xff, 0xdb]), contentType: "image/jpeg" };
+
+    const detail = await harness.manager.itemDetail(harness.admin, library.id, "f1");
+    assert.equal(detail.item.type, "folder");
+    const asset = await harness.manager.readArtwork(harness.admin, library.id, "f1", "Primary");
+    assert.equal(asset.contentType, "image/jpeg");
+    await assert.rejects(harness.manager.itemVersions(harness.admin, library.id, "f1"), { code: "invalid-input" });
+  });
+});
+
+test("previewDirectory is bounded to four posters, eight pages, four children per node and four levels", async () => {
+  await withHarness(async (harness) => {
+    const library = await directoryLibrary(harness, "music");
+    for (const id of ["f1", "f2", "f3", "f4", "f5"]) {
+      harness.server.directories["music"] ??= [];
+      harness.server.directories["music"].push(folder(id));
+      harness.server.directories[id] = [artMovie(`${id}-a`), artMovie(`${id}-b`), artMovie(`${id}-c`), artMovie(`${id}-d`)];
+    }
+
+    const preview = await harness.manager.previewDirectory(harness.admin, library.id);
+    assert.equal(preview.posters.length, 4, "at most four posters");
+    assert.ok(preview.posters.every((path) => path.startsWith(`/api/remote-libraries/${library.id}/items/`) && path.endsWith("/artwork/Primary")), "same-origin poster paths only");
+    assert.ok(harness.server.directoryCalls.length <= 8, "at most eight provider pages");
+    assert.ok(harness.server.directoryCalls.every((call) => call.options.limit === 4), "only the first four children per node");
+    assert.equal(harness.server.directoryCalls[0]!.options.mode, "folders");
+  });
+});
+
+test("previewDirectory stops at four levels and returns nothing when the mosaic is off", async () => {
+  await withHarness(async (harness) => {
+    const library = await directoryLibrary(harness, "music");
+    harness.server.directories["music"] = [folder("f1")];
+    harness.server.directories["f1"] = [folder("f2")];
+    harness.server.directories["f2"] = [folder("f3")];
+    harness.server.directories["f3"] = [folder("f4")];
+    harness.server.directories["f4"] = [artMovie("deep")];
+    for (const id of ["f1", "f2", "f3", "f4"]) { harness.server.detailOf[id] = folder(id); harness.server.ancestorsOf[id] = ["music"]; }
+    assert.deepEqual((await harness.manager.previewDirectory(harness.admin, library.id)).posters, [], "a title beyond four levels is never fetched");
+
+    harness.server.directories["f3"] = [folder("f4"), artMovie("near")];
+    assert.equal((await harness.manager.previewDirectory(harness.admin, library.id)).posters.length, 1);
+
+    const off = await directoryLibrary(harness, "music-2", "mixed", { mosaic: false });
+    const before = harness.server.directoryCalls.length;
+    assert.deepEqual(await harness.manager.previewDirectory(harness.admin, off.id), { posters: [] });
+    assert.equal(harness.server.directoryCalls.length, before, "a library with the mosaic off makes no provider call");
+  });
+});
+
+test("previewDirectory refuses an aborted or revoked request", async () => {
+  await withHarness(async (harness) => {
+    const library = await directoryLibrary(harness, "music");
+    harness.server.directories["music"] = [artMovie("m1")];
+    await assert.rejects(harness.manager.previewDirectory(harness.admin, library.id, undefined, AbortSignal.abort()), { code: "cancelled" });
+
+    await harness.manager.patchLibrary(harness.admin, library.id, { allowedUsers: [BOB] });
+    const held = (() => { let release!: () => void; const wait = new Promise<void>((resolve) => { release = resolve; }); return { wait, release }; })();
+    const entered = (() => { let signal!: () => void; const promise = new Promise<void>((resolve) => { signal = resolve; }); return { promise, signal }; })();
+    harness.server.nudge = { op: "directory", wait: held.wait, entered: entered.signal };
+    const previewing = harness.manager.previewDirectory(harness.bob, library.id);
+    await entered.promise;
+    await harness.manager.patchLibrary(harness.admin, library.id, { allowedUsers: [] });
+    held.release();
+    harness.server.nudge = undefined;
+    await assert.rejects(previewing, { code: "not-found" });
+  });
+});
+
+test("a display-only settings change keeps the generation, the runtime and any live cursor", async () => {
+  await withHarness(async (harness) => {
+    const connection = await connect(harness);
+    harness.server.libraries.push({ id: "music", name: "Music", type: "mixed" });
+    harness.server.directories["music"] = [movie("m1"), movie("m2")];
+    harness.server.versionsOf["m1"] = [{ id: "v1" }];
+    harness.server.ancestorsOf["m1"] = ["music"];
+    harness.server.detailOf["m1"] = movie("m1");
+    const library = await harness.manager.attachLibrary(harness.admin, connection.id, { remoteId: "music" });
+
+    const first = await harness.manager.browseDirectory(harness.admin, library.id, { limit: "1" });
+    assert.ok(first.cursor);
+    await harness.manager.itemVersions(harness.admin, library.id, "m1");
+    const generation = harness.store.mediaConnections()[0]!.generation;
+    const closedBefore = harness.server.closed;
+
+    const patched = await harness.manager.patchLibrary(harness.admin, library.id, { mosaic: false, showInFavorites: false });
+    assert.equal(patched.mosaic, false);
+    assert.equal(patched.showInFavorites, false);
+    assert.equal(harness.store.mediaConnections()[0]!.generation, generation, "a display-only change never bumps the generation");
+    assert.equal(harness.server.closed, closedBefore, "no live transport was closed");
+
+    const continued = await harness.manager.browseDirectory(harness.admin, library.id, { limit: "1", cursor: first.cursor });
+    assert.deepEqual(continued.items.map((item) => item.id), ["m2"], "the pre-change cursor still pages");
+    const versions = await harness.manager.itemVersions(harness.admin, library.id, "m1");
+    assert.equal(versions.versions[0]!.id, "v1", "the live reference still revalidates");
+
+    // A later mode switch is display-only too: it never bumps the generation or drops the runtime.
+    const remoded = await harness.manager.patchLibrary(harness.admin, library.id, { browseMode: "titles" });
+    assert.equal(remoded.browseMode, "titles");
+    assert.equal(harness.store.mediaConnections()[0]!.generation, generation, "a mode change never bumps the generation");
+    assert.equal(harness.server.closed, closedBefore, "still no transport was closed");
+  });
+});
+
+
+test("mosaics use folder artwork without descending and skip items known to have no artwork", async () => {
+  await withHarness(async (harness) => {
+    const library = await directoryLibrary(harness, "music");
+    harness.server.directories["music"] = [
+      { ...folder("cover-a"), hasPrimaryImage: true },
+      { ...folder("cover-b"), hasPrimaryImage: true },
+      { ...artMovie("missing"), hasPrimaryImage: false },
+    ];
+    const preview = await harness.manager.previewDirectory(harness.admin, library.id);
+    assert.equal(preview.posters.length, 2);
+    assert.ok(preview.posters.every(path => !path.includes("missing")));
+    assert.equal(harness.server.directoryCalls.length, 1, "existing folder covers need no child scan");
+  });
+});
+
+
+test("a saturated global lane cannot release a catch-up burst to one server", async () => {
+  await withHarness(async (harness) => {
+    const connection = await connect(harness);
+    const lane = harness.manager as unknown as {
+      runtimes: Map<string, unknown>;
+      net: (runtime: unknown, signal: AbortSignal, work: () => Promise<void>) => Promise<void>;
+    };
+    const runtime = lane.runtimes.get(connection.id);
+    assert.ok(runtime);
+    const held = deferred();
+    const signal = new AbortController().signal;
+    let active = 0;
+    const blockers = Array.from({ length: 4 }, () => lane.net(runtime, signal, async () => { active++; await held.promise; }));
+    await until(() => active === 4);
+    const starts: number[] = [];
+    const queued = Array.from({ length: 6 }, () => lane.net(runtime, signal, async () => { starts.push(Date.now()); }));
+    await new Promise(resolve => setTimeout(resolve, 200));
+    held.resolve();
+    await Promise.all([...blockers, ...queued]);
+    assert.equal(starts.length, 6);
+    for (let i = 1; i < starts.length; i++) assert.ok(starts[i]! - starts[i - 1]! >= 20, "dispatches remain spaced after saturation");
+  }, { networkStartIntervalMs: 25 });
 });

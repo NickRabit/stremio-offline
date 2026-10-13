@@ -18,10 +18,15 @@ import { MediaServerIndex, type MediaServerSnapshotKey, type SnapshotScan } from
 import {
   createMediaServerProvider,
   type MediaServerProvider,
+  type ProviderDirectoryOptions,
+  type ProviderOrder,
   type ProviderItem,
   type ProviderItemType,
   type ProviderLibrary,
+  type ProviderSort,
   type ProviderVersion,
+  PROVIDER_ORDERS,
+  PROVIDER_SORTS,
 } from "./media-server-provider.js";
 import { createMediaServerTransport, normalizeMediaServerUrl, type MediaServerAsset, type MediaServerTransport, type MediaServerTransportConfig } from "./media-server-security.js";
 import type { MediaServerSecrets } from "./media-server-secrets.js";
@@ -46,16 +51,20 @@ import {
   REMOTE_LIBRARY_ID,
   adminMediaConnection,
   adminRemoteLibrary,
+  effectiveBrowseMode,
+  effectiveMosaic,
   newConnectionId,
   newRemoteLibraryId,
   publicRemoteItem,
   publicRemoteLibrary,
+  remoteArtworkPath,
   type AdminMediaConnection,
   type MediaConnectionRecord,
   type MediaServerKind,
   type PublicRemoteItem,
   type PublicRemoteLibrary,
   type RemoteCapabilities,
+  type RemoteBrowseMode,
   type RemoteIdentity,
   type RemoteLibraryRecord,
 } from "./media-server-types.js";
@@ -115,6 +124,13 @@ export interface MediaServerManagerSeams {
   index?: MediaServerIndex;
   cleanupIntervalMs?: number;
   networkMax?: number;
+  /** The shortest gap between two upstream request starts on one connection. Production paces
+   *  at 125ms (eight starts a second); tests raise it to prove the spacing or zero it to keep
+   *  an unrelated suite fast. */
+  networkStartIntervalMs?: number;
+  /** Whether identical in-flight live-session metadata reads on one runtime are shared.
+   *  Production shares them; a test turns this off to drive the pre-coalescing network lane. */
+  coalesceReads?: boolean;
 }
 
 const USERNAME_MAX = 256;
@@ -134,11 +150,28 @@ const SEARCH_MAX = 256;
 const OFFSET_MAX = 1_000_000_000;
 const ITEM_TYPES: readonly ProviderItemType[] = ["movie", "series", "season", "episode"];
 const CREATE_KEYS = ["provider", "name", "baseUrl", "allowLan", "allowLoopback", "username", "password"];
-const ATTACH_KEYS = ["remoteId", "name", "order", "showOnHome", "showInContinueWatching"];
-const LIBRARY_PATCH_KEYS = ["name", "enabled", "order", "showOnHome", "showInContinueWatching", "allowedUsers"];
+const ATTACH_KEYS = ["remoteId", "name", "order", "showOnHome", "showInContinueWatching", "browseMode", "mosaic", "showInFavorites"];
+const LIBRARY_PATCH_KEYS = ["name", "enabled", "order", "showOnHome", "showInContinueWatching", "allowedUsers", "browseMode", "mosaic", "showInFavorites"];
 const CONNECTION_PATCH_KEYS = ["name", "enabled"];
 const BROWSE_QUERY_KEYS = ["limit", "cursor", "search", "type"];
 const EPISODE_QUERY_KEYS = ["limit", "cursor"];
+const DIRECTORY_QUERY_KEYS = ["parentId", "mode", "limit", "cursor", "search", "type", "sort", "order"];
+const DIRECTORY_LIMIT_DEFAULT = 60;
+/** Hard bounds on one lazy mosaic preview: no continuation and no full scan. */
+const PREVIEW_MAX_POSTERS = 4;
+const PREVIEW_MAX_PAGES = 8;
+const PREVIEW_DEPTH_MAX = 4;
+const PREVIEW_CHILDREN = 4;
+const PREVIEW_SWALLOWED_CODES: ReadonlySet<string> = new Set([
+  "timeout", "unavailable", "invalid-response", "response-too-large", "rate-limited", "busy",
+  "authentication-required", "unsafe-address",
+]);
+/** How many operations may wait in the network lane before a further one is refused outright. */
+const NET_QUEUE_MAX = 128;
+/** The production start interval: one upstream request per connection every 125ms (8/s). */
+const NETWORK_START_INTERVAL_MS = 125;
+/** How many operations may wait for one connection's start pacing before a further one is refused. */
+const PACER_QUEUE_MAX = 128;
 
 const invalid = (message: string): MediaServerError => new MediaServerError("invalid-input", message);
 const notFound = (message: string): MediaServerError => new MediaServerError("not-found", message);
@@ -205,6 +238,37 @@ const parseType = (value: string | undefined): ProviderItemType | undefined => {
   return value as ProviderItemType;
 };
 
+const parseBrowseMode = (value: string | undefined): RemoteBrowseMode | undefined => {
+  if (value === undefined || value === "") return undefined;
+  if (value !== "folders" && value !== "titles") throw invalid("The media-server browse mode is not supported.");
+  return value;
+};
+
+const parseDirectoryLimit = (value: string | undefined): number => {
+  if (value === undefined || value === "") return DIRECTORY_LIMIT_DEFAULT;
+  if (!/^\d{1,3}$/.test(value)) throw invalid("The media-server limit is out of range.");
+  const limit = Number(value);
+  if (limit < 1 || limit > 200) throw invalid("The media-server limit is out of range.");
+  return limit;
+};
+
+const parseSort = (value: string | undefined): ProviderSort => {
+  if (value === undefined || value === "") return "name";
+  if (!PROVIDER_SORTS.includes(value as ProviderSort)) throw invalid("The media-server sort is not supported.");
+  return value as ProviderSort;
+};
+
+const parseOrder = (value: string | undefined): ProviderOrder => {
+  if (value === undefined || value === "") return "asc";
+  if (!PROVIDER_ORDERS.includes(value as ProviderOrder)) throw invalid("The media-server order is not supported.");
+  return value as ProviderOrder;
+};
+
+const parseParentId = (value: string | undefined): string | undefined => {
+  if (value === undefined || value === "") return undefined;
+  return requestItemId(value);
+};
+
 const parseCursor = (value: string | undefined): string | undefined => {
   if (value === undefined || value === "") return undefined;
   if (value.length > CURSOR_MAX) throw invalid("The media-server cursor is malformed.");
@@ -249,12 +313,104 @@ const decodeCursor = (value: unknown): BrowseCursor => {
   return cursor;
 };
 
+/** A native-browse cursor. It binds the acting account, the library, the connection generation,
+ *  the requested parent, mode, type, search and the sort pair, plus the provider's own page
+ *  cursor. A cursor from any other context is refused before a provider call. */
+interface DirectoryCursor {
+  v: 1;
+  l: string;
+  g: number;
+  a: string;
+  p: string;
+  m: string;
+  t: string;
+  q: string;
+  s: string;
+  r: string;
+  c: string;
+}
+
+const encodeDirectoryCursor = (cursor: DirectoryCursor): string => Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
+
+const decodeDirectoryCursor = (value: unknown): DirectoryCursor => {
+  if (typeof value !== "string" || value.length === 0 || value.length > CURSOR_MAX) throw invalid("The media-server cursor is malformed.");
+  const json = Buffer.from(value, "base64url");
+  if (json.length === 0 || json.length > CURSOR_JSON_MAX) throw invalid("The media-server cursor is malformed.");
+  let parsed: unknown;
+  try { parsed = JSON.parse(json.toString("utf8")); }
+  catch { throw invalid("The media-server cursor is malformed."); }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw invalid("The media-server cursor is malformed.");
+  const { v, l, g, a, p, m, t, q, s, r, c } = parsed as Record<string, unknown>;
+  const bounded = (entry: unknown, max: number, allowEmpty: boolean): boolean =>
+    typeof entry === "string" && (allowEmpty || entry.length > 0) && entry.length <= max;
+  if (v !== 1 || !bounded(l, MEDIA_SERVER_LIMITS.upstreamId, false)
+    || typeof g !== "number" || !Number.isSafeInteger(g) || g < 0
+    || !bounded(a, MEDIA_SERVER_LIMITS.upstreamId, false)
+    || !bounded(p, MEDIA_SERVER_LIMITS.upstreamId, false)
+    || !bounded(m, 16, false) || !bounded(t, 32, true) || !bounded(q, SEARCH_MAX, true)
+    || !bounded(s, 16, false) || !bounded(r, 16, false) || !bounded(c, CURSOR_MAX, false)) {
+    throw invalid("The media-server cursor is malformed.");
+  }
+  const cursor: DirectoryCursor = { v: 1, l: l as string, g, a: a as string, p: p as string, m: m as string, t: t as string, q: q as string, s: s as string, r: r as string, c: c as string };
+  if (encodeDirectoryCursor(cursor) !== value) throw invalid("The media-server cursor is not canonical.");
+  return cursor;
+};
+
 interface CachedRuntime {
   generation: number;
   secretRef: string | undefined;
   transport: MediaServerTransport;
   provider: MediaServerProvider;
+  /** One pacer per runtime, so two connections never share a start budget. */
+  readonly pacer: RuntimePacer;
+  readonly dispatchPacer: RuntimePacer;
+  /** Identical in-flight metadata reads currently shared by this runtime's callers. */
+  readonly inflight: Map<string, InflightRead>;
 }
+
+/** One operation waiting for its turn under a connection's start pacing. `settled` separates an
+ *  entry still in the queue from one an admission or an abort has already resolved, so neither
+ *  the abort listener nor a later pump acts twice on the same waiter. */
+interface PacerWaiter {
+  signal: AbortSignal;
+  settled: boolean;
+  onAbort: () => void;
+  admit: () => void;
+  fail: (error: MediaServerError) => void;
+}
+
+/** Per-connection start pacing: at most one upstream request starts per interval, with a
+ *  bounded, abortable waiting queue. Never shared across connection identities. */
+interface RuntimePacer {
+  lastStart: number;
+  timer: NodeJS.Timeout | undefined;
+  waiters: PacerWaiter[];
+}
+
+/** One in-flight coalesced metadata read shared by several callers. Its dedicated controller is
+ *  combined with the manager lifetime; the last subscriber to leave cancels it, and its promise
+ *  always carries a rejection handler so an abandoned read cannot surface as an unhandled
+ *  rejection. A settled entry is dropped at once: no permission result is ever cached. */
+interface InflightRead {
+  promise: Promise<unknown>;
+  controller: AbortController;
+  subscribers: number;
+}
+
+const newRuntime = (
+  generation: number,
+  secretRef: string | undefined,
+  transport: MediaServerTransport,
+  provider: MediaServerProvider,
+): CachedRuntime => ({
+  generation,
+  secretRef,
+  transport,
+  provider,
+  pacer: { lastStart: 0, timer: undefined, waiters: [] },
+  dispatchPacer: { lastStart: 0, timer: undefined, waiters: [] },
+  inflight: new Map<string, InflightRead>(),
+});
 
 /** One proved live session: the token, the provider behind it, its transport and the view
  *  list the account may reach. Held for the length of a single request so several reads
@@ -270,6 +426,17 @@ interface StatusRecord {
   generation: number;
   secretRef: string | undefined;
   status: MediaServerConnectionStatus;
+}
+
+/** One operation waiting for a network slot. `settled` distinguishes an entry still in the
+ *  queue from one a drain admission or an abort has already resolved, so neither the abort
+ *  listener nor a later drain acts twice on the same waiter. */
+interface NetWaiter {
+  signal: AbortSignal;
+  settled: boolean;
+  onAbort: () => void;
+  admit: () => void;
+  fail: (error: MediaServerError) => void;
 }
 
 // Re-exported so existing callers keep importing it from the manager; the pure
@@ -290,6 +457,8 @@ export class MediaServerManager {
   private readonly providerFactory: (kind: MediaServerKind, transport: MediaServerTransport) => MediaServerProvider;
   private readonly transportFactory: (config: MediaServerTransportConfig) => MediaServerTransport;
   private readonly networkMax: number;
+  private readonly networkStartIntervalMs: number;
+  private readonly coalesceReads: boolean;
   private readonly cleanupIntervalMs: number;
   private readonly lifetime = new AbortController();
   private readonly loginTransports = new Set<MediaServerTransport>();
@@ -297,6 +466,7 @@ export class MediaServerManager {
   private maintenance: Promise<void> | undefined;
   private cleanupTimer: NodeJS.Timeout | undefined;
   private activeNetwork = 0;
+  private readonly netWaiters: NetWaiter[] = [];
   private mutationInFlight = false;
   private closed = false;
   private initialized = false;
@@ -312,6 +482,8 @@ export class MediaServerManager {
     this.providerFactory = seams.providerFactory ?? createMediaServerProvider;
     this.transportFactory = seams.transportFactory ?? ((config) => createMediaServerTransport(config));
     this.networkMax = seams.networkMax ?? 4;
+    this.networkStartIntervalMs = seams.networkStartIntervalMs ?? NETWORK_START_INTERVAL_MS;
+    this.coalesceReads = seams.coalesceReads ?? true;
     this.cleanupIntervalMs = seams.cleanupIntervalMs ?? CLEANUP_INTERVAL_MS;
     this.configuration = new MediaServerConfiguration(this.store);
   }
@@ -339,6 +511,20 @@ export class MediaServerManager {
   async close(): Promise<void> {
     this.closed = true;
     this.lifetime.abort();
+    // The lifetime abort rejects every queued request through its own signal; this sweep only
+    // covers a waiter whose signal was somehow not bound to the lifetime, so nothing leaks.
+    while (this.netWaiters.length > 0) {
+      const waiter = this.netWaiters.shift() as NetWaiter;
+      waiter.settled = true;
+      waiter.signal.removeEventListener("abort", waiter.onAbort);
+      waiter.fail(closedError());
+    }
+    // A pacer waiter is bound to the lifetime signal too, so this only covers one whose signal
+    // was somehow not combined with it.
+    for (const runtime of this.runtimes.values()) {
+      this.failPacer(runtime.pacer, closedError());
+      this.failPacer(runtime.dispatchPacer, closedError());
+    }
     if (this.cleanupTimer) { clearInterval(this.cleanupTimer); this.cleanupTimer = undefined; }
     await this.index.close();
     const transports = [...this.runtimes.values()].map((runtime) => runtime.transport);
@@ -383,7 +569,7 @@ export class MediaServerManager {
       this.loginTransports.add(transport);
       try {
         const provider = this.providerFactory(kind as MediaServerKind, transport);
-        const result = await this.net(request, () => provider.authenticate(username, password, request));
+        const result = await this.net(undefined, request, () => provider.authenticate(username, password, request));
         this.checkLive(request);
         this.requireAdmin(authority, request);
         const binding = { connectionId: id, provider: kind as MediaServerKind, serverId: result.serverId, accountId: result.accountId };
@@ -411,7 +597,7 @@ export class MediaServerManager {
           await this.rollbackSecret(ref);
           throw error;
         }
-        this.cacheRuntime(id, { generation: installed.generation, secretRef: installed.secretRef, transport, provider });
+        this.cacheRuntime(id, newRuntime(installed.generation, installed.secretRef, transport, provider));
         cached = true;
         this.markAvailable(installed);
         log("INFO", "Media-server connection created", { actor: actor.username, connectionId: id, provider: installed.provider });
@@ -505,7 +691,7 @@ export class MediaServerManager {
       this.loginTransports.add(transport);
       try {
         const provider = this.providerFactory(connection.provider, transport);
-        const result = await this.net(request, () => provider.authenticate(username, password, request));
+        const result = await this.net(undefined, request, () => provider.authenticate(username, password, request));
         this.checkLive(request);
         this.requireAdmin(authority, request);
         if (result.serverId !== connection.serverId || result.accountId !== connection.accountId) {
@@ -540,7 +726,7 @@ export class MediaServerManager {
         this.invalidateRuntime(connectionId);
         await this.invalidateContent({ connectionId });
         await this.drainCleanup();
-        this.cacheRuntime(connectionId, { generation: updated.generation, secretRef: updated.secretRef, transport, provider });
+        this.cacheRuntime(connectionId, newRuntime(updated.generation, updated.secretRef, transport, provider));
         cached = true;
         this.markAvailable(updated);
         log("INFO", "Media-server connection re-authenticated", { actor: actor.username, connectionId });
@@ -571,6 +757,9 @@ export class MediaServerManager {
     const order = record.order === undefined ? 0 : libraryOrder(record.order);
     const showOnHome = record.showOnHome === undefined ? true : bool(record.showOnHome, "showOnHome");
     const showInContinueWatching = record.showInContinueWatching === undefined ? true : bool(record.showInContinueWatching, "showInContinueWatching");
+    const browseMode = parseBrowseMode(record.browseMode as string | undefined);
+    const mosaic = record.mosaic === undefined ? undefined : bool(record.mosaic, "mosaic");
+    const showInFavorites = record.showInFavorites === undefined ? undefined : bool(record.showInFavorites, "showInFavorites");
     return this.adminMutation(async () => {
       const session = await this.liveSession(authority, connection, { libraryRemoteId: remoteId }, request);
       const discovered = session.libraries.find((library) => library.id === remoteId);
@@ -591,6 +780,9 @@ export class MediaServerManager {
         installed = {
           id: newRemoteLibraryId(), connectionId: connection.id, remoteId, name: name ?? discovered.name,
           type: discovered.type, enabled: true, order, allowedUsers: [], showOnHome, showInContinueWatching,
+          ...(browseMode === undefined ? {} : { browseMode }),
+          ...(mosaic === undefined ? {} : { mosaic }),
+          ...(showInFavorites === undefined ? {} : { showInFavorites }),
         };
         state.remoteLibraries = [...libraries, installed];
       });
@@ -609,6 +801,9 @@ export class MediaServerManager {
     const order = record.order === undefined ? undefined : libraryOrder(record.order);
     const showOnHome = record.showOnHome === undefined ? undefined : bool(record.showOnHome, "showOnHome");
     const showInContinueWatching = record.showInContinueWatching === undefined ? undefined : bool(record.showInContinueWatching, "showInContinueWatching");
+    const browseMode = parseBrowseMode(record.browseMode as string | undefined);
+    const mosaic = record.mosaic === undefined ? undefined : bool(record.mosaic, "mosaic");
+    const showInFavorites = record.showInFavorites === undefined ? undefined : bool(record.showInFavorites, "showInFavorites");
     const requestedUsers = record.allowedUsers === undefined ? undefined : this.readAllowedUsers(record.allowedUsers);
     return this.adminMutation(async () => {
       let updated!: RemoteLibraryRecord;
@@ -627,6 +822,10 @@ export class MediaServerManager {
         if (order !== undefined) next.order = order;
         if (showOnHome !== undefined) next.showOnHome = showOnHome;
         if (showInContinueWatching !== undefined) next.showInContinueWatching = showInContinueWatching;
+        // Display-only settings: they never bump the generation or revoke live content.
+        if (browseMode !== undefined) next.browseMode = browseMode;
+        if (mosaic !== undefined) next.mosaic = mosaic;
+        if (showInFavorites !== undefined) next.showInFavorites = showInFavorites;
         const before = library.allowedUsers;
         if (requestedUsers !== undefined) {
           const wanted = new Set<string>(dormantGrants(state.users ?? [], library.allowedUsers));
@@ -828,6 +1027,120 @@ export class MediaServerManager {
       page.cursor = encodeCursor({ v: 1, s: snapshot.id, l: library.id, g: connection.generation, a: user.id, q: search ?? "", t: type ?? "", p: "", o: offset + slice.length });
     }
     return page;
+  }
+
+  /** One native browse page of an attached remote library, folders or titles. It reads exactly
+   *  one provider page for one request -- the recursive snapshot index is never consulted -- and
+   *  re-proves the acting authority, the library grant and the connection identity after every
+   *  await. A nested parent is proved to belong to the library, and only a folder, series or
+   *  season may be browsed further. */
+  async browseDirectory(authority: MediaServerAuthority, libraryId: unknown, query: unknown, signal?: AbortSignal): Promise<MediaServerBrowsePage> {
+    const request = this.requestSignal(signal);
+    const user = this.currentActor(authority, request);
+    const record = readQuery(query, DIRECTORY_QUERY_KEYS);
+    const limit = parseDirectoryLimit(record.limit);
+    const search = parseSearch(record.search);
+    const type = parseType(record.type);
+    const sort = parseSort(record.sort);
+    const order = parseOrder(record.order);
+    const requestedParent = parseParentId(record.parentId);
+    const rawCursor = parseCursor(record.cursor);
+    const library = this.requireVisibleLibrary(user, libraryId);
+    const connection = this.requireConnection(library.connectionId);
+    const mode = parseBrowseMode(record.mode) ?? effectiveBrowseMode(library);
+    const parent = requestedParent ?? library.remoteId;
+    let cursor: DirectoryCursor | undefined;
+    if (rawCursor !== undefined) {
+      cursor = decodeDirectoryCursor(rawCursor);
+      if (cursor.l !== library.id || cursor.a !== user.id || cursor.g !== connection.generation
+        || cursor.p !== parent || cursor.m !== mode || cursor.t !== (type ?? "") || cursor.q !== (search ?? "")
+        || cursor.s !== sort || cursor.r !== order) throw stale();
+    }
+    const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId }, request);
+    if (requestedParent !== undefined) await this.proveParent(authority, request, library, connection, session, requestedParent);
+    const page = await this.upstream(connection, request, () => session.provider.pageDirectory(session.token, connection.accountId, parent, {
+      mode,
+      limit,
+      sort,
+      order,
+      ...(cursor === undefined ? {} : { cursor: cursor.c }),
+      ...(search === undefined ? {} : { search }),
+      ...(type === undefined ? {} : { type }),
+    }, request));
+    this.recheckContent(authority, request, library.id, connection);
+    const result: MediaServerBrowsePage = {
+      items: page.items.map((item) => publicRemoteItem(structuredClone(item), library.id)),
+      total: page.total,
+      asOf: new Date(this.clock()).toISOString(),
+      stale: false,
+      capabilities: READ_ONLY_MEDIA_CAPABILITIES,
+    };
+    if (page.cursor !== undefined) {
+      result.cursor = encodeDirectoryCursor({
+        v: 1, l: library.id, g: connection.generation, a: user.id, p: parent, m: mode,
+        t: type ?? "", q: search ?? "", s: sort, r: order, c: page.cursor,
+      });
+    }
+    return result;
+  }
+
+  /** Up to four same-origin poster paths for one library tile or folder tile, read by a bounded,
+   *  breadth-first walk of at most four children per node, eight provider pages and four levels.
+   *  It never continues a page and never scans the library. When the mosaic is off it answers
+   *  empty without a single provider call. Upstream metadata failures leave the gathered posters
+   *  as they are so a cosmetic preview can never hide a library or block opening it; a lost
+   *  authority, a stale generation or an abort still refuses. */
+  async previewDirectory(authority: MediaServerAuthority, libraryId: unknown, parentId?: unknown, signal?: AbortSignal): Promise<{ posters: string[] }> {
+    const request = this.requestSignal(signal);
+    const user = this.currentActor(authority, request);
+    const library = this.requireVisibleLibrary(user, libraryId);
+    const connection = this.requireConnection(library.connectionId);
+    if (!effectiveMosaic(library)) return { posters: [] };
+    const requestedParent = parseParentId(typeof parentId === "string" ? parentId : undefined);
+    const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId }, request);
+    let root = library.remoteId;
+    if (requestedParent !== undefined) {
+      const parent = await this.proveParent(authority, request, library, connection, session, requestedParent);
+      if (parent.type !== "folder") return { posters: [] };
+      root = parent.id;
+    }
+    const queue: string[] = [root];
+    const candidates: ProviderItem[] = [];
+    let depth = 0;
+    let pages = 0;
+    let stopped = false;
+    while (queue.length && pages < PREVIEW_MAX_PAGES && depth < PREVIEW_DEPTH_MAX && candidates.length < PREVIEW_MAX_POSTERS) {
+      const level = queue.length;
+      const folders: string[] = [];
+      for (let index = 0; index < level && pages < PREVIEW_MAX_PAGES; index += 1) {
+        if (request.aborted) throw cancelled();
+        const node = queue.shift() as string;
+        let page;
+        try {
+          pages += 1;
+          page = await this.upstream(connection, request, () => session.provider.pageDirectory(session.token, connection.accountId, node, { mode: "folders", limit: PREVIEW_CHILDREN }, request));
+        } catch (error) {
+          if (error instanceof MediaServerError && PREVIEW_SWALLOWED_CODES.has(error.code)) { stopped = true; break; }
+          throw error;
+        }
+        this.recheckContent(authority, request, library.id, connection);
+        for (const item of page.items) {
+          if (item.hasPrimaryImage === true || (item.type !== "folder" && item.hasPrimaryImage !== false)) candidates.push(item);
+          if (item.type === "folder" && item.hasPrimaryImage !== true) folders.push(item.id);
+        }
+        if (candidates.length >= PREVIEW_MAX_POSTERS) break;
+      }
+      if (stopped) break;
+      // Folders are opened only when the level did not already fill the mosaic.
+      queue.push(...folders);
+      depth += 1;
+    }
+    this.recheckContent(authority, request, library.id, connection);
+    const chosen = [
+      ...candidates.filter((item) => item.hasPrimaryImage === true),
+      ...candidates.filter((item) => item.hasPrimaryImage !== true),
+    ].slice(0, PREVIEW_MAX_POSTERS);
+    return { posters: chosen.map((item) => remoteArtworkPath(library.id, item.id, "Primary")) };
   }
 
   async itemDetail(authority: MediaServerAuthority, libraryId: unknown, itemId: unknown, signal?: AbortSignal): Promise<MediaServerDetail> {
@@ -1128,6 +1441,27 @@ export class MediaServerManager {
     if (!this.sameConnection(fresh, connection)) throw stale();
   }
 
+  /** Proves a requested browse parent sits inside the granted library and may be opened: the
+   *  exact item, its ancestor chain reaching the library's remote id, and a folder, series or
+   *  season kind. The library root is already proved by the live session. */
+  private async proveParent(
+    authority: MediaServerAuthority,
+    signal: AbortSignal,
+    library: RemoteLibraryRecord,
+    connection: MediaConnectionRecord,
+    session: { token: string; provider: MediaServerProvider },
+    parentId: string,
+  ): Promise<ProviderItem> {
+    const parent = await this.upstream(connection, signal, () => session.provider.detail(session.token, connection.accountId, parentId, signal));
+    this.recheckContent(authority, signal, library.id, connection);
+    if (parent.id !== parentId) throw new MediaServerError("invalid-response", "The media-server item identity changed.");
+    const ancestors = await this.upstream(connection, signal, () => session.provider.ancestors(session.token, connection.accountId, parent.id, signal));
+    if (!ancestors.includes(library.remoteId)) throw notFound("That item is not in this library.");
+    this.recheckContent(authority, signal, library.id, connection);
+    if (parent.type !== "folder" && parent.type !== "series" && parent.type !== "season") throw invalid("That item cannot be browsed.");
+    return parent;
+  }
+
   /** One upstream detail read proved to be the item asked for and to still sit in the library,
    *  with the acting authority and the local records re-checked after every await. */
   private async verifiedDetail(
@@ -1399,6 +1733,8 @@ export class MediaServerManager {
     const cached = this.runtimes.get(connectionId);
     if (cached) {
       this.runtimes.delete(connectionId);
+      this.failPacer(cached.pacer, stale());
+      this.failPacer(cached.dispatchPacer, stale());
       void cached.transport.close().catch(() => undefined);
     }
     this.index.invalidateConnection(connectionId);
@@ -1411,6 +1747,8 @@ export class MediaServerManager {
     const existing = this.runtimes.get(connectionId);
     if (existing && existing !== runtime) {
       this.runtimes.delete(connectionId);
+      this.failPacer(existing.pacer, stale());
+      this.failPacer(existing.dispatchPacer, stale());
       void existing.transport.close().catch(() => undefined);
     }
     while (this.runtimes.size >= RUNTIME_MAX && !this.runtimes.has(connectionId)) {
@@ -1418,7 +1756,11 @@ export class MediaServerManager {
       if (oldest === undefined) break;
       const evicted = this.runtimes.get(oldest);
       this.runtimes.delete(oldest);
-      if (evicted) void evicted.transport.close().catch(() => undefined);
+      if (evicted) {
+        this.failPacer(evicted.pacer, stale());
+        this.failPacer(evicted.dispatchPacer, stale());
+        void evicted.transport.close().catch(() => undefined);
+      }
     }
     this.runtimes.set(connectionId, runtime);
   }
@@ -1428,10 +1770,12 @@ export class MediaServerManager {
     if (cached && cached.generation === connection.generation && cached.secretRef === connection.secretRef) return cached;
     if (cached) {
       this.runtimes.delete(connection.id);
+      this.failPacer(cached.pacer, stale());
+      this.failPacer(cached.dispatchPacer, stale());
       void cached.transport.close().catch(() => undefined);
     }
     const transport = this.transportFactory({ baseUrl: connection.baseUrl, allowLan: connection.allowLan, allowLoopback: connection.allowLoopback, deviceId: connection.id });
-    const runtime: CachedRuntime = { generation: connection.generation, secretRef: connection.secretRef, transport, provider: this.providerFactory(connection.provider, transport) };
+    const runtime = newRuntime(connection.generation, connection.secretRef, transport, this.providerFactory(connection.provider, transport));
     this.cacheRuntime(connection.id, runtime);
     return runtime;
   }
@@ -1452,13 +1796,13 @@ export class MediaServerManager {
     const token = await this.serializedCredential(() => this.vault.get(binding, connection.secretRef as string));
     this.recheckConnection(authority, signal, connection);
     try {
-      const identity = await this.net(signal, () => runtime.provider.verifyIdentity(signal));
+      const identity = await this.coalesced(runtime, "identity", signal, (inner) => runtime.provider.verifyIdentity(inner));
       this.recheckConnection(authority, signal, connection);
       if (identity.serverId !== connection.serverId) {
         this.markIdentityChanged(connection);
         throw identityChanged();
       }
-      const account = await this.net(signal, () => runtime.provider.currentAccount(token, connection.accountId, signal));
+      const account = await this.coalesced(runtime, `account:${connection.accountId}`, signal, (inner) => runtime.provider.currentAccount(token, connection.accountId, inner));
       this.recheckConnection(authority, signal, connection);
       if (account.accountId !== connection.accountId) {
         this.markIdentityChanged(connection);
@@ -1468,7 +1812,7 @@ export class MediaServerManager {
       if (policy.disabled) throw new MediaServerError("unavailable", "The media-server account is disabled.");
       if (!policy.mediaPlayback) throw new MediaServerError("forbidden", "The media-server account may not play.");
       if (policy.hasAdditionalRestrictions) throw new MediaServerError("unsupported-policy", "The media-server account has unsupported restrictions.");
-      const libraries = await this.net(signal, () => runtime.provider.listLibraries(token, connection.accountId, signal));
+      const libraries = await this.coalesced(runtime, `views:${connection.accountId}`, signal, (inner) => runtime.provider.listLibraries(token, connection.accountId, inner));
       this.recheckConnection(authority, signal, connection);
       this.markAvailable(connection);
       if (options.libraryRemoteId !== undefined) {
@@ -1524,22 +1868,185 @@ export class MediaServerManager {
     throw new MediaServerError("response-too-large", "The media-server library needed too many pages.");
   }
 
-  private async net<T>(signal: AbortSignal, work: () => Promise<T>): Promise<T> {
+  /** Stage starts before reserving a slot; pace actual dispatch again after a saturated
+   *  global lane so delayed admissions cannot arrive upstream as a catch-up burst. */
+  private async net<T>(runtime: CachedRuntime | undefined, signal: AbortSignal, work: () => Promise<T>): Promise<T> {
+    if (runtime) await this.pace(runtime.pacer, signal);
+    await this.acquireNet(signal);
+    try {
+      if (runtime) await this.pace(runtime.dispatchPacer, signal);
+      this.checkLive(signal);
+      return await work();
+    } finally {
+      this.releaseNet();
+    }
+  }
+
+  /** Wait for this connection's next start slot. A start is admitted at once when the interval
+   *  has already elapsed and nobody is waiting; otherwise the caller joins a bounded, abortable
+   *  FIFO queue. Idle time never accrues credit, so a burst after a quiet spell is still spaced
+   *  rather than released all at once. */
+  private pace(pacer: RuntimePacer, signal: AbortSignal): Promise<void> {
+    const interval = this.networkStartIntervalMs;
+    if (interval <= 0) return Promise.resolve();
+    const now = Date.now();
+    if (pacer.waiters.length === 0 && now - pacer.lastStart >= interval) {
+      pacer.lastStart = now;
+      return Promise.resolve();
+    }
+    if (pacer.waiters.length >= PACER_QUEUE_MAX) return Promise.reject(busy("Too many media-server requests are queued."));
+    return new Promise<void>((resolve, reject) => {
+      const waiter: PacerWaiter = { signal, settled: false, onAbort: () => undefined, admit: resolve, fail: reject };
+      waiter.onAbort = () => {
+        if (waiter.settled) return;
+        waiter.settled = true;
+        const index = pacer.waiters.indexOf(waiter);
+        if (index !== -1) pacer.waiters.splice(index, 1);
+        // An emptied queue must not leave a stale pump holding the event loop open.
+        if (pacer.waiters.length === 0 && pacer.timer) { clearTimeout(pacer.timer); pacer.timer = undefined; }
+        reject(this.closed ? closedError() : cancelled());
+      };
+      pacer.waiters.push(waiter);
+      signal.addEventListener("abort", waiter.onAbort, { once: true });
+      this.pumpPacer(pacer);
+    });
+  }
+
+  /** Admit every waiter whose start is due, in arrival order, then arm one timer for the next.
+   *  A single pending timer drives the whole queue, so a burst never schedules a timer per
+   *  waiter and the queue stays a plain array. */
+  private pumpPacer(pacer: RuntimePacer): void {
+    if (pacer.timer) return;
+    for (;;) {
+      if (pacer.waiters.length === 0) return;
+      const now = Date.now();
+      if (now - pacer.lastStart < this.networkStartIntervalMs) {
+        const delay = Math.max(1, pacer.lastStart + this.networkStartIntervalMs - now);
+        pacer.timer = setTimeout(() => { pacer.timer = undefined; this.pumpPacer(pacer); }, delay);
+        return;
+      }
+      const waiter = pacer.waiters.shift() as PacerWaiter;
+      waiter.settled = true;
+      waiter.signal.removeEventListener("abort", waiter.onAbort);
+      pacer.lastStart = now;
+      waiter.admit();
+    }
+  }
+
+  /** Fail every waiter still queued for a pacer (a dropped or closing runtime): no abort listener
+   *  outlives the wait and the timer is cleared so a stale pump cannot fire. */
+  private failPacer(pacer: RuntimePacer, error: MediaServerError): void {
+    if (pacer.timer) { clearTimeout(pacer.timer); pacer.timer = undefined; }
+    while (pacer.waiters.length > 0) {
+      const waiter = pacer.waiters.shift() as PacerWaiter;
+      waiter.settled = true;
+      waiter.signal.removeEventListener("abort", waiter.onAbort);
+      waiter.fail(error);
+    }
+  }
+
+  /** Reserve a live slot at once, or wait in the FIFO queue for one to be handed over. On
+   *  success the slot is already counted; a rejection (abort, close or a full queue) leaves the
+   *  counter untouched. No abort listener outlives the wait in any of those paths. */
+  private acquireNet(signal: AbortSignal): Promise<void> {
     this.checkLive(signal);
-    if (this.activeNetwork >= this.networkMax) throw busy("Too many media-server requests are running.");
-    this.activeNetwork += 1;
-    try { return await work(); } finally { this.activeNetwork -= 1; }
+    if (this.activeNetwork < this.networkMax) {
+      this.activeNetwork += 1;
+      return Promise.resolve();
+    }
+    if (this.netWaiters.length >= NET_QUEUE_MAX) return Promise.reject(busy("Too many media-server requests are queued."));
+    return new Promise<void>((resolve, reject) => {
+      const waiter: NetWaiter = { signal, settled: false, onAbort: () => undefined, admit: resolve, fail: reject };
+      waiter.onAbort = () => {
+        if (waiter.settled) return;
+        waiter.settled = true;
+        const index = this.netWaiters.indexOf(waiter);
+        if (index !== -1) this.netWaiters.splice(index, 1);
+        reject(this.closed ? closedError() : cancelled());
+      };
+      this.netWaiters.push(waiter);
+      signal.addEventListener("abort", waiter.onAbort, { once: true });
+    });
+  }
+
+  private releaseNet(): void {
+    this.activeNetwork -= 1;
+    while (this.activeNetwork < this.networkMax && this.netWaiters.length > 0) {
+      const waiter = this.netWaiters.shift() as NetWaiter;
+      waiter.settled = true;
+      waiter.signal.removeEventListener("abort", waiter.onAbort);
+      this.activeNetwork += 1;
+      waiter.admit();
+    }
   }
 
   /** A provider call that also revokes the runtime on an authentication refusal: a 401 from
    *  any operation, not only the preflight, means the cached token is no longer usable. */
   private async upstream<T>(connection: MediaConnectionRecord, signal: AbortSignal, work: () => Promise<T>): Promise<T> {
     try {
-      return await this.net(signal, work);
+      return await this.net(this.liveRuntime(connection), signal, work);
     } catch (error) {
       if (error instanceof MediaServerError && error.code === "authentication-required") this.markReauthentication(connection);
       throw error;
     }
+  }
+
+  /** The cached runtime a connection's content call belongs to, or undefined when it is not
+   *  installed; pacing then simply does not apply. */
+  private liveRuntime(connection: MediaConnectionRecord): CachedRuntime | undefined {
+    const cached = this.runtimes.get(connection.id);
+    return cached && cached.generation === connection.generation && cached.secretRef === connection.secretRef ? cached : undefined;
+  }
+
+  /** Share one in-flight metadata read with every caller asking for the same key on the same
+   *  runtime. The read runs under a dedicated controller combined with the manager lifetime, so
+   *  it stops only when the last subscriber leaves and never inherits one caller's abort. A
+   *  settled entry is dropped at once; nothing about a permission result is cached. */
+  private coalesced<T>(runtime: CachedRuntime, key: string, signal: AbortSignal, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    this.checkLive(signal);
+    if (!this.coalesceReads) return this.net(runtime, signal, () => work(signal));
+    const existing = runtime.inflight.get(key);
+    if (existing) return this.joinInflight<T>(runtime, key, existing, signal);
+    const controller = new AbortController();
+    const entry: InflightRead = { promise: Promise.resolve(), controller, subscribers: 0 };
+    const combined = AbortSignal.any([this.lifetime.signal, controller.signal]);
+    entry.promise = this.net(runtime, combined, () => work(combined)).finally(() => {
+      if (runtime.inflight.get(key) === entry) runtime.inflight.delete(key);
+    });
+    // The read may outlive every subscriber; keep its rejection handled so it can never surface
+    // as an unhandled rejection, and drop it from the map the moment it settles.
+    void entry.promise.catch(() => undefined);
+    runtime.inflight.set(key, entry);
+    return this.joinInflight<T>(runtime, key, entry, signal);
+  }
+
+  /** Subscribe to a shared read. This caller's own signal cancels only its wait; the underlying
+   *  read is cancelled when the last subscriber leaves, so one abort never hurts another. */
+  private joinInflight<T>(runtime: CachedRuntime, key: string, entry: InflightRead, signal: AbortSignal): Promise<T> {
+    this.checkLive(signal);
+    return new Promise<T>((resolve, reject) => {
+      let done = false;
+      const finish = (settle: () => void): void => {
+        if (done) return;
+        done = true;
+        signal.removeEventListener("abort", onAbort);
+        settle();
+      };
+      const onAbort = (): void => {
+        entry.subscribers -= 1;
+        if (entry.subscribers <= 0) {
+          if (runtime.inflight.get(key) === entry) runtime.inflight.delete(key);
+          entry.controller.abort();
+        }
+        finish(() => reject(this.closed ? closedError() : cancelled()));
+      };
+      entry.subscribers += 1;
+      signal.addEventListener("abort", onAbort, { once: true });
+      entry.promise.then(
+        (value) => finish(() => resolve(value as T)),
+        (error) => finish(() => reject(error)),
+      );
+    });
   }
 
   private async adminMutation<T>(work: () => Promise<T>): Promise<T> {

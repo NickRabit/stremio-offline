@@ -267,6 +267,55 @@ test("the export is metadata only and the restore mints fresh disabled handles",
   });
 });
 
+test("the optional display settings round-trip, validate strictly and leave an old record untouched", async () => {
+  await run(async ({ config, store }) => {
+    const created = await config.addConnection(connectionInput());
+    const legacy = await config.attachLibrary(created.id, libraryInput());
+    assert.equal("browseMode" in legacy, false, "an attach with no settings stores no settings");
+    assert.deepEqual(Object.keys(config.exportConfiguration().libraries[0]).sort(),
+      ["connectionId", "id", "name", "order", "remoteId", "showInContinueWatching", "showOnHome", "type"]);
+
+    const rich = await config.attachLibrary(created.id, libraryInput({ remoteId: "remote-2", browseMode: "folders", mosaic: false, showInFavorites: false }));
+    assert.equal(rich.browseMode, "folders");
+    assert.equal(rich.mosaic, false);
+    assert.equal(rich.showInFavorites, false);
+    const exported = config.exportConfiguration();
+    const exportedRich = exported.libraries.find((library) => library.remoteId === "remote-2")!;
+    assert.equal(exportedRich.browseMode, "folders");
+    assert.equal(exportedRich.mosaic, false);
+    assert.equal(exportedRich.showInFavorites, false);
+    const exportedLegacy = exported.libraries.find((library) => library.remoteId === "remote-lib-1")!;
+    assert.equal("browseMode" in exportedLegacy, false, "an old record exports without the new fields");
+
+    // The whole configuration survives a restore, optional fields included, and nothing extra does.
+    const projected = projectMediaServerConfiguration({
+      version: 1,
+      connections: exported.connections,
+      libraries: exported.libraries.map((library) => library.remoteId === "remote-2"
+        ? { ...library, allowedUsers: ["usr_00000001"], enabled: true, extra: "no" }
+        : library),
+    });
+    assert.deepEqual(projected.libraries.find((library) => library.remoteId === "remote-2"), exportedRich);
+
+    const restored = await workspace();
+    try {
+      await restored.config.restoreConfiguration(exported);
+      const restoredRich = restored.store.remoteLibraries().find((library) => library.remoteId === "remote-2")!;
+      assert.equal(restoredRich.browseMode, "folders");
+      assert.equal(restoredRich.mosaic, false);
+      assert.equal(restoredRich.showInFavorites, false);
+      assert.equal("browseMode" in restored.store.remoteLibraries().find((library) => library.remoteId === "remote-lib-1")!, false);
+    } finally {
+      await rm(path.dirname(restored.dataDir), { recursive: true, force: true });
+    }
+
+    await assert.rejects(config.attachLibrary(created.id, libraryInput({ remoteId: "r3", browseMode: "grid" } as never)), { code: "invalid-input" });
+    await assert.rejects(config.attachLibrary(created.id, libraryInput({ remoteId: "r4", mosaic: "yes" } as never)), { code: "invalid-input" });
+    await assert.rejects(config.attachLibrary(created.id, libraryInput({ remoteId: "r5", showInFavorites: 1 } as never)), { code: "invalid-input" });
+    assert.equal(store.remoteLibraries().length, 2, "a refused setting attaches nothing");
+  });
+});
+
 test("restore refuses a duplicate account, a dangling library and extra fields atomically", async () => {
   await run(async ({ config, store }) => {
     const created = await config.addConnection(connectionInput());

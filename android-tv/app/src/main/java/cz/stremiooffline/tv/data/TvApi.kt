@@ -108,6 +108,27 @@ interface RemoteLibraryApi {
     type: String? = null,
   ): RemoteItemsPageDto = throw ApiError(ApiFailure.Generic)
 
+  /**
+   * One lazy page of a remote directory: the attached library root ([parentId] null) or one folder
+   * inside it. The server pages, filters and sorts; nothing is scanned ahead.
+   */
+  suspend fun remoteBrowse(
+    libraryId: String,
+    limit: Int = 60,
+    cursor: String? = null,
+    search: String? = null,
+    type: String? = null,
+    parentId: String? = null,
+    mode: String? = null,
+    sort: String? = null,
+    order: String? = null,
+  ): RemoteItemsPageDto = throw ApiError(ApiFailure.Generic)
+
+  /** Up to four same-origin authorized poster URLs for one library root or folder; empty when the
+   *  library's mosaic is off or the directory has no artwork of its own. */
+  suspend fun remotePreview(libraryId: String, parentId: String? = null): RemotePreviewDto =
+    throw ApiError(ApiFailure.Generic)
+
   suspend fun remoteItem(libraryId: String, itemId: String): RemoteItemDetailDto =
     throw ApiError(ApiFailure.Generic)
 

@@ -15,6 +15,7 @@ export interface MediaServerOperationArgs {
   user: { userId: string };
   views: { userId: string };
   items: { userId: string; parentId: string; includeItemTypes: string; startIndex?: number; limit?: number; searchTerm?: string };
+  directory: { userId: string; parentId: string; includeItemTypes: string; recursive: boolean; sortBy: string; sortOrder: string; startIndex?: number; limit?: number; searchTerm?: string };
   detail: { userId: string; itemId: string };
   ancestors: { itemId: string; userId: string };
   versions: { itemId: string; userId: string };
@@ -88,6 +89,8 @@ export interface MediaServerTransportSeams {
 const MAX_CONCURRENCY = 4;
 const DEADLINE_MS = 10_000;
 const MAX_RETRY_AFTER_MS = 300_000;
+/** A 429 without a usable Retry-After still parks the transport for this long. */
+const COOLDOWN_DEFAULT_MS = 30_000;
 const ORIGINAL_MAX_CONCURRENCY = 8;
 const ORIGINAL_HEADER_MS = 10_000;
 const ORIGINAL_IDLE_MS = 30_000;
@@ -111,6 +114,11 @@ const DEVICE = "Server";
 const DEVICE_ID = "stremio-offline-server";
 const CLIENT_VERSION = "1.0.0";
 const ITEM_TYPES = new Set(["Movie", "Series", "Season", "Episode", "MusicVideo"]);
+/** The directory listing admits Folder alongside the media types; the recursive `items`
+ *  operation above never does, so the old snapshot contract is unchanged. */
+const DIRECTORY_ITEM_TYPES = new Set(["Folder", "Movie", "Series", "Season", "Episode", "MusicVideo"]);
+const DIRECTORY_SORT_BY = new Set(["SortName", "DateCreated", "Size", "ParentIndexNumber,IndexNumber,SortName"]);
+const DIRECTORY_SORT_ORDER = new Set(["Ascending", "Descending"]);
 
 const invalid = (message: string): MediaServerError => new MediaServerError("invalid-input", message);
 const lookupFailure = (): MediaServerError => new MediaServerError("unsafe-address", "The media-server name did not resolve.");
@@ -445,6 +453,28 @@ const itemTypes = (value: unknown): string => {
   return tokens.join(",");
 };
 
+const directoryItemTypes = (value: unknown): string => {
+  if (typeof value !== "string" || value.length === 0 || value.length > 128) throw invalid("The media-server item types are missing.");
+  const tokens = value.split(",");
+  if (!tokens.length || tokens.some((token) => !DIRECTORY_ITEM_TYPES.has(token))) throw invalid("The media-server item types are not allowed.");
+  return tokens.join(",");
+};
+
+const directorySortBy = (value: unknown): string => {
+  if (typeof value !== "string" || !DIRECTORY_SORT_BY.has(value)) throw invalid("The media-server sort is not allowed.");
+  return value;
+};
+
+const directorySortOrder = (value: unknown): string => {
+  if (typeof value !== "string" || !DIRECTORY_SORT_ORDER.has(value)) throw invalid("The media-server sort order is not allowed.");
+  return value;
+};
+
+const directoryRecursive = (value: unknown): "true" | "false" => {
+  if (typeof value !== "boolean") throw invalid("The media-server recursive flag must be a boolean.");
+  return value ? "true" : "false";
+};
+
 const ORIGINAL_ARGUMENT_KEYS: readonly string[] = ["itemId", "mediaSourceId", "method", "range"];
 const ORIGINAL_REQUIRED_KEYS: readonly string[] = ["itemId", "mediaSourceId", "method"];
 const CANONICAL_DECIMAL = /^(0|[1-9][0-9]*)$/;
@@ -651,6 +681,7 @@ const ARGUMENT_KEYS: Record<MediaServerOperationName, readonly string[]> = {
   user: ["userId"],
   views: ["userId"],
   items: ["userId", "parentId", "includeItemTypes", "startIndex", "limit", "searchTerm"],
+  directory: ["userId", "parentId", "includeItemTypes", "recursive", "sortBy", "sortOrder", "startIndex", "limit", "searchTerm"],
   detail: ["userId", "itemId"],
   ancestors: ["itemId", "userId"],
   versions: ["itemId", "userId"],
@@ -662,6 +693,7 @@ const REQUIRED_KEYS: Record<MediaServerOperationName, readonly string[]> = {
   user: ["userId"],
   views: ["userId"],
   items: ["userId", "parentId", "includeItemTypes"],
+  directory: ["userId", "parentId", "includeItemTypes", "recursive", "sortBy", "sortOrder"],
   detail: ["userId", "itemId"],
   ancestors: ["itemId", "userId"],
   versions: ["itemId", "userId"],
@@ -707,6 +739,22 @@ function buildRequest(baseUrl: string, operation: MediaServerOperationName, args
       query.set("ParentId", pathSegment(args.parentId, "parentId"));
       query.set("StartIndex", String(boundedIndex(args.startIndex, "startIndex", 1_000_000_000) ?? 0));
       query.set("Limit", String(pageLimit(args.limit)));
+      const search = searchTerm(args.searchTerm);
+      if (search !== undefined) query.set("SearchTerm", search);
+      return { method: "GET", url: `${baseUrl}/Users/${userId}/Items?${query.toString()}` };
+    }
+    case "directory": {
+      const userId = encodeURIComponent(pathSegment(args.userId, "userId"));
+      const query = new URLSearchParams();
+      query.set("Recursive", directoryRecursive(args.recursive));
+      query.set("IncludeItemTypes", directoryItemTypes(args.includeItemTypes));
+      query.set("Fields", "ProviderIds,ParentId,SeriesInfo,ImageTags,Overview,Genres,DateCreated");
+      query.set("EnableUserData", "false");
+      query.set("ParentId", pathSegment(args.parentId, "parentId"));
+      query.set("StartIndex", String(boundedIndex(args.startIndex, "startIndex", 1_000_000_000) ?? 0));
+      query.set("Limit", String(pageLimit(args.limit)));
+      query.set("SortBy", directorySortBy(args.sortBy));
+      query.set("SortOrder", directorySortOrder(args.sortOrder));
       const search = searchTerm(args.searchTerm);
       if (search !== undefined) query.set("SearchTerm", search);
       return { method: "GET", url: `${baseUrl}/Users/${userId}/Items?${query.toString()}` };
@@ -758,6 +806,31 @@ export function createMediaServerTransport(
   const active = new Set<AbortController>();
   const agents = new Set<Agent>();
   let closed = false;
+  // A 429 parks every later request from this transport until the cooldown expires. It is only
+  // cleared by time passing or by rebuilding the transport, never by a request of our own.
+  let cooldownUntil = 0;
+
+  /** Arm the cooldown from a 429 and report the delay actually applied (bounded by the cap). */
+  const enterCooldown = (retryAfterMs: number | undefined): number => {
+    const delay = Math.min(retryAfterMs ?? COOLDOWN_DEFAULT_MS, MAX_RETRY_AFTER_MS);
+    cooldownUntil = Math.max(cooldownUntil, Date.now() + delay);
+    return delay;
+  };
+
+  /** The rejection a request gets while the transport is cooling down, or undefined when the
+   *  cooldown has expired. It is answered locally with the remaining hint, before any DNS work. */
+  const coolingError = (): MediaServerError | undefined => {
+    const remaining = cooldownUntil - Date.now();
+    if (remaining <= 0) return undefined;
+    return new MediaServerError("rate-limited", "The media server is rate limiting requests.", 429, remaining);
+  };
+
+  /** A non-ok status: a 429 arms the cooldown and reports the applied delay; every other status
+   *  keeps its existing mapping. */
+  const statusFailure = (status: number, headers: Headers): MediaServerError => {
+    if (status === 429) return new MediaServerError("rate-limited", "The media server is rate limiting requests.", 429, enterCooldown(parseRetryAfter(headers.get("retry-after"))));
+    return statusError(status, headers);
+  };
 
   /** Socket lookup shares its own request deadline; another live request cannot extend it. */
   const createLookup = (signal: AbortSignal, timedOut: () => boolean) => (hostname: string, options: LookupOptions, callback: (error: NodeJS.ErrnoException | null, address?: string | LookupAddress[], family?: number) => void): void => {
@@ -834,6 +907,8 @@ export function createMediaServerTransport(
     const built = buildRequest(baseUrl, operation, checked);
 
     if (closed) throw new MediaServerError("closed", "The media-server transport is closed.");
+    const cooling = coolingError();
+    if (cooling) throw cooling;
     if (active.size >= MAX_CONCURRENCY) throw new MediaServerError("busy", "Too many media-server requests are in flight.");
 
     const controller = new AbortController();
@@ -872,13 +947,17 @@ export function createMediaServerTransport(
         }
         const sendFetch: MediaServerFetch = seams.fetch ?? ((url, options) =>
           undiciFetch(url, { ...options, dispatcher: agent } as Parameters<typeof undiciFetch>[1]) as unknown as Promise<Response>);
+        // Recheck now: a 429 observed by another request while this one prepared must stop it
+        // before the socket is touched.
+        const lateCooling = coolingError();
+        if (lateCooling) throw lateCooling;
         response = await guard(sendFetch(built.url, { ...init, signal: controller.signal }), controller.signal, isTimedOut);
       } catch (error) {
         throw mapTransportError(error, controller.signal, isTimedOut);
       }
       if (!response.ok) {
         void response.body?.cancel().catch(() => undefined);
-        throw statusError(response.status, new Headers(response.headers));
+        throw statusFailure(response.status, new Headers(response.headers));
       }
       const text = await readBounded(response, controller.signal, isTimedOut);
       try { return JSON.parse(text); }
@@ -926,6 +1005,8 @@ export function createMediaServerTransport(
     const url = `${baseUrl}/Videos/${encodeURIComponent(request.itemId)}/stream?Static=true&MediaSourceId=${encodeURIComponent(request.mediaSourceId)}`;
 
     if (closed) throw new MediaServerError("closed", "The media-server transport is closed.");
+    const cooling = coolingError();
+    if (cooling) throw cooling;
     if (originals.size >= ORIGINAL_MAX_CONCURRENCY) {
       throw new MediaServerError("busy", "Too many media-server streams are in flight.");
     }
@@ -1009,6 +1090,9 @@ export function createMediaServerTransport(
       }
       const sendFetch: MediaServerFetch = seams.fetch ?? ((target, options) =>
         undiciFetch(target, { ...options, dispatcher: agent } as Parameters<typeof undiciFetch>[1]) as unknown as Promise<Response>);
+      // Recheck now: a 429 observed while this stream was being prepared must stop it here.
+      const lateCooling = coolingError();
+      if (lateCooling) throw lateCooling;
       const response = await guard(sendFetch(url, { ...init, signal: controller.signal }), controller.signal, isTimedOut);
       upstreamBody = response.body;
       clearTimeout(headerTimer);
@@ -1016,7 +1100,7 @@ export function createMediaServerTransport(
       const status = response.status;
       if (status !== 200 && status !== 206 && status !== 416) {
         void response.body?.cancel().catch(() => undefined);
-        throw statusError(status, new Headers(response.headers));
+        throw statusFailure(status, new Headers(response.headers));
       }
       const upstream = new Headers(response.headers);
       // `accept-encoding: identity` is a request preference; if the server compressed anyway the
@@ -1135,6 +1219,8 @@ export function createMediaServerTransport(
       : `${baseUrl}/Videos/${encodeURIComponent(checked.itemId)}/${encodeURIComponent(checked.mediaSourceId)}/Subtitles/${checked.index}/Stream.srt`;
 
     if (closed) throw new MediaServerError("closed", "The media-server transport is closed.");
+    const cooling = coolingError();
+    if (cooling) throw cooling;
     if (active.size >= MAX_CONCURRENCY) throw new MediaServerError("busy", "Too many media-server requests are in flight.");
 
     const controller = new AbortController();
@@ -1175,6 +1261,8 @@ export function createMediaServerTransport(
         undiciFetch(target, { ...options, dispatcher: agent } as Parameters<typeof undiciFetch>[1]) as unknown as Promise<Response>);
       // A fetch that settles only after the abort or deadline is lost to the guard, so its body
       // is cancelled here rather than left open.
+      const lateCooling = coolingError();
+      if (lateCooling) throw lateCooling;
       const response = await guard(
         sendFetch(url, { ...init, signal: controller.signal }).then((value) => {
           if (controller.signal.aborted) {
@@ -1191,7 +1279,7 @@ export function createMediaServerTransport(
       let mediaType = "";
       let declared: number | undefined;
       try {
-        if (response.status !== 200) throw statusError(response.status, upstream);
+        if (response.status !== 200) throw statusFailure(response.status, upstream);
         const encoding = upstream.get("content-encoding");
         if (encoding !== null && encoding.trim().toLowerCase() !== "identity") {
           throw invalidResponse("The media server transformed the asset.");

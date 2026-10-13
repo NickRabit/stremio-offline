@@ -3,7 +3,7 @@ import { AppError } from "../errors.js";
 import { log } from "../logger.js";
 import { ResourceError } from "../media-resources.js";
 import { ForbiddenError } from "../roles.js";
-import { MediaServerError, isMediaServerError } from "../media-server-types.js";
+import { MEDIA_SERVER_LIMITS, MediaServerError, isMediaServerError } from "../media-server-types.js";
 import type { MediaServerAuthority, MediaServerManager } from "../media-server-manager.js";
 import type { MediaServerPersonal, RemoteCards } from "../media-server-personal.js";
 import type { MediaServerSources } from "../media-server-sources.js";
@@ -136,6 +136,22 @@ const cardOptions = (req: express.Request): { filter: "resume" | "favorites"; sk
     return value;
   };
   return { filter, skip: bounded(query.skip, 0, 0, CARD_SKIP_MAX), limit: bounded(query.limit, CARD_LIMIT_DEFAULT, 1, CARD_LIMIT_MAX) };
+};
+
+/** The preview takes at most one opaque parent id and no body; every other key is refused
+ *  before the manager re-proves the parent against the granted library. */
+const previewParent = (req: express.Request): string | undefined => {
+  assertNoBody(req);
+  const query = req.query as Record<string, unknown>;
+  for (const key of Object.keys(query)) {
+    if (key !== "parentId") throw malformed("The media-server request has an unknown query field.");
+  }
+  const raw = query.parentId;
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "string" || raw.length === 0 || raw.length > MEDIA_SERVER_LIMITS.upstreamId) {
+    throw malformed("The media-server item id is missing or too long.");
+  }
+  return raw;
 };
 
 export function registerMediaServerRoutes(app: express.Application, deps: MediaServersDeps): void {
@@ -275,6 +291,14 @@ export function registerMediaServerRoutes(app: express.Application, deps: MediaS
     }
     res.status(200).json(result);
   }));
+  app.get("/api/remote-libraries/:id/browse", handle(async (req, authority, signal) => {
+    assertNoBody(req);
+    return mediaServers.browseDirectory(authority, req.params.id, req.query, signal);
+  }, 200, true));
+  app.get("/api/remote-libraries/:id/preview", handle(async (req, authority, signal) => {
+    const parentId = previewParent(req);
+    return mediaServers.previewDirectory(authority, req.params.id, parentId, signal);
+  }, 200, true));
   app.get("/api/remote-libraries/:id/items/:itemId/episodes", handle(async (req, authority, signal) => {
     assertNoBody(req);
     return mediaServers.itemEpisodes(authority, req.params.id, req.params.itemId, req.query, signal);

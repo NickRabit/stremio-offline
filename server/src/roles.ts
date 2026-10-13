@@ -73,6 +73,8 @@ export const USER_ALLOWED: Rule[] = [
   { method: "GET", pattern: /^\/remote-libraries$/ },
   { method: "GET", pattern: /^\/remote-libraries\/personal$/ },
   { method: "GET", pattern: /^\/remote-libraries\/[^/]+\/items$/ },
+  { method: "GET", pattern: /^\/remote-libraries\/[^/]+\/browse$/ },
+  { method: "GET", pattern: /^\/remote-libraries\/[^/]+\/preview$/ },
   { method: "GET", pattern: /^\/remote-libraries\/[^/]+\/items\/[^/]+\/episodes$/ },
   { method: "GET", pattern: /^\/remote-libraries\/[^/]+\/items\/[^/]+$/ },
   { method: "GET", pattern: /^\/remote-libraries\/[^/]+\/items\/[^/]+\/sources$/ },

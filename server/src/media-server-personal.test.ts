@@ -46,6 +46,7 @@ const provider = (server: FakeServer): MediaServerProvider => {
     currentAccount: async () => { await run(); return { accountId: server.accountId, policy: structuredClone(server.policy) }; },
     listLibraries: async () => { await run(); return structuredClone(server.libraries); },
     pageItems: async () => { throw new MediaServerError("not-found", "unused"); },
+    pageDirectory: async () => { throw new MediaServerError("not-found", "unused"); },
     detail: async (_t, _a, itemId) => { await run(); const item = server.detailOf[itemId]; if (!item) throw new MediaServerError("not-found", "missing"); return structuredClone(item); },
     ancestors: async (_t, _a, itemId) => { await run(); return [...(server.ancestorsOf[itemId] ?? [])]; },
     versions: async (_t, _a, itemId) => { await run(); return structuredClone(server.versionsOf[itemId] ?? []); },
@@ -95,6 +96,7 @@ const mount = async (): Promise<Harness> => {
   const server = new FakeServer();
   const manager = new MediaServerManager(store, new MediaServerSecrets(path.join(dir, "vault"), keyFile), {
     providerFactory: () => provider(server), transportFactory: () => transport, index: new MediaServerIndex(),
+    networkStartIntervalMs: 0,
   });
   await manager.initialize();
   let revoked = false;
@@ -501,5 +503,31 @@ test("cancelling the caller stops the queue and aborts the confirmations in flig
     caller.abort();
     await assert.rejects(running, { status: 401 }, "a cancelled caller is answered as signed out");
     assert.equal(aborted, 2, "both confirmations in flight were signalled");
+  });
+});
+
+test("the favourites opt-out hides the destination without deleting the stored row and never touches resume", async () => {
+  await withHarness(async (harness) => {
+    await harness.manager.patchLibrary(harness.admin, harness.libraryId, { allowedUsers: [BOB] });
+    await harness.personal.patch(harness.bob, harness.libraryId, "m1", { position: 30, duration: 100, favorite: true });
+    assert.equal((await harness.personal.cards(harness.bob, { filter: "favorites" })).items.length, 1);
+
+    await harness.manager.patchLibrary(harness.admin, harness.libraryId, { showInFavorites: false });
+    assert.equal((await harness.personal.cards(harness.bob, { filter: "favorites" })).items.length, 0, "the favourites destination is off");
+    const stored = harness.store.userData(BOB).remoteMedia as Record<string, unknown>;
+    assert.equal(Object.keys(stored).length, 1, "the stored favourite row is kept, not deleted");
+    assert.equal((await harness.personal.cards(harness.bob, { filter: "resume" })).items.length, 1, "resume is never governed by the favourites switch");
+
+    await harness.manager.patchLibrary(harness.admin, harness.libraryId, { showInFavorites: true });
+    assert.equal((await harness.personal.cards(harness.bob, { filter: "favorites" })).items.length, 1, "re-enabling brings the row back");
+  });
+});
+
+
+test("folder personal-state writes are refused instead of returning a row that cannot be read", async () => {
+  await withHarness(async (harness) => {
+    harness.server.detailOf.f1 = { id: "f1", name: "Folder", type: "folder", providerIds: {} };
+    harness.server.ancestorsOf.f1 = ["remote-1"];
+    await assert.rejects(harness.personal.patch(harness.admin, harness.libraryId, "f1", { favorite: true }), { code: "invalid-input" });
   });
 });

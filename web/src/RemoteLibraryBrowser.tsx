@@ -1,25 +1,44 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Check, ChevronLeft, ChevronRight, CirclePlay, Film, Search, Star } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { ArrowDown, ArrowUp, Check, ChevronLeft, ChevronRight, CirclePlay, Film, FolderOpen, HardDrive, LayoutGrid, List, Play, RectangleHorizontal, RectangleVertical, Search, SlidersHorizontal, Star } from "lucide-react";
 import { ApiError, api, describeError } from "./api";
-import { t, useI18n } from "./i18n";
+import { relativeAge } from "./home-cards";
+import { localeTag, t, useI18n } from "./i18n";
+import { LibraryItem, LibraryItemMenu } from "./library-item";
+import { LibraryTile } from "./library-tile";
 import { Player } from "./Player";
+import { RemoteFolderArt, RemoteLibraryArt, RemoteTileArt } from "./remote-mosaic";
+import { createCompactOnScroll } from "./scroll-fold";
+import { bytes } from "./settings-ui";
 import { TileArt } from "./TileArt";
-import type { LibraryType, MediaServerProvider, RemoteItem, RemoteItemState, RemoteLibrary, Stream } from "./types";
+import type { LibraryType, LibraryViewPrefs, MediaServerProvider, RemoteBrowseMode, RemoteItem, RemoteItemState, RemoteItemType, RemoteLibrary, Stream, TileShape, UserViews } from "./types";
 
 interface Props {
+  onRootPresenceChange?: (visible: boolean) => void;
   audioLanguage: string; subtitleLanguage: string; onError: (error: unknown) => void;
+  /** The one library tile shape, so a remote tile sits in the same grid as a local one. */
+  libraryTileShape: TileShape;
+  /** Turns the shared shape over, the way the library toolbar's own switch does. */
+  onToggleLibraryShape: () => void;
+  /** The stored browsing chrome, so a remote library keeps its sort, order and grid/rows. */
+  views: UserViews;
+  onPersistPrefs: (libraryId: string, prefs: LibraryViewPrefs) => void;
+  /** Raised while a remote library or its detail is open, so the local panel steps aside. */
+  onOpenChange: (open: boolean) => void;
+  /** The library toolbar's folded state, shared so the remote one folds identically. */
+  compact: boolean;
+  onCompactChange: (value: boolean) => void;
   /** The item this browser should open once its libraries are known; a new nonce opens it again. */
   initialTarget?: { libraryId: string; itemId: string; nonce: number };
   /** A favourite, a watched flag or a position changed here, so Home and the shelf re-read. */
   onPersonalChange?: () => void;
 }
 
-type Filter = "all" | "movie" | "series";
-type BucketKey = "movie" | "series";
-type Bucket = { items: RemoteItem[]; cursor?: string; total: number; loading: boolean; error: string };
+type Status = { items: RemoteItem[]; cursor?: string; total: number; loading: boolean; error: string };
 type Playing = { stream: Stream; libraryId: string; item: RemoteItem; title: string; favorite: boolean };
+type TileRef = { current: HTMLElement | null };
 
-const emptyBucket = (): Bucket => ({ items: [], total: 0, loading: false, error: "" });
+const PAGE_SIZE = 60;
+const emptyStatus = (): Status => ({ items: [], total: 0, loading: false, error: "" });
 const aborted = (error: unknown) => error instanceof DOMException && error.name === "AbortError";
 const isStale = (error: unknown) => error instanceof ApiError && (error.status === 409 || error.messageKey === "err.mediaServerStale");
 
@@ -27,6 +46,45 @@ const providerKey = (provider: MediaServerProvider) =>
   provider === "emby" ? "mediaServer.provider.emby" as const : "mediaServer.provider.jellyfin" as const;
 const libraryTypeKey = (type: LibraryType) =>
   type === "movie" ? "mediaServer.type.movie" as const : type === "series" ? "mediaServer.type.series" as const : "library.libraryTypeMixed" as const;
+const itemTypeKey = (type: RemoteItemType) =>
+  type === "movie" ? "mediaServer.type.movie" as const
+  : type === "series" ? "mediaServer.type.series" as const
+  : type === "season" ? "mediaServer.type.season" as const
+  : type === "episode" ? "mediaServer.type.episode" as const
+  : "mediaServer.type.folder" as const;
+/** The stored state of one item, keyed by library and item so two listings never share it. */
+const stateKey = (libraryId: string, itemId: string) => `${libraryId}:${itemId}`;
+/** A run time in the reader's own units. The client has no shared runtime helper, so the
+ *  browser's number formatting supplies the words and no new string is introduced. */
+const unitLabel = (unit: "hour" | "minute" | "second", value: number) =>
+  new Intl.NumberFormat(localeTag(), { style: "unit", unit, unitDisplay: "narrow" }).format(value);
+const runtimeLabel = (ticks?: number): string | undefined => {
+  if (!ticks || ticks <= 0) return undefined;
+  const seconds = Math.round(ticks / 10_000_000);
+  if (seconds < 60) return unitLabel("second", seconds);
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return unitLabel("minute", minutes);
+  const rest = minutes % 60;
+  return rest ? `${unitLabel("hour", Math.floor(minutes / 60))} ${unitLabel("minute", rest)}` : unitLabel("hour", Math.floor(minutes / 60));
+};
+/** A remote tile's line: when it was made, how long it runs, and what it is. */
+const itemMetaLine = (item: RemoteItem) => {
+  const playable = item.type === "movie" || item.type === "episode";
+  return [item.year, playable ? runtimeLabel(item.durationTicks) : undefined, t(itemTypeKey(item.type))].filter(Boolean).join(" · ");
+};
+/** The extra facts a remote detail adds, all from normalized fields, nothing guessed. */
+const itemFacts = (item: RemoteItem) => {
+  const added = item.addedAt && Number.isFinite(Date.parse(item.addedAt))
+    ? relativeAge(item.addedAt, Date.now(), localeTag()) : undefined;
+  return [item.year, runtimeLabel(item.durationTicks), item.size ? bytes(item.size) : undefined, added].filter(Boolean).join(" · ");
+};
+/** Mixed libraries keep the provider's folders; a library of one medium flattens to titles. */
+const effectiveMode = (library: RemoteLibrary): RemoteBrowseMode =>
+  library.browseMode ?? (library.type === "mixed" ? "folders" : "titles");
+const sortFor = (sort: LibraryViewPrefs["sort"]): RemoteItemSort =>
+  sort === "added" || sort === "size" ? sort : "name";
+type RemoteItemSort = "name" | "added" | "size";
+const defaultPrefs = (): LibraryViewPrefs => ({ sort: "name", order: "asc", favoritesOnly: false, view: "grid" });
 
 const sourceLabel = (stream: Stream) => stream.name || stream.title || stream.description || stream.sourceId;
 /** Carry-over key: the provider's version name alone, so a title or a library label can never match. */
@@ -46,19 +104,22 @@ const groupEpisodes = (items: RemoteItem[]) => {
   return [...groups.entries()].map(([season, group]) => ({ season, items: group }));
 };
 
-export function RemoteLibraryBrowser({ audioLanguage, subtitleLanguage, onError, initialTarget, onPersonalChange }: Props) {
+export function RemoteLibraryBrowser({ onRootPresenceChange, audioLanguage, subtitleLanguage, onError, libraryTileShape, onToggleLibraryShape, views, onPersistPrefs, onOpenChange, compact, onCompactChange, initialTarget, onPersonalChange }: Props) {
   useI18n();
   const [libraries, setLibraries] = useState<RemoteLibrary[] | null>(null);
   const [librariesError, setLibrariesError] = useState("");
   const [selected, setSelected] = useState<RemoteLibrary | null>(null);
-  const [filter, setFilter] = useState<Filter>("all");
+  const [stack, setStack] = useState<RemoteItem[]>([]);
+  const [listing, setListing] = useState<Status>(emptyStatus);
   const [searchInput, setSearchInput] = useState("");
   const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<RemoteItemSort>("name");
+  const [desc, setDesc] = useState(false);
+  const [view, setView] = useState<"grid" | "list">("grid");
   const [nonce, setNonce] = useState(0);
-  const [buckets, setBuckets] = useState<Record<BucketKey, Bucket>>({ movie: emptyBucket(), series: emptyBucket() });
   const [detail, setDetail] = useState<RemoteItem | null>(null);
   const [series, setSeries] = useState<RemoteItem | null>(null);
-  const [episodes, setEpisodes] = useState<{ items: RemoteItem[]; cursor?: string; loading: boolean; error: string }>({ items: [], loading: false, error: "" });
+  const [episodes, setEpisodes] = useState<Status>(emptyStatus);
   const [episodeNonce, setEpisodeNonce] = useState(0);
   const [sources, setSources] = useState<Stream[] | null>(null);
   const [sourceError, setSourceError] = useState("");
@@ -70,6 +131,14 @@ export function RemoteLibraryBrowser({ audioLanguage, subtitleLanguage, onError,
   const [nextBusy, setNextBusy] = useState(false);
   const [targetError, setTargetError] = useState("");
   const [targetAttempt, setTargetAttempt] = useState(0);
+  /** The one overflow menu that may be open, its item's state and how that read went. */
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  const [menuState, setMenuState] = useState<RemoteItemState | null>(null);
+  const [menuLoading, setMenuLoading] = useState(false);
+  const [menuError, setMenuError] = useState("");
+  const [menuBusy, setMenuBusy] = useState(false);
+  /** The last known state of each item, so a tile keeps its badges across a re-render. */
+  const [itemStates, setItemStates] = useState<Record<string, RemoteItemState>>({});
 
   const listEpoch = useRef(0);
   const episodeEpoch = useRef(0);
@@ -81,6 +150,16 @@ export function RemoteLibraryBrowser({ audioLanguage, subtitleLanguage, onError,
   const itemsMoreAbort = useRef<AbortController | null>(null);
   const episodesMoreAbort = useRef<AbortController | null>(null);
   const handoffAbort = useRef<AbortController | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const rootRef = useRef<HTMLElement | null>(null);
+  const pendingFocus = useRef<string | null>(null);
+  const pendingRootFocus = useRef<string | null>(null);
+  /** The listing offset to put back when a detail closes over it. */
+  const savedScroll = useRef(0);
+  /** One stable ref per remote tile, so the lazy preview can watch the element it draws. */
+  const tileRefs = useRef(new Map<string, TileRef>());
+  const [fold] = useState(createCompactOnScroll);
+  useEffect(() => { fold.attach(); return fold.dispose; }, [fold]);
   /** The streams a hand-off already fetched, so the panel does not scan the same item twice. */
   const handoffStreams = useRef<{ itemId: string; streams: Stream[]; selected: Stream | null } | null>(null);
   /** Set when a version was chosen by hand or by a hand-off, so a late state read never moves it. */
@@ -88,10 +167,17 @@ export function RemoteLibraryBrowser({ audioLanguage, subtitleLanguage, onError,
   const selectedRef = useRef<RemoteLibrary | null>(null);
   const detailRef = useRef<RemoteItem | null>(null);
   const playingRef = useRef<Playing | null>(null);
+  const menuEpoch = useRef(0);
+  const menuAbort = useRef<AbortController | null>(null);
   selectedRef.current = selected;
   detailRef.current = detail;
   playingRef.current = playing;
 
+  const artRef = (key: string): TileRef => {
+    let ref = tileRefs.current.get(key);
+    if (!ref) { ref = { current: null }; tileRefs.current.set(key, ref); }
+    return ref;
+  };
   const cancelItemsMore = () => { itemsMoreAbort.current?.abort(); itemsMoreAbort.current = null; };
   const cancelEpisodesMore = () => { episodesMoreAbort.current?.abort(); episodesMoreAbort.current = null; };
   const cancelHandoff = () => {
@@ -99,6 +185,82 @@ export function RemoteLibraryBrowser({ audioLanguage, subtitleLanguage, onError,
     handoffAbort.current?.abort();
     handoffAbort.current = null;
     setNextBusy(false);
+  };
+  const rememberState = (libraryId: string, itemId: string, value: RemoteItemState) =>
+    setItemStates((current) => ({ ...current, [stateKey(libraryId, itemId)]: value }));
+  /** Dismiss the menu and cancel whatever it was reading; every navigation does this too. */
+  const closeMenu = () => {
+    menuEpoch.current += 1;
+    menuAbort.current?.abort();
+    menuAbort.current = null;
+    setMenuFor(null);
+    setMenuState(null);
+    setMenuError("");
+    setMenuLoading(false);
+    setMenuBusy(false);
+  };
+  const toggleItemMenu = (item: RemoteItem) => {
+    const library = selectedRef.current;
+    if (menuFor === item.id || !library) { closeMenu(); return; }
+    menuEpoch.current += 1;
+    const epoch = menuEpoch.current;
+    menuAbort.current?.abort();
+    const controller = new AbortController();
+    menuAbort.current = controller;
+    setMenuFor(item.id);
+    setMenuState(itemStates[stateKey(library.id, item.id)] ?? null);
+    setMenuError("");
+    setMenuLoading(true);
+    setMenuBusy(false);
+    // One read per open, never a state call for every tile in the listing.
+    void api.remoteState(library.id, item.id, controller.signal)
+      .then((value) => {
+        if (epoch !== menuEpoch.current || controller.signal.aborted || selectedRef.current?.id !== library.id) return;
+        setMenuState(value);
+        setMenuLoading(false);
+        rememberState(library.id, item.id, value);
+      })
+      .catch((error) => {
+        if (epoch !== menuEpoch.current || controller.signal.aborted || aborted(error)) return;
+        setMenuError(describeError(error));
+        setMenuLoading(false);
+      });
+  };
+  /** A detail or the player showing the same item takes the saved state too. */
+  const syncPersonal = (libraryId: string, itemId: string, saved: RemoteItemState) => {
+    if (selectedRef.current?.id === libraryId && detailRef.current?.id === itemId) setState(saved);
+    const current = playingRef.current;
+    if (current?.libraryId === libraryId && current.item.id === itemId)
+      setPlaying((value) => value && value.libraryId === libraryId && value.item.id === itemId ? { ...value, favorite: saved.favorite } : value);
+  };
+  const writeMenuState = async (patch: { favorite?: boolean; watched?: boolean }) => {
+    const library = selectedRef.current;
+    const itemId = menuFor;
+    if (!library || !itemId) return;
+    const epoch = menuEpoch.current;
+    setMenuBusy(true);
+    try {
+      const saved = await api.saveRemoteState(library.id, itemId, patch);
+      if (selectedRef.current?.id !== library.id) return;
+      rememberState(library.id, itemId, saved);
+      syncPersonal(library.id, itemId, saved);
+      onPersonalChange?.();
+      if (epoch === menuEpoch.current) {
+        setMenuState(saved);
+        setMenuError("");
+      }
+    } catch (error) {
+      if (epoch === menuEpoch.current) setMenuError(describeError(error));
+      onError(error);
+    } finally {
+      if (epoch === menuEpoch.current) setMenuBusy(false);
+    }
+  };
+  const focusMenuTrigger = (itemId: string) => {
+    const container = scrollRef.current;
+    if (!container) return;
+    const tile = [...container.querySelectorAll<HTMLElement>("[data-remote-id]")].find((node) => node.dataset.remoteId === itemId);
+    tile?.querySelector<HTMLButtonElement>(".browse-menu")?.focus();
   };
 
   const loadLibraries = async () => {
@@ -110,57 +272,72 @@ export function RemoteLibraryBrowser({ audioLanguage, subtitleLanguage, onError,
     try {
       const rows = await api.remoteLibraries({ signal: controller.signal });
       if (epoch !== librariesEpoch.current || controller.signal.aborted) return;
-      setLibraries(rows);
+      setLibraries([...rows].sort((a, b) => a.order - b.order || a.id.localeCompare(b.id)));
     } catch (error) {
       if (epoch !== librariesEpoch.current || controller.signal.aborted || aborted(error)) return;
       setLibrariesError(describeError(error));
     }
   };
   useEffect(() => { void loadLibraries(); }, []);
+  useEffect(() => {
+    onRootPresenceChange?.(Boolean(libraries?.length));
+    return () => onRootPresenceChange?.(false);
+  }, [Boolean(libraries?.length), onRootPresenceChange]);
+  useEffect(() => {
+    const wanted = selected ? pendingFocus.current : pendingRootFocus.current;
+    const container = selected ? scrollRef.current : rootRef.current;
+    if (!wanted || !container) return;
+    const button = Array.from(container.querySelectorAll<HTMLButtonElement>(".library-open")).find((node) => {
+      const tile = node.closest<HTMLElement>("[data-remote-id], [data-path]");
+      return tile?.dataset.remoteId === wanted || tile?.dataset.path === wanted;
+    });
+    if (!button) return;
+    button.focus({ preventScroll: false });
+    if (selected) pendingFocus.current = null;
+    else pendingRootFocus.current = null;
+  }, [selected, detail, listing.items, episodes.items]);
 
-  // A cold shared index refuses two scans at once, so "All" walks the two types one after the
-  // other; every await re-checks the epoch, and the sequence's own abort ends both.
+  const prefsOf = (libraryId: string): LibraryViewPrefs => views.libraries[libraryId] ?? defaultPrefs();
+  const mosaicOn = (library: RemoteLibrary | null) => Boolean(library) && library!.mosaic !== false;
+  const mode: RemoteBrowseMode = selected && stack.length ? "folders" : selected ? effectiveMode(selected) : "folders";
+  const parentId = stack.length ? stack[stack.length - 1]!.id : undefined;
+
+  // One bounded page per request; a fresh search, sort, folder or library starts the listing over.
   useEffect(() => {
     const library = selected;
     if (!library) return;
     const epoch = ++listEpoch.current;
     const controller = new AbortController();
     cancelItemsMore();
-    const kinds: BucketKey[] = filter === "all" ? ["movie", "series"] : [filter];
-    setBuckets(() => {
-      const next: Record<BucketKey, Bucket> = { movie: emptyBucket(), series: emptyBucket() };
-      for (const kind of kinds) next[kind] = { ...next[kind], loading: true };
-      return next;
-    });
-    const read = async (kind: BucketKey) => {
-      try {
-        const page = await api.remoteItems(library.id, { type: kind, limit: 100, search: query || undefined, signal: controller.signal });
+    setListing({ items: [], total: 0, loading: true, error: "" });
+    api.remoteBrowse(library.id, { parentId, mode, limit: PAGE_SIZE, search: query || undefined, sort, order: desc ? "desc" : "asc", signal: controller.signal })
+      .then((page) => {
         if (epoch !== listEpoch.current) return;
-        setBuckets((current) => ({ ...current, [kind]: { items: page.items, cursor: page.cursor, total: page.total, loading: false, error: "" } }));
-      } catch (error) {
+        setListing({ items: page.items, cursor: page.cursor, total: page.total, loading: false, error: "" });
+      })
+      .catch((error) => {
         if (epoch !== listEpoch.current || controller.signal.aborted || aborted(error)) return;
-        setBuckets((current) => ({ ...current, [kind]: { ...current[kind], loading: false, error: describeError(error) } }));
-      }
-    };
-    void (async () => { for (const kind of kinds) { if (epoch !== listEpoch.current) return; await read(kind); } })();
+        setListing({ items: [], total: 0, loading: false, error: describeError(error) });
+      });
     return () => { controller.abort(); if (listEpoch.current === epoch) listEpoch.current += 1; cancelItemsMore(); };
-  }, [selected, filter, query, nonce]);
+  }, [selected, parentId, mode, query, sort, desc, nonce]);
 
+  // Series episodes are one more lazy page of the provider's own listing, not a stored snapshot.
   useEffect(() => {
     const library = selected;
     if (!library || !series) return;
     const epoch = ++episodeEpoch.current;
     const controller = new AbortController();
     cancelEpisodesMore();
-    setEpisodes({ items: [], loading: true, error: "" });
-    void api.remoteEpisodes(library.id, series.id, { limit: 100, signal: controller.signal })
+    setEpisodes({ items: [], total: 0, loading: true, error: "" });
+    api.remoteBrowse(library.id, { parentId: series.id, mode: "titles", type: "episode", limit: PAGE_SIZE, signal: controller.signal })
       .then((page) => {
         if (epoch !== episodeEpoch.current) return;
-        setEpisodes({ items: page.items, cursor: page.cursor, loading: false, error: "" });
+        setEpisodes({ items: page.items, cursor: page.cursor, total: page.total, loading: false, error: "" });
       })
       .catch((error) => {
         if (epoch !== episodeEpoch.current || controller.signal.aborted || aborted(error)) return;
-        setEpisodes({ items: [], loading: false, error: describeError(error) });
+        setEpisodes({ items: [], total: 0, loading: false, error: describeError(error) });
       });
     return () => { controller.abort(); if (episodeEpoch.current === epoch) episodeEpoch.current += 1; cancelEpisodesMore(); };
   }, [selected, series, episodeNonce]);
@@ -212,6 +389,7 @@ export function RemoteLibraryBrowser({ audioLanguage, subtitleLanguage, onError,
         if (!live()) return;
         saved = value;
         setState(value);
+        rememberState(library.id, itemId, value);
         gotState = true;
         settle();
       })
@@ -224,9 +402,27 @@ export function RemoteLibraryBrowser({ audioLanguage, subtitleLanguage, onError,
     return () => { controller.abort(); if (detailEpoch.current === epoch) detailEpoch.current += 1; };
   }, [selected, detail, detailNonce]);
 
-  useEffect(() => () => { cancelItemsMore(); cancelEpisodesMore(); handoffAbort.current?.abort(); librariesAbort.current?.abort(); }, []);
+  // A debounce keeps typing in the search box from firing one provider read per keystroke.
+  useEffect(() => {
+    const handle = window.setTimeout(() => setQuery(searchInput.trim()), 300);
+    return () => window.clearTimeout(handle);
+  }, [searchInput]);
+  // The listing keeps its offset while a detail is open over it; the panel is restored after.
+  useEffect(() => {
+    if (detail || !scrollRef.current || !savedScroll.current) return;
+    scrollRef.current.scrollTop = savedScroll.current;
+  }, [detail]);
+  useEffect(() => () => {
+    cancelItemsMore();
+    cancelEpisodesMore();
+    handoffAbort.current?.abort();
+    menuAbort.current?.abort();
+    librariesAbort.current?.abort();
+    // The page that draws the local listing may outlive this browser; make sure it comes back.
+    onOpenChange(false);
+  }, []);
 
-  // Opens a card's item directly; an episode also gets its verified parent series for next/previous.
+  // A remote card from Home or Favourites opens its item in the native browser.
   useEffect(() => {
     const target = initialTarget;
     if (!target || !libraries) return;
@@ -256,26 +452,42 @@ export function RemoteLibraryBrowser({ audioLanguage, subtitleLanguage, onError,
     setPlaying((value) => value && value.libraryId === current.libraryId && value.item.id === current.item.id ? { ...value, favorite: state.favorite } : value);
   }, [state]);
 
+  // A menu belongs to the listing it was opened on: a new library, folder, query, sort or detail
+  // dismisses it, so its state read and its writes can never belong to a listing that is gone.
+  useEffect(() => { closeMenu(); }, [selected, parentId, mode, query, sort, desc, nonce, detail]);
+
   const openLibrary = (library: RemoteLibrary) => {
+    closeMenu();
     cancelItemsMore();
     cancelEpisodesMore();
     cancelHandoff();
+    const prefs = prefsOf(library.id);
     setSelected(library);
-    setFilter("all");
+    setStack([]);
     setSearchInput("");
     setQuery("");
+    setSort(sortFor(prefs.sort));
+    setDesc(prefs.order === "desc");
+    setView(prefs.view);
     setNonce(0);
+    setListing(emptyStatus());
     setDetail(null);
     setSeries(null);
     setSources(null);
     setState(null);
     setSelectedSource(null);
+    savedScroll.current = 0;
+    onOpenChange(true);
   };
   const closeLibrary = () => {
+    closeMenu();
+    pendingRootFocus.current = selected?.id ?? null;
     cancelItemsMore();
     cancelEpisodesMore();
     cancelHandoff();
     setSelected(null);
+    setStack([]);
+    setListing(emptyStatus());
     setDetail(null);
     setSeries(null);
     setSources(null);
@@ -283,72 +495,132 @@ export function RemoteLibraryBrowser({ audioLanguage, subtitleLanguage, onError,
     setSelectedSource(null);
     setSearchInput("");
     setQuery("");
+    savedScroll.current = 0;
+    onOpenChange(false);
   };
   const stepBack = () => {
+    closeMenu();
     cancelHandoff();
     if (detail) {
+      pendingFocus.current = detail.id;
       if (detail.type === "episode" && series) { setDetail(series); return; }
       setDetail(null);
       setSeries(null);
       return;
     }
+    if (stack.length) {
+      pendingFocus.current = stack[stack.length - 1]!.id;
+      setDetail(null); setSeries(null); setSearchInput(""); setQuery(""); setStack(stack.slice(0, -1)); return;
+    }
     closeLibrary();
   };
   const openItem = (item: RemoteItem) => {
+    closeMenu();
     cancelItemsMore();
     cancelHandoff();
+    if (item.type === "folder" || item.type === "season") {
+      savedScroll.current = 0;
+      if (scrollRef.current) scrollRef.current.scrollTop = 0;
+      setDetail(null);
+      setSeries(null);
+      setSearchInput("");
+      setQuery("");
+      setStack([...stack, item]);
+      return;
+    }
+    savedScroll.current = scrollRef.current?.scrollTop ?? 0;
     if (item.type === "series") { setSeries(item); setDetail(item); setSources(null); setState(null); setSelectedSource(null); return; }
     setSeries(null);
     setDetail(item);
   };
   const openEpisode = (episode: RemoteItem) => {
+    closeMenu();
     cancelEpisodesMore();
     cancelHandoff();
+    savedScroll.current = scrollRef.current?.scrollTop ?? 0;
     setDetail(episode);
   };
-  const submitSearch = (event: FormEvent) => { event.preventDefault(); setQuery(searchInput.trim()); };
-  const clearSearch = () => { setSearchInput(""); setQuery(""); };
+  const goToFolder = (index: number) => {
+    closeMenu();
+    setSearchInput(""); setQuery("");
+    cancelItemsMore();
+    cancelHandoff();
+    savedScroll.current = 0;
+    setDetail(null);
+    setSeries(null);
+    setStack(stack.slice(0, index + 1));
+  };
+  const goLibraryRoot = () => {
+    closeMenu();
+    setSearchInput(""); setQuery("");
+    cancelItemsMore();
+    cancelHandoff();
+    savedScroll.current = 0;
+    setDetail(null);
+    setSeries(null);
+    setStack([]);
+  };
   const retryListing = () => setNonce((value) => value + 1);
   const retryEpisodes = () => setEpisodeNonce((value) => value + 1);
   const retryDetail = () => setDetailNonce((value) => value + 1);
 
-  const loadMoreItems = async () => {
+  const persistPrefs = (patch: Partial<LibraryViewPrefs>) => {
     const library = selectedRef.current;
     if (!library) return;
+    onPersistPrefs(library.id, { sort, order: desc ? "desc" : "asc", favoritesOnly: false, view, ...patch });
+  };
+  const changeSort = (next: RemoteItemSort) => {
+    setSort(next);
+    const order = next === "added" || next === "size" ? "desc" : "asc";
+    setDesc(order === "desc");
+    persistPrefs({ sort: next, order });
+  };
+  const changeView = () => {
+    const next = view === "grid" ? "list" : "grid";
+    setView(next);
+    persistPrefs({ view: next });
+  };
+
+  const loadMoreItems = async () => {
+    const library = selectedRef.current;
+    const cursor = listing.cursor;
+    if (!library || !cursor) return;
     const epoch = listEpoch.current;
-    const kinds: BucketKey[] = filter === "all" ? ["movie", "series"] : [filter];
-    for (const kind of kinds) {
-      const cursor = buckets[kind].cursor;
-      if (!cursor) continue;
-      const controller = new AbortController();
-      itemsMoreAbort.current?.abort();
-      itemsMoreAbort.current = controller;
-      setBuckets((current) => ({ ...current, [kind]: { ...current[kind], loading: true } }));
-      try {
-        const page = await api.remoteItems(library.id, { type: kind, limit: 100, search: query || undefined, cursor, signal: controller.signal });
-        if (epoch !== listEpoch.current || controller.signal.aborted) return;
-        setBuckets((current) => ({ ...current, [kind]: { items: [...current[kind].items, ...page.items], cursor: page.cursor, total: page.total, loading: false, error: "" } }));
-      } catch (error) {
-        if (epoch !== listEpoch.current || controller.signal.aborted || aborted(error)) return;
-        // A cursor from another snapshot restarts the listing instead of mixing two pages.
-        setBuckets((current) => ({ ...current, [kind]: { ...current[kind], loading: false, error: describeError(error), cursor: isStale(error) ? undefined : cursor } }));
-      }
+    const controller = new AbortController();
+    itemsMoreAbort.current?.abort();
+    itemsMoreAbort.current = controller;
+    setListing((current) => ({ ...current, loading: true }));
+    try {
+      const page = await api.remoteBrowse(library.id, { parentId, mode, limit: PAGE_SIZE, search: query || undefined, sort, order: desc ? "desc" : "asc", cursor, signal: controller.signal });
+      if (epoch !== listEpoch.current || controller.signal.aborted) return;
+      setListing((current) => {
+        const seen = new Set(current.items.map((item) => item.id));
+        return { items: [...current.items, ...page.items.filter((item) => !seen.has(item.id))], cursor: page.cursor, total: page.total, loading: false, error: "" };
+      });
+    } catch (error) {
+      if (epoch !== listEpoch.current || controller.signal.aborted || aborted(error)) return;
+      // A cursor from another snapshot restarts the listing instead of mixing two pages.
+      if (isStale(error)) { setNonce((value) => value + 1); return; }
+      setListing((current) => ({ ...current, loading: false, error: describeError(error) }));
     }
   };
   const loadEpisodes = async () => {
     const library = selectedRef.current;
     const heading = series;
-    if (!library || !heading || !episodes.cursor) return;
-    const epoch = episodeEpoch.current;
     const cursor = episodes.cursor;
+    if (!library || !heading || !cursor) return;
+    const epoch = episodeEpoch.current;
     const controller = new AbortController();
     episodesMoreAbort.current?.abort();
     episodesMoreAbort.current = controller;
     setEpisodes((current) => ({ ...current, loading: true }));
     try {
-      const page = await api.remoteEpisodes(library.id, heading.id, { limit: 100, cursor, signal: controller.signal });
+      const page = await api.remoteBrowse(library.id, { parentId: heading.id, mode: "titles", type: "episode", limit: PAGE_SIZE, cursor, signal: controller.signal });
       if (epoch !== episodeEpoch.current || controller.signal.aborted) return;
-      setEpisodes((current) => ({ items: [...current.items, ...page.items], cursor: page.cursor, loading: false, error: "" }));
+      setEpisodes((current) => {
+        const seen = new Set(current.items.map((item) => item.id));
+        return { items: [...current.items, ...page.items.filter((item) => !seen.has(item.id))], cursor: page.cursor, total: page.total, loading: false, error: "" };
+      });
     } catch (error) {
       if (epoch !== episodeEpoch.current || controller.signal.aborted || aborted(error)) return;
       setEpisodes((current) => ({ ...current, loading: false, error: describeError(error), cursor: isStale(error) ? undefined : cursor }));
@@ -364,6 +636,7 @@ export function RemoteLibraryBrowser({ audioLanguage, subtitleLanguage, onError,
       const saved = await api.saveRemoteState(library.id, item.id, patch);
       if (epoch !== detailEpoch.current || detailRef.current?.id !== item.id || selectedRef.current?.id !== library.id) return;
       setState(saved);
+      rememberState(library.id, item.id, saved);
       setStateError("");
       onPersonalChange?.();
     } catch (error) { onError(error); }
@@ -374,7 +647,10 @@ export function RemoteLibraryBrowser({ audioLanguage, subtitleLanguage, onError,
     try {
       const saved = await api.saveRemoteState(current.libraryId, current.item.id, { favorite: !current.favorite });
       setPlaying((value) => value && value.libraryId === current.libraryId && value.item.id === current.item.id ? { ...value, favorite: saved.favorite } : value);
-      if (selectedRef.current?.id === current.libraryId && detailRef.current?.id === current.item.id) setState(saved);
+      if (selectedRef.current?.id === current.libraryId) {
+        rememberState(current.libraryId, current.item.id, saved);
+        if (detailRef.current?.id === current.item.id) setState(saved);
+      }
       onPersonalChange?.();
     } catch (error) { onError(error); }
   };
@@ -387,6 +663,7 @@ export function RemoteLibraryBrowser({ audioLanguage, subtitleLanguage, onError,
       const saved = await api.remoteState(library.id, item.id);
       if (epoch !== detailEpoch.current || detailRef.current?.id !== item.id || selectedRef.current?.id !== library.id) return;
       setState(saved);
+      rememberState(library.id, item.id, saved);
       setStateError("");
       onPersonalChange?.();
     } catch { /* the panel keeps the state it had */ }
@@ -439,18 +716,69 @@ export function RemoteLibraryBrowser({ audioLanguage, subtitleLanguage, onError,
 
   if (!librariesError && !targetError && (libraries === null || !libraries.length)) return null;
 
-  const kinds: BucketKey[] = filter === "all" ? ["movie", "series"] : [filter];
-  const rows = kinds.flatMap((kind) => buckets[kind].items);
-  const listLoading = kinds.some((kind) => buckets[kind].loading);
-  const listError = kinds.map((kind) => buckets[kind].error).find(Boolean) ?? "";
-  const hasCursor = kinds.some((kind) => Boolean(buckets[kind].cursor));
   const grouped = groupEpisodes(episodes.items);
+  const previewKey = { libraryId: selected?.id ?? "", generation: nonce };
 
-  return <section className="remote-libraries" aria-label={t("mediaServer.remoteTitle")}>
-    <div className="remote-libraries-head">
-      <h3>{t("mediaServer.remoteTitle")}</h3>
-      <small>{t("mediaServer.remoteHint")}</small>
-    </div>
+  const renderTile = (item: RemoteItem, onOpen: (item: RemoteItem) => void, preview: PreviewInput): ReactNode => {
+    const key = `${preview.parentId ?? "root"}:${item.id}`;
+    if (item.type === "folder" || item.type === "season") {
+      return <LibraryItem key={item.id} folder dataRemoteId={item.id} artRef={artRef(key)} onOpen={() => onOpen(item)}
+        art={<RemoteFolderArt {...previewKey} parentId={item.id} enabled={preview.enabled} target={artRef(key)} shape={libraryTileShape} poster={item.poster} wide={item.wide}/>}
+        title={item.name} meta={itemMetaLine(item)} description={item.overview}
+        action={<><FolderOpen/> {t("library.openFolder")} <ChevronRight/></>}/>;
+    }
+    const playable = item.type === "movie" || item.type === "episode";
+    const stored = itemStates[stateKey(selected?.id ?? "", item.id)];
+    const locked = menuLoading || menuBusy || Boolean(menuError);
+    return <LibraryItem key={item.id} dataRemoteId={item.id} artRef={artRef(key)} onOpen={() => onOpen(item)}
+      art={<>
+        <RemoteTileArt target={artRef(key)} shape={libraryTileShape} poster={item.poster} wide={item.wide} fallback={<Film/>}/>
+        {stored?.favorite && <i className="fav-mark"><Star/></i>}
+        {stored?.watched && <i className="browse-badge">{t("mediaServer.watched")}</i>}
+      </>}
+      title={item.type === "episode" ? `${t("mediaServer.episodeLabel", { season: item.season ?? 0, episode: item.episode ?? 0 })} · ${item.name}` : item.name}
+      meta={itemMetaLine(item)} description={item.overview}
+      action={playable ? <><Play/> {t("player.play")}</> : <><FolderOpen/> {t("library.openFolder")} <ChevronRight/></>}>
+      <LibraryItemMenu name={item.name} open={menuFor === item.id} onToggle={() => toggleItemMenu(item)}>
+        {menuLoading && <span className="identify-hint" role="status">{t("common.loading")}</span>}
+        {menuError && <span className="identify-hint" role="alert">{menuError}</span>}
+        <button disabled={locked || !menuState} aria-pressed={menuState?.favorite ?? false} onClick={() => void writeMenuState({ favorite: !(menuState?.favorite ?? false) })}>
+          <Star/> {t(menuState?.favorite ? "favorite.remove" : "favorite.add")}
+        </button>
+        {playable && <button disabled={locked || !menuState} aria-pressed={menuState?.watched ?? false} onClick={() => void writeMenuState({ watched: !(menuState?.watched ?? false) })}>
+          <Check/> {t(menuState?.watched ? "mediaServer.markUnwatched" : "mediaServer.markWatched")}
+        </button>}
+        <button onClick={() => { closeMenu(); onOpen(item); }}>{item.type === "series" ? <><FolderOpen/> {t("library.openFolder")}</> : <><CirclePlay/> {t("mediaServer.versions")}</>}</button>
+      </LibraryItemMenu>
+    </LibraryItem>;
+  };
+
+  const onBrowseScroll = (event: Parameters<typeof fold.compactOnScroll>[0]) => {
+    fold.compactOnScroll(event, compact, onCompactChange);
+  };
+
+  return <>
+    {!selected && libraries && libraries.length > 0 && <section className="remote-libraries" ref={rootRef} aria-label={t("mediaServer.remoteTitle")}>
+      <div className="remote-libraries-head">
+        <h3>{t("mediaServer.remoteTitle")}</h3>
+        <small>{t("mediaServer.remoteHint")}</small>
+      </div>
+      <div className="browse-grid">
+        {libraries.map((library) => {
+          const key = `root:${library.id}`;
+          return <LibraryTile key={library.id} path={library.id}
+            name={library.name}
+            meta={[t(providerKey(library.provider)), t(libraryTypeKey(library.type)), t("mediaServer.readOnly")].join(" · ")}
+            fallback={<HardDrive/>}
+            enabled={library.enabled}
+            action={library.enabled ? <><FolderOpen/> {t("library.openFolder")} <ChevronRight/></> : t("library.disabled")}
+            containerRef={artRef(key)}
+            art={<RemoteLibraryArt libraryId={library.id} enabled={library.mosaic !== false} generation={0} target={artRef(key)}/>}
+            onOpen={() => openLibrary(library)}
+          />;
+        })}
+      </div>
+    </section>}
     {librariesError && <div className="remote-error" role="alert">
       <span>{t("mediaServer.loadFailed")} {librariesError}</span>
       <button type="button" onClick={() => void loadLibraries()}>{t("mediaServer.retry")}</button>
@@ -459,128 +787,118 @@ export function RemoteLibraryBrowser({ audioLanguage, subtitleLanguage, onError,
       <span>{targetError}</span>
       <button type="button" onClick={() => setTargetAttempt((value) => value + 1)}>{t("mediaServer.retry")}</button>
     </div>}
-    {!selected && libraries && libraries.length > 0 && <div className="remote-library-rows">
-      {libraries.map((library) => <button type="button" className="remote-library-row" key={library.id} onClick={() => openLibrary(library)}>
-        <span className="remote-library-copy">
-          <strong>{library.name}</strong>
-          <small>{t(providerKey(library.provider))} · {t(libraryTypeKey(library.type))}</small>
-        </span>
-        <i className="library-badge">{t("mediaServer.readOnly")}</i>
-        <ChevronRight aria-hidden="true"/>
-      </button>)}
-    </div>}
-    {selected && <div className="remote-browser">
-      <div className="remote-browser-bar">
-        <button type="button" className="library-back" onClick={stepBack}
-          aria-label={detail ? t("mediaServer.back") : t("mediaServer.backToLibraries")}
-          title={detail ? t("mediaServer.back") : t("mediaServer.backToLibraries")}><ChevronLeft/></button>
-        <span className="remote-browser-title">
-          <strong>{selected.name}</strong>
-          <small>{t(providerKey(selected.provider))} · {t("mediaServer.readOnly")}</small>
-        </span>
-        {!detail && <form className="remote-search" role="search" onSubmit={submitSearch}>
-          <div className="search-input">
-            <Search aria-hidden="true"/>
-            <input value={searchInput} aria-label={t("mediaServer.searchPlaceholder")} placeholder={t("mediaServer.searchPlaceholder")} onChange={(event) => setSearchInput(event.target.value)}/>
+    {selected && <div className="panel browse-panel remote-browse-panel" onClick={() => menuFor && closeMenu()}
+      onKeyDown={(event) => { if (event.key === "Escape" && menuFor) { const id = menuFor; closeMenu(); focusMenuTrigger(id); } }}>
+      <div className="browse-head">
+        <div className="browse-bar">
+          <nav className="crumbs" aria-label={t("library.breadcrumbs")}>
+            <button className="library-back" aria-label={detail || stack.length ? t("mediaServer.back") : t("mediaServer.backToLibraries")}
+              title={detail || stack.length ? t("mediaServer.back") : t("mediaServer.backToLibraries")} onClick={stepBack}><ChevronLeft/></button>
+            <button onClick={goLibraryRoot} disabled={!stack.length}><HardDrive/> {selected.name}</button>
+            {stack.map((folder, index) => <span key={folder.id}>
+              <ChevronRight/>
+              <button disabled={index === stack.length - 1} onClick={() => goToFolder(index)}>{folder.name}</button>
+            </span>)}
+          </nav>
+          <div className="browse-tools">
+            <div className={`fold browse-fold${compact ? " closed" : ""}`}><div className="browse-fold-inner">
+              {!detail && <div className="search-input"><Search/><input value={searchInput} aria-label={t("mediaServer.searchPlaceholder")} placeholder={t("mediaServer.searchPlaceholder")} onChange={(event) => setSearchInput(event.target.value)}/></div>}
+              {!detail && <select aria-label={t("common.sorting")} value={sort} onChange={(event) => changeSort(event.target.value as RemoteItemSort)}>
+                <option value="name">{t("library.sortName")}</option>
+                <option value="added">{t("library.sortAdded")}</option>
+                <option value="size">{t("library.sortSize")}</option>
+              </select>}
+              {!detail && <button title={t(desc ? "common.descending" : "common.ascending")} aria-label={t(desc ? "common.descending" : "common.ascending")} aria-pressed={desc}
+                onClick={() => { const next = !desc; setDesc(next); persistPrefs({ order: next ? "desc" : "asc" }); }}>{desc ? <ArrowDown/> : <ArrowUp/>}</button>}
+              {!detail && <button title={t(view === "grid" ? "library.viewRows" : "library.viewTiles")} aria-label={t(view === "grid" ? "library.viewRows" : "library.viewTiles")} aria-pressed={view === "list"}
+                onClick={changeView}>{view === "grid" ? <List/> : <LayoutGrid/>}</button>}
+            </div></div>
+            <div className="browse-keep">
+              {!detail && view === "grid" && <button className="shape-toggle" title={t(libraryTileShape === "wide" ? "library.shapePoster" : "library.shapeWide")} aria-pressed={libraryTileShape === "wide"} onClick={onToggleLibraryShape}>{libraryTileShape === "wide" ? <RectangleVertical/> : <RectangleHorizontal/>}</button>}
+              <button className="header-expand" title={t("library.showTools")} aria-label={t("library.showTools")} aria-expanded={!compact} onClick={() => { fold.hold(); onCompactChange(false); }}><SlidersHorizontal/></button>
+            </div>
           </div>
-          <button type="submit">{t("mediaServer.search")}</button>
-          {query && <button type="button" onClick={clearSearch}>{t("mediaServer.clearSearch")}</button>}
-        </form>}
-        {!detail && <label className="remote-filter">
-          <span>{t("mediaServer.filterLabel")}</span>
-          <select value={filter} aria-label={t("mediaServer.filterLabel")} onChange={(event) => setFilter(event.target.value as Filter)}>
-            <option value="all">{t("common.all")}</option>
-            <option value="movie">{t("mediaServer.filterMovies")}</option>
-            <option value="series">{t("mediaServer.filterSeries")}</option>
-          </select>
-        </label>}
+        </div>
       </div>
-
-      {!detail && <div className="remote-list">
-        {listError && <div className="remote-error" role="alert">
-          <span>{listError}</span>
-          <button type="button" onClick={retryListing}>{t("mediaServer.retry")}</button>
-        </div>}
-        {rows.map((item) => <button type="button" className="remote-item" key={item.id} onClick={() => openItem(item)}>
-          <span className="browse-art remote-item-art"><TileArt shape="wide" poster={item.poster} wide={item.wide} fallback={<Film/>}/></span>
-          <span>
-            <strong>{item.name}</strong>
-            <small>{item.type === "movie" ? t("mediaServer.type.movie") : t("mediaServer.type.series")}</small>
-          </span>
-          <ChevronRight aria-hidden="true"/>
-        </button>)}
-        {listLoading && !rows.length && <div className="loading" role="status">{t("common.loading")}</div>}
-        {!rows.length && !listLoading && !listError && !hasCursor && <p className="identify-hint">{query ? t("mediaServer.emptySearch") : t("mediaServer.emptyItems")}</p>}
-        {hasCursor && !listLoading && <div className="load-more"><button type="button" onClick={() => void loadMoreItems()}>{t("common.loadMore")}</button></div>}
-        {listLoading && rows.length > 0 && <div className="loading" role="status">{t("common.loadingMore")}</div>}
-      </div>}
-
-      {detail && detail.type === "series" && <div className="remote-list">
-        <div className="remote-subhead"><h4>{t("mediaServer.episodes")}</h4><span>{detail.name}</span></div>
-        {episodes.error && <div className="remote-error" role="alert">
-          <span>{episodes.error}</span>
-          <button type="button" onClick={retryEpisodes}>{t("mediaServer.retry")}</button>
-        </div>}
-        {grouped.map((group) => <div className="remote-season-group" key={group.season}>
-          <div className="remote-season">{t("mediaServer.seasonLabel", { season: group.season })}</div>
-          {group.items.map((episode) => <button type="button" className="remote-item" key={episode.id} onClick={() => openEpisode(episode)}>
-            <span className="browse-art remote-item-art"><TileArt shape="wide" poster={episode.poster} wide={episode.wide} fallback={<Film/>}/></span>
-            <span>
-              <strong>{t("mediaServer.episodeLabel", { season: episode.season ?? 0, episode: episode.episode ?? 0 })} · {episode.name}</strong>
-            </span>
-            <ChevronRight aria-hidden="true"/>
-          </button>)}
-        </div>)}
-        {episodes.loading && !grouped.length && <div className="loading" role="status">{t("common.loading")}</div>}
-        {!episodes.loading && !episodes.error && !grouped.length && !episodes.cursor && <p className="identify-hint">{t("mediaServer.noEpisodes")}</p>}
-        {episodes.cursor && !episodes.loading && <div className="load-more"><button type="button" onClick={() => void loadEpisodes()}>{t("common.loadMore")}</button></div>}
-        {episodes.loading && grouped.length > 0 && <div className="loading" role="status">{t("common.loadingMore")}</div>}
-      </div>}
-
-      {detail && detail.type !== "series" && <div className="remote-detail">
-        <div className="remote-subhead">
-          <h4>{detail.type === "episode" ? t("mediaServer.episodeLabel", { season: detail.season ?? 0, episode: detail.episode ?? 0 }) : detail.name}</h4>
-          <span>{detail.type === "episode" ? detail.name : series?.name ?? ""}</span>
-        </div>
-        {(detail.poster || detail.wide) && <div className="remote-detail-art"><TileArt shape="wide" poster={detail.poster} wide={detail.wide} fallback={<Film/>}/></div>}
-        {stateError && <div className="remote-error" role="alert">
-          <span>{stateError}</span>
-          <button type="button" onClick={retryDetail}>{t("mediaServer.retry")}</button>
-        </div>}
-        <div className="remote-detail-actions">
-          <button type="button" disabled={!state} aria-pressed={state?.favorite ?? false} onClick={() => void toggleState({ favorite: !(state?.favorite ?? false) })}>
-            <Star fill={state?.favorite ? "currentColor" : "none"}/> {t("mediaServer.favorite")}
-          </button>
-          <button type="button" disabled={!state} aria-pressed={state?.watched ?? false} onClick={() => void toggleState({ watched: !(state?.watched ?? false) })}>
-            <Check/> {state?.watched ? t("mediaServer.markUnwatched") : t("mediaServer.markWatched")}
-          </button>
-          {state?.watched && <i className="library-badge">{t("mediaServer.watched")}</i>}
-        </div>
-        <p className="identify-hint">{t("mediaServer.localStateNote")}</p>
-        <div className="remote-subhead"><h4>{t("mediaServer.versions")}</h4></div>
-        {sourceError && <div className="remote-error" role="alert">
-          <span>{sourceError}</span>
-          <button type="button" onClick={retryDetail}>{t("mediaServer.retry")}</button>
-        </div>}
-        {sources === null && !sourceError && <div className="loading" role="status">{t("common.loading")}</div>}
-        {sources && !sources.length && <><p className="identify-hint">{t("mediaServer.noSources")}</p><p className="identify-hint">{t("mediaServer.noSourcesHint")}</p></>}
-        {sources && sources.length > 0 && <>
-          <p className="identify-hint">{t("mediaServer.versionsHint")}</p>
-          <div className="remote-streams">
-            {sources.map((stream) => <button type="button" key={stream.sourceId} className={selectedSource === stream ? "selected" : ""} aria-pressed={selectedSource === stream} onClick={() => { explicitPick.current = true; setSelectedSource(stream); }}>
-              <i className="library-badge">{t(providerKey(selected.provider))}</i>
-              <span><strong>{sourceLabel(stream)}</strong>{stream.libraryName && <small>{stream.libraryName}</small>}</span>
-              {selectedSource === stream && <Check aria-hidden="true"/>}
-            </button>)}
-          </div>
-          <div className="actions remote-play">
-            <button className="primary" disabled={!selectedSource} onClick={() => {
-              if (!selectedSource) return;
-              setPlaying({ stream: selectedSource, libraryId: selected.id, item: detail, title: detail.type === "episode" ? `${series ? `${series.name} · ` : ""}${episodeTitle(detail)}` : detail.name, favorite: state?.favorite ?? false });
-            }}><CirclePlay/> {t("player.play")}</button>
-          </div>
+      <div className="browse-scroll" ref={scrollRef} onScroll={onBrowseScroll}>
+        {!detail && <>
+          {listing.error && <div className="remote-error" role="alert">
+            <span>{listing.error}</span>
+            <button type="button" onClick={retryListing}>{t("mediaServer.retry")}</button>
+          </div>}
+          {listing.loading && !listing.items.length ? <div className="loading" role="status">{t("common.loading")}</div>
+            : listing.items.length > 0 ? <div className={view === "grid" ? "browse-grid" : "browse-rows"}>
+              {listing.items.map((item) => renderTile(item, openItem, { enabled: mosaicOn(selected), parentId }))}
+            </div>
+            : !listing.error ? <p className="identify-hint">{query ? t("mediaServer.emptySearch") : t("mediaServer.emptyItems")}</p> : null}
+          {listing.cursor && <div className="load-more"><button type="button" disabled={listing.loading} onClick={() => void loadMoreItems()}>{t("common.loadMore")}</button></div>}
+          {listing.loading && listing.items.length > 0 && <div className="loading" role="status">{t("common.loadingMore")}</div>}
         </>}
-      </div>}
+        {detail && detail.type === "series" && <div className="remote-detail">
+          <div className="remote-subhead"><h4>{t("mediaServer.episodes")}</h4><span>{detail.name}</span></div>
+          {episodes.error && <div className="remote-error" role="alert">
+            <span>{episodes.error}</span>
+            <button type="button" onClick={retryEpisodes}>{t("mediaServer.retry")}</button>
+          </div>}
+          {grouped.map((group) => <div className="remote-season-group" key={group.season}>
+            <div className="remote-season">{t("mediaServer.seasonLabel", { season: group.season })}</div>
+            <div className={view === "grid" ? "browse-grid" : "browse-rows"}>
+              {group.items.map((episode) => renderTile(episode, openEpisode, { enabled: false }))}
+            </div>
+          </div>)}
+          {episodes.loading && !grouped.length && <div className="loading" role="status">{t("common.loading")}</div>}
+          {!episodes.loading && !episodes.error && !grouped.length && !episodes.cursor && <p className="identify-hint">{t("mediaServer.noEpisodes")}</p>}
+          {episodes.cursor && <div className="load-more"><button type="button" disabled={episodes.loading} onClick={() => void loadEpisodes()}>{t("common.loadMore")}</button></div>}
+          {episodes.loading && grouped.length > 0 && <div className="loading" role="status">{t("common.loadingMore")}</div>}
+        </div>}
+        {detail && detail.type !== "series" && <div className="remote-detail">
+          <div className="remote-subhead">
+            <h4>{detail.type === "episode" ? t("mediaServer.episodeLabel", { season: detail.season ?? 0, episode: detail.episode ?? 0 }) : detail.name}</h4>
+            <span>{detail.type === "episode" ? detail.name : series?.name ?? ""}</span>
+          </div>
+          {(detail.poster || detail.wide) && <div className="remote-detail-art"><TileArt shape={libraryTileShape} poster={detail.poster} wide={detail.wide} fallback={<Film/>}/></div>}
+          {detail.overview && <p className="identify-hint">{detail.overview}</p>}
+          {itemFacts(detail) && <p className="meta-line">{itemFacts(detail)}</p>}
+          {detail.genres?.length ? <p className="meta-line">{detail.genres.join(" · ")}</p> : null}
+          {stateError && <div className="remote-error" role="alert">
+            <span>{stateError}</span>
+            <button type="button" onClick={retryDetail}>{t("mediaServer.retry")}</button>
+          </div>}
+          <div className="remote-detail-actions">
+            <button type="button" disabled={!state} aria-pressed={state?.favorite ?? false} onClick={() => void toggleState({ favorite: !(state?.favorite ?? false) })}>
+              <Star fill={state?.favorite ? "currentColor" : "none"}/> {t("mediaServer.favorite")}
+            </button>
+            <button type="button" disabled={!state} aria-pressed={state?.watched ?? false} onClick={() => void toggleState({ watched: !(state?.watched ?? false) })}>
+              <Check/> {state?.watched ? t("mediaServer.markUnwatched") : t("mediaServer.markWatched")}
+            </button>
+            {state?.watched && <i className="library-badge">{t("mediaServer.watched")}</i>}
+          </div>
+          <p className="identify-hint">{t("mediaServer.localStateNote")}</p>
+          <div className="remote-subhead"><h4>{t("mediaServer.versions")}</h4></div>
+          {sourceError && <div className="remote-error" role="alert">
+            <span>{sourceError}</span>
+            <button type="button" onClick={retryDetail}>{t("mediaServer.retry")}</button>
+          </div>}
+          {sources === null && !sourceError && <div className="loading" role="status">{t("common.loading")}</div>}
+          {sources && !sources.length && <><p className="identify-hint">{t("mediaServer.noSources")}</p><p className="identify-hint">{t("mediaServer.noSourcesHint")}</p></>}
+          {sources && sources.length > 0 && <>
+            <p className="identify-hint">{t("mediaServer.versionsHint")}</p>
+            <div className="remote-streams">
+              {sources.map((stream) => <button type="button" key={stream.sourceId} className={selectedSource === stream ? "selected" : ""} aria-pressed={selectedSource === stream} onClick={() => { explicitPick.current = true; setSelectedSource(stream); }}>
+                <i className="library-badge">{t(providerKey(selected.provider))}</i>
+                <span><strong>{sourceLabel(stream)}</strong>{stream.libraryName && <small>{stream.libraryName}</small>}</span>
+                {selectedSource === stream && <Check aria-hidden="true"/>}
+              </button>)}
+            </div>
+            <div className="actions remote-play">
+              <button className="primary" disabled={!selectedSource} onClick={() => {
+                if (!selectedSource) return;
+                setPlaying({ stream: selectedSource, libraryId: selected.id, item: detail, title: detail.type === "episode" ? `${series ? `${series.name} · ` : ""}${episodeTitle(detail)}` : detail.name, favorite: state?.favorite ?? false });
+              }}><CirclePlay/> {t("player.play")}</button>
+            </div>
+          </>}
+        </div>}
+      </div>
     </div>}
     {playing && <Player
       open
@@ -600,5 +918,7 @@ export function RemoteLibraryBrowser({ audioLanguage, subtitleLanguage, onError,
       onDownload={async () => false}
       onDeviceDownload={async () => false}
       onClose={() => { cancelHandoff(); setPlaying(null); void refreshState(); }}/>}
-  </section>;
+  </>;
 }
+
+interface PreviewInput { enabled: boolean; parentId?: string }

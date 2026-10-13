@@ -503,6 +503,43 @@ class ApiClient(
     request(Request.Builder().url(address.resolve("${remoteItemsPath(libraryId)}/${encode(itemId)}")).get().build())
       .decode<RemoteItemDetailDto>() ?: throw ApiError(ApiFailure.Generic)
 
+  /** One lazy directory page of a remote library: the attached root or one folder inside it. The
+   *  server decides mode, paging, filtering and sorting; the client only names the request. */
+  override suspend fun remoteBrowse(
+    libraryId: String,
+    limit: Int,
+    cursor: String?,
+    search: String?,
+    type: String?,
+    parentId: String?,
+    mode: String?,
+    sort: String?,
+    order: String?,
+  ): RemoteItemsPageDto {
+    val query = buildString {
+      append("?limit=").append(limit)
+      if (!parentId.isNullOrEmpty()) append("&parentId=").append(encode(parentId))
+      if (!mode.isNullOrEmpty()) append("&mode=").append(encode(mode))
+      if (!cursor.isNullOrEmpty()) append("&cursor=").append(encode(cursor))
+      if (!search.isNullOrEmpty()) append("&search=").append(encode(search))
+      if (!type.isNullOrEmpty()) append("&type=").append(encode(type))
+      if (!sort.isNullOrEmpty()) append("&sort=").append(encode(sort))
+      if (!order.isNullOrEmpty()) append("&order=").append(encode(order))
+    }
+    val path = "/api/remote-libraries/" + encode(libraryId) + "/browse" + query
+    return request(Request.Builder().url(address.resolve(path)).get().build())
+      .decode<RemoteItemsPageDto>() ?: throw ApiError(ApiFailure.Generic)
+  }
+
+  /** Up to four authorized poster URLs for one library root or folder. An empty answer leaves the
+   *  folder's own icon in place. */
+  override suspend fun remotePreview(libraryId: String, parentId: String?): RemotePreviewDto {
+    val query = if (parentId.isNullOrEmpty()) "" else "?parentId=" + encode(parentId)
+    val path = "/api/remote-libraries/" + encode(libraryId) + "/preview" + query
+    return request(Request.Builder().url(address.resolve(path)).get().build())
+      .decode<RemotePreviewDto>() ?: RemotePreviewDto()
+  }
+
   /** The episodes of one series or season, paged the same way as the item list. */
   override suspend fun remoteEpisodes(
     libraryId: String,

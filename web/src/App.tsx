@@ -10,6 +10,8 @@ import { IdentifyDialog } from "./IdentifyDialog";
 import { AddonManager } from "./AddonManager";
 import { LibraryManagerDialog, libraryTypeLabel } from "./LibraryManager";
 import { RemoteLibraryBrowser } from "./RemoteLibraryBrowser";
+import { LibraryItem, LibraryItemMenu } from "./library-item";
+import { LibraryTile } from "./library-tile";
 import { RemotePersonalShelf } from "./RemotePersonalShelf";
 import { PosterMosaic, TileArt } from "./TileArt";
 import { MoveDialog } from "./MoveDialog";
@@ -206,6 +208,11 @@ export function App() {
   const [remoteLoading, setRemoteLoading] = useState(0);
   const [remoteDiscoveryError, setRemoteDiscoveryError] = useState("");
   const [remoteLibraries, setRemoteLibraries] = useState<RemoteLibrary[]>([]);
+  /** Raised by the remote browser while one of its libraries or a detail is open, so the local
+   *  listing steps aside and the two never draw two unrelated lists at once. */
+  const [remoteOpen, setRemoteOpen] = useState(false);
+  const [remoteCompact, setRemoteCompact] = useState(false);
+  const [remoteRootsPresent, setRemoteRootsPresent] = useState(false);
   const [remoteTarget, setRemoteTarget] = useState<{ libraryId: string; itemId: string; nonce: number } | null>(null);
   const [personalRefresh, setPersonalRefresh] = useState(0);
   const remoteAbortRef = useRef<AbortController | null>(null);
@@ -778,6 +785,12 @@ export function App() {
   const persistDownloadPrefs = (prefs: DownloadsViewPrefs) => {
     setViews((current) => withDownloads(current, prefs));
     queueViews({ downloads: prefs });
+  };
+  /** A remote library keeps its own grid/rows, sort and order under its id, keyed `rlib_`
+   *  exactly like a local one keys `lib_`, so each remembers its chrome the same way. */
+  const persistRemotePrefs = (libraryId: string, prefs: LibraryViewPrefs) => {
+    setViews((current) => withLibrary(current, libraryId, prefs));
+    queueViews({ libraries: { [libraryId]: prefs } });
   };
 
   const findPlaybackAnchor = ({ kind, key }: PlaybackAnchor) => {
@@ -2432,10 +2445,14 @@ export function App() {
           </> : <Empty icon={<Film/>} title={t("catalog.pickTitle")} text={t("catalog.pickText")}/>}</section></div>
         </>}
       </section>}
-      {view === "library" && <section className={`library-page${libraryCompact ? " library-compact" : ""}`} {...chromeGestures(() => browseScrollRef.current)} onKeyDown={(event) => { if (event.key === "Escape") setMenuFor(null); }} onClick={() => menuFor && setMenuFor(null)}><Heading eyebrow={t("library.eyebrow")} title={t("library.title")}/>
-        <RemoteLibraryBrowser audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} onError={fail}
+      {view === "library" && <section className={`library-page${remoteRootsPresent && !remoteOpen ? " library-remote-roots" : ""}${(remoteOpen ? remoteCompact : libraryCompact) ? " library-compact" : ""}`} {...chromeGestures(() => browseScrollRef.current)} onKeyDown={(event) => { if (event.key === "Escape") setMenuFor(null); }} onClick={() => menuFor && setMenuFor(null)}><Heading eyebrow={t("library.eyebrow")} title={t("library.title")}/>
+        <RemoteLibraryBrowser onRootPresenceChange={setRemoteRootsPresent} audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} onError={fail}
+          libraryTileShape={settings.libraryTileShape} onToggleLibraryShape={() => void toggleShape("libraryTileShape")}
+          views={views} onPersistPrefs={persistRemotePrefs}
+          onOpenChange={(open) => { setRemoteOpen(open); if (!open) setRemoteCompact(false); }}
+          compact={remoteCompact} onCompactChange={setRemoteCompact}
           {...(remoteTarget ? { initialTarget: remoteTarget } : {})} onPersonalChange={refreshPersonal}/>
-        <div className="panel browse-panel">
+        {!remoteOpen && <div className="panel browse-panel">
         <div className="browse-head">
         <div className="browse-bar">
           <nav className="crumbs" aria-label={t("library.breadcrumbs")}>
@@ -2565,25 +2582,24 @@ export function App() {
           : <>
             <div className={browseView === "grid" ? "browse-grid" : "browse-rows"}>
               {browse.items.map((item) => item.kind === "library"
-                ? <article className={`browse-item library${item.unreachable ? " unreachable" : ""}`} key={item.path} data-path={item.path}>
-                    <button className="library-open" disabled={!item.enabled} onClick={() => { setBrowseQuery(""); setFromFavorites(false); setMenuFor(null); setBrowsePath(item.path); }}>
-                      <span className="browse-art">{(item.posters?.length ?? 0) > 1
-                        ? <span className="library-preview-collage" aria-hidden="true">{item.posters?.map((poster) => <img key={poster} src={poster} alt="" loading="lazy" onError={hideBroken}/>)}</span>
-                        : item.posters?.[0] || item.poster ? <img src={item.posters?.[0] ?? item.poster} alt="" loading="lazy" onError={hideBroken}/> : <HardDrive/>}<i className="browse-badge">{item.fileCount}</i></span>
-                      <span className="library-copy"><strong>{item.name}</strong><small>{libraryMeta(item)}</small></span>
-                      <span className="library-action">{item.enabled ? <><FolderOpen/> {t("library.openFolder")} <ChevronRight/></> : t("library.disabled")}</span>
-                    </button>
-                  </article>
+                ? <LibraryTile key={item.path} name={item.name} meta={libraryMeta(item)} posters={item.posters} poster={item.poster}
+                    fallback={<HardDrive/>} count={item.fileCount} enabled={item.enabled} unreachable={item.unreachable} path={item.path}
+                    action={item.enabled ? <><FolderOpen/> {t("library.openFolder")} <ChevronRight/></> : t("library.disabled")}
+                    onOpen={() => { setBrowseQuery(""); setFromFavorites(false); setMenuFor(null); setBrowsePath(item.path); }}/>
                 : item.kind === "folder"
-                ? <article className={`browse-item folder${browseFocus === item.path ? " focused" : ""}${selectedPaths.has(item.path) ? " selected" : ""}`} key={item.path} data-path={item.path} aria-current={browseFocus === item.path ? "true" : undefined}><button className="library-open" onClick={() => { if (selectionMode) { toggleSelection(item.path); return; } setBrowseQuery(""); setFromFavorites(browsePath === ":favorites" || fromFavorites); setBrowsePath(item.path); }}>
-                    <span className="browse-art">{(item.posters?.length ?? 0) > 1
-                      ? <PosterMosaic posters={item.posters ?? []} label={t("library.mosaicAlt", { count: item.posters?.length ?? 0 })}/>
-                      : <TileArt shape={settings.libraryTileShape} poster={item.poster} wide={item.wide} fallback={<FolderOpen/>}/>}<i className="browse-badge">{item.fileCount}</i>{item.favorite && <i className="fav-mark"><Star/></i>}</span>
-                    <span className="library-copy"><strong>{item.name}</strong><small>{folderMeta(item)}</small>{descriptionLine(item) && <small className="library-desc" title={descriptionLine(item)}>{descriptionLine(item)}</small>}</span><span className="library-action"><FolderOpen/> {t("library.openFolder")} <ChevronRight/></span></button>
+                ? <LibraryItem key={item.path} folder focused={browseFocus === item.path} selected={selectedPaths.has(item.path)} dataPath={item.path}
+                    onOpen={() => { if (selectionMode) { toggleSelection(item.path); return; } setBrowseQuery(""); setFromFavorites(browsePath === ":favorites" || fromFavorites); setBrowsePath(item.path); }}
+                    art={<>
+                      {(item.posters?.length ?? 0) > 1
+                        ? <PosterMosaic posters={item.posters ?? []} label={t("library.mosaicAlt", { count: item.posters?.length ?? 0 })}/>
+                        : <TileArt shape={settings.libraryTileShape} poster={item.poster} wide={item.wide} fallback={<FolderOpen/>}/>}
+                      <i className="browse-badge">{item.fileCount}</i>{item.favorite && <i className="fav-mark"><Star/></i>}
+                    </>}
+                    title={item.name} meta={folderMeta(item)} description={descriptionLine(item)}
+                    action={<><FolderOpen/> {t("library.openFolder")} <ChevronRight/></>}>
                     {selectionMode && <button className="browse-select" aria-label={t("library.selectItem", { name: item.name })} aria-pressed={selectedPaths.has(item.path)} onClick={(event) => { event.stopPropagation(); toggleSelection(item.path); }}>{selectedPaths.has(item.path) && <Check/>}</button>}
                     {!selectionMode && (item.gallery ?? 0) > 0 && <button className="browse-gallery" aria-label={t("gallery.openStored", { name: item.name })} title={t("gallery.openStored", { name: item.name })} onClick={(event) => { event.stopPropagation(); void openStoredGallery(item.path); }}><Images/></button>}
-                    {!selectionMode && <button className="browse-menu" aria-label={t("library.options", { name: item.name })} aria-expanded={menuFor === item.path} onClick={(event) => { event.stopPropagation(); openMenu(item); }}><MoreVertical/></button>}
-                    {!selectionMode && menuFor === item.path && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
+                    {!selectionMode && <LibraryItemMenu name={item.name} open={menuFor === item.path} onToggle={() => openMenu(item)}>
                       {item.match === "matched" && titleChips(libraryTrailers[item.path] ?? null, libraryLinks[item.path] ?? [])}
                       {admin && matchActions(item)}
                       <button onClick={() => void toggleFavorite(item.path, !item.favorite)}><Star/> {t(item.favorite ? "favorite.remove" : "favorite.add")}</button>
@@ -2592,18 +2608,19 @@ export function App() {
                         <button onClick={() => openMove(item.path, item.name, item.titleType)}><FolderInput/> {t("library.move")}</button>
                         <button className="danger" onClick={() => void removeItem(item.path, item.name, true)}><Trash2/> {t("common.delete")}</button>
                       </>}
-                    </span>}
-                  </article>
-                : <article className={`browse-item${browseFocus === item.path ? " focused" : ""}${selectedPaths.has(item.path) ? " selected" : ""}`} key={item.path} data-path={item.path} aria-current={browseFocus === item.path ? "true" : undefined}><button className="library-open" onClick={() => selectionMode ? toggleSelection(item.path) : void playLocal(item.label, item.path, item.poster, item.season != null)}>
-                    <span className="browse-art"><TileArt shape={settings.libraryTileShape} poster={item.poster} wide={item.wide} fallback={<Film/>}/>{item.favorite && <i className="fav-mark"><Star/></i>}
-                    {browseFocus === item.path && <i className="browse-focus-mark">{t("library.thisFile")}</i>}
-                    {item.progress && <i className="resume-bar"><i style={{ width: `${Math.min(100, Math.round(item.progress.position / (item.progress.duration || 1) * 100))}%` }}/></i>}</span>
-                    <span className="library-copy"><strong>{item.season != null ? `${item.season}×${String(item.episode ?? 0).padStart(2, "0")} ${item.label}` : item.label}</strong>
-                    <small>{fileMeta(item)}</small>{descriptionLine(item) && <small className="library-desc" title={descriptionLine(item)}>{descriptionLine(item)}</small>}</span><span className="library-action"><Play/> {t(item.progress ? "library.continue" : "player.play")}</span></button>
+                    </LibraryItemMenu>}
+                  </LibraryItem>
+                : <LibraryItem key={item.path} focused={browseFocus === item.path} selected={selectedPaths.has(item.path)} dataPath={item.path}
+                    onOpen={() => selectionMode ? toggleSelection(item.path) : void playLocal(item.label, item.path, item.poster, item.season != null)}
+                    art={<><TileArt shape={settings.libraryTileShape} poster={item.poster} wide={item.wide} fallback={<Film/>}/>{item.favorite && <i className="fav-mark"><Star/></i>}
+                      {browseFocus === item.path && <i className="browse-focus-mark">{t("library.thisFile")}</i>}
+                      {item.progress && <i className="resume-bar"><i style={{ width: `${Math.min(100, Math.round(item.progress.position / (item.progress.duration || 1) * 100))}%` }}/></i>}</>}
+                    title={item.season != null ? `${item.season}×${String(item.episode ?? 0).padStart(2, "0")} ${item.label}` : item.label}
+                    meta={fileMeta(item)} description={descriptionLine(item)}
+                    action={<><Play/> {t(item.progress ? "library.continue" : "player.play")}</>}>
                     {selectionMode && <button className="browse-select" aria-label={t("library.selectItem", { name: item.label })} aria-pressed={selectedPaths.has(item.path)} onClick={(event) => { event.stopPropagation(); toggleSelection(item.path); }}>{selectedPaths.has(item.path) && <Check/>}</button>}
                     {!selectionMode && (item.gallery ?? 0) > 0 && <button className="browse-gallery" aria-label={t("gallery.openStored", { name: item.label })} title={t("gallery.openStored", { name: item.label })} onClick={(event) => { event.stopPropagation(); void openStoredGallery(item.path); }}><Images/></button>}
-                    {!selectionMode && <button className="browse-menu" aria-label={t("library.options", { name: item.label })} aria-expanded={menuFor === item.path} onClick={(event) => { event.stopPropagation(); openMenu(item); }}><MoreVertical/></button>}
-                    {!selectionMode && menuFor === item.path && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
+                    {!selectionMode && <LibraryItemMenu name={item.label} open={menuFor === item.path} onToggle={() => openMenu(item)}>
                       {item.match === "matched" && titleChips(libraryTrailers[item.path] ?? null, libraryLinks[item.path] ?? [])}
                       {admin && matchActions(item)}
                       <button onClick={() => void toggleFavorite(item.path, !item.favorite)}><Star/> {t(item.favorite ? "favorite.remove" : "favorite.add")}</button>
@@ -2615,8 +2632,8 @@ export function App() {
                         <button onClick={() => openMove(item.path, item.label, item.titleType)}><FolderInput/> {t("library.move")}</button>
                         <button className="danger" onClick={() => void removeItem(item.path, item.label, false)}><Trash2/> {t("common.delete")}</button>
                       </>}
-                    </span>}
-                  </article>)}
+                    </LibraryItemMenu>}
+                  </LibraryItem>)}
             </div>
             {browseBusy && <div className="loading">{t("common.loading")}</div>}
             {(() => {
@@ -2627,7 +2644,7 @@ export function App() {
             })()}
           </>}
         </div>
-        </div>
+        </div>}
       </section>}
       {view === "addons" && <AddonManager addons={addons} libraries={libraries} restricted={restricted} admin={admin} onChanged={refresh} onNotify={notify} onError={fail}/>} 
       {view === "resume" && <ResumeView
