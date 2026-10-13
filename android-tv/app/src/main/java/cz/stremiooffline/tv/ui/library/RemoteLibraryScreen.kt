@@ -500,7 +500,7 @@ private fun ItemBrowser(
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {
           when {
-            search.loading -> ShimmerCards()
+            search.loading -> ShimmerCards(modifier = Modifier.focusRequester(gridFocus).focusable().testTag("remote-loading"))
             search.error != null -> RemoteErrorPanel(search.error, { viewModel.retry() }, errorFocus)
             // Rows may be filtered out entirely while a cursor still holds more: keep the Load more.
             items.isEmpty() && !search.hasMore -> Text(

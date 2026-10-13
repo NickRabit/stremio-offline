@@ -194,6 +194,7 @@ open class FakeTvApi : TvApi {
   /** Every browse call, with the full query it carried, so a test can name the request. */
   val remoteBrowseRequests: MutableList<RemoteBrowseRequest> = mutableListOf()
   var remoteBrowseFailure: ApiError? = null
+  val remoteBrowseGates: MutableMap<String, CompletableDeferred<Unit>> = mutableMapOf()
   /** The posters every preview answers with; a test may gate or fail the call. */
   var remotePreviewValue: List<String> = emptyList()
   val remotePreviewRequests: MutableList<Pair<String, String?>> = mutableListOf()
@@ -507,6 +508,7 @@ open class FakeTvApi : TvApi {
     order: String?,
   ): RemoteItemsPageDto {
     remoteBrowseRequests += RemoteBrowseRequest(libraryId, limit, cursor, search, type, parentId, mode, sort, order)
+    remoteBrowseGates[parentId ?: ""]?.await()
     remoteBrowseFailure?.let { throw it }
     remoteBrowsePages["$libraryId|${parentId ?: ""}|${cursor ?: ""}"]?.let { return it }
     // The older suites only seeded the snapshot maps; answer from those and keep their counters

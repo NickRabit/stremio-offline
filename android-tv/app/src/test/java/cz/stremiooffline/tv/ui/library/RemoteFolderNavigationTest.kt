@@ -116,4 +116,34 @@ class RemoteFolderNavigationTest {
     compose.waitForIdle()
     compose.onNodeWithTag(remoteItemTag("f1")).assertIsFocused()
   }
+
+  @Test
+  fun `loading a nested folder retains content focus until its page arrives`() {
+    val api = FakeTvApi()
+    api.remoteLibrariesValue = listOf(RemoteLibraryDto(id = "rlibA", name = "Server", provider = "emby", type = "mixed"))
+    api.remoteBrowsePages["rlibA||"] = RemoteItemsPageDto(items = listOf(folder("f1", "Folder")), total = 1)
+    api.remoteBrowsePages["rlibA|f1|"] = RemoteItemsPageDto(items = listOf(movie("m1", "Movie")), total = 1)
+    val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+    api.remoteBrowseGates["f1"] = gate
+    scenario.onActivity { activity ->
+      activity.setContent {
+        RemoteLibraryRoute(api = api, segment = LibrarySegment.Servers, onOpenItem = { _, _, _, _ -> })
+      }
+    }
+    compose.waitUntil(5_000) { api.remoteLibrariesCalls > 0 }
+    compose.waitForIdle()
+    compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitUntil(5_000) { api.remoteBrowseRequests.isNotEmpty() }
+    compose.waitForIdle()
+    compose.onNodeWithTag(remoteItemTag("f1")).assertIsFocused()
+    compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitUntil(5_000) { api.remoteBrowseRequests.any { it.parentId == "f1" } }
+    compose.waitForIdle()
+    compose.onNodeWithTag("remote-loading").assertIsFocused()
+    compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
+    gate.complete(Unit)
+    compose.waitForIdle()
+    compose.onNodeWithTag(remoteItemTag("m1")).assertIsFocused()
+    assertEquals(2, api.remoteBrowseRequests.size)
+  }
 }

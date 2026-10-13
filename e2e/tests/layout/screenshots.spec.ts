@@ -34,6 +34,9 @@ const openCatalog = async (page: Page, pattern: RegExp) => {
 };
 
 test.describe("screenshots", () => {
+  test.afterEach(async ({ page }) => {
+    await page.unrouteAll({ behavior: "wait" });
+  });
   test.beforeEach(({}, testInfo) => {
     // These four screens look the same at 1280x760 as at 1440x900. The project
     // earns its place through the invariants, which check the 780px height rule;

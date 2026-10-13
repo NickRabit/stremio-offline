@@ -33,7 +33,7 @@ jobs:
       # does not carry. Without this the web server never starts and the run dies
       # before it renders anything. The e2e job in ci.yml installs it the same way.
       - run: apt-get update && apt-get install -y --no-install-recommends ffmpeg
-      - run: npx playwright test --update-snapshots
+      - run: npx playwright test e2e/tests/layout/screenshots.spec.ts e2e/tests/layout/library.spec.ts --update-snapshots
         env:
           HOME: /root
       - name: Commit the new baselines
