@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowDown, ArrowUp, Check, KeyRound, Library, Pencil, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, KeyRound, Library, Pencil, Plus, RefreshCw, SlidersHorizontal, Trash2, X } from "lucide-react";
 import { api, describeError } from "./api";
 import { t, useI18n } from "./i18n";
 import type { AdminRemoteLibrary, LibraryType, MediaServerConnection, MediaServerProvider, MediaServerStatus, ProviderLibrary, RemoteBrowseMode, UserAccount } from "./types";
@@ -55,7 +55,7 @@ const Checkbox = ({ checked, disabled, onChange, children }: { checked: boolean;
   </label>;
 
 /** Settings -> Libraries: connect Jellyfin/Emby and grant attached libraries. Administrator only. */
-export function MediaServerManager({ onError }: { onError: (error: unknown) => void }) {
+export function MediaServerManager({ onError, onChanged }: { onError: (error: unknown) => void; onChanged?: () => void }) {
   useI18n();
   const [connections, setConnections] = useState<MediaServerConnection[] | null>(null);
   const [keyConfigured, setKeyConfigured] = useState(true);
@@ -115,11 +115,13 @@ export function MediaServerManager({ onError }: { onError: (error: unknown) => v
   const openDialog = () => setDialogError("");
 
   const providerOf = (connectionId: string) => connections?.find((connection) => connection.id === connectionId);
-  const siblingsOf = (connectionId: string) =>
-    [...libraries.filter((library) => library.connectionId === connectionId)].sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
+  /** One sequence over every attached library, whatever server it sits on: this is the same
+   *  global `order` the member side draws its roots in, so an arrow moves a row across
+   *  connections too. */
+  const orderedLibraries = [...libraries].sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
 
   const toggleConnection = (connection: MediaServerConnection) =>
-    runList(async () => { await api.updateMediaServer(connection.id, { enabled: !connection.enabled }); await load(); });
+    runList(async () => { await api.updateMediaServer(connection.id, { enabled: !connection.enabled }); await load(); onChanged?.(); });
   const requestRemove = (removal: Removal) => {
     removeTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     openDialog();
@@ -142,23 +144,34 @@ export function MediaServerManager({ onError }: { onError: (error: unknown) => v
       if (current.kind === "connection") await api.deleteMediaServer(current.connection.id, forget);
       else await api.deleteRemoteLibrary(current.library.id, forget);
       await load();
+      onChanged?.();
     }).then((done) => { if (done) { setRemoving(null); restoreRemoveFocus(); } });
   };
-  const reorderLibrary = (library: AdminRemoteLibrary, delta: number) => runDialog(async () => {
-    const siblings = siblingsOf(library.connectionId);
-    const index = siblings.findIndex((row) => row.id === library.id);
-    const other = siblings[index + delta];
-    const moved = siblings[index];
-    if (!other || !moved) return;
-    const arranged = [...siblings];
+  /** Moving one row rewrites the whole sequence: stored orders can repeat or leave gaps and
+   *  swapping two values in that state does not always move anything, so every position is
+   *  written back when it differs. The move is list-level, so a failure is a toast rather than
+   *  an error inside a dialog, and the list is re-read even when it broke halfway. */
+  const reorderLibrary = (index: number, delta: number) => {
+    const arranged = [...orderedLibraries];
+    const moved = arranged[index];
+    const other = arranged[index + delta];
+    if (!moved || !other) return;
     arranged[index + delta] = moved;
     arranged[index] = other;
-    for (const [position, row] of arranged.entries()) {
-      if (row.order !== position) await api.updateRemoteLibrary(row.id, { order: position });
-    }
-    const list = await load();
-    setEditing((current) => current ? list.find((row) => row.id === current.id) ?? current : current);
-  });
+    setBusy(true);
+    void (async () => {
+      try {
+        for (const [position, row] of arranged.entries()) {
+          if (row.order !== position) await api.updateRemoteLibrary(row.id, { order: position });
+        }
+      } catch (error) { onError(error); }
+      finally {
+        try { await load(); } catch (error) { setLoadError(describeError(error)); }
+        onChanged?.();
+        setBusy(false);
+      }
+    })();
+  };
 
   return <div className="media-server-manager">
     {!keyConfigured && <p className="notice" role="alert">{t("mediaServer.keyMissing")}</p>}
@@ -198,7 +211,7 @@ export function MediaServerManager({ onError }: { onError: (error: unknown) => v
     {libraries.length > 0 && <section className="media-server-attached">
       <h3>{t("mediaServer.remoteTitle")}</h3>
       <div className="library-manager">
-        {[...libraries].sort((a, b) => a.connectionId.localeCompare(b.connectionId) || a.order - b.order || a.id.localeCompare(b.id)).map((library) => <article className={`library-admin-row${library.enabled ? "" : " unreachable"}`} key={library.id}>
+        {orderedLibraries.map((library, index) => <article className={`library-admin-row${library.enabled ? "" : " unreachable"}`} key={library.id}>
           <div className="library-admin-head">
             <div className="library-admin-title">
               <strong>{library.name}</strong>
@@ -209,9 +222,17 @@ export function MediaServerManager({ onError }: { onError: (error: unknown) => v
               {!library.enabled && <i className="library-badge off">{t("library.disabled")}</i>}
               {!library.allowedUsers.length && <i className="library-badge warn">{t("users.administrator")}</i>}
             </span>
+            {orderedLibraries.length > 1 && <span className="library-admin-order">
+              <button type="button" className="icon-button" disabled={busy || index === 0}
+                aria-label={t("library.orderUp", { name: library.name })} title={t("library.orderUp", { name: library.name })}
+                onClick={() => reorderLibrary(index, -1)}><ArrowUp/></button>
+              <button type="button" className="icon-button" disabled={busy || index === orderedLibraries.length - 1}
+                aria-label={t("library.orderDown", { name: library.name })} title={t("library.orderDown", { name: library.name })}
+                onClick={() => reorderLibrary(index, 1)}><ArrowDown/></button>
+            </span>}
           </div>
           <footer className="library-admin-footer">
-            <button disabled={busy} onClick={() => { openDialog(); setEditing(library); }}><Pencil/> {t("mediaServer.libraryTitle")}</button>
+            <button disabled={busy} onClick={() => { openDialog(); setEditing(library); }}><SlidersHorizontal/> {t("library.editLibrary")}</button>
           </footer>
         </article>)}
       </div>
@@ -219,7 +240,7 @@ export function MediaServerManager({ onError }: { onError: (error: unknown) => v
     {connecting && <ConnectionDialog onClose={() => setConnecting(false)}
       onDone={async () => { setConnecting(false); await boot(); }}/>}
     {discovering && <DiscoverDialog connection={discovering} attached={libraries} busy={busy} error={dialogError} onClose={() => setDiscovering(null)}
-      onAttach={(library) => runDialog(async () => { await api.attachMediaServerLibrary(discovering.id, { remoteId: library.id, name: library.name }); await load(); })}/>}
+      onAttach={(library) => runDialog(async () => { await api.attachMediaServerLibrary(discovering.id, { remoteId: library.id, name: library.name }); await load(); onChanged?.(); })}/>}
     {renaming && <FormDialog title={t("mediaServer.rename")} busy={busy} error={dialogError} onClose={() => setRenaming(null)}
       submitLabel={t("common.save")} canSubmit={(name) => Boolean(name.trim()) && name.trim() !== renaming.name}
       submit={(name) => runDialog(async () => { await api.updateMediaServer(renaming.id, { name: name.trim() }); await load(); })}>
@@ -243,9 +264,8 @@ export function MediaServerManager({ onError }: { onError: (error: unknown) => v
     </FormDialog>}
     {editing && <RemoteLibraryDialog library={editing} users={users} usersError={usersError} busy={busy} error={dialogError}
       onRetryUsers={() => void loadUsers()} onClose={() => setEditing(null)}
-      onSave={(patch) => runDialog(async () => { await api.updateRemoteLibrary(editing.id, patch); await load(); })}
-      onRequestRemove={() => requestRemoveLibrary(editing)}
-      onReorder={(delta) => reorderLibrary(editing, delta)}/>}
+      onSave={(patch) => runDialog(async () => { await api.updateRemoteLibrary(editing.id, patch); await load(); onChanged?.(); })}
+      onRequestRemove={() => requestRemoveLibrary(editing)}/>}
     {removing && <RemoveDialog removal={removing} busy={busy} error={dialogError} onDismiss={dismissRemoval} onConfirm={confirmRemoval}/>}
   </div>;
 }
@@ -396,11 +416,11 @@ function DiscoverDialog({ connection, attached, busy, error, onClose, onAttach }
   </Dialog>;
 }
 
-function RemoteLibraryDialog({ library, users, usersError, busy, error, onRetryUsers, onClose, onSave, onRequestRemove, onReorder }: {
+function RemoteLibraryDialog({ library, users, usersError, busy, error, onRetryUsers, onClose, onSave, onRequestRemove }: {
   library: AdminRemoteLibrary; users: UserAccount[] | null; usersError: string; busy: boolean; error: string;
   onRetryUsers: () => void; onClose: () => void;
   onSave: (patch: { name: string; enabled: boolean; showOnHome: boolean; showInContinueWatching: boolean; allowedUsers: string[]; browseMode: RemoteBrowseMode; mosaic: boolean; showInFavorites: boolean }) => Promise<boolean>;
-  onRequestRemove: () => void; onReorder: (delta: number) => Promise<boolean>;
+  onRequestRemove: () => void;
 }) {
   const [draft, setDraft] = useState(() => ({
     name: library.name, enabled: library.enabled,
@@ -440,10 +460,6 @@ function RemoteLibraryDialog({ library, users, usersError, busy, error, onRetryU
       </label>
       <div className="library-edit-controls">
         <Checkbox checked={draft.enabled} disabled={busy} onChange={(value) => setDraft((current) => ({ ...current, enabled: value }))}>{t("library.enabled")}</Checkbox>
-      </div>
-      <div className="library-admin-order media-server-order">
-        <button type="button" className="icon-button" disabled={busy} aria-label={t("mediaServer.orderUp", { name: library.name })} title={t("mediaServer.orderUp", { name: library.name })} onClick={() => void onReorder(-1)}><ArrowUp/></button>
-        <button type="button" className="icon-button" disabled={busy} aria-label={t("mediaServer.orderDown", { name: library.name })} title={t("mediaServer.orderDown", { name: library.name })} onClick={() => void onReorder(1)}><ArrowDown/></button>
       </div>
     </section>
     <section className="library-edit-section">

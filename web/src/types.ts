@@ -73,6 +73,10 @@ export interface AdminRemoteLibrary {
   enabled: boolean; order: number; showOnHome: boolean; showInContinueWatching: boolean;
   /** The accounts granted this library. Empty means administrators only. */
   allowedUsers: string[];
+  /** The provider behind the library's connection. Absent on a record whose connection was
+   *  already removed, and on a PATCH response that omits it, so the client keeps the value it
+   *  had. */
+  provider?: MediaServerProvider;
   /** Display-only settings. Absent means the effective default: mixed libraries browse
    *  folders, movie/series libraries browse titles, and both mosaic and Favourites are on. */
   browseMode?: RemoteBrowseMode; mosaic?: boolean; showInFavorites?: boolean;
@@ -261,11 +265,11 @@ export interface UserPermissions {
   /** May save allowed content to the device at the keyboard. */
   downloadToDevice: boolean;
 }
-/** One account as `GET /api/users` sends it: the public fields and the two grant counts. */
+/** One account as `GET /api/users` sends it: the public fields and the grant counts. */
 export interface UserAccount {
   id: string; username: string; role: UserRole; disabled: boolean; mustChangePassword: boolean;
   createdAt: string; lastSeenAt?: string; permissions: UserPermissions;
-  libraries: number; addons: number;
+  libraries: number; addons: number; remoteLibraries?: number;
 }
 /** `mustChangePassword` is set when an administrator chose the password this session signed
  *  in with. The server refuses everything but the change itself while it stands. */

@@ -185,6 +185,14 @@ describe("LocalLibraryDetail actions", () => {
     expect(host.querySelector('.library-detail-actions button[aria-label="Mark as unwatched"]')).toBeNull();
   });
 
+  it("uses the existing preview for an unmatched file without requesting catalogue metadata", async () => {
+    identityHandler = () => json(identity());
+    await render(file({ poster: "/existing-preview.jpg" }));
+    await flush();
+    expect(host.querySelector<HTMLElement>(".library-title-detail")!.style.backgroundImage).toContain("/existing-preview.jpg");
+    expect(calls.meta).toHaveLength(0);
+  });
+
   it("asks the catalogue with the identity the source lookup already found, and never stretches the poster", async () => {
     identityHandler = () => json(identity({ bound: { type: "movie", id: "tt1", name: "Heat" } }));
     copies = () => json([copy("Films/Heat.mkv", "Heat.mkv", 2_000_000_000)]);

@@ -109,8 +109,8 @@ export function LocalLibraryDetail({ item, favorite, progress, onToggleFavorite,
   const chips = <TitleChips kind={t(episode ? "episodes.one" : "catalog.oneMovie")} trailer={enrichment.trailer} links={enrichment.links}
     onTrailer={onTrailer} secureMode={secureMode}/>;
   const facts = [item.year, sources?.length === 1 && item.size ? bytes(item.size) : ""].filter(Boolean).join(" · ");
-  // Catalogue backdrops are full resolution; the file artwork is a tile-sized fallback.
-  const backdrops = [enrichment.meta?.background, item.wide];
+  // Prefer full-resolution backdrops; unmatched files can still use their existing preview.
+  const backdrops = [enrichment.meta?.background, item.wide, item.poster];
   // The file's own poster and wide artwork merge with the exact catalogue pictures; the saved
   // downloads are read only when the corner image is clicked.
   const gallery = mergeGallery(posterAndWide(item.poster, item.wide), catalogueGalleryImages(enrichment.meta));

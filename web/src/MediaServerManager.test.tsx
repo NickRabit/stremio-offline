@@ -8,10 +8,10 @@ import type { AdminRemoteLibrary, MediaServerConnection, UserAccount } from "./t
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
-const connection: MediaServerConnection = {
+const connection = (over: Partial<MediaServerConnection> = {}): MediaServerConnection => ({
   id: "mconn_1", provider: "jellyfin", name: "Living room", baseUrl: "https://jelly.example",
-  allowLan: false, allowLoopback: false, enabled: true, generation: 1, configured: true, status: "available",
-};
+  allowLan: false, allowLoopback: false, enabled: true, generation: 1, configured: true, status: "available", ...over,
+});
 const adminLibrary = (over: Partial<AdminRemoteLibrary> = {}): AdminRemoteLibrary => ({
   id: "rlib_a", connectionId: "mconn_1", remoteId: "lib1", name: "Music videos", type: "mixed",
   enabled: true, order: 0, showOnHome: true, showInContinueWatching: true, allowedUsers: [], ...over,
@@ -24,24 +24,34 @@ const account: UserAccount = {
 let root: Root;
 let host: HTMLDivElement;
 const patches: Array<{ url: string; body: Record<string, unknown> }> = [];
-let current = adminLibrary();
+let connections: MediaServerConnection[];
+let libraryRows: AdminRemoteLibrary[];
+/** A PATCH the test wants refused, keyed on the row it names. */
+let refusePatch: ((id: string) => Response | undefined) | undefined;
 
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   setLocale("en");
   patches.length = 0;
-  current = adminLibrary();
-  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+  connections = [connection()];
+  libraryRows = [adminLibrary()];
+  refusePatch = undefined;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), "http://localhost");
-    if (url.pathname === "/api/media-servers") return Promise.resolve(json({ connections: [connection], keyConfigured: true }));
-    if (url.pathname === "/api/media-servers/libraries") return Promise.resolve(json({ libraries: [current] }));
-    if (url.pathname === "/api/users") return Promise.resolve(json([account]));
-    if (url.pathname.startsWith("/api/remote-libraries/")) {
+    const method = init?.method ?? "GET";
+    if (method === "GET" && url.pathname === "/api/media-servers") return json({ connections, keyConfigured: true });
+    if (method === "GET" && url.pathname === "/api/media-servers/libraries") return json({ libraries: libraryRows });
+    if (method === "GET" && url.pathname === "/api/users") return json([account]);
+    const patch = /^\/api\/remote-libraries\/([^/]+)$/.exec(url.pathname);
+    if (patch && method === "PATCH") {
       const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : {};
       patches.push({ url: url.pathname, body });
-      return Promise.resolve(json({ ...current, ...body }));
+      const refusal = refusePatch?.(patch[1]!);
+      if (refusal) return refusal;
+      libraryRows = libraryRows.map((row) => row.id === patch[1] ? { ...row, ...body } : row);
+      return json(libraryRows.find((row) => row.id === patch[1]));
     }
-    return Promise.resolve(json({}, 404));
+    return json({}, 404);
   }));
   host = document.createElement("div");
   document.body.appendChild(host);
@@ -59,12 +69,19 @@ const click = async (element: HTMLElement) => { await act(async () => { element.
 const byText = (selector: string, text: string) =>
   [...host.querySelectorAll<HTMLElement>(selector)].find((node) => node.textContent?.includes(text));
 
-const render = async () => {
+const renderManager = async () => {
   await act(async () => { root.render(<MediaServerManager onError={vi.fn()}/>); });
   await flush();
-  await click(byText("button", "Remote library")!);
+};
+const render = async () => {
+  await renderManager();
+  await click(byText("button", "Edit library")!);
   return host.querySelector(".media-server-library-card")!;
 };
+const rowNames = () =>
+  [...host.querySelectorAll(".media-server-attached .library-admin-title strong")].map((node) => node.textContent);
+const orderButton = (name: string, direction: "up" | "down") =>
+  host.querySelector<HTMLButtonElement>(`button[aria-label="Move ${name} ${direction}"]`);
 
 describe("RemoteLibraryDialog", () => {
   it("saves the shared display settings and the browse mode", async () => {
@@ -91,5 +108,83 @@ describe("RemoteLibraryDialog", () => {
     expect(text).not.toContain("Write artwork next to the media");
     expect(text).not.toContain("Automatically look up metadata");
     expect(text).not.toContain("Default for movies");
+  });
+
+  it("has no ordering controls now that the overview owns the arrows", async () => {
+    libraryRows = [adminLibrary({ id: "rlib_a", name: "Alpha", order: 0 }), adminLibrary({ id: "rlib_b", name: "Beta", order: 1 })];
+    const dialog = await render();
+    expect(dialog.querySelector(".library-admin-order")).toBeNull();
+    expect(dialog.querySelector('button[aria-label^="Move "]')).toBeNull();
+  });
+});
+
+describe("Remote library ordering", () => {
+  it("draws every attached library in one global order, across connections", async () => {
+    connections = [connection(), connection({ id: "mconn_2", name: "Attic", provider: "emby" })];
+    libraryRows = [
+      adminLibrary({ id: "rlib_a", connectionId: "mconn_1", name: "Alpha", order: 0 }),
+      adminLibrary({ id: "rlib_b", connectionId: "mconn_2", name: "Beta", order: 1 }),
+    ];
+    await renderManager();
+    expect(rowNames()).toEqual(["Alpha", "Beta"]);
+  });
+
+  it("hides the arrows while a single library is attached", async () => {
+    await renderManager();
+    expect(host.querySelector(".media-server-attached .library-admin-order")).toBeNull();
+  });
+
+  it("moves one row across servers and rewrites the whole sequence", async () => {
+    connections = [connection(), connection({ id: "mconn_2", name: "Attic", provider: "emby" })];
+    libraryRows = [
+      adminLibrary({ id: "rlib_a", connectionId: "mconn_1", name: "Alpha", order: 0 }),
+      adminLibrary({ id: "rlib_b", connectionId: "mconn_2", name: "Beta", order: 1 }),
+    ];
+    await renderManager();
+    expect(orderButton("Alpha", "up")?.disabled).toBe(true);
+    expect(orderButton("Beta", "down")?.disabled).toBe(true);
+
+    await click(orderButton("Alpha", "down")!);
+    expect(patches).toEqual([
+      { url: "/api/remote-libraries/rlib_b", body: { order: 0 } },
+      { url: "/api/remote-libraries/rlib_a", body: { order: 1 } },
+    ]);
+    expect(rowNames()).toEqual(["Beta", "Alpha"]);
+  });
+
+  it("normalises duplicate and gapped orders when it moves a row", async () => {
+    libraryRows = [
+      adminLibrary({ id: "rlib_a", name: "Alpha", order: 5 }),
+      adminLibrary({ id: "rlib_b", name: "Beta", order: 5 }),
+      adminLibrary({ id: "rlib_c", name: "Gamma", order: 9 }),
+    ];
+    await renderManager();
+    expect(rowNames()).toEqual(["Alpha", "Beta", "Gamma"]);
+    await click(orderButton("Alpha", "down")!);
+    expect(patches).toEqual([
+      { url: "/api/remote-libraries/rlib_b", body: { order: 0 } },
+      { url: "/api/remote-libraries/rlib_a", body: { order: 1 } },
+      { url: "/api/remote-libraries/rlib_c", body: { order: 2 } },
+    ]);
+    expect(rowNames()).toEqual(["Beta", "Alpha", "Gamma"]);
+  });
+
+  it("reports a refused reorder through the toast and keeps the persisted order", async () => {
+    const onError = vi.fn();
+    connections = [connection(), connection({ id: "mconn_2", name: "Attic", provider: "emby" })];
+    libraryRows = [
+      adminLibrary({ id: "rlib_a", connectionId: "mconn_1", name: "Alpha", order: 0 }),
+      adminLibrary({ id: "rlib_b", connectionId: "mconn_2", name: "Beta", order: 1 }),
+    ];
+    refusePatch = () => json({ error: "refused", messageKey: "err.mediaServerBusy" }, 409);
+    await act(async () => { root.render(<MediaServerManager onError={onError}/>); });
+    await flush();
+
+    await click(orderButton("Alpha", "down")!);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect((onError.mock.calls[0][0] as { status: number }).status).toBe(409);
+    expect(patches, "the first refusal stops the run").toHaveLength(1);
+    expect(host.querySelector(".media-server-library-card"), "the failure is not hidden in a dialog").toBeNull();
+    expect(rowNames(), "the list is re-read and shows the order the server kept").toEqual(["Alpha", "Beta"]);
   });
 });

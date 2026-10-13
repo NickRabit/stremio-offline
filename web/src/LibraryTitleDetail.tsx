@@ -15,7 +15,7 @@ export interface LibraryTitleDetailProps {
   /** A line of context under the title, such as an episode's own numbering. */
   subtitle?: string;
   poster?: string;
-  /** The backdrops to try, best first: the first one that loads is the hero. Never a poster. */
+  /** The backdrops to try, best first, optionally ending with an existing preview. */
   backdrops?: Array<string | undefined>;
   /** The pictures the gallery overlay will hold, computed by the caller from its own metadata. */
   gallery?: GalleryImage[];

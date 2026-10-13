@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { UserManager } from "./UserManager";
-import type { Addon, LibraryView, Session, UserAccount } from "./types";
+import type { Addon, AdminRemoteLibrary, LibraryView, Session, UserAccount } from "./types";
 import { setLocale } from "./i18n";
 
 const json = (body: unknown, status = 200) =>
@@ -25,6 +25,10 @@ const library = (over: Partial<LibraryView> = {}): LibraryView => ({
 const addon = (over: Partial<Addon> = {}): Addon => ({
   key: "alpha", role: "source", enabled: true, globalSearch: false,
   manifest: { id: "org.alpha", name: "Alpha", version: "1.0.0" }, allowedUsers: [], ...over,
+});
+const remoteLibrary = (over: Partial<AdminRemoteLibrary> = {}): AdminRemoteLibrary => ({
+  id: "rlib_a", connectionId: "mconn_1", remoteId: "lib1", name: "Remote clips", type: "movie",
+  enabled: true, order: 0, showOnHome: true, showInContinueWatching: true, allowedUsers: [], provider: "jellyfin", ...over,
 });
 
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -49,9 +53,10 @@ afterEach(() => {
 
 /** `onWrite` answers a non-GET call: a Response says what the server said, anything else is
  *  answered as a 200, and `undefined` as an empty object. */
-const mount = async ({ session, users, libraries = [], addons = [], onWrite, onError = vi.fn() }:
-  { session: Session; users: UserAccount[]; libraries?: LibraryView[]; addons?: Addon[];
-    onWrite?: (url: string, body: Record<string, unknown>) => unknown; onError?: (error: unknown) => void }) => {
+const flush = async () => { await act(async () => { await new Promise((done) => setTimeout(done, 0)); }); };
+const mount = async ({ session, users, libraries = [], remoteLibraries = [], addons = [], failRemote = false, restricted = false, onWrite, onError = vi.fn() }:
+  { session: Session; users: UserAccount[]; libraries?: LibraryView[]; remoteLibraries?: AdminRemoteLibrary[]; addons?: Addon[];
+    failRemote?: boolean; restricted?: boolean; onWrite?: (url: string, body: Record<string, unknown>) => unknown; onError?: (error: unknown) => void }) => {
   fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
     if ((init?.method ?? "GET") !== "GET") {
       const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
@@ -62,10 +67,14 @@ const mount = async ({ session, users, libraries = [], addons = [], onWrite, onE
     if (url === "/api/users") return json(users);
     if (url === "/api/libraries") return json(libraries);
     if (url === "/api/addons") return json(addons);
+    if (url === "/api/media-servers/libraries") {
+      if (failRemote) return json({ error: "The media servers could not be read.", messageKey: "err.mediaServerUnavailable" }, 502);
+      return json({ libraries: remoteLibraries });
+    }
     return json({});
   });
-  await act(async () => { root.render(<UserManager session={session} onError={onError} onNotify={vi.fn()}/>); });
-  await act(async () => { await Promise.resolve(); });
+  await act(async () => { root.render(<UserManager session={session} restricted={restricted} onError={onError} onNotify={vi.fn()}/>); });
+  await flush();
 };
 
 const clickText = async (text: string) => {
@@ -282,4 +291,212 @@ it("creates an account with the role and the download permissions the dialog was
     url: "/api/users", username: "carol", password: "hunter2", role: "user",
     permissions: { downloadToLibrary: false, downloadToDevice: true },
   }]);
+});
+
+const choose = async (label: string, value: string) => {
+  const select = host.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`);
+  expect(select, `"${label}" is on screen`).toBeTruthy();
+  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!;
+  await act(async () => { setter.call(select, value); select!.dispatchEvent(new Event("change", { bubbles: true })); });
+};
+
+it("an ordinary user makes no administrator read at all", async () => {
+  await mount({ session: ordinary, users: [account()], remoteLibraries: [remoteLibrary()] });
+  expect(fetchMock, "not even the grant lists, which the server would refuse").not.toHaveBeenCalled();
+});
+
+it("a failed grant-list read is reported and keeps account creation disabled", async () => {
+  const onError = vi.fn();
+  await mount({ session: admin, users: [account()], failRemote: true, onError });
+
+  expect(onError).toHaveBeenCalledTimes(1);
+  const add = [...host.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Add account");
+  expect(add?.disabled, "a create dialog without the remote list would grant blind").toBe(true);
+  expect(host.textContent, "a failed read is not shown as an empty remote list").not.toContain("Remote libraries");
+});
+
+it("a restricted instance lists the accounts without reading the refused remote inventory", async () => {
+  const onError = vi.fn();
+  await mount({ session: admin, users: [account()], restricted: true, onError });
+
+  expect(host.querySelectorAll(".user-admin-row")).toHaveLength(1);
+  expect(onError).not.toHaveBeenCalled();
+  expect(fetchMock.mock.calls.map((call) => String(call[0]))).not.toContain("/api/media-servers/libraries");
+});
+
+it("shows local and remote libraries in one Libraries pane, counted together", async () => {
+  await mount({
+    session: admin,
+    users: [account({ id: "usr_00000002", username: "bob", role: "user", libraries: 1, addons: 0, remoteLibraries: 2 }), account()],
+    libraries: [library({ name: "Films" })],
+    remoteLibraries: [
+      remoteLibrary({ id: "rlib_a", name: "Remote clips", provider: "jellyfin" }),
+      remoteLibrary({ id: "rlib_b", name: "Other shelf", provider: "emby", enabled: false }),
+    ],
+  });
+  const row = [...host.querySelectorAll(".user-admin-row")].find((node) => node.textContent?.includes("bob"))!;
+  expect(row.querySelector(".library-admin-counts")?.textContent).toContain("3 libraries · 0 addons");
+
+  await clickText("Edit");
+  expect(host.querySelector("#user-tab-libraries")?.textContent, "the tab counts local and remote").toContain("3");
+  await openPane("Libraries");
+  expect(host.textContent).toContain("Remote libraries");
+  const labels = [...host.querySelectorAll<HTMLInputElement>(".user-grant-list input[type=checkbox]")].map((box) => box.getAttribute("aria-label"));
+  expect(labels).toEqual([
+    "Films is visible to this account",
+    "Remote clips (Jellyfin) is visible to this account",
+    "Other shelf (Emby) is visible to this account",
+  ]);
+  expect(host.textContent, "each remote row carries its provider and type").toContain("Jellyfin");
+  expect(host.textContent).toContain("Emby");
+  expect(host.textContent).toContain("Turned off");
+});
+
+it("tells two libraries apart when they share a name on different providers", async () => {
+  await mount({
+    session: admin,
+    users: [account({ id: "usr_00000002", username: "bob", role: "user" }), account()],
+    libraries: [library({ name: "Films" })],
+    remoteLibraries: [remoteLibrary({ id: "rlib_a", name: "Films", provider: "jellyfin" })],
+  });
+  await clickText("Edit");
+  await openPane("Libraries");
+  expect(host.querySelector('input[aria-label="Films is visible to this account"]')).not.toBeNull();
+  expect(host.querySelector('input[aria-label="Films (Jellyfin) is visible to this account"]')).not.toBeNull();
+});
+
+it("a remote tick writes the whole grant list back, keeping every other account", async () => {
+  const patched: Array<{ url: string; body: Record<string, unknown> }> = [];
+  await mount({
+    session: admin,
+    users: [account({ id: "usr_00000002", username: "bob", role: "user" }), account()],
+    remoteLibraries: [remoteLibrary({ id: "rlib_a", name: "Remote clips", allowedUsers: ["usr_00000009"] })],
+    onWrite: (url, body) => {
+      patched.push({ url, body });
+      return remoteLibrary({ id: "rlib_a", name: "Remote clips", allowedUsers: body.allowedUsers as string[] });
+    },
+  });
+  await clickText("Edit");
+  await openPane("Libraries");
+
+  expect(host.querySelector<HTMLInputElement>('input[aria-label="Remote clips (Jellyfin) is visible to this account"]')?.checked).toBe(false);
+  await clickBox("Remote clips (Jellyfin) is visible to this account");
+  expect(patched).toEqual([{ url: "/api/remote-libraries/rlib_a", body: { allowedUsers: ["usr_00000009", "usr_00000002"] } }]);
+  expect(host.querySelector(".user-admin-row .library-admin-counts")?.textContent).toContain("1 libraries");
+
+  await clickBox("Remote clips (Jellyfin) is visible to this account");
+  expect(patched[1]).toEqual({ url: "/api/remote-libraries/rlib_a", body: { allowedUsers: ["usr_00000009"] } });
+  expect(host.querySelector(".user-admin-row .library-admin-counts")?.textContent).toContain("0 libraries");
+});
+
+it("a refused remote grant leaves the checkbox at the value the server kept", async () => {
+  const onError = vi.fn();
+  await mount({
+    session: admin,
+    users: [account({ id: "usr_00000002", username: "bob", role: "user" }), account()],
+    remoteLibraries: [remoteLibrary({ id: "rlib_a", name: "Remote clips", allowedUsers: [] })],
+    onError,
+    onWrite: () => json({ error: "An administrator already sees every library.", messageKey: "err.adminAlwaysSees" }, 409),
+  });
+  await clickText("Edit");
+  await openPane("Libraries");
+  await clickBox("Remote clips (Jellyfin) is visible to this account");
+
+  expect(onError).toHaveBeenCalledTimes(1);
+  expect(host.querySelector<HTMLInputElement>('input[aria-label="Remote clips (Jellyfin) is visible to this account"]')?.checked).toBe(false);
+});
+
+/** A new account starts with everything switched on ticked and everything switched off clear,
+ *  for the remote list exactly as for the local one, and both can be overridden by hand. */
+it("a new account ticks the enabled remote libraries and can override that", async () => {
+  const patched: Array<{ url: string; body: Record<string, unknown> }> = [];
+  const users = [account()];
+  await mount({
+    session: admin, users,
+    remoteLibraries: [
+      remoteLibrary({ id: "rlib_on", name: "Movie shelf" }),
+      remoteLibrary({ id: "rlib_off", name: "Off shelf", enabled: false }),
+    ],
+    onWrite: (url, body) => {
+      if (url === "/api/users") { const made = account({ id: "usr_00000005", username: String(body.username), role: "user" }); users.push(made); return made; }
+      patched.push({ url, body });
+      return remoteLibrary({ id: url.split("/").pop()!, allowedUsers: body.allowedUsers as string[] });
+    },
+  });
+  await clickText("Add account");
+  await fill("Username", "carol");
+  await fill("Password", "hunter2");
+  await openPane("Libraries");
+
+  expect(host.querySelector<HTMLInputElement>('input[aria-label="Movie shelf (Jellyfin) is visible to this account"]')?.checked).toBe(true);
+  expect(host.querySelector<HTMLInputElement>('input[aria-label="Off shelf (Jellyfin) is visible to this account"]')?.checked).toBe(false);
+  await clickBox("Movie shelf (Jellyfin) is visible to this account");
+  await clickBox("Off shelf (Jellyfin) is visible to this account");
+  // The create button lives on the account pane; the overrides are held by the dialog, so
+  // stepping back to it keeps them.
+  await openPane("Account");
+  await clickText("Create account");
+
+  expect(patched).toEqual([{ url: "/api/remote-libraries/rlib_off", body: { allowedUsers: ["usr_00000005"] } }]);
+});
+
+it("creates an administrator without any grant writes", async () => {
+  const patched: Array<{ url: string; body: Record<string, unknown> }> = [];
+  const users = [account()];
+  await mount({
+    session: admin, users,
+    remoteLibraries: [remoteLibrary({ id: "rlib_a", name: "Remote clips" })],
+    onWrite: (url, body) => {
+      if (url === "/api/users") { const made = account({ id: "usr_00000005", username: String(body.username), role: "admin" }); users.push(made); return made; }
+      patched.push({ url, body });
+      return {};
+    },
+  });
+  await clickText("Add account");
+  await fill("Username", "root");
+  await fill("Password", "hunter2");
+  await choose("Role", "admin");
+  await clickText("Create account");
+
+  expect(patched, "the role already reaches everything, so nothing is written").toEqual([]);
+});
+
+it("a grant that fails after creation opens the account instead of creating it twice", async () => {
+  const onError = vi.fn();
+  const posts: string[] = [];
+  const users = [account()];
+  const libraries = [library({ id: "lib_ab12cd34", name: "Films", visibleTo: [] })];
+  const remoteLibraries = [remoteLibrary({ id: "rlib_a", name: "Remote clips", allowedUsers: [] })];
+  await mount({
+    session: admin, users, libraries, remoteLibraries, onError,
+    onWrite: (url, body) => {
+      if (url === "/api/users") {
+        posts.push(url);
+        const made = account({ id: "usr_00000005", username: String(body.username), role: "user", libraries: 0, addons: 0, remoteLibraries: 1 });
+        users.push(made);
+        return made;
+      }
+      if (url === "/api/libraries/lib_ab12cd34") return json({ error: "An administrator already sees every library.", messageKey: "err.adminAlwaysSees" }, 409);
+      if (url === "/api/remote-libraries/rlib_a") {
+        remoteLibraries[0] = remoteLibrary({ id: "rlib_a", name: "Remote clips", allowedUsers: body.allowedUsers as string[] });
+        return remoteLibraries[0];
+      }
+      return {};
+    },
+  });
+  await clickText("Add account");
+  await fill("Username", "carol");
+  await fill("Password", "hunter2");
+  await clickText("Create account");
+
+  expect(posts, "the account is made once, whatever the grants do").toEqual(["/api/users"]);
+  expect(onError).toHaveBeenCalledTimes(1);
+  expect([...host.querySelectorAll("button")].some((button) => button.textContent?.trim() === "Create account"),
+    "the dialog edits the account that exists, so it cannot be created again").toBe(false);
+  expect(host.querySelector(".identify-head h2")?.textContent).toBe("carol");
+  await openPane("Libraries");
+  expect(host.querySelector<HTMLInputElement>('input[aria-label="Remote clips (Jellyfin) is visible to this account"]')?.checked,
+    "the grant that landed is shown").toBe(true);
+  expect(host.querySelector<HTMLInputElement>('input[aria-label="Films is visible to this account"]')?.checked,
+    "the grant that was refused stays where the server left it").toBe(false);
 });
