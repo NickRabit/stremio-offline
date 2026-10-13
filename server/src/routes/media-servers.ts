@@ -45,7 +45,7 @@ const withRetryAfter = (text: string, key: string, retryAfterMs: number | undefi
 /** The single place an internal failure becomes a sentence and a status. Every declared code
  *  maps to a fixed key; an unknown one falls back to a plain 502 rather than leaking a raw
  *  status or message. An upstream 401 becomes a local 502, never a session 401. */
-const toHttpError = (error: MediaServerError): AppError => {
+export const toHttpError = (error: MediaServerError): AppError => {
   switch (error.code) {
     case "invalid-input":
       return new AppError(TEXTS.invalidRequest, "err.invalidRequest", 400);

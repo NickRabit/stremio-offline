@@ -10,11 +10,12 @@ import express from "express";
 import type { AirPlayAccess } from "../airplay-access.js";
 import type { SessionInfo } from "../auth.js";
 import { flushLog, initLogger, readLog, setLevel } from "../logger.js";
-import { mediaResources as registry, MediaResources, type ResourceOwner } from "../media-resources.js";
+import { mediaResources as registry, MediaResources, ResourceError, type ResourceOwner } from "../media-resources.js";
 import type { MediaServerManager } from "../media-server-manager.js";
 import { MediaServerPlaybackGuard } from "../media-server-playback.js";
 import { sealRemoteContent } from "../media-server-reference.js";
 import { MediaServerSources } from "../media-server-sources.js";
+import { MediaServerError } from "../media-server-types.js";
 import type { PlaybackManager } from "../playback.js";
 import type { RangeCache } from "../range-cache.js";
 import type { StatsLog } from "../stats.js";
@@ -281,4 +282,64 @@ test("the remote media proxy forwards HEAD and range and binds the resource owne
 
   const denied = await api(harness.base, `/api/media/${resourceId}`, { user: "bob" });
   assert.equal(denied.status, 404, "the wrong session cannot read another owner's resource");
+});
+
+test("the remote media proxy maps a media-server failure to its fixed sentence", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const resourceId = harness.seedRemote();
+  const sources = harness.mediaSources as unknown as { open(): Promise<Response> };
+  sources.open = async () => { throw new MediaServerError("busy", "SENTINEL-INTERNAL-DETAIL", undefined, 5_000); };
+
+  const response = await api(harness.base, `/api/media/${resourceId}`, { user: "ada" });
+
+  assert.equal(response.status, 429, "the mapped status, not the unmodified catch's 502");
+  const body = await response.json() as { error: string };
+  assert.equal(body.error, "The media server is busy. Try again shortly.");
+  assert.ok(!JSON.stringify(body).includes("SENTINEL-INTERNAL-DETAIL"), "the internal message never reaches the body");
+});
+
+test("the remote media proxy leaves a stale-owner resource error as a 404", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const resourceId = harness.seedRemote();
+  const sources = harness.mediaSources as unknown as { open(): Promise<Response> };
+  sources.open = async () => { throw new ResourceError(404, "RESOURCE_NOT_FOUND"); };
+
+  const response = await api(harness.base, `/api/media/${resourceId}`, { user: "ada" });
+
+  assert.equal(response.status, 404);
+  const body = await response.json() as { error: string };
+  assert.equal(body.error, "Media resource expired or unavailable. Select the source again.");
+  assert.notEqual(body.error, "The media server is unavailable.");
+});
+
+test("the remote media proxy returns quietly when the player is already gone", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const resourceId = harness.seedRemote();
+  const sources = harness.mediaSources as unknown as {
+    open(stream: StreamItem, owner: ResourceOwner, args: { method: string; range?: string }, signal?: AbortSignal): Promise<Response>;
+    assertCurrent(): void;
+  };
+  sources.assertCurrent = () => undefined;
+  let reached!: () => void;
+  const waiting = new Promise<void>((resolve) => { reached = resolve; });
+  sources.open = (_stream, _owner, _args, signal) => {
+    reached();
+    return new Promise<Response>((_resolve, reject) => {
+      signal?.addEventListener("abort", () => reject(new MediaServerError("cancelled", "The media-server request was cancelled.")), { once: true });
+    });
+  };
+
+  const controller = new AbortController();
+  const pending = fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada" }, signal: controller.signal }).catch(() => undefined);
+  await waiting;
+  controller.abort();
+  await pending;
+
+  sources.open = async () => new Response(new Uint8Array([1, 2, 3]), { status: 206, headers: { "content-range": "bytes 0-2/5", "content-type": "video/mp4" } });
+  const after = await api(harness.base, `/api/media/${harness.seedRemote()}`, { user: "ada" });
+  assert.equal(after.status, 206, "the route returned instead of throwing into the error middleware");
+  await after.arrayBuffer();
 });

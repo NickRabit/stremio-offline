@@ -1325,8 +1325,9 @@ export function createMediaServerTransport(
         const range = /^bytes=(\d*)-(\d*)$/.exec(request.range ?? "");
         if (!range) throw invalidResponse("The media server sent an unrequested range.");
         const expectedStart = range[1] ? Number(range[1]) : Math.max(0, total! - Number(range[2]));
-        const expectedEnd = range[1] && range[2] ? Math.min(Number(range[2]), total! - 1) : total! - 1;
-        if (start !== expectedStart || end !== expectedEnd) throw invalidResponse("The media server answered a different range.");
+        // The server may answer with a shorter or longer span than the one asked for; only a
+        // body that begins at another offset is a different answer.
+        if (start !== expectedStart || start > end || end >= total!) throw invalidResponse("The media server answered a different range.");
       }
       if (request.method === "HEAD") {
         void response.body?.cancel().catch(() => undefined);

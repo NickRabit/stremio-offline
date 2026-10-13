@@ -15,6 +15,7 @@ import { mediaChildPath, mediaResources, openMediaUrl, ResourceError, safeSource
 import { isRemoteMediaStream } from "../media-server-reference.js";
 import type { MediaServerPlaybackGuard } from "../media-server-playback.js";
 import type { MediaServerSources } from "../media-server-sources.js";
+import { isMediaServerError } from "../media-server-types.js";
 import { contentOf } from "../revocation.js";
 import { readMediaText, rewritePlaylist } from "../media-playlist.js";
 import { clientCapabilities } from "../playback.js";
@@ -25,6 +26,7 @@ import type { StatsLog, TrafficMeta } from "../stats.js";
 import type { UserPrefs } from "../store.js";
 import type { StreamItem } from "../types.js";
 import { asyncRoute, type RouteContext } from "./context.js";
+import { toHttpError } from "./media-servers.js";
 
 /** Inspection, the playback sessions and the media reader. */
 export interface PlaybackDeps extends RouteContext {
@@ -310,6 +312,14 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
         }, controller.signal);
       } catch (error) {
         if (error instanceof ResourceError || error instanceof AppError) throw error;
+        // The controller is aborted only when the response closes, and by then `res.destroyed`
+        // is already true, so the signal clause repeats that fact.
+        if (res.destroyed || res.writableEnded || controller.signal.aborted) return;
+        if (isMediaServerError(error)) {
+          const http = toHttpError(error);
+          http.cause = error;
+          throw http;
+        }
         throw new AppError("The media server is unavailable.", "err.mediaServerUnavailable", 502);
       }
       if (res.destroyed || res.writableEnded || controller.signal.aborted) { discard(upstream.body); return; }
@@ -325,6 +335,9 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       res.status(upstream.status);
       for (const name of ["content-type", "content-length", "content-range", "accept-ranges"]) { const value = upstream.headers.get(name); if (value) res.setHeader(name, value); }
       if (req.method === "HEAD" || !upstream.body) { discard(upstream.body); return void res.end(); }
+      // The stream pipeline on this response is what crosses Node's default of ten `close`
+      // listeners. One slot, not a raised global default.
+      res.setMaxListeners(res.getMaxListeners() + 1);
       try { await pipeline(Readable.fromWeb(upstream.body as never), res, { signal: controller.signal }); }
       catch { if (res.headersSent) res.destroy(); else throw new AppError("The media server is unavailable.", "err.mediaServerUnavailable", 502); }
       return;

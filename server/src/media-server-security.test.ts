@@ -1213,6 +1213,25 @@ test("original media refuses a different range and incomplete or overlong bodies
   }
 });
 
+test("original media refuses a different range but accepts a shorter or longer span at the same start", async () => {
+  const samples: Array<{ range: string; contentRange: string; bytes: number[] }> = [
+    { range: "bytes=0-1", contentRange: "bytes 0-5/6", bytes: [1, 2, 3, 4, 5, 6] },
+    { range: "bytes=0-10", contentRange: "bytes 0-2/6", bytes: [1, 2, 3] },
+  ];
+  for (const sample of samples) {
+    const transport = createMediaServerTransport({ baseUrl: "http://127.0.0.1", allowLan: false, allowLoopback: true }, {
+      fetch: async () => new Response(new ReadableStream<Uint8Array>({
+        start(controller) { controller.enqueue(new Uint8Array(sample.bytes)); controller.close(); },
+      }), { status: 206, headers: { "content-range": sample.contentRange } }),
+    });
+    try {
+      const response = await transport.requestOriginal({ itemId: "movie", mediaSourceId: "version", method: "GET", range: sample.range }, "safe-token");
+      assert.equal(response.headers.get("content-range"), sample.contentRange, sample.range);
+      assert.equal((await response.arrayBuffer()).byteLength, sample.bytes.length, sample.range);
+    } finally { await transport.close(); }
+  }
+});
+
 test("directory pins Recursive, the folder-admitting type set, the fixed sort pair and drops every other field", async () => {
   const captured: string[] = [];
   const transport = createMediaServerTransport({ baseUrl: "http://media.example", allowLan: false, allowLoopback: false }, {

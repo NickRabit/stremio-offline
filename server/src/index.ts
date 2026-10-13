@@ -91,6 +91,7 @@ import { MediaServerPlaybackGuard, readMediaServerPlaybackConfig } from "./media
 import { isRemoteMediaStream } from "./media-server-reference.js";
 import { MediaServerSources } from "./media-server-sources.js";
 import { MediaServerSecrets } from "./media-server-secrets.js";
+import { isMediaServerError } from "./media-server-types.js";
 
 const STREAM_SORTS = new Set(["recommended", "size-desc", "size-asc", "addon"]);
 const DATA_DIR = process.env.DATA_DIR ?? "/data";
@@ -2332,10 +2333,12 @@ app.use((error: unknown, req: express.Request, res: express.Response, _next: exp
     // session is gone, the answer is correct, and it is not a fault worth an ERROR.
     log("DEBUG", "A closed session was still being read", { req: req.id, path: req.path, user: currentUser(req)?.username });
   } else {
+    const cause = (error as { cause?: unknown }).cause;
     log("ERROR", "Request failed", {
       req: req.id, method: req.method, path: req.path, status,
       user: currentUser(req)?.username, category, reason: message,
       stack: error instanceof Error ? error.stack : undefined,
+      ...(isMediaServerError(cause) ? { upstream: cause.code } : {}),
     });
   }
   const mediaRoute = /^(?:\/api)?\/(?:media|playback|inspect|streams|subtitle|subtitles|device-download|library\/source)(?:\/|$)/.test(req.path);
