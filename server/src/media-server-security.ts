@@ -1412,7 +1412,7 @@ export function createMediaServerTransport(
     const bearer = validateMediaServerToken(token);
     const query = new URLSearchParams();
     if (request.tag !== undefined) query.set("tag", request.tag);
-    query.set("MaxWidth", "640");
+    query.set("MaxWidth", request.imageType === "Backdrop" ? "1920" : "640");
     query.set("Quality", "85");
     query.set("Format", "Jpg");
     const url = `${baseUrl}/Items/${encodeURIComponent(request.itemId)}/Images/${request.imageType}?${query.toString()}`;
@@ -1637,7 +1637,7 @@ export function createMediaServerTransport(
     const bearer = validateMediaServerToken(token);
     const limit = checked.kind === "artwork" ? ASSET_ARTWORK_MAX_BYTES : ASSET_SUBTITLE_MAX_BYTES;
     const url = checked.kind === "artwork"
-      ? `${baseUrl}/Items/${encodeURIComponent(checked.itemId)}/Images/${checked.imageType}?MaxWidth=640&Quality=85&Format=Jpg`
+      ? `${baseUrl}/Items/${encodeURIComponent(checked.itemId)}/Images/${checked.imageType}?MaxWidth=${checked.imageType === "Backdrop" ? "1920" : "640"}&Quality=85&Format=Jpg`
       : `${baseUrl}/Videos/${encodeURIComponent(checked.itemId)}/${encodeURIComponent(checked.mediaSourceId)}/Subtitles/${checked.index}/Stream.srt`;
 
     if (closed) throw new MediaServerError("closed", "The media-server transport is closed.");

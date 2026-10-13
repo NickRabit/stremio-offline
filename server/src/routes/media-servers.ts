@@ -145,8 +145,9 @@ const previewParent = (req: express.Request): string | undefined => {
   assertNoBody(req);
   const query = req.query as Record<string, unknown>;
   for (const key of Object.keys(query)) {
-    if (key !== "parentId") throw malformed("The media-server request has an unknown query field.");
+    if (key !== "parentId" && key !== "artwork") throw malformed("The media-server request has an unknown query field.");
   }
+  if (query.artwork !== undefined && query.artwork !== "children") throw malformed("The preview artwork mode is invalid.");
   const raw = query.parentId;
   if (raw === undefined) return undefined;
   if (typeof raw !== "string" || raw.length === 0 || raw.length > MEDIA_SERVER_LIMITS.upstreamId) {
@@ -312,7 +313,7 @@ export function registerMediaServerRoutes(app: express.Application, deps: MediaS
   }, 200, true));
   app.get("/api/remote-libraries/:id/preview", handle(async (req, authority, signal) => {
     const parentId = previewParent(req);
-    return mediaServers.previewDirectory(authority, req.params.id, parentId, signal);
+    return mediaServers.previewDirectory(authority, req.params.id, parentId, signal, req.query.artwork === "children");
   }, 200, true));
   app.get("/api/remote-libraries/:id/items/:itemId/episodes", handle(async (req, authority, signal) => {
     assertNoBody(req);

@@ -167,7 +167,7 @@ test("the asset transport reuses the DNS, rebinding and redirect guard with no t
   const query = new URL(seen.calls[0].url).searchParams;
   assert.deepEqual([...query.keys()].sort(), ["Format", "MaxWidth", "Quality"]);
   assert.equal(query.get("Format"), "Jpg");
-  assert.equal(query.get("MaxWidth"), "640");
+  assert.equal(query.get("MaxWidth"), "1920");
   assert.equal(query.get("Quality"), "85");
   assert.equal(seen.calls[0].url.includes("secret-token"), false);
   await transport.close();
@@ -361,4 +361,18 @@ test("successful assets return the exact bytes with their canonical type", async
     assert.deepEqual(asset.bytes, SRT_BYTES, type);
     await transport.close();
   }
+});
+
+
+test("detail backdrops use 1920 pixels while list posters stay at 640", async () => {
+  const { calls, fetch } = recording(() => body(new Uint8Array([...JPEG, 0, 0, 0, 0, 0, 0, 0, 0]), { "content-type": "image/jpeg" }));
+  const transport = transportWith(fetch);
+  try {
+    const backdrop = await transport.requestArtwork({ itemId: "item-1", imageType: "Backdrop" }, "tok");
+    await backdrop.arrayBuffer();
+    const poster = await transport.requestArtwork({ itemId: "item-1", imageType: "Primary" }, "tok");
+    await poster.arrayBuffer();
+    await transport.requestAsset({ kind: "artwork", itemId: "item-1", imageType: "Backdrop" }, "tok");
+    assert.deepEqual(calls.map((call) => new URL(call.url).searchParams.get("MaxWidth")), ["1920", "640", "1920"]);
+  } finally { transport.close(); }
 });

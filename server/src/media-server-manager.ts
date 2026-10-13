@@ -1151,7 +1151,7 @@ export class MediaServerManager {
   }
 
   /** Own artwork wins; otherwise one bounded child page supplies the mosaic. */
-  async previewDirectory(authority: MediaServerAuthority, libraryId: unknown, parentId?: unknown, signal?: AbortSignal): Promise<{ posters: string[] }> {
+  async previewDirectory(authority: MediaServerAuthority, libraryId: unknown, parentId?: unknown, signal?: AbortSignal, preferChildren = false): Promise<{ posters: string[] }> {
     const request = this.requestSignal(signal);
     const user = this.currentActor(authority, request);
     const library = this.requireVisibleLibrary(user, libraryId);
@@ -1170,7 +1170,7 @@ export class MediaServerManager {
       tag = parent.primaryImageTag;
     }
     this.recheckContent(authority, request, library.id, connection);
-    if (tag !== undefined) return { posters: [remoteArtworkPath(library.id, root, "Primary", tag)] };
+    if (tag !== undefined && (!preferChildren || requestedParent !== undefined)) return { posters: [remoteArtworkPath(library.id, root, "Primary", tag)] };
     const page = await this.upstream(connection, request, () => session.provider.pageDirectory(session.token, connection.accountId, root, {
       mode: "folders", limit: 12,
     }, request));

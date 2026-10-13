@@ -188,6 +188,28 @@ history merging (remote vs filesystem vs addon) is deferred. Continue watching
 must at least avoid duplicate cards for the same remote item/episode opened
 through different entry points.
 
+## Library detail presentation
+
+Local and remote libraries share title chips, source selection and detail layout.
+Library details show the full synopsis and a compact playback/action row. Technical
+filenames and version sizes belong in the source picker, rather than under Play.
+Clicking the Library navigation entry starts at the library root; Back within a
+library restores its previous listing and focus.
+
+Metadata enrichment runs only for an explicitly opened detail with an exact
+catalogue identity. Existing metadata, trailer and external-link endpoints supply
+optional catalogue artwork and links. Episode enrichment uses the series identity
+for artwork and links while retaining the episode's own synopsis. Missing or failed
+metadata never prevents playback, and a poster is never enlarged into a backdrop.
+Remote Backdrop requests use a maximum width of 1920 pixels; Primary posters remain
+at 640 pixels. Both retain the existing image byte cap and artwork request pool.
+
+Root mosaics use the local library's poster fan layout. An explicit
+`artwork=children` preview reads one page of at most twelve immediate children and
+returns at most four posters; it never walks nested directories. Ordinary folder
+previews retain their own-poster-first behavior, seasons never preview children,
+and disabling mosaics makes no preview request.
+
 ## Proxy and playback
 
 Extend the existing opaque `sourceId`/media-resource ownership model with remote

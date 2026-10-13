@@ -2200,6 +2200,24 @@ test("previewDirectory prefers owned posters and bounds fallback to one child pa
   });
 });
 
+test("root child mosaics read one bounded page and never walk folders", async () => {
+  await withHarness(async (harness) => {
+    const connection = await connect(harness);
+    harness.server.libraries.push({ id: "music", name: "Music", type: "mixed", primaryImageTag: "root-tag" });
+    const library = await harness.manager.attachLibrary(harness.admin, connection.id, { remoteId: "music" });
+    harness.server.directories["music"] = Array.from({ length: 15 }, (_, i) => ({ ...folder(`child-${i}`), hasPrimaryImage: true, primaryImageTag: `tag-${i}` }));
+    const preview = await harness.manager.previewDirectory(harness.admin, library.id, undefined, undefined, true);
+    assert.equal(preview.posters.length, 4);
+    assert.equal(harness.server.directoryCalls.length, 1);
+    assert.equal(harness.server.directoryCalls[0]!.options.limit, 12);
+    assert.ok(preview.posters.every((url) => url.includes("/items/child-")));
+    const off = await directoryLibrary(harness, "music-off", "mixed", { mosaic: false });
+    const calls = harness.server.calls.length;
+    assert.deepEqual(await harness.manager.previewDirectory(harness.admin, off.id, undefined, undefined, true), { posters: [] });
+    assert.equal(harness.server.calls.length, calls);
+  });
+});
+
 test("previewDirectory refuses an aborted or revoked request", async () => {
   await withHarness(async (harness) => {
     const library = await directoryLibrary(harness, "music");

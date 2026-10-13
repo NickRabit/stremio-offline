@@ -295,6 +295,11 @@ test("a granted member browses and previews natively, and only GET reaches those
     assert.equal(preview.status, 200);
     assert.deepEqual(await preview.json(), { posters: [`/api/remote-libraries/${harness.libraryId}/items/lib-1/artwork/Primary?tag=root-tag`] });
 
+    const children = await api(harness.base, `/api/remote-libraries/${harness.libraryId}/preview?artwork=children`, { user: BOB });
+    assert.equal(children.status, 200);
+    assert.deepEqual(await children.json(), { posters: [] });
+    assert.equal((await api(harness.base, `/api/remote-libraries/${harness.libraryId}/preview?artwork=recursive`, { user: BOB })).status, 400);
+
     // A write at the same path is not on the member allow-list: the role gate refuses it.
     assert.equal((await api(harness.base, `/api/remote-libraries/${harness.libraryId}/browse`, { method: "POST", user: BOB, body: {} })).status, 403);
     assert.equal((await api(harness.base, `/api/remote-libraries/${harness.libraryId}/preview`, { method: "PATCH", user: BOB, body: {} })).status, 403);
