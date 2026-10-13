@@ -204,6 +204,14 @@ authentication failure indefinitely or use another account as fallback. Probe
 Range behavior through the same authorized transport. If seeking cannot be
 supported safely by our pipeline, report unsupported playback.
 
+A Range of an original that was proved for this actor, library, connection
+generation, secret and media source within the last playback-guard interval
+(30 seconds) repeats the local grant and session checks and then transfers
+bytes. It does not repeat item detail, ancestors or PlaybackInfo. The periodic
+playback guard still revalidates the original upstream on every cycle, and a
+failed revalidation drops that proof. A membership proof never authorizes
+playback.
+
 The proxy forwards required authentication server-side, supports HEAD/Range and
 206 responses, and preserves cancellation/backpressure. Our playback planner
 uses real client capabilities: compatible files pass through; supported video

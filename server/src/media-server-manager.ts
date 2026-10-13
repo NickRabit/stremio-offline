@@ -150,6 +150,10 @@ const SESSION_FACTS_TTL_MS = 30_000;
 const PROOF_TTL_MS = 5 * 60_000;
 /** The most membership proofs held at once; the oldest is evicted past this bound. */
 const PROOF_MAX = 8192;
+/** How long one proved original stays usable once it was proved: one playback-guard interval. */
+const ORIGINAL_PROOF_TTL_MS = 30_000;
+/** The most original proofs held at once; the oldest is evicted past this bound. */
+const ORIGINAL_PROOF_MAX = 256;
 const EXPORT_MAX_BYTES = MEDIA_SERVER_CONFIGURATION_MAX_BYTES;
 const CURSOR_MAX = 8192;
 const CURSOR_JSON_MAX = 6144;
@@ -404,6 +408,22 @@ interface MembershipProof {
   at: number;
 }
 
+/** One proved original: the item detail, ancestor chain and named version were shown to hold for
+ *  one acting account under one connection generation and secret. Cached for one playback-guard
+ *  interval so a further byte range of the same source skips the preflight and repeats only the
+ *  local grant and the live session. It is not a membership proof and grants no playback
+ *  permission on its own; a revalidation drops it when the source moves. */
+interface OriginalProof {
+  actorId: string;
+  libraryId: string;
+  connectionId: string;
+  generation: number;
+  secretRef: string | undefined;
+  itemId: string;
+  mediaSourceId: string;
+  at: number;
+}
+
 /** One operation waiting for its turn under a connection's start pacing. `settled` separates an
  *  entry still in the queue from one an admission or an abort has already resolved, so neither
  *  the abort listener nor a later pump acts twice on the same waiter. */
@@ -491,6 +511,10 @@ export class MediaServerManager {
    *  connection generation/secret, they never grant playback and are dropped with an
    *  invalidated connection. */
   private readonly proofs = new Map<string, MembershipProof>();
+  /** Bounded, time-limited original proofs. Keyed like the membership proofs plus the media
+   *  source, they never substitute for the local grant and are dropped with an invalidated
+   *  connection. */
+  private readonly originalProofs = new Map<string, OriginalProof>();
   private readonly configuration: MediaServerConfiguration;
   private readonly index: MediaServerIndex;
   private readonly clock: () => number;
@@ -571,6 +595,7 @@ export class MediaServerManager {
     this.runtimes.clear();
     this.statuses.clear();
     this.proofs.clear();
+    this.originalProofs.clear();
     const logins = [...this.loginTransports];
     this.loginTransports.clear();
     await Promise.allSettled([...transports, ...logins].map((transport) => transport.close()));
@@ -1333,30 +1358,50 @@ export class MediaServerManager {
 
   /** Proves a sealed reference still names a live, permitted original: the actor owns it, the
    *  records still match, and the named version is still an ordinary file. Reads no bytes and
-   *  writes no upstream history. */
+   *  writes no upstream history. It always contacts the provider, and a success stores or
+   *  refreshes the original proof a later open reuses; a failure past the local check drops it. */
   async revalidateOriginal(authority: MediaServerAuthority, ref: RemoteContentRef, signal?: AbortSignal): Promise<void> {
     const request = this.requestSignal(signal);
     if (!isRemoteContentRef(ref)) throw notFound("That media-server item does not exist.");
     if (ref.subtitleIndex !== undefined) throw notFound("That media-server item does not exist.");
     const { library, connection } = this.recheckRef(authority, request, ref);
-    const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId }, request);
-    this.recheckRef(authority, request, ref);
-    const item = await this.upstream(connection, request, () => session.provider.detail(session.token, connection.accountId, ref.itemId, request));
-    this.recheckRef(authority, request, ref);
-    if (item.id !== ref.itemId) throw new MediaServerError("invalid-response", "The media-server item identity changed.");
-    const ancestors = await this.upstream(connection, request, () => session.provider.ancestors(session.token, connection.accountId, item.id, request));
-    if (!ancestors.includes(library.remoteId)) throw notFound("That item is not in this library.");
-    this.recheckRef(authority, request, ref);
-    if (item.type !== "movie" && item.type !== "episode") throw invalid("That item has no playable media.");
-    const versions = await this.upstream(connection, request, () => session.provider.versions(session.token, connection.accountId, item.id, request));
-    this.recheckRef(authority, request, ref);
-    if (!versions.some((version) => version.id === ref.mediaSourceId)) throw notFound("That media-server source is no longer available.");
+    const user = this.currentActor(authority, request);
+    try {
+      const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId }, request);
+      this.recheckRef(authority, request, ref);
+      const item = await this.upstream(connection, request, () => session.provider.detail(session.token, connection.accountId, ref.itemId, request));
+      this.recheckRef(authority, request, ref);
+      if (item.id !== ref.itemId) throw new MediaServerError("invalid-response", "The media-server item identity changed.");
+      const ancestors = await this.upstream(connection, request, () => session.provider.ancestors(session.token, connection.accountId, item.id, request));
+      if (!ancestors.includes(library.remoteId)) throw notFound("That item is not in this library.");
+      this.recheckRef(authority, request, ref);
+      if (item.type !== "movie" && item.type !== "episode") throw invalid("That item has no playable media.");
+      const versions = await this.upstream(connection, request, () => session.provider.versions(session.token, connection.accountId, item.id, request));
+      this.recheckRef(authority, request, ref);
+      if (!versions.some((version) => version.id === ref.mediaSourceId)) throw notFound("That media-server source is no longer available.");
+    } catch (error) {
+      this.deleteOriginalProof(user.id, library.id, connection.id, connection.generation, connection.secretRef, ref.itemId, ref.mediaSourceId);
+      throw error;
+    }
+    this.putOriginalProof({
+      actorId: user.id,
+      libraryId: library.id,
+      connectionId: connection.id,
+      generation: connection.generation,
+      secretRef: connection.secretRef,
+      itemId: ref.itemId,
+      mediaSourceId: ref.mediaSourceId,
+      at: this.clock(),
+    });
   }
 
-  /** Opens one original file over the binary transport. The full preflight runs first, the
-   *  token is read only for this operation, and the result is re-checked before any body
-   *  leaves the manager; a stale or denied result has its body cancelled. The request shares
-   *  the manager lifetime, so a shutdown or a connection change aborts it. */
+  /** Opens one original file over the binary transport. The local grant and the live session are
+   *  repeated on every open; the item detail, ancestor chain and named version are skipped when
+   *  the same source was proved within the last playback-guard interval. The token is read only
+   *  for this operation, the byte read runs on the transport's own pool, and the result is
+   *  re-checked before any body leaves the manager; a stale or denied result has its body
+   *  cancelled. The request shares the manager lifetime, so a shutdown or a connection change
+   *  aborts it. */
   async openOriginal(authority: MediaServerAuthority, ref: RemoteContentRef, args: { method: "GET" | "HEAD"; range?: string }, signal?: AbortSignal): Promise<Response> {
     const request = this.requestSignal(signal);
     if (!isRemoteContentRef(ref)) throw notFound("That media-server item does not exist.");
@@ -1366,16 +1411,29 @@ export class MediaServerManager {
     const { library, connection } = this.recheckRef(authority, request, ref);
     const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId }, request);
     this.recheckRef(authority, request, ref);
-    const item = await this.upstream(connection, request, () => session.provider.detail(session.token, connection.accountId, ref.itemId, request));
-    this.recheckRef(authority, request, ref);
-    if (item.id !== ref.itemId) throw new MediaServerError("invalid-response", "The media-server item identity changed.");
-    const ancestors = await this.upstream(connection, request, () => session.provider.ancestors(session.token, connection.accountId, item.id, request));
-    if (!ancestors.includes(library.remoteId)) throw notFound("That item is not in this library.");
-    this.recheckRef(authority, request, ref);
-    const versions = await this.upstream(connection, request, () => session.provider.versions(session.token, connection.accountId, item.id, request));
-    this.recheckRef(authority, request, ref);
-    if (!versions.some((version) => version.id === ref.mediaSourceId)) throw notFound("That media-server source is no longer available.");
-    const response = await this.upstream(connection, request, () => session.transport.requestOriginal(
+    const user = this.currentActor(authority, request);
+    if (!this.originalProofFor(user, library, connection, ref.itemId, ref.mediaSourceId)) {
+      const item = await this.upstream(connection, request, () => session.provider.detail(session.token, connection.accountId, ref.itemId, request));
+      this.recheckRef(authority, request, ref);
+      if (item.id !== ref.itemId) throw new MediaServerError("invalid-response", "The media-server item identity changed.");
+      const ancestors = await this.upstream(connection, request, () => session.provider.ancestors(session.token, connection.accountId, item.id, request));
+      if (!ancestors.includes(library.remoteId)) throw notFound("That item is not in this library.");
+      this.recheckRef(authority, request, ref);
+      const versions = await this.upstream(connection, request, () => session.provider.versions(session.token, connection.accountId, item.id, request));
+      this.recheckRef(authority, request, ref);
+      if (!versions.some((version) => version.id === ref.mediaSourceId)) throw notFound("That media-server source is no longer available.");
+      this.putOriginalProof({
+        actorId: user.id,
+        libraryId: library.id,
+        connectionId: connection.id,
+        generation: connection.generation,
+        secretRef: connection.secretRef,
+        itemId: ref.itemId,
+        mediaSourceId: ref.mediaSourceId,
+        at: this.clock(),
+      });
+    }
+    const response = await this.originalUpstream(connection, request, () => session.transport.requestOriginal(
       { itemId: ref.itemId, mediaSourceId: ref.mediaSourceId, method: args.method, ...(args.range === undefined ? {} : { range: args.range }) },
       session.token,
       request,
@@ -1478,6 +1536,38 @@ export class MediaServerManager {
     }
   }
 
+  /** The original-proof key: the membership binding plus the media source, so a proof cannot
+   *  authorize another account, library, generation or source. */
+  private originalProofKey(actorId: string, libraryId: string, connectionId: string, generation: number, secretRef: string | undefined, itemId: string, mediaSourceId: string): string {
+    return [actorId, libraryId, connectionId, String(generation), secretRef ?? "", itemId, mediaSourceId].join("\u0000");
+  }
+
+  private originalProofFor(user: UserRecord, library: RemoteLibraryRecord, connection: MediaConnectionRecord, itemId: string, mediaSourceId: string): OriginalProof | undefined {
+    const key = this.originalProofKey(user.id, library.id, connection.id, connection.generation, connection.secretRef, itemId, mediaSourceId);
+    const proof = this.originalProofs.get(key);
+    if (!proof) return undefined;
+    if (this.clock() - proof.at > ORIGINAL_PROOF_TTL_MS) {
+      this.originalProofs.delete(key);
+      return undefined;
+    }
+    return proof;
+  }
+
+  private putOriginalProof(proof: OriginalProof): void {
+    const key = this.originalProofKey(proof.actorId, proof.libraryId, proof.connectionId, proof.generation, proof.secretRef, proof.itemId, proof.mediaSourceId);
+    this.originalProofs.delete(key);
+    this.originalProofs.set(key, proof);
+    while (this.originalProofs.size > ORIGINAL_PROOF_MAX) {
+      const oldest = this.originalProofs.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.originalProofs.delete(oldest);
+    }
+  }
+
+  private deleteOriginalProof(actorId: string, libraryId: string, connectionId: string, generation: number, secretRef: string | undefined, itemId: string, mediaSourceId: string): void {
+    this.originalProofs.delete(this.originalProofKey(actorId, libraryId, connectionId, generation, secretRef, itemId, mediaSourceId));
+  }
+
   /** One proved member of a granted library, as a proof record. */
   private proofOf(user: UserRecord, library: RemoteLibraryRecord, connection: MediaConnectionRecord, item: ProviderItem): MembershipProof {
     return {
@@ -1499,6 +1589,9 @@ export class MediaServerManager {
   private dropProofs(connectionId: string): void {
     for (const [key, proof] of [...this.proofs]) {
       if (proof.connectionId === connectionId) this.proofs.delete(key);
+    }
+    for (const [key, proof] of [...this.originalProofs]) {
+      if (proof.connectionId === connectionId) this.originalProofs.delete(key);
     }
   }
 
@@ -1542,6 +1635,19 @@ export class MediaServerManager {
    *  bounded image pool, so an image burst cannot delay a browse or the playback guard. Only a
    *  401 is mapped the same way, as a reauthentication that drops the runtime and its caches. */
   private async imageUpstream<T>(connection: MediaConnectionRecord, signal: AbortSignal, work: () => Promise<T>): Promise<T> {
+    this.checkLive(signal);
+    try {
+      return await work();
+    } catch (error) {
+      if (error instanceof MediaServerError && error.code === "authentication-required") this.markReauthentication(connection);
+      throw error;
+    }
+  }
+
+  /** An original byte read never enters the metadata network lane: the transport owns its own
+   *  bounded original pool, so a range burst cannot delay a browse or the playback guard. Only a
+   *  401 is mapped the same way, as a reauthentication that drops the runtime and its caches. */
+  private async originalUpstream<T>(connection: MediaConnectionRecord, signal: AbortSignal, work: () => Promise<T>): Promise<T> {
     this.checkLive(signal);
     try {
       return await work();

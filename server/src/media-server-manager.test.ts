@@ -1247,6 +1247,149 @@ test("a 401 from the original transport invalidates the connection and notifies 
   });
 });
 
+test("original proof: a second open inside the window does not repeat the preflight", async () => {
+  await withHarness(async (harness) => {
+    const { connection, library } = await seedPlayable(harness);
+    harness.server.original = { status: 206 };
+    const ref = refFor(harness, connection.id, library.id, "m1", "v1");
+    await harness.manager.openOriginal(harness.admin, ref, { method: "GET", range: "bytes=0-1" });
+    await harness.manager.openOriginal(harness.admin, ref, { method: "GET", range: "bytes=0-1" });
+    assert.equal(harness.server.calls.filter((call) => call === "detail").length, 1);
+    assert.equal(harness.server.calls.filter((call) => call === "ancestors").length, 1);
+    assert.equal(harness.server.calls.filter((call) => call === "versions").length, 1);
+    assert.equal(harness.server.originalCalls, 2);
+  });
+});
+
+test("original proof: a cached open does not extend the window", async () => {
+  let now = 1_800_000_000_000;
+  await withHarness(async (harness) => {
+    const { connection, library } = await seedPlayable(harness);
+    harness.server.original = { status: 206 };
+    const ref = refFor(harness, connection.id, library.id, "m1", "v1");
+    await harness.manager.openOriginal(harness.admin, ref, { method: "GET", range: "bytes=0-1" });
+    now += 20_000;
+    await harness.manager.openOriginal(harness.admin, ref, { method: "GET", range: "bytes=0-1" });
+    assert.equal(harness.server.calls.filter((call) => call === "detail").length, 1, "a cached open inside the window repeats no preflight");
+    assert.equal(harness.server.calls.filter((call) => call === "ancestors").length, 1);
+    assert.equal(harness.server.calls.filter((call) => call === "versions").length, 1);
+    assert.equal(harness.server.originalCalls, 2);
+    now += 10_001;
+    await harness.manager.openOriginal(harness.admin, ref, { method: "GET", range: "bytes=0-1" });
+    assert.equal(harness.server.calls.filter((call) => call === "detail").length, 2, "past thirty seconds the preflight is proved again");
+    assert.equal(harness.server.calls.filter((call) => call === "ancestors").length, 2);
+    assert.equal(harness.server.calls.filter((call) => call === "versions").length, 2);
+    assert.equal(harness.server.originalCalls, 3);
+  }, { clock: () => now });
+});
+
+test("original proof: a successful revalidation lets the next open skip the preflight", async () => {
+  await withHarness(async (harness) => {
+    const { connection, library } = await seedPlayable(harness);
+    harness.server.original = { status: 206 };
+    const ref = refFor(harness, connection.id, library.id, "m1", "v1");
+    await harness.manager.revalidateOriginal(harness.admin, ref);
+    await harness.manager.openOriginal(harness.admin, ref, { method: "GET", range: "bytes=0-1" });
+    assert.equal(harness.server.calls.filter((call) => call === "detail").length, 1);
+    assert.equal(harness.server.calls.filter((call) => call === "ancestors").length, 1);
+    assert.equal(harness.server.calls.filter((call) => call === "versions").length, 1);
+    assert.equal(harness.server.originalCalls, 1);
+  });
+});
+
+test("original proof: a failed revalidation drops the proof", async () => {
+  await withHarness(async (harness) => {
+    const { connection, library } = await seedPlayable(harness);
+    harness.server.original = { status: 206 };
+    const ref = refFor(harness, connection.id, library.id, "m1", "v1");
+    await harness.manager.revalidateOriginal(harness.admin, ref);
+    harness.server.versionsOf["m1"] = [{ id: "v2" }];
+    await assert.rejects(harness.manager.revalidateOriginal(harness.admin, ref), { code: "not-found" });
+    await assert.rejects(harness.manager.openOriginal(harness.admin, ref, { method: "GET", range: "bytes=0-1" }), { code: "not-found" });
+    assert.equal(harness.server.calls.filter((call) => call === "detail").length, 3);
+    assert.equal(harness.server.calls.filter((call) => call === "ancestors").length, 3);
+    assert.equal(harness.server.calls.filter((call) => call === "versions").length, 3);
+    assert.equal(harness.server.originalCalls, 0, "the dropped proof never reached the transport");
+  });
+});
+
+test("original proof: revalidation is never served from the proof", async () => {
+  await withHarness(async (harness) => {
+    const { connection, library } = await seedPlayable(harness);
+    const ref = refFor(harness, connection.id, library.id, "m1", "v1");
+    await harness.manager.revalidateOriginal(harness.admin, ref);
+    await harness.manager.revalidateOriginal(harness.admin, ref);
+    assert.equal(harness.server.calls.filter((call) => call === "detail").length, 2);
+    assert.equal(harness.server.calls.filter((call) => call === "ancestors").length, 2);
+    assert.equal(harness.server.calls.filter((call) => call === "versions").length, 2);
+    assert.equal(harness.server.originalCalls, 0);
+  });
+});
+
+test("original proof: a disabled connection is not served from a leftover proof", async () => {
+  await withHarness(async (harness) => {
+    const { connection, library } = await seedPlayable(harness);
+    harness.server.original = { status: 206 };
+    const ref = refFor(harness, connection.id, library.id, "m1", "v1");
+    await harness.manager.openOriginal(harness.admin, ref, { method: "GET", range: "bytes=0-1" });
+    assert.equal(harness.server.originalCalls, 1);
+    await harness.manager.patchConnection(harness.admin, connection.id, { enabled: false });
+    await assert.rejects(harness.manager.openOriginal(harness.admin, ref, { method: "GET", range: "bytes=0-1" }));
+    assert.equal(harness.server.originalCalls, 1, "the disabled connection never reached the transport");
+  });
+});
+
+test("original proof: another media source is its own preflight", async () => {
+  await withHarness(async (harness) => {
+    const { connection, library } = await seedPlayable(harness);
+    harness.server.original = { status: 206 };
+    harness.server.versionsOf["m1"] = [{ id: "v1" }, { id: "v2" }];
+    const first = refFor(harness, connection.id, library.id, "m1", "v1");
+    const second = refFor(harness, connection.id, library.id, "m1", "v2");
+    await harness.manager.openOriginal(harness.admin, first, { method: "GET", range: "bytes=0-1" });
+    await harness.manager.openOriginal(harness.admin, second, { method: "GET", range: "bytes=0-1" });
+    assert.equal(harness.server.calls.filter((call) => call === "detail").length, 2);
+    assert.equal(harness.server.calls.filter((call) => call === "ancestors").length, 2);
+    assert.equal(harness.server.calls.filter((call) => call === "versions").length, 2);
+    assert.equal(harness.server.originalCalls, 2);
+  });
+});
+
+test("original proof: a membership proof is not a playback proof", async () => {
+  await withHarness(async (harness) => {
+    const { connection, library } = await seedPlayable(harness);
+    harness.server.detailOf["m1"] = artMovie("m1");
+    harness.server.artwork = { bytes: new Uint8Array([1, 2, 3]), contentType: "image/png" };
+    harness.server.original = { status: 206 };
+    const artwork = await harness.manager.readArtwork(harness.admin, library.id, "m1", "Primary");
+    await artwork.arrayBuffer();
+    const detailAfterArtwork = harness.server.calls.filter((call) => call === "detail").length;
+    const ancestorsAfterArtwork = harness.server.calls.filter((call) => call === "ancestors").length;
+    const ref = refFor(harness, connection.id, library.id, "m1", "v1");
+    await harness.manager.openOriginal(harness.admin, ref, { method: "GET", range: "bytes=0-1" });
+    assert.equal(harness.server.calls.filter((call) => call === "detail").length, detailAfterArtwork + 1, "the open proves the item even though a membership proof exists");
+    assert.equal(harness.server.calls.filter((call) => call === "ancestors").length, ancestorsAfterArtwork + 1);
+    assert.equal(harness.server.calls.filter((call) => call === "versions").length, 1);
+    assert.equal(harness.server.originalCalls, 1);
+  });
+});
+
+test("original proof: a 401 on the byte read drops the proof", async () => {
+  await withHarness(async (harness) => {
+    const { connection, library } = await seedPlayable(harness);
+    harness.server.original = { error: new MediaServerError("authentication-required", "reauthentication required") };
+    const ref = refFor(harness, connection.id, library.id, "m1", "v1");
+    await assert.rejects(harness.manager.openOriginal(harness.admin, ref, { method: "GET", range: "bytes=0-1" }), { code: "authentication-required" });
+    assert.equal((await harness.manager.listConnections(harness.admin)).connections[0]!.status, "reauthentication-required");
+    harness.server.original = { status: 206 };
+    await harness.manager.openOriginal(harness.admin, ref, { method: "GET", range: "bytes=0-1" });
+    assert.equal(harness.server.calls.filter((call) => call === "detail").length, 2, "the second open repeats the preflight");
+    assert.equal(harness.server.calls.filter((call) => call === "ancestors").length, 2);
+    assert.equal(harness.server.calls.filter((call) => call === "versions").length, 2);
+    assert.equal(harness.server.originalCalls, 2, "the stub increments before it throws the configured error");
+  });
+});
+
 test("the content invalidator is registered once and awaited for scoped writes", async () => {
   await withHarness(async (harness) => {
     const { connection, library } = await seedPlayable(harness);
