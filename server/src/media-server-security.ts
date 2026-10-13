@@ -110,7 +110,7 @@ const CLIENT = "Stremio Offline";
 const DEVICE = "Server";
 const DEVICE_ID = "stremio-offline-server";
 const CLIENT_VERSION = "1.0.0";
-const ITEM_TYPES = new Set(["Movie", "Series", "Season", "Episode"]);
+const ITEM_TYPES = new Set(["Movie", "Series", "Season", "Episode", "MusicVideo"]);
 
 const invalid = (message: string): MediaServerError => new MediaServerError("invalid-input", message);
 const lookupFailure = (): MediaServerError => new MediaServerError("unsafe-address", "The media-server name did not resolve.");

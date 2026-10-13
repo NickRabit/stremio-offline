@@ -391,14 +391,14 @@ test("the PATH logic leaves the backend variables as they were", () => {
   assert.equal(env.PORT, "8090");
   assert.equal(env.DATA_DIR, path.join("/data", INSTANCE_DIRECTORY));
   assert.equal(env.DOWNLOAD_DIR, path.join("/data", "downloads"));
-  assert.equal(env.MEDIA_SERVER_KEY_FILE, path.join("/data", "media-server.key"));
+  assert.equal(env.MEDIA_SERVER_KEY_FILE, path.posix.join("/data", "media-server.key"));
 });
 
 test("the media-server key path is defaulted, never overwritten by a blank, and an override is kept", () => {
   assert.equal(localBackendEnv({}, "/data", 8090, "linux", () => true).MEDIA_SERVER_KEY_FILE,
-    path.join("/data", "media-server.key"));
+    path.posix.join("/data", "media-server.key"));
   assert.equal(localBackendEnv({ MEDIA_SERVER_KEY_FILE: "   " }, "/data", 8090, "linux", () => true).MEDIA_SERVER_KEY_FILE,
-    path.join("/data", "media-server.key"));
+    path.posix.join("/data", "media-server.key"));
   assert.equal(localBackendEnv({ MEDIA_SERVER_KEY_FILE: "/run/secrets/key" }, "/data", 8090, "linux", () => true).MEDIA_SERVER_KEY_FILE,
     "/run/secrets/key");
 });

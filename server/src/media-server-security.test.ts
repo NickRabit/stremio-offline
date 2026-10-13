@@ -188,10 +188,10 @@ test("items carries only the fixed allow-listed query and drops raw path fields"
   try {
     fixture = await startServer((_req, res) => json(res, { Items: [], TotalRecordCount: 0 }));
     const transport = open(fixture.origin);
-    await transport.requestJson("items", { userId: "user-1", parentId: "lib-1", includeItemTypes: "Movie,Series,Season,Episode", startIndex: 0, limit: 25, searchTerm: "a b" }, "tok");
+    await transport.requestJson("items", { userId: "user-1", parentId: "lib-1", includeItemTypes: "Movie,Series,Season,Episode,MusicVideo", startIndex: 0, limit: 25, searchTerm: "a b" }, "tok");
     const query = new URLSearchParams(fixture.requests[0].url.split("?")[1]);
     assert.equal(query.get("Recursive"), "true");
-    assert.equal(query.get("IncludeItemTypes"), "Movie,Series,Season,Episode");
+    assert.equal(query.get("IncludeItemTypes"), "Movie,Series,Season,Episode,MusicVideo");
     assert.equal(query.get("Fields"), "ProviderIds,ParentId,SeriesInfo");
     assert.equal(query.get("EnableUserData"), "false");
     assert.equal(query.get("ParentId"), "lib-1");

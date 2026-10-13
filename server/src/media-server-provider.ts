@@ -116,6 +116,7 @@ const requiredStringArray = (value: unknown, field: string): string[] => {
 
 const ITEM_TYPES = new Map<string, ProviderItemType>([
   ["Movie", "movie"],
+  ["MusicVideo", "movie"],
   ["Series", "series"],
   ["Season", "season"],
   ["Episode", "episode"],
@@ -146,7 +147,7 @@ function providerItem(raw: unknown): ProviderItem {
     id: requiredString(item.Id, MEDIA_SERVER_LIMITS.upstreamId, "item id"),
     name: requiredString(item.Name, MEDIA_SERVER_LIMITS.name, "item name"),
     type,
-    providerIds: readProviderIds(item.ProviderIds),
+    providerIds: item.Type === "MusicVideo" ? {} : readProviderIds(item.ProviderIds),
   };
   const parentId = optionalString(item.ParentId, MEDIA_SERVER_LIMITS.upstreamId);
   if (parentId !== undefined) result.parentId = parentId;
@@ -192,12 +193,12 @@ function readExternalSubtitles(source: Record<string, unknown>): Array<{ index: 
   return subtitles;
 }
 
-/** The measured mapping: `movies`/`tvshows` map to the two kinds, a CollectionFolder with no
- *  CollectionType is mixed, and every other collection is left out. */
+/** Standalone music videos use the mixed library layout and the movie playback flow. */
 function libraryType(item: Record<string, unknown>): RemoteLibraryType | undefined {
   if (item.Type !== "CollectionFolder") return undefined;
   const collectionType = item.CollectionType;
   if (collectionType === null || collectionType === undefined || collectionType === "") return "mixed";
+  if (collectionType === "musicvideos") return "mixed";
   if (collectionType === "movies") return "movie";
   if (collectionType === "tvshows") return "series";
   return undefined;
@@ -387,7 +388,7 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
     const args = {
       userId: accountId,
       parentId: libraryId,
-      includeItemTypes: "Movie,Series,Season,Episode",
+      includeItemTypes: "Movie,Series,Season,Episode,MusicVideo",
       startIndex: offset,
       limit,
       ...(search !== undefined ? { searchTerm: search } : {}),

@@ -355,3 +355,5 @@ this stage does not claim exhaustive remote parental-policy support.
 - **The vault fails closed.** With no key, or with an unreadable one, every
   remote read refuses with `err.mediaServerKey`; the app still starts and the
   filesystem half keeps working.
+
+Music-video libraries are available in the mixed-library layout. Their clips use the standalone video playback controls and local history; their provider IDs do not participate in catalogue movie matching. Audio-only music libraries remain excluded.

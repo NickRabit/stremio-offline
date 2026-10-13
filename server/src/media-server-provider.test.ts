@@ -110,12 +110,14 @@ test("listLibraries maps collection folders and drops everything else", async ()
       { Type: "CollectionFolder", CollectionType: "tvshows", Id: "l3", Name: "Shows" },
       { Type: "CollectionFolder", CollectionType: "music", Id: "l4", Name: "Music" },
       { Type: "Folder", CollectionType: null, Id: "l5", Name: "Plain folder" },
+      { Type: "CollectionFolder", CollectionType: "musicvideos", Id: "l6", Name: "Music videos" },
     ],
   }));
   assert.deepEqual(await provider.listLibraries("tok", "user-1"), [
     { id: "l1", name: "Movies", type: "movie" },
     { id: "l2", name: "Mixed", type: "mixed" },
     { id: "l3", name: "Shows", type: "series" },
+    { id: "l6", name: "Music videos", type: "mixed" },
   ]);
 
   const notArray = fixture(() => ({ Items: {} }));
@@ -136,7 +138,7 @@ test("pageItems builds a bounded cursor and rejects mismatch, bad totals and ove
   const first = await provider.pageItems("tok", "user-1", "lib-1", { limit: 2 });
   assert.equal(first.total, 3);
   assert.equal(first.items.length, 2);
-  assert.equal(lastArgs.includeItemTypes, "Movie,Series,Season,Episode");
+  assert.equal(lastArgs.includeItemTypes, "Movie,Series,Season,Episode,MusicVideo");
   assert.equal(lastArgs.startIndex, 0);
   assert.ok(first.cursor);
   const second = await provider.pageItems("tok", "user-1", "lib-1", { limit: 2, cursor: first.cursor });
@@ -384,4 +386,21 @@ test("an episode keeps its IndexNumberEnd as a range and refuses a malformed one
   assert.deepEqual(await provider.detail("tok", "user-1", "e1"), { id: "e1", name: "Ep", type: "episode", episode: 2, episodeEnd: 3, providerIds: {} });
   const malformed = fixture(() => ({ Id: "e1", Name: "Ep", Type: "Episode", IndexNumber: 2, IndexNumberEnd: "3" }));
   await assert.rejects(malformed.provider.detail("tok", "user-1", "e1"), { code: "invalid-response" });
+});
+
+
+test("music videos browse and open as standalone media without catalogue movie matches", async () => {
+  const item = { Id: "clip-1", Name: "Clip", Type: "MusicVideo", ParentId: "music-library", RunTimeTicks: 1200000000, ProviderIds: { Imdb: "tt0133093" } };
+  const { provider } = fixture((operation, args) => {
+    if (operation === "items") {
+      assert.ok(String(args.includeItemTypes).split(",").includes("MusicVideo"));
+      return { Items: [item], TotalRecordCount: 1 };
+    }
+    return item;
+  });
+  const page = await provider.pageItems("tok", "user-1", "music-library");
+  assert.equal(page.items[0].type, "movie");
+  assert.equal(page.items[0].durationTicks, 1200000000);
+  assert.deepEqual(page.items[0].providerIds, {}, "music video IDs must not match a catalogue movie");
+  assert.deepEqual(await provider.detail("tok", "user-1", "clip-1"), page.items[0]);
 });
