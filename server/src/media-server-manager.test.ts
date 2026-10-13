@@ -1594,6 +1594,32 @@ test("readArtwork streams bounded bytes for a fixed role and refuses other roles
   });
 });
 
+test("readArtwork carries the fixed detail size to the transport and refuses any other size", async () => {
+  await withHarness(async (harness) => {
+    const library = await directoryLibrary(harness, "music");
+    harness.server.directories["music"] = [artMovie("a1")];
+    harness.server.artwork = { bytes: new Uint8Array([1, 2, 3]), contentType: "image/png" };
+    await harness.manager.browseDirectory(harness.admin, library.id, {});
+
+    const tile = await harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary");
+    await imageBytes(tile);
+    assert.deepEqual(harness.server.artworkRequests.at(-1), { itemId: "a1", imageType: "Primary" }, "a tile keeps the default request");
+
+    const detail = await harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary", undefined, { size: "detail" });
+    assert.equal(detail.status, 200);
+    await imageBytes(detail);
+    assert.deepEqual(harness.server.artworkRequests.at(-1), { itemId: "a1", imageType: "Primary", size: "detail" }, "the detail size reaches the transport");
+
+    const imagesBefore = harness.server.artworkRequests.length;
+    const callsBefore = harness.server.calls.length;
+    for (const size of ["wide", "Detail", "1920", "", 1920, ["detail"], { width: 1920 }, null]) {
+      await assert.rejects(harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary", undefined, { size }), { code: "invalid-input" }, String(size));
+    }
+    assert.equal(harness.server.artworkRequests.length, imagesBefore, "an invalid size fetches no image bytes");
+    assert.equal(harness.server.calls.length, callsBefore, "an invalid size makes no upstream call at all");
+  });
+});
+
 test("an image burst never consumes the metadata lane, so it cannot delay a browse or the playback guard", async () => {
   await withHarness(async (harness) => {
     const library = await directoryLibrary(harness, "music");
@@ -2346,6 +2372,14 @@ test("a page's own ids are proved once, so listing them then reading their image
     assert.equal(after.filter((call) => call === "detail").length, 0, "no per-image detail");
     assert.equal(after.filter((call) => call === "ancestors").length, 0, "no per-image ancestor chain");
     assert.equal(after.filter((call) => call === "artwork").length, 2, "each image was fetched once");
+
+    const detailBefore = harness.server.calls.length;
+    const details = await Promise.all(page.items.map((item) => harness.manager.readArtwork(harness.admin, library.id, item.id, "Primary", undefined, { size: "detail" })));
+    assert.ok(details.every((response) => response.status === 200));
+    const detailAfter = harness.server.calls.slice(detailBefore);
+    assert.equal(detailAfter.filter((call) => call === "detail").length, 0, "no per-image detail for a detail variant");
+    assert.equal(detailAfter.filter((call) => call === "ancestors").length, 0, "no per-image ancestor chain for a detail variant");
+    assert.equal(detailAfter.filter((call) => call === "artwork").length, 2, "each detail image was fetched once");
   });
 });
 
@@ -2386,6 +2420,62 @@ test("a matching If-None-Match is a local 304 with zero upstream work and a revo
       { code: "not-found" },
       "a revoked grant reads as missing even for a conditional request",
     );
+  });
+});
+
+test("a detail artwork variant carries its own ETag that a tile conditional can never satisfy", async () => {
+  await withHarness(async (harness) => {
+    const library = await directoryLibrary(harness, "music");
+    harness.server.directories["music"] = [{ ...artMovie("a1"), primaryImageTag: "tag1" }];
+    harness.server.artwork = { bytes: new Uint8Array([1]), contentType: "image/png" };
+    await harness.manager.browseDirectory(harness.admin, library.id, {});
+
+    const tile = await harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary");
+    assert.equal(tile.headers.get("etag"), `"tag1"`);
+    await imageBytes(tile);
+    const detail = await harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary", undefined, { size: "detail" });
+    assert.equal(detail.headers.get("etag"), `"tag1:detail"`, "the detail variant is tagged apart from the tile");
+    await imageBytes(detail);
+    assert.notEqual(tile.headers.get("etag"), detail.headers.get("etag"));
+
+    const imagesBefore = harness.server.artworkRequests.length;
+    const mismatch = await harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary", undefined, { size: "detail", ifNoneMatch: `"tag1"` });
+    assert.equal(mismatch.status, 200, "a tile ETag is never a false 304 for a detail request");
+    assert.equal(harness.server.artworkRequests.length, imagesBefore + 1, "the detail fetch did run");
+    await imageBytes(mismatch);
+
+    const tileMismatch = await harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary", undefined, { ifNoneMatch: `"tag1:detail"` });
+    assert.equal(tileMismatch.status, 200, "a detail ETag is never a false 304 for a tile request");
+    await imageBytes(tileMismatch);
+
+    const callsBefore304 = harness.server.calls.length;
+    const imagesBefore304 = harness.server.artworkRequests.length;
+    const notModified = await harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary", undefined, { size: "detail", ifNoneMatch: `"tag1:detail"` });
+    assert.equal(notModified.status, 304);
+    assert.equal(notModified.headers.get("etag"), `"tag1:detail"`);
+    assert.equal(harness.server.calls.length, callsBefore304, "a detail 304 makes no upstream call");
+    assert.equal(harness.server.artworkRequests.length, imagesBefore304, "a detail 304 fetches no image bytes");
+  });
+});
+
+test("a revoked grant refuses a detail artwork read exactly like a tile", async () => {
+  await withHarness(async (harness) => {
+    const library = await directoryLibrary(harness, "music");
+    harness.server.directories["music"] = [{ ...artMovie("a1"), primaryImageTag: "tag1" }];
+    harness.server.artwork = { bytes: new Uint8Array([1]), contentType: "image/png" };
+    await harness.manager.browseDirectory(harness.admin, library.id, {});
+    await harness.manager.patchLibrary(harness.admin, library.id, { enabled: false });
+    await assert.rejects(
+      harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary", undefined, { size: "detail" }),
+      { code: "not-found" },
+      "a revoked grant refuses a plain detail read",
+    );
+    await assert.rejects(
+      harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary", undefined, { size: "detail", ifNoneMatch: `"tag1:detail"` }),
+      { code: "not-found" },
+      "a revoked grant refuses a matching detail conditional before any local 304",
+    );
+    assert.equal(harness.server.artworkRequests.length, 0, "a revoked grant fetches no image bytes");
   });
 });
 

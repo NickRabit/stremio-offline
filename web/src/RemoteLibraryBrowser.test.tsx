@@ -769,3 +769,22 @@ it("keeps the favorite learned in detail on its tile after Back", async () => {
   await click(host.querySelector(".library-back")!);
   expect(host.querySelector(".fav-mark")).not.toBeNull();
 });
+
+it("uses the high-resolution native preview when a remote item has no backdrop or catalogue identity", async () => {
+  const preview = "/api/remote-libraries/rlib_a/items/clip/artwork/Primary?tag=preview-1";
+  const clip: RemoteItem = { id: "clip", name: "Preview only", type: "movie", providerIds: {}, poster: preview };
+  browse = () => json(page([clip]));
+  item = () => json({ item: clip, capabilities });
+  const onGallery = vi.fn();
+  await render({ onGallery });
+  await click(host.querySelector('.remote-libraries button.library-open')!);
+  expect(host.querySelector('.browse-item img')?.getAttribute('src')).toBe(preview);
+  await click(tileButtons()[0]!);
+  await flush();
+  const surface = host.querySelector<HTMLElement>('.library-title-detail')!;
+  expect(surface.style.backgroundImage).toContain('size=detail');
+  expect(surface.querySelector('.gallery-open img')?.getAttribute('src')).toBe(`${preview}&size=detail`);
+  expect(calls.title).toHaveLength(0);
+  await click(surface.querySelector('.gallery-open')!);
+  expect(onGallery.mock.calls[0]?.[0]?.[0]?.url).toBe(`${preview}&size=detail`);
+});

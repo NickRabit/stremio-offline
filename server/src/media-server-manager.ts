@@ -285,6 +285,13 @@ const readIfNoneMatch = (value: unknown): string | undefined => {
   return value;
 };
 
+/** The one optional artwork size a read accepts: the fixed `detail` variant, or nothing. */
+const readArtworkSize = (value: unknown): "detail" | undefined => {
+  if (value === undefined) return undefined;
+  if (value !== "detail") throw invalid("The media-server artwork size is not supported.");
+  return "detail";
+};
+
 /** A strong or weak `If-None-Match` match against the one current tag. */
 const ifNoneMatchMatches = (header: string, etag: string): boolean => {
   for (const raw of header.split(",")) {
@@ -1282,19 +1289,21 @@ export class MediaServerManager {
   }
 
   /** One item's official artwork as a scoped, streaming response. The image role is one of two
-   *  fixed values and the optional `tag` is a bounded opaque string; the item may be of any kind.
-   *  Membership is taken from a short-lived proof (an id a page already returned, or a one-time
-   *  detail and ancestor proof for an unknown id) so a page's images never fan out into per-image
-   *  detail and ancestor calls. `If-None-Match` is answered locally with a 304 once the local
-   *  authority and the current tag still hold; the bytes stream through the image lane so an
-   *  image burst never consumes a metadata or playback-guard slot. */
+   *  fixed values, the optional `tag` is a bounded opaque string and the optional `size` is the one
+   *  fixed `detail` variant; the item may be of any kind. Membership is taken from a short-lived
+   *  proof (an id a page already returned, or a one-time detail and ancestor proof for an unknown
+   *  id) so a page's images never fan out into per-image detail and ancestor calls. `If-None-Match`
+   *  is answered locally with a 304 once the local authority and the current tag still hold, and a
+   *  detail variant carries its own ETag so a tile ETag can never answer a detail request; the bytes
+   *  stream through the image lane so an image burst never consumes a metadata or playback-guard
+   *  slot. */
   async readArtwork(
     authority: MediaServerAuthority,
     libraryId: unknown,
     itemId: unknown,
     imageType: unknown,
     signal?: AbortSignal,
-    options?: { tag?: unknown; ifNoneMatch?: unknown },
+    options?: { tag?: unknown; ifNoneMatch?: unknown; size?: unknown },
   ): Promise<Response> {
     const request = this.requestSignal(signal);
     if (imageType !== "Primary" && imageType !== "Backdrop") throw invalid("The media-server image type is not supported.");
@@ -1304,6 +1313,7 @@ export class MediaServerManager {
     const requested = requestItemId(itemId);
     const tag = options?.tag === undefined ? undefined : validateArtworkTag(options.tag);
     const ifNoneMatch = readIfNoneMatch(options?.ifNoneMatch);
+    const size = readArtworkSize(options?.size);
     const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId }, request);
     this.recheckContent(authority, request, library.id, connection);
     let proof = this.proofFor(user, library, connection, requested);
@@ -1313,13 +1323,19 @@ export class MediaServerManager {
       this.putProof(proof);
     }
     const currentTag = imageType === "Primary" ? proof.primaryImageTag : proof.backdropImageTag;
-    const etag = currentTag === undefined ? undefined : `"${currentTag}"`;
+    const etagValue = currentTag === undefined ? undefined : size === "detail" ? `${currentTag}:detail` : currentTag;
+    const etag = etagValue === undefined ? undefined : `"${etagValue}"`;
     if (etag !== undefined && ifNoneMatch !== undefined && ifNoneMatchMatches(ifNoneMatch, etag)) {
       this.recheckContent(authority, request, library.id, connection);
       return artworkNotModified(etag);
     }
     const response = await this.imageUpstream(connection, request, () =>
-      session.transport.requestArtwork({ itemId: requested, imageType, ...(tag === undefined ? {} : { tag }) }, session.token, request));
+      session.transport.requestArtwork({
+        itemId: requested,
+        imageType,
+        ...(tag === undefined ? {} : { tag }),
+        ...(size === undefined ? {} : { size }),
+      }, session.token, request));
     try {
       this.recheckContent(authority, request, library.id, connection);
       return this.scopedImage(authority, request, library, connection, response, etag);

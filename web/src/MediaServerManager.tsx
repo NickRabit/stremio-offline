@@ -117,7 +117,7 @@ export function MediaServerManager({ onError, onChanged }: { onError: (error: un
     catch (error) { setDialogError(describeError(error)); return false; }
     finally { setBusy(false); }
   };
-  const openDialog = () => setDialogError("");
+  const openDialog = (trigger?: HTMLElement) => { trigger?.focus({ preventScroll: true }); setDialogError(""); };
 
   const providerOf = (connectionId: string) => connections?.find((connection) => connection.id === connectionId);
   /** One sequence over every attached library, whatever server it sits on: this is the same
@@ -181,7 +181,7 @@ export function MediaServerManager({ onError, onChanged }: { onError: (error: un
   return <div className="media-server-manager">
     {!keyConfigured && <p className="notice" role="alert">{t("mediaServer.keyMissing")}</p>}
     <div className="library-manager-actions">
-      <button className="primary" disabled={busy} onClick={() => { openDialog(); setConnecting(true); }}><Plus/> {t("mediaServer.add")}</button>
+      <button className="primary" disabled={busy} onClick={(event) => { openDialog(event.currentTarget); setConnecting(true); }}><Plus/> {t("mediaServer.add")}</button>
       <button disabled={busy} onClick={() => void boot()}><RefreshCw/> {t("common.refresh")}</button>
     </div>
     {loadError && <div className="remote-error" role="alert">
@@ -206,10 +206,10 @@ export function MediaServerManager({ onError, onChanged }: { onError: (error: un
           <Checkbox checked={connection.enabled} disabled={busy} onChange={() => void toggleConnection(connection)}>{t("library.enabled")}</Checkbox>
         </div>
         <footer className="library-admin-footer">
-          <button disabled={busy} onClick={() => { openDialog(); setDiscovering(connection); }}><Library/> {t("mediaServer.libraries")}</button>
-          <button disabled={busy} onClick={() => { openDialog(); setRenaming(connection); }}><Pencil/> {t("mediaServer.rename")}</button>
-          <button disabled={busy} onClick={() => { openDialog(); setReauthenticating(connection); }}><KeyRound/> {t("mediaServer.reauthenticate")}</button>
-          <button className="danger" disabled={busy} onClick={() => requestRemove({ kind: "connection", connection })}><Trash2/> {t("mediaServer.remove")}</button>
+          <button disabled={busy} onClick={(event) => { openDialog(event.currentTarget); setDiscovering(connection); }}><Library/> {t("mediaServer.libraries")}</button>
+          <button disabled={busy} onClick={(event) => { openDialog(event.currentTarget); setRenaming(connection); }}><Pencil/> {t("mediaServer.rename")}</button>
+          <button disabled={busy} onClick={(event) => { openDialog(event.currentTarget); setReauthenticating(connection); }}><KeyRound/> {t("mediaServer.reauthenticate")}</button>
+          <button className="danger" disabled={busy} onClick={(event) => { event.currentTarget.focus({ preventScroll: true }); requestRemove({ kind: "connection", connection }); }}><Trash2/> {t("mediaServer.remove")}</button>
         </footer>
       </article>)}
     </div>}
@@ -237,7 +237,7 @@ export function MediaServerManager({ onError, onChanged }: { onError: (error: un
             </span>}
           </div>
           <footer className="library-admin-footer">
-            <button disabled={busy} onClick={() => { openDialog(); setEditing(library); }}><SlidersHorizontal/> {t("library.editLibrary")}</button>
+            <button disabled={busy} onClick={(event) => { openDialog(event.currentTarget); setEditing(library); }}><SlidersHorizontal/> {t("library.editLibrary")}</button>
           </footer>
         </article>)}
       </div>

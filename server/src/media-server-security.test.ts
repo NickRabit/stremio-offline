@@ -1513,6 +1513,42 @@ test("artwork validates and encodes the tag before any network work", async () =
   }
 });
 
+test("artwork builds the fixed detail width and refuses any other size", async () => {
+  const captured: string[] = [];
+  const transport = createMediaServerTransport({ baseUrl: "http://media.example", allowLan: false, allowLoopback: false }, {
+    lookupAll: async () => [{ address: "93.184.216.34", family: 4 }],
+    fetch: async (url) => {
+      captured.push(url);
+      return new Response(new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(jpegBytes(40)); controller.close(); } }), { status: 200, headers: { "content-type": "image/jpeg" } });
+    },
+  });
+  try {
+    for (const request of [
+      { itemId: "i1", imageType: "Primary", tag: "Ab.c-9_~" } as const,
+      { itemId: "i1", imageType: "Primary", tag: "Ab.c-9_~", size: "detail" } as const,
+      { itemId: "i1", imageType: "Backdrop", size: "detail" } as const,
+    ]) {
+      await (await transport.requestArtwork(request, "tok")).arrayBuffer();
+    }
+    assert.deepEqual(captured.map((url) => new URL(url).searchParams.get("MaxWidth")), ["640", "1920", "1920"], "a tile keeps 640 while Primary and Backdrop detail both ask 1920");
+    assert.equal(new URL(captured[1]).searchParams.get("tag"), "Ab.c-9_~", "the tag still round-trips beside a detail size");
+
+    for (const size of ["wide", "Detail", "1920", "", "detail ", 1920, ["detail"], { width: 1920 }, null]) {
+      await assert.rejects(transport.requestArtwork({ itemId: "i", imageType: "Primary", size: size as never }, "tok"), { code: "invalid-input" }, String(size));
+    }
+    for (const args of [
+      { itemId: "i", imageType: "Primary", maxWidth: 1920 },
+      { itemId: "i", imageType: "Primary", width: 1920 },
+      { itemId: "i", imageType: "Primary", maxWidth: "1920" },
+    ]) {
+      await assert.rejects(transport.requestArtwork(args as never, "tok"), { code: "invalid-input" }, JSON.stringify(args));
+    }
+    assert.equal(captured.length, 3, "an invalid size or an arbitrary dimension never reaches the socket");
+  } finally {
+    await transport.close();
+  }
+});
+
 test("artwork and match refuse raw fields, paths and tokens before any network work", async () => {
   const transport = stubbed(async () => new Response(null, { status: 200 }));
   try {

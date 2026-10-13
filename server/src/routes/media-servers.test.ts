@@ -57,6 +57,8 @@ class FakeServer {
   versionsOf: Record<string, Array<{ id: string; name?: string; container?: string }>> = { m1: [{ id: "v1", name: "1080p" }] };
   errors: Record<string, MediaServerError> = {};
   nudge: { op: string; wait: Promise<void>; entered?: () => void } | undefined;
+  artworkRequests: Array<Record<string, unknown>> = [];
+  artwork: { bytes: Uint8Array; contentType: string } | undefined;
 
   async run(operation: string): Promise<void> {
     const error = this.errors[operation];
@@ -92,13 +94,18 @@ const provider = (server: FakeServer): MediaServerProvider => ({
   versions: async (_token, _account, itemId) => { await server.run("versions"); return structuredClone(server.versionsOf[itemId] ?? []); },
 });
 
-const transport: MediaServerTransport = {
+const transportFor = (server: FakeServer): MediaServerTransport => ({
   requestJson: async () => { throw new Error("unused"); },
   requestAsset: async () => { throw new Error("unused asset transport"); },
-  requestArtwork: async () => { throw new Error("unused artwork transport"); },
+  requestArtwork: async (args) => {
+    server.artworkRequests.push(args as unknown as Record<string, unknown>);
+    const spec = server.artwork;
+    if (!spec) throw new Error("no artwork response is configured");
+    return new Response(spec.bytes, { status: 200, headers: { "content-type": spec.contentType } });
+  },
   requestOriginal: async () => { throw new Error("unused"); },
   close: async () => undefined,
-};
+});
 
 interface Harness {
   base: string;
@@ -125,7 +132,7 @@ const mount = async (): Promise<Harness> => {
   const server = new FakeServer();
   const manager = new MediaServerManager(store, new MediaServerSecrets(path.join(dir, "vault"), keyFile), {
     providerFactory: () => provider(server),
-    transportFactory: () => transport,
+    transportFactory: () => transportFor(server),
     networkStartIntervalMs: 0,
   });
   await manager.initialize();
@@ -307,6 +314,30 @@ test("a granted member browses and previews natively, and only GET reaches those
     assert.equal((await api(harness.base, `/api/remote-libraries/${harness.libraryId}/browse?mode=grid`, { user: BOB })).status, 400);
     assert.equal((await api(harness.base, `/api/remote-libraries/${harness.libraryId}/preview?nope=1`, { user: BOB })).status, 400);
     assert.equal((await api(harness.base, `/api/remote-libraries/${harness.libraryId}/browse`, { user: BOB })).status, 200);
+  });
+});
+
+test("the artwork route forwards only the fixed detail size and refuses anything else", async () => {
+  await withHarness(async (harness) => {
+    harness.server.artwork = { bytes: new Uint8Array([0xff, 0xd8, 0xff, 0xe0]), contentType: "image/jpeg" };
+    const path = `/api/remote-libraries/${harness.libraryId}/items/m1/artwork/Primary`;
+
+    const plain = await api(harness.base, path, { user: BOB });
+    assert.equal(plain.status, 200);
+    await plain.arrayBuffer();
+    assert.deepEqual(harness.server.artworkRequests.at(-1), { itemId: "m1", imageType: "Primary" }, "a plain poster keeps the tile request");
+
+    const detail = await api(harness.base, `${path}?size=detail`, { user: BOB });
+    assert.equal(detail.status, 200);
+    await detail.arrayBuffer();
+    assert.deepEqual(harness.server.artworkRequests.at(-1), { itemId: "m1", imageType: "Primary", size: "detail" }, "an accepted size reaches the transport");
+
+    assert.equal((await api(harness.base, `${path}?nope=1`, { user: BOB })).status, 400, "an unknown query field is refused");
+    assert.equal((await api(harness.base, `${path}?size=wide`, { user: BOB })).status, 400, "an unknown size value is refused");
+    assert.equal((await api(harness.base, `${path}?size=1920`, { user: BOB })).status, 400, "an arbitrary width is refused");
+    assert.equal((await api(harness.base, `${path}?size=detail&size=wide`, { user: BOB })).status, 400, "a repeated size is refused");
+    assert.equal((await api(harness.base, `${path}?tag=bad%20tag`, { user: BOB })).status, 400, "a malformed tag is still refused");
+    assert.equal(harness.server.artworkRequests.length, 2, "only the two accepted requests reached the transport");
   });
 });
 

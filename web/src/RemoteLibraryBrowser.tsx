@@ -8,6 +8,7 @@ import { LibraryTile } from "./library-tile";
 import { LibraryTitleDetail } from "./LibraryTitleDetail";
 import { Player } from "./Player";
 import { DetailHero, LIBRARY_HERO_EMPTY_GRADIENT, LIBRARY_HERO_GRADIENT, useBackdrop } from "./DetailHero";
+import { remoteDetailArtwork } from "./remote-artwork";
 import { RemoteFolderArt, RemoteLibraryArt, RemoteTileArt } from "./remote-mosaic";
 import { TitleChips } from "./TitleChips";
 import { catalogueGalleryImages, mergeGallery, posterAndWide, type GalleryImage } from "./gallery-images";
@@ -838,13 +839,14 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     ? catalogueRef(detail.type, detail.providerIds)
     : detail?.type === "episode" ? catalogueRef("series", series?.providerIds) : null;
   const enrichment = useTitleEnrichment(catalogue ? { kind: "catalogue", ref: catalogue } : null, catalogue, uiLanguage);
+  const detailPreview = remoteDetailArtwork(detail?.poster);
   const detailBackdrops: Array<string | undefined> = detail
-    ? [enrichment.meta?.background, detail.wide, detail.type === "episode" ? series?.wide : undefined]
+    ? [enrichment.meta?.background, detail.wide, detail.type === "episode" ? series?.wide : undefined, detailPreview]
     : [];
   // The series draws its own full-detail surface, so the backdrop is probed here; the shared
   // shell probes for a playable title through the same hook.
   const seriesBackdrop = useBackdrop(detail?.type === "series" ? detailBackdrops : []);
-  const seriesGallery: GalleryImage[] = mergeGallery(posterAndWide(detail?.poster, detail?.wide), catalogueGalleryImages(enrichment.meta));
+  const seriesGallery: GalleryImage[] = mergeGallery(posterAndWide(detailPreview, detail?.wide), catalogueGalleryImages(enrichment.meta));
 
   if (!librariesError && !targetError && (libraries === null || !libraries.length)) return null;
 

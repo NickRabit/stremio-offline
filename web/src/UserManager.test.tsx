@@ -520,3 +520,12 @@ it("retains accounts but disables grant writes when a grant inventory cannot loa
   expect(host.querySelector('input[aria-label="Films is visible to this account"]')).toHaveProperty("disabled", true);
   expect(host.querySelector('.user-edit-card button')).not.toBeNull();
 });
+
+it("returns focus after a click that does not natively focus the opening button", async () => {
+  await mount({ session: admin, users: [account({ id: "bob", username: "bob", role: "user" })] });
+  const trigger = [...host.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Edit")!;
+  expect(document.activeElement).not.toBe(trigger);
+  await clickText("Edit");
+  await clickLabel("Close");
+  expect(document.activeElement).toBe(trigger);
+});

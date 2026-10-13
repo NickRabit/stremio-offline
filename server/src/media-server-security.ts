@@ -43,12 +43,15 @@ export interface MediaServerTransport {
   close(): Promise<void>;
 }
 
-/** The only artwork request the transport can make: a fixed image role for one opaque item id and
- *  at most one validated tag. A URL, query, header, method or output format is never caller text. */
+/** The only artwork request the transport can make: a fixed image role for one opaque item id, at
+ *  most one validated tag and at most one fixed size variant. A URL, query, header, method,
+ *  arbitrary dimension or output format is never caller text. */
 export interface ArtworkRequest {
   itemId: string;
   imageType: "Primary" | "Backdrop";
   tag?: string;
+  /** A fixed full-detail width for the role; never an arbitrary dimension. */
+  size?: "detail";
 }
 
 /** The only original-media request the transport can make: a fixed static stream path built from
@@ -636,11 +639,12 @@ function checkAssetRequest(args: unknown): MediaServerAssetRequest {
   return { kind: "subtitle", itemId, mediaSourceId, index };
 }
 
-const ARTWORK_REQUEST_KEYS: readonly string[] = ["itemId", "imageType", "tag"];
+const ARTWORK_REQUEST_KEYS: readonly string[] = ["itemId", "imageType", "tag", "size"];
 
-/** A plain object with exactly the artwork fields: one bounded item id, one fixed image role and
- *  at most one validated tag. A symbol key, an accessor, an inherited or spoofed prototype, an
- *  unknown field, a wrong-typed value or an invalid tag is refused before any DNS or network work. */
+/** A plain object with exactly the artwork fields: one bounded item id, one fixed image role, at
+ *  most one validated tag and at most the one fixed `detail` size. A symbol key, an accessor, an
+ *  inherited or spoofed prototype, an unknown field, a wrong-typed value, an invalid tag or an
+ *  unsupported size is refused before any DNS or network work. */
 function checkArtworkRequest(args: unknown): ArtworkRequest {
   if (typeof args !== "object" || args === null || Array.isArray(args)
     || ![Object.prototype, null].includes(Object.getPrototypeOf(args))) {
@@ -664,8 +668,16 @@ function checkArtworkRequest(args: unknown): ArtworkRequest {
   const itemId = pathSegment(record.itemId, "itemId");
   const imageType = record.imageType;
   if (imageType !== "Primary" && imageType !== "Backdrop") throw invalid("The media-server image type is not allowed.");
+  const rawSize = record.size;
+  if (rawSize !== undefined && rawSize !== "detail") throw invalid("The media-server artwork size is not allowed.");
+  const size: ArtworkRequest["size"] = rawSize === "detail" ? "detail" : undefined;
   const tag = record.tag === undefined ? undefined : validateArtworkTag(record.tag);
-  return tag === undefined ? { itemId, imageType } : { itemId, imageType, tag };
+  return {
+    itemId,
+    imageType,
+    ...(tag === undefined ? {} : { tag }),
+    ...(size === undefined ? {} : { size }),
+  };
 }
 
 /** The declared media type, lower-cased and stripped of parameters, from a bounded printable
@@ -1412,7 +1424,7 @@ export function createMediaServerTransport(
     const bearer = validateMediaServerToken(token);
     const query = new URLSearchParams();
     if (request.tag !== undefined) query.set("tag", request.tag);
-    query.set("MaxWidth", request.imageType === "Backdrop" ? "1920" : "640");
+    query.set("MaxWidth", request.imageType === "Backdrop" || request.size === "detail" ? "1920" : "640");
     query.set("Quality", "85");
     query.set("Format", "Jpg");
     const url = `${baseUrl}/Items/${encodeURIComponent(request.itemId)}/Images/${request.imageType}?${query.toString()}`;

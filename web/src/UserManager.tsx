@@ -104,7 +104,7 @@ export function UserManager({ session, restricted = false, onChanged, onNotify, 
       : <div className="library-manager-actions">
         {/* Every grant list has to be on hand before an account can be made: a create dialog
             missing a list would grant what it cannot show, or silently grant nothing. */}
-        <button className="primary" disabled={!loaded || busy} onClick={() => setCreating(true)}><Plus/> {t("users.addAccount")}</button>
+        <button className="primary" disabled={!loaded || busy} onClick={(event) => { event.currentTarget.focus({ preventScroll: true }); setCreating(true); }}><Plus/> {t("users.addAccount")}</button>
         <button onClick={() => void load().catch(onError)} disabled={busy}><RefreshCw/> {t("common.refresh")}</button>
       </div>}
     {accounts.map((account) => <article className="library-admin-row user-admin-row" key={account.id}>
@@ -127,7 +127,7 @@ export function UserManager({ session, restricted = false, onChanged, onNotify, 
             and what an addon's switch says is an administrator's to change from another page
             -- a badge that reports "off" for something switched on since is worse than no
             badge at all. */}
-        <button onClick={() => { setEditingId(account.id); void load().catch(onError); }} disabled={busy}>{t("users.edit")}</button>
+        <button onClick={(event) => { event.currentTarget.focus({ preventScroll: true }); setEditingId(account.id); void load().catch(onError); }} disabled={busy}>{t("users.edit")}</button>
       </footer>}
     </article>)}
     {loaded && !accounts.length && <p className="identify-hint">{t("users.empty")}</p>}

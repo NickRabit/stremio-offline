@@ -328,9 +328,9 @@ export function registerMediaServerRoutes(app: express.Application, deps: MediaS
     const name = streamName(req);
     return { streams: await mediaSources.matched(authority, ownerOf(req), String(req.params.id), String(req.params.type), String(req.params.catalogId), signal, name) };
   }, 200, true));
-  // Fixed Primary|Backdrop only and at most the optional `tag` query: the bytes stream through
-  // the image lane, private with nosniff, and an If-None-Match is answered by the manager with a
-  // local 304 once its checks still hold.
+  // Fixed Primary|Backdrop only and at most the optional `tag` and `size` queries: the bytes
+  // stream through the image lane, private with nosniff, and an If-None-Match is answered by the
+  // manager with a local 304 once its checks still hold.
   app.get("/api/remote-libraries/:id/items/:itemId/artwork/:imageType", asyncRoute(async (req, res) => {
     let response: Response;
     try {
@@ -338,13 +338,15 @@ export function registerMediaServerRoutes(app: express.Application, deps: MediaS
         assertNoBody(request);
         const query = request.query as Record<string, unknown>;
         for (const key of Object.keys(query)) {
-          if (key !== "tag") throw malformed("The media-server request has an unknown query field.");
+          if (key !== "tag" && key !== "size") throw malformed("The media-server request has an unknown query field.");
         }
         const tag = query.tag;
+        const size = query.size;
         const ifNoneMatch = request.header("if-none-match");
         return mediaServers.readArtwork(authority, request.params.id, request.params.itemId, String(request.params.imageType), signal, {
           ...(tag === undefined ? {} : { tag }),
           ...(ifNoneMatch === undefined ? {} : { ifNoneMatch }),
+          ...(size === undefined ? {} : { size }),
         });
       });
     } catch (error) {

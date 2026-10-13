@@ -233,3 +233,29 @@ test("a remote film's versions open a picker that defaults to the largest", asyn
   await expect(rows.first()).toHaveAttribute("aria-pressed", "true");
   await expect(rows.first()).toContainText("1080p");
 });
+
+test("an unmatched remote clip uses its native preview as a full-resolution detail backdrop", async ({ page }) => {
+  const poster = `/api/remote-libraries/${libraryId}/items/preview-only/artwork/Primary?tag=preview-1`;
+  await remoteLibraries(page, { items: () => [{ id: "preview-only", name: "Preview only", type: "movie", providerIds: {}, poster }] });
+  const sizes: Array<string | null> = [];
+  const metadata: string[] = [];
+  page.on("request", (request) => { if (new URL(request.url()).pathname.startsWith("/api/meta/")) metadata.push(request.url()); });
+  await page.route("**/items/preview-only/artwork/Primary?*", async (route) => {
+    const size = new URL(route.request().url()).searchParams.get("size");
+    sizes.push(size);
+    const [width, height] = size === "detail" ? [1920, 1080] : [640, 360];
+    await route.fulfill({ contentType: "image/svg+xml", body: `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="#48617b"/></svg>` });
+  });
+  await page.locator(".remote-libraries .browse-item.library").filter({ hasText: "Remote clips" }).getByRole("button").click();
+  const panel = page.locator(".remote-browse-panel");
+  const preview = panel.locator(".browse-art img:not(.tile-blur)").first();
+  await expect(preview).toHaveAttribute("src", poster);
+  await expect.poll(() => preview.evaluate((image: HTMLImageElement) => image.naturalWidth)).toBe(640);
+  expect(sizes.every((size) => size === null), "listing previews keep the tile variant").toBe(true);
+  await panel.locator(".browse-item").filter({ hasText: "Preview only" }).locator(".library-open").click();
+  const detail = panel.locator(".library-title-detail");
+  await expect(detail).toHaveCSS("background-image", /size=detail/);
+  await expect.poll(() => detail.locator(".gallery-open img").evaluate((image: HTMLImageElement) => image.naturalWidth)).toBe(1920);
+  expect(sizes).toContain("detail");
+  expect(metadata, "a clip without provider IDs never guesses catalogue metadata").toEqual([]);
+});
