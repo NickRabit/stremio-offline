@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
+import { goToView } from "./nav";
 import { resetViews } from "./library-tools";
 
 /** The one local film the detail journeys work on: a file bound to a title that exists in two
@@ -13,12 +14,12 @@ const source = (filename: string) => ({ sourceId: `exact:${filename}`, kind: "li
 const copy = (path: string, filename: string, size: number) =>
   ({ sourceId: `lib:${path}`, kind: "library", playable: true, localPath: path, libraryName: "Filmy", behaviorHints: { filename, videoSize: size } });
 
-async function openDetail(page: Page) {
+async function openDetail(page: Page, manyFiles = false) {
   await page.route("**/api/library/browse?*", async (route: Route) => {
     const path = new URL(route.request().url()).searchParams.get("path") || "";
-    const items: BrowseItem[] = path
-      ? []
-      : [{ kind: "file", path: movieFile, label: movieFile, size: 2_000_000_000, season: null, episode: null, modified: "2026-09-01", match: "matched", favorite: false }];
+    const file = { kind: "file", path: movieFile, label: movieFile, size: 2_000_000_000, season: null, episode: null, modified: "2026-09-01", match: "matched", favorite: false };
+    const files = manyFiles ? Array.from({ length: 80 }, (_, index) => index === 40 ? file : { ...file, path: `Extra ${index}.mkv`, label: `Extra film ${index}` }) : [file];
+    const items: BrowseItem[] = path ? [] : files;
     await route.fulfill({ json: { path, items, total: items.length, pending: false } });
   });
   await page.route("**/api/library/source", async (route: Route) => {
@@ -38,7 +39,15 @@ async function openDetail(page: Page) {
     ] }));
   await page.goto("/");
   await page.getByRole("button", { name: "Knihovna", exact: true }).click();
-  await page.locator(".browse-item", { hasText: "Detail film" }).getByRole("button").first().click();
+  const target = page.locator(`[data-path="${movieFile}"] .library-open`);
+  await target.scrollIntoViewIfNeeded();
+  const offset = await page.evaluate(() => {
+    const page = document.querySelector<HTMLElement>(".library-page")!;
+    const scroller = page.classList.contains("library-remote-roots") ? page : page.querySelector<HTMLElement>(".browse-panel > .browse-scroll")!;
+    return scroller.scrollTop;
+  });
+  await target.click();
+  return offset;
 }
 
 test.beforeEach(async ({ request }) => { await resetViews(request); });
@@ -76,4 +85,20 @@ test("the largest copy is the default and the arrow opens the picker", async ({ 
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
   await expect(arrow).toBeFocused();
+});
+
+
+test("leaving a local detail keeps the root listing's offset and focus", async ({ page }) => {
+  await page.route("**/api/remote-libraries", route => route.fulfill({ json: { libraries: [{
+    id: `rlib_${"2".repeat(32)}`, connectionId: "connection", remoteId: "root", name: "Remote roots", type: "movie",
+    enabled: true, order: 0, showOnHome: true, showInContinueWatching: true, mosaic: false, provider: "emby",
+  }] } }));
+  const offset = await openDetail(page, true);
+  expect(offset).toBeGreaterThan(0);
+  await goToView(page, "Katalog");
+  await goToView(page, "Knihovna");
+  await expect(page.locator(".library-title-detail")).toHaveCount(0);
+  await expect(page.locator(".library-page")).toHaveClass(/library-remote-roots/);
+  await expect(page.locator(`[data-path="${movieFile}"] .library-open`)).toBeFocused();
+  await expect.poll(async () => Math.abs(await page.locator(".library-page").evaluate(node => node.scrollTop) - offset)).toBeLessThan(3);
 });

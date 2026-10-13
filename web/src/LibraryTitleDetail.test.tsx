@@ -134,6 +134,14 @@ describe("LibraryTitleDetail source picker", () => {
     expect(document.activeElement).toBe(controls.at(-1));
   });
 
+  it("focuses the chosen version when the picker reopens", () => {
+    render({ sources: [remote("s1", "Large", 30), remote("s2", "Small", 1)] });
+    click(host.querySelector(".split-button-toggle"));
+    click(pickerRows()[1]!);
+    click(host.querySelector(".split-button-toggle"));
+    expect(document.activeElement).toBe(pickerRows()[1]);
+  });
+
   it("closes on Escape and returns focus to the arrow", () => {
     render({ sources: [remote("s1", "1080p", 3_000_000_000), remote("s2", "720p", 1)] });
     const arrow = host.querySelector<HTMLButtonElement>(".split-button-toggle")!;

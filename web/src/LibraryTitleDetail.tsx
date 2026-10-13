@@ -111,7 +111,7 @@ function SourcePicker({ sources, selected, badgeOf, onSelect, onClose }: {
   const listRef = useRef<HTMLDivElement | null>(null);
   const overlayRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    const node = listRef.current?.querySelector<HTMLButtonElement>("button.selected, button");
+    const node = listRef.current?.querySelector<HTMLButtonElement>("button.selected") ?? listRef.current?.querySelector<HTMLButtonElement>("button");
     node?.focus();
   }, []);
   useEffect(() => {

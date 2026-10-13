@@ -1539,20 +1539,27 @@ export function App() {
     setLocalDetail({ item });
   };
   const closeLocalDetail = () => {
-    if (localDetail) pendingLocalFocus.current = localDetail.item.path;
+    if (localDetail) {
+      pendingLocalFocus.current = localDetail.item.path;
+      scrollByView.current.library = localDetailScroll.current;
+    }
     setLocalDetail(null);
   };
   /** The breadcrumb Back: it closes an open detail first, then climbs one folder, then leaves. */
   const libraryBack = () => {
-    setBrowseQuery(""); setMenuFor(null);
+    setMenuFor(null);
     if (localDetail) { closeLocalDetail(); return; }
+    setBrowseQuery("");
     if (browsePath.startsWith(":")) setFromFavorites(false);
     setBrowsePath(browsePath.startsWith(":") ? "" : browsePath.includes("/") ? browsePath.slice(0, browsePath.lastIndexOf("/")) : fromFavorites ? ":favorites" : "");
   };
   /** A crumb that names an ancestor: the detail closes even when the crumb repeats the current
    *  folder, so clicking it always lands on the listing. */
   const goLocalFolder = (path: string) => {
-    setBrowseQuery(""); setMenuFor(null);
+    setMenuFor(null);
+    if (localDetail && path === browsePath) { closeLocalDetail(); return; }
+    pendingLocalFocus.current = null;
+    setBrowseQuery("");
     setLocalDetail(null);
     setBrowsePath(path);
   };
@@ -1563,18 +1570,20 @@ export function App() {
       return;
     }
     const wanted = pendingLocalFocus.current;
-    if (!wanted) return;
+    if (!wanted || view !== "library" || remoteOpen) return;
+    if (localDetailScroller.current?.classList.contains("library-page") && !remoteRootsPresent) return;
     pendingLocalFocus.current = null;
     const frame = window.requestAnimationFrame(() => {
-      const scroller = localDetailScroller.current ?? browseScrollRef.current;
+      const scroller = localDetailScroller.current?.classList.contains("library-page")
+        ? browseScrollRef.current?.closest<HTMLElement>(".library-page") : browseScrollRef.current;
       if (scroller) scroller.scrollTop = localDetailScroll.current;
       document.querySelector<HTMLButtonElement>(`[data-path="${CSS.escape(wanted)}"] .library-open`)?.focus({ preventScroll: true });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [localDetail]);
+  }, [localDetail, view, remoteOpen, remoteRootsPresent]);
   // A remote library or another view owns the page: the local detail must not linger behind it.
-  useEffect(() => { if (remoteOpen) setLocalDetail(null); }, [remoteOpen]);
-  useEffect(() => { if (view !== "library") setLocalDetail(null); }, [view]);
+  useEffect(() => { if (remoteOpen && localDetail) closeLocalDetail(); }, [remoteOpen]);
+  useEffect(() => { if (view !== "library" && localDetail) closeLocalDetail(); }, [view]);
   /** The listing's live row for the open detail, so its favorite and position never go stale. */
   const liveLocalItem = localDetail ? browseItemAt(localDetail.item.path) : null;
 
@@ -2641,7 +2650,7 @@ export function App() {
         </div>}
         </div>
         <div className="browse-scroll" ref={browseScrollRef} onScroll={(event) => {
-          if (!restoringScroll.current && !playerOpenRef.current) scrollByView.current.library = event.currentTarget.scrollTop;
+          if (!restoringScroll.current && !playerOpenRef.current && !localDetail) scrollByView.current.library = event.currentTarget.scrollTop;
           compactOnScroll(event, libraryCompact, setLibraryCompact);
           scheduleViewAnchor();
         }}>

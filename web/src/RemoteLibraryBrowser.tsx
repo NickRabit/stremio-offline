@@ -558,6 +558,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   };
   const openItem = (item: RemoteItem) => {
     closeMenu();
+    setSources(null); setSourceError(""); setState(null); setStateError("");
     cancelItemsMore();
     cancelHandoff();
     if (item.type === "folder" || item.type === "season") {
@@ -579,6 +580,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   };
   const openEpisode = (episode: RemoteItem) => {
     closeMenu();
+    setSources(null); setSourceError(""); setState(null); setStateError("");
     cancelEpisodesMore();
     cancelHandoff();
     savedScroll.current = scrollRef.current?.scrollTop ?? 0;
