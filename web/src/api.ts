@@ -1,6 +1,6 @@
 import { serverText, t } from "./i18n";
 import type { SaveTarget } from "./save-target";
-import type { StatsActivityPage, ActiveStream, ActivityItem, CalendarItem, UndatedCalendarItem, ClientLogBundle, ClientLogSummary, Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, FavoriteFilter, FavoriteItem, FollowDefaults, FollowEpisodeRow, FollowPreview, FollowStartMode, FollowView, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryMatchResult, LibraryOp, LibraryOpsState, NewEpisode, ProgressEntry, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchPreferences, SearchResult, SearchState, SearchableCatalog, SiteLink, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, SettingsView, Stream, Subtitle, Trailer, UserAccount, UserPermissions, UserRole } from "./types";
+import type { StatsActivityPage, ActiveStream, ActivityItem, CalendarItem, UndatedCalendarItem, ClientLogBundle, ClientLogSummary, Diagnostics, BuildInfo, AuthStatus, StatsSummary, AdminRemoteLibrary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, FavoriteFilter, FavoriteItem, FollowDefaults, FollowEpisodeRow, FollowPreview, FollowStartMode, FollowView, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryMatchResult, LibraryOp, LibraryOpsState, MediaServerConnection, MediaServerProvider, NewEpisode, ProgressEntry, ProviderLibrary, RemoteBrowseMode, RemoteBrowseOrder, RemoteBrowseSort, RemoteHomeCard, RemoteItem, RemoteItemPage, RemoteItemState, RemoteItemType, RemoteLibrary, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchPreferences, SearchResult, SearchState, SearchableCatalog, SiteLink, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, SettingsView, Stream, Subtitle, Trailer, UserAccount, UserPermissions, UserRole } from "./types";
 import type { HomeLayoutResponse, HomeResponse, HomeRowId } from "../../server/src/home";
 
 /** The status code has to reach the top, or a sign-out is indistinguishable from an ordinary error. */
@@ -92,10 +92,11 @@ export const api = {
   libraryLinks: (path: string, language: string) => request<{ links: SiteLink[] }>(`/api/library/links?${q({ path, language })}`, { timeoutMs: 60_000 }),
   trailer: (type: string, id: string, language: string) => request<{ trailer: Trailer | null }>(`/api/trailer/${encodeURIComponent(type)}/${encodeURIComponent(id)}?${q({ language })}`),
   libraryTrailer: (path: string, language: string) => request<{ trailer: Trailer | null }>(`/api/library/trailer?${q({ path, language })}`),
+  titleGallery: (type: string, id: string, language: string) => request<{ images: Array<{ url: string; kind: "poster" | "background" | "logo" | "still"; shape: "poster" | "wide" }> }>(`/api/meta/${encodeURIComponent(type)}/${encodeURIComponent(id)}?${q({ language, gallery: "1" })}`),
   libraryGallery: (path: string) => request<{ images: Array<{ url: string; kind: "poster" | "background" | "logo" | "still"; shape: "poster" | "wide" }> }>(`/api/library/gallery?${q({ path })}`),
   streamSources: (type: string, id: string) => request<Array<{ key: string; name: string }>>(`/api/stream-sources/${encodeURIComponent(type)}/${encodeURIComponent(id)}`),
   streams: (type: string, id: string, addon?: string) => request<Stream[]>(`/api/streams/${encodeURIComponent(type)}/${encodeURIComponent(id)}${addon ? `?addon=${encodeURIComponent(addon)}` : ""}`),
-  localStreams: (type: string, id: string) => request<Stream[]>(`/api/local-streams/${encodeURIComponent(type)}/${encodeURIComponent(id)}`),
+  localStreams: (type: string, id: string, signal?: AbortSignal) => request<Stream[]>(`/api/local-streams/${encodeURIComponent(type)}/${encodeURIComponent(id)}`, { signal }),
   subtitles: (type: string, id: string) => request<Subtitle[]>(`/api/subtitles/${encodeURIComponent(type)}/${encodeURIComponent(id)}`),
   downloads: (timeoutMs?: number) => request<DownloadSnapshot>("/api/downloads", { timeoutMs }),
   download: (title: string, stream: Stream, media?: Record<string, unknown>, target?: SaveTarget) => request<Download>("/api/downloads", { method: "POST", body: JSON.stringify({ title, sourceId: stream.sourceId, media, ...(target ? { target } : {}) }) }),
@@ -136,7 +137,7 @@ export const api = {
   stopPlayback: (id: string) => request<void>(`/api/playback/${id}`, { method: "DELETE" }),
   nextLibraryFile: (sourceId: string) => request<{ path: string; title: string } | null>(`/api/library/next/${encodeURIComponent(sourceId)}`),
   previousLibraryFile: (sourceId: string) => request<{ path: string; title: string } | null>(`/api/library/previous/${encodeURIComponent(sourceId)}`),
-  librarySource: (path: string) => request<Stream>("/api/library/source", { method: "POST", body: JSON.stringify({ path }) }),
+  librarySource: (path: string, signal?: AbortSignal) => request<Stream>("/api/library/source", { method: "POST", body: JSON.stringify({ path }), signal }),
   library: () => request<LibrarySummary[]>("/api/library"),
   deleteLibraryItem: (path: string) => request<void>(`/api/library/item?${q({ path })}`, { method: "DELETE" }),
   renameLibraryItem: (path: string, name: string) => request<{ path: string }>("/api/library/rename", { method: "POST", body: JSON.stringify({ path, name }) }),
@@ -146,7 +147,7 @@ export const api = {
   libraryOps: () => request<{ jobs: LibraryOpsState[] }>("/api/library/ops"),
   startLibraryOp: (operation: LibraryOp) => request<{ id: string }>("/api/library/ops", { method: "POST", body: JSON.stringify(operation) }),
   cancelLibraryOp: (id: string) => request<void>(`/api/library/ops/${encodeURIComponent(id)}`, { method: "DELETE" }),
-  libraryIdentity: (path: string) => request<IdentityPreview>(`/api/library/identity?${q({ path })}`),
+  libraryIdentity: (path: string, signal?: AbortSignal) => request<IdentityPreview>(`/api/library/identity?${q({ path })}`, { signal }),
   matchLibraryItem: (body: { path?: string; key?: string; id?: string; type?: string; scope?: "unit" | "file"; season?: number; episode?: number; skipLookup?: boolean; skipMosaic?: boolean; replacesId?: string }) =>
     request<{ key: string; type: string; id: string | null }>("/api/library/match", { method: "POST", body: JSON.stringify(body) }),
   librarySuggestions: (libraryId?: string) => request<{ items: SuggestionRow[]; total: number }>(`/api/library/suggestions${libraryId ? `?${q({ libraryId })}` : ""}`),
@@ -276,6 +277,74 @@ export const api = {
   setUserPassword: (id: string, password: string) =>
     request<UserAccount>(`/api/users/${encodeURIComponent(id)}/password`, { method: "PATCH", body: JSON.stringify({ password }) }),
   deleteUser: (id: string) => request<void>(`/api/users/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  // Media-server administration. Every identifier travels percent-encoded; the remote
+  // library and item ids stay opaque strings the interface never parses.
+  mediaServers: () => request<{ connections: MediaServerConnection[]; keyConfigured: boolean }>("/api/media-servers"),
+  createMediaServer: (body: { provider: MediaServerProvider; name: string; baseUrl: string; allowLan: boolean; allowLoopback: boolean; username: string; password: string }) =>
+    request<MediaServerConnection>("/api/media-servers", { method: "POST", body: JSON.stringify(body), timeoutMs: 60_000 }),
+  updateMediaServer: (id: string, patch: { name?: string; enabled?: boolean }) =>
+    request<MediaServerConnection>(`/api/media-servers/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  /** Removing a connection always revokes access now. Forgetting additionally drops the local
+   *  history and favorites of every account; the remote server is never touched either way. */
+  deleteMediaServer: (id: string, forget = false) =>
+    request<void>(`/api/media-servers/${encodeURIComponent(id)}${forget ? "?forget=true" : ""}`, { method: "DELETE" }),
+  reauthenticateMediaServer: (id: string, body: { username: string; password: string }) =>
+    request<MediaServerConnection>(`/api/media-servers/${encodeURIComponent(id)}/reauthenticate`, { method: "POST", body: JSON.stringify(body), timeoutMs: 60_000 }),
+  /** The provider libraries the stored account can currently see, for the attach picker. */
+  discoverMediaServerLibraries: (id: string, signal?: AbortSignal) =>
+    request<{ items: ProviderLibrary[] }>(`/api/media-servers/${encodeURIComponent(id)}/libraries`, { timeoutMs: 60_000, signal }),
+  attachMediaServerLibrary: (id: string, body: { remoteId: string; name?: string; order?: number; showOnHome?: boolean; showInContinueWatching?: boolean }) =>
+    request<AdminRemoteLibrary>(`/api/media-servers/${encodeURIComponent(id)}/libraries`, { method: "POST", body: JSON.stringify(body) }),
+  /** Every attached library, disabled ones included: what the administrator list works on. */
+  adminRemoteLibraries: () => request<{ libraries: AdminRemoteLibrary[] }>("/api/media-servers/libraries").then((answer) => answer.libraries),
+  updateRemoteLibrary: (id: string, patch: { name?: string; enabled?: boolean; order?: number; showOnHome?: boolean; showInContinueWatching?: boolean; allowedUsers?: string[]; browseMode?: RemoteBrowseMode; mosaic?: boolean; showInFavorites?: boolean }) =>
+    request<AdminRemoteLibrary>(`/api/remote-libraries/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  /** Detaching a library revokes access now; forgetting also drops every account's local
+   *  history and favorites for it. */
+  deleteRemoteLibrary: (id: string, forget = false) =>
+    request<void>(`/api/remote-libraries/${encodeURIComponent(id)}${forget ? "?forget=true" : ""}`, { method: "DELETE" }),
+  /** The remote libraries this account may browse. No upstream call. */
+  remoteLibraries: (options: { timeoutMs?: number; signal?: AbortSignal } = {}) =>
+    request<{ libraries: RemoteLibrary[] }>("/api/remote-libraries", { timeoutMs: options.timeoutMs ?? 3_000, signal: options.signal })
+      .then((answer) => answer.libraries),
+  /** One library's own answer for a catalogue id; a library with no match answers an empty list.
+   *  `nameHint` is the resolved catalogue title (a series name, never an episode's), carried only as
+   *  the provider's supported name filter and sent as a `name` query when there is one. */
+  remoteLibraryStreams: (libraryId: string, type: string, catalogId: string, signal?: AbortSignal, nameHint?: string) =>
+    request<{ streams: Stream[] }>(`/api/remote-libraries/${encodeURIComponent(libraryId)}/streams/${encodeURIComponent(type)}/${encodeURIComponent(catalogId)}${nameHint ? `?${q({ name: nameHint })}` : ""}`, { signal, timeoutMs: 8_000 })
+      .then((answer) => answer.streams),
+  /** This account's own remote favourites or Continue watching, already permission filtered. */
+  remotePersonal: (filter: "favorites" | "resume", options: { skip?: number; limit?: number; signal?: AbortSignal } = {}) =>
+    request<{ items: RemoteHomeCard[]; total: number; partial?: boolean }>(`/api/remote-libraries/personal?${q({ filter, skip: options.skip, limit: options.limit ?? 40 })}`, { signal: options.signal }),
+  remoteItems: (libraryId: string, options: { limit?: number; cursor?: string; search?: string; type?: string; signal?: AbortSignal } = {}) =>
+    request<RemoteItemPage>(`/api/remote-libraries/${encodeURIComponent(libraryId)}/items?${q({ limit: options.limit ?? 100, cursor: options.cursor, search: options.search, type: options.type })}`, { signal: options.signal }),
+  /** One bounded page of a remote library or one folder inside it. `parentId` absent means the
+   *  attached root; the cursor, search, sort and order all stay inside that same directory. */
+  remoteBrowse: (libraryId: string, options: { parentId?: string; mode?: RemoteBrowseMode; limit?: number; cursor?: string; search?: string; type?: RemoteItemType; sort?: RemoteBrowseSort; order?: RemoteBrowseOrder; signal?: AbortSignal } = {}) =>
+    request<RemoteItemPage>(`/api/remote-libraries/${encodeURIComponent(libraryId)}/browse?${q({ parentId: options.parentId, mode: options.mode, limit: options.limit ?? 60, cursor: options.cursor, search: options.search, type: options.type, sort: options.sort, order: options.order })}`, { signal: options.signal }),
+  /** Up to four authorized artwork URLs drawn from a library root or one folder, for the tile
+   *  mosaic. A library with mosaics off answers an empty list without touching the provider.
+   *  `preferChildren` asks for the children's own artwork instead of one composited library
+   *  picture, which is only wanted for a root tile that draws the local collage. */
+  remotePreview: (libraryId: string, parentId?: string, signal?: AbortSignal, preferChildren = false) =>
+    request<{ posters: string[] }>(`/api/remote-libraries/${encodeURIComponent(libraryId)}/preview?${q({ parentId, artwork: preferChildren ? "children" : undefined })}`, { signal }),
+  remoteItem: (libraryId: string, itemId: string, signal?: AbortSignal) =>
+    request<{ item: RemoteItem; capabilities: RemoteItemPage["capabilities"] }>(`/api/remote-libraries/${encodeURIComponent(libraryId)}/items/${encodeURIComponent(itemId)}`, { signal }),
+  remoteEpisodes: (libraryId: string, itemId: string, options: { limit?: number; cursor?: string; signal?: AbortSignal } = {}) =>
+    request<RemoteItemPage>(`/api/remote-libraries/${encodeURIComponent(libraryId)}/items/${encodeURIComponent(itemId)}/episodes?${q({ limit: options.limit ?? 100, cursor: options.cursor })}`, { signal: options.signal }),
+  /** Playable versions of a remote movie or episode; a source id is only ever sent to inspect and playback. */
+  remoteSources: (libraryId: string, itemId: string, signal?: AbortSignal) =>
+    request<{ streams: Stream[] }>(`/api/remote-libraries/${encodeURIComponent(libraryId)}/items/${encodeURIComponent(itemId)}/sources`, { signal }).then((answer) => answer.streams),
+  remoteState: (libraryId: string, itemId: string, signal?: AbortSignal) =>
+    request<RemoteItemState>(`/api/remote-libraries/${encodeURIComponent(libraryId)}/items/${encodeURIComponent(itemId)}/state`, { signal }),
+  saveRemoteState: (libraryId: string, itemId: string, body: { position?: number; duration?: number; favorite?: boolean; watched?: boolean; mediaSourceId?: string }) =>
+    request<RemoteItemState>(`/api/remote-libraries/${encodeURIComponent(libraryId)}/items/${encodeURIComponent(itemId)}/state`, { method: "PATCH", body: JSON.stringify(body) }),
+  /** The page is going away: a keepalive PATCH outlives it, so the last position still lands. */
+  saveRemoteStateOnUnload: (libraryId: string, itemId: string, body: { position?: number; duration?: number; mediaSourceId?: string }) => void fetch(
+    `/api/remote-libraries/${encodeURIComponent(libraryId)}/items/${encodeURIComponent(itemId)}/state`,
+    { method: "PATCH", keepalive: true, headers: { "content-type": "application/json" }, body: JSON.stringify(body) },
+  ).catch(() => undefined),
 };
 
 /** Hand the same-origin ticket to the browser so large files never pass through JavaScript memory. */

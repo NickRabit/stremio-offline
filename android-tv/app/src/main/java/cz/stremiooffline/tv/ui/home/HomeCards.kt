@@ -5,11 +5,13 @@ import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.catalog.ResumeEpisode
 import cz.stremiooffline.tv.data.HomeCard
 import cz.stremiooffline.tv.data.MetaDto
+import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.episodeCodeText
 import cz.stremiooffline.tv.data.yearText
 import cz.stremiooffline.tv.playback.Progress
 import cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs
 import cz.stremiooffline.tv.ui.detail.PlayTarget
+import cz.stremiooffline.tv.ui.detail.RemoteDetailData
 
 /** What OK on a Home card asks the shell to do. */
 sealed interface HomeAction {
@@ -18,6 +20,9 @@ sealed interface HomeAction {
   data class OpenLibrary(val path: String) : HomeAction
 
   data class OpenCatalog(val args: CatalogDetailArgs) : HomeAction
+
+  /** A remote media-server card: the shell opens its playable detail. */
+  data class OpenRemote(val data: RemoteDetailData) : HomeAction
 }
 
 /** The web's row titles for the built-in rows, or nothing for a catalogue row. */
@@ -46,11 +51,31 @@ fun cardLabel(card: HomeCard): Int? = when (card) {
   else -> null
 }
 
+/** The remote card as the native detail needs it: opaque identity only, never a path or a
+ *  catalogue id. */
+fun remoteDetailOf(card: HomeCard.Remote): RemoteDetailData = RemoteDetailData(
+  libraryId = card.libraryId,
+  libraryName = card.libraryName,
+  provider = card.provider,
+  item = RemoteItemDto(
+    id = card.itemId,
+    name = card.title,
+    type = card.itemType,
+    season = card.season,
+    episode = card.episode,
+    poster = card.poster,
+    wide = card.wide,
+  ),
+)
+
 /** The web's `captionOf`, minus the age and release-date text the TV deliberately leaves out. */
 fun captionOf(card: HomeCard, label: String?): String? = listOfNotNull(
   label,
   card.episodeCodeText,
   (card as? HomeCard.ResumeFile)?.subtitle?.takeIf { it.isNotBlank() },
+  (card as? HomeCard.Remote)?.let { remote ->
+    listOf(remote.provider, remote.libraryName).filter { it.isNotBlank() }.joinToString(" · ").takeIf { it.isNotBlank() }
+  },
   card.yearText?.takeIf { it.isNotBlank() },
 ).joinToString(" · ").ifEmpty { null }
 
@@ -127,6 +152,7 @@ fun actionFor(card: HomeCard): HomeAction = when (card) {
       type = card.type,
     ),
   )
+  is HomeCard.Remote -> HomeAction.OpenRemote(remoteDetailOf(card))
 }
 
 private fun play(path: String, title: String): HomeAction.Play =

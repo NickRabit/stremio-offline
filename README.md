@@ -21,8 +21,8 @@ It runs in four ways:
 
 > Unofficial. Not affiliated with Stremio or Smart Code Ltd.
 > The app provides, hosts and searches no content: everything it shows comes
-> from addons the user adds. Use only sources and accounts you have the right to
-> access; what you add and download is your responsibility.
+> from addons and libraries the user connects. Use only sources and accounts
+> you have the right to access; what you add and download is your responsibility.
 
 ![The catalog with a title's details, its source and the buttons to play or save it](docs/images/catalog.jpg)
 
@@ -47,6 +47,10 @@ It runs in four ways:
 - **Several libraries** — another disk, films and series kept apart, a friend's
   folder mounted read-only — and a metadata scan that turns a folder of files
   into titles with posters and descriptions.
+- **Jellyfin and Emby libraries**, shared with selected local users. Browse, search
+  and play original media through this server, with favorites and watch history
+  kept locally. Remote files and history stay read-only. See
+  [Remote media servers](docs/media-server-management.md).
 - **Ten interface languages** in the web and desktop apps: English, Czech,
   Slovak, German, Spanish, French, Italian, Polish, Brazilian Portuguese and
   Russian. Choose on first run or in Settings; the setup choice also seeds

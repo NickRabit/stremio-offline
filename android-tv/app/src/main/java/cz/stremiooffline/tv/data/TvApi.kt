@@ -88,8 +88,84 @@ interface DownloadsApi {
   suspend fun downloads(): DownloadsResponseDto
 }
 
+/**
+ * The read-only media-server libraries this account may browse, every identifier opaque and
+ * round-tripped exactly as the server minted it. A method carries no path, URL or credential: the
+ * local server is the only thing that ever talks to the provider.
+ *
+ * Every method defaults to a [ApiError] so an existing test double still compiles; a default that
+ * silently answered empty would let a screen present "nothing" for a call that was never made.
+ * [ApiClient] overrides each with the real request.
+ */
+interface RemoteLibraryApi {
+  suspend fun remoteLibraries(): List<RemoteLibraryDto> = throw ApiError(ApiFailure.Generic)
+
+  suspend fun remoteItems(
+    libraryId: String,
+    limit: Int = 100,
+    cursor: String? = null,
+    search: String? = null,
+    type: String? = null,
+  ): RemoteItemsPageDto = throw ApiError(ApiFailure.Generic)
+
+  /**
+   * One lazy page of a remote directory: the attached library root ([parentId] null) or one folder
+   * inside it. The server pages, filters and sorts; nothing is scanned ahead.
+   */
+  suspend fun remoteBrowse(
+    libraryId: String,
+    limit: Int = 60,
+    cursor: String? = null,
+    search: String? = null,
+    type: String? = null,
+    parentId: String? = null,
+    mode: String? = null,
+    sort: String? = null,
+    order: String? = null,
+  ): RemoteItemsPageDto = throw ApiError(ApiFailure.Generic)
+
+  /** Up to four same-origin authorized poster URLs for one library root or folder; empty when the
+   *  library's mosaic is off or the directory has no artwork of its own. */
+  suspend fun remotePreview(libraryId: String, parentId: String? = null): RemotePreviewDto =
+    throw ApiError(ApiFailure.Generic)
+
+  suspend fun remoteItem(libraryId: String, itemId: String): RemoteItemDetailDto =
+    throw ApiError(ApiFailure.Generic)
+
+  suspend fun remoteEpisodes(
+    libraryId: String,
+    itemId: String,
+    limit: Int = 100,
+    cursor: String? = null,
+  ): RemoteItemsPageDto = throw ApiError(ApiFailure.Generic)
+
+  suspend fun remoteSources(libraryId: String, itemId: String): List<StreamDto> =
+    throw ApiError(ApiFailure.Generic)
+
+  suspend fun remoteItemState(libraryId: String, itemId: String): RemoteItemStateDto =
+    throw ApiError(ApiFailure.Generic)
+
+  suspend fun patchRemoteItemState(
+    libraryId: String,
+    itemId: String,
+    patch: RemoteItemStatePatch,
+  ): RemoteItemStateDto = throw ApiError(ApiFailure.Generic)
+
+  /**
+   * The remote versions of one catalogue title or episode, matched by external id only.
+   * [nameHint] is the resolved catalogue title of the title being opened -- a series name for an
+   * episode, never the episode's own -- and is sent only as the provider's supported name filter.
+   */
+  suspend fun remoteMatchedStreams(libraryId: String, type: String, catalogId: String, nameHint: String? = null): List<StreamDto> =
+    throw ApiError(ApiFailure.Generic)
+
+  /** One page of the remote personal lists; [filter] is `favorites` or `resume`. */
+  suspend fun remotePersonal(filter: String, skip: Int = 0, limit: Int = 40): RemotePersonalPage =
+    throw ApiError(ApiFailure.Generic)
+}
+
 /** Everything a signed-in screen does: library, detail, catalogue, Home, images and playback. */
-interface TvApi : LibraryApi, FavoritesApi, ResumeApi, DetailApi, PlaybackApi, CatalogApi, HomeApi, DownloadsApi {
+interface TvApi : LibraryApi, FavoritesApi, ResumeApi, DetailApi, PlaybackApi, CatalogApi, HomeApi, DownloadsApi, RemoteLibraryApi {
   val http: OkHttpClient
   /** The address as the user typed it, shown on the Settings screen. */
   val serverAddress: String

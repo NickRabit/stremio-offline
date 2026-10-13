@@ -112,6 +112,16 @@ data class StreamDto(
   /** A copy already in one of the viewer's libraries: the wire path and the library it sits in. */
   val localPath: String? = null,
   val libraryName: String? = null,
+  /** Set only for a media-server version. [provider] and [libraryId] name where it comes from,
+   *  [capabilities] say what the app may do with it (nothing today) and [remoteItem] carries the
+   *  opaque remote identity and the stable progress key of the item this stream is one version of. */
+  val provider: String? = null,
+  val libraryId: String? = null,
+  val capabilities: RemoteCapabilitiesDto? = null,
+  val remoteItem: RemoteItemContext? = null,
+  /** Source-owned external subtitles this version carries (an addon's own list, or the SRT a
+   *  media server minted for one remote version), each with an opaque id. */
+  val subtitles: List<AddonSubtitleDto> = emptyList(),
 )
 
 /** One `GET /api/stream-sources/:type/:id` entry: a source addon the streams are asked from. */

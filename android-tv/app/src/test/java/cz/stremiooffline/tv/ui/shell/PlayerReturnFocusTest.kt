@@ -14,6 +14,17 @@ import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
+import cz.stremiooffline.tv.data.HomeCard
+import cz.stremiooffline.tv.data.HomeCardsJson
+import cz.stremiooffline.tv.data.HomeOrderEntry
+import cz.stremiooffline.tv.data.HomeResponseDto
+import cz.stremiooffline.tv.data.HomeRowDto
+import cz.stremiooffline.tv.data.RemoteItemContext
+import cz.stremiooffline.tv.ui.home.homeCardTag
+import cz.stremiooffline.tv.ui.detail.TagRemoteDetailPlay
+import kotlinx.serialization.json.JsonObject
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import cz.stremiooffline.tv.data.CatalogDto
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.SettingsResponse
@@ -171,4 +182,39 @@ class PlayerReturnFocusTest {
     compose.waitForIdle()
     org.junit.Assert.assertFalse(keepOn())
   }
+
+  @Test
+  fun `Home refresh waits until a remote detail closes after its player returns`() {
+    val card = HomeCard.Remote(key = "remote:one", title = "Movie", provider = "jellyfin",
+      libraryId = "rlibA", libraryName = "Movies", itemId = "iA")
+    val encoded = HomeCardsJson.encodeToJsonElement(HomeCard.serializer(), card) as JsonObject
+    val api = FakeTvApi().apply {
+      homeHandler = { asked ->
+        HomeResponseDto(order = listOf(HomeOrderEntry("resume")),
+          rows = if (asked.isEmpty()) emptyMap() else mapOf("resume" to HomeRowDto(items = listOf(encoded))))
+      }
+      remoteSourcesValue = listOf(StreamDto(sourceId = "remote1", kind = "remote", playable = true,
+        remoteItem = RemoteItemContext(libraryId = "rlibA", itemId = "iA", mediaSourceId = "v1", progressKey = "remote:one")))
+    }
+    scenario.onActivity { activity ->
+      activity.setContent { Shell(start = Section.Home, api = api, username = "demo", onSignOut = {}) }
+    }
+    compose.waitForIdle()
+    compose.onNodeWithTag(homeCardTag(card.key)).assertIsFocused()
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { runCatching { compose.onNodeWithTag(TagRemoteDetailPlay).assertIsFocused() }.isSuccess }
+    val homeRequests = api.homeRequests.size
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { compose.onAllNodes(androidx.compose.ui.test.hasTestTag(TAG_OVERLAY_ROOT)).fetchSemanticsNodes().isNotEmpty() }
+    repeat(3) {
+      if (compose.onAllNodes(androidx.compose.ui.test.hasTestTag(TAG_OVERLAY_ROOT)).fetchSemanticsNodes().isNotEmpty()) back()
+    }
+    compose.waitForIdle()
+    compose.onNodeWithTag(TagRemoteDetailPlay).assertIsFocused()
+    assertEquals(homeRequests, api.homeRequests.size)
+    back()
+    compose.onNodeWithTag(homeCardTag(card.key)).assertIsFocused()
+    assertTrue(api.homeRequests.size > homeRequests)
+  }
+
 }

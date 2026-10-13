@@ -34,6 +34,11 @@ import cz.stremiooffline.tv.data.ProgressEntryDto
 import cz.stremiooffline.tv.data.ResumeFilter
 import cz.stremiooffline.tv.data.ResumePage
 import cz.stremiooffline.tv.data.RecentSearchDto
+import cz.stremiooffline.tv.data.RemoteItemDto
+import cz.stremiooffline.tv.data.RemoteItemStateDto
+import cz.stremiooffline.tv.data.RemoteItemsPageDto
+import cz.stremiooffline.tv.data.RemoteLibraryDto
+import cz.stremiooffline.tv.data.RemotePreviewDto
 import cz.stremiooffline.tv.data.SearchStateDto
 import cz.stremiooffline.tv.data.SearchResultDto
 import cz.stremiooffline.tv.data.SearchScope
@@ -173,6 +178,40 @@ open class FakeTvApi : TvApi {
   var homeLayoutPatchMessage: String? = null
   var downloadsValue: DownloadsResponseDto = DownloadsResponseDto()
   var downloadsRequests = 0
+
+  var remoteLibrariesValue: List<RemoteLibraryDto>? = emptyList()
+  var remoteLibrariesFailure: ApiFailure? = null
+  var remoteLibrariesCalls = 0
+  /** One page per `libraryId|cursor` (`libraryId|` is the first, uncursored page). */
+  var remoteItemsPages: MutableMap<String, RemoteItemsPageDto> = mutableMapOf()
+  val remoteItemsRequests: MutableList<Pair<String, String?>> = mutableListOf()
+  var remoteItemsFailure: ApiError? = null
+  /** One page per `itemId|cursor`. */
+  var remoteEpisodesPages: MutableMap<String, RemoteItemsPageDto> = mutableMapOf()
+  val remoteEpisodesRequests: MutableList<Triple<String, String, String?>> = mutableListOf()
+  /** Dedicated browse answers keyed by `libraryId|parentId|cursor`; a miss falls back below. */
+  var remoteBrowsePages: MutableMap<String, RemoteItemsPageDto> = mutableMapOf()
+  /** Every browse call, with the full query it carried, so a test can name the request. */
+  val remoteBrowseRequests: MutableList<RemoteBrowseRequest> = mutableListOf()
+  var remoteBrowseFailure: ApiError? = null
+  val remoteBrowseGates: MutableMap<String, CompletableDeferred<Unit>> = mutableMapOf()
+  /** The posters every preview answers with; a test may gate or fail the call. */
+  var remotePreviewValue: List<String> = emptyList()
+  val remotePreviewRequests: MutableList<Pair<String, String?>> = mutableListOf()
+  var remotePreviewFailure: ApiError? = null
+  /** Held open until the test releases it, so preview concurrency can be watched. */
+  var remotePreviewGate: CompletableDeferred<Unit>? = null
+  var remoteSourcesValue: List<StreamDto> = emptyList()
+  var remoteSourcesFailure: ApiError? = null
+  val remoteSourcesRequests: MutableList<Pair<String, String>> = mutableListOf()
+  var remoteStateValue: RemoteItemStateDto = RemoteItemStateDto()
+  var remoteStateFailure: ApiError? = null
+  /** One answer per `libraryId|type|id`; a key in [remoteMatchFailures] refuses instead. */
+  val remoteMatchValues: MutableMap<String, List<StreamDto>> = mutableMapOf()
+  val remoteMatchFailures: MutableSet<String> = mutableSetOf()
+  val remoteMatchRequests: MutableList<String> = mutableListOf()
+  /** The name hint each request carried, in the same order as [remoteMatchRequests]. */
+  val remoteMatchHints: MutableList<String?> = mutableListOf()
 
   var clientLogLines: MutableList<Triple<String, String, Map<String, String>?>> = mutableListOf()
   var bundles: MutableList<ClientLogBundleDto> = mutableListOf()
@@ -441,6 +480,90 @@ open class FakeTvApi : TvApi {
     return downloadsValue
   }
 
+  override suspend fun remoteLibraries(): List<RemoteLibraryDto> {
+    remoteLibrariesCalls += 1
+    remoteLibrariesFailure?.let { throw ApiError(it) }
+    return remoteLibrariesValue ?: throw ApiError(ApiFailure.Generic)
+  }
+
+  override suspend fun remoteItems(
+    libraryId: String,
+    limit: Int,
+    cursor: String?,
+    search: String?,
+    type: String?,
+  ): RemoteItemsPageDto {
+    remoteItemsRequests += libraryId to cursor
+    remoteItemsFailure?.let { throw it }
+    return remoteItemsPages["$libraryId|${cursor ?: ""}"] ?: RemoteItemsPageDto()
+  }
+
+  override suspend fun remoteBrowse(
+    libraryId: String,
+    limit: Int,
+    cursor: String?,
+    search: String?,
+    type: String?,
+    parentId: String?,
+    mode: String?,
+    sort: String?,
+    order: String?,
+  ): RemoteItemsPageDto {
+    remoteBrowseRequests += RemoteBrowseRequest(libraryId, limit, cursor, search, type, parentId, mode, sort, order)
+    remoteBrowseGates[parentId ?: ""]?.await()
+    remoteBrowseFailure?.let { throw it }
+    remoteBrowsePages["$libraryId|${parentId ?: ""}|${cursor ?: ""}"]?.let { return it }
+    // The older suites only seeded the snapshot maps; answer from those and keep their counters
+    // alive, so a pre-browse test still drives the same listing through the new route.
+    return when {
+      parentId != null && (type == "episode" || mode == "titles") -> {
+        remoteEpisodesRequests += Triple(libraryId, parentId, cursor)
+        remoteEpisodesPages["$parentId|${cursor ?: ""}"] ?: RemoteItemsPageDto()
+      }
+      else -> {
+        remoteItemsRequests += libraryId to cursor
+        remoteItemsPages["$libraryId|${cursor ?: ""}"] ?: RemoteItemsPageDto()
+      }
+    }
+  }
+
+  override suspend fun remotePreview(libraryId: String, parentId: String?): RemotePreviewDto {
+    remotePreviewRequests += libraryId to parentId
+    remotePreviewGate?.await()
+    remotePreviewFailure?.let { throw it }
+    return RemotePreviewDto(remotePreviewValue)
+  }
+
+  override suspend fun remoteEpisodes(
+    libraryId: String,
+    itemId: String,
+    limit: Int,
+    cursor: String?,
+  ): RemoteItemsPageDto {
+    remoteEpisodesRequests += Triple(libraryId, itemId, cursor)
+    remoteItemsFailure?.let { throw it }
+    return remoteEpisodesPages["$itemId|${cursor ?: ""}"] ?: RemoteItemsPageDto()
+  }
+
+  override suspend fun remoteSources(libraryId: String, itemId: String): List<StreamDto> {
+    remoteSourcesRequests += libraryId to itemId
+    remoteSourcesFailure?.let { throw it }
+    return remoteSourcesValue
+  }
+
+  override suspend fun remoteItemState(libraryId: String, itemId: String): RemoteItemStateDto {
+    remoteStateFailure?.let { throw it }
+    return remoteStateValue
+  }
+
+  override suspend fun remoteMatchedStreams(libraryId: String, type: String, catalogId: String, nameHint: String?): List<StreamDto> {
+    val key = "$libraryId|$type|$catalogId"
+    remoteMatchRequests += key
+    remoteMatchHints += nameHint
+    if (key in remoteMatchFailures) throw ApiError(ApiFailure.Generic)
+    return remoteMatchValues[key] ?: emptyList()
+  }
+
   override suspend fun clientLog(level: String, message: String, context: Map<String, String>?) {
     clientLogLines += Triple(level, message, context)
   }
@@ -550,6 +673,18 @@ open class FakeTvApi : TvApi {
 data class CatalogRequest(val addonKey: String, val type: String, val id: String, val skip: Int, val genre: String?)
 
 data class SearchRequest(val query: String, val cursor: String?, val scope: SearchScope)
+
+data class RemoteBrowseRequest(
+  val libraryId: String,
+  val limit: Int,
+  val cursor: String?,
+  val search: String?,
+  val type: String?,
+  val parentId: String?,
+  val mode: String?,
+  val sort: String?,
+  val order: String?,
+)
 
 fun file(
   path: String,

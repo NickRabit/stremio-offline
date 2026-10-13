@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir, type NetworkInterfaceInfo } from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
@@ -367,9 +368,10 @@ test("on Windows the child's environment is the parent's plus the backend's own 
   const parent = { PATH: "C:\\Windows\\System32", FFMPEG_PATH: "C:\\tools\\ffmpeg.exe", KEEP: "me" };
   const env = localBackendEnv(parent, "C:\\data", 8090, "win32", () => true);
   assert.deepEqual(Object.keys(env).filter((key) => !(key in parent)).sort(),
-    ["DATA_DIR", "DESKTOP_LOCAL_BACKEND", "DOWNLOAD_DIR", "HOST", "HOST_CHECK", "PORT"]);
+    ["DATA_DIR", "DESKTOP_LOCAL_BACKEND", "DOWNLOAD_DIR", "HOST", "HOST_CHECK", "MEDIA_SERVER_KEY_FILE", "PORT"]);
   assert.equal(env.PATH, parent.PATH, "no tool directory is added on Windows");
   assert.equal(env.FFMPEG_PATH, parent.FFMPEG_PATH, "an inherited tool path is left alone");
+  assert.equal(env.MEDIA_SERVER_KEY_FILE, path.win32.join("C:\\data", "media-server.key"));
   assert.equal(env.KEEP, "me");
   assert.equal("HOST_NAMES" in env, false);
 });
@@ -389,6 +391,16 @@ test("the PATH logic leaves the backend variables as they were", () => {
   assert.equal(env.PORT, "8090");
   assert.equal(env.DATA_DIR, path.join("/data", INSTANCE_DIRECTORY));
   assert.equal(env.DOWNLOAD_DIR, path.join("/data", "downloads"));
+  assert.equal(env.MEDIA_SERVER_KEY_FILE, path.posix.join("/data", "media-server.key"));
+});
+
+test("the media-server key path is defaulted, never overwritten by a blank, and an override is kept", () => {
+  assert.equal(localBackendEnv({}, "/data", 8090, "linux", () => true).MEDIA_SERVER_KEY_FILE,
+    path.posix.join("/data", "media-server.key"));
+  assert.equal(localBackendEnv({ MEDIA_SERVER_KEY_FILE: "   " }, "/data", 8090, "linux", () => true).MEDIA_SERVER_KEY_FILE,
+    path.posix.join("/data", "media-server.key"));
+  assert.equal(localBackendEnv({ MEDIA_SERVER_KEY_FILE: "/run/secrets/key" }, "/data", 8090, "linux", () => true).MEDIA_SERVER_KEY_FILE,
+    "/run/secrets/key");
 });
 
 test("a stored download folder replaces the default one in the child's environment", () => {
@@ -444,6 +456,40 @@ test("a start reads the settings and passes the switch to the child", async (t) 
   await started;
   await harness.backend.stop();
   assert.deepEqual(reads, [dir]);
+});
+
+test("the media-server key is prepared before the fork and its path reaches the child", async (t) => {
+  const dir = await tempDir(t);
+  const calls: Array<{ dir: string; env: NodeJS.ProcessEnv; platform: NodeJS.Platform }> = [];
+  const intended = path.join(dir, "media-server.key");
+  const harness = makeBackend(dir, {
+    prepareMediaServerKey: async (requested, env, platform) => {
+      calls.push({ dir: requested, env, platform });
+      await writeFile(intended, randomBytes(32), { mode: 0o600 });
+      return intended;
+    },
+  });
+  const started = start(harness);
+  const fork = await harness.nextChild();
+  assert.equal(fork.options.env.MEDIA_SERVER_KEY_FILE, intended);
+  assert.deepEqual(calls, [{ dir, env: process.env, platform: process.platform }]);
+  fork.child.emit("message", READY);
+  await started;
+  await harness.backend.stop();
+});
+
+test("a preparer that declines still lets the child start", async (t) => {
+  const dir = await tempDir(t);
+  const harness = makeBackend(dir, {
+    prepareMediaServerKey: async (requested) => path.join(requested, "media-server.key"),
+  });
+  const started = start(harness);
+  const fork = await harness.nextChild();
+  assert.equal(fork.options.env.MEDIA_SERVER_KEY_FILE, path.join(dir, "media-server.key"));
+  fork.child.emit("message", READY);
+  const connection = await started;
+  assert.equal(connection.published, false);
+  await harness.backend.stop();
 });
 
 test("the settings are read again on the next start", async (t) => {

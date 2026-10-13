@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import type { ProviderItem } from "./media-server-provider.js";
 
 export type MediaServerKind = "jellyfin" | "emby";
 export const MEDIA_SERVER_KINDS: readonly MediaServerKind[] = ["jellyfin", "emby"];
@@ -37,9 +38,16 @@ export const MEDIA_SERVER_LIMITS = Object.freeze({
   libraries: 1024,
   requestBody: 16 * 1024,
   responseBody: 2 * 1024 * 1024,
+  secretCleanup: 2048,
 });
 
 export type RemoteLibraryType = "movie" | "series" | "mixed";
+
+/** How a remote library is listed natively: one provider page per request. `folders` walks the
+ *  library hierarchy (`Recursive=false`, `Folder` admitted), `titles` lists the media titles
+ *  (`Recursive=true`, no `Folder`). */
+export type RemoteBrowseMode = "folders" | "titles";
+export const REMOTE_BROWSE_MODES: readonly RemoteBrowseMode[] = ["folders", "titles"];
 
 export interface MediaConnectionRecord {
   id: string;
@@ -67,7 +75,26 @@ export interface RemoteLibraryRecord {
   allowedUsers: string[];
   showOnHome: boolean;
   showInContinueWatching: boolean;
+  /** Optional, backward-compatible display settings. Absent stays absent on the record so an
+   *  old record, export or backup keeps its exact shape; the projection resolves the default. */
+  browseMode?: RemoteBrowseMode;
+  mosaic?: boolean;
+  showInFavorites?: boolean;
 }
+
+/** The effective browse mode of a record: an explicit choice wins, otherwise a mixed library
+ *  (Emby Music, say) is a folder tree and a movie or series library is a flat title list. */
+export const effectiveBrowseMode = (record: Pick<RemoteLibraryRecord, "type" | "browseMode">): RemoteBrowseMode =>
+  record.browseMode === "folders" || record.browseMode === "titles"
+    ? record.browseMode
+    : record.type === "mixed" ? "folders" : "titles";
+
+/** Whether the mosaic preview is on: only an explicit `false` turns it off. */
+export const effectiveMosaic = (record: Pick<RemoteLibraryRecord, "mosaic">): boolean => record.mosaic !== false;
+
+/** Whether the library feeds the favourites destination: only an explicit `false` opts out. */
+export const effectiveShowInFavorites = (record: Pick<RemoteLibraryRecord, "showInFavorites">): boolean =>
+  record.showInFavorites !== false;
 
 export interface RemoteCapabilities {
   rename: false;
@@ -136,6 +163,7 @@ export const adminMediaConnection = (record: MediaConnectionRecord): AdminMediaC
 });
 
 export interface PublicRemoteLibrary {
+  poster?: string;
   id: string;
   connectionId: string;
   remoteId: string;
@@ -145,10 +173,16 @@ export interface PublicRemoteLibrary {
   order: number;
   showOnHome: boolean;
   showInContinueWatching: boolean;
+  /** Resolved display settings: the effective values the interface renders. */
+  browseMode: RemoteBrowseMode;
+  mosaic: boolean;
+  showInFavorites: boolean;
   capabilities: RemoteCapabilities;
+  /** The provider of the stored connection, when it still exists. Never a secret or address. */
+  provider?: MediaServerKind;
 }
 
-export const publicRemoteLibrary = (record: RemoteLibraryRecord): PublicRemoteLibrary => ({
+export const publicRemoteLibrary = (record: RemoteLibraryRecord, provider?: MediaServerKind): PublicRemoteLibrary => ({
   id: record.id,
   connectionId: record.connectionId,
   remoteId: record.remoteId,
@@ -158,13 +192,61 @@ export const publicRemoteLibrary = (record: RemoteLibraryRecord): PublicRemoteLi
   order: record.order,
   showOnHome: record.showOnHome,
   showInContinueWatching: record.showInContinueWatching,
+  browseMode: effectiveBrowseMode(record),
+  mosaic: effectiveMosaic(record),
+  showInFavorites: effectiveShowInFavorites(record),
   capabilities: READ_ONLY_MEDIA_CAPABILITIES,
+  ...(provider === undefined ? {} : { provider }),
 });
 
-export const adminRemoteLibrary = (record: RemoteLibraryRecord): PublicRemoteLibrary & { allowedUsers: string[] } => ({
-  ...publicRemoteLibrary(record),
+export const adminRemoteLibrary = (record: RemoteLibraryRecord, provider?: MediaServerKind): PublicRemoteLibrary & { allowedUsers: string[] } => ({
+  ...publicRemoteLibrary(record, provider),
   allowedUsers: [...record.allowedUsers],
 });
+
+/** A provider item as the interface may see it: the internal shape (never an image flag or an
+ *  image tag) plus the same-origin artwork paths the client loads instead of any upstream
+ *  address. A path is omitted only when the provider metadata proves that role absent, so an
+ *  unknown fact keeps the legacy URL. Two optional paths built from an encoded local library and
+ *  item handle, a fixed image role and a validated tag can never turn a cached provider row into
+ *  a client-admitted URL. */
+export type PublicRemoteItem = Omit<ProviderItem, "hasPrimaryImage" | "hasBackdropImage" | "primaryImageTag" | "backdropImageTag"> & { poster?: string; wide?: string };
+
+/** The one shape an artwork tag may take: bounded, URL-safe and credential-free, so it can travel
+ *  in a query string verbatim and never smuggle a remote path, query or address. */
+export const ARTWORK_TAG = /^[A-Za-z0-9._~-]{1,128}$/;
+
+export function validateArtworkTag(value: unknown): string {
+  if (typeof value !== "string" || !ARTWORK_TAG.test(value)) {
+    throw new MediaServerError("invalid-input", "The media-server artwork tag is not allowed.");
+  }
+  return value;
+}
+
+export const remoteArtworkPath = (libraryId: string, itemId: string, imageType: "Primary" | "Backdrop", tag?: string): string => {
+  const path = `/api/remote-libraries/${encodeURIComponent(libraryId)}/items/${encodeURIComponent(itemId)}/artwork/${imageType}`;
+  return tag === undefined ? path : `${path}?tag=${encodeURIComponent(tag)}`;
+};
+
+export const publicRemoteItem = (item: ProviderItem, libraryId: string): PublicRemoteItem => ({
+  ...scrubInternalItemFields(item),
+  ...(item.hasPrimaryImage === false ? {} : { poster: remoteArtworkPath(libraryId, item.id, "Primary", item.primaryImageTag) }),
+  ...(item.hasBackdropImage === false ? {} : { wide: remoteArtworkPath(libraryId, item.id, "Backdrop", item.backdropImageTag) }),
+});
+
+/** Internal provider-only facts never reach a client projection. A captured tag proves the exact
+ *  image version the manager must ask for; the resolved tag role is carried on the public URL, so
+ *  the raw tags never leave the server. */
+const scrubInternalItemFields = (item: ProviderItem): Omit<ProviderItem, "hasPrimaryImage" | "hasBackdropImage" | "primaryImageTag" | "backdropImageTag"> => {
+  if (item.hasPrimaryImage === undefined && item.hasBackdropImage === undefined
+    && item.primaryImageTag === undefined && item.backdropImageTag === undefined) return item;
+  const clone: ProviderItem = { ...item };
+  delete clone.hasPrimaryImage;
+  delete clone.hasBackdropImage;
+  delete clone.primaryImageTag;
+  delete clone.backdropImageTag;
+  return clone;
+};
 
 export type MediaServerErrorCode =
   | "invalid-input"
@@ -181,6 +263,8 @@ export type MediaServerErrorCode =
   | "invalid-response"
   | "response-too-large"
   | "stale-generation"
+  | "identity-changed"
+  | "unsupported-policy"
   | "secret-key-unavailable"
   | "secret-unavailable";
 

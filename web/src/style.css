@@ -1219,7 +1219,7 @@ img.broken{visibility:hidden}
 /* The blurred backdrop is drawn wider than the tile. Unclipped it counted towards the
    grid's scrollable width, so a phone could drag the catalogue sideways; .poster-wrap clips
    it and carries the hover lift the pictures used to do. */
-.tile-blur{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:blur(18px) saturate(1.2);transform:scale(1.12);opacity:.55}.tile-fit{position:relative;width:100%;height:100%;object-fit:contain}.poster-wrap .tile-blur,.poster-wrap .tile-fit{aspect-ratio:var(--catalog-tile-aspect,2/3);border-radius:9px}.poster-wrap .tile-blur{border:0}@media(prefers-reduced-motion:reduce){.tile-blur{transform:none}}
+.browse-art img.tile-fit{object-fit:contain}.tile-blur{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:blur(18px) saturate(1.2);transform:scale(1.12);opacity:.55}.tile-fit{position:relative;width:100%;height:100%;object-fit:contain}.poster-wrap .tile-blur,.poster-wrap .tile-fit{aspect-ratio:var(--catalog-tile-aspect,2/3);border-radius:9px}.poster-wrap .tile-blur{border:0}@media(prefers-reduced-motion:reduce){.tile-blur{transform:none}}
 .addon-tools{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:-10px 0 18px}
 .addon-order-note{font-size:11px;color:var(--muted);margin:0 0 18px}
 .addon-filter{min-width:220px;flex:0 1 300px;padding:9px 11px;font-size:12px}
@@ -1374,6 +1374,7 @@ img.broken{visibility:hidden}
 .user-grant-row input{flex:0 0 auto;width:auto;accent-color:var(--accent)}
 .user-grant-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .user-grant-row .library-badge{flex:0 0 auto}
+.user-grant-head{margin:7px 0 2px;padding:0 8px;font-size:11px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
 /* A phone in landscape leaves about 375px for the whole dialog, and the account block --
    name, role, the switch, a password field and its button -- does not fit in it at the
    desktop rhythm. Tightening the spacing there keeps the block's own button on screen when
@@ -1960,3 +1961,81 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 /* Let the long destination wrap beside its icon; short, wide windows keep a one-line rail. */
 @media(min-width:981px) and (min-height:501px),(min-width:701px) and (max-width:980px) and (min-height:501px) and (orientation:landscape){.sidebar nav button>span{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;min-width:0;white-space:normal;overflow:hidden;text-overflow:ellipsis;line-height:1.1}}
 @media(min-width:981px) and (max-height:500px) and (orientation:landscape){.sidebar nav button>span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+
+/* Remote media servers (MS-4a). The administrator panel reuses the library-manager rows and
+   dialogs above; only the section span, the connection grid and the compact Library-page
+   browser are new, and they take their colours and controls from the shared vocabulary. */
+.media-server-section{grid-column:1/-1}
+.media-server-manager{display:grid;gap:12px}
+.media-server-connections{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(440px,100%),1fr));gap:12px;align-items:stretch}
+.media-server-attached{display:grid;gap:12px;margin-top:6px}
+.media-server-attached>h3{margin:0;font-size:12px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted)}
+.media-server-card{width:min(560px,100%);max-height:100%}
+.media-server-library-card{width:min(620px,100%);max-height:100%}
+.media-server-form{display:grid;gap:12px}
+.media-server-form label,.media-server-field{display:grid;gap:6px;min-width:0}
+.media-server-form label>span,.media-server-field>span{font-size:10px;color:var(--muted)}
+.media-server-advanced{display:grid;gap:10px;padding-top:12px;border-top:1px solid var(--line)}
+.media-server-advanced>summary{font-size:11px;color:var(--muted);cursor:pointer}
+.media-server-discover{display:grid;gap:8px}
+.media-server-discover-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:#0d1117}
+.media-server-discover-row>span{min-width:0}
+.media-server-discover-row strong{display:block;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.media-server-discover-row small{font-size:10px;color:var(--muted)}
+.media-server-attached-tag{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--green)}
+.media-server-attached-tag svg{width:15px;height:15px}
+.media-server-grants{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(220px,100%),1fr));gap:8px}
+.media-server-grants .library-check{font-size:11px}
+.media-server-grant-info{display:flex;align-items:center;justify-content:space-between;gap:9px;font-size:11px;color:var(--muted)}
+
+/* The remote roots wear the same panel as the local listing: the heading, the borders and the
+   grid padding come from .browse-panel, and only the gap between the two blocks is added here. */
+.remote-libraries{flex:none;margin-bottom:16px}
+.remote-libraries .browse-scroll{overflow:visible}
+.remote-libraries .browse-bar{min-height:44px}
+/* One surface for a playable title, local or remote, so the two details cannot drift apart: the
+   backdrop lies under the whole body, chips to Play, and the copy starts at the top with no band
+   above it. The gradient keeps the synopsis, the actions and an episode list legible. */
+.library-title-detail{position:relative;isolation:isolate;display:flex;flex-direction:column;gap:10px;min-height:max(420px,calc(100dvh - 310px));padding:26px;border-radius:10px;background-color:#121721;background-size:cover;background-position:center;background-repeat:no-repeat}
+.library-title-detail::before{content:"";position:absolute;inset:0;z-index:0;border-radius:inherit;background:linear-gradient(90deg,#121721b8 0%,transparent 55%);pointer-events:none}
+.library-title-detail>.hero{position:relative;z-index:1;background:none;margin:0;padding:0;min-height:0;flex:0 1 auto}
+.library-detail-hero .detail-copy{max-width:760px}
+.library-detail-hero .detail-copy h2{font-size:30px;margin:10px 0 5px;line-height:1.14}
+.library-detail-hero .detail-copy p{margin:6px 0}
+.library-detail-synopsis{margin:9px 0 0;max-width:680px;font-size:13px;line-height:1.6;color:#dce3ed}
+.library-title-detail>.remote-error,.library-title-detail>.loading,.library-title-detail>.identify-hint,.library-title-detail>.library-detail-actions,.library-title-detail>.remote-episodes-head,.library-title-detail>.remote-season-group,.library-title-detail>.load-more,.library-title-detail>.remote-season-group .browse-grid,.library-title-detail>.remote-season-group .browse-rows{position:relative;z-index:1}
+.library-title-detail>.library-detail-actions{margin-top:4px}
+@media(max-width:700px){.library-title-detail{min-height:max(300px,calc(100dvh - 310px));padding:16px}.library-detail-hero .detail-copy h2{font-size:21px}.library-detail-synopsis{font-size:12px}}
+@media(max-height:500px) and (orientation:landscape){.library-title-detail{min-height:max(190px,calc(100dvh - 150px));padding:14px}}
+.remote-personal{margin-top:26px}
+.remote-episodes-head span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.remote-season{margin:8px 0 2px;font-size:10px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)}
+.remote-error{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:10px 12px;font-size:11px;color:var(--red);background:#2a171a;border-radius:8px}
+.remote-error span{flex:1 1 200px;min-width:0;line-height:1.45}
+.remote-detail{display:grid;gap:10px;align-content:start}
+.library-title-detail .remote-episodes-head{margin-top:2px}
+.library-detail-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.library-detail-actions button svg{width:16px;height:16px}
+.library-detail-play{justify-content:flex-start}
+.library-source-card{width:min(560px,100%)}
+.library-source-list{max-height:none}
+.remote-streams{display:grid;gap:6px}
+.remote-streams button{display:grid;grid-template-columns:auto minmax(0,1fr) 18px;align-items:center;gap:10px;padding:9px 11px;text-align:left;background:var(--panel)}
+.remote-streams button>span{display:grid;gap:3px;min-width:0}
+.remote-streams button strong{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.remote-streams button small{font-size:10px;color:var(--muted)}
+.remote-streams button.selected{border-color:var(--accent);background:#ff5b3812}
+.remote-streams button.selected>svg{color:var(--accent)}
+.stream-list button>i.remote{color:var(--accent2)}
+@media(max-width:980px){.media-server-connections{grid-template-columns:1fr}.media-server-grants{grid-template-columns:1fr}}
+
+main.view-library>.library-page.library-remote-roots{overflow-anchor:none;overflow-y:auto;overscroll-behavior:contain}
+.library-remote-roots>.remote-libraries{flex:none}
+main.view-library>.library-remote-roots>.browse-panel{flex:none;min-height:240px;overflow:visible}
+.library-remote-roots>.browse-panel.remote-libraries{min-height:0}
+.library-remote-roots>.browse-panel>.browse-scroll{overflow:visible}
+
+/* A library detail lives in the browse pane, so the catalogue's hero sizing must not reach it:
+   the backdrop is the whole surface and the copy starts at the very top of it. */
+.library-title-detail .hero.library-detail-hero{background:none;min-height:0;max-height:none;height:auto;margin:0;padding:0;overflow:visible}
+@media(max-width:700px){.library-title-detail .gallery-open{top:0;right:0}}

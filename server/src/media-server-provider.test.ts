@@ -110,12 +110,14 @@ test("listLibraries maps collection folders and drops everything else", async ()
       { Type: "CollectionFolder", CollectionType: "tvshows", Id: "l3", Name: "Shows" },
       { Type: "CollectionFolder", CollectionType: "music", Id: "l4", Name: "Music" },
       { Type: "Folder", CollectionType: null, Id: "l5", Name: "Plain folder" },
+      { Type: "CollectionFolder", CollectionType: "musicvideos", Id: "l6", Name: "Music videos" },
     ],
   }));
   assert.deepEqual(await provider.listLibraries("tok", "user-1"), [
     { id: "l1", name: "Movies", type: "movie" },
     { id: "l2", name: "Mixed", type: "mixed" },
     { id: "l3", name: "Shows", type: "series" },
+    { id: "l6", name: "Music videos", type: "mixed" },
   ]);
 
   const notArray = fixture(() => ({ Items: {} }));
@@ -136,7 +138,7 @@ test("pageItems builds a bounded cursor and rejects mismatch, bad totals and ove
   const first = await provider.pageItems("tok", "user-1", "lib-1", { limit: 2 });
   assert.equal(first.total, 3);
   assert.equal(first.items.length, 2);
-  assert.equal(lastArgs.includeItemTypes, "Movie,Series,Season,Episode");
+  assert.equal(lastArgs.includeItemTypes, "Movie,Series,Season,Episode,MusicVideo");
   assert.equal(lastArgs.startIndex, 0);
   assert.ok(first.cursor);
   const second = await provider.pageItems("tok", "user-1", "lib-1", { limit: 2, cursor: first.cursor });
@@ -342,4 +344,289 @@ test("a typed transport error is propagated untouched, never softened", async ()
   await assert.rejects(provider.currentAccount("tok", "user-1"), { code: "forbidden", status: 403 });
   const missing = fixture(() => new MediaServerError("not-found", "missing", 404));
   await assert.rejects(missing.provider.detail("tok", "user-1", "gone"), { code: "not-found", status: 404 });
+});
+
+test("versions read only external text subtitles with a bounded integer index", async () => {
+  const { provider } = fixture(() => ({
+    MediaSources: [{
+      Id: "v1", Protocol: "File",
+      MediaStreams: [
+        { Type: "Subtitle", IsExternal: true, Index: 0, Codec: "subrip", Language: "eng", Title: "English", DeliveryUrl: "https://evil.example/srt" },
+        { Type: "Subtitle", IsExternal: true, Index: 2, Codec: "srt", Language: "en" },
+        { Type: "Subtitle", IsExternal: false, Index: 3, Codec: "subrip" },
+        { Type: "Subtitle", IsExternal: true, Index: 4, Codec: "ass" },
+        { Type: "Subtitle", IsExternal: true, Index: -1, Codec: "subrip" },
+        { Type: "Subtitle", IsExternal: true, Index: 1.5, Codec: "subrip" },
+        { Type: "Audio", IsExternal: true, Index: 6, Codec: "aac" },
+        { Type: "Subtitle", IsExternal: true, Index: 0, Codec: "srt" },
+        { Type: "Subtitle", IsExternal: true, Index: 1024, Codec: "srt" },
+      ],
+    }],
+  }));
+  const versions = await provider.versions("tok", "user-1", "item-1");
+  assert.deepEqual(versions[0]!.externalSubtitles, [
+    { index: 0, language: "eng", title: "English" },
+    { index: 2, language: "en" },
+  ], "only external text tracks with a valid unique index are kept, and no URL is read");
+  assert.equal(JSON.stringify(versions).includes("/srt"), false, "no address from the stream reaches the version");
+});
+
+test("versions refuse a version that offers too many external subtitles", async () => {
+  const { provider } = fixture(() => ({
+    MediaSources: [{
+      Id: "v1", Protocol: "File",
+      MediaStreams: Array.from({ length: 65 }, (_value, index) => ({ Type: "Subtitle", IsExternal: true, Index: index, Codec: "subrip" })),
+    }],
+  }));
+  await assert.rejects(provider.versions("tok", "user-1", "item-1"), { code: "invalid-response" });
+});
+
+test("an episode keeps its IndexNumberEnd as a range and refuses a malformed one", async () => {
+  const { provider } = fixture(() => ({ Id: "e1", Name: "Ep", Type: "Episode", IndexNumber: 2, IndexNumberEnd: 3 }));
+  assert.deepEqual(await provider.detail("tok", "user-1", "e1"), { id: "e1", name: "Ep", type: "episode", episode: 2, episodeEnd: 3, providerIds: {} });
+  const malformed = fixture(() => ({ Id: "e1", Name: "Ep", Type: "Episode", IndexNumber: 2, IndexNumberEnd: "3" }));
+  await assert.rejects(malformed.provider.detail("tok", "user-1", "e1"), { code: "invalid-response" });
+});
+
+
+test("music videos browse and open as standalone media without catalogue movie matches", async () => {
+  const item = { Id: "clip-1", Name: "Clip", Type: "MusicVideo", ParentId: "music-library", RunTimeTicks: 1200000000, ProviderIds: { Imdb: "tt0133093" } };
+  const { provider } = fixture((operation, args) => {
+    if (operation === "items") {
+      assert.ok(String(args.includeItemTypes).split(",").includes("MusicVideo"));
+      return { Items: [item], TotalRecordCount: 1 };
+    }
+    return item;
+  });
+  const page = await provider.pageItems("tok", "user-1", "music-library");
+  assert.equal(page.items[0].type, "movie");
+  assert.equal(page.items[0].durationTicks, 1200000000);
+  assert.deepEqual(page.items[0].providerIds, {}, "music video IDs must not match a catalogue movie");
+  assert.deepEqual(await provider.detail("tok", "user-1", "clip-1"), page.items[0]);
+});
+
+test("pageDirectory pins Recursive and the type set to the mode and admits a Folder row", async () => {
+  const seen: Array<Record<string, unknown>> = [];
+  const { provider } = fixture((_operation, args) => {
+    seen.push(args);
+    return {
+      Items: [
+        { Id: "folder-1", Name: "Season 1", Type: "Folder", ParentId: "library-1" },
+        { Id: "m1", Name: "Alien", Type: "Movie", ProviderIds: { Imdb: "tt0078748" } },
+      ],
+      TotalRecordCount: 2,
+    };
+  });
+  const folders = await provider.pageDirectory("tok", "user-1", "library-1", { mode: "folders" });
+  assert.equal(seen[0].recursive, false, "folders mode is not recursive");
+  assert.ok(String(seen[0].includeItemTypes).split(",").includes("Folder"), "folders mode admits Folder");
+  assert.equal(seen[0].sortBy, "SortName");
+  assert.equal(seen[0].sortOrder, "Ascending");
+  assert.equal(folders.items[0].type, "folder", "a Folder row normalizes to the folder type");
+  assert.equal(folders.items[1].type, "movie");
+
+  await provider.pageDirectory("tok", "user-1", "series-1", { mode: "titles", type: "episode", limit: 5, sort: "added", order: "desc" });
+  assert.equal(seen[1].recursive, true, "titles mode is recursive");
+  assert.equal(seen[1].includeItemTypes, "Episode", "an explicit type narrows the listing");
+  assert.ok(!String(seen[1].includeItemTypes).includes("Folder"), "titles mode excludes Folder");
+  assert.equal(seen[1].sortBy, "DateCreated");
+  assert.equal(seen[1].sortOrder, "Descending");
+  assert.equal(seen[1].limit, 5);
+});
+
+test("pageDirectory records only a real Primary image tag and rejects a foreign cursor or option", async () => {
+  const { provider } = fixture(() => ({
+    Items: [
+      { Id: "m1", Name: "With art", Type: "Movie", ProviderIds: {}, ImageTags: { Primary: "abc" } },
+      { Id: "m2", Name: "No art", Type: "Movie", ProviderIds: {} },
+      { Id: "s1", Name: "Show", Type: "Series", ProviderIds: {}, ImageTags: { Primary: "" } },
+    ],
+    TotalRecordCount: 10,
+  }));
+  const page = await provider.pageDirectory("tok", "user-1", "library-1", { mode: "titles", limit: 3 });
+  assert.equal(page.items[0].hasPrimaryImage, true);
+  assert.equal(page.items[1].hasPrimaryImage, undefined, "a row with no tag carries no flag");
+  assert.equal(page.items[2].hasPrimaryImage, false, "an empty tag proves the image is absent");
+  assert.ok(page.cursor, "a short page offers a continuation");
+
+  await assert.rejects(provider.pageDirectory("tok", "user-1", "library-1", { mode: "grid" as never }), { code: "invalid-input" });
+  await assert.rejects(provider.pageDirectory("tok", "user-1", "library-1", { mode: "titles", type: "folder" as never }), { code: "invalid-input" });
+  await assert.rejects(provider.pageDirectory("tok", "user-1", "library-1", { mode: "titles", sort: "date" as never }), { code: "invalid-input" });
+  await assert.rejects(provider.pageDirectory("tok", "user-1", "library-1", { mode: "titles", order: "up" as never }), { code: "invalid-input" });
+  await assert.rejects(provider.pageDirectory("tok", "user-1", "library-1", { mode: "titles", limit: 0 }), { code: "invalid-input" });
+  await assert.rejects(provider.pageDirectory("tok", "user-1", "library-1", { mode: "titles", cursor: page.cursor!.slice(0, -1) + (page.cursor!.endsWith("A") ? "B" : "A") }), { code: "invalid-input" });
+  await assert.rejects(provider.pageDirectory("tok", "user-1", "other-library", { mode: "titles", limit: 3, cursor: page.cursor }), { code: "invalid-input" }, "a cursor from another parent is refused");
+  await assert.rejects(provider.pageDirectory("tok", "user-1", "library-1", { mode: "folders", limit: 3, cursor: page.cursor }), { code: "invalid-input" }, "a cursor from another mode is refused");
+});
+
+test("backdrop presence is read from BackdropImageTags, then ImageTags.Backdrop, and stays unknown without metadata", async () => {
+  const { provider } = fixture(() => ({
+    Items: [
+      { Id: "m1", Name: "Backdrops", Type: "Movie", ProviderIds: {}, BackdropImageTags: ["abc"] },
+      { Id: "m2", Name: "No backdrops", Type: "Movie", ProviderIds: {}, BackdropImageTags: [] },
+      { Id: "m3", Name: "Legacy backdrop", Type: "Movie", ProviderIds: {}, ImageTags: { Backdrop: "legacy" } },
+      { Id: "m4", Name: "Primary only", Type: "Movie", ProviderIds: {}, ImageTags: { Primary: "p1" } },
+      { Id: "m5", Name: "Unknown", Type: "Movie", ProviderIds: {} },
+      { Id: "m6", Name: "Blank tag", Type: "Movie", ProviderIds: {}, BackdropImageTags: [""] },
+      { Id: "m7", Name: "Wrong shape", Type: "Movie", ProviderIds: {}, BackdropImageTags: [3] },
+    ],
+    TotalRecordCount: 7,
+  }));
+  const page = await provider.pageDirectory("tok", "user-1", "library-1", { mode: "titles", limit: 7 });
+  assert.equal(page.items[0].hasBackdropImage, true, "a non-empty BackdropImageTags entry proves presence");
+  assert.equal(page.items[1].hasBackdropImage, false, "an empty BackdropImageTags proves absence");
+  assert.equal(page.items[2].hasBackdropImage, true, "ImageTags.Backdrop is a legacy presence signal");
+  assert.equal(page.items[3].hasBackdropImage, false, "ImageTags without Backdrop proves absence");
+  assert.equal(page.items[4].hasBackdropImage, undefined, "no image metadata leaves the backdrop unknown");
+  assert.equal(page.items[5].hasBackdropImage, false, "a blank tag proves absence");
+  assert.equal(page.items[6].hasBackdropImage, false, "a non-string entry proves absence");
+});
+
+
+test("native movie filters retain music videos and folders, and episode pages use numeric order", async () => {
+  const calls: Array<Record<string, unknown>> = [];
+  const { provider } = fixture((_operation, args) => { calls.push(args); return { Items: [], TotalRecordCount: 0 }; });
+  await provider.pageDirectory("tok", "account", "library", { mode: "titles", type: "movie" });
+  assert.equal(calls[0].includeItemTypes, "Movie,MusicVideo");
+  await provider.pageDirectory("tok", "account", "library", { mode: "folders", type: "movie" });
+  assert.equal(calls[1].includeItemTypes, "Folder,Movie,MusicVideo");
+  await provider.pageDirectory("tok", "account", "series", { mode: "titles", type: "episode", limit: 1 });
+  assert.equal(calls[2].sortBy, "ParentIndexNumber,IndexNumber,SortName", "numeric episode order must apply before pagination");
+});
+
+test("provider metadata is bounded, optional, and does not project paths or raw URLs", async () => {
+  for (const kind of ["jellyfin", "emby"] as const) {
+    const { provider } = fixture(() => ({ Id: "m", Name: "Movie", Type: "Movie", Overview: "A story", ProductionYear: 2024, Genres: ["Drama", "Drama", "Comedy", null, "x".repeat(129)], Size: 1234, RunTimeTicks: 1200000000, DateCreated: "2026-10-13T00:00:00Z", Path: "/private/movie.mkv", RemoteTrailers: [{ Url: "https://upstream.invalid" }] }), kind);
+    const item = await provider.detail("token", "user", "m");
+    assert.deepEqual(item, { id: "m", name: "Movie", type: "movie", providerIds: {}, overview: "A story", year: 2024, genres: ["Drama", "Comedy"], size: 1234, durationTicks: 1200000000, addedAt: "2026-10-13T00:00:00.000Z" });
+    const bad = fixture(() => ({ Id: "m", Name: "Movie", Type: "Movie", Overview: "x".repeat(4097), ProductionYear: 99999, Genres: "Drama", Size: -1, DateCreated: "invalid" }), kind);
+    assert.deepEqual(await bad.provider.detail("token", "user", "m"), { id: "m", name: "Movie", type: "movie", providerIds: {} });
+  }
+});
+
+test("listLibraries records a view's own primary image tag and drops a foreign one", async () => {
+  const { provider } = fixture(() => ({
+    Items: [
+      { Type: "CollectionFolder", CollectionType: "movies", Id: "l1", Name: "Movies", ImageTags: { Primary: "abc" } },
+      { Type: "CollectionFolder", CollectionType: "tvshows", Id: "l2", Name: "Shows", ImageTags: { Primary: "" } },
+      { Type: "CollectionFolder", CollectionType: "movies", Id: "l3", Name: "Plain" },
+      { Type: "CollectionFolder", CollectionType: "movies", Id: "l4", Name: "Foreign", ImageTags: { Primary: "bad tag!" } },
+    ],
+  }));
+  assert.deepEqual(await provider.listLibraries("tok", "user-1"), [
+    { id: "l1", name: "Movies", type: "movie", primaryImageTag: "abc" },
+    { id: "l2", name: "Shows", type: "series" },
+    { id: "l3", name: "Plain", type: "movie" },
+    { id: "l4", name: "Foreign", type: "movie" },
+  ]);
+});
+
+test("pageDirectory records a bounded child count and the exact image tags", async () => {
+  const { provider } = fixture(() => ({
+    Items: [
+      { Id: "s1", Name: "Show", Type: "Series", ProviderIds: {}, ChildCount: 12, ImageTags: { Primary: "p1", Backdrop: "b1" } },
+      { Id: "s2", Name: "Bad count", Type: "Series", ProviderIds: {}, ChildCount: -3 },
+      { Id: "s3", Name: "Backdrops", Type: "Series", ProviderIds: {}, BackdropImageTags: ["bk1"] },
+      { Id: "s4", Name: "Foreign", Type: "Series", ProviderIds: {}, ImageTags: { Primary: "bad tag!" } },
+    ],
+    TotalRecordCount: 4,
+  }));
+  const page = await provider.pageDirectory("tok", "user-1", "library-1", { mode: "titles", limit: 4 });
+  assert.equal(page.items[0].childCount, 12);
+  assert.equal(page.items[0].primaryImageTag, "p1");
+  assert.equal(page.items[0].backdropImageTag, "b1");
+  assert.equal(page.items[1].childCount, undefined, "a negative count is dropped");
+  assert.equal(page.items[2].backdropImageTag, "bk1");
+  assert.equal(page.items[3].primaryImageTag, undefined, "a tag outside the URL-safe alphabet is never captured");
+  assert.equal(page.items[3].hasPrimaryImage, false);
+});
+
+test("pageDirectory sends EnableTotalRecordCount only on the first page and keeps the stored total", async () => {
+  const seen: Array<Record<string, unknown>> = [];
+  const { provider } = fixture((_operation, args) => {
+    seen.push(args);
+    return args.enableTotalRecordCount === false
+      ? { Items: [{ Id: "e1", Name: "E1", Type: "Episode" }] }
+      : { Items: [{ Id: "e1", Name: "E1", Type: "Episode" }], TotalRecordCount: 5 };
+  });
+  const first = await provider.pageDirectory("tok", "user-1", "series-1", { mode: "titles", type: "episode", limit: 1, season: 2 });
+  assert.equal(seen[0].enableTotalRecordCount, true);
+  assert.equal(seen[0].parentIndexNumber, 2, "the season becomes a bounded ParentIndexNumber");
+  assert.equal(first.total, 5);
+  assert.ok(first.cursor);
+  const second = await provider.pageDirectory("tok", "user-1", "series-1", { mode: "titles", type: "episode", limit: 1, season: 2, cursor: first.cursor });
+  assert.equal(seen[1].enableTotalRecordCount, false, "a continuation never asks for another count");
+  assert.equal(second.total, 5, "the continuation keeps the initial total when upstream omits it");
+  assert.ok(second.cursor);
+});
+
+test("pageDirectory bounds the season and binds it into the cursor", async () => {
+  const { provider } = fixture(() => ({ Items: [{ Id: "e", Name: "E", Type: "Episode" }], TotalRecordCount: 4 }));
+  for (const season of [-1, 1.5, 10_001, "2"]) {
+    await assert.rejects(provider.pageDirectory("tok", "u", "series-1", { mode: "titles", season: season as never }), { code: "invalid-input" }, String(season));
+  }
+  const page = await provider.pageDirectory("tok", "u", "series-1", { mode: "titles", type: "episode", limit: 1, season: 3 });
+  assert.ok(page.cursor);
+  await assert.rejects(
+    provider.pageDirectory("tok", "u", "series-1", { mode: "titles", type: "episode", limit: 1, season: 4, cursor: page.cursor }),
+    { code: "invalid-input" },
+    "a cursor from another season is refused",
+  );
+});
+
+test("findByProviderIds issues one exact Emby query and re-checks every id locally", async () => {
+  const { calls, provider } = fixture(() => ({
+    Items: [
+      { Id: "m1", Name: "Alien", Type: "Movie", ProviderIds: { Imdb: "tt0078748" } },
+      { Id: "m2", Name: "Other", Type: "Movie", ProviderIds: { Imdb: "tt9999999" } },
+    ],
+  }), "emby");
+  const found = await provider.findByProviderIds("tok", "user-1", "lib-1", { imdb: "tt0078748" }, "movie");
+  assert.deepEqual(found.map((item) => item.id), ["m1"], "a row carrying a different id is filtered locally");
+  assert.equal(calls.length, 1, "exactly one list query, no scan");
+  assert.equal(calls[0].operation, "match");
+  assert.deepEqual(calls[0].args, {
+    userId: "user-1", parentId: "lib-1", provider: "emby", providerName: "imdb", providerId: "tt0078748",
+    includeItemTypes: "Movie", limit: 200,
+  });
+});
+
+test("findByProviderIds narrows Jellyfin by title and verifies the exact id in one query", async () => {
+  const { calls, provider } = fixture(() => ({
+    Items: [
+      { Id: "want", Name: "Alien", Type: "Movie", ProviderIds: { Tmdb: "603" } },
+      { Id: "same-name", Name: "Alien", Type: "Movie", ProviderIds: { Tmdb: "999" } },
+      { Id: "wrong", Name: "Alien Resurrection", Type: "Movie", ProviderIds: {} },
+    ],
+  }), "jellyfin");
+  const found = await provider.findByProviderIds("tok", "user-1", "lib-1", { tmdb: "603" }, "movie", "Alien");
+  assert.deepEqual(found.map((item) => item.id), ["want"]);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].operation, "match");
+  assert.equal(calls[0].args.searchTerm, "Alien");
+  assert.equal(calls[0].args.providerName, "tmdb");
+  assert.equal(calls[0].args.includeItemTypes, "Movie");
+});
+
+test("findByProviderIds without a title makes one bounded Has-id page and never claims exhaustiveness", async () => {
+  const { calls, provider } = fixture(() => ({
+    Items: [{ Id: "m1", Name: "Alien", Type: "Movie", ProviderIds: { Imdb: "tt0078748" } }],
+  }), "jellyfin");
+  const found = await provider.findByProviderIds("tok", "user-1", "lib-1", { imdb: "tt0078748" }, "movie");
+  assert.deepEqual(found.map((item) => item.id), ["m1"]);
+  assert.equal(calls.length, 1);
+  assert.equal("searchTerm" in calls[0].args, false, "no title is sent when the caller has none");
+  assert.equal(calls[0].args.limit, 200, "the page stays bounded");
+});
+
+test("findByProviderIds prefers a usable id, queries nothing without one and refuses an oversized page", async () => {
+  const { calls, provider } = fixture(() => ({ Items: [] }), "emby");
+  await provider.findByProviderIds("tok", "u", "lib", { imdb: "not-an-id", tmdb: "603" }, "movie");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].args.providerName, "tmdb", "the first usable id names the filter");
+  await provider.findByProviderIds("tok", "u", "lib", { imdb: "tt", tmdb: "0" }, "movie");
+  assert.equal(calls.length, 1, "no usable id means no query at all");
+  await assert.rejects(provider.findByProviderIds("tok", "u", "lib", { imdb: "tt1" }, "episode" as never), { code: "invalid-input" });
+  const oversized = fixture(() => ({ Items: Array.from({ length: 201 }, (_, index) => ({ Id: `m${index}`, Name: "n", Type: "Movie", ProviderIds: { Imdb: "tt1" } })) }), "emby");
+  await assert.rejects(oversized.provider.findByProviderIds("tok", "u", "lib", { imdb: "tt1" }, "movie"), { code: "invalid-response" });
 });

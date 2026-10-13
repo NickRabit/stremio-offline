@@ -10,16 +10,20 @@ import { episodeNumberOf, knownTitleEntry, unitFor, type LibraryMetaRecord, type
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { mediaResources, ResourceError, safeSourceText, type ResourceOwner } from "../media-resources.js";
 import { readMediaText } from "../media-playlist.js";
+import { isRemoteMediaStream } from "../media-server-reference.js";
+import type { MediaServerSources } from "../media-server-sources.js";
 import { guardedFetch } from "../outbound.js";
+import { contentOf } from "../revocation.js";
 import type { UserPrefs } from "../store.js";
 import { trailerFor } from "../trailers.js";
+import { tmdbGallery, type TmdbGalleryPicture } from "../tmdb.js";
 import type { MetaItem, StreamItem } from "../types.js";
 import { shiftVtt } from "../vtt.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 
 export interface CatalogDeps extends RouteContext {
   tmdbProvider(language: string): MetaProvider | undefined;
-  cachedMeta(type: string, id: string, language?: string, viewer?: Viewer): Promise<MetaItem | null>;
+  cachedMeta(type: string, id: string, language?: string, viewer?: Viewer, opts?: { artwork?: boolean }): Promise<MetaItem | null>;
   prefsOf(req?: express.Request): UserPrefs;
   libraryTarget(value: string, viewer: Viewer | undefined): Promise<string>;
   ownerOf(req: express.Request): ResourceOwner;
@@ -34,10 +38,11 @@ export interface CatalogDeps extends RouteContext {
   metaStore: LibraryMetaStore;
   externalIds: ExternalIdStore;
   subtitleDelay(value: unknown): number;
+  mediaSources: MediaServerSources;
 }
 
 export function registerCatalogRoutes(app: express.Application, deps: CatalogDeps): void {
-  const { store, currentUser, cachedMeta, prefsOf, libraryTarget, ownerOf, trackMedia, libraryKey, localCopies, libraryUnits, ownRecord, metaStore, externalIds, subtitleDelay, requireAccess } = deps;
+  const { store, currentUser, cachedMeta, prefsOf, libraryTarget, ownerOf, trackMedia, libraryKey, localCopies, libraryUnits, ownRecord, metaStore, externalIds, subtitleDelay, mediaSources, requireAccess } = deps;
 
   /** The addons this caller may use, read once per request. A disabled addon is left out
    *  later by the helpers that honour `enabled`; visibility narrows an enabled addon only. */
@@ -61,6 +66,19 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
   const titleTrailer = (type: string, id: string, language: string, viewer: Viewer) => {
     const apiKey = store.settings().tmdbApiKey;
     return trailerFor(allowedAddons(store.addons(), viewer), type, id, language, apiKey ? { apiKey, language } : undefined);
+  };
+
+  const galleryCache = new Map<string, { at: number; promise: Promise<TmdbGalleryPicture[]> }>();
+  const detailGallery = (type: string, id: string, language: string) => {
+    const apiKey = store.settings().tmdbApiKey;
+    if (!apiKey || (type !== "movie" && type !== "series") || !/^(tt[0-9]+|tmdb:[0-9]+)$/.test(id)) return Promise.resolve([]);
+    const key = `${type}:${id}:${language}:${apiKey}`;
+    const cached = galleryCache.get(key);
+    if (cached && Date.now() - cached.at < 30 * 60_000) return cached.promise;
+    const entry = { at: Date.now(), promise: tmdbGallery(type, id, { apiKey, language }).catch(() => []) };
+    galleryCache.set(key, entry);
+    if (galleryCache.size > 128) galleryCache.delete(galleryCache.keys().next().value!);
+    return entry.promise;
   };
 
   app.get("/api/catalogs", (req, res) => res.json(inOrder(req).filter((a) => a.enabled && a.role !== "source").flatMap((addon) => (addon.manifest.catalogs ?? []).map((item) => ({ ...item, addonKey: addon.key, addonName: addon.manifest.name })) )));
@@ -90,9 +108,16 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
   app.get("/api/searchable", (req, res) => res.json(searchableCatalogs(inOrder(req)).map(({ addon, definition }) => ({ addonKey: addon.key, addonName: addon.manifest.name, globalSearch: addon.globalSearch, type: definition.type, id: definition.id, name: definition.name ?? definition.id }))));
   app.get("/api/meta/:type/:id", asyncRoute(async (req, res) => {
     const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
-    const meta = await cachedMeta(String(req.params.type), String(req.params.id), language, viewerOf(currentUser(req)));
+    // The detail page is the one reader that wants the wider backdrop, so it asks for the
+    // artwork reading and keeps a Metahub background at its full size.
+    const meta = await cachedMeta(String(req.params.type), String(req.params.id), language, viewerOf(currentUser(req)), { artwork: true });
     if (!meta) throw new AppError("The metadata was not found.", "err.metaNotFound", 404);
-    res.json(images.rewriteMeta(meta));
+    if (req.query.gallery === "1") {
+      const gallery = await detailGallery(String(req.params.type), String(req.params.id), language);
+      res.json(images.rewriteMeta({ ...meta, images: gallery.map((image) => ({ ...image, shape: image.kind === "poster" ? "poster" : "wide" })) }, true));
+      return;
+    }
+    res.json(images.rewriteMeta(meta, true));
   }));
   app.get("/api/library/trailer", asyncRoute(async (req, res) => {
     const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
@@ -218,6 +243,31 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     if ("url" in req.query || "headers" in req.query) throw new ResourceError(400, "UNSAFE_SOURCE_INPUT");
     const owner = ownerOf(req);
     const resource = mediaResources.get(String(req.params.subtitleId), owner.sid, "subtitle");
+    // A media-server subtitle is a sealed reference, never a URL: it is read through the
+    // scoped transport, converted locally and guarded again before it is sent. A malformed
+    // media-server attempt refuses here rather than reaching the generic URL fetch below.
+    if (isRemoteMediaStream(resource.stream)) {
+      const need = contentOf(resource.stream);
+      requireAccess(req, need);
+      mediaResources.get(resource.id, owner.sid, "subtitle");
+      trackMedia(owner, res, resource.parent ?? resource.id);
+      const controller = new AbortController();
+      res.once("close", () => { if (!res.writableEnded) controller.abort(); });
+      const asset = await mediaSources.readSubtitle(resource.stream, owner, controller.signal);
+      let text = new TextDecoder().decode(asset.bytes);
+      if (!text.trimStart().startsWith("WEBVTT")) text = `WEBVTT\n\n${text.replace(/^\ufeff/, "").replace(/\r/g, "").replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2").replace(/^\d+\n(?=\d{2}:\d{2}:\d{2}[.,]\d{3} -->)/gm, "")}`;
+      const shift = (Number(req.query.offset) || 0) - subtitleDelay(req.query.delay);
+      if (shift) text = shiftVtt(text, shift);
+      // The session, the grant and the resource are all re-read after the await and the
+      // conversion, so a revocation that landed while the bytes were in flight refuses.
+      requireAccess(req, need);
+      mediaResources.get(resource.id, owner.sid, "subtitle");
+      if (res.destroyed || res.writableEnded) return;
+      return void res.type("text/vtt; charset=utf-8")
+        .setHeader("cache-control", "private, no-store")
+        .setHeader("x-content-type-options", "nosniff")
+        .send(text);
+    }
     // Re-checked against the addon it came from, the way a stream is: the resource may have
     // been minted while the account still had it.
     requireAccess(req, { addonKey: resource.stream.addonKey });

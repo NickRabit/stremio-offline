@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addonNotices, arrangeStreams, canQueue, catalogSourceRows, filmHasNoSource, isLocalStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, streamBadge, streamLanguages, streamSize, streamText, visibleCatalogStreams, repickStream, type StreamFilters } from "./streams";
+import { addonNotices, arrangeStreams, canQueue, catalogSourceRows, filmHasNoSource, isLocalStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, remoteSourceFilter, streamBadge, streamLanguages, streamSize, streamText, visibleCatalogStreams, repickStream, type StreamFilters } from "./streams";
 import type { Stream } from "./types";
 
 const stream = (parts: Partial<Stream>): Stream => ({ sourceId: "source", kind: "remote", playable: true, ...parts });
@@ -363,5 +363,57 @@ describe("filmHasNoSource", () => {
   it("is true only when every addon answered and nothing is playable", () => {
     expect(filmHasNoSource({ loaded: true, pending: 0, playable: false })).toBe(true);
     expect(filmHasNoSource({ loaded: true, pending: 0, playable: true })).toBe(false);
+  });
+});
+
+describe("remote media-server sources", () => {
+  const addon = stream({ sourceId: "a1", name: "FullHD", addonName: "Luna", title: "Czech 2 GB" });
+  const local = stream({ kind: "library", name: "Local", localPath: "lib/Heat.mkv" });
+  const remoteItem = { libraryId: "lib_1", itemId: "i1", mediaSourceId: "m1", progressKey: "p1" };
+  const remote = stream({ sourceId: "r1", name: "Remote 1080p", provider: "jellyfin", libraryId: "lib_1", remoteItem });
+
+  it("keeps an ordinary HTTP addon source queueable and badged HTTP", () => {
+    const http = stream({ sourceId: "h1", name: "HTTP", kind: "remote", playable: true });
+    expect(streamBadge(http)).toBe("HTTP");
+    expect(canQueue(http, false)).toBe(true);
+    expect(canQueue(http, true)).toBe(true);
+  });
+
+  it("refuses to queue a read-only remote source even without capabilities", () => {
+    const bare = stream({ sourceId: "r2", provider: "emby", libraryId: "lib_2" });
+    expect(bare.capabilities).toBeUndefined();
+    expect(canQueue(bare, true)).toBe(false);
+    // The remote context alone is enough: no addon path may pick a remote item up.
+    const contextOnly = stream({ sourceId: "r3", remoteItem });
+    expect(contextOnly.provider).toBeUndefined();
+    expect(canQueue(contextOnly, true)).toBe(false);
+  });
+
+  it("orders local, then remote, then addon sources in the recommended All list", () => {
+    expect(catalogSourceRows([local], [addon], "", "recommended", "en", new Map(), undefined, [remote]))
+      .toEqual([local, remote, addon]);
+  });
+
+  it("keeps a remote library out of a named addon filter", () => {
+    expect(catalogSourceRows([local], [addon], "Luna", "recommended", "en", new Map(), undefined, [remote]))
+      .toEqual([addon]);
+  });
+
+  it("shows a remote library only under its own filter, even against an addon of the same name", () => {
+    const collision = stream({ sourceId: "c1", name: "Collision", addonName: "lib_1" });
+    expect(catalogSourceRows([], [collision], remoteSourceFilter("lib_1"), "recommended", "en", new Map(), undefined, [remote]))
+      .toEqual([remote]);
+    expect(catalogSourceRows([], [collision], "lib_1", "recommended", "en", new Map(), undefined, [remote]))
+      .toEqual([collision]);
+    expect(catalogSourceRows([], [collision], remoteSourceFilter("lib_2"), "recommended", "en", new Map(), undefined, [remote]))
+      .toEqual([]);
+  });
+
+  it("never moves the viewer's own pick or a playing source for a late remote arrival", () => {
+    const base = { playing: false, picked: false, pending: 0, upgrade: true, visible: [addon, remote], selected: addon, preferred: remote };
+    // A remote copy landing late only replaces an automatic pick the viewer has not touched.
+    expect(repickStream(base)).toEqual({ move: true, to: remote });
+    expect(repickStream({ ...base, playing: true })).toEqual({ move: false });
+    expect(repickStream({ ...base, picked: true })).toEqual({ move: false });
   });
 });

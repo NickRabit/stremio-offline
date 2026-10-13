@@ -10,7 +10,8 @@ describe("one Favourites section in the shell", () => {
 
   it("puts a Favourites destination in the sidebar and renders its view", () => {
     expect(app).toContain('label={t("nav.favorites")}');
-    expect(app).toContain('view === "favorites" && <FavoritesView');
+    expect(app).toMatch(/view === "favorites" && <>\s*<FavoritesView/);
+    expect(app).toContain('<RemotePersonalShelf refreshToken={personalRefresh}');
   });
 
   it("keeps the compact bar at five slots by folding Favourites into More", () => {

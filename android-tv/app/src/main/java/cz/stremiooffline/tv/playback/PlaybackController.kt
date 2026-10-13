@@ -7,8 +7,13 @@ import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.ClientCapabilitiesDto
 import cz.stremiooffline.tv.data.PlaybackDescriptorDto
 import cz.stremiooffline.tv.data.ProgressDto
+import cz.stremiooffline.tv.data.RemoteItemContext
+import cz.stremiooffline.tv.data.RemoteItemStateDto
+import cz.stremiooffline.tv.data.RemoteItemStatePatch
+import cz.stremiooffline.tv.data.RemoteLibraryApi
 import cz.stremiooffline.tv.data.TrackChange
 import cz.stremiooffline.tv.diagnostics.AppLog
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -143,6 +148,9 @@ class PlaybackController(
   private var path: String? = null
   private var poster: String? = null
   private var addonKey: String? = null
+  /** Set only for a native remote play: the identity whose position is stored on the local
+   *  remote-state endpoint rather than through the generic progress route. */
+  private var remote: RemoteItemContext? = null
 
   private data class StartPlan(
     /** The source the start uses; null when [mint] has to produce one. */
@@ -162,6 +170,8 @@ class PlaybackController(
     val mint: (suspend () -> String?)? = null,
     /** The client's own subtitle choice, carried across a restart of the same session. */
     val carrySubtitle: SubtitleChoice? = null,
+    /** The native remote identity this session plays, or null for a filesystem or addon play. */
+    val remote: RemoteItemContext? = null,
   )
 
   private var plan: StartPlan? = null
@@ -212,7 +222,8 @@ class PlaybackController(
     subtitlePreference: String?,
     mint: (suspend () -> String?)? = null,
     carrySubtitle: SubtitleChoice? = null,
-  ) = StartPlan(sourceId, key, title, path, explicitTime, resume, poster, addonKey, subtitles, audioPreference, subtitlePreference, library = path != null, mint = mint, carrySubtitle = carrySubtitle)
+    remote: RemoteItemContext? = null,
+  ) = StartPlan(sourceId, key, title, path, explicitTime, resume, poster, addonKey, subtitles, audioPreference, subtitlePreference, library = path != null, mint = mint, carrySubtitle = carrySubtitle, remote = remote)
 
   /**
    * Starts a session for [key]. [sourceId] is a source the server already handed out; when it is
@@ -231,10 +242,11 @@ class PlaybackController(
     audioPreference: String? = null,
     subtitlePreference: String? = null,
     at: Double? = null,
+    remoteItem: RemoteItemContext? = null,
     mint: (suspend () -> String?)? = null,
   ) {
     if (released) return
-    begin(startPlan(sourceId, key, title, path, at, resume, poster, addonKey, subtitles, audioPreference, subtitlePreference, mint))
+    begin(startPlan(sourceId, key, title, path, at, resume, poster, addonKey, subtitles, audioPreference, subtitlePreference, mint, remote = remoteItem))
   }
 
   /** Starts the next library file: the old session is saved and deleted before the new start. */
@@ -281,7 +293,9 @@ class PlaybackController(
     // on the server is deleted when its answer arrives, rather than leaked to the reaper.
     cancelLoops()
     val previousId = sessionId
-    val previous = if (previousId != null && hasPosition) SavePayload(key, position, duration, title, path, poster, addonKey) else null
+    // The outgoing identity is captured before the new plan replaces it, so a switch between two
+    // versions of one remote item still saves under the same stable key.
+    val previous = if (previousId != null && hasPosition) SavePayload(key, position, duration, title, path, poster, addonKey, remote) else null
     sessionId = null
     plan = next
     sourceId = next.sourceId
@@ -290,6 +304,7 @@ class PlaybackController(
     path = next.path
     poster = next.poster
     addonKey = next.addonKey
+    remote = next.remote
     playing = false
     ready = false
     hasPosition = false
@@ -323,7 +338,7 @@ class PlaybackController(
         return@launch
       }
       sourceId = resolved
-      val resumeTime = next.explicitTime ?: if (next.resume) storedResumeTime(next.key) else 0.0
+      val resumeTime = next.explicitTime ?: if (next.resume) storedResumeTime(next) else 0.0
       if (mine != generation) return@launch
       if (resumeTime > 0) lastPosition = resumeTime
       val offered = next.subtitles.map { it.subtitleId }.take(MAX_SUBTITLE_IDS)
@@ -340,9 +355,36 @@ class PlaybackController(
     }
   }
 
-  private suspend fun storedResumeTime(key: String): Double {
-    val stored = runCatching { api.progress(key) }.getOrNull() ?: return 0.0
-    return Progress.resumePosition(stored.position, stored.duration) ?: 0.0
+  /** Where a resume begins. A native remote play reads the local remote-state store; everything
+   *  else reads the generic progress route it always did. A stored position is used only for the
+   *  same version: no proof of cross-version compatibility exists, so another version starts at 0. */
+  private suspend fun storedResumeTime(next: StartPlan): Double {
+    val context = next.remote
+    if (context == null) {
+      val stored = readProgress(next.key) ?: return 0.0
+      return Progress.resumePosition(stored.position, stored.duration) ?: 0.0
+    }
+    val state = readRemoteState(context) ?: return 0.0
+    // An item marked watched has no position to resume: like the web, it starts from the beginning.
+    if (state.watched) return 0.0
+    if (state.mediaSourceId == null || state.mediaSourceId != context.mediaSourceId) return 0.0
+    return Progress.resumePosition(state.position, state.duration) ?: 0.0
+  }
+
+  private suspend fun readProgress(key: String): ProgressDto? = try {
+    api.progress(key)
+  } catch (cancelled: CancellationException) {
+    throw cancelled
+  } catch (_: ApiError) {
+    null
+  }
+
+  private suspend fun readRemoteState(context: RemoteItemContext): RemoteItemStateDto? = try {
+    remoteApi().remoteItemState(context.libraryId, context.itemId)
+  } catch (cancelled: CancellationException) {
+    throw cancelled
+  } catch (_: ApiError) {
+    null
   }
 
   fun onPlayerPosition(seconds: Double) {
@@ -596,7 +638,7 @@ class PlaybackController(
     generation++
     cancelLoops()
     val id = sessionId
-    val payload = if (hasPosition) SavePayload(key, position, duration, title, path, poster, addonKey) else null
+    val payload = if (hasPosition) SavePayload(key, position, duration, title, path, poster, addonKey, remote) else null
     sessionId = null
     if (payload != null || id != null) {
       scope.launch {
@@ -614,11 +656,27 @@ class PlaybackController(
 
   private fun saveNow() {
     if (stopped || !hasPosition || sessionId == null) return
-    val payload = SavePayload(key, position, duration, title, path, poster, addonKey)
+    val payload = SavePayload(key, position, duration, title, path, poster, addonKey, remote)
     scope.launch { runCatching { save(payload) } }
   }
 
+  /** The remote identity of the current session, or the one an outgoing save carries. */
+  private fun remoteApi(): RemoteLibraryApi =
+    api as? RemoteLibraryApi
+      ?: throw ApiError(ApiFailure.Generic)
+
+  /** A native remote play stores its position and preference through the local remote-state
+   *  endpoint, never the generic progress route. Anything else keeps the existing behaviour. */
   private suspend fun save(payload: SavePayload) {
+    val context = payload.remote
+    if (context != null) {
+      remoteApi().patchRemoteItemState(
+        context.libraryId,
+        context.itemId,
+        RemoteItemStatePatch(position = payload.position, duration = payload.duration, mediaSourceId = context.mediaSourceId),
+      )
+      return
+    }
     api.saveProgress(payload.key, payload.position, payload.duration, payload.title, payload.path, payload.poster, payload.addonKey)
   }
 
@@ -641,7 +699,7 @@ class PlaybackController(
     saveJob = scope.launch {
       while (isActive) {
         delay(SAVE_INTERVAL_MS)
-        if (playing && hasPosition) runCatching { save(SavePayload(key, position, duration, title, path, poster, addonKey)) }
+        if (playing && hasPosition) runCatching { save(SavePayload(key, position, duration, title, path, poster, addonKey, remote)) }
       }
     }
   }
@@ -769,6 +827,8 @@ class PlaybackController(
     val path: String?,
     val poster: String?,
     val addonKey: String?,
+    /** Null for the generic progress route; set to store on the local remote-state endpoint. */
+    val remote: RemoteItemContext?,
   )
 
   companion object {

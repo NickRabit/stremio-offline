@@ -11,6 +11,7 @@ import { createSession, parseCookies, readSession, SESSION_COOKIE, sessionUserId
 import { DownloadQueue, type DownloadJob } from "../downloads.js";
 import { messageKeyOf } from "../errors.js";
 import type { LibraryRecord } from "../libraries.js";
+import type { MediaConnectionRecord, RemoteLibraryRecord } from "../media-server-types.js";
 import { MediaResources, type DeviceDownloadTicket, type ResourceOwner } from "../media-resources.js";
 import { Revocations, type ActiveTransfer, type RevocationQueue } from "../revocation.js";
 import { roleMiddleware } from "../roles.js";
@@ -92,6 +93,8 @@ const mount = async (options: {
   userData?: Record<string, UserData>;
   libraries?: (dir: string) => LibraryRecord[];
   addons?: AddonRecord[];
+  connections?: MediaConnectionRecord[];
+  remoteLibraries?: RemoteLibraryRecord[];
   jobs?: DownloadJob[];
   /** A real queue, so the file a cancelled job leaves behind can be looked at. */
   realQueue?: boolean;
@@ -107,6 +110,8 @@ const mount = async (options: {
     users,
     userData: options.userData ?? Object.fromEntries(users.map((entry) => [entry.id, emptyUserData()])),
     libraries: options.libraries?.(dir) ?? [],
+    mediaConnections: options.connections ?? [],
+    remoteLibraries: options.remoteLibraries ?? [],
   }));
   if (options.files) await options.files(dir);
   const store = new Store(dir, dir);
@@ -149,7 +154,13 @@ const mount = async (options: {
   const playbackOwners = new Map<string, { owner: ResourceOwner; resourceId: string }>();
   const stoppedPlayback: string[] = [];
   const revocations = new Revocations({
-    source: { users: () => store.users(), addons: () => store.addons(), libraries: () => store.libraries() },
+    source: {
+      users: () => store.users(),
+      addons: () => store.addons(),
+      libraries: () => store.libraries(),
+      mediaConnections: () => store.mediaConnections(),
+      remoteLibraries: () => store.remoteLibraries(),
+    },
     resources,
     airplay: new AirPlayAccess(resources),
     playbackOwners,
@@ -251,6 +262,19 @@ const keyOf = async (response: Response) => ((await response.json()) as { messag
 
 const exists = (file: string) => access(file).then(() => true, () => false);
 
+const connection = (): MediaConnectionRecord => ({
+  id: "mconn_00000000000000000000000000000001", provider: "jellyfin", name: "Media",
+  baseUrl: "http://media.example", allowLan: false, allowLoopback: false, serverId: "server-1",
+  accountId: "user-1", enabled: true, generation: 0, secretRef: "msecret_00000000000000000000000000000001",
+  addedAt: "2026-01-01T00:00:00.000Z",
+});
+
+const remoteLibrary = (allowedUsers: string[]): RemoteLibraryRecord => ({
+  id: "rlib_00000000000000000000000000000001", connectionId: "mconn_00000000000000000000000000000001",
+  remoteId: "lib-1", name: "Movies", type: "movie", enabled: true, order: 0, allowedUsers,
+  showOnHome: true, showInContinueWatching: true,
+});
+
 test("GET /api/users lists every account with its grants and none of its secrets", async (t) => {
   const harness = await mount({
     users: [admin, bob],
@@ -266,7 +290,7 @@ test("GET /api/users lists every account with its grants and none of its secrets
   assert.deepEqual(body[1], {
     id: BOB, username: "bob", role: "user", disabled: false, mustChangePassword: false,
     createdAt: "2026-01-01T00:00:00.000Z",
-    permissions: newUserPermissions(), libraries: 1, addons: 1,
+    permissions: newUserPermissions(), libraries: 1, addons: 1, remoteLibraries: 0,
   });
   assert.deepEqual(body[0]!.libraries, 0, "an administrator is granted nothing by a list");
   const wire = JSON.stringify(body);
@@ -276,7 +300,7 @@ test("GET /api/users lists every account with its grants and none of its secrets
   // Every response goes through publicUser, not just the list.
   const created = await api(harness.base, "/api/users", { method: "POST", body: { username: "carol", password: "hunter2" } });
   const createdBody = await created.json() as Record<string, unknown>;
-  assert.deepEqual(Object.keys(createdBody).sort(), ["addons", "createdAt", "disabled", "id", "libraries", "mustChangePassword", "permissions", "role", "username"]);
+  assert.deepEqual(Object.keys(createdBody).sort(), ["addons", "createdAt", "disabled", "id", "libraries", "mustChangePassword", "permissions", "remoteLibraries", "role", "username"]);
 });
 
 test("POST /api/users creates an account with the defaults of a new user", async (t) => {
@@ -427,6 +451,26 @@ test("a promotion and a demotion leave the account with the grants it had", asyn
   const rows = await (await api(harness.base, "/api/users")).json() as Array<{ id: string; libraries: number; addons: number }>;
   const back = rows.find((row) => row.id === BOB);
   assert.deepEqual([back?.libraries, back?.addons], [1, 1], "and the dashboard counts them again");
+});
+
+test("the dashboard counts remote library grants and deleting an account sweeps them", async (t) => {
+  const harness = await mount({
+    users: [admin, bob, carol],
+    connections: [connection()],
+    remoteLibraries: [remoteLibrary([BOB, CAROL])],
+  });
+  t.after(harness.close);
+
+  const rows = await (await api(harness.base, "/api/users")).json() as Array<{ id: string; remoteLibraries: number }>;
+  assert.deepEqual(
+    [rows.find((row) => row.id === BOB)?.remoteLibraries, rows.find((row) => row.id === ADA)?.remoteLibraries],
+    [1, 0],
+    "a remote grant is counted for its account and never for an administrator",
+  );
+
+  const removed = await api(harness.base, `/api/users/${BOB}`, { method: "DELETE" });
+  assert.equal(removed.status, 204);
+  assert.deepEqual(harness.store.remoteLibraries()[0]?.allowedUsers, [CAROL], "the deleted account leaves the remote grant list");
 });
 
 test("the last administrator cannot be demoted or switched off", async (t) => {

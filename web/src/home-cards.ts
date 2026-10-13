@@ -27,6 +27,7 @@ export function cardNumbering(card: HomeCard): string | undefined {
 export function cardProgress(card: HomeCard): number | null {
   const progress = card.kind === "resume-file" ? card.progress
     : card.kind === "resume-catalogue" && !card.pending ? card.progress
+    : card.kind === "remote" ? card.progress
     : undefined;
   if (!progress) return null;
   if (!(progress.duration > 0)) return 0;

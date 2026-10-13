@@ -126,6 +126,16 @@ const TABLE: Record<string, ErrorClassification> = {
 
   // A source host the breaker is holding back: it retries on its own once the cooldown ends.
   "err.hostUnavailable": { category: "network", retry: "manual" },
+
+  // Remote media servers: a busy or offline server is retried, a changed identity or
+  // configuration needs the person, and unsupported account restrictions need an operator.
+  "err.mediaServerBusy": { category: "network", retry: "manual" },
+  "err.mediaServerUnavailable": { category: "network", retry: "manual" },
+  "err.mediaServerLogin": { category: "authentication", retry: "action" },
+  "err.mediaServerKey": { category: "configuration", retry: "action" },
+  "err.mediaServerStale": { category: "configuration", retry: "action" },
+  "err.mediaServerIdentity": { category: "configuration", retry: "action" },
+  "err.mediaServerRestricted": { category: "configuration", retry: "action" },
 };
 
 /** `ResourceError` has no catalogue key, so its stable code is the table's second key. */

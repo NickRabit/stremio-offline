@@ -9,6 +9,8 @@ enum class ResumeFilter(val wire: String) {
   All("all"),
   Library("library"),
   Catalog("catalog"),
+  /** The media-server items this account has started; exclusive, unlike `All`. */
+  Remote("remote"),
 }
 
 /** The raw `GET /api/resume` answer: the same card shapes Home draws, kept unparsed so one

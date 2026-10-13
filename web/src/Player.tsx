@@ -367,6 +367,12 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const reportRef = useRef<{ position: number; duration: number }>({ position: 0, duration: 0 });
   // A library file is already on disk, so offering to download it makes no sense.
   const isLocal = stream?.kind === "library";
+  // A remote media-server source is read-only: it never reaches the download queue, is
+  // reported through the local remote-state API and never through the generic progress store.
+  const remoteItem = stream?.remoteItem;
+  const remoteSource = Boolean(stream?.provider || remoteItem);
+  const canSaveToLibrary = !remoteSource && stream?.capabilities?.downloadToLibrary !== false;
+  const canSaveToDevice = !remoteSource && stream?.capabilities?.downloadToDevice !== false;
   const addonSubtitles = [...(stream?.subtitles ?? []), ...subtitles];
 
   // Some browsers paint native WebVTT below the visible video box. Active cues
@@ -574,8 +580,13 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     setSubtitlesHidden(false); subtitlesHiddenRef.current = false;
     // Resuming: the server knows the position and starts playback right there.
     (async () => {
-      const saved = progressKey ? await api.progressOf(progressKey).catch(() => null) : null;
-      const from = saved && saved.position > 30 ? saved.position : 0;
+      const saved = remoteItem
+        ? await api.remoteState(remoteItem.libraryId, remoteItem.itemId).catch(() => null)
+        : progressKey ? await api.progressOf(progressKey).catch(() => null) : null;
+      // A remote item already marked watched starts over, whatever position the store kept.
+      const watched = Boolean(saved && "watched" in saved && saved.watched);
+      const sameVersion = !remoteItem || (saved && "mediaSourceId" in saved && saved.mediaSourceId === remoteItem.mediaSourceId);
+      const from = saved && saved.position > 30 && !watched && sameVersion ? saved.position : 0;
       if (from) setResumedFrom(from);
       return { created: await api.startPlayback(stream, capabilities(), from, addonSubtitles.map((item) => item.subtitleId), { audioLanguage: audioPreferenceRef.current, subtitleLanguage: subtitlePreferenceRef.current }), from };
     })().then(({ created, from }) => {
@@ -840,7 +851,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   // Leaving the page unmounts nothing, so a closed tab or a desktop window switching servers
   // reports it from `pagehide` with a request that outlives the page.
   useEffect(() => {
-    if (!open || !progressKey) return;
+    if (!open || remoteItem || !progressKey) return;
     const payload = () => progressToSave(reportRef.current, {
       key: progressKey, title,
       path: stream?.localPath,
@@ -853,6 +864,22 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     window.addEventListener("pagehide", leaving);
     return () => { clearInterval(timer); window.removeEventListener("pagehide", leaving); send(); };
   }, [open, progressKey, title, progressPoster, progressAddonKey]);
+
+  // The same cadence for a remote source, written to the local remote-state store under the
+  // stream's own identity; the generic progress route never sees a remote key.
+  useEffect(() => {
+    if (!open || !remoteItem) return;
+    const payload = () => {
+      const { position, duration } = reportRef.current;
+      if (!duration || position < 5) return null;
+      return { position: Math.round(position), duration: Math.round(duration), mediaSourceId: remoteItem.mediaSourceId };
+    };
+    const send = () => { const body = payload(); if (body) void api.saveRemoteState(remoteItem.libraryId, remoteItem.itemId, body).catch(() => undefined); };
+    const leaving = () => { const body = payload(); if (body) api.saveRemoteStateOnUnload(remoteItem.libraryId, remoteItem.itemId, body); };
+    const timer = setInterval(send, 10_000);
+    window.addEventListener("pagehide", leaving);
+    return () => { clearInterval(timer); window.removeEventListener("pagehide", leaving); send(); };
+  }, [open, remoteItem]);
 
   useEffect(() => {
     if (!open) return;
@@ -1232,12 +1259,12 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       </div>}
 
       {session?.video && <span className="codec-badge"><Gauge /> {session.video}{session.audio ? ` · ${session.audio}` : ""}</span>}
-      {!isLocal && <button className="player-action" disabled={downloadState === "busy"} onClick={() => void download()} title={t("save.toLibraryHint")} aria-label={t("save.toLibraryHint")}>
+      {!isLocal && canSaveToLibrary && <button className="player-action" disabled={downloadState === "busy"} onClick={() => void download()} title={t("save.toLibraryHint")} aria-label={t("save.toLibraryHint")}>
         {downloadState === "done" ? <><Check /> <span>{t("save.queued")}</span></> : <><HardDrive /> <span>{downloadState === "busy" ? t("save.adding") : t("save.toLibrary")}</span></>}
       </button>}
-      <button className="player-action" disabled={deviceDownloadBusy} onClick={() => void downloadToDevice()} title={t("save.toDeviceHint")} aria-label={t("save.toDeviceHint")}>
+      {canSaveToDevice && <button className="player-action" disabled={deviceDownloadBusy} onClick={() => void downloadToDevice()} title={t("save.toDeviceHint")} aria-label={t("save.toDeviceHint")}>
         <Download /> <span>{deviceDownloadBusy ? t("save.preparing") : t("save.toDevice")}</span>
-      </button>
+      </button>}
     </div>}
   </div>;
 }

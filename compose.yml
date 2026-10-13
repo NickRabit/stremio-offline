@@ -35,6 +35,10 @@ services:
       ALLOW_PRIVATE_ADDONS: "${ALLOW_PRIVATE_ADDONS:-0}"
       ALLOW_ADDON_HOSTS: "${ALLOW_ADDON_HOSTS:-}"
       RESTRICTED_MODE: "${RESTRICTED_MODE:-0}"
+      # Key that encrypts remote media-server tokens. Empty keeps remote connections
+      # unavailable and writes no credential; mount the file explicitly and point this
+      # at the container path. See docs/media-server-management.md.
+      MEDIA_SERVER_KEY_FILE: "${MEDIA_SERVER_KEY_FILE:-}"
       # Guarding addon requests: a cap on concurrent requests per host and a pause
       # after repeated failures. ADDON_GUARD=0 turns both off.
       ADDON_GUARD: "${ADDON_GUARD:-1}"

@@ -127,8 +127,13 @@ Revocation aborts upstream reads, not just the public resource registry.
 Remote artwork must always use a content-authorized proxy/cache path, even with
 secure mode off. A generic shared catalogue image ID is insufficient. Bind
 subtitle resources to the same content/owner and preserve that binding after
-conversion. Return private cache policies and recheck grants before serving
-cached bytes; already delivered bytes cannot be recalled.
+conversion. Return private, `no-cache` policies with an `ETag` of the current
+image tag, recheck grants before serving bytes and stream under that check, and
+answer a matching `If-None-Match` with a local `304` after the local checks.
+Already delivered bytes cannot be recalled. A thumbnail a few minutes old is
+acceptable: membership and image tags are cached for a bounded window rather
+than re-proved on every image request, and an authorization refusal still
+invalidates the cache at once.
 
 Reject media-server sources server-side in download admission, device-save,
 source replacement and resume. Public capabilities describe eligible actions;
@@ -136,11 +141,14 @@ client button visibility alone is not enforcement.
 
 ## Matching and local state
 
-Maintain a bounded, paginated external-ID index for selected libraries. Scope
-cached remote results to the connection/account; filter by local grants before
-returning any item, artwork, count, source or Home card. Index updates run in the
-background, with cancellation, retry backoff and explicit freshness. An outage
-must never be interpreted as a successful empty scan or remove cached items.
+Match a catalogue id with exactly one bounded provider-id query per library, and
+an episode with one series query plus one parent-scoped season page; never a full
+scan at click time. Scope cached remote results to the connection/account; filter
+by local grants before returning any item, artwork, count, source or Home card.
+An outage must never be interpreted as a successful empty match. Where a provider
+cannot search by external id, the client's resolved catalogue or series title may
+bound the query and the exact ids are verified locally; no name ever widens what
+is matched.
 
 Match by namespaced provider IDs (IMDb, TMDB, TVDB where available), including
 media type. Cross-ID conversion may use existing metadata facilities but must
@@ -149,9 +157,10 @@ as an automatic playback decision. Cross-ID conversion applies only to remote
 matching in this proposal; shipped local-source exact-ID behavior is unchanged.
 Reject conflicting IDs; ambiguous results
 remain browsable without being offered against the wrong catalogue title.
-For episodes, verify the series and season/episode numbering; alternate orders,
-anime absolute numbering and multi-episode files require explicit handling or
-no match, never a guess. Preserve multiple legitimate versions as separate
+For episodes, verify the series and season/episode numbering: a file whose own
+range spans two episodes matches either number it names, while alternate orders
+and anime absolute numbering still require explicit handling or no match, never
+a guess. Preserve multiple legitimate versions as separate
 sources rather than confusing them with ambiguous title matches.
 
 Use a canonical identity of provider + verified server ID + remote account ID +
@@ -179,6 +188,42 @@ history merging (remote vs filesystem vs addon) is deferred. Continue watching
 must at least avoid duplicate cards for the same remote item/episode opened
 through different entry points.
 
+## Library detail presentation
+
+Local and remote libraries share title chips, source selection and detail layout.
+Library details paint artwork behind the whole detail surface, including the
+compact playback/action row, with the title chips and full synopsis at the top. Technical
+filenames and version sizes belong in the source picker, rather than under Play.
+Clicking the Library navigation entry starts at the library root; Back within a
+library restores its previous listing and focus.
+
+Metadata enrichment runs only for an explicitly opened detail with an exact
+catalogue identity. Existing metadata, trailer and external-link endpoints supply
+optional catalogue artwork and links. Episode enrichment uses the series identity
+for artwork and links while retaining the episode's own synopsis. Missing or failed
+metadata never prevents playback, and a poster is never enlarged into a backdrop.
+Remote Backdrop requests use a maximum width of 1920 pixels; Primary posters remain
+at 640 pixels. Explicit catalogue detail metadata also registers a separate 1920px
+background cache variant, preserving the 640px listing optimization and never
+reusing an old tile as a detail backdrop. TMDB detail metadata includes artwork,
+and metadata fallback continues past an overview that lacks a backdrop. Both retain the existing image byte cap and artwork request pool.
+
+The corner picture opens the existing shared gallery. It combines saved local
+pictures with provider/catalogue artwork and preserves the originating control's
+focus on close. Alternative TMDB artwork is fetched only when the gallery opens,
+through the existing metadata route's `gallery=1` option, deduplicated and bounded
+to eighteen pictures. Metadata and image bytes remain cached; no gallery lookup
+runs for library rows or sends additional requests to Jellyfin/Emby. A failed
+alternative lookup leaves the already available gallery usable.
+
+Root mosaics use the local library's poster fan layout. An explicit
+`artwork=children` preview reads one page of at most twelve immediate children and
+returns at most four posters. Mixed roots use immediate children; movie/series
+roots use one native title query so physical folders without artwork do not
+hide the posters. The client never walks nested directories. Ordinary folder
+previews retain their own-poster-first behavior, seasons never preview children,
+and disabling mosaics makes no preview request.
+
 ## Proxy and playback
 
 Extend the existing opaque `sourceId`/media-resource ownership model with remote
@@ -194,6 +239,14 @@ transport with bounded retries only after current access checks; never retry an
 authentication failure indefinitely or use another account as fallback. Probe
 Range behavior through the same authorized transport. If seeking cannot be
 supported safely by our pipeline, report unsupported playback.
+
+A Range of an original that was proved for this actor, library, connection
+generation, secret and media source within the last playback-guard interval
+(30 seconds) repeats the local grant and session checks and then transfers
+bytes. It does not repeat item detail, ancestors or PlaybackInfo. The periodic
+playback guard still revalidates the original upstream on every cycle, and a
+failed revalidation drops that proof. A membership proof never authorizes
+playback.
 
 The proxy forwards required authentication server-side, supports HEAD/Range and
 206 responses, and preserves cancellation/backpressure. Our playback planner

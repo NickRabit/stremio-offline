@@ -1,9 +1,10 @@
 import { useRef, useState } from "react";
-import { Check, ChevronRight, CirclePlay, Download, FileJson, HardDrive, Heart, KeyRound, Languages, Library, PackagePlus, ShieldCheck, Trash2, Upload, Users } from "lucide-react";
+import { Check, ChevronRight, CirclePlay, Download, FileJson, HardDrive, Heart, KeyRound, Languages, Library, PackagePlus, Server, ShieldCheck, Trash2, Upload, Users } from "lucide-react";
 import { api } from "./api";
 import { DiagnosticsSection } from "./DiagnosticsPanel";
 import { AccountSettings } from "./Login";
 import { LibraryManager } from "./LibraryManager";
+import { MediaServerManager } from "./MediaServerManager";
 import { SearchSettings } from "./SearchSettings";
 import { HomeLayoutSettings } from "./HomeLayoutSettings";
 import { Heading, SettingControl, SettingsSectionHead } from "./settings-ui";
@@ -137,6 +138,7 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
     {restricted && <p className="notice">{t("restricted.notice")}</p>}
     <div className="settings-grid">
       {admin && <section className="panel settings-section library-manager-section"><SettingsSectionHead icon={<Library/>} title={t("library.libraries")} text={t("library.librariesHint")}/><LibraryManager restricted={restricted || !admin} onChanged={onLibrariesChanged} onError={onError} onNotify={onNotify}/></section>}
+      {admin && !restricted && <section className="panel settings-section media-server-section"><SettingsSectionHead icon={<Server/>} title={t("mediaServer.title")} text={t("mediaServer.hint")}/><MediaServerManager onError={onError} onChanged={onLibrariesChanged}/></section>}
       {admin && <section className="panel settings-section user-manager-section"><SettingsSectionHead icon={<Users/>} title={t("users.title")} text={t("users.hint")}/><UserManager session={session} restricted={restricted} onChanged={onLibrariesChanged} onNotify={onNotify} onError={onError}/></section>}
       <section className="panel settings-section"><SettingsSectionHead icon={<Library/>} title={t("nav.library")} /><SettingControl title={t("settings.sameTitles")} text={t("settings.sameTitlesHint")}><select aria-label={t("settings.sameTitles")} disabled={restricted} value={settings.mergeByName ? "1" : "0"} onChange={(event) => void onSave({ mergeByName: event.target.value === "1" })}><option value="1">{t("settings.merge")}</option><option value="0">{t("settings.showSeparately")}</option></select></SettingControl>
         {admin && <SettingControl title={t("settings.autoScan")} text={t("settings.autoScanHint")}>
@@ -205,7 +207,7 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
           </select></SettingControl>
       </section>}
       <AccountSettings session={session} onSession={onSession} onNotify={onNotify} onError={onError} restricted={restricted}/>
-      {!restricted && admin && <section className="panel settings-section backup-section"><SettingsSectionHead icon={<FileJson/>} title={t("settings.backupTitle")} text={t("settings.backupText")}/><p>{t("settings.backupBody")}</p><p className="notice">{t("settings.backupWarning")}</p><div className="setting-actions"><button disabled={backupBusy} onClick={() => void exportSettings()}><Download/> {t("settings.export")}</button><button disabled={backupBusy} onClick={() => importInput.current?.click()}><Upload/> {t("settings.import")}</button><input ref={importInput} className="file-input" type="file" accept="application/json,.json" aria-label={t("settings.pickBackup")} onChange={(event) => void importSettings(event.target.files?.[0])}/></div></section>}
+      {!restricted && admin && <section className="panel settings-section backup-section"><SettingsSectionHead icon={<FileJson/>} title={t("settings.backupTitle")} text={t("settings.backupText")}/><p>{t("settings.backupBody")}</p><p className="notice">{t("settings.backupWarning")}</p><p>{t("settings.backupRemote")}</p><div className="setting-actions"><button disabled={backupBusy} onClick={() => void exportSettings()}><Download/> {t("settings.export")}</button><button disabled={backupBusy} onClick={() => importInput.current?.click()}><Upload/> {t("settings.import")}</button><input ref={importInput} className="file-input" type="file" accept="application/json,.json" aria-label={t("settings.pickBackup")} onChange={(event) => void importSettings(event.target.files?.[0])}/></div></section>}
       {!restricted && admin && <DiagnosticsSection build={build} onNotify={onNotify} onError={onError}/>}
     </div>
     <a className="support-link" href="https://ko-fi.com/nickrabit" target="_blank" rel="noopener noreferrer"><Heart aria-hidden="true"/><span><strong>{t("settings.supportTitle")}</strong><small>{t("settings.supportText")}</small></span><ChevronRight aria-hidden="true"/></a>

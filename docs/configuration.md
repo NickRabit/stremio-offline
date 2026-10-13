@@ -211,6 +211,23 @@ Details in [Playback](playback.md) and
 | --- | --- | --- |
 | `RESTRICTED_MODE` | `0` | `1` locks the whole instance for a shared demo. Addons, settings, passwords and secret export become read-only, and the account list is visible but unchangeable. Guests can still browse, play, download to the library and save to their own device. Create the account (or inject `ADMIN_USERNAME` / `ADMIN_PASSWORD`) and confirm sign-in, then set `1` and recreate the container — not merely restart. For real separation between people use an account, not this: see [Accounts](users.md). |
 
+## Remote media servers
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `MEDIA_SERVER_KEY_FILE` | *(unset)* | Path to the key that encrypts remote Jellyfin / Emby tokens. An existing regular file of exactly 32 raw random bytes, owner-only (`0600`) and owned by the process user. Optional: with it unset the server boots, the connection list is empty and any attempt to store a credential is refused with a clear message. The key is **never generated automatically** and is read on every operation, so replacing it without re-authenticating makes the stored tokens undecryptable by design. Back it up with `DATA_PATH`; see [Remote media servers](media-server-management.md). Outside Compose the path is a plain filesystem path; inside the container the key must be mounted and this variable pointed at the mount. |
+
+Generate the key once, exclusive and owner-only:
+
+```sh
+node -e 'const {randomBytes}=require("node:crypto");require("node:fs").writeFileSync(process.argv[1],randomBytes(32),{flag:"wx",mode:0o600})' ./data/media-server-secret.key
+```
+
+The encrypted tokens live under `DATA_PATH/media-server-secrets`. The Compose
+files pass `MEDIA_SERVER_KEY_FILE` through from your `.env` and mount nothing on
+their own: an explicit read-only mount is a deliberate deployment step, not
+something the default configuration does for you.
+
 ## Account fallback
 
 | Variable | Default | Meaning |

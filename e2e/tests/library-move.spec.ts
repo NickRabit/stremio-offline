@@ -165,7 +165,8 @@ test("a moved file keeps its own title instead of inheriting the destination's",
   await expect(identify).toHaveCount(0);
   await expect(matched.locator(".library-desc")).toContainText("Film, který existuje jen pro testy.");
 
-  await matched.getByRole("button", { name: /Otevřít složku/ }).click();
+  await matched.locator(".library-open").click();
+  await page.locator(".library-local-detail").getByRole("button", { name: "Otevřít složku", exact: true }).click();
   const file = page.locator(".browse-item", { hasText: "Dědičný klip" });
   await expect(file.locator(".library-desc")).toContainText("Film, který existuje jen pro testy.");
 

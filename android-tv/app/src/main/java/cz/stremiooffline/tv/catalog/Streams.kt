@@ -1,5 +1,6 @@
 package cz.stremiooffline.tv.catalog
 
+import cz.stremiooffline.tv.data.RemoteItemContext
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.AddonDto
 import kotlin.math.roundToLong
@@ -109,10 +110,46 @@ object Streams {
   /** A copy that already exists in one of the viewer's libraries. */
   fun isLocalStream(stream: StreamDto): Boolean = stream.kind == "library"
 
+  /** A version offered by a media server the app browses read-only. Only its opaque identity
+   *  marks it: an ordinary addon stream is transport kind "remote" too, so `kind` cannot tell
+   *  them apart. No file-path, download or scanner action may be taken on it. */
+  fun isRemoteStream(stream: StreamDto): Boolean = stream.remoteItem != null
+
   /** The addon filter value that stands for the viewer's own library copies, the web's
    *  `LOCAL_SOURCE`: a manifest name is a plain string, so a leading control character can
    *  never collide with an addon of the same name. */
   const val LOCAL_FILTER = "\u0000local"
+
+  /** The addon-filter value that narrows to one remote library, built the same collision-safe
+   *  way: a leading control character, then `remote:` and the library id. */
+  const val REMOTE_FILTER_PREFIX = "\u0000remote:"
+
+  fun remoteFilter(libraryId: String): String = REMOTE_FILTER_PREFIX + libraryId
+
+  /** The library id a remote filter value names, or null for any other value. */
+  fun remoteFilterLibrary(value: String): String? =
+    value.takeIf { it.startsWith(REMOTE_FILTER_PREFIX) }?.removePrefix(REMOTE_FILTER_PREFIX)
+
+  /** One remote library's matched versions: its label and the streams the server matched. */
+  data class RemoteGroup(
+    val libraryId: String,
+    val provider: String,
+    val libraryName: String,
+    val streams: List<StreamDto> = emptyList(),
+  ) {
+    /** The filter bar's name for this group, `provider · library`. */
+    val label: String get() = listOf(provider, libraryName).filter { it.isNotBlank() }.joinToString(" · ")
+  }
+
+  /** The versions of one remote item: only streams with the same library id and item id. */
+  fun remoteVersionsOf(item: RemoteItemContext?, streams: List<StreamDto>): List<StreamDto> =
+    if (item == null) emptyList()
+    else streams.filter {
+      it.remoteItem?.libraryId == item.libraryId && it.remoteItem?.itemId == item.itemId
+    }
+
+  /** One remote group choice: its filter value, its label and how many rows it holds. */
+  data class RemoteGroupCount(val value: String, val label: String, val count: Int)
 
   /**
    * The list a source panel shows, as the web builds it. [addon] is already filtered and sorted.
@@ -127,12 +164,17 @@ object Streams {
     preferredLanguage: String = "en",
     priority: Map<String, Int> = emptyMap(),
     titleLanguage: String? = null,
+    remote: List<RemoteGroup> = emptyList(),
   ): List<StreamDto> = when {
     filters.addon == LOCAL_FILTER -> local
+    // A remote filter shows that one library's matched versions, even when it matched nothing.
+    remoteFilterLibrary(filters.addon) != null ->
+      remote.firstOrNull { it.libraryId == remoteFilterLibrary(filters.addon) }?.streams.orEmpty()
     filters.addon.isNotEmpty() -> addon
-    filters.sort == StreamSort.Recommended || filters.sort == StreamSort.Addon -> local + addon
+    filters.sort == StreamSort.Recommended || filters.sort == StreamSort.Addon ->
+      local + remote.flatMap { it.streams } + addon
     else -> arrangeStreams(
-      addon + local,
+      remote.flatMap { it.streams } + addon + local,
       StreamFilters(sort = filters.sort),
       preferredLanguage,
       priority,
@@ -168,13 +210,18 @@ object Streams {
 
   fun streamBadge(stream: StreamDto): String = when {
     isLocalStream(stream) -> "LOCAL"
+    isRemoteStream(stream) -> "REMOTE"
     stream.playable -> "HTTP"
     stream.kind == "torrent" -> "RD"
     else -> "EXT"
   }
 
+  /** Whether the server may queue this source into a library the viewer writes to. A media-server
+   *  version is never queueable: it lives on the remote server and cannot be downloaded through
+   *  this app. Existing filesystem and addon behaviour is unchanged. */
   fun canQueue(stream: StreamDto, debridConfigured: Boolean): Boolean =
-    !isLocalStream(stream) && (stream.playable || (stream.kind == "torrent" && debridConfigured))
+    !isLocalStream(stream) && !isRemoteStream(stream) &&
+      (stream.playable || (stream.kind == "torrent" && debridConfigured))
 
   /** An addon that cannot be played through the server is talking to the viewer, not offering. */
   fun isAddonNotice(stream: StreamDto): Boolean = stream.kind == "unsupported"
@@ -205,6 +252,8 @@ object Streams {
     val languages: List<StreamCount>,
     /** How many library copies the Local choice stands for; zero hides it unless it is chosen. */
     val localCount: Int = 0,
+    /** The remote library groups the addon filter offers. */
+    val remoteGroups: List<RemoteGroupCount> = emptyList(),
   )
 
   fun filterOptions(
@@ -213,6 +262,7 @@ object Streams {
     priority: Map<String, Int> = emptyMap(),
     titleLanguage: String? = null,
     localCount: Int = 0,
+    remote: List<RemoteGroup> = emptyList(),
   ): SourceFilterOptions {
     val byLanguage = if (filters.language.isEmpty()) listed
     else listed.filter { streamLanguages(it, titleLanguage).contains(filters.language) }
@@ -221,11 +271,14 @@ object Streams {
 
     val addonCounts = LinkedHashMap<String, Int>()
     for (stream in byLanguage) {
+      // A remote version is offered through its own group choice, never under an addon name.
+      if (isRemoteStream(stream)) continue
       val name = stream.addonName ?: "?"
       addonCounts[name] = (addonCounts[name] ?: 0) + 1
     }
     // The chosen addon stays in the menu even when the language filter left it nothing, or the chip would empty.
-    if (filters.addon.isNotEmpty() && filters.addon != LOCAL_FILTER && !addonCounts.containsKey(filters.addon)) addonCounts[filters.addon] = 0
+    val chosenRemote = remoteFilterLibrary(filters.addon)
+    if (filters.addon.isNotEmpty() && filters.addon != LOCAL_FILTER && chosenRemote == null && !addonCounts.containsKey(filters.addon)) addonCounts[filters.addon] = 0
     val addons = addonCounts.map { StreamCount(it.key, it.value) }
       .sortedWith(compareBy({ priority[it.value] ?: Int.MAX_VALUE }, { -it.count }))
 
@@ -236,7 +289,11 @@ object Streams {
     if (filters.language.isNotEmpty() && !languageCounts.containsKey(filters.language)) languageCounts[filters.language] = 0
     val languages = languageCounts.map { StreamCount(it.key, it.value) }.sortedByDescending { it.count }
 
-    return SourceFilterOptions(addons, languages, localCount)
+    // Every group with a match leads; one that is chosen stays visible even when it matched nothing.
+    val remoteGroups = remote
+      .filter { it.streams.isNotEmpty() || chosenRemote == it.libraryId }
+      .map { RemoteGroupCount(remoteFilter(it.libraryId), it.label, it.streams.size) }
+    return SourceFilterOptions(addons, languages, localCount, remoteGroups)
   }
 
   /** The sources of one title after the addons that answered have been merged, sorted and
@@ -262,6 +319,7 @@ object Streams {
     showTorrents: Boolean,
     metaLanguage: String?,
     local: List<StreamDto> = emptyList(),
+    remote: List<RemoteGroup> = emptyList(),
   ): SourceLists {
     val offered = offeredStreams(streams)
     val priority = addons.mapIndexed { index, addon -> addon.manifest.name to index }.toMap()
@@ -273,8 +331,8 @@ object Streams {
       visible = visible,
       notices = addonNotices(streams),
       titleLanguage = titleLanguage,
-      options = filterOptions(listed, filters, priority, titleLanguage, local.size),
-      rows = catalogSourceList(local, visible, filters, preferredLanguage, priority, titleLanguage),
+      options = filterOptions(listed, filters, priority, titleLanguage, local.size, remote),
+      rows = catalogSourceList(local, visible, filters, preferredLanguage, priority, titleLanguage, remote),
     )
   }
 

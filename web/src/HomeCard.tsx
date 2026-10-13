@@ -13,10 +13,14 @@ export interface HomeCardActions {
   forget: (card: HomeCardData) => void;
 }
 
+const providerLabel = (provider: "jellyfin" | "emby") =>
+  t(provider === "emby" ? "mediaServer.provider.emby" : "mediaServer.provider.jellyfin");
+
 /** The card's own line: its label, its numbering and whatever else the kind adds. */
 function captionOf(card: HomeCardData, locale: string): string {
   const label = cardLabel(card);
   const parts: Array<string | undefined> = [label && t(label), cardNumbering(card)];
+  if (card.kind === "remote") parts.push(`${providerLabel(card.provider)} · ${card.libraryName}`);
   if (card.kind === "resume-file") parts.push(card.subtitle);
   if (card.kind === "episode") parts.push(new Intl.DateTimeFormat(locale, { dateStyle: "short" }).format(new Date(card.released)));
   if (card.kind === "recent") parts.push(relativeAge(card.addedAt, Date.now(), locale));
@@ -50,7 +54,7 @@ export function HomeCard({ card, shape, actions }: { card: HomeCardData; shape: 
   const menu = card.kind !== "episode" && card.kind !== "discovery" && card.kind !== "confirm" && card.kind !== "favorite-catalogue";
 
   const primary = () => {
-    if (card.kind === "resume-catalogue" || card.kind === "episode" || card.kind === "discovery" || card.kind === "confirm" || card.kind === "favorite-catalogue") { actions.open(card); return; }
+    if (card.kind === "remote" || card.kind === "resume-catalogue" || card.kind === "episode" || card.kind === "discovery" || card.kind === "confirm" || card.kind === "favorite-catalogue") { actions.open(card); return; }
     if (folder) { actions.reveal(card.path); return; }
     actions.play(card);
   };
@@ -67,7 +71,7 @@ export function HomeCard({ card, shape, actions }: { card: HomeCardData; shape: 
     </div>
     {menu && menuOpen && <span className="browse-actions home-actions" onClick={(event) => event.stopPropagation()}>
       {hasPath(card) && <button onClick={() => { setMenuOpen(false); actions.reveal(card.path); }}><HardDrive/> {t("library.showInLibrary")}</button>}
-      {(card.kind === "resume-file" || card.kind === "resume-catalogue") && <button onClick={() => { setMenuOpen(false); actions.forget(card); }}><RotateCcw/> {t("home.forget")}</button>}
+      {(card.kind === "resume-file" || card.kind === "resume-catalogue" || card.kind === "remote") && <button onClick={() => { setMenuOpen(false); actions.forget(card); }}><RotateCcw/> {t("home.forget")}</button>}
     </span>}
   </article>;
 }

@@ -12,6 +12,11 @@ test("local player previews a frame and plays the next naturally sorted file", a
     await page.getByRole("button", { name: "Knihovna", exact: true }).click();
     await page.locator(".folder .library-open", { hasText: "Preview episodes" }).click();
     await page.locator('.browse-item[data-path="Preview episodes/Episode 1.webm"] .library-open').click();
+    // A file tile opens the library's own detail first; the single source plays from there.
+    const detail = page.locator(".library-title-detail");
+    await expect(detail).toBeVisible();
+    await expect(detail.locator(".split-button-toggle"), "one source needs no picker").toHaveCount(0);
+    await detail.locator(".library-detail-play button.primary").click();
     const overlay = page.locator(".player-overlay");
     await expect(overlay.locator(".player-head")).toContainText("DIRECT STREAM");
     const previous = overlay.getByRole("button", { name: "Předchozí díl", exact: true });

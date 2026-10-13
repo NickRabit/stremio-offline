@@ -9,6 +9,13 @@ import { TrailerPlayer } from "./TrailerPlayer";
 import { IdentifyDialog } from "./IdentifyDialog";
 import { AddonManager } from "./AddonManager";
 import { LibraryManagerDialog, libraryTypeLabel } from "./LibraryManager";
+import { RemoteLibraryBrowser } from "./RemoteLibraryBrowser";
+import { LocalLibraryDetail } from "./LocalLibraryDetail";
+import { DetailDescription, DetailHero } from "./DetailHero";
+import { LibraryItem, LibraryItemMenu } from "./library-item";
+import { LibraryTile } from "./library-tile";
+import { TitleChips } from "./TitleChips";
+import { RemotePersonalShelf } from "./RemotePersonalShelf";
 import { PosterMosaic, TileArt } from "./TileArt";
 import { MoveDialog } from "./MoveDialog";
 import { SaveTargetDialog } from "./SaveTargetDialog";
@@ -23,14 +30,13 @@ import { report } from "./diagnostics";
 import { label, titleLanguage } from "./languages";
 import { locale, localeTag, setLocale, t, useI18n, type Key } from "./i18n";
 import { catalogTypeTag } from "./catalog-labels";
-import { addonNotices, canQueue, catalogSourceRows, filmHasNoSource, isLocalStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, repickStream, streamBadge, streamLanguages, streamSize, visibleCatalogStreams, type StreamSort } from "./streams";
+import { addonNotices, canQueue, catalogSourceRows, filmHasNoSource, isLocalStream, isRemoteStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, remoteFilterId, remoteSourceFilter, repickStream, streamBadge, streamLanguages, streamSize, visibleCatalogStreams, type StreamSort } from "./streams";
 import { parseSearchScope } from "./search-scope";
 import { createLiveSearch, type LiveSearch, type LiveSearchState } from "./live-search";
 import { rankByTitle } from "./title-match";
 import { CandidatePool, suggest, type Suggestion } from "./search-suggestions";
 import { galleryPayload, gridArt, localizedDownloadTitle, mergeMetaDetail } from "./meta";
 import { resumeVideo, type ResumeTarget } from "./resume-target";
-import { trailerAction } from "./trailers";
 import { emptyViews, prefsFor, scopeOf, withDownloads, withExtra, withLibrary } from "./views";
 import { Empty, Nav, Onboarding } from "./app-chrome";
 import { FavoritesView } from "./FavoritesView";
@@ -42,14 +48,12 @@ import type { ShowAllTarget } from "./home-cards";
 import type { HomeCard } from "../../server/src/home";
 import { parseHomeCatalogRowId } from "../../server/src/home";
 import { MoreMenu, type MoreItem } from "./MoreMenu";
-import { MediaGallery, type GalleryImage, type GalleryKind } from "./MediaGallery";
+import { MediaGallery } from "./MediaGallery";
+import { catalogueGalleryImages, mergeGallery, localGalleryImage, type GalleryImage, type GalleryKind } from "./gallery-images";
+import { loadTitleGallery, type CatalogueRef } from "./title-enrichment";
 import { SettingsPage } from "./SettingsPage";
 import { resolveStartView } from "./start-view";
-import type { Addon, BuildInfo, BrowseItem, BrowseLibrary, BrowseResult, DeviceTransfer, DownloadsViewPrefs, FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem, FollowView, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, LibraryViewPrefs, NewEpisode, ProgressEntry, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, Stream, Subtitle, Trailer, Video, SearchState } from "./types";
-
-/** The names of the linked sites. They are trademarks, not interface text, so they are
- *  spelled the same in every language and live here rather than in the catalogues. */
-const SITE_LINKS: Record<SiteLink["site"], string> = { csfd: "ČSFD", tmdb: "TMDB", imdb: "IMDb" };
+import type { Addon, BuildInfo, BrowseItem, BrowseLibrary, BrowseResult, DeviceTransfer, DownloadsViewPrefs, FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem, FollowView, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, LibraryViewPrefs, MediaServerProvider, NewEpisode, ProgressEntry, RemoteLibrary, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, Stream, Subtitle, Trailer, Video, SearchState } from "./types";
 
 /** The library choices this browser kept before they moved onto the account. Read once and
  *  handed to the visible libraries; private mode may forbid storage, hence the try/catch. */
@@ -72,6 +76,8 @@ const legacyLibraryView = (): LibraryViewPrefs | null => {
 const forgetLegacy = () => { try { for (const key of LEGACY_KEYS) localStorage.removeItem(`library-${key}`); } catch { /* storage may be unavailable */ } };
 
 type View = "home" | "catalog" | "library" | "resume" | "favorites" | "following" | "downloads" | "stats" | "addons" | "settings";
+/** One accessible remote library and the sources it reported for the title on screen. */
+type RemoteGroup = { libraryId: string; name: string; provider: MediaServerProvider; order: number; streams: Stream[]; error: string };
 type PlaybackAnchor = { kind: "catalog" | "library"; key: string };
 /** What a list is looking at, in terms the layout cannot invalidate: the item on top and
  *  how far it sits into the view. A rotation rewrites every pixel offset; this survives. */
@@ -84,6 +90,7 @@ type PlaybackReturn = {
   anchor?: PlaybackAnchor & { element: HTMLElement; ratio: number };
 };
 const streamLabel = (item: Stream) => item.name || item.title?.split("\n")[0] || item.description?.split("\n")[0] || "Stream";
+const abortedRequest = (error: unknown) => error instanceof DOMException && error.name === "AbortError";
 
 /** Addons name types freely; only the two we filter by have a translation. */
 const typeLabel = (type: string) => type === "movie" ? t("catalog.movies") : type === "series" ? t("catalog.series") : type;
@@ -103,29 +110,6 @@ const imdbRating = (item: Meta | null): string | null => {
   const value = typeof raw === "number" ? String(raw) : typeof raw === "string" ? raw.trim() : "";
   return /^\d+(\.\d+)?$/.test(value) ? value : null;
 };
-const galleryFor = (item: Meta | null): GalleryImage[] => {
-  if (!item) return [];
-  const images: GalleryImage[] = [];
-  const seen = new Set<string>();
-  const add = (value: unknown, label: string, shape: GalleryImage["shape"], kind: GalleryKind) => {
-    if (typeof value !== "string" || !value.trim() || seen.has(value)) return;
-    seen.add(value); images.push({ url: value, label, shape, kind });
-  };
-  add(item.poster, t("gallery.poster"), "poster", "poster");
-  add(item.background, t("gallery.background"), "wide", "background");
-  add(item.logo, t("gallery.logo"), "wide", "logo");
-  for (const key of ["images", "screenshots"]) {
-    const values = item[key];
-    if (!Array.isArray(values)) continue;
-    for (const [index, value] of values.entries()) {
-      const candidate = typeof value === "object" && value ? value as Record<string, unknown> : undefined;
-      add(typeof value === "string" ? value : candidate?.url ?? candidate?.src, t("gallery.still", { index: index + 1 }), "wide", "still");
-    }
-  }
-  for (const video of item.videos ?? []) add(video.thumbnail, video.title || video.name || t("gallery.episodeStill"), "wide", "still");
-  return images.slice(0, 18);
-};
-
 export function App() {
   const { t } = useI18n();
   const [view, setView] = useState<View>("catalog"); const [addons, setAddons] = useState<Addon[]>([]); const [catalogs, setCatalogs] = useState<Catalog[]>([]);
@@ -142,6 +126,8 @@ export function App() {
    *  drags them away from where they went on purpose. Reset on a fresh sign-in. */
   const navigated = useRef(false);
   const [galleryIndex, setGalleryIndex] = useState<number | null>(null);
+  const galleryRequest = useRef(0);
+  const galleryTrigger = useRef<HTMLElement | null>(null);
   /** A library item's saved pictures, which take the overlay over while it is open. */
   const [storedGallery, setStoredGallery] = useState<GalleryImage[] | null>(null);
   const [detailCompact, setDetailCompact] = useState(false);
@@ -197,12 +183,34 @@ export function App() {
   const [selectedCatalog, setSelectedCatalog] = useState(""); const [search, setSearch] = useState(""); const [items, setItems] = useState<Meta[]>([]); const [selected, setSelected] = useState<Meta | null>(null); const [selectedSummary, setSelectedSummary] = useState<Meta | null>(null); const [selectedDownloadTitle, setSelectedDownloadTitle] = useState("");
   const [selectedVideo, setSelectedVideo] = useState<Video | null>(null); const [streams, setStreams] = useState<Stream[]>([]); const [localStreams, setLocalStreams] = useState<Stream[]>([]); const [localLoading, setLocalLoading] = useState(false); const [selectedStream, setSelectedStream] = useState<Stream | null>(null); const [subtitles, setSubtitles] = useState<Subtitle[]>([]); const [localEpisode, setLocalEpisode] = useState(false); const [playbackPreferences, setPlaybackPreferences] = useState<{ audioLanguage?: string; subtitleLanguage?: string | null }>({});
   const nextEpisodePrefetchRef = useRef<{ id: string; promise: Promise<{ streams: Stream[]; subtitles: Subtitle[] }> } | null>(null);
+  const [remoteGroups, setRemoteGroups] = useState<RemoteGroup[]>([]);
+  const [remoteLoading, setRemoteLoading] = useState(0);
+  const [remoteDiscoveryError, setRemoteDiscoveryError] = useState("");
+  const [remoteLibraries, setRemoteLibraries] = useState<RemoteLibrary[]>([]);
+  /** Raised by the remote browser while one of its libraries or a detail is open, so the local
+   *  listing steps aside and the two never draw two unrelated lists at once. */
+  const [remoteOpen, setRemoteOpen] = useState(false);
+  const [remoteCompact, setRemoteCompact] = useState(false);
+  const [remoteRootsPresent, setRemoteRootsPresent] = useState(false);
+  const [remoteTarget, setRemoteTarget] = useState<{ libraryId: string; itemId: string; nonce: number } | null>(null);
+  const [personalRefresh, setPersonalRefresh] = useState(0);
+  const remoteAbortRef = useRef<AbortController | null>(null);
+  const remoteEpochRef = useRef(0);
+  /** The title a remote-source load was opened for, with the resolved name hint so a retry sends
+   *  the same provider filter and never the title of whatever is selected by then. */
+  const remoteTargetForRef = useRef<{ type: string; id: string; nameHint?: string } | null>(null);
+  const remoteNextPrefetchRef = useRef<{ id: string; libraryId: string; controller: AbortController; promise: Promise<Stream[]> } | null>(null);
+  const remoteTargetNonce = useRef(0);
+  useEffect(() => () => { remoteAbortRef.current?.abort(); remoteNextPrefetchRef.current?.controller.abort(); }, []);
   const [sourcesLoaded, setSourcesLoaded] = useState(false); const [metaLoading, setMetaLoading] = useState(false);
   const [titleLinks, setTitleLinks] = useState<SiteLink[]>([]);
   const [libraryLinks, setLibraryLinks] = useState<Record<string, SiteLink[]>>({});
   const [titleTrailer, setTitleTrailer] = useState<Trailer | null>(null);
   const [libraryTrailers, setLibraryTrailers] = useState<Record<string, Trailer | null>>({});
   const [trailerOpen, setTrailerOpen] = useState<Trailer | null>(null);
+  /** Bumped when the Library entry returns the section to its root, so the remote browser drops
+   *  its own library, folder or title without being remounted. */
+  const [libraryReset, setLibraryReset] = useState(0);
   const [episodesOpen, setEpisodesOpen] = useState(true);
   const [season, setSeason] = useState<number | null>(null);
   const [bulkDownload, setBulkDownload] = useState<{ label: string; title: string; type: string; episodes: Array<{ id: string; season?: number; episode?: number; title?: string }>; media: { id?: string; metaType?: string; poster?: string; background?: string; gallery?: Array<{ url: string; kind: GalleryKind }> } } | null>(null);
@@ -236,6 +244,9 @@ export function App() {
   const [browseDesc, setBrowseDesc] = useState(false);
   const [browseView, setBrowseView] = useState<"grid" | "list">("grid");
   const [browseBusy, setBrowseBusy] = useState(false);
+  /** The local file or matched-movie folder open in the library's detail, and where its listing
+   *  sat, so Back returns to the exact spot. */
+  const [localDetail, setLocalDetail] = useState<{ item: TreeItem } | null>(null);
   const [identifyPath, setIdentifyPath] = useState<string | null>(null);
   const [movePath, setMovePath] = useState<{ path: string; label: string; type?: "movie" | "series"; paths?: string[]; copy?: boolean } | null>(null);
   const [saveTargetOpen, setSaveTargetOpen] = useState(false);
@@ -284,6 +295,12 @@ export function App() {
   const [browseFocus, setBrowseFocus] = useState<string | null>(null);
   const focusScrolled = useRef<string | null>(null);
   const focusTimer = useRef(0);
+  const localDetailScroll = useRef(0);
+  const localDetailScroller = useRef<HTMLElement | null>(null);
+  const pendingLocalFocus = useRef<string | null>(null);
+  /** Set when the sidebar's Library entry is clicked: the root must land at the very top once its
+   *  remote and local blocks have reflowed, not at the offset the old listing left behind. */
+  const pendingRootReset = useRef(false);
 
   const toggleSelection = (itemPath: string) => setSelectedPaths((current) => {
     const next = new Set(current);
@@ -536,26 +553,6 @@ export function App() {
       await loadBrowse(browsePath);
     } catch (error) { fail(error); }
   };
-  /** The links row, rendered the same way under the description and in the library menu. */
-  const titleLinksRow = (links: SiteLink[]) => links.length > 0 && <div className="title-links">
-    {links.map((link) => <a key={link.site} href={link.url} target="_blank" rel="noopener noreferrer"
-      title={t("links.openOn", { site: SITE_LINKS[link.site] })}>{SITE_LINKS[link.site]}</a>)}
-  </div>;
-  const trailerPill = (trailer: Trailer | null) => {
-    const action = trailerAction(trailer, settings.secureMode);
-    if (!action) return null;
-    return action.kind === "external"
-      ? <a className="trailer-action" href={action.href} target="_blank" rel="noopener noreferrer" title={t("trailers.openHint")}>{t("trailers.openOnYouTube")}</a>
-      : <button className="trailer-action" title={t("trailers.openHint")} onClick={() => setTrailerOpen(action.trailer)}>{t("trailers.watch")}</button>;
-  };
-  /** Everything that identifies a title, as one row of chips of one size: the watchlist star and
-   *  the kind where there is one, then the trailer and the sites that know the title. The
-   *  catalogue detail and a library menu render the same row, so they look the same. */
-  const titleChips = (trailer: Trailer | null, links: SiteLink[], leading?: ReactNode) => {
-    const trailerChip = trailerPill(trailer);
-    if (!leading && !trailerChip && !links.length) return null;
-    return <div className="title-chips">{leading}{trailerChip}{titleLinksRow(links)}</div>;
-  };
   /** A menu is asked about once per path per session; the answer is chrome either way. */
   const loadLibraryLinks = (item: TreeItem) => {
     if (item.match !== "matched" || askedLibraryLinks.current.has(item.path)) return;
@@ -671,7 +668,7 @@ export function App() {
   const [pendingSources, setPendingSources] = useState(0);
   const pickedRef = useRef(false); const sourcesRequestRef = useRef(0);
   const linksRequestRef = useRef(0); const trailerRequestRef = useRef(0); const askedLibraryLinks = useRef(new Set<string>()); const askedLibraryTrailers = useRef(new Set<string>());
-  const loadingRef = useRef(false); const requestRef = useRef(0); const itemsRef = useRef<Meta[]>([]); const gridRef = useRef<HTMLDivElement>(null); const browseScrollRef = useRef<HTMLDivElement | null>(null); const detailRef = useRef<HTMLElement>(null);
+  const loadingRef = useRef(false); const requestRef = useRef(0); const itemsRef = useRef<Meta[]>([]); const gridRef = useRef<HTMLDivElement>(null); const browseScrollRef = useRef<HTMLDivElement | null>(null); const libraryPageRef = useRef<HTMLElement | null>(null); const detailRef = useRef<HTMLElement>(null);
   const searchAbortRef = useRef<AbortController | null>(null);
   const loadedSearchRef = useRef<{ query: string; scope: string; type: string; genre: string; catalog: string; reset: number } | null>(null);
   const playerOpenRef = useRef(false); const playbackReturn = useRef<PlaybackReturn | null>(null);
@@ -702,22 +699,34 @@ export function App() {
   const chosenEpisode = Boolean(selected?.videos?.length) && selectedVideo && !episodesOpen
     ? <div className="episode-current"><small>{t("episodes.chosen")}</small><b>{selectedVideo.season != null ? `${String(selectedVideo.season).padStart(2,"0")}×${String(selectedVideo.episode || 0).padStart(2,"0")}` : t("episodes.part")}</b><span>{selectedVideo.title || selectedVideo.name || t("episodes.one")}</span><button onClick={() => setEpisodesOpen(true)}>{t("episodes.change")}</button></div>
     : null;
-  const galleryImages = useMemo(() => galleryFor(selected), [selected]);
+  const galleryImages = useMemo(() => catalogueGalleryImages(selected), [selected]);
   const shownGallery = storedGallery ?? galleryImages;
-  const closeGallery = () => { setGalleryIndex(null); setStoredGallery(null); };
-  /** The pictures a downloaded title kept. Named here rather than on the server, which stores
-   *  what each one is and leaves the wording to the interface. */
+  const closeGallery = () => {
+    galleryRequest.current += 1;
+    setGalleryIndex(null); setStoredGallery(null);
+    window.requestAnimationFrame(() => galleryTrigger.current?.isConnected && galleryTrigger.current.focus({ preventScroll: true }));
+  };
+  const presentGallery = (images: GalleryImage[], ref?: CatalogueRef | null, path?: string) => {
+    if (!images.length) return;
+    const request = ++galleryRequest.current;
+    galleryTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setStoredGallery(images);
+    setGalleryIndex(0);
+    const saved = path ? api.libraryGallery(path).then((answer) => answer.images.map(localGalleryImage)).catch(() => []) : Promise.resolve([]);
+    const extra = ref ? loadTitleGallery(ref, settings.uiLanguage) : Promise.resolve([]);
+    void Promise.all([saved, extra]).then(([local, catalogue]) => {
+      if (request === galleryRequest.current) setStoredGallery(mergeGallery(images, local, catalogue));
+    });
+  };
   const openStoredGallery = async (path: string) => {
+    const request = ++galleryRequest.current;
+    const location = browseLocation.current;
+    const openedView = viewRef.current;
     setMenuFor(null);
     try {
       const { images } = await api.libraryGallery(path);
-      if (!images.length) return;
-      let stills = 0;
-      setStoredGallery(images.map((image) => ({
-        url: image.url, shape: image.shape, kind: image.kind,
-        label: image.kind === "still" ? t("gallery.still", { index: ++stills }) : t(`gallery.${image.kind}`),
-      })));
-      setGalleryIndex(0);
+      if (request !== galleryRequest.current || openedView !== viewRef.current || location !== browseLocation.current) return;
+      presentGallery(images.map(localGalleryImage));
     } catch (error) { fail(error); }
   };
   const notify = (text: string) => { setMessage(text); setTimeout(() => setMessage(""), 3200); };
@@ -761,6 +770,12 @@ export function App() {
   const persistDownloadPrefs = (prefs: DownloadsViewPrefs) => {
     setViews((current) => withDownloads(current, prefs));
     queueViews({ downloads: prefs });
+  };
+  /** A remote library keeps its own grid/rows, sort and order under its id, keyed `rlib_`
+   *  exactly like a local one keys `lib_`, so each remembers its chrome the same way. */
+  const persistRemotePrefs = (libraryId: string, prefs: LibraryViewPrefs) => {
+    setViews((current) => withLibrary(current, libraryId, prefs));
+    queueViews({ libraries: { [libraryId]: prefs } });
   };
 
   const findPlaybackAnchor = ({ kind, key }: PlaybackAnchor) => {
@@ -1029,6 +1044,10 @@ export function App() {
   const resetCatalog = (pick?: { addonKey: string; type: string; id: string }) => {
     navigated.current = true;
     live.cancel();
+    cancelRemoteWork();
+    setRemoteGroups([]);
+    setRemoteLoading(0);
+    setRemoteDiscoveryError("");
     setCatalogCompact(false);
     const firstCatalog = (pick && catalogs.find((catalog) => catalog.addonKey === pick.addonKey && catalog.type === pick.type && catalog.id === pick.id)) ?? catalogs[0];
     scrollByView.current.catalog = 0;
@@ -1041,24 +1060,46 @@ export function App() {
     setEpisodesOpen(true); setSeason(null); setCatalogReset((value) => value + 1);
   };
   const resetLibrary = () => {
+    pendingLocalFocus.current = null;
+    localDetailScroll.current = 0;
+    localDetailScroller.current = null;
     setLibraryCompact(false);
     setMenuFor(null); setFromFavorites(false); setBrowseFocus(null);
+    setLocalDetail(null);
     setBrowsePath(""); setBrowseQuery("");
+    // The remote browser keeps its own library, folder and title; the signal drops all of it and
+    // the one-shot remote target goes with them, so the section starts at the top.
+    setRemoteTarget(null);
+    setLibraryReset((value) => value + 1);
   };
   /** Clicking the section we are already in resets it; otherwise the last filters
    * and the page position are restored. */
   const openView = (target: View) => {
     navigated.current = true;
+    // Leaving the Library drops the one-shot remote target, so coming back shows the list.
+    if (target !== "library") setRemoteTarget(null);
+    // The Library entry is the way back to the root from anywhere, another view, a folder or a
+    // remote title included; nothing is remembered for it.
+    if (target === "library") {
+      scrollByView.current.library = 0;
+      setView("library");
+      resetLibrary();
+      pendingRootReset.current = true;
+      // At the root the page itself is the scroller, so the inner pane alone is not enough.
+      if (libraryPageRef.current) libraryPageRef.current.scrollTop = 0;
+      if (browseScrollRef.current) browseScrollRef.current.scrollTop = 0;
+      window.scrollTo(0, 0);
+      return;
+    }
     if (target !== view) { setView(target); return; }
     scrollByView.current[target] = 0;
     if (target === "catalog") resetCatalog();
-    else if (target === "library") resetLibrary();
     else if (target === "resume") setResumeFilter("all");
     else if (target === "favorites") setFavoritesFilter("all");
     else if (target === "stats") setStatsReset((value) => value + 1);
     // The catalogue and the library scroll in a box of their own, so the document offset is not
     // the one that holds their position.
-    const list = target === "catalog" ? gridRef.current : target === "library" ? browseScrollRef.current : null;
+    const list = target === "catalog" ? gridRef.current : null;
     if (list) list.scrollTop = 0;
     window.scrollTo(0, 0);
   };
@@ -1271,6 +1312,8 @@ export function App() {
   // The follow of the title on screen. A slow answer for a title that is already gone is
   // dropped; a failure leaves the chip in the not-followed state and never blocks the detail.
   const selectedIdRef = useRef<string | null>(null);
+  const selectedStreamRef = useRef<Stream | null>(null);
+  selectedStreamRef.current = selectedStream;
   selectedIdRef.current = selected?.id ?? null;
   const followLoadedFor = useRef<string | null>(null);
   useEffect(() => {
@@ -1460,6 +1503,7 @@ export function App() {
     navigated.current = true;
     const slash = target.lastIndexOf("/");
     setMenuFor(null); setFromFavorites(false); setBrowseQuery("");
+    setLocalDetail(null);
     setBrowsePath(slash > 0 ? target.slice(0, slash) : "");
     focusScrolled.current = null;
     setBrowseFocus(target);
@@ -1470,6 +1514,89 @@ export function App() {
     if (scroller) scroller.scrollTop = 0;
     setView("library");
   };
+
+  /** The live row for a path, so a detail keeps the favorite and position the listing has, not
+   *  the snapshot it was opened on. */
+  const browseItemAt = (path: string): TreeItem | null =>
+    (browse?.items.find((entry) => entry.kind !== "library" && entry.path === path) as TreeItem | undefined) ?? null;
+  /** The library's own detail: a file, or a folder that stands for exactly one movie. The scroll
+   *  position is kept so Back lands on the tile the viewer came from. */
+  const openLocalDetail = (item: TreeItem) => {
+    setMenuFor(null);
+    const pane = browseScrollRef.current;
+    const page = pane?.closest<HTMLElement>(".library-page");
+    localDetailScroller.current = page?.classList.contains("library-remote-roots") ? page : pane;
+    localDetailScroll.current = localDetailScroller.current?.scrollTop ?? 0;
+    pendingLocalFocus.current = null;
+    holdHeaderOpen();
+    setLibraryCompact(false);
+    setLocalDetail({ item });
+  };
+  const closeLocalDetail = () => {
+    if (localDetail) {
+      pendingLocalFocus.current = localDetail.item.path;
+      scrollByView.current.library = localDetailScroll.current;
+    }
+    setLocalDetail(null);
+  };
+  /** The breadcrumb Back: it closes an open detail first, then climbs one folder, then leaves. */
+  const libraryBack = () => {
+    setMenuFor(null);
+    if (localDetail) { closeLocalDetail(); return; }
+    setBrowseQuery("");
+    if (browsePath.startsWith(":")) setFromFavorites(false);
+    setBrowsePath(browsePath.startsWith(":") ? "" : browsePath.includes("/") ? browsePath.slice(0, browsePath.lastIndexOf("/")) : fromFavorites ? ":favorites" : "");
+  };
+  /** A crumb that names an ancestor: the detail closes even when the crumb repeats the current
+   *  folder, so clicking it always lands on the listing. */
+  const goLocalFolder = (path: string) => {
+    setMenuFor(null);
+    if (localDetail && path === browsePath) { closeLocalDetail(); return; }
+    pendingLocalFocus.current = null;
+    setBrowseQuery("");
+    setLocalDetail(null);
+    setBrowsePath(path);
+  };
+  // Back puts the listing back where it was and returns focus to the tile that was opened.
+  useEffect(() => {
+    if (localDetail) {
+      if (browseScrollRef.current) browseScrollRef.current.scrollTop = 0;
+      return;
+    }
+    const wanted = pendingLocalFocus.current;
+    if (!wanted || view !== "library" || remoteOpen) return;
+    if (localDetailScroller.current?.classList.contains("library-page") && !remoteRootsPresent) return;
+    pendingLocalFocus.current = null;
+    const frame = window.requestAnimationFrame(() => {
+      const scroller = localDetailScroller.current?.classList.contains("library-page")
+        ? browseScrollRef.current?.closest<HTMLElement>(".library-page") : browseScrollRef.current;
+      if (scroller) scroller.scrollTop = localDetailScroll.current;
+      document.querySelector<HTMLButtonElement>(`[data-path="${CSS.escape(wanted)}"] .library-open`)?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [localDetail, view, remoteOpen, remoteRootsPresent]);
+  // A remote library or another view owns the page: the local detail must not linger behind it.
+  useEffect(() => { if (remoteOpen && localDetail) { pendingLocalFocus.current = null; setLocalDetail(null); } }, [remoteOpen]);
+  useEffect(() => { if (view !== "library" && localDetail) { pendingLocalFocus.current = null; setLocalDetail(null); } }, [view]);
+  // The sidebar's Library entry returns to the root, and the root has to sit at the top once its
+  // remote and local blocks have reflowed: reinserting the remote block under the scroll anchor
+  // used to leave the page partway down. Applied once, after the root DOM is there, so a normal
+  // scroll is never pinned and Back keeps its own restore.
+  useEffect(() => {
+    if (!pendingRootReset.current) return;
+    if (localDetail || remoteOpen || view !== "library" || browsePath || !browse || browse.path !== "" || browseBusy) return;
+    const frame = window.requestAnimationFrame(() => {
+      const page = libraryPageRef.current;
+      if (!page) return;
+      page.scrollTop = 0;
+      if (browseScrollRef.current) browseScrollRef.current.scrollTop = 0;
+      window.scrollTo(0, 0);
+      pendingRootReset.current = false;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [localDetail, remoteOpen, view, browsePath, remoteRootsPresent, browse?.path, browseBusy]);
+  /** The listing's live row for the open detail, so its favorite and position never go stale. */
+  const liveLocalItem = localDetail ? browseItemAt(localDetail.item.path) : null;
 
   const [previousFile, setPreviousFile] = useState<{ path: string; title: string } | null>(null);
   const [nextFile, setNextFile] = useState<{ path: string; title: string } | null>(null);
@@ -1689,12 +1816,19 @@ export function App() {
   const localByLanguage = useMemo(
     () => streamLanguage ? localStreams.filter((stream) => streamLanguages(stream, metaLanguage).includes(streamLanguage)) : localStreams,
     [localStreams, streamLanguage, metaLanguage]);
+  const remoteSelected = remoteFilterId(streamAddon);
+  // The language filter is applied per group, so the menu counts and the rows agree.
+  const remoteByLanguage = useMemo(
+    () => remoteGroups.map((group) => ({ ...group, streams: streamLanguage ? group.streams.filter((stream) => streamLanguages(stream, metaLanguage).includes(streamLanguage)) : group.streams })),
+    [remoteGroups, streamLanguage, metaLanguage]);
+  const remoteFlat = useMemo(() => remoteByLanguage.flatMap((group) => group.streams), [remoteByLanguage]);
+  const remoteFilterStreams = remoteSelected === undefined ? [] : remoteByLanguage.find((group) => group.libraryId === remoteSelected)?.streams ?? [];
   const byAddon = useMemo(
     () => addonFilter ? listedStreams.filter((stream) => stream.addonName === addonFilter) : listedStreams,
     [listedStreams, addonFilter]);
   const languageSources = useMemo(
-    () => localSelected ? localStreams : streamAddon ? byAddon : [...byAddon, ...localStreams],
-    [localSelected, localStreams, streamAddon, byAddon]);
+    () => localSelected ? localStreams : remoteSelected !== undefined ? remoteFilterStreams : streamAddon ? byAddon : [...byAddon, ...localStreams, ...remoteFlat],
+    [localSelected, localStreams, remoteSelected, remoteFilterStreams, streamAddon, byAddon, remoteFlat]);
 
   const streamAddons = useMemo(() => {
     const counts = new Map<string, number>();
@@ -1712,25 +1846,30 @@ export function App() {
   }, [languageSources, streamLanguage, metaLanguage]);
   // Recommended keeps a local copy first; alternate sort modes rank it together with addon rows.
   const sourceRows = useMemo(
-    () => catalogSourceRows(localByLanguage, visibleStreams, streamAddon, streamSort, settings.audioLanguage, addonPriority, metaLanguage),
-    [localByLanguage, visibleStreams, streamAddon, streamSort, settings.audioLanguage, addonPriority, metaLanguage]);
-  const sourceTotal = localSelected ? localStreams.length : offered.length + (streamAddon ? 0 : localStreams.length);
-  const hasPlayableMovieSource = selected?.type === "movie" && sourcesLoaded && (offered.some((stream) => stream.playable) || localStreams.some((stream) => stream.playable));
-  /** A film is worth following for its release only once every addon has answered and none had a source: while they are still asking, the chip would flash up and vanish. */
-  const movieHasNoSource = selected?.type === "movie" && filmHasNoSource({ loaded: sourcesLoaded, pending: pendingSources, playable: hasPlayableMovieSource });
+    () => catalogSourceRows(localByLanguage, visibleStreams, streamAddon, streamSort, settings.audioLanguage, addonPriority, metaLanguage, remoteFlat),
+    [localByLanguage, visibleStreams, streamAddon, streamSort, settings.audioLanguage, addonPriority, metaLanguage, remoteFlat]);
+  const sourceTotal = localSelected ? localStreams.length
+    : remoteSelected !== undefined ? remoteFilterStreams.length
+    : offered.length + (streamAddon ? 0 : localStreams.length + remoteFlat.length);
+  const hasPlayableMovieSource = selected?.type === "movie" && sourcesLoaded && (offered.some((stream) => stream.playable) || localStreams.some((stream) => stream.playable) || remoteFlat.some((stream) => stream.playable));
+  const movieHasNoSource = selected?.type === "movie" && filmHasNoSource({ loaded: sourcesLoaded, pending: pendingSources + remoteLoading + (localLoading ? 1 : 0), playable: hasPlayableMovieSource });
   // The chosen source decides what is still loading: the addon answers or the local probe.
-  const sourcesPending = localSelected ? localLoading : pendingSources > 0;
+  const sourcesPending = (localSelected ? localLoading : pendingSources > 0) || remoteLoading > 0;
   // When a filter removes the chosen source, the pick moves to the first one left -- unless
   // the film is already playing on it, when moving it would restart playback on another source.
   useEffect(() => {
     const preferred = pickDefaultStream(sourceRows) ?? null;
     const next = repickStream({
-      playing: playerOpen, picked: pickedRef.current, pending: pendingSources + (localLoading ? 1 : 0),
-      upgrade: Boolean(preferred && isLocalStream(preferred) && selectedStream && !isLocalStream(selectedStream)),
+      playing: playerOpen, picked: pickedRef.current, pending: pendingSources + (localLoading ? 1 : 0) + remoteLoading,
+      // A late local copy or remote group replaces an automatic addon pick; an explicit pick
+      // and a playing source stay where they are (repickStream keeps both).
+      upgrade: Boolean(preferred && selectedStream && (
+        (isLocalStream(preferred) && !isLocalStream(selectedStream))
+        || (isRemoteStream(preferred) && !isLocalStream(selectedStream) && !isRemoteStream(selectedStream)))),
       visible: sourceRows, selected: selectedStream, preferred,
     });
     if (next.move) setSelectedStream(next.to);
-  }, [sourceRows, localStreams, pendingSources, localLoading, playerOpen]);
+  }, [sourceRows, localStreams, pendingSources, localLoading, remoteLoading, playerOpen]);
 
   const catalogProgress = (item: Meta) => resume.find((entry) => item.type === "series"
     ? entry.series?.id === item.id
@@ -1765,13 +1904,81 @@ export function App() {
       return [] as Stream[];
     }
   };
+  const remoteProviderLabel = (provider: MediaServerProvider) =>
+    t(provider === "emby" ? "mediaServer.provider.emby" : "mediaServer.provider.jellyfin");
+  const cancelRemoteWork = () => {
+    remoteAbortRef.current?.abort();
+    remoteEpochRef.current += 1;
+    remoteNextPrefetchRef.current?.controller.abort();
+    remoteNextPrefetchRef.current = null;
+  };
+  const remoteLibraryLabel = (libraryId: string) => {
+    const library = remoteLibraries.find((row) => row.id === libraryId);
+    return library ? `${remoteProviderLabel(library.provider)} · ${library.name}` : libraryId;
+  };
+  // A library's failure stays in its own row and never becomes a toast.
+  const loadRemoteLibrary = async (library: { id: string; name: string; provider: MediaServerProvider; order: number }, type: string, id: string, epoch: number, nameHint: string | undefined, signal?: AbortSignal) => {
+    setRemoteLoading((count) => count + 1);
+    try {
+      const streams = await api.remoteLibraryStreams(library.id, type, id, signal, nameHint);
+      if (epoch !== remoteEpochRef.current) return;
+      setRemoteGroups((previous) => previous.map((group) => group.libraryId === library.id ? { ...group, streams, error: "" } : group));
+    } catch (error) {
+      if (epoch !== remoteEpochRef.current || abortedRequest(error)) return;
+      setRemoteGroups((previous) => previous.map((group) => group.libraryId === library.id ? { ...group, streams: [], error: describeError(error) } : group));
+    } finally {
+      if (epoch === remoteEpochRef.current) setRemoteLoading((count) => Math.max(0, count - 1));
+    }
+  };
+  /** `nameHint` is the resolved catalogue title of the item being opened -- a series name for an
+   *  episode, never the episode's own -- threaded straight to the provider's name filter. */
+  const loadRemoteGroups = async (type: string, id: string, nameHint?: string) => {
+    remoteAbortRef.current?.abort();
+    const controller = new AbortController();
+    remoteAbortRef.current = controller;
+    const epoch = ++remoteEpochRef.current;
+    remoteTargetForRef.current = { type, id, nameHint };
+    setRemoteGroups([]);
+    setRemoteLoading(1);
+    setRemoteDiscoveryError("");
+    let libraries: RemoteLibrary[];
+    try {
+      libraries = await api.remoteLibraries({ timeoutMs: 3_000, signal: controller.signal });
+    } catch (error) {
+      if (epoch !== remoteEpochRef.current || abortedRequest(error)) return;
+      setRemoteLoading(0);
+      setRemoteLibraries([]);
+      setRemoteDiscoveryError(t("sources.remoteUnavailable"));
+      return;
+    }
+    if (epoch !== remoteEpochRef.current) return;
+    setRemoteLoading(0);
+    const ordered = [...libraries].sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
+    setRemoteLibraries(ordered);
+    setRemoteGroups(ordered.map((library) => ({ libraryId: library.id, name: library.name, provider: library.provider, order: library.order, streams: [], error: "" })));
+    await Promise.all(ordered.map((library) => loadRemoteLibrary(library, type, id, epoch, nameHint, controller.signal)));
+  };
+  const retryRemoteLibrary = (libraryId: string) => {
+    const target = remoteTargetForRef.current;
+    const library = remoteLibraries.find((row) => row.id === libraryId);
+    if (!target || !library) return;
+    setRemoteGroups((previous) => previous.map((group) => group.libraryId === libraryId ? { ...group, error: "" } : group));
+    void loadRemoteLibrary(library, target.type, target.id, remoteEpochRef.current, target.nameHint, remoteAbortRef.current?.signal);
+  };
+  const retryRemoteGroups = () => {
+    const target = remoteTargetForRef.current;
+    if (target) void loadRemoteGroups(target.type, target.id, target.nameHint);
+  };
   /** Each addon is asked separately, so results show up as they arrive instead of waiting for the slowest. */
-  const fetchSources = async (type: string, id: string, video?: Video) => {
+  const fetchSources = async (type: string, id: string, video?: Video, nameHint?: string) => {
     const request = ++sourcesRequestRef.current;
     const stale = () => request !== sourcesRequestRef.current;
+    cancelRemoteWork();
     setSelectedVideo(video ?? null); setSourcesLoaded(false); setBusy(true);
     setStreams([]); setLocalStreams([]); setLocalLoading(false); setSelectedStream(null); setSubtitles([]); setPendingSources(0);
     pickedRef.current = false;
+    // Remote libraries are asked separately: an addon or subtitle failure cannot hide them.
+    void loadRemoteGroups(type, id, nameHint);
     // Local copies are asked for beside the addons and outside the try: an addon or subtitle
     // failure must not drop them.
     setLocalLoading(true);
@@ -1819,17 +2026,18 @@ export function App() {
     const remembered = resumeVideo(detail.videos, resume);
     if (remembered) {
       setSeason(remembered.season ?? null); setEpisodesOpen(false);
-      await fetchSources(type, remembered.id!, remembered);
-    } else if (type !== "series" && !detail.videos?.length) await fetchSources(type, item.id);
+      await fetchSources(type, remembered.id!, remembered, detail.name);
+    } else if (type !== "series" && !detail.videos?.length) await fetchSources(type, item.id, undefined, detail.name);
   };
   const closeMeta = () => {
     sourcesRequestRef.current += 1;
+    cancelRemoteWork();
     linksRequestRef.current += 1;
     trailerRequestRef.current += 1;
     setSelected(null); setSelectedSummary(null); setSelectedDownloadTitle(""); setSelectedVideo(null); setStreams([]); setLocalStreams([]); setLocalLoading(false); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false); setGalleryIndex(null); setDetailCompact(false); setTitleLinks([]); setTitleTrailer(null);
   };
   const loadSources = async (video?: Video) => {
-    if (!selected) return; await fetchSources(selected.type || currentCatalog?.type || "movie", video?.id || selected.id, video);
+    if (!selected) return; await fetchSources(selected.type || currentCatalog?.type || "movie", video?.id || selected.id, video, selected.name);
   };
   const fetchEpisodeSources = async (type: string, id: string) => {
     const [sources, nextSubtitles] = await Promise.all([api.streamSources(type, id), api.subtitles(type, id).catch(() => [] as Subtitle[])]);
@@ -1849,21 +2057,76 @@ export function App() {
     if (!playerOpen || localStream || !selected || !nextCatalogEpisode?.id) return;
     const id = nextCatalogEpisode.id;
     const type = selected.type || currentCatalog?.type || "series";
+    const current = selectedStreamRef.current;
+    if (current && isRemoteStream(current) && current.remoteItem) {
+      // The next episode of a remote source is looked for on that one library, never elsewhere.
+      const libraryId = current.remoteItem.libraryId;
+      remoteNextPrefetchRef.current?.controller.abort();
+      const controller = new AbortController();
+      const promise = api.remoteLibraryStreams(libraryId, type, id, controller.signal, selected?.name);
+      void promise.catch(() => undefined);
+      remoteNextPrefetchRef.current = { id, libraryId, controller, promise };
+      return;
+    }
     const promise = fetchEpisodeSources(type, id);
     // The viewer may never ask for this one, and nobody would be waiting to hear it failed.
     void promise.catch(() => undefined);
     nextEpisodePrefetchRef.current = { id, promise };
   }, [playerOpen, localStream, selected?.id, selected?.type, nextCatalogEpisode?.id, currentCatalog?.type]);
+  const stopPlayback = () => { setPlayerOpen(false); setLocalStream(null); setLocalEpisode(false); setPlaybackPreferences({}); };
+  /** Remote hand-off: the same library and version, or that episode's own selector. */
+  const playNextRemoteEpisode = async (type: string, id: string, current: Stream, episode: Video, nameHint: string | undefined) => {
+    const libraryId = current.remoteItem!.libraryId;
+    const request = sourcesRequestRef.current;
+    const titleId = selectedIdRef.current;
+    const sourceId = current.sourceId;
+    const remoteEpoch = remoteEpochRef.current;
+    const stale = () => request !== sourcesRequestRef.current || remoteEpoch !== remoteEpochRef.current
+      || titleId !== selectedIdRef.current || selectedStreamRef.current?.sourceId !== sourceId
+      || !playerOpenRef.current;
+    const prefetched = remoteNextPrefetchRef.current;
+    const usePrefetch = prefetched?.id === id && prefetched.libraryId === libraryId;
+    let streams: Stream[] = [];
+    let failure: unknown = null;
+    try {
+      streams = usePrefetch ? await prefetched!.promise : await api.remoteLibraryStreams(libraryId, type, id, undefined, nameHint);
+    } catch (error) {
+      if (abortedRequest(error) || stale()) return false;
+      failure = error;
+    }
+    if (usePrefetch) remoteNextPrefetchRef.current = null;
+    if (stale()) return false;
+    const wanted = current.name?.trim();
+    const pick = failure || !wanted ? null : streams.find((stream) => stream.provider === current.provider && stream.name?.trim() === wanted) ?? null;
+    setSelectedVideo(episode); setEpisodesOpen(false);
+    setStreams([]); setLocalStreams([]); setLocalLoading(false); setSubtitles([]); setPendingSources(0);
+    setRemoteDiscoveryError("");
+    setRemoteGroups([{ libraryId, name: current.libraryName ?? "", provider: current.provider!, order: 0, streams, error: failure ? describeError(failure) : "" }]);
+    setRemoteLoading(0);
+    setSourcesLoaded(true);
+    if (pick) {
+      setSelectedStream(pick); pickedRef.current = true;
+      return Boolean(pick.playable);
+    }
+    // No verified version: playback stops and this episode's real list is shown.
+    setSelectedStream(null); pickedRef.current = false;
+    stopPlayback();
+    return false;
+  };
   const playNextCatalogEpisode = async () => {
     if (!selected || !nextCatalogEpisode || nextBusyRef.current) return false;
     nextBusyRef.current = true; setNextBusy(true);
     const currentStream = selectedStream;
+    const type = selected.type || currentCatalog?.type || "series";
+    const id = nextCatalogEpisode.id || selected.id;
+    if (currentStream && isRemoteStream(currentStream) && currentStream.remoteItem) {
+      try { return await playNextRemoteEpisode(type, id, currentStream, nextCatalogEpisode, selected.name); }
+      finally { nextBusyRef.current = false; setNextBusy(false); }
+    }
     const request = ++sourcesRequestRef.current;
     const stale = () => request !== sourcesRequestRef.current;
     setSelectedVideo(nextCatalogEpisode); setEpisodesOpen(false); setSourcesLoaded(false); setBusy(true);
     setStreams([]); setLocalStreams([]); setLocalLoading(false); setSelectedStream(null); setSubtitles([]); setPendingSources(0); pickedRef.current = false;
-    const type = selected.type || currentCatalog?.type || "series";
-    const id = nextCatalogEpisode.id || selected.id;
     // The new episode's local copies are looked up too; they must not change what is about to
     // play, and the repick guard on `playerOpen` keeps the playing source in place.
     setLocalLoading(true);
@@ -1939,7 +2202,7 @@ export function App() {
   };
 
   const downloadStreamToDevice = async () => {
-    if (!selectedStream?.playable) return false;
+    if (!selectedStream?.playable || isRemoteStream(selectedStream)) return false;
     try {
       const filename = await saveToDevice({ title: videoTitle, stream: selectedStream, media: selectedMedia() });
       notify(t("save.startedViaServer", { filename }));
@@ -1991,11 +2254,13 @@ export function App() {
    *  itself, a new episode opens its show the way the Library's row does, and a suggestion opens
    *  the dialog the library page opens. */
   const homePlay = (card: HomeCard) => {
+    if (card.kind === "remote") { openRemoteCard(card); return; }
     if (card.kind === "resume-catalogue" || card.kind === "episode" || card.kind === "discovery" || card.kind === "confirm" || card.kind === "favorite-catalogue") return;
     const title = card.kind === "favorite" || card.kind === "recent" || card.kind === "tonight" ? card.label : card.title;
     void playLocal(title, card.path, card.poster, (card.kind === "resume-file" || card.kind === "completed" || card.kind === "recent") && card.season != null);
   };
   const homeOpen = (card: HomeCard) => {
+    if (card.kind === "remote") { openRemoteCard(card); return; }
     if (card.kind === "episode" || card.kind === "discovery") { void openFromCatalog({ type: card.type, id: card.kind === "episode" ? card.metaId : card.id, name: card.name, poster: card.poster }); return; }
     if (card.kind === "confirm") { setSuggestionsOpen(true); return; }
     if (card.kind === "favorite-catalogue") { void openFromCatalog({ type: card.type, id: card.id, name: card.name, poster: card.poster }); return; }
@@ -2014,9 +2279,27 @@ export function App() {
     else if (target === "favorites") openView("favorites");
     else if (target === "confirm") setSuggestionsOpen(true);
   };
+  /** Opens a remote card's item in the Library's native browser. */
+  const openRemoteCard = (card: Extract<HomeCard, { kind: "remote" }>) => {
+    navigated.current = true;
+    remoteTargetNonce.current += 1;
+    setRemoteTarget({ libraryId: card.libraryId, itemId: card.itemId, nonce: remoteTargetNonce.current });
+    setView("library");
+  };
+  const refreshPersonal = () => {
+    setPersonalRefresh((value) => value + 1);
+    home.refresh(["resume", "favorites"]);
+  };
   /** The Continue watching view's menu action: forgetting every key a card stands for, then
    *  re-reading both lists, so a card that stays cannot look removed and come back on a poll. */
   const forgetResume = (card: HomeCard) => {
+    if (card.kind === "remote") {
+      if (!window.confirm(t("home.forgetConfirm", { title: card.title }))) return;
+      // Only the position is cleared; the remote favourite and watched flags are kept.
+      void api.saveRemoteState(card.libraryId, card.itemId, { position: 0, duration: 0 })
+        .then(() => { void loadResume(resumeFilter, 0); home.refresh(["resume"]); refreshPersonal(); }, fail);
+      return;
+    }
     if (card.kind !== "resume-file" && card.kind !== "resume-catalogue") return;
     if (!window.confirm(t("home.forgetConfirm", { title: card.title }))) return;
     void api.forgetManyProgress(card.forgetKeys)
@@ -2078,7 +2361,7 @@ export function App() {
         rows={home.rows} order={home.order} shape={settings.homeTileShape} onToggleShape={() => void toggleShape("homeTileShape")}
         onRetry={(row) => home.refresh([row])} onShowAll={homeShowAll} onPlay={homePlay} onOpenCatalogue={homeOpen}
         onShuffle={(row, shuffle) => home.refresh([row], { shuffle })} onVisible={home.reveal} onOpenCatalog={(row) => { const pick = parseHomeCatalogRowId(row); if (pick) resetCatalog(pick); }}
-        onReveal={revealInLibrary} onForgotten={() => home.refresh(["resume"])} onError={fail}/>}
+        onReveal={revealInLibrary} onForgotten={refreshPersonal} onError={fail}/>}
       {view === "catalog" && <section className={`catalog-view ${catalogCompact ? "catalog-compact" : ""}`} {...chromeGestures(() => gridRef.current)} onFocusCapture={(event) => {
         if ((event.target as HTMLElement).closest(".searchbar,.filterbar")) setCatalogCompact(false);
       }}><Heading eyebrow={t("catalog.eyebrow")} title={t("catalog.title")}/>
@@ -2201,16 +2484,20 @@ export function App() {
             {busy && <div className="loading">{t("common.loading")}</div>}
           </section><section ref={detailRef} className={`panel detail-panel ${selected ? "mobile-open" : ""} ${selected?.videos?.length && episodesOpen ? "series-episodes-layout" : ""} ${sourcesLoaded && (selected?.videos?.length ? selectedVideo && !episodesOpen : true) ? "series-sources-layout" : ""} ${detailCompact ? "hero-compact" : ""}`}>{selected ? <>
             <div className="mobile-detail-head"><button onClick={selected.videos?.length && selectedVideo && !episodesOpen ? () => setEpisodesOpen(true) : closeMeta}><ChevronLeft/> {t(selected.videos?.length && selectedVideo && !episodesOpen ? "episodes.heading" : "catalog.results")}</button><strong>{selected.name}</strong></div>
-            <div className="detail-primary"><div className={`hero ${selected.videos?.length ? "series-hero" : ""} ${galleryImages.length ? "has-gallery" : ""}`} style={selected.background ? { backgroundImage: `linear-gradient(90deg,#121721 25%,transparent),url(${selected.background})` } : undefined}><div className="detail-copy">{titleChips(titleTrailer, titleLinks, <><button className={`watch-star ${inWatchlist(selected.type, selected.id) ? "on" : ""}`} title={t(inWatchlist(selected.type, selected.id) ? "watchlist.remove" : "watchlist.add")}
-                onClick={() => void toggleWatchlist(selected)}><Star/></button>{(selected.type === "series" || selected.type === "movie" || Boolean(selected.videos?.length)) && (detailFollow ? <button className="follow-chip on" onClick={() => setFollowDialogOpen(true)}><BellRing/>{t("follow.following")}{detailFollow.autoDownload && <span className="follow-chip-download" aria-hidden="true" title={t("follow.autoOnHint")}><Download/></span>}</button> : (selected.type !== "movie" || movieHasNoSource) && <button className="follow-chip" onClick={() => setFollowStart(selected)}><Bell/>{t("follow.follow")}</button>)}<span className="pill">{t(selected.type === "series" ? "catalog.oneSeries" : "catalog.oneMovie")}</span></>)}<h2>{selected.name}</h2><p className="meta-line">{imdbRating(selected) && <b className="imdb-rating" title={t("catalog.imdbRating", { rating: imdbRating(selected)! })}><Star/>{imdbRating(selected)}</b>}{imdbRating(selected) && [selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).length ? " · " : ""}{[selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).join(" · ")}</p><div className="catalog-description" aria-busy={metaLoading}><p className="description-preview" aria-hidden={metaLoading ? true : undefined}>{metaLoading ? skeletonLines : (selected.description || t("catalog.noDescription"))}</p><details key={selected.id}><summary>{t("catalog.description")}</summary><p tabIndex={0}>{metaLoading ? skeletonLines : (selected.description || t("catalog.noDescription"))}</p></details></div></div>{galleryImages.length > 0 && <button className={`gallery-open ${galleryImages[0].shape}`} onClick={() => setGalleryIndex(0)} title={t("gallery.openHint")}><img src={galleryImages[0].url} alt="" onError={hideBroken}/><span><Images/> {galleryImages.length > 1 ? t("gallery.stillCount", { count: galleryImages.length }) : t("gallery.enlarge")}</span></button>}</div></div>
+            <div className="detail-primary"><DetailHero className={selected.videos?.length ? "series-hero" : ""} background={selected.background}
+              gallery={galleryImages.length > 0 ? <button className={`gallery-open ${galleryImages[0].shape}`} onClick={() => presentGallery(galleryImages, selected.type === "movie" || selected.type === "series" ? { type: selected.type, id: selected.id } : null)} title={t("gallery.openHint")}><img src={galleryImages[0].url} alt="" onError={hideBroken}/><span><Images/> {galleryImages.length > 1 ? t("gallery.stillCount", { count: galleryImages.length }) : t("gallery.enlarge")}</span></button> : undefined}
+              copy={<><TitleChips leading={<><button className={`watch-star ${inWatchlist(selected.type, selected.id) ? "on" : ""}`} title={t(inWatchlist(selected.type, selected.id) ? "watchlist.remove" : "watchlist.add")}
+                onClick={() => void toggleWatchlist(selected)}><Star/></button>{(selected.type === "series" || selected.type === "movie" || Boolean(selected.videos?.length)) && (detailFollow ? <button className="follow-chip on" onClick={() => setFollowDialogOpen(true)}><BellRing/>{t("follow.following")}{detailFollow.autoDownload && <span className="follow-chip-download" aria-hidden="true" title={t("follow.autoOnHint")}><Download/></span>}</button> : (selected.type !== "movie" || movieHasNoSource) && <button className="follow-chip" onClick={() => setFollowStart(selected)}><Bell/>{t("follow.follow")}</button>)}</>} kind={t(selected.type === "series" ? "catalog.oneSeries" : "catalog.oneMovie")} trailer={titleTrailer} links={titleLinks} onTrailer={setTrailerOpen} secureMode={settings.secureMode}/><h2>{selected.name}</h2><p className="meta-line">{imdbRating(selected) && <b className="imdb-rating" title={t("catalog.imdbRating", { rating: imdbRating(selected)! })}><Star/>{imdbRating(selected)}</b>}{imdbRating(selected) && [selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).length ? " · " : ""}{[selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).join(" · ")}</p><DetailDescription text={selected.description} loading={metaLoading} identityKey={selected.id} skeleton={skeletonLines}/></>}/></div>
             <div className="detail-workflow">
             {selected.videos?.length ? !(chosenEpisode && sourcesLoaded) && <div className={`episodes ${chosenEpisode ? "collapsed" : ""}`}>{chosenEpisode ?? <><div className="subhead episode-head"><h3>{t("episodes.heading")}</h3><div className="episode-tools">{seasons.length > 1 && <select className="season-select" aria-label={t("episodes.season")} value={activeSeason ?? ""} onChange={(event) => setSeason(Number(event.target.value))}>{seasons.map((value) => <option key={value} value={value}>{value === 0 ? t("episodes.specials") : t("episodes.seasonNumber", { season: value })}</option>)}</select>}{activeSeason != null && <button title={activeSeason === 0 ? t("episodes.downloadSpecials") : t("episodes.downloadSeason", { season: activeSeason })} onClick={() => void enqueueEpisodes("season")}><Download/> {activeSeason === 0 ? t("episodes.specials") : t("episodes.seasonShort", { season: activeSeason })}</button>}<button title={t("episodes.downloadShow")} onClick={() => void enqueueEpisodes("series")}><Download/> {t("episodes.wholeShow")}</button>{selectedVideo ? <button onClick={() => setEpisodesOpen(false)}>{t("common.collapse")}</button> : <span>{visibleEpisodes.length}</span>}</div></div><div className="episode-list" onScroll={(event) => compactOnScroll(event, detailCompact, setDetailCompact, true)}>{visibleEpisodes.map((video, index) => <button key={video.id || index} className={selectedVideo?.id === video.id ? "selected" : ""} onClick={() => { setEpisodesOpen(false); void loadSources(video); }}><b>{video.season != null ? `${String(video.season).padStart(2,"0")}×${String(video.episode || 0).padStart(2,"0")}` : index + 1}</b><span>{video.title || video.name || t("episodes.one")}</span><ChevronRight/></button>)}</div></>}</div> : !sourcesLoaded && <button className="primary wide" onClick={() => loadSources()} disabled={busy}>{t("sources.load")}</button>}
             {sourcesLoaded && (!selected.videos?.length || !episodesOpen) && <div className="sources"><div className={`subhead ${chosenEpisode ? "sources-episode" : ""}`}>{chosenEpisode ?? <h3>{t("sources.heading")}</h3>}<span>{sourceRows.length === sourceTotal ? sourceTotal : t("sources.ofTotal", { shown: sourceRows.length, total: sourceTotal })}{pendingSources > 0 ? ` · ${t("sources.loadingFrom", { count: pendingSources })}` : ""}</span></div>
-              {(offered.length > 1 || localStreams.length > 0) && <div className="stream-filters">
+              {(offered.length > 1 || localStreams.length > 0 || remoteGroups.length > 0) && <div className="stream-filters">
                 <label><span>{t("sources.addon")}</span><select value={streamAddon} onChange={(event) => setStreamAddon(event.target.value)}>
-                  <option value="">{t("sources.allAddons")} ({byLanguage.length + localByLanguage.length})</option>
+                  <option value="">{t("sources.allAddons")} ({byLanguage.length + localByLanguage.length + remoteFlat.length})</option>
                   {(localStreams.length > 0 || localSelected) && <option value={LOCAL_SOURCE}>{t("sources.localFilter")} ({localStreams.length})</option>}
                   {streamAddons.map(([name, count]) => <option key={name} value={name}>{name} ({count})</option>)}
+                  {remoteByLanguage.map((group) => <option key={group.libraryId} value={remoteSourceFilter(group.libraryId)}>{remoteProviderLabel(group.provider)} · {group.name} ({group.streams.length})</option>)}
+                  {remoteSelected !== undefined && !remoteByLanguage.some((group) => group.libraryId === remoteSelected) && <option value={streamAddon}>{remoteLibraryLabel(remoteSelected)} (0)</option>}
                 </select></label>
                 {streamLangs.length > 0 && <label><span>{t("auth.language")}</span><select value={streamLanguage} onChange={(event) => setStreamLanguage(event.target.value)}>
                   <option value="">{t("sources.anyLanguage")} ({languageSources.length})</option>
@@ -2222,43 +2509,68 @@ export function App() {
                   <option value="size-asc">{t("sources.sortSmallest")}</option>
                   <option value="addon">{t("sources.sortAddon")}</option>
                 </select></label>
-              </div>}<div className="stream-list" onScroll={(event) => compactOnScroll(event, detailCompact, setDetailCompact, true)}>{sourceRows.map((stream, index) => { const local = isLocalStream(stream); const probedLanguages = local && selectedStream === stream ? [...new Set((inspection?.audioTracks ?? []).map((track) => track.language).filter((language): language is string => Boolean(language)))] : []; const languagesForRow = probedLanguages.length ? probedLanguages : streamLanguages(stream, metaLanguage); return <button key={index} className={selectedStream === stream ? "selected" : ""} title={local ? t("sources.localHint") : undefined} onClick={() => { pickedRef.current = true; setSelectedStream(stream); }}><i className={local ? "local" : stream.kind === "torrent" ? "rd" : stream.playable ? undefined : "ext"}>{local ? <><HardDrive/>{t("sources.localBadge")}</> : streamBadge(stream)}</i><span><strong>{local ? stream.behaviorHints?.filename ?? streamLabel(stream) : streamLabel(stream)}</strong><small>{local ? stream.libraryName : stream.addonName}</small></span><span className="stream-meta">{streamSize(stream) ? <b>{bytes(streamSize(stream))}</b> : null}<small>{languagesForRow.map((code) => <em className="lang-badge" key={code} title={probedLanguages.length ? t("sources.audioInFile") : t("sources.languageGuess")}>{label(code)}</em>)}</small></span>{selectedStream === stream && <Check/>}</button>; })}</div>
+              </div>}<div className="stream-list" onScroll={(event) => compactOnScroll(event, detailCompact, setDetailCompact, true)}>{sourceRows.map((stream, index) => {
+                const local = isLocalStream(stream);
+                const remote = isRemoteStream(stream);
+                const probedLanguages = local && selectedStream === stream ? [...new Set((inspection?.audioTracks ?? []).map((track) => track.language).filter((language): language is string => Boolean(language)))] : [];
+                const languagesForRow = probedLanguages.length ? probedLanguages : streamLanguages(stream, metaLanguage);
+                return <button key={index} className={selectedStream === stream ? "selected" : ""} title={local ? t("sources.localHint") : remote ? t("sources.remoteHint") : undefined} onClick={() => { pickedRef.current = true; setSelectedStream(stream); }}>
+                  <i className={local ? "local" : remote ? "remote" : stream.kind === "torrent" ? "rd" : stream.playable ? undefined : "ext"}>{local ? <><HardDrive/>{t("sources.localBadge")}</> : streamBadge(stream)}</i>
+                  <span><strong>{local ? stream.behaviorHints?.filename ?? streamLabel(stream) : streamLabel(stream)}</strong><small>{local ? stream.libraryName : remote ? [stream.provider ? remoteProviderLabel(stream.provider) : "", stream.libraryName].filter(Boolean).join(" · ") : stream.addonName}</small></span>
+                  <span className="stream-meta">{streamSize(stream) ? <b>{bytes(streamSize(stream))}</b> : null}<small>{languagesForRow.map((code) => <em className="lang-badge" key={code} title={probedLanguages.length ? t("sources.audioInFile") : t("sources.languageGuess")}>{label(code)}</em>)}</small></span>
+                  {selectedStream === stream && <Check/>}
+                </button>;
+              })}</div>
               {!sourceRows.length && sourcesPending && <div className="no-sources">{t("sources.asking")}</div>}
-              {!sourceRows.length && !sourcesPending && (!offered.length || localSelected) && <div className="no-sources">{t("sources.none")}</div>}
+              {!sourceRows.length && !sourcesPending && (!offered.length || localSelected || remoteSelected !== undefined) && <div className="no-sources">{t("sources.none")}</div>}
               {Boolean(offered.length) && !sourceRows.length && !sourcesPending && !localSelected && hiddenTorrents && !addonFilter && !streamLanguage && <div className="no-sources">{t("sources.onlyTorrentsBefore")} <button className="link-button" onClick={() => openView("settings")}>{t("nav.settings")}</button> {t("sources.onlyTorrentsAfter")}</div>}
               {Boolean(offered.length) && !sourceRows.length && !sourcesPending && !localSelected && !(hiddenTorrents && !addonFilter && !streamLanguage) && <div className="no-sources">{t("sources.noneMatchFilter", { count: offered.length })} <button className="link-button" onClick={() => { setStreamAddon(""); setStreamLanguage(""); }}>{t("sources.clearFilters")}</button></div>}
               {notices.map((notice) => <p className="notice" key={notice.sourceId}><b>{notice.addonName}</b> {noticeText(notice)}</p>)}
+              {remoteDiscoveryError && <p className="notice" role="alert"><b>{t("mediaServer.remoteTitle")}</b> {remoteDiscoveryError} <button className="link-button" onClick={() => retryRemoteGroups()}>{t("home.retry")}</button></p>}
+              {remoteGroups.filter((group) => group.error).map((group) => <p className="notice" role="alert" key={group.libraryId}><b>{remoteProviderLabel(group.provider)} · {group.name}</b> {t("sources.remoteFailed")} <button className="link-button" onClick={() => retryRemoteLibrary(group.libraryId)}>{t("home.retry")}</button></p>)}
               {selectedStream?.kind === "torrent" && <p className="notice">{t("sources.torrentNotice")}</p>}
               <div className="source-footer"><div className="source-info"><Subtitles/> {t("sources.subtitleCount", { count: selectedLocalPath ? 0 : subtitles.length + (selectedStream?.subtitles?.length || 0) })}
                 {inspection && <> · <b>{t("sources.audioInFile")}</b> {inspection.audioTracks.length ? inspection.audioTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}
                 · <b>{t("sources.subtitlesInFile")}</b> {inspection.subtitleTracks.length ? inspection.subtitleTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}</>}
-              {selectedStream?.playable && !inspection && <> · {t("sources.probing")}</>}</div><div className="action-slot"><div className="actions"><button className="primary" disabled={!canPlay} onClick={startCatalogPlayback}><CirclePlay/> {t("player.play")}</button>{selectedLocalPath ? <button onClick={() => revealInLibrary(selectedLocalPath)}><FolderOpen/> {t("library.showInLibrary")}</button> : <div className="split-button"><button disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} onClick={() => void enqueue()}><HardDrive/> {t("save.toLibrary")}</button><button className="split-button-toggle" disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} aria-haspopup="dialog" aria-label={t("save.toLibraryElsewhere")} title={t("save.toLibraryElsewhere")} onClick={() => setSaveTargetOpen(true)}><ChevronDown/></button></div>}<button disabled={!canPlay} onClick={() => { if (selectedLocalPath) void downloadLibraryFile(selectedLocalPath); else void downloadStreamToDevice(); }}><Download/> {t("save.toDevice")}</button></div></div></div>
+              {selectedStream?.playable && !inspection && <> · {t("sources.probing")}</>}</div><div className="action-slot"><div className="actions"><button className="primary" disabled={!canPlay} onClick={startCatalogPlayback}><CirclePlay/> {t("player.play")}</button>{selectedLocalPath ? <button onClick={() => revealInLibrary(selectedLocalPath)}><FolderOpen/> {t("library.showInLibrary")}</button> : <div className="split-button"><button disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} onClick={() => void enqueue()}><HardDrive/> {t("save.toLibrary")}</button><button className="split-button-toggle" disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} aria-haspopup="dialog" aria-label={t("save.toLibraryElsewhere")} title={t("save.toLibraryElsewhere")} onClick={() => setSaveTargetOpen(true)}><ChevronDown/></button></div>}<button disabled={!canPlay || Boolean(selectedStream && isRemoteStream(selectedStream))} onClick={() => { if (selectedLocalPath) void downloadLibraryFile(selectedLocalPath); else void downloadStreamToDevice(); }}><Download/> {t("save.toDevice")}</button></div></div></div>
             </div>}
             </div>
           </> : <Empty icon={<Film/>} title={t("catalog.pickTitle")} text={t("catalog.pickText")}/>}</section></div>
         </>}
       </section>}
-      {view === "library" && <section className={`library-page${libraryCompact ? " library-compact" : ""}`} {...chromeGestures(() => browseScrollRef.current)} onKeyDown={(event) => { if (event.key === "Escape") setMenuFor(null); }} onClick={() => menuFor && setMenuFor(null)}><Heading eyebrow={t("library.eyebrow")} title={t("library.title")}/>
-        <div className="panel browse-panel">
+      {view === "library" && <section ref={libraryPageRef} className={`library-page${remoteRootsPresent && !remoteOpen && !browsePath && !localDetail ? " library-remote-roots" : ""}${(remoteOpen ? remoteCompact : libraryCompact) ? " library-compact" : ""}`} {...chromeGestures(() => browseScrollRef.current)} onKeyDown={(event) => { if (event.key === "Escape") setMenuFor(null); }} onClick={() => menuFor && setMenuFor(null)}><Heading eyebrow={t("library.eyebrow")} title={t("library.title")}/>
+        <RemoteLibraryBrowser onRootPresenceChange={setRemoteRootsPresent} hideRoots={Boolean(browsePath) || Boolean(localDetail)} audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} onError={fail}
+          libraryTileShape={settings.libraryTileShape} onToggleLibraryShape={() => void toggleShape("libraryTileShape")}
+          views={views} onPersistPrefs={persistRemotePrefs}
+          onOpenChange={(open) => { setRemoteOpen(open); if (!open) setRemoteCompact(false); }}
+          compact={remoteCompact} onCompactChange={setRemoteCompact}
+          {...(remoteTarget ? { initialTarget: remoteTarget } : {})} onPersonalChange={refreshPersonal}
+          uiLanguage={settings.uiLanguage} secureMode={settings.secureMode} onTrailer={setTrailerOpen}
+          onGallery={presentGallery} resetSignal={libraryReset}/>
+        {!remoteOpen && <div className="panel browse-panel">
         <div className="browse-head">
         <div className="browse-bar">
           <nav className="crumbs" aria-label={t("library.breadcrumbs")}>
-            {browsePath && <button className="library-back" aria-label={t("library.folderUp")} onClick={() => { setBrowseQuery(""); setMenuFor(null); if (browsePath.startsWith(":")) setFromFavorites(false); setBrowsePath(browsePath.startsWith(":") ? "" : browsePath.includes("/") ? browsePath.slice(0, browsePath.lastIndexOf("/")) : fromFavorites ? ":favorites" : ""); }}><ChevronLeft/></button>}
-            <button onClick={() => { setBrowseQuery(""); setFromFavorites(false); setBrowsePath(""); }} disabled={!browsePath}><HardDrive/> {t("nav.library")}</button>
+            {(browsePath || localDetail) && <button className="library-back" aria-label={localDetail ? t("mediaServer.back") : t("library.folderUp")} onClick={libraryBack}><ChevronLeft/></button>}
+            <button onClick={() => { setFromFavorites(false); goLocalFolder(""); }} disabled={!browsePath && !localDetail}><HardDrive/> {t("nav.library")}</button>
             {(fromFavorites || browsePath === ":favorites") && <span>
               <ChevronRight/>
-              <button disabled={browsePath === ":favorites"} onClick={() => { setBrowseQuery(""); setBrowsePath(":favorites"); }}>{t("favorite.off")}</button>
+              <button disabled={browsePath === ":favorites" && !localDetail} onClick={() => { setBrowseQuery(""); setLocalDetail(null); setBrowsePath(":favorites"); }}>{t("favorite.off")}</button>
             </span>}
             {!browsePath.startsWith(":") && browsePath.split("/").filter(Boolean).map((part, index, all) => <span key={part + index}>
               <ChevronRight/>
               {/* Segment zero is a library id; the id is never shown. */}
-              <button disabled={index === all.length - 1} onClick={() => { setBrowseQuery(""); setBrowsePath(all.slice(0, index + 1).join("/")); }}>{index === 0 ? libraries.find((library) => library.id === part)?.name ?? part : part}</button>
+              <button disabled={index === all.length - 1 && !localDetail} onClick={() => goLocalFolder(all.slice(0, index + 1).join("/"))}>{index === 0 ? libraries.find((library) => library.id === part)?.name ?? part : part}</button>
             </span>)}
+            {localDetail && <span>
+              <ChevronRight/>
+              <button aria-current="page" disabled>{localDetail.item.kind === "file" ? (localDetail.item.season != null ? `${localDetail.item.season}×${String(localDetail.item.episode ?? 0).padStart(2, "0")} ${localDetail.item.label}` : localDetail.item.label) : localDetail.item.name}</button>
+            </span>}
           </nav>
           <div className="browse-tools">
             <div className={`fold browse-fold${libraryCompact ? " closed" : ""}`}><div className="browse-fold-inner">
-            {!libraryList && <div className="search-input"><Search/><input value={browseQuery} aria-label={t("library.filter")} placeholder={t("library.filterPlaceholder")} onChange={(event) => setBrowseQuery(event.target.value)}/></div>}
-            {!libraryList && <select aria-label={t("common.sorting")} value={browseSort} onChange={(event) => {
+            {!libraryList && !localDetail && <div className="search-input"><Search/><input value={browseQuery} aria-label={t("library.filter")} placeholder={t("library.filterPlaceholder")} onChange={(event) => setBrowseQuery(event.target.value)}/></div>}
+            {!libraryList && !localDetail && <select aria-label={t("common.sorting")} value={browseSort} onChange={(event) => {
               const next = event.target.value as LibrarySort;
               setBrowseSort(next);
               // Dates and sizes start with the largest value; names start with A.
@@ -2268,23 +2580,23 @@ export function App() {
               <option value="name">{t("library.sortName")}</option><option value="added">{t("library.sortAdded")}</option>
               <option value="size">{t("library.sortSize")}</option><option value="random">{t("library.sortRandom")}</option>
             </select>}
-            {!libraryList && <button title={t(browseDesc ? "common.descending" : "common.ascending")} onClick={() => { setBrowseDesc((value) => !value); persistLibraryPrefs({ order: browseDesc ? "asc" : "desc" }); }} disabled={browseSort === "random"}>
+            {!libraryList && !localDetail && <button title={t(browseDesc ? "common.descending" : "common.ascending")} onClick={() => { setBrowseDesc((value) => !value); persistLibraryPrefs({ order: browseDesc ? "asc" : "desc" }); }} disabled={browseSort === "random"}>
               {browseDesc ? <ArrowDown/> : <ArrowUp/>}
             </button>}
             {/* Only while the scan has something waiting: with nothing to confirm the filter
                 would list an empty folder and say nothing about why. */}
-            {!libraryList && suggestionCount > 0 && <button className={onlyUnconfirmed ? "active-filter" : ""} title={t("library.onlyUnconfirmed")}
+            {!libraryList && !localDetail && suggestionCount > 0 && <button className={onlyUnconfirmed ? "active-filter" : ""} title={t("library.onlyUnconfirmed")}
               aria-pressed={onlyUnconfirmed} disabled={browsePath === ":favorites"}
               onClick={() => setOnlyUnconfirmed((value) => !value)}><Sparkles/></button>}
-            {!libraryList && <button title={t(browseView === "grid" ? "library.viewRows" : "library.viewTiles")} onClick={() => { setBrowseView((value) => value === "grid" ? "list" : "grid"); persistLibraryPrefs({ view: browseView === "grid" ? "list" : "grid" }); }}>
+            {!libraryList && !localDetail && <button title={t(browseView === "grid" ? "library.viewRows" : "library.viewTiles")} onClick={() => { setBrowseView((value) => value === "grid" ? "list" : "grid"); persistLibraryPrefs({ view: browseView === "grid" ? "list" : "grid" }); }}>
               {browseView === "grid" ? <List/> : <LayoutGrid/>}
             </button>}
-            {admin && !libraryList && <button className={selectionMode ? "active-filter" : ""} title={t("library.selectMode")} aria-pressed={selectionMode}
+            {admin && !libraryList && !localDetail && <button className={selectionMode ? "active-filter" : ""} title={t("library.selectMode")} aria-pressed={selectionMode}
               onClick={() => { setMenuFor(null); if (selectionMode) leaveSelection(); else setSelectionMode(true); }}><Check/></button>}
             </div></div>
             {/* What a folded header keeps: where the tiles stand, the tools, and the way back. */}
             <div className="browse-keep">
-            {!libraryList && browseView === "grid" && <button className="shape-toggle" title={t(settings.libraryTileShape === "wide" ? "library.shapePoster" : "library.shapeWide")} aria-pressed={settings.libraryTileShape === "wide"} onClick={() => void toggleShape("libraryTileShape")}>{settings.libraryTileShape === "wide" ? <RectangleVertical/> : <RectangleHorizontal/>}</button>}
+            {!libraryList && !localDetail && browseView === "grid" && <button className="shape-toggle" title={t(settings.libraryTileShape === "wide" ? "library.shapePoster" : "library.shapeWide")} aria-pressed={settings.libraryTileShape === "wide"} onClick={() => void toggleShape("libraryTileShape")}>{settings.libraryTileShape === "wide" ? <RectangleVertical/> : <RectangleHorizontal/>}</button>}
             <div className="library-maintenance" onKeyDown={(event) => {
               if (event.key === "Escape" && menuFor === ":library-tools") event.currentTarget.querySelector<HTMLButtonElement>(".library-maintenance-toggle")?.focus();
             }}>
@@ -2302,7 +2614,7 @@ export function App() {
                 <button title={t("library.recheckAutomaticHint")} onClick={() => void recheckAutomatic()} disabled={scanning || !currentLibraryId}>
                   <ShieldQuestion/> {t("library.recheckAutomatic")}
                 </button>
-                {!libraryList && !browsePath.startsWith(":") && <button title={t("library.createFolder")} onClick={() => { setMenuFor(null); void createFolder(); }}>
+                {!libraryList && !localDetail && !browsePath.startsWith(":") && <button title={t("library.createFolder")} onClick={() => { setMenuFor(null); void createFolder(); }}>
                   <Plus/> {t("library.createFolder")}
                 </button>}
                 {/* One library is one thing to manage: the settings section holds it, and the
@@ -2351,10 +2663,24 @@ export function App() {
         </div>}
         </div>
         <div className="browse-scroll" ref={browseScrollRef} onScroll={(event) => {
-          if (!restoringScroll.current && !playerOpenRef.current) scrollByView.current.library = event.currentTarget.scrollTop;
+          if (!restoringScroll.current && !playerOpenRef.current && !localDetail) scrollByView.current.library = event.currentTarget.scrollTop;
           compactOnScroll(event, libraryCompact, setLibraryCompact);
           scheduleViewAnchor();
         }}>
+        {localDetail ? <LocalLibraryDetail key={localDetail.item.path}
+          item={localDetail.item}
+          favorite={liveLocalItem?.favorite ?? localDetail.item.favorite ?? false}
+          {...(liveLocalItem?.kind === "file" && liveLocalItem.progress ? { progress: liveLocalItem.progress } : {})}
+          onToggleFavorite={(favorite) => void toggleFavorite(localDetail.item.path, favorite)}
+          onResetProgress={() => void forgetWatched(localDetail.item.path)}
+          onOpenFolder={() => { if (localDetail.item.kind === "folder") goLocalFolder(localDetail.item.path); }}
+          uiLanguage={settings.uiLanguage} secureMode={settings.secureMode} onTrailer={setTrailerOpen}
+          onGallery={(images, path, ref) => { setMenuFor(null); presentGallery(images, ref, path); }}
+          onPlay={(stream) => {
+            const clicked = localDetail.item;
+            void playLocal(clicked.kind === "file" ? clicked.label : clicked.name, stream.localPath ?? clicked.path, clicked.poster,
+              clicked.kind === "file" && clicked.season != null, { kind: "library", key: clicked.path });
+          }}/> : <>
         {!browsePath && !scanHintDismissed && !libraryScan?.finishedAt && (browse?.total ?? 0) >= 10 && <div className="library-scan-hint" role="status">
           <span>{t("library.scanHint")}</span>
           <button type="button" onClick={dismissScanHint}>{t("library.dismissHint")}</button>
@@ -2369,26 +2695,32 @@ export function App() {
           : <>
             <div className={browseView === "grid" ? "browse-grid" : "browse-rows"}>
               {browse.items.map((item) => item.kind === "library"
-                ? <article className={`browse-item library${item.unreachable ? " unreachable" : ""}`} key={item.path} data-path={item.path}>
-                    <button className="library-open" disabled={!item.enabled} onClick={() => { setBrowseQuery(""); setFromFavorites(false); setMenuFor(null); setBrowsePath(item.path); }}>
-                      <span className="browse-art">{(item.posters?.length ?? 0) > 1
-                        ? <span className="library-preview-collage" aria-hidden="true">{item.posters?.map((poster) => <img key={poster} src={poster} alt="" loading="lazy" onError={hideBroken}/>)}</span>
-                        : item.posters?.[0] || item.poster ? <img src={item.posters?.[0] ?? item.poster} alt="" loading="lazy" onError={hideBroken}/> : <HardDrive/>}<i className="browse-badge">{item.fileCount}</i></span>
-                      <span className="library-copy"><strong>{item.name}</strong><small>{libraryMeta(item)}</small></span>
-                      <span className="library-action">{item.enabled ? <><FolderOpen/> {t("library.openFolder")} <ChevronRight/></> : t("library.disabled")}</span>
-                    </button>
-                  </article>
+                ? <LibraryTile key={item.path} name={item.name} meta={libraryMeta(item)} posters={item.posters} poster={item.poster}
+                    fallback={<HardDrive/>} count={item.fileCount} enabled={item.enabled} unreachable={item.unreachable} path={item.path}
+                    action={item.enabled ? <><FolderOpen/> {t("library.openFolder")} <ChevronRight/></> : t("library.disabled")}
+                    onOpen={() => { setBrowseQuery(""); setFromFavorites(false); setMenuFor(null); setBrowsePath(item.path); }}/>
                 : item.kind === "folder"
-                ? <article className={`browse-item folder${browseFocus === item.path ? " focused" : ""}${selectedPaths.has(item.path) ? " selected" : ""}`} key={item.path} data-path={item.path} aria-current={browseFocus === item.path ? "true" : undefined}><button className="library-open" onClick={() => { if (selectionMode) { toggleSelection(item.path); return; } setBrowseQuery(""); setFromFavorites(browsePath === ":favorites" || fromFavorites); setBrowsePath(item.path); }}>
-                    <span className="browse-art">{(item.posters?.length ?? 0) > 1
-                      ? <PosterMosaic posters={item.posters ?? []} label={t("library.mosaicAlt", { count: item.posters?.length ?? 0 })}/>
-                      : <TileArt shape={settings.libraryTileShape} poster={item.poster} wide={item.wide} fallback={<FolderOpen/>}/>}<i className="browse-badge">{item.fileCount}</i>{item.favorite && <i className="fav-mark"><Star/></i>}</span>
-                    <span className="library-copy"><strong>{item.name}</strong><small>{folderMeta(item)}</small>{descriptionLine(item) && <small className="library-desc" title={descriptionLine(item)}>{descriptionLine(item)}</small>}</span><span className="library-action"><FolderOpen/> {t("library.openFolder")} <ChevronRight/></span></button>
+                ? <LibraryItem key={item.path} folder focused={browseFocus === item.path} selected={selectedPaths.has(item.path)} dataPath={item.path}
+                    onOpen={() => {
+                      if (selectionMode) { toggleSelection(item.path); return; }
+                      // A folder matched to one movie holds that title's versions, so it opens the
+                      // detail; any other folder keeps browsing its own contents.
+                      if (item.match === "matched" && item.titleType === "movie") { openLocalDetail(item); return; }
+                      setBrowseQuery(""); setFromFavorites(browsePath === ":favorites" || fromFavorites); setBrowsePath(item.path);
+                    }}
+                    art={<>
+                      {(item.posters?.length ?? 0) > 1
+                        ? <PosterMosaic posters={item.posters ?? []} label={t("library.mosaicAlt", { count: item.posters?.length ?? 0 })}/>
+                        : <TileArt shape={settings.libraryTileShape} poster={item.poster} wide={item.wide} fallback={<FolderOpen/>}/>}
+                      <i className="browse-badge">{item.fileCount}</i>{item.favorite && <i className="fav-mark"><Star/></i>}
+                    </>}
+                    title={item.name} meta={folderMeta(item)} description={descriptionLine(item)}
+                    action={item.match === "matched" && item.titleType === "movie"
+                      ? <>{t("home.openTitle")}<ChevronRight/></> : <><FolderOpen/> {t("library.openFolder")} <ChevronRight/></>}>
                     {selectionMode && <button className="browse-select" aria-label={t("library.selectItem", { name: item.name })} aria-pressed={selectedPaths.has(item.path)} onClick={(event) => { event.stopPropagation(); toggleSelection(item.path); }}>{selectedPaths.has(item.path) && <Check/>}</button>}
                     {!selectionMode && (item.gallery ?? 0) > 0 && <button className="browse-gallery" aria-label={t("gallery.openStored", { name: item.name })} title={t("gallery.openStored", { name: item.name })} onClick={(event) => { event.stopPropagation(); void openStoredGallery(item.path); }}><Images/></button>}
-                    {!selectionMode && <button className="browse-menu" aria-label={t("library.options", { name: item.name })} aria-expanded={menuFor === item.path} onClick={(event) => { event.stopPropagation(); openMenu(item); }}><MoreVertical/></button>}
-                    {!selectionMode && menuFor === item.path && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
-                      {item.match === "matched" && titleChips(libraryTrailers[item.path] ?? null, libraryLinks[item.path] ?? [])}
+                    {!selectionMode && <LibraryItemMenu name={item.name} open={menuFor === item.path} onToggle={() => openMenu(item)}>
+                      {item.match === "matched" && <TitleChips trailer={libraryTrailers[item.path] ?? null} links={libraryLinks[item.path] ?? []} onTrailer={setTrailerOpen} secureMode={settings.secureMode}/>}
                       {admin && matchActions(item)}
                       <button onClick={() => void toggleFavorite(item.path, !item.favorite)}><Star/> {t(item.favorite ? "favorite.remove" : "favorite.add")}</button>
                       {admin && <>
@@ -2396,19 +2728,20 @@ export function App() {
                         <button onClick={() => openMove(item.path, item.name, item.titleType)}><FolderInput/> {t("library.move")}</button>
                         <button className="danger" onClick={() => void removeItem(item.path, item.name, true)}><Trash2/> {t("common.delete")}</button>
                       </>}
-                    </span>}
-                  </article>
-                : <article className={`browse-item${browseFocus === item.path ? " focused" : ""}${selectedPaths.has(item.path) ? " selected" : ""}`} key={item.path} data-path={item.path} aria-current={browseFocus === item.path ? "true" : undefined}><button className="library-open" onClick={() => selectionMode ? toggleSelection(item.path) : void playLocal(item.label, item.path, item.poster, item.season != null)}>
-                    <span className="browse-art"><TileArt shape={settings.libraryTileShape} poster={item.poster} wide={item.wide} fallback={<Film/>}/>{item.favorite && <i className="fav-mark"><Star/></i>}
-                    {browseFocus === item.path && <i className="browse-focus-mark">{t("library.thisFile")}</i>}
-                    {item.progress && <i className="resume-bar"><i style={{ width: `${Math.min(100, Math.round(item.progress.position / (item.progress.duration || 1) * 100))}%` }}/></i>}</span>
-                    <span className="library-copy"><strong>{item.season != null ? `${item.season}×${String(item.episode ?? 0).padStart(2, "0")} ${item.label}` : item.label}</strong>
-                    <small>{fileMeta(item)}</small>{descriptionLine(item) && <small className="library-desc" title={descriptionLine(item)}>{descriptionLine(item)}</small>}</span><span className="library-action"><Play/> {t(item.progress ? "library.continue" : "player.play")}</span></button>
+                    </LibraryItemMenu>}
+                  </LibraryItem>
+                : <LibraryItem key={item.path} focused={browseFocus === item.path} selected={selectedPaths.has(item.path)} dataPath={item.path}
+                    onOpen={() => selectionMode ? toggleSelection(item.path) : openLocalDetail(item)}
+                    art={<><TileArt shape={settings.libraryTileShape} poster={item.poster} wide={item.wide} fallback={<Film/>}/>{item.favorite && <i className="fav-mark"><Star/></i>}
+                      {browseFocus === item.path && <i className="browse-focus-mark">{t("library.thisFile")}</i>}
+                      {item.progress && <i className="resume-bar"><i style={{ width: `${Math.min(100, Math.round(item.progress.position / (item.progress.duration || 1) * 100))}%` }}/></i>}</>}
+                    title={item.season != null ? `${item.season}×${String(item.episode ?? 0).padStart(2, "0")} ${item.label}` : item.label}
+                    meta={fileMeta(item)} description={descriptionLine(item)}
+                    action={<>{t("home.openTitle")}<ChevronRight/></>}>
                     {selectionMode && <button className="browse-select" aria-label={t("library.selectItem", { name: item.label })} aria-pressed={selectedPaths.has(item.path)} onClick={(event) => { event.stopPropagation(); toggleSelection(item.path); }}>{selectedPaths.has(item.path) && <Check/>}</button>}
                     {!selectionMode && (item.gallery ?? 0) > 0 && <button className="browse-gallery" aria-label={t("gallery.openStored", { name: item.label })} title={t("gallery.openStored", { name: item.label })} onClick={(event) => { event.stopPropagation(); void openStoredGallery(item.path); }}><Images/></button>}
-                    {!selectionMode && <button className="browse-menu" aria-label={t("library.options", { name: item.label })} aria-expanded={menuFor === item.path} onClick={(event) => { event.stopPropagation(); openMenu(item); }}><MoreVertical/></button>}
-                    {!selectionMode && menuFor === item.path && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
-                      {item.match === "matched" && titleChips(libraryTrailers[item.path] ?? null, libraryLinks[item.path] ?? [])}
+                    {!selectionMode && <LibraryItemMenu name={item.label} open={menuFor === item.path} onToggle={() => openMenu(item)}>
+                      {item.match === "matched" && <TitleChips trailer={libraryTrailers[item.path] ?? null} links={libraryLinks[item.path] ?? []} onTrailer={setTrailerOpen} secureMode={settings.secureMode}/>}
                       {admin && matchActions(item)}
                       <button onClick={() => void toggleFavorite(item.path, !item.favorite)}><Star/> {t(item.favorite ? "favorite.remove" : "favorite.add")}</button>
                       {item.progress && <button onClick={() => revealInLibrary(item.path)}><HardDrive/> {t("library.showInLibrary")}</button>}
@@ -2419,8 +2752,8 @@ export function App() {
                         <button onClick={() => openMove(item.path, item.label, item.titleType)}><FolderInput/> {t("library.move")}</button>
                         <button className="danger" onClick={() => void removeItem(item.path, item.label, false)}><Trash2/> {t("common.delete")}</button>
                       </>}
-                    </span>}
-                  </article>)}
+                    </LibraryItemMenu>}
+                  </LibraryItem>)}
             </div>
             {browseBusy && <div className="loading">{t("common.loading")}</div>}
             {(() => {
@@ -2430,8 +2763,9 @@ export function App() {
               </div>;
             })()}
           </>}
+        </>}
         </div>
-        </div>
+        </div>}
       </section>}
       {view === "addons" && <AddonManager addons={addons} libraries={libraries} restricted={restricted} admin={admin} onChanged={refresh} onNotify={notify} onError={fail}/>} 
       {view === "resume" && <ResumeView
@@ -2439,12 +2773,16 @@ export function App() {
         items={resumeCards} busy={resumeBusy} shape={settings.resumeTileShape} onToggleShape={() => void toggleShape("resumeTileShape")} actions={resumeActions}
         hasMore={resumeCards.length < resumeCardsTotal} loadingMore={resumeLoadingMore}
         onLoadMore={() => void loadResume(resumeFilter, resumeCards.length)}/>}
-      {view === "favorites" && <FavoritesView
-        filter={favoritesFilter} onFilter={setFavoritesFilter}
-        items={favorites} busy={favoritesBusy} shape={settings.favoritesTileShape} onToggleShape={() => void toggleShape("favoritesTileShape")}
-        onPlay={openFavorite} onOpenFolder={openFavorite} onOpenCatalog={(item: FavoriteCatalogItem) => void openFromCatalog(item)}
-        hasMore={favorites.length < favoritesTotal} loadingMore={favoritesLoadingMore}
-        onLoadMore={() => void loadFavorites(favoritesFilter, favorites.length)}/>}
+      {view === "favorites" && <>
+        <FavoritesView
+          filter={favoritesFilter} onFilter={setFavoritesFilter}
+          items={favorites} busy={favoritesBusy} shape={settings.favoritesTileShape} onToggleShape={() => void toggleShape("favoritesTileShape")}
+          onPlay={openFavorite} onOpenFolder={openFavorite} onOpenCatalog={(item: FavoriteCatalogItem) => void openFromCatalog(item)}
+          hasMore={favorites.length < favoritesTotal} loadingMore={favoritesLoadingMore}
+          onLoadMore={() => void loadFavorites(favoritesFilter, favorites.length)}/>
+        <RemotePersonalShelf refreshToken={personalRefresh} shape={settings.favoritesTileShape}
+          onOpen={homeOpen} onForgotten={refreshPersonal} onError={fail}/>
+      </>}
       {view === "downloads" && <Downloads jobs={downloads} deviceTransfers={deviceTransfers} libraries={libraries} halt={queueHalt} admin={session!.role === "admin"} refresh={loadDownloads} onError={fail} onReveal={revealInLibrary} prefs={views.downloads} onPrefs={persistDownloadPrefs}/>}
       {view === "stats" && <StatsPanel key={statsReset} onError={fail}/>}
       {view === "following" && <FollowingPage canRetain={session!.role === "admin"} follows={follows} newEpisodes={newEpisodes} languages={languages} libraries={libraries} addons={addons} shape={settings.followingTileShape} onToggleShape={() => void toggleShape("followingTileShape")} audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} onChanged={applyFollowChange} onOpenSeries={(item) => void openFromCatalog(item)} onNotify={notify}/>}
@@ -2467,7 +2805,7 @@ export function App() {
       onToggleFavorite={localStream?.localPath || selected ? () => void togglePlayerFavorite() : undefined}
       onDownload={enqueue}
       onDeviceDownload={() => localStream?.localPath ? downloadLibraryFile(localStream.localPath) : downloadStreamToDevice()}
-      onClose={() => { setPlayerOpen(false); setLocalStream(null); setLocalEpisode(false); setPlaybackPreferences({}); }}/>
+      onClose={stopPlayback}/>
     {libraryManagerOpen && <LibraryManagerDialog restricted={restricted || !admin} onClose={() => setLibraryManagerOpen(false)} onChanged={refreshLibraries} onError={fail} onNotify={notify}/>}
     {movePath && <MoveDialog path={movePath.path} paths={movePath.paths} copy={movePath.copy} label={movePath.label}
       itemType={movePath.type} libraries={libraries} onClose={() => setMovePath(null)}

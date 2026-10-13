@@ -2,13 +2,20 @@ import type express from "express";
 import { once } from "node:events";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import type { AirPlayAccess } from "../airplay-access.js";
 import { INTERNAL_TOKEN } from "../auth.js";
+import { AppError } from "../errors.js";
 import { normalizeLanguage } from "../language.js";
 import type { Viewer } from "../libraries.js";
 import { sourcePace } from "../conversion-pace.js";
 import { log } from "../logger.js";
 import { mediaChildPath, mediaResources, openMediaUrl, ResourceError, safeSourceText, type ResourceOwner } from "../media-resources.js";
+import { isRemoteMediaStream } from "../media-server-reference.js";
+import type { MediaServerPlaybackGuard } from "../media-server-playback.js";
+import type { MediaServerSources } from "../media-server-sources.js";
+import { isMediaServerError } from "../media-server-types.js";
 import { contentOf } from "../revocation.js";
 import { readMediaText, rewritePlaylist } from "../media-playlist.js";
 import { clientCapabilities } from "../playback.js";
@@ -19,10 +26,13 @@ import type { StatsLog, TrafficMeta } from "../stats.js";
 import type { UserPrefs } from "../store.js";
 import type { StreamItem } from "../types.js";
 import { asyncRoute, type RouteContext } from "./context.js";
+import { toHttpError } from "./media-servers.js";
 
 /** Inspection, the playback sessions and the media reader. */
 export interface PlaybackDeps extends RouteContext {
   airplayAccess: AirPlayAccess;
+  mediaSources: MediaServerSources;
+  mediaServerGuard: MediaServerPlaybackGuard;
   airplayRequest(req: express.Request): ReturnType<AirPlayAccess["authorize"]>;
   answerHeaders(upstream: Response): Record<string, string>;
   countBytes(res: express.Response, meta: TrafficMeta, session?: string | (() => string | undefined)): void;
@@ -59,12 +69,38 @@ export interface PlaybackDeps extends RouteContext {
 const openTransfers = new Map<string, number>();
 
 export function registerPlaybackRoutes(app: express.Application, deps: PlaybackDeps): void {
-  const { airplayAccess, airplayRequest, answerHeaders, countBytes, currentSession, currentUser, httpSourceOf, internalMediaRequest, libraryTarget, noteSourceQuiet, ownerOf, playback, playbackMeta, playbackOwners, playbackResponse, prefsOf, quietSources, rangeCache, requireAccess, safeInspection, sleep, sourceIsQuiet, stats, subtitleDelay, trackMedia, SOURCE_ATTEMPTS, SOURCE_RETRY_MS, SOURCE_RESUMES, SOURCE_HEADER_MS, SOURCE_QUIET_HEADER_MS } = deps;
+  const { airplayAccess, airplayRequest, answerHeaders, countBytes, currentSession, currentUser, httpSourceOf, internalMediaRequest, libraryTarget, mediaSources, noteSourceQuiet, ownerOf, playback, playbackMeta, playbackOwners, playbackResponse, prefsOf, quietSources, rangeCache, requireAccess, safeInspection, sleep, sourceIsQuiet, stats, subtitleDelay, trackMedia, SOURCE_ATTEMPTS, SOURCE_RETRY_MS, SOURCE_RESUMES, SOURCE_HEADER_MS, SOURCE_QUIET_HEADER_MS } = deps;
+
+  /** The synchronous local guard on a playback session's own resource: a remote original whose
+   *  owner proof is no longer current is refused before any body is written. */
+  const guardOwned = (id: string): void => {
+    const owned = playbackOwners.get(id);
+    if (!owned) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
+    const stream = mediaResources.get(owned.resourceId, owned.owner.sid, "media").stream;
+    mediaSources.assertCurrent(stream, owned.owner);
+  };
 
   app.post("/api/inspect", asyncRoute(async (req, res) => {
+    const owner = ownerOf(req);
     const stream = await httpSourceOf(req);
-    const info = await playback.inspect(stream);
-    res.setHeader("cache-control", "private, no-store").json(safeInspection(info, stream));
+    const remote = isRemoteMediaStream(stream);
+    const controller = new AbortController();
+    res.once("close", () => { if (!res.writableEnded) controller.abort(); });
+    const need = contentOf(stream);
+    if (remote) await mediaSources.authorize(stream, owner, controller.signal);
+    requireAccess(req, need);
+    // A remote original is probed through the owner-bound resource proxy: the internal address
+    // is never handed to FFprobe, and an unbound remote source is never resolved internally.
+    const prepared = remote ? mediaResources.mediaStream(stream, owner) : undefined;
+    try {
+      const info = await playback.inspect(prepared ? prepared.stream : stream);
+      requireAccess(req, need);
+      if (remote) { mediaSources.assertCurrent(stream, owner); await mediaSources.authorize(stream, owner, controller.signal); }
+      if (res.destroyed || res.writableEnded) return;
+      res.setHeader("cache-control", "private, no-store").json(safeInspection(info, stream));
+    } finally {
+      if (prepared) mediaResources.remove(prepared.resourceId);
+    }
   }));
   app.post("/api/playback", asyncRoute(async (req, res) => {
     const settings = prefsOf(req);
@@ -80,9 +116,13 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     if (req.body.quality !== undefined) options.quality = req.body.quality === null ? null : Number(req.body.quality);
     const owner = ownerOf(req);
     const stream = await httpSourceOf(req);
+    const remote = isRemoteMediaStream(stream);
+    const controller = new AbortController();
+    res.once("close", () => { if (!res.writableEnded) controller.abort(); });
     // The resource is minted in one step with the check: everything the request awaited --
     // the source lookup included -- happened before it.
     const need = contentOf(stream);
+    if (remote) await mediaSources.authorize(stream, owner, controller.signal);
     requireAccess(req, need);
     const prepared = mediaResources.mediaStream(stream, owner);
     let started;
@@ -98,6 +138,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       // FFmpeg took its time starting: the account, its session and its rights are re-read
       // here, and the registration below follows in the same synchronous step.
       requireAccess(req, need);
+      if (remote) { mediaSources.assertCurrent(stream, owner); await mediaSources.authorize(stream, owner, controller.signal); }
       playbackOwners.set(started.id, { owner, resourceId: prepared.resourceId });
       if (req.body.capabilities?.airplay === true) airplayAccess.create(started.id, owner, prepared.resourceId);
     } catch (error) {
@@ -113,29 +154,62 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     res.status(201).setHeader("cache-control", "private, no-store").json({ ...playbackResponse(started), subtitleIds });
   }));
   app.use("/api/playback/:id", (req, res, next) => {
-    const owned = playbackOwners.get(String(req.params.id));
+    const id = String(req.params.id);
+    const owned = playbackOwners.get(id);
     if (!owned || owned.owner.sid !== (airplayRequest(req)?.owner.sid ?? currentSession(req)?.sid)) return res.status(404).json({ error: "The playback session no longer exists.", messageKey: "err.playbackSessionGone", code: "RESOURCE_NOT_FOUND" });
+    // Stopping an owned session is always allowed, even after the remote policy was withdrawn:
+    // it needs no network and must not be blocked by a guard meant for reads.
+    if (req.method !== "DELETE") {
+      try { guardOwned(id); }
+      catch {
+        // The session's own right is gone: stop it so no converter or reader is left behind.
+        void playback.stop(id).catch(() => undefined);
+        return res.status(404).json({ error: "The playback session no longer exists.", messageKey: "err.playbackSessionGone", code: "RESOURCE_NOT_FOUND" });
+      }
+      // A remote session's control, preview, converted segment and sidecar responses are
+      // tracked so a local revocation destroys the bytes already on their way, not only the
+      // upstream original.
+      const resource = mediaResources.get(owned.resourceId, owned.owner.sid, "media");
+      if (isRemoteMediaStream(resource.stream)) trackMedia(owned.owner, res, resource.parent ?? resource.id);
+    }
     res.setHeader("cache-control", "private, no-store");
-    playback.attended(String(req.params.id));
+    playback.attended(id);
     next();
   });
   app.get("/api/playback/:id/preview", asyncRoute(async (req, res) => {
+    const id = String(req.params.id);
     const controller = new AbortController();
     res.once("close", () => { if (!res.writableEnded) controller.abort(); });
-    const image = await playback.preview(String(req.params.id), Number(req.query.time), controller.signal);
+    const image = await playback.preview(id, Number(req.query.time), controller.signal);
+    guardOwned(id);
     if (res.destroyed) return;
     if (!image) return void res.status(204).end();
     res.type("image/jpeg").setHeader("cache-control", "private, no-store").send(image);
   }));
-  app.post("/api/playback/:id/ping", (_req, res) => res.status(204).end());
-  app.post("/api/playback/:id/seek", asyncRoute(async (req, res) => res.json(playbackResponse(await playback.seek(String(req.params.id), Number(req.body.time) || 0)))));
-  app.post("/api/playback/:id/escalate", asyncRoute(async (req, res) => res.json(playbackResponse(await playback.escalate(String(req.params.id), Number(req.body.time) || 0)))));
-  app.post("/api/playback/:id/track", asyncRoute(async (req, res) => res.json(playbackResponse(await playback.track(String(req.params.id), {
-    audio: req.body.audio === undefined ? undefined : Number(req.body.audio),
-    subtitle: req.body.subtitle === undefined ? undefined : (req.body.subtitle === null ? null : Number(req.body.subtitle)),
-    quality: req.body.quality === undefined ? undefined : (req.body.quality === null ? null : Number(req.body.quality)),
-    time: Number(req.body.time) || 0,
-  })))));
+  app.post("/api/playback/:id/ping", (req, res) => { guardOwned(String(req.params.id)); res.status(204).end(); });
+  app.post("/api/playback/:id/seek", asyncRoute(async (req, res) => {
+    const id = String(req.params.id);
+    const value = await playback.seek(id, Number(req.body.time) || 0);
+    guardOwned(id);
+    res.json(playbackResponse(value));
+  }));
+  app.post("/api/playback/:id/escalate", asyncRoute(async (req, res) => {
+    const id = String(req.params.id);
+    const value = await playback.escalate(id, Number(req.body.time) || 0);
+    guardOwned(id);
+    res.json(playbackResponse(value));
+  }));
+  app.post("/api/playback/:id/track", asyncRoute(async (req, res) => {
+    const id = String(req.params.id);
+    const value = await playback.track(id, {
+      audio: req.body.audio === undefined ? undefined : Number(req.body.audio),
+      subtitle: req.body.subtitle === undefined ? undefined : (req.body.subtitle === null ? null : Number(req.body.subtitle)),
+      quality: req.body.quality === undefined ? undefined : (req.body.quality === null ? null : Number(req.body.quality)),
+      time: Number(req.body.time) || 0,
+    });
+    guardOwned(id);
+    res.json(playbackResponse(value));
+  }));
   app.delete("/api/playback/:id", asyncRoute(async (req, res) => {
     // Who closed a session is the difference between a viewer leaving and the server giving up.
     log("INFO", "Playback session closed by the player", { id: String(req.params.id), user: currentUser(req)?.username });
@@ -153,6 +227,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       subtitleDelay(req.query.delay),
       position,
     );
+    guardOwned(String(req.params.id));
     if (!cues) return res.status(404).end();
     // Until the reader has the whole track the player keeps asking, so it is told which it has.
     // How far the cues reach: the player re-reads before the picture catches up with them.
@@ -162,7 +237,8 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       .send(cues.text);
   }));
   app.get("/api/playback/:id/:generation/:file", asyncRoute(async (req, res) => {
-    const directory = playback.directory(String(req.params.id), String(req.params.generation));
+    const sessionId = String(req.params.id);
+    const directory = playback.directory(sessionId, String(req.params.generation));
     // After a transcode restart the client asks for the old generation for a while; a 404 is fine
     // for that, but repeated 404s on a live session mean playback has fallen apart.
     if (!directory) { log("DEBUG", "Segment from an unknown session or generation", { req: req.id, id: req.params.id, generation: req.params.generation, file: req.params.file }); return res.status(404).end(); }
@@ -180,6 +256,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       // FFmpeg also writes HEVC as hvc1.1.4.L120.B01, while browsers accept only the B0 form and
       // would refuse the stream before trying it; with no attribute they read the codecs from the init segment.
       const playlist = await readFile(path.join(directory, file), "utf8").catch(() => "");
+      guardOwned(sessionId);
       if (playlist.includes("#EXT-X-STREAM-INF")) {
         return void res.type("application/vnd.apple.mpegurl").setHeader("cache-control", "private, no-store")
           .send(receiverPlaylist(playlist.replace(/CODECS="[^"]*"/g, "").replace(/:,+/g, ":").replace(/,{2,}/g, ",").replace(/,\s*$/gm, "")));
@@ -194,6 +271,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       res.type("application/vnd.apple.mpegurl").setHeader("cache-control", "private, no-store");
       if (grant) {
         const playlist = await readFile(path.join(directory, file), "utf8").catch(() => undefined);
+        guardOwned(sessionId);
         return void (playlist === undefined ? res.status(404).end() : res.send(receiverPlaylist(playlist)));
       }
     }
@@ -208,6 +286,62 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     const grant = airplayRequest(req);
     const resource = mediaResources.get(String(req.params.resourceId), grant?.owner.sid ?? currentSession(req)?.sid, "media", internal);
     trackMedia(grant ? { ...resource.owner, expiresAt: grant.expiresAt } : resource.owner, res, resource.parent ?? resource.id);
+    if (isRemoteMediaStream(resource.stream)) {
+      // A media-server original is a single file, never a playlist, and it leaves only through
+      // the scoped transport: the internal address is never resolved as a URL here.
+      if (typeof req.params.signed === "string") throw new ResourceError(404, "RESOURCE_NOT_FOUND");
+      const owner = grant ? { ...resource.owner, expiresAt: grant.expiresAt } : resource.owner;
+      const findOwner = () => [...playbackOwners].find(([, value]) => value.resourceId === (resource.parent ?? resource.id))?.[0];
+      let ownedSession = findOwner();
+      const ownerNow = () => ownedSession ??= findOwner();
+      if (ownedSession) {
+        playback.touch(ownedSession);
+        const heartbeat = setInterval(() => playback.touch(ownedSession!), 30_000);
+        res.once("close", () => clearInterval(heartbeat));
+      }
+      countBytes(res, playbackMeta(resource.stream), ownerNow);
+      const controller = new AbortController();
+      res.on("close", () => { if (!res.writableEnded) controller.abort(); });
+      // The body is cancelled without waiting: a source may never settle the cancel promise.
+      const discard = (body: ReadableStream<Uint8Array> | null) => { try { void body?.cancel().catch(() => undefined); } catch { /* already disturbed */ } };
+      let upstream: Response;
+      try {
+        upstream = await mediaSources.open(resource.stream, owner, {
+          method: req.method === "HEAD" ? "HEAD" : "GET",
+          ...(req.headers.range ? { range: String(req.headers.range) } : {}),
+        }, controller.signal);
+      } catch (error) {
+        if (error instanceof ResourceError || error instanceof AppError) throw error;
+        // The controller is aborted only when the response closes, and by then `res.destroyed`
+        // is already true, so the signal clause repeats that fact.
+        if (res.destroyed || res.writableEnded || controller.signal.aborted) return;
+        if (isMediaServerError(error)) {
+          const http = toHttpError(error);
+          http.cause = error;
+          throw http;
+        }
+        throw new AppError("The media server is unavailable.", "err.mediaServerUnavailable", 502);
+      }
+      if (res.destroyed || res.writableEnded || controller.signal.aborted) { discard(upstream.body); return; }
+      try { mediaSources.assertCurrent(resource.stream, owner); }
+      catch { discard(upstream.body); throw new ResourceError(404, "RESOURCE_NOT_FOUND"); }
+      if (upstream.status === 416) {
+        discard(upstream.body);
+        const range = upstream.headers.get("content-range");
+        if (range && /^bytes \*\/\d+$/.test(range)) res.setHeader("content-range", range);
+        return void res.status(416).end();
+      }
+      if (![200, 206].includes(upstream.status)) { discard(upstream.body); throw new AppError("The media server is unavailable.", "err.mediaServerUnavailable", 502); }
+      res.status(upstream.status);
+      for (const name of ["content-type", "content-length", "content-range", "accept-ranges"]) { const value = upstream.headers.get(name); if (value) res.setHeader(name, value); }
+      if (req.method === "HEAD" || !upstream.body) { discard(upstream.body); return void res.end(); }
+      // The stream pipeline on this response is what crosses Node's default of ten `close`
+      // listeners. One slot, not a raised global default.
+      res.setMaxListeners(res.getMaxListeners() + 1);
+      try { await pipeline(Readable.fromWeb(upstream.body as never), res, { signal: controller.signal }); }
+      catch { if (res.headersSent) res.destroy(); else throw new AppError("The media server is unavailable.", "err.mediaServerUnavailable", 502); }
+      return;
+    }
     let stream = resource.stream;
     if (typeof req.params.signed === "string") {
       const url = openMediaUrl(resource.id, req.params.signed);
@@ -353,7 +487,6 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       for (const name of ["content-type", "content-length", "content-range", "accept-ranges"]) { const value = upstream.headers.get(name); if (value) res.setHeader(name, value); }
     }
     if (!upstream.body) return res.end();
-    const { Readable } = await import("node:stream");
     // These hosts hand over a few seconds and then cut the stream. FFmpeg answers that by
     // reconnecting on its own -- another connection into a host that is counting them, and one
     // it usually refuses. The transfer is picked up here instead, from the byte it stopped at,

@@ -78,6 +78,10 @@ export interface UserData {
   watchlist: Record<string, unknown>;
   progress: Record<string, unknown>;
   watchedSeries: Record<string, unknown>;
+  /** One account's own state for verified media-server items, keyed by their remote progress
+   *  key. Kept apart from `progress` so filesystem and catalogue parsers never read a remote
+   *  id as a path or a series. Absent until the first write, so older state keeps its shape. */
+  remoteMedia?: Record<string, unknown>;
 }
 
 /** The account as anything outside the process may see it. The hash is what a password is

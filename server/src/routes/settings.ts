@@ -5,6 +5,9 @@ import { createSettingsBackup, parseSettingsBackup, remapBackupLibraries } from 
 import { normalizeToken, verifyRealDebridToken } from "../debrid.js";
 import type { DownloadQueue } from "../downloads.js";
 import { AppError } from "../errors.js";
+import { MEDIA_SERVER_CONFIGURATION_MAX_BYTES } from "../media-server-store.js";
+import type { MediaServerAuthority, MediaServerManager } from "../media-server-manager.js";
+import { ResourceError } from "../media-resources.js";
 import { homeCatalogOfferings } from "../home-catalogs.js";
 import { HOME_LAYOUT_FEED_LIMIT, HOME_LAYOUT_ROW_LIMIT, homeCatalogRowId, homeFeedSelectionKey, homeRowOrder, parseHomeLayout } from "../home.js";
 import { LANGUAGE_NAMES, isUiLanguage, normalizeLanguage } from "../language.js";
@@ -24,6 +27,9 @@ export interface SettingsDeps extends RouteContext {
   STREAM_SORTS: Set<string>;
   accountIdOf(req?: express.Request): string | undefined;
   invalidateLibrary(): void;
+  /** The media-server configuration the backup carries. A settings export is an
+   *  administrator's act like every other read of it. */
+  mediaServers: MediaServerManager;
   metaCache: Map<string, { value: MetaItem | null; at: number }>;
   metaStore: LibraryMetaStore;
   mutateData(state: State, id: string, mutate: (data: UserData) => void): void;
@@ -33,7 +39,15 @@ export interface SettingsDeps extends RouteContext {
 }
 
 export function registerSettingsRoutes(app: express.Application, deps: SettingsDeps): void {
-  const { store, STREAM_SORTS, accountIdOf, currentUser, invalidateLibrary, metaCache, metaStore, mutateData, prefsOf, queue, stopContentAccess, streamCache } = deps;
+  const { store, STREAM_SORTS, accountIdOf, currentUser, invalidateLibrary, mediaServers, metaCache, metaStore, mutateData, prefsOf, queue, requireAccess, stopContentAccess, streamCache } = deps;
+
+  /** The acting account as the media-server surface reads it: the captured id and secret with
+   *  the route's own access gate re-run on every check. */
+  const authorityOf = (req: express.Request): MediaServerAuthority => {
+    const user = currentUser(req);
+    if (!user) throw new ResourceError(401, "AUTH_REQUIRED");
+    return { actor: { id: user.id, secret: user.secret }, assertCurrent: () => requireAccess(req) };
+  };
 
   /** The one flat object the interface reads: the instance's settings and the caller's own.
    *  An ordinary account is answered with its own half and the two instance flags the
@@ -65,9 +79,15 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
   };
 
   app.get("/api/settings/export", asyncRoute(async (req, res) => {
+    // Read before anything is awaited: the media-server half of the file is an administrator's
+    // read, and an account signed out while the export waited must not be the one that lands in
+    // it. The same captured identity answers the access gate and the configuration read.
+    const authority = authorityOf(req);
+    mediaServers.exportConfiguration(authority);
     await metaStore.flush();
+    const mediaServersView = mediaServers.exportConfiguration(authority);
     res.setHeader("content-disposition", `attachment; filename=stremio-offline-settings-${new Date().toISOString().slice(0, 10)}.json`);
-    res.json(createSettingsBackup({ ...store.settings(), ...prefsOf(req) }, store.addons(), store.libraries()));
+    res.json(createSettingsBackup({ ...store.settings(), ...prefsOf(req) }, store.addons(), store.libraries(), mediaServersView));
   }));
   app.post("/api/settings/import", asyncRoute(async (req, res) => {
     // Captured before the manifests are fetched: read again inside the mutator it would
@@ -81,6 +101,14 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       log("INFO", "A save rule named a library this instance does not have", { what: remap.what, addon: remap.addon, from: remap.from, to: remap.to ?? "default" });
     }
     const backup = { ...parsed, libraries: [] };
+    // The remote setup a version 3 backup carries rides in the same write as the settings; a
+    // file from before then leaves the current one exactly as it is. Its size is bounded like
+    // the media-server import's own, so a file can never smuggle an unbounded roster in.
+    const mediaServersToRestore = parsed.mediaServers;
+    if (mediaServersToRestore !== undefined
+      && Buffer.byteLength(JSON.stringify(mediaServersToRestore), "utf8") > MEDIA_SERVER_CONFIGURATION_MAX_BYTES) {
+      throw new AppError("The media server configuration in the backup is too large.", "err.invalidRequest", 413);
+    }
     // Manifests are loaded before a single write, so a broken backup changes no part of the configuration.
     const loaded = await Promise.all(backup.addons.map(async (saved, index) => {
       try {
@@ -109,7 +137,7 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
     // The list as it is on either side of the write, read from the state the write lands on:
     // the sweep below needs the transition that really happened, not an earlier read.
     let before: Array<{ key: string; enabled: boolean }> = [];
-    await store.update((state) => {
+    const applySettings = (state: State) => {
       // Every manifest was fetched before this point, which is ample time for the gate's
       // answer to go stale.
       assertStillAdmin(state.users ?? [], actor);
@@ -134,7 +162,14 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       state.defaultsInstalled = true;
       const userId = accountIdOf(req);
       if (userId) mutateData(state, userId, (data) => { data.prefs = { ...data.prefs, ...split.prefs }; });
-    });
+    };
+    if (mediaServersToRestore === undefined) {
+      await store.update(applySettings);
+    } else {
+      // Both halves of the file land in one update: the settings and addons the route writes
+      // and the remote configuration the manager replaces, so a refusal leaves neither behind.
+      await mediaServers.restoreSettingsConfiguration(authorityOf(req), mediaServersToRestore, applySettings);
+    }
     streamCache.clear();
     queue.changed();
     // An import is also a removal and a switch-off: an addon the backup does not carry is gone

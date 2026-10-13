@@ -192,11 +192,32 @@ sealed interface HomeCard {
     override val poster: String? = null,
     override val wide: String? = null,
   ) : HomeCard
+
+  /** One card backed by a remote media-server item: no local path and no catalogue id. */
+  @Serializable
+  @SerialName("remote")
+  data class Remote(
+    override val key: String,
+    val title: String = "",
+    val provider: String = "",
+    val libraryId: String = "",
+    val libraryName: String = "",
+    val itemId: String = "",
+    val itemType: String = "movie",
+    val mediaSourceId: String? = null,
+    val season: Int? = null,
+    val episode: Int? = null,
+    override val poster: String? = null,
+    override val wide: String? = null,
+    val progress: HomeProgress? = null,
+    val updatedAt: String? = null,
+  ) : HomeCard
 }
 
 /** True for the cards the server draws wide; the rest are posters. */
 val HomeCard.isWideKind: Boolean
-  get() = this is HomeCard.ResumeFile || this is HomeCard.ResumeCatalogue || this is HomeCard.Episode
+  get() = this is HomeCard.ResumeFile || this is HomeCard.ResumeCatalogue || this is HomeCard.Episode ||
+    (this is HomeCard.Remote && itemType == "episode")
 
 /** The card's display title, exactly as the web's `titleOf` picks it. */
 val HomeCard.displayTitle: String
@@ -210,6 +231,7 @@ val HomeCard.displayTitle: String
     is HomeCard.ResumeFile -> title
     is HomeCard.ResumeCatalogue -> title
     is HomeCard.Completed -> title
+    is HomeCard.Remote -> title
   }
 
 /** The season/episode pair a card carries, when it carries one. */
@@ -220,6 +242,7 @@ val HomeCard.seasonEpisode: Pair<Int?, Int?>
     is HomeCard.Completed -> season to episode
     is HomeCard.Recent -> season to episode
     is HomeCard.Episode -> season to episode
+    is HomeCard.Remote -> season to episode
     else -> null to null
   }
 
@@ -259,6 +282,7 @@ val HomeCard.progressFraction: Float?
     val progress = when (this) {
       is HomeCard.ResumeFile -> progress
       is HomeCard.ResumeCatalogue -> if (pending) null else progress
+      is HomeCard.Remote -> progress
       else -> null
     } ?: return null
     if (progress.duration <= 0) return 0f

@@ -1,3 +1,5 @@
+import type { RemoteCapabilities } from "./media-server-types.js";
+
 export type AddonRole = "catalog" | "source" | "both";
 export type DownloadLayout = "flat" | "structured";
 export interface DownloadTargetSettings {
@@ -100,12 +102,18 @@ export interface SubtitleItem {
   id?: string;
   url: string;
   lang?: string;
+  title?: string;
   addonKey?: string;
   addonName?: string;
   [key: string]: unknown;
 }
 
-export interface PublicSubtitle { subtitleId: string; lang?: string; addonName?: string }
+export interface PublicSubtitle { subtitleId: string; lang?: string; title?: string; addonName?: string }
+
+/** The remote handles a client may use against authorized content and state routes. They are
+ *  not addresses or secrets: the connection, account and owner stamps never appear here. */
+export interface PublicRemoteItem { libraryId: string; itemId: string; mediaSourceId: string; progressKey: string }
+
 export interface PublicStream {
   sourceId: string;
   kind: "remote" | "library" | "torrent" | "unsupported";
@@ -116,6 +124,13 @@ export interface PublicStream {
   localPath?: string;
   /** The display name of the library the copy sits in. */
   libraryName?: string;
+  /** Present on a verified media-server source: which provider and which attached library.
+   *  Derived from the sealed reference, never from caller-supplied stream fields. */
+  provider?: "jellyfin" | "emby";
+  libraryId?: string;
+  /** What a remote item may still be used for. Always read-only in this stage. */
+  capabilities?: RemoteCapabilities;
+  remoteItem?: PublicRemoteItem;
   behaviorHints: { filename?: string; videoSize?: number; bingeGroup?: string };
   subtitles: PublicSubtitle[];
 }

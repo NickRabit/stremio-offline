@@ -33,6 +33,9 @@ class ApiError(
   /** The server's own English message, when it sent one; the interface prefers it to a
    *  catalogue line for a refusal it can explain precisely. */
   val serverMessage: String? = null,
+  /** The HTTP status the refusal carried, when it came from a response; a caller that must tell
+   *  one refusal from another (a stale paging cursor, say) reads it rather than the mapped failure. */
+  val status: Int? = null,
 ) : Exception(serverMessage ?: failure.name)
 
 data class ServerStatus(val version: String)
@@ -58,6 +61,9 @@ class ApiClient(
   private val downloadJson = Json { ignoreUnknownKeys = true; explicitNulls = false; encodeDefaults = false }
   /** Progress carries the artwork and addon only when the player knew them. */
   private val progressJson = Json { ignoreUnknownKeys = true; explicitNulls = false; encodeDefaults = false }
+  /** A remote-state PATCH carries only the fields the caller set: a `null` field is dropped and
+   *  an explicit `false` still travels. */
+  private val patchJson = Json { ignoreUnknownKeys = true; explicitNulls = false; encodeDefaults = false }
   private val mediaType = "application/json; charset=utf-8".toMediaType()
 
   private val client = baseClient.newBuilder()
@@ -470,6 +476,128 @@ class ApiClient(
     return body.decode<ClientLogBundleResultDto>()?.id ?: throw ApiError(ApiFailure.Generic)
   }
 
+  /** Every remote library this account may see, in the order the server arranged them. */
+  override suspend fun remoteLibraries(): List<RemoteLibraryDto> =
+    request(Request.Builder().url(address.resolve("/api/remote-libraries")).get().build())
+      .decode<RemoteLibrariesPageDto>()?.libraries ?: throw ApiError(ApiFailure.Generic)
+
+  /** One page of a remote library. The server filters, sorts and pages; the app never re-sorts. */
+  override suspend fun remoteItems(
+    libraryId: String,
+    limit: Int,
+    cursor: String?,
+    search: String?,
+    type: String?,
+  ): RemoteItemsPageDto {
+    val query = buildString {
+      append("?limit=").append(limit)
+      if (!cursor.isNullOrEmpty()) append("&cursor=").append(encode(cursor))
+      if (!search.isNullOrEmpty()) append("&search=").append(encode(search))
+      if (!type.isNullOrEmpty()) append("&type=").append(encode(type))
+    }
+    return request(Request.Builder().url(address.resolve(remoteItemsPath(libraryId) + query)).get().build())
+      .decode<RemoteItemsPageDto>() ?: throw ApiError(ApiFailure.Generic)
+  }
+
+  override suspend fun remoteItem(libraryId: String, itemId: String): RemoteItemDetailDto =
+    request(Request.Builder().url(address.resolve("${remoteItemsPath(libraryId)}/${encode(itemId)}")).get().build())
+      .decode<RemoteItemDetailDto>() ?: throw ApiError(ApiFailure.Generic)
+
+  /** One lazy directory page of a remote library: the attached root or one folder inside it. The
+   *  server decides mode, paging, filtering and sorting; the client only names the request. */
+  override suspend fun remoteBrowse(
+    libraryId: String,
+    limit: Int,
+    cursor: String?,
+    search: String?,
+    type: String?,
+    parentId: String?,
+    mode: String?,
+    sort: String?,
+    order: String?,
+  ): RemoteItemsPageDto {
+    val query = buildString {
+      append("?limit=").append(limit)
+      if (!parentId.isNullOrEmpty()) append("&parentId=").append(encode(parentId))
+      if (!mode.isNullOrEmpty()) append("&mode=").append(encode(mode))
+      if (!cursor.isNullOrEmpty()) append("&cursor=").append(encode(cursor))
+      if (!search.isNullOrEmpty()) append("&search=").append(encode(search))
+      if (!type.isNullOrEmpty()) append("&type=").append(encode(type))
+      if (!sort.isNullOrEmpty()) append("&sort=").append(encode(sort))
+      if (!order.isNullOrEmpty()) append("&order=").append(encode(order))
+    }
+    val path = "/api/remote-libraries/" + encode(libraryId) + "/browse" + query
+    return request(Request.Builder().url(address.resolve(path)).get().build())
+      .decode<RemoteItemsPageDto>() ?: throw ApiError(ApiFailure.Generic)
+  }
+
+  /** Up to four authorized poster URLs for one library root or folder. An empty answer leaves the
+   *  folder's own icon in place. */
+  override suspend fun remotePreview(libraryId: String, parentId: String?): RemotePreviewDto {
+    val query = if (parentId.isNullOrEmpty()) "" else "?parentId=" + encode(parentId)
+    val path = "/api/remote-libraries/" + encode(libraryId) + "/preview" + query
+    return request(Request.Builder().url(address.resolve(path)).get().build())
+      .decode<RemotePreviewDto>() ?: RemotePreviewDto()
+  }
+
+  /** The episodes of one series or season, paged the same way as the item list. */
+  override suspend fun remoteEpisodes(
+    libraryId: String,
+    itemId: String,
+    limit: Int,
+    cursor: String?,
+  ): RemoteItemsPageDto {
+    val query = buildString {
+      append("?limit=").append(limit)
+      if (!cursor.isNullOrEmpty()) append("&cursor=").append(encode(cursor))
+    }
+    return request(
+      Request.Builder().url(address.resolve("${remoteItemsPath(libraryId)}/${encode(itemId)}/episodes$query")).get().build(),
+    ).decode<RemoteItemsPageDto>() ?: throw ApiError(ApiFailure.Generic)
+  }
+
+  override suspend fun remoteSources(libraryId: String, itemId: String): List<StreamDto> =
+    request(
+      Request.Builder().url(address.resolve("${remoteItemsPath(libraryId)}/${encode(itemId)}/sources")).get().build(),
+    ).decode<RemoteSourcesDto>()?.streams ?: emptyList()
+
+  override suspend fun remoteItemState(libraryId: String, itemId: String): RemoteItemStateDto =
+    request(Request.Builder().url(address.resolve("${remoteStatePath(libraryId, itemId)}")).get().build())
+      .decode<RemoteItemStateDto>() ?: throw ApiError(ApiFailure.Generic)
+
+  /** The exact body the PATCH takes: only the fields the caller set, `false` included. */
+  override suspend fun patchRemoteItemState(
+    libraryId: String,
+    itemId: String,
+    patch: RemoteItemStatePatch,
+  ): RemoteItemStateDto {
+    val payload = patchJson.encodeToString(RemoteItemStatePatch.serializer(), patch)
+    return request(
+      Request.Builder().url(address.resolve(remoteStatePath(libraryId, itemId))).patch(payload.toRequestBody(mediaType)).build(),
+    ).decode<RemoteItemStateDto>() ?: throw ApiError(ApiFailure.Generic)
+  }
+
+  private fun remoteItemsPath(libraryId: String): String = "/api/remote-libraries/" + encode(libraryId) + "/items"
+
+  private fun remoteStatePath(libraryId: String, itemId: String): String =
+    remoteItemsPath(libraryId) + "/" + encode(itemId) + "/state"
+
+  /** External-id matched versions of one catalogue title or episode; each id is encoded, and a
+   *  resolved catalogue name, when there is one, rides as the provider's `name` filter. */
+  override suspend fun remoteMatchedStreams(libraryId: String, type: String, catalogId: String, nameHint: String?): List<StreamDto> {
+    val base = "/api/remote-libraries/" + encode(libraryId) + "/streams/" + encode(type) + "/" + encode(catalogId)
+    val path = if (nameHint.isNullOrEmpty()) base else "$base?name=" + encode(nameHint)
+    return request(Request.Builder().url(address.resolve(path)).get().build())
+      .decode<RemoteSourcesDto>()?.streams ?: emptyList()
+  }
+
+  override suspend fun remotePersonal(filter: String, skip: Int, limit: Int): RemotePersonalPage {
+    val query = "?filter=" + encode(filter) + "&skip=" + skip + "&limit=" + limit
+    val page = request(Request.Builder().url(address.resolve("/api/remote-libraries/personal$query")).get().build())
+      .decode<RemotePersonalPageDto>() ?: throw ApiError(ApiFailure.Generic)
+    return RemotePersonalPage(remotePersonalCards(page), page.total, page.partial)
+  }
+
   override suspend fun saveProgress(
     key: String,
     position: Double,
@@ -496,10 +624,10 @@ class ApiClient(
       // the interface shows the message when it can explain a failure better than a generic line.
       val error = readBody(response).decodeOrNull<ErrorBody>()
       when (response.code) {
-        401 -> throw ApiError(ApiFailure.SessionExpired, serverMessage = error?.error)
-        403 -> throw ApiError(ApiFailure.Forbidden, serverMessage = error?.error)
-        404, 410 -> throw ApiError(ApiFailure.NotFound, serverMessage = error?.error)
-        else -> throw ApiError(ApiFailure.Generic, serverMessage = error?.error)
+        401 -> throw ApiError(ApiFailure.SessionExpired, serverMessage = error?.error, status = response.code)
+        403 -> throw ApiError(ApiFailure.Forbidden, serverMessage = error?.error, status = response.code)
+        404, 410 -> throw ApiError(ApiFailure.NotFound, serverMessage = error?.error, status = response.code)
+        else -> throw ApiError(ApiFailure.Generic, serverMessage = error?.error, status = response.code)
       }
     }
   }

@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { constants as fsConstants, type Stats } from "node:fs";
-import { lstat, mkdir, open, unlink, type FileHandle } from "node:fs/promises";
+import { lstat, mkdir, open, opendir, unlink, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { renameWithRetry } from "./fs-retry.js";
 import {
@@ -23,6 +23,7 @@ export interface MediaServerSecretBinding {
 const O_NOFOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 const O_NONBLOCK = fsConstants.O_NONBLOCK ?? 0;
 const ENVELOPE_MAX = 32 * 1024;
+const REFERENCES_MAX = 4096;
 const VERSION = 1;
 const isPosix = process.platform !== "win32";
 
@@ -61,6 +62,40 @@ export class MediaServerSecrets {
     private readonly keyFile: string | undefined,
     private readonly seams: { rename?: (from: string, to: string) => Promise<void> } = {},
   ) {}
+
+  /** Whether a key file path was supplied at all. It says nothing about readability: the
+   *  bytes are read on every real operation, so a missing or unreadable file still fails
+   *  closed there. Exposed to the interface only as a boolean, never as a path. */
+  keyConfigured(): boolean {
+    return Boolean(this.keyFile);
+  }
+
+  /** The references the vault actually holds, for startup reconciliation. Needs no key: a
+   *  removal does not decrypt. A missing directory is empty, an unsafe directory fails
+   *  closed, and the listing is bounded, so a large or hostile vault can never make the
+   *  caller delete anything by halves. Own `.ref.hex.tmp` files do not match the handle
+   *  shape and are ignored. */
+  references(): Promise<string[]> {
+    return this.serialize(async () => {
+      if (!(await this.directoryUsable())) return [];
+      let handle;
+      try { handle = await opendir(this.directory); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+        throw secretUnavailable("The secret vault directory could not be listed.");
+      }
+      const found: string[] = [];
+      let seen = 0;
+      for await (const entry of handle) {
+        seen += 1;
+        if (seen > REFERENCES_MAX) throw secretUnavailable("The secret vault holds too many entries.");
+        if (!MEDIA_SECRET_REF.test(entry.name)) continue;
+        if (!entry.isFile()) continue;
+        found.push(entry.name);
+      }
+      return found.sort();
+    });
+  }
 
   put(binding: MediaServerSecretBinding, token: string): Promise<string> {
     return this.serialize(async () => {

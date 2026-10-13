@@ -47,8 +47,10 @@ import cz.stremiooffline.tv.ui.components.ShimmerCards
 import cz.stremiooffline.tv.ui.components.WideCard
 import cz.stremiooffline.tv.ui.components.leftToNeighbour
 import cz.stremiooffline.tv.ui.detail.DetailData
+import cz.stremiooffline.tv.ui.detail.RemoteDetailData
 import cz.stremiooffline.tv.ui.home.cardLabel
 import cz.stremiooffline.tv.ui.home.captionOf
+import cz.stremiooffline.tv.ui.home.remoteDetailOf
 import cz.stremiooffline.tv.ui.theme.Tokens
 
 fun resumeFilterTag(filter: ResumeFilter): String = "resume_filter_" + filter.wire
@@ -64,6 +66,8 @@ fun ResumeRoute(
   api: TvApi,
   onOpenDetail: (DetailData) -> Unit,
   onOpenCatalog: (CatalogDetailArgs) -> Unit,
+  /** A remote media-server card opens its own playable detail. */
+  onOpenRemote: (RemoteDetailData) -> Unit = {},
   modifier: Modifier = Modifier,
   restoreToken: Int = 0,
   refreshToken: Int = 0,
@@ -152,7 +156,7 @@ fun ResumeRoute(
                 completed = false,
                 caption = captionOf(card, label),
                 cardTag = resumeCardTag(card.key),
-                onClick = { openResume(card, onOpenDetail, onOpenCatalog) },
+                onClick = { openResume(card, onOpenDetail, onOpenCatalog, onOpenRemote) },
                 modifier = Modifier
                   .focusRequester(requester)
                   .onFocusChanged {
@@ -176,6 +180,7 @@ private fun openResume(
   card: HomeCard,
   onOpenDetail: (DetailData) -> Unit,
   onOpenCatalog: (CatalogDetailArgs) -> Unit,
+  onOpenRemote: (RemoteDetailData) -> Unit,
 ) {
   when (card) {
     is HomeCard.ResumeFile -> onOpenDetail(
@@ -200,6 +205,7 @@ private fun openResume(
         forgetKeys = card.forgetKeys,
       ),
     )
+    is HomeCard.Remote -> onOpenRemote(remoteDetailOf(card))
     else -> Unit
   }
 }
@@ -209,6 +215,7 @@ private fun filterLabel(filter: ResumeFilter): Int = when (filter) {
   ResumeFilter.All -> R.string.resume_filter_all
   ResumeFilter.Library -> R.string.resume_filter_library
   ResumeFilter.Catalog -> R.string.resume_filter_catalog
+  ResumeFilter.Remote -> R.string.resume_filter_remote
 }
 
 @StringRes
@@ -216,6 +223,7 @@ private fun filterEmptyTitle(filter: ResumeFilter): Int = when (filter) {
   ResumeFilter.All -> R.string.resume_empty_all_title
   ResumeFilter.Library -> R.string.resume_empty_library_title
   ResumeFilter.Catalog -> R.string.resume_empty_catalog_title
+  ResumeFilter.Remote -> R.string.resume_empty_remote_title
 }
 
 @StringRes
@@ -223,6 +231,7 @@ private fun filterEmptyText(filter: ResumeFilter): Int = when (filter) {
   ResumeFilter.All -> R.string.resume_empty_all_text
   ResumeFilter.Library -> R.string.resume_empty_library_text
   ResumeFilter.Catalog -> R.string.resume_empty_catalog_text
+  ResumeFilter.Remote -> R.string.resume_empty_remote_text
 }
 
 @Composable

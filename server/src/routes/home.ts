@@ -10,13 +10,15 @@ import {
   arrangeHomeRows, boundCards, homeCatalogRowId, homeFeedSelectionKey, homeRowOrder, mergeResume, parseHomeLayout,
   parseResumeFilter, resumePage,
   type HomeCard, type HomeLayout, type HomeLayoutEntry, type HomeLayoutResponse, type HomeResponse, type HomeRow, type HomeRowError, type HomeRowId,
-  type BuiltinHomeRowId, type ResumeCatalogueItem, type ResumeFileItem, type ResumeSources,
+  type BuiltinHomeRowId, type RemoteHomeCard, type ResumeCatalogueItem, type ResumeFileItem, type ResumeSources,
 } from "../home.js";
 import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, showsInFavorites, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
 import { isPathWithin, type BrowseItem } from "../library.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { knownTitleEntry } from "../library-match.js";
 import type { LibrarySeenStore } from "../library-seen.js";
+import type { MediaServerAuthority } from "../media-server-manager.js";
+import type { MediaServerPersonal, RemoteCards } from "../media-server-personal.js";
 import type { StoredProgress, WatchedMarker } from "../store.js";
 import type { UserData } from "../users.js";
 import type { MetaItem } from "../types.js";
@@ -50,12 +52,23 @@ export interface HomeSuggestion {
 const TONIGHT_CARDS = 12;
 const TONIGHT_SPARES = 6;
 
+/** Favourites keeps both halves present: up to this many remote cards and this many local
+ *  cards, with whatever is left over topping the row up to its bound. */
+const HOME_FAVORITE_SHARE = 10;
+
+/** A card projection and the authority it was built for, re-checked before its JSON leaves. */
+interface RowProof { authority: MediaServerAuthority; cards: RemoteCards }
+
 /** A title at or past this share of its duration counts as finished, so Tonight does not top
  *  up from it. The same threshold `POST /api/progress` uses to forget a position. */
 const PROGRESS_DONE = 0.94;
 
 export interface HomeDeps extends RouteContext {
   personal: PersonalApi;
+  /** The account's own verified media-server cards, and the proof a projection re-checks. */
+  remotePersonal: MediaServerPersonal;
+  /** The media-server authority for the request, built the way the media-server routes build it. */
+  authorityOf(req: express.Request): MediaServerAuthority;
   completedJobs(): CompletedJobView[];
   /** The owner's unseen episodes, read exactly the way `GET /api/follows/new-episodes` reads them. */
   newEpisodes(ownerUserId: string, watched: (metaId: string) => { season: number; episode: number } | undefined): NewEpisode[];
@@ -124,7 +137,7 @@ const shuffleOf = (raw: unknown): number => {
 };
 
 export function registerHomeRoutes(app: express.Application, deps: HomeDeps): void {
-  const { store, currentUser, personal, completedJobs, newEpisodes, describeLibraryPath, locateFileArtwork, locateFolderArtworkPair, thumbUrl, scheduleFileArtwork, scheduleFolderArtwork, wirePath, dataOf, markersOf, progressOf, metaStore, seen, suggestionRows, now = Date.now, homeLookupDeadlineMs = HOME_LOOKUP_DEADLINE_MS } = deps;
+  const { store, currentUser, requireAccess, personal, remotePersonal, authorityOf, completedJobs, newEpisodes, describeLibraryPath, locateFileArtwork, locateFolderArtworkPair, thumbUrl, scheduleFileArtwork, scheduleFolderArtwork, wirePath, dataOf, markersOf, progressOf, metaStore, seen, suggestionRows, now = Date.now, homeLookupDeadlineMs = HOME_LOOKUP_DEADLINE_MS } = deps;
 
   /** A key the caller may open now: its library is still configured, switched on and granted.
    *  `pathVisible` covers the removed and the lost-grant case; the enabled switch is Home's.
@@ -169,8 +182,9 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
    *  `resume` row and `GET /api/resume` read this one builder. On Home a library or add-on
    *  switched off the Home page drops out; the Continue watching section applies only the
    *  destination's own `showInContinueWatching` switch. */
-  const resumeSources = async (req: express.Request, home: boolean): Promise<{ sources: ResumeSources; partial: boolean; pending: boolean }> => {
-    const [progress, resume] = await Promise.all([
+  const resumeSources = async (req: express.Request, home: boolean): Promise<{ sources: ResumeSources; partial: boolean; pending: boolean; proof?: RowProof }> => {
+    const authority = authorityOf(req);
+    const [progress, resume, remote] = await Promise.all([
       personal.progressRows(req, {
         markerLimit: HOME_MARKER_LIMIT, deadlineMs: homeLookupDeadlineMs, addonFilter: true,
         // Every candidate of a shown show has to reach the merge, or forgetting the card
@@ -181,6 +195,9 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
       // stored positions are bounded already, and the merge is what pages. Home only ever
       // draws 20, so it keeps the smaller bound; the section may reach every file.
       personal.libraryResumeItems(req, { onHome: home, skip: 0, limit: home ? 120 : HOME_RESUME_FILE_LIMIT }),
+      // The account's own verified remote resume cards. A failure here only drops this half;
+      // the local and add-on halves are built above and never depend on it.
+      remotePersonal.cards(authority, { filter: "resume", onHome: home, limit: 1000 }).then((cards) => cards, () => undefined),
     ]);
     // The addon's own switches for the row, as the catalogue row reads them: a row whose addon
     // is gone, or that never recorded one, stays. Home also drops an add-on switched off there.
@@ -218,11 +235,17 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
       ...(typeof item.episode === "number" ? { episode: item.episode } : {}),
       ...(item.seriesId ? { seriesId: item.seriesId, seriesType: item.seriesType } : {}),
     }));
-    return { sources: { catalogue, files }, partial: progress.partial, pending: resume.pending };
+    return {
+      sources: { catalogue, files, ...(remote ? { remote: remote.items } : {}) },
+      partial: progress.partial || remote === undefined || remote.partial === true,
+      pending: resume.pending,
+      ...(remote ? { proof: { authority, cards: remote } } : {}),
+    };
   };
 
-  const resumeRow = async (req: express.Request): Promise<HomeRow> => {
-    const { sources, partial } = await resumeSources(req, true);
+  const resumeRow = async (req: express.Request, proofs: RowProof[]): Promise<HomeRow> => {
+    const { sources, partial, proof } = await resumeSources(req, true);
+    if (proof) proofs.push(proof);
     const merged = mergeResume(sources);
     return { status: "ok", items: merged.items, hasMore: merged.hasMore, ...(partial ? { partial: true } : {}) };
   };
@@ -257,10 +280,19 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     return { status: "ok", items: bounded.items, hasMore: bounded.hasMore };
   };
 
-  const favoritesRow = async (req: express.Request, viewer: Viewer): Promise<HomeRow> => {
+  /** Both halves are kept present: up to the share each, then whatever is left over. The local
+   *  half is built first and survives a remote failure on its own. */
+  const fairFavorites = (local: HomeCard[], remote: RemoteHomeCard[]): HomeCard[] => {
+    const cards: HomeCard[] = [...remote.slice(0, HOME_FAVORITE_SHARE), ...local.slice(0, HOME_FAVORITE_SHARE)];
+    const remainder = [...remote.slice(HOME_FAVORITE_SHARE), ...local.slice(HOME_FAVORITE_SHARE)];
+    cards.push(...remainder.slice(0, Math.max(0, HOME_ROW_LIMIT - cards.length)));
+    return cards.slice(0, HOME_ROW_LIMIT);
+  };
+
+  const favoritesRow = async (req: express.Request, viewer: Viewer, proofs: RowProof[]): Promise<HomeRow> => {
     // The one merged Favourites list, first page: library stars and catalogue stars alike.
     const page = await personal.favoritesPage(req, { filter: "all", limit: HOME_ROW_LIMIT, onHome: true });
-    const cards: HomeCard[] = page.items.map((item) => item.kind === "library" ? {
+    const local: HomeCard[] = page.items.map((item) => item.kind === "library" ? {
       kind: "favorite", key: item.path, path: item.path, itemKind: item.itemKind, label: item.label,
       ...(item.poster ? { poster: item.poster } : {}),
       ...(item.wide ? { wide: item.wide } : {}),
@@ -269,7 +301,12 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
       ...(item.poster ? { poster: item.poster } : {}),
       ...(item.year ? { year: item.year } : {}),
     });
-    return { status: "ok", items: cards, hasMore: page.total > cards.length };
+    const authority = authorityOf(req);
+    const remote = await remotePersonal.cards(authority, { filter: "favorites", onHome: true, limit: HOME_ROW_LIMIT }).catch(() => undefined);
+    if (remote) proofs.push({ authority, cards: remote });
+    const cards = fairFavorites(local, remote?.items ?? []);
+    const total = page.total + (remote?.total ?? 0);
+    return { status: "ok", items: cards, hasMore: total > cards.length, ...(remote === undefined ? { partial: true } : {}) };
   };
 
   /** Files the app first met after its baseline, newest first. A file the library knows as an
@@ -528,13 +565,13 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     return { status: "ok", items: bounded.items, hasMore: bounded.hasMore };
   };
 
-  const builders: Record<BuiltinHomeRowId, (req: express.Request, viewer: Viewer) => Promise<HomeRow>> = {
-    resume: (req) => resumeRow(req),
-    completed: completedRow,
-    favorites: favoritesRow,
+  const builders: Record<BuiltinHomeRowId, (req: express.Request, viewer: Viewer, proofs: RowProof[]) => Promise<HomeRow>> = {
+    resume: (req, _viewer, proofs) => resumeRow(req, proofs),
+    completed: (req, viewer) => completedRow(req, viewer),
+    favorites: (req, viewer, proofs) => favoritesRow(req, viewer, proofs),
     recent: (_req, viewer) => recentRow(viewer),
     episodes: (req, viewer) => Promise.resolve(episodesRow(req, viewer)),
-    tonight: tonightRow,
+    tonight: (req, viewer) => tonightRow(req, viewer),
     confirm: (_req, viewer) => Promise.resolve(confirmRow(viewer)),
   };
 
@@ -556,16 +593,21 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     // `rows` either.
     const ordered = new Set(visible);
     const rows: Partial<Record<HomeRowId, HomeRow>> = {};
+    // Every remote projection a row carries, re-proved once all the rows have settled and
+    // before any card leaves as JSON.
+    const proofs: RowProof[] = [];
     await Promise.all(requestedRows(req.query.rows, arrangement.targets).filter((id) => ordered.has(id)).map(async (id) => {
       try {
         const catalogRow = arrangement.targets.get(id);
         rows[id] = catalogRow
           ? await addonCatalogRow(req, viewer, id, catalogRow)
-          : await builders[id as BuiltinHomeRowId](req, viewer);
+          : await builders[id as BuiltinHomeRowId](req, viewer, proofs);
       } catch (error) {
         rows[id] = { status: "error", error: rowError(error), items: [], hasMore: false };
       }
     }));
+    for (const proof of proofs) remotePersonal.assertCardsCurrent(proof.authority, proof.cards);
+    requireAccess(req);
     const response: HomeResponse = { generatedAt: new Date().toISOString(), order, rows };
     res.json(response);
   }));
@@ -576,12 +618,14 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
    *  keeps the shape Home draws, so the interface renders both with one component. */
   app.get("/api/resume", asyncRoute(async (req, res) => {
     res.set("Cache-Control", "private, no-store");
-    const { sources, partial, pending } = await resumeSources(req, false);
+    const { sources, partial, pending, proof } = await resumeSources(req, false);
     const page = resumePage(sources, {
       filter: parseResumeFilter(req.query.filter),
       skip: Math.max(0, Number(req.query.skip) || 0),
       limit: Math.max(1, Math.min(120, Number(req.query.limit) || HOME_ROW_LIMIT)),
     });
+    if (proof) remotePersonal.assertCardsCurrent(proof.authority, proof.cards);
+    requireAccess(req);
     res.json({
       items: page.items, total: page.total,
       // A page is pending when a card on it still lacks a poster, and the library source

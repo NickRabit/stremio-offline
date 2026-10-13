@@ -2,9 +2,9 @@ import { useEffect } from "react";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { t } from "./i18n";
 import { hideBroken } from "./settings-ui";
+import type { GalleryImage } from "./gallery-images";
 
-export type GalleryKind = "poster" | "background" | "logo" | "still";
-export type GalleryImage = { url: string; label: string; shape: "poster" | "wide"; kind: GalleryKind };
+export type { GalleryImage } from "./gallery-images";
 
 export function MediaGallery({ images, index, onIndex, onClose }: { images: GalleryImage[]; index: number; onIndex: (index: number) => void; onClose: () => void }) {
   const current = images[index];

@@ -45,9 +45,11 @@ what watching already shows.
 Everything lives in **Settings → Users**, one row per account, opened as a
 dialog:
 
-- **Libraries.** An account sees the libraries ticked for it. A library it was
-  not granted answers exactly as a library that does not exist — same status,
-  same body — so the interface cannot be used to discover what is on the disk.
+- **Libraries.** An account sees the libraries ticked for it, both the ones on
+  this host and the remote libraries attached from a Jellyfin or Emby server.
+  Everything an account may not reach answers exactly as something that does not
+  exist — same status, same body — so the interface cannot be used to discover
+  what is on the disk or on the media server.
 - **Addons.** An account may use only the addons ticked for it. Its catalogue,
   search and streams are built from those, and it can arrange their priority
   order for itself without changing anyone else's.
@@ -57,6 +59,16 @@ dialog:
   *Save to this device* lets it save content to the device it is using.
   An administrator has both.
 - **The account itself.** The role, whether it is enabled, and a new password.
+
+The local and the remote libraries share one **Libraries** pane, one row each,
+the remote rows carrying their provider and type. A remote library is read only:
+this app never renames, moves, deletes or re-scans anything on the Jellyfin or
+Emby server, keeps position and favourites to itself, and an attached library
+arrives administrator-only like a local one. The ticks are the same grant either
+way; a remote tick writes to that library's own account list, so the account's
+other grants are untouched. The credentials that connect to the server are set
+up on the instance's own settings, apart from these grants, and are never shown
+to the accounts.
 
 Access is an explicit list: a library or an addon is reachable only where it is
 ticked, and a library or addon created later arrives administrator-only. The

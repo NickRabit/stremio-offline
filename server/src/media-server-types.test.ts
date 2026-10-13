@@ -8,15 +8,22 @@ import {
   REMOTE_LIBRARY_ID,
   adminMediaConnection,
   adminRemoteLibrary,
+  effectiveBrowseMode,
+  effectiveMosaic,
+  effectiveShowInFavorites,
   newConnectionId,
   newRemoteLibraryId,
   publicMediaConnection,
   publicRemoteLibrary,
+  publicRemoteItem,
+  remoteArtworkPath,
   remoteProgressKey,
+  validateArtworkTag,
   validateMediaServerToken,
   type MediaConnectionRecord,
   type RemoteLibraryRecord,
 } from "./media-server-types.js";
+import type { ProviderItem } from "./media-server-provider.js";
 
 const connection = (over: Partial<MediaConnectionRecord> = {}): MediaConnectionRecord => ({
   id: "mconn_00000000000000000000000000000000",
@@ -127,4 +134,94 @@ test("token validation accepts the printable boundary and refuses the rest", () 
   assert.throws(() => validateMediaServerToken("ab\ncd"), { code: "invalid-input" });
   assert.throws(() => validateMediaServerToken("héllo"), { code: "invalid-input" });
   assert.throws(() => validateMediaServerToken(42), { code: "invalid-input" });
+});
+
+test("the effective display defaults follow the library type and only an explicit false opts out", () => {
+  assert.equal(effectiveBrowseMode(library({ type: "mixed" })), "folders", "a mixed library is a folder tree by default");
+  assert.equal(effectiveBrowseMode(library({ type: "movie" })), "titles");
+  assert.equal(effectiveBrowseMode(library({ type: "series" })), "titles");
+  assert.equal(effectiveBrowseMode(library({ type: "movie", browseMode: "folders" })), "folders", "an explicit choice wins");
+  assert.equal(effectiveMosaic(library()), true);
+  assert.equal(effectiveMosaic(library({ mosaic: false })), false);
+  assert.equal(effectiveShowInFavorites(library()), true);
+  assert.equal(effectiveShowInFavorites(library({ showInFavorites: false })), false);
+
+  const projected = publicRemoteLibrary(library({ type: "mixed" }));
+  assert.equal(projected.browseMode, "folders");
+  assert.equal(projected.mosaic, true);
+  assert.equal(projected.showInFavorites, true);
+  assert.deepEqual(adminRemoteLibrary(library({ type: "mixed", mosaic: false })).mosaic, false);
+});
+
+test("the item projection strips the internal image flag and still carries both artwork paths", () => {
+  const item: ProviderItem = { id: "f1", name: "Folder", type: "folder", providerIds: {}, hasPrimaryImage: true };
+  const projected = publicRemoteItem(item, "rlib_00000000000000000000000000000000");
+  assert.equal("hasPrimaryImage" in projected, false, "the internal flag never reaches a client");
+  assert.equal("hasBackdropImage" in projected, false, "no second internal flag leaks either");
+  assert.equal(projected.poster, "/api/remote-libraries/rlib_00000000000000000000000000000000/items/f1/artwork/Primary");
+  assert.equal(projected.wide, "/api/remote-libraries/rlib_00000000000000000000000000000000/items/f1/artwork/Backdrop");
+});
+
+test("the item projection omits a path only for a fact the metadata proves absent", () => {
+  const libraryId = "rlib_00000000000000000000000000000000";
+  const present = publicRemoteItem(
+    { id: "i1", name: "Present", type: "movie", providerIds: {}, hasPrimaryImage: true, hasBackdropImage: true },
+    libraryId,
+  );
+  assert.equal(present.poster, `/api/remote-libraries/${libraryId}/items/i1/artwork/Primary`);
+  assert.equal(present.wide, `/api/remote-libraries/${libraryId}/items/i1/artwork/Backdrop`);
+  assert.equal("hasPrimaryImage" in present, false);
+  assert.equal("hasBackdropImage" in present, false);
+
+  const absent = publicRemoteItem(
+    { id: "i2", name: "Absent", type: "movie", providerIds: {}, hasPrimaryImage: false, hasBackdropImage: false },
+    libraryId,
+  );
+  assert.equal("poster" in absent, false, "a proven-absent poster emits no path");
+  assert.equal("wide" in absent, false, "a proven-absent backdrop emits no path");
+  assert.equal("hasPrimaryImage" in absent, false);
+  assert.equal("hasBackdropImage" in absent, false);
+
+  const unknown = publicRemoteItem({ id: "i3", name: "Unknown", type: "movie", providerIds: {} }, libraryId);
+  assert.equal(unknown.poster, `/api/remote-libraries/${libraryId}/items/i3/artwork/Primary`, "an unknown primary keeps the legacy path");
+  assert.equal(unknown.wide, `/api/remote-libraries/${libraryId}/items/i3/artwork/Backdrop`, "an unknown backdrop keeps the legacy path");
+
+  const halfKnown = publicRemoteItem(
+    { id: "i4", name: "Half", type: "movie", providerIds: {}, hasPrimaryImage: false },
+    libraryId,
+  );
+  assert.equal("poster" in halfKnown, false, "each role is decided on its own fact");
+  assert.equal(halfKnown.wide, `/api/remote-libraries/${libraryId}/items/i4/artwork/Backdrop`);
+});
+
+test("the artwork tag contract is a bounded URL-safe alphabet", () => {
+  assert.equal(validateArtworkTag("Abc.def-123_~"), "Abc.def-123_~");
+  assert.equal(validateArtworkTag("a".repeat(128)), "a".repeat(128));
+  for (const bad of ["", "a".repeat(129), "bad tag", "a&b", "a%20b", "a/b", "a?b", "héllo", 42, null, undefined]) {
+    assert.throws(() => validateArtworkTag(bad), { code: "invalid-input" }, String(bad));
+  }
+});
+
+test("the item projection emits a tagged same-origin URL and scrubs the internal tag", () => {
+  const libraryId = "rlib_00000000000000000000000000000000";
+  const projected = publicRemoteItem(
+    { id: "i1", name: "Tagged", type: "movie", providerIds: {}, hasPrimaryImage: true, hasBackdropImage: true, primaryImageTag: "p.1~x", backdropImageTag: "b-2", childCount: 4 },
+    libraryId,
+  );
+  assert.equal(projected.poster, `/api/remote-libraries/${libraryId}/items/i1/artwork/Primary?tag=p.1~x`);
+  assert.equal(projected.wide, `/api/remote-libraries/${libraryId}/items/i1/artwork/Backdrop?tag=b-2`);
+  assert.equal(projected.childCount, 4, "the child count is ordinary metadata and stays on the projection");
+  assert.equal("primaryImageTag" in projected, false, "the raw tag never leaves the server");
+  assert.equal("backdropImageTag" in projected, false);
+  const untagged = publicRemoteItem({ id: "i2", name: "Legacy", type: "movie", providerIds: {} }, libraryId);
+  assert.equal(untagged.poster, `/api/remote-libraries/${libraryId}/items/i2/artwork/Primary`, "an unknown fact keeps the legacy untagged URL");
+});
+
+test("remoteArtworkPath encodes a tag defensively and accepts no library or role injection", () => {
+  const libraryId = "rlib_00000000000000000000000000000000";
+  assert.equal(
+    remoteArtworkPath(libraryId, "i", "Primary", "a&b"),
+    `/api/remote-libraries/${libraryId}/items/i/artwork/Primary?tag=a%26b`,
+  );
+  assert.equal(remoteArtworkPath(libraryId, "i", "Backdrop"), `/api/remote-libraries/${libraryId}/items/i/artwork/Backdrop`);
 });

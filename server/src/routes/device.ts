@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
-import { isPlaylist, mayDownloadToDevice } from "../downloads.js";
+import { isPlaylist, isRemoteDownloadSource, mayDownloadToDevice, remoteDownloadRefused } from "../downloads.js";
 import type { DeviceTransfers } from "../device-transfers.js";
 import { AppError } from "../errors.js";
 import { posixBase, type Viewer } from "../libraries.js";
@@ -58,6 +58,7 @@ export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps)
     let ticket: DeviceDownloadTicket;
     const owner = ownerOf(req);
     const stream = await httpSourceOf(req);
+    if (isRemoteDownloadSource(stream)) throw remoteDownloadRefused();
     if (stream.url?.startsWith("file://")) {
       const relative = stream.url.slice(7);
       const target = relative ? await libraryTarget(relative, currentUser(req)).catch(() => undefined) : undefined;
@@ -132,6 +133,7 @@ export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps)
     }
 
     const { stream, title, media } = ticket.source;
+    if (isRemoteDownloadSource(stream)) throw remoteDownloadRefused();
     // The client only requests the ticket URL; the server handles debrid headers and ranges from its own IP.
     const headers: Record<string, string> = { ...(stream.behaviorHints?.proxyHeaders?.request ?? {}) };
     if (req.headers.range) headers.range = req.headers.range;

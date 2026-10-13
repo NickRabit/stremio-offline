@@ -19,8 +19,19 @@ export function logoutDenied(body: unknown): boolean {
 }
 
 type Rule = { method: string; pattern: RegExp };
-const match = (rules: Rule[], method: string, path: string) =>
-  rules.some((rule) => rule.method === method.toUpperCase() && rule.pattern.test(path));
+
+/** Express routes case-insensitively and treats a single trailing slash as equivalent, so a
+ *  deny rule has to see the same path the router matched. Exactly those two equivalences:
+ *  no decoding and no interior-slash collapsing, which Express does not do either. */
+const normalizedPath = (path: string): string => {
+  const trimmed = path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path;
+  return trimmed.toLowerCase();
+};
+
+const match = (rules: Rule[], method: string, path: string) => {
+  const normalized = normalizedPath(path);
+  return rules.some((rule) => rule.method === method.toUpperCase() && rule.pattern.test(normalized));
+};
 
 /** Paths are Express-stripped of the `/api` mount, matching OPEN_PATHS (`/addons`, not `/api/addons`). */
 export const DENIED_GETS: Rule[] = [
@@ -33,6 +44,12 @@ export const DENIED_GETS: Rule[] = [
   // types and counts, and the interface renders nothing else.
   { method: "GET", pattern: /^\/libraries\/browse$/ },
   { method: "GET", pattern: /^\/libraries\/grants$/ },
+  // Admin media-server reads name remote addresses, server and account ids, and the
+  // connection inventory; member metadata stays readable under the plain sign-in gate.
+  { method: "GET", pattern: /^\/media-servers$/ },
+  { method: "GET", pattern: /^\/media-servers\/export$/ },
+  { method: "GET", pattern: /^\/media-servers\/libraries$/ },
+  { method: "GET", pattern: /^\/media-servers\/[^/]+\/libraries$/ },
 ];
 
 /** Authenticated writes that remain legal in restricted mode. Open paths are skipped before this list. */
@@ -47,6 +64,7 @@ export const ALLOWED_MUTATIONS: Rule[] = [
   { method: "POST", pattern: /^\/progress$/ },
   { method: "POST", pattern: /^\/progress\/forget$/ },
   { method: "DELETE", pattern: /^\/progress\/[^/]+$/ },
+  { method: "PATCH", pattern: /^\/remote-libraries\/[^/]+\/items\/[^/]+\/state$/ },
   { method: "POST", pattern: /^\/library\/favorite$/ },
   { method: "POST", pattern: /^\/library\/folder$/ },
   { method: "POST", pattern: /^\/library\/ops$/ },

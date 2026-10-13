@@ -40,6 +40,18 @@ describe("request", () => {
     expect(optionsOf(2).method).toBe("POST");
   });
 
+  it("carries a resolved catalogue name as the remote streams name filter", async () => {
+    fetchMock.mockResolvedValue(json({ streams: [] }));
+    await api.remoteLibraryStreams("lib/1", "series", "tt5:1:2", undefined, "Show & Order");
+    expect(String(fetchMock.mock.calls[0][0])).toBe("/api/remote-libraries/lib%2F1/streams/series/tt5%3A1%3A2?name=Show+%26+Order");
+  });
+
+  it("sends no name filter when a source has no catalogue title", async () => {
+    fetchMock.mockResolvedValue(json({ streams: [] }));
+    await api.remoteLibraryStreams("lib/1", "series", "tt5:1:2");
+    expect(String(fetchMock.mock.calls[0][0])).toBe("/api/remote-libraries/lib%2F1/streams/series/tt5%3A1%3A2");
+  });
+
   it("carries the server's classification and shows the reference of an unexplained failure", async () => {
     fetchMock.mockResolvedValue(json({ error: "Something broke.", category: "internal", retry: "manual", reference: "3157a2f8" }, 400));
     const error = await api.addons().catch((caught: unknown) => caught) as ApiError;
@@ -59,6 +71,17 @@ describe("request", () => {
   it("does not try to parse an empty response", async () => {
     fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
     await expect(api.deleteAddon("alpha")).resolves.toBeUndefined();
+  });
+
+  it("cancels a local source read when the caller aborts", async () => {
+    const controller = new AbortController();
+    fetchMock.mockImplementation((_url: unknown, init?: RequestInit) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+    }));
+    const promise = api.localStreams("movie", "tt1", controller.signal);
+    controller.abort();
+    await expect(promise).rejects.toThrow();
+    expect(String(fetchMock.mock.calls[0][0])).toBe("/api/local-streams/movie/tt1");
   });
 
   it("carries the status and code of a failure up to the caller", async () => {

@@ -66,6 +66,8 @@ import cz.stremiooffline.tv.data.MediaDto
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.ProgressEntryDto
+import cz.stremiooffline.tv.data.RemoteItemStateDto
+import cz.stremiooffline.tv.data.RemoteLibraryDto
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.TvApi
@@ -89,6 +91,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 
 const val TagCatalogPrimary = "catalog_primary"
 const val TagCatalogStartOver = "catalog_start_over"
@@ -124,11 +127,24 @@ internal val CatalogNoticeKind = SemanticsPropertyKey<CatalogNotice>("CatalogNot
 /** One slow addon must not hold a play back longer once something playable has arrived. */
 const val PLAY_WHEN_READY_TIMEOUT_MS = 8_000L
 
+/** The independent remote group deadlines: listing the libraries is quick, matching one is not. */
+const val REMOTE_DISCOVERY_TIMEOUT_MS = 3_000L
+const val REMOTE_MATCH_TIMEOUT_MS = 8_000L
+
 fun seasonChipTag(season: Int): String = "season_chip_$season"
 fun episodeCardTag(video: VideoDto): String = "episode_card_${video.id ?: video.label}"
 
-/** The Sources panel's rows as the catalogue gathered them, and whether the addons still owe one. */
-data class OfferedSources(val streams: List<StreamDto> = emptyList(), val loading: Boolean = false)
+/** A remote source-group failure the player's panel names: the libraries that could not be
+ *  reached, or a general failure when even the library list was unavailable. */
+data class RemoteSourcesFailure(val labels: List<String> = emptyList(), val discovery: Boolean = false)
+
+/** The Sources panel's rows as the loader gathered them, whether more are still owed, and any
+ *  remote group that failed. */
+data class OfferedSources(
+  val streams: List<StreamDto> = emptyList(),
+  val loading: Boolean = false,
+  val remoteFailure: RemoteSourcesFailure? = null,
+)
 
 /** The catalogue title detail: the library's layout for a movie or a series, with sources. */
 @Composable
@@ -139,6 +155,8 @@ fun CatalogDetailScreen(
   onPlay: (PlayTarget) -> Unit,
   onBack: () -> Unit,
   restoreToken: Int = 0,
+  /** Bumped from outside while the player is up, so its Sources panel can re-read the groups. */
+  retryToken: Int = 0,
   /** The source the player was left on, if it was left on one; the caption and the next Play
    *  then name it, the way they do a row the viewer picked here. */
   playedSourceId: String? = null,
@@ -162,59 +180,26 @@ fun CatalogDetailScreen(
   var entries by remember { mutableStateOf<List<ProgressEntryDto>>(emptyList()) }
   var addons by remember { mutableStateOf<List<AddonDto>>(emptyList()) }
   var movieProgress by remember { mutableStateOf<ProgressDto?>(null) }
-  var streams by remember { mutableStateOf<List<StreamDto>>(emptyList()) }
-  var localStreams by remember { mutableStateOf<List<StreamDto>>(emptyList()) }
-  var localLoading by remember { mutableStateOf(false) }
-  // Bumped per source generation, so a late local answer that belongs to a dropped request is
-  // discarded even if its coroutine cancellation has not run yet.
-  var localRequest by remember { mutableIntStateOf(0) }
-  var localProgress by remember { mutableStateOf<ProgressDto?>(null) }
-  var pendingSources by remember { mutableIntStateOf(0) }
-  var sourcesLoaded by remember { mutableStateOf(false) }
-  var sourcesFailed by remember { mutableStateOf(false) }
-  var sourcesRetry by remember { mutableIntStateOf(0) }
-  var selectedVideo by remember { mutableStateOf<VideoDto?>(null) }
-  var season by remember { mutableStateOf<Int?>(null) }
-  var selectedStream by remember { mutableStateOf<StreamDto?>(null) }
-  var pickedStream by remember { mutableStateOf(false) }
   // The source filters are not saved: they live while a title or episode is on screen and reset
   // when either changes. A null sort follows the account's `streamSort`.
   val sourceFilters = remember { SourceFilterState() }
-  // The caption under the buttons names a source only once the viewer chose one in the panel;
-  // pressing Play, Start over or To library does not turn it on.
-  var chosenInPanel by remember { mutableStateOf(false) }
-  var sourcesOpen by remember { mutableStateOf(false) }
-  var actionRowFocused by remember { mutableStateOf(false) }
-  var toLibraryFocused by remember { mutableStateOf(false) }
-  var startOverFocused by remember { mutableStateOf(false) }
-  var closeToPlay by remember { mutableStateOf(false) }
   var favourite by remember { mutableStateOf(false) }
   var favouriteBusy by remember { mutableStateOf(false) }
-  var queuedSourceId by remember { mutableStateOf<String?>(null) }
   var message by remember { mutableStateOf<String?>(null) }
   var noticeKind by remember { mutableStateOf(CatalogNotice.Neutral) }
-  // One queue request per press burst: the second OK of a burst while the first is still in the
-  // air must not post the same job again.
-  var queueBusy by remember { mutableStateOf(false) }
-  var libraries by remember { mutableStateOf<List<LibraryDto>>(emptyList()) }
-  // False when the server could not answer /api/libraries at all: the TV then queues the way it
-  // did before the field existed instead of inventing a refusal.
-  var librariesLoaded by remember { mutableStateOf(false) }
-  var libraryPanelOpen by remember { mutableStateOf(false) }
-  var pendingLibraryStream by remember { mutableStateOf<StreamDto?>(null) }
+  // The sources list and its pick, and the save flow a pick feeds, in one object each so the screen
+  // keeps a single local for them: this composable sits close to the limit ART can verify, and
+  // every one of these used to cost a register of its own.
+  val pick = remember { SourcePickState() }
+  val save = remember { LibrarySaveState() }
+  val remoteProgress = remember { RemoteProgressState() }
   val ui = remember { DetailUiState() }
+  // The remote source groups load on their own, so a slow or offline media server cannot hold
+  // back the local copy or the addons; held in one object to keep this screen's local count low.
+  val remote = remember { RemoteSourcesState() }
 
   val context = LocalContext.current
-  val queuedText = stringResource(R.string.save_queued)
-  val waitingText = stringResource(R.string.downloads_waiting_debrid)
-  val notAllowedText = stringResource(R.string.err_download_library_not_allowed)
-  val noLibraryText = stringResource(R.string.tv_no_library_to_save)
-  val torrentText = stringResource(R.string.err_torrent_not_playable)
-  val noSourcesText = stringResource(R.string.sources_none)
-  val loadErrorText = stringResource(R.string.tv_load_error)
-  val toLibraryText = stringResource(R.string.save_to_library)
-  val findingSourcesText = stringResource(R.string.tv_finding_sources)
-  val playWhenReadyText = stringResource(R.string.tv_play_when_ready)
+  val texts = detailTexts()
 
   /** The one place the message line is set, so its kind -- which is what picks the colour --
    *  travels with the text instead of being read back off the drawn string. */
@@ -223,34 +208,27 @@ fun CatalogDetailScreen(
     noticeKind = if (text == null) CatalogNotice.Neutral else kind
   }
 
-  val primaryFocus = remember { FocusRequester() }
-  val rowFocus = remember { FocusRequester() }
-  val seasonFocus = remember { FocusRequester() }
-  val sourcesOpenerFocus = remember { FocusRequester() }
-  val sourcesPanelFocus = remember { FocusRequester() }
-  val libraryOpenerFocus = remember { FocusRequester() }
-  val libraryPanelFocus = remember { FocusRequester() }
-  val forgetPanelFocus = remember { FocusRequester() }
+  val focus = remember { DetailFocus() }
 
   val streamType = meta.type ?: args.type
   val isSeries = streamType == "series"
   // The libraries this account may save this kind of title to. A server too old to answer
   // /api/libraries leaves the list empty and the TV keeps the addon's own destination.
-  val libraryCandidates = remember(libraries, streamType) {
-    libraries.filter { it.canWrite && (it.type == streamType || it.type == "mixed") }
+  val libraryCandidates = remember(save.libraries, streamType) {
+    save.libraries.filter { it.canWrite && (it.type == streamType || it.type == "mixed") }
   }
   // Streams belong to a video; a series asks for nothing until an episode is chosen.
-  val streamVideoId = if (isSeries) selectedVideo?.id else meta.id
+  val streamVideoId = if (isSeries) pick.selectedVideo?.id else meta.id
   val streamsKey = streamVideoId?.let { "$streamType:$it" }
 
   // The title's own requests do not depend on each other, so they all leave at once; only the
   // metadata waits for the settings it takes its language from.
   LaunchedEffect(args.meta.id) {
-    queuedSourceId = null
+    save.queuedSourceId = null
     notice(null)
-    libraryPanelOpen = false
+    save.libraryPanelOpen = false
     ui.series.open = false
-    pendingLibraryStream = null
+    save.pendingLibraryStream = null
     sourceFilters.reset()
     coroutineScope {
       val settingsJob = async { runCatching { api.settings() }.getOrDefault(SettingsResponse()) }
@@ -267,7 +245,7 @@ fun CatalogDetailScreen(
       val detail = metaJob.await()
       if (detail != null) meta = mergeMeta(args.meta, detail)
       addons = addonsJob.await()
-      librariesJob.await()?.let { libraries = it; librariesLoaded = true }
+      librariesJob.await()?.let { save.libraries = it; save.librariesLoaded = true }
       entries = entriesJob.await()
       favourite = watchlistJob.await().any { it.key == "${args.type}:${args.meta.id}" }
       movieProgress = progressJob.await()
@@ -279,37 +257,37 @@ fun CatalogDetailScreen(
         // Home names the episode it remembers; without one, the stored position decides.
         val wanted = args.episode ?: if (resuming) storedEpisode else null
         val watched = Resume.resumeVideo(videos, wanted)
-        selectedVideo = watched ?: nextRelevantEpisode(videos, Resume.resumeVideo(videos, storedEpisode)) ?: firstReleased(videos)
-        season = wanted?.season ?: defaultSeason(videos)
+        pick.selectedVideo = watched ?: nextRelevantEpisode(videos, Resume.resumeVideo(videos, storedEpisode)) ?: firstReleased(videos)
+        pick.season = wanted?.season ?: defaultSeason(videos)
       }
     }
   }
 
   // Each source addon is asked on its own so the first answer is usable without waiting for the
   // slowest, and a change of video clears the list at once so nothing plays a stale source.
-  LaunchedEffect(streamsKey, sourcesRetry) {
-    val request = ++localRequest
-    streams = emptyList()
-    localStreams = emptyList()
-    localLoading = false
-    selectedStream = null
-    pickedStream = false
-    chosenInPanel = false
-    pendingSources = 0
-    sourcesLoaded = false
-    sourcesFailed = false
-    queuedSourceId = null
+  LaunchedEffect(streamsKey, pick.sourcesRetry) {
+    val request = ++pick.localRequest
+    pick.streams = emptyList()
+    pick.localStreams = emptyList()
+    pick.localLoading = false
+    pick.selectedStream = null
+    pick.pickedStream = false
+    pick.chosenInPanel = false
+    pick.pendingSources = 0
+    pick.sourcesLoaded = false
+    pick.sourcesFailed = false
+    save.queuedSourceId = null
     notice(null)
     val id = streamVideoId
     if (id == null) {
-      sourcesLoaded = true
+      pick.sourcesLoaded = true
       return@LaunchedEffect
     }
     coroutineScope {
       // The local lookup is its own child coroutine, started before the addons are asked, so a
       // failed addon discovery neither cancels it nor skips it.
       launch {
-        localLoading = true
+        pick.localLoading = true
         val found = try {
           api.localStreams(streamType, id)
         } catch (cancelled: CancellationException) {
@@ -319,9 +297,9 @@ fun CatalogDetailScreen(
         }
         // A cancelled (stale) effect must not write state; the next run resets it anyway.
         currentCoroutineContext().ensureActive()
-        if (request == localRequest) {
-          localStreams = found
-          localLoading = false
+        if (request == pick.localRequest) {
+          pick.localStreams = found
+          pick.localLoading = false
         }
       }
       val sources = try {
@@ -329,12 +307,12 @@ fun CatalogDetailScreen(
       } catch (cancelled: CancellationException) {
         throw cancelled
       } catch (error: ApiError) {
-        sourcesFailed = true
-        sourcesLoaded = true
+        pick.sourcesFailed = true
+        pick.sourcesLoaded = true
         return@coroutineScope
       }
-      sourcesLoaded = true
-      pendingSources = sources.size
+      pick.sourcesLoaded = true
+      pick.pendingSources = sources.size
       // Addon answers can resume on different threads, so their updates take a lock: a lost
       // decrement would leave the button spinning on "Finding sources…" forever.
       val updates = Mutex()
@@ -349,8 +327,8 @@ fun CatalogDetailScreen(
               emptyList()
             }
             updates.withLock {
-              if (part.isNotEmpty()) streams = streams + part
-              pendingSources -= 1
+              if (part.isNotEmpty()) pick.streams = pick.streams + part
+              pick.pendingSources -= 1
             }
           }
         }
@@ -358,11 +336,65 @@ fun CatalogDetailScreen(
     }
   }
 
-  LaunchedEffect(meta.id) { runCatching { primaryFocus.requestFocus() } }
+  // The remote groups load on their own: the authorized libraries are listed once, then each is
+  // asked for its externally matched versions in its own child, and a group publishes the moment
+  // it answers. This effect is separate from the local/addon one, so a slow or offline media
+  // server can neither cancel a sibling nor hold a playable source back. A retry of the same
+  // title (the player's own Sources Retry bumps it) keeps the groups already answered, so a healthy
+  // remote row is never hidden while the failed library is asked again; a new title starts clean.
+  LaunchedEffect(streamsKey, pick.sourcesRetry, retryToken) {
+    val request = ++remote.request
+    if (remote.key != streamsKey) remote.groups = emptyList()
+    remote.key = streamsKey
+    remote.pending = 0
+    remote.discoveryFailed = false
+    val id = streamVideoId
+    if (id == null) return@LaunchedEffect
+    val foundLibraries = try {
+      withTimeoutOrNull(REMOTE_DISCOVERY_TIMEOUT_MS) { api.remoteLibraries() }
+    } catch (cancelled: CancellationException) {
+      throw cancelled
+    } catch (_: ApiError) {
+      null
+    }
+    if (request != remote.request) return@LaunchedEffect
+    if (foundLibraries == null) {
+      remote.discoveryFailed = true
+      return@LaunchedEffect
+    }
+    remote.libraries = foundLibraries
+    remote.pending = foundLibraries.size
+    if (foundLibraries.isEmpty()) return@LaunchedEffect
+    val updates = Mutex()
+    coroutineScope {
+      foundLibraries.forEach { library ->
+        launch {
+          val part = try {
+            // The resolved catalogue title, never the episode's own, is the provider's name filter.
+            withTimeoutOrNull(REMOTE_MATCH_TIMEOUT_MS) { api.remoteMatchedStreams(library.id, streamType, id, nameHint = meta.name) }
+          } catch (cancelled: CancellationException) {
+            throw cancelled
+          } catch (_: ApiError) {
+            null
+          }
+          updates.withLock {
+            if (request != remote.request) return@withLock
+            val match = RemoteMatch(library.id, library.provider, library.name, part.orEmpty(), failed = part == null)
+            // Configured order is kept whatever order the answers arrive in.
+            remote.groups = (remote.groups.filterNot { it.libraryId == library.id } + match)
+              .sortedBy { entry -> remote.libraries.indexOfFirst { it.id == entry.libraryId } }
+            remote.pending -= 1
+          }
+        }
+      }
+    }
+  }
+
+  LaunchedEffect(meta.id) { runCatching { focus.primary.requestFocus() } }
   // The player covers this screen, so on return re-read the stored position to keep Resume honest.
   LaunchedEffect(restoreToken) {
     if (restoreToken == 0) return@LaunchedEffect
-    runCatching { primaryFocus.requestFocus() }
+    runCatching { focus.primary.requestFocus() }
     if (isSeries) {
       entries = runCatching { api.progressList() }.getOrDefault(entries)
     } else {
@@ -374,15 +406,16 @@ fun CatalogDetailScreen(
   // Merged, sorted and filtered once per change of the raw list or the filters, never on a
   // focus-driven recomposition: parsing hundreds of sizes and languages on every move is what
   // ground the real TV to a halt.
-  val lists = remember(streams, addons, settings, meta.language, filters, localStreams) {
+  val lists = remember(pick.streams, addons, settings, meta.language, filters, pick.localStreams, remote.groups) {
     Streams.sourceLists(
-      streams = streams,
+      streams = pick.streams,
       addons = addons,
       filters = filters,
       preferredLanguage = settings.audioLanguage ?: "en",
       showTorrents = settings.realDebridConfigured,
       metaLanguage = meta.language,
-      local = localStreams,
+      local = pick.localStreams,
+      remote = remote.groups.map { it.group() },
     )
   }
   val offered = lists.offered
@@ -393,70 +426,100 @@ fun CatalogDetailScreen(
   // way the web does (Streams.catalogSourceList); counts and notices keep using the addon streams.
   val rows = lists.rows
   val preferredStream = Streams.pickDefaultStream(rows)
-  val chosenStream = selectedStream?.takeIf { pickedStream && rows.contains(it) }
-  val activeStream = chosenStream ?: selectedStream?.takeIf { rows.contains(it) } ?: preferredStream
+  val chosenStream = pick.selectedStream?.takeIf { pick.pickedStream && rows.contains(it) }
+  val activeStream = chosenStream ?: pick.selectedStream?.takeIf { rows.contains(it) } ?: preferredStream
+  val remoteAsking = remote.pending > 0
+  val remoteStreams = remote.groups.flatMap { it.streams }
+  val remoteFailedLabels = remote.groups.filter { it.failed }.map { it.label }
+  val remoteFailed = remote.discoveryFailed || remoteFailedLabels.isNotEmpty()
   // Asking covers both "the addon list has not answered" and "some addon still owes a list".
-  val sourcesAsking = !sourcesFailed && (!sourcesLoaded || pendingSources > 0)
-  val anyAsking = sourcesAsking || localLoading
+  val sourcesAsking = !pick.sourcesFailed && (!pick.sourcesLoaded || pick.pendingSources > 0)
+  val anyAsking = sourcesAsking || pick.localLoading || remoteAsking
   // While no playable stream has arrived the primary action is a spinner, not a promise to play.
   val findingSources = activeStream?.playable != true && anyAsking
   val canQueueActive = activeStream != null && Streams.canQueue(activeStream, settings.realDebridConfigured)
   // The tick belongs to the source that was actually queued, and only while it is still the pick.
-  val queued = queuedSourceId != null && activeStream?.sourceId == queuedSourceId
+  val queued = save.queuedSourceId != null && activeStream?.sourceId == save.queuedSourceId
   // A local pick can always be played, and keeps the "no sources" note away: a local copy is a
   // source even before the addons answered.
   val localActive = activeStream != null && Streams.isLocalStream(activeStream)
-  // Nothing visible to play: either no addon offers a source, or only a torrent it cannot open.
-  val emptyText = if (offered.isEmpty()) noSourcesText else torrentText
+  // Nothing visible to play: no local copy, no remote match and no addon source at all. A chosen
+  // remote group that matched nothing reads the same way -- no addon silently stands in for it.
+  val remoteOnly = Streams.remoteFilterLibrary(filters.addon) != null
+  val nothingAtAll = (offered.isEmpty() && pick.localStreams.isEmpty() && remoteStreams.isEmpty()) || remoteOnly
+  val emptyText = if (nothingAtAll) texts.noSources else texts.torrent
   // The empty state is a note; a list holding only torrents is a failure.
-  val emptyKind = if (offered.isEmpty()) CatalogNotice.Neutral else CatalogNotice.Failure
+  val emptyKind = if (nothingAtAll) CatalogNotice.Neutral else CatalogNotice.Failure
+  val totalSources = offered.size + pick.localStreams.size + remoteStreams.size
 
   // A later addon may outrank the one already picked, but only while the viewer has not chosen.
   LaunchedEffect(rows, anyAsking) {
     val next = Streams.repickStream(
       playing = false,
-      picked = pickedStream,
-      pending = if (anyAsking) maxOf(pendingSources, 1) else 0,
+      picked = pick.pickedStream,
+      pending = if (anyAsking) maxOf(pick.pendingSources, 1) else 0,
       visible = rows,
-      selected = selectedStream,
+      selected = pick.selectedStream,
       preferred = preferredStream,
-      upgrade = preferredStream?.let(Streams::isLocalStream) == true && selectedStream?.let(Streams::isLocalStream) != true,
+      upgrade = preferredStream?.let(Streams::isLocalStream) == true && pick.selectedStream?.let(Streams::isLocalStream) != true,
     )
-    if (next.move) selectedStream = next.to
+    if (next.move) pick.selectedStream = next.to
   }
 
   // The player's own Sources panel gets the same list, the local copies included, and it keeps
   // growing while the addons answer.
-  LaunchedEffect(rows, anyAsking) { onSources(OfferedSources(rows, anyAsking)) }
+  LaunchedEffect(rows, anyAsking, remoteFailed, remote.discoveryFailed) {
+    onSources(OfferedSources(rows, anyAsking, if (remoteFailed) RemoteSourcesFailure(remoteFailedLabels, remote.discoveryFailed) else null))
+  }
 
   // A switch made inside the player has to carry back: the detail keeps naming the source the
   // viewer actually watched, and Play offers it again.
   LaunchedEffect(playedSourceId, rows) {
     val id = playedSourceId ?: return@LaunchedEffect
     val stream = rows.firstOrNull { it.sourceId == id } ?: return@LaunchedEffect
-    selectedStream = stream
-    pickedStream = true
-    chosenInPanel = true
+    pick.selectedStream = stream
+    pick.pickedStream = true
+    pick.chosenInPanel = true
   }
 
   val resumeEntry = if (isSeries) seriesEntry(entries, meta.id) else null
   val resumeEpisode = if (isSeries) Resume.resumeVideo(meta.videos.orEmpty(), resumeEntry?.let { Resume.resumeTarget(it).episode }) else null
   val storedPosition = if (isSeries) resumeEntry?.position ?: 0.0 else movieProgress?.position ?: 0.0
   val storedDuration = if (isSeries) resumeEntry?.duration ?: 0.0 else movieProgress?.duration ?: 0.0
-  val progressPosition = if (localActive) localProgress?.position ?: 0.0 else storedPosition
-  val progressDuration = if (localActive) localProgress?.duration ?: 0.0 else storedDuration
-  // The local file has its own progress key, so a catalogue row has no bearing on its resume.
-  val resuming = if (localActive) {
-    localProgress?.let { Progress.resumePosition(it.position, it.duration) != null } == true
-  } else {
-    Progress.resumePosition(storedPosition, storedDuration) != null &&
-      (selectedVideo == null || selectedVideo?.id == resumeEpisode?.id)
+  // A matched remote version carries its own row, keyed by its opaque identity and the version the
+  // viewer picked: the read below fills [remoteProgress] for exactly that identity.
+  val activeRemoteItem = activeStream?.remoteItem
+  val remoteIdentity = activeRemoteItem?.let { listOf(it.libraryId, it.itemId, it.mediaSourceId.orEmpty()) }
+  val remoteRow = remoteProgress.row.takeIf { remoteProgress.key == remoteIdentity }
+  // A local file and a remote version each keep their own progress; only an addon row falls back to
+  // the catalogue. A remote row still arriving, or one that failed, reads as no progress at all.
+  val progressPosition = when {
+    localActive -> pick.localProgress?.position ?: 0.0
+    activeRemoteItem != null -> remoteRow?.position ?: 0.0
+    else -> storedPosition
+  }
+  val progressDuration = when {
+    localActive -> pick.localProgress?.duration ?: 0.0
+    activeRemoteItem != null -> remoteRow?.duration ?: 0.0
+    else -> storedDuration
+  }
+  val resuming = when {
+    localActive -> pick.localProgress?.let { Progress.resumePosition(it.position, it.duration) != null } == true
+    // Only the version that stored the position may resume, and never an item marked watched.
+    activeRemoteItem != null -> remoteRow?.let {
+      !it.watched && it.mediaSourceId != null && it.mediaSourceId == activeRemoteItem.mediaSourceId &&
+        Progress.resumePosition(it.position, it.duration) != null
+    } == true
+    else -> Progress.resumePosition(storedPosition, storedDuration) != null &&
+      (pick.selectedVideo == null || pick.selectedVideo?.id == resumeEpisode?.id)
   }
   // Every stored key this title stands for: the card's own keys when it came from Continue
   // watching, the local file's own key for a local pick, a show's stored episode otherwise.
   val forgetKeys: List<String> = when {
+    // Remote history uses its own local endpoint; catalogue Forget cannot delete that row.
+    activeRemoteItem != null -> emptyList()
     args.forgetKeys.isNotEmpty() && !ui.forget.done -> args.forgetKeys
-    localActive && localProgress?.let { it.position > 0 } == true ->
+    localActive && pick.localProgress?.let { it.position > 0 } == true ->
       activeStream?.localPath?.let { listOf(Progress.libraryKey(it)) }.orEmpty()
     isSeries -> entries.filter {
       it.series?.id == meta.id || (it.key.startsWith("series:") && Resume.resumeTarget(it).meta.id == meta.id)
@@ -468,43 +531,62 @@ fun CatalogDetailScreen(
   // A local pick resumes from the file's own progress, read when it becomes the active row.
   LaunchedEffect(activeStream?.localPath, restoreToken) {
     val path = activeStream?.takeIf(Streams::isLocalStream)?.localPath
-    localProgress = if (path == null) null else runCatching { api.progress(Progress.libraryKey(path)) }.getOrNull()
+    pick.localProgress = if (path == null) null else runCatching { api.progress(Progress.libraryKey(path)) }.getOrNull()
+  }
+
+  // The active remote version's own row, re-read for its identity, the chosen version and the
+  // restore token. The row is cleared first, so a replaced source or a read still under way shows
+  // Play, and a late answer for an earlier identity is dropped.
+  LaunchedEffect(remoteIdentity, restoreToken) {
+    val request = ++remoteProgress.request
+    remoteProgress.key = null
+    remoteProgress.row = null
+    val item = activeRemoteItem ?: return@LaunchedEffect
+    if (item.libraryId.isBlank() || item.itemId.isBlank()) return@LaunchedEffect
+    val loaded = try {
+      api.remoteItemState(item.libraryId, item.itemId)
+    } catch (cancelled: CancellationException) {
+      throw cancelled
+    } catch (_: ApiError) {
+      return@LaunchedEffect
+    }
+    if (request != remoteProgress.request) return@LaunchedEffect
+    remoteProgress.row = loaded
+    remoteProgress.key = remoteIdentity
   }
 
   val baseTitle = localizedTitle(args.meta, meta, settings.uiLanguage)
-  val playerTitle = if (selectedVideo != null) "$baseTitle · ${selectedVideo!!.label}" else baseTitle
-  val progressKey = ProgressKey.of(streamType, meta.id, selectedVideo?.id)
+  val playerTitle = if (pick.selectedVideo != null) "$baseTitle · ${pick.selectedVideo!!.label}" else baseTitle
+  val progressKey = ProgressKey.of(streamType, meta.id, pick.selectedVideo?.id)
 
   fun closeSources() {
-    if (!sourcesOpen) return
-    sourcesOpen = false
+    if (!pick.sourcesOpen) return
+    pick.sourcesOpen = false
   }
 
-  var sourcesWasOpen by remember { mutableStateOf(false) }
   // The opener gets the remote back on the frame the panel and its focus trap are gone; a picked
   // source sends it to Play instead, so the action row is where the viewer carries on.
-  LaunchedEffect(sourcesOpen) {
-    if (sourcesOpen) {
-      sourcesWasOpen = true
-    } else if (sourcesWasOpen) {
-      sourcesWasOpen = false
-      if (closeToPlay) {
-        closeToPlay = false
-        runCatching { primaryFocus.requestFocus() }
+  LaunchedEffect(pick.sourcesOpen) {
+    if (pick.sourcesOpen) {
+      pick.sourcesWasOpen = true
+    } else if (pick.sourcesWasOpen) {
+      pick.sourcesWasOpen = false
+      if (pick.closeToPlay) {
+        pick.closeToPlay = false
+        runCatching { focus.primary.requestFocus() }
       } else {
-        runCatching { sourcesOpenerFocus.requestFocus() }
+        runCatching { focus.sourcesOpener.requestFocus() }
       }
     }
   }
 
-  var libraryWasOpen by remember { mutableStateOf(false) }
   // Back on the library panel hands the remote back to the To library button that opened it.
-  LaunchedEffect(libraryPanelOpen) {
-    if (libraryPanelOpen) {
-      libraryWasOpen = true
-    } else if (libraryWasOpen) {
-      libraryWasOpen = false
-      runCatching { libraryOpenerFocus.requestFocus() }
+  LaunchedEffect(save.libraryPanelOpen) {
+    if (save.libraryPanelOpen) {
+      save.libraryWasOpen = true
+    } else if (save.libraryWasOpen) {
+      save.libraryWasOpen = false
+      runCatching { focus.libraryOpener.requestFocus() }
     }
   }
 
@@ -520,8 +602,8 @@ fun CatalogDetailScreen(
   }
 
   fun play(stream: StreamDto) {
-    pickedStream = true
-    selectedStream = stream
+    pick.pickedStream = true
+    pick.selectedStream = stream
     closeSources()
     notice(null)
     val path = stream.localPath
@@ -540,9 +622,12 @@ fun CatalogDetailScreen(
         ),
       )
     } else {
+      // A remote-matched version carries its own opaque identity and its own version list; its
+      // resume flag follows the remote row the detail read, and the controller re-checks it.
+      val remoteItem = stream.remoteItem
       onPlay(
         PlayTarget(
-          key = progressKey,
+          key = remoteItem?.progressKey?.takeIf { it.isNotBlank() } ?: progressKey,
           title = playerTitle,
           resume = resuming,
           sourceId = stream.sourceId,
@@ -551,6 +636,8 @@ fun CatalogDetailScreen(
           subtitleType = streamType,
           subtitleTarget = streamVideoId,
           catalogue = true,
+          remoteItem = remoteItem,
+          remoteSources = Streams.remoteVersionsOf(remoteItem, remoteStreams),
         ),
       )
     }
@@ -559,54 +646,54 @@ fun CatalogDetailScreen(
   /** Queues one source into [libraryId], or with no target when the server never told us which
    *  libraries this account may use. */
   fun queueTo(stream: StreamDto, libraryId: String?) {
-    val media = mediaFor(meta, args, selectedVideo, settings)
+    val media = mediaFor(meta, args, pick.selectedVideo, settings)
     val title = playerTitle
-    queueBusy = true
+    save.queueBusy = true
     scope.launch {
       try {
         val job = api.download(title, stream.sourceId, media, libraryId?.let(::DownloadTargetDto))
-        queuedSourceId = stream.sourceId
-        notice(if (job.status == "waiting") waitingText else queuedText, CatalogNotice.Success)
+        save.queuedSourceId = stream.sourceId
+        notice(if (job.status == "waiting") texts.waiting else texts.queued, CatalogNotice.Success)
       } catch (cancelled: CancellationException) {
         throw cancelled
       } catch (error: ApiError) {
         // A refusal carries the server's own explanation; the catalogue line is the fallback.
-        notice(error.serverMessage ?: notAllowedText.takeIf { error.failure == ApiFailure.Forbidden }, CatalogNotice.Failure)
+        notice(error.serverMessage ?: texts.notAllowed.takeIf { error.failure == ApiFailure.Forbidden }, CatalogNotice.Failure)
       } finally {
-        queueBusy = false
+        save.queueBusy = false
       }
     }
   }
 
   fun queue(stream: StreamDto) {
-    if (queueBusy) return
-    selectedStream = stream
-    pickedStream = true
+    if (save.queueBusy) return
+    pick.selectedStream = stream
+    pick.pickedStream = true
     notice(null)
     if (!Streams.canQueue(stream, settings.realDebridConfigured)) {
-      notice(torrentText, CatalogNotice.Failure)
+      notice(texts.torrent, CatalogNotice.Failure)
       return
     }
     when {
       // The server that could not answer keeps the old behaviour: queue and let it pick.
-      !librariesLoaded -> queueTo(stream, null)
-      libraryCandidates.isEmpty() -> notice(noLibraryText, CatalogNotice.Failure)
+      !save.librariesLoaded -> queueTo(stream, null)
+      libraryCandidates.isEmpty() -> notice(texts.noLibrary, CatalogNotice.Failure)
       libraryCandidates.size == 1 -> queueTo(stream, libraryCandidates.first().id)
       // More than one usable library: let the viewer choose, the addon's own default preselected.
       else -> {
-        pendingLibraryStream = stream
-        libraryPanelOpen = true
+        save.pendingLibraryStream = stream
+        save.libraryPanelOpen = true
       }
     }
   }
 
   /** OK in the panel picks a row; Play or To library in the action row then acts on it. */
   fun chooseSource(stream: StreamDto) {
-    selectedStream = stream
-    pickedStream = true
-    chosenInPanel = true
+    pick.selectedStream = stream
+    pick.pickedStream = true
+    pick.chosenInPanel = true
     notice(null)
-    closeToPlay = true
+    pick.closeToPlay = true
     closeSources()
   }
 
@@ -622,8 +709,8 @@ fun CatalogDetailScreen(
     val stream = preferredStream
     if (stream?.playable == true) {
       play(stream)
-    } else if (localStreams.isEmpty()) {
-      notice(if (offered.isEmpty()) noSourcesText else torrentText, CatalogNotice.Failure)
+    } else if (pick.localStreams.isEmpty()) {
+      notice(if (offered.isEmpty()) texts.noSources else texts.torrent, CatalogNotice.Failure)
     }
   }
 
@@ -633,20 +720,20 @@ fun CatalogDetailScreen(
       pendingPlay -> cancelPendingPlay()
       // A local copy needs no addon and no discovery, so a failed addon lookup must not block it.
       localActive && stream?.localPath != null -> play(stream)
-      sourcesFailed -> notice(loadErrorText, CatalogNotice.Failure)
+      pick.sourcesFailed -> notice(texts.loadError, CatalogNotice.Failure)
       // Once a row is chosen, Play acts on that row alone: a playable pick plays, an unplayable
       // one says why, and the wait for another addon never overrides the pick.
-      pickedStream -> when {
+      pick.pickedStream -> when {
         stream?.playable == true -> play(stream)
-        stream != null -> notice(torrentText, CatalogNotice.Failure)
+        stream != null -> notice(texts.torrent, CatalogNotice.Failure)
         else -> notice(emptyText, emptyKind)
       }
       stream?.playable == true -> play(stream)
       findingSources -> armPendingPlay()
       // A chosen stream that cannot be played is what the torrent message is for; queuing it is
       // the To library button's job.
-      stream != null -> if (localStreams.isEmpty()) notice(torrentText, CatalogNotice.Failure)
-      else -> if (localStreams.isEmpty()) notice(emptyText, emptyKind)
+      stream != null -> if (pick.localStreams.isEmpty()) notice(texts.torrent, CatalogNotice.Failure)
+      else -> if (pick.localStreams.isEmpty()) notice(emptyText, emptyKind)
     }
   }
 
@@ -656,8 +743,8 @@ fun CatalogDetailScreen(
     val path = stream?.localPath
     when {
       stream != null && Streams.isLocalStream(stream) && path != null -> {
-        pickedStream = true
-        selectedStream = stream
+        pick.pickedStream = true
+        pick.selectedStream = stream
         onPlay(
           PlayTarget(
             key = Progress.libraryKey(path),
@@ -670,14 +757,15 @@ fun CatalogDetailScreen(
           ),
         )
       }
-      sourcesFailed -> notice(loadErrorText, CatalogNotice.Failure)
+      pick.sourcesFailed -> notice(texts.loadError, CatalogNotice.Failure)
       stream?.playable == true -> {
-        pickedStream = true
-        selectedStream = stream
+        pick.pickedStream = true
+        pick.selectedStream = stream
+        val remoteItem = stream.remoteItem
         onPlay(
           PlayTarget(
-            progressKey,
-            playerTitle,
+            key = remoteItem?.progressKey?.takeIf { it.isNotBlank() } ?: progressKey,
+            title = playerTitle,
             resume = false,
             sourceId = stream.sourceId,
             poster = args.meta.poster ?: meta.poster,
@@ -685,12 +773,14 @@ fun CatalogDetailScreen(
             subtitleType = streamType,
             subtitleTarget = streamVideoId,
             catalogue = true,
+            remoteItem = remoteItem,
+            remoteSources = Streams.remoteVersionsOf(remoteItem, remoteStreams),
           ),
         )
       }
-      pickedStream -> notice(if (stream != null) torrentText else emptyText, if (stream != null) CatalogNotice.Failure else emptyKind)
+      pick.pickedStream -> notice(if (stream != null) texts.torrent else emptyText, if (stream != null) CatalogNotice.Failure else emptyKind)
       anyAsking -> Unit
-      else -> if (localStreams.isEmpty()) notice(emptyText, emptyKind)
+      else -> if (pick.localStreams.isEmpty()) notice(emptyText, emptyKind)
     }
   }
 
@@ -727,7 +817,7 @@ fun CatalogDetailScreen(
         } else {
           movieProgress = runCatching { api.progress(ProgressKey.of(streamType, meta.id)) }.getOrNull()
         }
-        runCatching { primaryFocus.requestFocus() }
+        runCatching { focus.primary.requestFocus() }
       } catch (cancelled: CancellationException) {
         throw cancelled
       } catch (_: ApiError) {
@@ -739,21 +829,24 @@ fun CatalogDetailScreen(
 
   /** Selecting an episode drops the list, the queued state and any message at once. */
   fun selectVideo(video: VideoDto) {
-    if (video.id == selectedVideo?.id) return
+    if (video.id == pick.selectedVideo?.id) return
     cancelPendingPlay()
-    selectedVideo = video
-    selectedStream = null
-    pickedStream = false
-    chosenInPanel = false
+    pick.selectedVideo = video
+    pick.selectedStream = null
+    pick.pickedStream = false
+    pick.chosenInPanel = false
     // A new episode starts from the account's own sort and an unfiltered list.
     sourceFilters.reset()
-    streams = emptyList()
-    localStreams = emptyList()
-    localLoading = false
-    pendingSources = 0
-    sourcesLoaded = false
-    sourcesFailed = false
-    queuedSourceId = null
+    pick.streams = emptyList()
+    pick.localStreams = emptyList()
+    pick.localLoading = false
+    pick.pendingSources = 0
+    pick.sourcesLoaded = false
+    pick.sourcesFailed = false
+    remote.groups = emptyList()
+    remote.pending = 0
+    remote.discoveryFailed = false
+    save.queuedSourceId = null
     notice(null)
   }
 
@@ -774,26 +867,26 @@ fun CatalogDetailScreen(
 
   // A button that disappears while it holds the remote hands it back to Play. The flag is read
   // during composition, before the button is dropped, so losing focus on disposal does not hide it.
-  val toLibraryWasFocused = toLibraryFocused
-  val startOverWasFocused = startOverFocused
+  val toLibraryWasFocused = focus.toLibraryFocused
+  val startOverWasFocused = focus.startOverFocused
   LaunchedEffect(canQueueActive) {
     if (!canQueueActive && toLibraryWasFocused) {
-      toLibraryFocused = false
-      runCatching { primaryFocus.requestFocus() }
+      focus.toLibraryFocused = false
+      runCatching { focus.primary.requestFocus() }
     }
   }
   // A queue request in the air disables the button, so the remote it was holding goes back to Play
   // instead of being left on nothing.
-  LaunchedEffect(queueBusy) {
-    if (queueBusy && toLibraryWasFocused) {
-      toLibraryFocused = false
-      runCatching { primaryFocus.requestFocus() }
+  LaunchedEffect(save.queueBusy) {
+    if (save.queueBusy && toLibraryWasFocused) {
+      focus.toLibraryFocused = false
+      runCatching { focus.primary.requestFocus() }
     }
   }
   LaunchedEffect(resuming) {
     if (!resuming && startOverWasFocused) {
-      startOverFocused = false
-      runCatching { primaryFocus.requestFocus() }
+      focus.startOverFocused = false
+      runCatching { focus.primary.requestFocus() }
     }
   }
 
@@ -805,9 +898,9 @@ fun CatalogDetailScreen(
         // DOWN drops into the episode row from the action row only; inside an open panel it must
         // reach the next source instead.
         if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown &&
-          isSeries && !sourcesOpen && !ui.series.open && actionRowFocused
+          isSeries && !pick.sourcesOpen && !ui.series.open && focus.actionRowFocused
         ) {
-          runCatching { rowFocus.requestFocus() }.isSuccess
+          runCatching { focus.row.requestFocus() }.isSuccess
         } else {
           false
         }
@@ -843,7 +936,7 @@ fun CatalogDetailScreen(
         overflow = TextOverflow.Ellipsis,
         modifier = Modifier.width(760.dp),
       )
-      val selectedEpisodeLine = if (isSeries) selectedVideo?.let { episodeLine(it) } else null
+      val selectedEpisodeLine = if (isSeries) pick.selectedVideo?.let { episodeLine(it) } else null
       if (selectedEpisodeLine != null) {
         Text(
           selectedEpisodeLine,
@@ -877,21 +970,21 @@ fun CatalogDetailScreen(
       }
       Spacer(Modifier.height(3.dp))
       Row(
-        modifier = Modifier.onFocusChanged { actionRowFocused = it.hasFocus },
+        modifier = Modifier.onFocusChanged { focus.actionRowFocused = it.hasFocus },
         horizontalArrangement = Arrangement.spacedBy(11.dp),
         verticalAlignment = Alignment.CenterVertically,
       ) {
         FocusButton(
           text = when {
-            pendingPlay -> playWhenReadyText
-            findingSources -> findingSourcesText
+            pendingPlay -> texts.playWhenReady
+            findingSources -> texts.findingSources
             resuming -> stringResource(R.string.tv_resume)
             else -> stringResource(R.string.player_play)
           },
           onClick = { playPressed() },
           kind = FocusButtonKind.Primary,
           leading = if (pendingPlay || findingSources) ({ TvSpinner() }) else null,
-          modifier = Modifier.focusRequester(primaryFocus).testTag(TagCatalogPrimary),
+          modifier = Modifier.focusRequester(focus.primary).testTag(TagCatalogPrimary),
         )
         if (resuming) {
           ActionIconButton(
@@ -901,7 +994,7 @@ fun CatalogDetailScreen(
             caption = ui.caption,
             modifier = Modifier
               .testTag(TagCatalogStartOver)
-              .onFocusChanged { startOverFocused = it.isFocused },
+              .onFocusChanged { focus.startOverFocused = it.isFocused },
           )
         }
         if (forgetKeys.isNotEmpty()) {
@@ -924,20 +1017,20 @@ fun CatalogDetailScreen(
         )
         if (canQueueActive) {
           ActionIconButton(
-            label = if (queued) queuedText else toLibraryText,
+            label = if (queued) texts.queued else texts.toLibrary,
             icon = if (queued) CheckIcon else DownloadIcon,
             onClick = { activeStream?.let { queue(it) } },
-            enabled = !queueBusy,
+            enabled = !save.queueBusy,
             caption = ui.caption,
             modifier = Modifier
               .testTag(TagCatalogToLibrary)
-              .focusRequester(libraryOpenerFocus)
-              .onFocusChanged { toLibraryFocused = it.isFocused },
+              .focusRequester(focus.libraryOpener)
+              .onFocusChanged { focus.toLibraryFocused = it.isFocused },
           )
         }
         // The web's bulk download, for the whole batch at once: it needs no source of its own,
         // so it sits beside To library for any series with an episode selected.
-        if (isSeries && selectedVideo != null && !meta.videos.isNullOrEmpty()) {
+        if (isSeries && pick.selectedVideo != null && !meta.videos.isNullOrEmpty()) {
           ActionIconButton(
             label = stringResource(R.string.bulk_title),
             icon = SeriesDownloadIcon,
@@ -955,10 +1048,10 @@ fun CatalogDetailScreen(
           text = stringResource(R.string.tv_sources_count, rows.size.toString()),
           onClick = {
             cancelPendingPlay()
-            sourcesOpen = true
+            pick.sourcesOpen = true
           },
           leading = if (anyAsking) ({ TvSpinner() }) else null,
-          modifier = Modifier.focusRequester(sourcesOpenerFocus).testTag(TagCatalogSources),
+          modifier = Modifier.focusRequester(focus.sourcesOpener).testTag(TagCatalogSources),
         )
         // To library is hidden for a local pick (it is already on disk); Show in library opens
         // the file's folder instead.
@@ -970,20 +1063,20 @@ fun CatalogDetailScreen(
             caption = ui.caption,
             modifier = Modifier
               .testTag(TagCatalogShowInLibrary)
-              .focusRequester(libraryOpenerFocus)
-              .onFocusChanged { toLibraryFocused = it.isFocused },
+              .focusRequester(focus.libraryOpener)
+              .onFocusChanged { focus.toLibraryFocused = it.isFocused },
           )
         }
         if (ui.caption.text.isNotEmpty()) {
           Text(ui.caption.text, color = Tokens.Muted, fontSize = 12.sp, maxLines = 1)
         }
       }
-      if (chosenInPanel) {
+      if (pick.chosenInPanel) {
         activeStream?.let { stream ->
           val local = Streams.isLocalStream(stream)
           val label = if (local) stream.behaviorHints?.filename ?: streamLabel(stream) else streamLabel(stream)
           val caption = listOfNotNull(
-            (if (local) stream.libraryName else stream.addonName)?.takeIf { it.isNotBlank() },
+            sourceGroupName(stream)?.takeIf { it.isNotBlank() },
             label.takeIf { it.isNotBlank() },
             formatSize(Streams.streamSize(stream)),
           ).joinToString(" · ")
@@ -1014,8 +1107,8 @@ fun CatalogDetailScreen(
       if (isSeries && videos.isNotEmpty()) {
         SeriesRows(
           videos = videos,
-          season = season,
-          onSeason = { season = it },
+          season = pick.season,
+          onSeason = { pick.season = it },
           resumeEpisode = resumeEpisode,
           focusVideo = nextRelevantEpisode(videos, resumeEpisode),
           seriesPosition = storedPosition,
@@ -1025,16 +1118,16 @@ fun CatalogDetailScreen(
             selectVideo(video)
             scope.launch {
               awaitFrame()
-              runCatching { primaryFocus.requestFocus() }
+              runCatching { focus.primary.requestFocus() }
             }
           },
-          focusRequester = rowFocus,
-          seasonFocus = seasonFocus,
+          focusRequester = focus.row,
+          seasonFocus = focus.season,
         )
       }
     }
 
-    if (sourcesOpen) {
+    if (pick.sourcesOpen) {
       // Reopening lands on what the viewer picked; without a pick, on the default.
       val focusIndex = rows.indexOfFirst { it === (chosenStream ?: preferredStream) }.let { if (it >= 0) it else 0 }
       // Like the web, the filter bar is only worth showing once more than one source is offered.
@@ -1049,29 +1142,32 @@ fun CatalogDetailScreen(
         anyChosen = chosenStream != null,
         titleLanguage = titleLanguage,
         asking = anyAsking,
-        failed = sourcesFailed,
+        // A failure only stands in for the list when there is nothing to show: a nonempty filtered
+        // list is never hidden by a group that failed, which stays a note beside the rows instead.
+        failed = (pick.sourcesFailed || remoteFailed) && rows.isEmpty(),
         notices = notices,
         emptyText = emptyText,
-        failureText = loadErrorText,
-        onRetry = { sourcesRetry++ },
+        failureText = if (remoteFailed && rows.isEmpty()) remoteFailureText(remoteFailedLabels) else texts.loadError,
+        onRetry = { pick.sourcesRetry++ },
         retryTag = TagCatalogRetry,
-        filters = if (offered.size > 1) chips else emptyList(),
+        filters = if (totalSources > 1) chips else emptyList(),
         onFilterSelect = { chip, key ->
           sourceFilters.select(chip, key)
         },
-        countText = if (offered.size > 1) {
-          stringResource(R.string.sources_of_total, rows.size, offered.size + localStreams.size)
+        countText = if (totalSources > 1) {
+          stringResource(R.string.sources_of_total, rows.size, totalSources)
         } else {
           null
         },
-        initialFocus = sourcesPanelFocus,
+        remoteNote = remoteNotice(remoteFailed, remoteFailedLabels),
+        initialFocus = focus.sourcesPanel,
       )
     }
 
-    if (libraryPanelOpen) {
+    if (save.libraryPanelOpen) {
       // The preselection follows the web's `ruleTarget`: the addon's own rule first, then the
       // library the account flagged as its default for this kind, then the first usable one.
-      val addonDefault = addons.firstOrNull { it.key == pendingLibraryStream?.addonKey }?.defaultLibraryId(streamType)
+      val addonDefault = addons.firstOrNull { it.key == save.pendingLibraryStream?.addonKey }?.defaultLibraryId(streamType)
       val flaggedDefault = libraryCandidates.firstOrNull { if (streamType == "series") it.defaultSeries else it.defaultMovie }?.id
       val preferredLibraryId = addonDefault?.takeIf { id -> libraryCandidates.any { it.id == id } }
         ?: flaggedDefault
@@ -1079,22 +1175,22 @@ fun CatalogDetailScreen(
       val focusIndex = libraryCandidates.indexOfFirst { it.id == preferredLibraryId }.let { if (it >= 0) it else 0 }
       SidePanel(
         title = stringResource(R.string.save_to_library),
-        onClose = { libraryPanelOpen = false },
+        onClose = { save.libraryPanelOpen = false },
         modifier = Modifier.testTag(TagCatalogLibraryPanel),
-        initialFocus = libraryPanelFocus,
+        initialFocus = focus.libraryPanel,
       ) {
         libraryCandidates.forEachIndexed { index, library ->
           PanelOption(
             text = library.name,
             selected = library.id == preferredLibraryId,
             onClick = {
-              val stream = pendingLibraryStream
-              libraryPanelOpen = false
+              val stream = save.pendingLibraryStream
+              save.libraryPanelOpen = false
               stream?.let { queueTo(it, library.id) }
             },
             modifier = Modifier
               .testTag(libraryOptionTag(library.id))
-              .then(if (index == focusIndex) Modifier.focusRequester(libraryPanelFocus) else Modifier),
+              .then(if (index == focusIndex) Modifier.focusRequester(focus.libraryPanel) else Modifier),
           )
         }
       }
@@ -1105,12 +1201,12 @@ fun CatalogDetailScreen(
         title = stringResource(R.string.tv_forget_title),
         onClose = { ui.forget.panelOpen = false },
         modifier = Modifier.testTag(TagCatalogForgetPanel),
-        initialFocus = forgetPanelFocus,
+        initialFocus = focus.forgetPanel,
       ) {
         PanelOption(
           text = stringResource(R.string.common_cancel),
           onClick = { ui.forget.panelOpen = false },
-          modifier = Modifier.testTag(TagCatalogForgetCancel).focusRequester(forgetPanelFocus),
+          modifier = Modifier.testTag(TagCatalogForgetCancel).focusRequester(focus.forgetPanel),
         )
         PanelOption(
           text = stringResource(R.string.tv_forget_remove),
@@ -1128,7 +1224,7 @@ fun CatalogDetailScreen(
         type = streamType,
         title = baseTitle,
         videos = meta.videos.orEmpty(),
-        selected = selectedVideo,
+        selected = pick.selectedVideo,
         media = BulkMediaDto(
           id = meta.id,
           metaType = streamType,
@@ -1137,7 +1233,7 @@ fun CatalogDetailScreen(
         ),
         settings = settings,
         addons = addons,
-        libraries = libraries,
+        libraries = save.libraries,
         onQueued = { added, skipped ->
           ui.series.open = false
           val addedText = context.resources.getQuantityString(R.plurals.episodes_bulk_added, added, added)
@@ -1376,6 +1472,51 @@ private class SeriesDownloadState {
   val focus = FocusRequester()
 }
 
+/** The screen's fixed labels, read together so the composable keeps one local instead of ten; the
+ *  interface is translated, so they are resolved in composition and passed down as plain strings. */
+private data class DetailTexts(
+  val queued: String,
+  val waiting: String,
+  val notAllowed: String,
+  val noLibrary: String,
+  val torrent: String,
+  val noSources: String,
+  val loadError: String,
+  val toLibrary: String,
+  val findingSources: String,
+  val playWhenReady: String,
+)
+
+@Composable
+private fun detailTexts(): DetailTexts = DetailTexts(
+  queued = stringResource(R.string.save_queued),
+  waiting = stringResource(R.string.downloads_waiting_debrid),
+  notAllowed = stringResource(R.string.err_download_library_not_allowed),
+  noLibrary = stringResource(R.string.tv_no_library_to_save),
+  torrent = stringResource(R.string.err_torrent_not_playable),
+  noSources = stringResource(R.string.sources_none),
+  loadError = stringResource(R.string.tv_load_error),
+  toLibrary = stringResource(R.string.save_to_library),
+  findingSources = stringResource(R.string.tv_finding_sources),
+  playWhenReady = stringResource(R.string.tv_play_when_ready),
+)
+
+/** The focus requesters the screen hands the remote between and the three flags that say which
+ *  action holds it, in one object so the screen keeps a single local for all eleven. */
+private class DetailFocus {
+  val primary = FocusRequester()
+  val row = FocusRequester()
+  val season = FocusRequester()
+  val sourcesOpener = FocusRequester()
+  val sourcesPanel = FocusRequester()
+  val libraryOpener = FocusRequester()
+  val libraryPanel = FocusRequester()
+  val forgetPanel = FocusRequester()
+  var actionRowFocused by mutableStateOf(false)
+  var toLibraryFocused by mutableStateOf(false)
+  var startOverFocused by mutableStateOf(false)
+}
+
 /** Everything the detail screen keeps besides its data, in one object so the screen holds a single
  *  local for it: the Forget flow, the series-download panel and the focused action's caption. */
 private class DetailUiState {
@@ -1383,3 +1524,93 @@ private class DetailUiState {
   val series = SeriesDownloadState()
   val caption = ActionCaption()
 }
+
+/** One remote library's matched versions of the open title or episode, and whether it failed. */
+data class RemoteMatch(
+  val libraryId: String,
+  val provider: String,
+  val libraryName: String,
+  val streams: List<StreamDto> = emptyList(),
+  val failed: Boolean = false,
+) {
+  val label: String get() = listOf(provider, libraryName).filter { it.isNotBlank() }.joinToString(" · ")
+  fun group(): Streams.RemoteGroup = Streams.RemoteGroup(libraryId, provider, libraryName, streams)
+}
+
+/** The remote source groups of one title or episode, in one object so the screen keeps a single
+ *  local: the libraries it found, the groups that answered, whether discovery failed, how many
+ *  are still owed and the request generation a late answer is checked against. */
+private class RemoteSourcesState {
+  var libraries by mutableStateOf<List<RemoteLibraryDto>>(emptyList())
+  var groups by mutableStateOf<List<RemoteMatch>>(emptyList())
+  var discoveryFailed by mutableStateOf(false)
+  var pending by mutableIntStateOf(0)
+  var request by mutableIntStateOf(0)
+  /** The title or episode the groups belong to, so a retry of the same one can keep them. */
+  var key: String? = null
+}
+
+/** The local remote-state row and the identity/generation it was read for. */
+private class RemoteProgressState {
+  var key: List<String>? by mutableStateOf<List<String>?>(null)
+  var row: RemoteItemStateDto? by mutableStateOf<RemoteItemStateDto?>(null)
+  var request by mutableIntStateOf(0)
+}
+
+/** The sources list, the pick made from it and its Sources panel, plus the episode pick that
+ *  selects them, in one object so the screen keeps a single local for all of them: this composable
+ *  sits close to the limit ART can verify, and every delegate here used to cost a register. */
+private class SourcePickState {
+  var streams by mutableStateOf<List<StreamDto>>(emptyList())
+  var localStreams by mutableStateOf<List<StreamDto>>(emptyList())
+  var localLoading by mutableStateOf(false)
+  var localProgress by mutableStateOf<ProgressDto?>(null)
+  var localRequest by mutableIntStateOf(0)
+  var pendingSources by mutableIntStateOf(0)
+  var sourcesLoaded by mutableStateOf(false)
+  var sourcesFailed by mutableStateOf(false)
+  var sourcesRetry by mutableIntStateOf(0)
+  var selectedVideo by mutableStateOf<VideoDto?>(null)
+  var season by mutableStateOf<Int?>(null)
+  var selectedStream by mutableStateOf<StreamDto?>(null)
+  var pickedStream by mutableStateOf(false)
+  var chosenInPanel by mutableStateOf(false)
+  var sourcesOpen by mutableStateOf(false)
+  var sourcesWasOpen by mutableStateOf(false)
+  var closeToPlay by mutableStateOf(false)
+}
+
+/** The save-to-library flow a pick feeds: the libraries, the panel that chooses one, the stream a
+ *  queued job belongs to and the single queue slot, in one object for the same reason as above. */
+private class LibrarySaveState {
+  var libraries by mutableStateOf<List<LibraryDto>>(emptyList())
+  var librariesLoaded by mutableStateOf(false)
+  var libraryPanelOpen by mutableStateOf(false)
+  var pendingLibraryStream by mutableStateOf<StreamDto?>(null)
+  var libraryWasOpen by mutableStateOf(false)
+  var queuedSourceId by mutableStateOf<String?>(null)
+  var queueBusy by mutableStateOf(false)
+}
+
+/** The group a stream belongs to, for the caption: the library for a local copy, `provider ·
+ *  library` for a remote version, the addon otherwise. */
+internal fun sourceGroupName(stream: StreamDto): String? = when {
+  Streams.isLocalStream(stream) -> stream.libraryName
+  Streams.isRemoteStream(stream) ->
+    listOfNotNull(stream.provider, stream.libraryName).filter { it.isNotBlank() }.joinToString(" · ")
+  else -> stream.addonName
+}.takeIf { !it.isNullOrBlank() }
+
+/** The remote failure line: which libraries could not be reached, else a plain failure. */
+@Composable
+internal fun remoteNotice(failed: Boolean, labels: List<String>): String? = when {
+  !failed -> null
+  labels.isEmpty() -> stringResource(R.string.media_server_error)
+  else -> stringResource(R.string.media_server_group_failed, labels.joinToString(", "))
+}
+
+/** The failure text for the panel's own block when only the remote groups failed. */
+@Composable
+internal fun remoteFailureText(labels: List<String>): String =
+  if (labels.isEmpty()) stringResource(R.string.media_server_error)
+  else stringResource(R.string.media_server_group_failed, labels.joinToString(", "))

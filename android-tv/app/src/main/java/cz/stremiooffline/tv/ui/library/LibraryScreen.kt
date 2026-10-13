@@ -19,6 +19,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -35,7 +36,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.BrowseItem
+import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.TvApi
+import cz.stremiooffline.tv.data.RemoteLibraryApi
 import cz.stremiooffline.tv.ui.components.CardRowInset
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
@@ -52,14 +55,21 @@ const val TagLibraryBreadcrumb = "library_breadcrumb"
 fun LibraryRoute(
   api: TvApi,
   onOpenDetail: (DetailData) -> Unit,
+  /** A native remote item was opened; the shell shows its detail and plays its versions. */
+  onOpenRemoteItem: (libraryId: String, libraryName: String, provider: String, item: RemoteItemDto) -> Unit = { _, _, _, _ -> throw UnsupportedOperationException("Remote item opened without a handler") },
+  /** Bumped when a remote detail or its player closes, so the remote grid restores its focus. */
   modifier: Modifier = Modifier,
   restoreToken: Int = 0,
   refreshToken: Int = 0,
   /** A folder a Home card asked to reveal; opened once and then cleared by the caller. */
   pushPath: String? = null,
   onPushConsumed: () -> Unit = {},
+  /** False while a detail or the player covers this section, so a hidden Back never pops it. */
+  backEnabled: Boolean = true,
   pendingDelayMs: Long = 1_500L,
 ) {
+  var segment by rememberSaveable { mutableStateOf(LibrarySegment.Files) }
+  val remoteApi: RemoteLibraryApi = api
   val viewModel = viewModel<LibraryViewModel>(factory = LibraryViewModel.factory(api, pendingDelayMs))
   // A fresh entry starts at the root; a Home jump (arriving with a path) pushes its folder.
   LaunchedEffect(Unit) { if (viewModel.state.pages.isEmpty() || viewModel.needsRootReset) viewModel.start() }
@@ -90,7 +100,9 @@ fun LibraryRoute(
   // The card that opened each nested page, in page-stack order, so Back can focus it again.
   val openedBy = remember { mutableListOf<String>() }
 
-  BackHandler(enabled = state.pages.size > 1) {
+  // The filesystem breadcrumb only owns Back while the files half is showing; the remote half
+  // pops its own stack through RemoteLibraryRoute below.
+  BackHandler(enabled = segment == LibrarySegment.Files && state.pages.size > 1 && backEnabled) {
     restoreKey = openedBy.removeLastOrNull() ?: ""
     if (viewModel.back()) backToken++
   }
@@ -154,57 +166,76 @@ fun LibraryRoute(
       )
     }
 
-    Box(Modifier.weight(1f).fillMaxWidth()) {
-      when {
-        state.loading -> ShimmerCards()
-        state.error -> ErrorPanel { viewModel.retry() }
-        items.isEmpty() -> Text(
-          stringResource(R.string.tv_library_empty),
-          color = Tokens.Muted,
-          fontSize = 12.sp,
-        )
-        else -> BoxWithConstraints(Modifier.fillMaxSize()) {
-          val columns = (((maxWidth.value + 18f) / 128f).toInt()).coerceAtLeast(1)
-          LazyVerticalGrid(
-            columns = GridCells.Fixed(columns),
-            modifier = Modifier.focusRequester(gridFocus).focusGroup(),
-            // Room for the focused card's scale and ring so the first row is not clipped.
-            contentPadding = PaddingValues(start = CardRowInset, top = 10.dp, end = CardRowInset, bottom = 40.dp),
-            horizontalArrangement = Arrangement.spacedBy(18.dp),
-            verticalArrangement = Arrangement.spacedBy(18.dp),
-          ) {
-            itemsIndexed(items, key = { _, item -> item.path.ifEmpty { item.title } }) { index, item ->
-              val key = item.path.ifEmpty { item.title }
-              val requester = remember(key) { FocusRequester() }
-              requesters[key] = requester
-              PosterCard(
-                name = item.title,
-                imageUrl = (item.poster ?: item.wide)?.let(api::url),
-                progress = progressFraction(item),
-                caption = caption(item),
-                cardTag = key,
-                mosaic = item.mosaic.map(api::url),
-                onClick = {
-                  when (item) {
-                    is BrowseItem.Library -> viewModel.open(item.path, item.title)
-                    is BrowseItem.Folder -> openFolder(item)
-                    is BrowseItem.File -> onOpenDetail(DetailData.ofFile(item))
-                  }
-                },
-                modifier = Modifier
-                  .focusRequester(requester)
-                  .onFocusChanged {
-                    if (it.isFocused) {
-                      viewModel.selectedPath = key
-                      requesters[key] = requester
-                      if (index >= items.size - columns) viewModel.loadMore()
+    LibrarySegments(
+      segment = segment,
+      onFiles = { segment = LibrarySegment.Files },
+      onServers = { segment = LibrarySegment.Servers },
+    )
+
+    if (segment == LibrarySegment.Files) {
+      Box(Modifier.weight(1f).fillMaxWidth()) {
+        when {
+          state.loading -> ShimmerCards()
+          state.error -> ErrorPanel { viewModel.retry() }
+          items.isEmpty() -> Text(
+            stringResource(R.string.tv_library_empty),
+            color = Tokens.Muted,
+            fontSize = 12.sp,
+          )
+          else -> BoxWithConstraints(Modifier.fillMaxSize()) {
+            val columns = (((maxWidth.value + 18f) / 128f).toInt()).coerceAtLeast(1)
+            LazyVerticalGrid(
+              columns = GridCells.Fixed(columns),
+              modifier = Modifier.focusRequester(gridFocus).focusGroup(),
+              // Room for the focused card's scale and ring so the first row is not clipped.
+              contentPadding = PaddingValues(start = CardRowInset, top = 10.dp, end = CardRowInset, bottom = 40.dp),
+              horizontalArrangement = Arrangement.spacedBy(18.dp),
+              verticalArrangement = Arrangement.spacedBy(18.dp),
+            ) {
+              itemsIndexed(items, key = { _, item -> item.path.ifEmpty { item.title } }) { index, item ->
+                val key = item.path.ifEmpty { item.title }
+                val requester = remember(key) { FocusRequester() }
+                requesters[key] = requester
+                PosterCard(
+                  name = item.title,
+                  imageUrl = (item.poster ?: item.wide)?.let(api::url),
+                  progress = progressFraction(item),
+                  caption = caption(item),
+                  cardTag = key,
+                  mosaic = item.mosaic.map(api::url),
+                  onClick = {
+                    when (item) {
+                      is BrowseItem.Library -> viewModel.open(item.path, item.title)
+                      is BrowseItem.Folder -> openFolder(item)
+                      is BrowseItem.File -> onOpenDetail(DetailData.ofFile(item))
                     }
                   },
-              )
+                  modifier = Modifier
+                    .focusRequester(requester)
+                    .onFocusChanged {
+                      if (it.isFocused) {
+                        viewModel.selectedPath = key
+                        requesters[key] = requester
+                        if (index >= items.size - columns) viewModel.loadMore()
+                      }
+                    },
+                )
+              }
             }
           }
         }
       }
+    } else {
+      RemoteLibraryRoute(
+        api = remoteApi,
+        imageUrl = { path -> path?.let(api::url) },
+        segment = segment,
+        onOpenItem = onOpenRemoteItem,
+        onBackToFiles = { segment = LibrarySegment.Files },
+        modifier = Modifier.weight(1f),
+        restoreToken = restoreToken,
+        backEnabled = backEnabled,
+      )
     }
   }
 }

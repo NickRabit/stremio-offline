@@ -21,6 +21,8 @@ import {
   retryDelayMs, SourceError, StorageError, storageHeadroom, storageMessage, storageResumeNeed,
 } from "./download-policy.js";
 import { isRetryableDebridFailure, type DebridAdvance } from "./debrid.js";
+import { isRemoteMediaStream } from "./media-server-reference.js";
+import { REMOTE_LIBRARY_ID } from "./media-server-types.js";
 import { playlistArgs } from "./probe.js";
 import { defaultLibrary, libraryPath, libraryVisible, parseLibraryPath, relativeWithin, type DefaultLibrarySettings, type LibraryRecord, type Viewer } from "./libraries.js";
 import type { UserRecord } from "./users.js";
@@ -116,6 +118,14 @@ export const mayDownloadToLibrary = (user: Pick<UserRecord, "role" | "permission
 export const mayDownloadToDevice = (user: Pick<UserRecord, "role" | "permissions">): boolean =>
   user.role === "admin" || user.permissions.downloadToDevice;
 
+/** A remote media-server original is never copied into a library or a device. The scheme is
+ *  authoritative, valid or forged, so the check does not open the reference. */
+export const isRemoteDownloadSource = (stream: Pick<StreamItem, "url"> | undefined): boolean =>
+  isRemoteMediaStream(stream ?? {});
+
+export const remoteDownloadRefused = (): AppError =>
+  new AppError("This library is read-only.", "library.readOnly", 403);
+
 /** What the owner-bound check reads: the account that asked for the job, the addons and the
  *  libraries as they stand at this moment. Structural, so this module stays free of the store. */
 export interface DownloadOwnerScope {
@@ -150,6 +160,9 @@ export const defaultDownloadLibrary = (libraries: LibraryRecord[], settings: Def
 export function ownerMayDownload(scope: DownloadOwnerScope, job: { stream?: StreamItem; subtitle?: SubtitleItem; libraryId?: string; target?: string; targetSettings?: DownloadTargetSettings; source?: DownloadJob["source"] }): boolean {
   const owner = scope.owner;
   if (!owner || owner.disabled || !mayDownloadToLibrary(owner)) return false;
+  // No download path accepts a remote original, whatever the account is allowed to do.
+  if (isRemoteDownloadSource(job.stream)) return false;
+  if (job.subtitle && isRemoteMediaStream({ url: job.subtitle.url })) return false;
   const viewer: Viewer = { id: owner.id, role: owner.role };
   // Both addons, not only the video's: an external subtitle is commonly chosen from a
   // different one, and it is fetched on resume -- arbitrarily long after a withdrawal.
@@ -159,6 +172,7 @@ export function ownerMayDownload(scope: DownloadOwnerScope, job: { stream?: Stre
     if (!addon?.enabled || !addonAllowed(addon, viewer)) return false;
   }
   const libraryId = jobLibraryId({ libraryId: job.libraryId, target: job.target ?? "", targetSettings: job.targetSettings, source: job.source });
+  if (libraryId !== undefined && REMOTE_LIBRARY_ID.test(libraryId)) return false;
   const library = libraryId ? scope.libraries.find((item) => item.id === libraryId) : undefined;
   if (library && (!libraryVisible(library, viewer) || !library.enabled || Boolean(library.readOnly))) return false;
   return true;
@@ -623,12 +637,14 @@ export class DownloadQueue {
 
   async add(title: string, stream: StreamItem, media?: MediaInfo, targetSettings: DownloadTargetSettings = defaultDownloadSettings().movie, ownerUserId?: string) {
     if (this.unreadable) throw new AppError("The download queue file could not be read.", "err.queueUnreadable", 503);
+    if (isRemoteDownloadSource(stream)) throw remoteDownloadRefused();
     return this.admit(() => this.admitDirect(title, stream, media, targetSettings, ownerUserId));
   }
 
   /** The body of `add`, run under the admission lock so two clicks cannot both pass the
    *  duplicate check or the free-name search. A debrid source is delegated as it always was. */
   private async admitDirect(title: string, stream: StreamItem, media: MediaInfo | undefined, targetSettings: DownloadTargetSettings, ownerUserId?: string) {
+    if (isRemoteDownloadSource(stream)) throw remoteDownloadRefused();
     if (!stream.url && stream.infoHash) return this.addDebrid(title, stream, media, targetSettings, ownerUserId);
     if (!stream.url) throw new AppError("Only a direct HTTP stream can be downloaded.", "err.downloadNeedsHttp");
     // Without this check a double click on Download yields the same film twice, because
@@ -706,6 +722,9 @@ export class DownloadQueue {
   /** A lazy job: both target and source are filled in when the download starts. A duplicate episode is not added. */
   async addPending(title: string, source: { type: string; videoId: string; selection?: DownloadSelection }, media?: MediaInfo, ownerUserId?: string, follow?: DownloadJob["follow"]) {
     if (this.unreadable) throw new AppError("The download queue file could not be read.", "err.queueUnreadable", 503);
+    // A remote library id is not a local target: it cannot be smuggled in as the pinned library.
+    const pinned = source.selection?.targetSettings?.libraryId;
+    if (pinned !== undefined && REMOTE_LIBRARY_ID.test(pinned)) throw remoteDownloadRefused();
     return this.admit(async () => {
       if (this.jobs.some((job) => job.source?.videoId === source.videoId && job.source?.type === source.type && job.status !== "completed" && job.status !== "failed" && this.ownedBy(job, ownerUserId))) return undefined;
       const now = new Date().toISOString();
@@ -858,6 +877,8 @@ export class DownloadQueue {
   async retry(id: string, selection?: DownloadSelection) {
     const job = this.require(id);
     if (job.status !== "failed") throw new AppError("Only a failed download can be retried.", "err.retryOnlyFailed");
+    const pinned = selection?.targetSettings?.libraryId;
+    if (pinned !== undefined && REMOTE_LIBRARY_ID.test(pinned)) throw remoteDownloadRefused();
     job.retryCount = 0;
     job.notBefore = undefined;
     if (job.source) {
@@ -1250,6 +1271,10 @@ export class DownloadQueue {
     job.stream = resolved.stream;
     job.subtitle = resolved.subtitle;
     job.resolution = resolved.resolution;
+    if (isRemoteDownloadSource(job.stream) || (job.subtitle && isRemoteMediaStream({ url: job.subtitle.url }))) {
+      job.stream = undefined; job.subtitle = undefined; job.resolution = undefined;
+      throw new SourceError("This library is read-only.", "library.readOnly");
+    }
     const settings = job.source.selection?.targetSettings ?? (job.media?.kind === "episode" ? resolved.settings.series : resolved.settings.movie);
     job.targetSettings = settings;
     const kind = this.kindOf(job);

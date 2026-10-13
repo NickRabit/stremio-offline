@@ -7,6 +7,9 @@ import express from "express";
 import type { DownloadQueue } from "../downloads.js";
 import { messageKeyOf } from "../errors.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
+import type { MediaServerAuthority, MediaServerManager } from "../media-server-manager.js";
+import { prepareMediaServerConfiguration } from "../media-server-store.js";
+import { assertStillAdmin, ForbiddenError } from "../roles.js";
 import { defaultInstanceSettings, defaultPrefs, type State, type Store, type UserPrefs } from "../store.js";
 import type { AddonRecord } from "../types.js";
 import { emptyUserData, type Role, type UserData, type UserRecord } from "../users.js";
@@ -22,8 +25,11 @@ interface Harness {
   base: string;
   state: State;
   onStopContent?: (opts: { userId?: string; libraryId?: string; addonKey?: string }) => void;
+  onFlush?: () => Promise<void>;
   /** How many writes are waiting for `releaseWrites`, so a test can interleave two of them. */
   pendingWrites(): number;
+  /** How many writes the route made in total, so a test can prove they landed together. */
+  writes(): number;
   holdWrites(): void;
   releaseWrites(): void;
   close(): Promise<void>;
@@ -65,6 +71,32 @@ const mount = async (): Promise<Harness> => {
   // A write can be held, so a request that awaits before its write can be interleaved.
   let held: Array<() => void> = [];
   let holding = false;
+  let writes = 0;
+  const exportedConnection = { id: `mconn_${"1".repeat(32)}`, provider: "jellyfin" as const, name: "Home", baseUrl: "http://media.example", allowLan: false, allowLoopback: false, serverId: "server-1", accountId: "account-1" };
+  const exportedLibrary = { id: `rlib_${"2".repeat(32)}`, connectionId: exportedConnection.id, remoteId: "remote-1", name: "Films", type: "movie" as const, order: 0, showOnHome: true, showInContinueWatching: true };
+  // The media-server half of the settings surface, reduced to what these routes ask of it: a
+  // metadata-only export an administrator alone may read, and a replacement that lands in the
+  // same single write as the settings mutator it is handed.
+  const mediaServers = {
+    exportConfiguration: (authority: MediaServerAuthority) => {
+      assertStillAdmin(state.users ?? [], authority.actor);
+      if (authority.actor.id !== ADA) throw new ForbiddenError();
+      return { version: 1 as const, connections: [exportedConnection], libraries: [exportedLibrary] };
+    },
+    restoreSettingsConfiguration: async (
+      authority: MediaServerAuthority,
+      metadata: unknown,
+      mutate: (value: State) => void,
+    ) => {
+      if (authority.actor.id !== ADA) throw new ForbiddenError();
+      const prepared = prepareMediaServerConfiguration(metadata);
+      await deps.store.update((value) => {
+        mutate(value);
+        value.mediaConnections = prepared.connections;
+        value.remoteLibraries = prepared.libraries;
+      });
+    },
+  } as unknown as MediaServerManager;
   const deps: SettingsDeps = {
     store: {
       settings: () => state.settings,
@@ -72,6 +104,7 @@ const mount = async (): Promise<Harness> => {
       users: () => state.users,
       libraries: () => state.libraries,
       update: async (mutate: (value: State) => void) => {
+        writes += 1;
         if (holding) {
           await new Promise<void>((resolve, reject) => {
             held.push(() => { try { mutate(state); resolve(); } catch (error) { reject(error); } });
@@ -92,9 +125,10 @@ const mount = async (): Promise<Harness> => {
     STREAM_SORTS,
     accountIdOf: (req) => (req ? userIdOf(req) : ADA),
     invalidateLibrary: () => undefined,
+    mediaServers,
     metaCache: new Map(),
     metaStore: {
-      flush: async () => undefined,
+      flush: async () => harness.onFlush?.(),
       updateAll: async (mutate: (file: { meta: Record<string, unknown> }) => void) => { mutate({ meta: {} }); },
     } as unknown as LibraryMetaStore,
     mutateData: (current: State, id: string, mutate: (data: UserData) => void) => {
@@ -118,6 +152,7 @@ const mount = async (): Promise<Harness> => {
   const { port } = server.address() as AddressInfo;
   harness.base = `http://127.0.0.1:${port}`;
   harness.pendingWrites = () => held.length;
+  harness.writes = () => writes;
   harness.holdWrites = () => { holding = true; };
   harness.releaseWrites = () => { const waiting = held; held = []; for (const run of waiting) run(); };
   harness.close = async () => {
@@ -481,6 +516,97 @@ test("PATCH /api/settings refuses a malformed Home layout with 400 and writes no
   assert.deepEqual(harness.state.userData?.[CAROL]?.prefs, before);
 });
 
+const backupFile = (over: Record<string, unknown> = {}) => ({
+  format: "stremio-offline-settings", version: 3, exportedAt: "2026-01-01T00:00:00.000Z",
+  settings: { concurrentDownloads: 3 }, addons: [], libraries: [],
+  mediaServers: {
+    version: 1,
+    connections: [{ id: `mconn_${"1".repeat(32)}`, provider: "jellyfin", name: "Home", baseUrl: "https://media.example", allowLan: false, allowLoopback: false, serverId: "server-1", accountId: "account-1" }],
+    libraries: [{ id: `rlib_${"2".repeat(32)}`, connectionId: `mconn_${"1".repeat(32)}`, remoteId: "remote-1", name: "Films", type: "movie", order: 0, showOnHome: true, showInContinueWatching: true }],
+  },
+  ...over,
+});
+
+test("GET /api/settings/export is the administrator's file and carries metadata only", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  assert.equal((await api(harness.base, "/api/settings/export", { user: "carol" })).status, 403);
+  const response = await api(harness.base, "/api/settings/export", { user: "ada" });
+  assert.equal(response.status, 200);
+  const body = await response.json() as { version: number; mediaServers: { connections: Array<Record<string, unknown>>; libraries: Array<Record<string, unknown>> } };
+  assert.equal(body.version, 3);
+  assert.equal(body.mediaServers.connections.length, 1);
+  assert.equal(body.mediaServers.libraries.length, 1);
+  assert.equal(JSON.stringify(body.mediaServers).includes("secretRef"), false, "no credential reaches the file");
+});
+
+test("POST /api/settings/import replaces the remote configuration in the same write", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.state.mediaConnections = [{
+    id: `mconn_${"9".repeat(32)}`, provider: "jellyfin", name: "Old", baseUrl: "https://old.example",
+    allowLan: false, allowLoopback: false, serverId: "server-9", accountId: "account-9", enabled: true, generation: 2,
+    secretRef: `msecret_${"8".repeat(32)}`, addedAt: "2026-01-01T00:00:00.000Z",
+  }];
+
+  const writes = harness.writes();
+  const response = await api(harness.base, "/api/settings/import", { method: "POST", user: "ada", body: backupFile() });
+  assert.equal(response.status, 200);
+  assert.equal(harness.writes() - writes, 1, "the settings and the remote configuration landed in one write");
+  assert.equal(harness.state.settings.concurrentDownloads, 3);
+  const [restored] = harness.state.mediaConnections ?? [];
+  assert.equal(restored!.serverId, "server-1");
+  assert.equal(restored!.enabled, false, "a restored connection asks for a sign-in");
+  assert.equal(restored!.secretRef, undefined, "and never carries a credential");
+  const [restoredLibrary] = harness.state.remoteLibraries ?? [];
+  assert.equal(restoredLibrary!.connectionId, restored!.id);
+  assert.deepEqual(restoredLibrary!.allowedUsers, [], "and never carries a grant");
+});
+
+test("a version 1 or 2 import leaves the remote configuration exactly as it is", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const connection = {
+    id: `mconn_${"9".repeat(32)}`, provider: "jellyfin" as const, name: "Old", baseUrl: "https://old.example",
+    allowLan: false, allowLoopback: false, serverId: "server-9", accountId: "account-9", enabled: true, generation: 2,
+    secretRef: `msecret_${"8".repeat(32)}`, addedAt: "2026-01-01T00:00:00.000Z",
+  };
+  harness.state.mediaConnections = [connection];
+  for (const version of [1, 2]) {
+    const response = await api(harness.base, "/api/settings/import", {
+      method: "POST", user: "ada",
+      body: { format: "stremio-offline-settings", version, settings: { concurrentDownloads: 4 }, addons: [], libraries: [] },
+    });
+    assert.equal(response.status, 200, `version ${version}`);
+    assert.deepEqual(harness.state.mediaConnections, [connection], `version ${version} left the remote configuration alone`);
+  }
+});
+
+test("an import whose media-server half does not stand on its own is refused before anything is written", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const connection = {
+    id: `mconn_${"9".repeat(32)}`, provider: "jellyfin" as const, name: "Old", baseUrl: "https://old.example",
+    allowLan: false, allowLoopback: false, serverId: "server-9", accountId: "account-9", enabled: true, generation: 0,
+    addedAt: "2026-01-01T00:00:00.000Z",
+  };
+  harness.state.mediaConnections = [connection];
+  const before = harness.state.settings.concurrentDownloads;
+  for (const mediaServers of [
+    undefined,
+    { version: 2, connections: [], libraries: [] },
+    { version: 1, connections: [], libraries: [{ id: `rlib_${"2".repeat(32)}`, connectionId: `mconn_${"1".repeat(32)}`, remoteId: "r", name: "Films", type: "movie", order: 0, showOnHome: true, showInContinueWatching: true }] },
+  ]) {
+    const writes = harness.writes();
+    const response = await api(harness.base, "/api/settings/import", { method: "POST", user: "ada", body: backupFile({ mediaServers }) });
+    assert.equal(response.status, 400, JSON.stringify(mediaServers));
+    assert.equal(harness.writes(), writes, "a file that does not stand on its own writes nothing");
+  }
+  assert.equal(harness.state.settings.concurrentDownloads, before);
+  assert.deepEqual(harness.state.mediaConnections, [connection]);
+});
+
 test("PATCH /api/settings stores a Home layout and drops a feed the caller may not use", async (t) => {
   const harness = await mount();
   t.after(harness.close);
@@ -549,4 +675,13 @@ test("PATCH /api/settings refuses a Home layout beyond the caps and writes nothi
     assert.equal((await response.json() as { messageKey?: string }).messageKey, "err.homeLayoutShape");
   }
   assert.deepEqual(harness.state.userData?.[CAROL]?.prefs, before);
+});
+
+test("settings export rechecks the captured administrator after flushing metadata", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.onFlush = async () => { harness.state.users!.find((user) => user.id === ADA)!.secret = "rotated"; };
+  const response = await api(harness.base, "/api/settings/export", { user: "ada" });
+  assert.equal(response.status, 403);
+  assert.equal((await response.text()).includes("media.example"), false);
 });

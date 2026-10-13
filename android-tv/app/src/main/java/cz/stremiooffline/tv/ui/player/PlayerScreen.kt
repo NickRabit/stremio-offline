@@ -88,6 +88,7 @@ import cz.stremiooffline.tv.playback.sidecarAdvanced
 import cz.stremiooffline.tv.playback.sidecarPollDelay
 import cz.stremiooffline.tv.playback.sidecarRefresh
 import cz.stremiooffline.tv.ui.catalog.SourcesPanel
+import cz.stremiooffline.tv.ui.catalog.RemoteSourcesFailure
 import cz.stremiooffline.tv.ui.detail.PlayTarget
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -96,6 +97,8 @@ import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+
+const val TagRemoteSourcesRetry = "player_remote_sources_retry"
 
 @Composable
 fun PlayerScreen(
@@ -107,6 +110,10 @@ fun PlayerScreen(
   sources: List<StreamDto> = emptyList(),
   /** The caller is still waiting on addons, so the list above may still grow. */
   sourcesLoading: Boolean = false,
+  /** A remote source group that failed, named in the panel and retryable. */
+  sourcesRemoteFailure: RemoteSourcesFailure? = null,
+  /** Re-runs only the caller's source discovery, leaving the running session alone. */
+  onSourcesRetry: (() -> Unit)? = null,
 ) {
   val context = LocalContext.current
   val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -296,6 +303,12 @@ fun PlayerScreen(
   suspend fun readAccount(from: PlayTarget = currentTarget) {
     addonFetched = true
     settings = runCatching { api.settings() }.getOrDefault(SettingsResponse())
+    // A remote version's external subtitles belong to the version the viewer chose; the catalogue's
+    // addons are never asked, even for a matched title.
+    if (from.remoteItem != null) {
+      addonSubtitles = remoteSelectedSubtitles(from, sources)
+      return
+    }
     val type = from.subtitleType
     val id = from.subtitleTarget
     addonSubtitles = if (type != null && id != null) runCatching { api.subtitles(type, id) }.getOrDefault(emptyList()) else emptyList()
@@ -314,11 +327,25 @@ fun PlayerScreen(
   val quality = qualityChoice(state.quality, state.escalatedByViewer)
 
   /**
-   * The target a chosen row switches to. A library copy becomes the file's own session, with the
-   * file's key and name; an addon row keeps the session's key, title and path, so a switch away
-   * from a library file stays on that one file's progress.
+   * The target a chosen row switches to. The incoming stream's own `remoteItem` is authoritative:
+   * a remote version keeps this item's identity and stable key, and any non-remote stream drops
+   * the remote context entirely. A library copy becomes the file's own session; an addon row keeps
+   * the running title's key, so a switch away from a library file stays on that one file's progress.
    */
   fun switchTargetOf(stream: StreamDto): PlayTarget {
+    val incomingRemote = stream.remoteItem
+    if (incomingRemote != null) {
+      return PlayTarget(
+        key = incomingRemote.progressKey.ifEmpty { currentTarget.key },
+        title = currentTarget.title,
+        resume = false,
+        sourceId = stream.sourceId.takeIf { it.isNotBlank() },
+        poster = currentTarget.poster,
+        remoteItem = incomingRemote,
+        // Only the same item's versions: another library or item never lends its list.
+        remoteSources = Streams.remoteVersionsOf(incomingRemote, currentTarget.remoteSources).ifEmpty { listOf(stream) },
+      )
+    }
     val path = stream.localPath
     if (Streams.isLocalStream(stream) && path != null) {
       return PlayTarget(
@@ -330,8 +357,11 @@ fun PlayerScreen(
         catalogue = true,
       )
     }
+    // An ordinary addon row: it never inherits a remote item's key or identity. When the running
+    // target was remote there is no catalogue key to keep, so the source id names the row instead.
+    val fromRemote = currentTarget.remoteItem != null
     return PlayTarget(
-      key = currentTarget.key,
+      key = if (fromRemote) stream.sourceId.ifBlank { currentTarget.title } else currentTarget.key,
       title = currentTarget.title,
       resume = false,
       path = currentTarget.path,
@@ -344,8 +374,12 @@ fun PlayerScreen(
     )
   }
 
-  /** Starts [target] at [at], leaving the outgoing session saved and deleted behind it. */
+  /** Starts [target], leaving the outgoing session saved and deleted behind it. A different remote
+   *  version is a different file and begins at 0; a same-version restart keeps [at]. */
   fun startSwitch(target: PlayTarget, at: Double) {
+    val fromMediaSourceId = currentTarget.remoteItem?.mediaSourceId
+    val toMediaSourceId = target.remoteItem?.mediaSourceId
+    val startAt = if (target.remoteItem != null && fromMediaSourceId != toMediaSourceId) 0.0 else at
     title = target.title
     currentTarget = target
     scope.launch {
@@ -362,9 +396,10 @@ fun PlayerScreen(
         subtitles = addonSubtitles,
         audioPreference = settings.audioLanguage,
         subtitlePreference = settings.subtitleLanguage,
-        at = at,
+        at = startAt,
         // The source is minted inside the controller, after the outgoing session is closed.
         mint = target.path?.let { path -> { runCatching { api.librarySource(path) }.getOrNull()?.sourceId?.takeIf { it.isNotBlank() } } },
+        remoteItem = target.remoteItem,
       )
     }
   }
@@ -417,6 +452,7 @@ fun PlayerScreen(
       subtitles = addonSubtitles,
       audioPreference = settings.audioLanguage,
       subtitlePreference = settings.subtitleLanguage,
+      remoteItem = episode.remoteItem,
     )
   }
 
@@ -640,6 +676,10 @@ fun PlayerScreen(
   // The Sources panel opens on the row that is playing; without it, on the first row.
   val sourcesIndex = playingSource?.let { offeredSources.indexOf(it) }?.takeIf { it >= 0 } ?: 0
   val sourcesTitle = stringResource(R.string.sources_heading)
+  val remoteFailureNote = sourcesRemoteFailure?.let { failure ->
+    if (failure.discovery) stringResource(R.string.media_server_error)
+    else stringResource(R.string.media_server_group_failed, failure.labels.joinToString(", "))
+  }
   val qualityText = qualityLabel(quality)
   // Both panels act on the running session, so their buttons wait for it: a choice made before
   // the first descriptor lands would be dropped.
@@ -745,6 +785,9 @@ fun PlayerScreen(
           asking = sourcesAsking,
           emptyText = stringResource(R.string.sources_none),
           failureText = stringResource(R.string.tv_load_error),
+          remoteNote = remoteFailureNote,
+          onRetry = if (sourcesRemoteFailure != null) onSourcesRetry else null,
+          retryTag = if (sourcesRemoteFailure != null) TagRemoteSourcesRetry else null,
           initialFocus = sourcesEntry,
         )
       }
@@ -864,4 +907,15 @@ internal suspend fun playerRetry(
 ) {
   readAccount()
   if (started) restart() else startOver()
+}
+
+/**
+ * The external subtitles of the selected remote version: exactly the chosen stream's own list,
+ * found by its id in the target's own versions or in the caller's offered ones. A remote stream
+ * never borrows the catalogue's addon subtitles, matched or not.
+ */
+internal fun remoteSelectedSubtitles(target: PlayTarget, offered: List<StreamDto>): List<AddonSubtitleDto> {
+  if (target.remoteItem == null) return emptyList()
+  val selected = (target.remoteSources + offered).firstOrNull { it.sourceId.isNotBlank() && it.sourceId == target.sourceId }
+  return selected?.subtitles.orEmpty()
 }

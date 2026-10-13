@@ -1,5 +1,6 @@
 import { AppError } from "./errors.js";
 import { LIBRARY_ID } from "./libraries.js";
+import { REMOTE_LIBRARY_ID } from "./media-server-types.js";
 
 export type LibrarySort = "name" | "added" | "size" | "random";
 export type LibraryOrder = "asc" | "desc";
@@ -52,6 +53,11 @@ const DATE_FIELDS: readonly DownloadDateField[] = ["createdAt", "startedAt", "co
 const PAGE_SIZES: readonly DownloadPageSize[] = [20, 50, 100];
 
 const EXTRA_VIEWS: readonly ExtraView[] = [":favorites", ":resume"];
+
+/** A per-library view scope: a filesystem library or a granted remote library. Remote prefs
+ *  live under the same map, keyed by the `rlib_` handle -- purely a preference scope, which
+ *  broadens no filesystem route. */
+const isLibraryScope = (id: string): boolean => LIBRARY_ID.test(id) || REMOTE_LIBRARY_ID.test(id);
 
 const refused = () => new AppError("The request was not understood.", "err.invalidRequest");
 
@@ -135,7 +141,7 @@ export function parseViews(raw: unknown): UserViews {
   const source = asRecord(raw);
   const views = emptyViews();
   for (const [id, value] of Object.entries(asRecord(source.libraries))) {
-    if (!LIBRARY_ID.test(id)) continue;
+    if (!isLibraryScope(id)) continue;
     views.libraries[id] = parseLibraryView(value, defaultLibraryView());
   }
   const extras = asRecord(source.extras);
@@ -157,7 +163,7 @@ export function applyPatch(current: UserViews, body: unknown): UserViews {
     downloads: current.downloads,
   };
   for (const [id, value] of Object.entries(asRecord(source.libraries))) {
-    if (!LIBRARY_ID.test(id)) continue;
+    if (!isLibraryScope(id)) continue;
     next.libraries[id] = patchLibraryView(value, defaultLibraryView());
   }
   const extras = asRecord(source.extras);
