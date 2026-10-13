@@ -608,6 +608,7 @@ export const fr: Catalog = {
   "library.emptyUnconfirmedText": "Chaque titre de ce dossier est soit confirmé, soit exclu de la correspondance. Éteignez le filtre pour les voir.",
   "library.fileCount": { one: "1 fichier", other: "{count} fichiers" },
   "library.openFolder": "Ouvrir le dossier",
+  "library.chooseSource": "Choisir une source",
   "library.libraryTypeMovie": "Films",
   "library.libraryTypeSeries": "Série",
   "library.libraryTypeMixed": "Mixte",

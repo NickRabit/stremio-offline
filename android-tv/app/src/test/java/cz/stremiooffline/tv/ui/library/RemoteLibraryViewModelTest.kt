@@ -393,6 +393,21 @@ class RemoteLibraryViewModelTest {
   }
 
   @Test
+  fun `a root or folder that carries its own poster never asks for a preview`() = runTest(dispatcher) {
+    val api = FakeRemoteApi()
+    val vm = RemoteLibraryViewModel(api)
+    vm.openLibrary(RemoteLibraryDto(id = "rlibA", name = "Mixed", provider = "emby", type = "mixed"))
+    advanceUntilIdle()
+
+    vm.loadPreview("rlibA|", "rlibA", null, mosaic = true, poster = "/own-root.jpg")
+    vm.loadPreview("rlibA|f1", "rlibA", "f1", mosaic = true, poster = "/folder.jpg")
+    advanceUntilIdle()
+
+    // Own poster wins over any child collage, so neither the root nor the folder asked.
+    assertTrue(api.previewRequests.isEmpty())
+  }
+
+  @Test
   fun `the preview cache dedupes and at most two load at once`() = runTest(dispatcher) {
     val api = FakeRemoteApi()
     api.previewGate = CompletableDeferred()

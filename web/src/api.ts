@@ -95,7 +95,7 @@ export const api = {
   libraryGallery: (path: string) => request<{ images: Array<{ url: string; kind: "poster" | "background" | "logo" | "still"; shape: "poster" | "wide" }> }>(`/api/library/gallery?${q({ path })}`),
   streamSources: (type: string, id: string) => request<Array<{ key: string; name: string }>>(`/api/stream-sources/${encodeURIComponent(type)}/${encodeURIComponent(id)}`),
   streams: (type: string, id: string, addon?: string) => request<Stream[]>(`/api/streams/${encodeURIComponent(type)}/${encodeURIComponent(id)}${addon ? `?addon=${encodeURIComponent(addon)}` : ""}`),
-  localStreams: (type: string, id: string) => request<Stream[]>(`/api/local-streams/${encodeURIComponent(type)}/${encodeURIComponent(id)}`),
+  localStreams: (type: string, id: string, signal?: AbortSignal) => request<Stream[]>(`/api/local-streams/${encodeURIComponent(type)}/${encodeURIComponent(id)}`, { signal }),
   subtitles: (type: string, id: string) => request<Subtitle[]>(`/api/subtitles/${encodeURIComponent(type)}/${encodeURIComponent(id)}`),
   downloads: (timeoutMs?: number) => request<DownloadSnapshot>("/api/downloads", { timeoutMs }),
   download: (title: string, stream: Stream, media?: Record<string, unknown>, target?: SaveTarget) => request<Download>("/api/downloads", { method: "POST", body: JSON.stringify({ title, sourceId: stream.sourceId, media, ...(target ? { target } : {}) }) }),
@@ -136,7 +136,7 @@ export const api = {
   stopPlayback: (id: string) => request<void>(`/api/playback/${id}`, { method: "DELETE" }),
   nextLibraryFile: (sourceId: string) => request<{ path: string; title: string } | null>(`/api/library/next/${encodeURIComponent(sourceId)}`),
   previousLibraryFile: (sourceId: string) => request<{ path: string; title: string } | null>(`/api/library/previous/${encodeURIComponent(sourceId)}`),
-  librarySource: (path: string) => request<Stream>("/api/library/source", { method: "POST", body: JSON.stringify({ path }) }),
+  librarySource: (path: string, signal?: AbortSignal) => request<Stream>("/api/library/source", { method: "POST", body: JSON.stringify({ path }), signal }),
   library: () => request<LibrarySummary[]>("/api/library"),
   deleteLibraryItem: (path: string) => request<void>(`/api/library/item?${q({ path })}`, { method: "DELETE" }),
   renameLibraryItem: (path: string, name: string) => request<{ path: string }>("/api/library/rename", { method: "POST", body: JSON.stringify({ path, name }) }),
@@ -146,7 +146,7 @@ export const api = {
   libraryOps: () => request<{ jobs: LibraryOpsState[] }>("/api/library/ops"),
   startLibraryOp: (operation: LibraryOp) => request<{ id: string }>("/api/library/ops", { method: "POST", body: JSON.stringify(operation) }),
   cancelLibraryOp: (id: string) => request<void>(`/api/library/ops/${encodeURIComponent(id)}`, { method: "DELETE" }),
-  libraryIdentity: (path: string) => request<IdentityPreview>(`/api/library/identity?${q({ path })}`),
+  libraryIdentity: (path: string, signal?: AbortSignal) => request<IdentityPreview>(`/api/library/identity?${q({ path })}`, { signal }),
   matchLibraryItem: (body: { path?: string; key?: string; id?: string; type?: string; scope?: "unit" | "file"; season?: number; episode?: number; skipLookup?: boolean; skipMosaic?: boolean; replacesId?: string }) =>
     request<{ key: string; type: string; id: string | null }>("/api/library/match", { method: "POST", body: JSON.stringify(body) }),
   librarySuggestions: (libraryId?: string) => request<{ items: SuggestionRow[]; total: number }>(`/api/library/suggestions${libraryId ? `?${q({ libraryId })}` : ""}`),
@@ -307,9 +307,11 @@ export const api = {
   remoteLibraries: (options: { timeoutMs?: number; signal?: AbortSignal } = {}) =>
     request<{ libraries: RemoteLibrary[] }>("/api/remote-libraries", { timeoutMs: options.timeoutMs ?? 3_000, signal: options.signal })
       .then((answer) => answer.libraries),
-  /** One library's own answer for a catalogue id; a library with no match answers an empty list. */
-  remoteLibraryStreams: (libraryId: string, type: string, catalogId: string, signal?: AbortSignal) =>
-    request<{ streams: Stream[] }>(`/api/remote-libraries/${encodeURIComponent(libraryId)}/streams/${encodeURIComponent(type)}/${encodeURIComponent(catalogId)}`, { signal, timeoutMs: 8_000 })
+  /** One library's own answer for a catalogue id; a library with no match answers an empty list.
+   *  `nameHint` is the resolved catalogue title (a series name, never an episode's), carried only as
+   *  the provider's supported name filter and sent as a `name` query when there is one. */
+  remoteLibraryStreams: (libraryId: string, type: string, catalogId: string, signal?: AbortSignal, nameHint?: string) =>
+    request<{ streams: Stream[] }>(`/api/remote-libraries/${encodeURIComponent(libraryId)}/streams/${encodeURIComponent(type)}/${encodeURIComponent(catalogId)}${nameHint ? `?${q({ name: nameHint })}` : ""}`, { signal, timeoutMs: 8_000 })
       .then((answer) => answer.streams),
   /** This account's own remote favourites or Continue watching, already permission filtered. */
   remotePersonal: (filter: "favorites" | "resume", options: { skip?: number; limit?: number; signal?: AbortSignal } = {}) =>

@@ -153,10 +153,11 @@ class RemoteLibraryViewModel(private val api: RemoteLibraryApi) : ViewModel() {
 
   /**
    * Asks for one root or folder mosaic. The composed tile calls this; the cache and the running
-   * jobs dedupe, and a library with the mosaic off never fetches at all.
+   * jobs dedupe. A library with the mosaic off never fetches at all, and a tile that already
+   * carries its own poster never does either -- the own picture wins over any child collage.
    */
-  fun loadPreview(key: String, libraryId: String, parentId: String?, mosaic: Boolean) {
-    if (!mosaic) return
+  fun loadPreview(key: String, libraryId: String, parentId: String?, mosaic: Boolean, poster: String? = null) {
+    if (!mosaic || !poster.isNullOrEmpty()) return
     val known = previews[key]
     if (known is RemotePreviewState.Ready || known is RemotePreviewState.Failed) return
     if (previewJobs.containsKey(key)) return

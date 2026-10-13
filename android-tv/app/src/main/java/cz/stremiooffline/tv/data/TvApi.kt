@@ -151,8 +151,12 @@ interface RemoteLibraryApi {
     patch: RemoteItemStatePatch,
   ): RemoteItemStateDto = throw ApiError(ApiFailure.Generic)
 
-  /** The remote versions of one catalogue title or episode, matched by external id only. */
-  suspend fun remoteMatchedStreams(libraryId: String, type: String, catalogId: String): List<StreamDto> =
+  /**
+   * The remote versions of one catalogue title or episode, matched by external id only.
+   * [nameHint] is the resolved catalogue title of the title being opened -- a series name for an
+   * episode, never the episode's own -- and is sent only as the provider's supported name filter.
+   */
+  suspend fun remoteMatchedStreams(libraryId: String, type: String, catalogId: String, nameHint: String? = null): List<StreamDto> =
     throw ApiError(ApiFailure.Generic)
 
   /** One page of the remote personal lists; [filter] is `favorites` or `resume`. */

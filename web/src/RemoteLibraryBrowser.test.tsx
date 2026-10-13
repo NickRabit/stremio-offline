@@ -33,7 +33,7 @@ let preview: Handler;
 let sources: Handler;
 let item: Handler;
 let state: Handler;
-const calls = { browse: [] as URL[], preview: [] as URL[], sources: [] as URL[], state: [] as Array<{ method: string; body: unknown }>, stateUrls: [] as string[] };
+const calls = { browse: [] as URL[], preview: [] as URL[], sources: [] as URL[], item: [] as URL[], state: [] as Array<{ method: string; body: unknown }>, stateUrls: [] as string[] };
 
 /** A controllable IntersectionObserver: tiles only ask for a preview once it fires. */
 class FakeIntersectionObserver {
@@ -58,7 +58,7 @@ beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   setLocale("en");
   FakeIntersectionObserver.live = [];
-  calls.browse = []; calls.preview = []; calls.sources = []; calls.state = []; calls.stateUrls = [];
+  calls.browse = []; calls.preview = []; calls.sources = []; calls.item = []; calls.state = []; calls.stateUrls = [];
   libraries = [library()];
   browse = () => json(page([]));
   preview = () => json({ posters: [] });
@@ -82,7 +82,7 @@ beforeEach(() => {
       calls.stateUrls.push(path);
       return Promise.resolve(state(url, init));
     }
-    if (/^\/api\/remote-libraries\/[^/]+\/items\/[^/]+$/.test(path)) return Promise.resolve(item(url, init));
+    if (/^\/api\/remote-libraries\/[^/]+\/items\/[^/]+$/.test(path)) { calls.item.push(url); return Promise.resolve(item(url, init)); }
     return Promise.resolve(json({}, 404));
   }));
   host = document.createElement("div");
@@ -238,6 +238,135 @@ describe("RemoteLibraryBrowser listing", () => {
   });
 });
 
+describe("RemoteLibraryBrowser automatic pagination and navigation", () => {
+  const sentinels = () => FakeIntersectionObserver.live
+    .filter((observer) => [...observer.elements].some((element) => element.classList.contains("load-more")));
+
+  it("requests the next page once as the sentinel comes into view", async () => {
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+    browse = (url) => url.searchParams.get("cursor") === "c1"
+      ? json(page([movie("m2", "Two")], { total: 2 }))
+      : json(page([movie("m1", "One")], { total: 2, cursor: "c1" }));
+    await openRootLibrary();
+    expect(calls.browse).toHaveLength(1);
+    expect(sentinels()).toHaveLength(1);
+    await act(async () => { sentinels().at(-1)!.fire(); });
+    await flush();
+    expect(calls.browse).toHaveLength(2);
+    expect(calls.browse[1]!.searchParams.get("cursor")).toBe("c1");
+    expect([...host.querySelectorAll(".browse-panel .library-copy strong")].map((node) => node.textContent)).toEqual(["One", "Two"]);
+  });
+
+  it("holds a repeated nudge to one in-flight page and appends it when it lands", async () => {
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+    const held = deferred<Response>();
+    browse = (url) => url.searchParams.get("cursor") === "c1"
+      ? held.promise
+      : json(page([movie("m1", "One")], { total: 2, cursor: "c1" }));
+    await openRootLibrary();
+    await act(async () => { sentinels().at(-1)!.fire(); sentinels().at(-1)!.fire(); });
+    expect(calls.browse).toHaveLength(2);
+    await act(async () => { held.resolve(json(page([movie("m2", "Two")], { total: 2 }))); });
+    await flush();
+    expect(calls.browse).toHaveLength(2);
+    expect([...host.querySelectorAll(".browse-panel .library-copy strong")].map((node) => node.textContent)).toEqual(["One", "Two"]);
+  });
+
+  it("stops once the provider has no further page", async () => {
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+    browse = (url) => url.searchParams.get("cursor") === "c1"
+      ? json(page([movie("m2", "Two")], { total: 2 }))
+      : json(page([movie("m1", "One")], { total: 2, cursor: "c1" }));
+    await openRootLibrary();
+    await act(async () => { sentinels().at(-1)!.fire(); });
+    await flush();
+    expect(calls.browse).toHaveLength(2);
+    expect(host.querySelector(".browse-panel .load-more")).toBeNull();
+    expect(sentinels()).toHaveLength(0);
+  });
+
+  it("stops automatically after a failed page and leaves the manual retry", async () => {
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+    browse = (url) => url.searchParams.get("cursor") === "c1"
+      ? json({ error: "boom" }, 500)
+      : json(page([movie("m1", "One")], { total: 2, cursor: "c1" }));
+    await openRootLibrary();
+    await act(async () => { sentinels().at(-1)!.fire(); });
+    await flush();
+    expect(calls.browse).toHaveLength(2);
+    expect(host.querySelector(".remote-error")).not.toBeNull();
+    // A second nudge must not retry the failed cursor on its own.
+    await act(async () => { sentinels().at(-1)?.fire(); });
+    await flush();
+    expect(calls.browse).toHaveLength(2);
+    await click(host.querySelector(".load-more button")!);
+    expect(calls.browse).toHaveLength(3);
+  });
+
+  it("drops a page that lands after the reader left the listing", async () => {
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+    const held = deferred<Response>();
+    browse = (url) => {
+      if (url.searchParams.get("cursor") === "c1") return held.promise;
+      if (url.searchParams.get("parentId") === "f1") return json(page([]));
+      return json(page([folder("f1", "Concerts")], { total: 2, cursor: "c1" }));
+    };
+    await openRootLibrary();
+    await act(async () => { sentinels().at(-1)!.fire(); });
+    await click(tileButtons()[0]!);
+    await act(async () => { held.resolve(json(page([movie("m9", "Stale")], { total: 2 }))); });
+    await flush();
+    expect(host.textContent).not.toContain("Stale");
+    expect(calls.browse.at(-1)!.searchParams.get("parentId")).toBe("f1");
+  });
+
+  it("asks for the next page from the scroll handler when no observer fires", async () => {
+    browse = (url) => url.searchParams.get("cursor") === "c1"
+      ? json(page([movie("m2", "Two")], { total: 2 }))
+      : json(page([movie("m1", "One")], { total: 2, cursor: "c1" }));
+    await openRootLibrary();
+    expect(calls.browse).toHaveLength(1);
+    await act(async () => { host.querySelector(".browse-scroll")!.dispatchEvent(new Event("scroll")); });
+    await flush();
+    expect(calls.browse).toHaveLength(2);
+    expect(calls.browse[1]!.searchParams.get("cursor")).toBe("c1");
+  });
+
+  it("shows the item and its series in the crumbs and walks back through them", async () => {
+    const show: RemoteItem = { id: "ser1", name: "Show", type: "series", providerIds: {} };
+    browse = (url) => url.searchParams.get("type") === "episode"
+      ? json(page([{ id: "e1", name: "Pilot", type: "episode", season: 1, episode: 1, providerIds: {} }]))
+      : json(page([show]));
+    await openRootLibrary();
+    await click(tileButtons()[0]!);
+    expect([...host.querySelectorAll(".crumbs button")].map((node) => node.textContent?.trim())).toEqual(["", "Music videos", "Show"]);
+    await click(tileButtons()[0]!);
+    expect([...host.querySelectorAll(".crumbs button")].map((node) => node.textContent?.trim())).toEqual(["", "Music videos", "Show", "S1 E1 · Pilot"]);
+    const current = host.querySelector<HTMLButtonElement>('.crumbs button[aria-current="page"]')!;
+    expect(current.disabled).toBe(true);
+    await click(byText(".crumbs button", "Show")!);
+    expect([...host.querySelectorAll(".crumbs button")].map((node) => node.textContent?.trim())).toEqual(["", "Music videos", "Show"]);
+  });
+
+  it("hides the root block and reports no roots while a local folder owns the page", async () => {
+    const onRootPresenceChange = vi.fn();
+    await render({ hideRoots: true, onRootPresenceChange });
+    expect(host.querySelector(".remote-libraries")).toBeNull();
+    expect(onRootPresenceChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("still opens a targeted library while the roots are hidden", async () => {
+    const show: RemoteItem = { id: "ser1", name: "Show", type: "series", providerIds: {} };
+    item = () => json({ item: show, capabilities });
+    browse = (url) => url.searchParams.get("type") === "episode" ? json(page([])) : json(page([]));
+    sources = () => json({ streams: [] });
+    await render({ hideRoots: true, initialTarget: { libraryId: "rlib_a", itemId: "ser1", nonce: 1 } });
+    expect(host.querySelector(".remote-libraries")).toBeNull();
+    expect(host.querySelector(".remote-browse-panel")).not.toBeNull();
+    expect(host.querySelector(".remote-detail .hero h2")!.textContent).toBe("Show");
+  });
+});
+
 describe("RemoteLibraryBrowser preferences and detail", () => {
   it("starts from the library's stored sort, order and layout and stores a change", async () => {
     const views = emptyViews();
@@ -254,16 +383,25 @@ describe("RemoteLibraryBrowser preferences and detail", () => {
 
   it("opens a film's detail with its versions and toggles its favourite", async () => {
     browse = () => json(page([movie("m1", "One")]));
-    sources = () => json({ streams: [{ sourceId: "s1", kind: "remote", playable: true, name: "1080p", provider: "jellyfin" }] });
+    sources = () => json({ streams: [
+      { sourceId: "s1", kind: "remote", playable: true, name: "1080p", provider: "jellyfin", behaviorHints: { videoSize: 2_000_000_000 } },
+      { sourceId: "s2", kind: "remote", playable: true, name: "720p", provider: "jellyfin", behaviorHints: { videoSize: 800_000_000 } },
+    ] });
     await openRootLibrary();
     await click(tileButtons()[0]!);
     expect(calls.sources).toHaveLength(1);
     await flush();
-    expect(host.querySelector(".remote-streams")!.textContent).toContain("1080p");
-    const favorite = host.querySelectorAll<HTMLButtonElement>(".remote-detail-actions button")[0]!;
+    // Two versions open a picker behind the arrow, not an always-visible list.
+    expect(host.querySelector(".library-title-detail .remote-streams")).toBeNull();
+    const favorite = host.querySelectorAll<HTMLButtonElement>(".library-detail-actions button")[0]!;
     expect(favorite.disabled).toBe(false);
     await click(favorite);
     expect(calls.state.at(-1)).toEqual({ method: "PATCH", body: { favorite: true } });
+    await click(host.querySelector(".split-button-toggle")!);
+    const rows = document.querySelectorAll(".library-source-card .remote-streams button");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.getAttribute("aria-pressed")).toBe("true");
+    expect(rows[0]!.textContent).toContain("1080p");
   });
 
   it("reads a series' episodes as one more lazy page and groups them by season", async () => {
@@ -291,7 +429,17 @@ describe("RemoteLibraryBrowser preferences and detail", () => {
     await render({ initialTarget: { libraryId: "rlib_a", itemId: "m7", nonce: 1 } });
     expect(calls.sources).toHaveLength(1);
     expect(calls.sources[0]!.pathname).toBe("/api/remote-libraries/rlib_a/items/m7/sources");
-    expect(host.querySelector(".remote-subhead")!.textContent).toContain("Target");
+    expect(host.querySelector(".remote-detail .hero h2")!.textContent).toBe("Target");
+  });
+
+  it("keeps the title usable when detail metadata is malformed", async () => {
+    browse = () => json(page([movie("m1", "One")]));
+    item = () => json({});
+    await openRootLibrary();
+    await act(async () => { tileButtons()[0]!.click(); });
+    await flush();
+    expect(host.querySelector(".library-title-detail h2")!.textContent).toBe("One");
+    expect(calls.sources).toHaveLength(1);
   });
 
   it("shows the year, the run time, the kind and the overview it was given", async () => {
@@ -302,8 +450,33 @@ describe("RemoteLibraryBrowser preferences and detail", () => {
     expect(meta.textContent).toBe("2021 · 1h 25m · Movies");
     expect(host.querySelector(".browse-panel .library-desc")!.textContent).toBe("A quiet film.");
     await click(tileButtons()[0]!);
-    expect([...host.querySelectorAll(".remote-detail .meta-line")].map((node) => node.textContent)).toEqual(["2021 · 1h 25m", "Drama"]);
-    expect(host.querySelector(".remote-detail .identify-hint")!.textContent).toBe("A quiet film.");
+    expect([...host.querySelectorAll(".remote-detail .meta-line")].map((node) => node.textContent)).toEqual(["2021 · 1h 25m · Drama"]);
+    expect(host.querySelector(".remote-detail .description-preview")!.textContent).toBe("A quiet film.");
+  });
+
+  it("reads a title's full record once as a grid row opens and keeps it across the merge", async () => {
+    browse = () => json(page([movie("m1", "One")]));
+    item = () => json({ item: { ...movie("m1", "One"), overview: "A full description.", genres: ["Drama"] }, capabilities });
+    await openRootLibrary();
+    await click(tileButtons()[0]!);
+    await flush();
+    // One read, never one per render: folding the facts in must not restart anything.
+    expect(calls.item.filter((url) => url.pathname.endsWith("/items/m1"))).toHaveLength(1);
+    expect(calls.sources).toHaveLength(1);
+    expect(host.querySelector(".remote-detail .description-preview")!.textContent).toBe("A full description.");
+    expect([...host.querySelectorAll(".remote-detail .meta-line")].map((node) => node.textContent)).toEqual(["Drama"]);
+  });
+
+  it("drops a title's late record when the reader has already left it", async () => {
+    const held = deferred<Response>();
+    browse = () => json(page([movie("m1", "One")]));
+    item = () => held.promise;
+    await openRootLibrary();
+    await click(tileButtons()[0]!);
+    await click(host.querySelector(".library-back")!);
+    await act(async () => { held.resolve(json({ item: { ...movie("m1", "One"), overview: "Late description." }, capabilities })); });
+    await flush();
+    expect(host.textContent).not.toContain("Late description.");
   });
 });
 
@@ -324,6 +497,30 @@ describe("RemoteLibraryBrowser lazy mosaics", () => {
     await render();
     expect(calls.preview).toHaveLength(0);
     expect(host.querySelector(".remote-libraries .browse-art svg")).not.toBeNull();
+  });
+
+  it("draws a library root's own poster and asks for no preview of it", async () => {
+    libraries = [library({ poster: "/own-root.jpg" })];
+    await render();
+    expect(calls.preview).toHaveLength(0);
+    expect(host.querySelector(".remote-libraries .browse-art img")?.getAttribute("src")).toBe("/own-root.jpg");
+  });
+
+  it("draws a folder's own poster and asks for no preview of that folder", async () => {
+    browse = () => json(page([{ ...folder("f1", "Show"), poster: "/folder.jpg" }]));
+    await openRootLibrary();
+    expect(calls.preview.filter((url) => url.searchParams.get("parentId") === "f1")).toHaveLength(0);
+    expect([...host.querySelectorAll(".browse-panel .browse-art img")].some((img) => img.getAttribute("src") === "/folder.jpg")).toBe(true);
+  });
+
+  it("never asks for a preview of a season tile", async () => {
+    browse = (url) => url.searchParams.get("parentId") === "f1"
+      ? json(page([{ id: "sea1", name: "Season 1", type: "season", providerIds: {} }]))
+      : json(page([folder("f1", "Show")]));
+    await openRootLibrary();
+    await click(tileButtons()[0]!);
+    expect(calls.preview.filter((url) => url.searchParams.get("parentId") === "sea1")).toHaveLength(0);
+    expect(host.querySelector(".browse-panel .browse-item.folder")?.textContent).toContain("Season 1");
   });
 
   it("falls back to the ordinary icon when the preview fails and still opens the library", async () => {
@@ -461,7 +658,7 @@ it("keeps the favorite learned in detail on its tile after Back", async () => {
   await render();
   await click(host.querySelector(".remote-libraries .library-open")!);
   await click(host.querySelector(".browse-panel .library-open")!);
-  expect(host.querySelector(".remote-detail-actions button")?.getAttribute("aria-pressed")).toBe("true");
+  expect(host.querySelector(".library-detail-actions button")?.getAttribute("aria-pressed")).toBe("true");
   await click(host.querySelector(".library-back")!);
   expect(host.querySelector(".fav-mark")).not.toBeNull();
 });

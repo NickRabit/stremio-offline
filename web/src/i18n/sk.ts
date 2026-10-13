@@ -608,6 +608,7 @@ export const sk: Catalog = {
   "library.emptyUnconfirmedText": "Každý titul v tomto priečinku je buď potvrdený, alebo vynechaný. Ak ich chcete vidieť, vypnite filter.",
   "library.fileCount": { one: "1 súbor", other: "{count} súborov", few: "{count} súbory" },
   "library.openFolder": "Otvorte priečinok",
+  "library.chooseSource": "Vybrať zdroj",
   "library.libraryTypeMovie": "Filmy",
   "library.libraryTypeSeries": "séria",
   "library.libraryTypeMixed": "Zmiešané",

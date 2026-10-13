@@ -210,6 +210,8 @@ open class FakeTvApi : TvApi {
   val remoteMatchValues: MutableMap<String, List<StreamDto>> = mutableMapOf()
   val remoteMatchFailures: MutableSet<String> = mutableSetOf()
   val remoteMatchRequests: MutableList<String> = mutableListOf()
+  /** The name hint each request carried, in the same order as [remoteMatchRequests]. */
+  val remoteMatchHints: MutableList<String?> = mutableListOf()
 
   var clientLogLines: MutableList<Triple<String, String, Map<String, String>?>> = mutableListOf()
   var bundles: MutableList<ClientLogBundleDto> = mutableListOf()
@@ -554,9 +556,10 @@ open class FakeTvApi : TvApi {
     return remoteStateValue
   }
 
-  override suspend fun remoteMatchedStreams(libraryId: String, type: String, catalogId: String): List<StreamDto> {
+  override suspend fun remoteMatchedStreams(libraryId: String, type: String, catalogId: String, nameHint: String?): List<StreamDto> {
     val key = "$libraryId|$type|$catalogId"
     remoteMatchRequests += key
+    remoteMatchHints += nameHint
     if (key in remoteMatchFailures) throw ApiError(ApiFailure.Generic)
     return remoteMatchValues[key] ?: emptyList()
   }

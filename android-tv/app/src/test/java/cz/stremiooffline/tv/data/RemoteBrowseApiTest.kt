@@ -84,6 +84,27 @@ class RemoteBrowseApiTest {
     assertEquals(emptyList<String>(), api(start()).remotePreview("rlibA").posters)
   }
 
+  @Test
+  fun `matched streams carry the resolved catalogue name as an encoded filter`() = runTest {
+    server.enqueue(MockResponse().setBody("""{"streams":[]}"""))
+
+    api(start()).remoteMatchedStreams("lib/1", "series", "tt5:1:2", nameHint = "Show & Order")
+
+    assertEquals(
+      "/api/remote-libraries/lib%2F1/streams/series/tt5%3A1%3A2?name=Show%20%26%20Order",
+      server.takeRequest().path,
+    )
+  }
+
+  @Test
+  fun `matched streams send no name filter without a hint`() = runTest {
+    server.enqueue(MockResponse().setBody("""{"streams":[]}"""))
+
+    api(start()).remoteMatchedStreams("lib/1", "series", "tt5:1:2")
+
+    assertEquals("/api/remote-libraries/lib%2F1/streams/series/tt5%3A1%3A2", server.takeRequest().path)
+  }
+
   private class Memory : SessionPersistence {
     override fun loadSession(origin: String): String? = null
     override fun saveSession(origin: String, value: String?) = Unit

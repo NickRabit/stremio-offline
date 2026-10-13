@@ -120,7 +120,9 @@ class LibraryPlaySources(private val api: TvApi) {
           libraries.forEach { library ->
             launch {
               val part = try {
-                withTimeoutOrNull(REMOTE_MATCH_TIMEOUT_MS) { api.remoteMatchedStreams(library.id, type, id) }
+                // The bound catalogue title's own name is the provider's filter hint; for an
+                // episode that is the series name, because the binding names the series.
+                withTimeoutOrNull(REMOTE_MATCH_TIMEOUT_MS) { api.remoteMatchedStreams(library.id, type, id, nameHint = title.name) }
               } catch (cancelled: CancellationException) {
                 throw cancelled
               } catch (_: ApiError) {

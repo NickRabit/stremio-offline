@@ -370,7 +370,8 @@ fun CatalogDetailScreen(
       foundLibraries.forEach { library ->
         launch {
           val part = try {
-            withTimeoutOrNull(REMOTE_MATCH_TIMEOUT_MS) { api.remoteMatchedStreams(library.id, streamType, id) }
+            // The resolved catalogue title, never the episode's own, is the provider's name filter.
+            withTimeoutOrNull(REMOTE_MATCH_TIMEOUT_MS) { api.remoteMatchedStreams(library.id, streamType, id, nameHint = meta.name) }
           } catch (cancelled: CancellationException) {
             throw cancelled
           } catch (_: ApiError) {

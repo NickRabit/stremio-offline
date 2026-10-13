@@ -608,6 +608,7 @@ export const es: Catalog = {
   "library.emptyUnconfirmedText": "Todos los títulos de esta carpeta están confirmados o no coinciden. Apaga el filtro para verlos.",
   "library.fileCount": { one: "1 archivo", other: "{count} archivos" },
   "library.openFolder": "Abrir carpeta",
+  "library.chooseSource": "Elegir una fuente",
   "library.libraryTypeMovie": "Películas",
   "library.libraryTypeSeries": "Serie",
   "library.libraryTypeMixed": "Mixto",

@@ -582,9 +582,11 @@ class ApiClient(
   private fun remoteStatePath(libraryId: String, itemId: String): String =
     remoteItemsPath(libraryId) + "/" + encode(itemId) + "/state"
 
-  /** External-id matched versions of one catalogue title or episode; each id is encoded. */
-  override suspend fun remoteMatchedStreams(libraryId: String, type: String, catalogId: String): List<StreamDto> {
-    val path = "/api/remote-libraries/" + encode(libraryId) + "/streams/" + encode(type) + "/" + encode(catalogId)
+  /** External-id matched versions of one catalogue title or episode; each id is encoded, and a
+   *  resolved catalogue name, when there is one, rides as the provider's `name` filter. */
+  override suspend fun remoteMatchedStreams(libraryId: String, type: String, catalogId: String, nameHint: String?): List<StreamDto> {
+    val base = "/api/remote-libraries/" + encode(libraryId) + "/streams/" + encode(type) + "/" + encode(catalogId)
+    val path = if (nameHint.isNullOrEmpty()) base else "$base?name=" + encode(nameHint)
     return request(Request.Builder().url(address.resolve(path)).get().build())
       .decode<RemoteSourcesDto>()?.streams ?: emptyList()
   }

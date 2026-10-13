@@ -608,6 +608,7 @@ export const ptBR: Catalog = {
   "library.emptyUnconfirmedText": "Cada título nesta pasta é confirmado ou deixado de fora da correspondência. Desligue o filtro para vê-los.",
   "library.fileCount": { one: "1 arquivo", other: "{count} arquivos" },
   "library.openFolder": "Abrir pasta",
+  "library.chooseSource": "Escolher uma fonte",
   "library.libraryTypeMovie": "Filmes",
   "library.libraryTypeSeries": "Série",
   "library.libraryTypeMixed": "Misto",

@@ -365,6 +365,7 @@ private fun LibraryPicker(
                 libraryId = library.id,
                 parentId = null,
                 mosaic = library.mosaic,
+                poster = library.poster,
                 container = true,
                 viewModel = viewModel,
                 imageUrl = imageUrl,
@@ -406,8 +407,11 @@ private fun RemoteArtTile(
 ) {
   val key = RemoteLibraryViewModel.previewKey(libraryId, parentId)
   // Only a composed tile asks, so an off-screen folder never fetches; the cache dedupes repeats.
-  LaunchedEffect(key, mosaic, viewModel.preview(key) == null) { viewModel.loadPreview(key, libraryId, parentId, mosaic) }
-  val posters = if (mosaic) (viewModel.preview(key) as? RemotePreviewState.Ready)?.posters.orEmpty() else emptyList()
+  // A tile that already carries its own poster asks for nothing: the own picture wins.
+  LaunchedEffect(key, mosaic, poster, viewModel.preview(key) == null) {
+    viewModel.loadPreview(key, libraryId, parentId, mosaic, poster)
+  }
+  val posters = if (mosaic && poster.isNullOrEmpty()) (viewModel.preview(key) as? RemotePreviewState.Ready)?.posters.orEmpty() else emptyList()
   val art = posters.mapNotNull(imageUrl)
   Box {
     PosterCard(
@@ -572,7 +576,8 @@ private fun ItemGrid(
             title = item.name,
             libraryId = level.libraryId,
             parentId = item.id,
-            mosaic = level.mosaic,
+            // A season never previews: the collage would be its episodes, which says nothing of it.
+            mosaic = level.mosaic && item.type != "season",
             container = true,
             viewModel = viewModel,
             imageUrl = imageUrl,

@@ -21,6 +21,7 @@ import cz.stremiooffline.tv.data.RemoteLibraryDto
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.StreamSourceDto
+import cz.stremiooffline.tv.data.VideoDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -59,6 +60,30 @@ class CatalogRemoteSourcesTest {
   )
 
   private fun movieArgs() = CatalogDetailArgs(MetaDto(id = "tt1", type = "movie", name = "It"), "Cinemeta", "movie")
+
+  @Test
+  fun `a series episode asks the provider with the series name, never the episode's own`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    api.remoteLibrariesValue = listOf(RemoteLibraryDto(id = "rlibA", name = "Filmy", provider = "jellyfin"))
+    val episode = VideoDto(id = "tt1:1:2", title = "Episode Two", season = 1, episode = 2)
+    api.metaValues["series:tt1"] = MetaDto(id = "tt1", type = "series", name = "The Show", videos = listOf(episode))
+    api.remoteMatchValues["rlibA|series|tt1:1:2"] = listOf(remoteStream("a1", "rlibA"))
+    compose.setContent {
+      CatalogDetailScreen(
+        api = api,
+        args = CatalogDetailArgs(MetaDto(id = "tt1", type = "series", name = "The Show"), "Cinemeta", "series"),
+        imageUrl = { null },
+        onPlay = {},
+        onBack = {},
+      )
+    }
+    compose.waitUntil(5_000) { api.remoteMatchRequests.contains("rlibA|series|tt1:1:2") }
+    compose.waitForIdle()
+
+    val hint = api.remoteMatchHints[api.remoteMatchRequests.indexOf("rlibA|series|tt1:1:2")]
+    assertEquals("The Show", hint)
+  }
 
   private fun press(key: Key) {
     compose.onRoot().performKeyInput { pressKey(key) }

@@ -6,6 +6,7 @@ import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.BehaviorHintsDto
 import cz.stremiooffline.tv.data.LibraryTitleDto
+import cz.stremiooffline.tv.data.RemoteLibraryDto
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.StreamSourceDto
@@ -80,6 +81,21 @@ class LibraryPlaySourcesTest {
     assertEquals(listOf("series:tt5:1:2"), api.streamSourcesRequests)
     assertEquals(listOf("series:tt5:1:2"), api.localStreamsRequests)
     assertEquals(listOf("Shows/Show/S01/Show.S01E02.mkv", "srcA"), reports.last().streams.map { it.localPath ?: it.sourceId })
+  }
+
+  @Test
+  fun `a bound series file asks the remote libraries with the series name`() = runTest {
+    val api = FakeTvApi()
+    api.settingsValue = SettingsResponse(uiLanguage = "en", audioLanguage = "en")
+    api.remoteLibrariesValue = listOf(RemoteLibraryDto(id = "rlibA", name = "Filmy", provider = "jellyfin"))
+    api.libraryTitleValues["Shows/Show/S01/Show.S01E02.mkv"] =
+      LibraryTitleDto("series", "tt5", videoId = "tt5:1:2", name = "Show")
+
+    LibraryPlaySources(api).load(target("Shows/Show/S01/Show.S01E02.mkv")) { }
+
+    // The episode's own id is asked for, but the provider filter is the parent series name.
+    assertEquals(listOf("rlibA|series|tt5:1:2"), api.remoteMatchRequests)
+    assertEquals(listOf("Show"), api.remoteMatchHints.filterNotNull())
   }
 
   @Test

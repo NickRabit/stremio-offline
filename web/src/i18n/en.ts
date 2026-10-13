@@ -647,6 +647,7 @@ export const en = {
   "library.emptyUnconfirmedText": "Every title in this folder is either confirmed or left out of matching. Switch the filter off to see them.",
   "library.fileCount": { one: "1 file", other: "{count} files" },
   "library.openFolder": "Open folder",
+  "library.chooseSource": "Choose a source",
   "library.libraryTypeMovie": "Movies",
   "library.libraryTypeSeries": "Series",
   "library.libraryTypeMixed": "Mixed",

@@ -608,6 +608,7 @@ export const pl: Catalog = {
   "library.emptyUnconfirmedText": "Każdy tytuł w tym folderze jest albo potwierdzony, albo pominięty. Aby je zobaczyć, wyłącz filtr.",
   "library.fileCount": { one: "1 plik", other: "Liczba plików: {count}", few: "{count} pliki", many: "{count} plików" },
   "library.openFolder": "Otwórz folder",
+  "library.chooseSource": "Wybierz źródło",
   "library.libraryTypeMovie": "Filmy",
   "library.libraryTypeSeries": "Seria",
   "library.libraryTypeMixed": "Mieszane",

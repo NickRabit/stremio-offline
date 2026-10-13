@@ -146,4 +146,48 @@ class RemoteFolderNavigationTest {
     compose.onNodeWithTag(remoteItemTag("m1")).assertIsFocused()
     assertEquals(2, api.remoteBrowseRequests.size)
   }
+
+  @Test
+  fun `a library root that carries its own poster asks for no preview mosaic`() {
+    val api = FakeTvApi()
+    api.remoteLibrariesValue = listOf(
+      RemoteLibraryDto(id = "rlibA", name = "Server", provider = "emby", type = "mixed", poster = "/own-root.jpg"),
+    )
+    scenario.onActivity { activity ->
+      activity.setContent {
+        RemoteLibraryRoute(api = api, segment = LibrarySegment.Servers, onOpenItem = { _, _, _, _ -> })
+      }
+    }
+    compose.waitUntil(5_000) { api.remoteLibrariesCalls > 0 }
+    compose.waitForIdle()
+    compose.onNodeWithTag(remoteLibraryTag("rlibA")).assertIsFocused()
+
+    // The own picture wins over any child collage, so nothing was asked of the preview route.
+    assertTrue(api.remotePreviewRequests.isEmpty())
+  }
+
+  @Test
+  fun `a season tile never asks for a preview mosaic`() {
+    val api = FakeTvApi()
+    api.remoteLibrariesValue = listOf(RemoteLibraryDto(id = "rlibA", name = "Server", provider = "emby", type = "mixed"))
+    api.remoteBrowsePages["rlibA||"] = RemoteItemsPageDto(
+      items = listOf(RemoteItemDto(id = "sea1", name = "Season 1", type = "season")),
+      total = 1,
+    )
+    scenario.onActivity { activity ->
+      activity.setContent {
+        RemoteLibraryRoute(api = api, segment = LibrarySegment.Servers, onOpenItem = { _, _, _, _ -> })
+      }
+    }
+    compose.waitUntil(5_000) { api.remoteLibrariesCalls > 0 }
+    compose.waitForIdle()
+    compose.onNodeWithTag(remoteLibraryTag("rlibA")).assertIsFocused()
+    compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitUntil(5_000) { api.remoteBrowseRequests.isNotEmpty() }
+    compose.waitForIdle()
+    compose.onNodeWithTag(remoteItemTag("sea1")).assertIsFocused()
+
+    // The season's collage would be its episodes, which says nothing about it, so it never asked.
+    assertTrue(api.remotePreviewRequests.none { it.second == "sea1" })
+  }
 }

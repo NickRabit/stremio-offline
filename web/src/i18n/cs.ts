@@ -642,6 +642,7 @@ export const cs: Catalog = {
   "library.emptyUnconfirmedText": "Všechny tituly v téhle složce jsou potvrzené, nebo vyloučené z přiřazování. Vypněte filtr a uvidíte je.",
   "library.fileCount": { one: "1 soubor", few: "{count} soubory", other: "{count} souborů" },
   "library.openFolder": "Otevřít složku",
+  "library.chooseSource": "Vybrat zdroj",
   "library.libraryTypeMovie": "Filmy",
   "library.libraryTypeSeries": "Seriály",
   "library.libraryTypeMixed": "Smíšená",

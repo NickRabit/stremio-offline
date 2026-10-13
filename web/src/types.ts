@@ -90,6 +90,9 @@ export interface RemoteLibrary {
   /** Effective display settings as the member projection answers them; absent on records
    *  written before these existed, so the client keeps the defaults. */
   browseMode?: RemoteBrowseMode; mosaic?: boolean; showInFavorites?: boolean;
+  /** The library root's own same-origin poster, when the provider has one. Present means the tile
+   *  draws it instead of asking for a child mosaic; absent falls back to the bounded preview. */
+  poster?: string;
 }
 export type RemoteItemType = "movie" | "series" | "season" | "episode" | "folder";
 export interface RemoteItem {

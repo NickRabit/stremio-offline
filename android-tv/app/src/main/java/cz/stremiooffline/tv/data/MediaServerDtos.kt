@@ -27,6 +27,9 @@ data class RemoteLibraryDto(
   val mosaic: Boolean = true,
   /** Whether this library takes part in the viewer's Favourites; absent means yes. */
   val showInFavorites: Boolean = true,
+  /** The library root's own same-origin poster, when the provider has one. Present means the tile
+   *  draws it instead of asking for a child mosaic; absent falls back to the bounded preview. */
+  val poster: String? = null,
   val capabilities: RemoteCapabilitiesDto = RemoteCapabilitiesDto(),
 )
 

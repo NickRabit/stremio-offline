@@ -608,6 +608,7 @@ export const ru: Catalog = {
   "library.emptyUnconfirmedText": "Каждый заголовок в этой папке либо подтвержден, либо не соответствует. Выключите фильтр, чтобы увидеть их.",
   "library.fileCount": { one: "1 файл", other: "{count} файлов", few: "{count} файла", many: "{count} файлов" },
   "library.openFolder": "Открыть папку",
+  "library.chooseSource": "Выбрать источник",
   "library.libraryTypeMovie": "Фильмы",
   "library.libraryTypeSeries": "Серия",
   "library.libraryTypeMixed": "Смешанный",
