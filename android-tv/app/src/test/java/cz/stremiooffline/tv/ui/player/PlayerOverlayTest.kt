@@ -3,6 +3,9 @@
 package cz.stremiooffline.tv.ui.player
 
 import androidx.compose.foundation.background
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.fillMaxSize
@@ -55,6 +58,7 @@ class PlayerOverlayTest {
     initiallyShown: Boolean = true,
     showControls: Int = 0,
     seekKept: Int = 0,
+    reclaimFocus: Int = 0,
   ) {
     compose.setContent {
       PlayerOverlayShell(
@@ -67,6 +71,7 @@ class PlayerOverlayTest {
         initiallyShown = initiallyShown,
         showControls = showControls,
         seekKept = seekKept,
+        reclaimFocus = reclaimFocus,
         onSeek = { seeks += it },
         onTogglePause = { pauses++ },
         onExit = { exits++ },
@@ -232,6 +237,36 @@ class PlayerOverlayTest {
     assertEquals(listOf(190.0), seeks)
     compose.onNodeWithTag(TAG_OVERLAY_BUBBLE).assertExists()
     compose.onNodeWithText("+1:30").assertExists()
+  }
+
+  @Test
+  fun `reclaiming focus puts the remote back on the play button`() {
+    val play = FocusRequester()
+    val elsewhere = FocusRequester()
+    var token by mutableIntStateOf(0)
+    compose.setContent {
+      PlayerOverlayShell(
+        position = 100.0,
+        duration = 1_000.0,
+        playing = false,
+        title = "It",
+        eyebrow = "Direct play",
+        playFocus = play,
+        reclaimFocus = token,
+        onSeek = {},
+        onTogglePause = {},
+        onExit = {},
+      ) {
+        Box(Modifier.fillMaxSize().testTag("elsewhere").focusRequester(elsewhere).focusable())
+      }
+    }
+    compose.waitForIdle()
+    elsewhere.requestFocus()
+    compose.waitForIdle()
+
+    token = 1
+    compose.waitForIdle()
+    compose.onNodeWithTag(TAG_OSD_PLAY).assertIsFocused()
   }
 
   @Test
