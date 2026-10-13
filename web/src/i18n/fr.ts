@@ -845,6 +845,7 @@ export const fr: Catalog = {
   "users.empty": "Aucun compte pour l'instant.",
   "users.restrictedHint": "Le mode restreint répertorie les comptes et ne les modifie pas.",
   "users.accountHeading": "Compte",
+  "users.localLibraries": "Bibliothèques locales",
   "users.librariesHeading": "Bibliothèques",
   "users.addonsHeading": "Modules complémentaires",
   "users.downloadsHeading": "Téléchargements",

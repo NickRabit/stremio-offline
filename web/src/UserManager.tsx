@@ -23,11 +23,13 @@ const enabledAdmins = (accounts: UserAccount[]) => accounts.filter((row) => row.
 const isLastAdmin = (account: UserAccount, accounts: UserAccount[]) =>
   account.role === "admin" && !account.disabled && enabledAdmins(accounts).length <= 1;
 
-/** Two libraries can carry the same name on different servers, so a remote grant names its
- *  provider too: the visible row is just the name, but the label a screen reader reads out has
- *  to tell the two ticks apart. */
-const remoteGrantLabel = (remote: AdminRemoteLibrary) =>
-  t("users.grantLibrary", { library: remote.provider ? `${remote.name} (${t(PROVIDER_KEY[remote.provider])})` : remote.name });
+const duplicateRemoteName = (remote: AdminRemoteLibrary, libraries: AdminRemoteLibrary[]) =>
+  libraries.some((row) => row.id !== remote.id && row.name === remote.name && row.provider === remote.provider);
+const remoteGrantLabel = (remote: AdminRemoteLibrary, libraries: AdminRemoteLibrary[]) => {
+  const context = [remote.provider && t(PROVIDER_KEY[remote.provider]),
+    duplicateRemoteName(remote, libraries) && (remote.connectionName || remote.connectionId)].filter(Boolean).join(" · ");
+  return t("users.grantLibrary", { library: context ? `${remote.name} (${context})` : remote.name });
+};
 
 /** The accounts of this instance. Only an administrator renders it; an ordinary user is
  *  never shown the rows, let alone offered a control the API would refuse. */
@@ -47,20 +49,23 @@ export function UserManager({ session, restricted = false, onChanged, onNotify, 
 
   const load = async () => {
     setLoaded(false);
-    const [rows, nextLibraries, nextAddons, nextRemote] =
-      await Promise.all([
-        api.users(), api.libraries(), api.addons(),
-        // Restricted mode refuses the remote inventory, which names server addresses and ids,
-        // and its account rows carry no controls anyway, so the read is skipped rather than
-        // failing the whole load and leaving the list empty.
-        restricted ? Promise.resolve<AdminRemoteLibrary[]>([]) : api.adminRemoteLibraries(),
-      ]);
-    setAccounts(rows);
-    setLibraries(nextLibraries);
-    setAddons(nextAddons);
-    setRemoteLibraries(nextRemote);
+    const [rows, nextLibraries, nextAddons, nextRemote, servers] = await Promise.allSettled([
+      api.users(), api.libraries(), api.addons(),
+      restricted ? Promise.resolve<AdminRemoteLibrary[]>([]) : api.adminRemoteLibraries(),
+      restricted ? Promise.resolve({ connections: [], keyConfigured: true }) : api.mediaServers(),
+    ]);
+    if (rows.status === "fulfilled") setAccounts(rows.value);
+    if (nextLibraries.status === "fulfilled") setLibraries(nextLibraries.value);
+    if (nextAddons.status === "fulfilled") setAddons(nextAddons.value);
+    if (nextRemote.status === "fulfilled") setRemoteLibraries(nextRemote.value.map((library) => ({
+      ...library, connectionName: servers.status === "fulfilled"
+        ? servers.value.connections.find((connection) => connection.id === library.connectionId)?.name : undefined,
+    })));
+    const failure = [rows, nextLibraries, nextAddons, nextRemote, servers].find((result) => result.status === "rejected");
+    if (failure?.status === "rejected") throw failure.reason;
     setLoaded(true);
-    return rows;
+    return rows.status === "fulfilled" ? rows.value : [];
+
   };
   // An ordinary user is refused by every one of these reads, so the component asks for none of
   // them and renders nothing rather than a failure.
@@ -124,7 +129,7 @@ export function UserManager({ session, restricted = false, onChanged, onNotify, 
       </footer>}
     </article>)}
     {loaded && !accounts.length && <p className="identify-hint">{t("users.empty")}</p>}
-    {(creating || editing) && <UserEditDialog account={editing} accounts={accounts} libraries={libraries} remoteLibraries={remoteLibraries} addons={addons}
+    {(creating || editing) && <UserEditDialog account={editing} accounts={accounts} libraries={libraries} remoteLibraries={remoteLibraries} addons={addons} grantsReady={loaded} onRetryGrants={() => void load().catch(onError)}
       session={session} onClose={() => { setCreating(false); setEditingId(null); }}
       onCreated={async (created) => {
         setAccounts((rows) => [...rows, created]);
@@ -153,10 +158,10 @@ export function UserManager({ session, restricted = false, onChanged, onNotify, 
 
 /** Everything an administrator decides about one person. Each block writes on its own, the
  *  way the rest of Settings does, so the dialog has no save button to press. */
-function UserEditDialog({ account, accounts, libraries, remoteLibraries, addons, session, onClose, onCreated, onUpdated,
+function UserEditDialog({ account, accounts, libraries, remoteLibraries, addons, grantsReady, onRetryGrants, session, onClose, onCreated, onUpdated,
   onLibraryUpdated, onRemoteLibraryUpdated, onAddonUpdated, onChanged, onRemove, onNotify, onError }: {
   account: UserAccount | null; accounts: UserAccount[]; libraries: LibraryView[];
-  remoteLibraries: AdminRemoteLibrary[]; addons: Addon[]; session: Session;
+  remoteLibraries: AdminRemoteLibrary[]; addons: Addon[]; session: Session; grantsReady: boolean; onRetryGrants: () => void;
   onClose: () => void; onCreated: (created: UserAccount) => Promise<void>; onUpdated: (next: UserAccount) => void;
   onLibraryUpdated: (library: LibraryView) => void; onRemoteLibraryUpdated: (remote: AdminRemoteLibrary) => void;
   onAddonUpdated: (addon: Addon) => void;
@@ -215,7 +220,7 @@ function UserEditDialog({ account, accounts, libraries, remoteLibraries, addons,
     if (!account) return Promise.resolve();
     return run(async () => { onUpdated(await api.updateUser(account.id, body)); });
   };
-  const canApply = () => password.length >= 6 && (!creating || name.trim().length >= 3);
+  const canApply = () => password.length >= 6 && (!creating || (grantsReady && name.trim().length >= 3));
   const applyPassword = () => void run(async () => {
     if (creating) {
       const created = await api.createUser({
@@ -310,7 +315,7 @@ function UserEditDialog({ account, accounts, libraries, remoteLibraries, addons,
     tabs.length > 1 ? null : <div className="library-picker-section-head"><h3>{text}</h3></div>;
   const grant = (label: string, badge: ReactNode, checked: boolean, ariaLabel: string, onChange: (value: boolean) => void, key = ariaLabel) =>
     <label className="user-grant-row" key={key}>
-      <input type="checkbox" checked={checked} disabled={busy} aria-label={ariaLabel}
+      <input type="checkbox" checked={checked} disabled={busy || !grantsReady} aria-label={ariaLabel}
         onChange={(event) => onChange(event.target.checked)}/>
       <span className="user-grant-name">{label}</span>
       {badge}
@@ -381,6 +386,8 @@ function UserEditDialog({ account, accounts, libraries, remoteLibraries, addons,
             ? <p className="identify-hint">{t("users.seesEverything")}</p>
             : <>
               <div className="user-grant-list">
+                {!grantsReady && <button type="button" disabled={busy} onClick={onRetryGrants}>{t("common.refresh")}</button>}
+                {libraries.length > 0 && <div className="user-grant-head">{t("users.localLibraries")}</div>}
                 {libraries.map((library) =>
                   grant(library.name, <><i className="library-badge">{libraryTypeLabel(library.type)}</i>
                     {!library.enabled && <i className="library-badge off">{t("library.disabled")}</i>}</>,
@@ -389,11 +396,11 @@ function UserEditDialog({ account, accounts, libraries, remoteLibraries, addons,
                     (value) => account ? setLibraryGrant(library, value) : pick(libraryKey(library.id), value)))}
                 {remoteLibraries.length > 0 && <div className="user-grant-head">{t("mediaServer.remoteTitle")}</div>}
                 {remoteLibraries.map((remote) =>
-                  grant(remote.name, <>{remote.provider && <i className="library-badge">{t(PROVIDER_KEY[remote.provider])}</i>}
+                  grant(duplicateRemoteName(remote, remoteLibraries) ? `${remote.name} (${remote.connectionName || remote.connectionId})` : remote.name, <>{remote.provider && <i className="library-badge">{t(PROVIDER_KEY[remote.provider])}</i>}
                     <i className="library-badge">{libraryTypeLabel(remote.type)}</i>
                     {!remote.enabled && <i className="library-badge off">{t("library.disabled")}</i>}</>,
                     account ? remote.allowedUsers.includes(account.id) : willGrant(remoteKey(remote.id), remote.enabled),
-                    remoteGrantLabel(remote),
+                    remoteGrantLabel(remote, remoteLibraries),
                     (value) => account ? setRemoteLibraryGrant(remote, value) : pick(remoteKey(remote.id), value), remoteKey(remote.id)))}
               </div>
               {creating && <p className="identify-hint">{t("users.grantsOnCreate")}</p>}

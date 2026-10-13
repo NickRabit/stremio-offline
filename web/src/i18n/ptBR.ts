@@ -845,6 +845,7 @@ export const ptBR: Catalog = {
   "users.empty": "Nenhuma conta ainda.",
   "users.restrictedHint": "O modo restrito lista as contas e não as altera.",
   "users.accountHeading": "Conta",
+  "users.localLibraries": "Bibliotecas locais",
   "users.librariesHeading": "Bibliotecas",
   "users.addonsHeading": "Complementos",
   "users.downloadsHeading": "Transferências",

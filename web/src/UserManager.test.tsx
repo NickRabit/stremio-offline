@@ -65,6 +65,7 @@ const mount = async ({ session, users, libraries = [], remoteLibraries = [], add
       return answered === undefined ? json({}) : json(answered);
     }
     if (url === "/api/users") return json(users);
+    if (url === "/api/media-servers") return json({ connections: remoteLibraries.map((row) => ({ id: row.connectionId, name: row.connectionId })), keyConfigured: true });
     if (url === "/api/libraries") return json(libraries);
     if (url === "/api/addons") return json(addons);
     if (url === "/api/media-servers/libraries") {
@@ -310,6 +311,7 @@ it("a failed grant-list read is reported and keeps account creation disabled", a
   await mount({ session: admin, users: [account()], failRemote: true, onError });
 
   expect(onError).toHaveBeenCalledTimes(1);
+  expect(host.querySelectorAll(".user-admin-row")).toHaveLength(1);
   const add = [...host.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Add account");
   expect(add?.disabled, "a create dialog without the remote list would grant blind").toBe(true);
   expect(host.textContent, "a failed read is not shown as an empty remote list").not.toContain("Remote libraries");
@@ -340,6 +342,7 @@ it("shows local and remote libraries in one Libraries pane, counted together", a
   await clickText("Edit");
   expect(host.querySelector("#user-tab-libraries")?.textContent, "the tab counts local and remote").toContain("3");
   await openPane("Libraries");
+  expect(host.textContent).toContain("Local libraries");
   expect(host.textContent).toContain("Remote libraries");
   const labels = [...host.querySelectorAll<HTMLInputElement>(".user-grant-list input[type=checkbox]")].map((box) => box.getAttribute("aria-label"));
   expect(labels).toEqual([
@@ -499,4 +502,21 @@ it("a grant that fails after creation opens the account instead of creating it t
     "the grant that landed is shown").toBe(true);
   expect(host.querySelector<HTMLInputElement>('input[aria-label="Films is visible to this account"]')?.checked,
     "the grant that was refused stays where the server left it").toBe(false);
+});
+
+it("distinguishes equal names on two servers of the same provider", async () => {
+  await mount({ session: admin, users: [account({ id: "bob", username: "bob", role: "user" })], remoteLibraries: [
+    remoteLibrary({ id: "rlib_a", name: "Films", connectionId: "Living room" }),
+    remoteLibrary({ id: "rlib_b", name: "Films", connectionId: "Attic" }),
+  ] });
+  await clickText("Edit"); await openPane("Libraries");
+  expect(host.querySelector('input[aria-label="Films (Jellyfin · Living room) is visible to this account"]')).not.toBeNull();
+  expect(host.querySelector('input[aria-label="Films (Jellyfin · Attic) is visible to this account"]')).not.toBeNull();
+});
+
+it("retains accounts but disables grant writes when a grant inventory cannot load", async () => {
+  await mount({ session: admin, users: [account({ id: "bob", username: "bob", role: "user" })], libraries: [library()], failRemote: true });
+  await clickText("Edit"); await openPane("Libraries");
+  expect(host.querySelector('input[aria-label="Films is visible to this account"]')).toHaveProperty("disabled", true);
+  expect(host.querySelector('.user-edit-card button')).not.toBeNull();
 });

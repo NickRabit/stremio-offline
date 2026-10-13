@@ -77,6 +77,7 @@ export interface AdminRemoteLibrary {
    *  already removed, and on a PATCH response that omits it, so the client keeps the value it
    *  had. */
   provider?: MediaServerProvider;
+  connectionName?: string;
   /** Display-only settings. Absent means the effective default: mixed libraries browse
    *  folders, movie/series libraries browse titles, and both mosaic and Favourites are on. */
   browseMode?: RemoteBrowseMode; mosaic?: boolean; showInFavorites?: boolean;

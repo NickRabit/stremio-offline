@@ -188,3 +188,20 @@ describe("Remote library ordering", () => {
     expect(rowNames(), "the list is re-read and shows the order the server kept").toEqual(["Alpha", "Beta"]);
   });
 });
+
+it("clears a failed reorder reload after the next successful move", async () => {
+  libraryRows = [adminLibrary({ id: "rlib_a", name: "Alpha", order: 0 }), adminLibrary({ id: "rlib_b", name: "Beta", order: 1 })];
+  const original = fetch;
+  let reads = 0;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (new URL(String(input), "http://localhost").pathname === "/api/media-servers/libraries" && ++reads === 2) {
+      return json({ error: "Inventory unavailable" }, 503);
+    }
+    return original(input, init);
+  }));
+  await renderManager();
+  await click(orderButton("Alpha", "down")!);
+  expect(host.querySelector('.remote-error[role="alert"]')).not.toBeNull();
+  await click(orderButton("Alpha", "down")!);
+  expect(host.querySelector('.remote-error[role="alert"]')).toBeNull();
+});

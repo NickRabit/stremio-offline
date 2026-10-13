@@ -845,6 +845,7 @@ export const ru: Catalog = {
   "users.empty": "Аккаунтов пока нет.",
   "users.restrictedHint": "Ограниченный режим отображает список учетных записей и не меняет их.",
   "users.accountHeading": "Аккаунт",
+  "users.localLibraries": "Локальные библиотеки",
   "users.librariesHeading": "Библиотеки",
   "users.addonsHeading": "Аддоны",
   "users.downloadsHeading": "Загрузки",

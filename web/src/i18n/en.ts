@@ -886,6 +886,7 @@ export const en = {
   "users.empty": "No accounts yet.",
   "users.restrictedHint": "Restricted mode lists the accounts and does not change them.",
   "users.accountHeading": "Account",
+  "users.localLibraries": "Local libraries",
   "users.librariesHeading": "Libraries",
   "users.addonsHeading": "Addons",
   "users.downloadsHeading": "Downloads",

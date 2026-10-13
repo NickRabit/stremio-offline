@@ -881,6 +881,7 @@ export const cs: Catalog = {
   "users.empty": "Zatím žádné účty.",
   "users.restrictedHint": "V omezeném režimu se účty jen vypíšou, nic se v nich nemění.",
   "users.accountHeading": "Účet",
+  "users.localLibraries": "Lokální knihovny",
   "users.librariesHeading": "Knihovny",
   "users.addonsHeading": "Doplňky",
   "users.downloadsHeading": "Stahování",

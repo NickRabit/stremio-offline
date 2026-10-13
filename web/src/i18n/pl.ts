@@ -845,6 +845,7 @@ export const pl: Catalog = {
   "users.empty": "Nie ma jeszcze kont.",
   "users.restrictedHint": "Tryb ograniczony wyświetla listę kont i ich nie zmienia.",
   "users.accountHeading": "Konto",
+  "users.localLibraries": "Biblioteki lokalne",
   "users.librariesHeading": "Biblioteki",
   "users.addonsHeading": "Dodatki",
   "users.downloadsHeading": "Pliki do pobrania",

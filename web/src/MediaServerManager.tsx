@@ -166,7 +166,7 @@ export function MediaServerManager({ onError, onChanged }: { onError: (error: un
         }
       } catch (error) { onError(error); }
       finally {
-        try { await load(); } catch (error) { setLoadError(describeError(error)); }
+        try { await load(); setLoadError(""); } catch (error) { setLoadError(describeError(error)); }
         onChanged?.();
         setBusy(false);
       }

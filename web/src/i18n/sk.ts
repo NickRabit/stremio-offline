@@ -845,6 +845,7 @@ export const sk: Catalog = {
   "users.empty": "Zatiaľ žiadne účty.",
   "users.restrictedHint": "Obmedzený režim uvádza zoznam účtov a nemení ich.",
   "users.accountHeading": "účtu",
+  "users.localLibraries": "Lokálne knižnice",
   "users.librariesHeading": "Knižnice",
   "users.addonsHeading": "Addons",
   "users.downloadsHeading": "sťahovanie",

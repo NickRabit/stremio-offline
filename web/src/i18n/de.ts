@@ -845,6 +845,7 @@ export const de: Catalog = {
   "users.empty": "Noch keine Konten.",
   "users.restrictedHint": "Im eingeschränkten Modus werden die Konten aufgelistet und nicht geändert.",
   "users.accountHeading": "Konto",
+  "users.localLibraries": "Lokale Bibliotheken",
   "users.librariesHeading": "Bibliotheken",
   "users.addonsHeading": "Add-ons",
   "users.downloadsHeading": "Downloads",
