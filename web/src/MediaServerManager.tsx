@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowDown, ArrowUp, Check, KeyRound, Library, Pencil, Plus, RefreshCw, SlidersHorizontal, Trash2, X } from "lucide-react";
+import { useDialogFocus } from "./dialog-focus";
+import { useDialogViewport } from "./dialog-viewport";
 import { api, describeError } from "./api";
 import { t, useI18n } from "./i18n";
 import type { AdminRemoteLibrary, LibraryType, MediaServerConnection, MediaServerProvider, MediaServerStatus, ProviderLibrary, RemoteBrowseMode, UserAccount } from "./types";
@@ -30,12 +32,15 @@ type Removal = { kind: "connection"; connection: MediaServerConnection } | { kin
 function Dialog({ title, cardClass, onClose, children, footer, busy }: {
   title: string; cardClass?: string; onClose: () => void; children: ReactNode; footer?: ReactNode; busy?: boolean;
 }) {
+  const overlay = useRef<HTMLDivElement>(null);
+  useDialogFocus(overlay);
+  useDialogViewport(overlay);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape" && !busy) onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [busy, onClose]);
-  return <div className="identify-overlay" role="dialog" aria-modal="true" aria-label={title}
+  return <div ref={overlay} tabIndex={-1} className="identify-overlay" role="dialog" aria-modal="true" aria-label={title}
     onClick={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
     <div className={`panel identify-card dialog-split ${cardClass ?? ""}`}>
       <div className="identify-head">

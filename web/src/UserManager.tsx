@@ -1,5 +1,7 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Plus, RefreshCw, Trash2, X } from "lucide-react";
+import { useDialogFocus } from "./dialog-focus";
+import { useDialogViewport } from "./dialog-viewport";
 import { api } from "./api";
 import { t, localeTag, useI18n } from "./i18n";
 import { libraryTypeLabel } from "./LibraryManager";
@@ -169,6 +171,9 @@ function UserEditDialog({ account, accounts, libraries, remoteLibraries, addons,
   onNotify: (message: string) => void; onError: (error: unknown) => void;
 }) {
   useI18n();
+  const overlay = useRef<HTMLDivElement>(null);
+  useDialogFocus(overlay);
+  useDialogViewport(overlay);
   const creating = !account;
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
@@ -327,7 +332,7 @@ function UserEditDialog({ account, accounts, libraries, remoteLibraries, addons,
       <span><strong>{label}</strong>{hint && <small>{hint}</small>}</span>
     </label>;
 
-  return <div className="identify-overlay" role="dialog" aria-modal="true" aria-label={t("users.editAccount")}
+  return <div ref={overlay} tabIndex={-1} className="identify-overlay" role="dialog" aria-modal="true" aria-label={t("users.editAccount")}
     onClick={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
     <div className="panel identify-card dialog-split user-edit-card">
       <div className="identify-head">
