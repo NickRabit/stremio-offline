@@ -135,6 +135,8 @@ fun PlayerScreen(
   var playing by remember { mutableStateOf(false) }
   // The intent to play: true from the start, so the OSD offers Pause while the video is still buffering.
   var wantsPlay by remember { mutableStateOf(true) }
+  // The set stays awake for as long as the viewer means to be watching and nothing has failed.
+  KeepScreenOn(enabled = wantsPlay && state.error == null)
   var position by remember { mutableDoubleStateOf(0.0) }
   // Coming back from the background starts a fresh session paused, at the position left behind.
   var backgroundPosition by remember { mutableStateOf<Double?>(null) }
