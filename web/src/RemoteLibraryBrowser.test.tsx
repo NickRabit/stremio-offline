@@ -419,7 +419,6 @@ describe("RemoteLibraryBrowser preferences and detail", () => {
     await openRootLibrary();
     expect(calls.title).toEqual([]);
     await click(tileButtons()[0]!);
-    await flush();
     expect(calls.title).toContain("/api/meta/movie/tt5000");
     expect(calls.title).toContain("/api/links/movie/tt5000");
     expect(calls.title).toContain("/api/trailer/movie/tt5000");
@@ -465,6 +464,26 @@ describe("RemoteLibraryBrowser preferences and detail", () => {
     expect(episodes.searchParams.get("limit")).toBe("60");
     expect(host.querySelector(".remote-season")!.textContent).toBe("Season 1");
     expect(host.querySelectorAll(".browse-panel .browse-item")).toHaveLength(2);
+  });
+
+  it("wraps a series in the full-detail surface and opens its gallery", async () => {
+    const onGallery = vi.fn();
+    const show: RemoteItem = { id: "ser1", name: "Show", type: "series", providerIds: {}, poster: "/series-poster.jpg", wide: "/series-wide.jpg" };
+    browse = (url) => json(page(url.searchParams.get("type") === "episode" ? [] : [show]));
+    const { onOpenChange } = await render({ onGallery });
+    await click(host.querySelectorAll<HTMLButtonElement>(".remote-libraries button.library-open")[0]!);
+    expect(onOpenChange).toHaveBeenCalledWith(true);
+    await click(tileButtons()[0]!);
+    const surface = host.querySelector<HTMLElement>(".remote-detail.library-title-detail.remote-series-detail")!;
+    expect(surface).not.toBeNull();
+    // The episodes and the hero share the one surface, and the hero carries no band of its own.
+    expect(surface.querySelector(".hero.library-detail-hero")).not.toBeNull();
+    expect(surface.querySelector<HTMLElement>(".hero.library-detail-hero")!.style.backgroundImage).toBe("");
+    expect(surface.querySelector(".remote-episodes-head")).not.toBeNull();
+    const corner = surface.querySelector<HTMLButtonElement>(".gallery-open")!;
+    await click(corner);
+    expect(onGallery).toHaveBeenCalled();
+    expect(onGallery.mock.calls[0]![0][0].url).toBe("/series-poster.jpg");
   });
 
   it("opens the item a remote card from Home points at", async () => {

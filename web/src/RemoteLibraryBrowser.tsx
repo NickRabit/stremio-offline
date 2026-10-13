@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowDown, ArrowUp, Check, ChevronLeft, ChevronRight, CirclePlay, Film, FolderOpen, HardDrive, LayoutGrid, List, Play, RectangleHorizontal, RectangleVertical, Search, SlidersHorizontal, Star } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, ChevronLeft, ChevronRight, CirclePlay, Film, FolderOpen, HardDrive, Images, LayoutGrid, List, Play, RectangleHorizontal, RectangleVertical, Search, SlidersHorizontal, Star } from "lucide-react";
 import { ApiError, api, describeError } from "./api";
 import { relativeAge } from "./home-cards";
 import { localeTag, t, useI18n } from "./i18n";
@@ -10,9 +10,10 @@ import { Player } from "./Player";
 import { DetailHero, LIBRARY_HERO_EMPTY_GRADIENT, LIBRARY_HERO_GRADIENT, useBackdrop } from "./DetailHero";
 import { RemoteFolderArt, RemoteLibraryArt, RemoteTileArt } from "./remote-mosaic";
 import { TitleChips } from "./TitleChips";
+import { catalogueGalleryImages, mergeGallery, posterAndWide, type GalleryImage } from "./gallery-images";
 import { createCompactOnScroll } from "./scroll-fold";
 import { bytes, hideBroken } from "./settings-ui";
-import { catalogueRef, useTitleEnrichment } from "./title-enrichment";
+import { catalogueRef, useTitleEnrichment, type CatalogueRef } from "./title-enrichment";
 import type { LibraryType, LibraryViewPrefs, MediaServerProvider, RemoteBrowseMode, RemoteItem, RemoteItemState, RemoteItemType, RemoteLibrary, Stream, TileShape, Trailer, UserViews } from "./types";
 
 interface Props {
@@ -42,6 +43,8 @@ interface Props {
   secureMode: boolean;
   /** The app owns the trailer overlay; the chip only asks for it. */
   onTrailer: (trailer: Trailer) => void;
+  /** Opens the app's gallery overlay with the pictures this detail already holds. */
+  onGallery?: (images: GalleryImage[], ref?: CatalogueRef | null) => void;
   /** Bumped when the sidebar returns to the Library: the browser drops back to the roots. */
   resetSignal?: number;
 }
@@ -124,7 +127,7 @@ const groupEpisodes = (items: RemoteItem[]) => {
   return [...groups.entries()].map(([season, group]) => ({ season, items: group }));
 };
 
-export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLanguage, subtitleLanguage, onError, libraryTileShape, onToggleLibraryShape, views, onPersistPrefs, onOpenChange, compact, onCompactChange, initialTarget, onPersonalChange, uiLanguage, secureMode, onTrailer, resetSignal }: Props) {
+export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLanguage, subtitleLanguage, onError, libraryTileShape, onToggleLibraryShape, views, onPersistPrefs, onOpenChange, compact, onCompactChange, initialTarget, onPersonalChange, uiLanguage, secureMode, onTrailer, onGallery, resetSignal }: Props) {
   useI18n();
   const [libraries, setLibraries] = useState<RemoteLibrary[] | null>(null);
   const [librariesError, setLibrariesError] = useState("");
@@ -838,8 +841,10 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   const detailBackdrops: Array<string | undefined> = detail
     ? [enrichment.meta?.background, detail.wide, detail.type === "episode" ? series?.wide : undefined]
     : [];
-  // The series hero draws its backdrop through the shared hero, so only it probes here.
+  // The series draws its own full-detail surface, so the backdrop is probed here; the shared
+  // shell probes for a playable title through the same hook.
   const seriesBackdrop = useBackdrop(detail?.type === "series" ? detailBackdrops : []);
+  const seriesGallery: GalleryImage[] = mergeGallery(posterAndWide(detail?.poster, detail?.wide), catalogueGalleryImages(enrichment.meta));
 
   if (!librariesError && !targetError && (libraries === null || !libraries.length)) return null;
 
@@ -917,7 +922,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
       <div className="browse-head">
         <div className="browse-bar">
           <nav className="crumbs" aria-label={t("library.breadcrumbs")}>
-            <span className="crumbs-title"><HardDrive/> {t("mediaServer.remoteTitle")}</span>
+            <button type="button" disabled><HardDrive/> {t("mediaServer.remoteTitle")}</button>
           </nav>
         </div>
       </div>
@@ -1002,9 +1007,15 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
           {listing.cursor && <div className="load-more" ref={loadMoreItemsRef}><button type="button" disabled={listing.loading} onClick={() => void loadMoreItems()}>{t("common.loadMore")}</button></div>}
           {listing.loading && listing.items.length > 0 && <div className="loading" role="status">{t("common.loadingMore")}</div>}
         </>}
-        {detail && detail.type === "series" && <div className="remote-detail">
-          <DetailHero className="library-detail-hero" background={seriesBackdrop} gradient={LIBRARY_HERO_GRADIENT} emptyGradient={LIBRARY_HERO_EMPTY_GRADIENT}
-            gallery={detail.poster ? <div className="library-detail-poster"><img key={detail.poster} src={detail.poster} alt="" onError={hideBroken}/></div> : undefined}
+        {detail && detail.type === "series" && <div className="remote-detail library-title-detail remote-series-detail"
+          style={seriesBackdrop ? { backgroundImage: `${LIBRARY_HERO_GRADIENT},url(${seriesBackdrop})` } : { backgroundImage: LIBRARY_HERO_EMPTY_GRADIENT }}>
+          {/* The hero is transparent on the shared surface, so the episodes sit on the same wash and
+              the gradient's dark bottom keeps them legible. */}
+          <DetailHero className="library-detail-hero"
+            gallery={seriesGallery.length && onGallery ? <button type="button" className={`gallery-open ${seriesGallery[0]!.shape === "wide" ? "wide" : "poster"}`}
+              title={t("gallery.openHint")} onClick={() => onGallery(seriesGallery, catalogue)}>
+              <img key={seriesGallery[0]!.url} src={seriesGallery[0]!.url} alt="" onError={hideBroken}/><span><Images/> {seriesGallery.length > 1 ? t("gallery.stillCount", { count: seriesGallery.length }) : t("gallery.enlarge")}</span>
+            </button> : undefined}
             copy={seriesHeroCopy(detail)}/>
           <div className="subhead remote-episodes-head"><h3>{t("mediaServer.episodes")}</h3><span>{detail.name}</span></div>
           {episodes.error && <div className="remote-error" role="alert">
@@ -1029,6 +1040,8 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
             {...(detail.type === "episode" ? { subtitle: t("mediaServer.episodeLabel", { season: detail.season ?? 0, episode: detail.episode ?? 0 }) } : {})}
             {...(detail.poster ? { poster: detail.poster } : {})}
             backdrops={detailBackdrops}
+            gallery={seriesGallery}
+            {...(onGallery ? { onGallery: (images) => onGallery(images, catalogue) } : {})}
             {...(detailFacts(detail) ? { facts: detailFacts(detail) } : {})}
             {...(detail.overview ? { description: detail.overview } : {})}
             chips={detailChips(detail)}

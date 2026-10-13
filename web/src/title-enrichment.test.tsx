@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { catalogueRef, clearTitleEnrichment, useTitleEnrichment, type CatalogueRef, type TitleSource } from "./title-enrichment";
+import { catalogueRef, clearTitleEnrichment, loadTitleGallery, useTitleEnrichment, type CatalogueRef, type TitleSource } from "./title-enrichment";
 import type { SiteLink, Trailer } from "./types";
 
 const json = (body: unknown, status = 200) =>
@@ -141,5 +141,24 @@ describe("useTitleEnrichment", () => {
     await act(async () => { held.resolve(json({ links: [{ site: "imdb", url: "/a1" }, { site: "imdb", url: "/a2" }, { site: "imdb", url: "/a3" }] })); });
     await flush();
     expect(output().links).toBe(2);
+  });
+});
+
+
+describe("loadTitleGallery", () => {
+  it("loads alternative pictures only on explicit open and shares the cached request", async () => {
+    meta = () => json({ images: [{ url: "/alternate.jpg", shape: "wide", kind: "background" }] });
+    expect(calls).toEqual([]);
+    const ref: CatalogueRef = { type: "movie", id: "tt1" };
+    const [first, second] = await Promise.all([loadTitleGallery(ref, "en"), loadTitleGallery(ref, "en")]);
+    expect(first).toEqual(second);
+    expect(first[0]).toMatchObject({ url: "/alternate.jpg", kind: "background", shape: "wide" });
+    await loadTitleGallery(ref, "en");
+    expect(calls).toEqual(["/api/meta/movie/tt1"]);
+  });
+
+  it("leaves existing gallery pictures usable when alternative artwork fails", async () => {
+    meta = () => json({ error: "Unavailable" }, 503);
+    expect(await loadTitleGallery({ type: "movie", id: "tt1" }, "en")).toEqual([]);
   });
 });

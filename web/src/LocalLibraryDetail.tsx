@@ -4,6 +4,7 @@ import { bytes } from "./settings-ui";
 import { t, useI18n } from "./i18n";
 import { LibraryTitleDetail } from "./LibraryTitleDetail";
 import { TitleChips } from "./TitleChips";
+import { catalogueGalleryImages, mergeGallery, posterAndWide, type GalleryImage } from "./gallery-images";
 import { useTitleEnrichment, type CatalogueRef } from "./title-enrichment";
 import type { BrowseFile, BrowseFolder, IdentityPreview, Stream, Trailer } from "./types";
 
@@ -23,13 +24,15 @@ interface Props {
   secureMode: boolean;
   /** The app owns the trailer overlay; the chip only asks for it. */
   onTrailer: (trailer: Trailer) => void;
+  /** Opens the app's gallery overlay; a path asks it to merge the stored pictures in first. */
+  onGallery?: (images: GalleryImage[], path: string, ref?: CatalogueRef | null) => void;
 }
 
 /** The local counterpart of a remote title's detail: it discovers the exact file and, when the
  *  file or its folder is bound to a title, the other copies of that same title, then hands them to
  *  the shared shell. The catalogue hero, the synopsis and the source picker are the ones a remote
  *  library uses. */
-export function LocalLibraryDetail({ item, favorite, progress, onToggleFavorite, onResetProgress, onPlay, onOpenFolder, uiLanguage, secureMode, onTrailer }: Props) {
+export function LocalLibraryDetail({ item, favorite, progress, onToggleFavorite, onResetProgress, onPlay, onOpenFolder, uiLanguage, secureMode, onTrailer, onGallery }: Props) {
   useI18n();
   const [sources, setSources] = useState<Stream[] | null>(null);
   const [error, setError] = useState("");
@@ -106,15 +109,20 @@ export function LocalLibraryDetail({ item, favorite, progress, onToggleFavorite,
   const chips = <TitleChips kind={t(episode ? "episodes.one" : "catalog.oneMovie")} trailer={enrichment.trailer} links={enrichment.links}
     onTrailer={onTrailer} secureMode={secureMode}/>;
   const facts = [item.year, sources?.length === 1 && item.size ? bytes(item.size) : ""].filter(Boolean).join(" · ");
-  // The file's own wide artwork first, the catalogue's backdrop standing in only when it has none.
-  const backdrops = [item.wide, enrichment.meta?.background];
+  // Catalogue backdrops are full resolution; the file artwork is a tile-sized fallback.
+  const backdrops = [enrichment.meta?.background, item.wide];
+  // The file's own poster and wide artwork merge with the exact catalogue pictures; the saved
+  // downloads are read only when the corner image is clicked.
+  const gallery = mergeGallery(posterAndWide(item.poster, item.wide), catalogueGalleryImages(enrichment.meta));
 
   return <div className="library-local-detail" data-path={item.path} tabIndex={-1}><LibraryTitleDetail
     identityKey={item.path}
     title={title}
     {...(episode ? { subtitle: t("mediaServer.episodeLabel", { season: item.season ?? 0, episode: item.episode ?? 0 }) } : {})}
-    {...(item.poster ? { poster: item.poster } : {})}
+    poster={item.poster}
     backdrops={backdrops}
+    gallery={gallery}
+    {...(onGallery ? { onGallery: (images) => onGallery(images, item.path, bound) } : {})}
     {...(facts ? { facts } : {})}
     {...(item.description ? { description: item.description } : {})}
     chips={chips}

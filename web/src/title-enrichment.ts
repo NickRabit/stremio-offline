@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
+import { localGalleryImage, type GalleryImage } from "./gallery-images";
 import type { Meta, SiteLink, Trailer } from "./types";
 
 /** A catalogue identity the enrichment may trust: an exact movie or series, nothing else. */
@@ -33,8 +34,10 @@ const trailerInflight = new Map<string, Promise<Trailer | null>>();
 const metaCache = new Map<string, Meta | null>();
 const metaInflight = new Map<string, Promise<Meta | null>>();
 const EMPTY_LINKS: SiteLink[] = [];
+const galleryCache = new Map<string, { at: number; result: Promise<GalleryImage[]> }>();
 
 export const clearTitleEnrichment = () => {
+  galleryCache.clear();
   linksCache.clear(); linksInflight.clear(); trailerCache.clear(); trailerInflight.clear(); metaCache.clear(); metaInflight.clear();
 };
 
@@ -80,4 +83,15 @@ export function useTitleEnrichment(source: TitleSource | null, metaRef: Catalogu
   const meta = useSessionValue(metaCache, metaInflight, metaRef ? `${metaRef.type}:${metaRef.id}@${language}` : "",
     () => metaRef ? api.meta(metaRef.type, metaRef.id, language) : Promise.resolve(null), null);
   return { meta, links, trailer };
+}
+
+
+export function loadTitleGallery(ref: CatalogueRef, language: string): Promise<GalleryImage[]> {
+  const key = `${ref.type}:${ref.id}@${language}`;
+  const cached = galleryCache.get(key);
+  if (cached && Date.now() - cached.at < 30 * 60_000) return cached.result;
+  const result = api.titleGallery(ref.type, ref.id, language).then((answer) => answer.images.map(localGalleryImage)).catch(() => []);
+  galleryCache.set(key, { at: Date.now(), result });
+  if (galleryCache.size > 128) galleryCache.delete(galleryCache.keys().next().value!);
+  return result;
 }

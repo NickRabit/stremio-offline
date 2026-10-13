@@ -48,7 +48,9 @@ import type { ShowAllTarget } from "./home-cards";
 import type { HomeCard } from "../../server/src/home";
 import { parseHomeCatalogRowId } from "../../server/src/home";
 import { MoreMenu, type MoreItem } from "./MoreMenu";
-import { MediaGallery, type GalleryImage, type GalleryKind } from "./MediaGallery";
+import { MediaGallery } from "./MediaGallery";
+import { catalogueGalleryImages, mergeGallery, localGalleryImage, type GalleryImage, type GalleryKind } from "./gallery-images";
+import { loadTitleGallery, type CatalogueRef } from "./title-enrichment";
 import { SettingsPage } from "./SettingsPage";
 import { resolveStartView } from "./start-view";
 import type { Addon, BuildInfo, BrowseItem, BrowseLibrary, BrowseResult, DeviceTransfer, DownloadsViewPrefs, FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem, FollowView, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, LibraryViewPrefs, MediaServerProvider, NewEpisode, ProgressEntry, RemoteLibrary, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, Stream, Subtitle, Trailer, Video, SearchState } from "./types";
@@ -108,29 +110,6 @@ const imdbRating = (item: Meta | null): string | null => {
   const value = typeof raw === "number" ? String(raw) : typeof raw === "string" ? raw.trim() : "";
   return /^\d+(\.\d+)?$/.test(value) ? value : null;
 };
-const galleryFor = (item: Meta | null): GalleryImage[] => {
-  if (!item) return [];
-  const images: GalleryImage[] = [];
-  const seen = new Set<string>();
-  const add = (value: unknown, label: string, shape: GalleryImage["shape"], kind: GalleryKind) => {
-    if (typeof value !== "string" || !value.trim() || seen.has(value)) return;
-    seen.add(value); images.push({ url: value, label, shape, kind });
-  };
-  add(item.poster, t("gallery.poster"), "poster", "poster");
-  add(item.background, t("gallery.background"), "wide", "background");
-  add(item.logo, t("gallery.logo"), "wide", "logo");
-  for (const key of ["images", "screenshots"]) {
-    const values = item[key];
-    if (!Array.isArray(values)) continue;
-    for (const [index, value] of values.entries()) {
-      const candidate = typeof value === "object" && value ? value as Record<string, unknown> : undefined;
-      add(typeof value === "string" ? value : candidate?.url ?? candidate?.src, t("gallery.still", { index: index + 1 }), "wide", "still");
-    }
-  }
-  for (const video of item.videos ?? []) add(video.thumbnail, video.title || video.name || t("gallery.episodeStill"), "wide", "still");
-  return images.slice(0, 18);
-};
-
 export function App() {
   const { t } = useI18n();
   const [view, setView] = useState<View>("catalog"); const [addons, setAddons] = useState<Addon[]>([]); const [catalogs, setCatalogs] = useState<Catalog[]>([]);
@@ -147,6 +126,8 @@ export function App() {
    *  drags them away from where they went on purpose. Reset on a fresh sign-in. */
   const navigated = useRef(false);
   const [galleryIndex, setGalleryIndex] = useState<number | null>(null);
+  const galleryRequest = useRef(0);
+  const galleryTrigger = useRef<HTMLElement | null>(null);
   /** A library item's saved pictures, which take the overlay over while it is open. */
   const [storedGallery, setStoredGallery] = useState<GalleryImage[] | null>(null);
   const [detailCompact, setDetailCompact] = useState(false);
@@ -317,6 +298,9 @@ export function App() {
   const localDetailScroll = useRef(0);
   const localDetailScroller = useRef<HTMLElement | null>(null);
   const pendingLocalFocus = useRef<string | null>(null);
+  /** Set when the sidebar's Library entry is clicked: the root must land at the very top once its
+   *  remote and local blocks have reflowed, not at the offset the old listing left behind. */
+  const pendingRootReset = useRef(false);
 
   const toggleSelection = (itemPath: string) => setSelectedPaths((current) => {
     const next = new Set(current);
@@ -715,22 +699,34 @@ export function App() {
   const chosenEpisode = Boolean(selected?.videos?.length) && selectedVideo && !episodesOpen
     ? <div className="episode-current"><small>{t("episodes.chosen")}</small><b>{selectedVideo.season != null ? `${String(selectedVideo.season).padStart(2,"0")}×${String(selectedVideo.episode || 0).padStart(2,"0")}` : t("episodes.part")}</b><span>{selectedVideo.title || selectedVideo.name || t("episodes.one")}</span><button onClick={() => setEpisodesOpen(true)}>{t("episodes.change")}</button></div>
     : null;
-  const galleryImages = useMemo(() => galleryFor(selected), [selected]);
+  const galleryImages = useMemo(() => catalogueGalleryImages(selected), [selected]);
   const shownGallery = storedGallery ?? galleryImages;
-  const closeGallery = () => { setGalleryIndex(null); setStoredGallery(null); };
-  /** The pictures a downloaded title kept. Named here rather than on the server, which stores
-   *  what each one is and leaves the wording to the interface. */
+  const closeGallery = () => {
+    galleryRequest.current += 1;
+    setGalleryIndex(null); setStoredGallery(null);
+    window.requestAnimationFrame(() => galleryTrigger.current?.isConnected && galleryTrigger.current.focus({ preventScroll: true }));
+  };
+  const presentGallery = (images: GalleryImage[], ref?: CatalogueRef | null, path?: string) => {
+    if (!images.length) return;
+    const request = ++galleryRequest.current;
+    galleryTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setStoredGallery(images);
+    setGalleryIndex(0);
+    const saved = path ? api.libraryGallery(path).then((answer) => answer.images.map(localGalleryImage)).catch(() => []) : Promise.resolve([]);
+    const extra = ref ? loadTitleGallery(ref, settings.uiLanguage) : Promise.resolve([]);
+    void Promise.all([saved, extra]).then(([local, catalogue]) => {
+      if (request === galleryRequest.current) setStoredGallery(mergeGallery(images, local, catalogue));
+    });
+  };
   const openStoredGallery = async (path: string) => {
+    const request = ++galleryRequest.current;
+    const location = browseLocation.current;
+    const openedView = viewRef.current;
     setMenuFor(null);
     try {
       const { images } = await api.libraryGallery(path);
-      if (!images.length) return;
-      let stills = 0;
-      setStoredGallery(images.map((image) => ({
-        url: image.url, shape: image.shape, kind: image.kind,
-        label: image.kind === "still" ? t("gallery.still", { index: ++stills }) : t(`gallery.${image.kind}`),
-      })));
-      setGalleryIndex(0);
+      if (request !== galleryRequest.current || openedView !== viewRef.current || location !== browseLocation.current) return;
+      presentGallery(images.map(localGalleryImage));
     } catch (error) { fail(error); }
   };
   const notify = (text: string) => { setMessage(text); setTimeout(() => setMessage(""), 3200); };
@@ -1088,6 +1084,7 @@ export function App() {
       scrollByView.current.library = 0;
       setView("library");
       resetLibrary();
+      pendingRootReset.current = true;
       // At the root the page itself is the scroller, so the inner pane alone is not enough.
       if (libraryPageRef.current) libraryPageRef.current.scrollTop = 0;
       if (browseScrollRef.current) browseScrollRef.current.scrollTop = 0;
@@ -1579,8 +1576,25 @@ export function App() {
     return () => window.cancelAnimationFrame(frame);
   }, [localDetail, view, remoteOpen, remoteRootsPresent]);
   // A remote library or another view owns the page: the local detail must not linger behind it.
-  useEffect(() => { if (remoteOpen && localDetail) closeLocalDetail(); }, [remoteOpen]);
-  useEffect(() => { if (view !== "library" && localDetail) closeLocalDetail(); }, [view]);
+  useEffect(() => { if (remoteOpen && localDetail) { pendingLocalFocus.current = null; setLocalDetail(null); } }, [remoteOpen]);
+  useEffect(() => { if (view !== "library" && localDetail) { pendingLocalFocus.current = null; setLocalDetail(null); } }, [view]);
+  // The sidebar's Library entry returns to the root, and the root has to sit at the top once its
+  // remote and local blocks have reflowed: reinserting the remote block under the scroll anchor
+  // used to leave the page partway down. Applied once, after the root DOM is there, so a normal
+  // scroll is never pinned and Back keeps its own restore.
+  useEffect(() => {
+    if (!pendingRootReset.current) return;
+    if (localDetail || remoteOpen || view !== "library" || browsePath || !browse || browse.path !== "" || browseBusy) return;
+    const frame = window.requestAnimationFrame(() => {
+      const page = libraryPageRef.current;
+      if (!page) return;
+      page.scrollTop = 0;
+      if (browseScrollRef.current) browseScrollRef.current.scrollTop = 0;
+      window.scrollTo(0, 0);
+      pendingRootReset.current = false;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [localDetail, remoteOpen, view, browsePath, remoteRootsPresent, browse?.path, browseBusy]);
   /** The listing's live row for the open detail, so its favorite and position never go stale. */
   const liveLocalItem = localDetail ? browseItemAt(localDetail.item.path) : null;
 
@@ -2471,7 +2485,7 @@ export function App() {
           </section><section ref={detailRef} className={`panel detail-panel ${selected ? "mobile-open" : ""} ${selected?.videos?.length && episodesOpen ? "series-episodes-layout" : ""} ${sourcesLoaded && (selected?.videos?.length ? selectedVideo && !episodesOpen : true) ? "series-sources-layout" : ""} ${detailCompact ? "hero-compact" : ""}`}>{selected ? <>
             <div className="mobile-detail-head"><button onClick={selected.videos?.length && selectedVideo && !episodesOpen ? () => setEpisodesOpen(true) : closeMeta}><ChevronLeft/> {t(selected.videos?.length && selectedVideo && !episodesOpen ? "episodes.heading" : "catalog.results")}</button><strong>{selected.name}</strong></div>
             <div className="detail-primary"><DetailHero className={selected.videos?.length ? "series-hero" : ""} background={selected.background}
-              gallery={galleryImages.length > 0 ? <button className={`gallery-open ${galleryImages[0].shape}`} onClick={() => setGalleryIndex(0)} title={t("gallery.openHint")}><img src={galleryImages[0].url} alt="" onError={hideBroken}/><span><Images/> {galleryImages.length > 1 ? t("gallery.stillCount", { count: galleryImages.length }) : t("gallery.enlarge")}</span></button> : undefined}
+              gallery={galleryImages.length > 0 ? <button className={`gallery-open ${galleryImages[0].shape}`} onClick={() => presentGallery(galleryImages, selected.type === "movie" || selected.type === "series" ? { type: selected.type, id: selected.id } : null)} title={t("gallery.openHint")}><img src={galleryImages[0].url} alt="" onError={hideBroken}/><span><Images/> {galleryImages.length > 1 ? t("gallery.stillCount", { count: galleryImages.length }) : t("gallery.enlarge")}</span></button> : undefined}
               copy={<><TitleChips leading={<><button className={`watch-star ${inWatchlist(selected.type, selected.id) ? "on" : ""}`} title={t(inWatchlist(selected.type, selected.id) ? "watchlist.remove" : "watchlist.add")}
                 onClick={() => void toggleWatchlist(selected)}><Star/></button>{(selected.type === "series" || selected.type === "movie" || Boolean(selected.videos?.length)) && (detailFollow ? <button className="follow-chip on" onClick={() => setFollowDialogOpen(true)}><BellRing/>{t("follow.following")}{detailFollow.autoDownload && <span className="follow-chip-download" aria-hidden="true" title={t("follow.autoOnHint")}><Download/></span>}</button> : (selected.type !== "movie" || movieHasNoSource) && <button className="follow-chip" onClick={() => setFollowStart(selected)}><Bell/>{t("follow.follow")}</button>)}</>} kind={t(selected.type === "series" ? "catalog.oneSeries" : "catalog.oneMovie")} trailer={titleTrailer} links={titleLinks} onTrailer={setTrailerOpen} secureMode={settings.secureMode}/><h2>{selected.name}</h2><p className="meta-line">{imdbRating(selected) && <b className="imdb-rating" title={t("catalog.imdbRating", { rating: imdbRating(selected)! })}><Star/>{imdbRating(selected)}</b>}{imdbRating(selected) && [selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).length ? " · " : ""}{[selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).join(" · ")}</p><DetailDescription text={selected.description} loading={metaLoading} identityKey={selected.id} skeleton={skeletonLines}/></>}/></div>
             <div className="detail-workflow">
@@ -2531,7 +2545,8 @@ export function App() {
           onOpenChange={(open) => { setRemoteOpen(open); if (!open) setRemoteCompact(false); }}
           compact={remoteCompact} onCompactChange={setRemoteCompact}
           {...(remoteTarget ? { initialTarget: remoteTarget } : {})} onPersonalChange={refreshPersonal}
-          uiLanguage={settings.uiLanguage} secureMode={settings.secureMode} onTrailer={setTrailerOpen} resetSignal={libraryReset}/>
+          uiLanguage={settings.uiLanguage} secureMode={settings.secureMode} onTrailer={setTrailerOpen}
+          onGallery={presentGallery} resetSignal={libraryReset}/>
         {!remoteOpen && <div className="panel browse-panel">
         <div className="browse-head">
         <div className="browse-bar">
@@ -2660,6 +2675,7 @@ export function App() {
           onResetProgress={() => void forgetWatched(localDetail.item.path)}
           onOpenFolder={() => { if (localDetail.item.kind === "folder") goLocalFolder(localDetail.item.path); }}
           uiLanguage={settings.uiLanguage} secureMode={settings.secureMode} onTrailer={setTrailerOpen}
+          onGallery={(images, path, ref) => { setMenuFor(null); presentGallery(images, ref, path); }}
           onPlay={(stream) => {
             const clicked = localDetail.item;
             void playLocal(clicked.kind === "file" ? clicked.label : clicked.name, stream.localPath ?? clicked.path, clicked.poster,

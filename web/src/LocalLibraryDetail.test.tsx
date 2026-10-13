@@ -25,7 +25,9 @@ let identityHandler: Handler;
 let copies: Handler;
 let links: Handler;
 let trailer: Handler;
-const calls = { source: [] as URL[], identity: [] as URL[], localStreams: [] as URL[], meta: [] as URL[], links: [] as URL[], trailer: [] as URL[] };
+let gallery: Handler;
+let meta: Handler;
+const calls = { source: [] as URL[], identity: [] as URL[], localStreams: [] as URL[], meta: [] as URL[], links: [] as URL[], trailer: [] as URL[], gallery: [] as URL[] };
 
 const deferred = <T,>() => {
   let resolve!: (value: T) => void;
@@ -40,12 +42,14 @@ beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   setLocale("en");
   clearTitleEnrichment();
-  calls.source = []; calls.identity = []; calls.localStreams = []; calls.meta = []; calls.links = []; calls.trailer = [];
+  calls.source = []; calls.identity = []; calls.localStreams = []; calls.meta = []; calls.links = []; calls.trailer = []; calls.gallery = [];
   source = () => json({ sourceId: "exact", kind: "library", playable: true, behaviorHints: { filename: "Heat.mkv" } });
   identityHandler = () => json(identity());
   copies = () => json([]);
   links = () => json({ links: [] });
   trailer = () => json({ trailer: null });
+  gallery = () => json({ images: [] });
+  meta = () => json({ id: "x", type: "movie", name: "X", background: "/catalogue-backdrop.jpg" });
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), "http://localhost");
     const path = url.pathname;
@@ -53,7 +57,8 @@ beforeEach(() => {
     if (path === "/api/library/identity") { calls.identity.push(url); return Promise.resolve(identityHandler(url, init)); }
     if (path === "/api/library/links") { calls.links.push(url); return Promise.resolve(links(url, init)); }
     if (path === "/api/library/trailer") { calls.trailer.push(url); return Promise.resolve(trailer(url, init)); }
-    if (path.startsWith("/api/meta/")) { calls.meta.push(url); return Promise.resolve(json({ id: "x", type: "movie", name: "X", background: "/catalogue-backdrop.jpg" })); }
+    if (path === "/api/library/gallery") { calls.gallery.push(url); return Promise.resolve(gallery(url, init)); }
+    if (path.startsWith("/api/meta/")) { calls.meta.push(url); return Promise.resolve(meta(url, init)); }
     if (/^\/api\/local-streams\/[^/]+\/[^/]+$/.test(path)) { calls.localStreams.push(url); return Promise.resolve(copies(url, init)); }
     return Promise.resolve(json({}, 404));
   }));
@@ -183,15 +188,49 @@ describe("LocalLibraryDetail actions", () => {
   it("asks the catalogue with the identity the source lookup already found, and never stretches the poster", async () => {
     identityHandler = () => json(identity({ bound: { type: "movie", id: "tt1", name: "Heat" } }));
     copies = () => json([copy("Films/Heat.mkv", "Heat.mkv", 2_000_000_000)]);
-    await render(file({ poster: "/poster.jpg" }));
+    const onGallery = vi.fn();
+    await render(file({ poster: "/poster.jpg" }), { onGallery });
     expect(calls.identity).toHaveLength(1);
     await flush();
     expect(calls.meta.map((url) => url.pathname)).toEqual(["/api/meta/movie/tt1"]);
-    // The file has no wide artwork, so the catalogue backdrop stands in for it; the poster keeps
-    // its own corner and is never stretched across the hero.
-    const hero = host.querySelector<HTMLElement>(".hero.library-detail-hero")!;
-    expect(hero.style.backgroundImage).toContain("/catalogue-backdrop.jpg");
-    expect(hero.style.backgroundImage).not.toContain("/poster.jpg");
-    expect(host.querySelector(".library-detail-poster img")?.getAttribute("src")).toBe("/poster.jpg");
+    // The file has no wide artwork, so the catalogue backdrop stands in; the poster stays in the
+    // corner and is never stretched across the surface.
+    const surface = host.querySelector<HTMLElement>(".library-title-detail")!;
+    expect(surface.style.backgroundImage).toContain("/catalogue-backdrop.jpg");
+    expect(surface.style.backgroundImage).not.toContain("/poster.jpg");
+    expect(host.querySelector<HTMLElement>(".hero.library-detail-hero")!.style.backgroundImage).toBe("");
+    expect(host.querySelector(".gallery-open img")?.getAttribute("src")).toBe("/poster.jpg");
+  });
+});
+
+describe("LocalLibraryDetail gallery", () => {
+  it("hands the file's own pictures and the catalogue's to the app, poster first", async () => {
+    const onGallery = vi.fn();
+    const stills = Array.from({ length: 20 }, (_, index) => `/still-${index}.jpg`);
+    meta = () => json({ id: "x", type: "movie", name: "Heat", background: "/catalogue-backdrop.jpg", screenshots: stills });
+    identityHandler = () => json(identity({ bound: { type: "movie", id: "tt1", name: "Heat" } }));
+    await render(file({ poster: "/poster.jpg", wide: "/wide.jpg" }), { onGallery });
+    const corner = host.querySelector(".gallery-open")!;
+    expect(corner.querySelector("img")?.getAttribute("src")).toBe("/poster.jpg");
+    // No saved pictures are read until the app opens the overlay, so the click only hands over the
+    // metadata it already had: the file's poster and wide artwork, then the catalogue's.
+    await click(corner);
+    const [images] = onGallery.mock.calls[0]!;
+    expect(images[0].url).toBe("/poster.jpg");
+    expect(images[1].url).toBe("/wide.jpg");
+    expect(images[2].url).toBe("/catalogue-backdrop.jpg");
+    expect(images).toHaveLength(18);
+    expect(new Set(images.map((image: { url: string }) => image.url)).size).toBe(18);
+    expect(calls.gallery).toHaveLength(0);
+  });
+
+  it("falls back to the catalogue's backdrop when the file has no wide artwork", async () => {
+    const onGallery = vi.fn();
+    identityHandler = () => json(identity({ bound: { type: "movie", id: "tt1", name: "Heat" } }));
+    await render(file({ wide: "/wide.jpg" }), { onGallery });
+    await click(host.querySelector(".gallery-open"));
+    const [images] = onGallery.mock.calls[0]!;
+    expect(images.map((image: { url: string }) => image.url)).toContain("/wide.jpg");
+    expect(images.map((image: { url: string }) => image.url)).toContain("/catalogue-backdrop.jpg");
   });
 });

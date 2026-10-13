@@ -3,9 +3,10 @@ import { t } from "./i18n";
 
 const DEFAULT_GRADIENT = "linear-gradient(90deg,#121721 25%,transparent)";
 
-/** The cinematic wash a library detail puts over its backdrop, and the band it keeps when there
- *  is no backdrop to put under it. */
-export const LIBRARY_HERO_GRADIENT = "linear-gradient(90deg,#121721f2,#121721c9 46%,#12172155 78%,transparent)";
+/** The cinematic wash a library detail lays over its whole surface: a readable left and bottom
+ *  edge for the copy, the actions and, for a remote series, the episode list under it. */
+export const LIBRARY_HERO_GRADIENT = "linear-gradient(90deg,#121721f2 0%,#121721c9 46%,#1217215e 78%,#12172122 100%),linear-gradient(0deg,#121721f2 0%,#121721b8 34%,transparent 62%)";
+/** The surface a library detail keeps when there is no backdrop to put under it. */
 export const LIBRARY_HERO_EMPTY_GRADIENT = "linear-gradient(160deg,#212836,#10141b)";
 
 /**

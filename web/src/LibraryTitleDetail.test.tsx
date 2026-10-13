@@ -2,8 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { LibraryTitleDetail, type LibraryTitleDetailProps } from "./LibraryTitleDetail";
+import type { GalleryImage } from "./gallery-images";
 import { setLocale } from "./i18n";
 import type { Stream } from "./types";
+
+const poster = (url: string): GalleryImage => ({ url, label: "Poster", shape: "poster", kind: "poster" });
+const still = (url: string): GalleryImage => ({ url, label: "Still 1", shape: "wide", kind: "still" });
 
 const remote = (id: string, name: string, bytes?: number): Stream => ({
   sourceId: id, kind: "remote", playable: true, name, provider: "jellyfin",
@@ -109,21 +113,67 @@ describe("LibraryTitleDetail sources", () => {
     expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "s1" }));
   });
 
-  it("clears a broken poster when another title opens", () => {
-    render({ poster: "/missing.jpg" });
-    act(() => host.querySelector(".library-detail-poster img")!.dispatchEvent(new Event("error")));
-    expect(host.querySelector("img.broken")).not.toBeNull();
-    rerender({ identityKey: "second", poster: "/available.jpg" });
-    expect(host.querySelector("img.broken")).toBeNull();
-  });
-
-  it("shows the shared hero, the poster in its own corner and the whole synopsis", () => {
-    render({ poster: "/poster.jpg", description: "A quiet film." });
+  it("shows the shared hero, the gallery in its own corner and the whole synopsis", () => {
+    render({ gallery: [poster("/poster.jpg"), still("/still.jpg")], onGallery: vi.fn(), description: "A quiet film." });
     expect(host.querySelector(".hero.library-detail-hero")).not.toBeNull();
-    expect(host.querySelector(".library-detail-poster img")?.getAttribute("src")).toBe("/poster.jpg");
+    const corner = host.querySelector<HTMLButtonElement>(".gallery-open")!;
+    expect(corner.querySelector("img")?.getAttribute("src")).toBe("/poster.jpg");
+    expect(corner.textContent).toContain("2 stills");
     expect(host.querySelector(".library-detail-synopsis")!.textContent).toBe("A quiet film.");
     // No disclosure and no clamp: the full text is simply read.
     expect(host.querySelector(".library-title-detail details")).toBeNull();
+  });
+
+  it("opens the one gallery overlay with the pictures it was given", () => {
+    const onGallery = vi.fn();
+    const images = [poster("/poster.jpg"), still("/still.jpg")];
+    render({ gallery: images, onGallery });
+    click(host.querySelector(".gallery-open"));
+    expect(onGallery).toHaveBeenCalledWith(images, undefined);
+  });
+
+  it("falls back to the poster as the corner image when only a poster is known", () => {
+    const onGallery = vi.fn();
+    render({ poster: "/poster.jpg", onGallery });
+    const corner = host.querySelector<HTMLButtonElement>(".gallery-open")!;
+    expect(corner.querySelector("img")?.getAttribute("src")).toBe("/poster.jpg");
+    expect(corner.textContent).toContain("Enlarge");
+    click(corner);
+    expect(onGallery).toHaveBeenCalledWith([], undefined);
+  });
+
+  it("shows no gallery trigger when nothing can be shown", () => {
+    render({ sources: [], onGallery: vi.fn() });
+    expect(host.querySelector(".gallery-open")).toBeNull();
+    expect(host.querySelector(".library-title-detail")!.textContent).toContain("No playable version");
+  });
+
+  it("clears a broken corner image when another title opens", () => {
+    render({ poster: "/missing.jpg", onGallery: vi.fn() });
+    act(() => host.querySelector(".gallery-open img")!.dispatchEvent(new Event("error")));
+    expect(host.querySelector("img.broken")).not.toBeNull();
+    rerender({ identityKey: "second", poster: "/available.jpg", onGallery: vi.fn() });
+    expect(host.querySelector("img.broken")).toBeNull();
+  });
+
+  it("lays the backdrop on the whole surface, with the hero transparent above it", () => {
+    render({ description: "A quiet film." });
+    const surface = host.querySelector<HTMLElement>(".library-title-detail")!;
+    const hero = host.querySelector<HTMLElement>(".hero.library-detail-hero")!;
+    expect(hero.style.backgroundImage).toBe("");
+    // Without a backdrop the surface keeps its own gradient rather than going flat black.
+    expect(surface.style.backgroundImage).toContain("linear-gradient");
+    // The actions follow the synopsis on that same surface, not on a band of their own.
+    expect(surface.querySelector(".library-detail-actions")).not.toBeNull();
+    expect(surface.querySelector(".library-detail-synopsis")).not.toBeNull();
+  });
+
+  it("puts the chosen backdrop on the surface, not on the hero band", () => {
+    render({ backdrops: ["/wide.jpg"] });
+    const surface = host.querySelector<HTMLElement>(".library-title-detail")!;
+    const hero = host.querySelector<HTMLElement>(".hero.library-detail-hero")!;
+    expect(surface.style.backgroundImage).toContain("/wide.jpg");
+    expect(hero.style.backgroundImage).toBe("");
   });
 
   it("draws the play, favorite, watched and open-folder controls on one row", () => {

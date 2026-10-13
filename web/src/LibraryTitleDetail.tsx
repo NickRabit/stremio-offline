@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, CirclePlay, FolderOpen, RotateCcw, Star, X } from "lucide-react";
+import { Check, ChevronDown, CirclePlay, FolderOpen, Images, RotateCcw, Star, X } from "lucide-react";
 import { DetailHero, LIBRARY_HERO_EMPTY_GRADIENT, LIBRARY_HERO_GRADIENT, useBackdrop } from "./DetailHero";
+import type { GalleryImage } from "./gallery-images";
 import { bytes, hideBroken } from "./settings-ui";
 import { t, useI18n } from "./i18n";
 import { defaultSource, orderSources, playableSources, sourceIdentity, sourceName } from "./library-detail-sources";
@@ -16,6 +17,10 @@ export interface LibraryTitleDetailProps {
   poster?: string;
   /** The backdrops to try, best first: the first one that loads is the hero. Never a poster. */
   backdrops?: Array<string | undefined>;
+  /** The pictures the gallery overlay will hold, computed by the caller from its own metadata. */
+  gallery?: GalleryImage[];
+  /** Opens the app's gallery overlay, optionally after reading the stored pictures at a path. */
+  onGallery?: (images: GalleryImage[], path?: string) => void;
   /** The metadata line: what the catalogue, the provider or the file record said. */
   facts?: ReactNode;
   description?: string;
@@ -49,7 +54,7 @@ const sizeLabel = (stream: Stream) => {
 /** The one detail body a playable title shares, local or remote: the catalogue hero, the synopsis
  *  and the sources with a split Play button. The provider-specific parts arrive as props, so the
  *  two containers cannot drift apart and a future add-on stream joins the same selector. */
-export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backdrops, facts, description, chips, favorite, onToggleFavorite, favoriteDisabled, watched, onToggleWatched, watchedDisabled, watchedLabel, onOpenFolder, sources, sourceError, onRetry, onPlay, sourceBadge }: LibraryTitleDetailProps) {
+export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backdrops, gallery, onGallery, facts, description, chips, favorite, onToggleFavorite, favoriteDisabled, watched, onToggleWatched, watchedDisabled, watchedLabel, onOpenFolder, sources, sourceError, onRetry, onPlay, sourceBadge }: LibraryTitleDetailProps) {
   useI18n();
   const backdrop = useBackdrop(backdrops ?? []);
   const [chosen, setChosen] = useState<{ identity: string; key: string } | null>(null);
@@ -84,9 +89,22 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
     <p className="library-detail-synopsis">{description || t("catalog.noDescription")}</p>
   </>;
 
-  return <div className="library-title-detail">
-    <DetailHero className="library-detail-hero" background={backdrop} gradient={LIBRARY_HERO_GRADIENT} emptyGradient={LIBRARY_HERO_EMPTY_GRADIENT}
-      gallery={poster ? <div className="library-detail-poster"><img key={poster} src={poster} alt="" onError={hideBroken}/></div> : undefined}
+  // The gallery is the same overlay the catalogue and a library row open; the corner only says how
+  // many pictures it holds and, for a local title, that the saved ones are read when it is opened.
+  const primary = gallery?.[0]?.url ?? poster;
+  const trigger = primary && onGallery ? {
+    image: primary,
+    wide: gallery?.[0]?.shape === "wide",
+    label: (gallery?.length ?? 0) > 1 ? t("gallery.stillCount", { count: gallery!.length }) : t("gallery.enlarge"),
+    open: () => onGallery(gallery ?? [], undefined),
+  } : undefined;
+
+  return <div className="library-title-detail"
+    style={backdrop ? { backgroundImage: `${LIBRARY_HERO_GRADIENT},url(${backdrop})` } : { backgroundImage: LIBRARY_HERO_EMPTY_GRADIENT }}>
+    <DetailHero className="library-detail-hero"
+      gallery={trigger ? <button type="button" className={`gallery-open ${trigger.wide ? "wide" : "poster"}`} title={t("gallery.openHint")} onClick={() => trigger.open()}>
+        <img key={trigger.image} src={trigger.image} alt="" onError={hideBroken}/><span><Images/> {trigger.label}</span>
+      </button> : undefined}
       copy={copy}/>
     {sourceError ? <div className="remote-error" role="alert">
       <span>{sourceError}</span>

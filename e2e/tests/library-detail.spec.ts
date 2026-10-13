@@ -103,3 +103,61 @@ test("the sidebar's Library entry returns the section to its root", async ({ pag
   await expect.poll(async () => await page.locator(".library-page").evaluate(node => node.scrollTop)).toBe(0);
   await expect(page.locator(`[data-path="${movieFile}"] .library-open`)).not.toBeFocused();
 });
+
+test("re-entering a nested folder's parent leaves the root at the top, not where the folder sat", async ({ page }) => {
+  await page.route("**/api/remote-libraries", route => route.fulfill({ json: { libraries: [{
+    id: `rlib_${"3".repeat(32)}`, connectionId: "connection", remoteId: "root", name: "Remote roots", type: "movie",
+    enabled: true, order: 0, showOnHome: true, showInContinueWatching: true, mosaic: false, provider: "emby",
+  }] } }));
+  // A root long enough to scroll, with one folder that holds another.
+  await page.route("**/api/library/browse?*", (route) => {
+    const path = new URL(route.request().url()).searchParams.get("path") || "";
+    const filler = Array.from({ length: 60 }, (_, index) => ({ kind: "file", path: `Root ${index}.mkv`, label: `Root ${index}`, size: 1e9, season: null, episode: null, modified: "2026-09-01", match: "unmatched" }));
+    const items = path === "Collection" ? [{ kind: "folder", path: "Collection/Inner", name: "Inner", fileCount: 5, size: 1e9, match: "unmatched" }]
+      : path ? filler
+      : [{ kind: "folder", path: "Collection", name: "Collection", fileCount: 5, size: 1e9, match: "unmatched" }, ...filler];
+    return route.fulfill({ json: { path, items, total: items.length, pending: false } });
+  });
+  await page.goto("/");
+  await goToView(page, "Knihovna");
+  // Into a folder, then into the folder inside it, so the root is behind two levels of reflow.
+  await page.locator('[data-path="Collection"] .library-open').click();
+  await page.locator('[data-path="Collection/Inner"] .library-open').click();
+  await expect(page.locator(".library-title-detail")).toHaveCount(0);
+  // Re-read the Library: the nested folder is gone and the remote block returns under the roots.
+  await goToView(page, "Knihovna");
+  await expect(page.locator(".library-page")).toHaveClass(/library-remote-roots/);
+  await expect(page.locator('[data-path="Collection"] .library-open')).toBeVisible();
+  await expect.poll(async () => await page.locator(".library-page").evaluate(node => node.scrollTop)).toBe(0);
+});
+
+test("a local detail opens the shared gallery and loads alternative artwork once", async ({ page }) => {
+  let galleryRequests = 0;
+  await page.route("**/detail-art/*", (route) => route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720"><rect width="1280" height="720" fill="#334455"/></svg>' }));
+  await page.route("**/api/meta/**", (route) => {
+    const gallery = new URL(route.request().url()).searchParams.get("gallery") === "1";
+    if (gallery) galleryRequests += 1;
+    return route.fulfill({ json: {
+      id: "tt-detail", type: "movie", name: "Detail film",
+      poster: "/detail-art/poster.svg", background: "/detail-art/background.svg",
+      ...(gallery ? { images: [{ url: "/detail-art/alternate.svg", shape: "wide", kind: "background" }] } : {}),
+    } });
+  });
+  await openDetail(page);
+  const trigger = page.locator(".library-title-detail .gallery-open");
+  await expect(trigger).toBeVisible();
+  expect(galleryRequests).toBe(0);
+  await trigger.click();
+  const gallery = page.getByRole("dialog", { name: "Galerie obrázků" });
+  await expect(gallery.locator(".gallery-thumbnails button")).toHaveCount(3);
+  await page.getByRole("button", { name: "Další obrázek", exact: true }).click();
+  await expect(gallery.locator("figure img")).toHaveAttribute("src", "/detail-art/background.svg");
+  await page.keyboard.press("ArrowRight");
+  await expect(gallery.locator("figure img")).toHaveAttribute("src", "/detail-art/alternate.svg");
+  await page.keyboard.press("Escape");
+  await expect(gallery).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+  await trigger.click();
+  await expect(gallery).toBeVisible();
+  expect(galleryRequests).toBe(1);
+});

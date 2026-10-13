@@ -191,7 +191,8 @@ through different entry points.
 ## Library detail presentation
 
 Local and remote libraries share title chips, source selection and detail layout.
-Library details show the full synopsis and a compact playback/action row. Technical
+Library details paint artwork behind the whole detail surface, including the
+compact playback/action row, with the title chips and full synopsis at the top. Technical
 filenames and version sizes belong in the source picker, rather than under Play.
 Clicking the Library navigation entry starts at the library root; Back within a
 library restores its previous listing and focus.
@@ -206,6 +207,14 @@ at 640 pixels. Explicit catalogue detail metadata also registers a separate 1920
 background cache variant, preserving the 640px listing optimization and never
 reusing an old tile as a detail backdrop. TMDB detail metadata includes artwork,
 and metadata fallback continues past an overview that lacks a backdrop. Both retain the existing image byte cap and artwork request pool.
+
+The corner picture opens the existing shared gallery. It combines saved local
+pictures with provider/catalogue artwork and preserves the originating control's
+focus on close. Alternative TMDB artwork is fetched only when the gallery opens,
+through the existing metadata route's `gallery=1` option, deduplicated and bounded
+to eighteen pictures. Metadata and image bytes remain cached; no gallery lookup
+runs for library rows or sends additional requests to Jellyfin/Emby. A failed
+alternative lookup leaves the already available gallery usable.
 
 Root mosaics use the local library's poster fan layout. An explicit
 `artwork=children` preview reads one page of at most twelve immediate children and
