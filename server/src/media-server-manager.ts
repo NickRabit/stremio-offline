@@ -1,3 +1,4 @@
+import { createHmac, randomBytes } from "node:crypto";
 import { AppError } from "./errors.js";
 import { log } from "./logger.js";
 import { remoteLibraryVisibleTo } from "./media-server-access.js";
@@ -13,8 +14,8 @@ import {
   retainHistoryOnAttach,
   sweepRemoteHistory,
 } from "./media-server-retention.js";
-import { remoteIdsMatch, remoteMatchCandidates, remoteMatchTarget, type RemoteMatchTarget } from "./media-server-match.js";
-import { MediaServerIndex, type MediaServerSnapshotKey, type SnapshotScan } from "./media-server-index.js";
+import { remoteIdsMatch, remoteMatchTarget, type RemoteMatchTarget } from "./media-server-match.js";
+import { MediaServerIndex } from "./media-server-index.js";
 import {
   createMediaServerProvider,
   type MediaServerProvider,
@@ -25,6 +26,7 @@ import {
   type ProviderLibrary,
   type ProviderSort,
   type ProviderVersion,
+  type RemoteAccountPolicy,
   PROVIDER_ORDERS,
   PROVIDER_SORTS,
 } from "./media-server-provider.js";
@@ -58,6 +60,7 @@ import {
   publicRemoteItem,
   publicRemoteLibrary,
   remoteArtworkPath,
+  validateArtworkTag,
   type AdminMediaConnection,
   type MediaConnectionRecord,
   type MediaServerKind,
@@ -137,17 +140,21 @@ const USERNAME_MAX = 256;
 const PASSWORD_MAX = 1024;
 const RUNTIME_MAX = 128;
 const CLEANUP_INTERVAL_MS = 60_000;
-const SCAN_PAGE_LIMIT = 200;
-const SCAN_PAGE_MAX = 50;
-const SCAN_ITEM_MAX = 10_000;
-const SCAN_BYTES_MAX = 5 * 1024 * 1024;
 const MATCH_CANDIDATE_MAX = 40;
 const MATCH_STREAM_MAX = 200;
+/** A page asked for one season's episodes: the one parent-scoped page an episode match reads. */
+const MATCH_EPISODE_PAGE_LIMIT = 200;
+/** How long one proven live session's identity, account policy and view list stay usable. */
+const SESSION_FACTS_TTL_MS = 30_000;
+/** How long one item or parent membership proof stays usable once it was proved. */
+const PROOF_TTL_MS = 5 * 60_000;
+/** The most membership proofs held at once; the oldest is evicted past this bound. */
+const PROOF_MAX = 8192;
 const EXPORT_MAX_BYTES = MEDIA_SERVER_CONFIGURATION_MAX_BYTES;
 const CURSOR_MAX = 8192;
 const CURSOR_JSON_MAX = 6144;
+const IF_NONE_MATCH_MAX = 1024;
 const SEARCH_MAX = 256;
-const OFFSET_MAX = 1_000_000_000;
 const ITEM_TYPES: readonly ProviderItemType[] = ["movie", "series", "season", "episode"];
 const CREATE_KEYS = ["provider", "name", "baseUrl", "allowLan", "allowLoopback", "username", "password"];
 const ATTACH_KEYS = ["remoteId", "name", "order", "showOnHome", "showInContinueWatching", "browseMode", "mosaic", "showInFavorites"];
@@ -157,15 +164,6 @@ const BROWSE_QUERY_KEYS = ["limit", "cursor", "search", "type"];
 const EPISODE_QUERY_KEYS = ["limit", "cursor"];
 const DIRECTORY_QUERY_KEYS = ["parentId", "mode", "limit", "cursor", "search", "type", "sort", "order"];
 const DIRECTORY_LIMIT_DEFAULT = 60;
-/** Hard bounds on one lazy mosaic preview: no continuation and no full scan. */
-const PREVIEW_MAX_POSTERS = 4;
-const PREVIEW_MAX_PAGES = 8;
-const PREVIEW_DEPTH_MAX = 4;
-const PREVIEW_CHILDREN = 4;
-const PREVIEW_SWALLOWED_CODES: ReadonlySet<string> = new Set([
-  "timeout", "unavailable", "invalid-response", "response-too-large", "rate-limited", "busy",
-  "authentication-required", "unsafe-address",
-]);
 /** How many operations may wait in the network lane before a further one is refused outright. */
 const NET_QUEUE_MAX = 128;
 /** The production start interval: one upstream request per connection every 125ms (8/s). */
@@ -218,14 +216,6 @@ const readQuery = (query: unknown, keys: readonly string[]): Record<string, stri
   return out;
 };
 
-const parseLimit = (value: string | undefined): number => {
-  if (value === undefined || value === "") return 100;
-  if (!/^\d{1,3}$/.test(value)) throw invalid("The media-server limit is out of range.");
-  const limit = Number(value);
-  if (limit < 1 || limit > 200) throw invalid("The media-server limit is out of range.");
-  return limit;
-};
-
 const parseSearch = (value: string | undefined): string | undefined => {
   if (value === undefined || value === "") return undefined;
   if (value.length > SEARCH_MAX) throw invalid("The media-server search term is too long.");
@@ -275,47 +265,41 @@ const parseCursor = (value: string | undefined): string | undefined => {
   return value;
 };
 
-interface BrowseCursor {
-  v: 1;
-  s: string;
-  l: string;
-  g: number;
-  a: string;
-  q: string;
-  t: string;
-  p: string;
-  o: number;
-}
-
-const encodeCursor = (cursor: BrowseCursor): string => Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
-
-/** Canonical decode: bounded base64url, bounded JSON, bounded fields and a re-encode check, so
- *  no two spellings share one cursor and nothing unbounded reaches a comparison. */
-const decodeCursor = (value: unknown): BrowseCursor => {
-  if (typeof value !== "string" || value.length === 0 || value.length > CURSOR_MAX) throw invalid("The media-server cursor is malformed.");
-  const json = Buffer.from(value, "base64url");
-  if (json.length === 0 || json.length > CURSOR_JSON_MAX) throw invalid("The media-server cursor is malformed.");
-  let parsed: unknown;
-  try { parsed = JSON.parse(json.toString("utf8")); }
-  catch { throw invalid("The media-server cursor is malformed."); }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw invalid("The media-server cursor is malformed.");
-  const { v, s, l, g, a, q, t, p, o } = parsed as Record<string, unknown>;
-  const bounded = (entry: unknown, max: number, allowEmpty: boolean): boolean =>
-    typeof entry === "string" && (allowEmpty || entry.length > 0) && entry.length <= max;
-  if (v !== 1 || !bounded(s, MEDIA_SERVER_LIMITS.upstreamId, false) || !bounded(l, MEDIA_SERVER_LIMITS.upstreamId, false)
-    || typeof g !== "number" || !Number.isSafeInteger(g) || g < 0 || !bounded(a, MEDIA_SERVER_LIMITS.upstreamId, false)
-    || !bounded(q, SEARCH_MAX, true) || !bounded(t, 32, true) || !bounded(p, MEDIA_SERVER_LIMITS.upstreamId, true)
-    || typeof o !== "number" || !Number.isSafeInteger(o) || o < 0 || o > OFFSET_MAX) {
-    throw invalid("The media-server cursor is malformed.");
-  }
-  const cursor: BrowseCursor = { v: 1, s: s as string, l: l as string, g, a: a as string, q: q as string, t: t as string, p: p as string, o };
-  if (encodeCursor(cursor) !== value) throw invalid("The media-server cursor is not canonical.");
-  return cursor;
+/** Whether one episode row is the episode an exact external id names: the same season and a
+ *  numeric episode covered by the row's own first-to-last range, so a double-episode file still
+ *  matches either of the numbers it spans. */
+const episodeCovers = (item: ProviderItem, target: RemoteMatchTarget): boolean => {
+  if (item.type !== "episode" || item.season !== target.season || item.episode === undefined || target.episode === undefined) return false;
+  const end = item.episodeEnd ?? item.episode;
+  return item.episode <= target.episode && target.episode <= end;
 };
+
+/** The one conditional header a read accepts: a bounded `If-None-Match` value. */
+const readIfNoneMatch = (value: unknown): string | undefined => {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value.length === 0 || value.length > IF_NONE_MATCH_MAX) throw invalid("The media-server conditional header is malformed.");
+  return value;
+};
+
+/** A strong or weak `If-None-Match` match against the one current tag. */
+const ifNoneMatchMatches = (header: string, etag: string): boolean => {
+  for (const raw of header.split(",")) {
+    const entry = raw.trim();
+    if (entry === "*" || entry === etag || entry === `W/${etag}`) return true;
+  }
+  return false;
+};
+
+const IMAGE_CACHE_CONTROL = "private, no-cache";
+
+const artworkNotModified = (etag: string): Response =>
+  new Response(null, { status: 304, headers: { etag, "cache-control": IMAGE_CACHE_CONTROL } });
 
 /** A native-browse cursor. It binds the acting account, the library, the connection generation,
  *  the requested parent, mode, type, search and the sort pair, plus the provider's own page
- *  cursor. A cursor from any other context is refused before a provider call. */
+ *  cursor. Its signature is drawn from a process-scoped key, so a continuation is only trusted
+ *  as proof of the parent it names when this process minted it: a forged `parentId` cannot skip
+ *  the parent proof. A cursor from any other context is still refused before a provider call. */
 interface DirectoryCursor {
   v: 1;
   l: string;
@@ -328,9 +312,22 @@ interface DirectoryCursor {
   s: string;
   r: string;
   c: string;
+  i: number;
+  h: string;
 }
 
-const encodeDirectoryCursor = (cursor: DirectoryCursor): string => Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
+/** The process-scoped signing key. It is never persisted and never leaves the process, so a
+ *  cursor minted by one run is refused by the next and by any other holder. */
+const DIRECTORY_CURSOR_KEY = randomBytes(32);
+
+const directoryCursorPayload = (cursor: Omit<DirectoryCursor, "h">): string =>
+  JSON.stringify([cursor.v, cursor.l, cursor.g, cursor.a, cursor.p, cursor.m, cursor.t, cursor.q, cursor.s, cursor.r, cursor.c, cursor.i]);
+
+const directoryCursorTag = (cursor: Omit<DirectoryCursor, "h">): string =>
+  createHmac("sha256", DIRECTORY_CURSOR_KEY).update(directoryCursorPayload(cursor), "utf8").digest("base64url");
+
+const encodeDirectoryCursor = (cursor: Omit<DirectoryCursor, "h">): string =>
+  Buffer.from(JSON.stringify({ ...cursor, h: directoryCursorTag(cursor) }), "utf8").toString("base64url");
 
 const decodeDirectoryCursor = (value: unknown): DirectoryCursor => {
   if (typeof value !== "string" || value.length === 0 || value.length > CURSOR_MAX) throw invalid("The media-server cursor is malformed.");
@@ -340,7 +337,7 @@ const decodeDirectoryCursor = (value: unknown): DirectoryCursor => {
   try { parsed = JSON.parse(json.toString("utf8")); }
   catch { throw invalid("The media-server cursor is malformed."); }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw invalid("The media-server cursor is malformed.");
-  const { v, l, g, a, p, m, t, q, s, r, c } = parsed as Record<string, unknown>;
+  const { v, l, g, a, p, m, t, q, s, r, c, i, h } = parsed as Record<string, unknown>;
   const bounded = (entry: unknown, max: number, allowEmpty: boolean): boolean =>
     typeof entry === "string" && (allowEmpty || entry.length > 0) && entry.length <= max;
   if (v !== 1 || !bounded(l, MEDIA_SERVER_LIMITS.upstreamId, false)
@@ -348,12 +345,16 @@ const decodeDirectoryCursor = (value: unknown): DirectoryCursor => {
     || !bounded(a, MEDIA_SERVER_LIMITS.upstreamId, false)
     || !bounded(p, MEDIA_SERVER_LIMITS.upstreamId, false)
     || !bounded(m, 16, false) || !bounded(t, 32, true) || !bounded(q, SEARCH_MAX, true)
-    || !bounded(s, 16, false) || !bounded(r, 16, false) || !bounded(c, CURSOR_MAX, false)) {
+    || !bounded(s, 16, false) || !bounded(r, 16, false) || !bounded(c, CURSOR_MAX, false)
+    || typeof i !== "number" || !Number.isSafeInteger(i) || i < 0
+    || !bounded(h, 64, false)) {
     throw invalid("The media-server cursor is malformed.");
   }
-  const cursor: DirectoryCursor = { v: 1, l: l as string, g, a: a as string, p: p as string, m: m as string, t: t as string, q: q as string, s: s as string, r: r as string, c: c as string };
-  if (encodeDirectoryCursor(cursor) !== value) throw invalid("The media-server cursor is not canonical.");
-  return cursor;
+  const body: Omit<DirectoryCursor, "h"> = { v: 1, l: l as string, g, a: a as string, p: p as string, m: m as string, t: t as string, q: q as string, s: s as string, r: r as string, c: c as string, i };
+  // Re-encoding recomputes the tag, so this one canonical check both rejects a non-canonical
+  // spelling and refuses any cursor whose signature this process did not produce.
+  if (encodeDirectoryCursor(body) !== value) throw invalid("The media-server cursor is not canonical.");
+  return { ...body, h: h as string };
 };
 
 interface CachedRuntime {
@@ -366,6 +367,41 @@ interface CachedRuntime {
   readonly dispatchPacer: RuntimePacer;
   /** Identical in-flight metadata reads currently shared by this runtime's callers. */
   readonly inflight: Map<string, InflightRead>;
+  /** The last proved identity, account policy and view list, reused for a short window and
+   *  dropped with the runtime on any invalidation. It never carries the token: the credential
+   *  is re-read from the vault on every request so a changed or removed key still fails closed. */
+  session?: SessionFacts;
+}
+
+/** The remote facts one live session proves. Cached per runtime for a short window -- never the
+ *  token or any local authority -- so a burst of reads shares one identity, policy and view list
+ *  instead of re-reading them upstream. */
+interface SessionFacts {
+  serverId: string;
+  accountId: string;
+  policy: RemoteAccountPolicy;
+  libraries: ProviderLibrary[];
+  at: number;
+}
+
+/** One proved membership: an item (or a library root) was shown to sit inside a granted library
+ *  for one acting account under one connection generation and secret. Cached for a short window
+ *  so an image read for an id a page already returned never repeats the detail and ancestor
+ *  proof. It grants no playback permission and is keyed by actor, library and generation, so a
+ *  proof can never leak across accounts, libraries or connections. */
+interface MembershipProof {
+  actorId: string;
+  libraryId: string;
+  connectionId: string;
+  generation: number;
+  secretRef: string | undefined;
+  itemId: string;
+  type: ProviderItemType;
+  hasPrimaryImage?: boolean;
+  hasBackdropImage?: boolean;
+  primaryImageTag?: string;
+  backdropImageTag?: string;
+  at: number;
 }
 
 /** One operation waiting for its turn under a connection's start pacing. `settled` separates an
@@ -451,6 +487,10 @@ export { remoteLibraryVisibleTo };
 export class MediaServerManager {
   private readonly runtimes = new Map<string, CachedRuntime>();
   private readonly statuses = new Map<string, StatusRecord>();
+  /** Bounded, time-limited item/parent membership proofs. Keyed by actor, library and
+   *  connection generation/secret, they never grant playback and are dropped with an
+   *  invalidated connection. */
+  private readonly proofs = new Map<string, MembershipProof>();
   private readonly configuration: MediaServerConfiguration;
   private readonly index: MediaServerIndex;
   private readonly clock: () => number;
@@ -530,6 +570,7 @@ export class MediaServerManager {
     const transports = [...this.runtimes.values()].map((runtime) => runtime.transport);
     this.runtimes.clear();
     this.statuses.clear();
+    this.proofs.clear();
     const logins = [...this.loginTransports];
     this.loginTransports.clear();
     await Promise.allSettled([...transports, ...logins].map((transport) => transport.close()));
@@ -742,7 +783,9 @@ export class MediaServerManager {
     const request = this.requestSignal(signal);
     this.requireAdmin(authority, request);
     const connection = this.requireConnection(id);
-    const session = await this.liveSession(authority, connection, {}, request);
+    // An administrator discovering libraries must see one that appeared upstream just now, so a
+    // cached view list is never reused here.
+    const session = await this.liveSession(authority, connection, { refresh: true }, request);
     this.requireAdmin(authority, request);
     return session.libraries.map((library) => ({ ...library }));
   }
@@ -761,7 +804,9 @@ export class MediaServerManager {
     const mosaic = record.mosaic === undefined ? undefined : bool(record.mosaic, "mosaic");
     const showInFavorites = record.showInFavorites === undefined ? undefined : bool(record.showInFavorites, "showInFavorites");
     return this.adminMutation(async () => {
-      const session = await this.liveSession(authority, connection, { libraryRemoteId: remoteId }, request);
+      // A library the administrator is attaching may have appeared after the cache was filled,
+      // so the view list is proved afresh before the attachment is verified against it.
+      const session = await this.liveSession(authority, connection, { libraryRemoteId: remoteId, refresh: true }, request);
       const discovered = session.libraries.find((library) => library.id === remoteId);
       if (!discovered) throw notFound("That remote library is not visible to the account.");
       this.recheckConnection(authority, request, connection);
@@ -977,7 +1022,18 @@ export class MediaServerManager {
     const libraries = this.visibleFor(user);
     this.currentActor(authority, request);
     const connections = this.store.mediaConnections();
-    return libraries.map((library) => publicRemoteLibrary(library, connections.find((candidate) => candidate.id === library.connectionId)?.provider));
+    return libraries.map((library) => {
+      const connection = connections.find((candidate) => candidate.id === library.connectionId);
+      const result = publicRemoteLibrary(library, connection?.provider);
+      const runtime = connection && this.runtimes.get(connection.id);
+      const facts = runtime?.session;
+      if (connection && runtime?.generation === connection.generation && runtime.secretRef === connection.secretRef
+        && facts && this.clock() - facts.at < SESSION_FACTS_TTL_MS && effectiveMosaic(library)) {
+        const tag = facts.libraries.find((view) => view.id === library.remoteId)?.primaryImageTag;
+        if (tag !== undefined) result.poster = remoteArtworkPath(library.id, library.remoteId, "Primary", tag);
+      }
+      return result;
+    });
   }
 
   /** Every attached remote library, disabled ones included, with the provider of its stored
@@ -990,43 +1046,17 @@ export class MediaServerManager {
     return libraries.map((library) => ({ ...adminRemoteLibrary(library, connections.find((candidate) => candidate.id === library.connectionId)?.provider) }));
   }
 
+  /** The legacy one-page browse. It is a thin wrapper over `browseDirectory`: it accepts only
+   *  the old `limit`/`cursor`/`search`/`type` keys and never scans or continues past one
+   *  provider page. */
   async browseItems(authority: MediaServerAuthority, libraryId: unknown, query: unknown, signal?: AbortSignal): Promise<MediaServerBrowsePage> {
-    const request = this.requestSignal(signal);
-    const user = this.currentActor(authority, request);
     const record = readQuery(query, BROWSE_QUERY_KEYS);
-    const limit = parseLimit(record.limit);
-    const search = parseSearch(record.search);
-    const type = parseType(record.type);
-    const rawCursor = parseCursor(record.cursor);
-    const library = this.requireVisibleLibrary(user, libraryId);
-    const connection = this.requireConnection(library.connectionId);
-    let cursor: BrowseCursor | undefined;
-    if (rawCursor !== undefined) {
-      cursor = decodeCursor(rawCursor);
-      if (cursor.l !== library.id || cursor.a !== user.id || cursor.g !== connection.generation
-        || cursor.q !== (search ?? "") || cursor.t !== (type ?? "") || cursor.p !== "") throw stale();
-    }
-    const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId }, request);
-    const snapshot = await this.index.resolve(this.snapshotKey(connection, library), {
-      ...(cursor ? { cursorSnapshotId: cursor.s } : {}),
-      scan: (scanSignal) => this.scanLibrary(authority, connection, library, session.token, session.provider, scanSignal, request),
-    });
-    this.recheckContent(authority, request, library.id, connection);
-    const filtered = this.filterItems(snapshot.items, search, type);
-    const offset = cursor?.o ?? 0;
-    if (offset > filtered.length) throw invalid("The media-server cursor is out of range.");
-    const slice = filtered.slice(offset, offset + limit);
-    const page: MediaServerBrowsePage = {
-      items: slice.map((item) => publicRemoteItem(structuredClone(item), library.id)),
-      total: filtered.length,
-      asOf: snapshot.asOf,
-      stale: false,
-      capabilities: READ_ONLY_MEDIA_CAPABILITIES,
-    };
-    if (offset + slice.length < filtered.length) {
-      page.cursor = encodeCursor({ v: 1, s: snapshot.id, l: library.id, g: connection.generation, a: user.id, q: search ?? "", t: type ?? "", p: "", o: offset + slice.length });
-    }
-    return page;
+    return this.browseDirectory(authority, libraryId, {
+      ...(record.limit === undefined ? {} : { limit: record.limit }),
+      ...(record.cursor === undefined ? {} : { cursor: record.cursor }),
+      ...(record.search === undefined ? {} : { search: record.search }),
+      ...(record.type === undefined ? {} : { type: record.type }),
+    }, signal);
   }
 
   /** One native browse page of an attached remote library, folders or titles. It reads exactly
@@ -1057,7 +1087,13 @@ export class MediaServerManager {
         || cursor.s !== sort || cursor.r !== order) throw stale();
     }
     const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId }, request);
-    if (requestedParent !== undefined) await this.proveParent(authority, request, library, connection, session, requestedParent);
+    // A signed cursor that binds this exact actor, library, generation, parent and query can
+    // only have been minted after the parent was proved, so a continuation skips the proof; a
+    // fresh first page, or anything the signature does not prove, is proved again.
+    const parentProofExpired = cursor !== undefined && this.clock() - cursor.i >= PROOF_TTL_MS;
+    if (requestedParent !== undefined && (cursor === undefined || parentProofExpired)) {
+      await this.proveParent(authority, request, library, connection, session, requestedParent);
+    }
     const page = await this.upstream(connection, request, () => session.provider.pageDirectory(session.token, connection.accountId, parent, {
       mode,
       limit,
@@ -1068,6 +1104,10 @@ export class MediaServerManager {
       ...(type === undefined ? {} : { type }),
     }, request));
     this.recheckContent(authority, request, library.id, connection);
+    // A page of a parent already proved to sit in this library is a set of members of this
+    // library: register each as a proof so a later image read never repeats its detail and
+    // ancestor chain. Only after the current checks, so a stale page registers nothing.
+    for (const item of page.items) this.putProof(this.proofOf(user, library, connection, item));
     const result: MediaServerBrowsePage = {
       items: page.items.map((item) => publicRemoteItem(structuredClone(item), library.id)),
       total: page.total,
@@ -1079,17 +1119,13 @@ export class MediaServerManager {
       result.cursor = encodeDirectoryCursor({
         v: 1, l: library.id, g: connection.generation, a: user.id, p: parent, m: mode,
         t: type ?? "", q: search ?? "", s: sort, r: order, c: page.cursor,
+        i: cursor !== undefined && !parentProofExpired ? cursor.i : this.clock(),
       });
     }
     return result;
   }
 
-  /** Up to four same-origin poster paths for one library tile or folder tile, read by a bounded,
-   *  breadth-first walk of at most four children per node, eight provider pages and four levels.
-   *  It never continues a page and never scans the library. When the mosaic is off it answers
-   *  empty without a single provider call. Upstream metadata failures leave the gathered posters
-   *  as they are so a cosmetic preview can never hide a library or block opening it; a lost
-   *  authority, a stale generation or an abort still refuses. */
+  /** Own artwork wins; otherwise one bounded child page supplies the mosaic. */
   async previewDirectory(authority: MediaServerAuthority, libraryId: unknown, parentId?: unknown, signal?: AbortSignal): Promise<{ posters: string[] }> {
     const request = this.requestSignal(signal);
     const user = this.currentActor(authority, request);
@@ -1099,48 +1135,24 @@ export class MediaServerManager {
     const requestedParent = parseParentId(typeof parentId === "string" ? parentId : undefined);
     const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId }, request);
     let root = library.remoteId;
-    if (requestedParent !== undefined) {
+    let tag: string | undefined;
+    if (requestedParent === undefined) {
+      tag = session.libraries.find((entry) => entry.id === root)?.primaryImageTag;
+    } else {
       const parent = await this.proveParent(authority, request, library, connection, session, requestedParent);
-      if (parent.type !== "folder") return { posters: [] };
-      root = parent.id;
-    }
-    const queue: string[] = [root];
-    const candidates: ProviderItem[] = [];
-    let depth = 0;
-    let pages = 0;
-    let stopped = false;
-    while (queue.length && pages < PREVIEW_MAX_PAGES && depth < PREVIEW_DEPTH_MAX && candidates.length < PREVIEW_MAX_POSTERS) {
-      const level = queue.length;
-      const folders: string[] = [];
-      for (let index = 0; index < level && pages < PREVIEW_MAX_PAGES; index += 1) {
-        if (request.aborted) throw cancelled();
-        const node = queue.shift() as string;
-        let page;
-        try {
-          pages += 1;
-          page = await this.upstream(connection, request, () => session.provider.pageDirectory(session.token, connection.accountId, node, { mode: "folders", limit: PREVIEW_CHILDREN }, request));
-        } catch (error) {
-          if (error instanceof MediaServerError && PREVIEW_SWALLOWED_CODES.has(error.code)) { stopped = true; break; }
-          throw error;
-        }
-        this.recheckContent(authority, request, library.id, connection);
-        for (const item of page.items) {
-          if (item.hasPrimaryImage === true || (item.type !== "folder" && item.hasPrimaryImage !== false)) candidates.push(item);
-          if (item.type === "folder" && item.hasPrimaryImage !== true) folders.push(item.id);
-        }
-        if (candidates.length >= PREVIEW_MAX_POSTERS) break;
-      }
-      if (stopped) break;
-      // Folders are opened only when the level did not already fill the mosaic.
-      queue.push(...folders);
-      depth += 1;
+      if (parent.type === "season") return { posters: [] };
+      root = parent.itemId;
+      tag = parent.primaryImageTag;
     }
     this.recheckContent(authority, request, library.id, connection);
-    const chosen = [
-      ...candidates.filter((item) => item.hasPrimaryImage === true),
-      ...candidates.filter((item) => item.hasPrimaryImage !== true),
-    ].slice(0, PREVIEW_MAX_POSTERS);
-    return { posters: chosen.map((item) => remoteArtworkPath(library.id, item.id, "Primary")) };
+    if (tag !== undefined) return { posters: [remoteArtworkPath(library.id, root, "Primary", tag)] };
+    const page = await this.upstream(connection, request, () => session.provider.pageDirectory(session.token, connection.accountId, root, {
+      mode: "folders", limit: 12,
+    }, request));
+    this.recheckContent(authority, request, library.id, connection);
+    for (const item of page.items) this.putProof(this.proofOf(user, library, connection, item));
+    return { posters: page.items.filter((item) => item.hasPrimaryImage === true).slice(0, 4)
+      .map((item) => remoteArtworkPath(library.id, item.id, "Primary", item.primaryImageTag)) };
   }
 
   async itemDetail(authority: MediaServerAuthority, libraryId: unknown, itemId: unknown, signal?: AbortSignal): Promise<MediaServerDetail> {
@@ -1150,56 +1162,22 @@ export class MediaServerManager {
     const connection = this.requireConnection(library.connectionId);
     const requested = requestItemId(itemId);
     const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId }, request);
-    const item = await this.upstream(connection, request, () => session.provider.detail(session.token, connection.accountId, requested, request));
-    this.recheckContent(authority, request, library.id, connection);
-    const ancestors = await this.upstream(connection, request, () => session.provider.ancestors(session.token, connection.accountId, item.id, request));
-    if (!ancestors.includes(library.remoteId)) throw notFound("That item is not in this library.");
-    this.recheckContent(authority, request, library.id, connection);
+    const item = await this.verifiedDetail(authority, request, library, connection, session, requested);
     return { item: publicRemoteItem(structuredClone(item), library.id), capabilities: READ_ONLY_MEDIA_CAPABILITIES };
   }
 
+  /** The legacy one-page episode list. It is a thin wrapper over `browseDirectory`: one
+   *  parent-scoped page of the parent's episodes, never a scan or a snapshot. It accepts only
+   *  the old `limit`/`cursor` keys. */
   async itemEpisodes(authority: MediaServerAuthority, libraryId: unknown, itemId: unknown, query: unknown, signal?: AbortSignal): Promise<MediaServerBrowsePage> {
-    const request = this.requestSignal(signal);
-    const user = this.currentActor(authority, request);
     const record = readQuery(query, EPISODE_QUERY_KEYS);
-    const limit = parseLimit(record.limit);
-    const rawCursor = parseCursor(record.cursor);
-    const library = this.requireVisibleLibrary(user, libraryId);
-    const connection = this.requireConnection(library.connectionId);
-    const parentId = requestItemId(itemId);
-    let cursor: BrowseCursor | undefined;
-    if (rawCursor !== undefined) {
-      cursor = decodeCursor(rawCursor);
-      if (cursor.l !== library.id || cursor.a !== user.id || cursor.g !== connection.generation
-        || cursor.q !== "" || cursor.t !== "" || cursor.p !== parentId) throw stale();
-    }
-    const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId }, request);
-    const parent = await this.upstream(connection, request, () => session.provider.detail(session.token, connection.accountId, parentId, request));
-    this.recheckContent(authority, request, library.id, connection);
-    const ancestors = await this.upstream(connection, request, () => session.provider.ancestors(session.token, connection.accountId, parent.id, request));
-    if (!ancestors.includes(library.remoteId)) throw notFound("That item is not in this library.");
-    if (parent.type !== "series" && parent.type !== "season") throw invalid("That item has no episodes.");
-    const snapshot = await this.index.resolve(this.snapshotKey(connection, library), {
-      ...(cursor ? { cursorSnapshotId: cursor.s } : {}),
-      scan: (scanSignal) => this.scanLibrary(authority, connection, library, session.token, session.provider, scanSignal, request),
-    });
-    this.recheckContent(authority, request, library.id, connection);
-    const episodes = snapshot.items.filter((item) => item.type === "episode"
-      && (parent.type === "series" ? item.seriesId === parent.id : item.parentId === parent.id));
-    const offset = cursor?.o ?? 0;
-    if (offset > episodes.length) throw invalid("The media-server cursor is out of range.");
-    const slice = episodes.slice(offset, offset + limit);
-    const page: MediaServerBrowsePage = {
-      items: slice.map((item) => publicRemoteItem(structuredClone(item), library.id)),
-      total: episodes.length,
-      asOf: snapshot.asOf,
-      stale: false,
-      capabilities: READ_ONLY_MEDIA_CAPABILITIES,
-    };
-    if (offset + slice.length < episodes.length) {
-      page.cursor = encodeCursor({ v: 1, s: snapshot.id, l: library.id, g: connection.generation, a: user.id, q: "", t: "", p: parentId, o: offset + slice.length });
-    }
-    return page;
+    return this.browseDirectory(authority, libraryId, {
+      parentId: String(itemId),
+      mode: "titles",
+      type: "episode",
+      ...(record.limit === undefined ? {} : { limit: record.limit }),
+      ...(record.cursor === undefined ? {} : { cursor: record.cursor }),
+    }, signal);
   }
 
   /** Every ordinary file version of one playable item, re-reading the acting account and the
@@ -1230,10 +1208,10 @@ export class MediaServerManager {
   }
 
   /** The verified playable items behind one exact external id. Authorization comes first, then
-   *  a bounded snapshot and a fresh detail read for every candidate: the snapshot alone never
-   *  proves a match after metadata changes, a drifted title is dropped, and an id this app does
-   *  not match exactly is an empty answer rather than an error. Only an exact namespaced id is
-   *  matched; there is no fuzzy title or path lookup and no external network conversion. */
+   *  one bounded provider-id query and a fresh detail read for every candidate, so a drifted
+   *  title is dropped. An id this app does not match exactly is an empty answer, produced
+   *  without a single upstream call. Only an exact namespaced id is matched; there is no fuzzy
+   *  title or path lookup and no external network conversion. */
   async matchingItems(authority: MediaServerAuthority, libraryId: unknown, type: unknown, catalogId: unknown, signal?: AbortSignal): Promise<ProviderItem[]> {
     const request = this.requestSignal(signal);
     const user = this.currentActor(authority, request);
@@ -1241,7 +1219,7 @@ export class MediaServerManager {
     const connection = this.requireConnection(library.connectionId);
     const target = remoteMatchTarget(String(type), String(catalogId));
     if (!target) return this.unmatchable(authority, request, library, connection);
-    const { items } = await this.matchUnder(authority, request, library, connection, target);
+    const { items } = await this.matchUnder(authority, request, library, connection, target, undefined);
     return items;
   }
 
@@ -1250,14 +1228,14 @@ export class MediaServerManager {
    *  its series after its versions, under the same captured connection and generation, so an
    *  episode that moved to another series -- or a series whose ids moved -- is dropped before
    *  any address is minted. The public stream budget is bounded here rather than truncated. */
-  async matchedVersions(authority: MediaServerAuthority, libraryId: unknown, type: unknown, catalogId: unknown, signal?: AbortSignal): Promise<MediaServerItemVersions[]> {
+  async matchedVersions(authority: MediaServerAuthority, libraryId: unknown, type: unknown, catalogId: unknown, signal?: AbortSignal, nameHint?: string): Promise<MediaServerItemVersions[]> {
     const request = this.requestSignal(signal);
     const user = this.currentActor(authority, request);
     const library = this.requireVisibleLibrary(user, libraryId);
     const connection = this.requireConnection(library.connectionId);
     const target = remoteMatchTarget(String(type), String(catalogId));
     if (!target) return this.unmatchable(authority, request, library, connection);
-    const { session, items } = await this.matchUnder(authority, request, library, connection, target);
+    const { session, items } = await this.matchUnder(authority, request, library, connection, target, nameHint);
     const out: MediaServerItemVersions[] = [];
     let streams = 0;
     for (const item of items) {
@@ -1276,21 +1254,52 @@ export class MediaServerManager {
     return out;
   }
 
-  /** One item's official artwork, read only through the scoped binary transport after a fresh
-   *  detail and ancestry proof. The image role is one of two fixed values and the item may be of
-   *  any kind; the answer is bounded validated bytes and their content type, never a URL. */
-  async readArtwork(authority: MediaServerAuthority, libraryId: unknown, itemId: unknown, imageType: unknown, signal?: AbortSignal): Promise<MediaServerAsset> {
+  /** One item's official artwork as a scoped, streaming response. The image role is one of two
+   *  fixed values and the optional `tag` is a bounded opaque string; the item may be of any kind.
+   *  Membership is taken from a short-lived proof (an id a page already returned, or a one-time
+   *  detail and ancestor proof for an unknown id) so a page's images never fan out into per-image
+   *  detail and ancestor calls. `If-None-Match` is answered locally with a 304 once the local
+   *  authority and the current tag still hold; the bytes stream through the image lane so an
+   *  image burst never consumes a metadata or playback-guard slot. */
+  async readArtwork(
+    authority: MediaServerAuthority,
+    libraryId: unknown,
+    itemId: unknown,
+    imageType: unknown,
+    signal?: AbortSignal,
+    options?: { tag?: unknown; ifNoneMatch?: unknown },
+  ): Promise<Response> {
     const request = this.requestSignal(signal);
     if (imageType !== "Primary" && imageType !== "Backdrop") throw invalid("The media-server image type is not supported.");
     const user = this.currentActor(authority, request);
     const library = this.requireVisibleLibrary(user, libraryId);
     const connection = this.requireConnection(library.connectionId);
     const requested = requestItemId(itemId);
+    const tag = options?.tag === undefined ? undefined : validateArtworkTag(options.tag);
+    const ifNoneMatch = readIfNoneMatch(options?.ifNoneMatch);
     const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId }, request);
-    await this.verifiedDetail(authority, request, library, connection, session, requested);
-    const asset = await this.upstream(connection, request, () => session.transport.requestAsset({ kind: "artwork", itemId: requested, imageType }, session.token, request));
     this.recheckContent(authority, request, library.id, connection);
-    return { bytes: new Uint8Array(asset.bytes), contentType: asset.contentType };
+    let proof = this.proofFor(user, library, connection, requested);
+    if (!proof) {
+      proof = await this.proveArtwork(authority, request, library, connection, session, requested);
+      this.recheckContent(authority, request, library.id, connection);
+      this.putProof(proof);
+    }
+    const currentTag = imageType === "Primary" ? proof.primaryImageTag : proof.backdropImageTag;
+    const etag = currentTag === undefined ? undefined : `"${currentTag}"`;
+    if (etag !== undefined && ifNoneMatch !== undefined && ifNoneMatchMatches(ifNoneMatch, etag)) {
+      this.recheckContent(authority, request, library.id, connection);
+      return artworkNotModified(etag);
+    }
+    const response = await this.imageUpstream(connection, request, () =>
+      session.transport.requestArtwork({ itemId: requested, imageType, ...(tag === undefined ? {} : { tag }) }, session.token, request));
+    try {
+      this.recheckContent(authority, request, library.id, connection);
+      return this.scopedImage(authority, request, library, connection, response, etag);
+    } catch (error) {
+      await response.body?.cancel().catch(() => undefined);
+      throw error;
+    }
   }
 
   /** One sealed external subtitle. The reference must name an ordinary file version whose
@@ -1441,9 +1450,150 @@ export class MediaServerManager {
     if (!this.sameConnection(fresh, connection)) throw stale();
   }
 
+  /** The proof map key: actor, library and connection generation/secret binding plus the item,
+   *  so no proof can be read from another account, library or generation. */
+  private proofKey(actorId: string, libraryId: string, connectionId: string, generation: number, secretRef: string | undefined, itemId: string): string {
+    return [actorId, libraryId, connectionId, String(generation), secretRef ?? "", itemId].join("\u0000");
+  }
+
+  private proofFor(user: UserRecord, library: RemoteLibraryRecord, connection: MediaConnectionRecord, itemId: string): MembershipProof | undefined {
+    const key = this.proofKey(user.id, library.id, connection.id, connection.generation, connection.secretRef, itemId);
+    const proof = this.proofs.get(key);
+    if (!proof) return undefined;
+    if (this.clock() - proof.at > PROOF_TTL_MS) {
+      this.proofs.delete(key);
+      return undefined;
+    }
+    return proof;
+  }
+
+  private putProof(proof: MembershipProof): void {
+    const key = this.proofKey(proof.actorId, proof.libraryId, proof.connectionId, proof.generation, proof.secretRef, proof.itemId);
+    this.proofs.delete(key);
+    this.proofs.set(key, proof);
+    while (this.proofs.size > PROOF_MAX) {
+      const oldest = this.proofs.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.proofs.delete(oldest);
+    }
+  }
+
+  /** One proved member of a granted library, as a proof record. */
+  private proofOf(user: UserRecord, library: RemoteLibraryRecord, connection: MediaConnectionRecord, item: ProviderItem): MembershipProof {
+    return {
+      actorId: user.id,
+      libraryId: library.id,
+      connectionId: connection.id,
+      generation: connection.generation,
+      secretRef: connection.secretRef,
+      itemId: item.id,
+      type: item.type,
+      ...(item.hasPrimaryImage === undefined ? {} : { hasPrimaryImage: item.hasPrimaryImage }),
+      ...(item.hasBackdropImage === undefined ? {} : { hasBackdropImage: item.hasBackdropImage }),
+      ...(item.primaryImageTag === undefined ? {} : { primaryImageTag: item.primaryImageTag }),
+      ...(item.backdropImageTag === undefined ? {} : { backdropImageTag: item.backdropImageTag }),
+      at: this.clock(),
+    };
+  }
+
+  private dropProofs(connectionId: string): void {
+    for (const [key, proof] of [...this.proofs]) {
+      if (proof.connectionId === connectionId) this.proofs.delete(key);
+    }
+  }
+
+  /** Proves one item belongs to a granted library, once: a library root is taken from the view
+   *  list the live session already proved, so it never asks for an ancestor of itself, and any
+   *  other id reads its detail and ancestor chain exactly once. The result is the proof a later
+   *  image read reuses. */
+  private async proveArtwork(
+    authority: MediaServerAuthority,
+    signal: AbortSignal,
+    library: RemoteLibraryRecord,
+    connection: MediaConnectionRecord,
+    session: LiveSession,
+    itemId: string,
+  ): Promise<MembershipProof> {
+    const user = this.currentActor(authority, signal);
+    if (itemId === library.remoteId) {
+      const view = session.libraries.find((entry) => entry.id === library.remoteId);
+      return {
+        actorId: user.id,
+        libraryId: library.id,
+        connectionId: connection.id,
+        generation: connection.generation,
+        secretRef: connection.secretRef,
+        itemId,
+        type: "folder",
+        ...(view?.primaryImageTag === undefined ? {} : { hasPrimaryImage: true, primaryImageTag: view.primaryImageTag }),
+        at: this.clock(),
+      };
+    }
+    const item = await this.upstream(connection, signal, () => session.provider.detail(session.token, connection.accountId, itemId, signal));
+    this.recheckContent(authority, signal, library.id, connection);
+    if (item.id !== itemId) throw new MediaServerError("invalid-response", "The media-server item identity changed.");
+    const ancestors = await this.upstream(connection, signal, () => session.provider.ancestors(session.token, connection.accountId, item.id, signal));
+    if (!ancestors.includes(library.remoteId)) throw notFound("That item is not in this library.");
+    this.recheckContent(authority, signal, library.id, connection);
+    return this.proofOf(user, library, connection, item);
+  }
+
+  /** An image request never enters the metadata network lane: the transport owns its own
+   *  bounded image pool, so an image burst cannot delay a browse or the playback guard. Only a
+   *  401 is mapped the same way, as a reauthentication that drops the runtime and its caches. */
+  private async imageUpstream<T>(connection: MediaConnectionRecord, signal: AbortSignal, work: () => Promise<T>): Promise<T> {
+    this.checkLive(signal);
+    try {
+      return await work();
+    } catch (error) {
+      if (error instanceof MediaServerError && error.code === "authentication-required") this.markReauthentication(connection);
+      throw error;
+    }
+  }
+
+  /** The image body as a private, no-cache stream that re-checks the local authority and the
+   *  connection before every chunk and aborts the upstream read when the client goes away. */
+  private scopedImage(
+    authority: MediaServerAuthority,
+    signal: AbortSignal,
+    library: RemoteLibraryRecord,
+    connection: MediaConnectionRecord,
+    upstream: Response,
+    etag: string | undefined,
+  ): Response {
+    if (upstream.status !== 200 || !upstream.body) {
+      void upstream.body?.cancel().catch(() => undefined);
+      throw new MediaServerError("unavailable", "The media-server image is unavailable.");
+    }
+    const headers = new Headers({
+      "content-type": upstream.headers.get("content-type") ?? "application/octet-stream",
+      "cache-control": IMAGE_CACHE_CONTROL,
+      "x-content-type-options": "nosniff",
+    });
+    if (etag !== undefined) headers.set("etag", etag);
+    const reader = upstream.body.getReader();
+    const body = new ReadableStream<Uint8Array>({
+      pull: async (controller) => {
+        try {
+          this.recheckContent(authority, signal, library.id, connection);
+          const chunk = await reader.read();
+          if (chunk.done) controller.close();
+          else controller.enqueue(chunk.value);
+        } catch (error) {
+          void reader.cancel().catch(() => undefined);
+          controller.error(error);
+        }
+      },
+      cancel: (reason) => reader.cancel(reason).catch(() => undefined),
+    });
+    return new Response(body, { status: 200, headers });
+  }
+
   /** Proves a requested browse parent sits inside the granted library and may be opened: the
    *  exact item, its ancestor chain reaching the library's remote id, and a folder, series or
-   *  season kind. The library root is already proved by the live session. */
+   *  season kind. A fresh membership proof is reused when one exists, so a parent proved for a
+   *  preview is not proved again for a browse; a miss reads the detail and ancestor chain once
+   *  and records the proof. The library root is already proved by the live session. */
   private async proveParent(
     authority: MediaServerAuthority,
     signal: AbortSignal,
@@ -1451,7 +1601,10 @@ export class MediaServerManager {
     connection: MediaConnectionRecord,
     session: { token: string; provider: MediaServerProvider },
     parentId: string,
-  ): Promise<ProviderItem> {
+  ): Promise<MembershipProof> {
+    const user = this.currentActor(authority, signal);
+    const cached = this.proofFor(user, library, connection, parentId);
+    if (cached && (cached.type === "folder" || cached.type === "series" || cached.type === "season")) return cached;
     const parent = await this.upstream(connection, signal, () => session.provider.detail(session.token, connection.accountId, parentId, signal));
     this.recheckContent(authority, signal, library.id, connection);
     if (parent.id !== parentId) throw new MediaServerError("invalid-response", "The media-server item identity changed.");
@@ -1459,7 +1612,9 @@ export class MediaServerManager {
     if (!ancestors.includes(library.remoteId)) throw notFound("That item is not in this library.");
     this.recheckContent(authority, signal, library.id, connection);
     if (parent.type !== "folder" && parent.type !== "series" && parent.type !== "season") throw invalid("That item cannot be browsed.");
-    return parent;
+    const proof = this.proofOf(user, library, connection, parent);
+    this.putProof(proof);
+    return proof;
   }
 
   /** One upstream detail read proved to be the item asked for and to still sit in the library,
@@ -1478,66 +1633,80 @@ export class MediaServerManager {
     const ancestors = await this.upstream(connection, signal, () => session.provider.ancestors(session.token, connection.accountId, item.id, signal));
     if (!ancestors.includes(library.remoteId)) throw notFound("That item is not in this library.");
     this.recheckContent(authority, signal, library.id, connection);
+    this.putProof(this.proofOf(this.currentActor(authority, signal), library, connection, item));
     return item;
   }
 
   /** The exact-id match re-applied to a freshly read item: a movie by its shared namespaced id,
-   *  or an episode by season and episode with no multi-episode range. */
+   *  or an episode by season and a numeric episode covered by the row's own range, so a
+   *  double-episode file still matches either of the numbers it spans. */
   private freshMatch(target: RemoteMatchTarget, item: ProviderItem): boolean {
     if (target.type === "movie") return item.type === "movie" && remoteIdsMatch(target.ids, item.providerIds);
-    return item.type === "episode" && item.season === target.season && item.episode === target.episode
-      && (item.episodeEnd === undefined || item.episodeEnd === item.episode);
+    return episodeCovers(item, target);
   }
 
-  /** An id this app does not match exactly is an empty answer, never an error -- but only
-   *  after the live session and the local records have been proved, and before the index is
-   *  asked for a snapshot it could never use. */
+  /** An id this app does not match exactly is an empty answer, never an error, and it is
+   *  produced without any upstream work once the local authority has been re-checked. */
   private async unmatchable(
     authority: MediaServerAuthority,
     request: AbortSignal,
     library: RemoteLibraryRecord,
     connection: MediaConnectionRecord,
   ): Promise<[]> {
-    await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId }, request);
     this.recheckContent(authority, request, library.id, connection);
     return [];
   }
 
-  /** One live session, one bounded snapshot and the freshly proved items behind one exact
-   *  external id, shared by `matchingItems` and `matchedVersions` so both prove the same
-   *  identity under the same captured connection and generation. */
+  /** One live session, then one bounded provider-id query for one exact external id, shared by
+   *  `matchingItems` and `matchedVersions`. A movie asks for the movie type in the library; an
+   *  episode asks once for the series, then reads one parent-scoped season episode page and
+   *  filters it by the season and the numeric episode or range locally. Every candidate is read
+   *  again before it is accepted, so a row whose metadata moved mints nothing. */
   private async matchUnder(
     authority: MediaServerAuthority,
     request: AbortSignal,
     library: RemoteLibraryRecord,
     connection: MediaConnectionRecord,
     target: RemoteMatchTarget,
+    nameHint: string | undefined,
   ): Promise<{ session: LiveSession; items: ProviderItem[] }> {
     const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId }, request);
     this.recheckContent(authority, request, library.id, connection);
-    const snapshot = await this.index.resolve(this.snapshotKey(connection, library), {
-      scan: (scanSignal) => this.scanLibrary(authority, connection, library, session.token, session.provider, scanSignal, request),
-    });
-    this.recheckContent(authority, request, library.id, connection);
-    const candidates = remoteMatchCandidates(snapshot.items, target);
-    if (candidates.length > MATCH_CANDIDATE_MAX) throw new MediaServerError("response-too-large", "The media-server match has too many candidates.");
-    const parents = new Map<string, boolean>();
     const items: ProviderItem[] = [];
-    for (const candidate of candidates) {
-      const fresh = await this.verifiedDetail(authority, request, library, connection, session, candidate.id);
-      if (!this.freshMatch(target, fresh)) continue;
-      if (target.type === "episode") {
-        const seriesId = fresh.seriesId;
-        if (seriesId === undefined) continue;
-        let proven = parents.get(seriesId);
-        if (proven === undefined) {
-          const parent = await this.verifiedDetail(authority, request, library, connection, session, seriesId);
-          proven = parent.type === "series" && remoteIdsMatch(target.ids, parent.providerIds);
-          parents.set(seriesId, proven);
-        }
-        if (!proven) continue;
+    if (target.type === "movie") {
+      const candidates = await this.upstream(connection, request, () =>
+        session.provider.findByProviderIds(session.token, connection.accountId, library.remoteId, target.ids, "movie", nameHint, request));
+      this.recheckContent(authority, request, library.id, connection);
+      for (const candidate of candidates) {
+        const fresh = await this.verifiedDetail(authority, request, library, connection, session, candidate.id);
+        if (this.freshMatch(target, fresh)) items.push(fresh);
       }
-      items.push(fresh);
+      return { session, items };
+    }
+    const seriesCandidates = await this.upstream(connection, request, () =>
+      session.provider.findByProviderIds(session.token, connection.accountId, library.remoteId, target.ids, "series", nameHint, request));
+    this.recheckContent(authority, request, library.id, connection);
+    let examined = 0;
+    for (const candidate of seriesCandidates) {
+      if (examined >= MATCH_CANDIDATE_MAX) throw new MediaServerError("response-too-large", "The media-server match has too many candidates.");
+      examined += 1;
+      const series = await this.verifiedDetail(authority, request, library, connection, session, candidate.id);
+      if (series.type !== "series" || !remoteIdsMatch(target.ids, series.providerIds)) continue;
+      const page = await this.upstream(connection, request, () => session.provider.pageDirectory(session.token, connection.accountId, series.id, {
+        mode: "titles",
+        type: "episode",
+        season: target.season,
+        limit: MATCH_EPISODE_PAGE_LIMIT,
+        sort: "name",
+        order: "asc",
+      }, request));
+      this.recheckContent(authority, request, library.id, connection);
+      for (const row of page.items) {
+        if (row.type !== "episode" || !episodeCovers(row, target)) continue;
+        const fresh = await this.verifiedDetail(authority, request, library, connection, session, row.id);
+        if (this.freshMatch(target, fresh)) items.push(fresh);
+      }
+      if (items.length > 0) break;
     }
     return { session, items };
   }
@@ -1656,25 +1825,6 @@ export class MediaServerManager {
       && left.enabled === right.enabled;
   }
 
-  private snapshotKey(connection: MediaConnectionRecord, library: RemoteLibraryRecord): MediaServerSnapshotKey {
-    return {
-      libraryId: library.id,
-      connectionId: connection.id,
-      remoteId: library.remoteId,
-      generation: connection.generation,
-      identityKey: verifiedKey(connection.provider, connection.serverId, connection.accountId),
-    };
-  }
-
-  private filterItems(items: readonly ProviderItem[], search: string | undefined, type: ProviderItemType | undefined): readonly ProviderItem[] {
-    const needle = search?.toLowerCase();
-    return items.filter((item) => {
-      if (type !== undefined && item.type !== type) return false;
-      if (needle !== undefined && needle.length > 0 && !item.name.toLowerCase().includes(needle)) return false;
-      return true;
-    });
-  }
-
   private adminConnectionView(connection: MediaConnectionRecord): AdminConnectionView {
     return { ...adminMediaConnection(connection), status: this.statusOf(connection) };
   }
@@ -1737,6 +1887,9 @@ export class MediaServerManager {
       this.failPacer(cached.dispatchPacer, stale());
       void cached.transport.close().catch(() => undefined);
     }
+    // A dropped runtime means the identity or the credential is no longer trusted: every proof
+    // taken under that connection goes with it, so a 401 invalidates the membership cache too.
+    this.dropProofs(connectionId);
     this.index.invalidateConnection(connectionId);
   }
 
@@ -1780,13 +1933,15 @@ export class MediaServerManager {
     return runtime;
   }
 
-  /** The live permission check every read repeats: current identity, the exact stored account,
-   *  its policy facts and the current view list, re-reading the acting account and the local
-   *  records after each await. Nothing is cached as permission. */
+  /** The live permission check every read repeats: the credential is re-read from the vault, so
+   *  a removed or changed key still fails closed, and the remote identity, account policy and
+   *  view list are proved. Those three facts are cached for a short window per runtime; the
+   *  local actor, the library grant and the connection are re-checked after every await, and the
+   *  cached facts are re-validated on each use. Nothing here caches local authority. */
   private async liveSession(
     authority: MediaServerAuthority,
     connection: MediaConnectionRecord,
-    options: { libraryRemoteId?: string },
+    options: { libraryRemoteId?: string; refresh?: boolean },
     signal: AbortSignal,
   ): Promise<LiveSession> {
     this.checkLive(signal);
@@ -1796,76 +1951,50 @@ export class MediaServerManager {
     const token = await this.serializedCredential(() => this.vault.get(binding, connection.secretRef as string));
     this.recheckConnection(authority, signal, connection);
     try {
-      const identity = await this.coalesced(runtime, "identity", signal, (inner) => runtime.provider.verifyIdentity(inner));
+      const facts = await this.runtimeFacts(runtime, connection, token, signal, options.refresh === true);
       this.recheckConnection(authority, signal, connection);
-      if (identity.serverId !== connection.serverId) {
+      if (facts.serverId !== connection.serverId) {
         this.markIdentityChanged(connection);
         throw identityChanged();
       }
-      const account = await this.coalesced(runtime, `account:${connection.accountId}`, signal, (inner) => runtime.provider.currentAccount(token, connection.accountId, inner));
-      this.recheckConnection(authority, signal, connection);
-      if (account.accountId !== connection.accountId) {
+      if (facts.accountId !== connection.accountId) {
         this.markIdentityChanged(connection);
         throw identityChanged();
       }
-      const policy = account.policy;
+      const policy = facts.policy;
       if (policy.disabled) throw new MediaServerError("unavailable", "The media-server account is disabled.");
       if (!policy.mediaPlayback) throw new MediaServerError("forbidden", "The media-server account may not play.");
       if (policy.hasAdditionalRestrictions) throw new MediaServerError("unsupported-policy", "The media-server account has unsupported restrictions.");
-      const libraries = await this.coalesced(runtime, `views:${connection.accountId}`, signal, (inner) => runtime.provider.listLibraries(token, connection.accountId, inner));
-      this.recheckConnection(authority, signal, connection);
       this.markAvailable(connection);
       if (options.libraryRemoteId !== undefined) {
-        if (!libraries.some((library) => library.id === options.libraryRemoteId)) throw notFound("That remote library is not visible to the account.");
+        if (!facts.libraries.some((library) => library.id === options.libraryRemoteId)) throw notFound("That remote library is not visible to the account.");
         if (!policy.allFolders && !policy.folderIds.includes(options.libraryRemoteId)) {
           throw new MediaServerError("forbidden", "The media-server account cannot reach that library.");
         }
       }
-      return { token, provider: runtime.provider, transport: runtime.transport, libraries };
+      return { token, provider: runtime.provider, transport: runtime.transport, libraries: facts.libraries };
     } catch (error) {
       if (error instanceof MediaServerError && error.code === "authentication-required") this.markReauthentication(connection);
       throw error;
     }
   }
 
-  /** One library, paged to completion or refused whole, with a running byte and item budget
-   *  and a record of every cursor seen so a cycle is refused before the page limit. */
-  private async scanLibrary(
-    authority: MediaServerAuthority,
-    connection: MediaConnectionRecord,
-    library: RemoteLibraryRecord,
-    token: string,
-    provider: MediaServerProvider,
-    scanSignal: AbortSignal,
-    requestSignal: AbortSignal,
-  ): Promise<SnapshotScan> {
-    const signal = AbortSignal.any([scanSignal, requestSignal]);
-    const items: ProviderItem[] = [];
-    const seen = new Set<string>();
-    const cursors = new Set<string>();
-    let bytes = 2;
-    let cursor: string | undefined;
-    for (let page = 0; page < SCAN_PAGE_MAX; page += 1) {
-      const options = cursor === undefined ? { limit: SCAN_PAGE_LIMIT } : { cursor, limit: SCAN_PAGE_LIMIT };
-      const result = await this.upstream(connection, signal, () => provider.pageItems(token, connection.accountId, library.remoteId, options, signal));
-      this.recheckContent(authority, signal, library.id, connection);
-      for (const item of result.items) {
-        if (seen.has(item.id)) throw new MediaServerError("invalid-response", "The media-server library repeated an item.");
-        seen.add(item.id);
-        bytes += Buffer.byteLength(JSON.stringify(item), "utf8") + 1;
-        if (bytes > SCAN_BYTES_MAX) throw new MediaServerError("response-too-large", "The media-server library snapshot is too large.");
-        items.push(item);
-        if (items.length > SCAN_ITEM_MAX) throw new MediaServerError("response-too-large", "The media-server library has too many items.");
-      }
-      if (result.cursor === undefined) {
-        this.recheckContent(authority, signal, library.id, connection);
-        return { items, asOf: new Date(this.clock()).toISOString() };
-      }
-      if (cursors.has(result.cursor)) throw new MediaServerError("invalid-response", "The media-server paging cursor did not advance.");
-      cursors.add(result.cursor);
-      cursor = result.cursor;
-    }
-    throw new MediaServerError("response-too-large", "The media-server library needed too many pages.");
+  /** The remote facts behind one live session, cached for a short window on the runtime. A miss
+   *  stages each read through the network lane and coalesces identical in-flight reads, so a
+   *  burst of callers proves the identity, policy and views once. The token is only used here,
+   *  never stored on the runtime, so the vault's fail-closed invariant still holds. */
+  private async runtimeFacts(runtime: CachedRuntime, connection: MediaConnectionRecord, token: string, signal: AbortSignal, refresh: boolean): Promise<SessionFacts> {
+    const cached = runtime.session;
+    if (!refresh && cached && this.clock() - cached.at < SESSION_FACTS_TTL_MS) return cached;
+    const identity = await this.coalesced(runtime, "identity", signal, (inner) => runtime.provider.verifyIdentity(inner));
+    this.checkLive(signal);
+    const account = await this.coalesced(runtime, `account:${connection.accountId}`, signal, (inner) => runtime.provider.currentAccount(token, connection.accountId, inner));
+    this.checkLive(signal);
+    const libraries = await this.coalesced(runtime, `views:${connection.accountId}`, signal, (inner) => runtime.provider.listLibraries(token, connection.accountId, inner));
+    this.checkLive(signal);
+    const facts: SessionFacts = { serverId: identity.serverId, accountId: account.accountId, policy: account.policy, libraries, at: this.clock() };
+    runtime.session = facts;
+    return facts;
   }
 
   /** Stage starts before reserving a slot; pace actual dispatch again after a saturated

@@ -127,8 +127,13 @@ Revocation aborts upstream reads, not just the public resource registry.
 Remote artwork must always use a content-authorized proxy/cache path, even with
 secure mode off. A generic shared catalogue image ID is insufficient. Bind
 subtitle resources to the same content/owner and preserve that binding after
-conversion. Return private cache policies and recheck grants before serving
-cached bytes; already delivered bytes cannot be recalled.
+conversion. Return private, `no-cache` policies with an `ETag` of the current
+image tag, recheck grants before serving bytes and stream under that check, and
+answer a matching `If-None-Match` with a local `304` after the local checks.
+Already delivered bytes cannot be recalled. A thumbnail a few minutes old is
+acceptable: membership and image tags are cached for a bounded window rather
+than re-proved on every image request, and an authorization refusal still
+invalidates the cache at once.
 
 Reject media-server sources server-side in download admission, device-save,
 source replacement and resume. Public capabilities describe eligible actions;
@@ -136,11 +141,14 @@ client button visibility alone is not enforcement.
 
 ## Matching and local state
 
-Maintain a bounded, paginated external-ID index for selected libraries. Scope
-cached remote results to the connection/account; filter by local grants before
-returning any item, artwork, count, source or Home card. Index updates run in the
-background, with cancellation, retry backoff and explicit freshness. An outage
-must never be interpreted as a successful empty scan or remove cached items.
+Match a catalogue id with exactly one bounded provider-id query per library, and
+an episode with one series query plus one parent-scoped season page; never a full
+scan at click time. Scope cached remote results to the connection/account; filter
+by local grants before returning any item, artwork, count, source or Home card.
+An outage must never be interpreted as a successful empty match. Where a provider
+cannot search by external id, the client's resolved catalogue or series title may
+bound the query and the exact ids are verified locally; no name ever widens what
+is matched.
 
 Match by namespaced provider IDs (IMDb, TMDB, TVDB where available), including
 media type. Cross-ID conversion may use existing metadata facilities but must
@@ -149,9 +157,10 @@ as an automatic playback decision. Cross-ID conversion applies only to remote
 matching in this proposal; shipped local-source exact-ID behavior is unchanged.
 Reject conflicting IDs; ambiguous results
 remain browsable without being offered against the wrong catalogue title.
-For episodes, verify the series and season/episode numbering; alternate orders,
-anime absolute numbering and multi-episode files require explicit handling or
-no match, never a guess. Preserve multiple legitimate versions as separate
+For episodes, verify the series and season/episode numbering: a file whose own
+range spans two episodes matches either number it names, while alternate orders
+and anime absolute numbering still require explicit handling or no match, never
+a guess. Preserve multiple legitimate versions as separate
 sources rather than confusing them with ambiguous title matches.
 
 Use a canonical identity of provider + verified server ID + remote account ID +

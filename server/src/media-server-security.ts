@@ -4,7 +4,9 @@ import { Agent, fetch as undiciFetch } from "undici";
 import {
   MediaServerError,
   MEDIA_SERVER_LIMITS,
+  validateArtworkTag,
   validateMediaServerToken,
+  type MediaServerKind,
 } from "./media-server-types.js";
 
 /** Requests the metadata transport is allowed to make, with the exact argument fields each
@@ -15,7 +17,8 @@ export interface MediaServerOperationArgs {
   user: { userId: string };
   views: { userId: string };
   items: { userId: string; parentId: string; includeItemTypes: string; startIndex?: number; limit?: number; searchTerm?: string };
-  directory: { userId: string; parentId: string; includeItemTypes: string; recursive: boolean; sortBy: string; sortOrder: string; startIndex?: number; limit?: number; searchTerm?: string };
+  directory: { userId: string; parentId: string; includeItemTypes: string; recursive: boolean; sortBy: string; sortOrder: string; startIndex?: number; limit?: number; searchTerm?: string; parentIndexNumber?: number; enableTotalRecordCount?: boolean };
+  match: { userId: string; parentId: string; provider: MediaServerKind; providerName: "imdb" | "tmdb" | "tvdb"; providerId: string; includeItemTypes: "Movie" | "Series"; searchTerm?: string; limit?: number };
   detail: { userId: string; itemId: string };
   ancestors: { itemId: string; userId: string };
   versions: { itemId: string; userId: string };
@@ -35,8 +38,17 @@ export interface MediaServerTransport {
     signal?: AbortSignal,
   ): Promise<unknown>;
   requestOriginal(args: OriginalMediaRequest, token: string, signal?: AbortSignal): Promise<Response>;
+  requestArtwork(args: ArtworkRequest, token: string, signal?: AbortSignal): Promise<Response>;
   requestAsset(request: MediaServerAssetRequest, token: string, signal?: AbortSignal): Promise<MediaServerAsset>;
   close(): Promise<void>;
+}
+
+/** The only artwork request the transport can make: a fixed image role for one opaque item id and
+ *  at most one validated tag. A URL, query, header, method or output format is never caller text. */
+export interface ArtworkRequest {
+  itemId: string;
+  imageType: "Primary" | "Backdrop";
+  tag?: string;
 }
 
 /** The only original-media request the transport can make: a fixed static stream path built from
@@ -84,6 +96,10 @@ export interface MediaServerTransportSeams {
   originalHeaderMs?: number;
   originalIdleMs?: number;
   originalLifetimeMs?: number;
+  /** Shorter artwork deadlines for tests, bounded the same way as the original-stream seams. */
+  imageHeaderMs?: number;
+  imageIdleMs?: number;
+  imageLifetimeMs?: number;
 }
 
 const MAX_CONCURRENCY = 4;
@@ -99,6 +115,14 @@ const ORIGINAL_RANGE_MAX = 128;
 const ORIGINAL_HEADER_TYPE_MAX = 256;
 const ORIGINAL_HEADER_ETAG_MAX = 512;
 const ORIGINAL_HEADER_DATE_MAX = 128;
+const IMAGE_MAX_CONCURRENCY = 32;
+const IMAGE_HEADER_MS = 10_000;
+const IMAGE_IDLE_MS = 30_000;
+const IMAGE_LIFETIME_MS = 5 * 60 * 1000;
+const IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+/** Image DNS runs in its own bounded counter, so a burst of posters never starves the four
+ *  metadata lookup slots (and a stalled metadata lookup never starves the image pool). */
+const IMAGE_DNS_MAX = IMAGE_MAX_CONCURRENCY;
 
 /** Separate streaming pool and deadlines for original-media reads. Metadata keeps its own
  *  4-request pool and single 10s deadline; the two never share capacity. */
@@ -108,6 +132,16 @@ export const MEDIA_SERVER_ORIGINAL_LIMITS = Object.freeze({
   idleMs: ORIGINAL_IDLE_MS,
   lifetimeMs: ORIGINAL_LIFETIME_MS,
   rangeMax: ORIGINAL_RANGE_MAX,
+});
+
+/** A separate streaming pool and deadlines for artwork: a burst of posters reads concurrently
+ *  without borrowing a metadata slot, under a fixed per-image cap. */
+export const MEDIA_SERVER_IMAGE_LIMITS = Object.freeze({
+  concurrency: IMAGE_MAX_CONCURRENCY,
+  headerMs: IMAGE_HEADER_MS,
+  idleMs: IMAGE_IDLE_MS,
+  lifetimeMs: IMAGE_LIFETIME_MS,
+  maxBytes: IMAGE_MAX_BYTES,
 });
 const CLIENT = "Stremio Offline";
 const DEVICE = "Server";
@@ -446,6 +480,24 @@ const searchTerm = (value: unknown): string | undefined => {
   return value;
 };
 
+type MatchProviderName = "imdb" | "tmdb" | "tvdb";
+
+const HAS_PROVIDER_ID_PARAM: Record<MatchProviderName, string> = { imdb: "HasImdbId", tmdb: "HasTmdbId", tvdb: "HasTvdbId" };
+const MATCH_PROVIDER_ID: Record<MatchProviderName, RegExp> = {
+  imdb: /^tt[0-9]{1,12}$/,
+  tmdb: /^[0-9]{1,12}$/,
+  tvdb: /^[0-9]{1,12}$/,
+};
+
+/** The one catalogue-id shape each provider filter accepts. Anything else is refused before the
+ *  value could be spliced into `AnyProviderIdEquals` or a `Has<Name>Id` query. */
+const matchProviderId = (value: unknown, name: MatchProviderName): string => {
+  if (typeof value !== "string" || !MATCH_PROVIDER_ID[name].test(value)) {
+    throw invalid("The media-server provider id is not allowed.");
+  }
+  return value;
+};
+
 const itemTypes = (value: unknown): string => {
   if (typeof value !== "string" || value.length === 0 || value.length > 128) throw invalid("The media-server item types are missing.");
   const tokens = value.split(",");
@@ -584,6 +636,38 @@ function checkAssetRequest(args: unknown): MediaServerAssetRequest {
   return { kind: "subtitle", itemId, mediaSourceId, index };
 }
 
+const ARTWORK_REQUEST_KEYS: readonly string[] = ["itemId", "imageType", "tag"];
+
+/** A plain object with exactly the artwork fields: one bounded item id, one fixed image role and
+ *  at most one validated tag. A symbol key, an accessor, an inherited or spoofed prototype, an
+ *  unknown field, a wrong-typed value or an invalid tag is refused before any DNS or network work. */
+function checkArtworkRequest(args: unknown): ArtworkRequest {
+  if (typeof args !== "object" || args === null || Array.isArray(args)
+    || ![Object.prototype, null].includes(Object.getPrototypeOf(args))) {
+    throw invalid("The media-server artwork request is malformed.");
+  }
+  for (const key of Reflect.ownKeys(args)) {
+    const descriptor = typeof key === "string" ? Object.getOwnPropertyDescriptor(args, key) : undefined;
+    if (typeof key !== "string" || !descriptor || !("value" in descriptor)) {
+      throw invalid("The media-server artwork request is malformed.");
+    }
+  }
+  const record = args as Record<string, unknown>;
+  for (const key of Reflect.ownKeys(record)) {
+    if (typeof key !== "string" || !ARTWORK_REQUEST_KEYS.includes(key)) {
+      throw invalid("The media-server artwork request has an unknown argument.");
+    }
+  }
+  if (!Object.hasOwn(record, "itemId") || !Object.hasOwn(record, "imageType")) {
+    throw invalid("The media-server artwork request is missing an argument.");
+  }
+  const itemId = pathSegment(record.itemId, "itemId");
+  const imageType = record.imageType;
+  if (imageType !== "Primary" && imageType !== "Backdrop") throw invalid("The media-server image type is not allowed.");
+  const tag = record.tag === undefined ? undefined : validateArtworkTag(record.tag);
+  return tag === undefined ? { itemId, imageType } : { itemId, imageType, tag };
+}
+
 /** The declared media type, lower-cased and stripped of parameters, from a bounded printable
  *  header. It is checked against the kind's allow-list and the actual bytes. */
 function assetContentType(value: string | null): string {
@@ -681,7 +765,8 @@ const ARGUMENT_KEYS: Record<MediaServerOperationName, readonly string[]> = {
   user: ["userId"],
   views: ["userId"],
   items: ["userId", "parentId", "includeItemTypes", "startIndex", "limit", "searchTerm"],
-  directory: ["userId", "parentId", "includeItemTypes", "recursive", "sortBy", "sortOrder", "startIndex", "limit", "searchTerm"],
+  directory: ["userId", "parentId", "includeItemTypes", "recursive", "sortBy", "sortOrder", "startIndex", "limit", "searchTerm", "parentIndexNumber", "enableTotalRecordCount"],
+  match: ["userId", "parentId", "provider", "providerName", "providerId", "includeItemTypes", "searchTerm", "limit"],
   detail: ["userId", "itemId"],
   ancestors: ["itemId", "userId"],
   versions: ["itemId", "userId"],
@@ -694,6 +779,7 @@ const REQUIRED_KEYS: Record<MediaServerOperationName, readonly string[]> = {
   views: ["userId"],
   items: ["userId", "parentId", "includeItemTypes"],
   directory: ["userId", "parentId", "includeItemTypes", "recursive", "sortBy", "sortOrder"],
+  match: ["userId", "parentId", "provider", "providerName", "providerId", "includeItemTypes"],
   detail: ["userId", "itemId"],
   ancestors: ["itemId", "userId"],
   versions: ["itemId", "userId"],
@@ -748,15 +834,56 @@ function buildRequest(baseUrl: string, operation: MediaServerOperationName, args
       const query = new URLSearchParams();
       query.set("Recursive", directoryRecursive(args.recursive));
       query.set("IncludeItemTypes", directoryItemTypes(args.includeItemTypes));
-      query.set("Fields", "ProviderIds,ParentId,SeriesInfo,ImageTags,Overview,Genres,DateCreated");
+      // A grid row carries only the facts the listing needs: identity, ancestry, image membership
+      // and a child count. Overview and genres are the detail read's job, so the grid stays small.
+      query.set("Fields", "ProviderIds,ParentId,SeriesInfo,ImageTags,ChildCount");
       query.set("EnableUserData", "false");
+      query.set("ImageTypeLimit", "1");
+      query.set("EnableImageTypes", "Primary,Backdrop");
       query.set("ParentId", pathSegment(args.parentId, "parentId"));
       query.set("StartIndex", String(boundedIndex(args.startIndex, "startIndex", 1_000_000_000) ?? 0));
       query.set("Limit", String(pageLimit(args.limit)));
       query.set("SortBy", directorySortBy(args.sortBy));
       query.set("SortOrder", directorySortOrder(args.sortOrder));
+      const parentIndexNumber = boundedIndex(args.parentIndexNumber, "parentIndexNumber", 1_000_000);
+      if (parentIndexNumber !== undefined) query.set("ParentIndexNumber", String(parentIndexNumber));
+      if (args.enableTotalRecordCount !== undefined) {
+        if (typeof args.enableTotalRecordCount !== "boolean") throw invalid("The media-server total flag must be a boolean.");
+        query.set("EnableTotalRecordCount", args.enableTotalRecordCount ? "true" : "false");
+      }
       const search = searchTerm(args.searchTerm);
       if (search !== undefined) query.set("SearchTerm", search);
+      return { method: "GET", url: `${baseUrl}/Users/${userId}/Items?${query.toString()}` };
+    }
+    case "match": {
+      const userId = encodeURIComponent(pathSegment(args.userId, "userId"));
+      if (args.provider !== "jellyfin" && args.provider !== "emby") throw invalid("The media-server match provider is not allowed.");
+      if (args.providerName !== "imdb" && args.providerName !== "tmdb" && args.providerName !== "tvdb") {
+        throw invalid("The media-server match provider name is not allowed.");
+      }
+      const providerId = matchProviderId(args.providerId, args.providerName);
+      const includeItemTypes = args.includeItemTypes;
+      if (includeItemTypes !== "Movie" && includeItemTypes !== "Series") throw invalid("The media-server match item type is not allowed.");
+      const query = new URLSearchParams();
+      query.set("Recursive", "true");
+      query.set("IncludeItemTypes", includeItemTypes);
+      query.set("Fields", "ProviderIds,ParentId,SeriesInfo");
+      query.set("EnableImages", "false");
+      query.set("EnableUserData", "false");
+      query.set("EnableTotalRecordCount", "false");
+      query.set("ParentId", pathSegment(args.parentId, "parentId"));
+      query.set("StartIndex", "0");
+      query.set("Limit", String(pageLimit(args.limit)));
+      if (args.provider === "emby") {
+        // Emby 4.9 answers an exact `AnyProviderIdEquals=imdb.tt...` filter in one list request.
+        query.set("AnyProviderIdEquals", `${args.providerName}.${providerId}`);
+      } else {
+        // Jellyfin 12.2 does not implement AnyProviderIdEquals, so it answers a documented
+        // `Has<Name>Id` page; the caller's title narrows it and the ids are re-checked locally.
+        query.set(HAS_PROVIDER_ID_PARAM[args.providerName], "true");
+        const search = searchTerm(args.searchTerm);
+        if (search !== undefined) query.set("SearchTerm", search);
+      }
       return { method: "GET", url: `${baseUrl}/Users/${userId}/Items?${query.toString()}` };
     }
     case "ancestors":
@@ -799,12 +926,25 @@ export function createMediaServerTransport(
     // DNS work cannot be cancelled; keep its slot until the resolver actually settles.
     return Promise.resolve().then(() => resolveAll(hostname, options)).finally(() => { pendingLookups -= 1; });
   };
+  let pendingImageLookups = 0;
+  const lookupImageAll: LookupAll = (hostname, options) => {
+    if (pendingImageLookups >= IMAGE_DNS_MAX) {
+      return Promise.reject(new MediaServerError("busy", "Too many media-server image lookups are in flight."));
+    }
+    pendingImageLookups += 1;
+    return Promise.resolve().then(() => resolveAll(hostname, options)).finally(() => { pendingImageLookups -= 1; });
+  };
 
   const literalHost = new URL(baseUrl).hostname.replace(/^\[|\]$/g, "");
   if (net.isIP(literalHost)) assertMediaServerAddress(literalHost, policy);
 
   const active = new Set<AbortController>();
   const agents = new Set<Agent>();
+  /** Live artwork streams, each holding one of the thirty-two image slots until it is released. */
+  const images = new Set<{ controller: AbortController; abort: () => void }>();
+  /** One reusable agent for artwork: its pooled TLS connections outlive any single image, so a
+   *  burst of posters reuses connections instead of opening one handshake per JPEG. */
+  let imageAgent: Agent | undefined;
   let closed = false;
   // A 429 parks every later request from this transport until the cooldown expires. It is only
   // cleared by time passing or by rebuilding the transport, never by a request of our own.
@@ -860,6 +1000,57 @@ export function createMediaServerTransport(
     let answers: unknown;
     try {
       answers = await guard(lookupAll(hostname, { all: true }), signal, timedOut);
+    } catch (error) {
+      if (error instanceof MediaServerError) throw error;
+      throw lookupFailure();
+    }
+    checkedAnswers(answers, policy);
+  }
+
+  /** The reusable image agent's lookup: it validates answers against the same address policy, but
+   *  because the agent outlives one request it can never borrow that request's AbortSignal. It
+   *  carries its own single-lookup deadline and its own DNS counter instead. */
+  const imageLookup = (hostname: string, options: LookupOptions, callback: (error: NodeJS.ErrnoException | null, address?: string | LookupAddress[], family?: number) => void): void => {
+    const refused = lookupFailure() as unknown as NodeJS.ErrnoException;
+    if (closed) { callback(refused); return; }
+    const family = typeof options?.family === "number" ? options.family : 0;
+    const controller = new AbortController();
+    const deadline = setTimeout(() => controller.abort(), DEADLINE_MS);
+    guard(Promise.resolve().then(() => lookupImageAll(hostname, { all: true })), controller.signal, () => true)
+      .then((answers) => {
+        clearTimeout(deadline);
+        if (closed) throw abortError(false);
+        const checked = checkedAnswers(answers, policy);
+        let list = checked;
+        if (family === 4) list = list.filter((answer) => answer.family === 4);
+        else if (family === 6) list = list.filter((answer) => answer.family === 6);
+        if (!list.length) throw lookupFailure();
+        if (options?.all) callback(null, list);
+        else callback(null, list[0].address, list[0].family);
+      })
+      .catch((error: unknown) => {
+        clearTimeout(deadline);
+        callback(error instanceof MediaServerError ? error as unknown as NodeJS.ErrnoException : refused);
+      });
+  };
+
+  const ensureImageAgent = (): Agent | undefined => {
+    if (seams.fetch) return undefined;
+    if (!imageAgent) {
+      imageAgent = new Agent({ connect: { ...seams.connectOptions, lookup: imageLookup as unknown as import("node:net").LookupFunction } });
+      agents.add(imageAgent);
+    }
+    return imageAgent;
+  };
+
+  /** The pre-flight image host check runs on the image DNS counter, so it never occupies one of the
+   *  four metadata lookup slots. */
+  async function validateImageHost(hostname: string, signal: AbortSignal, timedOut: () => boolean): Promise<void> {
+    if (signal.aborted) throw abortError(timedOut());
+    if (net.isIP(hostname)) { assertMediaServerAddress(hostname, policy); return; }
+    let answers: unknown;
+    try {
+      answers = await guard(lookupImageAll(hostname, { all: true }), signal, timedOut);
     } catch (error) {
       if (error instanceof MediaServerError) throw error;
       throw lookupFailure();
@@ -977,6 +1168,9 @@ export function createMediaServerTransport(
   const originalHeaderMs = seamDeadline(seams.originalHeaderMs, ORIGINAL_HEADER_MS);
   const originalIdleMs = seamDeadline(seams.originalIdleMs, ORIGINAL_IDLE_MS);
   const originalLifetimeMs = seamDeadline(seams.originalLifetimeMs, ORIGINAL_LIFETIME_MS);
+  const imageHeaderMs = seamDeadline(seams.imageHeaderMs, IMAGE_HEADER_MS);
+  const imageIdleMs = seamDeadline(seams.imageIdleMs, IMAGE_IDLE_MS);
+  const imageLifetimeMs = seamDeadline(seams.imageLifetimeMs, IMAGE_LIFETIME_MS);
 
   interface OriginalRecord {
     controller: AbortController;
@@ -1207,6 +1401,233 @@ export function createMediaServerTransport(
     }
   }
 
+  /** Stream one validated artwork image under the artwork pool's thirty-two slots -- never a
+   *  metadata or original slot, and never the metadata DNS counter. Headers are validated before
+   *  the Response is returned; the first image bytes follow on their own pull, so a caller can
+   *  start showing a poster before the rest of the JPEG arrives. The slot, controller and idle
+   *  deadline live until the body finishes, is cancelled, errors or the transport closes. */
+  async function requestArtwork(args: ArtworkRequest, token: string, signal?: AbortSignal): Promise<Response> {
+    const request = checkArtworkRequest(args);
+    const bearer = validateMediaServerToken(token);
+    const query = new URLSearchParams();
+    if (request.tag !== undefined) query.set("tag", request.tag);
+    query.set("MaxWidth", "640");
+    query.set("Quality", "85");
+    query.set("Format", "Jpg");
+    const url = `${baseUrl}/Items/${encodeURIComponent(request.itemId)}/Images/${request.imageType}?${query.toString()}`;
+
+    if (closed) throw new MediaServerError("closed", "The media-server transport is closed.");
+    const cooling = coolingError();
+    if (cooling) throw cooling;
+    if (images.size >= IMAGE_MAX_CONCURRENCY) throw new MediaServerError("busy", "Too many media-server images are in flight.");
+
+    const controller = new AbortController();
+    let failure: MediaServerError | undefined;
+    const isTimedOut = (): boolean => failure?.code === "timeout";
+    const abortWith = (error: MediaServerError): void => {
+      if (!failure) failure = error;
+      controller.abort();
+    };
+    const onAbort = (): void => abortWith(new MediaServerError("cancelled", "The media-server request was cancelled."));
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+
+    const headerTimer = setTimeout(
+      () => abortWith(new MediaServerError("timeout", "The media server did not answer in time.")),
+      imageHeaderMs,
+    );
+    const lifetimeTimer = setTimeout(
+      () => abortWith(new MediaServerError("timeout", "The media-server image exceeded its lifetime.")),
+      imageLifetimeMs,
+    );
+    let idleTimer: NodeJS.Timeout | undefined;
+
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let upstreamBody: ReadableStream<Uint8Array> | null = null;
+    let downstream: ReadableStreamDefaultController<Uint8Array> | undefined;
+    let released = false;
+    const record = {
+      controller,
+      abort: () => abortWith(new MediaServerError("closed", "The media-server transport is closed.")),
+    };
+    images.add(record);
+
+    /** Release exactly once: clear every deadline, drop the slot and abort the upstream request.
+     *  The shared image agent is deliberately not destroyed here -- it outlives one image. */
+    const release = (): void => {
+      if (released) return;
+      released = true;
+      clearTimeout(headerTimer);
+      clearTimeout(lifetimeTimer);
+      clearTimeout(idleTimer);
+      signal?.removeEventListener("abort", onAbort);
+      controller.signal.removeEventListener("abort", terminate);
+      void (reader ? reader.cancel() : upstreamBody?.cancel())?.catch(() => undefined);
+      images.delete(record);
+      controller.abort();
+    };
+
+    const terminate = (): void => {
+      if (released) return;
+      const error = failure ?? new MediaServerError("cancelled", "The media-server request was cancelled.");
+      release();
+      downstream?.error(error);
+    };
+    controller.signal.addEventListener("abort", terminate, { once: true });
+
+    try {
+      await validateImageHost(new URL(url).hostname.replace(/^\[|\]$/g, ""), controller.signal, isTimedOut);
+      if (closed) throw new MediaServerError("closed", "The media-server transport is closed.");
+      if (controller.signal.aborted) throw failure ?? new MediaServerError("cancelled", "The media-server request was cancelled.");
+
+      const headers: Record<string, string> = {
+        accept: "image/*",
+        "accept-encoding": "identity",
+        authorization: `MediaBrowser Client="${CLIENT}", Device="${DEVICE}", DeviceId="${deviceId}", Version="${CLIENT_VERSION}", Token="${bearer}"`,
+        "x-emby-token": bearer,
+      };
+      const init: RequestInit = { method: "GET", headers, redirect: "error" };
+      const dispatcher = ensureImageAgent();
+      const sendFetch: MediaServerFetch = seams.fetch ?? ((target, options) =>
+        undiciFetch(target, { ...options, dispatcher } as Parameters<typeof undiciFetch>[1]) as unknown as Promise<Response>);
+      // Recheck now: a 429 observed while this image was preparing must stop it before the socket.
+      const lateCooling = coolingError();
+      if (lateCooling) throw lateCooling;
+      const response = await guard(sendFetch(url, { ...init, signal: controller.signal }), controller.signal, isTimedOut);
+      upstreamBody = response.body;
+      clearTimeout(headerTimer);
+
+      if (response.status !== 200) {
+        void response.body?.cancel().catch(() => undefined);
+        throw statusFailure(response.status, new Headers(response.headers));
+      }
+      const upstream = new Headers(response.headers);
+      const encoding = upstream.get("content-encoding");
+      if (encoding !== null && encoding.trim().toLowerCase() !== "identity") {
+        void response.body?.cancel().catch(() => undefined);
+        throw invalidResponse("The media server transformed the image.");
+      }
+      const declared = contentLengthValue(upstream.get("content-length"));
+      if (declared !== undefined && declared > IMAGE_MAX_BYTES) {
+        void response.body?.cancel().catch(() => undefined);
+        throw new MediaServerError("response-too-large", "The media server image is too large.");
+      }
+      const mediaType = assetContentType(upstream.get("content-type"));
+      assetTypeAllowed("artwork", mediaType);
+
+      // Only a validated image content type and its declared length leave the transport; the
+      // upstream ETag/Last-Modified, server identity and every other header are dropped.
+      const out = new Headers();
+      out.set("content-type", mediaType);
+      if (declared !== undefined) out.set("content-length", String(declared));
+
+      const body = response.body;
+      if (!body) throw invalidResponse("The media server sent no image body.");
+      reader = body.getReader();
+      let delivered = 0;
+      let sniffed = false;
+      const prefix: Uint8Array[] = [];
+      let prefixLength = 0;
+      const armIdle = (): void => {
+        clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => abortWith(new MediaServerError("timeout", "The media server stopped sending data.")), imageIdleMs);
+      };
+      const stream = new ReadableStream<Uint8Array>({
+        start(value) { downstream = value; },
+        async pull(pullDownstream) {
+          while (!released) {
+            armIdle();
+            let result: ReadableStreamReadResult<Uint8Array>;
+            try {
+              result = await guard(reader!.read(), controller.signal, isTimedOut);
+            } catch (error) {
+              if (released) return;
+              clearTimeout(idleTimer);
+              const mapped = failure ?? mapTransportError(error, controller.signal, isTimedOut);
+              release();
+              pullDownstream.error(mapped);
+              return;
+            }
+            if (released) return;
+            clearTimeout(idleTimer);
+            if (result.done) {
+              release();
+              if (!sniffed) {
+                pullDownstream.error(invalidResponse("The media server sent content that is not a supported image."));
+                return;
+              }
+              if (declared !== undefined && delivered !== declared) {
+                pullDownstream.error(invalidResponse("The media server ended the image early."));
+                return;
+              }
+              pullDownstream.close();
+              return;
+            }
+            if (!result.value) continue;
+            if (declared !== undefined && delivered + prefixLength + result.value.byteLength > declared) {
+              release();
+              pullDownstream.error(invalidResponse("The media server sent too many image bytes."));
+              return;
+            }
+            if (delivered + prefixLength + result.value.byteLength > IMAGE_MAX_BYTES) {
+              release();
+              pullDownstream.error(new MediaServerError("response-too-large", "The media server image is too large."));
+              return;
+            }
+            // The declared type is trusted only once the leading bytes agree with it: a body whose
+            // magic bytes are not a permitted raster format never reaches the client.
+            if (!sniffed) {
+              prefix.push(result.value);
+              prefixLength += result.value.byteLength;
+              if (prefixLength < 12) continue;
+              const head = new Uint8Array(prefixLength);
+              let offset = 0;
+              for (const chunk of prefix) { head.set(chunk, offset); offset += chunk.byteLength; }
+              const detected = detectImageType(head);
+              if (!detected || detected !== mediaType) {
+                release();
+                pullDownstream.error(invalidResponse("The media server image does not match its content."));
+                return;
+              }
+              sniffed = true;
+              prefixLength = 0;
+              prefix.length = 0;
+              delivered += head.byteLength;
+              if (delivered > IMAGE_MAX_BYTES) {
+                release();
+                pullDownstream.error(new MediaServerError("response-too-large", "The media server image is too large."));
+                return;
+              }
+              pullDownstream.enqueue(head);
+              return;
+            }
+            delivered += result.value.byteLength;
+            if (delivered > IMAGE_MAX_BYTES) {
+              release();
+              pullDownstream.error(new MediaServerError("response-too-large", "The media server image is too large."));
+              return;
+            }
+            pullDownstream.enqueue(result.value);
+            return;
+          }
+        },
+        cancel() {
+          clearTimeout(idleTimer);
+          void reader!.cancel().catch(() => undefined);
+          abortWith(new MediaServerError("cancelled", "The media-server request was cancelled."));
+          release();
+        },
+      });
+      return new Response(stream, { status: 200, headers: out });
+    } catch (error) {
+      // Map the failure before releasing: release aborts the controller, and an aborted signal
+      // must not turn a redirect or an upstream error into a plain cancel.
+      const mapped = failure ?? mapTransportError(error, controller.signal, isTimedOut);
+      release();
+      throw mapped;
+    }
+  }
+
   /** Fetch one fixed artwork image or subtitle track through the same connection, DNS, socket and
    *  redirect guard as metadata, under the metadata pool's four slots and single deadline. The
    *  body is read incrementally under its kind's cap and validated before it is returned. */
@@ -1328,12 +1749,14 @@ export function createMediaServerTransport(
   return {
     requestJson,
     requestOriginal,
+    requestArtwork,
     requestAsset,
     async close() {
       closed = true;
       for (const controller of active) controller.abort();
       active.clear();
       for (const original of [...originals]) original.abort();
+      for (const image of [...images]) image.abort();
       await Promise.all([...agents].map((agent) => agent.destroy().catch(() => undefined)));
     },
   };

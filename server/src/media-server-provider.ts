@@ -1,4 +1,5 @@
 import {
+  ARTWORK_TAG,
   MediaServerError,
   MEDIA_SERVER_KINDS,
   MEDIA_SERVER_LIMITS,
@@ -22,6 +23,9 @@ export interface ProviderLibrary {
   id: string;
   name: string;
   type: RemoteLibraryType;
+  /** The view's own Primary image tag, when the server reports one, so a library tile can prefer
+   *  its own poster without traversing a child. Never part of a client projection. */
+  primaryImageTag?: string;
 }
 
 export type ProviderItemType = "movie" | "series" | "season" | "episode" | "folder";
@@ -44,6 +48,8 @@ export interface ProviderDirectoryOptions {
   type?: ProviderItemType;
   sort?: ProviderSort;
   order?: ProviderOrder;
+  /** The bounded `ParentIndexNumber` of a season page: one episode page for exactly that season. */
+  season?: number;
 }
 
 export const DIRECTORY_MEDIA_TYPES = "Movie,Series,Season,Episode,MusicVideo";
@@ -69,6 +75,14 @@ export interface ProviderItem {
    *  client projection; the item projection omits the wide path only when this is explicitly
    *  false, so a row that never reported image metadata keeps the legacy path. */
   hasBackdropImage?: boolean;
+  /** Internal only: the exact Primary image tag the row reported, so the client URL can request
+   *  that version and a 404 proves the membership is gone. Never part of a client projection. */
+  primaryImageTag?: string;
+  /** Internal only: the exact Backdrop image tag the row reported, read from BackdropImageTags or
+   *  the legacy ImageTags.Backdrop. Never part of a client projection. */
+  backdropImageTag?: string;
+  /** The bounded number of children the row reports, when the server calculates one. */
+  childCount?: number;
 }
 
 export interface ProviderPage {
@@ -99,6 +113,18 @@ export interface MediaServerProvider {
   detail(token: string, accountId: string, itemId: string, signal?: AbortSignal): Promise<ProviderItem>;
   ancestors(token: string, accountId: string, itemId: string, signal?: AbortSignal): Promise<string[]>;
   versions(token: string, accountId: string, itemId: string, signal?: AbortSignal): Promise<ProviderVersion[]>;
+  /** Resolve a catalogue id to the one library item that carries it: exactly one bounded list
+   *  query, with every returned row re-checked locally for the exact provider id. Emby answers
+   *  `AnyProviderIdEquals`; Jellyfin answers a `Has<Name>Id` page narrowed by the caller's title. */
+  findByProviderIds(
+    token: string,
+    accountId: string,
+    libraryId: string,
+    ids: { imdb?: string; tmdb?: string; tvdb?: string },
+    type: "movie" | "series",
+    nameHint?: string,
+    signal?: AbortSignal,
+  ): Promise<ProviderItem[]>;
 }
 
 const LIBRARIES_MAX = MEDIA_SERVER_LIMITS.libraries;
@@ -108,12 +134,13 @@ const EXTERNAL_SUBTITLES_MAX = 64;
 const SUBTITLE_INDEX_MAX = 1023;
 const SUBTITLE_TEXT_CODECS = new Set(["subrip", "srt"]);
 const PROVIDER_ID_MAX = 512;
-const IMAGE_TAG_MAX = 512;
 const CURSOR_MAX = 8192;
 const CURSOR_JSON_BYTES_MAX = 6144;
 const CURSOR_OFFSET_MAX = 1_000_000_000;
 const SEARCH_MAX = 256;
 const DIRECTORY_LIMIT_DEFAULT = 60;
+const SEASON_MAX = 10_000;
+const MATCH_LIMIT = 200;
 
 const invalid = (message: string): MediaServerError => new MediaServerError("invalid-input", message);
 const invalidResponse = (message: string): MediaServerError => new MediaServerError("invalid-response", message);
@@ -170,25 +197,30 @@ const DIRECTORY_ITEM_TYPE_NAMES: ReadonlyMap<ProviderItemType, string> = new Map
 const SORT_BY: Record<ProviderSort, string> = { name: "SortName", added: "DateCreated", size: "Size" };
 const SORT_ORDER: Record<ProviderOrder, string> = { asc: "Ascending", desc: "Descending" };
 
-/** The provider row's Primary image tag, read only as a truthy non-empty string. */
-function hasPrimaryImage(raw: unknown): boolean {
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return false;
-  const primary = (raw as Record<string, unknown>).Primary;
-  return typeof primary === "string" && primary.length > 0;
+/** A row's image tag is trusted only in the exact URL-safe alphabet a client URL may carry; a
+ *  blank, over-long or foreign-character tag is treated as absent rather than forwarded. */
+const lenientArtworkTag = (value: unknown): string | undefined =>
+  typeof value === "string" && ARTWORK_TAG.test(value) ? value : undefined;
+
+/** The Primary tag `ImageTags` reports, or undefined for a missing, blank or malformed one. */
+function readPrimaryTag(raw: unknown): string | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
+  return lenientArtworkTag((raw as Record<string, unknown>).Primary);
 }
 
-/** A legacy `ImageTags.Backdrop` entry is the same truthy non-empty bounded string shape. */
-function hasBackdropTag(raw: unknown): boolean {
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return false;
-  const backdrop = (raw as Record<string, unknown>).Backdrop;
-  return typeof backdrop === "string" && backdrop.length > 0 && backdrop.length <= IMAGE_TAG_MAX;
-}
-
-/** `BackdropImageTags` proves presence only when it is an array carrying at least one bounded
- *  non-empty string: an empty or malformed list is the metadata's own statement of absence. */
-function hasBackdropImages(raw: unknown): boolean {
-  if (!Array.isArray(raw)) return false;
-  return raw.some((tag) => typeof tag === "string" && tag.length > 0 && tag.length <= IMAGE_TAG_MAX);
+/** The first trustworthy tag from `BackdropImageTags`, else the legacy `ImageTags.Backdrop`. An
+ *  empty or malformed list is the metadata's own statement of absence. */
+function readBackdropTag(backdropTags: unknown, imageTags: unknown): string | undefined {
+  if (Array.isArray(backdropTags)) {
+    for (const entry of backdropTags) {
+      const tag = lenientArtworkTag(entry);
+      if (tag !== undefined) return tag;
+    }
+  }
+  if (typeof imageTags === "object" && imageTags !== null && !Array.isArray(imageTags)) {
+    return lenientArtworkTag((imageTags as Record<string, unknown>).Backdrop);
+  }
+  return undefined;
 }
 
 function readProviderIds(raw: unknown): { imdb?: string; tmdb?: string; tvdb?: string } {
@@ -248,12 +280,22 @@ function providerItem(raw: unknown): ProviderItem {
   if (size !== undefined) result.size = size;
   const addedAt = optionalString(item.DateCreated, 64);
   if (addedAt !== undefined && Number.isFinite(Date.parse(addedAt))) result.addedAt = new Date(addedAt).toISOString();
-  if (item.ImageTags !== undefined) result.hasPrimaryImage = hasPrimaryImage(item.ImageTags);
-  if (item.BackdropImageTags !== undefined) {
-    result.hasBackdropImage = hasBackdropImages(item.BackdropImageTags);
-  } else if (item.ImageTags !== undefined) {
-    result.hasBackdropImage = hasBackdropTag(item.ImageTags);
+  if (item.ImageTags !== undefined) {
+    const tag = readPrimaryTag(item.ImageTags);
+    result.hasPrimaryImage = tag !== undefined;
+    if (tag !== undefined) result.primaryImageTag = tag;
   }
+  if (item.BackdropImageTags !== undefined) {
+    const tag = readBackdropTag(item.BackdropImageTags, undefined);
+    result.hasBackdropImage = tag !== undefined;
+    if (tag !== undefined) result.backdropImageTag = tag;
+  } else if (item.ImageTags !== undefined) {
+    const tag = readBackdropTag(undefined, item.ImageTags);
+    result.hasBackdropImage = tag !== undefined;
+    if (tag !== undefined) result.backdropImageTag = tag;
+  }
+  const childCount = optionalSafeInt(item.ChildCount);
+  if (childCount !== undefined) result.childCount = childCount;
   return result;
 }
 
@@ -384,7 +426,8 @@ function decodeCursor(cursor: unknown): CursorBinding {
 }
 
 /** A directory cursor binds the whole query identity -- account, parent, mode, type, search and
- *  the sort pair -- so a cursor from one listing can never be replayed against another. */
+ *  the sort pair, the season and the initial total -- so a cursor from one listing can never be
+ *  replayed against another, and a continuation can report the same stable total. */
 interface DirectoryCursorBinding {
   o: number;
   a: string;
@@ -394,6 +437,8 @@ interface DirectoryCursorBinding {
   q: string;
   s: string;
   r: string;
+  i: string;
+  n: number;
 }
 
 const encodeDirectoryCursor = (binding: DirectoryCursorBinding): string =>
@@ -407,7 +452,7 @@ function decodeDirectoryCursor(cursor: unknown): DirectoryCursorBinding {
   try { parsed = JSON.parse(json.toString("utf8")); }
   catch { throw invalid("The media-server paging cursor is malformed."); }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw invalid("The media-server paging cursor is malformed.");
-  const { o, a, p, m, t, q, s, r } = parsed as Record<string, unknown>;
+  const { o, a, p, m, t, q, s, r, i, n } = parsed as Record<string, unknown>;
   if (typeof o !== "number" || !Number.isSafeInteger(o) || o < 0 || o > CURSOR_OFFSET_MAX
     || !cursorString(a, MEDIA_SERVER_LIMITS.upstreamId, false)
     || !cursorString(p, MEDIA_SERVER_LIMITS.upstreamId, false)
@@ -415,10 +460,12 @@ function decodeDirectoryCursor(cursor: unknown): DirectoryCursorBinding {
     || !cursorString(t, 32, true)
     || !cursorString(q, SEARCH_MAX, true)
     || !cursorString(s, 16, false)
-    || !cursorString(r, 16, false)) {
+    || !cursorString(r, 16, false)
+    || !cursorString(i, 16, true)
+    || typeof n !== "number" || !Number.isSafeInteger(n) || n < 0 || n > CURSOR_OFFSET_MAX) {
     throw invalid("The media-server paging cursor is malformed.");
   }
-  const decoded: DirectoryCursorBinding = { o, a, p, m, t, q, s, r };
+  const decoded: DirectoryCursorBinding = { o, a, p, m, t, q, s, r, i, n };
   if (encodeDirectoryCursor(decoded) !== cursor) throw invalid("The media-server paging cursor is not canonical.");
   return decoded;
 }
@@ -487,11 +534,14 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
       const item = asObject(raw, "The library view entry");
       const type = libraryType(item);
       if (!type) continue;
-      libraries.push({
+      const library: ProviderLibrary = {
         id: requiredString(item.Id, MEDIA_SERVER_LIMITS.upstreamId, "library id"),
         name: requiredString(item.Name, MEDIA_SERVER_LIMITS.name, "library name"),
         type,
-      });
+      };
+      const tag = readPrimaryTag(item.ImageTags);
+      if (tag !== undefined) library.primaryImageTag = tag;
+      libraries.push(library);
     }
     return libraries;
   }
@@ -565,14 +615,25 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
     if (!PROVIDER_SORTS.includes(sort)) throw invalid("The media-server sort is not supported.");
     const order: ProviderOrder = options.order ?? "asc";
     if (!PROVIDER_ORDERS.includes(order)) throw invalid("The media-server order is not supported.");
+    const season = options.season;
+    if (season !== undefined && (typeof season !== "number" || !Number.isSafeInteger(season) || season < 0 || season > SEASON_MAX)) {
+      throw invalid("The media-server season is out of range.");
+    }
+    const seasonKey = season === undefined ? "" : String(season);
+    // The first page carries the count; a continuation reuses the total sealed into the cursor
+    // instead, so a server that omits `TotalRecordCount` when the count is off cannot make the
+    // public total shrink between pages.
+    const continuation = options.cursor !== undefined;
     let offset = 0;
-    if (options.cursor !== undefined) {
+    let storedTotal = 0;
+    if (continuation) {
       const decoded = decodeDirectoryCursor(options.cursor);
       if (decoded.a !== accountId || decoded.p !== parentId || decoded.m !== mode || decoded.t !== (type ?? "")
-        || decoded.q !== (search ?? "") || decoded.s !== sort || decoded.r !== order) {
+        || decoded.q !== (search ?? "") || decoded.s !== sort || decoded.r !== order || decoded.i !== seasonKey) {
         throw invalid("The media-server paging cursor does not belong to this query.");
       }
       offset = decoded.o;
+      storedTotal = decoded.n;
     }
     const filteredTypes = type === "movie" ? "Movie,MusicVideo" : type === "series" && mode === "folders"
       ? "Series,Season,Episode" : type === undefined ? undefined : DIRECTORY_ITEM_TYPE_NAMES.get(type);
@@ -588,13 +649,20 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
       sortOrder: SORT_ORDER[order],
       startIndex: offset,
       limit,
+      enableTotalRecordCount: !continuation,
+      ...(season !== undefined ? { parentIndexNumber: season } : {}),
       ...(search !== undefined ? { searchTerm: search } : {}),
     };
     const response = asObject(await transport.requestJson("directory", args, token, signal), "The browse response");
     if (!Array.isArray(response.Items)) throw invalidResponse("The browse response has no item array.");
-    const total = response.TotalRecordCount;
-    if (typeof total !== "number" || !Number.isSafeInteger(total) || total < 0 || total > CURSOR_OFFSET_MAX) {
-      throw invalidResponse("The browse response has no supported total.");
+    let total: number;
+    if (continuation) {
+      total = storedTotal;
+    } else {
+      total = response.TotalRecordCount as number;
+      if (typeof total !== "number" || !Number.isSafeInteger(total) || total < 0 || total > CURSOR_OFFSET_MAX) {
+        throw invalidResponse("The browse response has no supported total.");
+      }
     }
     const items = response.Items.map((raw) => providerItem(raw));
     if (items.length > limit) throw invalidResponse("The browse page returned more items than requested.");
@@ -603,7 +671,7 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
     }
     const page: ProviderPage = { items, total };
     if (items.length > 0 && offset + items.length < total) {
-      page.cursor = encodeDirectoryCursor({ o: offset + items.length, a: accountId, p: parentId, m: mode, t: type ?? "", q: search ?? "", s: sort, r: order });
+      page.cursor = encodeDirectoryCursor({ o: offset + items.length, a: accountId, p: parentId, m: mode, t: type ?? "", q: search ?? "", s: sort, r: order, i: seasonKey, n: total });
     }
     return page;
   }
@@ -612,6 +680,59 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
     const item = providerItem(await transport.requestJson("detail", { userId: accountId, itemId }, token, signal));
     if (item.id !== itemId) throw invalidResponse("The media-server detail response is for another item.");
     return item;
+  }
+
+  /** The catalogue ids a match may use, most specific first, and the shape each one must have
+   *  before it can name a provider filter. Anything else is skipped rather than sent upstream. */
+  const MATCH_ID_PATTERNS: ReadonlyArray<readonly ["imdb" | "tmdb" | "tvdb", RegExp]> = [
+    ["imdb", /^tt[0-9]{1,12}$/],
+    ["tmdb", /^[1-9][0-9]{0,11}$/],
+    ["tvdb", /^[1-9][0-9]{0,11}$/],
+  ];
+
+  /** One bounded list query scoped to the library, then a local exact-id check. Emby answers an
+   *  exact `AnyProviderIdEquals` filter. Jellyfin 12.2 ignores that parameter, so it answers a
+   *  documented `Has<Name>Id` page narrowed by the caller's title; a legacy caller that omits the
+   *  title gets that same single page, which the local check narrows but never treats as
+   *  exhaustive. Either way the returned rows are the only candidates and each is verified here. */
+  async function findByProviderIds(
+    token: string,
+    accountId: string,
+    libraryId: string,
+    ids: { imdb?: string; tmdb?: string; tvdb?: string },
+    type: "movie" | "series",
+    nameHint?: string,
+    signal?: AbortSignal,
+  ): Promise<ProviderItem[]> {
+    if (type !== "movie" && type !== "series") throw invalid("The media-server match type is not supported.");
+    let providerName: "imdb" | "tmdb" | "tvdb" | undefined;
+    let providerId: string | undefined;
+    for (const [name, pattern] of MATCH_ID_PATTERNS) {
+      const value = ids?.[name];
+      if (typeof value !== "string" || !pattern.test(value)) continue;
+      providerName = name;
+      providerId = name === "imdb" ? value.toLowerCase() : value;
+      break;
+    }
+    if (providerName === undefined || providerId === undefined) return [];
+    if (nameHint !== undefined && (typeof nameHint !== "string" || nameHint.length === 0 || nameHint.length > SEARCH_MAX)) {
+      throw invalid("The media-server match name is not allowed.");
+    }
+    const response = asObject(await transport.requestJson("match", {
+      userId: accountId,
+      parentId: libraryId,
+      provider: kind,
+      providerName,
+      providerId,
+      includeItemTypes: type === "movie" ? "Movie" : "Series",
+      limit: MATCH_LIMIT,
+      ...(nameHint !== undefined ? { searchTerm: nameHint } : {}),
+    }, token, signal), "The match response");
+    if (!Array.isArray(response.Items)) throw invalidResponse("The match response has no item array.");
+    if (response.Items.length > MATCH_LIMIT) throw invalidResponse("The match response returned too many items.");
+    const matched = providerName;
+    const wanted = providerId;
+    return response.Items.map((raw) => providerItem(raw)).filter((item) => item.providerIds[matched] === wanted);
   }
 
   async function ancestors(token: string, accountId: string, itemId: string, signal?: AbortSignal): Promise<string[]> {
@@ -648,5 +769,5 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
     return versions;
   }
 
-  return { verifyIdentity, authenticate, currentAccount, listLibraries, pageItems, pageDirectory, detail, ancestors, versions };
+  return { verifyIdentity, authenticate, currentAccount, listLibraries, pageItems, pageDirectory, detail, findByProviderIds, ancestors, versions };
 }

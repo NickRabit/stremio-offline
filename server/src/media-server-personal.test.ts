@@ -47,6 +47,7 @@ const provider = (server: FakeServer): MediaServerProvider => {
     listLibraries: async () => { await run(); return structuredClone(server.libraries); },
     pageItems: async () => { throw new MediaServerError("not-found", "unused"); },
     pageDirectory: async () => { throw new MediaServerError("not-found", "unused"); },
+    findByProviderIds: async () => { throw new MediaServerError("not-found", "unused"); },
     detail: async (_t, _a, itemId) => { await run(); const item = server.detailOf[itemId]; if (!item) throw new MediaServerError("not-found", "missing"); return structuredClone(item); },
     ancestors: async (_t, _a, itemId) => { await run(); return [...(server.ancestorsOf[itemId] ?? [])]; },
     versions: async (_t, _a, itemId) => { await run(); return structuredClone(server.versionsOf[itemId] ?? []); },
@@ -55,6 +56,7 @@ const provider = (server: FakeServer): MediaServerProvider => {
 const transport: MediaServerTransport = {
   requestJson: async () => { throw new Error("unused"); },
   requestAsset: async () => { throw new Error("unused asset transport"); },
+  requestArtwork: async () => { throw new Error("unused artwork transport"); },
   requestOriginal: async () => { throw new Error("unused"); },
   close: async () => undefined,
 };
@@ -122,6 +124,11 @@ const mount = async (): Promise<Harness> => {
     reload: async () => { const fresh = new Store(dir, dir); await fresh.load(); return fresh; },
     close: async () => { await manager.close(); await rm(dir, { recursive: true, force: true }); },
   };
+};
+
+/** Forget one connection's cached session facts so the next confirmation re-reads the policy. */
+const forgetSession = (h: Harness): void => {
+  (h.manager as unknown as { runtimes: Map<string, unknown> }).runtimes.delete(h.connectionId);
 };
 
 const withHarness = async (run: (harness: Harness) => Promise<void>) => {
@@ -325,10 +332,12 @@ test("cards mark a library partial when it cannot be confirmed and project nothi
   await withHarness(async (harness) => {
     await harness.personal.patch(harness.admin, harness.libraryId, "m1", { position: 12, duration: 100 });
     harness.server.policy = { ...harness.server.policy, mediaPlayback: false };
+    forgetSession(harness);
     const partial = await harness.personal.cards(harness.admin, { filter: "resume" });
     assert.deepEqual(partial.items, [], "an unconfirmed library projects no stored labels");
     assert.equal(partial.partial, true);
     harness.server.policy = { ...harness.server.policy, mediaPlayback: true };
+    forgetSession(harness);
     const confirmed = await harness.personal.cards(harness.admin, { filter: "resume" });
     assert.deepEqual(confirmed.items.map((card) => card.itemId), ["m1"]);
     assert.equal(confirmed.partial, undefined);

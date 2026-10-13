@@ -7,6 +7,7 @@ import { test } from "node:test";
 import { MediaResources, ResourceError } from "./media-resources.js";
 import { MediaServerIndex } from "./media-server-index.js";
 import { MediaServerManager, type MediaServerAuthority } from "./media-server-manager.js";
+import { remoteIdsMatch } from "./media-server-match.js";
 import type { MediaServerProvider, ProviderItem, ProviderLibrary, ProviderVersion, RemoteAccountPolicy } from "./media-server-provider.js";
 import { openRemoteContent } from "./media-server-reference.js";
 import { MediaServerSecrets } from "./media-server-secrets.js";
@@ -59,6 +60,10 @@ const stubProvider = (server: FakeServer): MediaServerProvider => ({
   listLibraries: async () => { await server.run(); return clone(server.libraries); },
   pageItems: async (_token, _account, libraryId) => { await server.run(); return { items: clone(server.items[libraryId] ?? []), total: (server.items[libraryId] ?? []).length }; },
   pageDirectory: async (_token, _account, parentId) => { await server.run(); return { items: clone(server.directories[parentId] ?? []), total: (server.directories[parentId] ?? []).length }; },
+  findByProviderIds: async (_token, _account, libraryId, ids, type) => {
+    await server.run();
+    return clone((server.items[libraryId] ?? []).filter((item) => item.type === type && remoteIdsMatch(ids, item.providerIds)));
+  },
   detail: async (_token, _account, itemId) => {
     await server.run();
     const item = server.detailOf[itemId];
@@ -77,6 +82,7 @@ const stubTransport = (server: FakeServer): MediaServerTransport => ({
     if (!server.assetResult) throw new Error("no asset response is configured");
     return { bytes: server.assetResult.bytes, contentType: server.assetResult.contentType };
   },
+  requestArtwork: async () => { throw new Error("no artwork lane is used in this harness"); },
   requestOriginal: async () => {
     server.originalCalls += 1;
     return new Response(new ReadableStream<Uint8Array>({ cancel: () => undefined }), { status: 200, headers: { "content-range": "bytes 0-0/1" } });
@@ -134,7 +140,7 @@ const mount = async (): Promise<Harness> => {
   const library = await manager.attachLibrary(adminAuthority, connection.id, { remoteId: "remote-1" });
   server.detailOf["item-1"] = { id: "item-1", name: "Movie One", type: "movie", providerIds: {} };
   server.ancestorsOf["item-1"] = ["remote-1"];
-  server.versionsOf["item-1"] = [{ id: "v1", name: "1080p", container: "mkv" }, { id: "v2", name: "720p" }];
+  server.versionsOf["item-1"] = [{ id: "v1", name: "1080p", container: "mkv", size: 200_000 }, { id: "v2", name: "720p" }];
 
   const resources = new MediaResources();
   const sources = new MediaServerSources(store, manager, resources);
@@ -164,6 +170,8 @@ test("list mints verified public sources without leaking the internal address", 
     assert.equal(first.provider, "jellyfin");
     assert.equal(first.libraryId, harness.libraryId);
     assert.equal(first.libraryName, "Movies");
+    assert.equal(first.behaviorHints?.videoSize, 200_000);
+    assert.equal(listed[1]!.behaviorHints?.videoSize, undefined);
     assert.equal(first.capabilities?.downloadToLibrary, false);
     assert.equal(first.capabilities?.downloadToDevice, false);
     assert.ok(first.remoteItem);

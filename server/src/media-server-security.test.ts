@@ -1264,3 +1264,364 @@ test("directory pins Recursive, the folder-admitting type set, the fixed sort pa
     await transport.close();
   }
 });
+
+/** A permitted raster body whose leading bytes are the JPEG signature the transport sniffs. */
+const jpegBytes = (size: number): Uint8Array => {
+  const bytes = new Uint8Array(size);
+  bytes[0] = 0xff; bytes[1] = 0xd8; bytes[2] = 0xff; bytes[3] = 0xe0;
+  return bytes;
+};
+
+/** An image response that returns validated headers at once but never ends its body, so a test can
+ *  prove the image slot outlives the headers. */
+const heldImage = (): Response => new Response(
+  new ReadableStream<Uint8Array>({ start() { /* stays open until released or cancelled */ } }),
+  { status: 200, headers: { "content-type": "image/jpeg" } },
+);
+
+const imageFetch = (url: string): boolean => url.includes("/Images/");
+
+test("artwork streams the first image bytes before the rest of the body arrives", async () => {
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const transport = createMediaServerTransport({ baseUrl: "http://media.example", allowLan: false, allowLoopback: false }, {
+    lookupAll: async () => [{ address: "93.184.216.34", family: 4 }],
+    fetch: async () => new Response(new ReadableStream<Uint8Array>({
+      start(value) { controller = value; controller.enqueue(jpegBytes(48)); },
+    }), { status: 200, headers: { "content-type": "image/jpeg" } }),
+  });
+  try {
+    const response = await transport.requestArtwork({ itemId: "i1", imageType: "Primary", tag: "abc" }, "tok");
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "image/jpeg");
+    const reader = response.body!.getReader();
+    const first = await reader.read();
+    assert.equal(first.done, false, "the first chunk resolves before the body ends");
+    assert.deepEqual([...first.value!.slice(0, 3)], [0xff, 0xd8, 0xff]);
+    controller.enqueue(jpegBytes(16));
+    controller.close();
+    const rest = await reader.read();
+    assert.equal(rest.done, false);
+    assert.equal(rest.value!.byteLength, 16);
+    assert.equal((await reader.read()).done, true);
+  } finally {
+    await transport.close();
+  }
+});
+
+test("artwork refuses a declared oversized image, an unsafe type and a transformed body", async () => {
+  const cases: Array<[string, () => Promise<Response>, string]> = [
+    ["declared oversized", async () => new Response(null, { status: 200, headers: { "content-type": "image/jpeg", "content-length": String(5 * 1024 * 1024 + 1) } }), "response-too-large"],
+    ["unsafe type", async () => new Response(null, { status: 200, headers: { "content-type": "text/html" } }), "invalid-response"],
+    ["transformed", async () => new Response(null, { status: 200, headers: { "content-type": "image/jpeg", "content-encoding": "gzip" } }), "invalid-response"],
+    ["not ok", async () => new Response(null, { status: 500 }), "unavailable"],
+  ];
+  for (const [label, fetch, code] of cases) {
+    const transport = stubbed(fetch);
+    await assert.rejects(transport.requestArtwork({ itemId: "i", imageType: "Primary" }, "tok"), { code }, label);
+    await transport.close();
+  }
+});
+
+test("artwork cuts off a body that exceeds its byte cap", async () => {
+  const megabyte = jpegBytes(1024 * 1024);
+  let sent = 0;
+  const transport = stubbed(async () => new Response(new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (sent >= 6) { controller.close(); return; }
+      sent += 1;
+      controller.enqueue(megabyte.slice());
+    },
+  }), { status: 200, headers: { "content-type": "image/jpeg" } }));
+  try {
+    const response = await transport.requestArtwork({ itemId: "i", imageType: "Primary" }, "tok");
+    await assert.rejects(readMedia(response.body), { code: "response-too-large" });
+  } finally {
+    await transport.close();
+  }
+});
+
+test("artwork holds its own thirty-two slots and answers an overflow with busy", async () => {
+  const transport = stubbed(async () => heldImage());
+  try {
+    const live = await Promise.all(Array.from({ length: 32 }, (_, index) =>
+      transport.requestArtwork({ itemId: `i${index}`, imageType: "Primary" }, "tok")));
+    assert.equal(live.length, 32);
+    await assert.rejects(transport.requestArtwork({ itemId: "overflow", imageType: "Primary" }, "tok"), { code: "busy" });
+  } finally {
+    await transport.close();
+  }
+});
+
+test("twenty-four concurrent artworks leave the metadata pool and its DNS slots free", async () => {
+  let releaseLookup!: () => void;
+  const lookupGate = new Promise<void>((resolve) => { releaseLookup = resolve; });
+  const transport = createMediaServerTransport({ baseUrl: "http://media.example", allowLan: false, allowLoopback: false }, {
+    lookupAll: async () => { await lookupGate; return [{ address: "93.184.216.34", family: 4 }]; },
+    fetch: async (url) => imageFetch(url)
+      ? heldImage()
+      : new Response(JSON.stringify({ Id: "server-1", Version: "1" }), { status: 200, headers: { "content-type": "application/json" } }),
+  });
+  try {
+    const artworks = Array.from({ length: 24 }, (_, index) =>
+      transport.requestArtwork({ itemId: `i${index}`, imageType: "Primary" }, "tok"));
+    // Every image lookup is parked on the gate at once. Were image DNS sharing the four metadata
+    // slots, the fifth lookup would already be refused with busy.
+    await new Promise((resolve) => setImmediate(resolve));
+    releaseLookup();
+    const settled = await Promise.allSettled(artworks);
+    assert.equal(settled.filter((entry) => entry.status === "rejected").length, 0, "every artwork resolved its headers");
+    const info = await transport.requestJson("info", {});
+    assert.deepEqual(info, { Id: "server-1", Version: "1" }, "metadata still runs while 24 image slots are held");
+  } finally {
+    await transport.close();
+  }
+});
+
+test("an artwork that never answers times out and frees its slot", async () => {
+  let hang = true;
+  const transport = createMediaServerTransport({ baseUrl: "http://media.example", allowLan: false, allowLoopback: false }, {
+    lookupAll: async () => [{ address: "93.184.216.34", family: 4 }],
+    imageHeaderMs: 30,
+    fetch: async () => hang
+      ? new Promise<Response>(() => { /* never answers */ })
+      : new Response(new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(jpegBytes(40)); controller.close(); } }), { status: 200, headers: { "content-type": "image/jpeg" } }),
+  });
+  try {
+    await assert.rejects(transport.requestArtwork({ itemId: "i", imageType: "Primary" }, "tok"), { code: "timeout" });
+    hang = false;
+    const ok = await transport.requestArtwork({ itemId: "i", imageType: "Primary" }, "tok");
+    assert.equal(ok.status, 200, "the timed-out slot is free again");
+    await readMedia(ok.body);
+  } finally {
+    await transport.close();
+  }
+});
+
+test("a caller abort before artwork headers cancels and frees its slot", async () => {
+  let hang = true;
+  const transport = createMediaServerTransport({ baseUrl: "http://media.example", allowLan: false, allowLoopback: false }, {
+    lookupAll: async () => [{ address: "93.184.216.34", family: 4 }],
+    fetch: async () => hang
+      ? new Promise<Response>(() => { /* never answers */ })
+      : new Response(new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(jpegBytes(40)); controller.close(); } }), { status: 200, headers: { "content-type": "image/jpeg" } }),
+  });
+  try {
+    const controller = new AbortController();
+    const pending = transport.requestArtwork({ itemId: "i", imageType: "Primary" }, "tok", controller.signal);
+    await new Promise((resolve) => setImmediate(resolve));
+    controller.abort();
+    await assert.rejects(pending, { code: "cancelled" });
+    hang = false;
+    const ok = await transport.requestArtwork({ itemId: "i", imageType: "Primary" }, "tok");
+    assert.equal(ok.status, 200);
+    await readMedia(ok.body);
+  } finally {
+    await transport.close();
+  }
+});
+
+test("cancelling a held artwork body frees its slot immediately", async () => {
+  let held = true;
+  const transport = createMediaServerTransport({ baseUrl: "http://media.example", allowLan: false, allowLoopback: false }, {
+    lookupAll: async () => [{ address: "93.184.216.34", family: 4 }],
+    fetch: async () => held
+      ? heldImage()
+      : new Response(new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(jpegBytes(40)); controller.close(); } }), { status: 200, headers: { "content-type": "image/jpeg" } }),
+  });
+  try {
+    const first = await transport.requestArtwork({ itemId: "i1", imageType: "Primary" }, "tok");
+    await first.body!.cancel();
+    held = false;
+    const second = await transport.requestArtwork({ itemId: "i2", imageType: "Primary" }, "tok");
+    assert.equal(second.status, 200, "the cancelled slot is reusable");
+  } finally {
+    await transport.close();
+  }
+});
+
+test("closing the transport errors a held artwork body and frees every image slot", async () => {
+  const transport = stubbed(async () => heldImage());
+  const responses = await Promise.all(Array.from({ length: 32 }, (_, index) =>
+    transport.requestArtwork({ itemId: `i${index}`, imageType: "Primary" }, "tok")));
+  await transport.close();
+  await assert.rejects(readMedia(responses[0].body), { code: "closed" });
+});
+
+test("artwork shares the upstream 429 cooldown in both directions", async () => {
+  let fetches = 0;
+  const fromImage = stubbed(async (url) => {
+    fetches += 1;
+    return imageFetch(url)
+      ? new Response(null, { status: 429, headers: { "retry-after": "2" } })
+      : new Response(JSON.stringify({ Id: "s", Version: "1" }), { status: 200, headers: { "content-type": "application/json" } });
+  });
+  const limited = await failed(fromImage.requestArtwork({ itemId: "i", imageType: "Primary" }, "tok"));
+  assert.equal(limited.code, "rate-limited");
+  assert.equal(limited.retryAfterMs, 2_000);
+  const blocked = await failed(fromImage.requestJson("info", {}));
+  assert.equal(blocked.code, "rate-limited", "an image 429 parks the whole transport");
+  assert.equal(fetches, 1, "the JSON request is refused locally during the cooldown");
+  await fromImage.close();
+
+  let jsonFetches = 0;
+  const fromJson = stubbed(async () => { jsonFetches += 1; return new Response(null, { status: 429, headers: { "retry-after": "2" } }); });
+  await failed(fromJson.requestJson("info", {}));
+  const blockedImage = await failed(fromJson.requestArtwork({ itemId: "i", imageType: "Primary" }, "tok"));
+  assert.equal(blockedImage.code, "rate-limited", "a metadata 429 parks artwork too");
+  assert.equal(jsonFetches, 1);
+  await fromJson.close();
+});
+
+test("artwork validates and encodes the tag before any network work", async () => {
+  const captured: string[] = [];
+  const transport = createMediaServerTransport({ baseUrl: "http://media.example", allowLan: false, allowLoopback: false }, {
+    lookupAll: async () => [{ address: "93.184.216.34", family: 4 }],
+    fetch: async (url) => {
+      captured.push(url);
+      return new Response(new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(jpegBytes(40)); controller.close(); } }), { status: 200, headers: { "content-type": "image/jpeg" } });
+    },
+  });
+  try {
+    const response = await transport.requestArtwork({ itemId: "i1", imageType: "Primary", tag: "Ab.c-9_~" }, "tok");
+    assert.equal(new URL(captured[0]).searchParams.get("tag"), "Ab.c-9_~", "the tag round-trips through the query");
+    await readMedia(response.body);
+    for (const tag of ["", "a".repeat(129), "bad tag", "a&b", "a%20b", "a/b", "a?b", "héllo", 42, null]) {
+      await assert.rejects(transport.requestArtwork({ itemId: "i", imageType: "Primary", tag: tag as never }, "tok"), { code: "invalid-input" }, String(tag));
+    }
+    assert.equal(captured.length, 1, "an invalid tag never reaches the socket");
+  } finally {
+    await transport.close();
+  }
+});
+
+test("artwork and match refuse raw fields, paths and tokens before any network work", async () => {
+  const transport = stubbed(async () => new Response(null, { status: 200 }));
+  try {
+    const rejects: Array<() => Promise<unknown>> = [
+      () => transport.requestArtwork({ itemId: "i", imageType: "Primary", rawUrl: "http://evil" } as never, "tok"),
+      () => transport.requestArtwork({ itemId: "a/b", imageType: "Primary" } as never, "tok"),
+      () => transport.requestArtwork({ itemId: "..", imageType: "Primary" } as never, "tok"),
+      () => transport.requestArtwork({ itemId: "i", imageType: "Poster" } as never, "tok"),
+      () => transport.requestArtwork({ itemId: "i" } as never, "tok"),
+      () => transport.requestArtwork(null as never, "tok"),
+      () => transport.requestArtwork({ itemId: "i", imageType: "Primary" }, 'bad"token'),
+      () => transport.requestJson("match", { userId: "u", parentId: "p", provider: "plex", providerName: "imdb", providerId: "tt1", includeItemTypes: "Movie" } as never, "tok"),
+      () => transport.requestJson("match", { userId: "u", parentId: "p", provider: "emby", providerName: "tvrage", providerId: "1", includeItemTypes: "Movie" } as never, "tok"),
+      () => transport.requestJson("match", { userId: "u", parentId: "p", provider: "emby", providerName: "imdb", providerId: "not-an-id", includeItemTypes: "Movie" } as never, "tok"),
+      () => transport.requestJson("match", { userId: "u", parentId: "p", provider: "emby", providerName: "imdb", providerId: "tt1", includeItemTypes: "Episode" } as never, "tok"),
+      () => transport.requestJson("match", { userId: "u", parentId: "p", provider: "emby", providerName: "imdb", providerId: "tt1", includeItemTypes: "Movie", url: "/x" } as never, "tok"),
+    ];
+    for (const call of rejects) await assert.rejects(call(), { code: "invalid-input" });
+  } finally {
+    await transport.close();
+  }
+});
+
+test("match builds Emby's exact AnyProviderIdEquals and Jellyfin's documented Has-id query", async () => {
+  const captured: string[] = [];
+  const transport = createMediaServerTransport({ baseUrl: "http://media.example", allowLan: false, allowLoopback: false }, {
+    lookupAll: async () => [{ address: "93.184.216.34", family: 4 }],
+    fetch: async (url) => {
+      captured.push(url);
+      return new Response(JSON.stringify({ Items: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+  try {
+    await transport.requestJson("match", { userId: "u1", parentId: "lib-1", provider: "emby", providerName: "imdb", providerId: "tt0133093", includeItemTypes: "Movie", limit: 200 }, "tok");
+    await transport.requestJson("match", { userId: "u1", parentId: "lib-1", provider: "jellyfin", providerName: "tmdb", providerId: "603", includeItemTypes: "Series", searchTerm: "Alien", limit: 200 }, "tok");
+    const emby = new URL(captured[0]).searchParams;
+    assert.equal(emby.get("AnyProviderIdEquals"), "imdb.tt0133093");
+    assert.equal(emby.get("SearchTerm"), null);
+    assert.equal(emby.get("EnableImages"), "false");
+    assert.equal(emby.get("EnableUserData"), "false");
+    assert.equal(emby.get("Recursive"), "true");
+    assert.equal(emby.get("ParentId"), "lib-1");
+    assert.equal(emby.get("IncludeItemTypes"), "Movie");
+    assert.equal(emby.get("Fields"), "ProviderIds,ParentId,SeriesInfo");
+    assert.equal(emby.get("Limit"), "200");
+    const jellyfin = new URL(captured[1]).searchParams;
+    assert.equal(jellyfin.get("AnyProviderIdEquals"), null, "Jellyfin never receives the unsupported parameter");
+    assert.equal(jellyfin.get("HasTmdbId"), "true");
+    assert.equal(jellyfin.get("SearchTerm"), "Alien");
+    assert.equal(jellyfin.get("IncludeItemTypes"), "Series");
+  } finally {
+    await transport.close();
+  }
+});
+
+test("directory sends ParentIndexNumber and EnableTotalRecordCount only when asked", async () => {
+  const captured: string[] = [];
+  const transport = createMediaServerTransport({ baseUrl: "http://media.example", allowLan: false, allowLoopback: false }, {
+    lookupAll: async () => [{ address: "93.184.216.34", family: 4 }],
+    fetch: async (url) => {
+      captured.push(url);
+      return new Response(JSON.stringify({ Items: [], TotalRecordCount: 0 }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+  try {
+    await transport.requestJson("directory", { userId: "u", parentId: "series-1", includeItemTypes: "Episode", recursive: true, sortBy: "SortName", sortOrder: "Ascending", limit: 10, parentIndexNumber: 2, enableTotalRecordCount: false }, "tok");
+    const query = new URL(captured[0]).searchParams;
+    assert.equal(query.get("ParentIndexNumber"), "2");
+    assert.equal(query.get("EnableTotalRecordCount"), "false");
+    assert.equal(query.get("ImageTypeLimit"), "1");
+    assert.equal(query.get("EnableImageTypes"), "Primary,Backdrop");
+    assert.equal(query.get("EnableUserData"), "false");
+    assert.deepEqual(String(query.get("Fields")).split(","), ["ProviderIds", "ParentId", "SeriesInfo", "ImageTags", "ChildCount"]);
+    await transport.requestJson("directory", { userId: "u", parentId: "lib-1", includeItemTypes: "Movie", recursive: false, sortBy: "SortName", sortOrder: "Ascending" }, "tok");
+    const plain = new URL(captured[1]).searchParams;
+    assert.equal(plain.get("ParentIndexNumber"), null);
+    assert.equal(plain.get("EnableTotalRecordCount"), null);
+  } finally {
+    await transport.close();
+  }
+});
+
+
+test("artwork handles a raster signature split over short chunks without stalling", async () => {
+  const jpeg = jpegBytes(32);
+  const transport = stubbed(async () => new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(jpeg.slice(0, 2));
+      controller.enqueue(jpeg.slice(2, 5));
+      controller.enqueue(jpeg.slice(5, 10));
+      controller.enqueue(jpeg.slice(10));
+      controller.close();
+    },
+  }), { headers: { "content-type": "image/jpeg" } }));
+  try {
+    const response = await transport.requestArtwork({ itemId: "i", imageType: "Primary" }, "tok");
+    assert.deepEqual(await readMedia(response.body), Buffer.from(jpeg));
+  } finally { await transport.close(); }
+});
+
+test("artwork rejects an empty body and bytes beyond the declared length", async () => {
+  const empty = stubbed(async () => new Response(null, { headers: { "content-type": "image/jpeg" } }));
+  try { await assert.rejects(empty.requestArtwork({ itemId: "i", imageType: "Primary" }, "tok"), { code: "invalid-response" }); }
+  finally { await empty.close(); }
+  const oversized = stubbed(async () => new Response(jpegBytes(32), { headers: { "content-type": "image/jpeg", "content-length": "16" } }));
+  try {
+    const response = await oversized.requestArtwork({ itemId: "i", imageType: "Primary" }, "tok");
+    await assert.rejects(readMedia(response.body), { code: "invalid-response" });
+  } finally { await oversized.close(); }
+});
+
+test("real artwork sockets stream tagged images and reuse their connection pool", async () => {
+  const jpeg = jpegBytes(32);
+  const fixture = await startServer((_request, response) => {
+    response.writeHead(200, { "content-type": "image/jpeg", "content-length": String(jpeg.length) });
+    response.end(jpeg);
+  });
+  const transport = open(fixture.origin);
+  try {
+    for (let index = 0; index < 8; index++) {
+      const response = await transport.requestArtwork({ itemId: "image", imageType: "Primary", tag: "tag-1" }, "tok");
+      assert.deepEqual(await readMedia(response.body), Buffer.from(jpeg));
+    }
+    assert.equal(fixture.requests.length, 8);
+    assert.ok(fixture.connections() < 8, "sequential images reuse HTTP connections");
+    const query = new URL(fixture.requests[0]!.url, fixture.origin).searchParams;
+    assert.equal(query.get("tag"), "tag-1");
+    assert.equal(query.get("MaxWidth"), "640");
+    assert.equal(query.get("Quality"), "85");
+  } finally { await transport.close(); await fixture.close(); }
+});

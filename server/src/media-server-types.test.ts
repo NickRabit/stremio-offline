@@ -16,7 +16,9 @@ import {
   publicMediaConnection,
   publicRemoteLibrary,
   publicRemoteItem,
+  remoteArtworkPath,
   remoteProgressKey,
+  validateArtworkTag,
   validateMediaServerToken,
   type MediaConnectionRecord,
   type RemoteLibraryRecord,
@@ -190,4 +192,36 @@ test("the item projection omits a path only for a fact the metadata proves absen
   );
   assert.equal("poster" in halfKnown, false, "each role is decided on its own fact");
   assert.equal(halfKnown.wide, `/api/remote-libraries/${libraryId}/items/i4/artwork/Backdrop`);
+});
+
+test("the artwork tag contract is a bounded URL-safe alphabet", () => {
+  assert.equal(validateArtworkTag("Abc.def-123_~"), "Abc.def-123_~");
+  assert.equal(validateArtworkTag("a".repeat(128)), "a".repeat(128));
+  for (const bad of ["", "a".repeat(129), "bad tag", "a&b", "a%20b", "a/b", "a?b", "héllo", 42, null, undefined]) {
+    assert.throws(() => validateArtworkTag(bad), { code: "invalid-input" }, String(bad));
+  }
+});
+
+test("the item projection emits a tagged same-origin URL and scrubs the internal tag", () => {
+  const libraryId = "rlib_00000000000000000000000000000000";
+  const projected = publicRemoteItem(
+    { id: "i1", name: "Tagged", type: "movie", providerIds: {}, hasPrimaryImage: true, hasBackdropImage: true, primaryImageTag: "p.1~x", backdropImageTag: "b-2", childCount: 4 },
+    libraryId,
+  );
+  assert.equal(projected.poster, `/api/remote-libraries/${libraryId}/items/i1/artwork/Primary?tag=p.1~x`);
+  assert.equal(projected.wide, `/api/remote-libraries/${libraryId}/items/i1/artwork/Backdrop?tag=b-2`);
+  assert.equal(projected.childCount, 4, "the child count is ordinary metadata and stays on the projection");
+  assert.equal("primaryImageTag" in projected, false, "the raw tag never leaves the server");
+  assert.equal("backdropImageTag" in projected, false);
+  const untagged = publicRemoteItem({ id: "i2", name: "Legacy", type: "movie", providerIds: {} }, libraryId);
+  assert.equal(untagged.poster, `/api/remote-libraries/${libraryId}/items/i2/artwork/Primary`, "an unknown fact keeps the legacy untagged URL");
+});
+
+test("remoteArtworkPath encodes a tag defensively and accepts no library or role injection", () => {
+  const libraryId = "rlib_00000000000000000000000000000000";
+  assert.equal(
+    remoteArtworkPath(libraryId, "i", "Primary", "a&b"),
+    `/api/remote-libraries/${libraryId}/items/i/artwork/Primary?tag=a%26b`,
+  );
+  assert.equal(remoteArtworkPath(libraryId, "i", "Backdrop"), `/api/remote-libraries/${libraryId}/items/i/artwork/Backdrop`);
 });

@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import type express from "express";
 import { AppError } from "../errors.js";
 import { log } from "../logger.js";
@@ -151,6 +152,20 @@ const previewParent = (req: express.Request): string | undefined => {
   if (typeof raw !== "string" || raw.length === 0 || raw.length > MEDIA_SERVER_LIMITS.upstreamId) {
     throw malformed("The media-server item id is missing or too long.");
   }
+  return raw;
+};
+
+/** The streams route takes one optional `name` (a resolved catalogue or series title), bounded
+ *  to 256 characters; every other query key is refused before the manager is asked to match. */
+const streamName = (req: express.Request): string | undefined => {
+  assertNoBody(req);
+  const query = req.query as Record<string, unknown>;
+  for (const key of Object.keys(query)) {
+    if (key !== "name") throw malformed("The media-server request has an unknown query field.");
+  }
+  const raw = query.name;
+  if (raw === undefined || raw === "") return undefined;
+  if (typeof raw !== "string" || raw.length > 256) throw malformed("The media-server search term is too long.");
   return raw;
 };
 
@@ -309,30 +324,52 @@ export function registerMediaServerRoutes(app: express.Application, deps: MediaS
     return { streams: await mediaSources.list(authority, ownerOf(req), String(req.params.id), String(req.params.itemId), signal) };
   }, 200, true));
   app.get("/api/remote-libraries/:id/streams/:type/:catalogId", handle(async (req, authority, signal) => {
-    assertNoBody(req);
-    assertNoQuery(req.query);
-    return { streams: await mediaSources.matched(authority, ownerOf(req), String(req.params.id), String(req.params.type), String(req.params.catalogId), signal) };
+    const name = streamName(req);
+    return { streams: await mediaSources.matched(authority, ownerOf(req), String(req.params.id), String(req.params.type), String(req.params.catalogId), signal, name) };
   }, 200, true));
-  // Fixed Primary|Backdrop only, no query and no body: the bytes are read through the scoped
-  // transport and sent private with nosniff. An If-None-Match never short-circuits the read.
+  // Fixed Primary|Backdrop only and at most the optional `tag` query: the bytes stream through
+  // the image lane, private with nosniff, and an If-None-Match is answered by the manager with a
+  // local 304 once its checks still hold.
   app.get("/api/remote-libraries/:id/items/:itemId/artwork/:imageType", asyncRoute(async (req, res) => {
-    let asset: Awaited<ReturnType<MediaServerManager["readArtwork"]>>;
+    let response: Response;
     try {
-      asset = await guardRequest(req, res, true, (request, authority, signal) => {
+      response = await guardRequest(req, res, true, (request, authority, signal) => {
         assertNoBody(request);
-        assertNoQuery(request.query);
-        return mediaServers.readArtwork(authority, request.params.id, request.params.itemId, String(request.params.imageType), signal);
+        const query = request.query as Record<string, unknown>;
+        for (const key of Object.keys(query)) {
+          if (key !== "tag") throw malformed("The media-server request has an unknown query field.");
+        }
+        const tag = query.tag;
+        const ifNoneMatch = request.header("if-none-match");
+        return mediaServers.readArtwork(authority, request.params.id, request.params.itemId, String(request.params.imageType), signal, {
+          ...(tag === undefined ? {} : { tag }),
+          ...(ifNoneMatch === undefined ? {} : { ifNoneMatch }),
+        });
       });
     } catch (error) {
       if (error instanceof ClientGone) return;
       throw error;
     }
-    res.status(200)
-      .setHeader("content-type", asset.contentType)
-      .setHeader("cache-control", "private, no-store")
-      .setHeader("x-content-type-options", "nosniff")
-      .setHeader("content-length", String(asset.bytes.byteLength))
-      .end(Buffer.from(asset.bytes));
+    res.status(response.status);
+    response.headers.forEach((value, name) => res.setHeader(name, value));
+    if (response.status === 304 || !response.body) { res.end(); return; }
+    const reader = response.body.getReader();
+    const downstream = new AbortController();
+    const onClose = () => { downstream.abort(); void reader.cancel().catch(() => undefined); };
+    res.on("close", onClose);
+    try {
+      for (;;) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        if (!res.write(Buffer.from(chunk.value))) await once(res, "drain", { signal: downstream.signal });
+      }
+      res.end();
+    } catch (error) {
+      log("DEBUG", "Media-server image stream ended early", { path: req.path, reason: error instanceof Error ? error.message : String(error) });
+      res.destroy();
+    } finally {
+      res.off("close", onClose);
+    }
   }));
   app.get("/api/remote-libraries/:id/items/:itemId/state", handle(async (req, authority, signal) => {
     assertNoBody(req);

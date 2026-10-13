@@ -11,8 +11,9 @@ import express from "express";
 import { messageKeyOf } from "../errors.js";
 import { MediaResources, ResourceError } from "../media-resources.js";
 import { MediaServerManager } from "../media-server-manager.js";
+import { remoteIdsMatch } from "../media-server-match.js";
 import { MediaServerPersonal } from "../media-server-personal.js";
-import type { MediaServerProvider, ProviderItem, RemoteAccountPolicy } from "../media-server-provider.js";
+import type { MediaServerProvider, ProviderItem, ProviderLibrary, RemoteAccountPolicy } from "../media-server-provider.js";
 import { MediaServerSources } from "../media-server-sources.js";
 import { MediaServerSecrets } from "../media-server-secrets.js";
 import type { MediaServerTransport } from "../media-server-security.js";
@@ -46,10 +47,11 @@ class FakeServer {
   serverId = "server-1";
   accountId = "user-1";
   policy: RemoteAccountPolicy = { disabled: false, mediaPlayback: true, allFolders: true, folderIds: [], hasAdditionalRestrictions: false };
-  libraries = [{ id: "lib-1", name: "Films", type: "movie" as const }];
+  libraries: ProviderLibrary[] = [{ id: "lib-1", name: "Films", type: "movie" }];
   items: Record<string, ProviderItem[]> = { "lib-1": [movie("m1", "Alien")] };
   directories: Record<string, ProviderItem[]> = {};
   directoryCalls: Array<{ parentId: string; options: Record<string, unknown> }> = [];
+  matchCalls: Array<{ ids: unknown; type: string; nameHint?: string }> = [];
   detailOf: Record<string, ProviderItem> = { m1: movie("m1", "Alien") };
   ancestorsOf: Record<string, string[]> = { m1: ["lib-1"] };
   versionsOf: Record<string, Array<{ id: string; name?: string; container?: string }>> = { m1: [{ id: "v1", name: "1080p" }] };
@@ -72,7 +74,18 @@ const provider = (server: FakeServer): MediaServerProvider => ({
   pageDirectory: async (_token, _account, parentId, options) => {
     await server.run("directory");
     server.directoryCalls.push({ parentId, options: options as unknown as Record<string, unknown> });
-    return { items: structuredClone(server.directories[parentId] ?? []), total: (server.directories[parentId] ?? []).length };
+    const base = server.directories[parentId] ?? server.items[parentId] ?? [];
+    const needle = options?.search?.toLowerCase();
+    const wanted = options?.type;
+    const all = base.filter((item) =>
+      (wanted === undefined || item.type === wanted)
+      && (needle === undefined || needle.length === 0 || item.name.toLowerCase().includes(needle)));
+    return { items: structuredClone(all), total: all.length };
+  },
+  findByProviderIds: async (_token, _account, libraryId, ids, type, nameHint) => {
+    await server.run("find");
+    server.matchCalls.push({ ids: structuredClone(ids), type, ...(nameHint === undefined ? {} : { nameHint }) });
+    return structuredClone((server.items[libraryId] ?? []).filter((item) => item.type === type && remoteIdsMatch(ids, item.providerIds)));
   },
   detail: async (_token, _account, itemId) => { await server.run("detail"); const item = server.detailOf[itemId]; if (!item) throw new MediaServerError("not-found", "missing"); return structuredClone(item); },
   ancestors: async (_token, _account, itemId) => { await server.run("ancestors"); return [...(server.ancestorsOf[itemId] ?? [])]; },
@@ -82,6 +95,7 @@ const provider = (server: FakeServer): MediaServerProvider => ({
 const transport: MediaServerTransport = {
   requestJson: async () => { throw new Error("unused"); },
   requestAsset: async () => { throw new Error("unused asset transport"); },
+  requestArtwork: async () => { throw new Error("unused artwork transport"); },
   requestOriginal: async () => { throw new Error("unused"); },
   close: async () => undefined,
 };
@@ -268,6 +282,7 @@ test("a granted member can list and browse, and the list never carries grants or
 
 test("a granted member browses and previews natively, and only GET reaches those paths", async () => {
   await withHarness(async (harness) => {
+    harness.server.libraries[0]!.primaryImageTag = "root-tag";
     harness.server.directories["lib-1"] = [movie("m1", "Alien")];
     const browse = await api(harness.base, `/api/remote-libraries/${harness.libraryId}/browse?mode=folders`, { user: BOB });
     assert.equal(browse.status, 200);
@@ -278,7 +293,7 @@ test("a granted member browses and previews natively, and only GET reaches those
 
     const preview = await api(harness.base, `/api/remote-libraries/${harness.libraryId}/preview`, { user: BOB });
     assert.equal(preview.status, 200);
-    assert.deepEqual(await preview.json(), { posters: [`/api/remote-libraries/${harness.libraryId}/items/m1/artwork/Primary`] });
+    assert.deepEqual(await preview.json(), { posters: [`/api/remote-libraries/${harness.libraryId}/items/lib-1/artwork/Primary?tag=root-tag`] });
 
     // A write at the same path is not on the member allow-list: the role gate refuses it.
     assert.equal((await api(harness.base, `/api/remote-libraries/${harness.libraryId}/browse`, { method: "POST", user: BOB, body: {} })).status, 403);
@@ -439,7 +454,7 @@ test("a session revoked mid-flight stops the answer after the awaited work", asy
   await withHarness(async (harness) => {
     const held = (() => { let release!: () => void; const wait = new Promise<void>((resolve) => { release = resolve; }); return { wait, release }; })();
     const entered = (() => { let signal!: () => void; const promise = new Promise<void>((resolve) => { signal = resolve; }); return { promise, signal }; })();
-    harness.server.nudge = { op: "items", wait: held.wait, entered: entered.signal };
+    harness.server.nudge = { op: "directory", wait: held.wait, entered: entered.signal };
     const browsing = api(harness.base, `/api/remote-libraries/${harness.libraryId}/items`);
     await entered.promise;
     harness.loseAccess();

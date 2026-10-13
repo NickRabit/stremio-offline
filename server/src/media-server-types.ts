@@ -163,6 +163,7 @@ export const adminMediaConnection = (record: MediaConnectionRecord): AdminMediaC
 });
 
 export interface PublicRemoteLibrary {
+  poster?: string;
   id: string;
   connectionId: string;
   remoteId: string;
@@ -203,28 +204,47 @@ export const adminRemoteLibrary = (record: RemoteLibraryRecord, provider?: Media
   allowedUsers: [...record.allowedUsers],
 });
 
-/** A provider item as the interface may see it: the internal shape (never an image flag) plus
- *  the same-origin artwork paths the client loads instead of any upstream address. A path is
- *  omitted only when the provider metadata proves that role absent, so an unknown fact keeps
- *  the legacy URL. Two optional paths built from an encoded local library and item handle and
- *  a fixed image role can never turn a cached provider row into a client-admitted URL. */
-export type PublicRemoteItem = Omit<ProviderItem, "hasPrimaryImage" | "hasBackdropImage"> & { poster?: string; wide?: string };
+/** A provider item as the interface may see it: the internal shape (never an image flag or an
+ *  image tag) plus the same-origin artwork paths the client loads instead of any upstream
+ *  address. A path is omitted only when the provider metadata proves that role absent, so an
+ *  unknown fact keeps the legacy URL. Two optional paths built from an encoded local library and
+ *  item handle, a fixed image role and a validated tag can never turn a cached provider row into
+ *  a client-admitted URL. */
+export type PublicRemoteItem = Omit<ProviderItem, "hasPrimaryImage" | "hasBackdropImage" | "primaryImageTag" | "backdropImageTag"> & { poster?: string; wide?: string };
 
-export const remoteArtworkPath = (libraryId: string, itemId: string, imageType: "Primary" | "Backdrop"): string =>
-  `/api/remote-libraries/${encodeURIComponent(libraryId)}/items/${encodeURIComponent(itemId)}/artwork/${imageType}`;
+/** The one shape an artwork tag may take: bounded, URL-safe and credential-free, so it can travel
+ *  in a query string verbatim and never smuggle a remote path, query or address. */
+export const ARTWORK_TAG = /^[A-Za-z0-9._~-]{1,128}$/;
+
+export function validateArtworkTag(value: unknown): string {
+  if (typeof value !== "string" || !ARTWORK_TAG.test(value)) {
+    throw new MediaServerError("invalid-input", "The media-server artwork tag is not allowed.");
+  }
+  return value;
+}
+
+export const remoteArtworkPath = (libraryId: string, itemId: string, imageType: "Primary" | "Backdrop", tag?: string): string => {
+  const path = `/api/remote-libraries/${encodeURIComponent(libraryId)}/items/${encodeURIComponent(itemId)}/artwork/${imageType}`;
+  return tag === undefined ? path : `${path}?tag=${encodeURIComponent(tag)}`;
+};
 
 export const publicRemoteItem = (item: ProviderItem, libraryId: string): PublicRemoteItem => ({
   ...scrubInternalItemFields(item),
-  ...(item.hasPrimaryImage === false ? {} : { poster: remoteArtworkPath(libraryId, item.id, "Primary") }),
-  ...(item.hasBackdropImage === false ? {} : { wide: remoteArtworkPath(libraryId, item.id, "Backdrop") }),
+  ...(item.hasPrimaryImage === false ? {} : { poster: remoteArtworkPath(libraryId, item.id, "Primary", item.primaryImageTag) }),
+  ...(item.hasBackdropImage === false ? {} : { wide: remoteArtworkPath(libraryId, item.id, "Backdrop", item.backdropImageTag) }),
 });
 
-/** Internal provider-only facts never reach a client projection. */
-const scrubInternalItemFields = (item: ProviderItem): Omit<ProviderItem, "hasPrimaryImage" | "hasBackdropImage"> => {
-  if (item.hasPrimaryImage === undefined && item.hasBackdropImage === undefined) return item;
+/** Internal provider-only facts never reach a client projection. A captured tag proves the exact
+ *  image version the manager must ask for; the resolved tag role is carried on the public URL, so
+ *  the raw tags never leave the server. */
+const scrubInternalItemFields = (item: ProviderItem): Omit<ProviderItem, "hasPrimaryImage" | "hasBackdropImage" | "primaryImageTag" | "backdropImageTag"> => {
+  if (item.hasPrimaryImage === undefined && item.hasBackdropImage === undefined
+    && item.primaryImageTag === undefined && item.backdropImageTag === undefined) return item;
   const clone: ProviderItem = { ...item };
   delete clone.hasPrimaryImage;
   delete clone.hasBackdropImage;
+  delete clone.primaryImageTag;
+  delete clone.backdropImageTag;
   return clone;
 };
 

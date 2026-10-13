@@ -68,6 +68,7 @@ export class MediaServerSources {
       stream: {
         url: sealRemoteContent({ ...base, mediaSourceId: version.id }),
         name: version.name ?? version.container ?? result.item.name,
+        ...(version.size === undefined ? {} : { behaviorHints: { videoSize: version.size } }),
         ...(version.externalSubtitles?.length ? {
           subtitles: version.externalSubtitles.map((entry) => ({
             url: sealRemoteContent({ ...base, mediaSourceId: version.id, subtitleIndex: entry.index }),
@@ -94,9 +95,11 @@ export class MediaServerSources {
   }
 
   /** The verified sources behind one exact external id, each candidate re-read and re-matched
-   *  after the listing, so a title whose metadata moved mints nothing. */
-  async matched(authority: MediaServerAuthority, owner: ResourceOwner, libraryId: string, type: string, catalogId: string, signal?: AbortSignal): Promise<PublicStream[]> {
-    const results = await this.manager.matchedVersions(authority, libraryId, type, catalogId, signal);
+   *  after the listing, so a title whose metadata moved mints nothing. `nameHint` is the
+   *  resolved catalogue or series title, used only to bound a provider that cannot search by
+   *  external id; it never widens what is matched. */
+  async matched(authority: MediaServerAuthority, owner: ResourceOwner, libraryId: string, type: string, catalogId: string, signal?: AbortSignal, nameHint?: string): Promise<PublicStream[]> {
+    const results = await this.manager.matchedVersions(authority, libraryId, type, catalogId, signal, nameHint);
     const secretStamp = this.ownerStamp(owner, authority);
     return this.listed(results.flatMap((result) => this.seal(result, owner, secretStamp)), owner);
   }

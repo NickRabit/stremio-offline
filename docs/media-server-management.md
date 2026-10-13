@@ -69,13 +69,13 @@ another instance's token through a shared device identifier.
 | --- | --- |
 | `GET /api/remote-libraries` | `{ libraries: [...] }` — the public remote-library projections the account may see. No upstream call: the names come from the local attachment. Never carries grants, server or account ids, the address or a secret reference. |
 | `GET /api/remote-libraries/:id/browse` | Native browsing: `limit` (default 60, 1–200), opaque `cursor`, optional `parentId`, `mode` (`folders`/`titles`), `search`, `type`, `sort` (`name`/`added`/`size`) and `order` (`asc`/`desc`). Reads one provider page, preserving folders in folder mode. Cursors are bound to the actor, library generation and complete browse context. |
-| `GET /api/remote-libraries/:id/preview` | Optional `parentId`; at most four same-origin poster paths from a bounded traversal (eight pages, four levels), loaded only for visible mosaic tiles. A disabled mosaic reads no provider pages. |
-| `GET /api/remote-libraries/:id/items` | Bounded browse: `limit` (default 100, 1–200), opaque `cursor`, `search` (≤256 chars, case-insensitive name substring) and exact `type` (`movie`/`series`/`season`/`episode`). |
+| `GET /api/remote-libraries/:id/preview` | Optional `parentId`; the tile's own tagged poster, or up to four posters from one bounded child page when it has none. A library root reads its own image from the current view list; a season shows no mosaic at all. A disabled mosaic reads no provider pages. |
+| `GET /api/remote-libraries/:id/items` | Bounded browse: `limit` (default 60, 1–200), opaque `cursor`, `search` (≤256 chars, provider search term) and exact `type` (`movie`/`series`/`season`/`episode`). |
 | `GET /api/remote-libraries/:id/items/:itemId` | `{ item, capabilities }` for the current authorized item. |
 | `GET /api/remote-libraries/:id/items/:itemId/episodes` | `limit` and `cursor` only; the parent must be a verified `series` or `season`. |
 | `GET /api/remote-libraries/:id/items/:itemId/sources` | The verified ordinary file versions of one playable item as sealed, source-owned streams. Each carries its external text subtitles as sealed references. No upstream address or token is returned. |
-| `GET /api/remote-libraries/:id/streams/:type/:catalogId` | The verified sources behind one exact external id (`ttN`, `tmdb:N`, `tvdb:N`, or a series episode `ttN:S:E`). The snapshot only finds candidates; every candidate is re-read and re-matched before its versions are minted, and an id this app does not match exactly answers `{ streams: [] }`. |
-| `GET /api/remote-libraries/:id/items/:itemId/artwork/:imageType` | Fixed `Primary`/`Backdrop` artwork bytes, read through the scoped transport. Always private, `no-store`, `nosniff`; an `If-None-Match` never short-circuits the authorization. Missing artwork answers `404` and the client falls back. |
+| `GET /api/remote-libraries/:id/streams/:type/:catalogId` | Optional `name` (≤256 chars, the resolved catalogue or series title). The verified sources behind one exact external id (`ttN`, `tmdb:N`, `tvdb:N`, or a series episode `ttN:S:E`). One bounded provider-id query finds candidates; a movie re-reads each, and an episode reads one series query and one parent-scoped season page. Every candidate is re-read and re-matched before its versions are minted, and an id this app does not match exactly answers `{ streams: [] }` with no upstream work. Any other query key is refused. |
+| `GET /api/remote-libraries/:id/items/:itemId/artwork/:imageType` | Fixed `Primary`/`Backdrop` bytes and at most one optional `tag` query, streaming through the image lane. Private, `no-cache`, `nosniff`, with an `ETag` of the current tag; a matching `If-None-Match` is answered locally with `304` after the local checks. Missing artwork answers `404` and the client falls back. |
 | `GET /api/remote-libraries/:id/items/:itemId/state`, `PATCH …/state` | The account's own position, duration, favourite, watched and chosen version for a verified item. Kept apart from the generic progress map, so a `remote:` key never resolves through the filesystem or catalogue parsers. |
 | `GET /api/remote-libraries/personal?filter=resume\|favorites&skip&limit` | The account's own resume or favourite cards, each library confirmed against the live remote policy first. A library that cannot be confirmed is dropped and the answer is marked `partial`; `skip` is 0–1000 and `limit` 1–120. The whole projection runs under one budget — 1.5 s for Home, 5 s otherwise, two confirmations at a time — and every card is re-proved against the account, the connection, the remote identity, the upstream library and the switches as they stand before the JSON leaves. |
 
@@ -93,8 +93,14 @@ nothing. Malformed item identifiers answer `400 err.invalidRequest`.
 
 ## Authorization, per request
 
-Nothing here relies on a cached permission decision. Before any browse, detail or
-episode read the manager:
+Nothing here relies on a cached permission decision. The remote facts a read
+proves — the server identity, the account policy and the view list — are cached
+for **30 seconds** per runtime, and a proved item or parent membership is cached
+for up to **5 minutes** (bounded, in memory), but the local authority is never
+cached: every read re-reads the acting account, its grant and the connection
+around each await. An operator discovering or attaching a library forces the view
+list to be read afresh so a library that appeared upstream moments ago is seen.
+Before any browse, detail or episode read the manager:
 
 1. re-reads the acting account from the state (it must exist, match the captured
    secret, be enabled and not owe a password change) and runs the captured
@@ -107,8 +113,11 @@ episode read the manager:
    restrictions (fail closed);
 4. requires the library in the **current** view list and, when the account is
    restricted to folders, the exact remote library id in `EnabledFolders`;
-5. for a guessed item, fetches the item detail and its ancestors and requires the
-   attached remote library id in that ancestor chain;
+5. for an id not yet proved, fetches the item detail and its ancestors **once**
+   and requires the attached remote library id in that ancestor chain, then
+   records the membership proof; a library root is authorized from the view list
+   without an ancestor-of-itself call, and an id a page already returned needs no
+   second detail or ancestor call;
 6. repeats steps 1 and the local visibility check after **all** awaited work and
    immediately before returning, including for a cached snapshot.
 
@@ -128,31 +137,46 @@ dashboard counts remote grants in a separate
 immediate network-abort hook on user deletion in this stage, but the
 publish-time check stops any late read from being returned.
 
-## Snapshot cache (bounded, in memory only)
+## Caches (bounded, in memory only)
 
-`MediaServerIndex` holds up to 20 snapshots (LRU), at most 10 000 items or 5 MiB
-per library, 32 MiB in total, and runs at most two scans at once with no queue: a
-third scan or a second scan of the same library is refused immediately as
-`busy`. A scan pages the provider at 200 items over at most 50 pages, requires
-unique item ids, a terminating cursor and cursors it has not already seen (a
-cycle is refused before the page limit), and refuses an over-cap library rather
-than publishing part of it. The 5 MiB budget is enforced incrementally while the
-pages arrive, not only after the last one; the aggregate cap refuses a single
-snapshot that alone exceeds it.
+Two short-lived caches speed up reads while allowing briefly stale upstream policy and image membership, and
+nothing on the interactive path scans a whole library.
 
-**A failed refresh fails closed.** A rejected scan publishes nothing and leaves
-the previous snapshot in memory only, where it can still answer a cursor that
-names it exactly, so an open listing is not torn apart by a transient failure.
-The next un-cursored request is refused with that failure for a bounded window
-(5 s doubling to 60 s, honouring an upstream `Retry-After` up to 300 s); a retry
-happens only on a later request, never in the background, and permission is never
-inferred from the cache. Failure records carry the full snapshot key, so one
-recorded against an older generation or identity is dropped with the connection
-and cannot hold back a repaired one, and they are bounded (1024 by default).
-An authentication refusal from **any** operation — the preflight or a page,
-detail or ancestor call — marks the connection `reauthentication-required` and
-throws away its runtime and cached snapshots. Nothing is written to disk: the
-cache has a zero disk footprint.
+**Session facts (30 seconds).** The proved server identity, account policy and
+view list are cached on the connection's runtime for 30 seconds, so a burst of
+browse, image or card reads proves them once. The token is never part of that
+cache: the vault is still read on every request, so a changed or removed key
+fails closed. A cached fact is re-validated on every use, and the local actor,
+grant and connection are re-checked around each await. Administrator discovery
+and attachment bypass the cache so a library that appeared moments ago is seen.
+
+**Membership proofs (5 minutes, at most 8192).** An item (or a library root)
+proved to sit inside one granted library for one acting account is cached for up
+to 5 minutes, keyed by the actor, the library, the connection generation and the
+secret reference. A page that passed its permission re-check registers each of
+its rows, so listing a library and then loading its images repeats no per-image
+detail or ancestor call; an id that was never proved is proved once. A proof
+carries only membership and the current image role tags — never a playback
+decision — and a proof never crosses actors, libraries or generations.
+
+**Invalidation.** Both caches live on the runtime and are dropped with it: an
+authentication refusal from any operation marks the connection
+`reauthentication-required` and throws away its session facts, its proofs and its
+transport; a generation change, a removal or `close()` does the same. Nothing is
+written to disk: the caches have a zero disk footprint.
+
+Visible library lists remain local-only. A fresh cached view can add the library's
+own tagged poster; a cold list falls back to one lazy preview request. Signed
+parent continuations renew their ancestry proof after five minutes.
+
+The recursive `MediaServerIndex` snapshot is **no longer consulted** by native
+browse, episode or match; those read exactly one provider page or one bounded
+provider-id query. The index object is still created, invalidated and closed
+alongside the manager, but it never widens the work an interactive request does.
+Its bounded-scan behaviour, if an operator or test drives it directly, keeps the
+previous limits: 20 snapshots, 10 000 items or 5 MiB per library, 32 MiB total,
+two concurrent scans, a 200-item page over at most 50 pages, unique ids, a
+terminating cursor and no cycles.
 
 ### Request lifetime
 
@@ -160,21 +184,27 @@ Every request-facing read and write takes the request's `AbortSignal`, combined
 with the manager's own lifetime signal. The acting account, the connection and
 the local library visibility are re-read after **every** awaited step — the vault
 read, the identity check, the account policy, the view list, each page, each
-detail and ancestor call — and before any cached snapshot is returned. A client
-that disconnects, a revoked session or a shutdown stops the work and nothing is
-published or written afterwards, even if a provider ignores the abort. The
-manager's `close()` aborts every staged scan, closes every cached **and every
-temporary login transport**, and from then on every request-facing method fails.
+detail and ancestor call — and before a cached fact or membership proof is used.
+A streamed image re-checks the local authority before every chunk and cancels the
+upstream read the moment the client goes away. A client that disconnects, a
+revoked session or a shutdown stops the work and nothing is published or written
+afterwards, even if a provider ignores the abort. The manager's `close()` aborts
+every staged scan, closes every cached **and every temporary login transport**,
+and from then on every request-facing method fails.
 
 ### Cursors
 
-A paging cursor is opaque base64url (≤8192 chars, ≤6144 decoded bytes) carrying
-the snapshot id, library id, connection generation, actor id, the search/type
-filter, an episode-parent filter and the offset. It is canonical, bounded and
-re-encoded to be sure two spellings never share one cursor. A replaced snapshot,
-a different actor, a different filter or an edited cursor is refused with
-`409 err.mediaServerStale`, and the client restarts the listing. Every cursor the
-API emits round-trips through its own validation.
+A native-browse cursor is opaque base64url (≤8192 chars, ≤6144 decoded bytes)
+carrying the library id, connection generation, actor id, the parent, mode,
+type, search and sort pair, and the provider's own page cursor. It is canonical,
+bounded, re-encoded to be sure two spellings never share one cursor, and signed
+with a **process-scoped HMAC**. A signed continuation that binds the exact
+actor, generation, parent and query is trusted as the proof that its parent was
+already proved, so it skips the parent proof; an edited, migrated or foreign
+cursor fails its signature or its binding and is refused with
+`409 err.mediaServerStale` (or `400` for a non-canonical one), and the client
+restarts the listing. Every cursor the API emits round-trips through its own
+validation.
 
 ## Token vault and cleanup
 
@@ -352,6 +382,15 @@ this stage does not claim exhaustive remote parental-policy support.
   external id conversion: an id this app cannot match exactly answers with an
   empty list rather than a guess, and an episode must still prove its series
   after every read that could have moved it.
+- **Jellyfin catalogue discovery has a compatibility limit.** Emby 4.9.3 supports
+  the exact `AnyProviderIdEquals` query. The tested Jellyfin 12.2.0 silently
+  ignores that parameter; its adapter instead requests one bounded page using
+  documented `HasImdbId`/`HasTmdbId`/`HasTvdbId` and the catalogue title as
+  `SearchTerm`, then checks the returned provider IDs exactly. Different
+  localized titles or more than 200 candidates can therefore hide a valid
+  catalogue source. Legacy callers without a title search one bounded ID-bearing
+  page. This never guesses a match or starts a full-library scan on a click;
+  opening and playing an item directly from its library remains unaffected.
 - **A remote failure stays local to its own half.** A failed remote read drops
   the remote part of a row or marks it `partial`; the filesystem rows, the
   add-on rows and the other destinations are unaffected, and no cached remote
@@ -386,21 +425,25 @@ leaving an empty collage.
 ## Upstream request budget
 
 Native lists read one provider page at a time, with a default of 60 items.
-Remote artwork is mounted near the visible viewport; mosaic discovery has two
-client slots and a bounded traversal, and changing tile shape does not repeat
-that discovery. Known absent image roles are not requested.
+Remote artwork is mounted near the visible viewport; a tile's mosaic is its own
+poster (or its library's own view image). Without one, a preview reads one bounded child
+page without traversing nested folders at all and changing tile shape does not repeat any discovery. Known absent
+image roles are not requested, and a thumbnail a few minutes old is acceptable —
+the client does not insist on zero-latency upstream metadata revocation.
 
-Metadata and artwork share at most four active network operations globally.
-Each connection admits at most one new operation every 125 ms, with bounded,
-abortable waiting queues. Dispatch is paced again after global saturation so
-queued work cannot catch up in a burst. Original streaming bytes use their
-separate transport pool.
+**Metadata and images use separate lanes.** Metadata admits at most four active
+network operations globally on a connection, one new start every 125 ms, with
+bounded, abortable waiting queues and a re-pace after global saturation so a
+queued burst cannot catch up. Image bytes take the transport's **own** finite
+pool, with no metadata start pacing and no metadata or DNS slot, so an image burst
+cannot delay a browse, a match or the playback guard's revalidation. Original
+streaming bytes use their own separate transport pool too.
 
 Concurrent identity, account-policy and view-list reads on the same runtime
-share their in-flight result. Settled permission results are not cached, and
-each caller repeats its own current actor, generation and grant checks. In a
-four-artwork fixture burst this reduces metadata calls from twelve to three,
-and total upstream operations from twenty-four to fifteen.
+share their in-flight result, and the settled facts are then reused for up to 30
+seconds; each caller still repeats its own current actor, generation and grant
+checks. In a four-artwork fixture burst this reduces the session reads to one
+each.
 
 An upstream `429` puts metadata, images and new stream requests on that
 transport into a shared cooldown: the supplied `Retry-After`, bounded to five
