@@ -1995,7 +1995,7 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 /* One surface for a playable title, local or remote, so the two details cannot drift apart: the
    backdrop lies under the whole body, chips to Play, and the copy starts at the top with no band
    above it. The gradient keeps the synopsis, the actions and an episode list legible. */
-.library-title-detail{position:relative;isolation:isolate;display:flex;flex-direction:column;gap:10px;min-height:min(680px,calc(100dvh - 220px));padding:26px;border-radius:10px;background-color:#121721;background-size:cover;background-position:center;background-repeat:no-repeat}
+.library-title-detail{position:relative;isolation:isolate;display:flex;flex-direction:column;gap:10px;min-height:max(420px,calc(100dvh - 310px));padding:26px;border-radius:10px;background-color:#121721;background-size:cover;background-position:center;background-repeat:no-repeat}
 .library-title-detail::before{content:"";position:absolute;inset:0;z-index:0;border-radius:inherit;background:linear-gradient(90deg,#121721b8 0%,transparent 55%);pointer-events:none}
 .library-title-detail>.hero{position:relative;z-index:1;background:none;margin:0;padding:0;min-height:0;flex:0 1 auto}
 .library-detail-hero .detail-copy{max-width:760px}
@@ -2004,8 +2004,8 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 .library-detail-synopsis{margin:9px 0 0;max-width:680px;font-size:13px;line-height:1.6;color:#dce3ed}
 .library-title-detail>.remote-error,.library-title-detail>.loading,.library-title-detail>.identify-hint,.library-title-detail>.library-detail-actions,.library-title-detail>.remote-episodes-head,.library-title-detail>.remote-season-group,.library-title-detail>.load-more,.library-title-detail>.remote-season-group .browse-grid,.library-title-detail>.remote-season-group .browse-rows{position:relative;z-index:1}
 .library-title-detail>.library-detail-actions{margin-top:4px}
-@media(max-width:700px){.library-title-detail{min-height:min(520px,calc(100dvh - 150px));padding:16px}.library-detail-hero .detail-copy h2{font-size:21px}.library-detail-synopsis{font-size:12px}}
-@media(max-height:500px) and (orientation:landscape){.library-title-detail{min-height:min(320px,calc(100dvh - 110px));padding:14px}}
+@media(max-width:700px){.library-title-detail{min-height:max(300px,calc(100dvh - 310px));padding:16px}.library-detail-hero .detail-copy h2{font-size:21px}.library-detail-synopsis{font-size:12px}}
+@media(max-height:500px) and (orientation:landscape){.library-title-detail{min-height:max(190px,calc(100dvh - 150px));padding:14px}}
 .remote-personal{margin-top:26px}
 .remote-episodes-head span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .remote-season{margin:8px 0 2px;font-size:10px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)}

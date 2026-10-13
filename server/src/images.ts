@@ -276,7 +276,8 @@ export class ImageProxy {
       if (!entry || typeof entry !== "object") return entry;
       const item = entry as Record<string, unknown>;
       const next = { ...item };
-      for (const key of ["url", "src"]) if (typeof item[key] === "string") next[key] = this.proxied(item[key] as string, width);
+      const target = item.kind === "poster" || item.shape === "poster" ? TILE_WIDTH : width;
+      for (const key of ["url", "src"]) if (typeof item[key] === "string") next[key] = this.proxied(item[key] as string, target);
       return next;
     });
   }

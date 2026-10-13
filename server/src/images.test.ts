@@ -239,6 +239,15 @@ test("a detail gallery keeps the wider address while the poster stays a tile", a
   assert.equal(meta.poster, proxy.proxied(PLAIN), "the poster keeps the tile width");
 });
 
+test("a gallery poster reuses its existing poster cache variant", async () => {
+  const { proxy } = await harness();
+  const meta = proxy.rewriteMeta({ id: "tt1", type: "movie", name: "Film", poster: PLAIN,
+    images: [{ url: PLAIN, kind: "poster", shape: "poster" }, { url: MEDIUM, kind: "background", shape: "wide" }] }, true);
+  const gallery = meta.images as Array<{ url: string }>;
+  assert.equal(gallery[0]!.url, meta.poster);
+  assert.equal(gallery[1]!.url, proxy.proxied(MEDIUM, DETAIL));
+});
+
 test("a detail width survives an index reload before the bytes exist", async () => {
   const { proxy, dir } = await harness();
   const id = proxy.proxied(PLAIN, DETAIL)!.split("/").pop()!;
