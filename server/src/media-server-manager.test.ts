@@ -865,17 +865,32 @@ test("a queued network request is removed and cancelled the moment its caller ab
     const four = deferred();
     harness.server.nudge = { op: "info", wait: held.promise, entered: () => { entered += 1; if (entered === 4) four.resolve(); } };
     const running = [0, 1, 2, 3].map(() => harness.manager.discoverLibraries(harness.admin, connection.id));
-    await four.promise;
+    const settledRunning = Promise.allSettled(running);
     const controller = new AbortController();
-    const queued = harness.manager.discoverLibraries(harness.admin, connection.id, controller.signal);
-    for (let spins = 0; spins < 1000 && netQueueLength(harness) < 1; spins += 1) await tick();
-    assert.equal(netQueueLength(harness), 1, "the request reached the queue");
-    controller.abort();
-    await assert.rejects(queued, { code: "cancelled" });
-    assert.equal(netQueueLength(harness), 0, "the aborted entry left the queue at once");
-    held.resolve();
-    harness.server.nudge = undefined;
-    await Promise.all(running);
+    let settledQueued: Promise<PromiseSettledResult<unknown>[]> | undefined;
+    try {
+      await four.promise;
+      const readCredential = harness.vault.get.bind(harness.vault);
+      harness.vault.get = async (...args) => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        return readCredential(...args);
+      };
+      const queued = harness.manager.discoverLibraries(harness.admin, connection.id, controller.signal);
+      settledQueued = Promise.allSettled([queued]);
+      const deadline = Date.now() + 5000;
+      while (netQueueLength(harness) < 1 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 1));
+      assert.equal(netQueueLength(harness), 1, "the request reached the queue");
+      controller.abort();
+      await assert.rejects(queued, { code: "cancelled" });
+      assert.equal(netQueueLength(harness), 0, "the aborted entry left the queue at once");
+    } finally {
+      controller.abort();
+      held.resolve();
+      harness.server.nudge = undefined;
+      await settledRunning;
+      await settledQueued;
+    }
+    for (const result of await settledRunning) assert.equal(result.status, "fulfilled");
   }, { coalesceReads: false });
 });
 
