@@ -1,9 +1,8 @@
 import { useEffect, useState, type RefObject } from "react";
 import { HardDrive, FolderOpen } from "lucide-react";
 import { api } from "./api";
-import { t } from "./i18n";
 import { hideBroken } from "./settings-ui";
-import { PosterMosaic, TileArt } from "./TileArt";
+import { TileArt } from "./TileArt";
 import type { TileShape } from "./types";
 
 /** Transfer an occupied slot directly to the next waiter so queued previews cannot exceed two. */
@@ -40,11 +39,17 @@ type TileRef = RefObject<HTMLElement | null>;
  * after the first request, and the component keeps its answer until it unmounts or its key
  * changes -- so the cache lives no longer than the authorized listing that drew it.
  */
-export function useRemotePosters({ libraryId, parentId, enabled, generation }: PreviewKey, target: TileRef, preferChildren = false): string[] {
+export function useRemotePosters({ libraryId, parentId, enabled, generation }: PreviewKey, target: TileRef, preferChildren = false): { posters: string[]; pending: boolean } {
   const [posters, setPosters] = useState<string[]>([]);
+  const [pending, setPending] = useState(enabled);
   useEffect(() => {
+    if (!enabled) {
+      setPosters([]);
+      setPending(false);
+      return;
+    }
     setPosters([]);
-    if (!enabled) return;
+    setPending(true);
     const controller = new AbortController();
     let live = true;
     const load = () => {
@@ -52,8 +57,8 @@ export function useRemotePosters({ libraryId, parentId, enabled, generation }: P
         if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
         return api.remotePreview(libraryId, parentId, controller.signal, preferChildren);
       })
-        .then((answer) => { if (live) setPosters(answer.posters); })
-        .catch(() => undefined);
+        .then((answer) => { if (live) { setPosters(answer.posters); setPending(false); } })
+        .catch(() => { if (live) setPending(false); });
     };
     const element = target.current;
     // No observer (an old browser or a test without one): read straight away rather than never.
@@ -65,8 +70,8 @@ export function useRemotePosters({ libraryId, parentId, enabled, generation }: P
     });
     observer.observe(element);
     return () => { live = false; observer.disconnect(); controller.abort(); };
-  }, [libraryId, parentId, enabled, generation]);
-  return posters;
+  }, [libraryId, parentId, enabled, generation, preferChildren]);
+  return { posters, pending };
 }
 
 /** The fan of posters the local library tile already draws, reused for a remote root so the two
@@ -78,11 +83,13 @@ function LibraryCollage({ posters }: { posters: string[] }) {
 }
 
 /** A remote root library's picture: a collage of its films, one film, the library's own poster or
- *  the drive icon. With mosaics on the collage is the picture and the library's own poster only
- *  stands in for an empty preview; with mosaics off the own poster is drawn as it is. */
+ *  the drive icon. The own poster is not drawn while the child preview is still coming: that
+ *  first picture uses a different frame, and replacing it with the fan reshuffles the tile.
+ *  With mosaics off the own poster is drawn as it is. */
 export function RemoteLibraryArt(props: PreviewKey & { target: TileRef; poster?: string }) {
   const { target, poster, ...key } = props;
-  const posters = useRemotePosters(key, target, true);
+  const { posters, pending } = useRemotePosters(key, target, true);
+  if (key.enabled && pending) return null;
   if (posters.length > 1) return <LibraryCollage posters={posters}/>;
   return <TileArt shape="poster" poster={key.enabled ? posters[0] ?? poster : poster} fallback={<HardDrive/>}/>;
 }
@@ -106,12 +113,15 @@ export function RemoteTileArt({ target, ...props }: Parameters<typeof TileArt>[0
   return visible ? <TileArt {...props}/> : <>{props.fallback}</>;
 }
 
-/** A remote folder's picture: the artwork the folder already carries, or the local folder tile's
- *  mosaic, or the folder icon. A folder with a poster draws it and asks for no preview, and a
- *  single preview poster stays a single picture rather than a collage. */
+/** A remote folder's picture: the artwork the folder already carries, or the same fan the local
+ *  folder tile draws, or the folder icon. A folder with a poster draws it and asks for no
+ *  preview, and a single preview poster stays a single picture rather than a collage. A poster
+ *  that fails stays in its slot, so the fan does not collapse into a different frame. */
 export function RemoteFolderArt({ shape, poster, wide, ...picture }: PreviewKey & { target: TileRef; shape: TileShape; poster?: string; wide?: string }) {
   const { target, ...key } = picture;
-  const posters = useRemotePosters({ ...key, enabled: key.enabled && !poster }, target);
-  if (posters.length > 1) return <PosterMosaic posters={posters} label={t("library.mosaicAlt", { count: posters.length })} fallback={<RemoteTileArt target={target} shape={shape} poster={poster} wide={wide} fallback={<FolderOpen/>}/>}/>;
+  const ask = key.enabled && !poster;
+  const { posters, pending } = useRemotePosters({ ...key, enabled: ask }, target);
+  if (posters.length > 1) return <LibraryCollage posters={posters}/>;
+  if (ask && pending) return <RemoteTileArt target={target} shape={shape} fallback={<FolderOpen/>}/>;
   return <RemoteTileArt target={target} shape={shape} poster={poster ?? posters[0]} wide={wide} fallback={<FolderOpen/>}/>;
 }
