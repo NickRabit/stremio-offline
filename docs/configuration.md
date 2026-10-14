@@ -76,7 +76,7 @@ served from cache.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `REMOTE_IMAGE_CACHE_MB` | `512` | Disk those images may take before the oldest are dropped. The same headroom rule as above applies. |
-| `REMOTE_IMAGE_MEMORY_MB` | `32` | Process memory in front of that disk. A hit does not touch the disk; `0` turns the layer off. |
+| `REMOTE_IMAGE_MEMORY_MB` | `128` | Process memory in front of that disk. Remote posters are larger than catalogue tiles, so this holds roughly a thousand of them. A hit does not touch the disk; `0` turns the layer off. |
 
 A poster a browser has already downloaded cannot be taken back for up to a year,
 so revoking a grant or disabling a library hides it from new readers only.
