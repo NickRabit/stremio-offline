@@ -149,9 +149,13 @@ operation and never cached, so a missing, changed or corrupt key fails closed
 with `secret-key-unavailable` — the vault never generates or replaces a key on
 its own. Before the vault is constructed, startup creates
 `DATA_DIR/media-server.key` when `MEDIA_SERVER_KEY_FILE` is unset and the
-install has no encrypted credential yet. The vault directory is created `0700`; a pre-existing directory that is
-not a real directory, is a symlink, or is group/other-accessible or owned by
-another user is refused. A stored envelope is opened only after an `lstat`
+install has no encrypted credential yet. Creation is followed by an explicit
+owner-only `chmod`, because a shared folder may replace the requested mode
+(Synology's `docker` share grants Everyone read on new files). A file that is
+still group- or world-readable, or not owned by the process user, is removed
+instead of kept. The vault directory is created `0700` and tightened the same
+way. A pre-existing directory that is not a real directory, is a symlink, or
+is group- or world-readable or owned by another user is refused. A stored envelope is opened only after an `lstat`
 rejects a symlink or non-regular file, and the opened descriptor is confirmed to
 be the same inode and to be a regular file that is owner-only and owned by the
 process user, so a FIFO cannot block the reader and a swapped or permission-

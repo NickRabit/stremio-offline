@@ -221,6 +221,12 @@ With the variable unset there is nothing to generate by hand. The file appears i
 the data directory the first time the server starts, and the same file is reused
 after that. Copy it with the rest of `DATA_PATH`.
 
+A shared folder can ignore the mode requested at creation. Synology's `docker`
+share grants Everyone read on every new file. Startup tightens the new key to
+owner-only, and the same happens for the vault directory and each stored token.
+When the folder will not keep that restriction, the key is removed and a remote
+login cannot be saved.
+
 Set the variable only when the key should live somewhere else. The file must
 already exist, be a regular file of exactly 32 raw random bytes, owner-only
 (`0600`) and owned by the process user. Compose passes the variable through and
