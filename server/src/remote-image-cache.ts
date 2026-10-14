@@ -122,7 +122,7 @@ export class RemoteImageCache {
     // is the one value that turns that layer off.
     this.cap = cap !== undefined && cap > 0 ? cap : megabytes(process.env.REMOTE_IMAGE_CACHE_MB, 512);
     this.memoryCap = memoryCap === 0 ? 0
-      : memoryCap !== undefined && memoryCap > 0 ? memoryCap : memoryMegabytes(process.env.REMOTE_IMAGE_MEMORY_MB, 32);
+      : memoryCap !== undefined && memoryCap > 0 ? memoryCap : memoryMegabytes(process.env.REMOTE_IMAGE_MEMORY_MB, 128);
   }
 
   /** Builds the index from the files that are actually there; there is no index file. A
