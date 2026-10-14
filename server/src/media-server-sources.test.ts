@@ -6,6 +6,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { MediaResources, ResourceError } from "./media-resources.js";
 import { MediaServerIndex } from "./media-server-index.js";
+import { isRemoteDownloadReference, type RemoteDownloadReference } from "./media-server-download.js";
 import { MediaServerManager, type MediaServerAuthority } from "./media-server-manager.js";
 import { remoteIdsMatch } from "./media-server-match.js";
 import type { MediaServerProvider, ProviderItem, ProviderLibrary, ProviderVersion, RemoteAccountPolicy } from "./media-server-provider.js";
@@ -45,6 +46,10 @@ class FakeServer {
   items: Record<string, ProviderItem[]> = {};
   directories: Record<string, ProviderItem[]> = {};
   originalCalls = 0;
+  originalCancels = 0;
+  /** Runs inside the original request, before its response is handed back, so a test can change
+   *  the records while the manager is awaiting the transport. */
+  onOriginal?: () => Promise<void>;
   assetResult: { bytes: Uint8Array; contentType: string } | undefined;
   assetRequests: Array<Record<string, unknown>> = [];
 
@@ -85,7 +90,8 @@ const stubTransport = (server: FakeServer): MediaServerTransport => ({
   requestArtwork: async () => { throw new Error("no artwork lane is used in this harness"); },
   requestOriginal: async () => {
     server.originalCalls += 1;
-    return new Response(new ReadableStream<Uint8Array>({ cancel: () => undefined }), { status: 200, headers: { "content-range": "bytes 0-0/1" } });
+    await server.onOriginal?.();
+    return new Response(new ReadableStream<Uint8Array>({ cancel: () => { server.originalCancels += 1; } }), { status: 200, headers: { "content-range": "bytes 0-0/1" } });
   },
   close: async () => undefined,
 });
@@ -104,7 +110,7 @@ interface Harness {
   close(): Promise<void>;
 }
 
-const mount = async (): Promise<Harness> => {
+const mount = async (options: { contentDownloading?: boolean } = {}): Promise<Harness> => {
   const dir = await mkdtemp(path.join(tmpdir(), "media-sources-"));
   const users = [admin, bob];
   await writeFile(path.join(dir, "state.json"), JSON.stringify({
@@ -117,6 +123,11 @@ const mount = async (): Promise<Harness> => {
   await store.load();
   const vault = new MediaServerSecrets(path.join(dir, "vault"), keyFile);
   const server = new FakeServer();
+  // The fact is set before the connection is made, because the runtime caches the account policy
+  // for a short window; a test that wants the permission must grant it before the first proof.
+  if (options.contentDownloading !== undefined) {
+    server.policy = { ...server.policy, contentDownloading: options.contentDownloading };
+  }
   const manager = new MediaServerManager(store, vault, {
     providerFactory: () => stubProvider(server),
     transportFactory: () => stubTransport(server),
@@ -152,8 +163,8 @@ const mount = async (): Promise<Harness> => {
   };
 };
 
-const withHarness = async (run: (harness: Harness) => Promise<void>) => {
-  const harness = await mount();
+const withHarness = async (run: (harness: Harness) => Promise<void>, options: { contentDownloading?: boolean } = {}) => {
+  const harness = await mount(options);
   try { await run(harness); }
   finally { await harness.close(); }
 };
@@ -185,6 +196,27 @@ test("list mints verified public sources without leaking the internal address", 
 });
 
 const openedRef = (harness: Harness, sourceId: string) => openRemoteContent(streamOf(harness, sourceId).url);
+
+test("a version's container decides the copy's file name, never the display label", async () => {
+  await withHarness(async (harness) => {
+    harness.server.versionsOf["item-1"] = [
+      { id: "v1", name: "Version1", container: "mkv" },
+      { id: "v2", name: "Version2.mp4", container: "mkv" },
+      { id: "v3", name: "Version3", container: "../../etc/passwd" },
+      { id: "v4", name: "Version4" },
+      { id: "v5", name: "Version5.mkv", container: "mkv" },
+    ];
+    const listed = await harness.sources.list(harness.adminAuthority, harness.owner, harness.libraryId, "item-1");
+    assert.deepEqual(listed.map((item) => item.behaviorHints?.filename),
+      ["Version1.mkv", "Version2.mkv", "Version3", "Version4", "Version5.mkv"],
+      "an accepted container sets the extension, an unsafe one never does, and nothing is doubled");
+    assert.deepEqual(listed.map((item) => item.name),
+      ["Version1", "Version2.mp4", "Version3", "Version4", "Version5.mkv"],
+      "the display label stays the provider's own");
+    assert.equal(JSON.stringify(listed).includes("passwd"), false, "an arbitrary container never reaches a name");
+    assert.equal(JSON.stringify(listed).includes("media-server:"), false, "no sealed address is exposed");
+  });
+});
 
 test("list refuses an owner that is not the acting account", async () => {
   await withHarness(async (harness) => {
@@ -287,4 +319,100 @@ test("matched mints only the verified versions behind an exact id", async () => 
     assert.deepEqual(listed.map((item) => item.name), ["1080p"]);
     assert.deepEqual(await harness.sources.matched(harness.adminAuthority, harness.owner, harness.libraryId, "movie", "tt9"), []);
   });
+});
+
+const downloadRefOf = async (harness: Harness, sourceId: string) =>
+  harness.sources.downloadReference(streamOf(harness, sourceId), harness.owner);
+
+const downloadReferenceOf = (harness: Harness): RemoteDownloadReference => ({
+  schemaVersion: 1, ownerUserId: ADA, connectionId: harness.connectionId, libraryId: harness.libraryId,
+  generation: harness.store.mediaConnections()[0]!.generation, provider: "jellyfin", serverId: "server-1",
+  accountId: "account-1", itemId: "item-1", mediaSourceId: "v1",
+});
+
+test("downloadReference captures a durable, session-free handle for the exact version", async () => {
+  await withHarness(async (harness) => {
+    const [first] = await harness.sources.list(harness.adminAuthority, harness.owner, harness.libraryId, "item-1");
+    const reference = await downloadRefOf(harness, first!.sourceId);
+    assert.equal(isRemoteDownloadReference(reference), true);
+    assert.deepEqual(reference, {
+      schemaVersion: 1, ownerUserId: harness.owner.userId, connectionId: harness.connectionId,
+      libraryId: harness.libraryId, generation: harness.store.mediaConnections()[0]!.generation, provider: "jellyfin", serverId: "server-1",
+      accountId: "account-1", itemId: "item-1", mediaSourceId: "v1",
+    });
+    const json = JSON.stringify(reference);
+    assert.equal(/sid|token|secret|expiresAt|media-server:|http/.test(json), false, "no session, credential or address is kept");
+    assert.equal(harness.server.originalCalls, 0, "the reference is proved without reading bytes");
+  }, { contentDownloading: true });
+});
+
+test("downloadReference refuses a subtitle, a foreign owner and a generic stream", async () => {
+  await withHarness(async (harness) => {
+    harness.server.versionsOf["item-1"] = [{ id: "v1", name: "1080p", externalSubtitles: [{ index: 2 }] }];
+    harness.server.assetResult = { bytes: new TextEncoder().encode("WEBVTT\n"), contentType: "text/vtt" };
+    const listed = await harness.sources.list(harness.adminAuthority, harness.owner, harness.libraryId, "item-1");
+    const subtitleStream = harness.resources.get(listed[0]!.subtitles[0]!.subtitleId, harness.owner.sid, "subtitle").stream;
+    await assert.rejects(harness.sources.downloadReference(subtitleStream, harness.owner), { status: 404 }, "a subtitle is never an original copy");
+    await assert.rejects(harness.sources.downloadReference({ url: "https://example.test/a.mp4" }, harness.owner), { status: 404 }, "a generic stream has no remote provenance");
+    await assert.rejects(harness.sources.downloadReference(streamOf(harness, listed[0]!.sourceId), { ...harness.owner, userId: BOB }), { status: 404 }, "another account cannot capture the handle");
+  });
+});
+
+test("openDownloadOriginal streams the proved original and refuses a foreign owner", async () => {
+  await withHarness(async (harness) => {
+    const [first] = await harness.sources.list(harness.adminAuthority, harness.owner, harness.libraryId, "item-1");
+    const reference = await downloadRefOf(harness, first!.sourceId);
+    const response = await harness.manager.openDownloadOriginal(harness.adminAuthority, reference, { method: "GET" });
+    assert.equal(response.status, 200);
+    assert.equal(harness.server.originalCalls, 1);
+    await assert.rejects(harness.manager.openDownloadOriginal(harness.bobAuthority, reference, { method: "GET" }), { status: 404 }, "the actor must be the owner");
+    await assert.rejects(harness.manager.revalidateDownloadOriginal(harness.bobAuthority, reference), { status: 404 });
+    assert.equal(harness.server.originalCalls, 1, "a refused actor reads no bytes");
+    assert.equal(isRemoteDownloadReference({ ...reference, sid: "sid-a" }), false, "a reference carrying a session field is refused");
+  }, { contentDownloading: true });
+});
+
+test("a connection that changes while the original is opening cancels the body", async () => {
+  await withHarness(async (harness) => {
+    const [first] = await harness.sources.list(harness.adminAuthority, harness.owner, harness.libraryId, "item-1");
+    const reference = await downloadRefOf(harness, first!.sourceId);
+    harness.server.onOriginal = async () => {
+      await harness.manager.patchConnection(harness.adminAuthority, harness.connectionId, { enabled: false });
+    };
+    await assert.rejects(harness.manager.openDownloadOriginal(harness.adminAuthority, reference, { method: "GET" }), { code: "not-found" });
+    assert.equal(harness.server.originalCancels, 1, "the already-opened body was cancelled rather than handed over");
+  }, { contentDownloading: true });
+});
+
+test("revalidateDownloadOriginal refuses once the named version is gone", async () => {
+  await withHarness(async (harness) => {
+    const [first] = await harness.sources.list(harness.adminAuthority, harness.owner, harness.libraryId, "item-1");
+    const reference = await downloadRefOf(harness, first!.sourceId);
+    await harness.manager.revalidateDownloadOriginal(harness.adminAuthority, reference);
+    harness.server.versionsOf["item-1"] = [{ id: "v9", name: "other" }];
+    await assert.rejects(harness.manager.revalidateDownloadOriginal(harness.adminAuthority, reference), { code: "not-found" });
+    harness.server.versionsOf["item-1"] = [{ id: "v1", name: "1080p", container: "mkv", size: 200_000 }];
+    await assert.rejects(harness.manager.revalidateDownloadOriginal(harness.adminAuthority, { ...reference, itemId: "missing" }), { code: "not-found" });
+  }, { contentDownloading: true });
+});
+
+test("a native download denial refuses admission and open yet leaves playback usable", async () => {
+  // The field is false in one case and absent in the other: both deny a copy, and neither
+  // changes ordinary playback. Only an explicit true would admit one.
+  for (const contentDownloading of [false, undefined]) {
+    await withHarness(async (harness) => {
+      const [first] = await harness.sources.list(harness.adminAuthority, harness.owner, harness.libraryId, "item-1");
+      const stream = streamOf(harness, first!.sourceId);
+      await assert.rejects(harness.sources.downloadReference(stream, harness.owner), { code: "forbidden" }, "admission needs an explicit true");
+      const before = harness.server.originalCalls;
+      const reference = downloadReferenceOf(harness);
+      await assert.rejects(harness.manager.openDownloadOriginal(harness.adminAuthority, reference, { method: "GET" }), { code: "forbidden" });
+      await assert.rejects(harness.manager.revalidateDownloadOriginal(harness.adminAuthority, reference), { code: "forbidden" });
+      assert.equal(harness.server.originalCalls, before, "a native denial reads no bytes");
+      // The same sealed source still plays: a missing download right never touches playback.
+      const played = await harness.sources.open(stream, harness.owner, { method: "GET" });
+      assert.equal(played.status, 200);
+      await played.body?.cancel().catch(() => undefined);
+    }, contentDownloading === undefined ? {} : { contentDownloading });
+  }
 });

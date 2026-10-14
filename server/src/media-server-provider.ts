@@ -14,6 +14,10 @@ import type { MediaServerTransport } from "./media-server-security.js";
 export interface RemoteAccountPolicy {
   disabled: boolean;
   mediaPlayback: boolean;
+  /** Whether the account may download content at all. Absent when the server did not report the
+   *  field: a missing fact is not a permission, so it never permits a copy. Local to download
+   *  admission and never consulted for ordinary playback. */
+  contentDownloading?: boolean;
   allFolders: boolean;
   folderIds: string[];
   hasAdditionalRestrictions: boolean;
@@ -162,6 +166,14 @@ const optionalSafeInt = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 
 const requiredBool = (value: unknown, field: string): boolean => {
+  if (typeof value !== "boolean") throw invalidResponse(`The media-server policy field ${field} is not a boolean.`);
+  return value;
+};
+
+/** A policy fact a server may or may not report. A missing field keeps the fact unproven rather
+ *  than granting it; a present non-boolean is malformed and refused like any other bad field. */
+const optionalBool = (value: unknown, field: string): boolean | undefined => {
+  if (value === undefined || value === null) return undefined;
   if (typeof value !== "boolean") throw invalidResponse(`The media-server policy field ${field} is not a boolean.`);
   return value;
 };
@@ -513,11 +525,13 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
     const user = asObject(await transport.requestJson("user", { userId: accountId }, token, signal), "The account response");
     if (user.Id !== accountId) throw invalidResponse("The account response is for another user.");
     const policy = asObject(user.Policy, "The account policy");
+    const contentDownloading = optionalBool(policy.EnableContentDownloading, "EnableContentDownloading");
     return {
       accountId,
       policy: {
         disabled: requiredBool(policy.IsDisabled, "IsDisabled"),
         mediaPlayback: requiredBool(policy.EnableMediaPlayback, "EnableMediaPlayback"),
+        ...(contentDownloading === undefined ? {} : { contentDownloading }),
         allFolders: requiredBool(policy.EnableAllFolders, "EnableAllFolders"),
         folderIds: requiredStringArray(policy.EnabledFolders, "EnabledFolders"),
         hasAdditionalRestrictions: hasAdditionalRestrictions(policy),

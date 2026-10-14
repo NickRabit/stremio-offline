@@ -5,6 +5,7 @@ import { jobLibraryId, mayDownloadToDevice, mayDownloadToLibrary, type DownloadJ
 import { libraryVisible, parseLibraryPath, type LibraryRecord, type Viewer } from "./libraries.js";
 import { log } from "./logger.js";
 import { remoteContentAccessible, remoteLibraryVisibleTo, type RemoteAccessSource } from "./media-server-access.js";
+import { remoteDownloadAccessible } from "./media-server-download.js";
 import { isRemoteMediaStream, openRemoteContent, type RemoteContentRef } from "./media-server-reference.js";
 import { REMOTE_LIBRARY_ID } from "./media-server-types.js";
 import { ResourceError, type DeviceDownloadTicket, type MediaResources, type ResourceOwner } from "./media-resources.js";
@@ -79,8 +80,9 @@ export function accessLost(source: AccessSource, claim: AccessClaim | undefined,
     if (!addon || !addon.enabled || !addonAllowed(addon, viewer)) return true;
   }
   if (need.permission === "downloadToLibrary" || need.permission === "downloadToDevice") {
-    // No download path accepts a remote original, whatever the account is allowed to do.
-    if (need.remote !== undefined) return true;
+    // Saving to the device never accepts a remote original. Copying one into a local library is
+    // the one authorized remote download, and it holds only while the grant checked above does.
+    if (need.remote !== undefined && need.permission === "downloadToDevice") return true;
     if (user.permissionsVersion !== claim.permissionsVersion) {
       // The counter moved, so the right has to re-resolve from the account as it stands now
       // rather than be assumed: an edit that took it away and one that gave it back look the
@@ -284,10 +286,17 @@ export class Revocations {
     this.deps.airplay.removeWhere((grant) => revoked.has(grant.resourceId));
     // A queued download keeps its place, like every other pause: the job is not wrong, the
     // library it writes to is simply not this account's to write to any more.
-    await this.pauseJobs((job) => this.deps.queue.ownerOf(job) === user.id && (lost({
-      libraryId: jobLibraryId(job),
-      addonKey: job.stream?.addonKey,
-    }) || lost({ addonKey: job.subtitle?.addonKey })), user.id);
+    await this.pauseJobs((job) => this.deps.queue.ownerOf(job) === user.id && (
+      lost({ libraryId: jobLibraryId(job), addonKey: job.stream?.addonKey })
+      || lost({ addonKey: job.subtitle?.addonKey })
+      || this.remoteDownloadLost(job, user.id)
+    ), user.id);
+  }
+
+  /** A queued remote copy whose local grant or connection generation no longer lines up. Its
+   *  own sealed session is long gone; only the durable reference is read here. */
+  private remoteDownloadLost(job: DownloadJob, userId: string): boolean {
+    return job.remoteDownload !== undefined && !remoteDownloadAccessible(this.deps.source, job.remoteDownload, userId);
   }
 
   /**
@@ -326,6 +335,8 @@ export class Revocations {
    *  here rather than guessed at. */
   private jobTouches(job: DownloadJob, opts: StopContentOptions): boolean {
     if (opts.userId !== undefined && this.deps.queue.ownerOf(job) !== opts.userId) return false;
+    // A remote copy names its own connection, which a local library id never does.
+    if (opts.connectionId !== undefined && job.remoteDownload?.connectionId === opts.connectionId) return true;
     if (opts.libraryId !== undefined) {
       const libraryId = jobLibraryId(job);
       if (libraryId === opts.libraryId) return true;

@@ -2,23 +2,31 @@ import { stat } from "node:fs/promises";
 import type express from "express";
 import { allowedAddons } from "../addons.js";
 import type { DeviceTransfers } from "../device-transfers.js";
-import { isRemoteDownloadSource, ownerMayDownload, remoteDownloadRefused, type AudioMode, type DownloadQueue, type DownloadSelection, type SubtitleMode } from "../downloads.js";
+import { NoLibraryForKindError, isRemoteDownloadSource, ownerMayDownload, remoteDownloadRefused, remoteDownloadStream, type AudioMode, type DownloadQueue, type DownloadSelection, type SubtitleMode } from "../downloads.js";
 import { AppError } from "../errors.js";
 import { normalizeLanguage } from "../language.js";
 import { log } from "../logger.js";
 import { libraryVisible, resolveLibraryPath, type LibraryRecord, type Viewer } from "../libraries.js";
 import { defaultDownloadSettings, exactSubfolder, targetLibrary, type MediaInfo } from "../naming.js";
+import type { RemoteDownloadReference } from "../media-server-download.js";
+import type { MediaServerSources } from "../media-server-sources.js";
 import { REMOTE_LIBRARY_ID } from "../media-server-types.js";
 import { titleLanguage } from "../ranking.js";
+import type { ResourceOwner } from "../media-resources.js";
 import type { UserPrefs } from "../store.js";
 import type { DownloadTargetSettings, MetaItem, StreamItem } from "../types.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 
 export interface DownloadsDeps extends RouteContext {
   queue: DownloadQueue;
+  /** The verified original-file sources: the only place a durable remote download reference is
+   *  minted, and only for a sealed source this session actually resolved. */
+  mediaSources: MediaServerSources;
   deviceTransfers: DeviceTransfers;
   jobView: <T extends { media?: MediaInfo; target?: string }>(job: T) => T;
   sourceOf(req: express.Request): StreamItem;
+  /** The session the request speaks for, as a media resource owner. */
+  ownerOf(req: express.Request): ResourceOwner;
   mediaSource(value: unknown): MediaInfo | undefined;
   posterOf(value: unknown): string | undefined;
   rememberTitle(target: string, media: MediaInfo | undefined, flat: boolean): Promise<void>;
@@ -39,9 +47,14 @@ type SelectionDeps = Pick<DownloadsDeps, "store" | "currentUser" | "cachedMeta" 
 /** The owner-bound check where a failure reaches the caller instead of pausing a job. The
  *  rights are asked before the body is read; the source and the library the rule names are
  *  asked again once they are known. */
-const mayQueueGuard = (deps: SelectionDeps) => (req: express.Request, job: { stream?: StreamItem; libraryId?: string } = {}) => {
+const mayQueueGuard = (deps: SelectionDeps) => (req: express.Request, job: { stream?: StreamItem; remoteDownload?: RemoteDownloadReference; libraryId?: string } = {}) => {
   const owner = deps.currentUser(req);
-  if (owner && ownerMayDownload({ owner, addons: deps.store.addons(), libraries: deps.store.libraries() }, job)) return;
+  const remoteAccess = {
+    users: () => deps.store.users(),
+    mediaConnections: () => deps.store.mediaConnections(),
+    remoteLibraries: () => deps.store.remoteLibraries(),
+  };
+  if (owner && ownerMayDownload({ owner, addons: deps.store.addons(), libraries: deps.store.libraries(), remoteAccess }, job)) return;
   throw new AppError("This account may not download to the library.", "err.downloadLibraryNotAllowed", 403);
 };
 
@@ -130,7 +143,7 @@ export function createSelectionParser(deps: SelectionDeps): (req: express.Reques
 }
 
 export function registerDownloadRoutes(app: express.Application, deps: DownloadsDeps): void {
-  const { store, currentUser, queue, deviceTransfers, jobView, sourceOf, mediaSource, posterOf, rememberTitle, titleKey, saveCatalogPoster, libraryKey, defaultDownloadLibrary } = deps;
+  const { store, currentUser, queue, mediaSources, deviceTransfers, jobView, sourceOf, ownerOf, mediaSource, posterOf, rememberTitle, titleKey, saveCatalogPoster, libraryKey, defaultDownloadLibrary } = deps;
 
   const assertMayQueue = mayQueueGuard(deps);
   const explicitTarget = explicitTargetFor(deps);
@@ -157,17 +170,33 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
     const owner = currentUser(req);
     assertMayQueue(req);
     const stream = sourceOf(req);
-    if (isRemoteDownloadSource(stream)) throw remoteDownloadRefused();
     const media = mediaSource(req.body.media);
     const addon = store.addons().find((item) => item.key === stream.addonKey);
     const settings = addon?.downloadSettings ?? defaultDownloadSettings();
     const kind = media?.kind === "episode" ? "series" : "movie";
+    // The requested local destination and its rights are resolved first, so a bad, hidden,
+    // read-only or remote target is refused here without any provider contact for a copy.
     const chosen = await explicitTarget(req, req.body.target, kind);
     const targetSettings = chosen ?? (kind === "series" ? settings.series : settings.movie);
     // The queue turns a rule that names no library into the default for the kind; the guard
     // has to name that same library or the job would be let in and paused at once.
-    assertMayQueue(req, { stream, libraryId: targetSettings.libraryId ?? defaultDownloadLibrary(kind)?.id });
-    const job = await queue.add(String(req.body.title ?? "video"), stream, media, targetSettings, owner?.id);
+    if (isRemoteDownloadSource(stream) && !(targetSettings.libraryId ?? defaultDownloadLibrary(kind)?.id)) throw new NoLibraryForKindError(kind);
+    assertMayQueue(req, { libraryId: targetSettings.libraryId ?? defaultDownloadLibrary(kind)?.id });
+    // A remote original is copied from a verified sealed source only: the durable handle is
+    // derived here from that source through the manager, never read from the request body.
+    let queuedStream = stream;
+    let remoteDownload: RemoteDownloadReference | undefined;
+    if (isRemoteDownloadSource(stream)) {
+      remoteDownload = await mediaSources.downloadReference(stream, ownerOf(req));
+      queuedStream = remoteDownloadStream(stream);
+    }
+    // Asked again after the asynchronous source proof and target read, so a revocation that
+    // landed meanwhile is seen before anything is queued.
+    assertMayQueue(req, { stream: queuedStream, remoteDownload, libraryId: targetSettings.libraryId ?? defaultDownloadLibrary(kind)?.id });
+    const job = await queue.add(String(req.body.title ?? "video"), stream, media, targetSettings, owner?.id, remoteDownload);
+    // The queue's own await is one more window; the rights are read again before any metadata is
+    // written, so a withdrawal that landed during admission leaves no trace on disk.
+    assertMayQueue(req, { stream: queuedStream, remoteDownload, libraryId: targetSettings.libraryId ?? defaultDownloadLibrary(kind)?.id });
     await rememberTitle(job.target, media, targetSettings.layout === "flat");
     // Only for a source the catalogue has no title for: `rememberTitle` already saved the
     // artwork of one that has, and it knows the background as well. Repeating the write here

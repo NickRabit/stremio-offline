@@ -21,8 +21,13 @@ import {
   retryDelayMs, SourceError, StorageError, storageHeadroom, storageMessage, storageResumeNeed,
 } from "./download-policy.js";
 import { isRetryableDebridFailure, type DebridAdvance } from "./debrid.js";
-import { isRemoteMediaStream } from "./media-server-reference.js";
-import { REMOTE_LIBRARY_ID } from "./media-server-types.js";
+import { isRemoteMediaStream, openRemoteContent } from "./media-server-reference.js";
+import { isMediaServerError, REMOTE_LIBRARY_ID } from "./media-server-types.js";
+import type { RemoteAccessSource } from "./media-server-access.js";
+import {
+  canonicalRemoteDownloadReference, isRemoteDownloadReference, remoteDownloadAccessible, remoteDownloadKey,
+  type RemoteDownloadReference,
+} from "./media-server-download.js";
 import { playlistArgs } from "./probe.js";
 import { defaultLibrary, libraryPath, libraryVisible, parseLibraryPath, relativeWithin, type DefaultLibrarySettings, type LibraryRecord, type Viewer } from "./libraries.js";
 import type { UserRecord } from "./users.js";
@@ -77,6 +82,10 @@ export interface DownloadJob {
   /** Present when a followed series queued the job, so the follow can be reconciled
    *  with the queue across restarts. */
   follow?: { followId: string; episodeKey: string; intent: string };
+  /** Present only when the job copies one explicitly chosen remote original into a local
+   *  library. The durable, session-free handle is what the transfer is re-proved against; the
+   *  stream carries no address, so nothing sealed is ever persisted. */
+  remoteDownload?: RemoteDownloadReference;
   subtitle?: SubtitleItem;
   resolution?: DownloadResolution;
   status: DownloadStatus; target: string; received: number; total?: number; speed: number;
@@ -126,12 +135,32 @@ export const isRemoteDownloadSource = (stream: Pick<StreamItem, "url"> | undefin
 export const remoteDownloadRefused = (): AppError =>
   new AppError("This library is read-only.", "library.readOnly", 403);
 
+/** The address a remote job persists in place of the sealed source it was queued with. It is
+ *  never fetched and never leaves the server: it exists so the naming, extension and file
+ *  bookkeeping the queue already does keep working. */
+export const REMOTE_DOWNLOAD_MARKER = "remote-download:original";
+
+/** The stream a remote job keeps: the safe name and size, and the marker in place of the sealed
+ *  address. Nothing sealed, ephemeral or credential-bearing survives into the queue file. */
+export const remoteDownloadStream = (stream: StreamItem): StreamItem => ({
+  ...(stream.name === undefined ? {} : { name: stream.name }),
+  ...(stream.title === undefined ? {} : { title: stream.title }),
+  url: REMOTE_DOWNLOAD_MARKER,
+  behaviorHints: {
+    ...(stream.behaviorHints?.filename ? { filename: stream.behaviorHints.filename } : (stream.name ? { filename: stream.name } : {})),
+    ...(stream.behaviorHints?.videoSize === undefined ? {} : { videoSize: stream.behaviorHints.videoSize }),
+  },
+});
+
 /** What the owner-bound check reads: the account that asked for the job, the addons and the
  *  libraries as they stand at this moment. Structural, so this module stays free of the store. */
 export interface DownloadOwnerScope {
   owner?: Pick<UserRecord, "id" | "role" | "disabled" | "permissions">;
   addons: AddonRecord[];
   libraries: LibraryRecord[];
+  /** The remote-side records a queued remote copy is checked against. Absent means every
+   *  remote job is refused, so a caller that has not been taught about them cannot admit one. */
+  remoteAccess?: RemoteAccessSource;
 }
 
 /** The library a job writes into, where it is named. A resolved job carries it on `libraryId`;
@@ -157,12 +186,18 @@ export const defaultDownloadLibrary = (libraries: LibraryRecord[], settings: Def
  * is known -- a lazy job has no source until the resolver picks one, and a library that has
  * been removed is waited for -- so the check is asked again once they are.
  */
-export function ownerMayDownload(scope: DownloadOwnerScope, job: { stream?: StreamItem; subtitle?: SubtitleItem; libraryId?: string; target?: string; targetSettings?: DownloadTargetSettings; source?: DownloadJob["source"] }): boolean {
+export function ownerMayDownload(scope: DownloadOwnerScope, job: { stream?: StreamItem; subtitle?: SubtitleItem; remoteDownload?: RemoteDownloadReference; libraryId?: string; target?: string; targetSettings?: DownloadTargetSettings; source?: DownloadJob["source"] }): boolean {
   const owner = scope.owner;
   if (!owner || owner.disabled || !mayDownloadToLibrary(owner)) return false;
-  // No download path accepts a remote original, whatever the account is allowed to do.
+  // A raw sealed address is never a queued source: a remote copy is identified by its own
+  // reference, never by the session-bound seal it was captured from.
   if (isRemoteDownloadSource(job.stream)) return false;
   if (job.subtitle && isRemoteMediaStream({ url: job.subtitle.url })) return false;
+  if (job.remoteDownload !== undefined) {
+    if (!isRemoteDownloadReference(job.remoteDownload) || job.remoteDownload.ownerUserId !== owner.id) return false;
+    const remote = scope.remoteAccess;
+    if (!remote || !remoteDownloadAccessible(remote, job.remoteDownload, owner.id)) return false;
+  }
   const viewer: Viewer = { id: owner.id, role: owner.role };
   // Both addons, not only the video's: an external subtitle is commonly chosen from a
   // different one, and it is fetched on resume -- arbitrarily long after a withdrawal.
@@ -174,6 +209,7 @@ export function ownerMayDownload(scope: DownloadOwnerScope, job: { stream?: Stre
   const libraryId = jobLibraryId({ libraryId: job.libraryId, target: job.target ?? "", targetSettings: job.targetSettings, source: job.source });
   if (libraryId !== undefined && REMOTE_LIBRARY_ID.test(libraryId)) return false;
   const library = libraryId ? scope.libraries.find((item) => item.id === libraryId) : undefined;
+  if (job.remoteDownload && !library) return false;
   if (library && (!libraryVisible(library, viewer) || !library.enabled || Boolean(library.readOnly))) return false;
   return true;
 }
@@ -191,6 +227,17 @@ export interface DebridEngine {
   configured: () => boolean;
   advance: (input: { infoHash: string; fileIdx?: number; torrentId?: string }) => Promise<DebridAdvance>;
 }
+
+/** The backend a queued remote copy runs on. It is the only way such a job may open bytes or
+ *  re-prove its original, so the queue never reaches an upstream address itself. `current` is a
+ *  synchronous local check of the owner, its grant, the connection generation and the target; a
+ *  false answer pauses the job before any byte or commit. */
+export interface RemoteDownloadBackend {
+  current(job: DownloadJob): boolean;
+  open(job: DownloadJob, args: { method: "GET" | "HEAD"; range?: string }, signal: AbortSignal): Promise<Response>;
+  revalidate(job: DownloadJob, signal: AbortSignal): Promise<void>;
+}
+
 export interface QueueHooks {
   now?: () => number;
   /** Every configured library, so a qualified target can be turned back into a root. */
@@ -214,6 +261,13 @@ export interface QueueHooks {
   spaceCheckMs?: number;
   /** How many connections one file is split across. */
   segments?: () => number;
+  /** The backend a remote original copy runs on. Absent means no remote copy can be admitted
+   *  or run, which is what every queue built before this feature had. */
+  remoteDownload?: RemoteDownloadBackend;
+  /** How often a running remote copy re-proves its original upstream, and how long one cycle may
+   *  take. Never more aggressive than the playback cadence: the values are clamped below. */
+  remoteRevalidateMs?: number;
+  remoteRevalidateTimeoutMs?: number;
   retryDelay?: (retryCount: number, retryAfterMs?: number) => number;
   debrid?: DebridEngine;
   debridPollMs?: number;
@@ -261,7 +315,7 @@ const libraryUsable = (library: LibraryRecord) => library.enabled && !library.re
 /** No usable library accepts this kind, so the download has nowhere to go. It is refused
  *  rather than dropped into the download directory, which is a place nobody chose. The queue
  *  entry points let this reach the caller; a job already mid-pump fails on it instead. */
-class NoLibraryForKindError extends AppError {
+export class NoLibraryForKindError extends AppError {
   constructor(kind: "movie" | "series") {
     super(
       kind === "series" ? "No library takes series." : "No library takes films.",
@@ -285,6 +339,23 @@ class ChosenLibraryGoneError extends AppError {
  *  usually a matter of a minute; half an hour of patience covers a mistake, and after that a
  *  queue that never moves is worse than a file in the default library. */
 export const LIBRARY_WAIT_MS = 30 * 60_000;
+
+/** The cadence a running remote copy re-proves its original, matching the playback guard so a
+ *  download is never re-checked harder than a remote film being watched. */
+const REMOTE_REVALIDATE_MS = 30_000;
+const REMOTE_REVALIDATE_TIMEOUT_MS = 5_000;
+
+const boundedMs = (value: number | undefined, fallback: number, max: number): number =>
+  typeof value === "number" && Number.isFinite(value) && value >= 1 ? Math.min(Math.floor(value), max) : fallback;
+
+/** Raised when the owner, its grant or the target is no longer there mid-transfer. The work is
+ *  right, only the right behind it is gone, so the job pauses with its partial file kept. */
+class RemotePermissionLost extends Error {
+  constructor() {
+    super("The permission for this download is gone.");
+    this.name = "RemotePermissionLost";
+  }
+}
 
 export async function volumeSpace(target: string) {
   try {
@@ -343,6 +414,9 @@ export class DownloadQueue {
   private readonly legacyOwnerId?: () => string | undefined;
   private readonly ownerAllowed?: (job: DownloadJob) => boolean | Promise<boolean>;
   private readonly ownerSeesLibrary?: (ownerUserId: string | undefined, libraryId: string) => boolean;
+  private readonly remoteDownload?: RemoteDownloadBackend;
+  private readonly remoteRevalidateMs: number;
+  private readonly remoteRevalidateTimeoutMs: number;
   private beforeRemove?: (job: Readonly<DownloadJob>, reason: "user" | "account") => Promise<void>;
   private beforeClearCompleted?: (jobs: ReadonlyArray<Readonly<DownloadJob>>) => Promise<void>;
   private debridTimers = new Map<string, NodeJS.Timeout>();
@@ -383,6 +457,9 @@ export class DownloadQueue {
     this.legacyOwnerId = hooks.legacyOwnerId;
     this.ownerAllowed = hooks.ownerAllowed;
     this.ownerSeesLibrary = hooks.ownerSeesLibrary;
+    this.remoteDownload = hooks.remoteDownload;
+    this.remoteRevalidateMs = boundedMs(hooks.remoteRevalidateMs, REMOTE_REVALIDATE_MS, REMOTE_REVALIDATE_MS);
+    this.remoteRevalidateTimeoutMs = boundedMs(hooks.remoteRevalidateTimeoutMs, REMOTE_REVALIDATE_TIMEOUT_MS, REMOTE_REVALIDATE_TIMEOUT_MS);
     this.beforeRemove = hooks.beforeRemove;
     this.beforeClearCompleted = hooks.beforeClearCompleted;
   }
@@ -446,6 +523,37 @@ export class DownloadQueue {
       job.updatedAt ??= job.createdAt;
       job.speed = 0;
       job.notBefore = undefined;
+    }
+    // A remote copy is restored from its durable reference alone, and a sealed address never
+    // survives a restart because the registry and its key are gone with the process. A job that
+    // still carries one -- or a malformed or foreign reference -- is refused rather than run
+    // against an address that no longer means anything.
+    const refused: DownloadJob[] = [];
+    for (const job of this.jobs) {
+      if (job.remoteDownload !== undefined) {
+        // Only the durable reference and the internal marker may be restored. A seal is refused
+        // even next to a valid reference: nothing the queue writes ever stores one, so one here
+        // is a state that cannot be re-proved.
+        if (!isRemoteDownloadReference(job.remoteDownload) || job.remoteDownload.ownerUserId !== this.ownerOf(job)
+          || job.stream?.url !== REMOTE_DOWNLOAD_MARKER) {
+          refused.push(job);
+          continue;
+        }
+        job.remoteDownload = canonicalRemoteDownloadReference(job.remoteDownload);
+        // A remote transfer never uses a segment plan; a restored one would issue doomed
+        // segment GETs, so it is dropped with whatever the plan wrote.
+        if (job.segments?.length) {
+          const abandoned = job.target ? this.jobPath(job) : undefined;
+          if (abandoned) await unlink(`${abandoned}.part`).catch(() => undefined);
+          job.segments = undefined; job.received = 0; job.total = undefined; job.rangesIgnored = undefined;
+        }
+      } else if (isRemoteDownloadSource(job.stream) || (job.subtitle && isRemoteMediaStream({ url: job.subtitle.url }))) {
+        refused.push(job);
+      }
+    }
+    if (refused.length) {
+      this.jobs = this.jobs.filter((job) => !refused.includes(job));
+      log("WARN", "Remote downloads that could not be re-proved were refused", { count: refused.length, ids: refused.map((job) => job.id) });
     }
     if (this.jobs.some((job) => job.status === "paused" && job.pauseReason === "storage")) {
       this.halt = { reason: "storage", at: new Date().toISOString(), message: "No space left on the disk.", messageKey: "err.noSpace" };
@@ -635,26 +743,84 @@ export class DownloadQueue {
     return located ? path.join(located.root, located.relative) : undefined;
   }
 
-  async add(title: string, stream: StreamItem, media?: MediaInfo, targetSettings: DownloadTargetSettings = defaultDownloadSettings().movie, ownerUserId?: string) {
+  async add(title: string, stream: StreamItem, media?: MediaInfo, targetSettings: DownloadTargetSettings = defaultDownloadSettings().movie, ownerUserId?: string, remoteDownload?: RemoteDownloadReference) {
     if (this.unreadable) throw new AppError("The download queue file could not be read.", "err.queueUnreadable", 503);
-    if (isRemoteDownloadSource(stream)) throw remoteDownloadRefused();
-    return this.admit(() => this.admitDirect(title, stream, media, targetSettings, ownerUserId));
+    if (isRemoteDownloadSource(stream) && remoteDownload === undefined) throw remoteDownloadRefused();
+    return this.admit(() => this.admitDirect(title, stream, media, targetSettings, ownerUserId, remoteDownload));
+  }
+
+  /** The stream and reference a remote admission persists, or a refusal. A sealed address is
+   *  accepted only with a validated reference for the same owner and the same identity, and only
+   *  when a remote backend is wired; the seal is replaced by the internal marker and never
+   *  stored. The reference can never come from a request body: the route derives it from the
+   *  sealed source through the manager. */
+  private remoteAdmission(stream: StreamItem, remoteDownload: RemoteDownloadReference | undefined, ownerUserId: string | undefined): { stream: StreamItem; reference?: RemoteDownloadReference } {
+    const sealed = isRemoteDownloadSource(stream);
+    const marker = stream.url === REMOTE_DOWNLOAD_MARKER;
+    if (!sealed && !marker) {
+      if (remoteDownload !== undefined) throw remoteDownloadRefused();
+      return { stream };
+    }
+    if (!remoteDownload || !isRemoteDownloadReference(remoteDownload) || !this.remoteDownload) throw remoteDownloadRefused();
+    if (remoteDownload.ownerUserId !== ownerUserId) throw remoteDownloadRefused();
+    const reference = canonicalRemoteDownloadReference(remoteDownload);
+    if (sealed) {
+      const opened = openRemoteContent(stream.url);
+      if (!opened || opened.subtitleIndex !== undefined) throw remoteDownloadRefused();
+      if (opened.owner.userId !== reference.ownerUserId || opened.connectionId !== reference.connectionId
+        || opened.libraryId !== reference.libraryId || opened.generation !== reference.generation
+        || opened.provider !== reference.provider || opened.serverId !== reference.serverId
+        || opened.accountId !== reference.accountId || opened.itemId !== reference.itemId
+        || opened.mediaSourceId !== reference.mediaSourceId) throw remoteDownloadRefused();
+    }
+    return { stream: remoteDownloadStream(stream), reference };
+  }
+
+  /** The identity a queued source is deduplicated by: an exact address for a local source, and
+   *  the exact version for a remote copy, whose persisted address is only the shared marker. */
+  private sourceKey(job: Pick<DownloadJob, "stream" | "remoteDownload">): string | undefined {
+    return job.remoteDownload ? `remote:${remoteDownloadKey(job.remoteDownload)}` : job.stream?.url;
+  }
+
+  /** The concrete place a remote copy lands: the library it writes into and the folder and base
+   *  name the naming rules give it. Because one original may be explicitly saved to a different
+   *  library or folder, a copy is a duplicate only when this destination matches exactly. */
+  private remoteDestination(libraryId: string | undefined, settings: DownloadTargetSettings, media: MediaInfo | undefined, title: string, stream: StreamItem | undefined, kind: "movie" | "series"): string {
+    const library = libraryId ?? this.defaultLibrary(kind)?.id ?? "";
+    const extension = stream ? streamExtension(stream) : "";
+    const { directory, base } = targetPath(media, title, extension, settings);
+    return `${library}\u0000${directory}\u0000${base}`;
+  }
+
+  /** The destination of an already-queued remote copy, resolved the way admission resolved it. */
+  private remoteJobDestination(job: DownloadJob): string {
+    const kind = this.kindOf(job);
+    return this.remoteDestination(jobLibraryId(job), job.targetSettings ?? defaultDownloadSettings()[kind], job.media, job.title, job.stream, kind);
   }
 
   /** The body of `add`, run under the admission lock so two clicks cannot both pass the
    *  duplicate check or the free-name search. A debrid source is delegated as it always was. */
-  private async admitDirect(title: string, stream: StreamItem, media: MediaInfo | undefined, targetSettings: DownloadTargetSettings, ownerUserId?: string) {
-    if (isRemoteDownloadSource(stream)) throw remoteDownloadRefused();
+  private async admitDirect(title: string, incoming: StreamItem, media: MediaInfo | undefined, targetSettings: DownloadTargetSettings, ownerUserId?: string, remoteDownload?: RemoteDownloadReference) {
+    const { stream, reference } = this.remoteAdmission(incoming, remoteDownload, ownerUserId);
     if (!stream.url && stream.infoHash) return this.addDebrid(title, stream, media, targetSettings, ownerUserId);
     if (!stream.url) throw new AppError("Only a direct HTTP stream can be downloaded.", "err.downloadNeedsHttp");
+    const kind = media?.kind === "episode" ? "series" : "movie";
+    const key = reference ? `remote:${remoteDownloadKey(reference)}` : stream.url;
+    // A remote copy is deduplicated by the save it performs, not by the source alone: the same
+    // original may be explicitly saved to another library or folder, which is a different
+    // request. A second click onto the same destination still matches the same key and is refused.
+    const destination = reference ? this.remoteDestination(targetSettings.libraryId, targetSettings, media, title, stream, kind) : undefined;
     // Without this check a double click on Download yields the same film twice, because
     // uniqueTarget happily hands the second job a name with "(2)".
-    if (this.jobs.some((job) => job.stream?.url === stream.url && job.status !== "failed" && job.status !== "completed" && this.ownedBy(job, ownerUserId)))
+    if (this.jobs.some((job) => this.sourceKey(job) === key
+      && (destination === undefined || this.remoteJobDestination(job) === destination)
+      && job.status !== "failed" && job.status !== "completed" && this.ownedBy(job, ownerUserId)))
       throw new AppError("This source is already in the queue.", "err.sourceQueued");
     // Another account's finished file refuses only when the asker can see its library anyway;
     // otherwise the refusal would tell them what someone else downloaded.
     for (const job of this.jobs) {
-      if (job.stream?.url !== stream.url || job.status !== "completed") continue;
+      if (this.sourceKey(job) !== key || job.status !== "completed") continue;
+      if (destination !== undefined && this.remoteJobDestination(job) !== destination) continue;
       const libraryId = jobLibraryId(job);
       const reachable = this.ownedBy(job, ownerUserId)
         || (libraryId !== undefined && (this.ownerSeesLibrary?.(ownerUserId ?? this.legacyOwnerId?.(), libraryId) ?? false));
@@ -663,9 +829,8 @@ export class DownloadQueue {
       if (duplicatePath && await exists(duplicatePath)) throw new AppError("This source is already in the library.", "err.sourceDownloaded");
     }
     const extension = streamExtension(stream);
-    const kind = media?.kind === "episode" ? "series" : "movie";
     const now = new Date().toISOString();
-    const job: DownloadJob = { id: crypto.randomUUID(), ownerUserId, title, stream, media, status: "queued", target: "", received: 0, speed: 0, targetSettings, createdAt: now, updatedAt: now };
+    const job: DownloadJob = { id: crypto.randomUUID(), ownerUserId, title, stream, media, ...(reference === undefined ? {} : { remoteDownload: reference }), status: "queued", target: "", received: 0, speed: 0, targetSettings, createdAt: now, updatedAt: now };
     try {
       try {
         const library = await this.resolveLibrary(kind, targetSettings);
@@ -1035,7 +1200,9 @@ export class DownloadQueue {
   /** Finished jobs, for seeding the statistics from the queue. */
   history() {
     return this.jobs.filter((job) => job.status === "completed").map((job) => ({
-      at: job.updatedAt, bytes: job.received, url: job.stream?.url, addonKey: job.stream?.addonKey,
+      // A remote copy has no meaningful address, and its marker is not one: only a local
+      // source's URL is reported.
+      at: job.updatedAt, bytes: job.received, url: job.remoteDownload ? undefined : job.stream?.url, addonKey: job.stream?.addonKey,
       addonName: job.stream?.addonName, title: job.title, kind: job.media?.kind,
     }));
   }
@@ -1058,7 +1225,7 @@ export class DownloadQueue {
   private require(id: string) { const job = this.jobs.find((item) => item.id === id); if (!job) throw new AppError("The item was not found.", "err.itemNotFound"); return job; }
   /** Source addresses (often carrying tokens) must not reach the interface; only the lazy flag goes out. */
   private publicJob(job: DownloadJob): Omit<PublicDownload, "order"> {
-    const { stream, source, subtitle: _subtitle, notBefore: _notBefore, debrid, segments, ...rest } = job;
+    const { stream, source, subtitle: _subtitle, remoteDownload: _remoteDownload, notBefore: _notBefore, debrid, segments, ...rest } = job;
     return { ...rest, ownerUserId: this.ownerOf(job), pending: !stream && Boolean(source), debridProgress: debrid?.progress, segments: segments?.length };
   }
   /** Saves have to run one after another: concurrent writes share one .tmp and the second
@@ -1123,9 +1290,20 @@ export class DownloadQueue {
     }
   }
   private saveSoon() { if (this.saveTimer) return; this.saveTimer = setTimeout(() => { this.saveTimer = undefined; void this.save(); }, 1500); }
-  /** The provider from the source address. Until a source is picked every job shares one
-   * bucket -- a series added in bulk thus queues up behind itself instead of arriving all at once. */
-  private provider(job: DownloadJob) { const url = job.stream?.url; if (!url) return "?"; try { return new URL(url).hostname; } catch { return "?"; } }
+  /** The bucket a job's transfer is limited within. A remote copy is bucketed by its actual
+   *  provider and server -- across connections and accounts -- never by the sealed address it
+   *  was queued with. Every other job keeps the source hostname, and one whose source is not
+   *  picked yet shares "?": a series added in bulk thus queues up behind itself. */
+  private provider(job: DownloadJob) {
+    if (job.remoteDownload) return `remote:${job.remoteDownload.provider}:${job.remoteDownload.serverId}`;
+    const url = job.stream?.url; if (!url) return "?"; try { return new URL(url).hostname; } catch { return "?"; }
+  }
+
+  /** How many transfers one bucket admits at once. A remote original is always one at a time,
+   *  whatever the account's own per-provider preference says. */
+  private providerLimit(job: DownloadJob, perProvider: number) {
+    return job.remoteDownload ? 1 : (this.provider(job) === "?" ? 1 : perProvider);
+  }
 
   private busy(provider: string, except?: string) {
     let count = 0;
@@ -1227,7 +1405,7 @@ export class DownloadQueue {
       while (this.active.size < limit) {
         const job = this.jobs.find((item) => {
           const provider = this.provider(item);
-          const providerLimit = provider === "?" ? 1 : perProvider;
+          const providerLimit = this.providerLimit(item, perProvider);
           return item.status === "queued" && !this.active.has(item.id) && !this.admitting.has(item.id) && (item.notBefore ?? 0) <= now && (taken.get(provider) ?? 0) < providerLimit;
         });
         if (!job) break;
@@ -1362,6 +1540,8 @@ export class DownloadQueue {
   }
 
   private async commit(job: DownloadJob, partial: string, target: string) {
+    // A remote copy re-checks the owner and the grant one last time before the file is published.
+    if (job.remoteDownload && this.remoteRefused(job)) throw new RemotePermissionLost();
     // The partial subtitle was written beside the name the episode had while it downloaded;
     // the reservation may move the episode to "(2)", and the subtitle follows it there.
     const written = this.subtitleFiles(job);
@@ -1540,12 +1720,76 @@ export class DownloadQueue {
     await this.save();
   }
 
+  /** Whether the remote backend currently refuses this job. A queue with no remote backend
+   *  refuses every remote job, so one restored where the backend is gone never runs. */
+  private remoteRefused(job: DownloadJob): boolean {
+    return !this.remoteDownload || !this.remoteDownload.current(job);
+  }
+
+  /** Opens the original behind a remote job through the backend alone: never a generic fetch to
+   *  an upstream address, and the only place a remote byte read starts. */
+  private async openRemote(job: DownloadJob, offset: number, signal: AbortSignal): Promise<Response> {
+    if (!this.remoteDownload) throw new SourceError("The media-server download backend is unavailable.");
+    return this.remoteDownload.open(job, { method: "GET", ...(offset > 0 ? { range: `bytes=${offset}-` } : {}) }, signal);
+  }
+
+  /** Re-proves a running remote copy on the playback cadence: one bounded cycle at a time, a
+   *  single timer for the transfer, and no positive fallback. A denial or a cycle that outlives
+   *  its deadline aborts the outer read and pauses the job, whether or not the proof honours the
+   *  abort. The returned stop function ends the guard and cancels any proof still in flight, so a
+   *  finished or cancelled transfer is never touched by an answer that arrives late. */
+  private startRemoteGuard(job: DownloadJob, controller: AbortController, onDenied: () => void): (() => void) | undefined {
+    const backend = this.remoteDownload;
+    if (!job.remoteDownload || !backend) return undefined;
+    let cleared = false;
+    let proof: AbortController | undefined;
+    let deadline: NodeJS.Timeout | undefined;
+    const clear = () => {
+      if (cleared) return;
+      cleared = true;
+      clearInterval(timer);
+      if (deadline) { clearTimeout(deadline); deadline = undefined; }
+      const running = proof;
+      proof = undefined;
+      running?.abort();
+    };
+    const deny = () => { if (cleared) return; onDenied(); controller.abort(); };
+    const timer = setInterval(() => {
+      if (cleared || proof || controller.signal.aborted) return;
+      const current = new AbortController();
+      proof = current;
+      const signal = AbortSignal.any([controller.signal, current.signal]);
+      deadline = setTimeout(() => {
+        // The deadline is a denial of its own: the proof's transport is aborted, and the outer
+        // transfer stops even when the proof ignores the signal and never settles.
+        current.abort();
+        deny();
+      }, this.remoteRevalidateTimeoutMs);
+      void backend.revalidate(job, signal).then(
+        () => undefined,
+        () => deny(),
+      ).finally(() => {
+        if (deadline) { clearTimeout(deadline); deadline = undefined; }
+        if (proof === current) proof = undefined;
+      });
+    }, this.remoteRevalidateMs);
+    timer.unref?.();
+    return clear;
+  }
+
   private async download(job: DownloadJob) {
     const controller = new AbortController(); this.active.set(job.id, controller); job.status = job.stream ? "downloading" : "checking"; job.startedAt ??= new Date(this.now()).toISOString(); this.setError(job); job.pauseReason = undefined; job.updatedAt = new Date().toISOString(); log("INFO", "Download started", { id: job.id, title: job.title, target: job.target || "(to be chosen)", previousBytes: job.received }); await this.save();
     let retryScheduled = false;
     let inactivity: NodeJS.Timeout | undefined;
     let stalled = false;
+    let remoteStopped = false;
     try {
+      // A remote copy has no session to fall back on: the durable reference is re-checked
+      // against the live records before a single byte, and a refusal pauses rather than fails.
+      if (job.remoteDownload && this.remoteRefused(job)) {
+        this.pauseForPermission(job);
+        return;
+      }
       // The owner is read afresh before any work: the right to queue may be gone since the
       // job was added, and nothing about the request that added it can speak for it now.
       if (await this.ownerRefused(job)) {
@@ -1580,7 +1824,7 @@ export class DownloadQueue {
       job.status = "downloading";
       // The provider is known only after a source is picked. If it is busy, the job goes back to
       // the queue; the next pump puts it in the right bucket and leaves it alone until that frees up.
-      if (this.busy(this.provider(job), job.id) >= Math.max(1, Math.min(8, this.perProvider()))) {
+      if (this.busy(this.provider(job), job.id) >= this.providerLimit(job, Math.max(1, Math.min(8, this.perProvider())))) {
         job.status = "queued";
         log("INFO", "The provider is busy, the job will wait", { id: job.id, title: job.title, provider: this.provider(job) });
         return;
@@ -1640,7 +1884,9 @@ export class DownloadQueue {
       };
       const start = (bytes: number) => { base = bytes; received = bytes; lastBytes = bytes; lastLog = bytes; job.received = bytes; };
 
-      const plan = await this.segmentPlan(job, stream, offset, controller);
+      // A remote original is fetched over one authenticated sequential stream: no range probe
+      // and no segment plan, whatever the account's segment preference says.
+      const plan = job.remoteDownload ? undefined : await this.segmentPlan(job, stream, offset, controller);
       if (plan) {
         job.segments = plan;
         start(segmentedBytes(plan));
@@ -1663,9 +1909,15 @@ export class DownloadQueue {
         } finally { await handle.close(); }
         clearInterval(inactivity); inactivity = undefined;
       } else {
-        const headers: Record<string, string> = { ...(stream.behaviorHints?.proxyHeaders?.request ?? {}) }; if (offset) headers.range = `bytes=${offset}-`;
         const headerTimer = setTimeout(() => controller.abort(), 30_000); let response: Response;
-        try { response = await safeFetch(stream.url, { headers, signal: controller.signal }); } finally { clearTimeout(headerTimer); }
+        try {
+          if (job.remoteDownload) {
+            response = await this.openRemote(job, offset, controller.signal);
+          } else {
+            const headers: Record<string, string> = { ...(stream.behaviorHints?.proxyHeaders?.request ?? {}) }; if (offset) headers.range = `bytes=${offset}-`;
+            response = await safeFetch(stream.url, { headers, signal: controller.signal });
+          }
+        } finally { clearTimeout(headerTimer); }
         if (!response.ok || !response.body) {
           const wait = retryAfterMs(response.headers.get("retry-after"), this.now());
           await response.body?.cancel().catch(() => undefined);
@@ -1686,20 +1938,30 @@ export class DownloadQueue {
         if (job.total) await this.admitStorage(job.total - offset, located.root);
         lastProgressAt = this.now();
         watchStall(() => lastProgressAt);
+        const guard = this.startRemoteGuard(job, controller, () => { remoteStopped = true; });
         const monitor = new TransformStream<Uint8Array, Uint8Array>({ transform: (chunk, output) => {
+          // A remote copy re-checks the owner, the grant and the target before every chunk, so a
+          // revocation that lands mid-transfer stops the bytes rather than finishing the file.
+          if (job.remoteDownload && this.remoteRefused(job)) throw new RemotePermissionLost();
           note(chunk.byteLength);
           output.enqueue(chunk);
         } });
-        await pipeline(Readable.fromWeb(response.body.pipeThrough(monitor) as never), this.createWriteStream(partial, { flags: resumed ? "a" : "w" }), { signal: controller.signal });
+        try {
+          await pipeline(Readable.fromWeb(response.body.pipeThrough(monitor) as never), this.createWriteStream(partial, { flags: resumed ? "a" : "w" }), { signal: controller.signal });
+        } finally { guard?.(); }
         clearInterval(inactivity); inactivity = undefined;
         const handle = await open(partial, "r+");
         try { await handle.sync(); } finally { await handle.close(); }
       }
       const expected = expectedSize(job.total, hinted);
       if (!expected || job.received !== expected) throw new IncompleteDownloadError(job.received, expected);
+      if (job.remoteDownload && this.remoteRefused(job)) throw new RemotePermissionLost();
       await this.commit(job, partial, target);
     } catch (error) {
       job.speed = 0;
+      // A media-server refusal carries the status the download policy already classifies by;
+      // nothing else about it changes shape.
+      if (isMediaServerError(error) && typeof error.status === "number") error = new HttpSourceError(error.status, error.message, error.retryAfterMs);
       // The rule's library went away while the job waited for its source, or is gone now.
       // Nothing is redirected and nothing fails: the job waits for the library to come back.
       if (error instanceof LibraryUnavailableError) {
@@ -1713,6 +1975,14 @@ export class DownloadQueue {
         job.status = "failed";
         this.setError(job, error.message, error.messageKey);
         log("ERROR", "Download failed", { id: job.id, title: job.title, reason: error.message });
+        return;
+      }
+      // A remote copy whose owner, grant or target went away mid-transfer pauses with its
+      // partial file kept: the work is not wrong, only the right behind it is gone. A native
+      // download-policy refusal counts too -- it is a denial to obey, not a source to retry.
+      if (job.remoteDownload && (error instanceof RemotePermissionLost || remoteStopped || this.remoteRefused(job)
+        || (isMediaServerError(error) && (error.code === "forbidden" || error.code === "unsupported-policy")))) {
+        this.pauseForPermission(job);
         return;
       }
       const message = stalled ? "The transfer carried no data." : (error instanceof Error ? error.message : String(error));

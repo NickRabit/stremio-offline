@@ -84,6 +84,23 @@ test("currentAccount checks the exact id and the required policy facts", async (
   await assert.rejects(badFolders.provider.currentAccount("tok", "user-1"), { code: "invalid-response" });
 });
 
+test("currentAccount records the native download permission only when the server reports it", async () => {
+  const facts = async (over: Record<string, unknown>, kind: MediaServerKind) => {
+    const { provider } = fixture(() => ({ Id: "user-1", Policy: policy(over) }), kind);
+    return (await provider.currentAccount("tok", "user-1")).policy;
+  };
+  for (const kind of ["jellyfin", "emby"] as const) {
+    assert.equal((await facts({ EnableContentDownloading: true }, kind)).contentDownloading, true, "an explicit true is kept");
+    assert.equal((await facts({ EnableContentDownloading: false }, kind)).contentDownloading, false, "an explicit false is kept");
+    assert.equal("contentDownloading" in (await facts({}, kind)), false, "a missing field keeps the fact unproven");
+    assert.equal("contentDownloading" in (await facts({ EnableContentDownloading: null }, kind)), false, "a null field is missing, like the other policy facts");
+    for (const malformed of ["yes", 1, []]) {
+      const { provider } = fixture(() => ({ Id: "user-1", Policy: policy({ EnableContentDownloading: malformed }) }), kind);
+      await assert.rejects(provider.currentAccount("tok", "user-1"), { code: "invalid-response" }, `malformed ${JSON.stringify(malformed)} is refused`);
+    }
+  }
+});
+
 test("currentAccount records known restrictions without ever claiming they are exhaustive", async () => {
   const restricted = async (over: Record<string, unknown>) => {
     const { provider } = fixture(() => ({ Id: "user-1", Policy: policy(over) }));
