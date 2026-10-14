@@ -90,6 +90,8 @@ interface Inflight {
   failure?: unknown;
   waiters: Set<Waiter>;
   ready: Promise<void>;
+  /** Resolves when the upstream read has settled, including a store it already decided on. */
+  done: Promise<void>;
   markReady: () => void;
   failReady: (error: unknown) => void;
 }
@@ -109,6 +111,9 @@ export class RemoteImageCache {
   private inflight = new Map<string, Inflight>();
   private maintenance?: Promise<void>;
   private chain: Promise<unknown> = Promise.resolve();
+  /** Disk stores started after a body finished. `close` waits for them, so a directory removed
+   *  immediately afterwards is not still being written. */
+  private pendingWrites: Promise<void> = Promise.resolve();
   private closed = false;
   private readonly cap: number;
   private readonly memoryCap: number;
@@ -187,11 +192,20 @@ export class RemoteImageCache {
   }
 
   /** Flushes the recency of memory hits, stops preheat and aborts every shared upstream read.
-   *  Stored files stay: a restart only has to rebuild the index. */
+   *  A store already decided still finishes first: the bytes are what the next start indexes,
+   *  and a caller removing the directory must not race that write. */
   async close(): Promise<void> {
     this.closed = true;
     await this.flushDirty();
-    for (const inflight of this.inflight.values()) inflight.controller.abort();
+    const running = [...this.inflight.values()];
+    for (const inflight of running) inflight.controller.abort();
+    await Promise.all(running.map((inflight) => inflight.done));
+    let pending = this.pendingWrites;
+    for (;;) {
+      await pending;
+      if (pending === this.pendingWrites) return;
+      pending = this.pendingWrites;
+    }
   }
 
   /** The bytes behind a key: memory, then disk, then the upstream -- which runs once for
@@ -237,9 +251,10 @@ export class RemoteImageCache {
     const inflight: Inflight = {
       key, controller, contentType: "application/octet-stream", storeable: false, chunks: [], size: 0,
       settled: false, abandoned: false, waiters: new Set(), ready, markReady, failReady,
+      done: Promise.resolve(),
     };
     this.inflight.set(key, inflight);
-    void this.pump(inflight, loadUpstream);
+    inflight.done = this.pump(inflight, loadUpstream).then(() => undefined, () => undefined);
     return inflight;
   }
 
@@ -289,7 +304,8 @@ export class RemoteImageCache {
     const data = Buffer.concat(inflight.chunks);
     // Both `image/jpeg` and `image/jpg` are remembered as the former.
     this.putMemory(inflight.key, data, MIME_BY_EXT[inflight.ext] ?? inflight.contentType);
-    void this.write(inflight.key, inflight.ext, data);
+    const stored = this.write(inflight.key, inflight.ext, data);
+    this.pendingWrites = this.pendingWrites.then(() => stored, () => stored).then(() => undefined, () => undefined);
   }
 
   private fail(inflight: Inflight, error: unknown): void {
