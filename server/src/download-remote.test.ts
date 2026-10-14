@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { statSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -197,13 +198,18 @@ test("a paused remote copy resumes from its partial file with a range request", 
     await h.queue.add("Movie", sealedStream(ref, h.remote.body.length), undefined, settings, OWNER, ref);
     const id = h.queue.list()[0]!.id;
     await waitFor(h.queue, () => (h.queue.get(id)?.received ?? 0) > 0);
+    const partial = `${h.file(h.queue.get(id)!.target)}.part`;
+    await waitFor(h.queue, () => {
+      try { return statSync(partial).size > 0; } catch { return false; }
+    });
     await h.queue.pause(id);
     const paused = h.queue.get(id)!;
+    const kept = (await stat(partial)).size;
     assert.equal(paused.status, "paused");
-    assert.ok(paused.received > 0 && paused.received < h.remote.body.length, `partial kept: ${paused.received}`);
+    assert.ok(kept > 0 && kept < h.remote.body.length, `partial kept: ${kept}`);
     await h.queue.resume(id);
     await waitFor(h.queue, () => h.queue.get(id)?.status === "completed");
-    assert.ok(h.remote.calls.some((call) => call.range !== undefined), "the resume used a range request");
+    assert.ok(h.remote.calls.some((call) => call.range === `bytes=${kept}-`), "the resume uses the actual partial file size");
     assert.equal(await readFile(h.file(h.queue.get(id)!.target)).then((buf) => buf.equals(h.remote.body)), true);
   } finally { await close(h); }
 });
