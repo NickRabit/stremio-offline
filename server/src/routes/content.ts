@@ -2,7 +2,7 @@ import type express from "express";
 import path from "node:path";
 import { mkdir, readFile, rename, stat } from "node:fs/promises";
 import { artworks } from "../artwork-cache.js";
-import { imageSurface, noteImage } from "../image-stats.js";
+import { askedSurface, imageSurface, logPoster, noteImage, type ImageFrom } from "../image-stats.js";
 import { FileSnapCache, fileEtag } from "../byte-cache.js";
 import type { ArtShape } from "../artwork.js";
 import { folderMosaicUnits, pendingSuggestionKeys, unitFor, type GalleryEntry, type LibraryMetaRecord, type LibrarySuggestion, type TitleUnit } from "../library-match.js";
@@ -348,10 +348,14 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     // library the viewer cannot see before the cache is touched.
     const cacheControl = "private, max-age=31536000, immutable";
     const surface = imageSurface(req.query.surface, "library");
+    const asked = askedSurface(req.query.surface);
+    const poster = (from: ImageFrom | undefined, status: number, bytes: number) =>
+      logPoster({ kind: "library", surface, asked, from, status, bytes, cache: cacheControl });
     const snap = fileSnaps.get(art);
     if (req.headers["if-none-match"] === undefined && snap) {
       artworks.touch(art);
       noteImage(surface, "memory");
+      poster("memory", 200, snap.bytes.length);
       res.setHeader("cache-control", cacheControl);
       res.setHeader("etag", snap.etag);
       res.type(path.extname(art));
@@ -371,11 +375,13 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
         if (fresh) fileSnaps.put(art, { bytes: fresh, etag, size: info.size, mtimeMs: info.mtime.getTime() });
       }
       artworks.touch(art);
+      poster(undefined, 304, 0);
       return res.status(304).end();
     }
     if (snap && snap.size === info.size && snap.mtimeMs === info.mtime.getTime()) {
       artworks.touch(art);
       noteImage(surface, "memory");
+      poster("memory", 200, snap.bytes.length);
       res.type(path.extname(art));
       res.end(snap.bytes);
       return;
@@ -385,6 +391,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     fileSnaps.put(art, { bytes: data, etag, size: info.size, mtimeMs: info.mtime.getTime() });
     artworks.touch(art);
     noteImage(surface, "disk");
+    poster("disk", 200, data.length);
     res.type(path.extname(art));
     res.end(data);
   }));

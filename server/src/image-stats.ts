@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { renameWithRetry } from "./fs-retry.js";
+import { log } from "./logger.js";
 
 /** Where the picture was shown. Home is separate because its cards reuse the other three stores. */
 export type ImageLayer = "catalog" | "library" | "remote" | "home";
@@ -32,6 +33,39 @@ const isLayer = (value: string): value is ImageLayer => (LAYERS as readonly stri
 /** A request may name the screen that showed the picture. Anything else keeps the store's own layer. */
 export function imageSurface(value: unknown, fallback: ImageLayer): ImageLayer {
   return typeof value === "string" && isLayer(value) ? value : fallback;
+}
+
+/** The surface the client actually named, for the log. A missing or unknown value stays a label,
+ *  never the raw query, so a poster line cannot grow without a bound. */
+export function askedSurface(value: unknown): string {
+  if (typeof value !== "string" || value === "") return "unset";
+  return isLayer(value) ? value : "other";
+}
+
+/** Hop between the image cache and the HTTP route. The route reads it for the log and does not
+ *  forward it: the browser must not see which copy the bytes came from. */
+export const IMAGE_FROM_HEADER = "x-image-from";
+
+/** One line per poster the browser was sent or revalidated. A picture the browser already holds
+ *  never arrives here. `asked` is the query; `surface` is the statistics column that moved. */
+export function logPoster(detail: {
+  kind: "remote" | "catalog" | "library";
+  surface: ImageLayer;
+  asked: string;
+  from?: ImageFrom;
+  status: number;
+  bytes: number;
+  cache?: string | null;
+}): void {
+  log("INFO", "Poster served", {
+    kind: detail.kind,
+    surface: detail.surface,
+    asked: detail.asked,
+    ...(detail.from ? { from: detail.from } : {}),
+    status: detail.status,
+    bytes: detail.bytes,
+    ...(detail.cache ? { cache: detail.cache } : {}),
+  });
 }
 
 /** Hourly picture counts. One request is exactly one of memory, disk or upstream. */

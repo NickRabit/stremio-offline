@@ -324,11 +324,14 @@ test("the artwork route forwards only the fixed detail size and refuses anything
 
     const plain = await api(harness.base, path, { user: BOB });
     assert.equal(plain.status, 200);
-    await plain.arrayBuffer();
+    assert.equal(plain.headers.get("content-length"), "4", "a poster carries its length so Safari can store it");
+    assert.equal(plain.headers.get("x-image-from"), null, "the copy the bytes came from stays off the response");
+    assert.deepEqual([...Buffer.from(await plain.arrayBuffer())], [0xff, 0xd8, 0xff, 0xe0]);
     assert.deepEqual(harness.server.artworkRequests.at(-1), { itemId: "m1", imageType: "Primary" }, "a plain poster keeps the tile request");
 
     const detail = await api(harness.base, `${path}?size=detail`, { user: BOB });
     assert.equal(detail.status, 200);
+    assert.equal(detail.headers.get("content-length"), "4");
     await detail.arrayBuffer();
     assert.deepEqual(harness.server.artworkRequests.at(-1), { itemId: "m1", imageType: "Primary", size: "detail" }, "an accepted size reaches the transport");
 

@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { allowedAddons, catalog, orderedForUser, orderFor, searchAll, searchableCatalogs, streamCandidates, streams, subtitles, type MetaProvider } from "../addons.js";
 import { AppError } from "../errors.js";
 import { ExternalIdStore, imdbOf, siteLinks } from "../external-ids.js";
-import { imageSurface, noteImage } from "../image-stats.js";
+import { askedSurface, imageSurface, logPoster, noteImage } from "../image-stats.js";
 import { images } from "../images.js";
 import { normalizeLanguage } from "../language.js";
 import { libraryFor, libraryVisible, parseLibraryPath, posixBase, type Viewer } from "../libraries.js";
@@ -183,11 +183,15 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     const id = String(req.params.id);
     const cached = await images.fetch(id);
     if (!cached) return res.status(404).end();
+    const surface = imageSurface(req.query.surface, "catalog");
+    const asked = askedSurface(req.query.surface);
+    const cache = "private, max-age=86400";
     res.setHeader("content-type", cached.type);
     res.setHeader("etag", cached.etag);
-    res.setHeader("cache-control", "private, max-age=86400");
+    res.setHeader("cache-control", cache);
     if (req.headers["if-none-match"] === cached.etag) {
       images.takeFetched(id);
+      logPoster({ kind: "catalog", surface, asked, status: 304, bytes: 0, cache });
       return res.status(304).end();
     }
     // The bytes come from memory when they are already there, and from one read otherwise;
@@ -198,7 +202,9 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
       images.takeFetched(id);
       return res.status(404).end();
     }
-    noteImage(imageSurface(req.query.surface, "catalog"), images.takeFetched(id) ? "upstream" : warm ? "memory" : "disk");
+    const from = images.takeFetched(id) ? "upstream" : warm ? "memory" : "disk";
+    noteImage(surface, from);
+    logPoster({ kind: "catalog", surface, asked, from, status: 200, bytes: bytes.length, cache });
     res.end(bytes);
   }));
   app.get("/api/stream-sources/:type/:id", (req, res) => {

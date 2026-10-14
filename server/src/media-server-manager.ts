@@ -18,7 +18,7 @@ import {
 } from "./media-server-retention.js";
 import { remoteIdsMatch, remoteMatchTarget, type RemoteMatchTarget } from "./media-server-match.js";
 import { MediaServerIndex } from "./media-server-index.js";
-import { imageSurface, noteImage } from "./image-stats.js";
+import { IMAGE_FROM_HEADER, imageSurface, noteImage } from "./image-stats.js";
 import { RemoteImageCache, remoteImageKey, type RemoteImageBody } from "./remote-image-cache.js";
 import {
   createMediaServerProvider,
@@ -1919,6 +1919,7 @@ export class MediaServerManager {
       "content-type": upstream.headers.get("content-type") ?? "application/octet-stream",
       "cache-control": cacheControl,
       "x-content-type-options": "nosniff",
+      [IMAGE_FROM_HEADER]: "upstream",
     });
     if (etag !== undefined) headers.set("etag", etag);
     const reader = upstream.body.getReader();
@@ -1955,6 +1956,7 @@ export class MediaServerManager {
       "content-type": body.contentType,
       "cache-control": cacheControl,
       "x-content-type-options": "nosniff",
+      [IMAGE_FROM_HEADER]: body.source,
     });
     if (etag !== undefined) headers.set("etag", etag);
     const reader = body.stream.getReader();

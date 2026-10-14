@@ -1,6 +1,6 @@
-import { once } from "node:events";
 import type express from "express";
 import { AppError } from "../errors.js";
+import { IMAGE_FROM_HEADER, askedSurface, imageSurface, logPoster } from "../image-stats.js";
 import { log } from "../logger.js";
 import { ResourceError } from "../media-resources.js";
 import { ForbiddenError } from "../roles.js";
@@ -85,6 +85,25 @@ const malformed = (message: string): MediaServerError => new MediaServerError("i
 /** The client went away before an answer could be written: nothing is sent and nothing is
  *  logged beyond the debug line, so a disconnect never becomes a 500. */
 class ClientGone extends Error {}
+
+/** The same cap the image transport already enforces. The route holds the body only so the
+ *  browser gets a length; a larger body is refused before any byte is written. */
+const ARTWORK_MAX_BYTES = 5 * 1024 * 1024;
+
+/** Headers the browser is allowed to see. `x-image-from` stays on the internal response. */
+const ARTWORK_RESPONSE_HEADERS = ["content-type", "cache-control", "etag", "x-content-type-options"] as const;
+
+const writeArtworkHeaders = (res: express.Response, response: Response): void => {
+  for (const name of ARTWORK_RESPONSE_HEADERS) {
+    const value = response.headers.get(name);
+    if (value !== null) res.setHeader(name, value);
+  }
+};
+
+const imageFrom = (response: Response): "memory" | "disk" | "upstream" => {
+  const value = response.headers.get(IMAGE_FROM_HEADER);
+  return value === "memory" || value === "disk" || value === "upstream" ? value : "upstream";
+};
 
 const assertNoBody = (req: express.Request): void => {
   if (req.body !== undefined || Number(req.header("content-length") ?? 0) > 0 || req.header("transfer-encoding")) {
@@ -328,10 +347,13 @@ export function registerMediaServerRoutes(app: express.Application, deps: MediaS
     const name = streamName(req);
     return { streams: await mediaSources.matched(authority, ownerOf(req), String(req.params.id), String(req.params.type), String(req.params.catalogId), signal, name) };
   }, 200, true));
-  // Fixed Primary|Backdrop only and at most the optional `tag` and `size` queries: the bytes
-  // stream through the image lane. The browser may keep a successful response for a year, and
-  // it is immutable only when the `tag` query equals the membership proof's tag. An If-None-Match
-  // that does arrive is a local 304 once the manager's checks still hold.
+  // Fixed Primary|Backdrop only and at most the optional `tag`, `size` and `surface` queries.
+  // The body is collected and sent with Content-Length: Mobile Safari does not store a chunked
+  // poster, so a repeat visit would fetch it again. The grant is still re-checked on every
+  // chunk before anything is written. A failure or a disconnect sends no body. The browser may
+  // keep a successful response for a year, and it is immutable only when the `tag` query equals
+  // the membership proof's tag. An If-None-Match that does arrive is a local 304 once the
+  // manager's checks still hold.
   app.get("/api/remote-libraries/:id/items/:itemId/artwork/:imageType", asyncRoute(async (req, res) => {
     let response: Response;
     try {
@@ -359,26 +381,64 @@ export function registerMediaServerRoutes(app: express.Application, deps: MediaS
       if (error instanceof ClientGone) return;
       throw error;
     }
-    res.status(response.status);
-    response.headers.forEach((value, name) => res.setHeader(name, value));
-    if (response.status === 304 || !response.body) { res.end(); return; }
+    const surface = imageSurface(req.query.surface, "remote");
+    const asked = askedSurface(req.query.surface);
+    const cache = response.headers.get("cache-control");
+    if (response.status === 304 || !response.body) {
+      res.status(response.status);
+      writeArtworkHeaders(res, response);
+      res.end();
+      logPoster({ kind: "remote", surface, asked, status: response.status, bytes: 0, cache });
+      return;
+    }
     const reader = response.body.getReader();
-    const downstream = new AbortController();
-    const onClose = () => { downstream.abort(); void reader.cancel().catch(() => undefined); };
+    let clientLeft = false;
+    const onClose = () => {
+      // A finished response also emits close. Only a request the client already dropped
+      // cancels the read, and it cancels before any byte has been written.
+      if (!req.destroyed) return;
+      clientLeft = true;
+      void reader.cancel().catch(() => undefined);
+    };
     res.on("close", onClose);
+    const chunks: Buffer[] = [];
+    let total = 0;
     try {
       for (;;) {
+        if (clientLeft || req.destroyed) throw new ClientGone();
         const chunk = await reader.read();
         if (chunk.done) break;
-        if (!res.write(Buffer.from(chunk.value))) await once(res, "drain", { signal: downstream.signal });
+        const piece = Buffer.from(chunk.value);
+        if (total + piece.length > ARTWORK_MAX_BYTES) {
+          void reader.cancel().catch(() => undefined);
+          throw new MediaServerError("response-too-large", "The media server image is too large.");
+        }
+        chunks.push(piece);
+        total += piece.length;
       }
-      res.end();
     } catch (error) {
-      log("DEBUG", "Media-server image stream ended early", { path: req.path, reason: error instanceof Error ? error.message : String(error) });
-      res.destroy();
-    } finally {
       res.off("close", onClose);
+      if (clientLeft || error instanceof ClientGone || req.destroyed) {
+        log("DEBUG", "Media-server image stream ended early", { path: req.path, reason: "client" });
+        return;
+      }
+      log("INFO", "Poster was not sent", {
+        kind: "remote", surface, asked, reason: isMediaServerError(error) ? error.code : "failed",
+      });
+      if (isMediaServerError(error)) throw toHttpError(error);
+      throw error;
     }
+    res.off("close", onClose);
+    if (clientLeft || req.destroyed || res.writableEnded || res.destroyed) {
+      log("DEBUG", "Media-server image stream ended early", { path: req.path, reason: "client" });
+      return;
+    }
+    const bytes = Buffer.concat(chunks, total);
+    res.status(response.status);
+    writeArtworkHeaders(res, response);
+    res.setHeader("content-length", String(bytes.length));
+    res.end(bytes);
+    logPoster({ kind: "remote", surface, asked, from: imageFrom(response), status: response.status, bytes: bytes.length, cache });
   }));
   app.get("/api/remote-libraries/:id/items/:itemId/state", handle(async (req, authority, signal) => {
     assertNoBody(req);
