@@ -28,15 +28,63 @@ on:
         default: false
 
 jobs:
-  test:
+  # Decides whether this run has to start CI itself. A rerun of this workflow
+  # must not add a second CI run for the same commit: a successful one is
+  # reused, a running one is waited on, and a failed one fails this workflow
+  # without tagging an image.
+  gate:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      reuse: ${{ steps.gate.outputs.reuse }}
+    steps:
+      - id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          deadline=$(( $(date +%s) + 2700 ))
+          while true; do
+            runs="$(gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&per_page=20" \
+              --jq '.workflow_runs[] | "\(.status) \(.conclusion)"')"
+            if printf '%s\n' "$runs" | grep -q '^completed success$'; then
+              echo "reuse=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if printf '%s\n' "$runs" | grep -Eq '^(queued|in_progress|waiting|pending) '; then
+              if [ "$(date +%s)" -ge "$deadline" ]; then
+                echo "::error::the CI run for ${GITHUB_SHA} did not finish within 45 minutes"
+                exit 1
+              fi
+              sleep 30
+              continue
+            fi
+            if printf '%s\n' "$runs" | grep -Eq '^completed (failure|cancelled|timed_out)$'; then
+              echo "::error::the CI run for ${GITHUB_SHA} failed"
+              exit 1
+            fi
+            echo "reuse=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          done
+
+  ci:
+    needs: gate
+    if: needs.gate.result == 'success' && needs.gate.outputs.reuse != 'true'
     uses: ./.github/workflows/ci.yml
 
   # Each architecture builds on its own machine (the repository is public, so
   # a native arm64 runner is free) and is pushed to GHCR as a digest only --
   # no tag. Tags (latest, commit SHA) are applied to the combined list in the
   # "manifest" job; otherwise the second architecture would overwrite the first.
+  #
+  # The build no longer waits for the tests, so it overlaps them. Only
+  # "manifest" applies tags, and only after both the build and the tests
+  # succeeded -- an untagged digest pushed here when a test later fails is
+  # simply left untagged.
   image:
-    needs: test
     strategy:
       fail-fast: false
       matrix:
@@ -94,7 +142,8 @@ jobs:
   # Digests from both architectures are combined into one list, which then
   # receives the real tags. Docker picks the variant that matches the client.
   manifest:
-    needs: image
+    needs: [image, gate, ci]
+    if: always() && needs.image.result == 'success' && needs.gate.result == 'success' && (needs.ci.result == 'success' || needs.ci.result == 'skipped')
     runs-on: ubuntu-24.04
     permissions:
       contents: read

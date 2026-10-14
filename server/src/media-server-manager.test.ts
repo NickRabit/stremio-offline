@@ -923,7 +923,8 @@ test("closing the manager rejects a queued network request", async () => {
       () => ({ rejected: false as const }),
       (error: MediaServerError) => ({ rejected: true as const, error }),
     );
-    for (let spins = 0; spins < 1000 && netQueueLength(harness) < 1; spins += 1) await tick();
+    const deadline = Date.now() + 5000;
+    while (netQueueLength(harness) < 1 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 1));
     assert.equal(netQueueLength(harness), 1, "the request reached the queue");
     const closing = harness.manager.close();
     const outcome = await queuedResult;
@@ -948,7 +949,8 @@ test("the pending queue refuses a request beyond its 128-waiter bound", async ()
     const running = [0, 1, 2, 3].map(() => harness.manager.discoverLibraries(harness.admin, connection.id));
     await four.promise;
     const waiting = Array.from({ length: 128 }, () => harness.manager.discoverLibraries(harness.admin, connection.id));
-    for (let spins = 0; spins < 100000 && netQueueLength(harness) < 128; spins += 1) await tick();
+    const deadline = Date.now() + 5000;
+    while (netQueueLength(harness) < 128 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 1));
     assert.equal(netQueueLength(harness), 128, "the queue fills to its bound");
     await assert.rejects(harness.manager.discoverLibraries(harness.admin, connection.id), { code: "busy" }, "one beyond the bound is refused");
     held.resolve();

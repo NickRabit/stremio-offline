@@ -73,12 +73,46 @@ jobs:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       - run: npm run build
       - run: apt-get update && apt-get install -y --no-install-recommends ffmpeg
-      - run: npx playwright test
+      - run: npx playwright test --project=chromium --project=safari-seek --project=safari-landscape --project=safari-queue --project=mobile-locales
         env:
           HOME: /root
       - uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
         with:
           name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+
+  # Every layout viewport would otherwise queue behind the other six on one server.
+  # Each job replays "setup" and "chromium" itself, because the layout projects
+  # declare that dependency and the baselines come from the state those journeys
+  # leave behind.
+  e2e-layout:
+    runs-on: ubuntu-24.04
+    container:
+      image: mcr.microsoft.com/playwright:v1.56.1-noble
+    strategy:
+      fail-fast: false
+      # Keep this list equal to the `name` fields of `viewports` in playwright.config.ts.
+      matrix:
+        project: [desktop, desktop-short, tablet-landscape, tablet, mobile, mobile-landscape, mobile-landscape-small]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - run: npm run build
+      - run: apt-get update && apt-get install -y --no-install-recommends ffmpeg
+      - run: npx playwright test --project=${{ matrix.project }}
+        env:
+          HOME: /root
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: playwright-report-layout-${{ matrix.project }}
           path: playwright-report/
           retention-days: 7

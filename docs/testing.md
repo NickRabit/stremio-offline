@@ -89,6 +89,13 @@ The fixture stack is two servers, both started by Playwright itself:
 Because there is one server with one state file, the specs run serially
 (`workers: 1`) rather than fighting over it.
 
+Locally and in each CI job the specs still share one server and still run with
+`workers: 1`. CI runs the seven layout viewports as seven separate jobs, each on
+its own server, so they do not wait on each other. Every one of those jobs
+replays `setup` and the chromium journeys first, because the layout projects
+declare that dependency, and the screenshot baselines are taken against the
+state those journeys leave behind.
+
 The `setup` project runs first and is a real journey, not scaffolding: a fresh
 server has no account, so it creates one and installs the fake addon through the
 UI. The session it leaves behind is reused by every other spec through
