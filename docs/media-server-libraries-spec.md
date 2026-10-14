@@ -127,13 +127,15 @@ Revocation aborts upstream reads, not just the public resource registry.
 Remote artwork must always use a content-authorized proxy/cache path, even with
 secure mode off. A generic shared catalogue image ID is insufficient. Bind
 subtitle resources to the same content/owner and preserve that binding after
-conversion. Return private, `no-cache` policies with an `ETag` of the current
-image tag, recheck grants before serving bytes and stream under that check, and
-answer a matching `If-None-Match` with a local `304` after the local checks.
-Already delivered bytes cannot be recalled. A thumbnail a few minutes old is
-acceptable: membership and image tags are cached for a bounded window rather
-than re-proved on every image request, and an authorization refusal still
-invalidates the cache at once.
+conversion. Return `Cache-Control: private, max-age=86400` with an `ETag` of the
+current image tag. A changed tag is a different URL, so a new picture is fetched
+at once; the browser may keep the previous response for a day and will not ask
+again until then. A request that does arrive still rechecks the grant before any
+byte, streams under that check, and answers a matching `If-None-Match` with a
+local `304`. Already delivered bytes cannot be recalled. A thumbnail a few
+minutes old is acceptable: membership and image tags are cached for a bounded
+window rather than re-proved on every image request, and an authorization
+refusal still invalidates that server cache at once.
 
 Reject media-server sources server-side in download admission, device-save,
 source replacement and resume. Public capabilities describe eligible actions;

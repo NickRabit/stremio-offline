@@ -338,7 +338,10 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     }
     if (!art) return res.status(404).end();
     void artworks.served(art);
-    res.setHeader("cache-control", "private, no-cache");
+    // The listing address carries the file's mtime, so a replaced picture is a new URL.
+    // The browser may keep this one for a day, the same way a catalogue poster is kept.
+    // A request that does arrive still resolves the path and refuses a library the viewer cannot see.
+    res.setHeader("cache-control", "private, max-age=86400");
     res.sendFile(art, { dotfiles: "allow" }, (error) => { if (error && !res.headersSent) res.status(404).end(); });
   }));
 }

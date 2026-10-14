@@ -1612,7 +1612,7 @@ test("readArtwork streams bounded bytes for a fixed role and refuses other roles
     const response = await harness.manager.readArtwork(harness.admin, library.id, "show", "Backdrop");
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("content-type"), "image/png");
-    assert.equal(response.headers.get("cache-control"), "private, no-cache");
+    assert.equal(response.headers.get("cache-control"), "private, max-age=86400");
     assert.deepEqual(await imageBytes(response), [1, 2, 3]);
     assert.deepEqual(harness.server.artworkRequests.at(-1), { itemId: "show", imageType: "Backdrop" });
     await assert.rejects(harness.manager.readArtwork(harness.admin, library.id, "m1", "Logo"), { code: "invalid-input" });

@@ -316,7 +316,11 @@ const ifNoneMatchMatches = (header: string, etag: string): boolean => {
   return false;
 };
 
-const IMAGE_CACHE_CONTROL = "private, no-cache";
+/** A day, matching catalogue posters. A tag in the URL is the picture's version, so a new
+ *  image is a new address and shows up at once. The browser may keep the previous bytes
+ *  until then. A request that arrives still rechecks the grant, and a matching ETag is a
+ *  local 304. */
+const IMAGE_CACHE_CONTROL = "private, max-age=86400";
 
 const artworkNotModified = (etag: string): Response =>
   new Response(null, { status: 304, headers: { etag, "cache-control": IMAGE_CACHE_CONTROL } });
@@ -1816,8 +1820,9 @@ export class MediaServerManager {
     }
   }
 
-  /** The image body as a private, no-cache stream that re-checks the local authority and the
-   *  connection before every chunk and aborts the upstream read when the client goes away. */
+  /** The image body as a private response the browser may keep for a day. A request that
+   *  arrives still re-checks the local authority and the connection before every chunk and
+   *  aborts the upstream read when the client goes away. */
   private scopedImage(
     authority: MediaServerAuthority,
     signal: AbortSignal,
