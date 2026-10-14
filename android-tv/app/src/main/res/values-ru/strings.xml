@@ -298,6 +298,8 @@
   <string name="media_server_mark_watched">Отметить как просмотренное</string>
   <string name="media_server_unwatch">Отметить как непросмотренное</string>
   <string name="media_server_download_unavailable">Элемент с медиасервера нельзя скачать.</string>
+  <string name="media_server_download_disabled">Загрузки отключены для этой учётной записи сервера.</string>
+  <string name="media_server_version_number">Версия %1$s</string>
   <string name="media_server_state_error">Не удалось загрузить сохранённую позицию.</string>
   <string name="media_server_group_failed">Не удалось загрузить %1$s.</string>
   <string name="media_server_personal_empty">Здесь пока ничего нет.</string>
@@ -307,4 +309,5 @@
   <string name="favorites_tab_local">Файлы и каталог</string>
   <string name="favorites_tab_servers">Медиасерверы</string>
   <string name="media_server_personal_partial">Некоторые элементы не удалось загрузить.</string>
+  <string name="err_media_server_format_unknown">Медиасервер не указал поддерживаемый формат исходного файла.</string>
 </resources>

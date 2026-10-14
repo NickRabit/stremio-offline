@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { ArrowDown, ArrowUp, Check, KeyRound, Library, Pencil, Plus, RefreshCw, SlidersHorizontal, Trash2, X } from "lucide-react";
 import { useDialogFocus } from "./dialog-focus";
 import { useDialogViewport } from "./dialog-viewport";
 import { api, describeError } from "./api";
 import { t, useI18n } from "./i18n";
-import type { AdminRemoteLibrary, LibraryType, MediaServerConnection, MediaServerProvider, MediaServerStatus, ProviderLibrary, RemoteBrowseMode, UserAccount } from "./types";
+import type { AdminRemoteLibrary, LibraryType, LibraryView, MediaServerConnection, MediaServerProvider, MediaServerStatus, ProviderLibrary, RemoteBrowseMode, UserAccount } from "./types";
 
 const PROVIDER_KEY: Record<MediaServerProvider, "mediaServer.provider.jellyfin" | "mediaServer.provider.emby"> = {
   jellyfin: "mediaServer.provider.jellyfin",
@@ -40,7 +41,7 @@ function Dialog({ title, cardClass, onClose, children, footer, busy }: {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [busy, onClose]);
-  return <div ref={overlay} tabIndex={-1} className="identify-overlay" role="dialog" aria-modal="true" aria-label={title}
+  return createPortal(<div ref={overlay} tabIndex={-1} className="identify-overlay" role="dialog" aria-modal="true" aria-label={title}
     onClick={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
     <div className={`panel identify-card dialog-split ${cardClass ?? ""}`}>
       <div className="identify-head">
@@ -50,7 +51,7 @@ function Dialog({ title, cardClass, onClose, children, footer, busy }: {
       <div className="dialog-body">{children}</div>
       {footer && <footer className="dialog-foot">{footer}</footer>}
     </div>
-  </div>;
+  </div>, document.body);
 }
 
 const Checkbox = ({ checked, disabled, onChange, children }: { checked: boolean; disabled?: boolean; onChange: (value: boolean) => void; children: ReactNode }) =>
@@ -60,7 +61,7 @@ const Checkbox = ({ checked, disabled, onChange, children }: { checked: boolean;
   </label>;
 
 /** Settings -> Libraries: connect Jellyfin/Emby and grant attached libraries. Administrator only. */
-export function MediaServerManager({ onError, onChanged }: { onError: (error: unknown) => void; onChanged?: () => void }) {
+export function MediaServerManager({ onError, onChanged, localLibraries = [] }: { onError: (error: unknown) => void; onChanged?: () => void; localLibraries?: LibraryView[] }) {
   useI18n();
   const [connections, setConnections] = useState<MediaServerConnection[] | null>(null);
   const [keyConfigured, setKeyConfigured] = useState(true);
@@ -267,7 +268,7 @@ export function MediaServerManager({ onError, onChanged }: { onError: (error: un
         </label>
       </>}
     </FormDialog>}
-    {editing && <RemoteLibraryDialog library={editing} users={users} usersError={usersError} busy={busy} error={dialogError}
+    {editing && <RemoteLibraryDialog library={editing} localLibraries={localLibraries} users={users} usersError={usersError} busy={busy} error={dialogError}
       onRetryUsers={() => void loadUsers()} onClose={() => setEditing(null)}
       onSave={(patch) => runDialog(async () => { await api.updateRemoteLibrary(editing.id, patch); await load(); onChanged?.(); })}
       onRequestRemove={() => requestRemoveLibrary(editing)}/>}
@@ -421,10 +422,15 @@ function DiscoverDialog({ connection, attached, busy, error, onClose, onAttach }
   </Dialog>;
 }
 
-function RemoteLibraryDialog({ library, users, usersError, busy, error, onRetryUsers, onClose, onSave, onRequestRemove }: {
-  library: AdminRemoteLibrary; users: UserAccount[] | null; usersError: string; busy: boolean; error: string;
+/** Whether one local library may receive copies of this remote library's content: a mixed remote
+ *  library only ever lands in a mixed one, a movie or series one may also use a mixed one. */
+const takesRemoteType = (remoteType: LibraryType, localType: LibraryType): boolean =>
+  remoteType === "mixed" ? localType === "mixed" : localType === remoteType || localType === "mixed";
+
+function RemoteLibraryDialog({ library, localLibraries, users, usersError, busy, error, onRetryUsers, onClose, onSave, onRequestRemove }: {
+  library: AdminRemoteLibrary; localLibraries: LibraryView[]; users: UserAccount[] | null; usersError: string; busy: boolean; error: string;
   onRetryUsers: () => void; onClose: () => void;
-  onSave: (patch: { name: string; enabled: boolean; showOnHome: boolean; showInContinueWatching: boolean; allowedUsers: string[]; browseMode: RemoteBrowseMode; mosaic: boolean; showInFavorites: boolean }) => Promise<boolean>;
+  onSave: (patch: { name: string; enabled: boolean; showOnHome: boolean; showInContinueWatching: boolean; allowedUsers: string[]; browseMode: RemoteBrowseMode; mosaic: boolean; showInFavorites: boolean; downloadLibraryId: string | null }) => Promise<boolean>;
   onRequestRemove: () => void;
 }) {
   const [draft, setDraft] = useState(() => ({
@@ -433,12 +439,19 @@ function RemoteLibraryDialog({ library, users, usersError, busy, error, onRetryU
     mosaic: library.mosaic !== false, showInFavorites: library.showInFavorites !== false,
     browseMode: library.browseMode ?? (library.type === "mixed" ? "folders" : "titles") as RemoteBrowseMode,
     allowedUsers: new Set(library.allowedUsers),
+    downloadLibraryId: library.downloadLibraryId ?? "",
   }));
+  // Only the appropriate writable local libraries are offered; a stored handle that is not among
+  // them stays visible as a disabled row, so it is never silently cleared or swapped.
+  const copyTargets = localLibraries.filter((candidate) => candidate.enabled && !candidate.readOnly && !candidate.unreachable && candidate.writable && takesRemoteType(library.type, candidate.type));
+  const storedUnavailable = draft.downloadLibraryId !== "" && !copyTargets.some((candidate) => candidate.id === draft.downloadLibraryId);
+  const storedName = localLibraries.find((candidate) => candidate.id === draft.downloadLibraryId)?.name ?? draft.downloadLibraryId;
   const loaded = users !== null;
   const dirty = draft.name.trim() !== library.name || draft.enabled !== library.enabled
     || draft.showOnHome !== library.showOnHome || draft.showInContinueWatching !== library.showInContinueWatching
     || draft.mosaic !== (library.mosaic !== false) || draft.showInFavorites !== (library.showInFavorites !== false)
     || draft.browseMode !== (library.browseMode ?? (library.type === "mixed" ? "folders" : "titles"))
+    || draft.downloadLibraryId !== (library.downloadLibraryId ?? "")
     || [...draft.allowedUsers].sort().join(",") !== [...library.allowedUsers].sort().join(",");
 
   const toggleUser = (id: string, on: boolean) => setDraft((current) => {
@@ -456,6 +469,7 @@ function RemoteLibraryDialog({ library, users, usersError, busy, error, onRetryU
           showOnHome: draft.showOnHome, showInContinueWatching: draft.showInContinueWatching,
           mosaic: draft.mosaic, showInFavorites: draft.showInFavorites, browseMode: draft.browseMode,
           allowedUsers: [...draft.allowedUsers],
+          downloadLibraryId: draft.downloadLibraryId || null,
         }).then((done) => { if (done) onClose(); })}>{t("common.save")}</button>
     </>}>
     <section className="library-edit-section">
@@ -482,6 +496,18 @@ function RemoteLibraryDialog({ library, users, usersError, busy, error, onRetryU
         <Checkbox checked={draft.showInFavorites} disabled={busy} onChange={(value) => setDraft((current) => ({ ...current, showInFavorites: value }))}>{t("library.showInFavorites")}</Checkbox>
         <p className="identify-hint">{t("library.showInFavoritesHint")}</p>
       </div>
+    </section>
+    <section className="library-edit-section">
+      <div className="library-picker-section-head"><h3>{t("save.toLibrary")}</h3></div>
+      <label className="media-server-field"><span>{t("mediaServer.downloadLibrary")}</span>
+        <select value={draft.downloadLibraryId} aria-label={t("mediaServer.downloadLibrary")} disabled={busy}
+          onChange={(event) => setDraft((current) => ({ ...current, downloadLibraryId: event.target.value }))}>
+          <option value="">{t("mediaServer.downloadLibraryDefault")}</option>
+          {copyTargets.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}
+          {storedUnavailable && <option value={draft.downloadLibraryId} disabled>{`${storedName} · ${t("mediaServer.status.unavailable")}`}</option>}
+        </select>
+      </label>
+      <p className="identify-hint">{t("mediaServer.downloadLibraryHint")}</p>
     </section>
     <section className="library-edit-section">
       <div className="library-picker-section-head"><h3>{t("mediaServer.grantsHeading")}</h3></div>

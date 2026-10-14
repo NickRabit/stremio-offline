@@ -379,7 +379,7 @@ describe("remote media-server sources", () => {
     expect(canQueue(http, true)).toBe(true);
   });
 
-  it("refuses to queue a read-only remote source even without capabilities", () => {
+  it("queues a remote original only when the server proved the copy capability", () => {
     const bare = stream({ sourceId: "r2", provider: "emby", libraryId: "lib_2" });
     expect(bare.capabilities).toBeUndefined();
     expect(canQueue(bare, true)).toBe(false);
@@ -387,6 +387,10 @@ describe("remote media-server sources", () => {
     const contextOnly = stream({ sourceId: "r3", remoteItem });
     expect(contextOnly.provider).toBeUndefined();
     expect(canQueue(contextOnly, true)).toBe(false);
+    // A source the server projected as copyable is queueable; a non-playable one never is.
+    const granted = stream({ sourceId: "r4", provider: "jellyfin", remoteItem, capabilities: { rename: false, move: false, delete: false, identify: false, writeArtwork: false, downloadToLibrary: true, downloadToDevice: false } });
+    expect(canQueue(granted, false)).toBe(true);
+    expect(canQueue({ ...granted, playable: false }, false)).toBe(false);
   });
 
   it("orders local, then remote, then addon sources in the recommended All list", () => {

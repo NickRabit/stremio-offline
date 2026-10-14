@@ -10,16 +10,25 @@ import { DeviceTransfers } from "../device-transfers.js";
 import { ownerMayDownload, type DownloadQueue } from "../downloads.js";
 import { AppError, messageKeyOf } from "../errors.js";
 import type { LibraryRecord } from "../libraries.js";
+import { sealRemoteContent } from "../media-server-reference.js";
+import type { RemoteDownloadReference } from "../media-server-download.js";
+import type { ResourceOwner } from "../media-resources.js";
 import { defaultDownloadSettings, type MediaInfo } from "../naming.js";
 import type { Store, UserPrefs } from "../store.js";
-import type { DownloadTargetSettings } from "../types.js";
+import type { DownloadTargetSettings, StreamItem } from "../types.js";
 import type { UserRecord } from "../users.js";
 import { registerDownloadRoutes, type DownloadsDeps } from "./downloads.js";
 
 interface Harness {
   base: string;
   transfers: DeviceTransfers;
-  added: Array<{ title: string; ownerUserId?: string; settings?: DownloadTargetSettings }>;
+  added: Array<{ title: string; ownerUserId?: string; settings?: DownloadTargetSettings; stream?: StreamItem; remoteDownload?: RemoteDownloadReference }>;
+  references: Array<{ stream: StreamItem; owner: ResourceOwner }>;
+  /** Every sealed source the route re-proved through the sources service before reading a
+   *  destination off it. */
+  assertions: StreamItem[];
+  titles: string[];
+  setViewer(viewer: UserRecord): void;
   actions: string[];
   moves: Array<{ id: string; direction: number }>;
   viewed: Array<{ id?: string; media?: MediaInfo; target?: string }>;
@@ -71,13 +80,29 @@ const mount = async (
     viewer?: UserRecord;
     jobs?: Array<{ id: string; ownerUserId?: string }>;
     libraries?: unknown[];
+    connections?: unknown[];
+    remoteLibraries?: unknown[];
+    source?: StreamItem;
+    /** The media the route reads for the job's kind, so a native episode can be posed. */
+    media?: MediaInfo;
+    /** The local defaults a native copy without a configured destination falls back to. */
+    settings?: { defaultMovieLibrary?: string; defaultSeriesLibrary?: string };
+    downloadReference?: RemoteDownloadReference | (() => Promise<never>);
+    /** A viewer the harness switches to while the handle is minted, or while the queue's `add`
+     *  awaits, so a withdrawal that lands inside an await can be tested. */
+    withdrawOnReference?: UserRecord;
+    withdrawOnAdd?: UserRecord;
     /** The library a rule with no library lands in, either fixed or decided by the kind. */
     defaultLibrary?: LibraryRecord | ((kind: "movie" | "series") => LibraryRecord | undefined);
   } = {},
 ): Promise<Harness> => {
   const jobs = options.jobs ?? [{ id: "job-1", ownerUserId: ADA }, { id: "job-2", ownerUserId: ADA }];
   const transfers = new DeviceTransfers();
-  const added: Array<{ title: string; ownerUserId?: string; settings?: DownloadTargetSettings }> = [];
+  const held = { viewer: options.viewer ?? admin };
+  const titles: string[] = [];
+  const added: Array<{ title: string; ownerUserId?: string; settings?: DownloadTargetSettings; stream?: StreamItem; remoteDownload?: RemoteDownloadReference }> = [];
+  const references: Array<{ stream: StreamItem; owner: ResourceOwner }> = [];
+  const assertions: StreamItem[] = [];
   const actions: string[] = [];
   const moves: Array<{ id: string; direction: number }> = [];
   const viewed: Array<{ id?: string; media?: MediaInfo; target?: string }> = [];
@@ -90,8 +115,9 @@ const mount = async (
   const queue = {
     snapshot: () => ({ jobs, halt: null }),
     list: () => jobs,
-    add: async (title: string, _stream: unknown, _media: unknown, settings: DownloadTargetSettings, ownerUserId?: string) => {
-      added.push({ title, ownerUserId, settings });
+    add: async (title: string, stream: StreamItem, _media: unknown, settings: DownloadTargetSettings, ownerUserId?: string, remoteDownload?: RemoteDownloadReference) => {
+      added.push({ title, ownerUserId, settings, stream, remoteDownload });
+      if (options.withdrawOnAdd) held.viewer = options.withdrawOnAdd;
       return { id: "job-1", target: "Movies/Film/Film.mkv" };
     },
     addPending: async (_title: string, source: { selection?: { addonKeys?: string[] } }, _media: unknown, ownerUserId?: string) => {
@@ -106,25 +132,44 @@ const mount = async (
     clearCompleted: async () => undefined,
   };
   const deps: DownloadsDeps = {
-    store: { addons: () => addons, libraries: () => options.libraries ?? [] } as unknown as Store,
+    store: {
+      addons: () => addons,
+      libraries: () => options.libraries ?? [],
+      users: () => [held.viewer],
+      mediaConnections: () => options.connections ?? [],
+      remoteLibraries: () => options.remoteLibraries ?? [],
+      settings: () => options.settings ?? {},
+    } as unknown as Store,
     needsSetup: () => false,
     currentSession: () => undefined,
-    currentUser: () => options.viewer ?? admin,
+    currentUser: () => held.viewer,
     isSecure: () => false,
     stopOwnedPlayback: async () => undefined,
     stopUserSessions: async () => undefined,
     requireAccess: () => undefined,
     stopContentAccess: async () => undefined,
     queue: queue as unknown as DownloadQueue,
+    mediaSources: {
+      assertCurrent: (stream: StreamItem) => { assertions.push(stream); },
+      downloadReference: async (stream: StreamItem, owner: ResourceOwner) => {
+        references.push({ stream, owner });
+        if (options.withdrawOnReference) held.viewer = options.withdrawOnReference;
+        const configured = options.downloadReference;
+        if (typeof configured === "function") return configured();
+        if (configured) return configured;
+        throw new AppError("This library is read-only.", "library.readOnly", 403);
+      },
+    } as unknown as DownloadsDeps["mediaSources"],
     deviceTransfers: transfers,
     jobView: <T extends { media?: MediaInfo; target?: string }>(job: T) => {
       viewed.push(job);
       return { ...job, viewed: true } as T;
     },
-    sourceOf: () => ({}),
-    mediaSource: () => undefined,
+    sourceOf: () => options.source ?? ({} as StreamItem),
+    ownerOf: () => ({ userId: ADA, sid: "sid-ada", expiresAt: Number.MAX_SAFE_INTEGER }),
+    mediaSource: () => options.media,
     posterOf: (value) => value ? String(value) : undefined,
-    rememberTitle: async () => undefined,
+    rememberTitle: async (target) => { titles.push(target); },
     titleKey: () => ".",
     saveCatalogPoster: () => undefined,
     libraryKey: (value) => value,
@@ -150,6 +195,10 @@ const mount = async (
     base: `http://127.0.0.1:${port}`,
     transfers,
     added,
+    references,
+    assertions,
+    titles,
+    setViewer: (viewer: UserRecord) => { held.viewer = viewer; },
     actions,
     moves,
     viewed,
@@ -571,4 +620,309 @@ test("POST /api/downloads/bulk reads the door's kind from the job it builds, not
   assert.equal(response.status, 403, "the queue's series default decides, not the body's claim");
   assert.equal(await keyOf(response), "err.downloadLibraryNotAllowed");
   assert.deepEqual(harness.pending, [], "nothing is queued");
+});
+
+const remoteLibraryRecord = {
+  id: `rlib_${"a".repeat(32)}`, connectionId: `mconn_${"b".repeat(32)}`, remoteId: "remote-1",
+  name: "Remote Movies", type: "movie", enabled: true, order: 0, allowedUsers: [],
+  showOnHome: true, showInContinueWatching: true,
+};
+
+const remoteConnectionRecord = {
+  id: `mconn_${"b".repeat(32)}`, provider: "jellyfin", name: "Home", baseUrl: "http://media.example",
+  allowLan: false, allowLoopback: false, serverId: "server-1", accountId: "account-1",
+  enabled: true, generation: 1, secretRef: `msecret_${"c".repeat(32)}`, addedAt: "2026-01-01T00:00:00.000Z",
+};
+
+const remoteReference: RemoteDownloadReference = {
+  schemaVersion: 1, ownerUserId: ADA, connectionId: remoteConnectionRecord.id, libraryId: remoteLibraryRecord.id,
+  generation: 1, provider: "jellyfin", serverId: "server-1", accountId: "account-1", itemId: "item-1", mediaSourceId: "v1",
+};
+
+test("POST /api/downloads derives the durable handle from the sealed source, never from the body", async (t) => {
+  const sealed = { url: "media-server:forged", name: "Movie.mkv" } as StreamItem;
+  const local = library("lib_movies", "movie");
+  const harness = await mount([streamAddon("stream-addon")], {
+    viewer: admin, libraries: [local], source: sealed, downloadReference: remoteReference,
+    connections: [remoteConnectionRecord], remoteLibraries: [remoteLibraryRecord],
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/downloads", {
+    method: "POST",
+    body: {
+      title: "Movie",
+      // A body that names its own reference must be ignored: the route mints the handle itself.
+      remoteDownload: { ...remoteReference, ownerUserId: BOB },
+    },
+  });
+  assert.equal(response.status, 201, await response.text());
+  assert.deepEqual(harness.references.map((entry) => entry.owner.userId), [ADA], "the handle is captured for the session's own owner");
+  assert.deepEqual(harness.references[0]?.stream, sealed, "the handle is derived from the sealed source the request resolved");
+  assert.deepEqual(harness.added[0]?.remoteDownload, remoteReference, "the queue receives the minted handle");
+  assert.equal(harness.added[0]?.stream, sealed, "the queue receives the sealed source, which it scrubs itself");
+});
+
+test("POST /api/downloads refuses a remote source the sources service will not mint a handle for", async (t) => {
+  const sealed = { url: "media-server:forged" } as StreamItem;
+  const local = library("lib_movies", "movie");
+  const harness = await mount([streamAddon("stream-addon")], {
+    viewer: admin, libraries: [local], source: sealed,
+    downloadReference: async () => { throw new AppError("This library is read-only.", "library.readOnly", 403); },
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/downloads", { method: "POST", body: { title: "Movie" } });
+  assert.equal(response.status, 403);
+  assert.equal(await keyOf(response), "library.readOnly");
+  assert.deepEqual(harness.added, [], "a forged sealed source is never queued");
+});
+
+test("a remote original can never be pinned as a remote library target", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/downloads", {
+    method: "POST",
+    body: { title: "Movie", target: { libraryId: `rlib_${"e".repeat(32)}` } },
+  });
+  assert.equal(response.status, 403);
+  assert.equal(await keyOf(response), "library.readOnly");
+});
+
+test("a bad, hidden or read-only target is refused before any provider call", async (t) => {
+  const visible = library("lib_visible", "movie", { visibleTo: [BOB] });
+  const hidden = library("lib_hidden", "movie", { visibleTo: [] });
+  const readOnly = library("lib_readonly", "movie", { visibleTo: [BOB], readOnly: true });
+  for (const target of [
+    { libraryId: `rlib_${"e".repeat(32)}` },
+    { libraryId: hidden.id },
+    { libraryId: readOnly.id },
+  ]) {
+    const harness = await mount([streamAddon("stream-addon")], {
+      viewer: ordinary, libraries: [visible, hidden, readOnly], source: { url: "media-server:forged" } as StreamItem,
+      downloadReference: remoteReference, connections: [remoteConnectionRecord], remoteLibraries: [remoteLibraryRecord],
+    });
+    t.after(harness.close);
+    const response = await api(harness.base, "/api/downloads", { method: "POST", body: { title: "Movie", target } });
+    assert.ok(response.status >= 400, `target ${JSON.stringify(target)} is refused`);
+    assert.deepEqual(harness.references, [], "an invalid destination never contacts the provider");
+    assert.deepEqual(harness.added, [], "and nothing is queued");
+  }
+});
+
+test("a withdrawal while the handle is minted queues nothing", async (t) => {
+  const local = library("lib_movies", "movie");
+  const harness = await mount([streamAddon("stream-addon")], {
+    viewer: admin, libraries: [local], source: { url: "media-server:forged", name: "Movie.mkv" } as StreamItem,
+    downloadReference: remoteReference, connections: [remoteConnectionRecord], remoteLibraries: [remoteLibraryRecord],
+    withdrawOnReference: denied,
+  });
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/downloads", { method: "POST", body: { title: "Movie" } });
+  assert.equal(response.status, 403, "the right is read again after the async proof");
+  assert.equal(harness.references.length, 1, "the handle was minted, then the withdrawal was seen");
+  assert.deepEqual(harness.added, [], "nothing is queued");
+  assert.deepEqual(harness.titles, [], "and no metadata is written");
+});
+
+test("a withdrawal during admission writes no metadata", async (t) => {
+  const local = library("lib_movies", "movie");
+  const harness = await mount([streamAddon("stream-addon")], {
+    viewer: admin, libraries: [local], source: { url: "media-server:forged", name: "Movie.mkv" } as StreamItem,
+    downloadReference: remoteReference, connections: [remoteConnectionRecord], remoteLibraries: [remoteLibraryRecord],
+    withdrawOnAdd: denied,
+  });
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/downloads", { method: "POST", body: { title: "Movie" } });
+  assert.equal(response.status, 403, "the right is read once more before the metadata write");
+  assert.equal(harness.added.length, 1, "the queue was asked before the second withdrawal was seen");
+  assert.deepEqual(harness.titles, [], "no title metadata is written for a withdrawn right");
+});
+
+
+test("a remote copy with no local destination does not contact its provider", async (t) => {
+  const harness = await mount([], {
+    viewer: admin, libraries: [], source: { url: "media-server:forged", name: "Movie.mkv" } as StreamItem,
+    downloadReference: remoteReference,
+    connections: [remoteConnectionRecord], remoteLibraries: [remoteLibraryRecord],
+  });
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/downloads", { method: "POST", body: { title: "Movie" } });
+  assert.equal(response.status, 400);
+  assert.equal(harness.references.length, 0);
+  assert.deepEqual(harness.added, []);
+});
+
+/** A sealed original the session could genuinely hold, so the route reads its remote library off
+ *  the address itself rather than off anything the request body says. */
+const sealedNative = (libraryId = remoteLibraryRecord.id): StreamItem => ({
+  url: sealRemoteContent({
+    provider: "jellyfin", serverId: "server-1", accountId: "account-1", itemId: "item-1",
+    connectionId: remoteConnectionRecord.id, libraryId, generation: 1, mediaSourceId: "v1",
+    owner: { userId: BOB, sid: "sid-bob", expiresAt: Number.MAX_SAFE_INTEGER, secretStamp: "d".repeat(64) },
+  }),
+  name: "Movie.2020.mkv",
+});
+
+/** A remote library Bob is granted, so the owner-bound queue check can pass for him. */
+const remoteLibraryOfType = (type: "movie" | "series" | "mixed", over: Record<string, unknown> = {}) =>
+  ({ ...remoteLibraryRecord, type, allowedUsers: [BOB], ...over });
+
+const bobReference: RemoteDownloadReference = { ...remoteReference, ownerUserId: BOB };
+
+const destinationOf = (harness: Harness) => harness.added[0]?.settings;
+
+test("a native copy with no target lands in the remote library's configured destination", async (t) => {
+  const films = library("lib_films", "movie", { visibleTo: [BOB] });
+  const other = library("lib_other", "movie", { visibleTo: [BOB] });
+  const harness = await mount([], {
+    viewer: ordinary, libraries: [other, films], source: sealedNative(),
+    downloadReference: bobReference, connections: [remoteConnectionRecord],
+    remoteLibraries: [remoteLibraryOfType("movie", { downloadLibraryId: films.id })],
+    settings: { defaultMovieLibrary: other.id },
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/downloads", { method: "POST", body: { title: "Movie" } });
+  assert.equal(response.status, 201, await response.text());
+  assert.equal(harness.assertions.length, 1, "the sealed identity was re-proved before its library was read");
+  assert.equal(destinationOf(harness)?.libraryId, films.id, "the configured handle wins over the kind's default");
+  assert.equal(destinationOf(harness)?.explicit, true, "a resolved destination is pinned, never redirected later");
+});
+
+test("a movie remote library with no override follows the movie default", async (t) => {
+  const films = library("lib_films", "movie", { visibleTo: [BOB] });
+  const shows = library("lib_shows", "series", { visibleTo: [BOB] });
+  const harness = await mount([], {
+    viewer: ordinary, libraries: [shows, films], source: sealedNative(),
+    downloadReference: bobReference, connections: [remoteConnectionRecord],
+    remoteLibraries: [remoteLibraryOfType("movie")],
+    settings: { defaultMovieLibrary: films.id, defaultSeriesLibrary: shows.id },
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/downloads", { method: "POST", body: { title: "Movie" } });
+  assert.equal(response.status, 201, await response.text());
+  assert.equal(destinationOf(harness)?.libraryId, films.id, "a movie library uses the movie default");
+});
+
+test("a series remote library with no override follows the series default", async (t) => {
+  const films = library("lib_films", "movie", { visibleTo: [BOB] });
+  const shows = library("lib_shows", "series", { visibleTo: [BOB] });
+  const harness = await mount([], {
+    viewer: ordinary, libraries: [films, shows], source: sealedNative(),
+    media: { kind: "episode", title: "The Show", season: 1, episode: 2 },
+    downloadReference: bobReference, connections: [remoteConnectionRecord],
+    remoteLibraries: [remoteLibraryOfType("series")],
+    settings: { defaultMovieLibrary: films.id, defaultSeriesLibrary: shows.id },
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/downloads", { method: "POST", body: { title: "Episode" } });
+  assert.equal(response.status, 201, await response.text());
+  assert.equal(destinationOf(harness)?.libraryId, shows.id, "a series library uses the series default");
+});
+
+test("a mixed remote library prefers the first mixed local library, whatever the kind default is", async (t) => {
+  const films = library("lib_films", "movie", { visibleTo: [BOB] });
+  const box = library("lib_box", "mixed", { visibleTo: [BOB], order: 3 });
+  const harness = await mount([], {
+    viewer: ordinary, libraries: [box, films], source: sealedNative(),
+    downloadReference: bobReference, connections: [remoteConnectionRecord],
+    remoteLibraries: [remoteLibraryOfType("mixed")],
+    settings: { defaultMovieLibrary: films.id },
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/downloads", { method: "POST", body: { title: "Movie" } });
+  assert.equal(response.status, 201, await response.text());
+  assert.equal(destinationOf(harness)?.libraryId, box.id, "mixed content goes to a mixed library");
+});
+
+test("an explicit target overrides the configured destination", async (t) => {
+  const configured = library("lib_configured", "movie", { visibleTo: [BOB] });
+  const picked = library("lib_picked", "movie", { visibleTo: [BOB] });
+  const harness = await mount([], {
+    viewer: ordinary, libraries: [configured, picked], source: sealedNative(),
+    downloadReference: bobReference, connections: [remoteConnectionRecord],
+    remoteLibraries: [remoteLibraryOfType("movie", { downloadLibraryId: configured.id })],
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/downloads", {
+    method: "POST", body: { title: "Movie", target: { libraryId: picked.id } },
+  });
+  assert.equal(response.status, 201, await response.text());
+  assert.equal(destinationOf(harness)?.libraryId, picked.id, "the viewer's own choice wins");
+});
+
+test("a read-only default for the kind is passed over the way the queue already passes it over", async (t) => {
+  const readOnly = library("lib_readonly", "movie", { visibleTo: [BOB], readOnly: true });
+  const writable = library("lib_writable", "movie", { visibleTo: [BOB], order: 1 });
+  const harness = await mount([], {
+    viewer: ordinary, libraries: [readOnly, writable], source: sealedNative(),
+    downloadReference: bobReference, connections: [remoteConnectionRecord],
+    remoteLibraries: [remoteLibraryOfType("movie")],
+    settings: { defaultMovieLibrary: readOnly.id },
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/downloads", { method: "POST", body: { title: "Movie" } });
+  assert.equal(response.status, 201, await response.text());
+  assert.equal(destinationOf(harness)?.libraryId, writable.id, "the kind's rule skips a root no copy may be written to");
+});
+
+const brokenDestinations: Array<[string, (entry: LibraryRecord) => LibraryRecord | undefined]> = [
+  ["hidden", (entry) => ({ ...entry, visibleTo: [] })],
+  ["read-only", (entry) => ({ ...entry, visibleTo: [BOB], readOnly: true })],
+  ["gone", () => undefined],
+];
+
+for (const [label, shape] of brokenDestinations) {
+  test(`a configured destination that is ${label} is refused, never swapped for another library`, async (t) => {
+    const configured = `lib_${"a".repeat(8)}`;
+    const stored = shape(library(configured, "movie", { visibleTo: [BOB] }));
+    const fallback = library("lib_fallback", "movie", { visibleTo: [BOB] });
+    const harness = await mount([], {
+      viewer: ordinary, libraries: [...(stored ? [stored] : []), fallback], source: sealedNative(),
+      downloadReference: bobReference, connections: [remoteConnectionRecord],
+      remoteLibraries: [remoteLibraryOfType("movie", { downloadLibraryId: configured })],
+    });
+    t.after(harness.close);
+
+    const response = await api(harness.base, "/api/downloads", { method: "POST", body: { title: "Movie" } });
+    assert.ok(response.status >= 400, `the stored ${label} destination is refused`);
+    assert.deepEqual(harness.references, [], "no provider was contacted before the refusal");
+    assert.deepEqual(harness.added, [], "and the fallback library is never substituted");
+  });
+}
+
+test("a withdrawal while the native handle is minted leaves nothing queued", async (t) => {
+  const films = library("lib_films", "movie", { visibleTo: [BOB] });
+  const harness = await mount([], {
+    viewer: ordinary, libraries: [films], source: sealedNative(),
+    downloadReference: bobReference, connections: [remoteConnectionRecord],
+    remoteLibraries: [remoteLibraryOfType("movie", { downloadLibraryId: films.id })],
+    withdrawOnReference: denied,
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/downloads", { method: "POST", body: { title: "Movie" } });
+  assert.equal(response.status, 403, "the right is read again after the async proof");
+  assert.deepEqual(harness.added, [], "the resolved destination does not survive a withdrawal");
+});
+
+test("a native series copy without episode metadata still uses the series default", async (t) => {
+  const films = library("lib_films", "movie", { visibleTo: [BOB] });
+  const shows = library("lib_shows", "series", { visibleTo: [BOB] });
+  const harness = await mount([], {
+    viewer: ordinary, libraries: [films, shows], source: sealedNative(),
+    downloadReference: bobReference, connections: [remoteConnectionRecord],
+    remoteLibraries: [remoteLibraryOfType("series")],
+    settings: { defaultMovieLibrary: films.id, defaultSeriesLibrary: shows.id },
+  });
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/downloads", { method: "POST", body: { title: "Episode" } });
+  assert.equal(response.status, 201, await response.text());
+  assert.equal(destinationOf(harness)?.libraryId, shows.id);
 });

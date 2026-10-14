@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MediaServerManager } from "./MediaServerManager";
 import { setLocale } from "./i18n";
-import type { AdminRemoteLibrary, MediaServerConnection, UserAccount } from "./types";
+import type { AdminRemoteLibrary, LibraryView, MediaServerConnection, UserAccount } from "./types";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -20,6 +20,12 @@ const account: UserAccount = {
   id: "user_1", username: "bob", role: "user", disabled: false, mustChangePassword: false,
   createdAt: "2026-01-01T00:00:00Z", permissions: { downloadToLibrary: false, downloadToDevice: false }, libraries: 0, addons: 0,
 };
+
+const localLibrary = (over: Partial<LibraryView> = {}): LibraryView => ({
+  id: "lib_a", name: "Films", type: "movie", enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z",
+  writeArtwork: false, autoScanMetadata: false, unreachable: false, readOnly: false, writable: true,
+  defaultMovie: false, defaultSeries: false, titles: 0, files: 0, bytes: 0, ...over,
+});
 
 let root: Root;
 let host: HTMLDivElement;
@@ -66,17 +72,24 @@ afterEach(() => {
 
 const flush = () => act(async () => { await new Promise((done) => setTimeout(done, 0)); });
 const click = async (element: HTMLElement) => { await act(async () => { element.click(); }); await flush(); };
-const byText = (selector: string, text: string) =>
-  [...host.querySelectorAll<HTMLElement>(selector)].find((node) => node.textContent?.includes(text));
-
-const renderManager = async () => {
-  await act(async () => { root.render(<MediaServerManager onError={vi.fn()}/>); });
+const selectOption = async (select: HTMLSelectElement, value: string) => {
+  await act(async () => {
+    select.value = value;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
   await flush();
 };
-const render = async () => {
-  await renderManager();
+const byText = (selector: string, text: string) =>
+  [...document.querySelectorAll<HTMLElement>(selector)].find((node) => node.textContent?.includes(text));
+
+const renderManager = async (localLibraries: LibraryView[] = []) => {
+  await act(async () => { root.render(<MediaServerManager onError={vi.fn()} localLibraries={localLibraries}/>); });
+  await flush();
+};
+const render = async (localLibraries: LibraryView[] = []) => {
+  await renderManager(localLibraries);
   await click(byText("button", "Edit library")!);
-  return host.querySelector(".media-server-library-card")!;
+  return document.querySelector(".media-server-library-card")!;
 };
 const rowNames = () =>
   [...host.querySelectorAll(".media-server-attached .library-admin-title strong")].map((node) => node.textContent);
@@ -115,6 +128,68 @@ describe("RemoteLibraryDialog", () => {
     const dialog = await render();
     expect(dialog.querySelector(".library-admin-order")).toBeNull();
     expect(dialog.querySelector('button[aria-label^="Move "]')).toBeNull();
+  });
+
+  it("offers only the writable local libraries of a fitting kind and saves the copy destination", async () => {
+    libraryRows = [adminLibrary({ type: "movie" })];
+    const dialog = await render([
+      localLibrary({ id: "lib_a", name: "Films" }),
+      localLibrary({ id: "lib_b", name: "Shows", type: "series" }),
+      localLibrary({ id: "lib_c", name: "Box", type: "mixed" }),
+      localLibrary({ id: "lib_d", name: "Locked", writable: false, readOnly: true }),
+    ]);
+    const select = dialog.querySelector<HTMLSelectElement>('select[aria-label="Save copies to"]')!;
+    expect([...select.options].map((option) => option.textContent)).toEqual([
+      "Default for this library type", "Films", "Box",
+    ]);
+    expect(select.value).toBe("");
+    await selectOption(select, "lib_c");
+    await click(byText(".dialog-foot button", "Save")!);
+    expect(patches[0]!.body).toMatchObject({ downloadLibraryId: "lib_c" });
+  });
+
+  it("clears the override with the default option and shows the hint", async () => {
+    libraryRows = [adminLibrary({ type: "movie", downloadLibraryId: "lib_a" })];
+    const dialog = await render([localLibrary({ id: "lib_a", name: "Films" })]);
+    expect(dialog.textContent).toContain("Movies use the default movie library, series the default series library, and other content a general-purpose library.");
+    const select = dialog.querySelector<HTMLSelectElement>('select[aria-label="Save copies to"]')!;
+    expect(select.value).toBe("lib_a");
+    await selectOption(select, "");
+    await click(byText(".dialog-foot button", "Save")!);
+    expect(patches[0]!.body).toMatchObject({ downloadLibraryId: null });
+  });
+
+  it("keeps the choice and the dialog when the change is refused", async () => {
+    libraryRows = [adminLibrary({ type: "movie" })];
+    refusePatch = () => json({ error: "The media-server copy destination is malformed." }, 400);
+    const dialog = await render([localLibrary({ id: "lib_a", name: "Films" })]);
+    const select = dialog.querySelector<HTMLSelectElement>('select[aria-label="Save copies to"]')!;
+    await selectOption(select, "lib_a");
+    await click(byText(".dialog-foot button", "Save")!);
+    expect(document.querySelector(".media-server-library-card")).not.toBeNull();
+    expect(dialog.textContent).toContain("The media-server copy destination is malformed.");
+    expect(select.value).toBe("lib_a");
+  });
+
+  it("keeps a stored destination it can no longer offer visible and selected", async () => {
+    libraryRows = [adminLibrary({ type: "movie", downloadLibraryId: "lib_gone" })];
+    const dialog = await render([localLibrary({ id: "lib_a", name: "Films" })]);
+    const select = dialog.querySelector<HTMLSelectElement>('select[aria-label="Save copies to"]')!;
+    expect(select.value).toBe("lib_gone");
+    const stored = [...select.options].find((option) => option.value === "lib_gone")!;
+    expect(stored.disabled).toBe(true);
+    expect(stored.textContent).toBe("lib_gone · Unavailable");
+    expect(byText(".dialog-foot button", "Save")).toHaveProperty("disabled", true);
+  });
+
+  it("names a stored destination that is still here but no longer writable", async () => {
+    libraryRows = [adminLibrary({ type: "movie", downloadLibraryId: "lib_a" })];
+    const dialog = await render([localLibrary({ id: "lib_a", name: "Films", writable: false, readOnly: true })]);
+    const select = dialog.querySelector<HTMLSelectElement>('select[aria-label="Save copies to"]')!;
+    expect([...select.options].map((option) => option.textContent)).toEqual([
+      "Default for this library type", "Films · Unavailable",
+    ]);
+    expect(select.value).toBe("lib_a");
   });
 });
 
@@ -184,7 +259,7 @@ describe("Remote library ordering", () => {
     expect(onError).toHaveBeenCalledTimes(1);
     expect((onError.mock.calls[0][0] as { status: number }).status).toBe(409);
     expect(patches, "the first refusal stops the run").toHaveLength(1);
-    expect(host.querySelector(".media-server-library-card"), "the failure is not hidden in a dialog").toBeNull();
+    expect(document.querySelector(".media-server-library-card"), "the failure is not hidden in a dialog").toBeNull();
     expect(rowNames(), "the list is re-read and shows the order the server kept").toEqual(["Alpha", "Beta"]);
   });
 });

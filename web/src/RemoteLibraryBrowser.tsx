@@ -6,6 +6,7 @@ import { localeTag, t, useI18n } from "./i18n";
 import { LibraryItem, LibraryItemMenu } from "./library-item";
 import { LibraryTile } from "./library-tile";
 import { LibraryTitleDetail } from "./LibraryTitleDetail";
+import { NativeLibrarySaveDialog, type NativeSaveLibrary } from "./NativeLibrarySaveDialog";
 import { sourceIdentity } from "./library-detail-sources";
 import { Player } from "./Player";
 import { DetailHero, LIBRARY_HERO_EMPTY_GRADIENT, LIBRARY_HERO_GRADIENT, useBackdrop } from "./DetailHero";
@@ -16,7 +17,7 @@ import { catalogueGalleryImages, mergeGallery, posterAndWide, type GalleryImage 
 import { createCompactOnScroll } from "./scroll-fold";
 import { bytes, hideBroken } from "./settings-ui";
 import { catalogueRef, useTitleEnrichment, type CatalogueRef } from "./title-enrichment";
-import type { LibraryType, LibraryViewPrefs, MediaServerProvider, RemoteBrowseMode, RemoteItem, RemoteItemState, RemoteItemType, RemoteLibrary, Stream, TileShape, Trailer, UserViews } from "./types";
+import type { LibraryType, LibraryView, LibraryViewPrefs, MediaServerProvider, RemoteBrowseMode, RemoteItem, RemoteItemState, RemoteItemType, RemoteLibrary, Stream, TileShape, Trailer, UserViews } from "./types";
 
 interface Props {
   onRootPresenceChange?: (visible: boolean) => void;
@@ -49,11 +50,33 @@ interface Props {
   onGallery?: (images: GalleryImage[], ref?: CatalogueRef | null) => void;
   /** Bumped when the sidebar returns to the Library: the browser drops back to the roots. */
   resetSignal?: number;
+  /** The libraries this account may write to, so a native copy can choose a destination. */
+  downloadLibraries: LibraryView[];
+  /** A copy was queued here: the app refreshes its downloads and shows the toast. */
+  onDownloadQueued?: () => void;
 }
 
 type Status = { items: RemoteItem[]; cursor?: string; total: number; loading: boolean; error: string };
 type Playing = { stream: Stream; libraryId: string; item: RemoteItem; title: string; favorite: boolean; fromBeginning?: boolean };
+/** The open native-copy dialog: the library and item captured at the click, the versions the
+ *  detail already holds (or nothing, so the dialog reads them once) and an exact artwork hint. */
+type SaveRequest = {
+  library: NativeSaveLibrary;
+  item: RemoteItem;
+  series?: RemoteItem | null;
+  knownSources?: Stream[] | null;
+  initialSource?: Stream | null;
+  artwork?: { poster?: string; background?: string };
+};
 type TileRef = { current: HTMLElement | null };
+
+/** The attached library a native copy lands through, with its own configured destination kept
+ *  for the case where the sources themselves arrive without one. */
+const saveLibrary = (library: RemoteLibrary): NativeSaveLibrary => ({
+  id: library.id, provider: library.provider,
+  ...(library.name ? { name: library.name } : {}),
+  ...(library.downloadLibraryId ? { downloadLibraryId: library.downloadLibraryId } : {}),
+});
 /** One ancestor listing kept while its children are open, so a jump back needs no new page. */
 type ListingSnapshot = {
   libraryId: string;
@@ -143,7 +166,7 @@ const groupEpisodes = (items: RemoteItem[]) => {
   return [...groups.entries()].map(([season, group]) => ({ season, items: group }));
 };
 
-export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLanguage, subtitleLanguage, onError, libraryTileShape, onToggleLibraryShape, views, onPersistPrefs, onOpenChange, compact, onCompactChange, initialTarget, onPersonalChange, uiLanguage, secureMode, onTrailer, onGallery, resetSignal }: Props) {
+export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLanguage, subtitleLanguage, onError, libraryTileShape, onToggleLibraryShape, views, onPersistPrefs, onOpenChange, compact, onCompactChange, initialTarget, onPersonalChange, uiLanguage, secureMode, onTrailer, onGallery, resetSignal, downloadLibraries, onDownloadQueued }: Props) {
   useI18n();
   const [libraries, setLibraries] = useState<RemoteLibrary[] | null>(null);
   const [librariesError, setLibrariesError] = useState("");
@@ -179,6 +202,9 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   const [menuBusy, setMenuBusy] = useState(false);
   /** The last known state of each item, so a tile keeps its badges across a re-render. */
   const [itemStates, setItemStates] = useState<Record<string, RemoteItemState>>({});
+  /** The open native-copy dialog: the exact item, its parent series and the versions the
+   *  detail already holds, or nothing so the dialog reads them once after the click. */
+  const [saveRequest, setSaveRequest] = useState<SaveRequest | null>(null);
 
   const listEpoch = useRef(0);
   const episodeEpoch = useRef(0);
@@ -1005,6 +1031,9 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
         {playable && <button disabled={locked || !menuState} aria-pressed={menuState?.watched ?? false} onClick={() => void writeMenuState({ watched: !(menuState?.watched ?? false) })}>
           <Check/> {t(menuState?.watched ? "mediaServer.markUnwatched" : "mediaServer.markWatched")}
         </button>}
+        {/* Only a playable original can be copied; a folder, a series or a season never is. The
+            versions are read once when this is pressed, never while the tile merely draws. */}
+        {playable && <button onClick={() => { closeMenu(); if (selectedRef.current) setSaveRequest({ library: saveLibrary(selectedRef.current), item, knownSources: null }); }}><HardDrive/> {t("save.toLibrary")}</button>}
         <button onClick={() => { closeMenu(); onOpen(item); }}>{item.type === "series" ? <><FolderOpen/> {t("library.openFolder")}</> : <><CirclePlay/> {t("mediaServer.versions")}</>}</button>
       </LibraryItemMenu>
     </LibraryItem>;
@@ -1159,6 +1188,14 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
             onSourceChange={setDetailStream}
             onClearProgress={() => toggleState({ position: 0, duration: 0 })}
             onPlay={(stream, fromBeginning) => setPlaying({ stream, libraryId: selected!.id, item: detail, title: detail.type === "episode" ? `${series ? `${series.name} · ` : ""}${episodeTitle(detail)}` : detail.name, favorite: state?.favorite ?? false, fromBeginning })}
+            onSaveToLibrary={(stream) => setSaveRequest({
+              library: saveLibrary(selected!),
+              item: detail, series, knownSources: sources, initialSource: stream,
+              artwork: {
+                ...(enrichment.meta?.poster ? { poster: enrichment.meta.poster } : {}),
+                ...(enrichment.meta?.background ? { background: enrichment.meta.background } : {}),
+              },
+            })}
             sourceBadge={() => t(providerKey(selected!.provider))}
           />
           {stateError && <div className="remote-error" role="alert">
@@ -1187,6 +1224,17 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
       onDownload={async () => false}
       onDeviceDownload={async () => false}
       onClose={() => { cancelHandoff(); setPlaying(null); void refreshState(); }}/>}
+    {saveRequest && <NativeLibrarySaveDialog
+      key={`${saveRequest.item.id}:${saveRequest.knownSources ? "known" : "lazy"}`}
+      library={saveRequest.library}
+      item={saveRequest.item}
+      series={saveRequest.series ?? null}
+      knownSources={saveRequest.knownSources}
+      initialSource={saveRequest.initialSource}
+      libraries={downloadLibraries}
+      {...(saveRequest.artwork ? { artwork: saveRequest.artwork } : {})}
+      onClose={() => setSaveRequest(null)}
+      onQueued={() => onDownloadQueued?.()}/>}
   </>;
 }
 

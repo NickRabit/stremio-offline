@@ -298,7 +298,7 @@ export const api = {
     request<AdminRemoteLibrary>(`/api/media-servers/${encodeURIComponent(id)}/libraries`, { method: "POST", body: JSON.stringify(body) }),
   /** Every attached library, disabled ones included: what the administrator list works on. */
   adminRemoteLibraries: () => request<{ libraries: AdminRemoteLibrary[] }>("/api/media-servers/libraries").then((answer) => answer.libraries),
-  updateRemoteLibrary: (id: string, patch: { name?: string; enabled?: boolean; order?: number; showOnHome?: boolean; showInContinueWatching?: boolean; allowedUsers?: string[]; browseMode?: RemoteBrowseMode; mosaic?: boolean; showInFavorites?: boolean }) =>
+  updateRemoteLibrary: (id: string, patch: { name?: string; enabled?: boolean; order?: number; showOnHome?: boolean; showInContinueWatching?: boolean; allowedUsers?: string[]; browseMode?: RemoteBrowseMode; mosaic?: boolean; showInFavorites?: boolean; downloadLibraryId?: string | null }) =>
     request<AdminRemoteLibrary>(`/api/remote-libraries/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
   /** Detaching a library revokes access now; forgetting also drops every account's local
    *  history and favorites for it. */

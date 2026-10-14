@@ -60,6 +60,9 @@ import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.data.SearchScope
+import cz.stremiooffline.tv.data.DownloadTargetDto
+import cz.stremiooffline.tv.data.LibraryDto
+import cz.stremiooffline.tv.data.MediaDto
 import cz.stremiooffline.tv.diagnostics.AppLog
 import cz.stremiooffline.tv.ui.components.BrandMark
 import cz.stremiooffline.tv.ui.components.outlineIcon
@@ -148,6 +151,13 @@ fun Shell(
   var librarySourcesRetry by remember { mutableIntStateOf(0) }
   /** Bumped by the panel's own Try again, so a catalogue title's remote discovery reloads. */
   var catalogueSourcesRetry by remember { mutableIntStateOf(0) }
+  // The native copy action's two catalogue collaborators: the destinations this account may write
+  // to, read once when the action is used, and the queue call itself. A failed read is thrown so
+  // the screen can say so; both stay off the remote screens' own RemoteLibraryApi.
+  val nativeDestinations: suspend () -> List<LibraryDto> = { api.libraries() }
+  val nativeQueue: suspend (String, String, MediaDto, String) -> Unit = { title, sourceId, media, libraryId ->
+    api.download(title, sourceId, media, DownloadTargetDto(libraryId))
+  }
   /** The source the player ended on, so the title underneath keeps naming what was watched. */
   var playedSourceId by remember { mutableStateOf<String?>(null) }
   // A section takes the remote back when a detail or a player over it closes; a detail takes it
@@ -245,6 +255,8 @@ fun Shell(
           pushPath = libraryPush,
           onPushConsumed = { libraryPush = null },
           backEnabled = !overlayOpen,
+          loadDestinations = nativeDestinations,
+          onQueue = nativeQueue,
         )
         Section.Resume -> ResumeRoute(
           api = api,
@@ -387,6 +399,8 @@ fun Shell(
       },
       backEnabled = player == null,
       restoreToken = detailReturnToken,
+      loadDestinations = nativeDestinations,
+      onQueue = nativeQueue,
     )
   }
 

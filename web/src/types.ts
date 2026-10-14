@@ -45,6 +45,10 @@ export interface Stream {
   /** Set on a source that belongs to a remote Jellyfin/Emby library, never on an addon stream. */
   provider?: MediaServerProvider;
   libraryId?: string;
+  /** Preselected destination for a copy of this source, resolved by the server from the remote
+   *  library's own setting or its kind's default. Only a preselection: the queue call re-resolves
+   *  it and every admission is proved again. */
+  downloadLibraryId?: string;
   /** What this source may be used for. Absent on every non-remote stream. */
   capabilities?: RemoteCapabilities;
   /** The remote identity a player reports position and favorites against; only a remote source carries one. */
@@ -81,6 +85,9 @@ export interface AdminRemoteLibrary {
   /** Display-only settings. Absent means the effective default: mixed libraries browse
    *  folders, movie/series libraries browse titles, and both mosaic and Favourites are on. */
   browseMode?: RemoteBrowseMode; mosaic?: boolean; showInFavorites?: boolean;
+  /** The local library this remote library's copies are saved into. Absent means the default for
+   *  the kind; a stored handle that is no longer usable stays stored. */
+  downloadLibraryId?: string;
 }
 /** What a remote library or source may be used for. Every flag is false in this stage. */
 export interface RemoteCapabilities {
@@ -95,6 +102,8 @@ export interface RemoteLibrary {
   /** Effective display settings as the member projection answers them; absent on records
    *  written before these existed, so the client keeps the defaults. */
   browseMode?: RemoteBrowseMode; mosaic?: boolean; showInFavorites?: boolean;
+  /** The stored copy destination, when one is configured. */
+  downloadLibraryId?: string;
   /** The library root's own same-origin poster, when the provider has one. With mosaics on it is
    *  only the empty-preview fallback; with mosaics off the tile draws it as its picture. */
   poster?: string;

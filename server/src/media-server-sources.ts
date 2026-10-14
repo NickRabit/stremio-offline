@@ -1,13 +1,36 @@
+import { mayDownloadToLibrary } from "./downloads.js";
+import { libraryVisible, type DefaultLibrarySettings, type LibraryRecord } from "./libraries.js";
 import { remoteContentAccessible } from "./media-server-access.js";
+import { canonicalRemoteDownloadReference, defaultRemoteCopyLibraryId, takesRemoteCopy, type RemoteDownloadReference } from "./media-server-download.js";
 import type { MediaServerAuthority, MediaServerItemVersions, MediaServerManager } from "./media-server-manager.js";
 import { isRemoteMediaStream, openRemoteContent, remoteSecretStamp, sealRemoteContent } from "./media-server-reference.js";
+import { READ_ONLY_MEDIA_CAPABILITIES, type RemoteLibraryRecord } from "./media-server-types.js";
 import { ResourceError, type MediaResources, type ResourceOwner } from "./media-resources.js";
+import { containerExtension, nameExtension } from "./naming.js";
 import type { Store } from "./store.js";
 import type { PublicStream, StreamItem } from "./types.js";
 import type { UserRecord } from "./users.js";
 
 /** One verified item's versions and its sealed subtitles as public sources. */
-type SealedStreams = { stream: StreamItem; libraryName: string };
+type SealedStreams = {
+  stream: StreamItem;
+  libraryName: string;
+  downloadAllowed: boolean;
+  /** The remote library the version came from and the kind of content it is, so the copy
+   *  destination this source projects is resolved from the same records the admission reads. */
+  libraryId: string;
+  kind: "movie" | "series";
+};
+
+/** The file name a copy of one version should carry: the display label with the version's own
+ *  container extension. A label that already ends in an accepted extension has it replaced, so
+ *  the container decides and no name is doubled; an unknown container leaves the label as is. */
+const copyFilename = (label: string, container: string | undefined): string => {
+  const extension = containerExtension(container);
+  if (extension === undefined) return label;
+  const existing = nameExtension(label);
+  return `${existing ? label.slice(0, -existing.length) : label}${extension}`;
+};
 
 /** Trusted original-file sources: the only place a sealed media-server address is minted for
  *  a verified item, and the guard every later read passes through. It derives provider and
@@ -65,10 +88,16 @@ export class MediaServerSources {
     };
     return result.versions.map((version) => ({
       libraryName: result.libraryName,
+      downloadAllowed: result.downloadAllowed === true,
+      libraryId: result.libraryId,
+      kind: result.item.type === "episode" ? "series" : "movie",
       stream: {
         url: sealRemoteContent({ ...base, mediaSourceId: version.id }),
-        name: version.name ?? version.container ?? result.item.name,
-        ...(version.size === undefined ? {} : { behaviorHints: { videoSize: version.size } }),
+        name: version.name ?? result.item.name,
+        behaviorHints: {
+          filename: copyFilename(version.name ?? result.item.name, version.container),
+          ...(version.size === undefined ? {} : { videoSize: version.size }),
+        },
         ...(version.externalSubtitles?.length ? {
           subtitles: version.externalSubtitles.map((entry) => ({
             url: sealRemoteContent({ ...base, mediaSourceId: version.id, subtitleIndex: entry.index }),
@@ -80,9 +109,47 @@ export class MediaServerSources {
     }));
   }
 
+  /** The local library a copy of this source lands in when the caller names no target, when it is
+   *  one the acting account can see and write to. The stored setting only preselects the
+   *  interface: the admission resolves the same default again and refuses an unusable handle
+   *  instead of redirecting it to another library. */
+  private copyDestination(
+    entry: SealedStreams,
+    user: UserRecord,
+    libraries: LibraryRecord[],
+    settings: DefaultLibrarySettings,
+    remotes: RemoteLibraryRecord[],
+  ): string | undefined {
+    const remote = remotes.find((candidate) => candidate.id === entry.libraryId);
+    if (!remote) return undefined;
+    const resolved = defaultRemoteCopyLibraryId(remote, libraries, settings, entry.kind);
+    if (resolved === undefined) return undefined;
+    const destination = libraries.find((candidate) => candidate.id === resolved);
+    if (!destination || !takesRemoteCopy(remote.downloadLibraryId === undefined && remote.type === "mixed" ? entry.kind : remote.type, destination)) return undefined;
+    if (!libraryVisible(destination, { id: user.id, role: user.role })) return undefined;
+    return resolved;
+  }
+
+  /** The listed sources, with the one capability a trusted projection may add: an original the
+   *  acting account may still copy into a local library. It needs the session's native flag and
+   *  the account's own right; a subtitle never carries it, and no other flag is ever true. The
+   *  copy destination rides along with it, as a preselection only. */
   private listed(sealed: SealedStreams[], owner: ResourceOwner): PublicStream[] {
     const listed = this.resources.listing(sealed.map((entry) => entry.stream), owner);
-    for (let index = 0; index < listed.length; index += 1) listed[index]!.libraryName = sealed[index]!.libraryName;
+    const user = this.currentUser(owner.userId);
+    const mayCopy = user !== undefined && mayDownloadToLibrary(user);
+    // Read once for the whole listing: a version read never fans out into one store read each.
+    const libraries = this.store.libraries();
+    const settings = this.store.settings();
+    const remotes = this.store.remoteLibraries();
+    for (let index = 0; index < listed.length; index += 1) {
+      const entry = sealed[index]!;
+      listed[index]!.libraryName = entry.libraryName;
+      if (!mayCopy || !user || !entry.downloadAllowed) continue;
+      listed[index]!.capabilities = { ...READ_ONLY_MEDIA_CAPABILITIES, downloadToLibrary: true };
+      const destination = this.copyDestination(entry, user, libraries, settings, remotes);
+      if (destination !== undefined) listed[index]!.downloadLibraryId = destination;
+    }
     return listed;
   }
 
@@ -115,16 +182,46 @@ export class MediaServerSources {
     if (!remoteContentAccessible(this.accessSource(), ref)) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
   }
 
-  /** Re-proves a remote source against the live remote policy before it is used. */
-  async authorize(stream: StreamItem, owner: ResourceOwner, signal?: AbortSignal): Promise<void> {
+  /** Re-proves a remote source against the live remote policy before it is used. `download`
+   *  asks the manager to enforce the account's native download permission as well, so a copy
+   *  is never authorized by a playable source alone. */
+  async authorize(stream: StreamItem, owner: ResourceOwner, signal?: AbortSignal, options?: { download?: boolean }): Promise<void> {
     this.assertCurrent(stream, owner);
     if (!isRemoteMediaStream(stream)) return;
     const ref = openRemoteContent(stream.url);
     if (ref?.subtitleIndex !== undefined) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
     const authority = this.authorityFor(stream, owner);
     if (!ref || !authority) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
-    await this.manager.revalidateOriginal(authority, ref, signal);
+    await this.manager.revalidateOriginal(authority, ref, signal, options);
     this.assertCurrent(stream, owner);
+  }
+
+  /**
+   * Captures the durable handle a local library download persists. The source is the exact
+   * sealed, session-bound original the owner was granted; the live original is proved through
+   * the same `authorize` path playback uses, and the reference is derived from the sealed
+   * identity -- never from caller fields, public flags or a title. A subtitle, a non-remote
+   * stream or anything the owner may not read is refused. No session, expiry or secret is kept.
+   */
+  async downloadReference(stream: StreamItem, owner: ResourceOwner, signal?: AbortSignal): Promise<RemoteDownloadReference> {
+    if (!isRemoteMediaStream(stream)) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
+    const sealed = openRemoteContent(stream.url);
+    if (!sealed || sealed.subtitleIndex !== undefined) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
+    await this.authorize(stream, owner, signal, { download: true });
+    const ref = openRemoteContent(stream.url);
+    if (!ref || ref.subtitleIndex !== undefined) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
+    return canonicalRemoteDownloadReference({
+      schemaVersion: 1,
+      ownerUserId: owner.userId,
+      connectionId: ref.connectionId,
+      libraryId: ref.libraryId,
+      generation: ref.generation,
+      provider: ref.provider,
+      serverId: ref.serverId,
+      accountId: ref.accountId,
+      itemId: ref.itemId,
+      mediaSourceId: ref.mediaSourceId,
+    });
   }
 
   /** One sealed external subtitle as its validated bytes. The owner, the item, the version and

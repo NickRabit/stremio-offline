@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { allowedAddons, loadAddon, metadata, searchAll, searchableCatalogs, streams, subtitles, type MetaProvider } from "./addons.js";
 import { autoRefreshEnabled, refreshDue, refreshManifests, type RefreshOutcome } from "./addon-refresh.js";
 import { rankStreams } from "./ranking.js";
-import { defaultDownloadLibrary, DownloadQueue, ownerMayDownload, type DownloadJob } from "./downloads.js";
+import { defaultDownloadLibrary, DownloadQueue, ownerMayDownload, type DownloadJob, type RemoteDownloadBackend } from "./downloads.js";
 import { DeviceTransfers } from "./device-transfers.js";
 import { ClientLogStore } from "./client-logs.js";
 import { selectDownloadSource, selectTorrentSource } from "./download-selection.js";
@@ -86,6 +86,7 @@ import { registerPlaybackRoutes } from "./routes/playback.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerUsersRoutes } from "./routes/users.js";
 import { MediaServerManager, type MediaServerAuthority } from "./media-server-manager.js";
+import { remoteDownloadAccessible } from "./media-server-download.js";
 import { MediaServerPersonal } from "./media-server-personal.js";
 import { MediaServerPlaybackGuard, readMediaServerPlaybackConfig } from "./media-server-playback.js";
 import { isRemoteMediaStream } from "./media-server-reference.js";
@@ -180,6 +181,13 @@ const migratedAdminId = (): string | undefined => {
 /** Who owns a job: the account that asked for it, or the migrated administrator for one
  *  queued before ownership existed. The queue resolves the same rule when it reads a job. */
 const ownerIdOf = (job: { ownerUserId?: string }): string | undefined => job.ownerUserId ?? migratedAdminId();
+/** The state a remote download's own local check reads: the accounts, the connections and the
+ *  granted remote libraries. Owner-bound, so no session is part of it. */
+const remoteDownloadAccess = {
+  users: () => store.users(),
+  mediaConnections: () => store.mediaConnections(),
+  remoteLibraries: () => store.remoteLibraries(),
+};
 /** The owner-bound check the queue asks at start, at retry and after a lazy resolve. The
  *  account, the addons and the libraries are read again every time: the job outlives the
  *  request that queued it, so nothing about that request may be trusted now. */
@@ -187,13 +195,48 @@ const ownerMayUseQueue = (job: DownloadJob): boolean => ownerMayDownload({
   owner: findUserById(store.users(), ownerIdOf(job) ?? ""),
   addons: store.addons(),
   libraries: store.libraries(),
+  remoteAccess: remoteDownloadAccess,
 }, job);
+/** The authority a durable remote copy runs on: the account behind the job as it stands now,
+ *  never the request that queued it. The secret is held in memory for one call; the gate re-reads
+ *  the account, so a password change or a deletion fails closed and a retry picks up the new
+ *  secret. Nothing about the session, the token or the device is part of it. */
+const jobAuthority = (job: DownloadJob): MediaServerAuthority => {
+  const owner = findUserById(store.users(), ownerIdOf(job) ?? "");
+  if (!owner) throw new ResourceError(401, "AUTH_REQUIRED");
+  return {
+    actor: { id: owner.id, secret: owner.secret },
+    assertCurrent: () => {
+      const fresh = findUserById(store.users(), owner.id);
+      if (!fresh || fresh.secret !== owner.secret || fresh.disabled || fresh.mustChangePassword) throw new ResourceError(401, "AUTH_REQUIRED");
+    },
+  };
+};
+/** The only way a queued remote original is opened or re-proved. The reference travels with the
+ *  job; the authority is read fresh on every call, and the open is an authenticated transport
+ *  request, never a fetch to an upstream address. */
+const remoteDownloadBackend: RemoteDownloadBackend = {
+  current: (job) => {
+    const ownerUserId = ownerIdOf(job);
+    if (!job.remoteDownload || !ownerUserId) return false;
+    if (!remoteDownloadAccessible(remoteDownloadAccess, job.remoteDownload, ownerUserId)) return false;
+    return ownerMayDownload({
+      owner: findUserById(store.users(), ownerUserId),
+      addons: store.addons(),
+      libraries: store.libraries(),
+      remoteAccess: remoteDownloadAccess,
+    }, job);
+  },
+  open: (job, args, signal) => mediaServers.openDownloadOriginal(jobAuthority(job), job.remoteDownload!, args, signal),
+  revalidate: (job, signal) => mediaServers.revalidateDownloadOriginal(jobAuthority(job), job.remoteDownload!, signal),
+};
 const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () => store.settings().parallelPerProvider ?? 1, undefined, undefined, {
   segments: () => store.settings().downloadSegments ?? 1,
   libraries: () => store.libraries(),
   defaultLibrary: downloadDefaultLibrary,
   legacyOwnerId: migratedAdminId,
   ownerAllowed: ownerMayUseQueue,
+  remoteDownload: remoteDownloadBackend,
   ownerSeesLibrary: (ownerUserId, libraryId) => {
     const owner = ownerUserId ? findUserById(store.users(), ownerUserId) : undefined;
     const library = store.libraries().find((item) => item.id === libraryId);
@@ -2302,7 +2345,7 @@ const warmHomeCatalogs = () => { if (!homeCatalogs.idle) homeCatalogs.warm(homeC
 registerHomeRoutes(app, { ...routeContext, homeCatalogs, personal, remotePersonal: mediaServerPersonal, authorityOf, completedJobs: () => queue.list(), newEpisodes: (ownerUserId, watched) => followService.newEpisodes(ownerUserId, watched), describeLibraryPath, locateFileArtwork, locateFolderArtworkPair, thumbUrl, scheduleFileArtwork, scheduleFolderArtwork, wirePath, dataOf, markersOf, progressOf, metaStore, seen, suggestionRows: curate.suggestionRows });
 
 registerDeviceRoutes(app, { ...routeContext, stats, countBytes, deviceDownloadTickets, deviceTransfers, DEVICE_TICKET_TTL, httpSourceOf, libraryTarget, mediaSource, ownerOf, pruneDeviceDownloadTickets, statMeta, trackMedia });
-registerDownloadRoutes(app, { ...routeContext, queue, deviceTransfers, jobView, sourceOf, mediaSource, posterOf, rememberTitle, titleKey, saveCatalogPoster, libraryKey, cachedMeta, prefsOf, defaultDownloadLibrary: downloadDefaultLibrary });
+registerDownloadRoutes(app, { ...routeContext, queue, mediaSources: mediaServerSources, deviceTransfers, jobView, sourceOf, ownerOf, mediaSource, posterOf, rememberTitle, titleKey, saveCatalogPoster, libraryKey, cachedMeta, prefsOf, defaultDownloadLibrary: downloadDefaultLibrary });
 const freeSpace = async (target: string) => {
   try { const info = await statfs(target); return { path: target, freeBytes: info.bavail * info.bsize, totalBytes: info.blocks * info.bsize }; }
   catch { return { path: target }; }

@@ -33,7 +33,7 @@ interface Harness {
 
 /** The two routes keep the tickets in a map the server owns, so the harness hands over a real
  *  one and remembers which session a request speaks for. */
-const mount = async (options: { holdLibrary?: (call: number) => Promise<void> | undefined } = {}): Promise<Harness> => {
+const mount = async (options: { holdLibrary?: (call: number) => Promise<void> | undefined; source?: StreamItem } = {}): Promise<Harness> => {
   const dir = await mkdtemp(path.join(tmpdir(), "routes-device-"));
   const file = path.join(dir, "Some Movie.mkv");
   await writeFile(file, "movie bytes");
@@ -67,7 +67,7 @@ const mount = async (options: { holdLibrary?: (call: number) => Promise<void> | 
     deviceDownloadTickets: tickets,
     deviceTransfers: transfers,
     DEVICE_TICKET_TTL: TTL,
-    httpSourceOf: async () => ({ url: `file://${SOURCE}` }) as StreamItem,
+    httpSourceOf: async () => options.source ?? ({ url: `file://${SOURCE}` } as StreamItem),
     libraryTarget: async (value: string) => {
       await options.holdLibrary?.(++libraryCalls);
       if (value !== SOURCE) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
@@ -309,4 +309,14 @@ test("DELETE /api/device-transfers clears the caller's finished rows only", asyn
   assert.equal(cleared.status, 204);
   assert.deepEqual(harness.transfers.list({ id: BOB_ID, role: "user" }), []);
   assert.equal(harness.transfers.list({ id: ADA_ID, role: "admin" }).length, 1, "ada's row stays");
+});
+
+test("a remote media-server original can never be saved to a device", async (t) => {
+  const harness = await mount({ source: { url: "media-server:forged" } });
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/device-download", { method: "POST", user: "ada", body: {} });
+  assert.equal(response.status, 403);
+  assert.equal((await response.json() as { messageKey?: string }).messageKey, "library.readOnly");
+  assert.equal(harness.tickets.size, 0, "no ticket is minted for a remote original");
 });

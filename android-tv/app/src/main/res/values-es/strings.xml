@@ -288,6 +288,8 @@
   <string name="media_server_mark_watched">Marcar como visto</string>
   <string name="media_server_unwatch">Marcar como no visto</string>
   <string name="media_server_download_unavailable">Un elemento de servidor multimedia no se puede descargar.</string>
+  <string name="media_server_download_disabled">Las descargas están desactivadas para esta cuenta del servidor.</string>
+  <string name="media_server_version_number">Versión %1$s</string>
   <string name="media_server_state_error">No se pudo cargar tu posición guardada.</string>
   <string name="media_server_group_failed">No se pudo cargar %1$s.</string>
   <string name="media_server_personal_empty">Aquí todavía no hay nada.</string>
@@ -297,4 +299,5 @@
   <string name="favorites_tab_local">Archivos y catálogo</string>
   <string name="favorites_tab_servers">Servidores multimedia</string>
   <string name="media_server_personal_partial">No se pudieron cargar algunos elementos.</string>
+  <string name="err_media_server_format_unknown">El servidor multimedia no proporcionó un formato compatible para el archivo original.</string>
 </resources>

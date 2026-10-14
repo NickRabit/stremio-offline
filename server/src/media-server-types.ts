@@ -80,6 +80,10 @@ export interface RemoteLibraryRecord {
   browseMode?: RemoteBrowseMode;
   mosaic?: boolean;
   showInFavorites?: boolean;
+  /** The local library copies of this remote library's originals are saved into. Absent means
+   *  the default for the kind; an explicitly stored handle that is gone stays stored and is
+   *  refused at the door rather than redirected elsewhere. */
+  downloadLibraryId?: string;
 }
 
 /** The effective browse mode of a record: an explicit choice wins, otherwise a mixed library
@@ -102,7 +106,9 @@ export interface RemoteCapabilities {
   delete: false;
   identify: false;
   writeArtwork: false;
-  downloadToLibrary: false;
+  /** The one flag a trusted source projection may turn on: an original a local library may
+   *  copy, proved by the account's native permission and never from caller fields. */
+  downloadToLibrary: boolean;
   downloadToDevice: false;
 }
 
@@ -177,6 +183,8 @@ export interface PublicRemoteLibrary {
   browseMode: RemoteBrowseMode;
   mosaic: boolean;
   showInFavorites: boolean;
+  /** The stored copy destination, when one is configured for this library. */
+  downloadLibraryId?: string;
   capabilities: RemoteCapabilities;
   /** The provider of the stored connection, when it still exists. Never a secret or address. */
   provider?: MediaServerKind;
@@ -195,6 +203,7 @@ export const publicRemoteLibrary = (record: RemoteLibraryRecord, provider?: Medi
   browseMode: effectiveBrowseMode(record),
   mosaic: effectiveMosaic(record),
   showInFavorites: effectiveShowInFavorites(record),
+  ...(record.downloadLibraryId === undefined ? {} : { downloadLibraryId: record.downloadLibraryId }),
   capabilities: READ_ONLY_MEDIA_CAPABILITIES,
   ...(provider === undefined ? {} : { provider }),
 });

@@ -1,3 +1,4 @@
+import { containerExtension, nameExtension } from "./naming.js";
 import {
   ARTWORK_TAG,
   MediaServerError,
@@ -14,6 +15,10 @@ import type { MediaServerTransport } from "./media-server-security.js";
 export interface RemoteAccountPolicy {
   disabled: boolean;
   mediaPlayback: boolean;
+  /** Whether the account may download content at all. Absent when the server did not report the
+   *  field: a missing fact is not a permission, so it never permits a copy. Local to download
+   *  admission and never consulted for ordinary playback. */
+  contentDownloading?: boolean;
   allFolders: boolean;
   folderIds: string[];
   hasAdditionalRestrictions: boolean;
@@ -162,6 +167,14 @@ const optionalSafeInt = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 
 const requiredBool = (value: unknown, field: string): boolean => {
+  if (typeof value !== "boolean") throw invalidResponse(`The media-server policy field ${field} is not a boolean.`);
+  return value;
+};
+
+/** A policy fact a server may or may not report. A missing field keeps the fact unproven rather
+ *  than granting it; a present non-boolean is malformed and refused like any other bad field. */
+const optionalBool = (value: unknown, field: string): boolean | undefined => {
+  if (value === undefined || value === null) return undefined;
   if (typeof value !== "boolean") throw invalidResponse(`The media-server policy field ${field} is not a boolean.`);
   return value;
 };
@@ -513,11 +526,13 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
     const user = asObject(await transport.requestJson("user", { userId: accountId }, token, signal), "The account response");
     if (user.Id !== accountId) throw invalidResponse("The account response is for another user.");
     const policy = asObject(user.Policy, "The account policy");
+    const contentDownloading = optionalBool(policy.EnableContentDownloading, "EnableContentDownloading");
     return {
       accountId,
       policy: {
         disabled: requiredBool(policy.IsDisabled, "IsDisabled"),
         mediaPlayback: requiredBool(policy.EnableMediaPlayback, "EnableMediaPlayback"),
+        ...(contentDownloading === undefined ? {} : { contentDownloading }),
         allFolders: requiredBool(policy.EnableAllFolders, "EnableAllFolders"),
         folderIds: requiredStringArray(policy.EnabledFolders, "EnabledFolders"),
         hasAdditionalRestrictions: hasAdditionalRestrictions(policy),
@@ -758,6 +773,10 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
       if (name !== undefined) version.name = name;
       const container = optionalString(source.Container, 64);
       if (container !== undefined) version.container = container;
+      if (containerExtension(container) === undefined) {
+        const extension = nameExtension(source.Path);
+        if (extension) version.container = extension.slice(1);
+      }
       const size = optionalSafeInt(source.Size);
       if (size !== undefined) version.size = size;
       const durationTicks = optionalSafeInt(source.RunTimeTicks);

@@ -288,6 +288,8 @@
   <string name="media_server_mark_watched">Mark watched</string>
   <string name="media_server_unwatch">Mark as unwatched</string>
   <string name="media_server_download_unavailable">A media-server item cannot be downloaded.</string>
+  <string name="media_server_download_disabled">Downloads are disabled for this server account.</string>
+  <string name="media_server_version_number">Version %1$s</string>
   <string name="media_server_state_error">Your saved position could not be loaded.</string>
   <string name="media_server_group_failed">%1$s could not be loaded.</string>
   <string name="media_server_personal_empty">Nothing here yet.</string>
@@ -297,4 +299,5 @@
   <string name="favorites_tab_local">Files &amp; catalog</string>
   <string name="favorites_tab_servers">Media servers</string>
   <string name="media_server_personal_partial">Some items could not be loaded.</string>
+  <string name="err_media_server_format_unknown">The media server did not provide a supported original file format.</string>
 </resources>

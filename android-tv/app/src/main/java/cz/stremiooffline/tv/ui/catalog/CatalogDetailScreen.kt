@@ -593,7 +593,7 @@ fun CatalogDetailScreen(
   // Closing the bulk panel, whether it queued or the viewer backed out, returns the remote to
   // the button that opened it.
   LaunchedEffect(ui.series.open) {
-    if (ui.series.open) {
+    if (ui.series.open && activeStream?.let(Streams::isRemoteStream) != true && Streams.remoteFilterLibrary(filters.addon) == null) {
       ui.series.wasOpen = true
     } else if (ui.series.wasOpen) {
       ui.series.wasOpen = false
@@ -643,8 +643,8 @@ fun CatalogDetailScreen(
     }
   }
 
-  /** Queues one source into [libraryId], or with no target when the server never told us which
-   *  libraries this account may use. */
+  /** Queues one source into [libraryId], or with no target for an addon when the server never told
+   *  us which libraries this account may use. */
   fun queueTo(stream: StreamDto, libraryId: String?) {
     val media = mediaFor(meta, args, pick.selectedVideo, settings)
     val title = playerTitle
@@ -675,6 +675,13 @@ fun CatalogDetailScreen(
       return
     }
     when {
+      // A media-server original goes to the destination the server projected for it, or to the
+      // server's own default for the kind. A destination list that never came back or holds no
+      // writable library still refuses: nothing is queued blind, and no first candidate is taken.
+      Streams.isRemoteStream(stream) -> {
+        if (!save.librariesLoaded || libraryCandidates.isEmpty()) notice(texts.noLibrary, CatalogNotice.Failure)
+        else queueTo(stream, stream.downloadLibraryId?.takeIf { id -> libraryCandidates.any { it.id == id } })
+      }
       // The server that could not answer keeps the old behaviour: queue and let it pick.
       !save.librariesLoaded -> queueTo(stream, null)
       libraryCandidates.isEmpty() -> notice(texts.noLibrary, CatalogNotice.Failure)
@@ -1028,15 +1035,19 @@ fun CatalogDetailScreen(
               .onFocusChanged { focus.toLibraryFocused = it.isFocused },
           )
         }
-        // The web's bulk download, for the whole batch at once: it needs no source of its own,
-        // so it sits beside To library for any series with an episode selected.
-        if (isSeries && pick.selectedVideo != null && !meta.videos.isNullOrEmpty()) {
+        // The web's bulk download, for the whole batch at once: it needs no source of its own, so
+        // it sits beside To library for any series with an episode selected. A native pick has no
+        // bulk action at all: the batch would queue addons the viewer never chose.
+        if (isSeries && pick.selectedVideo != null && !meta.videos.isNullOrEmpty()
+          && activeStream?.let(Streams::isRemoteStream) != true) {
           ActionIconButton(
             label = stringResource(R.string.bulk_title),
             icon = SeriesDownloadIcon,
             onClick = {
-              cancelPendingPlay()
-              ui.series.open = true
+              if (activeStream?.let(Streams::isRemoteStream) != true) {
+                cancelPendingPlay()
+                ui.series.open = true
+              }
             },
             caption = ui.caption,
             modifier = Modifier

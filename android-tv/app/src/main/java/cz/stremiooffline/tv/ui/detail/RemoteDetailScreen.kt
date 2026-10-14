@@ -37,17 +37,25 @@ import coil.compose.AsyncImage
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.catalog.Streams
 import cz.stremiooffline.tv.data.ApiError
+import cz.stremiooffline.tv.data.ApiFailure
+import cz.stremiooffline.tv.data.LibraryDto
+import cz.stremiooffline.tv.data.MediaDto
 import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.RemoteItemStateDto
 import cz.stremiooffline.tv.data.RemoteItemStatePatch
 import cz.stremiooffline.tv.data.RemoteLibraryApi
+import cz.stremiooffline.tv.data.RemoteProviderIdsDto
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.playback.Progress
 import cz.stremiooffline.tv.ui.catalog.ActionCaption
 import cz.stremiooffline.tv.ui.catalog.ActionIconButton
 import cz.stremiooffline.tv.ui.catalog.ForgetIcon
+import cz.stremiooffline.tv.ui.catalog.NativeCopyRequest
+import cz.stremiooffline.tv.ui.catalog.NativeQueuePanel
 import cz.stremiooffline.tv.ui.catalog.ReplayIcon
 import cz.stremiooffline.tv.ui.catalog.SourcesPanel
+import cz.stremiooffline.tv.ui.catalog.nativeCopyTitle
+import cz.stremiooffline.tv.ui.catalog.resolveNativeCopy
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
 import cz.stremiooffline.tv.ui.library.RemoteSeriesScreen
@@ -64,6 +72,8 @@ const val TagRemoteDetailVersions = "remote_versions"
 const val TagRemoteStateCaption = "remote_state_caption"
 const val TagRemoteSourcesRetry = "remote_sources_retry"
 const val TagRemoteStateRetry = "remote_state_retry"
+const val TagRemoteDetailToLibrary = "remote_to_library"
+const val TagRemoteCopyNotice = "remote_copy_notice"
 
 /** What one native remote item's detail needs: the library and the item's opaque id. */
 data class RemoteDetailData(
@@ -72,6 +82,9 @@ data class RemoteDetailData(
   val provider: String,
   val item: RemoteItemDto,
   val seriesName: String? = null,
+  /** The parent series' external ids, when the caller already holds them, so an episode's copy
+   *  carries the series' catalogue id without reading the parent again. */
+  val seriesIds: RemoteProviderIdsDto? = null,
 ) {
   val isEpisode: Boolean get() = item.type == "episode"
 }
@@ -91,6 +104,11 @@ fun RemoteDetailScreen(
   onBack: () -> Unit,
   backEnabled: Boolean = true,
   restoreToken: Int = 0,
+  /** The destinations this account may copy into, read once when the copy action is pressed.
+   *  Null keeps the action off entirely, which is what a harness with no catalogue surface passes. */
+  loadDestinations: (suspend () -> List<LibraryDto>)? = null,
+  /** Queues one exact version into the exact library the viewer picked. */
+  onQueue: (suspend (title: String, sourceId: String, media: MediaDto, libraryId: String) -> Unit)? = null,
 ) {
   // A series has no playable versions of its own: its card opens the episode grid instead.
   if (data.item.type == "series" || data.item.type == "season") {
@@ -102,6 +120,8 @@ fun RemoteDetailScreen(
       onBack = onBack,
       backEnabled = backEnabled,
       restoreToken = restoreToken,
+      loadDestinations = loadDestinations,
+      onQueue = onQueue,
     )
     return
   }
@@ -124,10 +144,17 @@ fun RemoteDetailScreen(
   var watchedBusy by remember(identity) { mutableStateOf(false) }
   var forgetBusy by remember(identity) { mutableStateOf(false) }
   var sourceListOpen by remember(identity) { mutableStateOf(false) }
+  // The copy panel: nothing is read for it until the viewer presses the action.
+  var copyRequest by remember(identity) { mutableStateOf<NativeCopyRequest?>(null) }
+  var copyResolving by remember(identity) { mutableStateOf(false) }
+  var copyBusy by remember(identity) { mutableStateOf(false) }
+  var copyNotice by remember(identity) { mutableStateOf<String?>(null) }
+  var copyWasOpen by remember(identity) { mutableStateOf(false) }
   val caption = remember(identity) { ActionCaption() }
 
   val playFocus = remember { FocusRequester() }
   val versionsFocus = remember { FocusRequester() }
+  val copyFocus = remember { FocusRequester() }
   val sourcesRetryFocus = remember { FocusRequester() }
   val stateRetryFocus = remember { FocusRequester() }
   val statusFocus = remember { FocusRequester() }
@@ -176,6 +203,9 @@ fun RemoteDetailScreen(
   }
 
   val stateLoaded = state != null && !stateError
+  val notAllowedText = stringResource(R.string.err_download_library_not_allowed)
+  val destinationsFailedText = stringResource(R.string.media_server_error)
+  val canCopy = onQueue != null && loadDestinations != null && sources.any { Streams.canQueue(it, false) }
   val stored = state
   val savedSourceId = stored?.mediaSourceId
   val favorite = stored?.favorite == true
@@ -264,6 +294,74 @@ fun RemoteDetailScreen(
     }
   }
 
+  /** Reads, once the action is pressed, the parent series, the versions and the destinations the
+   *  copy needs; the panel opens only once it has them, so no row ever acts on nothing. The read
+   *  stays cancellable: leaving the item drops a late answer. */
+  fun openCopy() {
+    val load = loadDestinations ?: return
+    if (copyResolving || copyBusy) return
+    copyResolving = true
+    copyNotice = null
+    scope.launch {
+      try {
+        val resolved = resolveNativeCopy(
+          api = api,
+          libraryId = data.libraryId,
+          item = data.item,
+          seriesName = data.seriesName,
+          seriesIds = data.seriesIds,
+          sources = sources.takeIf { it.isNotEmpty() },
+          loadDestinations = load,
+        )
+        if (live.value == mine) copyRequest = resolved
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (error: ApiError) {
+        if (live.value == mine) copyNotice = error.serverMessage
+          ?: if (error.failure == ApiFailure.Forbidden) notAllowedText else destinationsFailedText
+      } catch (_: Exception) {
+        if (live.value == mine) copyNotice = destinationsFailedText
+      } finally {
+        if (live.value == mine) copyResolving = false
+      }
+    }
+  }
+
+  /** Queues the exact version the panel captured. A refusal leaves the panel and its choice up,
+   *  so another destination can be tried without picking the version again. */
+  fun queueCopy(stream: StreamDto, libraryId: String) {
+    val queue = onQueue ?: return
+    val subject = copyRequest?.subject ?: return
+    if (copyBusy) return
+    copyBusy = true
+    copyNotice = null
+    scope.launch {
+      try {
+        queue(nativeCopyTitle(subject), stream.sourceId, subject.media(), libraryId)
+        if (live.value == mine) { copyRequest = null; copyNotice = null }
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (error: ApiError) {
+        if (live.value == mine) copyNotice = error.serverMessage ?: notAllowedText
+      } catch (_: Exception) {
+        if (live.value == mine) copyNotice = notAllowedText
+      } finally {
+        if (live.value == mine) copyBusy = false
+      }
+    }
+  }
+
+  // Closing the panel, whether it queued or the viewer backed out, returns the remote to the
+  // action that opened it once the panel and its focus trap are gone.
+  LaunchedEffect(copyRequest) {
+    if (copyRequest != null) {
+      copyWasOpen = true
+    } else if (copyWasOpen) {
+      copyWasOpen = false
+      runCatching { copyFocus.requestFocus() }
+    }
+  }
+
   // Focus follows what is actually actionable: the Retry on a failure, otherwise Play once a
   // version exists. Loading and empty states still hold a focusable target so the remote cannot
   // go dead over the player-less detail.
@@ -347,6 +445,16 @@ fun RemoteDetailScreen(
             modifier = Modifier.focusRequester(versionsFocus).testTag(TagRemoteDetailVersions),
           )
         }
+        // The copy action is shown only when an exactly copyable version is in hand: the device
+        // save stays denied and a denied native right offers nothing rather than a failing button.
+        if (canCopy) {
+          FocusButton(
+            text = stringResource(R.string.save_to_library),
+            onClick = { openCopy() },
+            enabled = !copyResolving && !copyBusy,
+            modifier = Modifier.focusRequester(copyFocus).testTag(TagRemoteDetailToLibrary),
+          )
+        }
         // The local toggles act on the stored state; without it they would be no-ops, so they are
         // not drawn at all until the state is known.
         if (stateLoaded) {
@@ -381,6 +489,11 @@ fun RemoteDetailScreen(
         if (caption.text.isNotEmpty()) Text(caption.text, color = Tokens.Muted, fontSize = 12.sp, maxLines = 1)
       }
 
+      // A copy that never opened its panel (no readable destinations, no native right) says why
+      // here instead; pressing the action again is the retry.
+      if (copyNotice != null && copyRequest == null) {
+        Text(copyNotice!!, color = Tokens.Red, fontSize = 11.5.sp, modifier = Modifier.testTag(TagRemoteCopyNotice))
+      }
       if (mutationError) Text(stringResource(R.string.media_server_state_error), color = Tokens.Red, fontSize = 11.5.sp)
 
       Box(Modifier.weight(1f)) {
@@ -437,6 +550,24 @@ fun RemoteDetailScreen(
         emptyText = stringResource(R.string.media_server_sources_empty),
         failureText = stringResource(R.string.media_server_sources_error),
         initialFocus = sourcesEntry,
+      )
+    }
+
+    val request = copyRequest
+    if (request != null) {
+      val kind = if (data.isEpisode) "series" else "movie"
+      NativeQueuePanel(
+        versions = request.versions,
+        libraries = request.destinations.filter { it.canWrite && (it.type == kind || it.type == "mixed") },
+        defaultDestination = request.defaultDestination,
+        preferred = primary,
+        busy = copyBusy,
+        notice = copyNotice,
+        onQueue = { stream, libraryId -> queueCopy(stream, libraryId) },
+        onClose = {
+          copyRequest = null
+          copyNotice = null
+        },
       )
     }
   }

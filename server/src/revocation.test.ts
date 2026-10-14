@@ -5,6 +5,7 @@ import { createSession } from "./auth.js";
 import type { DownloadJob, DownloadSelection } from "./downloads.js";
 import { MediaResources, type ResourceOwner } from "./media-resources.js";
 import { remoteSecretStamp, sealRemoteContent } from "./media-server-reference.js";
+import type { RemoteDownloadReference } from "./media-server-download.js";
 import type { MediaConnectionRecord, RemoteLibraryRecord } from "./media-server-types.js";
 import { accessLost, contentOf, Revocations, type AccessSource, type ActiveTransfer, type RevocationDeps } from "./revocation.js";
 import type { DeviceDownloadTicket } from "./media-resources.js";
@@ -221,7 +222,7 @@ test("contentOf resolves a sealed remote stream and refuses a malformed attempt"
   assert.throws(() => contentOf({ url: "media-server:garbage" }), { status: 404 });
 });
 
-test("accessLost denies any remote download and re-checks the remote record", () => {
+test("accessLost permits a genuine remote download to a library and re-checks the remote record", () => {
   const secret = remoteSecret;
   const token = createSession(secret, "usr_a", Date.now() + 3_600_000, remoteSid);
   const claim = { userId: "usr_a", sid: remoteSid, token, permissionsVersion: 0 };
@@ -232,14 +233,14 @@ test("accessLost denies any remote download and re-checks the remote record", ()
   };
   assert.equal(accessLost(remoteSource(), claim, { remote: ref }), false);
   assert.equal(accessLost(remoteSource(), claim, { remote: ref, libraryId: REMOTE_LIBRARY }), false);
-  assert.equal(accessLost(remoteSource(), claim, { remote: ref, permission: "downloadToLibrary" }), true, "a remote original is never saved");
+  assert.equal(accessLost(remoteSource(), claim, { remote: ref, permission: "downloadToLibrary" }), false, "a granted remote original may still be copied into a local library");
   assert.equal(accessLost(remoteSource({ user: remoteUser({ secret: "rotated" }) }), claim, { remote: ref }), true, "a password change is caught");
   assert.equal(accessLost(remoteSource({ connection: remoteConnection({ generation: 3 }) }), claim, { remote: ref }), true, "a generation change is caught");
   assert.equal(accessLost(remoteSource({ library: remoteLibrary({ enabled: false }) }), claim, { remote: ref }), true, "a disabled library is caught");
   assert.equal(accessLost(remoteSource(), claim, { remote: { ...ref, owner: { ...ref.owner, sid: "other" } } }), true, "the claim session must own the reference");
 });
 
-test("accessLost denies a remote download even for an administrator with an unchanged counter", () => {
+test("accessLost denies saving a remote original to a device, even for an administrator", () => {
   const secret = remoteSecret;
   const token = createSession(secret, "usr_a", Date.now() + 3_600_000, remoteSid);
   const claim = { userId: "usr_a", sid: remoteSid, token, permissionsVersion: 0 };
@@ -309,4 +310,28 @@ test("stopResource reaches one resource and its readers, and nothing else", asyn
   assert.throws(() => h.resources.get(child, who.sid, "subtitle"), { status: 404 }, "the child goes with the parent");
   assert.equal(h.resources.get(other.resourceId, who.sid, "media").stream.url, "https://other.test/film.mp4");
   assert.deepEqual(h.paused, [], "the queue is never touched");
+});
+
+const remoteDownload = (over: Partial<RemoteDownloadReference> = {}): RemoteDownloadReference => ({
+  schemaVersion: 1, ownerUserId: "usr_a", connectionId: CONNECTION_A, libraryId: REMOTE_LIBRARY,
+  generation: 2, provider: "jellyfin", serverId: "server-1", accountId: "account-1",
+  itemId: "item-1", mediaSourceId: "v1", ...over,
+});
+
+test("a connection sweep pauses the queued remote copy that names it", async () => {
+  const h = harness([job("remote", "usr_a", { remoteDownload: remoteDownload() }), job("local", "usr_a")]);
+
+  await h.revocations.stopContent({ connectionId: CONNECTION_A });
+
+  assert.deepEqual(h.paused, ["remote"], "only the copy bound to the swept connection pauses");
+});
+
+test("stopUnreachable pauses a remote copy whose grant was withdrawn", async () => {
+  const h = harness([job("remote", "usr_a", { remoteDownload: remoteDownload() }), job("other", "usr_a")]);
+  const user = remoteUser();
+  h.deps.source = remoteSource({ user, library: remoteLibrary({ allowedUsers: [] }) });
+
+  await h.revocations.stopUnreachable(user);
+
+  assert.deepEqual(h.paused, ["remote"], "the withdrawn grant pauses only the remote copy");
 });

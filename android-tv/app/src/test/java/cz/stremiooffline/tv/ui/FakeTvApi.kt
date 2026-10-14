@@ -87,6 +87,8 @@ open class FakeTvApi : TvApi {
   var catalogsValue: List<CatalogDto> = emptyList()
   var librariesValue: List<LibraryDto> = emptyList()
   var librariesFailure: ApiFailure? = null
+  /** Held open until the test releases it, so a destination read can land after a move. */
+  var librariesGate: CompletableDeferred<Unit>? = null
   var librariesCalls = 0
   var catalogPages: MutableMap<String, List<List<MetaDto>>> = mutableMapOf()
   var catalogRequests: MutableList<CatalogRequest> = mutableListOf()
@@ -282,6 +284,7 @@ open class FakeTvApi : TvApi {
 
   override suspend fun libraries(): List<LibraryDto> {
     librariesCalls += 1
+    librariesGate?.await()
     librariesFailure?.let { throw ApiError(it) }
     return librariesValue
   }

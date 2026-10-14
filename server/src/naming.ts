@@ -218,6 +218,25 @@ export function streamExtension(stream: StreamItem): string {
   return path.extname(source) || ".mp4";
 }
 
+/** The extension one original file's own container names, normalized to the accepted set. A
+ *  missing, unknown or unsafe value gives nothing, so a caller keeps its own conservative
+ *  fallback instead of trusting a container word as part of a name. */
+export function containerExtension(container: unknown): string | undefined {
+  if (typeof container !== "string") return undefined;
+  const word = container.trim().toLowerCase().replace(/^\./, "");
+  if (!/^[a-z0-9]{1,8}$/.test(word)) return undefined;
+  const extension = `.${word}`;
+  return MEDIA_EXTENSIONS.has(extension) ? extension : undefined;
+}
+
+/** The accepted extension a name already ends in, or nothing. Only the media set counts, so a
+ *  release name's own dots are left alone. */
+export function nameExtension(name: unknown): string | undefined {
+  if (typeof name !== "string") return undefined;
+  const extension = path.extname(name).toLowerCase();
+  return MEDIA_EXTENSIONS.has(extension) ? extension : undefined;
+}
+
 /** Browsers cannot preserve server folders, but the basename must match a library download. */
 export function deviceFilename(stream: StreamItem, media: MediaInfo | undefined, fallbackTitle: string, settings: DownloadTargetSettings): string {
   const extension = streamExtension(stream);

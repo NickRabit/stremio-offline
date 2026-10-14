@@ -288,6 +288,8 @@
   <string name="media_server_mark_watched">Marquer comme vu</string>
   <string name="media_server_unwatch">Marquer comme non vu</string>
   <string name="media_server_download_unavailable">Un élément de serveur multimédia ne peut pas être téléchargé.</string>
+  <string name="media_server_download_disabled">Les téléchargements sont désactivés pour ce compte du serveur.</string>
+  <string name="media_server_version_number">Version %1$s</string>
   <string name="media_server_state_error">Impossible de charger votre position enregistrée.</string>
   <string name="media_server_group_failed">Impossible de charger %1$s.</string>
   <string name="media_server_personal_empty">Rien ici pour l\'instant.</string>
@@ -297,4 +299,5 @@
   <string name="favorites_tab_local">Fichiers et catalogue</string>
   <string name="favorites_tab_servers">Serveurs multimédia</string>
   <string name="media_server_personal_partial">Certains éléments n\'ont pas pu être chargés.</string>
+  <string name="err_media_server_format_unknown">Le serveur multimédia n’a pas fourni de format pris en charge pour le fichier original.</string>
 </resources>

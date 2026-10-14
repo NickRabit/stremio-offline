@@ -1,9 +1,11 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { AppError } from "./errors.js";
+import { LIBRARY_ID } from "./libraries.js";
 import { log } from "./logger.js";
 import { remoteLibraryVisibleTo } from "./media-server-access.js";
 import { ResourceError } from "./media-resources.js";
 import { isRemoteContentRef, remoteSecretStamp, type RemoteContentRef } from "./media-server-reference.js";
+import { isRemoteDownloadReference, takesRemoteCopy, type RemoteDownloadReference } from "./media-server-download.js";
 import {
   connectionScope,
   forgetRemovedHistory,
@@ -111,6 +113,10 @@ export interface MediaServerItemVersions {
   libraryId: string;
   generation: number;
   libraryName: string;
+  /** The account's native copy permission, read from the session's own account policy rather
+   *  than a fresh call. The source guard still re-proves every copy; this only lets the
+   *  interface offer the action at all, and a missing fact is never a permission. */
+  downloadAllowed?: boolean;
 }
 
 /** What a content mutation took away. A scope with no fields means everything. */
@@ -162,7 +168,7 @@ const SEARCH_MAX = 256;
 const ITEM_TYPES: readonly ProviderItemType[] = ["movie", "series", "season", "episode"];
 const CREATE_KEYS = ["provider", "name", "baseUrl", "allowLan", "allowLoopback", "username", "password"];
 const ATTACH_KEYS = ["remoteId", "name", "order", "showOnHome", "showInContinueWatching", "browseMode", "mosaic", "showInFavorites"];
-const LIBRARY_PATCH_KEYS = ["name", "enabled", "order", "showOnHome", "showInContinueWatching", "allowedUsers", "browseMode", "mosaic", "showInFavorites"];
+const LIBRARY_PATCH_KEYS = ["name", "enabled", "order", "showOnHome", "showInContinueWatching", "allowedUsers", "browseMode", "mosaic", "showInFavorites", "downloadLibraryId"];
 const CONNECTION_PATCH_KEYS = ["name", "enabled"];
 const BROWSE_QUERY_KEYS = ["limit", "cursor", "search", "type"];
 const EPISODE_QUERY_KEYS = ["limit", "cursor"];
@@ -187,6 +193,15 @@ const readForgetOption = (options: unknown): boolean => {
   const record = checkKeys(options, ["forget"], "The media-server removal");
   if (record.forget === undefined) throw invalid("The media-server removal names nothing to change.");
   return bool(record.forget, "forget");
+};
+
+/** The copy destination a patch asks for: absent leaves the stored handle alone, `null` clears
+ *  the override, and anything else has to be a local library handle. A remote handle is never a
+ *  destination for a copy that lands on this machine. */
+const readDownloadLibrary = (value: unknown): string | null | undefined => {
+  if (value === undefined || value === null) return value as null | undefined;
+  if (typeof value !== "string" || !LIBRARY_ID.test(value)) throw invalid("The media-server copy destination is malformed.");
+  return value;
 };
 
 const identityChanged = (): MediaServerError => new MediaServerError("identity-changed", "The media-server identity is not the configured one.");
@@ -483,6 +498,9 @@ interface LiveSession {
   provider: MediaServerProvider;
   transport: MediaServerTransport;
   libraries: ProviderLibrary[];
+  /** The account policy the session proved, so a caller that needs an extra native permission
+   *  (a download) can read it without repeating the identity, policy and view reads. */
+  policy: RemoteAccountPolicy;
 }
 
 interface StatusRecord {
@@ -881,6 +899,7 @@ export class MediaServerManager {
     const browseMode = parseBrowseMode(record.browseMode as string | undefined);
     const mosaic = record.mosaic === undefined ? undefined : bool(record.mosaic, "mosaic");
     const showInFavorites = record.showInFavorites === undefined ? undefined : bool(record.showInFavorites, "showInFavorites");
+    const downloadLibraryId = readDownloadLibrary(record.downloadLibraryId);
     const requestedUsers = record.allowedUsers === undefined ? undefined : this.readAllowedUsers(record.allowedUsers);
     return this.adminMutation(async () => {
       let updated!: RemoteLibraryRecord;
@@ -903,6 +922,20 @@ export class MediaServerManager {
         if (browseMode !== undefined) next.browseMode = browseMode;
         if (mosaic !== undefined) next.mosaic = mosaic;
         if (showInFavorites !== undefined) next.showInFavorites = showInFavorites;
+        // A shared copy destination: it is validated against the state this write lands on, so a
+        // library removed or made read-only meanwhile is refused rather than stored. The setting
+        // never bumps the generation and never revokes content; a copy already running keeps the
+        // destination it captured.
+        if (downloadLibraryId !== undefined) {
+          if (downloadLibraryId === null) {
+            delete next.downloadLibraryId;
+          } else {
+            const destination = (state.libraries ?? []).find((candidate) => candidate.id === downloadLibraryId);
+            if (!destination) throw invalid("That library does not exist.");
+            if (!takesRemoteCopy(library.type, destination)) throw invalid("That library is switched off, read-only, unreachable or does not take this kind of content.");
+            next.downloadLibraryId = downloadLibraryId;
+          }
+        }
         const before = library.allowedUsers;
         if (requestedUsers !== undefined) {
           const wanted = new Set<string>(dormantGrants(state.users ?? [], library.allowedUsers));
@@ -1378,14 +1411,14 @@ export class MediaServerManager {
    *  records still match, and the named version is still an ordinary file. Reads no bytes and
    *  writes no upstream history. It always contacts the provider, and a success stores or
    *  refreshes the original proof a later open reuses; a failure past the local check drops it. */
-  async revalidateOriginal(authority: MediaServerAuthority, ref: RemoteContentRef, signal?: AbortSignal): Promise<void> {
+  async revalidateOriginal(authority: MediaServerAuthority, ref: RemoteContentRef, signal?: AbortSignal, options?: { download?: boolean }): Promise<void> {
     const request = this.requestSignal(signal);
     if (!isRemoteContentRef(ref)) throw notFound("That media-server item does not exist.");
     if (ref.subtitleIndex !== undefined) throw notFound("That media-server item does not exist.");
     const { library, connection } = this.recheckRef(authority, request, ref);
     const user = this.currentActor(authority, request);
     try {
-      const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId }, request);
+      const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId, download: options?.download === true }, request);
       this.recheckRef(authority, request, ref);
       const item = await this.upstream(connection, request, () => session.provider.detail(session.token, connection.accountId, ref.itemId, request));
       this.recheckRef(authority, request, ref);
@@ -1459,6 +1492,114 @@ export class MediaServerManager {
     const abortBody = () => { void response.body?.cancel().catch(() => undefined); };
     try {
       this.recheckRef(authority, request, ref);
+      this.checkLive(request);
+    } catch (error) {
+      abortBody();
+      throw error;
+    }
+    if (request.aborted) {
+      abortBody();
+      throw cancelled();
+    }
+    request.addEventListener("abort", abortBody, { once: true });
+    return response;
+  }
+
+  /** Re-reads the records a durable download reference names and refuses when any moved: the
+   *  actor is the owner, and the library grant, connection, identity and generation are the
+   *  configured ones now. A download reference carries no session, so there is no sid or secret
+   *  stamp to compare; the account's current secret is checked by `currentActor` alone. */
+  private recheckDownloadRef(authority: MediaServerAuthority, signal: AbortSignal, reference: RemoteDownloadReference): { library: RemoteLibraryRecord; connection: MediaConnectionRecord } {
+    const user = this.currentActor(authority, signal);
+    if (user.id !== reference.ownerUserId) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
+    const connections = this.store.mediaConnections();
+    const library = this.store.remoteLibraries().find((candidate) => candidate.id === reference.libraryId);
+    if (!library || library.connectionId !== reference.connectionId) throw notFound("That remote library does not exist.");
+    if (!remoteLibraryVisibleTo(connections, library, user)) throw notFound("That remote library does not exist.");
+    const connection = connections.find((candidate) => candidate.id === reference.connectionId);
+    if (!connection || !connection.enabled || !connection.secretRef) throw invalid("That media-server connection is disabled.");
+    if (connection.provider !== reference.provider || connection.serverId !== reference.serverId
+      || connection.accountId !== reference.accountId || connection.generation !== reference.generation) throw stale();
+    return { library, connection };
+  }
+
+  /** The live original behind a download reference: the item, its ancestor chain reaching the
+   *  granted library and the named file version are read from the provider and re-checked after
+   *  every await. A success is recorded in the same proof map playback uses, so a bounded window
+   *  of opens costs one proof and a proof never crosses accounts, generations or sources. */
+  private async proveDownloadOriginal(
+    authority: MediaServerAuthority,
+    signal: AbortSignal,
+    reference: RemoteDownloadReference,
+    library: RemoteLibraryRecord,
+    connection: MediaConnectionRecord,
+    session: LiveSession,
+    user: UserRecord,
+  ): Promise<void> {
+    const item = await this.upstream(connection, signal, () => session.provider.detail(session.token, connection.accountId, reference.itemId, signal));
+    this.recheckDownloadRef(authority, signal, reference);
+    if (item.id !== reference.itemId) throw new MediaServerError("invalid-response", "The media-server item identity changed.");
+    const ancestors = await this.upstream(connection, signal, () => session.provider.ancestors(session.token, connection.accountId, item.id, signal));
+    if (!ancestors.includes(library.remoteId)) throw notFound("That item is not in this library.");
+    this.recheckDownloadRef(authority, signal, reference);
+    if (item.type !== "movie" && item.type !== "episode") throw invalid("That item has no playable media.");
+    const versions = await this.upstream(connection, signal, () => session.provider.versions(session.token, connection.accountId, item.id, signal));
+    this.recheckDownloadRef(authority, signal, reference);
+    if (!versions.some((version) => version.id === reference.mediaSourceId)) throw notFound("That media-server source is no longer available.");
+    this.putOriginalProof({
+      actorId: user.id,
+      libraryId: library.id,
+      connectionId: connection.id,
+      generation: connection.generation,
+      secretRef: connection.secretRef,
+      itemId: reference.itemId,
+      mediaSourceId: reference.mediaSourceId,
+      at: this.clock(),
+    });
+  }
+
+  /** Proves a durable download reference still names a live, permitted original, with no session
+   *  and no bytes. It always contacts the provider, and a failure past the local check drops any
+   *  stored proof. The owner comes from the authority, never from the reference alone. */
+  async revalidateDownloadOriginal(authority: MediaServerAuthority, reference: RemoteDownloadReference, signal?: AbortSignal): Promise<void> {
+    const request = this.requestSignal(signal);
+    if (!isRemoteDownloadReference(reference)) throw notFound("That media-server item does not exist.");
+    const { library, connection } = this.recheckDownloadRef(authority, request, reference);
+    const user = this.currentActor(authority, request);
+    try {
+      const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId, download: true }, request);
+      this.recheckDownloadRef(authority, request, reference);
+      await this.proveDownloadOriginal(authority, request, reference, library, connection, session, user);
+    } catch (error) {
+      this.deleteOriginalProof(user.id, library.id, connection.id, connection.generation, connection.secretRef, reference.itemId, reference.mediaSourceId);
+      throw error;
+    }
+  }
+
+  /** Opens one original file for a local library copy over the binary transport, with the same
+   *  live-session and post-await checks playback uses. A recent original proof is reused; a miss
+   *  reads the item, ancestor chain and version once. The result is re-checked before the body
+   *  leaves the manager, and a stale or denied result has its body cancelled. */
+  async openDownloadOriginal(authority: MediaServerAuthority, reference: RemoteDownloadReference, args: { method: "GET" | "HEAD"; range?: string }, signal?: AbortSignal): Promise<Response> {
+    const request = this.requestSignal(signal);
+    if (!isRemoteDownloadReference(reference)) throw notFound("That media-server item does not exist.");
+    if (!args || (args.method !== "GET" && args.method !== "HEAD")) throw invalid("The media-server request method is not supported.");
+    if (args.range !== undefined && (typeof args.range !== "string" || args.range.length > 128)) throw invalid("The media-server byte range is malformed.");
+    const { library, connection } = this.recheckDownloadRef(authority, request, reference);
+    const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId, download: true }, request);
+    this.recheckDownloadRef(authority, request, reference);
+    const user = this.currentActor(authority, request);
+    if (!this.originalProofFor(user, library, connection, reference.itemId, reference.mediaSourceId)) {
+      await this.proveDownloadOriginal(authority, request, reference, library, connection, session, user);
+    }
+    const response = await this.originalUpstream(connection, request, () => session.transport.requestOriginal(
+      { itemId: reference.itemId, mediaSourceId: reference.mediaSourceId, method: args.method, ...(args.range === undefined ? {} : { range: args.range }) },
+      session.token,
+      request,
+    ));
+    const abortBody = () => { void response.body?.cancel().catch(() => undefined); };
+    try {
+      this.recheckDownloadRef(authority, request, reference);
       this.checkLive(request);
     } catch (error) {
       abortBody();
@@ -1864,6 +2005,7 @@ export class MediaServerManager {
       libraryId: library.id,
       generation: connection.generation,
       libraryName: library.name,
+      downloadAllowed: session.policy.contentDownloading === true,
     };
   }
 
@@ -2065,7 +2207,7 @@ export class MediaServerManager {
   private async liveSession(
     authority: MediaServerAuthority,
     connection: MediaConnectionRecord,
-    options: { libraryRemoteId?: string; refresh?: boolean },
+    options: { libraryRemoteId?: string; refresh?: boolean; download?: boolean },
     signal: AbortSignal,
   ): Promise<LiveSession> {
     this.checkLive(signal);
@@ -2088,6 +2230,9 @@ export class MediaServerManager {
       const policy = facts.policy;
       if (policy.disabled) throw new MediaServerError("unavailable", "The media-server account is disabled.");
       if (!policy.mediaPlayback) throw new MediaServerError("forbidden", "The media-server account may not play.");
+      // Downloading is a separate native permission: a playable account that may not download is
+      // refused here, and only here, so ordinary playback stays unaffected.
+      if (options.download === true && policy.contentDownloading !== true) throw new MediaServerError("forbidden", "The media-server account may not download.");
       if (policy.hasAdditionalRestrictions) throw new MediaServerError("unsupported-policy", "The media-server account has unsupported restrictions.");
       this.markAvailable(connection);
       if (options.libraryRemoteId !== undefined) {
@@ -2096,7 +2241,7 @@ export class MediaServerManager {
           throw new MediaServerError("forbidden", "The media-server account cannot reach that library.");
         }
       }
-      return { token, provider: runtime.provider, transport: runtime.transport, libraries: facts.libraries };
+      return { token, provider: runtime.provider, transport: runtime.transport, libraries: facts.libraries, policy };
     } catch (error) {
       if (error instanceof MediaServerError && error.code === "authentication-required") this.markReauthentication(connection);
       throw error;

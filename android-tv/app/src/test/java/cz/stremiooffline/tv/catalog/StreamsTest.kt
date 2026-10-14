@@ -3,6 +3,8 @@ package cz.stremiooffline.tv.catalog
 import cz.stremiooffline.tv.catalog.Streams.StreamFilters
 import cz.stremiooffline.tv.catalog.Streams.StreamSort
 import cz.stremiooffline.tv.data.BehaviorHintsDto
+import cz.stremiooffline.tv.data.RemoteCapabilitiesDto
+import cz.stremiooffline.tv.data.RemoteItemContext
 import cz.stremiooffline.tv.data.StreamDto
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -235,6 +237,22 @@ class StreamsTest {
     assertEquals(false, Streams.canQueue(torrent, false))
     assertEquals(true, Streams.canQueue(torrent, true))
     assertEquals(true, Streams.canQueue(http, false))
+  }
+
+  @Test
+  fun `canQueue queues a remote original only when the server proved the copy right`() {
+    val context = RemoteItemContext("rlib_a", "i1", "m1", "k")
+    val granted = StreamDto(
+      sourceId = "r1", kind = "remote", playable = true, name = "1080p",
+      capabilities = RemoteCapabilitiesDto(downloadToLibrary = true), remoteItem = context,
+    )
+    val denied = granted.copy(sourceId = "r2", capabilities = RemoteCapabilitiesDto(downloadToLibrary = false))
+    val bare = granted.copy(sourceId = "r3", capabilities = null)
+    assertEquals(true, Streams.canQueue(granted, false))
+    assertEquals(false, Streams.canQueue(denied, false))
+    assertEquals(false, Streams.canQueue(bare, false))
+    // The native right is never enough on its own: a version the server cannot play copies nothing.
+    assertEquals(false, Streams.canQueue(granted.copy(playable = false), false))
   }
 
   @Test

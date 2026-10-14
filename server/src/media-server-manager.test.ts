@@ -14,6 +14,7 @@ import { openRemoteContent, remoteSecretStamp, sealRemoteContent, type RemoteCon
 import { MediaServerSecrets } from "./media-server-secrets.js";
 import type { MediaServerTransport } from "./media-server-security.js";
 import { MediaServerError, remoteProgressKey } from "./media-server-types.js";
+import type { LibraryRecord } from "./libraries.js";
 import { Store } from "./store.js";
 import { emptyUserData, type UserRecord } from "./users.js";
 
@@ -39,6 +40,12 @@ const movie = (id: string, name = `Movie ${id}`): ProviderItem => ({ id, name, t
 const episode = (id: string, over: Partial<ProviderItem>): ProviderItem => ({ id, name: `Episode ${id}`, type: "episode", providerIds: {}, ...over });
 const folder = (id: string, over: Partial<ProviderItem> = {}): ProviderItem => ({ id, name: `Folder ${id}`, type: "folder", providerIds: {}, ...over });
 const artMovie = (id: string): ProviderItem => ({ id, name: `Movie ${id}`, type: "movie", providerIds: {}, hasPrimaryImage: true });
+
+/** One local library, seeded straight into the store the manager validates a patch against. */
+const localLibrary = (id: string, type: "movie" | "series" | "mixed", over: Partial<LibraryRecord> = {}): LibraryRecord => ({
+  id, name: id, type, root: `/downloads/${id}`, enabled: true, order: 0,
+  addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: false, ...over,
+});
 
 interface Nudge { op: string; wait: Promise<void>; entered?: () => void }
 
@@ -2626,4 +2633,73 @@ test("signed continuations renew parent membership after five minutes", async ()
     await assert.rejects(harness.manager.browseDirectory(harness.admin, library.id, { parentId: "parent", limit: "1", cursor: second.cursor }), { code: "not-found" });
     assert.equal(harness.server.directoryCalls.length, before, "expired membership is re-proved before continuing");
   }, { clock: () => now });
+});
+
+test("the copy destination is set, kept and reset without disturbing anything else", async () => {
+  await withHarness(async (harness) => {
+    const connection = await connect(harness);
+    seedLibrary(harness, "lib-1", [movie("m1")]);
+    const library = await harness.manager.attachLibrary(harness.admin, connection.id, { remoteId: "lib-1" });
+    const films = localLibrary("lib_a1b2c3d4", "movie");
+    const shows = localLibrary("lib_b2c3d4e5", "series");
+    await harness.store.update((state) => { state.libraries = [films, shows]; });
+    const generation = harness.store.mediaConnections()[0]!.generation;
+
+    const stored = await harness.manager.patchLibrary(harness.admin, library.id, { downloadLibraryId: films.id });
+    assert.equal(stored.downloadLibraryId, films.id);
+    assert.equal(harness.store.remoteLibraries()[0]!.downloadLibraryId, films.id);
+    assert.equal(harness.store.mediaConnections()[0]!.generation, generation, "a copy destination never bumps the generation");
+
+    // A patch that says nothing about it keeps it, and so does a reload from the disk.
+    const renamed = await harness.manager.patchLibrary(harness.admin, library.id, { name: "Films" });
+    assert.equal(renamed.downloadLibraryId, films.id, "an unrelated patch keeps the setting");
+    const reopened = new Store(harness.dir, harness.dir);
+    await reopened.load();
+    assert.equal(reopened.remoteLibraries()[0]!.downloadLibraryId, films.id, "the setting survives a reload");
+
+    const cleared = await harness.manager.patchLibrary(harness.admin, library.id, { downloadLibraryId: null });
+    assert.equal("downloadLibraryId" in cleared, false, "null removes the override");
+    assert.equal("downloadLibraryId" in harness.store.remoteLibraries()[0]!, false, "and stores no empty field");
+    assert.equal(harness.store.mediaConnections()[0]!.generation, generation, "clearing it bumps nothing either");
+  });
+});
+
+test("a malformed or unusable copy destination is refused and nothing is written", async () => {
+  await withHarness(async (harness) => {
+    const connection = await connect(harness);
+    harness.server.libraries.push({ id: "music", name: "Music", type: "mixed" });
+    seedLibrary(harness, "lib-1", [movie("m1")]);
+    const library = await harness.manager.attachLibrary(harness.admin, connection.id, { remoteId: "lib-1" });
+    const mixed = await harness.manager.attachLibrary(harness.admin, connection.id, { remoteId: "music" });
+    const films = localLibrary("lib_a1b2c3d4", "movie");
+    const shows = localLibrary("lib_b2c3d4e5", "series");
+    const box = localLibrary("lib_c3d4e5f6", "mixed");
+    const off = localLibrary("lib_d4e5f6a7", "movie", { enabled: false });
+    const readOnly = localLibrary("lib_e5f6a7b8", "movie", { readOnly: true });
+    const away = localLibrary("lib_f6a7b8c9", "movie", { unreachable: true });
+    await harness.store.update((state) => { state.libraries = [films, shows, box, off, readOnly, away]; });
+
+    for (const value of [`rlib_${"a".repeat(32)}`, "lib_zzzzzzzz", "", "not-a-handle", 42, {}, true]) {
+      await assert.rejects(
+        harness.manager.patchLibrary(harness.admin, library.id, { downloadLibraryId: value as never }),
+        { code: "invalid-input" },
+        `the handle ${JSON.stringify(value)} is refused`,
+      );
+    }
+    await assert.rejects(harness.manager.patchLibrary(harness.admin, library.id, { downloadLibraryId: "lib_00000000" }), { code: "invalid-input" },
+      "a well-formed handle that names no library is refused");
+    // A movie remote library takes a movie or mixed destination, never a series one.
+    await assert.rejects(harness.manager.patchLibrary(harness.admin, library.id, { downloadLibraryId: shows.id }), { code: "invalid-input" });
+    for (const entry of [off, readOnly, away]) {
+      await assert.rejects(harness.manager.patchLibrary(harness.admin, library.id, { downloadLibraryId: entry.id }), { code: "invalid-input" },
+        `a ${entry.id} destination that cannot be written to is refused`);
+    }
+    // A mixed remote library only ever lands in a mixed local library.
+    await assert.rejects(harness.manager.patchLibrary(harness.admin, mixed.id, { downloadLibraryId: films.id }), { code: "invalid-input" });
+    const accepted = await harness.manager.patchLibrary(harness.admin, mixed.id, { downloadLibraryId: box.id });
+    assert.equal(accepted.downloadLibraryId, box.id);
+
+    assert.equal(harness.store.remoteLibraries().length, 2, "a refused patch writes nothing");
+    assert.equal("downloadLibraryId" in harness.store.remoteLibraries().find((entry) => entry.id === library.id)!, false);
+  });
 });

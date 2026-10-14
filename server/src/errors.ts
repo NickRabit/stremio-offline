@@ -46,6 +46,7 @@ export interface ErrorClassification {
 const TABLE: Record<string, ErrorClassification> = {
   // Download source and queue.
   "err.noMatchingSource": { category: "source", retry: "manual" },
+  "err.mediaServerFormatUnknown": { category: "source", retry: "action" },
   "err.downloadNeedsHttp": { category: "source", retry: "action" },
   "err.sourceQueued": { category: "source", retry: "permanent" },
   "err.torrentQueued": { category: "source", retry: "permanent" },
