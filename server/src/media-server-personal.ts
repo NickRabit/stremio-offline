@@ -152,17 +152,16 @@ class CardBudget {
  *  own child signal that carries both the caller's abort and the budget's deadline, so a
  *  cancellation reaches it whatever it awaits; the race answers `false` even when the work
  *  ignores its signal and keeps running, and that ignored work's failure is swallowed by the
- *  race's own handler rather than surfacing later as an unhandled rejection. */
+ *  race's own handler rather than surfacing later as an unhandled rejection. The budget signal
+ *  owns the only deadline; an independent timer could expire while the budget still accepts work. */
 const withinDeadline = async (
   work: (signal: AbortSignal) => Promise<void>,
-  milliseconds: number,
   caller: AbortSignal,
 ): Promise<boolean> => {
   const controller = new AbortController();
   const relay = () => controller.abort();
   if (caller.aborted) relay();
   else caller.addEventListener("abort", relay, { once: true });
-  const timer = setTimeout(relay, Math.max(0, milliseconds));
   const outcome = work(controller.signal).then(() => true, () => false);
   const expired = new Promise<boolean>((resolve) => {
     if (controller.signal.aborted) resolve(false);
@@ -171,7 +170,6 @@ const withinDeadline = async (
   try {
     return await Promise.race([outcome, expired]);
   } finally {
-    clearTimeout(timer);
     caller.removeEventListener("abort", relay);
   }
 };
@@ -448,7 +446,6 @@ export class MediaServerPersonal {
         if (budget.exhausted || budget.remainingMs() <= 0) { partial = true; return; }
         const ok = await withinDeadline(
           (child) => this.manager.verifyLibrary(authority, group.library.id, child),
-          budget.remainingMs(),
           budget.signal,
         );
         authority.assertCurrent();

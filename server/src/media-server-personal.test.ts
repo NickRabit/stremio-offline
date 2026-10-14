@@ -480,6 +480,30 @@ test("the whole budget bounds how many confirmations start and never scans past 
   });
 });
 
+test("one shared deadline prevents extra confirmations when the wall clock lags", async (context) => {
+  await withHarness(async (harness) => {
+    await harness.personal.patch(harness.admin, harness.libraryId, "m1", { position: 12, duration: 100 });
+    await addLibraryWithRow(harness, "remote-2", "m2");
+    await addLibraryWithRow(harness, "remote-3", "m3");
+    let started = 0;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    harness.manager.verifyLibrary = (async () => { started += 1; await held; }) as typeof harness.manager.verifyLibrary;
+    const epoch = Date.now();
+    let reads = 0;
+    const clock = context.mock.method(Date, "now", () => epoch + (reads++ === 0 ? 0 : 250));
+    try {
+      const cards = await harness.personal.cards(harness.admin, { filter: "resume", onHome: true });
+      assert.equal(started, 2, "an expired confirmation cannot restart work before the shared budget aborts");
+      assert.equal(cards.partial, true);
+      assert.deepEqual(cards.items, []);
+    } finally {
+      clock.mock.restore();
+      release();
+    }
+  });
+});
+
 test("a spent budget keeps the sibling that was confirmed", async () => {
   await withHarness(async (harness) => {
     await harness.personal.patch(harness.admin, harness.libraryId, "m1", { position: 12, duration: 100 });
