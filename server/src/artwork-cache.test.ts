@@ -46,7 +46,7 @@ test("a key maps to the directory of its library, folder prefix and all", async 
   });
 });
 
-test("the ceiling drops the oldest thumbnail down to four fifths of it", async () => {
+test("the ceiling keeps everything above the headroom floor and drops the oldest", async () => {
   await withCache(10 * 1024, async (cache, dir) => {
     await put(cache, "lib_aaaaaaaa/One.mkv", 4096);
     await sleep(3);
@@ -285,11 +285,11 @@ test("a lowered cap is enforced at load and maintain is quiet under it", async (
 
     const cache = new ArtworkCache(dir, 9000);
     await cache.load();
-    assert.equal(cache.size, 1, "load enforces the lowered cap");
+    assert.equal(cache.size, 2, "load enforces the lowered cap down to the floor, not further");
 
     const before = await listed(dir);
     await cache.maintain();
-    assert.equal(cache.size, 1, "maintain is a no-op while under the cap");
+    assert.equal(cache.size, 2, "maintain is a no-op while under the cap");
     assert.deepEqual(await listed(dir), before);
   } finally { await rm(dataDir, { recursive: true, force: true }); }
 });
@@ -330,7 +330,21 @@ test("a thumbnail served while a pass is deciding is not the one dropped", async
     await pass;
     assert.equal((await stat(two)).size, 4096, "the thumbnail served while the pass ran was kept");
     await assert.rejects(stat(one), "the oldest, untouched one was dropped");
-    assert.equal(cache.size, 1);
+    assert.equal(cache.size, 2);
+  });
+});
+
+test("hotFiles lists indexed pictures newest first and touch refreshes one", async () => {
+  await withCache(1024 * 1024, async (cache, dir) => {
+    const one = await put(cache, "lib_aaaaaaaa/One.mkv", 32);
+    await sleep(3);
+    const two = await put(cache, "lib_aaaaaaaa/Two.mkv", 32);
+    assert.deepEqual(cache.hotFiles().map((entry) => entry.file), [two, one], "the newest is first");
+    await sleep(3);
+    cache.touch(one);
+    assert.deepEqual(cache.hotFiles().map((entry) => entry.file), [one, two], "touch makes it the hottest again");
+    cache.touch(path.join(dir, "downloads", "poster.jpg"));
+    assert.equal(cache.size, 2, "a picture beside the media is not indexed");
   });
 });
 

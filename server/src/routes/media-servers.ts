@@ -329,8 +329,9 @@ export function registerMediaServerRoutes(app: express.Application, deps: MediaS
     return { streams: await mediaSources.matched(authority, ownerOf(req), String(req.params.id), String(req.params.type), String(req.params.catalogId), signal, name) };
   }, 200, true));
   // Fixed Primary|Backdrop only and at most the optional `tag` and `size` queries: the bytes
-  // stream through the image lane, private with nosniff, and an If-None-Match is answered by the
-  // manager with a local 304 once its checks still hold.
+  // stream through the image lane. The browser may keep a successful response for a year, and
+  // it is immutable only when the `tag` query equals the membership proof's tag. An If-None-Match
+  // that does arrive is a local 304 once the manager's checks still hold.
   app.get("/api/remote-libraries/:id/items/:itemId/artwork/:imageType", asyncRoute(async (req, res) => {
     let response: Response;
     try {
@@ -338,15 +339,20 @@ export function registerMediaServerRoutes(app: express.Application, deps: MediaS
         assertNoBody(request);
         const query = request.query as Record<string, unknown>;
         for (const key of Object.keys(query)) {
-          if (key !== "tag" && key !== "size") throw malformed("The media-server request has an unknown query field.");
+          if (key !== "tag" && key !== "size" && key !== "surface") throw malformed("The media-server request has an unknown query field.");
         }
         const tag = query.tag;
         const size = query.size;
+        const surface = query.surface;
+        if (surface !== undefined && surface !== "catalog" && surface !== "library" && surface !== "remote" && surface !== "home") {
+          throw malformed("The image surface is not supported.");
+        }
         const ifNoneMatch = request.header("if-none-match");
         return mediaServers.readArtwork(authority, request.params.id, request.params.itemId, String(request.params.imageType), signal, {
           ...(tag === undefined ? {} : { tag }),
           ...(ifNoneMatch === undefined ? {} : { ifNoneMatch }),
           ...(size === undefined ? {} : { size }),
+          ...(surface === undefined ? {} : { surface }),
         });
       });
     } catch (error) {

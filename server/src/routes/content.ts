@@ -1,7 +1,9 @@
 import type express from "express";
 import path from "node:path";
-import { mkdir, rename, stat } from "node:fs/promises";
+import { mkdir, readFile, rename, stat } from "node:fs/promises";
 import { artworks } from "../artwork-cache.js";
+import { imageSurface, noteImage } from "../image-stats.js";
+import { FileSnapCache, fileEtag } from "../byte-cache.js";
 import type { ArtShape } from "../artwork.js";
 import { folderMosaicUnits, pendingSuggestionKeys, unitFor, type GalleryEntry, type LibraryMetaRecord, type LibrarySuggestion, type TitleUnit } from "../library-match.js";
 import { AppError } from "../errors.js";
@@ -53,10 +55,13 @@ export interface ContentDeps extends RouteContext {
   transferLibraryItem(relative: string, folder: string, copy?: boolean, progress?: TransferProgress, confirmTypeMismatch?: boolean): Promise<string>;
   wirePath(key: string): string;
   withFavorites<T extends { path: string }>(items: T[], data: UserData): Array<T & { favorite: boolean }>;
+  /** The memory copy of the library poster and wide bytes. Omitted, one is built here. */
+  fileSnaps?: FileSnapCache;
 }
 
 export function registerContentRoutes(app: express.Application, deps: ContentDeps): void {
   const { store, currentUser, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, metaStore, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites } = deps;
+  const fileSnaps = deps.fileSnaps ?? new FileSnapCache();
 
   /** The distinct films a folder holds, one catalogue picture each, bounded and deduplicated
    *  by identity. A folder that is one film or a series answers with nothing, so it keeps the
@@ -337,8 +342,50 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
       art = entry && await locateArtwork(entry, shape);
     }
     if (!art) return res.status(404).end();
-    void artworks.served(art);
-    res.setHeader("cache-control", "private, no-cache");
-    res.sendFile(art, { dotfiles: "allow" }, (error) => { if (error && !res.headersSent) res.status(404).end(); });
+    // The listing address carries the file's mtime, so a replaced picture is a new URL the
+    // browser has never seen. This one may therefore be kept for a year, and the bytes may come
+    // straight from memory. A request that does arrive still resolves the path and refuses a
+    // library the viewer cannot see before the cache is touched.
+    const cacheControl = "private, max-age=31536000, immutable";
+    const surface = imageSurface(req.query.surface, "library");
+    const snap = fileSnaps.get(art);
+    if (req.headers["if-none-match"] === undefined && snap) {
+      artworks.touch(art);
+      noteImage(surface, "memory");
+      res.setHeader("cache-control", cacheControl);
+      res.setHeader("etag", snap.etag);
+      res.type(path.extname(art));
+      res.end(snap.bytes);
+      return;
+    }
+    const info = await stat(art).catch(() => undefined);
+    if (!info?.isFile()) return res.status(404).end();
+    const etag = fileEtag(info.size, info.mtime.getTime());
+    res.setHeader("cache-control", cacheControl);
+    res.setHeader("etag", etag);
+    if (req.headers["if-none-match"] === etag) {
+      // The snapshot is only a copy: the file may have been replaced under the same address,
+      // in which case the fresh bytes are read now so the next unconditional GET is up to date.
+      if (snap && (snap.size !== info.size || snap.mtimeMs !== info.mtime.getTime())) {
+        const fresh = await readFile(art).catch(() => undefined);
+        if (fresh) fileSnaps.put(art, { bytes: fresh, etag, size: info.size, mtimeMs: info.mtime.getTime() });
+      }
+      artworks.touch(art);
+      return res.status(304).end();
+    }
+    if (snap && snap.size === info.size && snap.mtimeMs === info.mtime.getTime()) {
+      artworks.touch(art);
+      noteImage(surface, "memory");
+      res.type(path.extname(art));
+      res.end(snap.bytes);
+      return;
+    }
+    const data = await readFile(art).catch(() => undefined);
+    if (!data) return res.status(404).end();
+    fileSnaps.put(art, { bytes: data, etag, size: info.size, mtimeMs: info.mtime.getTime() });
+    artworks.touch(art);
+    noteImage(surface, "disk");
+    res.type(path.extname(art));
+    res.end(data);
   }));
 }

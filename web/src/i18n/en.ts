@@ -128,6 +128,15 @@ export const en = {
   "stats.mode.direct": "Direct play",
   "stats.mode.remux": "Remux",
   "stats.mode.transcode": "Transcode",
+  "stats.images.title": "Posters",
+  "stats.images.hint": "Each served poster counts once: from memory, from disk, or fetched again. Posters the browser already holds, and listings or metadata, are not included.",
+  "stats.images.remote": "Remote libraries",
+  "stats.images.library": "Local libraries",
+  "stats.images.catalog": "Catalogue",
+  "stats.images.home": "Home",
+  "stats.images.memory": "From memory",
+  "stats.images.disk": "From disk",
+  "stats.images.upstream": "Fetched again",
 
   // Shared across screens.
   "common.loading": "Loading…",

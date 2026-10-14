@@ -328,6 +328,50 @@ test("cards project resume rows and hide unstarted, finished and watched ones", 
   });
 });
 
+test("a role the provider reports absent is remembered and keeps the card URL off", async () => {
+  await withHarness(async (harness) => {
+    harness.server.detailOf.m1 = { ...movie("m1", "Alien"), hasPrimaryImage: false, hasBackdropImage: false };
+    await harness.personal.patch(harness.admin, harness.libraryId, "m1", { position: 12, duration: 100 });
+
+    const resume = await harness.personal.cards(harness.admin, { filter: "resume" });
+    assert.deepEqual(resume.items.map((card) => card.itemId), ["m1"]);
+    assert.equal("poster" in resume.items[0]!, false, "the absent poster has no URL");
+    assert.equal("wide" in resume.items[0]!, false, "the absent backdrop has no URL");
+
+    const stored = harness.store.userData(ADA).remoteMedia as Record<string, { primaryAbsent?: boolean; backdropAbsent?: boolean }>;
+    const row = stored[Object.keys(stored)[0]!]!;
+    assert.equal(row.primaryAbsent, true);
+    assert.equal(row.backdropAbsent, true);
+
+    // A round trip through validRecord has to keep the flags, or the next read strips them.
+    const fresh = await harness.reload();
+    const reread = new MediaServerPersonal(fresh, harness.manager);
+    const again = await reread.cards(harness.admin, { filter: "resume" });
+    assert.equal("poster" in again.items[0]!, false, "the flag survives a reload");
+    assert.equal("wide" in again.items[0]!, false);
+  });
+});
+
+test("a row written before the absence flags still emits both untagged URLs", async () => {
+  await withHarness(async (harness) => {
+    await harness.personal.patch(harness.admin, harness.libraryId, "m1", { position: 12, duration: 100 });
+    const stored = harness.store.userData(ADA).remoteMedia as Record<string, Record<string, unknown>>;
+    const key = Object.keys(stored)[0]!;
+    await harness.store.update((state) => {
+      const row = (state.userData![ADA]!.remoteMedia as Record<string, Record<string, unknown>>)[key]!;
+      delete row.primaryAbsent;
+      delete row.backdropAbsent;
+      row.primaryImageTag = "planted";
+    });
+
+    const resume = await harness.personal.cards(harness.admin, { filter: "resume" });
+    assert.equal(resume.items.length, 1);
+    assert.match(resume.items[0]!.poster!, /\/items\/m1\/artwork\/Primary$/);
+    assert.match(resume.items[0]!.wide!, /\/items\/m1\/artwork\/Backdrop$/);
+    assert.equal(resume.items[0]!.poster!.includes("tag="), false, "a planted tag never reaches the card");
+  });
+});
+
 test("cards mark a library partial when it cannot be confirmed and project nothing for it", async () => {
   await withHarness(async (harness) => {
     await harness.personal.patch(harness.admin, harness.libraryId, "m1", { position: 12, duration: 100 });

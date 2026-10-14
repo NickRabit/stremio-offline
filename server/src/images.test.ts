@@ -29,10 +29,11 @@ async function harness(
   ttlMs = 0,
   indexTtlMs?: number,
   now: () => number = Date.now,
+  memoryCap = 0,
 ) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "stremio-images-"));
   const calls: string[] = [];
-  const proxy = new ImageProxy(dir, cap, ttlMs, async (url) => { calls.push(url); return responder(url); }, indexTtlMs, now);
+  const proxy = new ImageProxy(dir, cap, ttlMs, async (url) => { calls.push(url); return responder(url); }, indexTtlMs, now, memoryCap);
   await proxy.load();
   return { dir, proxy, calls };
 }
@@ -353,8 +354,63 @@ test("a lowered cap is enforced when the cache is loaded again", async () => {
   const restarted = new ImageProxy(dir, 500, 0, async () => chunk());
   await restarted.load();
   const kept = (await cached(dir)).length;
-  assert.ok(kept * 400 <= 500 * 0.8, `expected at most 400 bytes, found ${kept} files`);
+  // The margin is max(1, floor(500 * 0.02)) = 10, so the floor is 490 bytes: one file remains.
+  assert.equal(kept, 1);
   for (const link of links) assert.ok((await restarted.fetch(link.split("/").pop()!))?.file, "a dropped id fetches again");
+});
+
+test("a pass drops to the headroom floor, leaving nine where an 80% floor would leave eight", async () => {
+  const chunk = async () => imageResponse(Buffer.alloc(1000, 7), "image/jpeg");
+  const { proxy, dir } = await harness(chunk, 1024 * 1024);
+  const links = Array.from({ length: 12 }, (_, index) => proxy.proxied(`https://cdn.example/${index}.jpg`)!);
+  for (const link of links) await proxy.fetch(link.split("/").pop()!);
+  await proxy.flush();
+  assert.equal((await cached(dir)).length, 12);
+
+  // The floor is 10000 - max(1, floor(10000 * 0.02)) = 9800, so 9 files fit and the cache stops
+  // there. A floor of `cap * 0.8` (8000) would have dropped a tenth file as well.
+  const restarted = new ImageProxy(dir, 10000, 0, async () => chunk());
+  await restarted.load();
+  assert.equal((await cached(dir)).length, 9);
+});
+
+test("a poster read once is served from memory, and a picture over that cap is not kept", async () => {
+  const { proxy } = await harness(jpeg, 1024 * 1024, 0, undefined, Date.now, 1024 * 1024);
+  const id = proxy.proxied(REMOTE)!.split("/").pop()!;
+  const stored = (await proxy.fetch(id))!.file;
+  const first = await proxy.readCached(id);
+  assert.deepEqual(first, Buffer.alloc(64, 7), "the miss reads the file once");
+
+  await rm(stored, { force: true });
+  assert.deepEqual(await proxy.readCached(id), first, "a memory hit never goes back to the disk");
+
+  const small = await harness(jpeg, 1024 * 1024, 0, undefined, Date.now, 10);
+  const { proxy: tight } = small;
+  const big = tight.proxied(REMOTE)!.split("/").pop()!;
+  const file = (await tight.fetch(big))!.file;
+  assert.deepEqual(await tight.readCached(big), Buffer.alloc(64, 7), "the read still succeeds");
+  await rm(file, { force: true });
+  assert.equal(await tight.readCached(big), undefined, "a buffer over the memory cap is never stored");
+});
+
+test("preheat fills the memory with the hottest posters and never reads an old one", async () => {
+  let clock = 1_000_000;
+  const bytes = Buffer.alloc(1000, 7);
+  const { proxy } = await harness(async () => imageResponse(bytes, "image/jpeg"), 1024 * 1024, 0, undefined, () => clock, 2500);
+  const files: string[] = [];
+  for (const name of ["one", "two", "three"]) {
+    const id = proxy.proxied(`https://cdn.example/${name}.jpg`)!.split("/").pop()!;
+    files.push((await proxy.fetch(id))!.file);
+    clock += 1000;
+  }
+  const ids = files.map((file) => path.basename(file, ".jpg"));
+
+  await proxy.preheat();
+  for (const file of files) await rm(file, { force: true });
+
+  assert.equal(await proxy.readCached(ids[0]!), undefined, "the oldest does not fit and is not read");
+  assert.deepEqual(await proxy.readCached(ids[1]!), bytes, "the second newest is in memory");
+  assert.deepEqual(await proxy.readCached(ids[2]!), bytes, "the newest is in memory");
 });
 
 test("maintain forgets an old link with no bytes and keeps the ones still in use", async () => {

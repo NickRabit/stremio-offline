@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { allowedAddons, catalog, orderedForUser, orderFor, searchAll, searchableCatalogs, streamCandidates, streams, subtitles, type MetaProvider } from "../addons.js";
 import { AppError } from "../errors.js";
 import { ExternalIdStore, imdbOf, siteLinks } from "../external-ids.js";
+import { imageSurface, noteImage } from "../image-stats.js";
 import { images } from "../images.js";
 import { normalizeLanguage } from "../language.js";
 import { libraryFor, libraryVisible, parseLibraryPath, posixBase, type Viewer } from "../libraries.js";
@@ -175,17 +176,30 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     const ids = imdbId ? await externalIds.ids(imdbId) : {};
     res.json({ links: siteLinks(String(req.params.type), id, ids ?? {}, language) });
   }));
-  /** Opaque id in, cached bytes out. An id we never handed out means nothing here. */
+  /** Opaque id in, cached bytes out. An id we never handed out means nothing here. The id is a
+   *  hash of the address, not of the bytes, so it stays a day rather than a year: the bytes may
+   *  be replaced under the same id. */
   app.get("/api/image/:id", asyncRoute(async (req, res) => {
-    const cached = await images.fetch(String(req.params.id));
+    const id = String(req.params.id);
+    const cached = await images.fetch(id);
     if (!cached) return res.status(404).end();
     res.setHeader("content-type", cached.type);
     res.setHeader("etag", cached.etag);
     res.setHeader("cache-control", "private, max-age=86400");
-    if (req.headers["if-none-match"] === cached.etag) return res.status(304).end();
-    // The path is ours, not the caller's, and a data directory may well sit inside a
-    // dotted folder -- which sendFile refuses unless told otherwise.
-    res.sendFile(cached.file, { dotfiles: "allow" }, (error) => { if (error && !res.headersSent) res.status(404).end(); });
+    if (req.headers["if-none-match"] === cached.etag) {
+      images.takeFetched(id);
+      return res.status(304).end();
+    }
+    // The bytes come from memory when they are already there, and from one read otherwise;
+    // sendFile would refuse a data directory that sits inside a dotted folder.
+    const warm = images.inMemory(id);
+    const bytes = await images.readCached(id);
+    if (!bytes) {
+      images.takeFetched(id);
+      return res.status(404).end();
+    }
+    noteImage(imageSurface(req.query.surface, "catalog"), images.takeFetched(id) ? "upstream" : warm ? "memory" : "disk");
+    res.end(bytes);
   }));
   app.get("/api/stream-sources/:type/:id", (req, res) => {
     // The picker lists these in the caller's own order, the same one `GET /api/addons` answers.

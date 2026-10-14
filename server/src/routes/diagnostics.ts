@@ -8,6 +8,7 @@ import { clearLog, currentLevel, log, parseLevel, readLog } from "../logger.js";
 import { safeSourceText } from "../media-resources.js";
 import { metadataOutbound, outbound } from "../outbound.js";
 import { sourceTitle, type PlaybackManager } from "../playback.js";
+import type { ImageStats } from "../image-stats.js";
 import type { StatsLog, TrafficMeta } from "../stats.js";
 import type { Throughput } from "../throughput.js";
 import type { StreamItem } from "../types.js";
@@ -15,6 +16,8 @@ import { asyncRoute, type RouteContext } from "./context.js";
 
 export interface DiagnosticsDeps extends RouteContext {
   stats: StatsLog;
+  /** Picture counts for the statistics page. Absent in route tests that only stub traffic. */
+  imageStats?: ImageStats;
   playback: PlaybackManager;
   throughput: Throughput;
   queue: DownloadQueue;
@@ -70,13 +73,17 @@ const bundleLine = (raw: unknown): ClientLogLine | undefined => {
 };
 
 export function registerDiagnosticsRoutes(app: express.Application, deps: DiagnosticsDeps): void {
-  const { store, currentUser, stats, playback, throughput, queue, libraryScan, playbackMeta, freeSpace, clientLogs, dataDir } = deps;
+  const { store, currentUser, stats, imageStats, playback, throughput, queue, libraryScan, playbackMeta, freeSpace, clientLogs, dataDir } = deps;
 
   app.get("/api/stats/activity", (req, res) => {
     res.setHeader("cache-control", "private, no-store");
     res.json(stats.activity.page(Number(req.query.hours) || 720, String(req.query.kind ?? ""), String(req.query.user ?? ""), Number(req.query.before) || undefined));
   });
-  app.get("/api/stats", (req, res) => res.json(stats.summary(Number(req.query.hours) || 720)));
+  app.get("/api/stats", (req, res) => {
+    const hours = Number(req.query.hours) || 720;
+    const summary = stats.summary(hours);
+    res.json(imageStats ? { ...summary, images: imageStats.summary(hours) } : summary);
+  });
   /** Playback running at this moment. The statistics otherwise look backwards; this is the
    * one view of what the line is carrying right now. */
   app.get("/api/stats/streams", (_req, res) => res.json(playback.active().map((session) => {

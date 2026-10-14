@@ -9,6 +9,7 @@ import {
   REMOTE_LIBRARY_ID,
   type MediaConnectionRecord,
   type MediaServerKind,
+  type PublicRemoteItem,
   type RemoteLibraryRecord,
 } from "./media-server-types.js";
 import { ResourceError } from "./media-resources.js";
@@ -44,6 +45,10 @@ interface RemoteMediaRecord {
   favorite: boolean;
   watched: boolean;
   mediaSourceId?: string;
+  /** A role the provider reported as absent. Only the true flag is stored: an unknown role
+   *  keeps its legacy URL, and a later build clears the flag when the image appears. */
+  primaryAbsent?: true;
+  backdropAbsent?: true;
   updatedAt: string;
 }
 
@@ -278,6 +283,8 @@ const validRecord = (value: unknown): RemoteMediaRecord | undefined => {
   if (series) stored.series = series;
   const mediaSourceId = safeString(record.mediaSourceId, MEDIA_SERVER_LIMITS.upstreamId);
   if (mediaSourceId !== undefined) stored.mediaSourceId = mediaSourceId;
+  if (record.primaryAbsent === true) stored.primaryAbsent = true;
+  if (record.backdropAbsent === true) stored.backdropAbsent = true;
   return stored;
 };
 
@@ -537,8 +544,8 @@ export class MediaServerPersonal {
       ...(record.mediaSourceId !== undefined ? { mediaSourceId: record.mediaSourceId } : {}),
       ...(record.series?.season !== undefined ? { season: record.series.season } : {}),
       ...(record.series?.episode !== undefined ? { episode: record.series.episode } : {}),
-      poster: remoteArtworkPath(library.id, record.itemId, "Primary"),
-      wide: remoteArtworkPath(library.id, record.itemId, "Backdrop"),
+      ...(record.primaryAbsent === true ? {} : { poster: remoteArtworkPath(library.id, record.itemId, "Primary") }),
+      ...(record.backdropAbsent === true ? {} : { wide: remoteArtworkPath(library.id, record.itemId, "Backdrop") }),
       ...(record.duration > 0 ? { progress: { position: record.position, duration: record.duration } } : {}),
       updatedAt: record.updatedAt,
     };
@@ -571,6 +578,9 @@ export class MediaServerPersonal {
   }
 
   private build(previous: RemoteMediaRecord | undefined, resolved: Resolved, patch: Patch, trackProgress: boolean): RemoteMediaRecord {
+    // The detail route answers the public projection, so an absent role reads as a missing
+    // path here. Unknown roles keep a path, which leaves the flag unset.
+    const shown = resolved.item as PublicRemoteItem;
     const record: RemoteMediaRecord = {
       key: resolved.key,
       provider: resolved.connection.provider,
@@ -586,6 +596,8 @@ export class MediaServerPersonal {
       watched: previous?.watched ?? false,
       updatedAt: new Date().toISOString(),
     };
+    if (shown.poster === undefined) record.primaryAbsent = true;
+    if (shown.wide === undefined) record.backdropAbsent = true;
     const series = seriesOf(resolved.item);
     if (series) record.series = series;
     if (resolved.playable && previous?.mediaSourceId !== undefined) record.mediaSourceId = previous.mediaSourceId;

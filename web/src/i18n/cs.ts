@@ -124,6 +124,15 @@ export const cs: Catalog = {
   "stats.mode.direct": "Přímé přehrávání",
   "stats.mode.remux": "Přebalení",
   "stats.mode.transcode": "Překódování",
+  "stats.images.title": "Plakáty",
+  "stats.images.hint": "Každý odeslaný plakát se počítá jednou: z paměti, z disku, nebo znovu stažený. Plakáty, které už drží prohlížeč, a výpisy nebo metadata se nepočítají.",
+  "stats.images.remote": "Vzdálené knihovny",
+  "stats.images.library": "Místní knihovny",
+  "stats.images.catalog": "Katalog",
+  "stats.images.home": "Domů",
+  "stats.images.memory": "Z paměti",
+  "stats.images.disk": "Z disku",
+  "stats.images.upstream": "Staženo znovu",
 
   // Sdílené napříč obrazovkami.
   "common.loading": "Načítám…",

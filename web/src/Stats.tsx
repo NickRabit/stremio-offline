@@ -64,6 +64,30 @@ const stamp = (at: string, step: StatsSummary["step"]) => {
   return date.toLocaleTimeString(localeTag(), { hour: "2-digit", minute: "2-digit" });
 };
 
+function ImageCountsPanel({ images }: { images: NonNullable<StatsSummary["images"]> }) {
+  const columns = [
+    ["remote", "stats.images.remote"],
+    ["library", "stats.images.library"],
+    ["catalog", "stats.images.catalog"],
+    ["home", "stats.images.home"],
+  ] as const;
+  const rows = [
+    ["memory", "stats.images.memory"],
+    ["disk", "stats.images.disk"],
+    ["upstream", "stats.images.upstream"],
+  ] as const;
+  return <section className="panel stats-images">
+    <h3>{t("stats.images.title")}</h3>
+    <p className="stats-hint">{t("stats.images.hint")}</p>
+    <div className="stats-columns">
+      {columns.map(([key, label]) => <div key={key} className="stats-card">
+        <small>{t(label)}</small>
+        {rows.map(([from, row]) => <span key={from}>{t(row)}: {images[key][from].toLocaleString(localeTag())}</span>)}
+      </div>)}
+    </div>
+  </section>;
+}
+
 function Card({ title, window }: { title: string; window: { bytes: number; count: number } }) {
   return <div className="stats-card">
     <small>{title}</small>
@@ -335,6 +359,8 @@ export function StatsPanel({ onError }: { onError: (error: unknown) => void }) {
         <Card title={t("stats.card.month")} window={summary.month}/>
         <Card title={t("stats.card.total")} window={summary.total}/>
       </div>
+
+      {summary.images && <ImageCountsPanel images={summary.images}/>}
 
       <section className="panel stats-graph">
         <div className="stats-graph-head">

@@ -29,6 +29,13 @@ const megabytes = (value: string | undefined, fallback: number) => {
   return (Number.isFinite(parsed) && parsed > 0 ? parsed : fallback) * 1024 * 1024;
 };
 
+/** How far below the cap a pass drops: the smaller of 8 MiB and 2% of the cap, at least one
+ *  byte. A cache that stays above its cap evicts on every pass; the cap is the lever. */
+function evictionFloor(cap: number): number {
+  const margin = Math.min(8 * 1024 * 1024, Math.max(1, Math.floor(cap * 0.02)));
+  return cap - margin;
+}
+
 export class ArtworkCache {
   private entries = new Map<string, Entry>();
   private timer?: NodeJS.Timeout;
@@ -227,15 +234,33 @@ export class ArtworkCache {
     this.save();
   }
 
+  /** A thumbnail served from the memory in front of this cache: the index entry is refreshed
+   *  the same way a serve does, without the debounced write. A picture that is not indexed --
+   *  one sitting next to its media -- is not this cache's business. */
+  touch(file: string): void {
+    const name = this.storedName(file);
+    if (!name) return;
+    const known = this.entries.get(name);
+    if (!known) return;
+    this.entries.set(name, { bytes: known.bytes, at: Date.now() });
+  }
+
+  /** Every indexed file as an absolute path, newest `at` first. Bodies are not read here. */
+  hotFiles(): Array<{ file: string; at: number }> {
+    return [...this.entries.entries()]
+      .map(([name, entry]) => ({ file: path.join(this.dir, name), at: entry.at }))
+      .sort((left, right) => right.at - left.at);
+  }
+
   private evict(): Promise<void> { return this.exclusively(() => this.evictOnce()); }
 
-  /** Oldest first, down to four fifths of the cap so this does not run on every write. */
+  /** Oldest first, down to `evictionFloor(cap)` so this does not run on every write. */
   private async evictOnce() {
     let total = 0;
     for (const entry of this.entries.values()) total += entry.bytes;
     if (total <= this.cap) return;
     const stored = [...this.entries.entries()].sort((a, b) => a[1].at - b[1].at);
-    const target = this.cap * 0.8;
+    const target = evictionFloor(this.cap);
     let removed = 0;
     for (const [name, snapshot] of stored) {
       if (total <= target) break;

@@ -13,6 +13,7 @@ import { defaultDownloadLibrary, DownloadQueue, ownerMayDownload, type DownloadJ
 import { DeviceTransfers } from "./device-transfers.js";
 import { ClientLogStore } from "./client-logs.js";
 import { selectDownloadSource, selectTorrentSource } from "./download-selection.js";
+import { ImageStats, useImageStats } from "./image-stats.js";
 import { StatsLog, type TrafficEvent, type TrafficMeta } from "./stats.js";
 import { Throughput } from "./throughput.js";
 import { sourcePace } from "./conversion-pace.js";
@@ -64,6 +65,8 @@ import { LibraryMetaStore } from "./library-meta-store.js";
 import { LibrarySeenStore } from "./library-seen.js";
 import { localCopies } from "./local-sources.js";
 import { artworks } from "./artwork-cache.js";
+import { FileSnapCache, preheatFileSnaps } from "./byte-cache.js";
+import { RemoteImageCache } from "./remote-image-cache.js";
 import type { AddonRecord, MetaItem, StreamItem } from "./types.js";
 import { createLibraryActions } from "./library-actions.js";
 import { LibraryOps } from "./library-ops.js";
@@ -118,7 +121,11 @@ const clientLogs = new ClientLogStore(DATA_DIR);
 const mediaServerKeyFile = await prepareContainerMediaKey(DATA_DIR, process.env, (level, line) => log(level, line));
 process.env.MEDIA_SERVER_KEY_FILE = mediaServerKeyFile;
 const mediaServerVault = new MediaServerSecrets(path.join(DATA_DIR, "media-server-secrets"), mediaServerKeyFile);
-const mediaServers = new MediaServerManager(store, mediaServerVault);
+/** The disk and memory cache in front of remote posters and backdrops, and the memory copy of
+ *  the library thumbnails: both are faster copies of bytes that already sit on disk. */
+const remoteImages = new RemoteImageCache(path.join(DATA_DIR, "remote-images"));
+const fileSnaps = new FileSnapCache();
+const mediaServers = new MediaServerManager(store, mediaServerVault, { remoteImages });
 const mediaServerSources = new MediaServerSources(store, mediaServers, mediaResources);
 const mediaServerPersonal = new MediaServerPersonal(store, mediaServers);
 let markServerReady!: () => void;
@@ -162,6 +169,11 @@ await initLogger(); startLogMaintenance();
 if (restrictedMode()) log("INFO", "Restricted mode enabled");
 await images.load();
 await artworks.load();
+await remoteImages.load();
+// Preheat is a background copy of what is already on disk: it never delays listen or /api/status.
+void images.preheat();
+void preheatFileSnaps(fileSnaps, artworks.hotFiles());
+void remoteImages.preheat();
 const playbackOwners = new Map<string, { owner: ResourceOwner; resourceId: string }>();
 const airplayAccess = new AirPlayAccess(mediaResources);
 /** Where a download with no library of its own goes: the default for the kind, resolved the
@@ -263,6 +275,8 @@ const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () =
   sourcePace.forget(id);
 });
 const stats = new StatsLog();
+const imageStats = new ImageStats(path.join(DATA_DIR, "image-stats.json"));
+useImageStats(imageStats);
 let libraryOpsWriting = false;
 /** How fast each running playback is transferring right now. */
 const throughput = new Throughput();
@@ -1072,6 +1086,7 @@ const maintenance = createMaintenance({
   tasks: [
     { name: "images", run: () => images.maintain() },
     { name: "artworks", run: () => artworks.maintain() },
+    { name: "remote-images", run: () => remoteImages.maintain() },
     // The pass signal is swapped in here: the sweep is built once so its empty-library
     // memory survives between passes, and the signal only exists while a pass is running.
     { name: "artwork-sweep", run: (signal) => { sweepDeps.signal = signal; return artworkSweep().then(() => undefined); } },
@@ -1976,7 +1991,7 @@ const libraryPathBusy = async (keys: string[]): Promise<string | undefined> => {
   return undefined;
 };
 
-registerContentRoutes(app, { ...routeContext, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, metaStore, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
+registerContentRoutes(app, { ...routeContext, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, fileSnaps, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, metaStore, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
 /** The one search and resolution service behind both the scan and the manual identity
  *  search, so the row somebody picks by hand is the row the scanner would have picked. */
 const libraryCandidates = createLibraryCandidates({
@@ -2141,6 +2156,7 @@ queue.setDebrid({
   advance: (input) => advanceTorrent(store.settings().realDebridToken, input.infoHash, input.fileIdx, input.torrentId),
 });
 await stats.load();
+await imageStats.load();
 await queue.load();
 await libraryScan.load();
 await followService.reconcile();
@@ -2350,7 +2366,7 @@ const freeSpace = async (target: string) => {
   try { const info = await statfs(target); return { path: target, freeBytes: info.bavail * info.bsize, totalBytes: info.blocks * info.bsize }; }
   catch { return { path: target }; }
 };
-registerDiagnosticsRoutes(app, { ...routeContext, stats, playback, throughput, queue, libraryScan, playbackMeta, freeSpace, clientLogs, dataDir: DATA_DIR });
+registerDiagnosticsRoutes(app, { ...routeContext, stats, imageStats, playback, throughput, queue, libraryScan, playbackMeta, freeSpace, clientLogs, dataDir: DATA_DIR });
 registerSettingsRoutes(app, { ...routeContext, STREAM_SORTS, accountIdOf, invalidateLibrary, mediaServers, metaCache, metaStore, mutateData, prefsOf, queue, streamCache });
 registerMediaServerRoutes(app, { ...routeContext, mediaServers, mediaSources: mediaServerSources, remotePersonal: mediaServerPersonal, ownerOf });
 registerPlaybackRoutes(app, { ...routeContext, mediaSources: mediaServerSources, mediaServerGuard, airplayAccess, airplayRequest, answerHeaders, countBytes, httpSourceOf, internalMediaRequest, libraryTarget, noteSourceQuiet, ownerOf, playback, playbackMeta, playbackOwners, playbackResponse, prefsOf, quietSources, rangeCache, safeInspection, sleep, sourceIsQuiet, stats, subtitleDelay, trackMedia, SOURCE_ATTEMPTS, SOURCE_RETRY_MS, SOURCE_RESUMES, SOURCE_HEADER_MS, SOURCE_QUIET_HEADER_MS });
@@ -2465,7 +2481,7 @@ const shutdown = createShutdown({
   maintenance,
   followService,
   killRunningMedia,
-  flushes: [() => stats.activity.flush(), () => images.flush(), () => artworks.flush(), () => metaStore.flush(), () => seen.flush(), () => libraryOps.flush(), () => mediaServerGuard.close(), () => mediaServers.close()],
+  flushes: [() => stats.activity.flush(), () => imageStats.flush(), () => images.flush(), () => artworks.flush(), () => metaStore.flush(), () => seen.flush(), () => libraryOps.flush(), () => mediaServerGuard.close(), () => mediaServers.close()],
   store,
   flushLog,
   log,

@@ -15,6 +15,7 @@ import { MediaServerSecrets } from "./media-server-secrets.js";
 import type { MediaServerTransport } from "./media-server-security.js";
 import { MediaServerError, remoteProgressKey } from "./media-server-types.js";
 import type { LibraryRecord } from "./libraries.js";
+import { RemoteImageCache } from "./remote-image-cache.js";
 import { Store } from "./store.js";
 import { emptyUserData, type UserRecord } from "./users.js";
 
@@ -221,6 +222,7 @@ const mount = async (options: {
   networkStartIntervalMs?: number;
   coalesceReads?: boolean;
   clock?: () => number;
+  cacheRemoteImages?: boolean;
 } = {}): Promise<Harness> => {
   const dir = await mkdtemp(path.join(tmpdir(), "media-manager-"));
   const users = options.users ?? [admin, bob, carol];
@@ -245,10 +247,13 @@ const mount = async (options: {
   const vault = new MediaServerSecrets(path.join(dir, "vault"), options.key === false ? undefined : keyFile);
   const server = new FakeServer();
   const index = new MediaServerIndex();
+  const remoteImages = options.cacheRemoteImages ? new RemoteImageCache(path.join(dir, "remote-images")) : undefined;
+  if (remoteImages) await remoteImages.load();
   const manager = new MediaServerManager(store, vault, {
     providerFactory: () => stubProvider(server),
     transportFactory: () => stubTransport(server),
     index,
+    ...(remoteImages === undefined ? {} : { remoteImages }),
     // The identical-live-session tests own the network lane, so none of the shared harness pays
     // the production 125ms start interval; a test proves the pacing with its own short interval.
     networkStartIntervalMs: options.networkStartIntervalMs ?? 0,
@@ -294,7 +299,7 @@ const mount = async (options: {
 
 const withHarness = async (
   run: (harness: Harness) => Promise<void>,
-  options: { users?: UserRecord[]; key?: boolean; networkStartIntervalMs?: number; coalesceReads?: boolean; clock?: () => number } = {},
+  options: { users?: UserRecord[]; key?: boolean; networkStartIntervalMs?: number; coalesceReads?: boolean; clock?: () => number; cacheRemoteImages?: boolean } = {},
 ) => {
   const harness = await mount(options);
   try { await run(harness); }
@@ -1612,7 +1617,7 @@ test("readArtwork streams bounded bytes for a fixed role and refuses other roles
     const response = await harness.manager.readArtwork(harness.admin, library.id, "show", "Backdrop");
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("content-type"), "image/png");
-    assert.equal(response.headers.get("cache-control"), "private, no-cache");
+    assert.equal(response.headers.get("cache-control"), "private, max-age=31536000");
     assert.deepEqual(await imageBytes(response), [1, 2, 3]);
     assert.deepEqual(harness.server.artworkRequests.at(-1), { itemId: "show", imageType: "Backdrop" });
     await assert.rejects(harness.manager.readArtwork(harness.admin, library.id, "m1", "Logo"), { code: "invalid-input" });
@@ -2407,6 +2412,179 @@ test("a page's own ids are proved once, so listing them then reading their image
     assert.equal(detailAfter.filter((call) => call === "ancestors").length, 0, "no per-image ancestor chain for a detail variant");
     assert.equal(detailAfter.filter((call) => call === "artwork").length, 2, "each detail image was fetched once");
   });
+});
+
+/** A library whose page carries a poster tag, browsed once so the membership proof exists. */
+const taggedLibrary = async (harness: Harness, tag = "t1") => {
+  const library = await directoryLibrary(harness, "music");
+  harness.server.directories["music"] = [{ ...artMovie("a1"), primaryImageTag: tag }];
+  harness.server.artwork = { bytes: new Uint8Array([1, 2, 3]), contentType: "image/png" };
+  await harness.manager.browseDirectory(harness.admin, library.id, {});
+  return library;
+};
+
+/** How many readers are waiting on the remote image cache's in-flight artwork body. */
+const cacheWaiters = (harness: Harness): number => {
+  const cache = (harness.manager as unknown as { remoteImages: { inflight: Map<string, { waiters: Set<unknown> }> } }).remoteImages;
+  let total = 0;
+  for (const entry of cache.inflight.values()) total += entry.waiters.size;
+  return total;
+};
+
+test("a remote poster read twice is served from the cache without a second upstream call", async () => {
+  await withHarness(async (harness) => {
+    const library = await taggedLibrary(harness);
+    const first = await harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary");
+    assert.equal(first.headers.get("cache-control"), "private, max-age=31536000");
+    assert.equal(first.headers.get("cache-control")!.includes("immutable"), false, "an untagged URL is not immutable");
+    assert.deepEqual(await imageBytes(first), [1, 2, 3]);
+    assert.deepEqual(harness.server.artworkRequests, [{ itemId: "a1", imageType: "Primary" }], "the proof tag never travels upstream");
+
+    const second = await harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary");
+    assert.deepEqual(await imageBytes(second), [1, 2, 3]);
+    assert.equal(harness.server.artworkRequests.length, 1, "the second read never reached the provider");
+  }, { cacheRemoteImages: true });
+});
+
+test("a URL whose tag equals the proof tag is a cache hit and is immutable", async () => {
+  await withHarness(async (harness) => {
+    const library = await taggedLibrary(harness);
+    const plain = await harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary");
+    await imageBytes(plain);
+
+    const tagged = await harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary", undefined, { tag: "t1" });
+    assert.equal(tagged.headers.get("cache-control"), "private, max-age=31536000, immutable");
+    assert.deepEqual(await imageBytes(tagged), [1, 2, 3]);
+    assert.equal(harness.server.artworkRequests.length, 1, "the same proof tag is the same cache entry");
+  }, { cacheRemoteImages: true });
+});
+
+test("a client tag that differs from the proof tag never touches the cache", async () => {
+  await withHarness(async (harness) => {
+    const library = await taggedLibrary(harness);
+    for (let index = 0; index < 2; index += 1) {
+      const response = await harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary", undefined, { tag: "other" });
+      assert.deepEqual(await imageBytes(response), [1, 2, 3]);
+      assert.equal(response.headers.get("cache-control")!.includes("immutable"), false);
+    }
+    assert.deepEqual(harness.server.artworkRequests, [
+      { itemId: "a1", imageType: "Primary", tag: "other" },
+      { itemId: "a1", imageType: "Primary", tag: "other" },
+    ], "a mismatched tag is fetched every time and never stored");
+
+    const plain = await harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary");
+    await imageBytes(plain);
+    assert.deepEqual(harness.server.artworkRequests.at(-1), { itemId: "a1", imageType: "Primary" }, "the untagged read is not served from those bytes");
+  }, { cacheRemoteImages: true });
+});
+
+test("a role with no proof tag is never stored, so every read reaches the provider", async () => {
+  await withHarness(async (harness) => {
+    const library = await directoryLibrary(harness, "music");
+    harness.server.directories["music"] = [artMovie("a1")];
+    harness.server.artwork = { bytes: new Uint8Array([1, 2, 3]), contentType: "image/png" };
+    await harness.manager.browseDirectory(harness.admin, library.id, {});
+    await imageBytes(await harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary"));
+    await imageBytes(await harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary"));
+    assert.equal(harness.server.artworkRequests.length, 2, "a proof tag is what makes a poster storeable");
+  }, { cacheRemoteImages: true });
+});
+
+test("a cached remote poster still refuses a disabled library and one the account may not see", async () => {
+  await withHarness(async (harness) => {
+    const library = await taggedLibrary(harness);
+    await imageBytes(await harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary"));
+    const fetched = harness.server.artworkRequests.length;
+
+    await harness.manager.patchLibrary(harness.admin, library.id, { enabled: false });
+    await assert.rejects(harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary"), { code: "not-found" });
+    assert.equal(harness.server.artworkRequests.length, fetched, "a disabled library is never served from the cache");
+
+    await harness.manager.patchLibrary(harness.admin, library.id, { enabled: true, allowedUsers: [BOB] });
+    await assert.rejects(harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary"), { code: "not-found" });
+    assert.equal(harness.server.artworkRequests.length, fetched, "an account without the grant is refused before the cache");
+  }, { cacheRemoteImages: true });
+});
+
+test("two overlapping reads of one poster share a single upstream call", async () => {
+  await withHarness(async (harness) => {
+    const library = await taggedLibrary(harness);
+    const held = deferred();
+    const entered = deferred();
+    harness.server.nudge = { op: "artwork", wait: held.promise, entered: () => entered.resolve() };
+    const first = harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary");
+    const second = harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary");
+    await entered.promise;
+    await until(() => harness.server.artworkRequests.length === 1);
+    await new Promise((resolve) => setImmediate(resolve));
+    held.resolve();
+    harness.server.nudge = undefined;
+    const responses = await Promise.all([first, second]);
+    for (const response of responses) assert.deepEqual(await imageBytes(response), [1, 2, 3]);
+    assert.equal(harness.server.artworkRequests.length, 1);
+    assert.equal(harness.server.artworkCancelled, 0, "no waiter left, so the upstream was never cancelled");
+  }, { cacheRemoteImages: true });
+});
+
+test("the only waiter leaving aborts the shared upstream and the next read fetches afresh", async () => {
+  await withHarness(async (harness) => {
+    const library = await taggedLibrary(harness);
+    const held = deferred();
+    const entered = deferred();
+    harness.server.nudge = { op: "artwork", wait: held.promise, entered: () => entered.resolve() };
+    const controller = new AbortController();
+    const pending = harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary", controller.signal);
+    await entered.promise;
+    controller.abort();
+    await assert.rejects(pending);
+    held.resolve();
+    harness.server.nudge = undefined;
+    await until(() => harness.server.artworkCancelled === 1);
+
+    const again = await harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary");
+    assert.deepEqual(await imageBytes(again), [1, 2, 3]);
+    assert.equal(harness.server.artworkRequests.length, 2, "nothing was stored, so the poster is fetched again");
+  }, { cacheRemoteImages: true });
+});
+
+test("the first of two waiters leaving leaves the second and the stored bytes alone", async () => {
+  await withHarness(async (harness) => {
+    const library = await taggedLibrary(harness);
+    const held = deferred();
+    const entered = deferred();
+    harness.server.nudge = { op: "artwork", wait: held.promise, entered: () => entered.resolve() };
+    const first = new AbortController();
+    const leaving = harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary", first.signal);
+    const staying = harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary");
+    await entered.promise;
+    await until(() => cacheWaiters(harness) === 2);
+    first.abort();
+    assert.equal(cacheWaiters(harness), 1, "only the aborting waiter left");
+    await assert.rejects(leaving);
+    held.resolve();
+    harness.server.nudge = undefined;
+
+    assert.deepEqual(await imageBytes(await staying), [1, 2, 3], "the remaining waiter still gets the bytes");
+    assert.equal(harness.server.artworkCancelled, 0);
+    const third = await harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary");
+    await imageBytes(third);
+    assert.equal(harness.server.artworkRequests.length, 1, "the body was stored");
+  }, { cacheRemoteImages: true });
+});
+
+test("a failed or non-200 upstream stores nothing", async () => {
+  await withHarness(async (harness) => {
+    const library = await taggedLibrary(harness);
+    harness.server.artwork = { bytes: new Uint8Array([1]), contentType: "image/png", status: 500 };
+    await assert.rejects(harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary"));
+    harness.server.artwork = { bytes: new Uint8Array([1]), contentType: "image/png", error: new MediaServerError("unavailable", "down") };
+    await assert.rejects(harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary"));
+
+    harness.server.artwork = { bytes: new Uint8Array([1, 2, 3]), contentType: "image/png" };
+    const response = await harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary");
+    assert.deepEqual(await imageBytes(response), [1, 2, 3]);
+    assert.equal(harness.server.artworkRequests.length, 3, "neither failure was stored");
+  }, { cacheRemoteImages: true });
 });
 
 test("an image response is cancelled when its grant disappears while headers are pending", async () => {

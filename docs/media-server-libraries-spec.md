@@ -127,13 +127,20 @@ Revocation aborts upstream reads, not just the public resource registry.
 Remote artwork must always use a content-authorized proxy/cache path, even with
 secure mode off. A generic shared catalogue image ID is insufficient. Bind
 subtitle resources to the same content/owner and preserve that binding after
-conversion. Return private, `no-cache` policies with an `ETag` of the current
-image tag, recheck grants before serving bytes and stream under that check, and
-answer a matching `If-None-Match` with a local `304` after the local checks.
-Already delivered bytes cannot be recalled. A thumbnail a few minutes old is
-acceptable: membership and image tags are cached for a bounded window rather
-than re-proved on every image request, and an authorization refusal still
-invalidates the cache at once.
+conversion. Return `Cache-Control: private, max-age=31536000` with an `ETag` of
+the current image tag, and add `immutable` only when the URL's tag query equals
+the current tag; an untagged URL gets the year without it. A changed tag is a
+different URL, so a new picture is fetched at once. Catalogue
+`/api/image/:id` stays at one day. A request that does arrive still rechecks the
+grant before any byte, streams under that check, and answers a matching
+`If-None-Match` with a local `304`. The bytes are kept in a disk cache under
+`remote-images/`, keyed by the membership proof's tag -- never by the client tag
+and never by a token -- with a memory copy in front of it, and the same memory
+layer sits in front of the catalogue files and the library thumbnails. Already
+delivered bytes cannot be recalled, and the browser may keep them for a year. A
+thumbnail a few minutes old is acceptable: membership and image tags are cached
+for a bounded window rather than re-proved on every image request, and an
+authorization refusal still invalidates that server cache at once.
 
 Reject media-server sources server-side in download admission, device-save,
 source replacement and resume. Public capabilities describe eligible actions;

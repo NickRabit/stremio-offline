@@ -11,7 +11,7 @@ import { sourceIdentity } from "./library-detail-sources";
 import { Player } from "./Player";
 import { DetailHero, LIBRARY_HERO_EMPTY_GRADIENT, LIBRARY_HERO_GRADIENT, useBackdrop } from "./DetailHero";
 import { remoteDetailArtwork } from "./remote-artwork";
-import { RemoteFolderArt, RemoteLibraryArt, RemoteTileArt } from "./remote-mosaic";
+import { preloadRemotePosters, RemoteFolderArt, RemoteLibraryArt, RemoteTileArt } from "./remote-mosaic";
 import { TitleChips } from "./TitleChips";
 import { catalogueGalleryImages, mergeGallery, posterAndWide, type GalleryImage } from "./gallery-images";
 import { createCompactOnScroll } from "./scroll-fold";
@@ -415,6 +415,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     api.remoteBrowse(library.id, { parentId, mode, limit: PAGE_SIZE, search: query || undefined, sort, order: desc ? "desc" : "asc", signal: controller.signal })
       .then((page) => {
         if (epoch !== listEpoch.current) return;
+        preloadRemotePosters(page.items.flatMap((item) => [item.poster, item.wide]));
         setListing({ items: page.items, cursor: page.cursor, total: page.total, loading: false, error: "" });
       })
       .catch((error) => {
@@ -435,6 +436,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     api.remoteBrowse(library.id, { parentId: series.id, mode: "titles", type: "episode", limit: PAGE_SIZE, signal: controller.signal })
       .then((page) => {
         if (epoch !== episodeEpoch.current) return;
+        preloadRemotePosters(page.items.flatMap((item) => [item.poster, item.wide]));
         setEpisodes({ items: page.items, cursor: page.cursor, total: page.total, loading: false, error: "" });
       })
       .catch((error) => {
@@ -1015,7 +1017,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     const locked = menuLoading || menuBusy || Boolean(menuError);
     return <LibraryItem key={item.id} dataRemoteId={item.id} artRef={artRef(key)} onOpen={() => onOpen(item)}
       art={<>
-        <RemoteTileArt target={artRef(key)} shape={libraryTileShape} poster={item.poster} wide={item.wide} fallback={<Film/>}/>
+        <RemoteTileArt shape={libraryTileShape} poster={item.poster} wide={item.wide} fallback={<Film/>}/>
         {stored?.favorite && <i className="fav-mark"><Star/></i>}
         {stored?.watched && <i className="browse-badge">{t("mediaServer.watched")}</i>}
       </>}
