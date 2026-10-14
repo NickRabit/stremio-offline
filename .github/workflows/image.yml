@@ -192,6 +192,9 @@ jobs:
   # does not run on that machine.
   verify:
     needs: manifest
+    # A reused CI run leaves `ci` skipped. Without an explicit condition GitHub then
+    # skips this job too, even though manifest itself succeeded.
+    if: ${{ !cancelled() && needs.manifest.result == 'success' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
