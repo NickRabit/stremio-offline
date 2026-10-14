@@ -28,6 +28,8 @@ export interface RemoteContentRef extends RemoteIdentity {
   mediaSourceId: string;
   /** Present only on a sealed external-subtitle address: the provider's own subtitle index. */
   subtitleIndex?: number;
+  /** Verified item kind for automatic copy rules; not part of durable download references. */
+  copyKind?: "movie" | "series";
   owner: RemoteContentOwner;
 }
 
@@ -41,6 +43,8 @@ const SEGMENT_BAD = /[/\\?#%\u0000-\u001f\u007f]/;
 const REF_KEYS: readonly string[] = ["provider", "serverId", "accountId", "itemId", "connectionId", "libraryId", "generation", "mediaSourceId", "owner"];
 const SUBTITLE_INDEX_KEY = "subtitleIndex";
 const SUBTITLE_INDEX_MAX = 1023;
+const COPY_KIND_KEY = "copyKind";
+const COPY_KINDS: readonly ("movie" | "series")[] = ["movie", "series"];
 const OWNER_KEYS = ["userId", "sid", "expiresAt", "secretStamp"] as const;
 
 /** A module-private random key. The seal is an in-process address, not a portable token:
@@ -73,11 +77,12 @@ const plainKeys = (record: Record<string, unknown>): string[] | undefined => {
   return keys;
 };
 
-/** The base keys exactly, plus the one optional subtitle index: nothing else. */
+/** The base keys exactly, plus the two optional extras: nothing else. */
+const REF_OPTIONAL_KEYS: readonly string[] = [SUBTITLE_INDEX_KEY, COPY_KIND_KEY];
 const refKeysValid = (keys: readonly string[]): boolean =>
   keys.length >= REF_KEYS.length
   && REF_KEYS.every((key) => keys.includes(key))
-  && keys.every((key) => REF_KEYS.includes(key) || key === SUBTITLE_INDEX_KEY);
+  && keys.every((key) => REF_KEYS.includes(key) || REF_OPTIONAL_KEYS.includes(key));
 
 const isSegmentId = (value: unknown): value is string =>
   typeof value === "string" && value.length > 0 && value.length <= ID_MAX
@@ -116,12 +121,14 @@ export const isRemoteContentRef = (value: unknown): value is RemoteContentRef =>
   const mediaSourceId = ownValue(value, "mediaSourceId");
   const owner = ownValue(value, "owner");
   const subtitleIndex = ownValue(value, SUBTITLE_INDEX_KEY);
+  const copyKind = ownValue(value, COPY_KIND_KEY);
   return MEDIA_SERVER_KINDS.includes(provider as MediaServerKind)
     && isSegmentId(serverId) && isSegmentId(accountId) && isSegmentId(itemId) && isSegmentId(mediaSourceId)
     && typeof connectionId === "string" && MEDIA_CONNECTION_ID.test(connectionId)
     && typeof libraryId === "string" && REMOTE_LIBRARY_ID.test(libraryId)
     && typeof generation === "number" && Number.isSafeInteger(generation) && generation >= 0
     && (subtitleIndex === undefined || isSubtitleIndex(subtitleIndex))
+    && (copyKind === undefined || COPY_KINDS.includes(copyKind as "movie" | "series"))
     && isOwner(owner);
 };
 
@@ -135,6 +142,7 @@ const canonical = (ref: RemoteContentRef): RemoteContentRef => ({
   generation: ref.generation,
   mediaSourceId: ref.mediaSourceId,
   ...(ref.subtitleIndex === undefined ? {} : { subtitleIndex: ref.subtitleIndex }),
+  ...(ref.copyKind === undefined ? {} : { copyKind: ref.copyKind }),
   owner: {
     userId: ref.owner.userId,
     sid: ref.owner.sid,

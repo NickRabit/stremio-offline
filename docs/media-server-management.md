@@ -522,6 +522,22 @@ picker can override this rule for a single copy. A configured destination that i
 removed or no longer accessible is refused rather than silently replaced. Changing
 the setting affects new copies, while queued copies retain their chosen destination.
 
+Which slot an automatic copy of a mixed library follows is the kind sealed from the
+verified item when its sources were listed, never the request body; the download
+admission reads that proved kind. An older sealed source that carries no such kind
+keeps the previous body-based fallback.
+
+`PATCH /api/remote-libraries/:id` treats `downloadSettings` as a per-kind merge, not an
+atomic replacement. An omitted `downloadSettings` leaves the stored rules alone. A
+supplied object updates only the kind slots it names — `movie` and/or `series` — and an
+absent kind keeps its current new rule, or its effective legacy seed, including an
+unavailable handle that is not re-validated. Each kind the patch does name is a complete
+slot: a missing `subfolder` and `layout` fall back to the empty subfolder and the
+structured layout, and a changed handle is proved against the libraries the write lands
+on. An empty object is a storage no-op, and `null` resets the new rules as before. The
+legacy `downloadLibraryId` seed keeps its existing precedence for a library that has no
+new rules.
+
 Copies use one original-file transfer per upstream server, without segmentation.
 Partial files are kept when access is withdrawn; the copy pauses instead of repeatedly
 asking the server. Queue state keeps an owner-bound reference, never the upstream

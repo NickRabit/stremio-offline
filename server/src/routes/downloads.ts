@@ -197,10 +197,15 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
     const nativeRef = native ? openRemoteContent(stream.url) : undefined;
     const remote = nativeRef ? store.remoteLibraries().find((library) => library.id === nativeRef.libraryId) : undefined;
     const suppliedMedia = mediaSource(req.body.media);
-    const media = remote?.type === "series" ? { ...suppliedMedia, kind: "episode" as const, title: suppliedMedia?.title ?? String(req.body.title ?? "video") } : suppliedMedia;
+    // Mixed libraries use the signed item kind; old seals retain their body-based fallback.
+    const provedKind: "movie" | "series" | undefined = remote === undefined ? undefined
+      : remote.type === "mixed" ? nativeRef?.copyKind : remote.type;
+    const media = provedKind === "series"
+      ? { ...suppliedMedia, kind: "episode" as const, title: suppliedMedia?.title ?? String(req.body.title ?? "video") }
+      : provedKind === "movie" && suppliedMedia?.kind === "episode" ? { ...suppliedMedia, kind: "movie" as const } : suppliedMedia;
     const addon = store.addons().find((item) => item.key === stream.addonKey);
     const settings = addon?.downloadSettings ?? defaultDownloadSettings();
-    const kind = remote?.type === "movie" ? "movie" : media?.kind === "episode" ? "series" : "movie";
+    const kind = provedKind ?? (media?.kind === "episode" ? "series" : "movie");
     // The requested local destination and its rights are resolved first, so a bad, hidden,
     // read-only or remote target is refused here without any provider contact for a copy.
     const chosen = await explicitTarget(req, req.body.target, kind);

@@ -641,3 +641,25 @@ test("a mixed library's automatic kind fallback is also projected", async () => 
     for (const source of listed) assert.equal(source.downloadLibraryId, films.id);
   }, { contentDownloading: true });
 });
+
+test("a listed source seals the verified item's own kind, on originals and subtitles alike", async () => {
+  await withHarness(async (harness) => {
+    harness.server.versionsOf["item-1"] = [{ id: "v1", name: "1080p", externalSubtitles: [{ index: 2 }] }];
+    const before = harness.server.originalCalls;
+
+    const movies = await harness.sources.list(harness.adminAuthority, harness.owner, harness.libraryId, "item-1");
+    for (const source of movies) assert.equal(openedRef(harness, source.sourceId)?.copyKind, "movie", "a movie seals the movie kind");
+    const subtitleStream = harness.resources.get(movies[0]!.subtitles[0]!.subtitleId, harness.owner.sid, "subtitle").stream;
+    assert.equal(openRemoteContent(subtitleStream.url)?.copyKind, "movie", "a subtitle carries the original's kind");
+    assert.equal(openRemoteContent(subtitleStream.url)?.subtitleIndex, 2, "and keeps its own index");
+    assert.equal(JSON.stringify(movies).includes("copyKind"), false, "no public stream exposes the sealed kind");
+    assert.equal(JSON.stringify(movies).includes("media-server:"), false, "and no sealed address leaks");
+
+    harness.server.detailOf["item-1"] = { id: "item-1", name: "Episode One", type: "episode", providerIds: {} };
+    const episodes = await harness.sources.list(harness.adminAuthority, harness.owner, harness.libraryId, "item-1");
+    assert.ok(episodes.length > 0);
+    for (const source of episodes) assert.equal(openedRef(harness, source.sourceId)?.copyKind, "series", "an episode seals the series kind");
+
+    assert.equal(harness.server.originalCalls, before, "sealing the kind costs no provider read");
+  });
+});

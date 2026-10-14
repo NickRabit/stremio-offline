@@ -344,7 +344,7 @@ catalogue title. Changing it does not rename files already saved.
 ### Choosing the place for one download
 
 The arrow next to **To library** opens **Save to…** (`Uložit jinam…`). It starts
-on **Addon rule**, which shows where the rule would put the title and does the
+on **Storage rule**, which shows where the rule would put the title and does the
 same as the button itself. **Somewhere else** (`Jinam`) picks, for this download
 only:
 

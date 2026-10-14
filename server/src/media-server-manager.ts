@@ -929,6 +929,11 @@ export class MediaServerManager {
     const downloadSettings = record.downloadSettings === undefined ? undefined
       : record.downloadSettings === null ? null
       : readDownloadSettings(record.downloadSettings);
+    // Storage normalization fills omissions; a PATCH must preserve omitted kinds.
+    const namedKinds: readonly ("movie" | "series")[] = record.downloadSettings !== undefined && record.downloadSettings !== null
+      && typeof record.downloadSettings === "object" && !Array.isArray(record.downloadSettings)
+      ? (Object.keys(record.downloadSettings) as ("movie" | "series")[])
+      : [];
     if (downloadSettings !== undefined && downloadSettings !== null
       && downloadLibraryId !== undefined && downloadLibraryId !== null) {
       throw invalid("A remote library cannot change its legacy and its new copy destination at the same time.");
@@ -976,14 +981,16 @@ export class MediaServerManager {
         if (downloadSettings !== undefined) {
           if (downloadSettings === null) {
             delete next.downloadSettings;
-          } else {
+          } else if (namedKinds.length > 0) {
             const legacy = library.downloadLibraryId ? { libraryId: library.downloadLibraryId } : undefined;
             const stored = library.downloadSettings ?? readDownloadSettings({
               ...(legacy && library.type !== "series" ? { movie: legacy } : {}),
               ...(legacy && library.type !== "movie" ? { series: legacy } : {}),
             });
-            const merged: AddonDownloadSettings = { movie: downloadSettings.movie, series: downloadSettings.series };
+            // Unspecified kinds retain stored rules or legacy targets, even when unavailable.
+            const merged: AddonDownloadSettings = { movie: stored.movie, series: stored.series };
             for (const kind of ["movie", "series"] as const) {
+              if (!namedKinds.includes(kind)) continue;
               merged[kind] = sameDownloadTarget(downloadSettings[kind], stored[kind])
                 ? stored[kind]
                 : readDownloadSettings({ [kind]: downloadSettings[kind] }, state.libraries ?? [])[kind];

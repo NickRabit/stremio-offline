@@ -76,6 +76,7 @@ export class MediaServerSources {
    *  the owner stamp. A subtitle reference shares the original's item, version and owner and
    *  adds only its provider index, so no caller can invent provenance for it. */
   private seal(result: MediaServerItemVersions, owner: ResourceOwner, secretStamp: string): SealedStreams[] {
+    const copyKind: "movie" | "series" = result.item.type === "episode" ? "series" : "movie";
     const base = {
       provider: result.identity.provider,
       serverId: result.identity.serverId,
@@ -84,13 +85,14 @@ export class MediaServerSources {
       connectionId: result.connectionId,
       libraryId: result.libraryId,
       generation: result.generation,
+      copyKind,
       owner: { userId: owner.userId, sid: owner.sid, expiresAt: owner.expiresAt, secretStamp },
     };
     return result.versions.map((version) => ({
       libraryName: result.libraryName,
       downloadAllowed: result.downloadAllowed === true,
       libraryId: result.libraryId,
-      kind: result.item.type === "episode" ? "series" : "movie",
+      kind: copyKind,
       stream: {
         url: sealRemoteContent({ ...base, mediaSourceId: version.id }),
         name: version.name ?? result.item.name,

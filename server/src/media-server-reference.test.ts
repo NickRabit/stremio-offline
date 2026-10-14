@@ -8,6 +8,7 @@ import {
   sealRemoteContent,
   type RemoteContentRef,
 } from "./media-server-reference.js";
+import { remoteProgressKey } from "./media-server-types.js";
 
 const base = (over: Partial<RemoteContentRef> = {}): RemoteContentRef => ({
   provider: "jellyfin",
@@ -127,4 +128,43 @@ test("a subtitle index is a signed part of the reference and is validated like a
   assert.equal(isRemoteContentRef(base({ subtitleIndex: "2" as never })), false);
   assert.equal(isRemoteContentRef({ ...base(), [Symbol("subtitleIndex")]: 2 }), false, "a symbol key is refused");
   assert.equal(isRemoteContentRef({ ...base(), get subtitleIndex() { return 2; } }), false, "an accessor is refused");
+});
+
+test("a sealed copy kind round-trips, is signed into the payload and is a fresh clone", () => {
+  const sealed = sealRemoteContent(base({ copyKind: "series" }));
+  assert.deepEqual(openRemoteContent(sealed), base({ copyKind: "series" }));
+  assert.deepEqual(openRemoteContent(structuredClone(sealed)), base({ copyKind: "series" }));
+  const opened = openRemoteContent(sealed)!;
+  opened.copyKind = "movie";
+  assert.equal(openRemoteContent(sealed)?.copyKind, "series", "each open is a fresh clone");
+  assert.equal(payloadOf(sealed).copyKind, "series", "the kind is inside the signed payload");
+  assert.notEqual(sealed, sealRemoteContent(base({ copyKind: "movie" })));
+  assert.equal("copyKind" in payloadOf(sealRemoteContent(base())), false, "an absent kind is not null");
+});
+
+test("a sealed copy kind is validated like any other optional field", () => {
+  assert.equal(isRemoteContentRef(base({ copyKind: "movie" })), true);
+  assert.equal(isRemoteContentRef(base({ copyKind: "series" })), true);
+  for (const value of ["film", "MOVIE", "Series", "", 1, true, null, {}, ["movie"]]) {
+    assert.equal(isRemoteContentRef({ ...base(), copyKind: value }), false, `the kind ${JSON.stringify(value)} is refused`);
+  }
+  assert.equal(isRemoteContentRef({ ...base(), [Symbol("copyKind")]: "movie" }), false, "a symbol key is refused");
+  assert.equal(isRemoteContentRef({ ...base(), get copyKind() { return "movie"; } }), false, "an accessor is refused");
+  assert.equal(isRemoteContentRef({ ...base(), copyKind: "movie", extra: 1 }), false, "an unknown field beside it is refused");
+  assert.throws(() => sealRemoteContent({ ...base(), copyKind: "film" } as never), /malformed/);
+});
+
+test("an old reference without a kind, and every subtitle combination, stay valid", () => {
+  assert.equal(isRemoteContentRef(base()), true, "an older seal without a kind is still valid");
+  assert.equal(isRemoteContentRef(base({ subtitleIndex: 2 })), true, "the index alone is still valid");
+  assert.equal(isRemoteContentRef(base({ copyKind: "movie", subtitleIndex: 2 })), true);
+  assert.equal(isRemoteContentRef(base({ copyKind: "series", subtitleIndex: 0 })), true);
+  const subtitle = openRemoteContent(sealRemoteContent(base({ copyKind: "movie", subtitleIndex: 2 })));
+  assert.equal(subtitle?.copyKind, "movie");
+  assert.equal(subtitle?.subtitleIndex, 2);
+});
+
+test("the sealed kind never changes the progress identity", () => {
+  assert.equal(remoteProgressKey(base({ copyKind: "movie" })), remoteProgressKey(base()));
+  assert.equal(remoteProgressKey(base({ copyKind: "series" })), remoteProgressKey(base()));
 });
