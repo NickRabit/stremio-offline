@@ -771,8 +771,10 @@ describe("RemoteLibraryBrowser lazy mosaics", () => {
     root = createRoot(host);
     await render();
     expect([...host.querySelectorAll(".remote-libraries .browse-art img")].map((img) => img.getAttribute("src"))).toEqual(["/a.jpg", "/b.jpg"]);
+    expect(host.querySelector(".remote-libraries .library-preview-collage.is-pending")).toBeNull();
     await act(async () => { pending.resolve(json({ posters: ["/a.jpg", "/b.jpg"] })); });
     await flush();
+    expect(host.querySelector(".remote-libraries .library-preview-collage.is-pending")).toBeNull();
   });
 
   it("draws the children's collage for a root and leaves the library's own poster aside", async () => {
@@ -781,7 +783,7 @@ describe("RemoteLibraryBrowser lazy mosaics", () => {
     await render();
     await flush();
     expect(calls.preview.at(-1)!.searchParams.get("artwork")).toBe("children");
-    expect(host.querySelector(".remote-libraries .library-preview-collage")).not.toBeNull();
+    expect(host.querySelector(".remote-libraries .library-preview-collage.is-pending")).not.toBeNull();
     expect([...host.querySelectorAll(".remote-libraries .browse-art img")].every((img) => img.getAttribute("src") !== "/own-root.jpg")).toBe(true);
   });
 
