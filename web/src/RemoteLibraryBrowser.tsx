@@ -53,6 +53,20 @@ interface Props {
 type Status = { items: RemoteItem[]; cursor?: string; total: number; loading: boolean; error: string };
 type Playing = { stream: Stream; libraryId: string; item: RemoteItem; title: string; favorite: boolean };
 type TileRef = { current: HTMLElement | null };
+/** One ancestor listing kept while its children are open, so a jump back needs no new page. */
+type ListingSnapshot = {
+  libraryId: string;
+  parentId?: string;
+  mode: RemoteBrowseMode;
+  searchInput: string;
+  query: string;
+  sort: RemoteItemSort;
+  desc: boolean;
+  status: Status;
+  scrollTop: number;
+  /** The folder that was entered from this listing, so focus can return to it. */
+  focusId: string;
+};
 
 const PAGE_SIZE = 60;
 const emptyStatus = (): Status => ({ items: [], total: 0, loading: false, error: "" });
@@ -180,6 +194,12 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   /** The listing offset to put back when a detail closes over it. */
   const savedScroll = useRef(0);
   const savedEpisodeScroll = useRef(0);
+  /** The ancestor listings of the open library, indexed by depth; cleared with the library. */
+  const snapshots = useRef<ListingSnapshot[]>([]);
+  /** One-use token; the listing effect keeps the restored listing instead of reading page one. */
+  const pendingRestore = useRef<ListingSnapshot | null>(null);
+  /** The listing a return put back, so its offset is applied once that listing is on screen. */
+  const restoredListing = useRef<{ status: Status; offset: number } | null>(null);
   /** One stable ref per remote tile, so the lazy preview can watch the element it draws. */
   const tileRefs = useRef(new Map<string, TileRef>());
   const [fold] = useState(createCompactOnScroll);
@@ -342,14 +362,26 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   const mosaicOn = (library: RemoteLibrary | null) => Boolean(library) && library!.mosaic !== false;
   const mode: RemoteBrowseMode = selected && stack.length ? "folders" : selected ? effectiveMode(selected) : "folders";
   const parentId = stack.length ? stack[stack.length - 1]!.id : undefined;
+  /** The identity of the listing on screen: the library and the folder path that leads to it. */
+  const navKey = selected ? `${selected.id}:${stack.map((folder) => folder.id).join("/")}` : "";
 
   // One bounded page per request; a fresh search, sort, folder or library starts the listing over.
   useEffect(() => {
     const library = selected;
     if (!library) return;
     const epoch = ++listEpoch.current;
-    const controller = new AbortController();
     cancelItemsMore();
+    const restore = pendingRestore.current;
+    pendingRestore.current = null;
+    // An ancestor return keeps the page it left, but only for the exact listing it was saved from.
+    if (restore && restore.libraryId === library.id && restore.parentId === parentId && restore.mode === mode
+      && restore.query === query && restore.sort === sort && restore.desc === desc) {
+      const status: Status = { ...restore.status, loading: false, error: "" };
+      restoredListing.current = { status, offset: restore.scrollTop };
+      setListing(status);
+      return () => { if (listEpoch.current === epoch) listEpoch.current += 1; cancelItemsMore(); };
+    }
+    const controller = new AbortController();
     setListing({ items: [], total: 0, loading: true, error: "" });
     api.remoteBrowse(library.id, { parentId, mode, limit: PAGE_SIZE, search: query || undefined, sort, order: desc ? "desc" : "asc", signal: controller.signal })
       .then((page) => {
@@ -452,13 +484,24 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     if (!scrollRef.current) return;
     if (!detail) scrollRef.current.scrollTop = savedScroll.current;
     else if (detail.type === "series") scrollRef.current.scrollTop = savedEpisodeScroll.current;
-  }, [detail?.id, detail?.type]);
+  }, [detail?.id, detail?.type, navKey]);
+  // An ancestor return puts the offset it left back, once the restored listing itself is on screen.
+  useEffect(() => {
+    const restore = restoredListing.current;
+    if (!restore || restore.status !== listing) return;
+    restoredListing.current = null;
+    savedScroll.current = restore.offset;
+    if (scrollRef.current) scrollRef.current.scrollTop = restore.offset;
+  }, [listing, navKey]);
   useEffect(() => () => {
     cancelItemsMore();
     cancelEpisodesMore();
     handoffAbort.current?.abort();
     menuAbort.current?.abort();
     librariesAbort.current?.abort();
+    snapshots.current = [];
+    pendingRestore.current = null;
+    restoredListing.current = null;
     // The page that draws the local listing may outlive this browser; make sure it comes back.
     onOpenChange(false);
   }, []);
@@ -473,6 +516,9 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     cancelItemsMore();
     cancelEpisodesMore();
     cancelHandoff();
+    snapshots.current = [];
+    pendingRestore.current = null;
+    restoredListing.current = null;
     pendingFocus.current = null;
     pendingRootFocus.current = null;
     savedScroll.current = 0;
@@ -545,6 +591,9 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     cancelItemsMore();
     cancelEpisodesMore();
     cancelHandoff();
+    snapshots.current = [];
+    pendingRestore.current = null;
+    restoredListing.current = null;
     const prefs = prefsOf(library.id);
     setSelected(library);
     setStack([]);
@@ -569,6 +618,9 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     cancelItemsMore();
     cancelEpisodesMore();
     cancelHandoff();
+    snapshots.current = [];
+    pendingRestore.current = null;
+    restoredListing.current = null;
     setSelected(null);
     setStack([]);
     setListing(emptyStatus());
@@ -593,10 +645,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
       setSeries(null);
       return;
     }
-    if (stack.length) {
-      pendingFocus.current = stack[stack.length - 1]!.id;
-      setDetail(null); setSeries(null); setSearchInput(""); setQuery(""); setStack(stack.slice(0, -1)); return;
-    }
+    if (stack.length) { returnToAncestor(stack.length - 1); return; }
     closeLibrary();
   };
   const openItem = (item: RemoteItem) => {
@@ -605,6 +654,13 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     cancelItemsMore();
     cancelHandoff();
     if (item.type === "folder" || item.type === "season") {
+      const library = selectedRef.current;
+      // Keep the listing this folder is entered from, so the return reads no page again.
+      if (library) snapshots.current = [...snapshots.current.slice(0, stack.length), {
+        libraryId: library.id, parentId, mode, searchInput, query, sort, desc,
+        status: { ...listingRef.current, loading: false },
+        scrollTop: scrollRef.current?.scrollTop ?? 0, focusId: item.id,
+      }];
       savedScroll.current = 0;
       if (scrollRef.current) scrollRef.current.scrollTop = 0;
       setDetail(null);
@@ -639,29 +695,46 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     setDetail(null);
     setSeries(null);
   };
-  const goToFolder = (index: number) => {
-    if (detail && index === stack.length - 1) { returnToListing(); return; }
+  /** The one return path for stepBack, an ancestor breadcrumb and the library root. */
+  const returnToAncestor = (depth: number) => {
     closeMenu();
-    setSearchInput(""); setQuery("");
     cancelItemsMore();
     cancelHandoff();
-    savedScroll.current = 0;
-    setDetail(null);
     needsDetailMeta.current = false;
+    setDetail(null);
     setSeries(null);
-    setStack(stack.slice(0, index + 1));
+    setSources(null);
+    setState(null);
+    const library = selectedRef.current;
+    const snapshot = library ? snapshots.current[depth] : undefined;
+    if (library && snapshot && snapshot.libraryId === library.id) {
+      // Drop every deeper listing: the ones below this depth belong to a history left behind.
+      snapshots.current = snapshots.current.slice(0, depth + 1);
+      pendingRestore.current = snapshot;
+      pendingFocus.current = snapshot.focusId;
+      setSearchInput(snapshot.searchInput);
+      setQuery(snapshot.query);
+      setSort(snapshot.sort);
+      setDesc(snapshot.desc);
+      setStack(stack.slice(0, depth));
+      return;
+    }
+    snapshots.current = [];
+    pendingRestore.current = null;
+    restoredListing.current = null;
+    pendingFocus.current = stack[depth]?.id ?? null;
+    savedScroll.current = 0;
+    setSearchInput("");
+    setQuery("");
+    setStack(stack.slice(0, depth));
+  };
+  const goToFolder = (index: number) => {
+    if (detail && index === stack.length - 1) { returnToListing(); return; }
+    returnToAncestor(index + 1);
   };
   const goLibraryRoot = () => {
     if (detail && !stack.length) { returnToListing(); return; }
-    closeMenu();
-    setSearchInput(""); setQuery("");
-    cancelItemsMore();
-    cancelHandoff();
-    savedScroll.current = 0;
-    setDetail(null);
-    needsDetailMeta.current = false;
-    setSeries(null);
-    setStack([]);
+    returnToAncestor(0);
   };
   /** The series crumb: leave the episode's detail but keep the episode as the tile to focus once
    *  the episode listing returns, exactly the way Back behaves from an episode. */
