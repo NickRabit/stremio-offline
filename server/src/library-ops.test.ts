@@ -218,7 +218,8 @@ test("finished reports a failure and a cancellation, and the caller is what deci
     const job = await cancelling.enqueue({ op: "delete", items: ["one"] });
     await waitFor(() => cancelling.snapshot().jobs[0]?.status === "running");
     await cancelling.cancel(job.id);
-    await waitFor(() => seen.length === 2);
+    // While the finished hook is still in flight the snapshot keeps saying "running".
+    await waitFor(() => seen.length === 2 && cancelling.snapshot().jobs[0]?.status === "cancelled");
     assert.deepEqual(seen, ["failed", "cancelled"]);
     assert.equal(cancelling.snapshot().jobs[0]?.status, "cancelled");
   } finally { await cleanup(dataDir, queues); }
