@@ -1,5 +1,5 @@
 import { t } from "./i18n";
-import type { AddonDownloadSettings, LibraryView } from "./types";
+import type { AddonDownloadSettings, DownloadTargetSettings, LibraryView } from "./types";
 
 export type SaveKind = "movie" | "series";
 export interface SaveTarget { libraryId: string; subfolder: string; layout: "structured" | "flat" }
@@ -11,6 +11,16 @@ const takes = (library: LibraryView, kind: SaveKind) => library.type === kind ||
  *  and the account may queue a download there at all. */
 export function offeredLibraries(libraries: LibraryView[], kind: SaveKind): LibraryView[] {
   return libraries.filter((library) => usable(library) && library.writable && takes(library, kind));
+}
+
+/** The rule a native media-server copy is preselected to: the destination the server projected
+ *  for that exact source. Nothing is invented when there is no projection, so the choice falls
+ *  back to the kind's own default and the server re-resolves the target it admits. */
+export function sourceTargetRule(stream: { downloadLibraryId?: string } | null | undefined): AddonDownloadSettings | undefined {
+  const libraryId = stream?.downloadLibraryId;
+  if (!libraryId) return undefined;
+  const entry = (): DownloadTargetSettings => ({ subfolder: "", layout: "structured", libraryId });
+  return { movie: entry(), series: entry() };
 }
 
 /** Where the addon rule puts it; libraryId falls back to the library flagged defaultMovie/defaultSeries. */

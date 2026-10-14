@@ -1,4 +1,5 @@
 import type { State, Store } from "./store.js";
+import { LIBRARY_ID } from "./libraries.js";
 import {
   MediaServerError,
   MEDIA_CONNECTION_ID,
@@ -48,6 +49,9 @@ export interface ExportedRemoteLibrary {
   browseMode?: RemoteBrowseMode;
   mosaic?: boolean;
   showInFavorites?: boolean;
+  /** The configured copy destination. Kept verbatim: a handle that names no library here is
+   *  stored as it came and refused at the door, never redirected to some other library. */
+  downloadLibraryId?: string;
 }
 
 export interface MediaServerConfigurationExport {
@@ -72,7 +76,7 @@ const nextGeneration = (generation: number): number => {
 export const CONNECTION_KEYS = ["provider", "name", "baseUrl", "allowLan", "allowLoopback", "serverId", "accountId", "enabled"];
 export const LIBRARY_KEYS = ["remoteId", "name", "type", "enabled", "order", "showOnHome", "showInContinueWatching", "browseMode", "mosaic", "showInFavorites"];
 export const EXPORT_CONNECTION_KEYS = ["id", "provider", "name", "baseUrl", "allowLan", "allowLoopback", "serverId", "accountId"];
-export const EXPORT_LIBRARY_KEYS = ["id", "connectionId", "remoteId", "name", "type", "order", "showOnHome", "showInContinueWatching", "browseMode", "mosaic", "showInFavorites"];
+export const EXPORT_LIBRARY_KEYS = ["id", "connectionId", "remoteId", "name", "type", "order", "showOnHome", "showInContinueWatching", "browseMode", "mosaic", "showInFavorites", "downloadLibraryId"];
 export const LIBRARY_TYPES: readonly RemoteLibraryType[] = ["movie", "series", "mixed"];
 
 export function checkKeys(value: unknown, allowed: readonly string[], context: string): Record<string, unknown> {
@@ -125,6 +129,7 @@ export function readLibraryFields(record: Record<string, unknown>) {
   const mode = record.browseMode === undefined ? undefined : browseMode(record.browseMode);
   const mosaic = record.mosaic === undefined ? undefined : bool(record.mosaic, "mosaic");
   const showInFavorites = record.showInFavorites === undefined ? undefined : bool(record.showInFavorites, "showInFavorites");
+  const downloadLibraryId = record.downloadLibraryId === undefined ? undefined : libraryHandle(record.downloadLibraryId);
   return {
     remoteId: boundedString(record.remoteId, MEDIA_SERVER_LIMITS.upstreamId, "library id"),
     name: boundedString(record.name, MEDIA_SERVER_LIMITS.name, "library name"),
@@ -135,8 +140,17 @@ export function readLibraryFields(record: Record<string, unknown>) {
     ...(mode === undefined ? {} : { browseMode: mode }),
     ...(mosaic === undefined ? {} : { mosaic }),
     ...(showInFavorites === undefined ? {} : { showInFavorites }),
+    ...(downloadLibraryId === undefined ? {} : { downloadLibraryId }),
   };
 }
+
+/** The local library a remote library's copies are saved into. Only its shape is proved here:
+ *  whether that library exists, is writable and takes the content is the acting mutation's
+ *  business, and an unavailable handle is never rewritten to some other one. */
+const libraryHandle = (value: unknown): string => {
+  if (typeof value !== "string" || !LIBRARY_ID.test(value)) throw invalid("The media-server copy destination is malformed.");
+  return value;
+};
 
 /** A JSON tuple, not a NUL join: upstream ids may themselves contain a control byte, so a
  *  joined string could map two different identities to one key. */
@@ -293,6 +307,7 @@ export class MediaServerConfiguration {
         ...(library.browseMode === undefined ? {} : { browseMode: library.browseMode }),
         ...(library.mosaic === undefined ? {} : { mosaic: library.mosaic }),
         ...(library.showInFavorites === undefined ? {} : { showInFavorites: library.showInFavorites }),
+        ...(library.downloadLibraryId === undefined ? {} : { downloadLibraryId: library.downloadLibraryId }),
       })),
     };
   }

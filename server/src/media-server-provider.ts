@@ -1,3 +1,4 @@
+import { nameExtension } from "./naming.js";
 import {
   ARTWORK_TAG,
   MediaServerError,
@@ -772,6 +773,10 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
       if (name !== undefined) version.name = name;
       const container = optionalString(source.Container, 64);
       if (container !== undefined) version.container = container;
+      else {
+        const extension = nameExtension(source.Path);
+        if (extension) version.container = extension.slice(1);
+      }
       const size = optionalSafeInt(source.Size);
       if (size !== undefined) version.size = size;
       const durationTicks = optionalSafeInt(source.RunTimeTicks);

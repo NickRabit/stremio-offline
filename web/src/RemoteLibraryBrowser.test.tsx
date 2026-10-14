@@ -5,7 +5,7 @@ import { RemoteLibraryBrowser } from "./RemoteLibraryBrowser";
 import { setLocale } from "./i18n";
 import { clearTitleEnrichment } from "./title-enrichment";
 import { emptyViews } from "./views";
-import type { RemoteCapabilities, RemoteItem, RemoteItemPage, RemoteLibrary, Stream } from "./types";
+import type { LibraryView, RemoteCapabilities, RemoteItem, RemoteItemPage, RemoteLibrary, Stream } from "./types";
 
 const capabilities: RemoteCapabilities = { rename: false, move: false, delete: false, identify: false, writeArtwork: false, downloadToLibrary: false, downloadToDevice: false };
 const json = (body: unknown, status = 200) =>
@@ -34,7 +34,9 @@ let preview: Handler;
 let sources: Handler;
 let item: Handler;
 let state: Handler;
+let downloadReply: Handler | undefined;
 const calls = { browse: [] as URL[], preview: [] as URL[], sources: [] as URL[], item: [] as URL[], state: [] as Array<{ method: string; body: unknown }>, stateUrls: [] as string[], title: [] as string[] };
+const downloadCalls: Array<Record<string, unknown>> = [];
 
 /** A controllable IntersectionObserver: tiles only ask for a preview once it fires. */
 class FakeIntersectionObserver {
@@ -61,11 +63,13 @@ beforeEach(() => {
   clearTitleEnrichment();
   FakeIntersectionObserver.live = [];
   calls.browse = []; calls.preview = []; calls.sources = []; calls.item = []; calls.state = []; calls.stateUrls = []; calls.title = [];
+  downloadCalls.length = 0;
   libraries = [library()];
   browse = () => json(page([]));
   preview = () => json({ posters: [] });
   sources = () => json({ streams: [] });
   item = () => json({ item: movie("m1", "One"), capabilities });
+  downloadReply = undefined;
   state = (url, init) => {
     if (init?.method === "PATCH") return json({ key: "k", position: 0, duration: 0, favorite: true, watched: false });
     return json({ key: "k", position: 0, duration: 0, favorite: false, watched: false });
@@ -74,6 +78,10 @@ beforeEach(() => {
     const url = new URL(String(input), "http://localhost");
     const path = url.pathname;
     if (path === "/api/remote-libraries") return Promise.resolve(json({ libraries }));
+    if (path === "/api/downloads" && init?.method === "POST") {
+      downloadCalls.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+      return Promise.resolve(downloadReply ? downloadReply(url, init) : json({ id: "job1", status: "queued" }, 201));
+    }
     if (/^\/api\/remote-libraries\/[^/]+\/browse$/.test(path)) { calls.browse.push(url); return browse(url, init); }
     if (/^\/api\/remote-libraries\/[^/]+\/preview$/.test(path)) { calls.preview.push(url); return preview(url, init); }
     if (/^\/api\/remote-libraries\/[^/]+\/items\/[^/]+\/sources$/.test(path)) { calls.sources.push(url); return sources(url, init); }
@@ -119,6 +127,7 @@ const render = async (over: Partial<Parameters<typeof RemoteLibraryBrowser>[0]> 
     views: emptyViews(), onPersistPrefs, onOpenChange,
     compact: false, onCompactChange: vi.fn(), onPersonalChange: vi.fn(),
     uiLanguage: "en", secureMode: true, onTrailer: vi.fn(),
+    downloadLibraries: [],
     ...over,
   };
   await act(async () => { root.render(<RemoteLibraryBrowser {...props}/>); });
@@ -1014,5 +1023,74 @@ describe("RemoteLibraryBrowser saved position", () => {
     expect(host.querySelector(".library-title-detail h2")!.textContent).toBe("Two");
     expect(host.querySelector(".library-detail-progress")).toBeNull();
     expect(host.querySelector('.library-detail-actions button[aria-label="Add to favorites"]')?.getAttribute("aria-pressed")).toBe("false");
+  });
+});
+
+describe("RemoteLibraryBrowser native copy", () => {
+  const saveView = (over: Partial<LibraryView> = {}): LibraryView => ({
+    id: "lib_1", name: "Films", type: "mixed", enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z",
+    writeArtwork: false, autoScanMetadata: false, unreachable: false, readOnly: false, writable: true,
+    defaultMovie: true, defaultSeries: true, titles: 0, files: 0, bytes: 0, ...over,
+  });
+  const copyable = (mediaSourceId: string, name: string, size: number): Stream => ({
+    sourceId: `src-${mediaSourceId}`, kind: "remote", playable: true, name, provider: "jellyfin",
+    remoteItem: { libraryId: "rlib_a", itemId: "m1", mediaSourceId, progressKey: "k" },
+    capabilities: { rename: false, move: false, delete: false, identify: false, writeArtwork: false, downloadToLibrary: true, downloadToDevice: false },
+    behaviorHints: { videoSize: size },
+  });
+  const actionLabels = () => [...host.querySelectorAll<HTMLButtonElement>(".browse-actions button")].map((node) => node.textContent ?? "");
+  const card = () => document.querySelector<HTMLElement>(".save-target-card");
+  const primary = () => document.querySelector<HTMLButtonElement>(".save-target-card footer button.primary")!;
+
+  it("offers the copy on a movie's menu and reads the versions only when it is pressed", async () => {
+    browse = () => json(page([movie("m1", "One")]));
+    sources = () => json({ streams: [copyable("v1", "1080p", 1)] });
+    await render({ downloadLibraries: [saveView()], onDownloadQueued: vi.fn() });
+    await click(host.querySelector(".remote-libraries button.library-open")!);
+    await click(host.querySelector(".browse-menu")!);
+    expect(actionLabels().some((text) => text.includes("To library"))).toBe(true);
+    expect(calls.sources).toHaveLength(0);
+    await click(byText(".browse-actions button", "To library")!);
+    expect(calls.sources).toHaveLength(1);
+    expect(card()).not.toBeNull();
+  });
+
+  it("offers no copy for a series, a season or a folder", async () => {
+    const show: RemoteItem = { id: "ser1", name: "Show", type: "series", providerIds: {} };
+    browse = () => json(page([show]));
+    await render({ downloadLibraries: [saveView()] });
+    await click(host.querySelector(".remote-libraries button.library-open")!);
+    await click(host.querySelector(".browse-menu")!);
+    expect(actionLabels().some((text) => text.includes("To library"))).toBe(false);
+  });
+
+  it("uses the detail's own versions without another read and queues the exact source", async () => {
+    browse = () => json(page([movie("m1", "One")]));
+    sources = () => json({ streams: [copyable("v1", "720p", 1), copyable("v2", "1080p", 3_000_000_000)] });
+    const onDownloadQueued = vi.fn();
+    await render({ downloadLibraries: [saveView()], onDownloadQueued });
+    await click(host.querySelector(".remote-libraries button.library-open")!);
+    await click(tileButtons()[0]!);
+    await flush();
+    expect(calls.sources).toHaveLength(1);
+    await click(byText(".library-detail-actions button", "To library")!);
+    expect(calls.sources).toHaveLength(1);
+    await click(primary());
+    expect(downloadCalls[0]!.sourceId).toBe("src-v2");
+    expect(onDownloadQueued).toHaveBeenCalledTimes(1);
+    expect(card()).toBeNull();
+  });
+
+  it("keeps the dialog open with the failure when the queue call is refused", async () => {
+    browse = () => json(page([movie("m1", "One")]));
+    sources = () => json({ streams: [copyable("v2", "1080p", 1)] });
+    downloadReply = () => json({ error: "This source is already in the library." }, 409);
+    await render({ downloadLibraries: [saveView()] });
+    await click(host.querySelector(".remote-libraries button.library-open")!);
+    await click(host.querySelector(".browse-menu")!);
+    await click(byText(".browse-actions button", "To library")!);
+    await click(primary());
+    expect(card()).not.toBeNull();
+    expect(card()!.textContent).toContain("This source is already in the library.");
   });
 });

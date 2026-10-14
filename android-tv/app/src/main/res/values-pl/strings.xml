@@ -298,6 +298,8 @@
   <string name="media_server_mark_watched">Oznacz jako obejrzane</string>
   <string name="media_server_unwatch">Oznacz jako nieobejrzane</string>
   <string name="media_server_download_unavailable">Elementu z serwera multimediów nie można pobrać.</string>
+  <string name="media_server_download_disabled">Pobieranie jest wyłączone dla tego konta serwera.</string>
+  <string name="media_server_version_number">Wersja %1$s</string>
   <string name="media_server_state_error">Nie udało się wczytać zapisanej pozycji.</string>
   <string name="media_server_group_failed">Nie udało się wczytać: %1$s.</string>
   <string name="media_server_personal_empty">Jeszcze nic tu nie ma.</string>
@@ -307,4 +309,5 @@
   <string name="favorites_tab_local">Pliki i katalog</string>
   <string name="favorites_tab_servers">Serwery multimediów</string>
   <string name="media_server_personal_partial">Nie udało się wczytać niektórych elementów.</string>
+  <string name="err_media_server_format_unknown">Serwer multimediów nie podał obsługiwanego formatu oryginalnego pliku.</string>
 </resources>

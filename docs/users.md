@@ -70,6 +70,12 @@ other grants are untouched. The credentials that connect to the server are set
 up on the instance's own settings, apart from these grants, and are never shown
 to the accounts.
 
+Saving a remote original into a local library requires both the app account’s
+download permission and the native server account’s content-download permission.
+The account must see the source library and be allowed to write to the chosen local
+library. A library’s configured copy destination does not grant access to that
+destination. Progress, watched state and favourites remain local to this app.
+
 Access is an explicit list: a library or an addon is reachable only where it is
 ticked, and a library or addon created later arrives administrator-only. The
 create dialog opens with everything ticked so the administrator clears what that

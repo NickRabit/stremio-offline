@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { MediaResources, ResourceError } from "./media-resources.js";
+import type { LibraryRecord } from "./libraries.js";
 import { MediaServerIndex } from "./media-server-index.js";
 import { isRemoteDownloadReference, type RemoteDownloadReference } from "./media-server-download.js";
 import { MediaServerManager, type MediaServerAuthority } from "./media-server-manager.js";
@@ -20,6 +21,7 @@ import { emptyUserData, type UserRecord } from "./users.js";
 
 const ADA = "usr_00000001";
 const BOB = "usr_00000002";
+const CAROL = "usr_00000003";
 
 const account = (over: Partial<UserRecord> & Pick<UserRecord, "id" | "username">): UserRecord => ({
   passwordHash: "scrypt$aa$bb",
@@ -33,6 +35,7 @@ const account = (over: Partial<UserRecord> & Pick<UserRecord, "id" | "username">
 
 const admin = account({ id: ADA, username: "ada", role: "admin" });
 const bob = account({ id: BOB, username: "bob" });
+const carol = account({ id: CAROL, username: "carol", permissions: { downloadToLibrary: false, downloadToDevice: true } });
 
 class FakeServer {
   serverId = "server-1";
@@ -104,15 +107,18 @@ interface Harness {
   server: FakeServer;
   adminAuthority: MediaServerAuthority;
   bobAuthority: MediaServerAuthority;
+  carolAuthority: MediaServerAuthority;
   connectionId: string;
   libraryId: string;
   owner: { userId: string; sid: string; expiresAt: number };
+  bobOwner: { userId: string; sid: string; expiresAt: number };
+  carolOwner: { userId: string; sid: string; expiresAt: number };
   close(): Promise<void>;
 }
 
 const mount = async (options: { contentDownloading?: boolean } = {}): Promise<Harness> => {
   const dir = await mkdtemp(path.join(tmpdir(), "media-sources-"));
-  const users = [admin, bob];
+  const users = [admin, bob, carol];
   await writeFile(path.join(dir, "state.json"), JSON.stringify({
     schemaVersion: 3, addons: [], settings: {}, defaultsInstalled: true, users,
     userData: Object.fromEntries(users.map((user) => [user.id, emptyUserData()])), libraries: [],
@@ -143,12 +149,16 @@ const mount = async (options: { contentDownloading?: boolean } = {}): Promise<Ha
   });
   const adminAuthority = authority(admin);
   const bobAuthority = authority(bob);
+  const carolAuthority = authority(carol);
 
   const connection = await manager.createConnection(adminAuthority, {
     provider: "jellyfin", name: "Home", baseUrl: "http://media.example", allowLan: false, allowLoopback: false,
     username: "reader", password: "reader-password",
   });
-  const library = await manager.attachLibrary(adminAuthority, connection.id, { remoteId: "remote-1" });
+  const attached = await manager.attachLibrary(adminAuthority, connection.id, { remoteId: "remote-1" });
+  // The ordinary accounts hold the grant they exercise: an administrator sees the library
+  // regardless, which keeps every existing read on the same record.
+  const library = await manager.patchLibrary(adminAuthority, attached.id, { allowedUsers: [BOB, CAROL] });
   server.detailOf["item-1"] = { id: "item-1", name: "Movie One", type: "movie", providerIds: {} };
   server.ancestorsOf["item-1"] = ["remote-1"];
   server.versionsOf["item-1"] = [{ id: "v1", name: "1080p", container: "mkv", size: 200_000 }, { id: "v2", name: "720p" }];
@@ -159,6 +169,9 @@ const mount = async (options: { contentDownloading?: boolean } = {}): Promise<Ha
     store, manager, sources, resources, server, adminAuthority, bobAuthority,
     connectionId: connection.id, libraryId: library.id,
     owner: { userId: admin.id, sid: "admin-sid", expiresAt: Date.now() + 3_600_000 },
+    bobOwner: { userId: bob.id, sid: "bob-sid", expiresAt: Date.now() + 3_600_000 },
+    carolAuthority,
+    carolOwner: { userId: carol.id, sid: "carol-sid", expiresAt: Date.now() + 3_600_000 },
     close: async () => { await manager.close(); await rm(dir, { recursive: true, force: true }); },
   };
 };
@@ -196,6 +209,136 @@ test("list mints verified public sources without leaking the internal address", 
 });
 
 const openedRef = (harness: Harness, sourceId: string) => openRemoteContent(streamOf(harness, sourceId).url);
+
+test("a granted native account projects the copy capability on an original", async () => {
+  await withHarness(async (harness) => {
+    const listed = await harness.sources.list(harness.adminAuthority, harness.owner, harness.libraryId, "item-1");
+    assert.equal(listed.length, 2, "both versions are listed");
+    for (const source of listed) {
+      assert.equal(source.capabilities?.downloadToLibrary, true, "the native flag and the account's right project the copy");
+      assert.deepEqual(source.capabilities, {
+        rename: false, move: false, delete: false, identify: false, writeArtwork: false,
+        downloadToLibrary: true, downloadToDevice: false,
+      }, "every other capability stays false");
+    }
+    assert.equal(harness.server.originalCalls, 0, "the projection costs no extra provider read");
+  }, { contentDownloading: true });
+});
+
+/** One local library as the store keeps it; the projection reads these records and nothing else. */
+const localLibrary = (
+  id: string,
+  type: "movie" | "series" | "mixed",
+  over: Record<string, unknown> = {},
+): LibraryRecord => ({
+  id, name: id, type, root: `/downloads/${id}`, enabled: true, order: 0,
+  addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: false, ...over,
+});
+
+/** The state a projection test starts from: local libraries on disk and settings that name one. */
+const seedLocal = async (harness: Harness, libraries: LibraryRecord[], settings: Record<string, string> = {}) => {
+  await harness.store.update((state) => {
+    state.libraries = libraries;
+    state.settings = { ...state.settings, ...settings };
+  });
+};
+
+const configureCopy = async (harness: Harness, downloadLibraryId: string) => {
+  await harness.store.update((state) => {
+    state.remoteLibraries = (state.remoteLibraries ?? []).map((library) =>
+      library.id === harness.libraryId ? { ...library, downloadLibraryId } : library);
+  });
+};
+
+test("a native original carries the copy destination the server resolved for it", async () => {
+  await withHarness(async (harness) => {
+    const films = localLibrary("lib_a1b2c3d4", "movie");
+    const other = localLibrary("lib_b2c3d4e5", "movie");
+    await seedLocal(harness, [other, films], { defaultMovieLibrary: other.id });
+    await configureCopy(harness, films.id);
+
+    const listed = await harness.sources.list(harness.adminAuthority, harness.owner, harness.libraryId, "item-1");
+    for (const source of listed) assert.equal(source.downloadLibraryId, films.id, "the configured destination rides along");
+  }, { contentDownloading: true });
+});
+
+test("without a configured destination the kind's own default is projected", async () => {
+  await withHarness(async (harness) => {
+    const films = localLibrary("lib_a1b2c3d4", "movie");
+    await seedLocal(harness, [films], { defaultMovieLibrary: films.id });
+
+    const listed = await harness.sources.list(harness.adminAuthority, harness.owner, harness.libraryId, "item-1");
+    for (const source of listed) assert.equal(source.downloadLibraryId, films.id);
+  }, { contentDownloading: true });
+});
+
+for (const [label, over] of [
+  ["read-only", { readOnly: true }],
+  ["switched off", { enabled: false }],
+  ["away", { unreachable: true }],
+] as const) {
+  test(`a configured destination that is ${label} is not projected, and is never swapped`, async () => {
+    await withHarness(async (harness) => {
+      const stored = localLibrary(`lib_${"a".repeat(8)}`, "movie", over);
+      const fallback = localLibrary("lib_b2c3d4e5", "movie");
+      await seedLocal(harness, [stored, fallback]);
+      await configureCopy(harness, stored.id);
+
+      const listed = await harness.sources.list(harness.adminAuthority, harness.owner, harness.libraryId, "item-1");
+      for (const source of listed) {
+        assert.equal(source.downloadLibraryId, undefined, `an unusable stored destination is never replaced by ${fallback.id}`);
+        assert.equal(source.capabilities?.downloadToLibrary, true, "a bad default never takes the capability away");
+      }
+    }, { contentDownloading: true });
+  });
+}
+
+test("a destination of the wrong kind is not projected", async () => {
+  await withHarness(async (harness) => {
+    const shows = localLibrary("lib_c3d4e5f6", "series");
+    await seedLocal(harness, [shows]);
+    await configureCopy(harness, shows.id);
+
+    const listed = await harness.sources.list(harness.adminAuthority, harness.owner, harness.libraryId, "item-1");
+    for (const source of listed) assert.equal(source.downloadLibraryId, undefined, "a movie remote never points at a series library");
+  }, { contentDownloading: true });
+});
+
+test("a destination the acting account cannot see is not projected for it", async () => {
+  await withHarness(async (harness) => {
+    const hidden = localLibrary("lib_d4e5f6a7", "movie", { visibleTo: [] });
+    const mine = localLibrary("lib_e5f6a7b8", "movie", { visibleTo: [BOB] });
+    await seedLocal(harness, [hidden, mine]);
+    await configureCopy(harness, hidden.id);
+
+    const listed = await harness.sources.list(harness.bobAuthority, harness.bobOwner, harness.libraryId, "item-1");
+    for (const source of listed) {
+      assert.equal(source.capabilities?.downloadToLibrary, true, "bob may copy");
+      assert.equal(source.downloadLibraryId, undefined, "a destination he cannot see is never exposed, even with the right");
+    }
+
+    await configureCopy(harness, mine.id);
+    const visible = await harness.sources.list(harness.bobAuthority, harness.bobOwner, harness.libraryId, "item-1");
+    for (const source of visible) assert.equal(source.downloadLibraryId, mine.id, "a destination he can see is exposed");
+  }, { contentDownloading: true });
+});
+
+test("a missing or false native flag never projects the copy capability", async () => {
+  for (const contentDownloading of [false, undefined]) {
+    await withHarness(async (harness) => {
+      const listed = await harness.sources.list(harness.adminAuthority, harness.owner, harness.libraryId, "item-1");
+      for (const source of listed) assert.equal(source.capabilities?.downloadToLibrary, false, "an absent fact is not a permission");
+    }, contentDownloading === undefined ? {} : { contentDownloading });
+  }
+});
+
+test("an account without the local-copy right never gets the capability", async () => {
+  await withHarness(async (harness) => {
+    const listed = await harness.sources.list(harness.carolAuthority, harness.carolOwner, harness.libraryId, "item-1");
+    assert.equal(listed.length, 2, "the grant names carol, so the versions are listed");
+    for (const source of listed) assert.equal(source.capabilities?.downloadToLibrary, false, "the account's own right is required too");
+  }, { contentDownloading: true });
+});
 
 test("a version's container decides the copy's file name, never the display label", async () => {
   await withHarness(async (harness) => {
@@ -415,4 +558,16 @@ test("a native download denial refuses admission and open yet leaves playback us
       await played.body?.cancel().catch(() => undefined);
     }, contentDownloading === undefined ? {} : { contentDownloading });
   }
+});
+
+test("a mixed library's automatic kind fallback is also projected", async () => {
+  await withHarness(async (harness) => {
+    const films = localLibrary("lib_a1b2c3d4", "movie");
+    await seedLocal(harness, [films]);
+    await harness.store.update((state) => {
+      state.remoteLibraries = state.remoteLibraries?.map((entry) => entry.id === harness.libraryId ? { ...entry, type: "mixed" } : entry);
+    });
+    const listed = await harness.sources.list(harness.adminAuthority, harness.owner, harness.libraryId, "item-1");
+    for (const source of listed) assert.equal(source.downloadLibraryId, films.id);
+  }, { contentDownloading: true });
 });

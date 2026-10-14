@@ -1,10 +1,13 @@
 import { remoteLibraryVisibleTo, type RemoteAccessSource } from "./media-server-access.js";
+import { defaultLibrary, type DefaultLibrarySettings, type LibraryRecord } from "./libraries.js";
 import {
   MEDIA_CONNECTION_ID,
   MEDIA_SERVER_KINDS,
   MEDIA_SERVER_LIMITS,
   REMOTE_LIBRARY_ID,
   type MediaServerKind,
+  type RemoteLibraryRecord,
+  type RemoteLibraryType,
 } from "./media-server-types.js";
 
 /**
@@ -121,4 +124,40 @@ export function remoteDownloadAccessible(
     && connection.serverId === reference.serverId
     && connection.accountId === reference.accountId
     && connection.generation === reference.generation;
+}
+
+/** Whether one local library may receive a copy of a remote library's originals: it is switched
+ *  on with a writable, reachable root, and its type takes the content. A mixed remote library
+ *  only ever lands in a mixed local library; a movie or series one may also use a mixed library. */
+export const takesRemoteCopy = (
+  remoteType: RemoteLibraryType,
+  library: Pick<LibraryRecord, "type" | "enabled" | "readOnly" | "unreachable">,
+): boolean =>
+  library.enabled && !library.readOnly && !library.unreachable
+  && (remoteType === "mixed" ? library.type === "mixed" : library.type === remoteType || library.type === "mixed");
+
+/** The local library a copy of one remote library's original lands in when the request names no
+ *  target. A configured override wins and is returned exactly as it stands -- an unusable one is
+ *  refused at the door rather than swapped for another library -- and otherwise the remote
+ *  library's own type decides: a movie or series library follows the default for that kind of
+ *  content, while a mixed one prefers the first mixed library by order and falls back to the
+ *  kind's default only when no mixed library exists. Pure and provider-free, so the source
+ *  projection and the download admission read one rule and cannot disagree. */
+export function defaultRemoteCopyLibraryId(
+  remote: Pick<RemoteLibraryRecord, "type" | "downloadLibraryId">,
+  libraries: readonly LibraryRecord[],
+  settings: DefaultLibrarySettings,
+  kind: "movie" | "series",
+): string | undefined {
+  if (remote.downloadLibraryId !== undefined) return remote.downloadLibraryId;
+  // The kind's own rule, with a root no copy may be written to left out -- the same fallback the
+  // queue resolves for every other download, so a read-only default never lands a copy.
+  const forKind = (): string | undefined =>
+    defaultLibrary(libraries.filter((library) => !library.readOnly), settings,
+      (remote.type === "mixed" ? kind : remote.type) === "movie" ? "movie" : "episode")?.id;
+  if (remote.type !== "mixed") return forKind();
+  const mixed = libraries
+    .filter((library) => takesRemoteCopy("mixed", library))
+    .sort((left, right) => left.order - right.order)[0];
+  return mixed?.id ?? forKind();
 }

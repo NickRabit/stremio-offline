@@ -6,6 +6,7 @@ import test from "node:test";
 import { DownloadQueue, REMOTE_DOWNLOAD_MARKER, type RemoteDownloadBackend } from "./downloads.js";
 import { relativeWithin, type LibraryRecord } from "./libraries.js";
 import { isRemoteDownloadReference, type RemoteDownloadReference } from "./media-server-download.js";
+import { MediaServerError } from "./media-server-types.js";
 import { sealRemoteContent } from "./media-server-reference.js";
 import { defaultDownloadSettings } from "./naming.js";
 import type { StreamItem } from "./types.js";
@@ -62,6 +63,7 @@ interface RemoteState {
   gate?: Promise<void>;
   statusByAttempt?: Record<string, number>;
   attempts: Record<string, number>;
+  openError?: Error;
 }
 
 const state = (total: number): RemoteState => ({
@@ -91,6 +93,7 @@ const remoteBackend = (remote: RemoteState) => {
     open: async (job, args, signal) => {
       remote.calls.push({ id: job.id, method: args.method, range: args.range });
       remote.attempts[job.id] = (remote.attempts[job.id] ?? 0) + 1;
+      if (remote.openError) throw remote.openError;
       const forced = remote.statusByAttempt?.[`${job.id}:${remote.attempts[job.id]}`];
       if (forced) return new Response(null, { status: forced, headers: forced === 429 ? { "retry-after": "1" } : {} });
       if (remote.gate) await remote.gate;
@@ -229,6 +232,8 @@ test("a legacy sealed address and a restored segment plan are refused, never run
     const ref = reference();
     const legacy = { ...reference({ itemId: "item-2" }) };
     const jobs = [
+      { id: "orphan-marker", title: "Orphan", ownerUserId: OWNER, status: "queued", target: "", received: 0, speed: 0,
+        createdAt: "2026-01-01T00:00:00.000Z", stream: { url: REMOTE_DOWNLOAD_MARKER } },
       // A sealed address cannot be re-proved after a restart: the job is dropped, not run.
       { id: "legacy", title: "Legacy", ownerUserId: OWNER, status: "queued", target: "", received: 0, speed: 0,
         createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z",
@@ -593,5 +598,42 @@ test("a named original keeps its container extension in the copied file name", a
     const job = h.queue.list()[0]!;
     assert.equal(job.target.endsWith("/Movie.mkv"), true, `the container decides the extension: ${job.target}`);
     assert.equal(await readFile(h.file(job.target)).then((buf) => buf.equals(h.remote.body)), true);
+  } finally { await close(h); }
+});
+
+for (const status of [undefined, 403]) {
+  test(`native download refusal (${status ?? "policy"}) pauses without retry and keeps the partial file`, async () => {
+    const h = await harness({ total: MiB, chunkDelayMs: 10 });
+    try {
+      const ref = reference();
+      await h.queue.add("Movie", sealedStream(ref, h.remote.body.length), undefined, settings, OWNER, ref);
+      const id = h.queue.list()[0]!.id;
+      await waitFor(h.queue, () => (h.queue.get(id)?.received ?? 0) > 0);
+      await h.queue.pause(id);
+      const job = h.queue.get(id)!;
+      const partial = `${h.file(job.target)}.part`;
+      const before = await readFile(partial);
+      const attempts = h.remote.calls.length;
+      h.remote.openError = new MediaServerError("forbidden", "The media server denied the request.", status);
+      await h.queue.resume(id);
+      await waitFor(h.queue, () => h.queue.get(id)?.pauseReason === "permission");
+      assert.equal(h.queue.get(id)?.status, "paused");
+      assert.equal(h.queue.get(id)?.errorKey, "download.pausedNoPermission");
+      assert.deepEqual(await readFile(partial), before);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.equal(h.remote.calls.length, attempts + 1, "a denial is not retried");
+    } finally { await close(h); }
+  });
+}
+
+test("a native original without a known extension is refused instead of mislabeled MP4", async () => {
+  const h = await harness();
+  try {
+    const ref = reference();
+    const source = { ...sealedStream(ref, h.remote.body.length), name: "Unknown format", behaviorHints: { filename: "1080p" } };
+    await assert.rejects(h.queue.add("Movie", source, undefined, settings, OWNER, ref),
+      (error: unknown) => (error as { messageKey?: string }).messageKey === "err.mediaServerFormatUnknown");
+    assert.deepEqual(h.queue.list(), []);
+    assert.equal(h.remote.calls.length, 0);
   } finally { await close(h); }
 });

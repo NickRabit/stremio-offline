@@ -27,6 +27,9 @@ data class RemoteLibraryDto(
   val mosaic: Boolean = true,
   /** Whether this library takes part in the viewer's Favourites; absent means yes. */
   val showInFavorites: Boolean = true,
+  /** The local library this remote library's copies are saved into; absent means the default for
+   *  the kind. A preselection only, and a stored handle that is no longer usable stays stored. */
+  val downloadLibraryId: String? = null,
   /** The library root's own same-origin poster, when the provider has one. Present means the tile
    *  draws it instead of asking for a child mosaic; absent falls back to the bounded preview. */
   val poster: String? = null,
@@ -61,6 +64,8 @@ data class RemoteItemDto(
   val episode: Int? = null,
   val providerIds: RemoteProviderIdsDto = RemoteProviderIdsDto(),
   val durationTicks: Long? = null,
+  /** The provider's release year, when it reports one; a movie copy carries it into its media. */
+  val year: Int? = null,
   /** Content-authorized same-origin artwork, loaded with the session cookie like any image. */
   val poster: String? = null,
   val wide: String? = null,

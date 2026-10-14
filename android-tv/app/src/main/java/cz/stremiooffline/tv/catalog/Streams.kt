@@ -219,9 +219,17 @@ object Streams {
   /** Whether the server may queue this source into a library the viewer writes to. A media-server
    *  version is never queueable: it lives on the remote server and cannot be downloaded through
    *  this app. Existing filesystem and addon behaviour is unchanged. */
-  fun canQueue(stream: StreamDto, debridConfigured: Boolean): Boolean =
-    !isLocalStream(stream) && !isRemoteStream(stream) &&
-      (stream.playable || (stream.kind == "torrent" && debridConfigured))
+  /**
+   * A copy that is already on disk is never queued again. A remote media-server original may be
+   * copied into a local library only when the server projected the account's native download
+   * right on that exact source: a playable version is not enough. Every other source keeps the
+   * addon rule, and a torrent still needs Real-Debrid.
+   */
+  fun canQueue(stream: StreamDto, debridConfigured: Boolean): Boolean {
+    if (isLocalStream(stream)) return false
+    if (isRemoteStream(stream)) return stream.playable && stream.capabilities?.downloadToLibrary == true
+    return stream.playable || (stream.kind == "torrent" && debridConfigured)
+  }
 
   /** An addon that cannot be played through the server is talking to the viewer, not offering. */
   fun isAddonNotice(stream: StreamDto): Boolean = stream.kind == "unsupported"

@@ -34,7 +34,7 @@ the canonical lower-case path without a trailing slash; variants fail closed.
 | `POST /api/media-servers/:id/reauthenticate` | Signs in again with `{ username, password }`; requires the same verified server/account identity. |
 | `GET /api/media-servers/:id/libraries` | `{ items: ProviderLibrary[] }` — the libraries the stored account can currently see. |
 | `POST /api/media-servers/:id/libraries` | Attaches one remote library from `{ remoteId, name?, order?, showOnHome?, showInContinueWatching?, showInFavorites?, browseMode?, mosaic? }`; the remote name and type come from verified discovery. New libraries are granted to nobody. |
-| `PATCH /api/remote-libraries/:id` | Local configuration only: `name`, `enabled`, `order`, `showOnHome`, `showInContinueWatching`, `showInFavorites`, `browseMode`, `mosaic`, `allowedUsers`. `root`, `writeArtwork`, `type`, `remoteId`, `connectionId` and any download flag are refused. |
+| `PATCH /api/remote-libraries/:id` | Local configuration only: `name`, `enabled`, `order`, `showOnHome`, `showInContinueWatching`, `showInFavorites`, `browseMode`, `mosaic`, `allowedUsers`, `downloadLibraryId`. `root`, `writeArtwork`, `type`, `remoteId`, `connectionId` and any download flag are refused. |
 | `DELETE /api/remote-libraries/:id` | Removes the local attachment. Its stored history is kept invisibly for 30 days; `?forget=true` deletes it at once. The remote server is never mutated. |
 | `GET /api/media-servers/export` | The metadata-only configuration export (`version`, connections, libraries). No secret references, grants, generations or timestamps. |
 | `POST /api/media-servers/import` | Additively restores an export: fresh handles, connections and libraries land **disabled** with no grants and no secrets, and a duplicate remote account refuses the whole batch. Its own body parser allows up to 8 MiB, above the ordinary 256 KiB. |
@@ -498,3 +498,26 @@ minutes, or thirty seconds when absent. Calls during cooldown make no DNS or
 HTTP request. There are no automatic retry loops. The upstream client identity
 remains Stremio Offline; request pacing does not imply that an operator who
 allows only the official Jellyfin client permits this application.
+
+
+## Copying remote originals into local libraries
+
+The catalogue, a native video detail and its item menu can save the selected
+original into a local library, on the web and Android TV. The source account on
+Jellyfin or Emby must explicitly allow content downloading, and the acting app
+account must have access to the remote library and permission to write to the
+local destination. Device saves and bulk season or folder copies remain unavailable
+for native sources. No remote watch history, metadata or files are modified.
+
+An administrator can set **Save copies to** in the attached library's settings.
+With no override, movie and series libraries use their respective local defaults;
+other libraries prefer an enabled writable general-purpose library. The destination
+picker can override this rule for a single copy. A configured destination that is
+removed or no longer accessible is refused rather than silently replaced. Changing
+the setting affects new copies, while queued copies retain their chosen destination.
+
+Copies use one original-file transfer per upstream server, without segmentation.
+Partial files are kept when access is withdrawn; the copy pauses instead of repeatedly
+asking the server. Queue state keeps an owner-bound reference, never the upstream
+address, token or browser session. The original container supplies the saved file
+extension; an unknown format is refused instead of being guessed as MP4.

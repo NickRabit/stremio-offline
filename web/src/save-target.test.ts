@@ -1,5 +1,5 @@
 import { beforeEach, expect, it } from "vitest";
-import { offeredLibraries, ruleTarget, targetPreview } from "./save-target";
+import { offeredLibraries, ruleTarget, sourceTargetRule, targetPreview } from "./save-target";
 import { setLocale } from "./i18n";
 import type { AddonDownloadSettings, LibraryType, LibraryView } from "./types";
 
@@ -43,6 +43,18 @@ it("names the library a rule would use, falling back to the default-flagged one"
   expect(ruleTarget(settings({ libraryId: "lib_a" }, {}), "movie", libraries))
     .toEqual({ libraryId: "lib_a", subfolder: "", layout: "structured" });
   expect(ruleTarget(undefined, "series", libraries)).toEqual({ subfolder: "", layout: "structured" });
+});
+
+it("preselects the destination the server projected for a native source, and nothing else", () => {
+  const libraries = [library("lib_a", "Films", "movie"), library("lib_b", "Downloads", "mixed", { defaultMovie: true })];
+  const projected = sourceTargetRule({ downloadLibraryId: "lib_a" })!;
+  expect(projected.movie).toEqual({ libraryId: "lib_a", subfolder: "", layout: "structured" });
+  expect(projected.series).toEqual({ libraryId: "lib_a", subfolder: "", layout: "structured" });
+  // The projected handle wins over the flagged default, and no projection invents one.
+  expect(ruleTarget(projected, "movie", libraries).libraryId).toBe("lib_a");
+  expect(ruleTarget(sourceTargetRule({}), "movie", libraries).libraryId).toBe("lib_b");
+  expect(ruleTarget(sourceTargetRule(null), "movie", libraries).libraryId).toBe("lib_b");
+  expect(sourceTargetRule(undefined)).toBeUndefined();
 });
 
 it("draws the folder chain a title lands in for each layout and kind", () => {

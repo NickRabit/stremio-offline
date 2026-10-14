@@ -1,10 +1,11 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { AppError } from "./errors.js";
+import { LIBRARY_ID } from "./libraries.js";
 import { log } from "./logger.js";
 import { remoteLibraryVisibleTo } from "./media-server-access.js";
 import { ResourceError } from "./media-resources.js";
 import { isRemoteContentRef, remoteSecretStamp, type RemoteContentRef } from "./media-server-reference.js";
-import { isRemoteDownloadReference, type RemoteDownloadReference } from "./media-server-download.js";
+import { isRemoteDownloadReference, takesRemoteCopy, type RemoteDownloadReference } from "./media-server-download.js";
 import {
   connectionScope,
   forgetRemovedHistory,
@@ -112,6 +113,10 @@ export interface MediaServerItemVersions {
   libraryId: string;
   generation: number;
   libraryName: string;
+  /** The account's native copy permission, read from the session's own account policy rather
+   *  than a fresh call. The source guard still re-proves every copy; this only lets the
+   *  interface offer the action at all, and a missing fact is never a permission. */
+  downloadAllowed?: boolean;
 }
 
 /** What a content mutation took away. A scope with no fields means everything. */
@@ -163,7 +168,7 @@ const SEARCH_MAX = 256;
 const ITEM_TYPES: readonly ProviderItemType[] = ["movie", "series", "season", "episode"];
 const CREATE_KEYS = ["provider", "name", "baseUrl", "allowLan", "allowLoopback", "username", "password"];
 const ATTACH_KEYS = ["remoteId", "name", "order", "showOnHome", "showInContinueWatching", "browseMode", "mosaic", "showInFavorites"];
-const LIBRARY_PATCH_KEYS = ["name", "enabled", "order", "showOnHome", "showInContinueWatching", "allowedUsers", "browseMode", "mosaic", "showInFavorites"];
+const LIBRARY_PATCH_KEYS = ["name", "enabled", "order", "showOnHome", "showInContinueWatching", "allowedUsers", "browseMode", "mosaic", "showInFavorites", "downloadLibraryId"];
 const CONNECTION_PATCH_KEYS = ["name", "enabled"];
 const BROWSE_QUERY_KEYS = ["limit", "cursor", "search", "type"];
 const EPISODE_QUERY_KEYS = ["limit", "cursor"];
@@ -188,6 +193,15 @@ const readForgetOption = (options: unknown): boolean => {
   const record = checkKeys(options, ["forget"], "The media-server removal");
   if (record.forget === undefined) throw invalid("The media-server removal names nothing to change.");
   return bool(record.forget, "forget");
+};
+
+/** The copy destination a patch asks for: absent leaves the stored handle alone, `null` clears
+ *  the override, and anything else has to be a local library handle. A remote handle is never a
+ *  destination for a copy that lands on this machine. */
+const readDownloadLibrary = (value: unknown): string | null | undefined => {
+  if (value === undefined || value === null) return value as null | undefined;
+  if (typeof value !== "string" || !LIBRARY_ID.test(value)) throw invalid("The media-server copy destination is malformed.");
+  return value;
 };
 
 const identityChanged = (): MediaServerError => new MediaServerError("identity-changed", "The media-server identity is not the configured one.");
@@ -885,6 +899,7 @@ export class MediaServerManager {
     const browseMode = parseBrowseMode(record.browseMode as string | undefined);
     const mosaic = record.mosaic === undefined ? undefined : bool(record.mosaic, "mosaic");
     const showInFavorites = record.showInFavorites === undefined ? undefined : bool(record.showInFavorites, "showInFavorites");
+    const downloadLibraryId = readDownloadLibrary(record.downloadLibraryId);
     const requestedUsers = record.allowedUsers === undefined ? undefined : this.readAllowedUsers(record.allowedUsers);
     return this.adminMutation(async () => {
       let updated!: RemoteLibraryRecord;
@@ -907,6 +922,20 @@ export class MediaServerManager {
         if (browseMode !== undefined) next.browseMode = browseMode;
         if (mosaic !== undefined) next.mosaic = mosaic;
         if (showInFavorites !== undefined) next.showInFavorites = showInFavorites;
+        // A shared copy destination: it is validated against the state this write lands on, so a
+        // library removed or made read-only meanwhile is refused rather than stored. The setting
+        // never bumps the generation and never revokes content; a copy already running keeps the
+        // destination it captured.
+        if (downloadLibraryId !== undefined) {
+          if (downloadLibraryId === null) {
+            delete next.downloadLibraryId;
+          } else {
+            const destination = (state.libraries ?? []).find((candidate) => candidate.id === downloadLibraryId);
+            if (!destination) throw invalid("That library does not exist.");
+            if (!takesRemoteCopy(library.type, destination)) throw invalid("That library is switched off, read-only, unreachable or does not take this kind of content.");
+            next.downloadLibraryId = downloadLibraryId;
+          }
+        }
         const before = library.allowedUsers;
         if (requestedUsers !== undefined) {
           const wanted = new Set<string>(dormantGrants(state.users ?? [], library.allowedUsers));
@@ -1976,6 +2005,7 @@ export class MediaServerManager {
       libraryId: library.id,
       generation: connection.generation,
       libraryName: library.name,
+      downloadAllowed: session.policy.contentDownloading === true,
     };
   }
 

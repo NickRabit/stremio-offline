@@ -1,7 +1,10 @@
+import { mayDownloadToLibrary } from "./downloads.js";
+import { libraryVisible, type DefaultLibrarySettings, type LibraryRecord } from "./libraries.js";
 import { remoteContentAccessible } from "./media-server-access.js";
-import { canonicalRemoteDownloadReference, type RemoteDownloadReference } from "./media-server-download.js";
+import { canonicalRemoteDownloadReference, defaultRemoteCopyLibraryId, takesRemoteCopy, type RemoteDownloadReference } from "./media-server-download.js";
 import type { MediaServerAuthority, MediaServerItemVersions, MediaServerManager } from "./media-server-manager.js";
 import { isRemoteMediaStream, openRemoteContent, remoteSecretStamp, sealRemoteContent } from "./media-server-reference.js";
+import { READ_ONLY_MEDIA_CAPABILITIES, type RemoteLibraryRecord } from "./media-server-types.js";
 import { ResourceError, type MediaResources, type ResourceOwner } from "./media-resources.js";
 import { containerExtension, nameExtension } from "./naming.js";
 import type { Store } from "./store.js";
@@ -9,7 +12,15 @@ import type { PublicStream, StreamItem } from "./types.js";
 import type { UserRecord } from "./users.js";
 
 /** One verified item's versions and its sealed subtitles as public sources. */
-type SealedStreams = { stream: StreamItem; libraryName: string };
+type SealedStreams = {
+  stream: StreamItem;
+  libraryName: string;
+  downloadAllowed: boolean;
+  /** The remote library the version came from and the kind of content it is, so the copy
+   *  destination this source projects is resolved from the same records the admission reads. */
+  libraryId: string;
+  kind: "movie" | "series";
+};
 
 /** The file name a copy of one version should carry: the display label with the version's own
  *  container extension. A label that already ends in an accepted extension has it replaced, so
@@ -77,6 +88,9 @@ export class MediaServerSources {
     };
     return result.versions.map((version) => ({
       libraryName: result.libraryName,
+      downloadAllowed: result.downloadAllowed === true,
+      libraryId: result.libraryId,
+      kind: result.item.type === "episode" ? "series" : "movie",
       stream: {
         url: sealRemoteContent({ ...base, mediaSourceId: version.id }),
         name: version.name ?? result.item.name,
@@ -95,9 +109,47 @@ export class MediaServerSources {
     }));
   }
 
+  /** The local library a copy of this source lands in when the caller names no target, when it is
+   *  one the acting account can see and write to. The stored setting only preselects the
+   *  interface: the admission resolves the same default again and refuses an unusable handle
+   *  instead of redirecting it to another library. */
+  private copyDestination(
+    entry: SealedStreams,
+    user: UserRecord,
+    libraries: LibraryRecord[],
+    settings: DefaultLibrarySettings,
+    remotes: RemoteLibraryRecord[],
+  ): string | undefined {
+    const remote = remotes.find((candidate) => candidate.id === entry.libraryId);
+    if (!remote) return undefined;
+    const resolved = defaultRemoteCopyLibraryId(remote, libraries, settings, entry.kind);
+    if (resolved === undefined) return undefined;
+    const destination = libraries.find((candidate) => candidate.id === resolved);
+    if (!destination || !takesRemoteCopy(remote.downloadLibraryId === undefined && remote.type === "mixed" ? entry.kind : remote.type, destination)) return undefined;
+    if (!libraryVisible(destination, { id: user.id, role: user.role })) return undefined;
+    return resolved;
+  }
+
+  /** The listed sources, with the one capability a trusted projection may add: an original the
+   *  acting account may still copy into a local library. It needs the session's native flag and
+   *  the account's own right; a subtitle never carries it, and no other flag is ever true. The
+   *  copy destination rides along with it, as a preselection only. */
   private listed(sealed: SealedStreams[], owner: ResourceOwner): PublicStream[] {
     const listed = this.resources.listing(sealed.map((entry) => entry.stream), owner);
-    for (let index = 0; index < listed.length; index += 1) listed[index]!.libraryName = sealed[index]!.libraryName;
+    const user = this.currentUser(owner.userId);
+    const mayCopy = user !== undefined && mayDownloadToLibrary(user);
+    // Read once for the whole listing: a version read never fans out into one store read each.
+    const libraries = this.store.libraries();
+    const settings = this.store.settings();
+    const remotes = this.store.remoteLibraries();
+    for (let index = 0; index < listed.length; index += 1) {
+      const entry = sealed[index]!;
+      listed[index]!.libraryName = entry.libraryName;
+      if (!mayCopy || !user || !entry.downloadAllowed) continue;
+      listed[index]!.capabilities = { ...READ_ONLY_MEDIA_CAPABILITIES, downloadToLibrary: true };
+      const destination = this.copyDestination(entry, user, libraries, settings, remotes);
+      if (destination !== undefined) listed[index]!.downloadLibraryId = destination;
+    }
     return listed;
   }
 

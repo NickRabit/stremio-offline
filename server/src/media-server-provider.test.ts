@@ -647,3 +647,18 @@ test("findByProviderIds prefers a usable id, queries nothing without one and ref
   const oversized = fixture(() => ({ Items: Array.from({ length: 201 }, (_, index) => ({ Id: `m${index}`, Name: "n", Type: "Movie", ProviderIds: { Imdb: "tt1" } })) }), "emby");
   await assert.rejects(oversized.provider.findByProviderIds("tok", "u", "lib", { imdb: "tt1" }, "movie"), { code: "invalid-response" });
 });
+
+for (const kind of ["jellyfin", "emby"] as const) {
+  test(`${kind} derives an absent container from the original file extension without exposing its path`, async () => {
+    const { provider } = fixture(() => ({ MediaSources: [
+      { Id: "file", Protocol: "File", Name: "720p", Path: "/private/media/Original.MKV" },
+      { Id: "unknown", Protocol: "File", Name: "Unknown", Path: "/private/media/Original.unknown" },
+      { Id: "reported", Protocol: "File", Container: "mp4", Path: "/private/media/Original.mkv" },
+    ] }), kind);
+    const versions = await provider.versions("tok", "user-1", "item-1");
+    assert.equal(versions[0]?.container, "mkv");
+    assert.equal(versions[1]?.container, undefined);
+    assert.equal(versions[2]?.container, "mp4");
+    assert.equal(JSON.stringify(versions).includes("/private/media"), false);
+  });
+}

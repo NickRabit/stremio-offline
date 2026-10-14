@@ -339,3 +339,27 @@ describe("LibraryTitleDetail saved position", () => {
     expect(savedText()).toBe("0:30 of 5:00");
   });
 });
+
+describe("LibraryTitleDetail save to library", () => {
+  it("shows no save action unless the caller asks for one", () => {
+    render();
+    expect(host.textContent).not.toContain("To library");
+  });
+
+  it("queues the version the selector currently holds, not the largest default", () => {
+    const onSaveToLibrary = vi.fn();
+    render({ sources: [remote("s1", "720p", 1_000_000_000), remote("s2", "1080p", 3_000_000_000)], onSaveToLibrary });
+    click(host.querySelector<HTMLButtonElement>(".split-button-toggle"));
+    click(pickerRows()[1]!);
+    const save = [...host.querySelectorAll<HTMLButtonElement>(".library-detail-actions button")].find((button) => button.textContent?.includes("To library"))!;
+    expect(save.disabled).toBe(false);
+    click(save);
+    expect(onSaveToLibrary).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "s1" }));
+  });
+
+  it("holds the action back while no version is selected", () => {
+    render({ sources: [], onSaveToLibrary: vi.fn() });
+    const save = [...host.querySelectorAll<HTMLButtonElement>(".library-detail-actions button")].find((button) => button.textContent?.includes("To library"))!;
+    expect(save.disabled).toBe(true);
+  });
+});

@@ -151,9 +151,11 @@ export function streamBadge(stream: Stream): string {
 
 export function canQueue(stream: Stream, debridConfigured: boolean): boolean {
   if (isLocalStream(stream)) return false;
-  // A remote media-server source is read-only in this stage: it is watched through the
-  // server's proxy, never downloaded, and no addon path may pick it up.
-  if (stream.provider || stream.remoteItem || stream.capabilities?.downloadToLibrary === false) return false;
+  // A remote media-server original may be copied into a local library only when the server
+  // proved the account's native download right for this exact source; the device save stays
+  // denied and no addon or debrid path picks it up.
+  if (stream.provider || stream.remoteItem) return stream.playable && stream.capabilities?.downloadToLibrary === true;
+  if (stream.capabilities?.downloadToLibrary === false) return false;
   return stream.playable || (stream.kind === "torrent" && debridConfigured);
 }
 

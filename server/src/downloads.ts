@@ -7,7 +7,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { addonAllowed } from "./addons.js";
 import type { AddonDownloadSettings, AddonRecord, StreamItem, SubtitleItem } from "./types.js";
-import { defaultDownloadSettings, fitTargetName, joinTarget, streamExtension, targetPath, type MediaInfo } from "./naming.js";
+import { defaultDownloadSettings, fitTargetName, joinTarget, nameExtension, streamExtension, targetPath, type MediaInfo } from "./naming.js";
 import { torrentKey } from "./download-selection.js";
 import { episodeTag } from "./library.js";
 import type { DownloadTargetSettings } from "./types.js";
@@ -127,8 +127,7 @@ export const mayDownloadToLibrary = (user: Pick<UserRecord, "role" | "permission
 export const mayDownloadToDevice = (user: Pick<UserRecord, "role" | "permissions">): boolean =>
   user.role === "admin" || user.permissions.downloadToDevice;
 
-/** A remote media-server original is never copied into a library or a device. The scheme is
- *  authoritative, valid or forged, so the check does not open the reference. */
+/** Detect native provenance without trusting public capability fields. */
 export const isRemoteDownloadSource = (stream: Pick<StreamItem, "url"> | undefined): boolean =>
   isRemoteMediaStream(stream ?? {});
 
@@ -547,7 +546,7 @@ export class DownloadQueue {
           if (abandoned) await unlink(`${abandoned}.part`).catch(() => undefined);
           job.segments = undefined; job.received = 0; job.total = undefined; job.rangesIgnored = undefined;
         }
-      } else if (isRemoteDownloadSource(job.stream) || (job.subtitle && isRemoteMediaStream({ url: job.subtitle.url }))) {
+      } else if (job.stream?.url === REMOTE_DOWNLOAD_MARKER || isRemoteDownloadSource(job.stream) || (job.subtitle && isRemoteMediaStream({ url: job.subtitle.url }))) {
         refused.push(job);
       }
     }
@@ -772,6 +771,9 @@ export class DownloadQueue {
         || opened.provider !== reference.provider || opened.serverId !== reference.serverId
         || opened.accountId !== reference.accountId || opened.itemId !== reference.itemId
         || opened.mediaSourceId !== reference.mediaSourceId) throw remoteDownloadRefused();
+    }
+    if (!nameExtension(stream.behaviorHints?.filename ?? stream.name)) {
+      throw new AppError("The media server did not provide a supported original file format.", "err.mediaServerFormatUnknown", 422);
     }
     return { stream: remoteDownloadStream(stream), reference };
   }
@@ -1959,8 +1961,7 @@ export class DownloadQueue {
       await this.commit(job, partial, target);
     } catch (error) {
       job.speed = 0;
-      // A media-server refusal carries the status the download policy already classifies by;
-      // nothing else about it changes shape.
+      const nativeDenied = isMediaServerError(error) && (error.code === "forbidden" || error.code === "unsupported-policy");
       if (isMediaServerError(error) && typeof error.status === "number") error = new HttpSourceError(error.status, error.message, error.retryAfterMs);
       // The rule's library went away while the job waited for its source, or is gone now.
       // Nothing is redirected and nothing fails: the job waits for the library to come back.
@@ -1981,7 +1982,7 @@ export class DownloadQueue {
       // partial file kept: the work is not wrong, only the right behind it is gone. A native
       // download-policy refusal counts too -- it is a denial to obey, not a source to retry.
       if (job.remoteDownload && (error instanceof RemotePermissionLost || remoteStopped || this.remoteRefused(job)
-        || (isMediaServerError(error) && (error.code === "forbidden" || error.code === "unsupported-policy")))) {
+        || nativeDenied)) {
         this.pauseForPermission(job);
         return;
       }

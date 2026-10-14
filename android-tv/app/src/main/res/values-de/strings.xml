@@ -288,6 +288,8 @@
   <string name="media_server_mark_watched">Als gesehen markieren</string>
   <string name="media_server_unwatch">Als ungesehen markieren</string>
   <string name="media_server_download_unavailable">Ein Medienserver-Eintrag kann nicht heruntergeladen werden.</string>
+  <string name="media_server_download_disabled">Downloads sind für dieses Serverkonto deaktiviert.</string>
+  <string name="media_server_version_number">Version %1$s</string>
   <string name="media_server_state_error">Deine gespeicherte Position konnte nicht geladen werden.</string>
   <string name="media_server_group_failed">%1$s konnte nicht geladen werden.</string>
   <string name="media_server_personal_empty">Hier ist noch nichts.</string>
@@ -297,4 +299,5 @@
   <string name="favorites_tab_local">Dateien und Katalog</string>
   <string name="favorites_tab_servers">Medienserver</string>
   <string name="media_server_personal_partial">Einige Einträge konnten nicht geladen werden.</string>
+  <string name="err_media_server_format_unknown">Der Medienserver hat kein unterstütztes Format der Originaldatei angegeben.</string>
 </resources>

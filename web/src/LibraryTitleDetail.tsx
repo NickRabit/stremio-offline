@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, CirclePlay, FolderOpen, Images, RotateCcw, Star, X } from "lucide-react";
+import { Check, ChevronDown, CirclePlay, FolderOpen, HardDrive, Images, RotateCcw, Star, X } from "lucide-react";
 import { DetailHero, LIBRARY_HERO_EMPTY_GRADIENT, LIBRARY_HERO_GRADIENT, useBackdrop } from "./DetailHero";
 import type { GalleryImage } from "./gallery-images";
 import { bytes, hideBroken } from "./settings-ui";
@@ -50,6 +50,9 @@ export interface LibraryTitleDetailProps {
   onClearProgress?: (stream: Stream) => Promise<boolean>;
   /** Start-over asks for the same stream with `fromBeginning`, which leaves its progress alone. */
   onPlay: (stream: Stream, fromBeginning?: boolean) => void;
+  /** Queues a copy of the currently selected version into a local library. Absent where saving
+   *  has no meaning, so the action only appears for a source that can be copied. */
+  onSaveToLibrary?: (stream: Stream) => void;
   /** A source row's own tag; absent falls back to the library's name. */
   sourceBadge?: (stream: Stream) => string;
 }
@@ -69,7 +72,7 @@ const clock = (value: number) => {
 /** The one detail body a playable title shares, local or remote: the catalogue hero, the synopsis
  *  and the sources with a split Play button. The provider-specific parts arrive as props, so the
  *  two containers cannot drift apart and a future add-on stream joins the same selector. */
-export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backdrops, gallery, onGallery, facts, description, chips, favorite, onToggleFavorite, favoriteDisabled, watched, onToggleWatched, watchedDisabled, watchedLabel, onOpenFolder, sources, sourceError, onRetry, progress, onSourceChange, onClearProgress, onPlay, sourceBadge }: LibraryTitleDetailProps) {
+export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backdrops, gallery, onGallery, facts, description, chips, favorite, onToggleFavorite, favoriteDisabled, watched, onToggleWatched, watchedDisabled, watchedLabel, onOpenFolder, sources, sourceError, onRetry, progress, onSourceChange, onClearProgress, onPlay, onSaveToLibrary, sourceBadge }: LibraryTitleDetailProps) {
   useI18n();
   const backdrop = useBackdrop(backdrops ?? []);
   const [chosen, setChosen] = useState<{ identity: string; key: string } | null>(null);
@@ -196,6 +199,7 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
           : <button ref={playRef} className="primary" disabled={!selected} onClick={() => selected && onPlay(selected)}><CirclePlay/> {t("player.play")}</button>}
       </div>
       {savedPosition && <button type="button" onClick={() => selected && onPlay(selected, true)}>{t("player.playFromStart")}</button>}
+      {onSaveToLibrary && <button type="button" disabled={!selected} onClick={() => selected && onSaveToLibrary(selected)}><HardDrive/> {t("save.toLibrary")}</button>}
       {onToggleFavorite && <button type="button" className="icon-button" aria-pressed={favorite ?? false} disabled={favoriteDisabled ?? false}
         aria-label={t(favorite ? "favorite.remove" : "favorite.add")} title={t(favorite ? "favorite.remove" : "favorite.add")}
         onClick={() => onToggleFavorite(!(favorite ?? false))}><Star fill={favorite ? "currentColor" : "none"}/></button>}

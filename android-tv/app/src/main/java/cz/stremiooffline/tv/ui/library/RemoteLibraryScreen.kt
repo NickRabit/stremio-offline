@@ -27,12 +27,18 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -47,9 +53,19 @@ import androidx.tv.material3.Icon
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
+import cz.stremiooffline.tv.data.ApiError
+import cz.stremiooffline.tv.data.ApiFailure
+import cz.stremiooffline.tv.data.LibraryDto
+import cz.stremiooffline.tv.data.MediaDto
 import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.RemoteLibraryApi
 import cz.stremiooffline.tv.data.RemoteLibraryDto
+import cz.stremiooffline.tv.data.RemoteProviderIdsDto
+import cz.stremiooffline.tv.data.StreamDto
+import cz.stremiooffline.tv.ui.catalog.NativeCopyRequest
+import cz.stremiooffline.tv.ui.catalog.NativeQueuePanel
+import cz.stremiooffline.tv.ui.catalog.nativeCopyTitle
+import cz.stremiooffline.tv.ui.catalog.resolveNativeCopy
 import cz.stremiooffline.tv.ui.catalog.FolderIcon
 import cz.stremiooffline.tv.ui.components.CardRowInset
 import cz.stremiooffline.tv.ui.components.FocusButton
@@ -63,6 +79,8 @@ import cz.stremiooffline.tv.ui.detail.RemoteDetailData
 import cz.stremiooffline.tv.ui.detail.RemoteDetailScreen
 import cz.stremiooffline.tv.ui.theme.Tokens
 import kotlinx.coroutines.android.awaitFrame
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 
 const val TagLibrarySegments = "library_segments"
 const val TagRemoteLoadMore = "remote_load_more"
@@ -92,6 +110,11 @@ fun RemoteLibraryRoute(
   restoreToken: Int = 0,
   /** False while a detail or the player covers this half, so a hidden Back never pops its stack. */
   backEnabled: Boolean = true,
+  /** The destinations this account may copy into, read once when a card's copy action is used;
+   *  null keeps the action off. */
+  loadDestinations: (suspend () -> List<LibraryDto>)? = null,
+  /** Queues one exact version into the exact library the viewer picked. */
+  onQueue: (suspend (title: String, sourceId: String, media: MediaDto, libraryId: String) -> Unit)? = null,
 ) {
   val viewModel = viewModel<RemoteLibraryViewModel>(factory = RemoteLibraryViewModel.factory(api))
   LaunchedEffect(segment) {
@@ -114,6 +137,83 @@ fun RemoteLibraryRoute(
   var query by remember { mutableStateOf("") }
   var committed by remember { mutableStateOf("") }
 
+  // The card's copy panel: nothing is read for it until the viewer presses Menu or Info on a
+  // playable card, so a listing never fans out into a source read per tile. One copy is in flight
+  // at a time and its token outlives the answer, so a late one never touches another card's panel.
+  var copyCard by remember { mutableStateOf<RemoteItemDto?>(null) }
+  var copyRequest by remember { mutableStateOf<NativeCopyRequest?>(null) }
+  var copyResolving by remember { mutableStateOf(false) }
+  var copyBusy by remember { mutableStateOf(false) }
+  var copyNotice by remember { mutableStateOf<String?>(null) }
+  var copyToken by remember { mutableIntStateOf(0) }
+  val copyScope = rememberCoroutineScope()
+  val notAllowedText = stringResource(R.string.err_download_library_not_allowed)
+  val destinationsFailedText = stringResource(R.string.media_server_error)
+
+  fun openCardCopy(libraryId: String, item: RemoteItemDto) {
+    val load = loadDestinations ?: return
+    if (copyResolving || copyBusy) return
+    val mine = ++copyToken
+    copyResolving = true
+    copyNotice = null
+    copyCard = item
+    copyScope.launch {
+      try {
+        val resolved = resolveNativeCopy(
+          api = api, libraryId = libraryId, item = item,
+          seriesName = null, seriesIds = null, sources = null, loadDestinations = load,
+        )
+        if (mine == copyToken) copyRequest = resolved
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (error: ApiError) {
+        if (mine == copyToken) {
+          copyNotice = error.serverMessage
+            ?: if (error.failure == ApiFailure.Forbidden) notAllowedText else destinationsFailedText
+          copyCard = null
+        }
+      } catch (_: Exception) {
+        if (mine == copyToken) { copyNotice = destinationsFailedText; copyCard = null }
+      } finally {
+        if (mine == copyToken) copyResolving = false
+      }
+    }
+  }
+
+  fun queueCardCopy(stream: StreamDto, libraryId: String) {
+    val queue = onQueue ?: return
+    val subject = copyRequest?.subject ?: return
+    if (copyBusy) return
+    val mine = copyToken
+    copyBusy = true
+    copyNotice = null
+    copyScope.launch {
+      try {
+        queue(nativeCopyTitle(subject), stream.sourceId, subject.media(), libraryId)
+        if (mine == copyToken) { copyRequest = null; copyCard = null }
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (error: ApiError) {
+        if (mine == copyToken) copyNotice = error.serverMessage ?: notAllowedText
+      } catch (_: Exception) {
+        if (mine == copyToken) copyNotice = notAllowedText
+      } finally {
+        if (mine == copyToken) copyBusy = false
+      }
+    }
+  }
+
+  fun closeCardCopy() {
+    val id = copyCard?.id
+    copyToken++
+    copyRequest = null
+    copyCard = null
+    copyNotice = null
+    copyResolving = false
+    copyBusy = false
+    runCatching { id?.let { requesters[it] }?.requestFocus() }
+  }
+
   BackHandler(enabled = segment == LibrarySegment.Servers && backEnabled) {
     if (!viewModel.back()) onBackToFiles()
   }
@@ -121,6 +221,14 @@ fun RemoteLibraryRoute(
   LaunchedEffect(levelKey) {
     committed = (level as? RemoteLevel.Directory)?.state?.search.orEmpty()
     query = committed
+    // A copy that was still being resolved belongs to the card that asked for it: leaving the
+    // level drops it, so a late answer never opens a panel over another listing or moves focus.
+    copyToken++
+    copyCard = null
+    copyRequest = null
+    copyNotice = null
+    copyResolving = false
+    copyBusy = false
   }
 
   // A page change focuses the card last used on this level, else the first card; Back restores the
@@ -133,9 +241,13 @@ fun RemoteLibraryRoute(
     runCatching { requester.requestFocus() }
   }
 
+  Box(modifier) {
   Column(
-    modifier = modifier.fillMaxSize().padding(start = Tokens.SafeX, top = Tokens.SafeY, end = Tokens.SafeX),
+    modifier = Modifier.fillMaxSize().padding(start = Tokens.SafeX, top = Tokens.SafeY, end = Tokens.SafeX),
   ) {
+    if (copyNotice != null && copyRequest == null) {
+      Text(copyNotice!!, color = Tokens.Red, fontSize = 11.sp, modifier = Modifier.padding(bottom = 6.dp))
+    }
     // The path back to the library, so a nested folder is never a dead end on screen.
     if (state.levels.size > 1) {
       Text(
@@ -164,10 +276,27 @@ fun RemoteLibraryRoute(
           gridFocus = gridFocus,
           loadMoreFocus = loadMoreFocus,
           errorFocus = errorFocus,
+          onMenu = if (loadDestinations != null) { item -> openCardCopy(level.libraryId, item) } else null,
           onOpenItem = onOpenItem,
         )
       }
     }
+  }
+
+  val cardRequest = copyRequest
+  if (cardRequest != null) {
+    val kind = if (cardRequest.subject.kind == "episode") "series" else "movie"
+    NativeQueuePanel(
+      versions = cardRequest.versions,
+      libraries = cardRequest.destinations.filter { it.canWrite && (it.type == kind || it.type == "mixed") },
+      defaultDestination = cardRequest.defaultDestination,
+      preferred = null,
+      busy = copyBusy,
+      notice = copyNotice,
+      onQueue = { stream, libraryId -> queueCardCopy(stream, libraryId) },
+      onClose = { closeCardCopy() },
+    )
+  }
   }
 }
 
@@ -186,6 +315,8 @@ internal fun RemoteSeriesScreen(
   onBack: () -> Unit,
   backEnabled: Boolean = true,
   restoreToken: Int = 0,
+  loadDestinations: (suspend () -> List<LibraryDto>)? = null,
+  onQueue: (suspend (title: String, sourceId: String, media: MediaDto, libraryId: String) -> Unit)? = null,
 ) {
   val viewModel = viewModel<RemoteLibraryViewModel>(
     key = "remote-series:${data.libraryId}:${data.item.id}",
@@ -212,6 +343,81 @@ internal fun RemoteSeriesScreen(
   val searchSurface = remember { FocusRequester() }
   val requesters = remember(levelKey) { mutableMapOf<String, FocusRequester>() }
 
+  // The episode grid's copy panel, opened by Menu/Info on a playable episode card.
+  var copyCard by remember { mutableStateOf<RemoteItemDto?>(null) }
+  var copyRequest by remember { mutableStateOf<NativeCopyRequest?>(null) }
+  var copyResolving by remember { mutableStateOf(false) }
+  var copyBusy by remember { mutableStateOf(false) }
+  var copyNotice by remember { mutableStateOf<String?>(null) }
+  var copyToken by remember { mutableIntStateOf(0) }
+  val copyScope = rememberCoroutineScope()
+  val notAllowedText = stringResource(R.string.err_download_library_not_allowed)
+  val destinationsFailedText = stringResource(R.string.media_server_error)
+
+  fun openCardCopy(item: RemoteItemDto) {
+    val load = loadDestinations ?: return
+    if (copyResolving || copyBusy) return
+    val mine = ++copyToken
+    copyResolving = true
+    copyNotice = null
+    copyCard = item
+    copyScope.launch {
+      try {
+        val resolved = resolveNativeCopy(
+          api = api, libraryId = data.libraryId, item = item,
+          seriesName = data.item.name, seriesIds = data.item.providerIds, sources = null, loadDestinations = load,
+        )
+        if (mine == copyToken) copyRequest = resolved
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (error: ApiError) {
+        if (mine == copyToken) {
+          copyNotice = error.serverMessage
+            ?: if (error.failure == ApiFailure.Forbidden) notAllowedText else destinationsFailedText
+          copyCard = null
+        }
+      } catch (_: Exception) {
+        if (mine == copyToken) { copyNotice = destinationsFailedText; copyCard = null }
+      } finally {
+        if (mine == copyToken) copyResolving = false
+      }
+    }
+  }
+
+  fun queueCardCopy(stream: StreamDto, libraryId: String) {
+    val queue = onQueue ?: return
+    val subject = copyRequest?.subject ?: return
+    if (copyBusy) return
+    val mine = copyToken
+    copyBusy = true
+    copyNotice = null
+    copyScope.launch {
+      try {
+        queue(nativeCopyTitle(subject), stream.sourceId, subject.media(), libraryId)
+        if (mine == copyToken) { copyRequest = null; copyCard = null }
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (error: ApiError) {
+        if (mine == copyToken) copyNotice = error.serverMessage ?: notAllowedText
+      } catch (_: Exception) {
+        if (mine == copyToken) copyNotice = notAllowedText
+      } finally {
+        if (mine == copyToken) copyBusy = false
+      }
+    }
+  }
+
+  fun closeCardCopy() {
+    val id = copyCard?.id
+    copyToken++
+    copyRequest = null
+    copyCard = null
+    copyNotice = null
+    copyResolving = false
+    copyBusy = false
+    runCatching { id?.let { requesters[it] }?.requestFocus() }
+  }
+
   // A page change focuses the card last used; coming back from an episode restores the card that
   // opened it, so the viewer lands where they left rather than on the first card.
   LaunchedEffect(levelKey, items.map { it.id }, restoreToken, returnToken, episode) {
@@ -222,8 +428,22 @@ internal fun RemoteSeriesScreen(
     runCatching { requester.requestFocus() }
   }
 
+  // A copy still being resolved belongs to the card that asked for it: leaving the level or
+  // opening an episode drops it, so a late answer never opens a panel over another screen.
+  LaunchedEffect(levelKey, episode) {
+    copyToken++
+    copyCard = null
+    copyRequest = null
+    copyNotice = null
+    copyResolving = false
+    copyBusy = false
+  }
+
   Box(Modifier.fillMaxSize()) {
     if (episode == null) Column(Modifier.fillMaxSize().padding(start = Tokens.SafeX, top = Tokens.SafeY, end = Tokens.SafeX)) {
+      if (copyNotice != null && copyRequest == null) {
+        Text(copyNotice!!, color = Tokens.Red, fontSize = 11.sp, modifier = Modifier.padding(bottom = 6.dp))
+      }
       Box(Modifier.weight(1f).fillMaxWidth()) {
         if (level == null) {
           ShimmerCards()
@@ -242,6 +462,7 @@ internal fun RemoteSeriesScreen(
             gridFocus = gridFocus,
             loadMoreFocus = loadMoreFocus,
             errorFocus = errorFocus,
+            onMenu = if (loadDestinations != null) { item -> openCardCopy(item) } else null,
             onOpenItem = { libraryId, libraryName, provider, item ->
               episode = RemoteDetailData(
                 libraryId = libraryId,
@@ -249,6 +470,7 @@ internal fun RemoteSeriesScreen(
                 provider = provider,
                 item = item,
                 seriesName = data.item.name,
+                seriesIds = data.item.providerIds,
               )
             },
           )
@@ -269,6 +491,23 @@ internal fun RemoteSeriesScreen(
         },
         backEnabled = backEnabled,
         restoreToken = returnToken + restoreToken,
+        loadDestinations = loadDestinations,
+        onQueue = onQueue,
+      )
+    }
+
+    val cardRequest = copyRequest
+    if (cardRequest != null) {
+      val kind = if (cardRequest.subject.kind == "episode") "series" else "movie"
+      NativeQueuePanel(
+        versions = cardRequest.versions,
+        libraries = cardRequest.destinations.filter { it.canWrite && (it.type == kind || it.type == "mixed") },
+        defaultDestination = cardRequest.defaultDestination,
+        preferred = null,
+        busy = copyBusy,
+        notice = copyNotice,
+        onQueue = { stream, libraryId -> queueCardCopy(stream, libraryId) },
+        onClose = { closeCardCopy() },
       )
     }
   }
@@ -448,6 +687,7 @@ private fun ItemBrowser(
   gridFocus: FocusRequester,
   loadMoreFocus: FocusRequester,
   errorFocus: FocusRequester,
+  onMenu: ((RemoteItemDto) -> Unit)? = null,
   onOpenItem: (libraryId: String, libraryName: String, provider: String, item: RemoteItemDto) -> Unit,
 ) {
   val search = level.state
@@ -520,6 +760,7 @@ private fun ItemBrowser(
               requesters = requesters,
               gridFocus = gridFocus,
               loadMoreFocus = loadMoreFocus,
+              onMenu = onMenu,
               onOpen = { item ->
                 // A folder opens one directory level deeper; it is never playable, so it never
                 // reaches the shell's item detail.
@@ -543,6 +784,8 @@ private fun ItemGrid(
   requesters: MutableMap<String, FocusRequester>,
   gridFocus: FocusRequester,
   loadMoreFocus: FocusRequester,
+  /** Invoked for a playable card when the viewer presses Menu or Info on it; null disables it. */
+  onMenu: ((RemoteItemDto) -> Unit)? = null,
   onOpen: (RemoteItemDto) -> Unit,
 ) {
   val isEpisodes = level is RemoteLevel.Episodes
@@ -571,6 +814,20 @@ private fun ItemGrid(
               if (index >= items.size - columns) viewModel.loadMore()
             }
           }
+          // A playable item's copy action lives behind Menu/Info, the way a TV remote offers a
+          // context action without a long press; a folder or a series has nothing to copy.
+          .then(
+            if (onMenu != null && item.type != "folder" && item.type != "season" && item.type != "series") {
+              Modifier.onPreviewKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown && (event.key == Key.Menu || event.key == Key.Info)) {
+                  onMenu(item)
+                  true
+                } else {
+                  false
+                }
+              }
+            } else Modifier,
+          )
         if (item.type == "folder" || item.type == "season") {
           RemoteArtTile(
             title = item.name,

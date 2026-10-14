@@ -399,3 +399,81 @@ test("an unmatched remote clip uses its native preview as a full-resolution deta
   expect(sizes).toContain("detail");
   expect(metadata, "a clip without provider IDs never guesses catalogue metadata").toEqual([]);
 });
+
+for (const width of [1440, 390]) {
+  test(`native copy menu selects an exact version and local destination at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    const remote = await remoteLibraries(page, {
+      items: () => [{ id: "copy-film", name: "Copy fixture", type: "movie", providerIds: {} }],
+      sources: [
+        { sourceId: "copy-small", kind: "remote", playable: true, name: "720p", provider: "emby",
+          remoteItem: { libraryId, itemId: "copy-film", mediaSourceId: "v1" },
+          capabilities: { ...capabilities, downloadToLibrary: true }, behaviorHints: { videoSize: 1_000_000_000 } },
+        { sourceId: "copy-large", kind: "remote", playable: true, name: "1080p", provider: "emby",
+          remoteItem: { libraryId, itemId: "copy-film", mediaSourceId: "v2" },
+          capabilities: { ...capabilities, downloadToLibrary: true }, behaviorHints: { videoSize: 4_000_000_000 } },
+      ],
+    });
+    const copies: Array<{ sourceId: string; target: { libraryId: string } }> = [];
+    await page.route("**/api/downloads", async route => {
+      if (route.request().method() !== "POST") { await route.continue(); return; }
+      copies.push(route.request().postDataJSON());
+      await route.fulfill({ status: 201, json: { id: "copy-job", status: "queued" } });
+    });
+    await page.locator(".remote-libraries .browse-item.library").filter({ hasText: "Remote clips" }).getByRole("button").click();
+    const tile = page.locator('.remote-browse-panel .browse-item[data-remote-id="copy-film"]');
+    expect(remote.sources(), "drawing a tile does not read its versions").toBe(0);
+    await tile.locator(".browse-menu").click();
+    await tile.getByRole("button", { name: "Do knihovny", exact: true }).click();
+    const dialog = page.getByRole("dialog").filter({ has: page.locator(".save-target-card") });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator(".native-source-choice select")).toBeVisible();
+    expect(remote.sources()).toBe(1);
+    const small = await dialog.locator(".native-source-choice option").filter({ hasText: "720p" }).getAttribute("value");
+    await dialog.locator(".native-source-choice select").selectOption(small!);
+    await dialog.locator(".bulk-strategy").first().locator("label").nth(1).click();
+    await dialog.getByRole("button", { name: "Local roots B", exact: true }).click();
+    await dialog.getByRole("button", { name: "Do knihovny", exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    expect(copies).toHaveLength(1);
+    expect(copies[0]!.sourceId).toBe("copy-small");
+    expect(copies[0]!.target.libraryId).toBe(localLibraryIds[1]);
+    expect(remote.sources()).toBe(1);
+    await expect(page.locator(".remote-browse-panel .crumbs")).toContainText("Remote clips");
+  });
+}
+
+test("a native copy keeps the projected destination as its automatic default", async ({ page }) => {
+  const remote = await remoteLibraries(page, {
+    items: () => [{ id: "copy-film", name: "Copy fixture", type: "movie", providerIds: {} }],
+    sources: [
+      { sourceId: "copy-small", kind: "remote", playable: true, name: "720p", provider: "emby",
+        remoteItem: { libraryId, itemId: "copy-film", mediaSourceId: "v1" },
+        capabilities: { ...capabilities, downloadToLibrary: true }, behaviorHints: { videoSize: 1_000_000_000 } },
+      { sourceId: "copy-large", kind: "remote", playable: true, name: "1080p", provider: "emby",
+        remoteItem: { libraryId, itemId: "copy-film", mediaSourceId: "v2" },
+        capabilities: { ...capabilities, downloadToLibrary: true }, behaviorHints: { videoSize: 4_000_000_000 },
+        downloadLibraryId: localLibraryIds[1] },
+    ],
+  });
+  const copies: Array<Record<string, unknown>> = [];
+  await page.route("**/api/downloads", async route => {
+    if (route.request().method() !== "POST") { await route.continue(); return; }
+    copies.push(route.request().postDataJSON());
+    await route.fulfill({ status: 201, json: { id: "copy-job", status: "queued" } });
+  });
+  await page.locator(".remote-libraries .browse-item.library").filter({ hasText: "Remote clips" }).getByRole("button").click();
+  const tile = page.locator('.remote-browse-panel .browse-item[data-remote-id="copy-film"]');
+  await tile.locator(".browse-menu").click();
+  await tile.getByRole("button", { name: "Do knihovny", exact: true }).click();
+  const dialog = page.getByRole("dialog").filter({ has: page.locator(".save-target-card") });
+  await expect(dialog).toBeVisible();
+  // The automatic option names the destination the server projected, and the exact version the
+  // server would pick is the largest one.
+  await expect(dialog.locator(".bulk-strategy").first().locator("label").first()).toContainText("Local roots B");
+  await dialog.getByRole("button", { name: "Do knihovny", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(copies).toHaveLength(1);
+  expect(copies[0]!.sourceId).toBe("copy-large");
+  expect("target" in copies[0]!).toBe(false);
+});

@@ -274,6 +274,8 @@ mediaServer.sourceHint
 mediaServer.markWatched
 mediaServer.unwatch
 mediaServer.downloadUnavailable
+mediaServer.downloadDisabled
+mediaServer.versionNumber
 mediaServer.stateError
 mediaServer.groupFailed
 mediaServer.personalEmpty
@@ -283,3 +285,5 @@ resume.emptyRemoteText
 favorites.tabLocal
 favorites.tabServers
 mediaServer.personalPartial
+
+err.mediaServerFormatUnknown

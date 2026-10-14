@@ -457,3 +457,44 @@ test("generation overflow refuses the complete mutation", async () => {
     assert.equal(store.mediaConnections()[0].generation, Number.MAX_SAFE_INTEGER);
   });
 });
+
+test("the copy destination rides in a backup as it stands, and only its shape is proved", async () => {
+  await run(async ({ config, store, dataDir }) => {
+    const connection = await config.addConnection(connectionInput());
+    const attached = await config.attachLibrary(connection.id, libraryInput());
+    assert.equal("downloadLibraryId" in attached, false, "an attach with no destination stores none");
+    await store.update((state) => { state.remoteLibraries![0]!.downloadLibraryId = "lib_a1b2c3d4"; });
+
+    const exported = config.exportConfiguration();
+    assert.equal(exported.libraries[0]!.downloadLibraryId, "lib_a1b2c3d4");
+    const projected = projectMediaServerConfiguration({ version: 1, connections: exported.connections, libraries: exported.libraries });
+    assert.equal(projected.libraries[0]!.downloadLibraryId, "lib_a1b2c3d4", "the backup projection keeps the handle");
+
+    // The handle names a library of the install it came from, so a restore stores it verbatim:
+    // a destination that is gone here is refused when a copy is asked for, never rewritten.
+    const restored = await workspace();
+    try {
+      await restored.config.restoreConfiguration(exported);
+      assert.equal(restored.store.remoteLibraries()[0]!.downloadLibraryId, "lib_a1b2c3d4");
+    } finally {
+      await rm(path.dirname(restored.dataDir), { recursive: true, force: true });
+    }
+
+    // A reload reads it back off the disk unchanged, and nothing about it is recomputed.
+    const reopened = new Store(dataDir, dataDir);
+    await reopened.load();
+    assert.equal(reopened.remoteLibraries()[0]!.downloadLibraryId, "lib_a1b2c3d4");
+
+    for (const value of [`rlib_${"a".repeat(32)}`, "lib_zzzzzzzz", "", 7, null, {}]) {
+      await assert.rejects(
+        config.restoreConfiguration({
+          version: 1, connections: [],
+          libraries: [{ ...exported.libraries[0], downloadLibraryId: value }],
+        }),
+        { code: "invalid-input" },
+        `the exported handle ${JSON.stringify(value)} is refused`,
+      );
+    }
+    assert.equal(store.remoteLibraries().length, 1, "a refused batch writes nothing");
+  });
+});

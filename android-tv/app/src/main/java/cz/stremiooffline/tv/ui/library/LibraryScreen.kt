@@ -37,6 +37,8 @@ import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.RemoteItemDto
+import cz.stremiooffline.tv.data.LibraryDto
+import cz.stremiooffline.tv.data.MediaDto
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.data.RemoteLibraryApi
 import cz.stremiooffline.tv.ui.components.CardRowInset
@@ -67,6 +69,11 @@ fun LibraryRoute(
   /** False while a detail or the player covers this section, so a hidden Back never pops it. */
   backEnabled: Boolean = true,
   pendingDelayMs: Long = 1_500L,
+  /** The destinations this account may copy into, read once when a card's copy action is used.
+   *  Null keeps the remote copy action off, which is what a harness without the catalogue passes. */
+  loadDestinations: (suspend () -> List<LibraryDto>)? = null,
+  /** Queues one exact native version into the chosen library. */
+  onQueue: (suspend (title: String, sourceId: String, media: MediaDto, libraryId: String) -> Unit)? = null,
 ) {
   var segment by rememberSaveable { mutableStateOf(LibrarySegment.Files) }
   val remoteApi: RemoteLibraryApi = api
@@ -235,6 +242,8 @@ fun LibraryRoute(
         modifier = Modifier.weight(1f),
         restoreToken = restoreToken,
         backEnabled = backEnabled,
+        loadDestinations = loadDestinations,
+        onQueue = onQueue,
       )
     }
   }

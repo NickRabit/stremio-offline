@@ -124,6 +124,10 @@ export interface PublicStream {
   localPath?: string;
   /** The display name of the library the copy sits in. */
   libraryName?: string;
+  /** Preselected destination for a copy of this source, resolved from the remote library's
+   *  stored setting or its kind's default. Absent when that target is unusable or invisible to
+   *  the asking account; the server re-resolves it on the request and never trusts it. */
+  downloadLibraryId?: string;
   /** Present on a verified media-server source: which provider and which attached library.
    *  Derived from the sealed reference, never from caller-supplied stream fields. */
   provider?: "jellyfin" | "emby";

@@ -8,8 +8,9 @@ import { normalizeLanguage } from "../language.js";
 import { log } from "../logger.js";
 import { libraryVisible, resolveLibraryPath, type LibraryRecord, type Viewer } from "../libraries.js";
 import { defaultDownloadSettings, exactSubfolder, targetLibrary, type MediaInfo } from "../naming.js";
-import type { RemoteDownloadReference } from "../media-server-download.js";
+import { defaultRemoteCopyLibraryId, type RemoteDownloadReference } from "../media-server-download.js";
 import type { MediaServerSources } from "../media-server-sources.js";
+import { openRemoteContent } from "../media-server-reference.js";
 import { REMOTE_LIBRARY_ID } from "../media-server-types.js";
 import { titleLanguage } from "../ranking.js";
 import type { ResourceOwner } from "../media-resources.js";
@@ -170,14 +171,28 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
     const owner = currentUser(req);
     assertMayQueue(req);
     const stream = sourceOf(req);
-    const media = mediaSource(req.body.media);
+    const native = isRemoteDownloadSource(stream);
+    if (native) mediaSources.assertCurrent(stream, ownerOf(req));
+    const nativeRef = native ? openRemoteContent(stream.url) : undefined;
+    const remote = nativeRef ? store.remoteLibraries().find((library) => library.id === nativeRef.libraryId) : undefined;
+    const suppliedMedia = mediaSource(req.body.media);
+    const media = remote?.type === "series" ? { ...suppliedMedia, kind: "episode" as const, title: suppliedMedia?.title ?? String(req.body.title ?? "video") } : suppliedMedia;
     const addon = store.addons().find((item) => item.key === stream.addonKey);
     const settings = addon?.downloadSettings ?? defaultDownloadSettings();
-    const kind = media?.kind === "episode" ? "series" : "movie";
+    const kind = remote?.type === "movie" ? "movie" : media?.kind === "episode" ? "series" : "movie";
     // The requested local destination and its rights are resolved first, so a bad, hidden,
     // read-only or remote target is refused here without any provider contact for a copy.
     const chosen = await explicitTarget(req, req.body.target, kind);
-    const targetSettings = chosen ?? (kind === "series" ? settings.series : settings.movie);
+    // A native original queued without a target of its own takes the destination its remote
+    // library stores, or the default for the kind. The library is read from the sealed address
+    // the session actually resolved -- never from the body -- and a stored setting that names no
+    // usable library is refused here rather than redirected to another one.
+    let derived: DownloadTargetSettings | undefined;
+    if (chosen === undefined && isRemoteDownloadSource(stream)) {
+      const resolved = remote ? defaultRemoteCopyLibraryId(remote, store.libraries(), store.settings(), kind) : undefined;
+      if (resolved !== undefined) derived = await explicitTarget(req, { libraryId: resolved }, kind);
+    }
+    const targetSettings = chosen ?? derived ?? (kind === "series" ? settings.series : settings.movie);
     // The queue turns a rule that names no library into the default for the kind; the guard
     // has to name that same library or the job would be let in and paused at once.
     if (isRemoteDownloadSource(stream) && !(targetSettings.libraryId ?? defaultDownloadLibrary(kind)?.id)) throw new NoLibraryForKindError(kind);
