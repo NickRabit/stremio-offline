@@ -745,6 +745,8 @@ export const fr: Catalog = {
   "library.deleteFileConfirm": "Supprimer le fichier « {name} » ? Cela ne peut pas être annulé.",
   "library.deleteFolderConfirm": "Supprimer le dossier « {name} » et tout ce qu'il contient ? Cela ne peut pas être annulé.",
   "library.markUnwatched": "Marquer comme non surveillé",
+  "library.savedPosition": "{position} sur {duration}",
+  "library.savedPositionUnknown": "Position enregistrée : {position}",
   "library.downloadToDevice": "Enregistrer sur cet appareil",
   "library.continue": "Continuer",
   "library.thisFile": "Ce fichier",

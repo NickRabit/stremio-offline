@@ -183,10 +183,14 @@ fun RemoteDetailScreen(
   // The version the viewer last watched leads, so its Resume is the one offered.
   val primary = sources.firstOrNull { it.remoteItem?.mediaSourceId != null && it.remoteItem.mediaSourceId == savedSourceId }
     ?: sources.firstOrNull()
+  // The saved position belongs to the exact version that stored it; another version shows none.
+  val sameVersion = primary?.remoteItem?.mediaSourceId == savedSourceId
   // Resume is offered only for the same version that stored the position and never for an item
   // already marked watched; any other version, or an unknown one, starts from the beginning.
-  val resuming = stateLoaded && savedSourceId != null && !watched && primary?.remoteItem?.mediaSourceId == savedSourceId &&
+  val resuming = stateLoaded && savedSourceId != null && !watched && sameVersion &&
     Progress.resumePosition(stored?.position ?: 0.0, stored?.duration ?: 0.0) != null
+  /** A stored position the primary version owns, so Start over can still be offered beside Play. */
+  val savedOnPrimary = stateLoaded && sameVersion && (stored?.position ?: 0.0) > 0.0
 
   fun play(source: StreamDto?, resume: Boolean) {
     val context = source?.remoteItem ?: return
@@ -308,13 +312,12 @@ fun RemoteDetailScreen(
         fontSize = 11.5.sp,
         fontWeight = FontWeight.Medium,
       )
-      if (resuming) {
-        val fraction = ((stored?.position ?: 0.0) / ((stored?.duration ?: 0.0).takeIf { it > 0 } ?: 1.0)).toFloat()
-        Text(
-          stringResource(R.string.tv_detail_watched, ((fraction * 100).toInt()).toString()),
-          color = Tokens.Muted,
-          fontSize = 10.sp,
-          modifier = Modifier.testTag(TagRemoteDetailWatched),
+      // The same bar the local detail draws, from the same saved position numbers.
+      if (stateLoaded && sameVersion) {
+        SavedPlaybackProgress(
+          position = stored?.position ?: 0.0,
+          duration = stored?.duration ?: 0.0,
+          tag = TagRemoteDetailWatched,
         )
       }
       Text(stringResource(R.string.media_server_state_local), color = Tokens.Muted, fontSize = 10.sp, modifier = Modifier.testTag(TagRemoteStateCaption))
@@ -328,7 +331,7 @@ fun RemoteDetailScreen(
           enabled = primary != null,
           modifier = Modifier.focusRequester(playFocus).testTag(TagRemoteDetailPlay),
         )
-        if (resuming) {
+        if (resuming || savedOnPrimary) {
           ActionIconButton(
             label = stringResource(R.string.tv_start_over),
             icon = ReplayIcon,

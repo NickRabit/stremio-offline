@@ -3,6 +3,7 @@ import { api, describeError } from "./api";
 import { bytes } from "./settings-ui";
 import { t, useI18n } from "./i18n";
 import { LibraryTitleDetail } from "./LibraryTitleDetail";
+import { sourceIdentity } from "./library-detail-sources";
 import { TitleChips } from "./TitleChips";
 import { catalogueGalleryImages, mergeGallery, posterAndWide, type GalleryImage } from "./gallery-images";
 import { useTitleEnrichment, type CatalogueRef } from "./title-enrichment";
@@ -14,9 +15,11 @@ interface Props {
   item: LocalDetailItem;
   favorite: boolean;
   progress?: { position: number; duration: number };
+  progressRevision?: number;
   onToggleFavorite: (favorite: boolean) => void;
-  onResetProgress: () => void;
-  onPlay: (stream: Stream) => void;
+  /** Forgets one file's saved position; true once the owner's write and refresh succeeded. */
+  onResetProgress: (path: string) => Promise<boolean>;
+  onPlay: (stream: Stream, fromBeginning?: boolean) => void;
   onOpenFolder?: () => void;
   /** The reader's interface language, so the catalogue is asked in it. */
   uiLanguage: string;
@@ -32,14 +35,21 @@ interface Props {
  *  file or its folder is bound to a title, the other copies of that same title, then hands them to
  *  the shared shell. The catalogue hero, the synopsis and the source picker are the ones a remote
  *  library uses. */
-export function LocalLibraryDetail({ item, favorite, progress, onToggleFavorite, onResetProgress, onPlay, onOpenFolder, uiLanguage, secureMode, onTrailer, onGallery }: Props) {
+export function LocalLibraryDetail({ item, favorite, progress, progressRevision = 0, onToggleFavorite, onResetProgress, onPlay, onOpenFolder, uiLanguage, secureMode, onTrailer, onGallery }: Props) {
   useI18n();
   const [sources, setSources] = useState<Stream[] | null>(null);
   const [error, setError] = useState("");
   const [nonce, setNonce] = useState(0);
   const [bound, setBound] = useState<CatalogueRef | null>(null);
+  const [selected, setSelected] = useState<Stream | null>(null);
+  const [saved, setSaved] = useState<{ sourceKey: string; position: number; duration: number } | null>(null);
   const epoch = useRef(0);
+  const progressEpoch = useRef(0);
   const isFile = item.kind === "file";
+  const selectedKey = selected ? sourceIdentity(selected) : null;
+  const selectedPath = selected?.localPath;
+  const currentSelection = useRef(selectedKey);
+  currentSelection.current = selectedKey;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -101,6 +111,40 @@ export function LocalLibraryDetail({ item, favorite, progress, onToggleFavorite,
     return () => { controller.abort(); if (epoch.current === mine) epoch.current += 1; };
   }, [item.path, nonce]);
 
+  // The played file's own saved position, never the whole title's: the clicked file's value
+  // stands in at once, then the authoritative read replaces it. A failed read keeps only what
+  // already belonged to this same file, so nothing of another version can flash over it.
+  useEffect(() => {
+    if (!selectedPath || !selectedKey) { setSaved(null); return; }
+    const controller = new AbortController();
+    const mine = ++progressEpoch.current;
+    const live = () => mine === progressEpoch.current && !controller.signal.aborted;
+    const initial = isFile && selectedPath === item.path && progress && progress.position > 0
+      ? { sourceKey: selectedKey, position: progress.position, duration: progress.duration }
+      : null;
+    setSaved(initial);
+    void api.progressOf(`file:${selectedPath}`, controller.signal)
+      .then((entry) => {
+        if (!live()) return;
+        const own = entry && entry.position > 0 ? entry : { position: 0, duration: 0 };
+        setSaved({ sourceKey: selectedKey, position: own.position, duration: own.duration });
+      })
+      .catch(() => undefined);
+    return () => { controller.abort(); if (progressEpoch.current === mine) progressEpoch.current += 1; };
+  }, [selectedPath, selectedKey, progressRevision]);
+
+  const clearSelectedProgress = async (stream: Stream): Promise<boolean> => {
+    const path = stream.localPath;
+    if (!path) return false;
+    const key = sourceIdentity(stream);
+    const done = await onResetProgress(path);
+    if (done && currentSelection.current === key) {
+      progressEpoch.current += 1;
+      setSaved({ sourceKey: key, position: 0, duration: 0 });
+    }
+    return done;
+  };
+
   // The catalogue identity the source resolution already found: the series of an episode, or the
   // film itself. Its metadata supplies a backdrop and never replaces the file's own synopsis.
   const enrichment = useTitleEnrichment({ kind: "local", path: item.path }, bound, uiLanguage);
@@ -128,11 +172,13 @@ export function LocalLibraryDetail({ item, favorite, progress, onToggleFavorite,
     chips={chips}
     favorite={favorite}
     onToggleFavorite={onToggleFavorite}
-    {...(progress ? { watchedLabel: t("library.markUnwatched"), onToggleWatched: onResetProgress } : {})}
     {...(!isFile && onOpenFolder ? { onOpenFolder } : {})}
     sources={sources}
     {...(error ? { sourceError: error } : {})}
     onRetry={() => setNonce((value) => value + 1)}
+    onSourceChange={setSelected}
+    {...(saved && saved.sourceKey === selectedKey ? { progress: saved } : {})}
+    onClearProgress={clearSelectedProgress}
     onPlay={onPlay}/></div>;
 }
 

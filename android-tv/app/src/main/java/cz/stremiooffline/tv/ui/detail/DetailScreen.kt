@@ -9,15 +9,12 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -27,7 +24,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
@@ -123,11 +119,23 @@ data class DetailData(
   /** Every stored key this title stands for when it was opened from a Continue watching card. */
   val forgetKeys: List<String> = emptyList(),
 ) {
-  /** Re-reads the stored position of every file, so returning from the player shows the resume. */
+  /**
+   * Re-reads the stored position of every file, so returning from the player shows the resume.
+   * A successful `null` clears the old position; only a failed read keeps it, and a cancellation
+   * is never swallowed.
+   */
   suspend fun refresh(progress: suspend (String) -> ProgressDto?): DetailData {
-    val refreshed = files.map { file ->
-      val stored = runCatching { progress(Progress.libraryKey(file.path)) }.getOrNull()
-      if (stored == null) file else file.copy(progress = stored)
+    val refreshed = ArrayList<BrowseItem.File>(files.size)
+    for (file in files) {
+      val stored = try {
+        progress(Progress.libraryKey(file.path))
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (_: ApiError) {
+        refreshed += file
+        continue
+      }
+      refreshed += file.copy(progress = stored)
     }
     return copy(files = refreshed)
   }
@@ -174,7 +182,7 @@ fun DetailScreen(
   progress: suspend (String) -> ProgressDto?,
   setFavorite: suspend (String, Boolean) -> Boolean = { _, wanted -> wanted },
   /** Forgets the stored positions behind every key, the same call Home's card makes. */
-  forgetProgress: suspend (List<String>) -> Unit = {},
+  forgetProgress: suspend (List<String>) -> Unit,
   restoreToken: Int = 0,
   backEnabled: Boolean = true,
 ) {
@@ -189,16 +197,20 @@ fun DetailScreen(
   var favouriteBusy by remember(detail.gridPath) { mutableStateOf(false) }
   var forgetPanelOpen by remember { mutableStateOf(false) }
   var forgetting by remember { mutableStateOf(false) }
+  var forgetError by remember { mutableStateOf(false) }
   val caption = remember { ActionCaption() }
   // The card's own keys stop counting once they have been forgotten.
   var forgotten by remember { mutableStateOf(false) }
   LaunchedEffect(detail.gridPath, restoreToken) {
+    forgetError = false
     current = if (detail.files.isEmpty()) detail else detail.refresh(progress)
   }
 
   val playIndex = current.files.indexOfFirst { !isCompleted(it) }.let { if (it < 0) 0 else it }
   val playFile = current.files.getOrNull(playIndex)
   val resuming = playFile?.let { Progress.resumePosition(positionOf(it), durationOf(it)) != null } == true
+  /** A saved position that is not offered as Resume still gets a Start over beside Play. */
+  val hasStoredProgress = positionOf(playFile) > 0.0
   val storedKeys = current.files.filter { positionOf(it) > 0 }.map { Progress.libraryKey(it.path) }
   val forgetKeys = (if (forgotten) emptyList() else detail.forgetKeys).ifEmpty { storedKeys }
 
@@ -232,6 +244,7 @@ fun DetailScreen(
     if (forgetting || forgetKeys.isEmpty()) return
     forgetting = true
     forgetPanelOpen = false
+    forgetError = false
     scope.launch {
       try {
         forgetProgress(forgetKeys)
@@ -245,6 +258,9 @@ fun DetailScreen(
       } catch (cancelled: CancellationException) {
         throw cancelled
       } catch (_: ApiError) {
+        // The positions are still stored, so the detail keeps showing them and says the clear failed.
+        forgetError = true
+        runCatching { primaryFocus.requestFocus() }
       } finally {
         forgetting = false
       }
@@ -314,28 +330,11 @@ fun DetailScreen(
           modifier = Modifier.width(700.dp),
         )
       }
-      if (resuming) {
-        val fraction = (positionOf(playFile) / (durationOf(playFile).takeIf { it > 0 } ?: 1.0)).toFloat()
-        val percent = (fraction * 100).toInt()
-        Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-          Box(
-            Modifier.width(140.dp).height(5.dp).clip(RoundedCornerShape(999.dp)).background(Tokens.Line),
-          ) {
-            Box(
-              Modifier
-                .fillMaxHeight()
-                .fillMaxWidth(fraction.coerceIn(0f, 1f))
-                .background(Tokens.Accent)
-            )
-          }
-          Text(
-            stringResource(R.string.tv_detail_watched, percent.toString()),
-            color = Tokens.Muted,
-            fontSize = 10.sp,
-            modifier = Modifier.testTag(TagDetailWatched),
-          )
-        }
-      }
+      SavedPlaybackProgress(
+        position = positionOf(playFile),
+        duration = durationOf(playFile),
+        tag = TagDetailWatched,
+      )
       Spacer(Modifier.height(3.dp))
       Row(horizontalArrangement = Arrangement.spacedBy(11.dp), verticalAlignment = Alignment.CenterVertically) {
         FocusButton(
@@ -344,7 +343,7 @@ fun DetailScreen(
           kind = FocusButtonKind.Primary,
           modifier = Modifier.focusRequester(primaryFocus).testTag(TagDetailPrimary),
         )
-        if (resuming) {
+        if (resuming || hasStoredProgress) {
           ActionIconButton(
             label = stringResource(R.string.tv_start_over),
             icon = ReplayIcon,
@@ -374,6 +373,9 @@ fun DetailScreen(
         if (caption.text.isNotEmpty()) {
           Text(caption.text, color = Tokens.Muted, fontSize = 12.sp, maxLines = 1)
         }
+      }
+      if (forgetError) {
+        Text(stringResource(R.string.tv_err_generic), color = Tokens.Red, fontSize = 11.5.sp)
       }
       if (current.files.size > 1) {
         Spacer(Modifier.height(3.dp))

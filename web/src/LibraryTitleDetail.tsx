@@ -41,7 +41,15 @@ export interface LibraryTitleDetailProps {
   sources: Stream[] | null;
   sourceError?: string;
   onRetry?: () => void;
-  onPlay: (stream: Stream) => void;
+  /** The saved position of the selected source, keyed by its identity so another version's
+   *  position can never be drawn. */
+  progress?: { position: number; duration: number; sourceKey: string };
+  /** Told whenever the played version changes, so a caller can read that version's own state. */
+  onSourceChange?: (stream: Stream | null) => void;
+  /** Clears the selected source's saved position; true once the owner's write succeeded. */
+  onClearProgress?: (stream: Stream) => Promise<boolean>;
+  /** Start-over asks for the same stream with `fromBeginning`, which leaves its progress alone. */
+  onPlay: (stream: Stream, fromBeginning?: boolean) => void;
   /** A source row's own tag; absent falls back to the library's name. */
   sourceBadge?: (stream: Stream) => string;
 }
@@ -51,15 +59,25 @@ const sizeLabel = (stream: Stream) => {
   return typeof value === "number" && value > 0 ? bytes(value) : "";
 };
 
+/** A nonnegative, floored clock, with hours only when they are there. */
+const clock = (value: number) => {
+  const total = Math.max(0, Math.floor(Number.isFinite(value) ? value : 0));
+  const hours = Math.floor(total / 3600);
+  return `${hours ? `${hours}:` : ""}${String(Math.floor((total % 3600) / 60)).padStart(hours ? 2 : 1, "0")}:${String(total % 60).padStart(2, "0")}`;
+};
+
 /** The one detail body a playable title shares, local or remote: the catalogue hero, the synopsis
  *  and the sources with a split Play button. The provider-specific parts arrive as props, so the
  *  two containers cannot drift apart and a future add-on stream joins the same selector. */
-export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backdrops, gallery, onGallery, facts, description, chips, favorite, onToggleFavorite, favoriteDisabled, watched, onToggleWatched, watchedDisabled, watchedLabel, onOpenFolder, sources, sourceError, onRetry, onPlay, sourceBadge }: LibraryTitleDetailProps) {
+export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backdrops, gallery, onGallery, facts, description, chips, favorite, onToggleFavorite, favoriteDisabled, watched, onToggleWatched, watchedDisabled, watchedLabel, onOpenFolder, sources, sourceError, onRetry, progress, onSourceChange, onClearProgress, onPlay, sourceBadge }: LibraryTitleDetailProps) {
   useI18n();
   const backdrop = useBackdrop(backdrops ?? []);
   const [chosen, setChosen] = useState<{ identity: string; key: string } | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [clearing, setClearing] = useState<string | null>(null);
+  const [cleared, setCleared] = useState<{ scope: string; position: number; duration: number } | null>(null);
   const arrowRef = useRef<HTMLButtonElement | null>(null);
+  const playRef = useRef<HTMLButtonElement | null>(null);
   const wasOpen = useRef(false);
 
   // Another title opens over this one: the picker closes with it.
@@ -79,6 +97,53 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
   const choose = (stream: Stream) => {
     setChosen({ identity: identityKey, key: sourceIdentity(stream) });
     setPickerOpen(false);
+  };
+
+  const selectedKey = selected ? sourceIdentity(selected) : null;
+  const selectionScope = `${identityKey}\0${selectedKey ?? ""}`;
+  const currentScope = useRef(selectionScope);
+  currentScope.current = selectionScope;
+  // The chosen version is announced once per actual change, never on a re-render: a caller
+  // reading the new version's state must not be asked again just because the tree redrew.
+  const onChangeRef = useRef(onSourceChange);
+  onChangeRef.current = onSourceChange;
+  const announced = useRef<{ identity: string; key: string | null } | null>(null);
+  useEffect(() => {
+    if (announced.current?.identity === identityKey && announced.current.key === selectedKey) return;
+    announced.current = { identity: identityKey, key: selectedKey };
+    onChangeRef.current?.(selected ? selected : null);
+  }, [identityKey, selectedKey]);
+  // A cleared version stays hidden until the selection moves on; the owner's own refresh then
+  // says what the store really holds.
+  useEffect(() => { setCleared(null); setClearing(null); }, [identityKey, selectedKey]);
+
+  useEffect(() => {
+    if (cleared?.scope === selectionScope && progress
+      && (progress.position !== cleared.position || progress.duration !== cleared.duration)) setCleared(null);
+  }, [cleared, selectionScope, progress?.position, progress?.duration]);
+
+  const savedPosition = progress && selectedKey && progress.sourceKey === selectedKey && !(cleared?.scope === selectionScope
+    && cleared.position === progress.position && cleared.duration === progress.duration)
+    && Number.isFinite(progress.position) && progress.position > 0 ? progress : null;
+  const fullDuration = Boolean(savedPosition && Number.isFinite(savedPosition.duration) && savedPosition.duration > 0);
+  const percent = fullDuration ? Math.min(100, Math.max(0, Math.round((savedPosition!.position / savedPosition!.duration) * 100))) : 0;
+  const clear = async (stream: Stream) => {
+    if (!onClearProgress) return;
+    const key = sourceIdentity(stream);
+    const scope = selectionScope;
+    const trigger = document.activeElement;
+    const position = progress?.position ?? 0;
+    const duration = progress?.duration ?? 0;
+    if (clearing === key) return;
+    setClearing(key);
+    let done = false;
+    try { done = await onClearProgress(stream); } catch { done = false; }
+    if (currentScope.current !== scope) return;
+    setClearing((current) => current === key ? null : current);
+    if (done) {
+      setCleared({ scope, position, duration });
+      if (document.activeElement === trigger || (trigger instanceof HTMLElement && !trigger.isConnected && document.activeElement === document.body)) playRef.current?.focus();
+    }
   };
 
   const copy = <>
@@ -111,15 +176,26 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
       {onRetry && <button type="button" onClick={onRetry}>{t("home.retry")}</button>}
     </div> : sources === null ? <div className="loading" role="status">{t("common.loading")}</div>
       : !pickable.length ? <><p className="identify-hint">{t("mediaServer.noSources")}</p><p className="identify-hint">{t("mediaServer.noSourcesHint")}</p></> : null}
+    {savedPosition && <div className="library-detail-progress">
+      {fullDuration && <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} aria-label={t("player.position")}>
+        <i style={{ width: `${percent}%` }}/>
+      </div>}
+      <span>{fullDuration
+        ? t("library.savedPosition", { position: clock(savedPosition.position), duration: clock(savedPosition.duration) })
+        : t("library.savedPositionUnknown", { position: clock(savedPosition.position) })}</span>
+      {onClearProgress && <button type="button" className="icon-button" aria-label={t("home.forget")} title={t("home.forget")}
+        disabled={clearing === selectedKey} onClick={() => selected && void clear(selected)}><RotateCcw/></button>}
+    </div>}
     <div className="library-detail-actions">
       <div className="actions library-detail-play">
         {multiple ? <div className="split-button">
-          <button className="primary" disabled={!selected} onClick={() => selected && onPlay(selected)}><CirclePlay/> {t("player.play")}</button>
+          <button ref={playRef} className="primary" disabled={!selected} onClick={() => selected && onPlay(selected)}><CirclePlay/> {t("player.play")}</button>
           <button ref={arrowRef} type="button" className="split-button-toggle" aria-haspopup="dialog" aria-expanded={pickerOpen}
             aria-label={t("library.chooseSource")} title={t("library.chooseSource")} onClick={() => setPickerOpen(true)}><ChevronDown/></button>
         </div>
-          : <button className="primary" disabled={!selected} onClick={() => selected && onPlay(selected)}><CirclePlay/> {t("player.play")}</button>}
+          : <button ref={playRef} className="primary" disabled={!selected} onClick={() => selected && onPlay(selected)}><CirclePlay/> {t("player.play")}</button>}
       </div>
+      {savedPosition && <button type="button" onClick={() => selected && onPlay(selected, true)}>{t("player.playFromStart")}</button>}
       {onToggleFavorite && <button type="button" className="icon-button" aria-pressed={favorite ?? false} disabled={favoriteDisabled ?? false}
         aria-label={t(favorite ? "favorite.remove" : "favorite.add")} title={t(favorite ? "favorite.remove" : "favorite.add")}
         onClick={() => onToggleFavorite(!(favorite ?? false))}><Star fill={favorite ? "currentColor" : "none"}/></button>}

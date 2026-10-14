@@ -745,6 +745,8 @@ export const pl: Catalog = {
   "library.deleteFileConfirm": "Usunąć plik „{name}”? Tego nie można cofnąć.",
   "library.deleteFolderConfirm": "Usunąć folder „{name}” i wszystko, co się w nim znajduje? Tego nie można cofnąć.",
   "library.markUnwatched": "Oznacz jako nieobejrzane",
+  "library.savedPosition": "{position} z {duration}",
+  "library.savedPositionUnknown": "Zapisana pozycja: {position}",
   "library.downloadToDevice": "Zapisz na tym urządzeniu",
   "library.continue": "Kontynuuj",
   "library.thisFile": "Ten plik",

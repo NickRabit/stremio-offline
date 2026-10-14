@@ -784,6 +784,8 @@ export const en = {
   "library.deleteFileConfirm": "Delete the file “{name}”? This cannot be undone.",
   "library.deleteFolderConfirm": "Delete the folder “{name}” and everything in it? This cannot be undone.",
   "library.markUnwatched": "Mark as unwatched",
+  "library.savedPosition": "{position} of {duration}",
+  "library.savedPositionUnknown": "Saved position: {position}",
   "library.downloadToDevice": "Save to this device",
   "library.continue": "Continue",
   "library.thisFile": "This file",

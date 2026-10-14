@@ -438,10 +438,10 @@ export function App() {
     void playLocal(item.label, item.path, item.poster);
   };
 
-  const forgetWatched = async (itemPath: string) => {
+  const forgetWatched = async (itemPath: string): Promise<boolean> => {
     setMenuFor(null);
-    try { await api.forgetProgress(`file:${itemPath}`); await loadBrowse(browsePath); setResume(await api.progressList()); }
-    catch (error) { fail(error); }
+    try { await api.forgetProgress(`file:${itemPath}`); await loadBrowse(browsePath); setResume(await api.progressList()); return true; }
+    catch (error) { fail(error); return false; }
   };
   const renameItem = async (itemPath: string, label: string) => {
     setMenuFor(null);
@@ -614,6 +614,9 @@ export function App() {
       ? t("library.suggestionLine", { name: item.suggestion.name, score: item.suggestion.titleSimilarity ?? item.suggestion.score })
       : item.catalogName;
   const [localStream, setLocalStream] = useState<Stream | null>(null); const [localTitle, setLocalTitle] = useState("");
+  /** Whether the local film now opening must ignore its saved position and start at zero. */
+  const [localFromBeginning, setLocalFromBeginning] = useState(false);
+  const [localProgressRevision, setLocalProgressRevision] = useState(0);
   const [streamAddon, setStreamAddon] = useState(""); const [streamLanguage, setStreamLanguage] = useState(""); const [streamSort, setStreamSort] = useState<StreamSort>("recommended");
   useEffect(() => { setStreamSort(settings.streamSort as StreamSort); }, [settings.streamSort]);
   const [submittedQuery, setSubmittedQuery] = useState(""); const [searchScopeValue, setSearchScopeValue] = useState(""); const [searchable, setSearchable] = useState<SearchableCatalog[]>([]); const [typeFilter, setTypeFilter] = useState(""); const [genre, setGenre] = useState(""); const [sort, setSort] = useState("default"); const [searchSort, setSearchSort] = useState("default");
@@ -809,6 +812,7 @@ export function App() {
     scrollByView.current[view] = viewScrollTop();
     playerOpenRef.current = true;
     pickedRef.current = true;
+    setLocalFromBeginning(false);
     setPlayerOpen(true);
   };
 
@@ -1343,7 +1347,10 @@ export function App() {
     // After the player closes the last position is still on its way, so we wait a moment.
     // Both the catalogue and the library need the list; only the library needs the folder listing.
     const timer = setTimeout(() => {
-      api.progressList().then(setResume).catch(() => undefined);
+      api.progressList().then((entries) => {
+        setResume(entries);
+        if (!playerOpen) setLocalProgressRevision((value) => value + 1);
+      }).catch(() => undefined);
       if (!playerOpen && view === "library") void refreshBrowse(browse?.items.length ?? 60);
     }, playerOpen ? 0 : 900);
     return () => clearTimeout(timer);
@@ -1616,7 +1623,7 @@ export function App() {
     try { return await playLocal(file.title, file.path, localPoster, localEpisode); }
     finally { nextBusyRef.current = false; setNextBusy(false); }
   };
-  const playLocal = async (title: string, path: string, poster?: string, episode = false, anchor?: PlaybackAnchor) => {
+  const playLocal = async (title: string, path: string, poster?: string, episode = false, anchor?: PlaybackAnchor, fromBeginning = false) => {
     const returning = capturePlaybackReturn(anchor ?? { kind: "library", key: path });
     try {
       const source = await api.librarySource(path);
@@ -1624,6 +1631,7 @@ export function App() {
       setLocalTitle(title);
       setLocalEpisode(episode);
       setLocalStream({ ...source, localPath: path });
+      setLocalFromBeginning(fromBeginning);
       playbackReturn.current = returning;
       scrollByView.current[view] = returning.windowY;
       playerOpenRef.current = true;
@@ -2073,7 +2081,7 @@ export function App() {
     void promise.catch(() => undefined);
     nextEpisodePrefetchRef.current = { id, promise };
   }, [playerOpen, localStream, selected?.id, selected?.type, nextCatalogEpisode?.id, currentCatalog?.type]);
-  const stopPlayback = () => { setPlayerOpen(false); setLocalStream(null); setLocalEpisode(false); setPlaybackPreferences({}); };
+  const stopPlayback = () => { setPlayerOpen(false); setLocalStream(null); setLocalEpisode(false); setLocalFromBeginning(false); setPlaybackPreferences({}); };
   /** Remote hand-off: the same library and version, or that episode's own selector. */
   const playNextRemoteEpisode = async (type: string, id: string, current: Stream, episode: Video, nameHint: string | undefined) => {
     const libraryId = current.remoteItem!.libraryId;
@@ -2669,17 +2677,18 @@ export function App() {
         }}>
         {localDetail ? <LocalLibraryDetail key={localDetail.item.path}
           item={localDetail.item}
+          progressRevision={localProgressRevision}
           favorite={liveLocalItem?.favorite ?? localDetail.item.favorite ?? false}
           {...(liveLocalItem?.kind === "file" && liveLocalItem.progress ? { progress: liveLocalItem.progress } : {})}
           onToggleFavorite={(favorite) => void toggleFavorite(localDetail.item.path, favorite)}
-          onResetProgress={() => void forgetWatched(localDetail.item.path)}
+          onResetProgress={(path) => forgetWatched(path)}
           onOpenFolder={() => { if (localDetail.item.kind === "folder") goLocalFolder(localDetail.item.path); }}
           uiLanguage={settings.uiLanguage} secureMode={settings.secureMode} onTrailer={setTrailerOpen}
           onGallery={(images, path, ref) => { setMenuFor(null); presentGallery(images, ref, path); }}
-          onPlay={(stream) => {
+          onPlay={(stream, fromBeginning) => {
             const clicked = localDetail.item;
             void playLocal(clicked.kind === "file" ? clicked.label : clicked.name, stream.localPath ?? clicked.path, clicked.poster,
-              clicked.kind === "file" && clicked.season != null, { kind: "library", key: clicked.path });
+              clicked.kind === "file" && clicked.season != null, { kind: "library", key: clicked.path }, fromBeginning);
           }}/> : <>
         {!browsePath && !scanHintDismissed && !libraryScan?.finishedAt && (browse?.total ?? 0) >= 10 && <div className="library-scan-hint" role="status">
           <span>{t("library.scanHint")}</span>
@@ -2802,6 +2811,7 @@ export function App() {
       progressPoster={localStream ? localPoster : selected?.poster}
       progressAddonKey={localStream ? undefined : currentCatalog?.addonKey}
       favorite={localStream?.localPath ? libraryFavorites.includes(localStream.localPath) : inWatchlist(selected?.type, selected?.id)}
+      fromBeginning={localStream ? localFromBeginning : undefined}
       onToggleFavorite={localStream?.localPath || selected ? () => void togglePlayerFavorite() : undefined}
       onDownload={enqueue}
       onDeviceDownload={() => localStream?.localPath ? downloadLibraryFile(localStream.localPath) : downloadStreamToDevice()}

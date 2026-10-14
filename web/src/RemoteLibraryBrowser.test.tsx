@@ -5,7 +5,7 @@ import { RemoteLibraryBrowser } from "./RemoteLibraryBrowser";
 import { setLocale } from "./i18n";
 import { clearTitleEnrichment } from "./title-enrichment";
 import { emptyViews } from "./views";
-import type { RemoteCapabilities, RemoteItem, RemoteItemPage, RemoteLibrary } from "./types";
+import type { RemoteCapabilities, RemoteItem, RemoteItemPage, RemoteLibrary, Stream } from "./types";
 
 const capabilities: RemoteCapabilities = { rename: false, move: false, delete: false, identify: false, writeArtwork: false, downloadToLibrary: false, downloadToDevice: false };
 const json = (body: unknown, status = 200) =>
@@ -946,4 +946,73 @@ it("uses the high-resolution native preview when a remote item has no backdrop o
   expect(calls.title).toHaveLength(0);
   await click(surface.querySelector('.gallery-open')!);
   expect(onGallery.mock.calls[0]?.[0]?.[0]?.url).toBe(`${preview}&size=detail`);
+});
+
+describe("RemoteLibraryBrowser saved position", () => {
+  const version = (name: string, mediaSourceId: string, bytes: number): Stream => ({
+    sourceId: mediaSourceId, kind: "remote", playable: true, name, provider: "jellyfin",
+    remoteItem: { libraryId: "rlib_a", itemId: "m1", mediaSourceId, progressKey: "k" },
+    behaviorHints: { videoSize: bytes },
+  });
+  const savedText = () => host.querySelector(".library-detail-progress span")!.textContent;
+  const clearButton = () => host.querySelector<HTMLButtonElement>('.library-detail-progress button[aria-label="Forget progress"]');
+  const stateGet = () => calls.state.filter((call) => call.method === "GET");
+
+  it("shows the selected version's saved position and clears only it, keeping favorite and watched", async () => {
+    browse = () => json(page([movie("m1", "One")]));
+    sources = () => json({ streams: [version("1080p", "ms1", 2_000_000_000)] });
+    state = (url, init) => init?.method === "PATCH"
+      ? json({ key: "k", position: 0, duration: 0, favorite: true, watched: true, mediaSourceId: "ms1" })
+      : json({ key: "k", position: 600, duration: 3600, favorite: true, watched: true, mediaSourceId: "ms1" });
+    await openRootLibrary();
+    await click(tileButtons()[0]!);
+    await flush();
+    expect(savedText()).toBe("10:00 of 1:00:00");
+    // The position comes from the item's one state read; no version asks for a listing or a read of its own.
+    expect(calls.sources).toHaveLength(1);
+    expect(stateGet()).toHaveLength(1);
+    await click(clearButton()!);
+    expect(calls.state.at(-1)).toEqual({ method: "PATCH", body: { position: 0, duration: 0 } });
+    expect(host.querySelector(".library-detail-progress")).toBeNull();
+    expect(host.querySelector('.library-detail-actions button[aria-label="Remove from favorites"]')?.getAttribute("aria-pressed")).toBe("true");
+    expect(host.querySelector('.library-detail-actions button[aria-label="Mark unwatched"]')?.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("does not show or clear another version's saved position", async () => {
+    browse = () => json(page([movie("m1", "One")]));
+    sources = () => json({ streams: [version("1080p", "ms1", 2_000_000_000)] });
+    state = () => json({ key: "k", position: 600, duration: 3600, favorite: false, watched: false, mediaSourceId: "ms2" });
+    await openRootLibrary();
+    await click(tileButtons()[0]!);
+    await flush();
+    expect(host.querySelector(".library-detail-progress")).toBeNull();
+    expect(clearButton()).toBeNull();
+    expect(calls.sources).toHaveLength(1);
+    expect(stateGet()).toHaveLength(1);
+  });
+
+  it("drops a clear that lands after the reader moved to another title", async () => {
+    const held = deferred<Response>();
+    browse = () => json(page([movie("m1", "One"), movie("m2", "Two")]));
+    sources = () => json({ streams: [version("1080p", "ms1", 2_000_000_000)] });
+    state = (url, init) => {
+      if (init?.method === "PATCH") return held.promise;
+      return url.pathname.includes("/m1/")
+        ? json({ key: "k1", position: 600, duration: 3600, favorite: true, watched: false, mediaSourceId: "ms1" })
+        : json({ key: "k2", position: 0, duration: 0, favorite: false, watched: false, mediaSourceId: "ms1" });
+    };
+    await openRootLibrary();
+    await click(tileButtons()[0]!);
+    await flush();
+    await click(clearButton()!);
+    await click(host.querySelector<HTMLButtonElement>(".library-back")!);
+    await click(tileButtons()[1]!);
+    await flush();
+    expect(host.querySelector(".library-title-detail h2")!.textContent).toBe("Two");
+    await act(async () => { held.resolve(json({ key: "k1", position: 0, duration: 0, favorite: true, watched: false, mediaSourceId: "ms1" })); });
+    await flush();
+    expect(host.querySelector(".library-title-detail h2")!.textContent).toBe("Two");
+    expect(host.querySelector(".library-detail-progress")).toBeNull();
+    expect(host.querySelector('.library-detail-actions button[aria-label="Add to favorites"]')?.getAttribute("aria-pressed")).toBe("false");
+  });
 });

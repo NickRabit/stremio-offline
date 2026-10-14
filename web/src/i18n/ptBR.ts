@@ -745,6 +745,8 @@ export const ptBR: Catalog = {
   "library.deleteFileConfirm": "Excluir o arquivo “{name}”? Isto não pode ser desfeito.",
   "library.deleteFolderConfirm": "Excluir a pasta “{name}” e tudo que ela contém? Isto não pode ser desfeito.",
   "library.markUnwatched": "Marcar como não assistido",
+  "library.savedPosition": "{position} de {duration}",
+  "library.savedPositionUnknown": "Posição salva: {position}",
   "library.downloadToDevice": "Salvar neste dispositivo",
   "library.continue": "Continuar",
   "library.thisFile": "Este arquivo",

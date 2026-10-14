@@ -6,6 +6,7 @@ import { localeTag, t, useI18n } from "./i18n";
 import { LibraryItem, LibraryItemMenu } from "./library-item";
 import { LibraryTile } from "./library-tile";
 import { LibraryTitleDetail } from "./LibraryTitleDetail";
+import { sourceIdentity } from "./library-detail-sources";
 import { Player } from "./Player";
 import { DetailHero, LIBRARY_HERO_EMPTY_GRADIENT, LIBRARY_HERO_GRADIENT, useBackdrop } from "./DetailHero";
 import { remoteDetailArtwork } from "./remote-artwork";
@@ -51,7 +52,7 @@ interface Props {
 }
 
 type Status = { items: RemoteItem[]; cursor?: string; total: number; loading: boolean; error: string };
-type Playing = { stream: Stream; libraryId: string; item: RemoteItem; title: string; favorite: boolean };
+type Playing = { stream: Stream; libraryId: string; item: RemoteItem; title: string; favorite: boolean; fromBeginning?: boolean };
 type TileRef = { current: HTMLElement | null };
 /** One ancestor listing kept while its children are open, so a jump back needs no new page. */
 type ListingSnapshot = {
@@ -163,6 +164,8 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   const [sourceError, setSourceError] = useState("");
   const [state, setState] = useState<RemoteItemState | null>(null);
   const [stateError, setStateError] = useState("");
+  /** The version the detail's own selector currently holds, so its state can be matched. */
+  const [detailStream, setDetailStream] = useState<Stream | null>(null);
   const [detailNonce, setDetailNonce] = useState(0);
   const [playing, setPlaying] = useState<Playing | null>(null);
   const [nextBusy, setNextBusy] = useState(false);
@@ -449,6 +452,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     setSourceError("");
     setState(null);
     setStateError("");
+    setDetailStream(null);
     if (!handoff) {
       void api.remoteSources(library.id, itemId, controller.signal)
         .then((found) => {
@@ -829,19 +833,23 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     if (page.cursor && !page.loading && !page.error) void loadMoreItems();
   };
 
-  const toggleState = async (patch: { favorite?: boolean; watched?: boolean }) => {
+  /** Writes one patch to the open title's state and says whether it landed. Clearing the
+   *  position goes through here too: favourite and watched are left out of the patch, so the
+   *  server keeps them, and a detail the reader has left is never overwritten. */
+  const toggleState = async (patch: { favorite?: boolean; watched?: boolean; position?: number; duration?: number }): Promise<boolean> => {
     const library = selectedRef.current;
     const item = detailRef.current;
-    if (!library || !item || item.type === "series" || !state) return;
+    if (!library || !item || item.type === "series" || !state) return false;
     const epoch = detailEpoch.current;
     try {
       const saved = await api.saveRemoteState(library.id, item.id, patch);
-      if (epoch !== detailEpoch.current || detailRef.current?.id !== item.id || selectedRef.current?.id !== library.id) return;
+      if (epoch !== detailEpoch.current || detailRef.current?.id !== item.id || selectedRef.current?.id !== library.id) return false;
       setState(saved);
       rememberState(library.id, item.id, saved);
       setStateError("");
       onPersonalChange?.();
-    } catch (error) { onError(error); }
+      return true;
+    } catch (error) { onError(error); return false; }
   };
   const togglePlayingFavorite = async () => {
     const current = playingRef.current;
@@ -933,6 +941,11 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   // shell probes for a playable title through the same hook.
   const seriesBackdrop = useBackdrop(detail?.type === "series" ? detailBackdrops : []);
   const seriesGallery: GalleryImage[] = mergeGallery(posterAndWide(detailPreview, detail?.wide), catalogueGalleryImages(enrichment.meta));
+  // Only the version the selector actually holds may show its position; the saved state was
+  // read once for the item, so no version needs a call of its own.
+  const detailStreamKey = detailStream ? sourceIdentity(detailStream) : null;
+  const detailProgress = state && detailStreamKey && state.mediaSourceId === detailStreamKey
+    ? { position: state.position, duration: state.duration, sourceKey: detailStreamKey } : undefined;
 
   if (!librariesError && !targetError && (libraries === null || !libraries.length)) return null;
 
@@ -1123,7 +1136,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
         </div>}
         {detail && detail.type !== "series" && <div className="remote-detail">
           <LibraryTitleDetail
-            identityKey={detail.id}
+            identityKey={`${selected!.id}:${detail.id}`}
             title={detail.name}
             {...(detail.type === "episode" ? { subtitle: t("mediaServer.episodeLabel", { season: detail.season ?? 0, episode: detail.episode ?? 0 }) } : {})}
             {...(detail.poster ? { poster: detail.poster } : {})}
@@ -1142,7 +1155,10 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
             sources={sources}
             {...(sourceError ? { sourceError } : {})}
             onRetry={retryDetail}
-            onPlay={(stream) => setPlaying({ stream, libraryId: selected!.id, item: detail, title: detail.type === "episode" ? `${series ? `${series.name} · ` : ""}${episodeTitle(detail)}` : detail.name, favorite: state?.favorite ?? false })}
+            {...(detailProgress ? { progress: detailProgress } : {})}
+            onSourceChange={setDetailStream}
+            onClearProgress={() => toggleState({ position: 0, duration: 0 })}
+            onPlay={(stream, fromBeginning) => setPlaying({ stream, libraryId: selected!.id, item: detail, title: detail.type === "episode" ? `${series ? `${series.name} · ` : ""}${episodeTitle(detail)}` : detail.name, favorite: state?.favorite ?? false, fromBeginning })}
             sourceBadge={() => t(providerKey(selected!.provider))}
           />
           {stateError && <div className="remote-error" role="alert">
@@ -1166,6 +1182,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
       autoNext={false}
       nextBusy={nextBusy}
       favorite={playing.favorite}
+      fromBeginning={playing.fromBeginning}
       onToggleFavorite={() => void togglePlayingFavorite()}
       onDownload={async () => false}
       onDeviceDownload={async () => false}

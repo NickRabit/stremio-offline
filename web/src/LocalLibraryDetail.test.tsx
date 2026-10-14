@@ -27,13 +27,17 @@ let links: Handler;
 let trailer: Handler;
 let gallery: Handler;
 let meta: Handler;
-const calls = { source: [] as URL[], identity: [] as URL[], localStreams: [] as URL[], meta: [] as URL[], links: [] as URL[], trailer: [] as URL[], gallery: [] as URL[] };
+let progressOf: Handler;
+const calls = { source: [] as URL[], identity: [] as URL[], localStreams: [] as URL[], meta: [] as URL[], links: [] as URL[], trailer: [] as URL[], gallery: [] as URL[], progress: [] as URL[] };
 
 const deferred = <T,>() => {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((done) => { resolve = done; });
   return { promise, resolve };
 };
+
+const progressKey = (url: URL) => decodeURIComponent(url.pathname.replace("/api/progress/", ""));
+const savedEntry = (key: string, position: number, duration: number) => ({ key, position, duration, title: "Heat", updatedAt: "2026-09-01T00:00:00Z" });
 
 let root: Root;
 let host: HTMLDivElement;
@@ -42,7 +46,7 @@ beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   setLocale("en");
   clearTitleEnrichment();
-  calls.source = []; calls.identity = []; calls.localStreams = []; calls.meta = []; calls.links = []; calls.trailer = []; calls.gallery = [];
+  calls.source = []; calls.identity = []; calls.localStreams = []; calls.meta = []; calls.links = []; calls.trailer = []; calls.gallery = []; calls.progress = [];
   source = () => json({ sourceId: "exact", kind: "library", playable: true, behaviorHints: { filename: "Heat.mkv" } });
   identityHandler = () => json(identity());
   copies = () => json([]);
@@ -50,9 +54,11 @@ beforeEach(() => {
   trailer = () => json({ trailer: null });
   gallery = () => json({ images: [] });
   meta = () => json({ id: "x", type: "movie", name: "X", background: "/catalogue-backdrop.jpg" });
+  progressOf = () => json(null);
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), "http://localhost");
     const path = url.pathname;
+    if (path.startsWith("/api/progress/")) { calls.progress.push(url); return Promise.resolve(progressOf(url, init)); }
     if (path === "/api/library/source") { calls.source.push(url); return Promise.resolve(source(url, init)); }
     if (path === "/api/library/identity") { calls.identity.push(url); return Promise.resolve(identityHandler(url, init)); }
     if (path === "/api/library/links") { calls.links.push(url); return Promise.resolve(links(url, init)); }
@@ -169,20 +175,21 @@ describe("LocalLibraryDetail actions", () => {
     expect(onOpenFolder).toHaveBeenCalledOnce();
   });
 
-  it("toggles the clicked library item's favorite and resets its position", async () => {
+  it("toggles the clicked file's favorite and clears its saved position", async () => {
+    progressOf = (url) => json(savedEntry(progressKey(url), 10, 100));
     const { onToggleFavorite, props } = await render(file(), { favorite: true, progress: { position: 10, duration: 100 } });
     await click(host.querySelector('.library-detail-actions button[aria-label="Remove from favorites"]'));
     expect(onToggleFavorite).toHaveBeenCalledWith(false);
-    expect(host.querySelector('.library-detail-actions button[aria-label="Mark as unwatched"]')?.hasAttribute("aria-pressed")).toBe(false);
-    await click(host.querySelector('.library-detail-actions button[aria-label="Mark as unwatched"]'));
-    expect(props.onResetProgress).toHaveBeenCalled();
+    expect(props.onResetProgress).not.toHaveBeenCalled();
+    await click(host.querySelector('.library-detail-progress button[aria-label="Forget progress"]'));
+    expect(props.onResetProgress).toHaveBeenCalledWith("Films/Heat.mkv");
   });
 
-  it("keeps the favorite control pressed state and drops the watched one when there is nothing to clear", async () => {
+  it("keeps the favorite control pressed and shows no position controls when nothing is saved", async () => {
     await render(file(), { favorite: true });
     const favorite = host.querySelector('.library-detail-actions button[aria-label="Remove from favorites"]');
     expect(favorite?.getAttribute("aria-pressed")).toBe("true");
-    expect(host.querySelector('.library-detail-actions button[aria-label="Mark as unwatched"]')).toBeNull();
+    expect(host.querySelector(".library-detail-progress")).toBeNull();
   });
 
   it("uses the existing preview for an unmatched file without requesting catalogue metadata", async () => {
@@ -240,5 +247,113 @@ describe("LocalLibraryDetail gallery", () => {
     const [images] = onGallery.mock.calls[0]!;
     expect(images.map((image: { url: string }) => image.url)).toContain("/wide.jpg");
     expect(images.map((image: { url: string }) => image.url)).toContain("/catalogue-backdrop.jpg");
+  });
+});
+
+describe("LocalLibraryDetail saved position", () => {
+  const twoVersions = () => [copy("Heat/Heat.mkv", "Heat.mkv", 2_000_000_000), copy("Heat/Heat.1080p.mkv", "Heat.1080p.mkv", 6_000_000_000)];
+  const boundMovie = () => json(identity({ file: false, kind: "movie", bound: { type: "movie", id: "tt1", name: "Heat" } }));
+  const savedText = () => host.querySelector(".library-detail-progress span")!.textContent;
+
+  it("reads the selected version's own key and shows it without sweeping the versions", async () => {
+    identityHandler = boundMovie;
+    copies = () => json(twoVersions());
+    progressOf = (url) => {
+      const key = progressKey(url);
+      return json(key.endsWith("Heat.1080p.mkv") ? savedEntry(key, 300, 3600) : savedEntry(key, 60, 3600));
+    };
+    await render(folder());
+    await flush();
+    expect(calls.progress.map(progressKey)).toEqual(["file:Heat/Heat.1080p.mkv"]);
+    expect(savedText()).toBe("5:00 of 1:00:00");
+    await openPicker();
+    await click(rows()[1]!);
+    await flush();
+    expect(calls.progress.map(progressKey)).toEqual(["file:Heat/Heat.1080p.mkv", "file:Heat/Heat.mkv"]);
+    expect(savedText()).toBe("1:00 of 1:00:00");
+  });
+
+  it("shows the clicked file's passed position until the authoritative read answers", async () => {
+    const held = deferred<Response>();
+    progressOf = () => held.promise;
+    const props = { item: file(), favorite: false, onPlay: vi.fn(), onToggleFavorite: vi.fn(), onResetProgress: vi.fn(), uiLanguage: "en", secureMode: true, onTrailer: vi.fn(), progress: { position: 42, duration: 600 } };
+    await act(async () => { root.render(<LocalLibraryDetail {...props}/>); });
+    await flush();
+    expect(savedText()).toBe("0:42 of 10:00");
+    await act(async () => { held.resolve(json(savedEntry("file:Films/Heat.mkv", 90, 600))); });
+    await flush();
+    expect(savedText()).toBe("1:30 of 10:00");
+  });
+
+  it("drops a saved position that lands after the viewer left the file", async () => {
+    const held = deferred<Response>();
+    progressOf = (url) => progressKey(url).includes("A.mkv") ? held.promise : json(savedEntry(progressKey(url), 60, 600));
+    const { props } = await render(file({ path: "A.mkv", label: "A.mkv" }));
+    await act(async () => { root.render(<LocalLibraryDetail {...props} item={file({ path: "B.mkv", label: "B.mkv" })}/>); });
+    await flush();
+    expect(savedText()).toBe("1:00 of 10:00");
+    await act(async () => { held.resolve(json(savedEntry("file:A.mkv", 9999, 600))); });
+    await flush();
+    expect(savedText()).toBe("1:00 of 10:00");
+  });
+
+  it("clears the selected file's key, never the clicked folder's path", async () => {
+    identityHandler = boundMovie;
+    copies = () => json(twoVersions());
+    progressOf = (url) => json(savedEntry(progressKey(url), 120, 3600));
+    const onResetProgress = vi.fn().mockResolvedValue(true);
+    await render(folder(), { onResetProgress });
+    await flush();
+    await click(host.querySelector('.library-detail-progress button[aria-label="Forget progress"]'));
+    expect(onResetProgress).toHaveBeenCalledWith("Heat/Heat.1080p.mkv");
+    expect(onResetProgress).not.toHaveBeenCalledWith("Heat");
+    expect(host.querySelector(".library-detail-progress")).toBeNull();
+  });
+
+  it("keeps the position when the clear fails and leaves the favorite alone", async () => {
+    progressOf = (url) => json(savedEntry(progressKey(url), 120, 3600));
+    const onResetProgress = vi.fn().mockResolvedValue(false);
+    const { onToggleFavorite } = await render(file(), { progress: { position: 120, duration: 3600 }, onResetProgress });
+    await flush();
+    await click(host.querySelector('.library-detail-progress button[aria-label="Forget progress"]'));
+    expect(host.querySelector(".library-detail-progress")).not.toBeNull();
+    expect(onToggleFavorite).not.toHaveBeenCalled();
+  });
+
+  it("refreshes the same source after returning from playback", async () => {
+    let position = 120;
+    progressOf = (url) => json(savedEntry(progressKey(url), position, 3600));
+    const { props } = await render(file());
+    await flush();
+    expect(savedText()).toBe("2:00 of 1:00:00");
+    position = 240;
+    await act(async () => root.render(<LocalLibraryDetail {...props} progressRevision={1}/>));
+    await flush();
+    expect(savedText()).toBe("4:00 of 1:00:00");
+  });
+
+  it("does not overwrite another selected version after a slow clear", async () => {
+    identityHandler = boundMovie;
+    copies = () => json(twoVersions());
+    progressOf = (url) => json(savedEntry(progressKey(url), 120, 3600));
+    const held = deferred<boolean>();
+    await render(folder(), { onResetProgress: () => held.promise });
+    await flush();
+    await click(host.querySelector('.library-detail-progress button[aria-label="Forget progress"]'));
+    await openPicker();
+    await click(rows()[1]!);
+    await flush();
+    await act(async () => { held.resolve(true); });
+    expect(savedText()).toBe("2:00 of 1:00:00");
+  });
+
+  it("starts over from the beginning without clearing the saved position", async () => {
+    progressOf = (url) => json(savedEntry(progressKey(url), 120, 3600));
+    const { onPlay, props } = await render(file(), { progress: { position: 120, duration: 3600 } });
+    await flush();
+    const startOver = [...host.querySelectorAll<HTMLButtonElement>(".library-detail-actions button")].find((button) => button.textContent?.includes("Play from the start"));
+    await click(startOver!);
+    expect(onPlay.mock.calls.at(-1)![1]).toBe(true);
+    expect(props.onResetProgress).not.toHaveBeenCalled();
   });
 });
