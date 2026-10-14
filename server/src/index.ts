@@ -92,6 +92,7 @@ import { isRemoteMediaStream } from "./media-server-reference.js";
 import { MediaServerSources } from "./media-server-sources.js";
 import { MediaServerSecrets } from "./media-server-secrets.js";
 import { isMediaServerError } from "./media-server-types.js";
+import { prepareContainerMediaKey } from "./prepare-media-key.js";
 
 const STREAM_SORTS = new Set(["recommended", "size-desc", "size-asc", "addon"]);
 const DATA_DIR = process.env.DATA_DIR ?? "/data";
@@ -110,8 +111,12 @@ const seen = new LibrarySeenStore(DATA_DIR);
 /** The log bundles clients upload, one JSON file each under the data directory. */
 const clientLogs = new ClientLogStore(DATA_DIR);
 /** The encrypted provider tokens and the administration/browsing service over the stored
- *  remote connections. With no key configured the vault stays unavailable and the app boots. */
-const mediaServerVault = new MediaServerSecrets(path.join(DATA_DIR, "media-server-secrets"), process.env.MEDIA_SERVER_KEY_FILE);
+ *  remote connections. A blank MEDIA_SERVER_KEY_FILE creates the key in the data directory
+ *  on a genuine first run. An override, an existing key, or an install that already holds
+ *  credentials is left untouched; the vault then fails closed and the app still boots. */
+const mediaServerKeyFile = await prepareContainerMediaKey(DATA_DIR, process.env, (level, line) => log(level, line));
+process.env.MEDIA_SERVER_KEY_FILE = mediaServerKeyFile;
+const mediaServerVault = new MediaServerSecrets(path.join(DATA_DIR, "media-server-secrets"), mediaServerKeyFile);
 const mediaServers = new MediaServerManager(store, mediaServerVault);
 const mediaServerSources = new MediaServerSources(store, mediaServers, mediaResources);
 const mediaServerPersonal = new MediaServerPersonal(store, mediaServers);

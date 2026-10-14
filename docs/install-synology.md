@@ -51,7 +51,10 @@ ready from GHCR.
    `PGID` and restart the project. For this purpose the Container Manager
    terminal is a full substitute for SSH.
 6. Open `http://NAS:8090`. A fresh install has no account and asks you to choose
-   a name and password; until then the server serves nothing else.
+   a name and password; until then the server serves nothing else. The first
+   start also writes `media-server.key` into the data folder. Leave it there and
+   back it up with that folder; it is what later unlocks a saved Jellyfin or
+   Emby login. No separate folder or command is required.
 
 To update later, use **Action → Build** on the project. With no `build:` section
 in the file, that only pulls a newer image. Note that `:latest` is the last

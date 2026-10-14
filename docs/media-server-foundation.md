@@ -147,7 +147,9 @@ symlinks are refused with `O_NOFOLLOW` and the descriptor is verified with
 `fstat`, so there is no lstat-then-read race. The key is read on every
 operation and never cached, so a missing, changed or corrupt key fails closed
 with `secret-key-unavailable` — the vault never generates or replaces a key on
-its own. The vault directory is created `0700`; a pre-existing directory that is
+its own. Before the vault is constructed, startup creates
+`DATA_DIR/media-server.key` when `MEDIA_SERVER_KEY_FILE` is unset and the
+install has no encrypted credential yet. The vault directory is created `0700`; a pre-existing directory that is
 not a real directory, is a symlink, or is group/other-accessible or owned by
 another user is refused. A stored envelope is opened only after an `lstat`
 rejects a symlink or non-regular file, and the opened descriptor is confirmed to
@@ -160,7 +162,8 @@ missing directory or reference, and needs no key. Writes go to a random
 exclusive `0600` temp file, are `fsync`ed, then renamed atomically; a failed
 write cleans the temp file up.
 
-Generate a deployment key with Node, exclusive and owner-only:
+A normal start creates the default key. Generate a file yourself only when
+`MEDIA_SERVER_KEY_FILE` points at a path the server must not create:
 
 ```sh
 node -e 'const {randomBytes}=require("node:crypto");require("node:fs").writeFileSync(process.argv[1],randomBytes(32),{flag:"wx",mode:0o600})' /data/media-server-secret.key
