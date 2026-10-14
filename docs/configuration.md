@@ -215,18 +215,28 @@ Details in [Playback](playback.md) and
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `MEDIA_SERVER_KEY_FILE` | *(unset)* | Path to the key that encrypts remote Jellyfin / Emby tokens. An existing regular file of exactly 32 raw random bytes, owner-only (`0600`) and owned by the process user. Optional: with it unset the server boots, the connection list is empty and any attempt to store a credential is refused with a clear message. The key is **never generated automatically** and is read on every operation, so replacing it without re-authenticating makes the stored tokens undecryptable by design. Back it up with `DATA_PATH`; see [Remote media servers](media-server-management.md). Outside Compose the path is a plain filesystem path; inside the container the key must be mounted and this variable pointed at the mount. |
+| `MEDIA_SERVER_KEY_FILE` | *(unset)* | Path to the key that encrypts remote Jellyfin / Emby tokens. Leave it unset and the server creates `DATA_PATH/media-server.key` on startup: 32 raw random bytes, owner-only (`0600`), owned by the process user. That happens only when the install has no saved remote login yet. An existing file is kept byte for byte, including a short, loose or symlinked one, and a missing key is never replaced once a login has been stored. Set the variable to opt out and point at a file you manage yourself; that file is not created or repaired. The key is read on every operation, so replacing it without signing in again makes the stored tokens undecryptable by design. Back it up with `DATA_PATH`; see [Remote media servers](media-server-management.md). |
 
-Generate the key once, exclusive and owner-only:
+With the variable unset there is nothing to generate by hand. The file appears in
+the data directory the first time the server starts, and the same file is reused
+after that. Copy it with the rest of `DATA_PATH`.
+
+Set the variable only when the key should live somewhere else. The file must
+already exist, be a regular file of exactly 32 raw random bytes, owner-only
+(`0600`) and owned by the process user. Compose passes the variable through and
+mounts nothing for it:
 
 ```sh
 node -e 'const {randomBytes}=require("node:crypto");require("node:fs").writeFileSync(process.argv[1],randomBytes(32),{flag:"wx",mode:0o600})' ./data/media-server-secret.key
 ```
 
-The encrypted tokens live under `DATA_PATH/media-server-secrets`. The Compose
-files pass `MEDIA_SERVER_KEY_FILE` through from your `.env` and mount nothing on
-their own: an explicit read-only mount is a deliberate deployment step, not
-something the default configuration does for you.
+```dotenv
+MEDIA_SERVER_KEY_FILE=/data/media-server-secret.key
+```
+
+The encrypted tokens live under `DATA_PATH/media-server-secrets`. A read-only
+mount of your own file is optional; the default path needs no extra mount
+because the data directory is already mounted.
 
 ## Account fallback
 

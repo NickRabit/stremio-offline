@@ -3,9 +3,10 @@
 The desktop app carries its own copy of the server, so a desktop install can add
 Jellyfin and Emby libraries with no environment setup at all. The server keeps
 the provider tokens in an encrypted vault unlocked by a single key file. A
-container deployment points `MEDIA_SERVER_KEY_FILE` at a key you mounted
-yourself; on the desktop the application manages that key for you. This page
-describes what it does and what it deliberately will not do.
+container with `MEDIA_SERVER_KEY_FILE` unset creates its key in the data
+directory on first start; on the desktop the application manages a key of its
+own, outside that directory. This page describes what the desktop does and what
+it deliberately will not do.
 
 ## The key file
 
@@ -30,11 +31,10 @@ the one named by
 app](install-windows.md) and [Installing the Linux app](install-linux.md) for
 removal.
 
-A non-blank `MEDIA_SERVER_KEY_FILE` in the environment still wins, exactly as on
-a server deployment: the desktop uses the given path and never creates, reads or
-repairs anything there. That is how a portable or managed install can keep the
-key on a mounted volume. See [Configuration](configuration.md) for the variable
-itself.
+A non-blank `MEDIA_SERVER_KEY_FILE` in the environment still wins, on the desktop
+and in a container: the given path is used and nothing is created, read or
+repaired there. That is how a portable or managed install can keep the key on a
+mounted volume. See [Configuration](configuration.md) for the variable itself.
 
 ## First run, and what the app will not do
 

@@ -905,14 +905,18 @@ test("closing the manager rejects a queued network request", async () => {
     const settledRunning = Promise.allSettled(running);
     await four.promise;
     const queued = harness.manager.discoverLibraries(harness.admin, connection.id);
+    // Attached before close. assert.rejects waits a microtask before it listens, and a
+    // rejection in that gap fails the test even when the assertion would have passed.
+    const queuedResult = queued.then(
+      () => ({ rejected: false as const }),
+      (error: MediaServerError) => ({ rejected: true as const, error }),
+    );
     for (let spins = 0; spins < 1000 && netQueueLength(harness) < 1; spins += 1) await tick();
     assert.equal(netQueueLength(harness), 1, "the request reached the queue");
-    const rejected = assert.rejects(queued, (error: MediaServerError) => {
-      assert.ok(["closed", "cancelled"].includes(error.code), error.code);
-      return true;
-    });
     const closing = harness.manager.close();
-    await rejected;
+    const outcome = await queuedResult;
+    assert.equal(outcome.rejected, true);
+    if (outcome.rejected) assert.ok(["closed", "cancelled"].includes(outcome.error.code), outcome.error.code);
     held.resolve();
     harness.server.nudge = undefined;
     await closing;

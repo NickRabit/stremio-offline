@@ -257,10 +257,13 @@ since been revoked must not itself require that revoked authority.
   this before an import runs.
 - **Full recovery.** Restoring working remote connections needs three things
   together: the state file, the encrypted vault directory
-  (`DATA_PATH/media-server-secrets`) and the key file. Whoever holds all three
-  holds the tokens — treat that set as a credential. A missing key is **not**
-  replaced or regenerated; existing references simply fail to decrypt, and every
-  remote read fails closed with `err.mediaServerKey`.
+  (`DATA_PATH/media-server-secrets`) and the key file
+  (`DATA_PATH/media-server.key`, unless `MEDIA_SERVER_KEY_FILE` points elsewhere).
+  Whoever holds all three holds the tokens — treat that set as a credential. A
+  missing key is generated only when the install has no encrypted credential yet.
+  Once a login has been stored, a missing key is **not** replaced; existing
+  references simply fail to decrypt, and every remote read fails closed with
+  `err.mediaServerKey`.
 
 ## Removal and stored history
 
@@ -324,9 +327,13 @@ place its own text in a response. A rate-limited or busy answer carries a bounde
 
 ## Deployment
 
-Set `MEDIA_SERVER_KEY_FILE` to an existing 32-byte owner-only key file (see
-[Configuration](configuration.md)). The server never generates it. In Compose,
-mount it read-only and point the variable at the mount, for example an override:
+Leave `MEDIA_SERVER_KEY_FILE` unset. On startup the server creates
+`DATA_PATH/media-server.key` when that file is absent and the install has no
+saved remote login yet (see [Configuration](configuration.md)). The next start
+reuses the same file. Back it up with the data directory.
+
+Set the variable to use a key you created yourself. The server then does not
+create or repair that path. Mount the file and point the variable at the mount:
 
 ```yaml
 services:
@@ -337,11 +344,11 @@ services:
       - ./data/media-server-secret.key:/run/secrets/media-server.key:ro
 ```
 
-With the variable unset the container still boots, lists no connections and
-refuses to store a credential with a clear message. Key rotation is not
-supported: changing the key without re-authenticating makes existing tokens
-undecryptable by design. The desktop application creates and preserves its own
-installation key outside the replaceable backend directory; see
+With no usable key the container still boots, lists no connections and refuses
+to store a credential with a clear message. Key rotation is not supported:
+changing the key without signing in again makes existing tokens undecryptable
+by design. The desktop application creates and preserves its own installation
+key outside the replaceable backend directory; see
 [Desktop media-server credentials](desktop-media-servers.md).
 
 Active remote playback is revalidated every 30 seconds, with a five-second

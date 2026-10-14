@@ -21,6 +21,8 @@ hashes. Store them like passwords. The settings export is described in
 | Path | Holds | Back it up? |
 | --- | --- | --- |
 | `state.json` | Accounts, grants, libraries, settings, addons, each account's favourites, resume positions, watchlist and search history | **Yes** — cannot be rebuilt |
+| `media-server.key` | Key that decrypts saved Jellyfin and Emby logins. Present only when the server created it; a deployment that sets `MEDIA_SERVER_KEY_FILE` keeps the key at that path instead | **Yes** — without it those logins cannot be read |
+| `media-server-secrets/` | Encrypted provider tokens | **Yes** — together with the key and `state.json` |
 | `library/<library id>.json` | Match history of one library: manual matches, skipped lookups, suggestions | **Yes** — manual work |
 | `library/episodes.json` | Episode titles and stills shared by all libraries | Yes — refetched slowly otherwise |
 | `follows.json` | Followed series, discovered episodes, automatic-download decisions | **Yes** |
