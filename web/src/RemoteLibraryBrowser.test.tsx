@@ -158,32 +158,191 @@ describe("RemoteLibraryBrowser listing", () => {
     expect(calls.browse[1]!.searchParams.get("parentId")).toBe("f1");
     expect(calls.browse[1]!.searchParams.get("mode")).toBe("folders");
     expect([...host.querySelectorAll(".crumbs button")].map((node) => node.textContent?.trim())).toEqual(["", "Music videos", "Concerts"]);
-    // Back climbs one level, not straight out of the library.
+    // Back climbs one level from the listing the folder left behind, without a new provider read.
     await click(host.querySelector(".library-back")!);
-    expect(calls.browse).toHaveLength(3);
-    expect(calls.browse[2]!.searchParams.get("parentId")).toBeNull();
+    expect(calls.browse).toHaveLength(2);
     expect([...host.querySelectorAll(".crumbs button")].map((node) => node.textContent?.trim())).toEqual(["", "Music videos"]);
+    expect(host.querySelector('.browse-item[data-remote-id="f1"]')).not.toBeNull();
+    expect(host.querySelector<HTMLElement>('.browse-item[data-remote-id="f1"] .library-open')).toBe(document.activeElement);
     // From the root, Back leaves the browser entirely.
     await click(host.querySelector(".library-back")!);
     expect(host.querySelector(".remote-libraries")).not.toBeNull();
     expect(onOpenChange).toHaveBeenLastCalledWith(false);
   });
 
-  it("ignores a late page from a listing the reader already left", async () => {
-    const stale = deferred<Response>();
-    const fresh = deferred<Response>();
-    let count = 0;
-    browse = () => (++count === 1 ? json(page([folder("f1", "Concerts")])) : (count === 2 ? stale.promise : fresh.promise));
+  it.each([false, true])("restores the paginated listing through its current breadcrumb (folder=%s)", async (nested) => {
+    browse = (url) => {
+      if (nested && !url.searchParams.get("parentId")) return json(page([folder("f1", "Concerts")]));
+      return url.searchParams.get("cursor")
+        ? json(page([movie("m2", "Two")]))
+        : json(page([movie("m1", "One")], { cursor: "c1", total: 2 }));
+    };
+    item = () => json({ item: movie("m2", "Two"), capabilities });
     await openRootLibrary();
-    await click(tileButtons()[0]!);          // browse #2, held open
-    await click(host.querySelector(".crumbs button:not(.library-back)")!); // browse #3, back to the root
-    expect(calls.browse).toHaveLength(3);
+    if (nested) await click(tileButtons()[0]!);
+    await click(host.querySelector(".load-more button")!);
+    const reads = calls.browse.length;
+    const pane = host.querySelector<HTMLDivElement>(".browse-scroll")!;
+    pane.scrollTop = 760;
+    await click(tileButtons()[1]!);
+    pane.scrollTop = 0;
+    await click(byText(".crumbs button", nested ? "Concerts" : "Music videos")!);
+    expect(host.querySelector(".remote-detail")).toBeNull();
+    expect(tileButtons()).toHaveLength(2);
+    expect(calls.browse).toHaveLength(reads);
+    expect(host.querySelector<HTMLDivElement>(".browse-scroll")!.scrollTop).toBe(760);
+  });
+
+  it("keeps series and episode offsets separate when returning through breadcrumbs", async () => {
+    const show: RemoteItem = { id: "ser1", name: "Show", type: "series", providerIds: {} };
+    const episode: RemoteItem = { id: "e1", name: "Pilot", type: "episode", providerIds: {} };
+    browse = (url) => json(page(url.searchParams.get("type") === "episode" ? [episode] : [show]));
+    item = (url) => json({ item: url.pathname.endsWith("/e1") ? episode : show, capabilities });
+    await openRootLibrary();
+    const pane = host.querySelector<HTMLDivElement>(".browse-scroll")!;
+    pane.scrollTop = 760;
+    await click(tileButtons()[0]!);
+    pane.scrollTop = 340;
+    await click(tileButtons()[0]!);
+    pane.scrollTop = 0;
+    await click(byText(".crumbs button", "Show")!);
+    expect(pane.scrollTop).toBe(340);
+    await click(byText(".crumbs button", "Music videos")!);
+    expect(pane.scrollTop).toBe(760);
+  });
+
+  it("restores every loaded root row, cursor, offset and folder focus after a nested return", async () => {
+    const f1 = folder("f1", "Concerts");
+    const f2 = folder("f2", "2024");
+    const film = movie("m2", "Two");
+    browse = (url) => {
+      const parent = url.searchParams.get("parentId");
+      if (!parent) return url.searchParams.get("cursor") === "c1"
+        ? json(page([film], { total: 2, cursor: "c2" }))
+        : json(page([f1], { total: 2, cursor: "c1" }));
+      return json(page(parent === "f1" ? [f2] : [film]));
+    };
+    item = () => json({ item: film, capabilities });
+    await openRootLibrary();
+    await click(host.querySelector(".load-more button")!);
+    expect(tileButtons()).toHaveLength(2);
+    const pane = host.querySelector<HTMLDivElement>(".browse-scroll")!;
+    pane.scrollTop = 760;
+    await click(tileButtons()[0]!);   // Concerts
+    await click(tileButtons()[0]!);   // 2024
+    const reads = calls.browse.length;
+    await click(tileButtons()[0]!);   // Two opens its detail
+    expect(host.querySelector(".library-title-detail")).not.toBeNull();
+    await click(byText(".crumbs button", "Music videos")!);
+    expect(host.querySelector(".library-title-detail")).toBeNull();
+    expect(tileButtons()).toHaveLength(2);
+    expect(host.querySelector(".load-more")).not.toBeNull();
+    expect(pane.scrollTop).toBe(760);
+    expect(host.querySelector<HTMLElement>('.browse-item[data-remote-id="f1"] .library-open')).toBe(document.activeElement);
+    expect(calls.browse).toHaveLength(reads);
+  });
+
+  it("restores an intermediate folder listing the same way from its breadcrumb and from Back", async () => {
+    const f1 = folder("f1", "Concerts");
+    const f2 = folder("f2", "2024");
+    const f3 = folder("f3", "Spring");
+    browse = (url) => {
+      const parent = url.searchParams.get("parentId");
+      if (!parent) return json(page([f1]));
+      if (parent === "f1") return json(page([f2]));
+      if (parent === "f2") return json(page([f3]));
+      return json(page([movie("m9", "Nine")]));
+    };
+    await openRootLibrary();
+    await click(tileButtons()[0]!);   // Concerts
+    await click(tileButtons()[0]!);   // 2024
+    await click(tileButtons()[0]!);   // Spring
+    const pane = host.querySelector<HTMLDivElement>(".browse-scroll")!;
+    await click(host.querySelector(".library-back")!);
+    expect(tileButtons()).toHaveLength(1);
+    pane.scrollTop = 420;
+    const reads = calls.browse.length;
+    // The ancestor breadcrumb restores the listing of 2024 without a new read.
+    await click(byText(".crumbs button", "2024")!);
+    expect(calls.browse).toHaveLength(reads);
+    expect(byText(".browse-panel .browse-item", "Spring")).not.toBeNull();
+    expect(host.querySelector<HTMLElement>('.browse-item[data-remote-id="f3"] .library-open')).toBe(document.activeElement);
+    expect(pane.scrollTop).toBe(420);
+    // Back from the same child lands on that same cached listing.
+    await click(tileButtons()[0]!);
+    expect(calls.browse).toHaveLength(reads + 1);
+    await click(host.querySelector(".library-back")!);
+    expect(calls.browse).toHaveLength(reads + 1);
+    expect(byText(".browse-panel .browse-item", "Spring")).not.toBeNull();
+    expect(host.querySelector<HTMLElement>('.browse-item[data-remote-id="f3"] .library-open')).toBe(document.activeElement);
+    expect(pane.scrollTop).toBe(420);
+  });
+
+  it("restores the ancestor's search text, sort and order", async () => {
+    const f1 = folder("f1", "Concerts");
+    browse = (url) => (url.searchParams.get("parentId") === "f1" ? json(page([movie("m9", "Nine")])) : json(page([f1])));
+    const setSelect = async (select: HTMLSelectElement, value: string) => {
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(select, value);
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      await flush();
+    };
+    const setInput = async (input: HTMLInputElement, value: string) => {
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await flush();
+    };
+    await openRootLibrary();
+    await setSelect(host.querySelector<HTMLSelectElement>(".browse-panel select")!, "size");
+    await setInput(host.querySelector<HTMLInputElement>(".browse-panel .search-input input")!, "jazz");
+    await act(async () => { await new Promise((done) => setTimeout(done, 350)); });
+    expect(calls.browse.at(-1)!.searchParams.get("search")).toBe("jazz");
+    expect(calls.browse.at(-1)!.searchParams.get("sort")).toBe("size");
+    await click(tileButtons()[0]!);   // into Concerts
+    await setSelect(host.querySelector<HTMLSelectElement>(".browse-panel select")!, "name");
+    const reads = calls.browse.length;
+    expect(host.querySelector<HTMLInputElement>(".browse-panel .search-input input")!.value).toBe("");
+    await click(byText(".crumbs button", "Music videos")!);
+    expect(host.querySelector<HTMLInputElement>(".browse-panel .search-input input")!.value).toBe("jazz");
+    expect(host.querySelector<HTMLSelectElement>(".browse-panel select")!.value).toBe("size");
+    expect(calls.browse).toHaveLength(reads);
+  });
+
+  it("drops the ancestor history when the sidebar returns to the libraries", async () => {
+    const f1 = folder("f1", "Concerts");
+    browse = (url) => (url.searchParams.get("parentId") === "f1" ? json(page([movie("m9", "Nine")])) : json(page([f1])));
+    const { props } = await render();
+    await click(host.querySelector(".remote-libraries .library-open")!);
+    await click(tileButtons()[0]!);
+    host.querySelector<HTMLDivElement>(".browse-scroll")!.scrollTop = 500;
+    const reads = calls.browse.length;
+    await act(async () => { root.render(<RemoteLibraryBrowser {...props} resetSignal={1}/>); });
+    await flush();
+    expect(host.querySelector(".remote-libraries")).not.toBeNull();
+    // A fresh open reads the provider again; the folder it enters starts at the top.
+    await click(host.querySelector(".remote-libraries .library-open")!);
+    expect(calls.browse).toHaveLength(reads + 1);
+    await click(tileButtons()[0]!);
+    expect(calls.browse).toHaveLength(reads + 2);
+    expect(host.querySelector<HTMLDivElement>(".browse-scroll")!.scrollTop).toBe(0);
+  });
+
+  it("keeps the restored ancestor when the child page it replaced lands late", async () => {
+    const stale = deferred<Response>();
+    browse = (url) => (url.searchParams.get("parentId") ? stale.promise : json(page([folder("f1", "Concerts")])));
+    await openRootLibrary();
+    await click(tileButtons()[0]!);          // the folder read is held open
+    await click(host.querySelector(".crumbs button:not(.library-back)")!); // back to the cached root
+    expect(calls.browse).toHaveLength(2);
+    expect(host.querySelector('.browse-item[data-remote-id="f1"]')).not.toBeNull();
     await act(async () => { stale.resolve(json(page([movie("m9", "Stale")]))); });
     await flush();
     expect(host.textContent).not.toContain("Stale");
-    await act(async () => { fresh.resolve(json(page([movie("m1", "Fresh")]))); });
-    await flush();
-    expect(host.textContent).toContain("Fresh");
+    expect(host.querySelector('.browse-item[data-remote-id="f1"]')).not.toBeNull();
+    expect(tileButtons()).toHaveLength(1);
   });
 
   it("restarts a listing when a cursor turns out to be stale", async () => {

@@ -135,6 +135,146 @@ test("item and series breadcrumbs walk the remote hierarchy", async ({ page }) =
   await expect(panel.locator(".browse-item").filter({ hasText: "Pilot" }).locator(".library-open")).toBeFocused();
 });
 
+for (const nested of [false, true]) {
+  test(`current remote breadcrumb restores a paginated ${nested ? "folder" : "root"} listing`, async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const items = Array.from({ length: 80 }, (_, i) => ({ id: `movie-${i}`, name: `Movie ${i}`, type: "movie", providerIds: {} }));
+    const remote = await remoteLibraries(page, { items: () => items });
+    await page.route("**/api/remote-libraries/*/browse*", async route => {
+      const url = new URL(route.request().url());
+      remote.requests.push(url);
+      const root = nested && !url.searchParams.has("parentId");
+      await route.fulfill({ json: { items: root ? [folder("folder-a", "Category Alpha")]
+        : url.searchParams.has("cursor") ? items.slice(60) : items.slice(0, 60),
+        total: root ? 1 : 80, capabilities, asOf: "2026-01-01T00:00:00Z", stale: false,
+        ...(!root && !url.searchParams.has("cursor") ? { cursor: "next" } : {}) } });
+    });
+    await page.locator(".remote-libraries .browse-item.library").filter({ hasText: "Remote clips" }).getByRole("button").click();
+    const panel = page.locator(".remote-browse-panel");
+    if (nested) await panel.locator('.library-open').click();
+    await panel.locator('.browse-item[data-remote-id="movie-59"]').scrollIntoViewIfNeeded();
+    await expect(panel.locator('.browse-item[data-remote-id="movie-79"]')).toBeVisible();
+    const target = panel.locator('.browse-item[data-remote-id="movie-70"] .library-open');
+    await target.scrollIntoViewIfNeeded();
+    const offset = await panel.locator(".browse-scroll").evaluate(node => node.scrollTop);
+    expect(offset).toBeGreaterThan(100);
+    const reads = remote.requests.length;
+    await target.click();
+    await expect(panel.locator(".library-title-detail")).toBeVisible();
+    await panel.locator(".crumbs").getByRole("button", { name: nested ? "Category Alpha" : "Remote clips", exact: true }).click();
+    await expect(panel.locator(".library-title-detail")).toHaveCount(0);
+    await expect(panel.locator('.browse-item[data-remote-id]')).toHaveCount(80);
+    await expect.poll(() => panel.locator(".browse-scroll").evaluate((node, expected) => Math.abs(node.scrollTop - expected), offset)).toBeLessThan(2);
+    await expect(target).toBeFocused();
+    expect(remote.requests).toHaveLength(reads);
+  });
+}
+
+test("an ancestor breadcrumb restores a scrolled remote listing without a new page", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const items = Array.from({ length: 80 }, (_, i) => (i === 70
+    ? folder("folder-70", "Category 71")
+    : { id: `movie-${i}`, name: `Movie ${i}`, type: "movie", providerIds: {} }));
+  const remote = await remoteLibraries(page);
+  await page.route("**/api/remote-libraries/*/browse*", async route => {
+    const url = new URL(route.request().url());
+    remote.requests.push(url);
+    if (url.searchParams.get("parentId") === "folder-70") {
+      await route.fulfill({ json: { items: [{ id: "clip-70", name: "Clip Seventy", type: "movie", providerIds: {} }],
+        total: 1, capabilities, asOf: "2026-01-01T00:00:00Z", stale: false } });
+      return;
+    }
+    await route.fulfill({ json: { items: url.searchParams.has("cursor") ? items.slice(60) : items.slice(0, 60),
+      total: 80, capabilities, asOf: "2026-01-01T00:00:00Z", stale: false,
+      ...(url.searchParams.has("cursor") ? {} : { cursor: "next" }) } });
+  });
+  await page.locator(".remote-libraries .browse-item.library").filter({ hasText: "Remote clips" }).getByRole("button").click();
+  const panel = page.locator(".remote-browse-panel");
+  await panel.locator('.browse-item[data-remote-id="movie-59"]').scrollIntoViewIfNeeded();
+  const target = panel.locator('.browse-item[data-remote-id="folder-70"]');
+  await expect(target).toBeVisible();
+  await target.locator(".library-open").scrollIntoViewIfNeeded();
+  const offset = await panel.locator(".browse-scroll").evaluate(node => node.scrollTop);
+  expect(offset).toBeGreaterThan(100);
+  await target.locator(".library-open").click();
+  await expect(panel.locator('.browse-item[data-remote-id="clip-70"]')).toBeVisible();
+  const reads = remote.requests.length;
+  await panel.locator('.browse-item[data-remote-id="clip-70"] .library-open').click();
+  await expect(panel.locator(".library-title-detail")).toBeVisible();
+  await panel.locator(".crumbs").getByRole("button", { name: "Remote clips", exact: true }).click();
+  await expect(panel.locator(".library-title-detail")).toHaveCount(0);
+  await expect(panel.locator(".browse-item[data-remote-id]")).toHaveCount(80);
+  await expect(panel.locator('.browse-item[data-remote-id="movie-79"]')).toBeVisible();
+  await expect.poll(() => panel.locator(".browse-scroll").evaluate((node, expected) => Math.abs(node.scrollTop - expected), offset)).toBeLessThan(2);
+  await expect(target.locator(".library-open")).toBeFocused();
+  expect(remote.requests).toHaveLength(reads);
+});
+
+test("remote ancestor breadcrumb and Back restore the same intermediate listing", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const remote = await remoteLibraries(page, { items: (url) => {
+    const parent = url.searchParams.get("parentId");
+    if (parent === "folder-a") return [folder("nested-a", "Collection One")];
+    if (parent === "nested-a") return [folder("nested-b", "Collection Two")];
+    if (parent === "nested-b") return [{ id: "clip-a", name: "Clip One", type: "movie", providerIds: {} }];
+    return [folder("folder-a", "Category Alpha")];
+  } });
+  await page.locator(".remote-libraries .browse-item.library").filter({ hasText: "Remote clips" }).getByRole("button").click();
+  const panel = page.locator(".remote-browse-panel");
+  const nested = () => panel.locator('.browse-item[data-remote-id="nested-a"]');
+  await panel.locator('.browse-item[data-remote-id="folder-a"] .library-open').click();
+  await nested().locator(".library-open").click();
+  const reads = remote.requests.length;
+  // The intermediate breadcrumb returns to Collection One from the listing it left behind.
+  await panel.locator(".crumbs").getByRole("button", { name: "Category Alpha", exact: true }).click();
+  await expect(nested()).toBeVisible();
+  await expect(nested().locator(".library-open")).toBeFocused();
+  expect(remote.requests).toHaveLength(reads);
+  // Back from the same child lands on that same cached listing.
+  await nested().locator(".library-open").click();
+  expect(remote.requests).toHaveLength(reads + 1);
+  await panel.locator(".library-back").click();
+  await expect(nested()).toBeVisible();
+  await expect(nested().locator(".library-open")).toBeFocused();
+  expect(remote.requests).toHaveLength(reads + 1);
+});
+
+test("the sidebar returns to the libraries and the next remote open starts fresh at the top", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const clips = Array.from({ length: 80 }, (_, i) => ({ id: `clip-${i}`, name: `Clip ${i}`, type: "movie", providerIds: {} }));
+  const remote = await remoteLibraries(page);
+  await page.route("**/api/remote-libraries/*/browse*", async route => {
+    const url = new URL(route.request().url());
+    remote.requests.push(url);
+    if (url.searchParams.get("parentId") !== "folder-a") {
+      await route.fulfill({ json: { items: [folder("folder-a", "Category Alpha")], total: 1,
+        capabilities, asOf: "2026-01-01T00:00:00Z", stale: false } });
+      return;
+    }
+    await route.fulfill({ json: { items: url.searchParams.has("cursor") ? clips.slice(60) : clips.slice(0, 60),
+      total: 80, capabilities, asOf: "2026-01-01T00:00:00Z", stale: false,
+      ...(url.searchParams.has("cursor") ? {} : { cursor: "next" }) } });
+  });
+  const openLibrary = () => page.locator(".remote-libraries .browse-item.library").filter({ hasText: "Remote clips" }).getByRole("button").click();
+  await openLibrary();
+  const panel = page.locator(".remote-browse-panel");
+  await panel.locator('.browse-item[data-remote-id="folder-a"] .library-open').click();
+  await panel.locator('.browse-item[data-remote-id="clip-59"]').scrollIntoViewIfNeeded();
+  await expect(panel.locator('.browse-item[data-remote-id="clip-79"]')).toBeVisible();
+  expect(await panel.locator(".browse-scroll").evaluate(node => node.scrollTop)).toBeGreaterThan(100);
+  const reads = remote.requests.length;
+  await page.getByRole("button", { name: "Knihovna", exact: true }).click();
+  await expect(page.locator(".remote-libraries .browse-item.library")).toHaveCount(8);
+  await expect(panel).toHaveCount(0);
+  await openLibrary();
+  await expect(panel.locator('.browse-item[data-remote-id="folder-a"]')).toBeVisible();
+  expect(remote.requests).toHaveLength(reads + 1);
+  await panel.locator('.browse-item[data-remote-id="folder-a"] .library-open').click();
+  await expect(panel.locator(".browse-item[data-remote-id]")).toHaveCount(60);
+  expect(await panel.locator(".browse-scroll").evaluate(node => node.scrollTop)).toBe(0);
+  expect(remote.requests).toHaveLength(reads + 2);
+});
+
 test("the remote toolbar folds on a deliberate scroll and the expand button restores it", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await remoteLibraries(page, { folders: 40 });
