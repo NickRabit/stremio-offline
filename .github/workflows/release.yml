@@ -183,23 +183,6 @@ jobs:
         # The app carries an LGPL FFmpeg statically linked with OpenSSL, so the exact source
         # archives it was built from travel with the same release (see docs/licensing.md).
         run: gh release upload "${GITHUB_REF_NAME}" desktop/release/*-unsigned.dmg desktop/release/*-unsigned.zip desktop/ffmpeg/sources/*
-      - name: Say how to open it
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          notes="$RUNNER_TEMP/notes.md"
-          gh release view "${GITHUB_REF_NAME}" --json body --jq .body > "$notes"
-          cat >> "$notes" <<'NOTES'
-
-          ## Desktop app (macOS, Apple Silicon)
-
-          `Stremio-Offline-<version>-arm64-unsigned.dmg` is not signed with an Apple Developer ID, so macOS refuses the first launch. Allow it once in **System Settings → Privacy & Security → Open Anyway** (on macOS 14 and older, right-click the app → **Open**). [docs/install-mac.md](https://github.com/NickRabit/stremio-offline/blob/main/docs/install-mac.md) walks through it.
-
-          The app includes FFmpeg, built LGPL-3.0-or-later with OpenSSL; the `ffmpeg-*` and `openssl-*` archives attached here are the exact sources it was built from (see `docs/licensing.md`).
-          NOTES
-          gh release edit "${GITHUB_REF_NAME}" --notes-file "$notes"
-
   # The LGPL FFmpeg the Windows app carries, cross-built with mingw-w64 exactly as the
   # pull-request check builds it.
   ffmpeg-windows:
@@ -223,10 +206,11 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # The Windows x64 app, unsigned like the macOS one. Depending on the desktop job keeps it
-  # strictly after it, so the two never edit the release notes or the assets at the same time.
+  # The Windows x64 app, unsigned like the macOS one. The package jobs upload
+  # distinct asset names, so they run beside each other; "release-notes" is the
+  # only job that edits the release body.
   desktop-windows:
-    needs: [release, ffmpeg-windows, desktop]
+    needs: [release, ffmpeg-windows]
     runs-on: windows-latest
     permissions:
       contents: write
@@ -317,28 +301,6 @@ jobs:
             cat "$RUNNER_TEMP/source-upload.err" >&2
             exit 1
           fi
-      - name: Say how to install it
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          notes="$RUNNER_TEMP/notes-windows.md"
-          gh release view "${GITHUB_REF_NAME}" --json body --jq .body > "$notes"
-          # A rerun must not add the section twice.
-          if grep -qF "## Desktop app (Windows x64)" "$notes"; then
-            echo "the release notes already describe the Windows app"
-            exit 0
-          fi
-          cat >> "$notes" <<'NOTES'
-
-          ## Desktop app (Windows x64)
-
-          `Stremio-Offline-<version>-x64-unsigned-setup.exe` is not signed, so Microsoft Defender SmartScreen stops the first launch: choose **More info** → **Run anyway**. [docs/install-windows.md](https://github.com/NickRabit/stremio-offline/blob/main/docs/install-windows.md) walks through the install.
-
-          The app includes FFmpeg, built LGPL-3.0-or-later for Windows; the `ffmpeg-*` source archive attached here is the exact source it was built from (see `docs/licensing.md`).
-          NOTES
-          gh release edit "${GITHUB_REF_NAME}" --notes-file "$notes"
-
   # The LGPL FFmpeg the Linux app carries, built in the same pinned ubuntu:22.04 container as the
   # pull-request check builds it.
   ffmpeg-linux:
@@ -361,11 +323,11 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # The Linux x64 AppImage and .deb, unsigned like the macOS and Windows ones. Depending on the
-  # Windows job keeps it strictly after it, so the three never edit the release notes or the assets
-  # at the same time.
+  # The Linux x64 AppImage and .deb, unsigned like the macOS and Windows ones. The package jobs
+  # upload distinct asset names, so they run beside each other; "release-notes" is the only job
+  # that edits the release body.
   desktop-linux:
-    needs: [release, ffmpeg-linux, desktop-windows]
+    needs: [release, ffmpeg-linux]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -462,6 +424,59 @@ jobs:
             cat "$RUNNER_TEMP/source-upload.err" >&2
             exit 1
           fi
+
+  # The only job that edits the release body. The three sections are appended in
+  # macOS, Windows, Linux order, because each step adds to whatever the release
+  # already carries.
+  release-notes:
+    needs: [desktop, desktop-windows, desktop-linux]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Say how to open it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/notes.md"
+          gh release view "${GITHUB_REF_NAME}" --json body --jq .body > "$notes"
+          # A rerun must not add the section twice. The Windows and Linux steps
+          # already refuse that; this one job now appends all three.
+          if grep -qF "## Desktop app (macOS, Apple Silicon)" "$notes"; then
+            echo "the release notes already describe the macOS app"
+            exit 0
+          fi
+          cat >> "$notes" <<'NOTES'
+
+          ## Desktop app (macOS, Apple Silicon)
+
+          `Stremio-Offline-<version>-arm64-unsigned.dmg` is not signed with an Apple Developer ID, so macOS refuses the first launch. Allow it once in **System Settings → Privacy & Security → Open Anyway** (on macOS 14 and older, right-click the app → **Open**). [docs/install-mac.md](https://github.com/NickRabit/stremio-offline/blob/main/docs/install-mac.md) walks through it.
+
+          The app includes FFmpeg, built LGPL-3.0-or-later with OpenSSL; the `ffmpeg-*` and `openssl-*` archives attached here are the exact sources it was built from (see `docs/licensing.md`).
+          NOTES
+          gh release edit "${GITHUB_REF_NAME}" --notes-file "$notes"
+      - name: Say how to install it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/notes-windows.md"
+          gh release view "${GITHUB_REF_NAME}" --json body --jq .body > "$notes"
+          # A rerun must not add the section twice.
+          if grep -qF "## Desktop app (Windows x64)" "$notes"; then
+            echo "the release notes already describe the Windows app"
+            exit 0
+          fi
+          cat >> "$notes" <<'NOTES'
+
+          ## Desktop app (Windows x64)
+
+          `Stremio-Offline-<version>-x64-unsigned-setup.exe` is not signed, so Microsoft Defender SmartScreen stops the first launch: choose **More info** → **Run anyway**. [docs/install-windows.md](https://github.com/NickRabit/stremio-offline/blob/main/docs/install-windows.md) walks through the install.
+
+          The app includes FFmpeg, built LGPL-3.0-or-later for Windows; the `ffmpeg-*` source archive attached here is the exact source it was built from (see `docs/licensing.md`).
+          NOTES
+          gh release edit "${GITHUB_REF_NAME}" --notes-file "$notes"
       - name: Say how to install it
         env:
           GH_TOKEN: ${{ github.token }}
