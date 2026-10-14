@@ -179,6 +179,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   const pendingRootFocus = useRef<string | null>(null);
   /** The listing offset to put back when a detail closes over it. */
   const savedScroll = useRef(0);
+  const savedEpisodeScroll = useRef(0);
   /** One stable ref per remote tile, so the lazy preview can watch the element it draws. */
   const tileRefs = useRef(new Map<string, TileRef>());
   const [fold] = useState(createCompactOnScroll);
@@ -448,9 +449,10 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   }, [searchInput]);
   // The listing keeps its offset while a detail is open over it; the panel is restored after.
   useEffect(() => {
-    if (detail || !scrollRef.current || !savedScroll.current) return;
-    scrollRef.current.scrollTop = savedScroll.current;
-  }, [detail]);
+    if (!scrollRef.current) return;
+    if (!detail) scrollRef.current.scrollTop = savedScroll.current;
+    else if (detail.type === "series") scrollRef.current.scrollTop = savedEpisodeScroll.current;
+  }, [detail?.id, detail?.type]);
   useEffect(() => () => {
     cancelItemsMore();
     cancelEpisodesMore();
@@ -614,6 +616,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
       return;
     }
     savedScroll.current = scrollRef.current?.scrollTop ?? 0;
+    savedEpisodeScroll.current = 0;
     needsDetailMeta.current = true;
     if (item.type === "series") { setSeries(item); setDetail(item); setSources(null); setState(null); return; }
     setSeries(null);
@@ -624,11 +627,20 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     setSources(null); setSourceError(""); setState(null); setStateError("");
     cancelEpisodesMore();
     cancelHandoff();
-    savedScroll.current = scrollRef.current?.scrollTop ?? 0;
+    savedEpisodeScroll.current = scrollRef.current?.scrollTop ?? 0;
     needsDetailMeta.current = true;
     setDetail(episode);
   };
+  const returnToListing = () => {
+    closeMenu();
+    cancelHandoff();
+    pendingFocus.current = series?.id ?? detail?.id ?? null;
+    needsDetailMeta.current = false;
+    setDetail(null);
+    setSeries(null);
+  };
   const goToFolder = (index: number) => {
+    if (detail && index === stack.length - 1) { returnToListing(); return; }
     closeMenu();
     setSearchInput(""); setQuery("");
     cancelItemsMore();
@@ -640,6 +652,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     setStack(stack.slice(0, index + 1));
   };
   const goLibraryRoot = () => {
+    if (detail && !stack.length) { returnToListing(); return; }
     closeMenu();
     setSearchInput(""); setQuery("");
     cancelItemsMore();

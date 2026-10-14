@@ -169,6 +169,47 @@ describe("RemoteLibraryBrowser listing", () => {
     expect(onOpenChange).toHaveBeenLastCalledWith(false);
   });
 
+  it.each([false, true])("restores the paginated listing through its current breadcrumb (folder=%s)", async (nested) => {
+    browse = (url) => {
+      if (nested && !url.searchParams.get("parentId")) return json(page([folder("f1", "Concerts")]));
+      return url.searchParams.get("cursor")
+        ? json(page([movie("m2", "Two")]))
+        : json(page([movie("m1", "One")], { cursor: "c1", total: 2 }));
+    };
+    item = () => json({ item: movie("m2", "Two"), capabilities });
+    await openRootLibrary();
+    if (nested) await click(tileButtons()[0]!);
+    await click(host.querySelector(".load-more button")!);
+    const reads = calls.browse.length;
+    const pane = host.querySelector<HTMLDivElement>(".browse-scroll")!;
+    pane.scrollTop = 760;
+    await click(tileButtons()[1]!);
+    pane.scrollTop = 0;
+    await click(byText(".crumbs button", nested ? "Concerts" : "Music videos")!);
+    expect(host.querySelector(".remote-detail")).toBeNull();
+    expect(tileButtons()).toHaveLength(2);
+    expect(calls.browse).toHaveLength(reads);
+    expect(host.querySelector<HTMLDivElement>(".browse-scroll")!.scrollTop).toBe(760);
+  });
+
+  it("keeps series and episode offsets separate when returning through breadcrumbs", async () => {
+    const show: RemoteItem = { id: "ser1", name: "Show", type: "series", providerIds: {} };
+    const episode: RemoteItem = { id: "e1", name: "Pilot", type: "episode", providerIds: {} };
+    browse = (url) => json(page(url.searchParams.get("type") === "episode" ? [episode] : [show]));
+    item = (url) => json({ item: url.pathname.endsWith("/e1") ? episode : show, capabilities });
+    await openRootLibrary();
+    const pane = host.querySelector<HTMLDivElement>(".browse-scroll")!;
+    pane.scrollTop = 760;
+    await click(tileButtons()[0]!);
+    pane.scrollTop = 340;
+    await click(tileButtons()[0]!);
+    pane.scrollTop = 0;
+    await click(byText(".crumbs button", "Show")!);
+    expect(pane.scrollTop).toBe(340);
+    await click(byText(".crumbs button", "Music videos")!);
+    expect(pane.scrollTop).toBe(760);
+  });
+
   it("ignores a late page from a listing the reader already left", async () => {
     const stale = deferred<Response>();
     const fresh = deferred<Response>();
