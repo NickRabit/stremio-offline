@@ -329,8 +329,9 @@ export function registerMediaServerRoutes(app: express.Application, deps: MediaS
     return { streams: await mediaSources.matched(authority, ownerOf(req), String(req.params.id), String(req.params.type), String(req.params.catalogId), signal, name) };
   }, 200, true));
   // Fixed Primary|Backdrop only and at most the optional `tag` and `size` queries: the bytes
-  // stream through the image lane. The browser may keep a successful response for a day. An
-  // If-None-Match that does arrive is a local 304 once the manager's checks still hold.
+  // stream through the image lane. The browser may keep a successful response for a year, and
+  // it is immutable only when the `tag` query equals the membership proof's tag. An If-None-Match
+  // that does arrive is a local 304 once the manager's checks still hold.
   app.get("/api/remote-libraries/:id/items/:itemId/artwork/:imageType", asyncRoute(async (req, res) => {
     let response: Response;
     try {

@@ -653,12 +653,14 @@ test("library thumbnails revalidate cached bytes and still enforce library visib
   const url = `${harness.base}/api/library/thumb?path=Films/Heat.mkv&v=stamp`;
   const first = await fetch(url);
   assert.equal(first.status, 200);
-  assert.equal(first.headers.get("cache-control"), "private, max-age=86400");
+  assert.equal(first.headers.get("cache-control"), "private, max-age=31536000, immutable");
+  assert.equal(first.headers.get("content-type"), "image/jpeg");
   assert.equal(await first.text(), "poster bytes");
   const etag = first.headers.get("etag")!;
   assert.ok(etag);
   const cached = await fetch(url, { headers: { "if-none-match": etag, "cache-control": "max-age=0" } });
   assert.equal(cached.status, 304);
+  assert.equal(cached.headers.get("cache-control"), "private, max-age=31536000, immutable");
   assert.equal(await cached.text(), "");
   const denied = await fetch(url, { headers: { "if-none-match": etag, "cache-control": "max-age=0", "x-user": BOB } });
   assert.equal(denied.status, 404);

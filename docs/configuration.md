@@ -43,6 +43,7 @@ load artwork straight from the provider again.
 | `IMAGE_CACHE_MB` | `512` | Disk the cached artwork may take before the oldest images are dropped. |
 | `IMAGE_CACHE_TTL_DAYS` | `0` | Age at which a cached image is dropped even while the cache is under its limit. `0` keeps the limit as the only rule. |
 | `IMAGE_CACHE_INDEX_TTL_DAYS` | `90` | Days after which an unused link to a remote image, with no cached bytes, is forgotten. `0` keeps links forever. |
+| `IMAGE_MEMORY_MB` | `32` | Process memory in front of the cached catalogue images. A hit is served without touching the disk; `0` turns the layer off. |
 
 The byte limit and `IMAGE_CACHE_TTL_DAYS` govern the cached **image data**;
 `IMAGE_CACHE_INDEX_TTL_DAYS` governs the **link** behind an id. `0` for the byte
@@ -53,9 +54,36 @@ to be reloaded, while anything the server stored keeps its original address and
 is linked again when it is next shown. The cache is checked at start and every
 six hours, not only when an image is downloaded.
 
+Crossing the cap drops the oldest files until the smaller of 8 MiB and 2% of the
+cap (at least one byte) is free; at 512 MiB that margin is 8 MiB. A cache that
+stays larger than its cap therefore evicts on every maintenance pass, so
+raise `IMAGE_CACHE_MB`. At startup the most recently used files are read into that
+memory in the background and never delay the server.
+
 The first visit to a catalogue is slower, because the server is fetching those
 posters; after that they are served from the cache. Dropping an image only frees
 the bytes, never the link the page already holds.
+
+## Remote posters
+
+Posters and backdrops from a Jellyfin or Emby library are cached the same way,
+under `DATA_PATH/remote-images`. The browser is allowed to keep a versioned
+poster for a year, the disk copy serves a cold browser and another device, and
+the memory copy keeps a refresh off the NAS. Every request still rechecks the
+viewer's grant before either copy is read, and a disabled library is never
+served from cache.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `REMOTE_IMAGE_CACHE_MB` | `512` | Disk those images may take before the oldest are dropped. The same headroom rule as above applies. |
+| `REMOTE_IMAGE_MEMORY_MB` | `32` | Process memory in front of that disk. A hit does not touch the disk; `0` turns the layer off. |
+
+A poster a browser has already downloaded cannot be taken back for up to a year,
+so revoking a grant or disabling a library hides it from new readers only.
+
+Match history, external ids, follows and the rest of `state.json` are already
+resident in memory after startup; there is no second memory cache in front of
+them.
 
 ## Library artwork
 
@@ -69,7 +97,14 @@ thumbnails; **remove and forget** deletes them.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `ARTWORK_CACHE_MB` | `256` | Disk those thumbnails may take before the least recently used are dropped. |
+| `THUMB_MEMORY_MB` | `32` | Process memory in front of the library poster and wide bytes. A hit does not touch the disk; `0` turns the layer off. |
 | `LIBRARY_META_TTL_DAYS` | `14` | Age at which the scan re-reads a bound series, so its episode titles stay current. `0` switches the pass off. Only libraries the interface opened are refreshed. |
+
+Crossing `ARTWORK_CACHE_MB` drops the oldest files until the smaller of 8 MiB and
+2% of the cap (at least one byte) is free; at 256 MiB that margin is 5.2 MiB. A
+cache that stays larger than its cap therefore evicts on every maintenance
+pass, so raise `ARTWORK_CACHE_MB`. At startup the most recently used thumbnails are read into
+the memory in the background and never delay the server.
 
 The ceiling counts the generated image files, not the `index.json` beside them,
 so the directory can be slightly larger than `ARTWORK_CACHE_MB`. Thumbnails of

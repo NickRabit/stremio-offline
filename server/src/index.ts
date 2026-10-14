@@ -64,6 +64,8 @@ import { LibraryMetaStore } from "./library-meta-store.js";
 import { LibrarySeenStore } from "./library-seen.js";
 import { localCopies } from "./local-sources.js";
 import { artworks } from "./artwork-cache.js";
+import { FileSnapCache, preheatFileSnaps } from "./byte-cache.js";
+import { RemoteImageCache } from "./remote-image-cache.js";
 import type { AddonRecord, MetaItem, StreamItem } from "./types.js";
 import { createLibraryActions } from "./library-actions.js";
 import { LibraryOps } from "./library-ops.js";
@@ -118,7 +120,11 @@ const clientLogs = new ClientLogStore(DATA_DIR);
 const mediaServerKeyFile = await prepareContainerMediaKey(DATA_DIR, process.env, (level, line) => log(level, line));
 process.env.MEDIA_SERVER_KEY_FILE = mediaServerKeyFile;
 const mediaServerVault = new MediaServerSecrets(path.join(DATA_DIR, "media-server-secrets"), mediaServerKeyFile);
-const mediaServers = new MediaServerManager(store, mediaServerVault);
+/** The disk and memory cache in front of remote posters and backdrops, and the memory copy of
+ *  the library thumbnails: both are faster copies of bytes that already sit on disk. */
+const remoteImages = new RemoteImageCache(path.join(DATA_DIR, "remote-images"));
+const fileSnaps = new FileSnapCache();
+const mediaServers = new MediaServerManager(store, mediaServerVault, { remoteImages });
 const mediaServerSources = new MediaServerSources(store, mediaServers, mediaResources);
 const mediaServerPersonal = new MediaServerPersonal(store, mediaServers);
 let markServerReady!: () => void;
@@ -162,6 +168,11 @@ await initLogger(); startLogMaintenance();
 if (restrictedMode()) log("INFO", "Restricted mode enabled");
 await images.load();
 await artworks.load();
+await remoteImages.load();
+// Preheat is a background copy of what is already on disk: it never delays listen or /api/status.
+void images.preheat();
+void preheatFileSnaps(fileSnaps, artworks.hotFiles());
+void remoteImages.preheat();
 const playbackOwners = new Map<string, { owner: ResourceOwner; resourceId: string }>();
 const airplayAccess = new AirPlayAccess(mediaResources);
 /** Where a download with no library of its own goes: the default for the kind, resolved the
@@ -1072,6 +1083,7 @@ const maintenance = createMaintenance({
   tasks: [
     { name: "images", run: () => images.maintain() },
     { name: "artworks", run: () => artworks.maintain() },
+    { name: "remote-images", run: () => remoteImages.maintain() },
     // The pass signal is swapped in here: the sweep is built once so its empty-library
     // memory survives between passes, and the signal only exists while a pass is running.
     { name: "artwork-sweep", run: (signal) => { sweepDeps.signal = signal; return artworkSweep().then(() => undefined); } },
@@ -1976,7 +1988,7 @@ const libraryPathBusy = async (keys: string[]): Promise<string | undefined> => {
   return undefined;
 };
 
-registerContentRoutes(app, { ...routeContext, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, metaStore, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
+registerContentRoutes(app, { ...routeContext, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, fileSnaps, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, metaStore, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
 /** The one search and resolution service behind both the scan and the manual identity
  *  search, so the row somebody picks by hand is the row the scanner would have picked. */
 const libraryCandidates = createLibraryCandidates({

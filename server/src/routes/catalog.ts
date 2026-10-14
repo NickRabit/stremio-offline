@@ -175,7 +175,9 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     const ids = imdbId ? await externalIds.ids(imdbId) : {};
     res.json({ links: siteLinks(String(req.params.type), id, ids ?? {}, language) });
   }));
-  /** Opaque id in, cached bytes out. An id we never handed out means nothing here. */
+  /** Opaque id in, cached bytes out. An id we never handed out means nothing here. The id is a
+   *  hash of the address, not of the bytes, so it stays a day rather than a year: the bytes may
+   *  be replaced under the same id. */
   app.get("/api/image/:id", asyncRoute(async (req, res) => {
     const cached = await images.fetch(String(req.params.id));
     if (!cached) return res.status(404).end();
@@ -183,9 +185,11 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     res.setHeader("etag", cached.etag);
     res.setHeader("cache-control", "private, max-age=86400");
     if (req.headers["if-none-match"] === cached.etag) return res.status(304).end();
-    // The path is ours, not the caller's, and a data directory may well sit inside a
-    // dotted folder -- which sendFile refuses unless told otherwise.
-    res.sendFile(cached.file, { dotfiles: "allow" }, (error) => { if (error && !res.headersSent) res.status(404).end(); });
+    // The bytes come from memory when they are already there, and from one read otherwise;
+    // sendFile would refuse a data directory that sits inside a dotted folder.
+    const bytes = await images.readCached(String(req.params.id));
+    if (!bytes) return res.status(404).end();
+    res.end(bytes);
   }));
   app.get("/api/stream-sources/:type/:id", (req, res) => {
     // The picker lists these in the caller's own order, the same one `GET /api/addons` answers.

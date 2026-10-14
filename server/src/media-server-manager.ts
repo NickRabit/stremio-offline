@@ -18,6 +18,7 @@ import {
 } from "./media-server-retention.js";
 import { remoteIdsMatch, remoteMatchTarget, type RemoteMatchTarget } from "./media-server-match.js";
 import { MediaServerIndex } from "./media-server-index.js";
+import { RemoteImageCache, remoteImageKey, type RemoteImageBody } from "./remote-image-cache.js";
 import {
   createMediaServerProvider,
   type MediaServerProvider,
@@ -140,6 +141,9 @@ export interface MediaServerManagerSeams {
   /** Whether identical in-flight live-session metadata reads on one runtime are shared.
    *  Production shares them; a test turns this off to drive the pre-coalescing network lane. */
   coalesceReads?: boolean;
+  /** The disk and memory cache in front of remote posters and backdrops. Absent turns the
+   *  cache off: every read streams from the provider the way it always did. */
+  remoteImages?: RemoteImageCache;
 }
 
 const USERNAME_MAX = 256;
@@ -316,14 +320,16 @@ const ifNoneMatchMatches = (header: string, etag: string): boolean => {
   return false;
 };
 
-/** A day, matching catalogue posters. A tag in the URL is the picture's version, so a new
- *  image is a new address and shows up at once. The browser may keep the previous bytes
- *  until then. A request that arrives still rechecks the grant, and a matching ETag is a
- *  local 304. */
-const IMAGE_CACHE_CONTROL = "private, max-age=86400";
+/** A year: a tag in the URL is the picture's version, so a new image is a new address and shows
+ *  up at once. A URL whose tag equals the membership proof's tag is immutable; an untagged one
+ *  is a year without it. A request that arrives still rechecks the grant, and a matching ETag
+ *  is a local 304. A revoked grant or a disabled library may keep a poster a browser already
+ *  holds for up to a year; that tradeoff is accepted. */
+const IMAGE_CACHE_CONTROL = "private, max-age=31536000";
+const IMAGE_IMMUTABLE_CACHE_CONTROL = "private, max-age=31536000, immutable";
 
-const artworkNotModified = (etag: string): Response =>
-  new Response(null, { status: 304, headers: { etag, "cache-control": IMAGE_CACHE_CONTROL } });
+const artworkNotModified = (etag: string, cacheControl: string): Response =>
+  new Response(null, { status: 304, headers: { etag, "cache-control": cacheControl } });
 
 /** A native-browse cursor. It binds the acting account, the library, the connection generation,
  *  the requested parent, mode, type, search and the sort pair, plus the provider's own page
@@ -564,6 +570,7 @@ export class MediaServerManager {
   private closed = false;
   private initialized = false;
   private contentInvalidator: ((scope: MediaServerInvalidationScope) => Promise<void>) | undefined;
+  private readonly remoteImages: RemoteImageCache | undefined;
 
   constructor(
     private readonly store: Store,
@@ -579,6 +586,7 @@ export class MediaServerManager {
     this.coalesceReads = seams.coalesceReads ?? true;
     this.cleanupIntervalMs = seams.cleanupIntervalMs ?? CLEANUP_INTERVAL_MS;
     this.configuration = new MediaServerConfiguration(this.store);
+    this.remoteImages = seams.remoteImages;
   }
 
   /** Reconcile the vault against the stored references, then start the periodic drain. A
@@ -620,6 +628,7 @@ export class MediaServerManager {
     }
     if (this.cleanupTimer) { clearInterval(this.cleanupTimer); this.cleanupTimer = undefined; }
     await this.index.close();
+    await this.remoteImages?.close();
     const transports = [...this.runtimes.values()].map((runtime) => runtime.transport);
     this.runtimes.clear();
     this.statuses.clear();
@@ -1333,7 +1342,8 @@ export class MediaServerManager {
    *  is answered locally with a 304 once the local authority and the current tag still hold, and a
    *  detail variant carries its own ETag so a tile ETag can never answer a detail request; the bytes
    *  stream through the image lane so an image burst never consumes a metadata or playback-guard
-   *  slot. */
+   *  slot. A read whose URL tag equals the proof's tag may be replayed from the disk and memory
+   *  cache, and is then immutable to the browser; the grant is rechecked either way. */
   async readArtwork(
     authority: MediaServerAuthority,
     libraryId: unknown,
@@ -1359,23 +1369,41 @@ export class MediaServerManager {
       this.recheckContent(authority, request, library.id, connection);
       this.putProof(proof);
     }
-    const currentTag = imageType === "Primary" ? proof.primaryImageTag : proof.backdropImageTag;
-    const etagValue = currentTag === undefined ? undefined : size === "detail" ? `${currentTag}:detail` : currentTag;
+    const proofTag = imageType === "Primary" ? proof.primaryImageTag : proof.backdropImageTag;
+    const versioned = tag !== undefined && tag === proofTag;
+    const cacheControl = versioned ? IMAGE_IMMUTABLE_CACHE_CONTROL : IMAGE_CACHE_CONTROL;
+    const etagValue = proofTag === undefined ? undefined : size === "detail" ? `${proofTag}:detail` : proofTag;
     const etag = etagValue === undefined ? undefined : `"${etagValue}"`;
     if (etag !== undefined && ifNoneMatch !== undefined && ifNoneMatchMatches(ifNoneMatch, etag)) {
       this.recheckContent(authority, request, library.id, connection);
-      return artworkNotModified(etag);
+      return artworkNotModified(etag, cacheControl);
+    }
+    // The proof's tag is the cache key and never travels upstream: a client tag that does not
+    // match the proof is a different picture and is streamed without touching the cache.
+    const upstream = {
+      itemId: requested,
+      imageType,
+      ...(tag === undefined ? {} : { tag }),
+      ...(size === undefined ? {} : { size }),
+    } as const;
+    const cacheable = this.remoteImages !== undefined && proofTag !== undefined && (tag === undefined || tag === proofTag);
+    if (cacheable) {
+      const key = remoteImageKey({ connectionId: connection.id, itemId: requested, imageType, size: size ?? "", proofTag });
+      const body = await this.remoteImages!.open(key, request, (upstreamSignal) =>
+        this.imageUpstream(connection, upstreamSignal, () => session.transport.requestArtwork(upstream, session.token, upstreamSignal)));
+      try {
+        this.recheckContent(authority, request, library.id, connection);
+        return this.scopedCachedImage(authority, request, library, connection, body, etag, cacheControl);
+      } catch (error) {
+        await body.stream.cancel().catch(() => undefined);
+        throw error;
+      }
     }
     const response = await this.imageUpstream(connection, request, () =>
-      session.transport.requestArtwork({
-        itemId: requested,
-        imageType,
-        ...(tag === undefined ? {} : { tag }),
-        ...(size === undefined ? {} : { size }),
-      }, session.token, request));
+      session.transport.requestArtwork(upstream, session.token, request));
     try {
       this.recheckContent(authority, request, library.id, connection);
-      return this.scopedImage(authority, request, library, connection, response, etag);
+      return this.scopedImage(authority, request, library, connection, response, etag, cacheControl);
     } catch (error) {
       await response.body?.cancel().catch(() => undefined);
       throw error;
@@ -1820,7 +1848,7 @@ export class MediaServerManager {
     }
   }
 
-  /** The image body as a private response the browser may keep for a day. A request that
+  /** The image body as a private response the browser may keep for a year. A request that
    *  arrives still re-checks the local authority and the connection before every chunk and
    *  aborts the upstream read when the client goes away. */
   private scopedImage(
@@ -1830,6 +1858,7 @@ export class MediaServerManager {
     connection: MediaConnectionRecord,
     upstream: Response,
     etag: string | undefined,
+    cacheControl: string,
   ): Response {
     if (upstream.status !== 200 || !upstream.body) {
       void upstream.body?.cancel().catch(() => undefined);
@@ -1837,7 +1866,7 @@ export class MediaServerManager {
     }
     const headers = new Headers({
       "content-type": upstream.headers.get("content-type") ?? "application/octet-stream",
-      "cache-control": IMAGE_CACHE_CONTROL,
+      "cache-control": cacheControl,
       "x-content-type-options": "nosniff",
     });
     if (etag !== undefined) headers.set("etag", etag);
@@ -1857,6 +1886,42 @@ export class MediaServerManager {
       cancel: (reason) => reader.cancel(reason).catch(() => undefined),
     });
     return new Response(body, { status: 200, headers });
+  }
+
+  /** The same wrapper for bytes the cache already holds: the local authority and the connection
+   *  are re-checked before the response is returned and before every chunk, whichever copy the
+   *  bytes came from. */
+  private scopedCachedImage(
+    authority: MediaServerAuthority,
+    signal: AbortSignal,
+    library: RemoteLibraryRecord,
+    connection: MediaConnectionRecord,
+    body: RemoteImageBody,
+    etag: string | undefined,
+    cacheControl: string,
+  ): Response {
+    const headers = new Headers({
+      "content-type": body.contentType,
+      "cache-control": cacheControl,
+      "x-content-type-options": "nosniff",
+    });
+    if (etag !== undefined) headers.set("etag", etag);
+    const reader = body.stream.getReader();
+    const stream = new ReadableStream<Uint8Array>({
+      pull: async (controller) => {
+        try {
+          this.recheckContent(authority, signal, library.id, connection);
+          const chunk = await reader.read();
+          if (chunk.done) controller.close();
+          else controller.enqueue(chunk.value);
+        } catch (error) {
+          void reader.cancel().catch(() => undefined);
+          controller.error(error);
+        }
+      },
+      cancel: (reason) => reader.cancel(reason).catch(() => undefined),
+    });
+    return new Response(stream, { status: 200, headers });
   }
 
   /** Proves a requested browse parent sits inside the granted library and may be opened: the

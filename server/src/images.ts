@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { renameWithRetry } from "./fs-retry.js";
@@ -114,6 +114,20 @@ const megabytes = (value: string | undefined, fallback: number) => {
   return (Number.isFinite(parsed) && parsed > 0 ? parsed : fallback) * 1024 * 1024;
 };
 
+/** Unlike `megabytes`, an explicit `0` is honoured: it turns the memory layer off. */
+const memoryMegabytes = (value: string | undefined, fallback: number) => {
+  const text = value?.trim();
+  const parsed = Number(text);
+  return (!text || !Number.isFinite(parsed) || parsed < 0 ? fallback : parsed) * 1024 * 1024;
+};
+
+/** How far below the cap a pass drops: the smaller of 8 MiB and 2% of the cap, at least one
+ *  byte. A cache that stays above its cap evicts on every pass; the cap is the lever. */
+function evictionFloor(cap: number): number {
+  const margin = Math.min(8 * 1024 * 1024, Math.max(1, Math.floor(cap * 0.02)));
+  return cap - margin;
+}
+
 /** `0`, the default, keeps the cache on its cap alone. */
 const days = (value: string | undefined) => {
   const parsed = Number(value);
@@ -132,6 +146,8 @@ const indexDays = (value: string | undefined) => {
 export class ImageProxy {
   private index = new Map<string, Entry>();
   private inflight = new Map<string, Promise<Entry | undefined>>();
+  private memory = new Map<string, Buffer>();
+  private memoryBytes = 0;
   private saveTimer?: NodeJS.Timeout;
   private dirty = false;
   private maintenance?: Promise<void>;
@@ -144,6 +160,7 @@ export class ImageProxy {
     private fetcher: (url: string, init: RequestInit) => Promise<Response> = guardedFetch,
     private indexTtlMs = indexDays(process.env.IMAGE_CACHE_INDEX_TTL_DAYS),
     private now: () => number = Date.now,
+    private memoryCap = memoryMegabytes(process.env.IMAGE_MEMORY_MB, 32),
   ) {}
 
   private get indexFile() { return path.join(this.dir, "index.json"); }
@@ -335,7 +352,6 @@ export class ImageProxy {
     if (!entry) { log("DEBUG", "An unknown image id was requested", { id }); return undefined; }
     if (entry.ext) {
       entry.at = this.now();
-      this.save();
       return { file: this.path(id, entry.ext), type: TYPES[entry.ext]!, etag: `"${id}-${entry.bytes ?? 0}"` };
     }
     let pending = this.inflight.get(id);
@@ -346,6 +362,71 @@ export class ImageProxy {
     const done = await pending;
     if (!done?.ext) return undefined;
     return { file: this.path(id, done.ext), type: TYPES[done.ext]!, etag: `"${id}-${done.bytes ?? 0}"` };
+  }
+
+  private putMemory(id: string, data: Buffer) {
+    if (this.memoryCap <= 0 || data.length > this.memoryCap) return;
+    const known = this.memory.get(id);
+    if (known) { this.memory.delete(id); this.memoryBytes -= known.length; }
+    while (this.memoryBytes + data.length > this.memoryCap) {
+      const oldest = this.memory.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      const dropped = this.memory.get(oldest)!;
+      this.memory.delete(oldest);
+      this.memoryBytes -= dropped.length;
+    }
+    this.memory.set(id, data);
+    this.memoryBytes += data.length;
+  }
+
+  /** The bytes behind an id the page holds: from memory when they are there, otherwise read
+   *  once from disk and remembered. An id whose bytes were evicted holds nothing. */
+  async readCached(id: string): Promise<Buffer | undefined> {
+    const entry = this.index.get(id);
+    if (!entry?.ext) return undefined;
+    const remembered = this.memory.get(id);
+    if (remembered) {
+      this.memory.delete(id);
+      this.memory.set(id, remembered);
+      return remembered;
+    }
+    const data = await readFile(this.path(id, entry.ext)).catch(() => undefined);
+    if (!data) return undefined;
+    this.putMemory(id, data);
+    return data;
+  }
+
+  /** The hottest files, newest `at` first, read into memory once at start. It never changes an
+   *  entry's `at`: preheat is a copy, not a use. */
+  async preheat(): Promise<void> {
+    if (this.memoryCap <= 0) return;
+    const ordered = [...this.index.entries()]
+      .filter(([, entry]) => entry.ext !== undefined)
+      .sort((left, right) => right[1].at - left[1].at);
+    const warmed: string[] = [];
+    let files = 0;
+    let bytes = 0;
+    for (const [id, entry] of ordered) {
+      if (this.memory.has(id)) continue;
+      const info = await stat(this.path(id, entry.ext!)).catch(() => undefined);
+      if (!info?.isFile()) continue;
+      if (info.size > this.memoryCap) continue;
+      if (info.size > this.memoryCap - this.memoryBytes) break;
+      const data = await readFile(this.path(id, entry.ext!)).catch(() => undefined);
+      if (!data) continue;
+      this.putMemory(id, data);
+      warmed.push(id);
+      files += 1;
+      bytes += data.length;
+    }
+    // Newest was inserted first, so it would be evicted first. Replay oldest-first.
+    for (const id of warmed.reverse()) {
+      const data = this.memory.get(id);
+      if (!data) continue;
+      this.memory.delete(id);
+      this.memory.set(id, data);
+    }
+    log("INFO", "Image cache preheat finished", { files, bytes });
   }
 
   private async download(id: string, entry: Entry): Promise<Entry | undefined> {
@@ -383,7 +464,7 @@ export class ImageProxy {
 
   private evict(): Promise<boolean> { return this.exclusively(() => this.evictOnce()); }
 
-  /** Oldest first, down to four fifths of the cap so this does not run on every write.
+  /** Oldest first, down to `evictionFloor(cap)` so this does not run on every write.
    *  `IMAGE_CACHE_TTL_DAYS` also drops the bytes of anything not served for that long,
    *  while the cache still sits under its cap. */
   private async evictOnce(): Promise<boolean> {
@@ -406,7 +487,7 @@ export class ImageProxy {
     const stored = [...this.index.entries()]
       .filter(([id, entry]) => entry.ext && !this.inflight.has(id))
       .sort((a, b) => a[1].at - b[1].at);
-    const target = this.cap * 0.8;
+    const target = evictionFloor(this.cap);
     let removed = 0;
     for (const [id, snapshot] of total > this.cap ? stored : []) {
       if (total <= target) break;
@@ -435,6 +516,8 @@ export class ImageProxy {
     const bytes = current.bytes ?? 0;
     current.ext = undefined;
     current.bytes = undefined;
+    const remembered = this.memory.get(id);
+    if (remembered) { this.memory.delete(id); this.memoryBytes -= remembered.length; }
     return bytes;
   }
 

@@ -33,6 +33,7 @@ hashes. Store them like passwords. The settings export is described in
 | `external-ids.json` | Cached links between catalogue identifiers | Optional — rebuilt on demand |
 | `artwork/` | Thumbnails the server generated from the media | Optional — regenerated, which takes ffmpeg time |
 | `images/` | Cached posters and backgrounds from the catalogues | **No** — refetched on demand; often the largest folder |
+| `remote-images/` | Cached Jellyfin and Emby posters | **No** — refetched on demand |
 | `app.log` | The log | No |
 | `*.damaged-*` | A state file that could not be read at start, kept aside | Keep until you have looked at it |
 | `state.json.v1.bak` and other `*.bak` | Copies taken before a migration | Keep while a rollback is possible |
