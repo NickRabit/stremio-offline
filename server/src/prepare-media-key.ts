@@ -12,8 +12,9 @@ export const MEDIA_SERVER_SECRETS_DIRECTORY = "media-server-secrets";
 const KEY_BYTES = 32;
 const OWNER_ONLY = 0o600;
 
-/** What happened while preparing the key, for a caller that wants one generic log line. */
-export type MediaKeyOutcome = "existing" | "created" | "declined" | "failed";
+/** What happened while preparing the key, for a caller that wants one generic log line.
+ *  `exposed` was already explained by the call that refused to publish the file. */
+export type MediaKeyOutcome = "existing" | "created" | "declined" | "exposed" | "failed";
 
 export type MediaKeyLog = (level: "INFO" | "WARN", line: string) => void;
 
@@ -95,23 +96,38 @@ async function ensureRealDirectory(dataDir: string): Promise<boolean> {
 
 /** Writes 32 random bytes to a unique temp file, fsyncs and closes it, then publishes it as the
  *  key with a hard link. A concurrently created key wins: `EEXIST` leaves the winner's bytes in
- *  place. The temp file is removed either way, and no rename ever replaces an existing key. */
-async function publishKey(dataDir: string, intended: string): Promise<MediaKeyOutcome> {
+ *  place. The temp file is removed either way, and no rename ever replaces an existing key.
+ *
+ *  The mode passed to `open` is not what a shared folder keeps. Synology's `docker` share grants
+ *  Everyone read on every new file, so the inode comes back group- or world-readable and would be
+ *  discarded. Tighten the descriptor just written, then judge that inode, not a path that could
+ *  have been swapped since. */
+async function publishKey(dataDir: string, intended: string, log?: MediaKeyLog): Promise<MediaKeyOutcome> {
   const temp = path.join(dataDir, `${MEDIA_SERVER_KEY_NAME}.${randomUUID()}.tmp`);
   try {
     const handle = await open(temp, "wx", OWNER_ONLY);
-    try {
-      await handle.writeFile(randomBytes(KEY_BYTES));
-      await handle.sync();
-    } finally {
-      await handle.close().catch(() => {});
-    }
-    const info = await lstat(temp);
-    if (!info.isFile()) return "declined";
+    const info = await (async () => {
+      try {
+        await handle.writeFile(randomBytes(KEY_BYTES));
+        if (process.platform !== "win32") await handle.chmod(OWNER_ONLY);
+        await handle.sync();
+        return await handle.stat();
+      } finally {
+        await handle.close().catch(() => {});
+      }
+    })();
+    if (!info.isFile()) return "failed";
     if (process.platform !== "win32") {
-      if ((info.mode & 0o077) !== 0) return "declined";
+      const mode = info.mode & 0o777;
       const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
-      if (uid !== undefined && info.uid !== uid) return "declined";
+      const foreignOwner = uid !== undefined && info.uid !== uid;
+      if ((mode & 0o077) !== 0 || foreignOwner) {
+        const why = foreignOwner
+          ? "the new file is not owned by the server user"
+          : "the data directory left the new file readable by other accounts";
+        log?.("WARN", `The media-server key was not created because ${why} (mode ${mode.toString(8)}).`);
+        return "exposed";
+      }
     }
     try {
       await link(temp, intended);
@@ -128,12 +144,12 @@ async function publishKey(dataDir: string, intended: string): Promise<MediaKeyOu
 /** Locates or, only for a genuine first run, creates the data-directory key. Returns what
  *  happened. An existing file, a symlink, a malformed state or an unreadable vault all leave
  *  the intended path untouched so the vault fails closed on its own. */
-export async function establishContainerMediaKey(dataDir: string, intended: string): Promise<MediaKeyOutcome> {
+export async function establishContainerMediaKey(dataDir: string, intended: string, log?: MediaKeyLog): Promise<MediaKeyOutcome> {
   try {
     if ((await lstatOrNull(intended)) !== null) return "existing";
     if (!(await ensureRealDirectory(dataDir))) return "declined";
     if (await hasCredentialEvidence(dataDir)) return "declined";
-    return await publishKey(dataDir, intended);
+    return await publishKey(dataDir, intended, log);
   } catch {
     return "failed";
   }
@@ -151,7 +167,7 @@ export async function prepareContainerMediaKey(
   const override = env[MEDIA_SERVER_KEY_FILE_ENV];
   if (typeof override === "string" && override.trim().length > 0) return override;
   const intended = mediaServerKeyPath(dataDir);
-  const outcome = await establishContainerMediaKey(dataDir, intended);
+  const outcome = await establishContainerMediaKey(dataDir, intended, log);
   if (outcome === "created") {
     log?.("INFO", "Created a new media-server key in the data directory.");
   } else if (outcome === "declined") {

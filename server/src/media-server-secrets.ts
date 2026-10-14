@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { constants as fsConstants, type Stats } from "node:fs";
-import { lstat, mkdir, open, opendir, unlink, type FileHandle } from "node:fs/promises";
+import { chmod, lstat, mkdir, open, opendir, rmdir, unlink, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { renameWithRetry } from "./fs-retry.js";
 import {
@@ -235,6 +235,23 @@ export class MediaServerSecrets {
   private async ensureDirectory(): Promise<void> {
     if (await this.directoryUsable()) return;
     await mkdir(this.directory, { mode: 0o700 }).catch(() => { throw secretUnavailable("The secret vault directory could not be created."); });
+    // Same shared-folder inheritance as the key: a new directory can come back world-readable.
+    // An empty directory that stays that way is removed, so a later attempt can try again.
+    // A directory that already existed is refused above and is never removed here.
+    if (isPosix) {
+      try {
+        await chmod(this.directory, 0o700);
+      } catch {
+        await rmdir(this.directory).catch(() => undefined);
+        throw secretUnavailable("The secret vault directory could not be created.");
+      }
+    }
+    try {
+      if (!(await this.directoryUsable())) throw secretUnavailable("The secret vault directory could not be created.");
+    } catch (error) {
+      await rmdir(this.directory).catch(() => undefined);
+      throw error;
+    }
   }
 
   private async readEnvelope(ref: string): Promise<Buffer> {
@@ -307,6 +324,7 @@ export class MediaServerSecrets {
     try {
       handle = await open(temp, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | O_NOFOLLOW, 0o600);
       await handle.writeFile(envelope);
+      if (isPosix) await handle.chmod(0o600);
       await handle.sync();
     } catch (error) {
       await handle?.close().catch(() => undefined);
