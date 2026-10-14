@@ -13,10 +13,15 @@ export function offeredLibraries(libraries: LibraryView[], kind: SaveKind): Libr
   return libraries.filter((library) => usable(library) && library.writable && takes(library, kind));
 }
 
-/** The rule a native media-server copy is preselected to: the destination the server projected
- *  for that exact source. Nothing is invented when there is no projection, so the choice falls
- *  back to the kind's own default and the server re-resolves the target it admits. */
-export function sourceTargetRule(stream: { downloadLibraryId?: string } | null | undefined): AddonDownloadSettings | undefined {
+/** The rule a native media-server copy is preselected to: the whole destination the server
+ *  projected for that exact source, library, subfolder and layout included. Nothing is invented
+ *  when there is no projection -- not even the remote library's own configured handle, which may
+ *  be hidden or unavailable -- so the choice falls back to the kind's own default and the server
+ *  re-resolves the target it admits. An older server that projects only the library handle still
+ *  preselects it. */
+export function sourceTargetRule(stream: { downloadTarget?: DownloadTargetSettings; downloadLibraryId?: string } | null | undefined): AddonDownloadSettings | undefined {
+  const target = stream?.downloadTarget;
+  if (target) { const entry = (): DownloadTargetSettings => ({ ...target }); return { movie: entry(), series: entry() }; }
   const libraryId = stream?.downloadLibraryId;
   if (!libraryId) return undefined;
   const entry = (): DownloadTargetSettings => ({ subfolder: "", layout: "structured", libraryId });

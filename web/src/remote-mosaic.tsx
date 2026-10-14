@@ -204,6 +204,8 @@ export function useRemotePosters({ libraryId, parentId, enabled, generation }: P
  *  visible immediately. A new one stays hidden until every poster has arrived or failed, and a
  *  poster that already failed stays hidden on the next paint. */
 function LibraryCollage({ posters, instant = false }: { posters: string[]; instant?: boolean }) {
+  const latest = useRef({ posters, instant });
+  latest.current = { posters, instant };
   const signature = posters.join("\0");
   const ready = () => instant || posters.every((url) => decodedPosters.has(url));
   const [shown, setShown] = useState(signature);
@@ -213,9 +215,8 @@ function LibraryCollage({ posters, instant = false }: { posters: string[]; insta
     setWaiting(!ready());
   }
   const settle = (url: string) => {
-    if (decodedPosters.has(url)) return;
     decodedPosters.add(url);
-    setWaiting(posters.some((item) => !decodedPosters.has(item)));
+    setWaiting(!latest.current.instant && latest.current.posters.some((item) => !decodedPosters.has(item)));
   };
   // A remembered fan is on screen immediately, like a local mosaic. A new one stays hidden
   // until every poster has decoded, then appears whole.

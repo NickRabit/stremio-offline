@@ -21,11 +21,11 @@ const episode = (over: Partial<RemoteItem> = {}): RemoteItem =>
 const series = (over: Partial<RemoteItem> = {}): RemoteItem =>
   ({ id: "s1", name: "The Show", type: "series", providerIds: { imdb: "tt5000" }, ...over });
 
-const stream = (id: string, name: string, size: number, downloadToLibrary = true, downloadLibraryId?: string): Stream => ({
+const stream = (id: string, name: string, size: number, downloadToLibrary = true, projectedLibraryId?: string): Stream => ({
   sourceId: `source-${id}`, kind: "remote", playable: true, name, provider: "jellyfin",
   remoteItem: { libraryId: "rlib_a", itemId: "m1", mediaSourceId: id, progressKey: `p-${id}` },
   capabilities: capabilities(downloadToLibrary), behaviorHints: { videoSize: size },
-  ...(downloadLibraryId ? { downloadLibraryId } : {}),
+  ...(projectedLibraryId ? { downloadTarget: { subfolder: "", layout: "structured", libraryId: projectedLibraryId } } : {}),
 });
 
 const json = (body: unknown, status = 200) =>
@@ -43,7 +43,7 @@ beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   setLocale("en");
   sourceCalls = []; itemCalls = []; downloadCalls = [];
-  sourcesReply = () => json({ streams: [stream("v1", "720p", 800_000_000), stream("v2", "1080p", 3_000_000_000)] });
+  sourcesReply = () => json({ streams: [stream("v1", "720p", 800_000_000, true, "lib_1"), stream("v2", "1080p", 3_000_000_000, true, "lib_1")] });
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), "http://localhost");
     const path = url.pathname;
@@ -106,7 +106,7 @@ describe("NativeLibrarySaveDialog", () => {
   });
 
   it("uses the versions the caller already holds without reading them again", async () => {
-    await render({ knownSources: [stream("v2", "1080p", 3_000_000_000)] });
+    await render({ knownSources: [stream("v2", "1080p", 3_000_000_000, true, "lib_1")] });
     expect(sourceCalls).toHaveLength(0);
     expect(chooser()).toBeNull();
     await click(primary());
@@ -114,7 +114,7 @@ describe("NativeLibrarySaveDialog", () => {
   });
 
   it("keeps the picture off a protected remote proxy path and sends only exact catalogue art", async () => {
-    await render({ knownSources: [stream("v2", "1080p", 1)], item: movie({ poster: "/api/remote-libraries/rlib_a/items/m1/artwork/Primary?tag=abc" }) });
+    await render({ knownSources: [stream("v2", "1080p", 1, true, "lib_1")], item: movie({ poster: "/api/remote-libraries/rlib_a/items/m1/artwork/Primary?tag=abc" }) });
     await click(primary());
     const media = downloadCalls[0]!.media as Record<string, unknown>;
     expect(media.poster).toBeUndefined();
@@ -159,13 +159,24 @@ describe("NativeLibrarySaveDialog", () => {
     expect("target" in downloadCalls[0]!).toBe(false);
   });
 
-  it("falls back to the remote library's own configured destination when a source carries none", async () => {
-    await render({
-      library: { id: "rlib_a", provider: "jellyfin", name: "Movies", downloadLibraryId: "lib_2" },
+  it("never falls back to the remote library's own handle when a source carries no projection", async () => {
+    const { onQueued } = await render({
+      library: { id: "rlib_a", provider: "jellyfin", name: "Movies" },
       libraries: [library({ id: "lib_1", name: "Films" }), library({ id: "lib_2", name: "Elsewhere", defaultMovie: false, defaultSeries: false })],
       knownSources: [stream("v2", "1080p", 1)],
     });
-    expect(card()!.textContent).toContain("Elsewhere");
+    // No projection at all: the automatic option is refused rather than filled in with the remote
+    // library's own handle, which may be hidden or unavailable.
+    expect(card()!.textContent).toContain("The default destination is unavailable. Choose another library.");
+    expect(primary().disabled).toBe(true);
+    await click(primary());
+    expect(downloadCalls).toHaveLength(0);
+    // A manual pick is still there and queues an explicit destination.
+    const custom = [...card()!.querySelectorAll<HTMLElement>(".bulk-strategy label")].find((label) => label.textContent?.includes("Somewhere else"))!;
+    await click(custom);
+    await click(primary());
+    expect(downloadCalls[0]!.target).toEqual({ libraryId: "lib_1", subfolder: "", layout: "structured" });
+    expect(onQueued).toHaveBeenCalledTimes(1);
   });
 
   it("reports a denied native permission and holds the submit back", async () => {
@@ -175,7 +186,7 @@ describe("NativeLibrarySaveDialog", () => {
   });
 
   it("reports when no library can be written to and holds the submit back", async () => {
-    await render({ libraries: [library({ readOnly: true, writable: false })], knownSources: [stream("v2", "1080p", 1)] });
+    await render({ libraries: [library({ readOnly: true, writable: false })], knownSources: [stream("v2", "1080p", 1, true, "lib_1")] });
     expect(card()!.textContent).toContain("No library you can write to takes this kind of title.");
     expect(primary().disabled).toBe(true);
   });
@@ -187,14 +198,14 @@ describe("NativeLibrarySaveDialog", () => {
       library({ unreachable: true, writable: false }),
       library({ type: "series" }),
     ]) {
-      await render({ libraries: [broken], knownSources: [stream("v2", "1080p", 1)] });
+      await render({ libraries: [broken], knownSources: [stream("v2", "1080p", 1, true, "lib_1")] });
       expect(card()!.textContent).toContain("No library you can write to takes this kind of title.");
       expect(primary().disabled).toBe(true);
     }
   });
 
   it("reads the parent series of an episode and titles the copy with it", async () => {
-    await render({ item: episode(), knownSources: [stream("v2", "1080p", 1)] });
+    await render({ item: episode(), knownSources: [stream("v2", "1080p", 1, true, "lib_1")] });
     expect(itemCalls.some((path) => path.endsWith("/s1"))).toBe(true);
     await click(primary());
     const media = downloadCalls[0]!.media as Record<string, unknown>;
@@ -202,7 +213,7 @@ describe("NativeLibrarySaveDialog", () => {
   });
 
   it("never lists or reads a title for an unnumbered episode clip", async () => {
-    await render({ item: episode({ seriesId: undefined, season: undefined, episode: undefined }), knownSources: [stream("v2", "1080p", 1)] });
+    await render({ item: episode({ seriesId: undefined, season: undefined, episode: undefined }), knownSources: [stream("v2", "1080p", 1, true, "lib_1")] });
     expect(itemCalls).toHaveLength(0);
     await click(primary());
     const media = downloadCalls[0]!.media as Record<string, unknown>;
@@ -214,9 +225,9 @@ describe("NativeLibrarySaveDialog", () => {
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const path = new URL(String(input), "http://localhost").pathname;
       if (path === "/api/downloads" && init?.method === "POST") return Promise.resolve(json({ error: "This source is already in the library." }, 409));
-      return Promise.resolve(json({ streams: [stream("v2", "1080p", 1)] }));
+      return Promise.resolve(json({ streams: [stream("v2", "1080p", 1, true, "lib_1")] }));
     }));
-    const { onQueued } = await render({ knownSources: [stream("v2", "1080p", 1)] });
+    const { onQueued } = await render({ knownSources: [stream("v2", "1080p", 1, true, "lib_1")] });
     await click(primary());
     expect(onQueued).not.toHaveBeenCalled();
     expect(card()).not.toBeNull();
@@ -225,7 +236,7 @@ describe("NativeLibrarySaveDialog", () => {
 
   it("shows a retry when the version read fails and reads again on demand", async () => {
     let fail = true;
-    sourcesReply = () => { if (fail) return json({ error: "The versions could not be loaded." }, 500); return json({ streams: [stream("v2", "1080p", 1)] }); };
+    sourcesReply = () => { if (fail) return json({ error: "The versions could not be loaded." }, 500); return json({ streams: [stream("v2", "1080p", 1, true, "lib_1")] }); };
     await render();
     expect(sourceCalls).toHaveLength(1);
     expect(card()!.textContent).toContain("The versions could not be loaded.");
@@ -245,7 +256,7 @@ it("waits for an episode's parent before saving its series identity", async () =
     if (String(input).endsWith("/items/s1")) return parent;
     return originalFetch(input, init);
   }));
-  await render({ item: episode(), knownSources: [stream("v1", "720p", 1)] });
+  await render({ item: episode(), knownSources: [stream("v1", "720p", 1, true, "lib_1")] });
   expect(primary().disabled).toBe(true);
   await click(primary());
   expect(downloadCalls).toHaveLength(0);

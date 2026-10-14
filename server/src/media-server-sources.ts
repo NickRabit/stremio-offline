@@ -1,14 +1,14 @@
 import { mayDownloadToLibrary } from "./downloads.js";
 import { libraryVisible, type DefaultLibrarySettings, type LibraryRecord } from "./libraries.js";
 import { remoteContentAccessible } from "./media-server-access.js";
-import { canonicalRemoteDownloadReference, defaultRemoteCopyLibraryId, takesRemoteCopy, type RemoteDownloadReference } from "./media-server-download.js";
+import { canonicalRemoteDownloadReference, defaultRemoteCopyTarget, takesRemoteTarget, type RemoteDownloadReference } from "./media-server-download.js";
 import type { MediaServerAuthority, MediaServerItemVersions, MediaServerManager } from "./media-server-manager.js";
 import { isRemoteMediaStream, openRemoteContent, remoteSecretStamp, sealRemoteContent } from "./media-server-reference.js";
 import { READ_ONLY_MEDIA_CAPABILITIES, type RemoteLibraryRecord } from "./media-server-types.js";
 import { ResourceError, type MediaResources, type ResourceOwner } from "./media-resources.js";
 import { containerExtension, nameExtension } from "./naming.js";
 import type { Store } from "./store.js";
-import type { PublicStream, StreamItem } from "./types.js";
+import type { DownloadTargetSettings, PublicStream, StreamItem } from "./types.js";
 import type { UserRecord } from "./users.js";
 
 /** One verified item's versions and its sealed subtitles as public sources. */
@@ -76,6 +76,7 @@ export class MediaServerSources {
    *  the owner stamp. A subtitle reference shares the original's item, version and owner and
    *  adds only its provider index, so no caller can invent provenance for it. */
   private seal(result: MediaServerItemVersions, owner: ResourceOwner, secretStamp: string): SealedStreams[] {
+    const copyKind: "movie" | "series" = result.item.type === "episode" ? "series" : "movie";
     const base = {
       provider: result.identity.provider,
       serverId: result.identity.serverId,
@@ -84,13 +85,14 @@ export class MediaServerSources {
       connectionId: result.connectionId,
       libraryId: result.libraryId,
       generation: result.generation,
+      copyKind,
       owner: { userId: owner.userId, sid: owner.sid, expiresAt: owner.expiresAt, secretStamp },
     };
     return result.versions.map((version) => ({
       libraryName: result.libraryName,
       downloadAllowed: result.downloadAllowed === true,
       libraryId: result.libraryId,
-      kind: result.item.type === "episode" ? "series" : "movie",
+      kind: copyKind,
       stream: {
         url: sealRemoteContent({ ...base, mediaSourceId: version.id }),
         name: version.name ?? result.item.name,
@@ -109,25 +111,26 @@ export class MediaServerSources {
     }));
   }
 
-  /** The local library a copy of this source lands in when the caller names no target, when it is
-   *  one the acting account can see and write to. The stored setting only preselects the
-   *  interface: the admission resolves the same default again and refuses an unusable handle
-   *  instead of redirecting it to another library. */
+  /** The destination a copy of this source takes when the caller names no target, when its library
+   *  is one the acting account can see and write to. The stored rule only preselects the
+   *  interface: the admission resolves the same target again and refuses an unusable handle
+   *  instead of redirecting it to another library. The full rule -- library, subfolder and layout
+   *  -- comes back only when the concrete destination fits the content's effective kind. */
   private copyDestination(
     entry: SealedStreams,
     user: UserRecord,
     libraries: LibraryRecord[],
     settings: DefaultLibrarySettings,
     remotes: RemoteLibraryRecord[],
-  ): string | undefined {
+  ): DownloadTargetSettings | undefined {
     const remote = remotes.find((candidate) => candidate.id === entry.libraryId);
     if (!remote) return undefined;
-    const resolved = defaultRemoteCopyLibraryId(remote, libraries, settings, entry.kind);
-    if (resolved === undefined) return undefined;
-    const destination = libraries.find((candidate) => candidate.id === resolved);
-    if (!destination || !takesRemoteCopy(remote.downloadLibraryId === undefined && remote.type === "mixed" ? entry.kind : remote.type, destination)) return undefined;
+    const target = defaultRemoteCopyTarget(remote, libraries, settings, entry.kind);
+    if (target.libraryId === undefined) return undefined;
+    const destination = libraries.find((candidate) => candidate.id === target.libraryId);
+    if (!destination || !takesRemoteTarget(remote, entry.kind, destination)) return undefined;
     if (!libraryVisible(destination, { id: user.id, role: user.role })) return undefined;
-    return resolved;
+    return target;
   }
 
   /** The listed sources, with the one capability a trusted projection may add: an original the
@@ -148,7 +151,10 @@ export class MediaServerSources {
       if (!mayCopy || !user || !entry.downloadAllowed) continue;
       listed[index]!.capabilities = { ...READ_ONLY_MEDIA_CAPABILITIES, downloadToLibrary: true };
       const destination = this.copyDestination(entry, user, libraries, settings, remotes);
-      if (destination !== undefined) listed[index]!.downloadLibraryId = destination;
+      if (destination?.libraryId !== undefined) {
+        listed[index]!.downloadTarget = destination;
+        listed[index]!.downloadLibraryId = destination.libraryId;
+      }
     }
     return listed;
   }

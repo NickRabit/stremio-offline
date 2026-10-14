@@ -30,6 +30,9 @@ data class RemoteLibraryDto(
   /** The local library this remote library's copies are saved into; absent means the default for
    *  the kind. A preselection only, and a stored handle that is no longer usable stays stored. */
   val downloadLibraryId: String? = null,
+  /** The storage rules for automatic copies of this library's originals, the same shape an addon
+   *  carries. A preselection only; every admission is proved again on the server. */
+  val downloadSettings: AddonDownloadSettingsDto? = null,
   /** The library root's own same-origin poster, when the provider has one. Present means the tile
    *  draws it instead of asking for a child mosaic; absent falls back to the bounded preview. */
   val poster: String? = null,

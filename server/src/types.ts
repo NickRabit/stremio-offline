@@ -128,6 +128,11 @@ export interface PublicStream {
    *  stored setting or its kind's default. Absent when that target is unusable or invisible to
    *  the asking account; the server re-resolves it on the request and never trusts it. */
   downloadLibraryId?: string;
+  /** The whole destination rule a copy of this source takes when the caller names no target:
+   *  the library, its subfolder and the storage layout, all resolved from the remote library's
+   *  stored rules. Absent when the concrete destination is unusable or invisible to the asking
+   *  account; the server re-resolves it on the request and never trusts it. */
+  downloadTarget?: DownloadTargetSettings;
   /** Present on a verified media-server source: which provider and which attached library.
    *  Derived from the sealed reference, never from caller-supplied stream fields. */
   provider?: "jellyfin" | "emby";

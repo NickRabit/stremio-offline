@@ -6,12 +6,15 @@ import type { AddonDownloadSettings, LibraryView } from "./types";
 
 /** The destination section the title and series dialogs share. `value` null means the addon
  *  rule; anything else is a library, a folder below it and a layout the user picked. */
-export function SaveTargetFields({ kind, title, season, libraries, rule, value, onChange }: {
+export function SaveTargetFields({ kind, title, season, libraries, rule, ruleUnavailable = false, value, onChange }: {
   kind: SaveKind;
   title: string;
   season?: number;
   libraries: LibraryView[];
   rule: AddonDownloadSettings | undefined;
+  /** A native source whose server projected no concrete destination: the automatic option is
+   *  refused and the viewer has to pick a library themselves. */
+  ruleUnavailable?: boolean;
   value: SaveTarget | null;
   onChange: (value: SaveTarget | null) => void;
 }) {
@@ -43,9 +46,11 @@ export function SaveTargetFields({ kind, title, season, libraries, rule, value, 
 
   return <>
     <div className="bulk-strategy" role="radiogroup" aria-label={t("saveTarget.where")}>
-      <label className={!custom ? "selected" : ""}>
-        <input type="radio" name={`${name}-where`} checked={!custom} onChange={() => onChange(null)}/>
-        <span><strong>{t("saveTarget.rule")}</strong><small>{targetPreview(ruleValue, libraries, title, kind, season).join(" › ")}</small></span>
+      <label className={!custom && !ruleUnavailable ? "selected" : ""}>
+        <input type="radio" name={`${name}-where`} checked={!custom && !ruleUnavailable} disabled={ruleUnavailable} onChange={() => onChange(null)}/>
+        <span><strong>{t("saveTarget.rule")}</strong>{ruleUnavailable
+          ? <small>{t("saveTarget.ruleUnavailable")}</small>
+          : <small>{targetPreview(ruleValue, libraries, title, kind, season).join(" › ")}</small>}</span>
       </label>
       <label className={custom ? "selected" : ""}>
         <input type="radio" name={`${name}-where`} checked={custom} disabled={!offered.length} onChange={() => onChange(startCustom())}/>

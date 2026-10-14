@@ -155,8 +155,10 @@ fun Shell(
   // to, read once when the action is used, and the queue call itself. A failed read is thrown so
   // the screen can say so; both stay off the remote screens' own RemoteLibraryApi.
   val nativeDestinations: suspend () -> List<LibraryDto> = { api.libraries() }
-  val nativeQueue: suspend (String, String, MediaDto, String) -> Unit = { title, sourceId, media, libraryId ->
-    api.download(title, sourceId, media, DownloadTargetDto(libraryId))
+  // The caller resolves the target DTO: a library equal to the version's projected destination
+  // travels as no target, so the server resolves its own configured subfolder and layout.
+  val nativeQueue: suspend (String, String, MediaDto, DownloadTargetDto?) -> Unit = { title, sourceId, media, target ->
+    api.download(title, sourceId, media, target)
   }
   /** The source the player ended on, so the title underneath keeps naming what was watched. */
   var playedSourceId by remember { mutableStateOf<String?>(null) }

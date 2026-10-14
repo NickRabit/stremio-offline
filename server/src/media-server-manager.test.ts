@@ -2881,3 +2881,203 @@ test("a malformed or unusable copy destination is refused and nothing is written
     assert.equal("downloadLibraryId" in harness.store.remoteLibraries().find((entry) => entry.id === library.id)!, false);
   });
 });
+
+test("the stored storage rules are set, kept and reset without disturbing anything else", async () => {
+  await withHarness(async (harness) => {
+    const connection = await connect(harness);
+    seedLibrary(harness, "lib-1", [movie("m1")]);
+    const library = await harness.manager.attachLibrary(harness.admin, connection.id, { remoteId: "lib-1" });
+    const films = localLibrary("lib_a1b2c3d4", "movie");
+    const box = localLibrary("lib_c3d4e5f6", "mixed");
+    await harness.store.update((state) => { state.libraries = [films, box]; });
+    const generation = harness.store.mediaConnections()[0]!.generation;
+
+    const rules = {
+      movie: { subfolder: "Filmy/2024", layout: "flat" as const, libraryId: films.id },
+      series: { subfolder: "", layout: "structured" as const, libraryId: box.id },
+    };
+    const stored = await harness.manager.patchLibrary(harness.admin, library.id, { downloadSettings: rules });
+    assert.deepEqual(stored.downloadSettings, rules);
+    assert.equal(harness.store.mediaConnections()[0]!.generation, generation, "storage rules bump no generation");
+
+    // The rules survive a reload and an unrelated patch untouched.
+    const reopened = new Store(harness.dir, harness.dir);
+    await reopened.load();
+    assert.deepEqual(reopened.remoteLibraries()[0]!.downloadSettings, rules, "the rules survive a reload");
+    const renamed = await harness.manager.patchLibrary(harness.admin, library.id, { name: "Films" });
+    assert.deepEqual(renamed.downloadSettings, rules, "an unrelated patch keeps the rules");
+
+    // A `null` resets only the new rules; the legacy field, absent here, stays absent.
+    const cleared = await harness.manager.patchLibrary(harness.admin, library.id, { downloadSettings: null });
+    assert.equal("downloadSettings" in cleared, false, "null removes the rules");
+    assert.equal("downloadSettings" in harness.store.remoteLibraries()[0]!, false, "and stores no empty field");
+  });
+});
+
+test("editing one legacy mixed destination rule preserves the other unavailable slot", async () => {
+  await withHarness(async (harness) => {
+    const connection = await connect(harness);
+    harness.server.libraries.push({ id: "legacy-mixed", name: "Mixed", type: "mixed" });
+    const remote = await harness.manager.attachLibrary(harness.admin, connection.id, { remoteId: "legacy-mixed" });
+    const box = localLibrary("lib_c3d4e5f6", "mixed");
+    const films = localLibrary("lib_a1b2c3d4", "movie");
+    await harness.store.update((state) => { state.libraries = [box, films]; });
+    await harness.manager.patchLibrary(harness.admin, remote.id, { downloadLibraryId: box.id });
+    await harness.store.update((state) => { state.libraries = [films]; });
+    const changed = await harness.manager.patchLibrary(harness.admin, remote.id, {
+      downloadLibraryId: null,
+      downloadSettings: { movie: { libraryId: films.id }, series: { libraryId: box.id } },
+    });
+    assert.equal(changed.downloadSettings!.movie.libraryId, films.id);
+    assert.equal(changed.downloadSettings!.series.libraryId, box.id);
+  });
+});
+
+test("storage rules are validated where they change, and an unavailable rule is preserved", async () => {
+  await withHarness(async (harness) => {
+    const connection = await connect(harness);
+    harness.server.libraries.push({ id: "music", name: "Music", type: "mixed" });
+    seedLibrary(harness, "lib-1", [movie("m1")]);
+    const library = await harness.manager.attachLibrary(harness.admin, connection.id, { remoteId: "lib-1" });
+    const mixed = await harness.manager.attachLibrary(harness.admin, connection.id, { remoteId: "music" });
+    const films = localLibrary("lib_a1b2c3d4", "movie");
+    const shows = localLibrary("lib_b2c3d4e5", "series");
+    const box = localLibrary("lib_c3d4e5f6", "mixed");
+    const off = localLibrary("lib_d4e5f6a7", "movie", { enabled: false });
+    await harness.store.update((state) => { state.libraries = [films, shows, box, off]; });
+
+    // Both kind overrides are accepted on a mixed remote library: a movie slot may name a movie
+    // library and a series slot a series library.
+    const both = await harness.manager.patchLibrary(harness.admin, mixed.id, {
+      downloadSettings: {
+        movie: { subfolder: "F", layout: "flat", libraryId: films.id },
+        series: { subfolder: "S", layout: "structured", libraryId: shows.id },
+      },
+    });
+    assert.equal(both.downloadSettings!.movie.libraryId, films.id);
+    assert.equal(both.downloadSettings!.series.libraryId, shows.id);
+
+    const before = harness.store.remoteLibraries().find((entry) => entry.id === library.id)!;
+    for (const value of [
+      { movie: { subfolder: "x", libraryId: `rlib_${"a".repeat(32)}` } },
+      { movie: { layout: "guess" } },
+      { movie: { subfolder: 7 } },
+      { movie: { libraryId: "not-a-handle" } },
+      { movie: { extra: true } },
+      { movie: "flat" },
+      [],
+      { movie: { subfolder: "/etc" } },
+    ]) {
+      await assert.rejects(
+        harness.manager.patchLibrary(harness.admin, library.id, { downloadSettings: value as never }),
+        { code: "invalid-input" },
+        `the rules ${JSON.stringify(value)} are refused`,
+      );
+    }
+    // A slot that changed to a library that cannot be written to is refused as well.
+    await assert.rejects(harness.manager.patchLibrary(harness.admin, library.id, { downloadSettings: { movie: { libraryId: off.id } } as never }), { code: "invalid-input" });
+    assert.deepEqual(harness.store.remoteLibraries().find((entry) => entry.id === library.id), before, "a refused patch writes nothing");
+
+    // Once stored, a slot the patch echoes back unchanged is not re-validated: a library switched
+    // off afterwards is preserved, so an unrelated edit never silently drops somebody's rule.
+    const withRules = await harness.manager.patchLibrary(harness.admin, library.id, { downloadSettings: { movie: { libraryId: films.id } } });
+    await harness.store.update((state) => { state.libraries = [{ ...films, enabled: false }, shows, box, off]; });
+    const renamed = await harness.manager.patchLibrary(harness.admin, library.id, { name: "Renamed", downloadSettings: withRules.downloadSettings });
+    assert.equal(renamed.downloadSettings!.movie.libraryId, films.id, "an unchanged, now-unavailable rule is preserved");
+  });
+});
+
+test("a legacy handle and the new rules cannot change at once, and the atomic save is accepted", async () => {
+  await withHarness(async (harness) => {
+    const connection = await connect(harness);
+    seedLibrary(harness, "lib-1", [movie("m1")]);
+    const library = await harness.manager.attachLibrary(harness.admin, connection.id, { remoteId: "lib-1" });
+    const films = localLibrary("lib_a1b2c3d4", "movie");
+    const box = localLibrary("lib_c3d4e5f6", "mixed");
+    await harness.store.update((state) => { state.libraries = [films, box]; });
+
+    // Both a non-null legacy handle and non-null rules at once is ambiguous and refused.
+    await assert.rejects(
+      harness.manager.patchLibrary(harness.admin, library.id, { downloadLibraryId: films.id, downloadSettings: { movie: { libraryId: box.id } } as never }),
+      { code: "invalid-input" },
+    );
+
+    await harness.manager.patchLibrary(harness.admin, library.id, { downloadLibraryId: films.id });
+    // The new UI's atomic save: the rules land and the legacy handle is cleared in one patch.
+    const atomic = await harness.manager.patchLibrary(harness.admin, library.id, {
+      downloadSettings: { movie: { subfolder: "Filmy", libraryId: box.id } },
+      downloadLibraryId: null,
+    });
+    assert.equal("downloadLibraryId" in atomic, false, "the legacy handle is cleared with the rules");
+    assert.equal(atomic.downloadSettings!.movie.libraryId, box.id);
+    // An old client may still change the legacy field on its own, with no new rules to confuse it.
+    const legacy = await harness.manager.patchLibrary(harness.admin, library.id, { downloadLibraryId: films.id });
+    assert.equal(legacy.downloadLibraryId, films.id);
+  });
+});
+
+test("a one-kind storage patch leaves the other slot, however unavailable, exactly as it stands", async () => {
+  await withHarness(async (harness) => {
+    const connection = await connect(harness);
+    harness.server.libraries.push({ id: "mixed", name: "Mixed", type: "mixed" });
+    const remote = await harness.manager.attachLibrary(harness.admin, connection.id, { remoteId: "mixed" });
+    const films = localLibrary("lib_a1b2c3d4", "movie");
+    const shows = localLibrary("lib_b2c3d4e5", "series");
+    const box = localLibrary("lib_c3d4e5f6", "mixed");
+    await harness.store.update((state) => { state.libraries = [films, shows, box]; });
+    await harness.manager.patchLibrary(harness.admin, remote.id, {
+      downloadSettings: {
+        movie: { subfolder: "Filmy", layout: "flat", libraryId: films.id },
+        series: { subfolder: "Serialy", layout: "structured", libraryId: shows.id },
+      },
+    });
+
+    // The series destination goes away, so re-validating it would refuse the whole patch.
+    await harness.store.update((state) => { state.libraries = [films, box]; });
+    const movieOnly = await harness.manager.patchLibrary(harness.admin, remote.id, { downloadSettings: { movie: { subfolder: "Nove", libraryId: box.id } } });
+    assert.deepEqual(movieOnly.downloadSettings!.movie, { subfolder: "Nove", layout: "structured", libraryId: box.id }, "the named movie slot is a complete replacement");
+    assert.deepEqual(movieOnly.downloadSettings!.series, { subfolder: "Serialy", layout: "structured", libraryId: shows.id }, "the untouched series slot keeps its unavailable target");
+
+    // The symmetric case: a series-only patch leaves the movie slot alone.
+    await harness.store.update((state) => { state.libraries = [shows, box]; });
+    const seriesOnly = await harness.manager.patchLibrary(harness.admin, remote.id, { downloadSettings: { series: { libraryId: box.id } } });
+    assert.deepEqual(seriesOnly.downloadSettings!.series, { subfolder: "", layout: "structured", libraryId: box.id }, "the named series slot is a complete replacement");
+    assert.deepEqual(seriesOnly.downloadSettings!.movie, { subfolder: "Nove", layout: "structured", libraryId: box.id }, "the untouched movie slot is preserved");
+  });
+});
+
+test("an empty storage payload changes nothing, stored or legacy", async () => {
+  await withHarness(async (harness) => {
+    const connection = await connect(harness);
+    harness.server.libraries.push({ id: "mixed", name: "Mixed", type: "mixed" });
+    const remote = await harness.manager.attachLibrary(harness.admin, connection.id, { remoteId: "mixed" });
+    const box = localLibrary("lib_c3d4e5f6", "mixed");
+    await harness.store.update((state) => { state.libraries = [box]; });
+
+    // A library with stored rules keeps them.
+    const seeded = await harness.manager.patchLibrary(harness.admin, remote.id, { downloadSettings: { movie: { subfolder: "Filmy", libraryId: box.id } } });
+    const empty = await harness.manager.patchLibrary(harness.admin, remote.id, { downloadSettings: {} });
+    assert.deepEqual(empty.downloadSettings, seeded.downloadSettings, "an empty object leaves the stored rules alone");
+
+    // A reset library with only the legacy handle keeps it: the new seed is not materialised.
+    await harness.manager.patchLibrary(harness.admin, remote.id, { downloadSettings: null });
+    await harness.manager.patchLibrary(harness.admin, remote.id, { downloadLibraryId: box.id });
+    const legacy = await harness.manager.patchLibrary(harness.admin, remote.id, { downloadSettings: {} });
+    assert.equal("downloadSettings" in legacy, false, "an empty object does not materialise the legacy seed");
+    assert.equal(legacy.downloadLibraryId, box.id, "and keeps the legacy handle");
+  });
+});
+
+test("a named kind is a complete slot, with omitted fields defaulted", async () => {
+  await withHarness(async (harness) => {
+    const connection = await connect(harness);
+    seedLibrary(harness, "lib-1", [movie("m1")]);
+    const library = await harness.manager.attachLibrary(harness.admin, connection.id, { remoteId: "lib-1" });
+    const box = localLibrary("lib_c3d4e5f6", "mixed");
+    await harness.store.update((state) => { state.libraries = [box]; });
+    await harness.manager.patchLibrary(harness.admin, library.id, { downloadSettings: { movie: { subfolder: "Old", layout: "flat", libraryId: box.id } } });
+    const replaced = await harness.manager.patchLibrary(harness.admin, library.id, { downloadSettings: { movie: { libraryId: box.id } } });
+    assert.deepEqual(replaced.downloadSettings!.movie, { subfolder: "", layout: "structured", libraryId: box.id }, "a named slot drops fields the payload omits");
+    assert.deepEqual(replaced.downloadSettings!.series, { subfolder: "", layout: "structured" }, "and the untouched series slot stays the default");
+  });
+});

@@ -8,14 +8,13 @@ import { bytes } from "./settings-ui";
 import { catalogueRef } from "./title-enrichment";
 import type { LibraryView, MediaServerProvider, RemoteItem, Stream } from "./types";
 
-/** The attached library a copy lands through: its id scopes the version read, the provider and
- *  name only label the chooser, and its own configured destination is the fallback when the
- *  sources themselves carry none. */
+/** The attached library a copy lands through: its id scopes the version read and the provider and
+ *  name only label the chooser. Its own configured destination is never a fallback -- the source
+ *  projection the server sends is the only preselection. */
 export interface NativeSaveLibrary {
   id: string;
   provider: MediaServerProvider;
   name?: string;
-  downloadLibraryId?: string;
 }
 
 const sizeLabel = (stream: Stream) => {
@@ -109,8 +108,10 @@ function NativeLibrarySaveDialogContent({ library, item, series, knownSources, i
   const kind: SaveKind = item.type === "movie" ? "movie" : "series";
   const offered = offeredLibraries(libraries, kind);
   // The automatic option is preselected to the destination the server projected for this exact
-  // source, or the kind's own default when it projected none. A manual pick still replaces it.
-  const rule = sourceTargetRule(selected) ?? sourceTargetRule({ downloadLibraryId: library.downloadLibraryId });
+  // source. When it projected none the automatic option is refused -- never filled in from the
+  // remote library's own configured handle, which may be hidden or unavailable -- and the viewer
+  // has to pick a library. A manual pick still replaces the projection.
+  const rule = sourceTargetRule(selected);
 
   // Identical labels are told apart by the localized version number, never by an opaque id.
   const optionLabels = (() => {
@@ -158,7 +159,7 @@ function NativeLibrarySaveDialogContent({ library, item, series, knownSources, i
   return <SaveTargetDialog
     label={title} kind={kind} title={item.type === "episode" ? loadedSeries?.name ?? item.name : item.name}
     season={item.type === "episode" ? item.season : undefined}
-    libraries={libraries} rule={rule}
+    libraries={libraries} rule={rule} ruleUnavailable={rule === undefined}
     submitDisabled={seriesPending || loading || Boolean(error) || !offered.length || !selected || selected.capabilities?.downloadToLibrary !== true}
     onClose={onClose} onSubmit={submit}>
     {loading && <p className="identify-hint" role="status">{t("common.loading")}</p>}

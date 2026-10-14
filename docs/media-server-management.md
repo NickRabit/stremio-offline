@@ -34,7 +34,7 @@ the canonical lower-case path without a trailing slash; variants fail closed.
 | `POST /api/media-servers/:id/reauthenticate` | Signs in again with `{ username, password }`; requires the same verified server/account identity. |
 | `GET /api/media-servers/:id/libraries` | `{ items: ProviderLibrary[] }` — the libraries the stored account can currently see. |
 | `POST /api/media-servers/:id/libraries` | Attaches one remote library from `{ remoteId, name?, order?, showOnHome?, showInContinueWatching?, showInFavorites?, browseMode?, mosaic? }`; the remote name and type come from verified discovery. New libraries are granted to nobody. |
-| `PATCH /api/remote-libraries/:id` | Local configuration only: `name`, `enabled`, `order`, `showOnHome`, `showInContinueWatching`, `showInFavorites`, `browseMode`, `mosaic`, `allowedUsers`, `downloadLibraryId`. `root`, `writeArtwork`, `type`, `remoteId`, `connectionId` and any download flag are refused. |
+| `PATCH /api/remote-libraries/:id` | Local configuration only: `name`, `enabled`, `order`, `showOnHome`, `showInContinueWatching`, `showInFavorites`, `browseMode`, `mosaic`, `allowedUsers`, `downloadLibraryId`, `downloadSettings`. `root`, `writeArtwork`, `type`, `remoteId`, `connectionId` and any download flag are refused. |
 | `DELETE /api/remote-libraries/:id` | Removes the local attachment. Its stored history is kept invisibly for 30 days; `?forget=true` deletes it at once. The remote server is never mutated. |
 | `GET /api/media-servers/export` | The metadata-only configuration export (`version`, connections, libraries). No secret references, grants, generations or timestamps. |
 | `POST /api/media-servers/import` | Additively restores an export: fresh handles, connections and libraries land **disabled** with no grants and no secrets, and a duplicate remote account refuses the whole batch. Its own body parser allows up to 8 MiB, above the ordinary 256 KiB. |
@@ -509,12 +509,34 @@ account must have access to the remote library and permission to write to the
 local destination. Device saves and bulk season or folder copies remain unavailable
 for native sources. No remote watch history, metadata or files are modified.
 
-An administrator can set **Save copies to** in the attached library's settings.
+An administrator can configure the destination library, a relative subfolder and
+the storage layout in the attached library's settings, using the same rule editor
+as addons. Movie and series libraries show their applicable rule; mixed libraries
+show both. The editor previews the resulting path. Structured storage creates a
+title folder for a movie or show and season folders for episodes; flat storage
+writes the file directly below the selected subfolder. A configured subfolder
+may be created when the copy starts, whereas a manually browsed folder must exist.
 With no override, movie and series libraries use their respective local defaults;
 other libraries prefer an enabled writable general-purpose library. The destination
 picker can override this rule for a single copy. A configured destination that is
 removed or no longer accessible is refused rather than silently replaced. Changing
 the setting affects new copies, while queued copies retain their chosen destination.
+
+Which slot an automatic copy of a mixed library follows is the kind sealed from the
+verified item when its sources were listed, never the request body; the download
+admission reads that proved kind. An older sealed source that carries no such kind
+keeps the previous body-based fallback.
+
+`PATCH /api/remote-libraries/:id` treats `downloadSettings` as a per-kind merge, not an
+atomic replacement. An omitted `downloadSettings` leaves the stored rules alone. A
+supplied object updates only the kind slots it names — `movie` and/or `series` — and an
+absent kind keeps its current new rule, or its effective legacy seed, including an
+unavailable handle that is not re-validated. Each kind the patch does name is a complete
+slot: a missing `subfolder` and `layout` fall back to the empty subfolder and the
+structured layout, and a changed handle is proved against the libraries the write lands
+on. An empty object is a storage no-op, and `null` resets the new rules as before. The
+legacy `downloadLibraryId` seed keeps its existing precedence for a library that has no
+new rules.
 
 Copies use one original-file transfer per upstream server, without segmentation.
 Partial files are kept when access is withdrawn; the copy pauses instead of repeatedly

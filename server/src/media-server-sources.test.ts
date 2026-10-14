@@ -17,6 +17,7 @@ import { MediaServerSources } from "./media-server-sources.js";
 import type { MediaServerTransport } from "./media-server-security.js";
 import { MediaServerError } from "./media-server-types.js";
 import { Store } from "./store.js";
+import type { AddonDownloadSettings, DownloadTargetSettings } from "./types.js";
 import { emptyUserData, type UserRecord } from "./users.js";
 
 const ADA = "usr_00000001";
@@ -249,6 +250,75 @@ const configureCopy = async (harness: Harness, downloadLibraryId: string) => {
       library.id === harness.libraryId ? { ...library, downloadLibraryId } : library);
   });
 };
+
+/** Store the two per-kind storage rules on the attached library, as the editor saves them. */
+const configureRules = async (harness: Harness, movie: Partial<DownloadTargetSettings>, series: Partial<DownloadTargetSettings>) => {
+  const rules: AddonDownloadSettings = {
+    movie: { subfolder: "", layout: "structured", ...movie },
+    series: { subfolder: "", layout: "structured", ...series },
+  };
+  await harness.store.update((state) => {
+    state.remoteLibraries = (state.remoteLibraries ?? []).map((library) =>
+      library.id === harness.libraryId ? { ...library, downloadSettings: rules } : library);
+  });
+};
+
+test("a stored rule projects its whole target, layout and subfolder, and costs no provider read", async () => {
+  await withHarness(async (harness) => {
+    const films = localLibrary("lib_a1b2c3d4", "movie");
+    await seedLocal(harness, [films]);
+    await configureRules(harness, { subfolder: "Filmy/2024", layout: "flat", libraryId: films.id }, { libraryId: films.id });
+
+    const before = harness.server.originalCalls;
+    const listed = await harness.sources.list(harness.adminAuthority, harness.owner, harness.libraryId, "item-1");
+    for (const source of listed) {
+      assert.deepEqual(source.downloadTarget, { subfolder: "Filmy/2024", layout: "flat", libraryId: films.id });
+      assert.equal(source.downloadLibraryId, films.id, "the library handle stays on the source for older clients");
+    }
+    assert.equal(harness.server.originalCalls, before, "the rule projection adds no provider read");
+  }, { contentDownloading: true });
+});
+
+test("a mixed library's rule follows the item's own kind", async () => {
+  await withHarness(async (harness) => {
+    const films = localLibrary("lib_a1b2c3d4", "movie", { visibleTo: [BOB] });
+    const shows = localLibrary("lib_b2c3d4e5", "series", { visibleTo: [BOB] });
+    await seedLocal(harness, [films, shows]);
+    await harness.store.update((state) => {
+      state.remoteLibraries = (state.remoteLibraries ?? []).map((entry) => entry.id === harness.libraryId
+        ? { ...entry, type: "mixed", downloadSettings: { movie: { subfolder: "Filmy", layout: "flat", libraryId: films.id }, series: { subfolder: "Serialy", layout: "structured", libraryId: shows.id } } }
+        : entry);
+    });
+
+    // item-1 is a movie, so the movie slot is projected.
+    const listed = await harness.sources.list(harness.bobAuthority, harness.bobOwner, harness.libraryId, "item-1");
+    for (const source of listed) assert.deepEqual(source.downloadTarget, { subfolder: "Filmy", layout: "flat", libraryId: films.id });
+
+    // The same library's rule for an episode follows the series slot.
+    harness.server.detailOf["item-1"] = { id: "item-1", name: "Episode One", type: "episode", providerIds: {} };
+    const episodes = await harness.sources.list(harness.bobAuthority, harness.bobOwner, harness.libraryId, "item-1");
+    for (const source of episodes) assert.deepEqual(source.downloadTarget, { subfolder: "Serialy", layout: "structured", libraryId: shows.id });
+  }, { contentDownloading: true });
+});
+
+test("a stored rule whose library the acting account cannot see is never projected", async () => {
+  await withHarness(async (harness) => {
+    const hidden = localLibrary("lib_d4e5f6a7", "movie", { visibleTo: [] });
+    const mine = localLibrary("lib_e5f6a7b8", "movie", { visibleTo: [BOB] });
+    await seedLocal(harness, [hidden, mine]);
+    await configureRules(harness, { subfolder: "Filmy", layout: "flat", libraryId: hidden.id }, { libraryId: hidden.id });
+
+    const listed = await harness.sources.list(harness.bobAuthority, harness.bobOwner, harness.libraryId, "item-1");
+    for (const source of listed) {
+      assert.equal(source.capabilities?.downloadToLibrary, true, "bob may copy");
+      assert.equal(source.downloadTarget, undefined, "a destination he cannot see is never exposed");
+    }
+
+    await configureRules(harness, { subfolder: "Filmy", layout: "flat", libraryId: mine.id }, { libraryId: mine.id });
+    const visible = await harness.sources.list(harness.bobAuthority, harness.bobOwner, harness.libraryId, "item-1");
+    for (const source of visible) assert.deepEqual(source.downloadTarget, { subfolder: "Filmy", layout: "flat", libraryId: mine.id });
+  }, { contentDownloading: true });
+});
 
 test("a native original carries the copy destination the server resolved for it", async () => {
   await withHarness(async (harness) => {
@@ -570,4 +640,26 @@ test("a mixed library's automatic kind fallback is also projected", async () => 
     const listed = await harness.sources.list(harness.adminAuthority, harness.owner, harness.libraryId, "item-1");
     for (const source of listed) assert.equal(source.downloadLibraryId, films.id);
   }, { contentDownloading: true });
+});
+
+test("a listed source seals the verified item's own kind, on originals and subtitles alike", async () => {
+  await withHarness(async (harness) => {
+    harness.server.versionsOf["item-1"] = [{ id: "v1", name: "1080p", externalSubtitles: [{ index: 2 }] }];
+    const before = harness.server.originalCalls;
+
+    const movies = await harness.sources.list(harness.adminAuthority, harness.owner, harness.libraryId, "item-1");
+    for (const source of movies) assert.equal(openedRef(harness, source.sourceId)?.copyKind, "movie", "a movie seals the movie kind");
+    const subtitleStream = harness.resources.get(movies[0]!.subtitles[0]!.subtitleId, harness.owner.sid, "subtitle").stream;
+    assert.equal(openRemoteContent(subtitleStream.url)?.copyKind, "movie", "a subtitle carries the original's kind");
+    assert.equal(openRemoteContent(subtitleStream.url)?.subtitleIndex, 2, "and keeps its own index");
+    assert.equal(JSON.stringify(movies).includes("copyKind"), false, "no public stream exposes the sealed kind");
+    assert.equal(JSON.stringify(movies).includes("media-server:"), false, "and no sealed address leaks");
+
+    harness.server.detailOf["item-1"] = { id: "item-1", name: "Episode One", type: "episode", providerIds: {} };
+    const episodes = await harness.sources.list(harness.adminAuthority, harness.owner, harness.libraryId, "item-1");
+    assert.ok(episodes.length > 0);
+    for (const source of episodes) assert.equal(openedRef(harness, source.sourceId)?.copyKind, "series", "an episode seals the series kind");
+
+    assert.equal(harness.server.originalCalls, before, "sealing the kind costs no provider read");
+  });
 });

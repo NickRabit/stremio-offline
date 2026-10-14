@@ -71,12 +71,11 @@ type SaveRequest = {
 };
 type TileRef = { current: HTMLElement | null };
 
-/** The attached library a native copy lands through, with its own configured destination kept
- *  for the case where the sources themselves arrive without one. */
+/** The attached library a native copy lands through: its id scopes the version read, the provider
+ *  and name label the chooser. The source projection is the copy's only preselected destination. */
 const saveLibrary = (library: RemoteLibrary): NativeSaveLibrary => ({
   id: library.id, provider: library.provider,
   ...(library.name ? { name: library.name } : {}),
-  ...(library.downloadLibraryId ? { downloadLibraryId: library.downloadLibraryId } : {}),
 });
 /** One ancestor listing kept while its children are open, so a jump back needs no new page. */
 type ListingSnapshot = {

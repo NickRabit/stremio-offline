@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { LibraryRecord } from "./libraries.js";
-import { defaultRemoteCopyLibraryId, takesRemoteCopy } from "./media-server-download.js";
+import { defaultRemoteCopyLibraryId, defaultRemoteCopyTarget, takesRemoteCopy, takesRemoteTarget } from "./media-server-download.js";
 import type { RemoteLibraryRecord } from "./media-server-types.js";
+import type { AddonDownloadSettings } from "./types.js";
 
 const library = (id: string, type: "movie" | "series" | "mixed", over: Partial<LibraryRecord> = {}): LibraryRecord => ({
   id, name: id, type, root: `/downloads/${id}`, enabled: true, order: 0,
@@ -75,4 +76,59 @@ test("a typed remote library keeps its own default even without trustworthy medi
   const settings = { defaultMovieLibrary: films.id, defaultSeriesLibrary: shows.id };
   assert.equal(defaultRemoteCopyLibraryId(remote("series"), [films, shows], settings, "movie"), shows.id);
   assert.equal(defaultRemoteCopyLibraryId(remote("movie"), [films, shows], settings, "series"), films.id);
+});
+
+const rules = (movie: Partial<AddonDownloadSettings["movie"]> = {}, series: Partial<AddonDownloadSettings["series"]> = {}): AddonDownloadSettings => ({
+  movie: { subfolder: "", layout: "structured", ...movie },
+  series: { subfolder: "", layout: "structured", ...series },
+});
+
+test("a stored rule names the subfolder and layout, and its handle wins verbatim", () => {
+  const films = library("lib_a1b2c3d4", "movie");
+  const settings = { defaultMovieLibrary: films.id };
+  // The rule's own library is handed back as it stands, exactly like a legacy handle.
+  assert.deepEqual(
+    defaultRemoteCopyTarget({ type: "movie", downloadSettings: rules({ subfolder: "Filmy", layout: "flat", libraryId: "lib_00000000" }) }, [films], settings, "movie"),
+    { subfolder: "Filmy", layout: "flat", libraryId: "lib_00000000" },
+  );
+  // Without a rule handle the automatic destination follows the kind, but the folder and layout
+  // the user chose still travel with it.
+  assert.deepEqual(
+    defaultRemoteCopyTarget({ type: "movie", downloadSettings: rules({ subfolder: "Filmy", layout: "flat" }) }, [films], settings, "movie"),
+    { subfolder: "Filmy", layout: "flat", libraryId: films.id },
+  );
+  // The legacy handle applies only when the library carries no rules at all.
+  assert.deepEqual(
+    defaultRemoteCopyTarget({ type: "movie", downloadLibraryId: "lib_b2c3d4e5", downloadSettings: rules() }, [], settings, "movie"),
+    { subfolder: "", layout: "structured" },
+    "rules present but with no handle never fall back to the legacy handle",
+  );
+  assert.deepEqual(
+    defaultRemoteCopyTarget(remote("movie", { downloadLibraryId: "lib_b2c3d4e5" }), [], settings, "movie"),
+    { subfolder: "", layout: "structured", libraryId: "lib_b2c3d4e5" },
+  );
+});
+
+test("a mixed library's rule follows the item's own kind, both layouts included", () => {
+  const stored = rules({ subfolder: "Filmy", layout: "flat", libraryId: "lib_a1b2c3d4" }, { subfolder: "Serialy", layout: "structured", libraryId: "lib_b2c3d4e5" });
+  assert.deepEqual(defaultRemoteCopyTarget({ type: "mixed", downloadSettings: stored }, [], {}, "movie"), { subfolder: "Filmy", layout: "flat", libraryId: "lib_a1b2c3d4" });
+  assert.deepEqual(defaultRemoteCopyTarget({ type: "mixed", downloadSettings: stored }, [], {}, "series"), { subfolder: "Serialy", layout: "structured", libraryId: "lib_b2c3d4e5" });
+  // A typed library ignores the other kind's slot whatever the item's kind claims.
+  assert.deepEqual(defaultRemoteCopyTarget({ type: "movie", downloadSettings: stored }, [], {}, "series"), { subfolder: "Filmy", layout: "flat", libraryId: "lib_a1b2c3d4" });
+});
+
+test("a stored rule fits the content's kind; a legacy handle keeps the remote library's own type", () => {
+  const films = library("lib_a1b2c3d4", "movie");
+  const box = library("lib_b2c3d4e5", "mixed");
+  const shows = library("lib_c3d4e5f6", "series");
+  const stored = { type: "mixed" as const, downloadSettings: rules() };
+  assert.equal(takesRemoteTarget(stored, "movie", films), true, "a movie slot of a mixed library may land in a movie library");
+  assert.equal(takesRemoteTarget(stored, "movie", box), true);
+  assert.equal(takesRemoteTarget(stored, "movie", shows), false);
+  // Without rules the remote library's own type decides, exactly as before.
+  assert.equal(takesRemoteTarget({ type: "mixed" }, "movie", box), true);
+  assert.equal(takesRemoteTarget({ type: "mixed" }, "movie", films), true, "a mixed library with neither rules nor a handle follows the item's kind");
+  assert.equal(takesRemoteTarget({ type: "mixed", downloadLibraryId: films.id }, "movie", films), false, "a legacy handle keeps the mixed-only rule");
+  assert.equal(takesRemoteTarget({ type: "mixed", downloadLibraryId: box.id }, "movie", box), true);
+  assert.equal(takesRemoteTarget({ type: "movie" }, "movie", films), true);
 });

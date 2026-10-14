@@ -79,6 +79,14 @@ const selectOption = async (select: HTMLSelectElement, value: string) => {
   });
   await flush();
 };
+/** React tracks a text input's own value, so it has to be set through the native setter. */
+const setInput = async (input: HTMLInputElement, value: string) => {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await flush();
+};
 const byText = (selector: string, text: string) =>
   [...document.querySelectorAll<HTMLElement>(selector)].find((node) => node.textContent?.includes(text));
 
@@ -95,6 +103,14 @@ const rowNames = () =>
   [...host.querySelectorAll(".media-server-attached .library-admin-title strong")].map((node) => node.textContent);
 const orderButton = (name: string, direction: "up" | "down") =>
   host.querySelector<HTMLButtonElement>(`button[aria-label="Move ${name} ${direction}"]`);
+
+/** The shared storage-rule editor draws one `.download-rule` per applicable kind; a typed remote
+ *  library shows its one kind, a mixed one Films then Series. */
+const ruleBlock = (dialog: Element, index = 0) => dialog.querySelectorAll<HTMLElement>(".download-rule")[index]!;
+const ruleLibrary = (dialog: Element, index = 0) => ruleBlock(dialog, index).querySelectorAll<HTMLSelectElement>("select")[0]!;
+const ruleSubfolder = (dialog: Element, index = 0) => ruleBlock(dialog, index).querySelector<HTMLInputElement>("input")!;
+const ruleLayout = (dialog: Element, index = 0) => ruleBlock(dialog, index).querySelectorAll<HTMLSelectElement>("select")[1]!;
+const saveButton = () => byText(".dialog-foot button", "Save")!;
 
 describe("RemoteLibraryDialog", () => {
   it("saves the shared display settings and the browse mode", async () => {
@@ -130,7 +146,7 @@ describe("RemoteLibraryDialog", () => {
     expect(dialog.querySelector('button[aria-label^="Move "]')).toBeNull();
   });
 
-  it("offers only the writable local libraries of a fitting kind and saves the copy destination", async () => {
+  it("shows one rule section per applicable kind with only the fitting writable libraries", async () => {
     libraryRows = [adminLibrary({ type: "movie" })];
     const dialog = await render([
       localLibrary({ id: "lib_a", name: "Films" }),
@@ -138,58 +154,94 @@ describe("RemoteLibraryDialog", () => {
       localLibrary({ id: "lib_c", name: "Box", type: "mixed" }),
       localLibrary({ id: "lib_d", name: "Locked", writable: false, readOnly: true }),
     ]);
-    const select = dialog.querySelector<HTMLSelectElement>('select[aria-label="Save copies to"]')!;
-    expect([...select.options].map((option) => option.textContent)).toEqual([
-      "Default for this library type", "Films", "Box",
-    ]);
+    expect(dialog.querySelectorAll(".download-rule")).toHaveLength(1);
+    const select = ruleLibrary(dialog);
+    expect([...select.options].map((option) => option.textContent)).toEqual(["Default · Films", "Films", "Box"]);
     expect(select.value).toBe("");
-    await selectOption(select, "lib_c");
-    await click(byText(".dialog-foot button", "Save")!);
-    expect(patches[0]!.body).toMatchObject({ downloadLibraryId: "lib_c" });
-  });
-
-  it("clears the override with the default option and shows the hint", async () => {
-    libraryRows = [adminLibrary({ type: "movie", downloadLibraryId: "lib_a" })];
-    const dialog = await render([localLibrary({ id: "lib_a", name: "Films" })]);
     expect(dialog.textContent).toContain("Movies use the default movie library, series the default series library, and other content a general-purpose library.");
-    const select = dialog.querySelector<HTMLSelectElement>('select[aria-label="Save copies to"]')!;
-    expect(select.value).toBe("lib_a");
-    await selectOption(select, "");
-    await click(byText(".dialog-foot button", "Save")!);
-    expect(patches[0]!.body).toMatchObject({ downloadLibraryId: null });
+
   });
 
-  it("keeps the choice and the dialog when the change is refused", async () => {
+  it("draws both kind sections for a mixed library, each defaulting to the mixed library", async () => {
+    libraryRows = [adminLibrary({ type: "mixed" })];
+    const dialog = await render([
+      localLibrary({ id: "lib_a", name: "Films" }),
+      localLibrary({ id: "lib_b", name: "Shows", type: "series" }),
+      localLibrary({ id: "lib_c", name: "Box", type: "mixed" }),
+    ]);
+    expect(dialog.querySelectorAll(".download-rule")).toHaveLength(2);
+    expect([...ruleLibrary(dialog, 0).options].map((option) => option.textContent)).toEqual(["Default · Box", "Films", "Box"]);
+    expect([...ruleLibrary(dialog, 1).options].map((option) => option.textContent)).toEqual(["Default · Box", "Shows", "Box"]);
+  });
+
+  it("saves both rule slots and clears the legacy handle in one patch", async () => {
+    libraryRows = [adminLibrary({ type: "mixed", downloadLibraryId: "lib_a" })];
+    const dialog = await render([
+      localLibrary({ id: "lib_a", name: "Films" }),
+      localLibrary({ id: "lib_c", name: "Box", type: "mixed" }),
+    ]);
+    // The legacy handle seeds both slots, so nothing is dirty merely by opening.
+    expect(ruleLibrary(dialog, 0).value).toBe("lib_a");
+    expect(ruleLibrary(dialog, 1).value).toBe("lib_a");
+    expect(saveButton()).toHaveProperty("disabled", true);
+
+    await selectOption(ruleLibrary(dialog, 0), "lib_c");
+    expect(saveButton()).toHaveProperty("disabled", false);
+    await click(saveButton());
+    expect(patches[0]!.body).toMatchObject({
+      downloadSettings: { movie: { libraryId: "lib_c", subfolder: "", layout: "structured" }, series: { libraryId: "lib_a", subfolder: "", layout: "structured" } },
+      downloadLibraryId: null,
+    });
+  });
+
+  it("preserves the stored rules through an unrelated edit, without sending a storage patch", async () => {
+    libraryRows = [adminLibrary({ type: "movie", downloadLibraryId: "lib_gone" })];
+    const dialog = await render([localLibrary({ id: "lib_a", name: "Films" })]);
+    await setInput(dialog.querySelector<HTMLInputElement>('input[aria-label="Name"]')!, "Renamed");
+    await click(saveButton());
+    expect(patches).toHaveLength(1);
+    expect(patches[0]!.body.name).toBe("Renamed");
+    expect("downloadSettings" in patches[0]!.body).toBe(false);
+    expect("downloadLibraryId" in patches[0]!.body).toBe(false);
+  });
+
+  it("keeps the choice and exports the rules when the change is refused", async () => {
     libraryRows = [adminLibrary({ type: "movie" })];
     refusePatch = () => json({ error: "The media-server copy destination is malformed." }, 400);
     const dialog = await render([localLibrary({ id: "lib_a", name: "Films" })]);
-    const select = dialog.querySelector<HTMLSelectElement>('select[aria-label="Save copies to"]')!;
-    await selectOption(select, "lib_a");
-    await click(byText(".dialog-foot button", "Save")!);
+    await selectOption(ruleLibrary(dialog), "lib_a");
+    await click(saveButton());
     expect(document.querySelector(".media-server-library-card")).not.toBeNull();
     expect(dialog.textContent).toContain("The media-server copy destination is malformed.");
-    expect(select.value).toBe("lib_a");
+    expect(ruleLibrary(dialog).value).toBe("lib_a");
   });
 
-  it("keeps a stored destination it can no longer offer visible and selected", async () => {
+  it("keeps an unavailable stored rule visible and selected, including a deleted library", async () => {
     libraryRows = [adminLibrary({ type: "movie", downloadLibraryId: "lib_gone" })];
     const dialog = await render([localLibrary({ id: "lib_a", name: "Films" })]);
-    const select = dialog.querySelector<HTMLSelectElement>('select[aria-label="Save copies to"]')!;
+    const select = ruleLibrary(dialog);
     expect(select.value).toBe("lib_gone");
-    const stored = [...select.options].find((option) => option.value === "lib_gone")!;
-    expect(stored.disabled).toBe(true);
-    expect(stored.textContent).toBe("lib_gone · Unavailable");
-    expect(byText(".dialog-foot button", "Save")).toHaveProperty("disabled", true);
+    expect([...select.options].find((option) => option.value === "lib_gone")?.textContent)
+      .toBe("lib_gone (not available right now)");
+    expect(saveButton()).toHaveProperty("disabled", true);
   });
 
-  it("names a stored destination that is still here but no longer writable", async () => {
+  it("names a stored rule that is still here but no longer writable", async () => {
     libraryRows = [adminLibrary({ type: "movie", downloadLibraryId: "lib_a" })];
     const dialog = await render([localLibrary({ id: "lib_a", name: "Films", writable: false, readOnly: true })]);
-    const select = dialog.querySelector<HTMLSelectElement>('select[aria-label="Save copies to"]')!;
-    expect([...select.options].map((option) => option.textContent)).toEqual([
-      "Default for this library type", "Films · Unavailable",
+    expect([...ruleLibrary(dialog).options].map((option) => option.textContent)).toEqual([
+      "Default", "Films (not available right now)",
     ]);
-    expect(select.value).toBe("lib_a");
+    expect(ruleLibrary(dialog).value).toBe("lib_a");
+  });
+
+  it("edits the subfolder and the layout of a rule", async () => {
+    libraryRows = [adminLibrary({ type: "movie" })];
+    const dialog = await render([localLibrary({ id: "lib_a", name: "Films" })]);
+    await setInput(ruleSubfolder(dialog), "Filmy/2024");
+    await selectOption(ruleLayout(dialog), "flat");
+    await click(saveButton());
+    expect(patches[0]!.body).toMatchObject({ downloadSettings: { movie: { subfolder: "Filmy/2024", layout: "flat" } } });
   });
 });
 
