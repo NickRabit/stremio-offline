@@ -148,6 +148,8 @@ export class ImageProxy {
   private inflight = new Map<string, Promise<Entry | undefined>>();
   private memory = new Map<string, Buffer>();
   private memoryBytes = 0;
+  /** Ids whose bytes were downloaded by the fetch that is about to serve them. */
+  private justFetched = new Set<string>();
   private saveTimer?: NodeJS.Timeout;
   private dirty = false;
   private maintenance?: Promise<void>;
@@ -361,7 +363,18 @@ export class ImageProxy {
     }
     const done = await pending;
     if (!done?.ext) return undefined;
+    this.justFetched.add(id);
     return { file: this.path(id, done.ext), type: TYPES[done.ext]!, etag: `"${id}-${done.bytes ?? 0}"` };
+  }
+
+  /** True when this id's bytes are already in memory, before the route reads them. */
+  inMemory(id: string): boolean {
+    return this.memory.has(id);
+  }
+
+  /** The fetch that just stored this id. The next read of it is not a disk hit. */
+  takeFetched(id: string): boolean {
+    return this.justFetched.delete(id);
   }
 
   private putMemory(id: string, data: Buffer) {

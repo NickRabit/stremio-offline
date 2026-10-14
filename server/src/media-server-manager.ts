@@ -18,6 +18,7 @@ import {
 } from "./media-server-retention.js";
 import { remoteIdsMatch, remoteMatchTarget, type RemoteMatchTarget } from "./media-server-match.js";
 import { MediaServerIndex } from "./media-server-index.js";
+import { imageSurface, noteImage } from "./image-stats.js";
 import { RemoteImageCache, remoteImageKey, type RemoteImageBody } from "./remote-image-cache.js";
 import {
   createMediaServerProvider,
@@ -1350,7 +1351,7 @@ export class MediaServerManager {
     itemId: unknown,
     imageType: unknown,
     signal?: AbortSignal,
-    options?: { tag?: unknown; ifNoneMatch?: unknown; size?: unknown },
+    options?: { tag?: unknown; ifNoneMatch?: unknown; size?: unknown; surface?: unknown },
   ): Promise<Response> {
     const request = this.requestSignal(signal);
     if (imageType !== "Primary" && imageType !== "Backdrop") throw invalid("The media-server image type is not supported.");
@@ -1393,6 +1394,7 @@ export class MediaServerManager {
         this.imageUpstream(connection, upstreamSignal, () => session.transport.requestArtwork(upstream, session.token, upstreamSignal)));
       try {
         this.recheckContent(authority, request, library.id, connection);
+        noteImage(imageSurface(options?.surface, "remote"), body.source);
         return this.scopedCachedImage(authority, request, library, connection, body, etag, cacheControl);
       } catch (error) {
         await body.stream.cancel().catch(() => undefined);
@@ -1403,6 +1405,7 @@ export class MediaServerManager {
       session.transport.requestArtwork(upstream, session.token, request));
     try {
       this.recheckContent(authority, request, library.id, connection);
+      noteImage(imageSurface(options?.surface, "remote"), "upstream");
       return this.scopedImage(authority, request, library, connection, response, etag, cacheControl);
     } catch (error) {
       await response.body?.cancel().catch(() => undefined);

@@ -13,6 +13,7 @@ import { defaultDownloadLibrary, DownloadQueue, ownerMayDownload, type DownloadJ
 import { DeviceTransfers } from "./device-transfers.js";
 import { ClientLogStore } from "./client-logs.js";
 import { selectDownloadSource, selectTorrentSource } from "./download-selection.js";
+import { ImageStats, useImageStats } from "./image-stats.js";
 import { StatsLog, type TrafficEvent, type TrafficMeta } from "./stats.js";
 import { Throughput } from "./throughput.js";
 import { sourcePace } from "./conversion-pace.js";
@@ -274,6 +275,8 @@ const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () =
   sourcePace.forget(id);
 });
 const stats = new StatsLog();
+const imageStats = new ImageStats(path.join(DATA_DIR, "image-stats.json"));
+useImageStats(imageStats);
 let libraryOpsWriting = false;
 /** How fast each running playback is transferring right now. */
 const throughput = new Throughput();
@@ -2153,6 +2156,7 @@ queue.setDebrid({
   advance: (input) => advanceTorrent(store.settings().realDebridToken, input.infoHash, input.fileIdx, input.torrentId),
 });
 await stats.load();
+await imageStats.load();
 await queue.load();
 await libraryScan.load();
 await followService.reconcile();
@@ -2362,7 +2366,7 @@ const freeSpace = async (target: string) => {
   try { const info = await statfs(target); return { path: target, freeBytes: info.bavail * info.bsize, totalBytes: info.blocks * info.bsize }; }
   catch { return { path: target }; }
 };
-registerDiagnosticsRoutes(app, { ...routeContext, stats, playback, throughput, queue, libraryScan, playbackMeta, freeSpace, clientLogs, dataDir: DATA_DIR });
+registerDiagnosticsRoutes(app, { ...routeContext, stats, imageStats, playback, throughput, queue, libraryScan, playbackMeta, freeSpace, clientLogs, dataDir: DATA_DIR });
 registerSettingsRoutes(app, { ...routeContext, STREAM_SORTS, accountIdOf, invalidateLibrary, mediaServers, metaCache, metaStore, mutateData, prefsOf, queue, streamCache });
 registerMediaServerRoutes(app, { ...routeContext, mediaServers, mediaSources: mediaServerSources, remotePersonal: mediaServerPersonal, ownerOf });
 registerPlaybackRoutes(app, { ...routeContext, mediaSources: mediaServerSources, mediaServerGuard, airplayAccess, airplayRequest, answerHeaders, countBytes, httpSourceOf, internalMediaRequest, libraryTarget, noteSourceQuiet, ownerOf, playback, playbackMeta, playbackOwners, playbackResponse, prefsOf, quietSources, rangeCache, safeInspection, sleep, sourceIsQuiet, stats, subtitleDelay, trackMedia, SOURCE_ATTEMPTS, SOURCE_RETRY_MS, SOURCE_RESUMES, SOURCE_HEADER_MS, SOURCE_QUIET_HEADER_MS });
@@ -2477,7 +2481,7 @@ const shutdown = createShutdown({
   maintenance,
   followService,
   killRunningMedia,
-  flushes: [() => stats.activity.flush(), () => images.flush(), () => artworks.flush(), () => metaStore.flush(), () => seen.flush(), () => libraryOps.flush(), () => mediaServerGuard.close(), () => mediaServers.close()],
+  flushes: [() => stats.activity.flush(), () => imageStats.flush(), () => images.flush(), () => artworks.flush(), () => metaStore.flush(), () => seen.flush(), () => libraryOps.flush(), () => mediaServerGuard.close(), () => mediaServers.close()],
   store,
   flushLog,
   log,

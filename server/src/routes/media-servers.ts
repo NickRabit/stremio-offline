@@ -339,15 +339,20 @@ export function registerMediaServerRoutes(app: express.Application, deps: MediaS
         assertNoBody(request);
         const query = request.query as Record<string, unknown>;
         for (const key of Object.keys(query)) {
-          if (key !== "tag" && key !== "size") throw malformed("The media-server request has an unknown query field.");
+          if (key !== "tag" && key !== "size" && key !== "surface") throw malformed("The media-server request has an unknown query field.");
         }
         const tag = query.tag;
         const size = query.size;
+        const surface = query.surface;
+        if (surface !== undefined && surface !== "catalog" && surface !== "library" && surface !== "remote" && surface !== "home") {
+          throw malformed("The image surface is not supported.");
+        }
         const ifNoneMatch = request.header("if-none-match");
         return mediaServers.readArtwork(authority, request.params.id, request.params.itemId, String(request.params.imageType), signal, {
           ...(tag === undefined ? {} : { tag }),
           ...(ifNoneMatch === undefined ? {} : { ifNoneMatch }),
           ...(size === undefined ? {} : { size }),
+          ...(surface === undefined ? {} : { surface }),
         });
       });
     } catch (error) {

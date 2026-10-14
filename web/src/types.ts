@@ -208,6 +208,7 @@ export interface StatsBucket {
   hosts?: StatsBucketHost[];
 }
 export interface StatsSeries { key: string; label: string; points: number[] }
+export interface ImageCounts { memory: number; disk: number; upstream: number }
 export interface StatsSummary {
   hour: StatsWindow; day: StatsWindow; week: StatsWindow; month: StatsWindow; total: StatsWindow;
   step: "minute" | "hour" | "day";
@@ -215,6 +216,8 @@ export interface StatsSummary {
   providers: StatsBucket[]; addons: StatsBucket[]; sources: StatsBucket[];
   byProvider: StatsSeries[]; byAddon: StatsSeries[]; bySource: StatsSeries[];
   since?: string;
+  /** Served posters in the selected period. Absent on a server that does not count them. */
+  images?: { catalog: ImageCounts; library: ImageCounts; remote: ImageCounts; home: ImageCounts };
 }
 /** One playback running at this moment; the statistics page polls these. */
 export interface ActiveStream {

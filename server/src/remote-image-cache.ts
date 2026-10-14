@@ -58,6 +58,8 @@ export interface RemoteImageBody {
   stream: ReadableStream<Uint8Array>;
   contentType: string;
   cached: boolean;
+  /** Where these bytes came from. `cached` stays true for memory and disk. */
+  source: "memory" | "disk" | "upstream";
 }
 
 interface Entry { file: string; ext: string; size: number; at: number }
@@ -202,7 +204,7 @@ export class RemoteImageCache {
       const known = this.index.get(key);
       if (known) known.at = Date.now();
       this.dirty.add(key);
-      return { stream: bufferStream(remembered.bytes), contentType: remembered.contentType, cached: true };
+      return { stream: bufferStream(remembered.bytes), contentType: remembered.contentType, cached: true, source: "memory" };
     }
     const entry = this.index.get(key);
     if (entry) {
@@ -211,7 +213,7 @@ export class RemoteImageCache {
         entry.at = Date.now();
         const contentType = MIME_BY_EXT[entry.ext] ?? "application/octet-stream";
         this.putMemory(key, data, contentType);
-        return { stream: bufferStream(data), contentType, cached: true };
+        return { stream: bufferStream(data), contentType, cached: true, source: "disk" };
       }
       this.index.delete(key);
     }
@@ -223,7 +225,7 @@ export class RemoteImageCache {
       this.detach(inflight, waiter);
       throw error;
     }
-    return { stream: waiter.stream, contentType: inflight.contentType, cached: false };
+    return { stream: waiter.stream, contentType: inflight.contentType, cached: false, source: "upstream" };
   }
 
   private start(key: string, loadUpstream: (signal: AbortSignal) => Promise<Response>): Inflight {

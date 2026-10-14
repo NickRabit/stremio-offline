@@ -2,6 +2,7 @@ import type express from "express";
 import path from "node:path";
 import { mkdir, readFile, rename, stat } from "node:fs/promises";
 import { artworks } from "../artwork-cache.js";
+import { imageSurface, noteImage } from "../image-stats.js";
 import { FileSnapCache, fileEtag } from "../byte-cache.js";
 import type { ArtShape } from "../artwork.js";
 import { folderMosaicUnits, pendingSuggestionKeys, unitFor, type GalleryEntry, type LibraryMetaRecord, type LibrarySuggestion, type TitleUnit } from "../library-match.js";
@@ -346,9 +347,11 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     // straight from memory. A request that does arrive still resolves the path and refuses a
     // library the viewer cannot see before the cache is touched.
     const cacheControl = "private, max-age=31536000, immutable";
+    const surface = imageSurface(req.query.surface, "library");
     const snap = fileSnaps.get(art);
     if (req.headers["if-none-match"] === undefined && snap) {
       artworks.touch(art);
+      noteImage(surface, "memory");
       res.setHeader("cache-control", cacheControl);
       res.setHeader("etag", snap.etag);
       res.type(path.extname(art));
@@ -372,6 +375,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     }
     if (snap && snap.size === info.size && snap.mtimeMs === info.mtime.getTime()) {
       artworks.touch(art);
+      noteImage(surface, "memory");
       res.type(path.extname(art));
       res.end(snap.bytes);
       return;
@@ -380,6 +384,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     if (!data) return res.status(404).end();
     fileSnaps.put(art, { bytes: data, etag, size: info.size, mtimeMs: info.mtime.getTime() });
     artworks.touch(art);
+    noteImage(surface, "disk");
     res.type(path.extname(art));
     res.end(data);
   }));
