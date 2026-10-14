@@ -34,22 +34,75 @@ export interface PreviewKey {
 
 type TileRef = RefObject<HTMLElement | null>;
 
+/** Poster lists from the last preview. A repeat visit paints that fan at once instead of
+ *  clearing the tile and assembling it again. Image requests still recheck the grant. */
+const mosaicMemory = new Map<string, string[]>();
+const decodedPosters = new Set<string>();
+const brokenPosters = new Set<string>();
+const MOSAIC_STORAGE = "stremio.remote-mosaic.";
+
+const mosaicKey = (libraryId: string, parentId: string | undefined, preferChildren: boolean) =>
+  `${libraryId}|${parentId ?? ""}|${preferChildren ? "c" : "o"}`;
+
+const readMosaic = (key: string): string[] | undefined => {
+  const remembered = mosaicMemory.get(key);
+  if (remembered) return remembered;
+  try {
+    const raw = sessionStorage.getItem(MOSAIC_STORAGE + key);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== "string")) return;
+    const posters = parsed as string[];
+    mosaicMemory.set(key, posters);
+    return posters;
+  } catch {
+    return;
+  }
+};
+
+const writeMosaic = (key: string, posters: string[]) => {
+  mosaicMemory.set(key, posters);
+  try { sessionStorage.setItem(MOSAIC_STORAGE + key, JSON.stringify(posters)); } catch { /* full or unavailable */ }
+};
+
+const samePosters = (left: string[], right: string[]) =>
+  left.length === right.length && left.every((url, index) => url === right[index]);
+
+/** Drops remembered fans. Tests start from an empty page. */
+export function clearRemoteMosaicCache(): void {
+  mosaicMemory.clear();
+  decodedPosters.clear();
+  brokenPosters.clear();
+  try {
+    const drop: string[] = [];
+    for (let index = 0; index < sessionStorage.length; index += 1) {
+      const name = sessionStorage.key(index);
+      if (name?.startsWith(MOSAIC_STORAGE)) drop.push(name);
+    }
+    for (const name of drop) sessionStorage.removeItem(name);
+  } catch { /* unavailable */ }
+}
+
 /**
- * The posters for one tile, read once the tile is actually on screen. The observer disconnects
- * after the first request, and the component keeps its answer until it unmounts or its key
- * changes -- so the cache lives no longer than the authorized listing that drew it.
+ * The posters for one tile, read once the tile is actually on screen. A fan this page already
+ * showed stays up while a newer preview is in flight, and is replaced only when the answer
+ * actually changed.
  */
 export function useRemotePosters({ libraryId, parentId, enabled, generation }: PreviewKey, target: TileRef, preferChildren = false): { posters: string[]; pending: boolean } {
-  const [posters, setPosters] = useState<string[]>([]);
-  const [pending, setPending] = useState(enabled);
+  const key = mosaicKey(libraryId, parentId, preferChildren);
+  const remembered = enabled ? readMosaic(key) : undefined;
+  const [posters, setPosters] = useState<string[]>(remembered ?? []);
+  const [pending, setPending] = useState(enabled && !remembered);
   useEffect(() => {
     if (!enabled) {
       setPosters([]);
       setPending(false);
       return;
     }
-    setPosters([]);
-    setPending(true);
+    if (!readMosaic(key)) {
+      setPosters([]);
+      setPending(true);
+    }
     const controller = new AbortController();
     let live = true;
     const load = () => {
@@ -57,7 +110,12 @@ export function useRemotePosters({ libraryId, parentId, enabled, generation }: P
         if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
         return api.remotePreview(libraryId, parentId, controller.signal, preferChildren);
       })
-        .then((answer) => { if (live) { setPosters(answer.posters); setPending(false); } })
+        .then((answer) => {
+          if (!live) return;
+          writeMosaic(key, answer.posters);
+          setPosters((current) => samePosters(current, answer.posters) ? current : answer.posters);
+          setPending(false);
+        })
         .catch(() => { if (live) setPending(false); });
     };
     const element = target.current;
@@ -70,15 +128,32 @@ export function useRemotePosters({ libraryId, parentId, enabled, generation }: P
     });
     observer.observe(element);
     return () => { live = false; observer.disconnect(); controller.abort(); };
-  }, [libraryId, parentId, enabled, generation, preferChildren]);
+  }, [key, libraryId, parentId, enabled, generation, preferChildren]);
   return { posters, pending };
 }
 
-/** The fan of posters the local library tile already draws, reused for a remote root so the two
- *  roots look alike. Broken posters drop out; the container underneath stays. */
+/** The fan of posters the local library tile already draws. It stays hidden until every poster
+ *  has arrived or failed, so the tile does not fill in one picture at a time. A poster that
+ *  already failed stays hidden on the next paint. */
 function LibraryCollage({ posters }: { posters: string[] }) {
-  return <span className="library-preview-collage" aria-hidden="true">
-    {posters.map((url) => <img key={url} src={url} alt="" loading="lazy" onError={hideBroken}/>)}
+  const signature = posters.join("\0");
+  const [shown, setShown] = useState(signature);
+  const [waiting, setWaiting] = useState(() => posters.some((url) => !decodedPosters.has(url)));
+  if (shown !== signature) {
+    setShown(signature);
+    setWaiting(posters.some((url) => !decodedPosters.has(url)));
+  }
+  const settle = (url: string) => {
+    if (decodedPosters.has(url)) return;
+    decodedPosters.add(url);
+    setWaiting(posters.some((item) => !decodedPosters.has(item)));
+  };
+  return <span className={`library-preview-collage${waiting ? " is-pending" : ""}`} aria-hidden="true">
+    {posters.map((url) => <img key={url} src={url} alt="" decoding="async"
+      className={brokenPosters.has(url) ? "broken" : undefined}
+      ref={(node) => { if (node?.complete && node.naturalWidth > 0) settle(url); }}
+      onLoad={() => settle(url)}
+      onError={(event) => { brokenPosters.add(url); hideBroken(event); settle(url); }}/>)}
   </span>;
 }
 

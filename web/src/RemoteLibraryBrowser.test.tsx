@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { RemoteLibraryBrowser } from "./RemoteLibraryBrowser";
+import { clearRemoteMosaicCache } from "./remote-mosaic";
 import { setLocale } from "./i18n";
 import { clearTitleEnrichment } from "./title-enrichment";
 import { emptyViews } from "./views";
@@ -61,6 +62,7 @@ beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   setLocale("en");
   clearTitleEnrichment();
+  clearRemoteMosaicCache();
   FakeIntersectionObserver.live = [];
   calls.browse = []; calls.preview = []; calls.sources = []; calls.item = []; calls.state = []; calls.stateUrls = []; calls.title = [];
   downloadCalls.length = 0;
@@ -758,6 +760,19 @@ describe("RemoteLibraryBrowser lazy mosaics", () => {
     await act(async () => { pending.resolve(json({ posters: ["/a.jpg", "/b.jpg"] })); });
     await flush();
     expect([...host.querySelectorAll(".remote-libraries .browse-art img")].map((img) => img.getAttribute("src"))).toEqual(["/a.jpg", "/b.jpg"]);
+  });
+
+  it("paints the last mosaic again while the next preview is still out", async () => {
+    preview = () => json({ posters: ["/a.jpg", "/b.jpg"] });
+    await render();
+    const pending = deferred<Response>();
+    preview = () => pending.promise;
+    await act(async () => { root.unmount(); });
+    root = createRoot(host);
+    await render();
+    expect([...host.querySelectorAll(".remote-libraries .browse-art img")].map((img) => img.getAttribute("src"))).toEqual(["/a.jpg", "/b.jpg"]);
+    await act(async () => { pending.resolve(json({ posters: ["/a.jpg", "/b.jpg"] })); });
+    await flush();
   });
 
   it("draws the children's collage for a root and leaves the library's own poster aside", async () => {
