@@ -433,6 +433,9 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+    env:
+      # This job does not check the repository out, so gh cannot discover it from git.
+      GH_REPO: ${{ github.repository }}
     steps:
       - name: Say how to open it
         env:
