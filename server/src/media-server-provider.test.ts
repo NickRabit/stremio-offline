@@ -654,11 +654,13 @@ for (const kind of ["jellyfin", "emby"] as const) {
       { Id: "file", Protocol: "File", Name: "720p", Path: "/private/media/Original.MKV" },
       { Id: "unknown", Protocol: "File", Name: "Unknown", Path: "/private/media/Original.unknown" },
       { Id: "reported", Protocol: "File", Container: "mp4", Path: "/private/media/Original.mkv" },
+      { Id: "formats", Protocol: "File", Container: "mov,mp4,m4a,3gp,3g2,mj2", Path: "/private/media/Original.mp4" },
     ] }), kind);
     const versions = await provider.versions("tok", "user-1", "item-1");
     assert.equal(versions[0]?.container, "mkv");
     assert.equal(versions[1]?.container, undefined);
     assert.equal(versions[2]?.container, "mp4");
+    assert.equal(versions[3]?.container, "mp4");
     assert.equal(JSON.stringify(versions).includes("/private/media"), false);
   });
 }
