@@ -115,6 +115,10 @@ data class StreamDto(
   /** The destination the server preselected for a copy of this version: the remote library's own
    *  setting or the default for its kind. A preselection only; the queue call re-resolves it. */
   val downloadLibraryId: String? = null,
+  /** The whole destination the server projected for a copy of this version: the library, its
+   *  subfolder and the storage layout. A preselection only; the queue call re-resolves it. No
+   *  local root path is ever carried here. */
+  val downloadTarget: DownloadTargetSettingsDto? = null,
   /** Set only for a media-server version. [provider] and [libraryId] name where it comes from,
    *  [capabilities] say what the app may do with it (nothing today) and [remoteItem] carries the
    *  opaque remote identity and the stable progress key of the item this stream is one version of. */

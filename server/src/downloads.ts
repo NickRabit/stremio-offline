@@ -678,7 +678,7 @@ export class DownloadQueue {
       const kind = this.kindOf(job);
       // A library the user picked is never swapped for the default: once the deadline for a
       // removed one passes, the job fails where it is instead of landing somewhere unasked for.
-      if (!named && job.targetSettings?.explicit) {
+      if (!named && (job.targetSettings?.explicit || job.remoteDownload)) {
         const refusal = new ChosenLibraryGoneError();
         log("WARN", "The chosen library is gone, the download fails", { id: job.id, title: job.title, library: waited });
         job.status = "failed";

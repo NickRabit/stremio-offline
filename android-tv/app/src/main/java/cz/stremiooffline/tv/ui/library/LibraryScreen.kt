@@ -36,6 +36,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.BrowseItem
+import cz.stremiooffline.tv.data.DownloadTargetDto
 import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.LibraryDto
 import cz.stremiooffline.tv.data.MediaDto
@@ -73,7 +74,7 @@ fun LibraryRoute(
    *  Null keeps the remote copy action off, which is what a harness without the catalogue passes. */
   loadDestinations: (suspend () -> List<LibraryDto>)? = null,
   /** Queues one exact native version into the chosen library. */
-  onQueue: (suspend (title: String, sourceId: String, media: MediaDto, libraryId: String) -> Unit)? = null,
+  onQueue: (suspend (title: String, sourceId: String, media: MediaDto, target: DownloadTargetDto?) -> Unit)? = null,
 ) {
   var segment by rememberSaveable { mutableStateOf(LibrarySegment.Files) }
   val remoteApi: RemoteLibraryApi = api

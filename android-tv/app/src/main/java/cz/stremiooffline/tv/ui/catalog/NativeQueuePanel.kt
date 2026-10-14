@@ -22,6 +22,7 @@ import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.catalog.Streams
 import cz.stremiooffline.tv.data.ApiError
+import cz.stremiooffline.tv.data.DownloadTargetDto
 import cz.stremiooffline.tv.data.LibraryDto
 import cz.stremiooffline.tv.data.MediaDto
 import cz.stremiooffline.tv.data.RemoteItemDto
@@ -119,10 +120,14 @@ data class NativeCopyRequest(
   val subject: NativeCopySubject,
   val versions: List<StreamDto>,
   val destinations: List<LibraryDto>,
-  /** The destination the server projected for this source, when one is configured or derivable.
-   *  It only steers the initial focus; every row stays selectable and the queue call re-checks. */
-  val defaultDestination: String? = null,
 )
+
+/** The target one native copy sends. The picked library is the destination the server projected
+ *  for this exact version, so the copy carries no target and the server resolves its own
+ *  configured subfolder and layout; any other library stays a deliberate override, sent as the
+ *  existing target DTO. */
+fun nativeQueueTarget(stream: StreamDto, libraryId: String): DownloadTargetDto? =
+  if ((stream.downloadTarget?.libraryId ?: stream.downloadLibraryId) == libraryId) null else DownloadTargetDto(libraryId)
 
 /** The job title one native copy carries: the film's name, or the series with the episode's number. */
 fun nativeCopyTitle(subject: NativeCopySubject): String =
@@ -168,7 +173,6 @@ suspend fun resolveNativeCopy(
     subject = nativeCopySubject(item, name, ids),
     versions = versions,
     destinations = loadDestinations(),
-    defaultDestination = versions.mapNotNull { it.downloadLibraryId }.firstOrNull(),
   )
 }
 
@@ -182,9 +186,6 @@ fun NativeQueuePanel(
   versions: List<StreamDto>,
   /** The destinations this account may write to, already filtered to this kind. */
   libraries: List<LibraryDto>,
-  /** The destination the server projected for this source; the row it names starts focused and
-   *  selected. Absent or unknown keeps the first row leading. */
-  defaultDestination: String? = null,
   /** The version the detail currently holds, offered first when it may be copied. */
   preferred: StreamDto?,
   /** True while the queue call is in flight: no row acts again and Back is held. */
@@ -204,7 +205,9 @@ fun NativeQueuePanel(
   var chosenId by remember(copyable) { mutableStateOf(initial?.sourceId) }
   val chosen = copyable.firstOrNull { it.sourceId == chosenId } ?: initial
   var step by remember(copyable) { mutableStateOf(if (copyable.size > 1) Step.Version else Step.Destination) }
-  // The projected destination leads when the caller offers it; every other row stays selectable.
+  // The destination the server projected for the version actually chosen leads; every other row
+  // stays selectable.
+  val defaultDestination = chosen?.downloadTarget?.libraryId ?: chosen?.downloadLibraryId
   val destinationIndex = remember(libraries, defaultDestination) {
     libraries.indexOfFirst { it.id == defaultDestination }.let { if (it >= 0) it else 0 }
   }

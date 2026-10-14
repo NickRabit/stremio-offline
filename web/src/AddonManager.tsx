@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { ArrowDown, ArrowUp, Copy, ExternalLink, FileJson, PackagePlus, Plus, RefreshCw, ShieldCheck, SlidersHorizontal, Trash2, X } from "lucide-react";
 import { api } from "./api";
 import { copyText } from "./clipboard";
+import { DownloadRuleEditor } from "./DownloadRuleEditor";
 import { Heading, hideBroken } from "./settings-ui";
 import { t, useI18n } from "./i18n";
 import type { Addon, AddonDownloadSettings, LibraryView } from "./types";
@@ -267,35 +268,6 @@ function AddonEditDialog({ addon, libraries, onClose, onChanged, onNotify, onErr
     void run(async () => { await api.deleteAddon(addon.key); await onChanged(); onNotify(t("addons.removed")); onRemoved(); });
   };
 
-  // Where a rule may point: the same set the server accepts, in the same order, so the
-  // "Default" entry names the library the queue would fall back to.
-  const offered = (kind: "movie" | "series") => libraries
-    .filter((library) => library.enabled && !library.unreachable && !library.readOnly && (library.type === kind || library.type === "mixed"))
-    .sort((a, b) => a.order - b.order);
-  const defaultLibrary = (kind: "movie" | "series") => {
-    const available = offered(kind);
-    return available.find((library) => (kind === "movie" ? library.defaultMovie : library.defaultSeries)) ?? available[0];
-  };
-  // A rule may name a library that is no longer offered (switched off, unplugged, removed).
-  // It stays visible and stays selected: silently rewriting somebody's rule would be worse.
-  const strayLibrary = (kind: "movie" | "series") => {
-    const wanted = draft.downloadSettings[kind].libraryId;
-    return wanted && !offered(kind).some((library) => library.id === wanted) ? libraries.find((library) => library.id === wanted) : undefined;
-  };
-  const preview = (kind: "movie" | "series") => {
-    const rule = draft.downloadSettings[kind];
-    const folder = rule.subfolder.trim().replaceAll("\\", "/").replace(/^\/+|\/+$/g, "");
-    const root = `${(libraries.find((library) => library.id === rule.libraryId) ?? defaultLibrary(kind))?.root ?? t("addons.noLibraryRoot")}${folder ? `/${folder}` : ""}`;
-    if (kind === "movie") {
-      const movie = `${t("addons.sampleMovie")} (${t("addons.sampleYear")})`;
-      return rule.layout === "flat" ? `${root}/${t("addons.sampleMovie")}.mkv` : `${root}/${movie}/${movie}.mkv`;
-    }
-    const show = t("addons.sampleShow");
-    return rule.layout === "flat"
-      ? `${root}/${show} - S01E01 - ${t("addons.sampleEpisode")}.mkv`
-      : `${root}/${show}/01 ${t("addons.sampleSeasonFolder")}/${show} - S01E01 - ${t("addons.sampleEpisode")}.mkv`;
-  };
-
   const check = (key: "globalSearch" | "showInContinueWatching" | "showOnHome", labelText: string, hint: string) =>
     <label className="library-check" title={hint}>
       <span className="switch"><input type="checkbox" aria-label={labelText} checked={draft[key]} disabled={busy}
@@ -352,31 +324,7 @@ function AddonEditDialog({ addon, libraries, onClose, onChanged, onNotify, onErr
         </section>}
         {streams && <section className="addon-edit-section">
           <div className="library-picker-section-head"><h3>{t("addons.whereToStore")}</h3><p>{t("addons.whereToStoreHint")}</p></div>
-          <div className="download-rule-grid">{(["movie", "series"] as const).map((kind) => {
-            const kindLabel = t(kind === "movie" ? "catalog.movies" : "catalog.series");
-            const rule = draft.downloadSettings[kind];
-            const chosen = libraries.find((library) => library.id === rule.libraryId);
-            const stray = strayLibrary(kind);
-            const fallback = defaultLibrary(kind);
-            return <div className="download-rule" key={kind}><b>{kindLabel}</b>
-              <label><span>{t("addons.saveTo")}</span>
-                <select aria-label={t("addons.saveToLabel", { kind: kindLabel })} value={rule.libraryId ?? ""} disabled={busy}
-                  onChange={(event) => changeRule(kind, { libraryId: event.target.value || undefined })}>
-                  <option value="">{fallback ? t("addons.saveToDefaultNamed", { name: fallback.name }) : t("addons.saveToDefault")}</option>
-                  {offered(kind).map((library) => <option key={library.id} value={library.id}>{library.name}</option>)}
-                  {stray && <option value={stray.id}>{t("addons.saveToUnavailable", { name: stray.name })}</option>}
-                </select></label>
-              <label className="folder-label"><span>{t("addons.subfolder")}</span>
-                <div className="folder-field"><code>{chosen?.root ?? fallback?.root ?? ""}/</code>
-                  <input aria-label={t("addons.subfolderLabel", { kind: kindLabel })} value={rule.subfolder} disabled={busy}
-                    placeholder={t("addons.subfolderPlaceholder")} onChange={(event) => changeRule(kind, { subfolder: event.target.value })}/></div></label>
-              <label><span>{t("addons.layout")}</span>
-                <select aria-label={t("addons.layoutLabel", { kind: kindLabel })} value={rule.layout} disabled={busy}
-                  onChange={(event) => changeRule(kind, { layout: event.target.value as "flat" | "structured" })}>
-                  <option value="structured">{t("addons.layoutStructured")}</option><option value="flat">{t("addons.layoutFlat")}</option>
-                </select></label>
-              <small className="path-preview">{t("addons.example")} <code>{preview(kind)}</code></small></div>;
-          })}</div>
+          <DownloadRuleEditor settings={draft.downloadSettings} libraries={libraries} disabled={busy} onChange={changeRule}/>
         </section>}
         <section className="addon-edit-section">
           <div className="library-picker-section-head"><h3>{t("addons.sectionActions")}</h3></div>

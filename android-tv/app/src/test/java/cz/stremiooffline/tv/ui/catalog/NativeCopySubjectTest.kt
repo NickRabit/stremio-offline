@@ -1,6 +1,7 @@
 package cz.stremiooffline.tv.ui.catalog
 
 import cz.stremiooffline.tv.data.RemoteItemDto
+import cz.stremiooffline.tv.data.DownloadTargetSettingsDto
 import cz.stremiooffline.tv.data.RemoteProviderIdsDto
 import cz.stremiooffline.tv.data.RemoteLibraryApi
 import cz.stremiooffline.tv.data.StreamDto
@@ -70,10 +71,10 @@ class NativeCopySubjectTest {
   }
 
   @Test
-  fun `the copy request carries the destination the server projected on the versions`() = runBlocking {
+  fun `the copy request keeps each version's own projected destination`() = runBlocking {
     val api = object : RemoteLibraryApi {
       override suspend fun remoteSources(libraryId: String, itemId: String): List<StreamDto> = listOf(
-        StreamDto(sourceId = "s1", kind = "remote", playable = true, downloadLibraryId = "box"),
+        StreamDto(sourceId = "s1", kind = "remote", playable = true, downloadTarget = DownloadTargetSettingsDto(libraryId = "box")),
         StreamDto(sourceId = "s2", kind = "remote", playable = true),
       )
     }
@@ -86,6 +87,19 @@ class NativeCopySubjectTest {
       sources = null,
       loadDestinations = { emptyList() },
     )
-    assertEquals("box", request.defaultDestination)
+    // Each version keeps its own rule: the panel reads the destination of the version chosen,
+    // never the first version's.
+    assertEquals("box", request.versions.first().downloadTarget?.libraryId)
+    assertNull(request.versions[1].downloadTarget)
+  }
+
+  @Test
+  fun `a copy sends no target for the projected destination and an explicit one otherwise`() {
+    val projected = StreamDto(sourceId = "s1", kind = "remote", playable = true, downloadTarget = DownloadTargetSettingsDto(libraryId = "box"))
+    assertNull(nativeQueueTarget(projected, "box"))
+    assertNull(nativeQueueTarget(projected.copy(downloadTarget = null, downloadLibraryId = "box"), "box"))
+    assertEquals("libA", nativeQueueTarget(projected, "libA")?.libraryId)
+    // With no projection at all a chosen library is a deliberate override, sent explicitly.
+    assertEquals("libA", nativeQueueTarget(StreamDto(sourceId = "s2", kind = "remote", playable = true), "libA")?.libraryId)
   }
 }

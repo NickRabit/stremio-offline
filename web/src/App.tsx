@@ -2208,6 +2208,13 @@ export function App() {
       await loadDownloads(); return true;
     } catch (e) { fail(e); return false; }
   };
+  /** The primary "Save to library" action. A native source whose server projected no destination
+   *  opens the choice dialog instead of submitting a copy the server would refuse, so the viewer
+   *  picks a library themselves; every other source queues straight away, as before. */
+  const primarySave = () => {
+    if (selectedStream && isRemoteStream(selectedStream) && sourceTargetRule(selectedStream) === undefined) { setSaveTargetOpen(true); return; }
+    void enqueue();
+  };
 
   const downloadStreamToDevice = async () => {
     if (!selectedStream?.playable || isRemoteStream(selectedStream)) return false;
@@ -2540,7 +2547,7 @@ export function App() {
               <div className="source-footer"><div className="source-info"><Subtitles/> {t("sources.subtitleCount", { count: selectedLocalPath ? 0 : subtitles.length + (selectedStream?.subtitles?.length || 0) })}
                 {inspection && <> · <b>{t("sources.audioInFile")}</b> {inspection.audioTracks.length ? inspection.audioTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}
                 · <b>{t("sources.subtitlesInFile")}</b> {inspection.subtitleTracks.length ? inspection.subtitleTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}</>}
-              {selectedStream?.playable && !inspection && <> · {t("sources.probing")}</>}</div><div className="action-slot"><div className="actions"><button className="primary" disabled={!canPlay} onClick={startCatalogPlayback}><CirclePlay/> {t("player.play")}</button>{selectedLocalPath ? <button onClick={() => revealInLibrary(selectedLocalPath)}><FolderOpen/> {t("library.showInLibrary")}</button> : <div className="split-button"><button disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} onClick={() => void enqueue()}><HardDrive/> {t("save.toLibrary")}</button><button className="split-button-toggle" disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} aria-haspopup="dialog" aria-label={t("save.toLibraryElsewhere")} title={t("save.toLibraryElsewhere")} onClick={() => setSaveTargetOpen(true)}><ChevronDown/></button></div>}<button disabled={!canPlay || Boolean(selectedStream && isRemoteStream(selectedStream))} onClick={() => { if (selectedLocalPath) void downloadLibraryFile(selectedLocalPath); else void downloadStreamToDevice(); }}><Download/> {t("save.toDevice")}</button></div></div></div>
+              {selectedStream?.playable && !inspection && <> · {t("sources.probing")}</>}</div><div className="action-slot"><div className="actions"><button className="primary" disabled={!canPlay} onClick={startCatalogPlayback}><CirclePlay/> {t("player.play")}</button>{selectedLocalPath ? <button onClick={() => revealInLibrary(selectedLocalPath)}><FolderOpen/> {t("library.showInLibrary")}</button> : <div className="split-button"><button disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} onClick={primarySave}><HardDrive/> {t("save.toLibrary")}</button><button className="split-button-toggle" disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} aria-haspopup="dialog" aria-label={t("save.toLibraryElsewhere")} title={t("save.toLibraryElsewhere")} onClick={() => setSaveTargetOpen(true)}><ChevronDown/></button></div>}<button disabled={!canPlay || Boolean(selectedStream && isRemoteStream(selectedStream))} onClick={() => { if (selectedLocalPath) void downloadLibraryFile(selectedLocalPath); else void downloadStreamToDevice(); }}><Download/> {t("save.toDevice")}</button></div></div></div>
             </div>}
             </div>
           </> : <Empty icon={<Film/>} title={t("catalog.pickTitle")} text={t("catalog.pickText")}/>}</section></div>
@@ -2825,6 +2832,7 @@ export function App() {
       label={videoTitle} kind={selectedMedia().kind === "episode" ? "series" : "movie"} title={baseDownloadTitle}
       season={selectedVideo?.season} libraries={libraries}
       rule={sourceTargetRule(selectedStream) ?? addons.find((addon) => addon.key === selectedStream.addonKey)?.downloadSettings}
+      ruleUnavailable={isRemoteStream(selectedStream) && sourceTargetRule(selectedStream) === undefined}
       onClose={() => setSaveTargetOpen(false)} onSubmit={enqueue}/>}
     {identifyPath && <IdentifyDialog path={identifyPath} onClose={() => setIdentifyPath(null)}
       onApplied={() => { setIdentifyPath(null); void loadSuggestionCount(); void loadBrowse(browsePath); }}/>}

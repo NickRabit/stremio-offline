@@ -49,6 +49,10 @@ export interface Stream {
    *  library's own setting or its kind's default. Only a preselection: the queue call re-resolves
    *  it and every admission is proved again. */
   downloadLibraryId?: string;
+  /** The whole destination rule a copy of this source takes when the caller names no target: the
+   *  library, its subfolder and the storage layout, all resolved by the server. Only a
+   *  preselection; the queue call re-resolves it and every admission is proved again. */
+  downloadTarget?: DownloadTargetSettings;
   /** What this source may be used for. Absent on every non-remote stream. */
   capabilities?: RemoteCapabilities;
   /** The remote identity a player reports position and favorites against; only a remote source carries one. */
@@ -88,6 +92,8 @@ export interface AdminRemoteLibrary {
   /** The local library this remote library's copies are saved into. Absent means the default for
    *  the kind; a stored handle that is no longer usable stays stored. */
   downloadLibraryId?: string;
+  /** The storage rules for automatic copies, the same two per-kind rules an addon carries. */
+  downloadSettings?: AddonDownloadSettings;
 }
 /** What a remote library or source may be used for. Every flag is false in this stage. */
 export interface RemoteCapabilities {
@@ -104,6 +110,8 @@ export interface RemoteLibrary {
   browseMode?: RemoteBrowseMode; mosaic?: boolean; showInFavorites?: boolean;
   /** The stored copy destination, when one is configured. */
   downloadLibraryId?: string;
+  /** The stored storage rules for automatic copies, when this library has its own. */
+  downloadSettings?: AddonDownloadSettings;
   /** The library root's own same-origin poster, when the provider has one. With mosaics on it is
    *  only the empty-preview fallback; with mosaics off the tile draws it as its picture. */
   poster?: string;

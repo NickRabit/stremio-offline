@@ -643,15 +643,15 @@ fun CatalogDetailScreen(
     }
   }
 
-  /** Queues one source into [libraryId], or with no target for an addon when the server never told
-   *  us which libraries this account may use. */
-  fun queueTo(stream: StreamDto, libraryId: String?) {
+  /** Queues one source with [target], or with no target when the server should resolve its own
+   *  configured destination. */
+  fun queueTo(stream: StreamDto, target: DownloadTargetDto?) {
     val media = mediaFor(meta, args, pick.selectedVideo, settings)
     val title = playerTitle
     save.queueBusy = true
     scope.launch {
       try {
-        val job = api.download(title, stream.sourceId, media, libraryId?.let(::DownloadTargetDto))
+        val job = api.download(title, stream.sourceId, media, target)
         save.queuedSourceId = stream.sourceId
         notice(if (job.status == "waiting") texts.waiting else texts.queued, CatalogNotice.Success)
       } catch (cancelled: CancellationException) {
@@ -680,12 +680,16 @@ fun CatalogDetailScreen(
       // writable library still refuses: nothing is queued blind, and no first candidate is taken.
       Streams.isRemoteStream(stream) -> {
         if (!save.librariesLoaded || libraryCandidates.isEmpty()) notice(texts.noLibrary, CatalogNotice.Failure)
-        else queueTo(stream, stream.downloadLibraryId?.takeIf { id -> libraryCandidates.any { it.id == id } })
+        // With a projected destination the copy carries no target at all, so the server resolves
+        // its own configured subfolder and layout. A source with no projection opens the library
+        // panel instead: nothing is queued blind and no first candidate is taken.
+        else if (libraryCandidates.any { it.id == (stream.downloadTarget?.libraryId ?: stream.downloadLibraryId) }) queueTo(stream, null)
+        else { save.pendingLibraryStream = stream; save.libraryPanelOpen = true }
       }
       // The server that could not answer keeps the old behaviour: queue and let it pick.
       !save.librariesLoaded -> queueTo(stream, null)
       libraryCandidates.isEmpty() -> notice(texts.noLibrary, CatalogNotice.Failure)
-      libraryCandidates.size == 1 -> queueTo(stream, libraryCandidates.first().id)
+      libraryCandidates.size == 1 -> queueTo(stream, DownloadTargetDto(libraryCandidates.first().id))
       // More than one usable library: let the viewer choose, the addon's own default preselected.
       else -> {
         save.pendingLibraryStream = stream
@@ -1197,7 +1201,7 @@ fun CatalogDetailScreen(
             onClick = {
               val stream = save.pendingLibraryStream
               save.libraryPanelOpen = false
-              stream?.let { queueTo(it, library.id) }
+              stream?.let { queueTo(it, DownloadTargetDto(library.id)) }
             },
             modifier = Modifier
               .testTag(libraryOptionTag(library.id))

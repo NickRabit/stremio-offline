@@ -1,5 +1,8 @@
 import type { State, Store } from "./store.js";
-import { LIBRARY_ID } from "./libraries.js";
+import { AppError } from "./errors.js";
+import { LIBRARY_ID, type LibraryRecord } from "./libraries.js";
+import { normalizeDownloadSettings } from "./naming.js";
+import type { AddonDownloadSettings } from "./types.js";
 import {
   MediaServerError,
   MEDIA_CONNECTION_ID,
@@ -52,6 +55,9 @@ export interface ExportedRemoteLibrary {
   /** The configured copy destination. Kept verbatim: a handle that names no library here is
    *  stored as it came and refused at the door, never redirected to some other library. */
   downloadLibraryId?: string;
+  /** The storage rules for automatic copies. Kept verbatim: an unavailable local handle inside a
+   *  rule is stored as it came and refused at the door, never redirected to some other library. */
+  downloadSettings?: AddonDownloadSettings;
 }
 
 export interface MediaServerConfigurationExport {
@@ -74,9 +80,11 @@ const nextGeneration = (generation: number): number => {
 };
 
 export const CONNECTION_KEYS = ["provider", "name", "baseUrl", "allowLan", "allowLoopback", "serverId", "accountId", "enabled"];
-export const LIBRARY_KEYS = ["remoteId", "name", "type", "enabled", "order", "showOnHome", "showInContinueWatching", "browseMode", "mosaic", "showInFavorites"];
+export const LIBRARY_KEYS = ["remoteId", "name", "type", "enabled", "order", "showOnHome", "showInContinueWatching", "browseMode", "mosaic", "showInFavorites", "downloadSettings"];
 export const EXPORT_CONNECTION_KEYS = ["id", "provider", "name", "baseUrl", "allowLan", "allowLoopback", "serverId", "accountId"];
-export const EXPORT_LIBRARY_KEYS = ["id", "connectionId", "remoteId", "name", "type", "order", "showOnHome", "showInContinueWatching", "browseMode", "mosaic", "showInFavorites", "downloadLibraryId"];
+export const EXPORT_LIBRARY_KEYS = ["id", "connectionId", "remoteId", "name", "type", "order", "showOnHome", "showInContinueWatching", "browseMode", "mosaic", "showInFavorites", "downloadLibraryId", "downloadSettings"];
+const DOWNLOAD_SETTINGS_KEYS = ["movie", "series"];
+const DOWNLOAD_TARGET_KEYS = ["subfolder", "layout", "libraryId"];
 export const LIBRARY_TYPES: readonly RemoteLibraryType[] = ["movie", "series", "mixed"];
 
 export function checkKeys(value: unknown, allowed: readonly string[], context: string): Record<string, unknown> {
@@ -130,6 +138,7 @@ export function readLibraryFields(record: Record<string, unknown>) {
   const mosaic = record.mosaic === undefined ? undefined : bool(record.mosaic, "mosaic");
   const showInFavorites = record.showInFavorites === undefined ? undefined : bool(record.showInFavorites, "showInFavorites");
   const downloadLibraryId = record.downloadLibraryId === undefined ? undefined : libraryHandle(record.downloadLibraryId);
+  const downloadSettings = record.downloadSettings === undefined ? undefined : readDownloadSettings(record.downloadSettings);
   return {
     remoteId: boundedString(record.remoteId, MEDIA_SERVER_LIMITS.upstreamId, "library id"),
     name: boundedString(record.name, MEDIA_SERVER_LIMITS.name, "library name"),
@@ -141,6 +150,7 @@ export function readLibraryFields(record: Record<string, unknown>) {
     ...(mosaic === undefined ? {} : { mosaic }),
     ...(showInFavorites === undefined ? {} : { showInFavorites }),
     ...(downloadLibraryId === undefined ? {} : { downloadLibraryId }),
+    ...(downloadSettings === undefined ? {} : { downloadSettings }),
   };
 }
 
@@ -151,6 +161,40 @@ const libraryHandle = (value: unknown): string => {
   if (typeof value !== "string" || !LIBRARY_ID.test(value)) throw invalid("The media-server copy destination is malformed.");
   return value;
 };
+
+/** One storage-rule slot as the admin boundary accepts it: only the three known fields, a layout
+ *  that is one of the two, a string subfolder and a local library handle. Unknown keys, another
+ *  shape or a remote handle are refused rather than quietly tidied. When `libraries` is given the
+ *  named handle is proved against them; without it the handle is kept as it stands, so an import
+ *  preserves a destination that only exists on the machine the backup came from. */
+export function readDownloadSettings(value: unknown, libraries?: LibraryRecord[]): AddonDownloadSettings {
+  const item = checkKeys(value, DOWNLOAD_SETTINGS_KEYS, "The remote library storage rules");
+  const settings: AddonDownloadSettings = { movie: { subfolder: "", layout: "structured" }, series: { subfolder: "", layout: "structured" } };
+  for (const kind of ["movie", "series"] as const) {
+    const raw = item[kind];
+    if (raw === undefined) continue;
+    const slot = checkKeys(raw, DOWNLOAD_TARGET_KEYS, "The remote library storage rule");
+    if (slot.layout !== undefined && slot.layout !== "flat" && slot.layout !== "structured") {
+      throw invalid("The media-server storage layout is not supported.");
+    }
+    if (slot.subfolder !== undefined && typeof slot.subfolder !== "string") {
+      throw invalid("The media-server storage subfolder is malformed.");
+    }
+    if (slot.libraryId !== undefined && (typeof slot.libraryId !== "string" || !LIBRARY_ID.test(slot.libraryId))) {
+      throw invalid("The media-server copy destination is malformed.");
+    }
+    // `normalizeDownloadSettings` owns the subfolder rules -- no absolute path, no . or ..
+    // segments -- and, when the libraries are given, that the handle names a writable library of
+    // the right kind. An unsafe subfolder or an unusable handle is refused, never rewritten.
+    try {
+      settings[kind] = normalizeDownloadSettings({ [kind]: slot }, libraries)[kind];
+    } catch (error) {
+      if (error instanceof AppError) throw invalid(error.message);
+      throw error;
+    }
+  }
+  return settings;
+}
 
 /** A JSON tuple, not a NUL join: upstream ids may themselves contain a control byte, so a
  *  joined string could map two different identities to one key. */
@@ -308,6 +352,7 @@ export class MediaServerConfiguration {
         ...(library.mosaic === undefined ? {} : { mosaic: library.mosaic }),
         ...(library.showInFavorites === undefined ? {} : { showInFavorites: library.showInFavorites }),
         ...(library.downloadLibraryId === undefined ? {} : { downloadLibraryId: library.downloadLibraryId }),
+        ...(library.downloadSettings === undefined ? {} : { downloadSettings: structuredClone(library.downloadSettings) }),
       })),
     };
   }

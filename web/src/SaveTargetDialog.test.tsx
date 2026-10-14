@@ -112,3 +112,40 @@ it("does not close a replacement dialog after an old submission finishes", async
   expect(replacementClose).not.toHaveBeenCalled();
   expect(dialog()).not.toBeNull();
 });
+
+describe("SaveTargetDialog with no projected native destination", () => {
+  it("refuses the automatic option, explains it and holds the submit until a library is picked", async () => {
+    const { onSubmit } = render({ ruleUnavailable: true, rule: undefined });
+    const automatic = [...dialog()!.querySelectorAll<HTMLInputElement>(".bulk-strategy label")][0]!;
+    expect(automatic.querySelector("small")!.textContent).toBe("The default destination is unavailable. Choose another library.");
+    expect(automatic.querySelector<HTMLInputElement>("input")!.disabled).toBe(true);
+    expect(automatic.querySelector<HTMLInputElement>("input")!.checked).toBe(false);
+    expect(primary()!.disabled).toBe(true);
+    await act(async () => { primary()!.click(); });
+    await flush();
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    // A manual pick is still available, enables the submit and travels as an explicit target.
+    const custom = [...dialog()!.querySelectorAll<HTMLElement>(".bulk-strategy label")].find((label) => label.textContent?.includes("Somewhere else"))!;
+    await act(async () => { custom.querySelector("input")!.click(); });
+    await flush();
+    expect(primary()!.disabled).toBe(false);
+    await act(async () => { primary()!.click(); });
+    await flush();
+    expect(onSubmit).toHaveBeenCalledWith({ libraryId: "lib_1", subfolder: "", layout: "structured" });
+  });
+
+  it("never draws a false default path preview when the rule is unavailable", () => {
+    render({ ruleUnavailable: true, rule: undefined });
+    expect(dialog()!.textContent).not.toContain("Default library › Heat");
+    expect(dialog()!.textContent).not.toContain("Heat › Heat");
+  });
+
+  it("keeps the automatic option and its preview when a destination is projected", async () => {
+    const { onSubmit } = render({ rule: { movie: { subfolder: "Filmy", layout: "structured", libraryId: "lib_1" }, series: { subfolder: "", layout: "structured", libraryId: "lib_1" } } });
+    expect(dialog()!.textContent).toContain("Films › Filmy › Heat");
+    await act(async () => { primary()!.click(); });
+    await flush();
+    expect(onSubmit).toHaveBeenCalledWith(undefined);
+  });
+});

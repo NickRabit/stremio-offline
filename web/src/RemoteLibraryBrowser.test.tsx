@@ -1080,6 +1080,7 @@ describe("RemoteLibraryBrowser native copy", () => {
     sourceId: `src-${mediaSourceId}`, kind: "remote", playable: true, name, provider: "jellyfin",
     remoteItem: { libraryId: "rlib_a", itemId: "m1", mediaSourceId, progressKey: "k" },
     capabilities: { rename: false, move: false, delete: false, identify: false, writeArtwork: false, downloadToLibrary: true, downloadToDevice: false },
+    downloadTarget: { subfolder: "", layout: "structured", libraryId: "lib_1" },
     behaviorHints: { videoSize: size },
   });
   const actionLabels = () => [...host.querySelectorAll<HTMLButtonElement>(".browse-actions button")].map((node) => node.textContent ?? "");

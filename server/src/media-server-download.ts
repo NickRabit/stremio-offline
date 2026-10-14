@@ -1,5 +1,6 @@
 import { remoteLibraryVisibleTo, type RemoteAccessSource } from "./media-server-access.js";
 import { defaultLibrary, type DefaultLibrarySettings, type LibraryRecord } from "./libraries.js";
+import type { DownloadTargetSettings } from "./types.js";
 import {
   MEDIA_CONNECTION_ID,
   MEDIA_SERVER_KINDS,
@@ -136,28 +137,73 @@ export const takesRemoteCopy = (
   library.enabled && !library.readOnly && !library.unreachable
   && (remoteType === "mixed" ? library.type === "mixed" : library.type === remoteType || library.type === "mixed");
 
-/** The local library a copy of one remote library's original lands in when the request names no
- *  target. A configured override wins and is returned exactly as it stands -- an unusable one is
- *  refused at the door rather than swapped for another library -- and otherwise the remote
- *  library's own type decides: a movie or series library follows the default for that kind of
- *  content, while a mixed one prefers the first mixed library by order and falls back to the
- *  kind's default only when no mixed library exists. Pure and provider-free, so the source
- *  projection and the download admission read one rule and cannot disagree. */
-export function defaultRemoteCopyLibraryId(
-  remote: Pick<RemoteLibraryRecord, "type" | "downloadLibraryId">,
+/** The destination a copy of one remote library's original takes when the request names no
+ *  target: the one resolver the source projection and the download admission share, so the two
+ *  cannot disagree. The remote library's storage rules take precedence: the rule for the
+ *  content's effective kind -- a typed library's own type, the item's kind for a mixed one --
+ *  names the subfolder, the layout and, when it has one, the library, which wins verbatim. Only
+ *  when the library has no rules at all does the legacy `downloadLibraryId` handle apply, exactly
+ *  as it stands; an unusable destination is refused at the door rather than swapped for another
+ *  library. With neither, the remote library's own type decides: a movie or series library
+ *  follows the default for that kind of content, while a mixed one prefers the first mixed
+ *  library by order and falls back to the kind's default only when no mixed library exists. Pure
+ *  and provider-free. */
+export function defaultRemoteCopyTarget(
+  remote: Pick<RemoteLibraryRecord, "type" | "downloadLibraryId" | "downloadSettings">,
   libraries: readonly LibraryRecord[],
   settings: DefaultLibrarySettings,
   kind: "movie" | "series",
-): string | undefined {
-  if (remote.downloadLibraryId !== undefined) return remote.downloadLibraryId;
+): DownloadTargetSettings {
+  const effectiveKind: "movie" | "series" = remote.type === "mixed" ? kind : remote.type;
+  const rule = remote.downloadSettings?.[effectiveKind];
+  const subfolder = rule?.subfolder ?? "";
+  const layout = rule?.layout ?? "structured";
+  if (rule?.libraryId !== undefined) return { subfolder, layout, libraryId: rule.libraryId };
+  if (remote.downloadSettings === undefined && remote.downloadLibraryId !== undefined) {
+    return { subfolder, layout, libraryId: remote.downloadLibraryId };
+  }
   // The kind's own rule, with a root no copy may be written to left out -- the same fallback the
   // queue resolves for every other download, so a read-only default never lands a copy.
   const forKind = (): string | undefined =>
     defaultLibrary(libraries.filter((library) => !library.readOnly), settings,
       (remote.type === "mixed" ? kind : remote.type) === "movie" ? "movie" : "episode")?.id;
-  if (remote.type !== "mixed") return forKind();
-  const mixed = libraries
-    .filter((library) => takesRemoteCopy("mixed", library))
-    .sort((left, right) => left.order - right.order)[0];
-  return mixed?.id ?? forKind();
+  const derived = remote.type === "mixed"
+    ? libraries.filter((library) => takesRemoteCopy("mixed", library))
+        .sort((left, right) => left.order - right.order)[0]?.id ?? forKind()
+    : forKind();
+  return { subfolder, layout, ...(derived === undefined ? {} : { libraryId: derived }) };
 }
+
+/** The local library one remote library's rule places a copy of `kind` in, or nothing. Kept as a
+ *  thin wrapper over {@link defaultRemoteCopyTarget} for the callers that only want the handle. */
+export function defaultRemoteCopyLibraryId(
+  remote: Pick<RemoteLibraryRecord, "type" | "downloadLibraryId" | "downloadSettings">,
+  libraries: readonly LibraryRecord[],
+  settings: DefaultLibrarySettings,
+  kind: "movie" | "series",
+): string | undefined {
+  return defaultRemoteCopyTarget(remote, libraries, settings, kind).libraryId;
+}
+
+/** Whether one local library may receive the copy a remote library's rule resolves to. A stored
+ *  rule follows the content's effective kind, so a movie slot of a mixed library may land in a
+ *  movie or a mixed library; a legacy handle follows the remote library's own type, exactly as it
+ *  always did. The same check both the projection and the admission run, so neither exposes a
+ *  destination the other refuses. */
+export const takesRemoteTarget = (
+  remote: Pick<RemoteLibraryRecord, "type" | "downloadLibraryId" | "downloadSettings">,
+  kind: "movie" | "series",
+  library: Pick<LibraryRecord, "type" | "enabled" | "readOnly" | "unreachable">,
+): boolean => takesRemoteCopy(copyFitType(remote, kind), library);
+
+/** The remote type a resolved copy has to fit into. A stored rule follows the content's effective
+ *  kind -- the item's kind for a mixed library -- so its movie slot may land in a movie or a mixed
+ *  library. A legacy handle, or the bare kind default, keeps the remote library's own type: a
+ *  mixed library with a handle only ever lands in a mixed one, and one without a handle in the
+ *  kind's own libraries. */
+const copyFitType = (
+  remote: Pick<RemoteLibraryRecord, "type" | "downloadLibraryId" | "downloadSettings">,
+  kind: "movie" | "series",
+): RemoteLibraryType => remote.downloadSettings !== undefined
+  ? (remote.type === "mixed" ? kind : remote.type)
+  : remote.type === "mixed" && remote.downloadLibraryId === undefined ? kind : remote.type;

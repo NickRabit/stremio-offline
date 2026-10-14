@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { ProviderItem } from "./media-server-provider.js";
+import type { AddonDownloadSettings } from "./types.js";
 
 export type MediaServerKind = "jellyfin" | "emby";
 export const MEDIA_SERVER_KINDS: readonly MediaServerKind[] = ["jellyfin", "emby"];
@@ -84,6 +85,12 @@ export interface RemoteLibraryRecord {
    *  the default for the kind; an explicitly stored handle that is gone stays stored and is
    *  refused at the door rather than redirected elsewhere. */
   downloadLibraryId?: string;
+  /** How automatic copies of this library's originals are stored: the same two per-kind rules an
+   *  addon carries. Absent means the legacy behaviour -- the record's `downloadLibraryId` handle
+   *  when there is one, otherwise the kind's default destination with an empty subfolder and the
+   *  structured layout. A stored rule that names a destination gone from this machine stays
+   *  stored and is refused at the door rather than redirected elsewhere. */
+  downloadSettings?: AddonDownloadSettings;
 }
 
 /** The effective browse mode of a record: an explicit choice wins, otherwise a mixed library
@@ -185,6 +192,8 @@ export interface PublicRemoteLibrary {
   showInFavorites: boolean;
   /** The stored copy destination, when one is configured for this library. */
   downloadLibraryId?: string;
+  /** The stored storage rules for automatic copies, when this library has its own. */
+  downloadSettings?: AddonDownloadSettings;
   capabilities: RemoteCapabilities;
   /** The provider of the stored connection, when it still exists. Never a secret or address. */
   provider?: MediaServerKind;
@@ -204,6 +213,7 @@ export const publicRemoteLibrary = (record: RemoteLibraryRecord, provider?: Medi
   mosaic: effectiveMosaic(record),
   showInFavorites: effectiveShowInFavorites(record),
   ...(record.downloadLibraryId === undefined ? {} : { downloadLibraryId: record.downloadLibraryId }),
+  ...(record.downloadSettings === undefined ? {} : { downloadSettings: structuredClone(record.downloadSettings) }),
   capabilities: READ_ONLY_MEDIA_CAPABILITIES,
   ...(provider === undefined ? {} : { provider }),
 });

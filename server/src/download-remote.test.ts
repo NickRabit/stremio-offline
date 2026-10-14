@@ -177,6 +177,27 @@ const close = async (h: { queue: DownloadQueue; directory: string }) => {
   await rm(h.directory, { recursive: true, force: true });
 };
 
+test("an automatic native copy never switches libraries after its destination disappears", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-native-target-"));
+  const downloads = path.join(directory, "downloads");
+  const fallback = library(downloads);
+  const remote = state(4096);
+  const queue = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloads, {
+    libraries: () => [fallback], defaultLibrary: () => fallback,
+    libraryRetryMs: 10, libraryWaitMs: 30, remoteDownload: remoteBackend(remote),
+  });
+  await queue.load();
+  try {
+    const ref = reference();
+    const job = await queue.add("Movie", sealedStream(ref, 4096), undefined,
+      { subfolder: "new-folder", layout: "flat", libraryId: "lib_deadbeef" }, OWNER, ref);
+    await waitFor(queue, () => queue.get(job.id)?.status === "failed");
+    assert.equal(queue.get(job.id)?.errorKey, "err.chosenLibraryGone");
+    assert.equal(remote.calls.length, 0);
+    await assert.rejects(stat(path.join(downloads, "new-folder", "Movie.mkv")));
+  } finally { await close({ queue, directory }); }
+});
+
 test("a remote original is copied byte for byte over one authenticated GET", async () => {
   const h = await harness({ total: 300 * 1024, segments: 8 });
   try {

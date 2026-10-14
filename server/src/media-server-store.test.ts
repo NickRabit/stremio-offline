@@ -498,3 +498,54 @@ test("the copy destination rides in a backup as it stands, and only its shape is
     assert.equal(store.remoteLibraries().length, 1, "a refused batch writes nothing");
   });
 });
+
+test("storage rules ride in a backup with an unavailable handle kept as it stands", async () => {
+  await run(async ({ config, store, dataDir }) => {
+    const connection = await config.addConnection(connectionInput());
+    const attached = await config.attachLibrary(connection.id, libraryInput());
+    assert.equal("downloadSettings" in attached, false, "an attach with no rules stores none");
+    const rules = {
+      movie: { subfolder: "Filmy/2024", layout: "flat" as const, libraryId: "lib_a1b2c3d4" },
+      series: { subfolder: "", layout: "structured" as const },
+    };
+    await store.update((state) => { state.remoteLibraries![0]!.downloadSettings = structuredClone(rules); });
+
+    const exported = config.exportConfiguration();
+    assert.deepEqual(exported.libraries[0]!.downloadSettings, rules);
+    const projected = projectMediaServerConfiguration({ version: 1, connections: exported.connections, libraries: exported.libraries });
+    assert.deepEqual(projected.libraries[0]!.downloadSettings, rules, "the backup projection keeps the rules");
+
+    // The handle names a library of the install the backup came from: a restore stores it as it
+    // stands, and a copy that asks for a library gone here is refused at the door, never rewritten.
+    const restored = await workspace();
+    try {
+      await restored.config.restoreConfiguration(exported);
+      assert.deepEqual(restored.store.remoteLibraries()[0]!.downloadSettings, rules, "the handle is preserved verbatim");
+    } finally {
+      await rm(path.dirname(restored.dataDir), { recursive: true, force: true });
+    }
+
+    const reopened = new Store(dataDir, dataDir);
+    await reopened.load();
+    assert.deepEqual(reopened.remoteLibraries()[0]!.downloadSettings, rules, "the rules survive a reload");
+
+    for (const value of [
+      { movie: { libraryId: `rlib_${"a".repeat(32)}` } },
+      { movie: { subfolder: "/etc" } },
+      { movie: { subfolder: "a/../../b" } },
+      { movie: { layout: "guess" } },
+      { movie: { subfolder: 7 } },
+      { movie: { libraryId: 9 } },
+      { movie: { extra: true } },
+      { movie: "flat" },
+      [],
+    ]) {
+      await assert.rejects(
+        config.restoreConfiguration({ version: 1, connections: [], libraries: [{ ...exported.libraries[0], downloadSettings: value }] }),
+        { code: "invalid-input" },
+        `the imported rules ${JSON.stringify(value)} are refused`,
+      );
+    }
+    assert.equal(store.remoteLibraries().length, 1, "a refused batch writes nothing");
+  });
+});

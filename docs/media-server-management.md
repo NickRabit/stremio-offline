@@ -34,7 +34,7 @@ the canonical lower-case path without a trailing slash; variants fail closed.
 | `POST /api/media-servers/:id/reauthenticate` | Signs in again with `{ username, password }`; requires the same verified server/account identity. |
 | `GET /api/media-servers/:id/libraries` | `{ items: ProviderLibrary[] }` — the libraries the stored account can currently see. |
 | `POST /api/media-servers/:id/libraries` | Attaches one remote library from `{ remoteId, name?, order?, showOnHome?, showInContinueWatching?, showInFavorites?, browseMode?, mosaic? }`; the remote name and type come from verified discovery. New libraries are granted to nobody. |
-| `PATCH /api/remote-libraries/:id` | Local configuration only: `name`, `enabled`, `order`, `showOnHome`, `showInContinueWatching`, `showInFavorites`, `browseMode`, `mosaic`, `allowedUsers`, `downloadLibraryId`. `root`, `writeArtwork`, `type`, `remoteId`, `connectionId` and any download flag are refused. |
+| `PATCH /api/remote-libraries/:id` | Local configuration only: `name`, `enabled`, `order`, `showOnHome`, `showInContinueWatching`, `showInFavorites`, `browseMode`, `mosaic`, `allowedUsers`, `downloadLibraryId`, `downloadSettings`. `root`, `writeArtwork`, `type`, `remoteId`, `connectionId` and any download flag are refused. |
 | `DELETE /api/remote-libraries/:id` | Removes the local attachment. Its stored history is kept invisibly for 30 days; `?forget=true` deletes it at once. The remote server is never mutated. |
 | `GET /api/media-servers/export` | The metadata-only configuration export (`version`, connections, libraries). No secret references, grants, generations or timestamps. |
 | `POST /api/media-servers/import` | Additively restores an export: fresh handles, connections and libraries land **disabled** with no grants and no secrets, and a duplicate remote account refuses the whole batch. Its own body parser allows up to 8 MiB, above the ordinary 256 KiB. |
@@ -509,7 +509,13 @@ account must have access to the remote library and permission to write to the
 local destination. Device saves and bulk season or folder copies remain unavailable
 for native sources. No remote watch history, metadata or files are modified.
 
-An administrator can set **Save copies to** in the attached library's settings.
+An administrator can configure the destination library, a relative subfolder and
+the storage layout in the attached library's settings, using the same rule editor
+as addons. Movie and series libraries show their applicable rule; mixed libraries
+show both. The editor previews the resulting path. Structured storage creates a
+title folder for a movie or show and season folders for episodes; flat storage
+writes the file directly below the selected subfolder. A configured subfolder
+may be created when the copy starts, whereas a manually browsed folder must exist.
 With no override, movie and series libraries use their respective local defaults;
 other libraries prefer an enabled writable general-purpose library. The destination
 picker can override this rule for a single copy. A configured destination that is

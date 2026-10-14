@@ -772,6 +772,115 @@ const bobReference: RemoteDownloadReference = { ...remoteReference, ownerUserId:
 
 const destinationOf = (harness: Harness) => harness.added[0]?.settings;
 
+/** The two per-kind rules a remote library stores, in the shape the editor saves them. */
+const storedRule = (movie: Partial<DownloadTargetSettings> = {}, series: Partial<DownloadTargetSettings> = {}) => ({
+  movie: { subfolder: "", layout: "structured" as const, ...movie },
+  series: { subfolder: "", layout: "structured" as const, ...series },
+});
+
+/** A local library that is hidden, read-only or gone, so a stored destination can be pointed at a
+ *  library the admission must refuse. */
+const brokenDestinations: Array<[string, (entry: LibraryRecord) => LibraryRecord | undefined]> = [
+  ["hidden", (entry) => ({ ...entry, visibleTo: [] })],
+  ["read-only", (entry) => ({ ...entry, visibleTo: [BOB], readOnly: true })],
+  ["gone", () => undefined],
+];
+
+test("a stored rule captures its library, subfolder and layout, and a folder that does not exist yet is fine", async (t) => {
+  const films = library("lib_films", "movie", { visibleTo: [BOB] });
+  const harness = await mount([], {
+    viewer: ordinary, libraries: [films], source: sealedNative(),
+    downloadReference: bobReference, connections: [remoteConnectionRecord],
+    // The folder "Filmy/2024" is not on disk: an addon rule's folder is created by the queue, so a
+    // copy without a manual pick must not treat it as an already-existing directory.
+    remoteLibraries: [remoteLibraryOfType("movie", { downloadSettings: storedRule({ subfolder: "Filmy/2024", layout: "flat", libraryId: films.id }) })],
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/downloads", { method: "POST", body: { title: "Movie" } });
+  assert.equal(response.status, 201, await response.text());
+  assert.deepEqual(destinationOf(harness), { subfolder: "Filmy/2024", layout: "flat", libraryId: films.id });
+  assert.equal(destinationOf(harness)?.explicit, undefined, "an automatic destination is not a manual pick");
+});
+
+test("an episode copies with the series rule, structured and subfoldered", async (t) => {
+  const shows = library("lib_shows", "series", { visibleTo: [BOB] });
+  const harness = await mount([], {
+    viewer: ordinary, libraries: [shows], source: sealedNative(),
+    media: { kind: "episode", title: "The Show", season: 1, episode: 2 },
+    downloadReference: bobReference, connections: [remoteConnectionRecord],
+    remoteLibraries: [remoteLibraryOfType("series", { downloadSettings: storedRule({}, { subfolder: "Serialy", layout: "structured", libraryId: shows.id }) })],
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/downloads", { method: "POST", body: { title: "Episode" } });
+  assert.equal(response.status, 201, await response.text());
+  assert.deepEqual(destinationOf(harness), { subfolder: "Serialy", layout: "structured", libraryId: shows.id });
+});
+
+test("a mixed remote library's stored rule follows the item's own kind", async (t) => {
+  const films = library("lib_films", "movie", { visibleTo: [BOB] });
+  const shows = library("lib_shows", "series", { visibleTo: [BOB] });
+  const rules = storedRule({ subfolder: "Filmy", layout: "flat", libraryId: films.id }, { subfolder: "Serialy", layout: "structured", libraryId: shows.id });
+  const movie = await mount([], {
+    viewer: ordinary, libraries: [films, shows], source: sealedNative(),
+    downloadReference: bobReference, connections: [remoteConnectionRecord],
+    remoteLibraries: [remoteLibraryOfType("mixed", { downloadSettings: rules })],
+  });
+  t.after(movie.close);
+  const movieResponse = await api(movie.base, "/api/downloads", { method: "POST", body: { title: "Movie" } });
+  assert.equal(movieResponse.status, 201, await movieResponse.text());
+  assert.deepEqual(destinationOf(movie), { subfolder: "Filmy", layout: "flat", libraryId: films.id }, "a film takes the movie slot");
+
+  const episode = await mount([], {
+    viewer: ordinary, libraries: [films, shows], source: sealedNative(),
+    media: { kind: "episode", title: "The Show", season: 1, episode: 2 },
+    downloadReference: bobReference, connections: [remoteConnectionRecord],
+    remoteLibraries: [remoteLibraryOfType("mixed", { downloadSettings: rules })],
+  });
+  t.after(episode.close);
+  const episodeResponse = await api(episode.base, "/api/downloads", { method: "POST", body: { title: "Episode" } });
+  assert.equal(episodeResponse.status, 201, await episodeResponse.text());
+  assert.deepEqual(destinationOf(episode), { subfolder: "Serialy", layout: "structured", libraryId: shows.id }, "an episode takes the series slot");
+});
+
+for (const [label, shape] of brokenDestinations) {
+  test(`a stored rule whose library is ${label} is refused before the provider is contacted`, async (t) => {
+    const configured = `lib_${"a".repeat(8)}`;
+    const stored = shape(library(configured, "movie", { visibleTo: [BOB] }));
+    const harness = await mount([], {
+      viewer: ordinary, libraries: [...(stored ? [stored] : []), library("lib_fallback", "movie", { visibleTo: [BOB] })],
+      source: sealedNative(), downloadReference: bobReference, connections: [remoteConnectionRecord],
+      remoteLibraries: [remoteLibraryOfType("movie", { downloadSettings: storedRule({ subfolder: "X", libraryId: configured }) })],
+    });
+    t.after(harness.close);
+
+    const response = await api(harness.base, "/api/downloads", { method: "POST", body: { title: "Movie" } });
+    assert.ok(response.status >= 400, `the stored ${label} rule library is refused`);
+    assert.deepEqual(harness.references, [], "no provider was contacted before the refusal");
+    assert.deepEqual(harness.added, [], "and nothing is substituted for the unusable destination");
+  });
+}
+
+test("the queue captures the resolved rule, so a later change cannot move the copy", async (t) => {
+  const films = library("lib_films", "movie", { visibleTo: [BOB] });
+  const other = library("lib_other", "movie", { visibleTo: [BOB] });
+  const record = remoteLibraryOfType("movie", { downloadSettings: storedRule({ subfolder: "Filmy", layout: "flat", libraryId: films.id }) }) as Record<string, unknown>;
+  const harness = await mount([], {
+    viewer: ordinary, libraries: [films, other], source: sealedNative(),
+    downloadReference: bobReference, connections: [remoteConnectionRecord],
+    remoteLibraries: [record],
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/downloads", { method: "POST", body: { title: "Movie" } });
+  assert.equal(response.status, 201, await response.text());
+  const captured = destinationOf(harness)!;
+  // A later edit of the stored rule is a fresh record; the captured job keeps its own copy.
+  record.downloadSettings = storedRule({ subfolder: "Moved", libraryId: other.id });
+  assert.deepEqual(captured, { subfolder: "Filmy", layout: "flat", libraryId: films.id });
+});
+
 test("a native copy with no target lands in the remote library's configured destination", async (t) => {
   const films = library("lib_films", "movie", { visibleTo: [BOB] });
   const other = library("lib_other", "movie", { visibleTo: [BOB] });
@@ -787,7 +896,9 @@ test("a native copy with no target lands in the remote library's configured dest
   assert.equal(response.status, 201, await response.text());
   assert.equal(harness.assertions.length, 1, "the sealed identity was re-proved before its library was read");
   assert.equal(destinationOf(harness)?.libraryId, films.id, "the configured handle wins over the kind's default");
-  assert.equal(destinationOf(harness)?.explicit, true, "a resolved destination is pinned, never redirected later");
+  assert.equal(destinationOf(harness)?.explicit, undefined, "configured subfolders use rule naming; native jobs pin the library separately");
+  assert.equal(destinationOf(harness)?.layout, "structured");
+  assert.equal(destinationOf(harness)?.subfolder, "");
 });
 
 test("a movie remote library with no override follows the movie default", async (t) => {
@@ -871,12 +982,6 @@ test("a read-only default for the kind is passed over the way the queue already 
   assert.equal(response.status, 201, await response.text());
   assert.equal(destinationOf(harness)?.libraryId, writable.id, "the kind's rule skips a root no copy may be written to");
 });
-
-const brokenDestinations: Array<[string, (entry: LibraryRecord) => LibraryRecord | undefined]> = [
-  ["hidden", (entry) => ({ ...entry, visibleTo: [] })],
-  ["read-only", (entry) => ({ ...entry, visibleTo: [BOB], readOnly: true })],
-  ["gone", () => undefined],
-];
 
 for (const [label, shape] of brokenDestinations) {
   test(`a configured destination that is ${label} is refused, never swapped for another library`, async (t) => {

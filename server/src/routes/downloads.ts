@@ -8,10 +8,10 @@ import { normalizeLanguage } from "../language.js";
 import { log } from "../logger.js";
 import { libraryVisible, resolveLibraryPath, type LibraryRecord, type Viewer } from "../libraries.js";
 import { defaultDownloadSettings, exactSubfolder, targetLibrary, type MediaInfo } from "../naming.js";
-import { defaultRemoteCopyLibraryId, type RemoteDownloadReference } from "../media-server-download.js";
+import { defaultRemoteCopyTarget, takesRemoteTarget, type RemoteDownloadReference } from "../media-server-download.js";
 import type { MediaServerSources } from "../media-server-sources.js";
 import { openRemoteContent } from "../media-server-reference.js";
-import { REMOTE_LIBRARY_ID } from "../media-server-types.js";
+import { REMOTE_LIBRARY_ID, type RemoteLibraryRecord } from "../media-server-types.js";
 import { titleLanguage } from "../ranking.js";
 import type { ResourceOwner } from "../media-resources.js";
 import type { UserPrefs } from "../store.js";
@@ -90,6 +90,26 @@ const explicitTargetFor = (deps: SelectionDeps) => async (req: express.Request, 
   };
 };
 
+/** The automatic destination of a native copy, resolved from the remote library's stored rules.
+ *  The library is proved here -- it exists, the account may see it, it takes the content and it
+ *  is writable -- but the configured subfolder is NOT treated as an already-existing picked
+ *  directory: the stored subfolder and layout are kept as they stand, and the queue's own naming
+ *  and creation makes the folder, exactly as it makes an addon rule's folder. */
+const automaticRemoteTargetFor = (deps: SelectionDeps) =>
+  (req: express.Request, remote: RemoteLibraryRecord, kind: "movie" | "series"): DownloadTargetSettings => {
+    const libraries = deps.store.libraries();
+    const target = defaultRemoteCopyTarget(remote, libraries, deps.store.settings(), kind);
+    if (target.libraryId === undefined) return target;
+    const library = libraries.find((candidate) => candidate.id === target.libraryId);
+    if (!library || !libraryVisible(library, viewerOf(deps.currentUser(req)))) {
+      throw new AppError("That library does not exist.", "err.libraryNotFound");
+    }
+    if (!takesRemoteTarget(remote, kind, library)) {
+      throw new AppError("That library does not take this kind of title.", "err.libraryTypeMismatch");
+    }
+    return target;
+  };
+
 /** Parses the lazy download body of a series into a `DownloadSelection`: the addon keys the
  *  caller may use, the strategy, the audio and subtitle rules, the title language and a
  *  concrete target. Shared so the bulk route and a follow's automatic rule cannot drift. */
@@ -148,6 +168,7 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
 
   const assertMayQueue = mayQueueGuard(deps);
   const explicitTarget = explicitTargetFor(deps);
+  const automaticTarget = automaticRemoteTargetFor(deps);
   const parseSelection = createSelectionParser(deps);
 
   /** A job the caller does not own is answered exactly like one that is not there: 403 would
@@ -183,15 +204,11 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
     // The requested local destination and its rights are resolved first, so a bad, hidden,
     // read-only or remote target is refused here without any provider contact for a copy.
     const chosen = await explicitTarget(req, req.body.target, kind);
-    // A native original queued without a target of its own takes the destination its remote
-    // library stores, or the default for the kind. The library is read from the sealed address
-    // the session actually resolved -- never from the body -- and a stored setting that names no
-    // usable library is refused here rather than redirected to another one.
-    let derived: DownloadTargetSettings | undefined;
-    if (chosen === undefined && isRemoteDownloadSource(stream)) {
-      const resolved = remote ? defaultRemoteCopyLibraryId(remote, store.libraries(), store.settings(), kind) : undefined;
-      if (resolved !== undefined) derived = await explicitTarget(req, { libraryId: resolved }, kind);
-    }
+    // A native original queued without a target of its own takes the full destination its remote
+    // library stores -- library, subfolder and layout. The library is read from the sealed address
+    // the session actually resolved, never from the body, and a stored handle that names no usable
+    // library is refused here rather than redirected to another one.
+    const derived = chosen === undefined && native && remote ? automaticTarget(req, remote, kind) : undefined;
     const targetSettings = chosen ?? derived ?? (kind === "series" ? settings.series : settings.movie);
     // The queue turns a rule that names no library into the default for the kind; the guard
     // has to name that same library or the job would be let in and paused at once.

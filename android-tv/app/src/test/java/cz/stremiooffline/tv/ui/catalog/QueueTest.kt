@@ -19,7 +19,7 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
 import cz.stremiooffline.tv.data.ApiFailure
-import cz.stremiooffline.tv.data.DownloadTargetDto
+import cz.stremiooffline.tv.data.DownloadTargetSettingsDto
 import cz.stremiooffline.tv.data.DownloadResult
 import cz.stremiooffline.tv.data.LibraryDto
 import cz.stremiooffline.tv.data.MetaDto
@@ -81,8 +81,8 @@ class QueueTest {
   }
 
   @Test
-  fun `a native original goes straight to the projected destination, without a panel`() {
-    val api = readyNative(downloadLibraryId = "box")
+  fun `a native original with a projected destination sends no target, without a panel`() {
+    val api = readyNative(projectedLibraryId = "box")
     mount(api)
     compose.waitForIdle()
 
@@ -90,27 +90,28 @@ class QueueTest {
     press(Key.DirectionCenter)
 
     assertEquals(listOf("src-native"), api.queuedSourceIds)
-    assertEquals(listOf(DownloadTargetDto("box")), api.queuedTargets)
-    compose.onNodeWithTag(TagCatalogLibraryPanel).assertDoesNotExist()
-  }
-
-  @Test
-  fun `a native original with no projected destination lets the server resolve the default`() {
-    val api = readyNative(downloadLibraryId = null)
-    mount(api)
-    compose.waitForIdle()
-
-    focusFromLeft(TagCatalogToLibrary)
-    press(Key.DirectionCenter)
-
-    assertEquals(listOf("src-native"), api.queuedSourceIds)
+    // The projected destination is the server's own; no target travels and the server resolves
+    // its configured subfolder and layout.
     assertEquals(listOf(null), api.queuedTargets)
     compose.onNodeWithTag(TagCatalogLibraryPanel).assertDoesNotExist()
   }
 
   @Test
+  fun `a native original with no projected destination opens the library panel, never a blind queue`() {
+    val api = readyNative(projectedLibraryId = null)
+    mount(api)
+    compose.waitForIdle()
+
+    focusFromLeft(TagCatalogToLibrary)
+    press(Key.DirectionCenter)
+
+    assertEquals(0, api.downloadCalls)
+    compose.onNodeWithTag(TagCatalogLibraryPanel).assertExists()
+  }
+
+  @Test
   fun `a destination read that fails queues no native original`() {
-    val api = readyNative(downloadLibraryId = "box")
+    val api = readyNative(projectedLibraryId = "box")
     api.librariesFailure = ApiFailure.Generic
     mount(api)
     compose.waitForIdle()
@@ -123,7 +124,7 @@ class QueueTest {
   }
 
   /** One native original this account may copy, with two writable destinations in reach. */
-  private fun readyNative(downloadLibraryId: String?): FakeTvApi {
+  private fun readyNative(projectedLibraryId: String?): FakeTvApi {
     val api = FakeTvApi()
     api.settingsValue = SettingsResponse(uiLanguage = "en", audioLanguage = "en", realDebridConfigured = true)
     api.librariesValue = listOf(
@@ -135,7 +136,7 @@ class QueueTest {
         sourceId = "src-native", kind = "remote", playable = true, name = "1080p",
         capabilities = RemoteCapabilitiesDto(downloadToLibrary = true),
         remoteItem = RemoteItemContext(libraryId = "rlib_a", itemId = "i1", mediaSourceId = "m1", progressKey = "k"),
-        downloadLibraryId = downloadLibraryId,
+        downloadTarget = projectedLibraryId?.let { DownloadTargetSettingsDto(libraryId = it) },
       ),
     )
     return api

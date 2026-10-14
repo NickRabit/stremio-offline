@@ -4,8 +4,9 @@ import { ArrowDown, ArrowUp, Check, KeyRound, Library, Pencil, Plus, RefreshCw, 
 import { useDialogFocus } from "./dialog-focus";
 import { useDialogViewport } from "./dialog-viewport";
 import { api, describeError } from "./api";
+import { DownloadRuleEditor, type DownloadRuleKind } from "./DownloadRuleEditor";
 import { t, useI18n } from "./i18n";
-import type { AdminRemoteLibrary, LibraryType, LibraryView, MediaServerConnection, MediaServerProvider, MediaServerStatus, ProviderLibrary, RemoteBrowseMode, UserAccount } from "./types";
+import type { AddonDownloadSettings, AdminRemoteLibrary, DownloadTargetSettings, LibraryType, LibraryView, MediaServerConnection, MediaServerProvider, MediaServerStatus, ProviderLibrary, RemoteBrowseMode, UserAccount } from "./types";
 
 const PROVIDER_KEY: Record<MediaServerProvider, "mediaServer.provider.jellyfin" | "mediaServer.provider.emby"> = {
   jellyfin: "mediaServer.provider.jellyfin",
@@ -422,15 +423,33 @@ function DiscoverDialog({ connection, attached, busy, error, onClose, onAttach }
   </Dialog>;
 }
 
-/** Whether one local library may receive copies of this remote library's content: a mixed remote
- *  library only ever lands in a mixed one, a movie or series one may also use a mixed one. */
-const takesRemoteType = (remoteType: LibraryType, localType: LibraryType): boolean =>
-  remoteType === "mixed" ? localType === "mixed" : localType === remoteType || localType === "mixed";
+const emptyTarget = (): DownloadTargetSettings => ({ subfolder: "", layout: "structured" });
+
+/** The storage rules the editor opens with. Stored rules win; a library that only carries the
+ *  legacy handle seeds the slots its type uses -- a movie library its movie rule, a series one
+ *  its series rule, a mixed library both -- so opening the dialog changes nothing by itself and a
+ *  save without an edit leaves the legacy field exactly where it was. */
+const initialRemoteDownloadSettings = (library: AdminRemoteLibrary): AddonDownloadSettings => {
+  if (library.downloadSettings) return { movie: { ...library.downloadSettings.movie }, series: { ...library.downloadSettings.series } };
+  const handle = library.downloadLibraryId;
+  if (!handle) return { movie: emptyTarget(), series: emptyTarget() };
+  const seeded = (): DownloadTargetSettings => ({ subfolder: "", layout: "structured", libraryId: handle });
+  return {
+    movie: library.type === "series" ? emptyTarget() : seeded(),
+    series: library.type === "movie" ? emptyTarget() : seeded(),
+  };
+};
+
+const sameTarget = (left: DownloadTargetSettings, right: DownloadTargetSettings): boolean =>
+  left.subfolder === right.subfolder && left.layout === right.layout && (left.libraryId ?? "") === (right.libraryId ?? "");
+
+const sameSettings = (left: AddonDownloadSettings, right: AddonDownloadSettings): boolean =>
+  sameTarget(left.movie, right.movie) && sameTarget(left.series, right.series);
 
 function RemoteLibraryDialog({ library, localLibraries, users, usersError, busy, error, onRetryUsers, onClose, onSave, onRequestRemove }: {
   library: AdminRemoteLibrary; localLibraries: LibraryView[]; users: UserAccount[] | null; usersError: string; busy: boolean; error: string;
   onRetryUsers: () => void; onClose: () => void;
-  onSave: (patch: { name: string; enabled: boolean; showOnHome: boolean; showInContinueWatching: boolean; allowedUsers: string[]; browseMode: RemoteBrowseMode; mosaic: boolean; showInFavorites: boolean; downloadLibraryId: string | null }) => Promise<boolean>;
+  onSave: (patch: { name: string; enabled: boolean; showOnHome: boolean; showInContinueWatching: boolean; allowedUsers: string[]; browseMode: RemoteBrowseMode; mosaic: boolean; showInFavorites: boolean; downloadLibraryId?: string | null; downloadSettings?: AddonDownloadSettings | null }) => Promise<boolean>;
   onRequestRemove: () => void;
 }) {
   const [draft, setDraft] = useState(() => ({
@@ -439,19 +458,28 @@ function RemoteLibraryDialog({ library, localLibraries, users, usersError, busy,
     mosaic: library.mosaic !== false, showInFavorites: library.showInFavorites !== false,
     browseMode: library.browseMode ?? (library.type === "mixed" ? "folders" : "titles") as RemoteBrowseMode,
     allowedUsers: new Set(library.allowedUsers),
-    downloadLibraryId: library.downloadLibraryId ?? "",
+    downloadSettings: initialRemoteDownloadSettings(library),
   }));
-  // Only the appropriate writable local libraries are offered; a stored handle that is not among
-  // them stays visible as a disabled row, so it is never silently cleared or swapped.
-  const copyTargets = localLibraries.filter((candidate) => candidate.enabled && !candidate.readOnly && !candidate.unreachable && candidate.writable && takesRemoteType(library.type, candidate.type));
-  const storedUnavailable = draft.downloadLibraryId !== "" && !copyTargets.some((candidate) => candidate.id === draft.downloadLibraryId);
-  const storedName = localLibraries.find((candidate) => candidate.id === draft.downloadLibraryId)?.name ?? draft.downloadLibraryId;
+  const stored = initialRemoteDownloadSettings(library);
+  const storageChanged = !sameSettings(draft.downloadSettings, stored);
+  // A typed remote library shows its one applicable kind section; a mixed one shows Films and
+  // Series. The default a mixed library falls back to is the first writable mixed library.
+  const kinds: readonly DownloadRuleKind[] = library.type === "movie" ? ["movie"] : library.type === "series" ? ["series"] : ["movie", "series"];
+  const defaultLibraryIds = (() => {
+    if (library.type !== "mixed") return undefined;
+    const mixed = localLibraries
+      .filter((candidate) => candidate.enabled && !candidate.readOnly && !candidate.unreachable && candidate.writable && candidate.type === "mixed")
+      .sort((a, b) => a.order - b.order)[0];
+    return mixed ? { movie: mixed.id, series: mixed.id } : undefined;
+  })();
+  const changeRule = (kind: DownloadRuleKind, patch: Partial<DownloadTargetSettings>) =>
+    setDraft((current) => ({ ...current, downloadSettings: { ...current.downloadSettings, [kind]: { ...current.downloadSettings[kind], ...patch } } }));
   const loaded = users !== null;
   const dirty = draft.name.trim() !== library.name || draft.enabled !== library.enabled
     || draft.showOnHome !== library.showOnHome || draft.showInContinueWatching !== library.showInContinueWatching
     || draft.mosaic !== (library.mosaic !== false) || draft.showInFavorites !== (library.showInFavorites !== false)
     || draft.browseMode !== (library.browseMode ?? (library.type === "mixed" ? "folders" : "titles"))
-    || draft.downloadLibraryId !== (library.downloadLibraryId ?? "")
+    || storageChanged
     || [...draft.allowedUsers].sort().join(",") !== [...library.allowedUsers].sort().join(",");
 
   const toggleUser = (id: string, on: boolean) => setDraft((current) => {
@@ -469,7 +497,10 @@ function RemoteLibraryDialog({ library, localLibraries, users, usersError, busy,
           showOnHome: draft.showOnHome, showInContinueWatching: draft.showInContinueWatching,
           mosaic: draft.mosaic, showInFavorites: draft.showInFavorites, browseMode: draft.browseMode,
           allowedUsers: [...draft.allowedUsers],
-          downloadLibraryId: draft.downloadLibraryId || null,
+          // Only a real storage edit is sent, so an unrelated change never validates -- and never
+          // rewrites -- a rule that names a library that has since become unavailable. A storage
+          // edit saves the new rules and clears the legacy handle in the same patch.
+          ...(storageChanged ? { downloadSettings: draft.downloadSettings, downloadLibraryId: null } : {}),
         }).then((done) => { if (done) onClose(); })}>{t("common.save")}</button>
     </>}>
     <section className="library-edit-section">
@@ -499,14 +530,8 @@ function RemoteLibraryDialog({ library, localLibraries, users, usersError, busy,
     </section>
     <section className="library-edit-section">
       <div className="library-picker-section-head"><h3>{t("save.toLibrary")}</h3></div>
-      <label className="media-server-field"><span>{t("mediaServer.downloadLibrary")}</span>
-        <select value={draft.downloadLibraryId} aria-label={t("mediaServer.downloadLibrary")} disabled={busy}
-          onChange={(event) => setDraft((current) => ({ ...current, downloadLibraryId: event.target.value }))}>
-          <option value="">{t("mediaServer.downloadLibraryDefault")}</option>
-          {copyTargets.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}
-          {storedUnavailable && <option value={draft.downloadLibraryId} disabled>{`${storedName} · ${t("mediaServer.status.unavailable")}`}</option>}
-        </select>
-      </label>
+      <DownloadRuleEditor settings={draft.downloadSettings} libraries={localLibraries} disabled={busy}
+        kinds={kinds} {...(defaultLibraryIds ? { defaultLibraryIds } : {})} onChange={changeRule}/>
       <p className="identify-hint">{t("mediaServer.downloadLibraryHint")}</p>
     </section>
     <section className="library-edit-section">

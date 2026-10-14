@@ -38,6 +38,7 @@ import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.catalog.Streams
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
+import cz.stremiooffline.tv.data.DownloadTargetDto
 import cz.stremiooffline.tv.data.LibraryDto
 import cz.stremiooffline.tv.data.MediaDto
 import cz.stremiooffline.tv.data.RemoteItemDto
@@ -55,6 +56,7 @@ import cz.stremiooffline.tv.ui.catalog.NativeQueuePanel
 import cz.stremiooffline.tv.ui.catalog.ReplayIcon
 import cz.stremiooffline.tv.ui.catalog.SourcesPanel
 import cz.stremiooffline.tv.ui.catalog.nativeCopyTitle
+import cz.stremiooffline.tv.ui.catalog.nativeQueueTarget
 import cz.stremiooffline.tv.ui.catalog.resolveNativeCopy
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
@@ -108,7 +110,7 @@ fun RemoteDetailScreen(
    *  Null keeps the action off entirely, which is what a harness with no catalogue surface passes. */
   loadDestinations: (suspend () -> List<LibraryDto>)? = null,
   /** Queues one exact version into the exact library the viewer picked. */
-  onQueue: (suspend (title: String, sourceId: String, media: MediaDto, libraryId: String) -> Unit)? = null,
+  onQueue: (suspend (title: String, sourceId: String, media: MediaDto, target: DownloadTargetDto?) -> Unit)? = null,
 ) {
   // A series has no playable versions of its own: its card opens the episode grid instead.
   if (data.item.type == "series" || data.item.type == "season") {
@@ -337,7 +339,7 @@ fun RemoteDetailScreen(
     copyNotice = null
     scope.launch {
       try {
-        queue(nativeCopyTitle(subject), stream.sourceId, subject.media(), libraryId)
+        queue(nativeCopyTitle(subject), stream.sourceId, subject.media(), nativeQueueTarget(stream, libraryId))
         if (live.value == mine) { copyRequest = null; copyNotice = null }
       } catch (cancelled: CancellationException) {
         throw cancelled
@@ -559,7 +561,6 @@ fun RemoteDetailScreen(
       NativeQueuePanel(
         versions = request.versions,
         libraries = request.destinations.filter { it.canWrite && (it.type == kind || it.type == "mixed") },
-        defaultDestination = request.defaultDestination,
         preferred = primary,
         busy = copyBusy,
         notice = copyNotice,

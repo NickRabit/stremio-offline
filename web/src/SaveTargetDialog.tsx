@@ -11,7 +11,7 @@ import type { AddonDownloadSettings, LibraryView } from "./types";
 
 /** The "Save to…" dialog: the addon's rule or a destination the user picks, with a preview of
  *  where the title lands. Same shell as the move dialog, so the two feel like one thing. */
-export function SaveTargetDialog({ label, kind, title, season, libraries, rule, children, submitDisabled = false, onClose, onSubmit }: {
+export function SaveTargetDialog({ label, kind, title, season, libraries, rule, children, ruleUnavailable = false, submitDisabled = false, onClose, onSubmit }: {
   label: string;
   kind: SaveKind;
   title: string;
@@ -20,6 +20,9 @@ export function SaveTargetDialog({ label, kind, title, season, libraries, rule, 
   rule: AddonDownloadSettings | undefined;
   /** Extra controls above the destination, such as a version chooser for a native copy. */
   children?: ReactNode;
+  /** A native source whose server projected no concrete destination: the automatic option is
+   *  refused and the copy cannot be submitted until the viewer picks a library themselves. */
+  ruleUnavailable?: boolean;
   /** Holds the primary action back while a source or a destination is not yet usable. */
   submitDisabled?: boolean;
   onClose: () => void;
@@ -45,7 +48,7 @@ export function SaveTargetDialog({ label, kind, title, season, libraries, rule, 
   }, [busy, onClose]);
 
   const submit = async () => {
-    if (submitting.current || submitDisabled) return;
+    if (submitting.current || submitDisabled || (ruleUnavailable && value === null)) return;
     submitting.current = true;
     setBusy(true); setError("");
     try {
@@ -63,12 +66,12 @@ export function SaveTargetDialog({ label, kind, title, season, libraries, rule, 
       </div>
       <div className="dialog-body">
         {children}
-        <SaveTargetFields kind={kind} title={title} season={season} libraries={libraries} rule={rule} value={value} onChange={setValue}/>
+        <SaveTargetFields kind={kind} title={title} season={season} libraries={libraries} rule={rule} ruleUnavailable={ruleUnavailable} value={value} onChange={setValue}/>
       </div>
       <footer className="dialog-foot">
         {error && <p className="login-error" role="alert">{error}</p>}
         <button type="button" disabled={busy} onClick={onClose}>{t("common.cancel")}</button>
-        <button type="button" className="primary" disabled={busy || submitDisabled} onClick={() => void submit()}>
+        <button type="button" className="primary" disabled={busy || submitDisabled || (ruleUnavailable && value === null)} onClick={() => void submit()}>
           {busy ? t("save.adding") : t("save.toLibrary")}
         </button>
       </footer>

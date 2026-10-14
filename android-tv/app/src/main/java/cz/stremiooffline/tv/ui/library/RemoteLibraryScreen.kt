@@ -55,6 +55,7 @@ import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
+import cz.stremiooffline.tv.data.DownloadTargetDto
 import cz.stremiooffline.tv.data.LibraryDto
 import cz.stremiooffline.tv.data.MediaDto
 import cz.stremiooffline.tv.data.RemoteItemDto
@@ -65,6 +66,7 @@ import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.ui.catalog.NativeCopyRequest
 import cz.stremiooffline.tv.ui.catalog.NativeQueuePanel
 import cz.stremiooffline.tv.ui.catalog.nativeCopyTitle
+import cz.stremiooffline.tv.ui.catalog.nativeQueueTarget
 import cz.stremiooffline.tv.ui.catalog.resolveNativeCopy
 import cz.stremiooffline.tv.ui.catalog.FolderIcon
 import cz.stremiooffline.tv.ui.components.CardRowInset
@@ -114,7 +116,7 @@ fun RemoteLibraryRoute(
    *  null keeps the action off. */
   loadDestinations: (suspend () -> List<LibraryDto>)? = null,
   /** Queues one exact version into the exact library the viewer picked. */
-  onQueue: (suspend (title: String, sourceId: String, media: MediaDto, libraryId: String) -> Unit)? = null,
+  onQueue: (suspend (title: String, sourceId: String, media: MediaDto, target: DownloadTargetDto?) -> Unit)? = null,
 ) {
   val viewModel = viewModel<RemoteLibraryViewModel>(factory = RemoteLibraryViewModel.factory(api))
   LaunchedEffect(segment) {
@@ -189,8 +191,13 @@ fun RemoteLibraryRoute(
     copyNotice = null
     copyScope.launch {
       try {
-        queue(nativeCopyTitle(subject), stream.sourceId, subject.media(), libraryId)
-        if (mine == copyToken) { copyRequest = null; copyCard = null }
+        queue(nativeCopyTitle(subject), stream.sourceId, subject.media(), nativeQueueTarget(stream, libraryId))
+        if (mine == copyToken) {
+          val id = copyCard?.id
+          copyRequest = null
+          copyCard = null
+          runCatching { id?.let { requesters[it] }?.requestFocus() }
+        }
       } catch (cancelled: CancellationException) {
         throw cancelled
       } catch (error: ApiError) {
@@ -289,7 +296,6 @@ fun RemoteLibraryRoute(
     NativeQueuePanel(
       versions = cardRequest.versions,
       libraries = cardRequest.destinations.filter { it.canWrite && (it.type == kind || it.type == "mixed") },
-      defaultDestination = cardRequest.defaultDestination,
       preferred = null,
       busy = copyBusy,
       notice = copyNotice,
@@ -316,7 +322,7 @@ internal fun RemoteSeriesScreen(
   backEnabled: Boolean = true,
   restoreToken: Int = 0,
   loadDestinations: (suspend () -> List<LibraryDto>)? = null,
-  onQueue: (suspend (title: String, sourceId: String, media: MediaDto, libraryId: String) -> Unit)? = null,
+  onQueue: (suspend (title: String, sourceId: String, media: MediaDto, target: DownloadTargetDto?) -> Unit)? = null,
 ) {
   val viewModel = viewModel<RemoteLibraryViewModel>(
     key = "remote-series:${data.libraryId}:${data.item.id}",
@@ -393,8 +399,13 @@ internal fun RemoteSeriesScreen(
     copyNotice = null
     copyScope.launch {
       try {
-        queue(nativeCopyTitle(subject), stream.sourceId, subject.media(), libraryId)
-        if (mine == copyToken) { copyRequest = null; copyCard = null }
+        queue(nativeCopyTitle(subject), stream.sourceId, subject.media(), nativeQueueTarget(stream, libraryId))
+        if (mine == copyToken) {
+          val id = copyCard?.id
+          copyRequest = null
+          copyCard = null
+          runCatching { id?.let { requesters[it] }?.requestFocus() }
+        }
       } catch (cancelled: CancellationException) {
         throw cancelled
       } catch (error: ApiError) {
@@ -502,7 +513,6 @@ internal fun RemoteSeriesScreen(
       NativeQueuePanel(
         versions = cardRequest.versions,
         libraries = cardRequest.destinations.filter { it.canWrite && (it.type == kind || it.type == "mixed") },
-        defaultDestination = cardRequest.defaultDestination,
         preferred = null,
         busy = copyBusy,
         notice = copyNotice,

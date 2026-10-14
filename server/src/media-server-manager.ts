@@ -44,6 +44,7 @@ import {
   checkKeys,
   order as libraryOrder,
   prepareMediaServerConfiguration,
+  readDownloadSettings,
   verifiedKey,
   type MediaServerConfigurationExport,
 } from "./media-server-store.js";
@@ -77,6 +78,7 @@ import {
 } from "./media-server-types.js";
 import { ForbiddenError, assertStillAdmin } from "./roles.js";
 import type { State, Store } from "./store.js";
+import type { AddonDownloadSettings, DownloadTargetSettings } from "./types.js";
 import { bumpPermissions, dormantGrants, findUserById, usersToBump, type UserRecord } from "./users.js";
 
 /** The verified identity behind a request. `assertCurrent` is the route's own access gate
@@ -173,7 +175,7 @@ const SEARCH_MAX = 256;
 const ITEM_TYPES: readonly ProviderItemType[] = ["movie", "series", "season", "episode"];
 const CREATE_KEYS = ["provider", "name", "baseUrl", "allowLan", "allowLoopback", "username", "password"];
 const ATTACH_KEYS = ["remoteId", "name", "order", "showOnHome", "showInContinueWatching", "browseMode", "mosaic", "showInFavorites"];
-const LIBRARY_PATCH_KEYS = ["name", "enabled", "order", "showOnHome", "showInContinueWatching", "allowedUsers", "browseMode", "mosaic", "showInFavorites", "downloadLibraryId"];
+const LIBRARY_PATCH_KEYS = ["name", "enabled", "order", "showOnHome", "showInContinueWatching", "allowedUsers", "browseMode", "mosaic", "showInFavorites", "downloadLibraryId", "downloadSettings"];
 const CONNECTION_PATCH_KEYS = ["name", "enabled"];
 const BROWSE_QUERY_KEYS = ["limit", "cursor", "search", "type"];
 const EPISODE_QUERY_KEYS = ["limit", "cursor"];
@@ -208,6 +210,12 @@ const readDownloadLibrary = (value: unknown): string | null | undefined => {
   if (typeof value !== "string" || !LIBRARY_ID.test(value)) throw invalid("The media-server copy destination is malformed.");
   return value;
 };
+
+/** Whether two storage rules for one kind name the same destination. Used so an unrelated edit
+ *  that echoes back an unchanged slot never re-validates -- and never refuses -- a destination
+ *  that has since become unavailable. */
+const sameDownloadTarget = (left: DownloadTargetSettings, right: DownloadTargetSettings): boolean =>
+  left.subfolder === right.subfolder && left.layout === right.layout && (left.libraryId ?? "") === (right.libraryId ?? "");
 
 const identityChanged = (): MediaServerError => new MediaServerError("identity-changed", "The media-server identity is not the configured one.");
 const closedError = (): MediaServerError => new MediaServerError("closed", "The media-server manager is closed.");
@@ -914,6 +922,17 @@ export class MediaServerManager {
     const mosaic = record.mosaic === undefined ? undefined : bool(record.mosaic, "mosaic");
     const showInFavorites = record.showInFavorites === undefined ? undefined : bool(record.showInFavorites, "showInFavorites");
     const downloadLibraryId = readDownloadLibrary(record.downloadLibraryId);
+    // `null` clears the new rules; a payload has to be one of the two, so the storage a patch
+    // means is unambiguous. An old client that only knows the legacy handle keeps working as long
+    // as it changes nothing else, and a patch that carries both at once is refused rather than
+    // guessing which of the two the caller meant.
+    const downloadSettings = record.downloadSettings === undefined ? undefined
+      : record.downloadSettings === null ? null
+      : readDownloadSettings(record.downloadSettings);
+    if (downloadSettings !== undefined && downloadSettings !== null
+      && downloadLibraryId !== undefined && downloadLibraryId !== null) {
+      throw invalid("A remote library cannot change its legacy and its new copy destination at the same time.");
+    }
     const requestedUsers = record.allowedUsers === undefined ? undefined : this.readAllowedUsers(record.allowedUsers);
     return this.adminMutation(async () => {
       let updated!: RemoteLibraryRecord;
@@ -948,6 +967,28 @@ export class MediaServerManager {
             if (!destination) throw invalid("That library does not exist.");
             if (!takesRemoteCopy(library.type, destination)) throw invalid("That library is switched off, read-only, unreachable or does not take this kind of content.");
             next.downloadLibraryId = downloadLibraryId;
+          }
+        }
+        // The new storage rules. Only the slot a patch actually changes is proved against the
+        // libraries this write lands on, so echoing back an unchanged slot keeps a destination
+        // that has since been switched off, read-only or removed; the queue refuses it at the
+        // door instead of the editor silently rewriting somebody's rule.
+        if (downloadSettings !== undefined) {
+          if (downloadSettings === null) {
+            delete next.downloadSettings;
+          } else {
+            const legacy = library.downloadLibraryId ? { libraryId: library.downloadLibraryId } : undefined;
+            const stored = library.downloadSettings ?? readDownloadSettings({
+              ...(legacy && library.type !== "series" ? { movie: legacy } : {}),
+              ...(legacy && library.type !== "movie" ? { series: legacy } : {}),
+            });
+            const merged: AddonDownloadSettings = { movie: downloadSettings.movie, series: downloadSettings.series };
+            for (const kind of ["movie", "series"] as const) {
+              merged[kind] = sameDownloadTarget(downloadSettings[kind], stored[kind])
+                ? stored[kind]
+                : readDownloadSettings({ [kind]: downloadSettings[kind] }, state.libraries ?? [])[kind];
+            }
+            next.downloadSettings = merged;
           }
         }
         const before = library.allowedUsers;

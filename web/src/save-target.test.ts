@@ -57,6 +57,18 @@ it("preselects the destination the server projected for a native source, and not
   expect(sourceTargetRule(undefined)).toBeUndefined();
 });
 
+it("preselects the whole projected target, subfolder and layout included, over the legacy handle", () => {
+  const target = { subfolder: "Filmy/2024", layout: "flat" as const, libraryId: "lib_a" };
+  const projected = sourceTargetRule({ downloadTarget: target })!;
+  expect(projected.movie).toEqual(target);
+  expect(projected.series).toEqual(target);
+  // The two kinds get their own copy, so editing one never rewrites the other.
+  expect(projected.movie).not.toBe(projected.series);
+  // A full projection wins over the older library-only handle.
+  expect(sourceTargetRule({ downloadTarget: { subfolder: "S", layout: "flat" }, downloadLibraryId: "lib_b" })!.movie)
+    .toEqual({ subfolder: "S", layout: "flat" });
+});
+
 it("draws the folder chain a title lands in for each layout and kind", () => {
   const libraries = [library("lib_a", "Films", "movie"), library("lib_b", "Shows", "series")];
 

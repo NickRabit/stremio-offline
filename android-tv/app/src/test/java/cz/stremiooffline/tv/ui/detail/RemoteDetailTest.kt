@@ -27,7 +27,7 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
-import cz.stremiooffline.tv.data.DownloadTargetDto
+import cz.stremiooffline.tv.data.DownloadTargetSettingsDto
 import cz.stremiooffline.tv.data.LibraryDto
 import cz.stremiooffline.tv.data.RemoteCapabilitiesDto
 import cz.stremiooffline.tv.data.RemoteItemContext
@@ -211,7 +211,7 @@ class RemoteDetailTest {
           onPlay = { played += it },
           onBack = {},
           loadDestinations = { api.libraries() },
-          onQueue = { title, sourceId, media, libraryId -> api.download(title, sourceId, media, DownloadTargetDto(libraryId)) },
+          onQueue = { title, sourceId, media, target -> api.download(title, sourceId, media, target) },
         )
       }
     }
@@ -254,7 +254,7 @@ class RemoteDetailTest {
   @Test
   fun `the projected destination leads the copy panel`() {
     val api = FakeTvApi()
-    api.remoteSourcesValue = listOf(copyableVersion("ms1").copy(downloadLibraryId = "libB"))
+    api.remoteSourcesValue = listOf(copyableVersion("ms1").copy(downloadTarget = DownloadTargetSettingsDto(libraryId = "libB")))
     api.librariesValue = listOf(
       LibraryDto(id = "libA", name = "Filmy", type = "movie", writable = true),
       LibraryDto(id = "libB", name = "Serialy", type = "movie", writable = true),
@@ -268,7 +268,9 @@ class RemoteDetailTest {
     compose.waitUntil(5_000) { api.queuedSourceIds.isNotEmpty() }
 
     assertEquals(listOf("ms1"), api.queuedSourceIds)
-    assertEquals("libB", api.queuedTargets.single()?.libraryId)
+    // The picked library is exactly the projected one, so no target travels: the server resolves
+    // its configured subfolder and layout itself.
+    assertEquals(null, api.queuedTargets.single())
   }
 
   @Test
@@ -285,7 +287,7 @@ class RemoteDetailTest {
           onPlay = { played += it },
           onBack = { backs += 1 },
           loadDestinations = { api.libraries() },
-          onQueue = { title, sourceId, media, libraryId -> api.download(title, sourceId, media, DownloadTargetDto(libraryId)) },
+          onQueue = { title, sourceId, media, target -> api.download(title, sourceId, media, target) },
         )
       }
     }
@@ -356,7 +358,7 @@ class RemoteDetailTest {
           onPlay = { played += it },
           onBack = { backs += 1 },
           loadDestinations = { api.libraries() },
-          onQueue = { title, sourceId, media, libraryId -> api.download(title, sourceId, media, DownloadTargetDto(libraryId)) },
+          onQueue = { title, sourceId, media, target -> api.download(title, sourceId, media, target) },
         )
       }
     }
@@ -443,7 +445,7 @@ class RemoteDetailTest {
           onPlay = { played += it },
           onBack = {},
           loadDestinations = { api.libraries() },
-          onQueue = { title, sourceId, media, libraryId -> api.download(title, sourceId, media, DownloadTargetDto(libraryId)) },
+          onQueue = { title, sourceId, media, target -> api.download(title, sourceId, media, target) },
         )
       }
     }

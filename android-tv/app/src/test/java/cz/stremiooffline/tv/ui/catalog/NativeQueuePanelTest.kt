@@ -11,6 +11,7 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
 import cz.stremiooffline.tv.data.LibraryDto
+import cz.stremiooffline.tv.data.DownloadTargetSettingsDto
 import cz.stremiooffline.tv.data.RemoteCapabilitiesDto
 import cz.stremiooffline.tv.data.RemoteItemContext
 import cz.stremiooffline.tv.data.StreamDto
@@ -29,13 +30,14 @@ class NativeQueuePanelTest {
 
   @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
-  private fun version(id: String, copyable: Boolean = true) = StreamDto(
+  private fun version(id: String, copyable: Boolean = true, target: String? = null) = StreamDto(
     sourceId = id,
     kind = "remote",
     playable = true,
     name = "Version $id",
     capabilities = RemoteCapabilitiesDto(downloadToLibrary = copyable),
     remoteItem = RemoteItemContext(libraryId = "rlibA", itemId = "iA", mediaSourceId = id, progressKey = "k-$id"),
+    downloadTarget = target?.let { DownloadTargetSettingsDto(libraryId = it) },
   )
 
   private fun library(id: String, name: String) = LibraryDto(id = id, name = name, type = "movie", writable = true)
@@ -48,13 +50,11 @@ class NativeQueuePanelTest {
     libraries: List<LibraryDto>,
     preferred: StreamDto? = null,
     busy: Boolean = false,
-    defaultDestination: String? = null,
   ) {
     compose.setContent {
       NativeQueuePanel(
         versions = versions,
         libraries = libraries,
-        defaultDestination = defaultDestination,
         preferred = preferred,
         busy = busy,
         onQueue = { stream, libraryId -> queued += stream.sourceId to libraryId },
@@ -139,7 +139,7 @@ class NativeQueuePanelTest {
 
   @Test
   fun `the projected destination leads while the other rows stay selectable`() {
-    mount(listOf(version("only")), listOf(library("libA", "Films"), library("libB", "Series")), defaultDestination = "libB")
+    mount(listOf(version("only", target = "libB")), listOf(library("libA", "Films"), library("libB", "Series")))
     compose.onNodeWithTag(nativeQueueLibraryTag("libB")).assertIsSelected()
     // The projected row holds focus, so OK takes it without another press.
     press(Key.DirectionCenter)
@@ -148,7 +148,7 @@ class NativeQueuePanelTest {
 
   @Test
   fun `a destination the caller does not offer falls back to the first row`() {
-    mount(listOf(version("only")), listOf(library("libA", "Films"), library("libB", "Series")), defaultDestination = "lib_gone")
+    mount(listOf(version("only", target = "lib_gone")), listOf(library("libA", "Films"), library("libB", "Series")))
     compose.onNodeWithTag(nativeQueueLibraryTag("libA")).assertIsSelected()
     press(Key.DirectionCenter)
     assertEquals(listOf("only" to "libA"), queued)
@@ -156,7 +156,7 @@ class NativeQueuePanelTest {
 
   @Test
   fun `the viewer can still move to another library than the projected one`() {
-    mount(listOf(version("only")), listOf(library("libA", "Films"), library("libB", "Series")), defaultDestination = "libB")
+    mount(listOf(version("only", target = "libB")), listOf(library("libA", "Films"), library("libB", "Series")))
     // The projected row leads; Up moves the focus to the row before it and OK takes that one.
     press(Key.DirectionUp)
     press(Key.DirectionCenter)
