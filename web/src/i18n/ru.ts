@@ -745,6 +745,8 @@ export const ru: Catalog = {
   "library.deleteFileConfirm": "Удалить файл «{name}»? Это невозможно отменить.",
   "library.deleteFolderConfirm": "Удалить папку «{name}» и все, что в ней? Это невозможно отменить.",
   "library.markUnwatched": "Отметить как непросмотренное",
+  "library.savedPosition": "{position} из {duration}",
+  "library.savedPositionUnknown": "Сохранённая позиция: {position}",
   "library.downloadToDevice": "Сохранить на это устройство",
   "library.continue": "Продолжить",
   "library.thisFile": "Этот файл",

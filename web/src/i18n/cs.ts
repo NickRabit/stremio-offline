@@ -779,6 +779,8 @@ export const cs: Catalog = {
   "library.deleteFileConfirm": "Smazat soubor „{name}“? Tohle nejde vrátit.",
   "library.deleteFolderConfirm": "Smazat složku „{name}“ i se vším uvnitř? Tohle nejde vrátit.",
   "library.markUnwatched": "Označit jako neshlédnuté",
+  "library.savedPosition": "{position} z {duration}",
+  "library.savedPositionUnknown": "Uložená pozice: {position}",
   "library.downloadToDevice": "Uložit do tohoto zařízení",
   "library.continue": "Pokračovat",
   "library.thisFile": "Tento soubor",

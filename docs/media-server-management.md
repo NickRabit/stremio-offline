@@ -436,7 +436,7 @@ playback. The detail retains an Open folder action for managing the individual f
 Unmatched, mixed and series folders keep their normal navigation.
 Local and remote playable titles share the same hero, synopsis, metadata and
 source picker; a matched local title uses its catalogue name while the selected
-file name stays visible beside Play.
+file name stays in the source picker.
 
 The largest playable version with a reported file size is the default. Unknown
 sizes retain the provider's order, and a user's explicit choice survives a
@@ -451,10 +451,20 @@ playable file. Playback resolves only the selected copy again so its sidecar
 subtitles and permissions are current. Remote discovery keeps the existing
 scoped source and local-history paths.
 
+The selected video's saved position appears below the synopsis. A known duration
+adds a bounded progress bar; an unknown duration shows the elapsed time alone.
+Forget progress clears only that file or native item's app-local position, keeping
+favourites and the remote watched flag. Play from the start opens the selected
+version at zero without first deleting its saved position. Ordinary playback
+retains its resume rules, including the native remote version check. Returning
+from playback refreshes the position. Android TV provides the same actions; its
+local clear is wired through the real shell to the owner-scoped progress API.
+
 Remote listings and episode lists load their next page near the end of their
 scroll pane, with one request in flight and no automatic retry after an error.
 The manual button remains a fallback. Breadcrumbs include the current item;
-Back and sidebar navigation restore the local listing's position and focus.
+Back and visited breadcrumbs restore the listing's position and focus. The
+sidebar Library entry opens the libraries overview.
 The remote root block is shown only at the library root, so an opened local
 folder owns its full page and scroll pane. Mobile folding uses the established
 library chrome.

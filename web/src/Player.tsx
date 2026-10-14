@@ -9,12 +9,12 @@ import { hostOf, report } from "./diagnostics";
 import { releaseMediaElement, AHEAD_CATCHUP_MS, HLS_PLAYER_CONFIG, ignoreHlsErrorDuringRestart, planDecodeRecovery, planSeek, recordDecodeRecover, watchRemuxStart, waitForSeekable } from "./player-hls";
 import { clampVolume, readVolume, writeVolume } from "./player-volume";
 import { PlaybackWakeLock, screenWakeLock } from "./playback-wake-lock";
-import { progressToSave } from "./player-progress";
+import { initialPlaybackPosition, progressToSave } from "./player-progress";
 import { detectCapabilities } from "./capabilities";
 import { t, useI18n, type Key } from "./i18n";
 import type { Capabilities, PlaybackMode, PlaybackSession, Stream, Subtitle, Track } from "./types";
 
-interface Props { previousTitle?: string; onPrevious?: () => Promise<boolean>; nextTitle?: string; nextBusy?: boolean; onNext?: () => Promise<boolean>; autoNext?: boolean; open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; audioLanguage: string; onPreferences?: (preferences: { audioLanguage?: string; subtitleLanguage?: string | null }) => void; progressKey?: string; progressPoster?: string; progressAddonKey?: string; favorite?: boolean; onToggleFavorite?: () => void; onDownload: () => Promise<boolean>; onDeviceDownload: () => Promise<boolean>; onClose: () => void }
+interface Props { previousTitle?: string; onPrevious?: () => Promise<boolean>; nextTitle?: string; nextBusy?: boolean; onNext?: () => Promise<boolean>; autoNext?: boolean; open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; audioLanguage: string; onPreferences?: (preferences: { audioLanguage?: string; subtitleLanguage?: string | null }) => void; progressKey?: string; progressPoster?: string; progressAddonKey?: string; favorite?: boolean; fromBeginning?: boolean; onToggleFavorite?: () => void; onDownload: () => Promise<boolean>; onDeviceDownload: () => Promise<boolean>; onClose: () => void }
 
 const fmt = (seconds: number) => !Number.isFinite(seconds) ? "0:00" : `${Math.floor(seconds / 3600) ? `${Math.floor(seconds / 3600)}:` : ""}${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
 
@@ -195,7 +195,7 @@ const trackLabel = (track: Track) => {
 const SUBTITLE_DELAY_STEP_S = 0.25;
 const SUBTITLE_DELAY_LIMIT_S = 30;
 
-export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext, autoNext, open, title, stream, subtitles, subtitleLanguage, audioLanguage, onPreferences, progressKey, progressPoster, progressAddonKey, favorite, onToggleFavorite, onDownload, onDeviceDownload, onClose }: Props) {
+export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext, autoNext, open, title, stream, subtitles, subtitleLanguage, audioLanguage, onPreferences, progressKey, progressPoster, progressAddonKey, favorite, fromBeginning = false, onToggleFavorite, onDownload, onDeviceDownload, onClose }: Props) {
   // Subscribes the whole overlay to the language, so a switch behind it redraws every label.
   useI18n();
   const [subtitleIds, setSubtitleIds] = useState<Record<string, string>>({});
@@ -578,18 +578,21 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     stallsRef.current = []; setQualityHint(null); setDownloadState("idle");
     decodeRecoversRef.current = []; abandonedRef.current = false; escalateRef.current = false; setSidecarReady(false); setSidecarPass(0); setSubtitleDelay(0);
     setSubtitlesHidden(false); subtitlesHiddenRef.current = false;
-    // Resuming: the server knows the position and starts playback right there.
+    // Resuming: the server knows the position and starts playback right there. A start-over
+    // never reads the store and never writes to it -- the saved position simply stays.
     (async () => {
-      const saved = remoteItem
-        ? await api.remoteState(remoteItem.libraryId, remoteItem.itemId).catch(() => null)
-        : progressKey ? await api.progressOf(progressKey).catch(() => null) : null;
-      // A remote item already marked watched starts over, whatever position the store kept.
-      const watched = Boolean(saved && "watched" in saved && saved.watched);
-      const sameVersion = !remoteItem || (saved && "mediaSourceId" in saved && saved.mediaSourceId === remoteItem.mediaSourceId);
-      const from = saved && saved.position > 30 && !watched && sameVersion ? saved.position : 0;
+      const saved = fromBeginning ? null
+        : remoteItem ? await api.remoteState(remoteItem.libraryId, remoteItem.itemId).catch(() => null)
+          : progressKey ? await api.progressOf(progressKey).catch(() => null) : null;
+      // The player may have been closed or handed another film while the state was in flight;
+      // starting a session here would leave an orphan nobody watches.
+      if (disposed) return null;
+      const from = initialPlaybackPosition(saved, remoteItem, fromBeginning);
       if (from) setResumedFrom(from);
       return { created: await api.startPlayback(stream, capabilities(), from, addonSubtitles.map((item) => item.subtitleId), { audioLanguage: audioPreferenceRef.current, subtitleLanguage: subtitlePreferenceRef.current }), from };
-    })().then(({ created, from }) => {
+    })().then((result) => {
+      if (!result) return;
+      const { created, from } = result;
       if (disposed) { void api.stopPlayback(created.id).catch(() => undefined); return; }
       applySession(created);
       report("DEBUG", `Playback session started in ${created.mode} mode`, {
@@ -629,7 +632,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
         void api.stopPlayback(id).catch(() => undefined);
       }
     };
-  }, [open, stream, progressKey]);
+  }, [open, stream, progressKey, fromBeginning]);
 
   useEffect(() => {
     const url = session?.sidecarUrl;

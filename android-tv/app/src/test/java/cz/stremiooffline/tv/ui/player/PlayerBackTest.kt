@@ -46,6 +46,7 @@ class PlayerBackTest {
         onPlay = {},
         onBack = { detailBacks++ },
         progress = { _: String -> null as ProgressDto? },
+        forgetProgress = {},
         backEnabled = !playerOpen,
       )
       if (playerOpen) {

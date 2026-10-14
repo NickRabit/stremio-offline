@@ -46,6 +46,17 @@ const click = (element: Element | null) => act(() => { (element as HTMLElement).
 const playButton = () => host.querySelector<HTMLButtonElement>(".library-detail-play button.primary")!;
 const pickerRows = () => [...document.querySelectorAll<HTMLButtonElement>(".library-source-card .remote-streams button")];
 const chosenRow = () => pickerRows().find((row) => row.getAttribute("aria-pressed") === "true");
+const flush = () => act(async () => { await new Promise((done) => setTimeout(done, 0)); });
+const clickAsync = async (element: Element | null) => { await act(async () => { (element as HTMLElement).click(); }); await flush(); };
+const saved = () => host.querySelector(".library-detail-progress");
+const savedText = () => host.querySelector(".library-detail-progress span")!.textContent;
+const clearButton = () => host.querySelector<HTMLButtonElement>('.library-detail-progress button[aria-label="Forget progress"]');
+const startOverButton = () => [...host.querySelectorAll<HTMLButtonElement>(".library-detail-actions button")].find((button) => button.textContent?.includes("Play from the start")) ?? null;
+const deferred = <T,>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+};
 
 describe("LibraryTitleDetail sources", () => {
   it("plays the single source with no picker arrow", () => {
@@ -221,5 +232,110 @@ describe("LibraryTitleDetail source picker", () => {
     act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); });
     expect(document.querySelector(".library-source-card")).toBeNull();
     expect(document.activeElement).toBe(arrow);
+  });
+});
+
+describe("LibraryTitleDetail saved position", () => {
+  const twoVersions = () => [remote("s1", "720p", 1_000_000_000), remote("s2", "1080p", 3_000_000_000)];
+
+  it("shows a clamped progress bar and the formatted position for a known length", () => {
+    render({ sources: [remote("s1", "1080p", 1)], progress: { position: 90, duration: 60, sourceKey: "s1" } });
+    const bar = host.querySelector('[role="progressbar"]')!;
+    expect(bar.getAttribute("aria-valuenow")).toBe("100");
+    expect(bar.querySelector<HTMLElement>("i")!.style.width).toBe("100%");
+    expect(savedText()).toBe("1:30 of 1:00");
+  });
+
+  it("shows a completed position as a full bar", () => {
+    render({ sources: [remote("s1", "1080p", 1)], progress: { position: 3600, duration: 3600, sourceKey: "s1" } });
+    expect(host.querySelector('[role="progressbar"]')!.getAttribute("aria-valuenow")).toBe("100");
+    expect(savedText()).toBe("1:00:00 of 1:00:00");
+  });
+
+  it("writes the position without a bar when the length is unknown or unusable", () => {
+    render({ sources: [remote("s1", "1080p", 1)], progress: { position: 120, duration: 0, sourceKey: "s1" } });
+    expect(host.querySelector('[role="progressbar"]')).toBeNull();
+    expect(savedText()).toBe("Saved position: 2:00");
+    rerender({ sources: [remote("s1", "1080p", 1)], progress: { position: 120, duration: Number.NaN, sourceKey: "s1" } });
+    expect(host.querySelector('[role="progressbar"]')).toBeNull();
+    expect(savedText()).toBe("Saved position: 2:00");
+  });
+
+  it("hides a zero, negative or non-finite position and a position of another source", () => {
+    render({ sources: [remote("s1", "1080p", 1)], progress: { position: 0, duration: 100, sourceKey: "s1" } });
+    expect(saved()).toBeNull();
+    rerender({ sources: [remote("s1", "1080p", 1)], progress: { position: -70, duration: 100, sourceKey: "s1" } });
+    expect(saved()).toBeNull();
+    rerender({ sources: [remote("s1", "1080p", 1)], progress: { position: Number.NaN, duration: 100, sourceKey: "s1" } });
+    expect(saved()).toBeNull();
+    rerender({ sources: [remote("s1", "1080p", 1)], progress: { position: 120, duration: 600, sourceKey: "somewhere-else" } });
+    expect(saved()).toBeNull();
+  });
+
+  it("plays the chosen source ordinarily and starts it over from the same source", () => {
+    const onPlay = vi.fn();
+    render({ sources: twoVersions(), progress: { position: 120, duration: 3600, sourceKey: "s2" }, onPlay });
+    click(playButton());
+    expect(onPlay.mock.calls.at(-1)![1]).toBeUndefined();
+    expect(onPlay.mock.calls.at(-1)![0]).toEqual(expect.objectContaining({ sourceId: "s2" }));
+    click(startOverButton());
+    expect(onPlay.mock.calls.at(-1)![1]).toBe(true);
+    expect(onPlay.mock.calls.at(-1)![0]).toEqual(expect.objectContaining({ sourceId: "s2" }));
+  });
+
+  it("offers neither control while nothing is saved", () => {
+    render({ sources: [remote("s1", "1080p", 1)], onClearProgress: vi.fn().mockResolvedValue(true) });
+    expect(saved()).toBeNull();
+    expect(startOverButton()).toBeNull();
+  });
+
+  it("clears the selected source, disables the button while pending and hides the position on success", async () => {
+    const held = deferred<boolean>();
+    const onClearProgress = vi.fn(() => held.promise);
+    render({ sources: twoVersions(), progress: { position: 120, duration: 3600, sourceKey: "s2" }, onClearProgress });
+    await act(async () => clearButton()!.click());
+    expect(onClearProgress).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "s2" }));
+    expect(clearButton()!.disabled).toBe(true);
+    await act(async () => { held.resolve(true); await Promise.resolve(); });
+    await flush();
+    expect(saved()).toBeNull();
+  });
+
+  it("shows a new saved position after playback following a clear", async () => {
+    const sources = [remote("s1", "1080p", 1)];
+    render({ sources, progress: { position: 120, duration: 3600, sourceKey: "s1" }, onClearProgress: vi.fn().mockResolvedValue(true) });
+    await clickAsync(clearButton());
+    expect(saved()).toBeNull();
+    rerender({ sources, progress: { position: 60, duration: 3600, sourceKey: "s1" } });
+    expect(savedText()).toBe("1:00 of 1:00:00");
+  });
+
+  it("does not hide another title sharing a provider's version id after a late clear", async () => {
+    const held = deferred<boolean>();
+    const sources = [remote("s1", "1080p", 1)];
+    render({ sources, progress: { position: 120, duration: 3600, sourceKey: "s1" }, onClearProgress: () => held.promise });
+    await act(async () => clearButton()!.click());
+    rerender({ identityKey: "another-title", sources, progress: { position: 60, duration: 300, sourceKey: "s1" } });
+    await act(async () => { held.resolve(true); });
+    expect(savedText()).toBe("1:00 of 5:00");
+  });
+
+  it("keeps the position when the write fails", async () => {
+    const onClearProgress = vi.fn().mockResolvedValue(false);
+    render({ sources: [remote("s1", "1080p", 1)], progress: { position: 120, duration: 3600, sourceKey: "s1" }, onClearProgress });
+    await clickAsync(clearButton());
+    expect(saved()).not.toBeNull();
+    expect(clearButton()!.disabled).toBe(false);
+  });
+
+  it("does not erase another source's position when the selection changes while clearing", async () => {
+    const held = deferred<boolean>();
+    render({ sources: twoVersions(), progress: { position: 120, duration: 3600, sourceKey: "s2" }, onClearProgress: () => held.promise });
+    await act(async () => clearButton()!.click());
+    rerender({ sources: [remote("s1", "720p", 5_000_000_000), remote("s2", "1080p", 3_000_000_000)], progress: { position: 30, duration: 300, sourceKey: "s1" } });
+    await act(async () => { held.resolve(true); await Promise.resolve(); });
+    await flush();
+    expect(saved()).not.toBeNull();
+    expect(savedText()).toBe("0:30 of 5:00");
   });
 });

@@ -745,6 +745,8 @@ export const sk: Catalog = {
   "library.deleteFileConfirm": "Odstrániť súbor „{name}“? Toto sa nedá vrátiť späť.",
   "library.deleteFolderConfirm": "Chcete odstrániť priečinok „{name}“ a všetko, čo sa v ňom nachádza? Toto sa nedá vrátiť späť.",
   "library.markUnwatched": "Označiť ako nepozerané",
+  "library.savedPosition": "{position} z {duration}",
+  "library.savedPositionUnknown": "Uložená pozícia: {position}",
   "library.downloadToDevice": "Uložiť do tohto zariadenia",
   "library.continue": "Pokračovať",
   "library.thisFile": "Tento súbor",

@@ -161,3 +161,69 @@ test("a local detail opens the shared gallery and loads alternative artwork once
   await expect(gallery).toBeVisible();
   expect(galleryRequests).toBe(1);
 });
+
+test("local detail clears only the chosen version's saved position", async ({ page }) => {
+  const forgotten: string[] = [];
+  const cleared = new Set<string>();
+  await page.route("**/api/progress/*", async (route) => {
+    const key = decodeURIComponent(new URL(route.request().url()).pathname.slice("/api/progress/".length));
+    if (route.request().method() === "DELETE") {
+      forgotten.push(key); cleared.add(key);
+      await route.fulfill({ status: 204 });
+    } else await route.fulfill({ json: cleared.has(key) ? null : { key, position: 120, duration: 3600 } });
+  });
+  await openDetail(page);
+  const detail = page.locator(".library-title-detail");
+  await expect(detail.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "3");
+  await detail.getByRole("button", { name: "Zapomenout postup" }).click();
+  await expect(detail.getByRole("progressbar")).toHaveCount(0);
+  expect(forgotten).toEqual([`file:Other/${largerCopy}`]);
+  await expect(detail.getByRole("button", { name: "Přidat do oblíbených" })).toHaveAttribute("aria-pressed", "false");
+});
+
+test("local detail starts its selected version at zero without forgetting progress", async ({ page }) => {
+  let reads = 0;
+  let deletes = 0;
+  let started: { sourceId: string; time: number } | undefined;
+  await page.route("**/api/progress/*", async (route) => {
+    if (route.request().method() === "DELETE") { deletes++; await route.fulfill({ status: 204 }); return; }
+    reads++;
+    const key = decodeURIComponent(new URL(route.request().url()).pathname.slice("/api/progress/".length));
+    await route.fulfill({ json: { key, position: 120, duration: 3600 } });
+  });
+  await page.route("**/api/playback", async (route) => {
+    started = route.request().postDataJSON();
+    await route.fulfill({ status: 503, json: { error: "Synthetic playback unavailable" } });
+  });
+  await openDetail(page);
+  const detail = page.locator(".library-title-detail");
+  await expect(detail.getByRole("progressbar")).toBeVisible();
+  const before = reads;
+  await detail.getByRole("button", { name: "Přehrát od začátku" }).click();
+  await expect.poll(() => started).toEqual(expect.objectContaining({ sourceId: `exact:Other/${largerCopy}`, time: 0 }));
+  expect(reads).toBe(before);
+  expect(deletes).toBe(0);
+});
+
+test("saved-position controls remain usable across desktop and mobile viewports", async ({ page }) => {
+  await page.route("**/api/progress/*", async (route) => {
+    const key = decodeURIComponent(new URL(route.request().url()).pathname.slice("/api/progress/".length));
+    await route.fulfill({ json: { key, position: 3723, duration: 7200 } });
+  });
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 820, height: 1180 }, { width: 390, height: 844 }, { width: 844, height: 390 }, { width: 851, height: 393 }]) {
+    await page.setViewportSize(viewport);
+    await openDetail(page);
+    const detail = page.locator(".library-title-detail");
+    await expect(detail.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "52");
+    for (const name of ["Přehrát", "Přehrát od začátku", "Zapomenout postup", "Vybrat zdroj"]) {
+      const button = detail.getByRole("button", { name, exact: true });
+      await button.scrollIntoViewIfNeeded();
+      await expect(button).toBeVisible();
+      const box = await button.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.x).toBeGreaterThanOrEqual(0);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width + 1);
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+  }
+});

@@ -212,7 +212,7 @@ export const api = {
   saveProgressOnUnload: (payload: ProgressPayload) => void fetch("/api/progress", {
     method: "POST", keepalive: true, headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
   }).catch(() => undefined),
-  progressOf: (key: string) => request<ProgressEntry | null>(`/api/progress/${encodeURIComponent(key)}`),
+  progressOf: (key: string, signal?: AbortSignal) => request<ProgressEntry | null>(`/api/progress/${encodeURIComponent(key)}`, { signal }),
   saveProgress: (payload: ProgressPayload) =>
     request<void>("/api/progress", { method: "POST", body: JSON.stringify(payload) }),
   clearProgress: () => request<void>("/api/progress", { method: "DELETE" }),

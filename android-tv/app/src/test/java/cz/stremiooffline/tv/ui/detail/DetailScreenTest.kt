@@ -133,7 +133,28 @@ class DetailScreenTest {
     progress["file:Films/It/It.mkv"] = ProgressDto(10.0, 120.0)
     mount(detail(listOf(file("Films/It/It.mkv"))))
     compose.onNodeWithText("Play").assertIsDisplayed()
-    compose.onNodeWithTag(TagDetailStartOver).assertDoesNotExist()
+    // The early position is still offered a fresh start beside Play.
+    compose.onNodeWithTag(TagDetailStartOver).assertExists()
+  }
+
+  @Test
+  fun `an early position keeps Play and adds the bar and a Start over`() {
+    progress["file:Films/It/It.mkv"] = ProgressDto(10.0, 600.0)
+    mount(detail(listOf(file("Films/It/It.mkv"))))
+
+    compose.onNodeWithText("Play").assertIsDisplayed()
+    compose.onNodeWithTag(TagDetailStartOver).assertExists()
+    compose.onNodeWithTag(TagDetailWatched).assertTextContains("1 % watched")
+  }
+
+  @Test
+  fun `a completed position keeps the bar and a Start over`() {
+    progress["file:Films/It/It.mkv"] = ProgressDto(600.0, 600.0)
+    mount(detail(listOf(file("Films/It/It.mkv"))))
+
+    compose.onNodeWithText("Play").assertIsDisplayed()
+    compose.onNodeWithTag(TagDetailStartOver).assertExists()
+    compose.onNodeWithTag(TagDetailWatched).assertTextContains("100 % watched")
   }
 
   @Test
@@ -147,6 +168,7 @@ class DetailScreenTest {
         onPlay = {},
         onBack = {},
         progress = { key -> progress[key] },
+        forgetProgress = {},
         restoreToken = token,
       )
     }
@@ -176,6 +198,7 @@ class DetailScreenTest {
         onPlay = {},
         onBack = {},
         progress = { key -> progress[key] },
+        forgetProgress = {},
         restoreToken = token,
       )
     }
@@ -329,5 +352,29 @@ class DetailScreenTest {
       listOf(listOf("file:Films/Show/S1E1.mkv", "file:Films/Show/S1E2.mkv")),
       forgotten,
     )
+  }
+
+  @Test
+  fun `a failed forget keeps the position, the favourite and shows the failure`() {
+    progress["file:Films/It/It.mkv"] = ProgressDto(38.6, 120.0)
+    mount(
+      detail(listOf(file("Films/It/It.mkv"))),
+      forgetProgress = { throw ApiError(ApiFailure.Generic) },
+    )
+
+    focusForget()
+    press(Key.DirectionCenter)
+    press(Key.DirectionDown)
+    press(Key.DirectionCenter)
+    compose.waitForIdle()
+
+    focusFavourite()
+    press(Key.DirectionCenter)
+    assertEquals(listOf("Films/It" to true), favouriteCalls)
+
+    compose.onNodeWithText("Resume").assertIsDisplayed()
+    compose.onNodeWithTag(TagDetailWatched).assertTextContains("32 % watched")
+    compose.onNodeWithTag(TagDetailFavourite).assertTextContains("★")
+    compose.onNodeWithText("Something went wrong. Try again.").assertIsDisplayed()
   }
 }

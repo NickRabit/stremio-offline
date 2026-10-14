@@ -745,6 +745,8 @@ export const es: Catalog = {
   "library.deleteFileConfirm": "¿Eliminar el archivo “{name}”? Esto no se puede deshacer.",
   "library.deleteFolderConfirm": "¿Eliminar la carpeta “{name}” y todo lo que contiene? Esto no se puede deshacer.",
   "library.markUnwatched": "Marcar como no visto",
+  "library.savedPosition": "{position} de {duration}",
+  "library.savedPositionUnknown": "Posición guardada: {position}",
   "library.downloadToDevice": "Guardar en este dispositivo",
   "library.continue": "Continuar",
   "library.thisFile": "este archivo",

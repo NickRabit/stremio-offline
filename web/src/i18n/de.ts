@@ -745,6 +745,8 @@ export const de: Catalog = {
   "library.deleteFileConfirm": "Datei „{name}“ löschen? Dies kann nicht rückgängig gemacht werden.",
   "library.deleteFolderConfirm": "Den Ordner „{name}“ und alles darin löschen? Dies kann nicht rückgängig gemacht werden.",
   "library.markUnwatched": "Als unbeobachtet markieren",
+  "library.savedPosition": "{position} von {duration}",
+  "library.savedPositionUnknown": "Gespeicherte Position: {position}",
   "library.downloadToDevice": "Auf diesem Gerät speichern",
   "library.continue": "Weiter",
   "library.thisFile": "Diese Datei",

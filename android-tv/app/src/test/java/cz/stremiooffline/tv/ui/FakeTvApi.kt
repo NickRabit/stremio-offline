@@ -36,6 +36,7 @@ import cz.stremiooffline.tv.data.ResumePage
 import cz.stremiooffline.tv.data.RecentSearchDto
 import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.RemoteItemStateDto
+import cz.stremiooffline.tv.data.RemoteItemStatePatch
 import cz.stremiooffline.tv.data.RemoteItemsPageDto
 import cz.stremiooffline.tv.data.RemoteLibraryDto
 import cz.stremiooffline.tv.data.RemotePreviewDto
@@ -553,6 +554,28 @@ open class FakeTvApi : TvApi {
 
   override suspend fun remoteItemState(libraryId: String, itemId: String): RemoteItemStateDto {
     remoteStateFailure?.let { throw it }
+    return remoteStateValue
+  }
+
+  /** Every state PATCH in order, so a test can name the fields the screen wrote. */
+  var remoteStatePatches: MutableList<RemoteItemStatePatch> = mutableListOf()
+  var remoteStatePatchFailure: ApiError? = null
+
+  override suspend fun patchRemoteItemState(
+    libraryId: String,
+    itemId: String,
+    patch: RemoteItemStatePatch,
+  ): RemoteItemStateDto {
+    remoteStatePatches += patch
+    remoteStatePatchFailure?.let { throw it }
+    // Mirrors the server: only the fields the patch set travel and the rest stay as they were.
+    remoteStateValue = remoteStateValue.copy(
+      position = patch.position ?: remoteStateValue.position,
+      duration = patch.duration ?: remoteStateValue.duration,
+      favorite = patch.favorite ?: remoteStateValue.favorite,
+      watched = patch.watched ?: remoteStateValue.watched,
+      mediaSourceId = patch.mediaSourceId ?: remoteStateValue.mediaSourceId,
+    )
     return remoteStateValue
   }
 

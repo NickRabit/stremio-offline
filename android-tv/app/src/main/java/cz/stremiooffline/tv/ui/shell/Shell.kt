@@ -338,6 +338,7 @@ fun Shell(
       },
       progress = api::progress,
       setFavorite = { path, wanted -> api.setFavorite(path, wanted).favorite },
+      forgetProgress = api::forgetProgress,
       restoreToken = detailReturnToken,
       backEnabled = player == null,
     )

@@ -2003,7 +2003,12 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 .library-detail-hero .detail-copy h2{font-size:30px;margin:10px 0 5px;line-height:1.14}
 .library-detail-hero .detail-copy p{margin:6px 0}
 .library-detail-synopsis{margin:9px 0 0;max-width:680px;font-size:13px;line-height:1.6;color:#dce3ed}
-.library-title-detail>.remote-error,.library-title-detail>.loading,.library-title-detail>.identify-hint,.library-title-detail>.library-detail-actions,.library-title-detail>.remote-episodes-head,.library-title-detail>.remote-season-group,.library-title-detail>.load-more,.library-title-detail>.remote-season-group .browse-grid,.library-title-detail>.remote-season-group .browse-rows{position:relative;z-index:1}
+.library-title-detail>.remote-error,.library-title-detail>.loading,.library-title-detail>.identify-hint,.library-title-detail>.library-detail-progress,.library-title-detail>.library-detail-actions,.library-title-detail>.remote-episodes-head,.library-title-detail>.remote-season-group,.library-title-detail>.load-more,.library-title-detail>.remote-season-group .browse-grid,.library-title-detail>.remote-season-group .browse-rows{position:relative;z-index:1}
+.library-detail-progress{display:flex;flex-wrap:wrap;align-items:center;gap:10px;max-width:680px;margin-top:2px}
+.library-detail-progress .progress{flex:1 1 160px;max-width:280px;margin:0}
+.library-detail-progress>span{font-size:11px;color:var(--muted);white-space:nowrap}
+.library-detail-progress .icon-button{padding:5px}
+.library-detail-progress .icon-button svg{width:14px;height:14px}
 .library-title-detail>.library-detail-actions{margin-top:4px}
 @media(max-width:700px){.library-title-detail{min-height:max(300px,calc(100dvh - 310px));padding:16px}.library-detail-hero .detail-copy h2{font-size:21px}.library-detail-synopsis{font-size:12px}}
 @media(max-height:500px) and (orientation:landscape){.library-title-detail{min-height:max(190px,calc(100dvh - 150px));padding:14px}}
