@@ -117,7 +117,7 @@ interface Harness {
   close(): Promise<void>;
 }
 
-const mount = async (options: { contentDownloading?: boolean } = {}): Promise<Harness> => {
+const mount = async (options: { contentDownloading?: boolean; clock?: () => number } = {}): Promise<Harness> => {
   const dir = await mkdtemp(path.join(tmpdir(), "media-sources-"));
   const users = [admin, bob, carol];
   await writeFile(path.join(dir, "state.json"), JSON.stringify({
@@ -140,6 +140,7 @@ const mount = async (options: { contentDownloading?: boolean } = {}): Promise<Ha
     transportFactory: () => stubTransport(server),
     index: new MediaServerIndex(),
     networkStartIntervalMs: 0,
+    ...(options.clock === undefined ? {} : { clock: options.clock }),
   });
   await manager.initialize();
 
@@ -177,7 +178,7 @@ const mount = async (options: { contentDownloading?: boolean } = {}): Promise<Ha
   };
 };
 
-const withHarness = async (run: (harness: Harness) => Promise<void>, options: { contentDownloading?: boolean } = {}) => {
+const withHarness = async (run: (harness: Harness) => Promise<void>, options: { contentDownloading?: boolean; clock?: () => number } = {}) => {
   const harness = await mount(options);
   try { await run(harness); }
   finally { await harness.close(); }
@@ -280,6 +281,7 @@ test("a stored rule projects its whole target, layout and subfolder, and costs n
 });
 
 test("a mixed library's rule follows the item's own kind", async () => {
+  let now = 3_000_000;
   await withHarness(async (harness) => {
     const films = localLibrary("lib_a1b2c3d4", "movie", { visibleTo: [BOB] });
     const shows = localLibrary("lib_b2c3d4e5", "series", { visibleTo: [BOB] });
@@ -295,10 +297,11 @@ test("a mixed library's rule follows the item's own kind", async () => {
     for (const source of listed) assert.deepEqual(source.downloadTarget, { subfolder: "Filmy", layout: "flat", libraryId: films.id });
 
     // The same library's rule for an episode follows the series slot.
+    now += 30_000;
     harness.server.detailOf["item-1"] = { id: "item-1", name: "Episode One", type: "episode", providerIds: {} };
     const episodes = await harness.sources.list(harness.bobAuthority, harness.bobOwner, harness.libraryId, "item-1");
     for (const source of episodes) assert.deepEqual(source.downloadTarget, { subfolder: "Serialy", layout: "structured", libraryId: shows.id });
-  }, { contentDownloading: true });
+  }, { contentDownloading: true, clock: () => now });
 });
 
 test("a stored rule whose library the acting account cannot see is never projected", async () => {
@@ -643,6 +646,7 @@ test("a mixed library's automatic kind fallback is also projected", async () => 
 });
 
 test("a listed source seals the verified item's own kind, on originals and subtitles alike", async () => {
+  let now = 3_000_000;
   await withHarness(async (harness) => {
     harness.server.versionsOf["item-1"] = [{ id: "v1", name: "1080p", externalSubtitles: [{ index: 2 }] }];
     const before = harness.server.originalCalls;
@@ -655,11 +659,12 @@ test("a listed source seals the verified item's own kind, on originals and subti
     assert.equal(JSON.stringify(movies).includes("copyKind"), false, "no public stream exposes the sealed kind");
     assert.equal(JSON.stringify(movies).includes("media-server:"), false, "and no sealed address leaks");
 
+    now += 30_000;
     harness.server.detailOf["item-1"] = { id: "item-1", name: "Episode One", type: "episode", providerIds: {} };
     const episodes = await harness.sources.list(harness.adminAuthority, harness.owner, harness.libraryId, "item-1");
     assert.ok(episodes.length > 0);
     for (const source of episodes) assert.equal(openedRef(harness, source.sourceId)?.copyKind, "series", "an episode seals the series kind");
 
     assert.equal(harness.server.originalCalls, before, "sealing the kind costs no provider read");
-  });
+  }, { clock: () => now });
 });

@@ -340,6 +340,22 @@ const pacerQueueLength = (harness: Harness, connectionId: string): number =>
 const subscribersOf = (harness: Harness, connectionId: string, key: string): number | undefined =>
   inflightReads(harness, connectionId).get(key)?.subscribers;
 
+/** How many times one provider operation has run, for the assertions about the shared window. */
+const providerCalls = (harness: Harness, operation: string): number =>
+  harness.server.calls.filter((call) => call === operation).length;
+
+/** The ordinary detail/version window as the manager holds it. */
+const metadataWindow = (harness: Harness): Map<string, { at: number; bytes: number }> =>
+  (harness.manager as unknown as { metadata: Map<string, { at: number; bytes: number }> }).metadata;
+
+/** The serialized size the ordinary detail/version window currently accounts for. */
+const metadataBytes = (harness: Harness): number =>
+  (harness.manager as unknown as { metadataBytes: number }).metadataBytes;
+
+/** The one in-flight ordinary read of one connection for one operation, if there is one. */
+const sharedRead = (harness: Harness, connectionId: string, operation: string): { subscribers: number } | undefined =>
+  [...inflightReads(harness, connectionId)].find(([key]) => key.startsWith(`${operation}\u0000`))?.[1];
+
 test("a connection is created enabled with a stored token and never returns the token", async () => {
   await withHarness(async (harness) => {
     const view = await connect(harness);
@@ -3155,5 +3171,355 @@ test("a named kind is a complete slot, with omitted fields defaulted", async () 
     const replaced = await harness.manager.patchLibrary(harness.admin, library.id, { downloadSettings: { movie: { libraryId: box.id } } });
     assert.deepEqual(replaced.downloadSettings!.movie, { subfolder: "", layout: "structured", libraryId: box.id }, "a named slot drops fields the payload omits");
     assert.deepEqual(replaced.downloadSettings!.series, { subfolder: "", layout: "structured" }, "and the untouched series slot stays the default");
+  });
+});
+
+/** One attached movie library with a warm membership proof: the listing already proved both
+ *  items to sit in it, so the reads below are the ordinary detail and version calls alone. */
+const warmLibrary = async (harness: Harness) => {
+  const connection = await connect(harness);
+  harness.server.libraries.push({ id: "lib-1", name: "Library lib-1", type: "movie" });
+  harness.server.items["lib-1"] = [movie("m1"), movie("m2")];
+  for (const item of [movie("m1"), movie("m2")]) {
+    harness.server.detailOf[item.id] = item;
+    harness.server.ancestorsOf[item.id] = ["lib-1"];
+    harness.server.versionsOf[item.id] = [{ id: `v-${item.id}` }];
+  }
+  const library = await harness.manager.attachLibrary(harness.admin, connection.id, { remoteId: "lib-1" });
+  await harness.manager.browseDirectory(harness.admin, library.id, {});
+  return { connection, library };
+};
+
+test("a warm library's ordinary detail and version reads cost one row and one version list", async () => {
+  let now = 2_000_000;
+  await withHarness(async (harness) => {
+    const { library } = await warmLibrary(harness);
+    const before = { detail: providerCalls(harness, "detail"), versions: providerCalls(harness, "versions") };
+    const [first, second, third, versions] = await Promise.all([
+      harness.manager.itemDetail(harness.admin, library.id, "m2"),
+      harness.manager.itemDetail(harness.admin, library.id, "m2"),
+      harness.manager.itemDetail(harness.admin, library.id, "m2"),
+      harness.manager.itemVersions(harness.admin, library.id, "m2"),
+    ]);
+    assert.equal(providerCalls(harness, "detail") - before.detail, 1, "three detail reads and a versions read cost one row");
+    assert.equal(providerCalls(harness, "versions") - before.versions, 1, "and one version list");
+    for (const detail of [first, second, third]) assert.equal(detail.item.id, "m2");
+    assert.deepEqual(versions.versions.map((version) => version.id), ["v-m2"]);
+
+    // The window hands out a clone of what it stored, never the stored row itself. The provider's
+    // new version list is read once the window it replaced has ended.
+    now += 30_000;
+    harness.server.versionsOf["m2"] = [{ id: "v-m2", externalSubtitles: [{ index: 1, language: "eng" }] }];
+    const again = await harness.manager.itemDetail(harness.admin, library.id, "m2");
+    const againVersions = await harness.manager.itemVersions(harness.admin, library.id, "m2");
+    assert.deepEqual(againVersions.versions[0]!.externalSubtitles, [{ index: 1, language: "eng" }]);
+    const held = { detail: providerCalls(harness, "detail"), versions: providerCalls(harness, "versions") };
+    assert.equal(again.item.name, "Movie m2");
+    again.item.name = "mutated";
+    againVersions.versions[0]!.externalSubtitles![0]!.language = "mutated";
+    assert.equal((await harness.manager.itemDetail(harness.admin, library.id, "m2")).item.name, "Movie m2", "a consumer never reaches into the window");
+    const reread = await harness.manager.itemVersions(harness.admin, library.id, "m2");
+    assert.deepEqual(reread.versions[0]!.externalSubtitles, [{ index: 1, language: "eng" }], "and neither does a nested field");
+    assert.deepEqual({ detail: providerCalls(harness, "detail"), versions: providerCalls(harness, "versions") }, held, "a repeat inside the window reads nothing upstream");
+  }, { clock: () => now });
+});
+
+test("the ordinary window ends exactly at thirty seconds and never slides", async () => {
+  let now = 1_000_000;
+  await withHarness(async (harness) => {
+    const { library } = await warmLibrary(harness);
+    await harness.manager.itemDetail(harness.admin, library.id, "m1");
+    const read = providerCalls(harness, "detail");
+
+    now += 29_999;
+    harness.server.detailOf["m1"] = { ...movie("m1"), name: "Moved" };
+    assert.equal((await harness.manager.itemDetail(harness.admin, library.id, "m1")).item.name, "Movie m1", "a hit inside the window serves what was stored");
+    assert.equal(providerCalls(harness, "detail"), read, "and reads nothing upstream");
+
+    // The hit above did not move the window: it started when the read completed.
+    now += 1;
+    assert.equal((await harness.manager.itemDetail(harness.admin, library.id, "m1")).item.name, "Moved", "the window ends at thirty seconds");
+    assert.equal(providerCalls(harness, "detail"), read + 1, "and costs exactly one fresh row");
+
+    // The sources behind the same title share the row the detail read just stored.
+    const versions = providerCalls(harness, "versions");
+    assert.deepEqual((await harness.manager.itemVersions(harness.admin, library.id, "m1")).versions.map((entry) => entry.id), ["v-m1"]);
+    assert.equal(providerCalls(harness, "detail"), read + 1, "a versions read never repeats the row");
+    assert.equal(providerCalls(harness, "versions"), versions + 1);
+  }, { clock: () => now });
+});
+
+test("the ordinary window is bound to the actor, the library and the live grant", async () => {
+  await withHarness(async (harness) => {
+    const connection = await connect(harness);
+    harness.server.libraries.push({ id: "lib-1", name: "Library lib-1", type: "movie" });
+    harness.server.libraries.push({ id: "lib-2", name: "Library lib-2", type: "movie" });
+    const first = await harness.manager.attachLibrary(harness.admin, connection.id, { remoteId: "lib-1" });
+    const second = await harness.manager.attachLibrary(harness.admin, connection.id, { remoteId: "lib-2" });
+    await harness.manager.patchLibrary(harness.admin, first.id, { allowedUsers: [BOB] });
+    harness.server.detailOf["m1"] = movie("m1");
+    harness.server.ancestorsOf["m1"] = ["lib-1", "lib-2"];
+
+    await harness.manager.itemDetail(harness.admin, first.id, "m1");
+    const read = providerCalls(harness, "detail");
+
+    // The same provider item under another library of the same connection is another answer.
+    await harness.manager.itemDetail(harness.admin, second.id, "m1");
+    assert.equal(providerCalls(harness, "detail"), read + 1, "another library never reads this one's window");
+    // So is the same item read by another account.
+    await harness.manager.itemDetail(harness.bob, first.id, "m1");
+    assert.equal(providerCalls(harness, "detail"), read + 2, "another actor reads its own row");
+    await harness.manager.itemDetail(harness.bob, first.id, "m1");
+    assert.equal(providerCalls(harness, "detail"), read + 2, "and its own row is held for it");
+    await harness.manager.itemDetail(harness.admin, first.id, "m1");
+    assert.equal(providerCalls(harness, "detail"), read + 2, "and this one's row is still held");
+
+    // A grant change drops the runtime with its window, so neither the row nor the account that
+    // lost the grant survives it.
+    await harness.manager.patchLibrary(harness.admin, first.id, { allowedUsers: [] });
+    assert.equal(metadataWindow(harness).size, 0, "a grant change takes the window with it");
+    await assert.rejects(harness.manager.itemDetail(harness.bob, first.id, "m1"), { code: "not-found" });
+    await assert.rejects(harness.manager.itemVersions(harness.bob, first.id, "m1"), { code: "not-found" });
+
+    // A rotated secret is a new actor stamp: the old one refuses and the new one reads afresh.
+    await harness.store.update((state) => {
+      state.users = (state.users ?? []).map((user) => user.id === ADA ? { ...user, secret: "rotated" } : user);
+    });
+    await assert.rejects(harness.manager.itemDetail(harness.admin, first.id, "m1"), { status: 401 }, "a stale stamp never serves the window");
+    const rotated: MediaServerAuthority = { actor: { id: ADA, secret: "rotated" }, assertCurrent: () => undefined };
+    await harness.manager.itemDetail(rotated, first.id, "m1");
+    assert.equal(providerCalls(harness, "detail"), read + 3, "the new stamp reads its own row");
+  });
+});
+
+test("a revoked subscriber refuses while the other subscriber of the same read still answers", async () => {
+  await withHarness(async (harness) => {
+    const { connection, library } = await warmLibrary(harness);
+    const before = providerCalls(harness, "detail");
+    const held = deferred();
+    const entered = deferred();
+    let live = true;
+    const revoked: MediaServerAuthority = {
+      actor: { id: ADA, secret: admin.secret },
+      assertCurrent: () => { if (!live) throw new ResourceError(401, "AUTH_REQUIRED"); },
+    };
+    harness.server.nudge = { op: "detail", wait: held.promise, entered: () => entered.resolve() };
+    const refused = harness.manager.itemDetail(revoked, library.id, "m2").then(() => undefined, (error: unknown) => error);
+    const allowed = harness.manager.itemDetail(harness.admin, library.id, "m2");
+    await until(() => sharedRead(harness, connection.id, "detail")?.subscribers === 2);
+    await entered.promise;
+    live = false;
+    held.resolve();
+    harness.server.nudge = undefined;
+    const outcome = await refused;
+    assert.ok(outcome instanceof ResourceError, "the revoked subscriber refuses");
+    assert.equal(outcome.status, 401);
+    assert.equal((await allowed).item.id, "m2", "the subscriber that is still authorized keeps the answer");
+    assert.equal(providerCalls(harness, "detail"), before + 1, "one shared read served both");
+  });
+});
+
+test("one subscriber's abort leaves the other, and the last abort cancels the read", async () => {
+  await withHarness(async (harness) => {
+    const { connection, library } = await warmLibrary(harness);
+    const start = providerCalls(harness, "detail");
+    const gate = deferred();
+    const entered = deferred();
+    harness.server.nudge = { op: "detail", wait: gate.promise, entered: () => entered.resolve() };
+    const leaving = new AbortController();
+    const leavingRead = harness.manager.itemDetail(harness.admin, library.id, "m1", leaving.signal).then(() => undefined, (error: unknown) => error);
+    const staying = harness.manager.itemDetail(harness.admin, library.id, "m1");
+    await until(() => sharedRead(harness, connection.id, "detail")?.subscribers === 2);
+    await entered.promise;
+    leaving.abort();
+    gate.resolve();
+    harness.server.nudge = undefined;
+    const outcome = await leavingRead;
+    assert.ok(outcome instanceof MediaServerError);
+    assert.equal(outcome.code, "cancelled");
+    assert.equal((await staying).item.name, "Movie m1", "the read carries on for the subscriber that stayed");
+    assert.equal(providerCalls(harness, "detail"), start + 1, "and it was still one row");
+
+    // Two subscribers of a fresh read leave together: the read goes with them, and the retry
+    // starts its own instead of joining the cancelled one.
+    const second = deferred();
+    const started = deferred();
+    harness.server.nudge = { op: "detail", wait: second.promise, entered: () => started.resolve() };
+    const firstLeft = new AbortController();
+    const secondLeft = new AbortController();
+    const abandoned = harness.manager.itemDetail(harness.admin, library.id, "m2", firstLeft.signal).then(() => undefined, (error: unknown) => error);
+    const alsoAbandoned = harness.manager.itemDetail(harness.admin, library.id, "m2", secondLeft.signal).then(() => undefined, (error: unknown) => error);
+    await until(() => sharedRead(harness, connection.id, "detail")?.subscribers === 2);
+    await started.promise;
+    firstLeft.abort();
+    secondLeft.abort();
+    assert.equal(sharedRead(harness, connection.id, "detail"), undefined, "the last subscriber took the read with it");
+    second.resolve();
+    harness.server.nudge = undefined;
+    assert.equal((await abandoned as MediaServerError).code, "cancelled");
+    assert.equal((await alsoAbandoned as MediaServerError).code, "cancelled");
+
+    const before = providerCalls(harness, "detail");
+    assert.equal((await harness.manager.itemDetail(harness.admin, library.id, "m2")).item.id, "m2", "the retry reads the provider itself");
+    assert.equal(providerCalls(harness, "detail"), before + 1);
+    assert.equal((await harness.manager.itemDetail(harness.admin, library.id, "m2")).item.id, "m2", "and keeps what it read");
+    assert.equal(providerCalls(harness, "detail"), before + 1, "a cancelled read leaves nothing behind");
+
+    // A read that fails is never kept either.
+    harness.server.detailOf["m3"] = movie("m3");
+    harness.server.ancestorsOf["m3"] = ["lib-1"];
+    harness.server.errors.detail = new MediaServerError("forbidden", "no", 403);
+    await assert.rejects(harness.manager.itemDetail(harness.admin, library.id, "m3"), { code: "forbidden" });
+    delete harness.server.errors.detail;
+    const failed = providerCalls(harness, "detail");
+    await harness.manager.itemDetail(harness.admin, library.id, "m3");
+    assert.equal(providerCalls(harness, "detail"), failed + 1, "the failure left no answer behind");
+  });
+});
+
+test("a row that lands after its runtime was invalidated neither repopulates nor evicts", async () => {
+  await withHarness(async (harness) => {
+    const { library } = await warmLibrary(harness);
+    harness.server.detailOf["m3"] = movie("m3");
+    harness.server.ancestorsOf["m3"] = ["lib-1"];
+
+    const gate = deferred();
+    const entered = deferred();
+    harness.server.nudge = { op: "detail", wait: gate.promise, entered: () => entered.resolve() };
+    const late = harness.manager.itemDetail(harness.admin, library.id, "m1").then(() => "served", (error: unknown) => error);
+    await entered.promise;
+    harness.server.nudge = undefined;
+
+    // Another read's 401 drops the runtime and every window under it.
+    harness.server.errors.detail = new MediaServerError("authentication-required", "401", 401);
+    await assert.rejects(harness.manager.itemDetail(harness.admin, library.id, "m3"), { code: "authentication-required" });
+    delete harness.server.errors.detail;
+    assert.equal((await harness.manager.listConnections(harness.admin)).connections[0]!.status, "reauthentication-required");
+
+    // The new runtime reads a newer row and keeps it.
+    harness.server.detailOf["m1"] = { ...movie("m1"), name: "Newer" };
+    assert.equal((await harness.manager.itemDetail(harness.admin, library.id, "m1")).item.name, "Newer");
+    const kept = providerCalls(harness, "detail");
+
+    // The abandoned read lands now: it may answer its own caller, but nothing of it is kept.
+    harness.server.detailOf["m1"] = { ...movie("m1"), name: "Later" };
+    gate.resolve();
+    await late;
+    assert.equal((await harness.manager.itemDetail(harness.admin, library.id, "m1")).item.name, "Newer", "the newer answer is still the one held");
+    assert.equal(providerCalls(harness, "detail"), kept, "and the late read cost no provider call of its own");
+  });
+});
+
+test("an authentication-required read from a miss drops the runtime, its window and its status", async () => {
+  await withHarness(async (harness) => {
+    const { library } = await warmLibrary(harness);
+    harness.server.detailOf["m3"] = movie("m3");
+    harness.server.ancestorsOf["m3"] = ["lib-1"];
+    await harness.manager.itemDetail(harness.admin, library.id, "m1");
+    assert.equal(metadataWindow(harness).size, 1, "the window holds the row it read");
+
+    harness.server.errors.detail = new MediaServerError("authentication-required", "401", 401);
+    await assert.rejects(harness.manager.itemDetail(harness.admin, library.id, "m3"), { code: "authentication-required" });
+    delete harness.server.errors.detail;
+    assert.equal((await harness.manager.listConnections(harness.admin)).connections[0]!.status, "reauthentication-required");
+    assert.equal(metadataWindow(harness).size, 0, "the dropped runtime took its window with it");
+    assert.equal(metadataBytes(harness), 0);
+
+    const before = providerCalls(harness, "detail");
+    await harness.manager.itemDetail(harness.admin, library.id, "m1");
+    assert.equal(providerCalls(harness, "detail"), before + 1, "the row is read again, never re-served");
+  });
+});
+
+test("closing the manager empties the ordinary window", async () => {
+  const harness = await mount();
+  try {
+    const { library } = await warmLibrary(harness);
+    await harness.manager.itemVersions(harness.admin, library.id, "m1");
+    assert.equal(metadataWindow(harness).size, 2, "the row and its version list are held");
+    assert.ok(metadataBytes(harness) > 0);
+    await harness.manager.close();
+    assert.equal(metadataWindow(harness).size, 0);
+    assert.equal(metadataBytes(harness), 0);
+  } finally {
+    await harness.close();
+  }
+});
+
+test("the ordinary window holds at most 256 answers, evicting the oldest", async () => {
+  await withHarness(async (harness) => {
+    const connection = await connect(harness);
+    harness.server.libraries.push({ id: "lib-1", name: "Library lib-1", type: "movie" });
+    const library = await harness.manager.attachLibrary(harness.admin, connection.id, { remoteId: "lib-1" });
+    const ids = Array.from({ length: 257 }, (_, index) => `m${index}`);
+    for (const id of ids) {
+      harness.server.detailOf[id] = movie(id);
+      harness.server.ancestorsOf[id] = ["lib-1"];
+    }
+    for (const id of ids) await harness.manager.itemDetail(harness.admin, library.id, id);
+    assert.equal(metadataWindow(harness).size, 256, "the window keeps its bound");
+
+    const read = providerCalls(harness, "detail");
+    await harness.manager.itemDetail(harness.admin, library.id, "m0");
+    assert.equal(providerCalls(harness, "detail"), read + 1, "the oldest answer was evicted");
+    assert.equal(metadataWindow(harness).size, 256, "and the window is still bounded");
+    await harness.manager.itemDetail(harness.admin, library.id, "m2");
+    assert.equal(providerCalls(harness, "detail"), read + 1, "the answers after it are still held");
+  });
+});
+
+test("the ordinary window keeps its byte budget and never stores an oversized answer", async () => {
+  await withHarness(async (harness) => {
+    const connection = await connect(harness);
+    harness.server.libraries.push({ id: "lib-1", name: "Library lib-1", type: "movie" });
+    const library = await harness.manager.attachLibrary(harness.admin, connection.id, { remoteId: "lib-1" });
+    const big = (id: string, bytes: number): ProviderItem => ({ id, name: `Movie ${id}`, type: "movie", providerIds: {}, overview: "x".repeat(bytes) });
+    const ids = ["a", "b", "c", "d", "e", "f", "g", "h", "i"];
+    for (const id of ids) {
+      harness.server.detailOf[id] = big(id, 1024 * 1024);
+      harness.server.ancestorsOf[id] = ["lib-1"];
+    }
+    for (const id of ids) await harness.manager.itemDetail(harness.admin, library.id, id);
+    assert.ok(metadataBytes(harness) <= 8 * 1024 * 1024, `the window stays inside its budget (${metadataBytes(harness)})`);
+
+    const read = providerCalls(harness, "detail");
+    await harness.manager.itemDetail(harness.admin, library.id, "a");
+    assert.equal(providerCalls(harness, "detail"), read + 1, "the oldest megabyte was evicted");
+    await harness.manager.itemDetail(harness.admin, library.id, "i");
+    assert.equal(providerCalls(harness, "detail"), read + 1, "the newest answer is still held");
+
+    // An answer past the whole budget on its own is served, kept nowhere and evicts nothing.
+    const held = { entries: metadataWindow(harness).size, bytes: metadataBytes(harness) };
+    harness.server.detailOf["huge"] = big("huge", 9 * 1024 * 1024);
+    harness.server.ancestorsOf["huge"] = ["lib-1"];
+    assert.equal((await harness.manager.itemDetail(harness.admin, library.id, "huge")).item.id, "huge");
+    assert.deepEqual({ entries: metadataWindow(harness).size, bytes: metadataBytes(harness) }, held, "an oversized answer is not stored");
+    const after = providerCalls(harness, "detail");
+    await harness.manager.itemDetail(harness.admin, library.id, "i");
+    assert.equal(providerCalls(harness, "detail"), after, "and its neighbours still answer from the window");
+  });
+});
+
+test("a match, a revalidation and a download proof read the provider behind the window", async () => {
+  await withHarness(async (harness) => {
+    const { connection, library } = await seedMatchLibrary(harness, [{ id: "m1", name: "Alien", type: "movie", providerIds: { imdb: "tt1" } }]);
+    harness.server.versionsOf["m1"] = [{ id: "v1" }];
+    await harness.manager.itemDetail(harness.admin, library.id, "m1");
+    assert.deepEqual((await harness.manager.itemVersions(harness.admin, library.id, "m1")).versions.map((version) => version.id), ["v1"]);
+
+    // The provider swaps the file versions behind the item.
+    harness.server.versionsOf["m1"] = [{ id: "v2" }];
+    assert.deepEqual((await harness.manager.itemVersions(harness.admin, library.id, "m1")).versions.map((version) => version.id), ["v1"], "the ordinary read still serves its window");
+    const matched = await harness.manager.matchedVersions(harness.admin, library.id, "movie", "tt1");
+    assert.deepEqual(matched.flatMap((entry) => entry.versions.map((version) => version.id)), ["v2"], "the match reads the provider");
+    const stale = refFor(harness, connection.id, library.id, "m1", "v1");
+    await assert.rejects(harness.manager.revalidateOriginal(harness.admin, stale), { code: "not-found" }, "a source the provider dropped is refused");
+    await harness.manager.revalidateOriginal(harness.admin, { ...stale, mediaSourceId: "v2" });
+    await assert.rejects(harness.manager.openOriginal(harness.admin, stale, { method: "GET" }), { code: "not-found" }, "the playback guard reads the provider too");
+
+    // The provider moves the item off the matched id.
+    harness.server.detailOf["m1"] = movie("m1", "Alien");
+    assert.deepEqual(await harness.manager.matchingItems(harness.admin, library.id, "movie", "tt1"), [], "a fresh match never trusts the window");
+    assert.equal((await harness.manager.itemDetail(harness.admin, library.id, "m1")).item.id, "m1", "which is still holding the row it read");
   });
 });

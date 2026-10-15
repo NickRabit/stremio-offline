@@ -172,6 +172,23 @@ const PREVIEW_MAX = 128;
 const ORIGINAL_PROOF_TTL_MS = 30_000;
 /** The most original proofs held at once; the oldest is evicted past this bound. */
 const ORIGINAL_PROOF_MAX = 256;
+/** How long one ordinary raw detail or version list may be re-served once its read completed.
+ *  A warm detail screen and the progress saves that follow it in the same window cost the
+ *  provider one read; the window never slides on a hit. */
+const METADATA_TTL_MS = 30_000;
+/** The most raw detail and version entries held together; the oldest is evicted past this bound. */
+const METADATA_MAX = 256;
+/** The serialized size of all raw metadata entries held together. A value larger than this is
+ *  never stored at all, so one oversized answer cannot evict the whole cache. */
+const METADATA_BYTES_MAX = 8 * 1024 * 1024;
+/** Whether a detail or version read may be served from the short ordinary-metadata window. A
+ *  caller that must observe provider changes -- a match, a revalidation or a download proof --
+ *  asks for a fresh read instead. */
+type MetadataFreshness = "fresh" | "cached";
+/** How one provider call inside an ordinary detail or version read is staged: a caller that must
+ *  observe provider changes sends every call through the manager's own upstream helper, one
+ *  network slot per call, while a shared read already holds one slot for the whole read. */
+type MetadataCall = <T>(work: () => Promise<T>) => Promise<T>;
 const EXPORT_MAX_BYTES = MEDIA_SERVER_CONFIGURATION_MAX_BYTES;
 const CURSOR_MAX = 8192;
 const CURSOR_JSON_MAX = 6144;
@@ -464,6 +481,20 @@ interface CachedPreview {
   posters: string[];
 }
 
+/** One identity-validated raw provider answer held for a short window: an ordinary item detail
+ *  or the ordinary version list of one item. The key binds the operation, the acting account and
+ *  its secret stamp, the library, the whole connection identity and the exact item, so an answer
+ *  can never be read across accounts, libraries, generations or items. It holds neither local
+ *  authority nor projected personal state: a caller still passes the live actor, grant and
+ *  connection checks before it is served, and the stored value is cloned out so no consumer can
+ *  reach into it. */
+interface CachedMetadata {
+  connectionId: string;
+  at: number;
+  bytes: number;
+  value: unknown;
+}
+
 /** The version of each picture a fan would use, in the order the fan draws them: what the stamp
  *  of a composed mosaic is drawn from, so a fan changes exactly when one of its pictures does. */
 const mosaicVersions = (items: readonly ProviderItem[]): string[] =>
@@ -586,6 +617,11 @@ export class MediaServerManager {
    *  source, they never substitute for the local grant and are dropped with an invalidated
    *  connection. */
   private readonly originalProofs = new Map<string, OriginalProof>();
+  /** Bounded, time-limited raw ordinary metadata: one identity-validated detail or version list
+   *  per operation, actor, library, connection identity and item. It is never an authorization
+   *  and never carries projected local state; it is dropped with an invalidated connection. */
+  private readonly metadata = new Map<string, CachedMetadata>();
+  private metadataBytes = 0;
   private readonly configuration: MediaServerConfiguration;
   private readonly index: MediaServerIndex;
   private readonly clock: () => number;
@@ -671,6 +707,8 @@ export class MediaServerManager {
     this.proofs.clear();
     this.originalProofs.clear();
     this.previews.clear();
+    this.metadata.clear();
+    this.metadataBytes = 0;
     const logins = [...this.loginTransports];
     this.loginTransports.clear();
     await Promise.allSettled([...transports, ...logins].map((transport) => transport.close()));
@@ -1359,6 +1397,11 @@ export class MediaServerManager {
     return { sources, versions };
   }
 
+  /** One ordinary item row. The acting account, the grant, the connection and the live session
+   *  are proved on every call; the raw row behind them may be one another ordinary caller of the
+   *  same item is reading, or one read within the last few seconds, so a warm detail screen costs
+   *  the provider a single row. A match, a revalidation or a download proof never takes this
+   *  path. */
   async itemDetail(authority: MediaServerAuthority, libraryId: unknown, itemId: unknown, signal?: AbortSignal): Promise<MediaServerDetail> {
     const request = this.requestSignal(signal);
     const user = this.currentActor(authority, request);
@@ -1366,7 +1409,7 @@ export class MediaServerManager {
     const connection = this.requireConnection(library.connectionId);
     const requested = requestItemId(itemId);
     const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId }, request);
-    const item = await this.verifiedDetail(authority, request, library, connection, session, requested);
+    const item = await this.verifiedDetail(authority, request, library, connection, session, requested, "cached");
     return { item: publicRemoteItem(structuredClone(item), library.id), capabilities: READ_ONLY_MEDIA_CAPABILITIES };
   }
 
@@ -1385,8 +1428,10 @@ export class MediaServerManager {
   }
 
   /** Every ordinary file version of one playable item, re-reading the acting account and the
-   *  local records after each awaited step. Only a movie or an episode has media to hand over;
-   *  the answer carries no URL, path or token. */
+   *  local records after each awaited step. The row and the version list behind the answer are
+   *  shared with the neighbouring ordinary readers of the same item the way `itemDetail` shares
+   *  them. Only a movie or an episode has media to hand over; the answer carries no URL, path or
+   *  token. */
   async itemVersions(authority: MediaServerAuthority, libraryId: unknown, itemId: unknown, signal?: AbortSignal): Promise<MediaServerItemVersions> {
     const request = this.requestSignal(signal);
     const user = this.currentActor(authority, request);
@@ -1394,7 +1439,7 @@ export class MediaServerManager {
     const connection = this.requireConnection(library.connectionId);
     const requested = requestItemId(itemId);
     const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId }, request);
-    return this.versionsUnder(authority, request, library, connection, session, requested);
+    return this.versionsUnder(authority, request, library, connection, session, requested, "cached");
   }
 
   /** Proves the acting account may still reach one attached library: the current actor, a
@@ -1950,6 +1995,60 @@ export class MediaServerManager {
     }
   }
 
+  /** The ordinary-metadata key: the exact operation, the acting account and its secret stamp, the
+   *  library, the whole connection identity and the item, so an answer can never be read across an
+   *  account, a library, a generation, a credential or an item. */
+  private metadataKey(operation: "detail" | "versions", actor: UserRecord, library: RemoteLibraryRecord, connection: MediaConnectionRecord, itemId: string): string {
+    return [
+      operation, actor.id, remoteSecretStamp(actor.secret), library.id, library.remoteId, connection.id,
+      connection.provider, connection.serverId, connection.accountId, String(connection.generation),
+      connection.secretRef ?? "", itemId,
+    ].join("\u0000");
+  }
+
+  /** The stored answer behind one key, cloned out so no caller can reach into the stored row, or
+   *  undefined when there is none or its window has closed. The window starts when the read
+   *  completed and never slides: an entry is served while it is younger than the window and gone
+   *  the moment it reaches it. */
+  private metadataFor(key: string): unknown | undefined {
+    const cached = this.metadata.get(key);
+    if (!cached) return undefined;
+    if (this.clock() - cached.at >= METADATA_TTL_MS) {
+      this.forgetMetadata(key);
+      return undefined;
+    }
+    return structuredClone(cached.value);
+  }
+
+  /** Keeps one completed ordinary answer for the short window. An answer whose own serialized
+   *  size is past the byte budget is not stored at all, so one oversized read cannot evict the
+   *  rest; otherwise the oldest entries go first until both budgets hold again. */
+  private rememberMetadata(key: string, connectionId: string, value: unknown): void {
+    const bytes = Buffer.byteLength(JSON.stringify(value) ?? "", "utf8");
+    this.forgetMetadata(key);
+    if (bytes > METADATA_BYTES_MAX) return;
+    this.metadata.set(key, { connectionId, at: this.clock(), bytes, value: structuredClone(value) });
+    this.metadataBytes += bytes;
+    while (this.metadata.size > METADATA_MAX || this.metadataBytes > METADATA_BYTES_MAX) {
+      const oldest = this.metadata.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.forgetMetadata(oldest);
+    }
+  }
+
+  private forgetMetadata(key: string): void {
+    const cached = this.metadata.get(key);
+    if (!cached) return;
+    this.metadata.delete(key);
+    this.metadataBytes -= cached.bytes;
+  }
+
+  private dropMetadata(connectionId: string): void {
+    for (const [key, cached] of [...this.metadata]) {
+      if (cached.connectionId === connectionId) this.forgetMetadata(key);
+    }
+  }
+
   /** Proves one item belongs to a granted library, once: a library root is taken from the view
    *  list the live session already proved, so it never asks for an ancestor of itself, and any
    *  other id reads its detail and ancestor chain exactly once. The result is the proof a later
@@ -2118,8 +2217,53 @@ export class MediaServerManager {
     return proof;
   }
 
+  /** One ordinary raw detail or version read, shared with every other ordinary caller of the same
+   *  item: an identical read already in flight on the same runtime is joined, and a completed one
+   *  is re-served for the short window, while a caller that must observe provider changes reads
+   *  straight through. Only an answer that completed under a runtime still installed for this
+   *  connection may be kept, so a read that lands after an invalidation neither repopulates the
+   *  window nor evicts a newer answer, and a 401 drops the runtime under the same mapping a
+   *  staged upstream call performs. The answer is a raw provider row, never an authorization: the
+   *  acting account, the grant and the connection are re-checked here and by every caller. */
+  private async sharedMetadata<T>(
+    authority: MediaServerAuthority,
+    signal: AbortSignal,
+    freshness: MetadataFreshness,
+    operation: "detail" | "versions",
+    library: RemoteLibraryRecord,
+    connection: MediaConnectionRecord,
+    itemId: string,
+    read: (user: UserRecord, signal: AbortSignal, call: MetadataCall) => Promise<T>,
+  ): Promise<T> {
+    const user = this.currentActor(authority, signal);
+    if (freshness === "fresh") return read(user, signal, (work) => this.upstream(connection, signal, work));
+    const key = this.metadataKey(operation, user, library, connection, itemId);
+    const cached = this.metadataFor(key) as T | undefined;
+    if (cached !== undefined) {
+      this.recheckContent(authority, signal, library.id, connection);
+      return cached;
+    }
+    const runtime = this.liveRuntime(connection);
+    const direct: MetadataCall = (work) => work();
+    const readAndStore = async (inner: AbortSignal): Promise<T> => {
+      const value = await read(user, inner, direct);
+      this.checkLive(inner);
+      if (this.liveRuntime(connection) === runtime) this.rememberMetadata(key, connection.id, value);
+      return value;
+    };
+    const work = (inner: AbortSignal): Promise<T> => readAndStore(inner).catch((error: unknown) => {
+      if (error instanceof MediaServerError && error.code === "authentication-required") this.markReauthentication(connection);
+      throw error;
+    });
+    // Without a live runtime there is nothing to share the read on, so it still runs once through
+    // the network lane rather than inventing a second place to hold in-flight reads.
+    return runtime ? this.coalesced(runtime, key, signal, work) : this.net(undefined, signal, () => work(signal));
+  }
+
   /** One upstream detail read proved to be the item asked for and to still sit in the library,
-   *  with the acting authority and the local records re-checked after every await. */
+   *  with the acting authority and the local records re-checked after every await. An ordinary
+   *  caller shares the read with its neighbours for the short window; a match or a download proof
+   *  asks for a fresh one. */
   private async verifiedDetail(
     authority: MediaServerAuthority,
     signal: AbortSignal,
@@ -2127,21 +2271,39 @@ export class MediaServerManager {
     connection: MediaConnectionRecord,
     session: { token: string; provider: MediaServerProvider },
     itemId: string,
+    freshness: MetadataFreshness = "fresh",
   ): Promise<ProviderItem> {
-    // The row is read live -- a grid row carries neither an overview nor genres -- but the walk
-    // up the ancestor chain is already covered when this very item was proved to sit in this
-    // library under this connection generation and secret within the proof's window.
-    const proved = this.proofFor(this.currentActor(authority, signal), library, connection, itemId);
-    const item = await this.upstream(connection, signal, () => session.provider.detail(session.token, connection.accountId, itemId, signal));
+    const item = await this.provedDetail(authority, signal, freshness, library, connection, session, itemId);
     this.recheckContent(authority, signal, library.id, connection);
-    if (item.id !== itemId) throw new MediaServerError("invalid-response", "The media-server item identity changed.");
-    if (!proved) {
-      const ancestors = await this.upstream(connection, signal, () => session.provider.ancestors(session.token, connection.accountId, item.id, signal));
-      if (!ancestors.includes(library.remoteId)) throw notFound("That item is not in this library.");
-      this.recheckContent(authority, signal, library.id, connection);
-    }
     this.putProof(this.proofOf(this.currentActor(authority, signal), library, connection, item));
     return item;
+  }
+
+  /** The row behind `verifiedDetail`: the provider row read for this granted library and proved
+   *  to be the item asked for, with the walk up the ancestor chain taken only when this very item
+   *  was not already proved to sit here under this connection generation and secret. */
+  private provedDetail(
+    authority: MediaServerAuthority,
+    signal: AbortSignal,
+    freshness: MetadataFreshness,
+    library: RemoteLibraryRecord,
+    connection: MediaConnectionRecord,
+    session: { token: string; provider: MediaServerProvider },
+    itemId: string,
+  ): Promise<ProviderItem> {
+    return this.sharedMetadata(authority, signal, freshness, "detail", library, connection, itemId, async (user, inner, call) => {
+      // The row is read live -- a grid row carries neither an overview nor genres -- but the walk
+      // up the ancestor chain is already covered when this very item was proved to sit in this
+      // library under this connection generation and secret within the proof's window.
+      const proved = this.proofFor(user, library, connection, itemId);
+      const item = await call(() => session.provider.detail(session.token, connection.accountId, itemId, inner));
+      if (item.id !== itemId) throw new MediaServerError("invalid-response", "The media-server item identity changed.");
+      if (!proved) {
+        const ancestors = await call(() => session.provider.ancestors(session.token, connection.accountId, item.id, inner));
+        if (!ancestors.includes(library.remoteId)) throw notFound("That item is not in this library.");
+      }
+      return item;
+    });
   }
 
   /** The exact-id match re-applied to a freshly read item: a movie by its shared namespaced id,
@@ -2228,21 +2390,17 @@ export class MediaServerManager {
     connection: MediaConnectionRecord,
     session: LiveSession,
     requested: string,
+    freshness: MetadataFreshness = "fresh",
   ): Promise<MediaServerItemVersions> {
     this.recheckContent(authority, request, library.id, connection);
-    // As in `verifiedDetail`: the item row and its version list are read live, while the ancestor
-    // walk is skipped for an item this very library already proved within the proof's window.
-    const proved = this.proofFor(this.currentActor(authority, request), library, connection, requested);
-    const item = await this.upstream(connection, request, () => session.provider.detail(session.token, connection.accountId, requested, request));
+    // As in `verifiedDetail`: the row behind the versions is shared with the neighbouring
+    // ordinary callers of the same item, so a detail screen and the sources read behind it in the
+    // same window cost the provider one row.
+    const item = await this.provedDetail(authority, request, freshness, library, connection, session, requested);
     this.recheckContent(authority, request, library.id, connection);
-    if (item.id !== requested) throw new MediaServerError("invalid-response", "The media-server item identity changed.");
-    if (!proved) {
-      const ancestors = await this.upstream(connection, request, () => session.provider.ancestors(session.token, connection.accountId, item.id, request));
-      if (!ancestors.includes(library.remoteId)) throw notFound("That item is not in this library.");
-      this.recheckContent(authority, request, library.id, connection);
-    }
     if (item.type !== "movie" && item.type !== "episode") throw invalid("That item has no playable media.");
-    const versions = await this.upstream(connection, request, () => session.provider.versions(session.token, connection.accountId, item.id, request));
+    const versions = await this.sharedMetadata(authority, request, freshness, "versions", library, connection, item.id, (_user, signal, call) =>
+      call(() => session.provider.versions(session.token, connection.accountId, item.id, signal)));
     this.recheckContent(authority, request, library.id, connection);
     return {
       item: structuredClone(item),
@@ -2404,6 +2562,7 @@ export class MediaServerManager {
     // taken under that connection goes with it, so a 401 invalidates the membership cache too.
     this.dropProofs(connectionId);
     this.dropPreviews(connectionId);
+    this.dropMetadata(connectionId);
     this.index.invalidateConnection(connectionId);
   }
 
