@@ -2,6 +2,7 @@ package cz.stremiooffline.tv.ui.catalog
 
 import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.RemoteProviderIdsDto
+import cz.stremiooffline.tv.data.LibraryTitleDto
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -83,5 +84,43 @@ class NativeAddonIdentityTest {
   fun `an unknown video type derives nothing`() {
     assertNull(nativeAddonIdentity(RemoteItemDto(id = "x", name = "Trailer", type = "video"), null))
     assertNull(nativeAddonIdentity(RemoteItemDto(id = "x", name = "Trailer", type = "video"), RemoteProviderIdsDto(imdb = "tt0903747")))
+  }
+
+  @Test
+  fun `a library binding keeps a colon-bearing id whole and takes its episode suffix`() {
+    // `tmdb:123:4:5` is the series id `tmdb:123` plus its own season and episode, never three
+    // colon-separated fields.
+    assertEquals(
+      "series" to "tmdb:123:4:5",
+      libraryAddonIdentity(LibraryTitleDto("series", "tmdb:123", videoId = "tmdb:123:4:5", name = "Show")),
+    )
+    assertEquals(
+      "movie" to "tmdb:123",
+      libraryAddonIdentity(LibraryTitleDto("movie", "tmdb:123", name = "Heat")),
+    )
+  }
+
+  @Test
+  fun `a bare or malformed series binding asks nothing`() {
+    // The series itself is not the episode's video, and a suffix that is not exactly two numbers
+    // is no episode at all.
+    assertNull(libraryAddonIdentity(LibraryTitleDto("series", "tmdb:123", name = "Show")))
+    assertNull(libraryAddonIdentity(LibraryTitleDto("series", "tmdb:123", videoId = "tmdb:123", name = "Show")))
+    assertNull(libraryAddonIdentity(LibraryTitleDto("series", "tmdb:123", videoId = "tmdb:124:4:5", name = "Show")))
+    assertNull(libraryAddonIdentity(LibraryTitleDto("series", "tmdb:123", videoId = "tmdb:123:4", name = "Show")))
+    assertNull(libraryAddonIdentity(LibraryTitleDto("series", "tmdb:123", videoId = "tmdb:123:4:5:6", name = "Show")))
+    assertNull(libraryAddonIdentity(LibraryTitleDto("series", "tmdb:123", videoId = "tmdb:123:x:5", name = "Show")))
+    assertNull(libraryAddonIdentity(LibraryTitleDto("series", "tmdb:123", videoId = "tmdb:123:4:0", name = "Show")))
+    assertNull(libraryAddonIdentity(LibraryTitleDto("", "", name = "Show")))
+    assertNull(libraryAddonIdentity(null))
+  }
+
+  @Test
+  fun `the episode numbers of a bound file are split after the whole id`() {
+    assertEquals(4 to 5, episodeNumbers("tmdb:123", "tmdb:123:4:5"))
+    assertEquals(0 to 1, episodeNumbers("tt0903747", "tt0903747:0:1"))
+    assertNull(episodeNumbers("tmdb:123", null))
+    assertNull(episodeNumbers("tmdb:123", "tmdb:123"))
+    assertNull(episodeNumbers("", "4:5"))
   }
 }

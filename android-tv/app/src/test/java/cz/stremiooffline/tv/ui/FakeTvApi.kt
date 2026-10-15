@@ -66,6 +66,10 @@ open class FakeTvApi : TvApi {
   var pages: MutableMap<String?, BrowseResult> = mutableMapOf()
   var progressValues: MutableMap<String, ProgressDto> = mutableMapOf()
   var browseCalls: MutableList<Pair<String?, Int>> = mutableListOf()
+  /** Every browse call with the whole query it carried, so a test can name what was asked. */
+  val browseRequests: MutableList<BrowseRequest> = mutableListOf()
+  /** Answers for a narrowed level, keyed by `path|query`; a query with no answer is empty. */
+  var browseQueries: MutableMap<String, BrowseResult> = mutableMapOf()
   var failBrowse = false
   var favoritesValue: FavoritesPage = FavoritesPage(emptyList(), 0, false)
   var favoritesRequests: MutableList<FavoriteFilter> = mutableListOf()
@@ -106,6 +110,10 @@ open class FakeTvApi : TvApi {
   var streamsRequests: MutableList<String> = mutableListOf()
   /** Each `streams()` request that has finished answering, in completion order. */
   var streamsCompleted: MutableList<String> = mutableListOf()
+  /** How many `streams()` calls are out right now, and the most that ever were: a test watches the
+   *  cap on how many addons one panel asks at a time. */
+  var streamsInFlight = 0
+  var streamsPeakInFlight = 0
   /** A gate keyed by `type:id` blocks a `streams()` call like a slow server would. Releasing it
    *  resumes the caller through the test clock, not a real thread. */
   var streamsGates: MutableMap<String, CompletableDeferred<Unit>> = mutableMapOf()
@@ -120,8 +128,14 @@ open class FakeTvApi : TvApi {
   val localStreamsRequests: MutableList<String> = mutableListOf()
   var addonsValue: List<AddonDto> = emptyList()
   var addonsCalls = 0
+  /** When set, the next `addons()` calls refuse until it is cleared, as a server would. */
+  var addonsFailure: ApiFailure? = null
   var settingsValue: SettingsResponse = SettingsResponse()
   var settingsCalls = 0
+  /** The account's own settings read (`GET /api/settings`); a patch failure is its own field. */
+  var settingsReadFailure: ApiFailure? = null
+  /** Held open until the test releases it, so a settings answer can land late. */
+  var settingsReadGate: CompletableDeferred<Unit>? = null
   /** Each `updateSettings()` call in order, so a test can assert one personal field per body. */
   var settingsPatches: MutableList<Pair<String, String>> = mutableListOf()
   /** When set, every `updateSettings()` throws it instead of answering. */
@@ -185,6 +199,8 @@ open class FakeTvApi : TvApi {
   var remoteLibrariesValue: List<RemoteLibraryDto>? = emptyList()
   var remoteLibrariesFailure: ApiFailure? = null
   var remoteLibrariesCalls = 0
+  /** Held open until the test releases it, so the discovery deadline can be watched. */
+  var remoteLibrariesGate: CompletableDeferred<Unit>? = null
   /** One page per `libraryId|cursor` (`libraryId|` is the first, uncursored page). */
   var remoteItemsPages: MutableMap<String, RemoteItemsPageDto> = mutableMapOf()
   val remoteItemsRequests: MutableList<Pair<String, String?>> = mutableListOf()
@@ -215,6 +231,11 @@ open class FakeTvApi : TvApi {
   val remoteMatchRequests: MutableList<String> = mutableListOf()
   /** The name hint each request carried, in the same order as [remoteMatchRequests]. */
   val remoteMatchHints: MutableList<String?> = mutableListOf()
+  /** A gate keyed by `libraryId|type|catalogId` holds one match like a slow provider would. */
+  var remoteMatchGates: MutableMap<String, CompletableDeferred<Unit>> = mutableMapOf()
+  /** How many matches are out right now, and the most that ever were. */
+  var remoteMatchesInFlight = 0
+  var remoteMatchesPeakInFlight = 0
 
   var clientLogLines: MutableList<Triple<String, String, Map<String, String>?>> = mutableListOf()
   var bundles: MutableList<ClientLogBundleDto> = mutableListOf()
@@ -226,9 +247,13 @@ open class FakeTvApi : TvApi {
 
   override fun url(path: String): String = "http://server$path"
 
-  override suspend fun browse(path: String?, limit: Int, skip: Int): BrowseResult {
+  override suspend fun browse(path: String?, limit: Int, skip: Int, query: String): BrowseResult {
     browseCalls += path to skip
+    browseRequests += BrowseRequest(path, limit, skip, query)
     if (failBrowse) throw ApiError(ApiFailure.Generic)
+    if (query.isNotEmpty()) {
+      return browseQueries["${path.orEmpty()}|$query"] ?: BrowseResult(path.orEmpty(), emptyList(), 0, false)
+    }
     return pages[path] ?: BrowseResult(path.orEmpty(), emptyList(), 0, false)
   }
 
@@ -356,10 +381,16 @@ open class FakeTvApi : TvApi {
     val key = "$type:$id"
     val request = if (addon.isNullOrEmpty()) key else "$key|$addon"
     streamsRequests += request
-    (streamsGates[request] ?: streamsGates[key])?.await()
-    (streamFailures[request] ?: streamFailures[key])?.let { throw ApiError(it) }
-    streamsCompleted += request
-    return addonStreams[request] ?: streamsValues[key] ?: emptyList()
+    streamsInFlight += 1
+    streamsPeakInFlight = maxOf(streamsPeakInFlight, streamsInFlight)
+    try {
+      (streamsGates[request] ?: streamsGates[key])?.await()
+      (streamFailures[request] ?: streamFailures[key])?.let { throw ApiError(it) }
+      streamsCompleted += request
+      return addonStreams[request] ?: streamsValues[key] ?: emptyList()
+    } finally {
+      streamsInFlight -= 1
+    }
   }
 
   override suspend fun localStreams(type: String, id: String): List<StreamDto> {
@@ -373,11 +404,14 @@ open class FakeTvApi : TvApi {
 
   override suspend fun addons(): List<AddonDto> {
     addonsCalls += 1
+    addonsFailure?.let { throw ApiError(it) }
     return addonsValue
   }
 
   override suspend fun settings(): SettingsResponse {
     settingsCalls += 1
+    settingsReadGate?.let { withContext(currentCoroutineContext()) { it.await() } }
+    settingsReadFailure?.let { throw ApiError(it) }
     return settingsValue
   }
 
@@ -486,6 +520,7 @@ open class FakeTvApi : TvApi {
 
   override suspend fun remoteLibraries(): List<RemoteLibraryDto> {
     remoteLibrariesCalls += 1
+    remoteLibrariesGate?.let { withContext(currentCoroutineContext()) { it.await() } }
     remoteLibrariesFailure?.let { throw ApiError(it) }
     return remoteLibrariesValue ?: throw ApiError(ApiFailure.Generic)
   }
@@ -555,7 +590,10 @@ open class FakeTvApi : TvApi {
     return remoteSourcesValue
   }
 
+  var remoteStateReadGate: CompletableDeferred<Unit>? = null
+
   override suspend fun remoteItemState(libraryId: String, itemId: String): RemoteItemStateDto {
+    remoteStateReadGate?.await()
     remoteStateFailure?.let { throw it }
     return remoteStateValue
   }
@@ -586,8 +624,15 @@ open class FakeTvApi : TvApi {
     val key = "$libraryId|$type|$catalogId"
     remoteMatchRequests += key
     remoteMatchHints += nameHint
-    if (key in remoteMatchFailures) throw ApiError(ApiFailure.Generic)
-    return remoteMatchValues[key] ?: emptyList()
+    remoteMatchesInFlight += 1
+    remoteMatchesPeakInFlight = maxOf(remoteMatchesPeakInFlight, remoteMatchesInFlight)
+    try {
+      remoteMatchGates[key]?.let { withContext(currentCoroutineContext()) { it.await() } }
+      if (key in remoteMatchFailures) throw ApiError(ApiFailure.Generic)
+      return remoteMatchValues[key] ?: emptyList()
+    } finally {
+      remoteMatchesInFlight -= 1
+    }
   }
 
   override suspend fun clientLog(level: String, message: String, context: Map<String, String>?) {
@@ -697,6 +742,8 @@ open class FakeTvApi : TvApi {
 }
 
 data class CatalogRequest(val addonKey: String, val type: String, val id: String, val skip: Int, val genre: String?)
+
+data class BrowseRequest(val path: String?, val limit: Int, val skip: Int, val query: String)
 
 data class SearchRequest(val query: String, val cursor: String?, val scope: SearchScope)
 

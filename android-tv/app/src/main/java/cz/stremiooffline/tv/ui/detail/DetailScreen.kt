@@ -16,11 +16,14 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -43,17 +46,37 @@ import androidx.tv.material3.Text
 import coil.compose.AsyncImage
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.episodeCode
+import cz.stremiooffline.tv.catalog.Streams
 import cz.stremiooffline.tv.data.ApiError
+import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.BrowseItem
+import cz.stremiooffline.tv.data.BehaviorHintsDto
+import cz.stremiooffline.tv.data.DownloadTargetDto
+import cz.stremiooffline.tv.data.LibraryDto
+import cz.stremiooffline.tv.data.LibraryTitleDto
+import cz.stremiooffline.tv.data.MediaDto
 import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.RemoteItemContext
 import cz.stremiooffline.tv.data.StreamDto
+import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.playback.Progress
 import cz.stremiooffline.tv.ui.components.CardRowInset
 import cz.stremiooffline.tv.ui.catalog.ActionCaption
 import cz.stremiooffline.tv.ui.catalog.ActionIconButton
 import cz.stremiooffline.tv.ui.catalog.ForgetIcon
+import cz.stremiooffline.tv.ui.catalog.NativeQueuePanel
+import cz.stremiooffline.tv.ui.catalog.NativeSourceState
+import cz.stremiooffline.tv.ui.catalog.NativeSources
+import cz.stremiooffline.tv.ui.catalog.NativeSourcesPanel
 import cz.stremiooffline.tv.ui.catalog.ReplayIcon
+import cz.stremiooffline.tv.ui.catalog.SourceFilterState
+import cz.stremiooffline.tv.ui.catalog.SourceSaveRequest
+import cz.stremiooffline.tv.ui.catalog.SourceSaveState
+import cz.stremiooffline.tv.ui.catalog.libraryAddonIdentity
+import cz.stremiooffline.tv.ui.catalog.libraryCopySubject
+import cz.stremiooffline.tv.ui.catalog.nativeCopyTitle
+import cz.stremiooffline.tv.ui.catalog.nativeQueueTarget
+import cz.stremiooffline.tv.ui.catalog.nativeRowTarget
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
 import cz.stremiooffline.tv.ui.components.WideCard
@@ -62,6 +85,11 @@ import cz.stremiooffline.tv.ui.catalog.SidePanel
 import cz.stremiooffline.tv.ui.theme.Tokens
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.android.awaitFrame
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 const val TagDetailPrimary = "detail_primary"
@@ -72,6 +100,8 @@ const val TagDetailForget = "detail_forget"
 const val TagDetailForgetPanel = "detail_forget_panel"
 const val TagDetailForgetCancel = "detail_forget_cancel"
 const val TagDetailForgetRemove = "detail_forget_remove"
+const val TagDetailSources = "detail_sources"
+const val TagDetailSourceNotice = "detail_source_notice"
 
 /**
  * What to play: the progress key and title, and either a library [path] to mint a source from or
@@ -89,7 +119,10 @@ data class PlayTarget(
   val poster: String? = null,
   val addonKey: String? = null,
   /** A catalogue title's type and the id the addon subtitles must be asked for (the video's id
-   *  for a series episode, the meta's own id for a movie); a library play leaves both null. */
+   *  for a series episode, the meta's own id for a movie); a library play leaves both null. A
+   *  native detail's play carries the title's own identity here whatever kind of row started it:
+   *  it is the generic key and subtitle context a switch to an addon row inside the player keeps,
+   *  while the file or remote version the target itself plays keeps its own key. */
   val subtitleType: String? = null,
   val subtitleTarget: String? = null,
   /** True when the catalogue detail started this play. The player then keeps the sources that
@@ -189,6 +222,16 @@ fun DetailScreen(
   forgetProgress: suspend (List<String>) -> Unit,
   restoreToken: Int = 0,
   backEnabled: Boolean = true,
+  /** The catalogue surface the Sources panel's supplementary groups need: the catalogue title the
+   *  opened file is bound to, the viewer's own copies of it, every configured addon provider and
+   *  every other media library. Null keeps the panel on the detail's own files, which is what a
+   *  harness without a catalogue surface passes. */
+  sourcesApi: TvApi? = null,
+  /** The destinations this account may copy a supplementary row into, read once when that row's
+   *  Save is pressed; null keeps every Save off the panel. */
+  loadDestinations: (suspend () -> List<LibraryDto>)? = null,
+  /** Queues exactly one supplementary row into the exact library the viewer picked. */
+  onQueue: (suspend (title: String, sourceId: String, media: MediaDto, target: DownloadTargetDto?) -> Unit)? = null,
 ) {
   BackHandler(enabled = backEnabled) { onBack() }
   val scope = rememberCoroutineScope()
@@ -210,6 +253,24 @@ fun DetailScreen(
     current = if (detail.files.isEmpty()) detail else detail.refresh(progress)
   }
 
+  // The Sources panel: the rows the detail itself holds, plus the supplementary groups the file's
+  // catalogue binding opens. Nothing is asked of any addon or media server until the action is
+  // pressed, and the panel keeps the exact file it was opened on.
+  var sourcesOpen by remember(detail.gridPath) { mutableStateOf(false) }
+  var sourcesPath by remember(detail.gridPath) { mutableStateOf<String?>(null) }
+  var pickedRow by remember(detail.gridPath) { mutableStateOf<StreamDto?>(null) }
+  var sourceNotice by remember(detail.gridPath) { mutableStateOf<String?>(null) }
+  /** The control the open panel must hand the remote back to: the action, or the exact card a
+   *  Menu/Info press opened it from. */
+  var sourcesOpener by remember(detail.gridPath) { mutableStateOf<FocusRequester?>(null) }
+  /** The panel the save work belongs to. Replacing the panel (another file, another card) makes
+   *  every answer still out belong to nobody, so a late one can never open over its replacement. */
+  var saveGeneration by remember(detail.gridPath) { mutableIntStateOf(0) }
+  /** True while the save panel is up, so its close can hand the remote back to its opener. */
+  var saveWasOpen by remember(detail.gridPath) { mutableStateOf(false) }
+  val sourceFilters = remember(detail.gridPath) { SourceFilterState() }
+  val save = remember(detail.gridPath) { SourceSaveState() }
+
   val playIndex = current.files.indexOfFirst { !isCompleted(it) }.let { if (it < 0) 0 else it }
   val playFile = current.files.getOrNull(playIndex)
   val resuming = playFile?.let { Progress.resumePosition(positionOf(it), durationOf(it)) != null } == true
@@ -217,13 +278,236 @@ fun DetailScreen(
   val hasStoredProgress = positionOf(playFile) > 0.0
   val storedKeys = current.files.filter { positionOf(it) > 0 }.map { Progress.libraryKey(it.path) }
   val forgetKeys = (if (forgotten) emptyList() else detail.forgetKeys).ifEmpty { storedKeys }
+  val notAllowedText = stringResource(R.string.err_download_library_not_allowed)
+  val destinationsFailedText = stringResource(R.string.media_server_error)
+  val torrentText = stringResource(R.string.err_torrent_not_playable)
 
   val primaryFocus = remember { FocusRequester() }
   val rowFocus = remember { FocusRequester() }
   val forgetPanelFocus = remember { FocusRequester() }
+  val sourcesFocus = remember { FocusRequester() }
+  val sourcesEntry = remember { FocusRequester() }
+  // Whether this detail still owns the remote: it does not while the player covers it, and nothing
+  // that lands late may pull the remote into a covered screen.
+  val liveBack = rememberUpdatedState(backEnabled)
   // The primary action takes focus on the first entry and again when the player closes.
   LaunchedEffect(current.gridPath, restoreToken) {
     runCatching { primaryFocus.requestFocus() }
+  }
+
+  // The exact file the panel stands for: the one the action was pressed on, or the card a
+  // Menu/Info press opened it from. Its binding is read once, on the open, never before it.
+  val sourcesFile = sourcesPath?.let { path -> current.files.firstOrNull { it.path == path } }
+  val panelPath = sourcesFile?.path.orEmpty()
+  // What the detail itself contributes: every version of a film, largest reported size first the
+  // way the web orders them, or exactly the one episode the panel was opened on -- a sibling
+  // episode is a different video and never joins this list.
+  val panelRows = remember(current.files, sourcesFile) { ownFileRows(current, sourcesFile) }
+  var binding by remember(detail.gridPath, panelPath) { mutableStateOf<LibraryTitleDto?>(null) }
+  var probing by remember(detail.gridPath, panelPath) { mutableStateOf(false) }
+  val sourcesIdentity = remember(binding) { libraryAddonIdentity(binding) }
+  // One scope per detail and panel file: another file, another detail or leaving the screen drops
+  // every call this panel had out, and reopening the same file reuses what answered.
+  val groupScope = remember(detail.gridPath, panelPath) {
+    CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+  }
+  DisposableEffect(groupScope) { onDispose { groupScope.cancel() } }
+  val sourceGroups = remember(groupScope, sourcesIdentity, sourcesApi) {
+    val port = sourcesApi
+    val wanted = sourcesIdentity
+    if (port != null && wanted != null) {
+      NativeSources(
+        catalogApi = port,
+        remoteApi = port,
+        // A file on disk is no media-server library: no origin is excluded from the match, and the
+        // binding's own title is the name filter a provider may take. Nothing is ever guessed.
+        originLibraryId = "",
+        identity = wanted,
+        nameHint = binding?.name?.takeIf { it.isNotBlank() },
+      )
+    } else {
+      null
+    }
+  }
+  val groupState = sourceGroups?.state
+  // Every row the panel holds, in the order it draws them: the player is handed all of them so a
+  // switch never shrinks the list to the row it landed on.
+  val loadedRows = remember(panelRows, groupState) {
+    val seen = HashSet<String>()
+    Streams.deduped(
+      panelRows + groupState?.local.orEmpty() + groupState?.remoteGroups.orEmpty().flatMap { it.streams } +
+        groupState?.addonRows.orEmpty(),
+      seen,
+    )
+  }
+  val realDebrid = groupState?.realDebridConfigured == true
+
+  fun openSources(file: BrowseItem.File?, opener: FocusRequester?) {
+    val target = file ?: sourcesFile ?: playFile ?: return
+    // A panel that replaces another one owns the save work from here on: what the old panel had
+    // out is dropped, and its own delete-in-progress flags go with it so a new Save is offered.
+    saveGeneration++
+    save.resolving = false
+    save.busy = false
+    save.request = null
+    save.notice = null
+    saveWasOpen = false
+    sourcesOpener = opener ?: sourcesFocus
+    sourcesPath = target.path
+    sourcesOpen = true
+    sourceNotice = null
+  }
+
+  // The binding is read the first time the panel is opened for this exact file, and never before
+  // it: a file with no binding keeps its own row and asks no addon or media server anything.
+  LaunchedEffect(sourcesOpen, panelPath, sourcesApi) {
+    val port = sourcesApi ?: return@LaunchedEffect
+    if (!sourcesOpen || panelPath.isEmpty() || binding != null || probing) return@LaunchedEffect
+    probing = true
+    try {
+      binding = port.libraryTitle(panelPath)
+    } catch (cancelled: CancellationException) {
+      throw cancelled
+    } catch (_: ApiError) {
+      // A lookup that failed leaves the panel with its own rows, exactly like an unbound file.
+    } finally {
+      probing = false
+    }
+  }
+
+  // Opening the panel is the intent that starts the groups; a reopen of the same file asks nothing.
+  LaunchedEffect(sourcesOpen, sourceGroups) {
+    if (sourcesOpen) sourceGroups?.open(groupScope)
+  }
+
+  // Closing the panel hands the remote back to the action that opened it once the panel and its own
+  // focus trap are gone.
+  var sourcesWasOpen by remember(detail.gridPath) { mutableStateOf(false) }
+  LaunchedEffect(sourcesOpen) {
+    if (sourcesOpen) {
+      sourcesWasOpen = true
+    } else if (sourcesWasOpen) {
+      sourcesWasOpen = false
+      awaitFrame()
+      // Choosing a row starts the player, which covers this detail: a covered detail never pulls
+      // the remote out of the session that owns it.
+      if (liveBack.value) runCatching { sourcesOpener?.requestFocus() }
+    }
+  }
+  // The save panel took the sources panel's place, so closing it (a queued copy or Back) hands the
+  // remote back to the action that started the whole flow -- and only while this detail still owns
+  // the remote.
+  LaunchedEffect(save.request) {
+    if (save.request != null) {
+      saveWasOpen = true
+    } else if (saveWasOpen) {
+      saveWasOpen = false
+      awaitFrame()
+      if (liveBack.value) runCatching { sourcesOpener?.requestFocus() }
+    }
+  }
+
+  /**
+   * One row of the panel: a library copy plays the file on disk, a media-server version plays its
+   * own exact item and an addon row plays the title under the binding's own identity. Every play
+   * carries the whole loaded list, so the player offers it and discovers nothing of its own.
+   */
+  fun choosePanelRow(row: StreamDto) {
+    saveGeneration++
+    save.resolving = false
+    sourcesOpen = false
+    val addon = !Streams.isRemoteStream(row) && !Streams.isLocalStream(row)
+    if (addon && !row.playable) {
+      sourceNotice = torrentText
+      return
+    }
+    val wanted = nativeRowTarget(row, current.title, sourcesIdentity, loadedRows, current.poster) ?: return
+    pickedRow = row
+    sourceNotice = null
+    onPlay(wanted)
+  }
+
+  /** Whether one panel row may offer its own Save: never a copy that is already on disk, only when
+   *  the account may queue exactly that source. */
+  fun canSaveRow(row: StreamDto): Boolean =
+    onQueue != null && loadDestinations != null && !Streams.isLocalStream(row) && Streams.canQueue(row, realDebrid)
+
+  /** Reads, at the viewer's Save press, the destinations this one row may be queued into, then opens
+   *  the destination picker with exactly that row. Nothing is queued blind. */
+  fun saveRow(row: StreamDto) {
+    val load = loadDestinations ?: return
+    val bound = binding ?: return
+    if (save.resolving || save.busy) return
+    val kind = if (bound.type.trim() == "series") "series" else "movie"
+    // Everything the answer will act on is taken now: the panel this press belongs to, and the
+    // subject the viewer pressed on. Another panel opened while the read is out replaces both.
+    val mine = saveGeneration
+    val path = panelPath
+    val subject = libraryCopySubject(bound, episodeTitleOf(current, sourcesFile))
+    save.resolving = true
+    save.notice = null
+    save.queued = false
+    sourceNotice = null
+    scope.launch {
+      try {
+        val destinations = load().filter { it.canWrite && (it.type == kind || it.type == "mixed") }
+        if (mine != saveGeneration || path != panelPath) return@launch
+        save.request = SourceSaveRequest(
+          stream = row,
+          subject = subject,
+          destinations = destinations,
+          // An addon row may hand the destination back to the server's own storage rule; a
+          // media-server version always copies into a destination it already projects.
+          automatic = !Streams.isRemoteStream(row),
+        )
+        // The picker takes the panel's place rather than stacking over it: one panel owns the
+        // remote at a time, and Back from the picker lands on the action that opened it.
+        sourcesOpen = false
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (error: ApiError) {
+        if (mine == saveGeneration && path == panelPath) {
+          sourceNotice = error.serverMessage
+            ?: if (error.failure == ApiFailure.Forbidden) notAllowedText else destinationsFailedText
+        }
+      } catch (_: Exception) {
+        if (mine == saveGeneration && path == panelPath) sourceNotice = destinationsFailedText
+      } finally {
+        if (mine == saveGeneration) save.resolving = false
+      }
+    }
+  }
+
+  /** Queues exactly the row the panel captured. A null target hands the choice to the server, which
+   *  resolves the addon's own storage rules; a picked library is an explicit override. */
+  fun queueRow(target: DownloadTargetDto?) {
+    val queue = onQueue ?: return
+    val request = save.request ?: return
+    if (save.busy) return
+    val mine = saveGeneration
+    val subject = request.subject
+    save.busy = true
+    save.notice = null
+    scope.launch {
+      try {
+        // The queue call is issued whatever happens next: a request the server already took is
+        // never cancelled or sent twice just because the panel around it was replaced.
+        queue(nativeCopyTitle(subject), request.stream.sourceId, subject.media(), target)
+        if (mine == saveGeneration) {
+          save.request = null
+          save.notice = null
+          save.queued = true
+        }
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (error: ApiError) {
+        if (mine == saveGeneration) save.notice = error.serverMessage ?: notAllowedText
+      } catch (_: Exception) {
+        if (mine == saveGeneration) save.notice = notAllowedText
+      } finally {
+        if (mine == saveGeneration) save.busy = false
+      }
+    }
   }
 
   fun toggleFavourite() {
@@ -278,7 +562,8 @@ fun DetailScreen(
       // DOWN from the actions enters the episode row on the first episode that is not finished,
       // not on whatever card happens to sit below the button. An open panel keeps the remote.
       .onPreviewKeyEvent { event ->
-        if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown && current.files.size > 1 && !forgetPanelOpen) {
+        val panelUp = forgetPanelOpen || sourcesOpen || save.request != null
+        if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown && current.files.size > 1 && !panelUp) {
           runCatching { rowFocus.requestFocus() }
           true
         } else {
@@ -356,6 +641,16 @@ fun DetailScreen(
             modifier = Modifier.testTag(TagDetailStartOver),
           )
         }
+        // One text action for the whole Sources panel, whatever the file turned out to be: the
+        // detail's own rows are always there, and a supplementary group joins them only if it
+        // answers. A file with no row to offer has nothing to open.
+        if (current.files.isNotEmpty()) {
+          FocusButton(
+            text = stringResource(R.string.sources_heading),
+            onClick = { openSources(playFile, sourcesFocus) },
+            modifier = Modifier.focusRequester(sourcesFocus).testTag(TagDetailSources),
+          )
+        }
         if (forgetKeys.isNotEmpty()) {
           ActionIconButton(
             label = stringResource(R.string.tv_forget_progress),
@@ -381,6 +676,17 @@ fun DetailScreen(
       if (forgetError) {
         Text(stringResource(R.string.tv_err_generic), color = Tokens.Red, fontSize = 11.5.sp)
       }
+      // A row that could not be played or saved says why here; a copy that landed says so too, and
+      // neither hides the row the viewer picked.
+      val sourceMessage = sourceNotice ?: if (save.queued) stringResource(R.string.save_queued) else null
+      if (sourceMessage != null) {
+        Text(
+          sourceMessage,
+          color = if (sourceNotice != null) Tokens.Red else Tokens.Green,
+          fontSize = 11.5.sp,
+          modifier = Modifier.testTag(TagDetailSourceNotice),
+        )
+      }
       if (current.files.size > 1) {
         Spacer(Modifier.height(3.dp))
         EpisodeRow(
@@ -389,8 +695,55 @@ fun DetailScreen(
           imageUrl = imageUrl,
           onPlay = onPlay,
           focusRequester = rowFocus,
+          onSources = { file, card -> openSources(file, card) },
         )
       }
+    }
+
+    if (sourcesOpen) {
+      NativeSourcesPanel(
+        // While the file's binding is still being read the panel is asking, so the own rows show
+        // under the same spinner a supplementary group gets.
+        state = (groupState ?: NativeSourceState()).copy(
+          asking = groupState?.asking == true || probing,
+        ),
+        originals = panelRows,
+        // The film's versions lead largest first; an episode is the only row of its own list.
+        default = panelRows.firstOrNull(),
+        chosen = pickedRow?.takeIf { row -> loadedRows.any { it === row } },
+        filters = sourceFilters.filters(groupState?.settings?.streamSort),
+        onFilterSelect = { chip, key -> sourceFilters.select(chip, key) },
+        onChoose = { choosePanelRow(it) },
+        onSave = if (onQueue != null && loadDestinations != null) ({ row -> saveRow(row) }) else null,
+        canSave = { row -> canSaveRow(row) },
+        onRetry = { sourceGroups?.retry(groupScope) },
+        emptyText = stringResource(R.string.media_server_sources_empty),
+        onClose = {
+          saveGeneration++
+          save.resolving = false
+          sourcesOpen = false
+        },
+        initialFocus = sourcesEntry,
+      )
+    }
+
+    val rowRequest = save.request
+    if (rowRequest != null) {
+      // Only the row the viewer pressed Save on, and every destination row acts on exactly it.
+      NativeQueuePanel(
+        versions = listOf(rowRequest.stream),
+        libraries = rowRequest.destinations,
+        preferred = rowRequest.stream,
+        busy = save.busy,
+        notice = save.notice,
+        realDebridConfigured = realDebrid,
+        onQueueDefault = if (rowRequest.automatic) ({ queueRow(null) }) else null,
+        onQueue = { _, libraryId -> queueRow(nativeQueueTarget(rowRequest.stream, libraryId)) },
+        onClose = {
+          save.request = null
+          save.notice = null
+        },
+      )
     }
 
     if (forgetPanelOpen) {
@@ -422,17 +775,25 @@ private fun EpisodeRow(
   imageUrl: (String?) -> String?,
   onPlay: (PlayTarget) -> Unit,
   focusRequester: FocusRequester,
+  /** Menu/Info on one card opens the Sources panel for exactly that file, and closing it hands the
+   *  remote back to that same card; Enter still plays the file. */
+  onSources: (BrowseItem.File, FocusRequester) -> Unit,
 ) {
   val state = rememberLazyListState()
   LaunchedEffect(detail.gridPath) {
     state.scrollToItem(startIndex.coerceAtLeast(0))
   }
+  // One requester per card, so the panel opened from a card returns to that exact card.
+  val cardFocuses = remember(detail.gridPath) { mutableMapOf<String, FocusRequester>() }
   LazyRow(
     state = state,
     contentPadding = PaddingValues(horizontal = CardRowInset),
     horizontalArrangement = Arrangement.spacedBy(18.dp),
   ) {
     itemsIndexed(detail.files, key = { _, file -> file.path }) { index, file ->
+      // The card the actions' DOWN lands on keeps the caller's requester; every other card owns
+      // one, so a panel opened from it comes back to exactly that card.
+      val card = if (index == startIndex) focusRequester else cardFocuses.getOrPut(file.path) { FocusRequester() }
       WideCard(
         label = episodeLabel(file),
         imageUrl = imageUrl(file.wide ?: file.poster),
@@ -443,11 +804,52 @@ private fun EpisodeRow(
           val resume = Progress.resumePosition(positionOf(file), durationOf(file)) != null
           onPlay(PlayTarget(Progress.libraryKey(file.path), file.label, resume = resume, path = file.path))
         },
-        modifier = if (index == startIndex) Modifier.focusRequester(focusRequester) else Modifier,
+        modifier = Modifier
+          .onPreviewKeyEvent { event ->
+            if (event.type == KeyEventType.KeyDown && (event.key == Key.Menu || event.key == Key.Info)) {
+              onSources(file, card)
+              true
+            } else {
+              false
+            }
+          }
+          .focusRequester(card),
       )
     }
   }
 }
+
+/** Whether the detail lists a series' episodes rather than the versions of one film. */
+private fun isEpisodeDetail(detail: DetailData): Boolean =
+  detail.files.any { it.season != null || it.episode != null }
+
+/**
+ * The rows the detail itself contributes to the Sources panel: every file of a film, ordered
+ * largest reported size first the way the web orders its versions, or exactly the one episode the
+ * panel was opened on. A sibling episode is a different video, so it never joins an episode's list.
+ */
+private fun ownFileRows(detail: DetailData, file: BrowseItem.File?): List<StreamDto> {
+  if (file == null) return emptyList()
+  val files = if (isEpisodeDetail(detail)) listOf(file) else detail.files.sortedByDescending { it.size }
+  return files.map(::fileRow)
+}
+
+/** The episode title one file stands for, when the detail lists episodes: its number pair, never a
+ *  filename read as a title. */
+private fun episodeTitleOf(detail: DetailData, file: BrowseItem.File?): String? =
+  if (file == null || !isEpisodeDetail(detail)) null else episodeLabel(file)
+
+private fun fileRow(file: BrowseItem.File): StreamDto = StreamDto(
+  sourceId = Progress.libraryKey(file.path),
+  kind = "library",
+  playable = true,
+  name = file.label,
+  localPath = file.path,
+  behaviorHints = BehaviorHintsDto(
+    filename = file.label,
+    videoSize = file.size.takeIf { it > 0 },
+  ),
+)
 
 private fun metaLine(detail: DetailData, files: String): String {
   val parts = mutableListOf<String>()

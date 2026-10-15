@@ -23,6 +23,7 @@ import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.BrowseResult
 import cz.stremiooffline.tv.data.LibraryTitleDto
 import cz.stremiooffline.tv.data.RemoteItemContext
+import cz.stremiooffline.tv.data.RemoteLibraryDto
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.StreamSourceDto
@@ -60,7 +61,7 @@ class LibraryPlaySourcesShellTest {
   private val path = "It/It.mkv"
 
   private class LibraryFake : FakeTvApi() {
-    override suspend fun browse(path: String?, limit: Int, skip: Int): BrowseResult {
+    override suspend fun browse(path: String?, limit: Int, skip: Int, query: String): BrowseResult {
       browseCalls += path to skip
       val items: List<BrowseItem> = if (path == null) listOf(BrowseItem.Folder(path = "It", name = "It", fileCount = 1))
       else listOf(BrowseItem.File(path = "It/It.mkv", label = "It.mkv"))
@@ -156,6 +157,53 @@ class LibraryPlaySourcesShellTest {
     playFromLibrary()
 
     compose.onNodeWithTag(TAG_OSD_SOURCES).assertDoesNotExist()
+  }
+
+  /** The library flow keeps its own list: switching to an addon row inside the player must not
+   *  shrink the panel to that row, and must not make anything discover a second time. */
+  @Test
+  fun `a library play keeps its rows across a switch to another source`() {
+    val fake = api()
+    fake.remoteLibrariesValue = listOf(RemoteLibraryDto(id = "rlibB", name = "Serialy", provider = "jellyfin"))
+    fake.remoteMatchValues["rlibB|movie|tt1"] = listOf(
+      StreamDto(
+        sourceId = "ms9",
+        kind = "remote",
+        playable = true,
+        name = "Version ms9",
+        remoteItem = RemoteItemContext(
+          libraryId = "rlibB",
+          itemId = "iB",
+          mediaSourceId = "ms9",
+          progressKey = "remote:rlibB:iB",
+        ),
+      )
+    )
+    fake.libraryTitleValues[path] = LibraryTitleDto("movie", "tt1", name = "It")
+    mount(fake)
+
+    playFromLibrary()
+    openSources()
+    compose.onNodeWithTag(sourceRowTag(0)).assert(hasText("Playing"))
+    compose.onNodeWithTag(sourceRowTag(1)).assert(hasText("Version ms9"))
+    compose.onNodeWithTag(sourceRowTag(2)).assert(hasText("Alpha"))
+
+    // DOWN from the file that is playing reaches the other library's version, and OK plays it.
+    press(Key.DirectionDown)
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { fake.startedSources.size == 2 }
+    assertEquals(listOf("src:$path", "ms9"), fake.startedSources)
+
+    // The panel is still the caller's whole list, and nothing was asked a second time.
+    openSources()
+    compose.onNodeWithTag(sourceRowTag(0)).assert(hasText("It.mkv"))
+    compose.onNodeWithTag(sourceRowTag(1)).assert(hasText("Version ms9"))
+    compose.onNodeWithTag(sourceRowTag(2)).assert(hasText("Alpha"))
+    press(Key.Back)
+    assertEquals(1, fake.libraryTitleRequests.size)
+    assertEquals(1, fake.streamSourcesRequests.size)
+    assertEquals(1, fake.localStreamsRequests.size)
+    assertEquals(1, fake.remoteMatchRequests.size)
   }
 
   @Test

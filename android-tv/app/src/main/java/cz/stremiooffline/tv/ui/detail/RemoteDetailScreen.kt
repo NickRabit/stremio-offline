@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
 import coil.compose.AsyncImage
 import cz.stremiooffline.tv.R
+import cz.stremiooffline.tv.catalog.ProgressKey
 import cz.stremiooffline.tv.catalog.Streams
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
@@ -52,19 +53,21 @@ import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.playback.Progress
 import cz.stremiooffline.tv.ui.catalog.ActionCaption
 import cz.stremiooffline.tv.ui.catalog.ActionIconButton
-import cz.stremiooffline.tv.ui.catalog.AddonSaveRequest
-import cz.stremiooffline.tv.ui.catalog.AddonSaveState
 import cz.stremiooffline.tv.ui.catalog.ForgetIcon
-import cz.stremiooffline.tv.ui.catalog.NativeAddonSourceControls
-import cz.stremiooffline.tv.ui.catalog.NativeAddonSources
 import cz.stremiooffline.tv.ui.catalog.NativeCopyRequest
 import cz.stremiooffline.tv.ui.catalog.NativeQueuePanel
+import cz.stremiooffline.tv.ui.catalog.NativeSourceState
+import cz.stremiooffline.tv.ui.catalog.NativeSources
+import cz.stremiooffline.tv.ui.catalog.NativeSourcesPanel
 import cz.stremiooffline.tv.ui.catalog.ReplayIcon
-import cz.stremiooffline.tv.ui.catalog.SourcesPanel
+import cz.stremiooffline.tv.ui.catalog.SourceFilterState
+import cz.stremiooffline.tv.ui.catalog.SourceSaveRequest
+import cz.stremiooffline.tv.ui.catalog.SourceSaveState
 import cz.stremiooffline.tv.ui.catalog.nativeAddonIdentity
 import cz.stremiooffline.tv.ui.catalog.nativeCopyTitle
 import cz.stremiooffline.tv.ui.catalog.nativeCopySubject
 import cz.stremiooffline.tv.ui.catalog.nativeQueueTarget
+import cz.stremiooffline.tv.ui.catalog.nativeRowTarget
 import cz.stremiooffline.tv.ui.catalog.resolveNativeCopy
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
@@ -88,7 +91,7 @@ const val TagRemoteSourcesRetry = "remote_sources_retry"
 const val TagRemoteStateRetry = "remote_state_retry"
 const val TagRemoteDetailToLibrary = "remote_to_library"
 const val TagRemoteCopyNotice = "remote_copy_notice"
-const val TagRemoteAddonNotice = "remote_addon_notice"
+const val TagRemoteSourceNotice = "remote_source_notice"
 
 /** What one native remote item's detail needs: the library and the item's opaque id. */
 data class RemoteDetailData(
@@ -104,7 +107,8 @@ data class RemoteDetailData(
   val isEpisode: Boolean get() = item.type == "episode"
 }
 
-/** A native item, its local state and copies, with supplementary addon sources read on demand. */
+/** A native item, its local state and copies, with every supplementary source group behind the
+ *  Versions panel: the viewer's own copies, the other media libraries and the addon rows. */
 @Composable
 fun RemoteDetailScreen(
   api: RemoteLibraryApi,
@@ -142,6 +146,9 @@ fun RemoteDetailScreen(
   }
 
   val scope = rememberCoroutineScope()
+  // Whether this detail still owns the remote: it does not while the player covers it, and nothing
+  // that lands late may pull the remote into a covered screen.
+  val liveBack = rememberUpdatedState(backEnabled)
   // Back over an item detail closes it; a hidden section-level handler must never take it, and the
   // versions panel installed later in this composition still closes first.
   BackHandler(enabled = backEnabled) { onBack() }
@@ -165,22 +172,50 @@ fun RemoteDetailScreen(
   var copyBusy by remember(identity) { mutableStateOf(false) }
   var copyNotice by remember(identity) { mutableStateOf<String?>(null) }
   var copyWasOpen by remember(identity) { mutableStateOf(false) }
+  // The row the viewer last picked in the panel, so reopening lands on it while the item's own
+  // version keeps its own mark.
+  var pickedRow by remember(identity) { mutableStateOf<StreamDto?>(null) }
   val caption = remember(identity) { ActionCaption() }
 
-  // The explicit addon discovery: a port plus a derivable identity is what puts the Versions
-  // button on an item at all. The state is keyed by the item, so another item never sees these
-  // rows, and its scope is dropped with it.
-  val addonIdentity = remember(data.item, data.seriesIds) { nativeAddonIdentity(data.item, data.seriesIds) }
-  val addonState = remember(identity, addonIdentity, catalogueApi) {
+  // The unified Sources panel: a catalogue port plus a derivable identity is what puts the Versions
+  // button on an item at all. The coordinator is keyed by the item -- another item never sees these
+  // rows -- and its scope is dropped with it, which abandons every call it had out.
+  val sourcesIdentity = remember(data.item, data.seriesIds) { nativeAddonIdentity(data.item, data.seriesIds) }
+  val sourceGroups = remember(identity, sourcesIdentity, catalogueApi) {
     val port = catalogueApi
-    if (addonIdentity != null && port != null) NativeAddonSources(port, addonIdentity) else null
+    val wanted = sourcesIdentity
+    if (port != null && wanted != null) {
+      NativeSources(
+        catalogApi = port,
+        remoteApi = api,
+        originLibraryId = data.libraryId,
+        identity = wanted,
+        // A provider's name filter takes the resolved catalogue title: a series name for an
+        // episode, never the episode's own, and nothing guessed when the parent is unknown.
+        nameHint = if (data.isEpisode) data.seriesName?.takeIf { it.isNotBlank() } else data.item.name.takeIf { it.isNotBlank() },
+      )
+    } else {
+      null
+    }
   }
-  val addonScope = remember(identity, addonIdentity, catalogueApi) { CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate) }
-  DisposableEffect(addonScope) { onDispose { addonScope.cancel() } }
-  val addonRows = addonState?.rows.orEmpty()
-  val save = remember(identity) { AddonSaveState() }
-  // A row the viewer tried to play or save outside the panel, and the copy that landed.
-  var addonNotice by remember(identity) { mutableStateOf<String?>(null) }
+  val sourceScope = remember(identity, sourcesIdentity, catalogueApi) { CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate) }
+  DisposableEffect(sourceScope) { onDispose { sourceScope.cancel() } }
+  // The filters the panel offers, reset with the item the way the catalogue detail resets its own.
+  val sourceFilters = remember(identity) { SourceFilterState() }
+  val groups = sourceGroups?.state
+  // Every row the panel holds: the item's own versions lead, and the player is handed all of them
+  // so a switch never shrinks the list to the row it landed on. One row per identity, so a copy the
+  // viewer's own library answers with is not the item's own version twice.
+  val loadedRows = remember(sources, groups) {
+    Streams.deduped(
+      sources + groups?.local.orEmpty() + groups?.remoteGroups.orEmpty().flatMap { it.streams } +
+        groups?.addonRows.orEmpty(),
+    )
+  }
+  val save = remember(identity) { SourceSaveState() }
+  var saveGeneration by remember(identity) { mutableStateOf(0) }
+  // A row that could not be played or saved, and the copy that landed.
+  var sourceNotice by remember(identity) { mutableStateOf<String?>(null) }
 
   val playFocus = remember { FocusRequester() }
   val versionsFocus = remember { FocusRequester() }
@@ -228,7 +263,8 @@ fun RemoteDetailScreen(
     sourceListOpen = false
     caption.text = ""
     mutationError = false
-    addonNotice = null
+    sourceNotice = null
+    pickedRow = null
     loadSources(mine)
     loadState(mine)
   }
@@ -238,9 +274,10 @@ fun RemoteDetailScreen(
   val destinationsFailedText = stringResource(R.string.media_server_error)
   val torrentText = stringResource(R.string.err_torrent_not_playable)
   val canCopy = onQueue != null && loadDestinations != null && sources.any { Streams.canQueue(it, false) }
-  // The versions panel is worth offering whenever a native version may be picked or an addon
-  // source may still be asked for; without the port only the native versions can fill it.
-  val versionsAvailable = sources.size > 1 || (addonState != null)
+  // The Sources action is offered whenever the item has a row to show: one version is a choice too,
+  // and the item's identity may still fetch supplementary rows beside it. Without the port only the
+  // native versions fill the panel.
+  val versionsAvailable = sources.isNotEmpty() || sourceGroups != null
   val stored = state
   val savedSourceId = stored?.mediaSourceId
   val favorite = stored?.favorite == true
@@ -265,72 +302,67 @@ fun RemoteDetailScreen(
         title = titleOf(data),
         resume = resume,
         sourceId = source.sourceId.takeIf { it.isNotBlank() },
+        poster = data.item.poster,
+        // The title's own catalogue identity travels with a native play too: a row of another kind
+        // picked later in the player keeps the generic key and subtitles this identity makes.
+        subtitleType = sourcesIdentity?.first,
+        subtitleTarget = sourcesIdentity?.second,
         remoteItem = context,
-        remoteSources = sources,
+        remoteSources = Streams.remoteVersionsOf(context, loadedRows),
+        initialSources = loadedRows,
       ),
     )
   }
 
-  /** Plays one already-loaded addon row through its own generic identity. The player is handed
-   *  exactly the rows that are in hand, so it never discovers another addon or library, and the
-   *  progress it stores is the generic title's, never this item's native one. */
-  fun playAddon(source: StreamDto) {
-    val identityNow = addonIdentity ?: return
-    val (type, requestId) = identityNow
-    if (!source.playable) {
-      addonNotice = torrentText
+  /** One row of the sources panel: a media-server version plays its own exact item, a library copy
+   *  plays the file on disk, and an addon row plays the title through the generic identity its
+   *  rows were loaded under. Every play carries the whole loaded list, so the player offers it and
+   *  discovers nothing of its own. */
+  fun choosePanelRow(row: StreamDto) {
+    saveGeneration++
+    save.resolving = false
+    sourceListOpen = false
+    val addon = !Streams.isRemoteStream(row) && !Streams.isLocalStream(row)
+    if (addon && !row.playable) {
+      sourceNotice = torrentText
       return
     }
-    addonNotice = null
-    onPlay(
-      PlayTarget(
-        key = "$type:$requestId",
-        title = titleOf(data),
-        resume = true,
-        sourceId = source.sourceId,
-        poster = data.item.poster,
-        subtitleType = type,
-        subtitleTarget = requestId,
-        catalogue = false,
-        remoteItem = null,
-        initialSources = addonRows,
-      ),
-    )
+    val wanted = nativeRowTarget(row, titleOf(data), sourcesIdentity, loadedRows, data.item.poster) ?: return
+    pickedRow = row
+    sourceNotice = null
+    onPlay(wanted)
   }
 
-  /** One row of the sources panel: a native version plays its own item, an addon row through the
-   *  generic identity it was discovered under. */
-  fun choosePanelSource(source: StreamDto) {
-    sourceListOpen = false
-    if (Streams.isRemoteStream(source)) play(source, resume = false) else playAddon(source)
-  }
-
-  /** Whether one panel row may offer its own Save: only an addon row this code loaded, and only
-   *  when the account may queue exactly that source. */
-  fun canSaveAddon(source: StreamDto): Boolean =
+  /** Whether one panel row may offer its own Save: any row but a copy that is already on disk, and
+   *  only when the account may queue exactly that source. */
+  fun canSaveRow(row: StreamDto): Boolean =
     onQueue != null && loadDestinations != null &&
-      !Streams.isLocalStream(source) && addonRows.any { it === source } &&
-      Streams.canQueue(source, addonState?.realDebridConfigured == true)
+      !Streams.isLocalStream(row) && Streams.canQueue(row, groups?.realDebridConfigured == true)
 
-  /** Reads, at the viewer's Save press, the destinations this one addon row may be queued into,
-   *  then opens the panel with exactly that row. Nothing is queued blind and no first candidate
-   *  is taken. */
-  fun saveAddonRow(source: StreamDto) {
+  /** Reads, at the viewer's Save press, the destinations this one row may be queued into, then
+   *  opens the panel with exactly that row. Nothing is queued blind and no first candidate is
+   *  taken. */
+  fun saveRow(row: StreamDto) {
     val load = loadDestinations ?: return
     if (save.resolving || save.busy) return
+    val generation = saveGeneration
+    val subject = nativeCopySubject(data.item, data.seriesName, data.seriesIds)
     val kind = if (data.isEpisode) "series" else "movie"
     save.resolving = true
     save.notice = null
     save.queued = false
-    addonNotice = null
+    sourceNotice = null
     scope.launch {
       try {
         val destinations = load().filter { it.canWrite && (it.type == kind || it.type == "mixed") }
-        if (live.value == mine) {
-          save.request = AddonSaveRequest(
-            stream = source,
-            subject = nativeCopySubject(data.item, data.seriesName, data.seriesIds),
+        if (live.value == mine && generation == saveGeneration) {
+          save.request = SourceSaveRequest(
+            stream = row,
+            subject = subject,
             destinations = destinations,
+            // Only an addon row may hand the destination back to the server's own rule; a
+            // media-server version always copies into the destination it already projects.
+            automatic = !Streams.isRemoteStream(row),
           )
           // The picker takes the panel's place rather than stacking over it: one panel owns the
           // remote at a time, and Back from the picker lands on the button that opened the panel.
@@ -339,31 +371,32 @@ fun RemoteDetailScreen(
       } catch (cancelled: CancellationException) {
         throw cancelled
       } catch (error: ApiError) {
-        if (live.value == mine) {
-          addonNotice = error.serverMessage
+        if (live.value == mine && generation == saveGeneration) {
+          sourceNotice = error.serverMessage
             ?: if (error.failure == ApiFailure.Forbidden) notAllowedText else destinationsFailedText
         }
       } catch (_: Exception) {
-        if (live.value == mine) addonNotice = destinationsFailedText
+        if (live.value == mine && generation == saveGeneration) sourceNotice = destinationsFailedText
       } finally {
-        if (live.value == mine) save.resolving = false
+        if (live.value == mine && generation == saveGeneration) save.resolving = false
       }
     }
   }
 
-  /** Queues exactly the addon row the panel captured. A null target hands the choice to the
-   *  server, which resolves the addon's own storage rules; a picked library is an explicit
-   *  override. A refusal leaves the panel and its choice up. */
-  fun queueAddon(target: DownloadTargetDto?) {
+  /** Queues exactly the row the panel captured. A null target hands the choice to the server,
+   *  which resolves the addon's own storage rules; a picked library is an explicit override. A
+   *  refusal leaves the panel and its choice up. */
+  fun queueRow(target: DownloadTargetDto?) {
     val queue = onQueue ?: return
     val request = save.request ?: return
     if (save.busy) return
+    val generation = saveGeneration
     save.busy = true
     save.notice = null
     scope.launch {
       try {
         queue(nativeCopyTitle(request.subject), request.stream.sourceId, request.subject.media(), target)
-        if (live.value == mine) {
+        if (live.value == mine && generation == saveGeneration) {
           save.request = null
           save.notice = null
           save.queued = true
@@ -371,11 +404,11 @@ fun RemoteDetailScreen(
       } catch (cancelled: CancellationException) {
         throw cancelled
       } catch (error: ApiError) {
-        if (live.value == mine) save.notice = error.serverMessage ?: notAllowedText
+        if (live.value == mine && generation == saveGeneration) save.notice = error.serverMessage ?: notAllowedText
       } catch (_: Exception) {
-        if (live.value == mine) save.notice = notAllowedText
+        if (live.value == mine && generation == saveGeneration) save.notice = notAllowedText
       } finally {
-        if (live.value == mine) save.busy = false
+        if (live.value == mine && generation == saveGeneration) save.busy = false
       }
     }
   }
@@ -502,12 +535,19 @@ fun RemoteDetailScreen(
       copyWasOpen = true
     } else if (copyWasOpen) {
       copyWasOpen = false
+      if (!liveBack.value) return@LaunchedEffect
       runCatching { copyFocus.requestFocus() }
     }
   }
 
+  // Opening the panel is the intent that starts the supplementary groups; the first open leaves
+  // every call at once, and a reopen of the same item reuses what already answered.
+  LaunchedEffect(sourceListOpen, sourceGroups) {
+    if (sourceListOpen) sourceGroups?.open(sourceScope)
+  }
+
   // The panel is gone only once the frame that removed it is applied: asking for the opener in
-  // the same frame lets the removal take focus away again. Both the sources panel and the addon
+  // the same frame lets the removal take focus away again. Both the sources panel and the copy
   // picker hand the remote back to the button that opened them this way.
   var sourcesWasOpen by remember(identity) { mutableStateOf(false) }
   LaunchedEffect(sourceListOpen) {
@@ -516,6 +556,9 @@ fun RemoteDetailScreen(
     } else if (sourcesWasOpen) {
       sourcesWasOpen = false
       awaitFrame()
+      // Choosing a row starts the player, which covers this detail: the covered detail never takes
+      // the remote out of the session that owns it.
+      if (!liveBack.value) return@LaunchedEffect
       runCatching { versionsFocus.requestFocus() }
     }
   }
@@ -526,6 +569,7 @@ fun RemoteDetailScreen(
     } else if (saveWasOpen) {
       saveWasOpen = false
       awaitFrame()
+      if (!liveBack.value) return@LaunchedEffect
       runCatching { versionsFocus.requestFocus() }
     }
   }
@@ -533,14 +577,12 @@ fun RemoteDetailScreen(
   // Focus follows what is actually actionable: the Retry on a failure, otherwise Play once a
   // version exists. Loading and empty states still hold a focusable target so the remote cannot
   // go dead over the player-less detail.
+  val panelOwnsFocus = rememberUpdatedState(sourceListOpen || copyRequest != null || save.request != null)
   LaunchedEffect(identity, restoreToken, sourcesLoading, sourcesError, sources.isEmpty(), stateLoaded, stateError) {
-    if (sourcesLoading) {
-      awaitFrame()
-      runCatching { statusFocus.requestFocus() }
-      return@LaunchedEffect
-    }
     awaitFrame()
+    if (!liveBack.value || panelOwnsFocus.value) return@LaunchedEffect
     val target = when {
+      sourcesLoading -> statusFocus
       sourcesError -> sourcesRetryFocus
       sources.isEmpty() -> statusFocus
       stateError -> stateRetryFocus
@@ -608,8 +650,13 @@ fun RemoteDetailScreen(
         }
         if (versionsAvailable) {
           FocusButton(
-            text = stringResource(R.string.media_server_versions),
-            onClick = { sourceListOpen = true },
+            // One action name for the panel wherever it is opened from: the catalogue's own heading.
+            text = stringResource(R.string.sources_heading),
+            onClick = {
+              saveGeneration++
+              save.resolving = false
+              sourceListOpen = true
+            },
             modifier = Modifier.focusRequester(versionsFocus).testTag(TagRemoteDetailVersions),
           )
         }
@@ -662,15 +709,15 @@ fun RemoteDetailScreen(
       if (copyNotice != null && copyRequest == null) {
         Text(copyNotice!!, color = Tokens.Red, fontSize = 11.5.sp, modifier = Modifier.testTag(TagRemoteCopyNotice))
       }
-      // An addon row that could not be played or saved says why here; a copy that landed says so
-      // too, and neither hides the row the viewer picked.
-      val addonMessage = addonNotice ?: if (save.queued) stringResource(R.string.save_queued) else null
-      if (addonMessage != null) {
+      // A row that could not be played or saved says why here; a copy that landed says so too, and
+      // neither hides the row the viewer picked.
+      val sourceMessage = sourceNotice ?: if (save.queued) stringResource(R.string.save_queued) else null
+      if (sourceMessage != null) {
         Text(
-          addonMessage,
-          color = if (addonNotice != null) Tokens.Red else Tokens.Green,
+          sourceMessage,
+          color = if (sourceNotice != null) Tokens.Red else Tokens.Green,
           fontSize = 11.5.sp,
-          modifier = Modifier.testTag(TagRemoteAddonNotice),
+          modifier = Modifier.testTag(TagRemoteSourceNotice),
         )
       }
       if (mutationError) Text(stringResource(R.string.media_server_state_error), color = Tokens.Red, fontSize = 11.5.sp)
@@ -714,48 +761,49 @@ fun RemoteDetailScreen(
     }
 
     if (sourceListOpen) {
-      val addon = addonState
-      val canSave = onQueue != null && loadDestinations != null
-      SourcesPanel(
-        // The native versions keep their own order and lead; the addon rows sit under them and
-        // grow only when a provider was explicitly loaded.
-        streams = sources + addonRows,
-        focusIndex = 0,
-        onChoose = { choosePanelSource(it) },
-        onClose = {
-          sourceListOpen = false
-        },
+      NativeSourcesPanel(
+        state = groups ?: NativeSourceState(),
+        // The item's own versions lead as this library's own group; every supplementary row the
+        // groups answered sits under them, and none of them ever takes the default.
+        originals = sources,
+        originLibrary = Streams.RemoteGroup(
+          libraryId = data.libraryId,
+          provider = data.provider,
+          libraryName = data.libraryName,
+          streams = sources,
+        ),
         default = primary,
+        chosen = pickedRow?.takeIf { row -> loadedRows.any { it === row } },
+        filters = sourceFilters.filters(groups?.settings?.streamSort),
+        onFilterSelect = { chip, key -> sourceFilters.select(chip, key) },
+        onChoose = { choosePanelRow(it) },
+        onSave = if (onQueue != null && loadDestinations != null) ({ row -> saveRow(row) }) else null,
+        canSave = { row -> canSaveRow(row) },
+        onRetry = { sourceGroups?.retry(sourceScope) },
         emptyText = stringResource(R.string.media_server_sources_empty),
-        failureText = stringResource(R.string.media_server_sources_error),
-        // A Save is offered on an addon row alone, and only when the account may queue it.
-        onSaveToLibrary = if (addon != null && canSave) ({ row -> saveAddonRow(row) }) else null,
-        canSaveToLibrary = { row -> canSaveAddon(row) },
-        additionalContent = addon?.let {
-          {
-            NativeAddonSourceControls(
-              state = it,
-              onDiscover = { it.discover(addonScope) },
-              onLoadProvider = { key -> it.loadProvider(addonScope, key) },
-            )
-          }
+        onClose = {
+          saveGeneration++
+          save.resolving = false
+          sourceListOpen = false
         },
         initialFocus = sourcesEntry,
       )
     }
 
-    val addonRequest = save.request
-    if (addonRequest != null) {
+    val rowRequest = save.request
+    if (rowRequest != null) {
       // Only the row the viewer pressed Save on, and every row acts on exactly it.
       NativeQueuePanel(
-        versions = listOf(addonRequest.stream),
-        libraries = addonRequest.destinations,
-        preferred = null,
+        versions = listOf(rowRequest.stream),
+        libraries = rowRequest.destinations,
+        preferred = rowRequest.stream,
         busy = save.busy,
         notice = save.notice,
-        realDebridConfigured = addonState?.realDebridConfigured == true,
-        onQueueDefault = { queueAddon(null) },
-        onQueue = { _, libraryId -> queueAddon(DownloadTargetDto(libraryId)) },
+        realDebridConfigured = groups?.realDebridConfigured == true,
+        // An addon row may hand the destination back to the server's own rule; a media-server
+        // version copies into the destination it projects, or into the library the viewer picks.
+        onQueueDefault = if (rowRequest.automatic) ({ queueRow(null) }) else null,
+        onQueue = { _, libraryId -> queueRow(nativeQueueTarget(rowRequest.stream, libraryId)) },
         onClose = {
           save.request = null
           save.notice = null

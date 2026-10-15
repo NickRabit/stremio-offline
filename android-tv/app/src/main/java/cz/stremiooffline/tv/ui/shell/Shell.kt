@@ -355,6 +355,11 @@ fun Shell(
       forgetProgress = api::forgetProgress,
       restoreToken = detailReturnToken,
       backEnabled = player == null,
+      // The panel's supplementary groups need the catalogue surface; the destinations and the queue
+      // call are already the shell's own collaborators.
+      sourcesApi = api,
+      loadDestinations = nativeDestinations,
+      onQueue = nativeQueue,
     )
   }
 

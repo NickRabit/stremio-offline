@@ -92,6 +92,17 @@ fun TvTextField(
     if (move == null) surface.requestFocus() else focusManager.moveFocus(move)
   }
 
+  /** The end of an edit: a field with [onSubmit] runs it, and one without moves focus on instead.
+   *  The done key and the search key are both ends of an edit, so both submit. */
+  fun leaveEditing() {
+    if (onSubmit == null) {
+      stopEditing(FocusDirection.Down)
+    } else {
+      stopEditing(null)
+      onSubmit()
+    }
+  }
+
   // Only the end of an edit counts: walking past an untouched field with the D-pad must not
   // validate it.
   var wasEditing by remember { mutableStateOf(false) }
@@ -160,14 +171,8 @@ fun TvTextField(
         keyboardOptions = KeyboardOptions(keyboardType = keyboardType, imeAction = imeAction),
         keyboardActions = KeyboardActions(
           onNext = { stopEditing(FocusDirection.Down) },
-          onDone = {
-            if (onSubmit == null) {
-              stopEditing(FocusDirection.Down)
-            } else {
-              stopEditing(null)
-              onSubmit()
-            }
-          },
+          onDone = { leaveEditing() },
+          onSearch = { leaveEditing() },
         ),
         modifier = Modifier
           .fillMaxWidth()

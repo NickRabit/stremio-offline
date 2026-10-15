@@ -185,12 +185,13 @@ class ApiClient(
   }
 
   /** One page of the library tree. An unknown item kind is dropped rather than failing the page. */
-  override suspend fun browse(path: String?, limit: Int, skip: Int): BrowseResult {
-    val query = buildString {
+  override suspend fun browse(path: String?, limit: Int, skip: Int, query: String): BrowseResult {
+    val suffix = buildString {
       append("?limit=").append(limit).append("&skip=").append(skip)
       if (!path.isNullOrEmpty()) append("&path=").append(encode(path))
+      if (query.isNotEmpty()) append("&query=").append(encode(query))
     }
-    val page = request(Request.Builder().url(address.resolve("/api/library/browse$query")).get().build())
+    val page = request(Request.Builder().url(address.resolve("/api/library/browse$suffix")).get().build())
       .decode<BrowsePage>() ?: throw ApiError(ApiFailure.Generic)
     return BrowseResult(page.path, browseItems(page), page.total, page.pending)
   }

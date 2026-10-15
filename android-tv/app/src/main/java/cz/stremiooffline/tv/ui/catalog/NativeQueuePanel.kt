@@ -24,6 +24,7 @@ import cz.stremiooffline.tv.catalog.Streams
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.DownloadTargetDto
 import cz.stremiooffline.tv.data.LibraryDto
+import cz.stremiooffline.tv.data.LibraryTitleDto
 import cz.stremiooffline.tv.data.MediaDto
 import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.RemoteLibraryApi
@@ -94,6 +95,33 @@ fun nativeCopySubject(item: RemoteItemDto, seriesName: String?, seriesIds: Remot
       metaType = identity?.second,
     )
   }
+
+/**
+ * The subject of one library file, from the catalogue title the server bound it to. A series file
+ * copies as its own episode -- the series name is the title, the season and episode come from the
+ * binding's video id, and [episodeTitle] is the file's own episode label -- and a movie file copies
+ * as the film. The video id is read as the bound id (colons and all) plus its two numeric fields, so
+ * a `tmdb:123` binding keeps its id whole and its episode copies as season 4, episode 5. An id or a
+ * number the binding could not name is left out rather than guessed.
+ */
+fun libraryCopySubject(binding: LibraryTitleDto, episodeTitle: String? = null): NativeCopySubject {
+  val type = binding.type.trim()
+  val id = binding.id.trim().takeIf { it.isNotEmpty() }
+  val title = binding.name?.trim().orEmpty()
+  if (type != "series") {
+    return NativeCopySubject(kind = "movie", title = title, id = id, metaType = "movie")
+  }
+  val numbers = id?.let { episodeNumbers(it, binding.videoId) }
+  return NativeCopySubject(
+    kind = "episode",
+    title = title,
+    id = id,
+    metaType = "series",
+    season = numbers?.first,
+    episode = numbers?.second,
+    episodeTitle = episodeTitle,
+  )
+}
 
 /** What one version row reads: its own name and size, with a localized version number when two
  *  rows would otherwise read identically. An opaque source id is never a label. */

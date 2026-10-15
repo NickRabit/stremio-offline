@@ -114,9 +114,6 @@ fun SourcesPanel(
   countText: String? = null,
   /** A red line under the rows naming a remote group that could not be reached; null hides it. */
   remoteNote: String? = null,
-  /** An extra row after every stream, for a caller that draws its own controls there (the native
-   *  detail's addon discovery). It is an ordinary list item, so it scrolls with the rows. */
-  additionalContent: (@Composable () -> Unit)? = null,
   /** One exact stream's explicit Save action; null keeps every row without one, as before. */
   onSaveToLibrary: ((StreamDto) -> Unit)? = null,
   /** Whether one row may offer that Save at all: the caller marks exactly the rows it wants. */
@@ -290,17 +287,16 @@ fun SourcesPanel(
           }
         }
       }
-      // The caller's own controls, if any, come after every row so they never stand in for one.
-      if (additionalContent != null) item(key = "additional_content") { additionalContent() }
     }
   }
 }
 
-/** A stable key per row: the stream's own identity, with a positional fallback for one that
- *  arrived without a source id. `Streams.offeredStreams` has already dropped a repeated id, so
- *  two rows never share a key -- and a row that is still offered keeps its identity across a
- *  re-sort. */
-private fun sourceRowKey(stream: StreamDto, index: Int): String = stream.sourceId.ifBlank { "row-$index" }
+/** A stable key per row: the stream's whole identity (its remote tuple, its path or its source id),
+ *  with a positional fallback only for a row that truly carries none of them. Two rows that differ
+ *  in any part of that identity keep keys of their own, and a row that is still offered keeps its
+ *  key across a re-sort. */
+private fun sourceRowKey(stream: StreamDto, index: Int): String =
+  Streams.rowIdentity(stream).ifBlank { "row-$index" }
 
 /** The chips across the top of the panel and the `shown of total` line beside them. */
 @Composable

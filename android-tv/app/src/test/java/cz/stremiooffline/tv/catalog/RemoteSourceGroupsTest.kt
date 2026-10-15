@@ -114,6 +114,84 @@ class RemoteSourceGroupsTest {
   }
 
   @Test
+  fun `the item's own rows lead the recommended order and obey the source choice`() {
+    val a = remote("a1", "rlibA", "iA", "A")
+    val own = remote("own", "rlibA", "iA", "Own")
+    val x = addon("x1", "X")
+    val lg = local("/f", "L")
+    val origins = Streams.Origins(rows = listOf(own), libraryId = "rlibA", label = "jellyfin · Film")
+
+    val rows = Streams.catalogSourceList(
+      local = listOf(lg),
+      addon = listOf(x),
+      remote = listOf(group("rlibB", "emby", "Serial", a)),
+      origins = origins,
+    )
+    assertEquals(listOf(own.sourceId, lg.sourceId, a.sourceId, x.sourceId), rows.map { it.sourceId })
+
+    // The own library answers with those rows; another library and any named addon hide them.
+    assertEquals(
+      listOf(own.sourceId),
+      Streams.catalogSourceList(
+        local = listOf(lg),
+        addon = listOf(x),
+        filters = Streams.StreamFilters(addon = Streams.remoteFilter("rlibA")),
+        remote = listOf(group("rlibB", "emby", "Serial", a)),
+        origins = origins,
+      ).map { it.sourceId },
+    )
+    assertEquals(
+      listOf(x.sourceId),
+      Streams.catalogSourceList(
+        local = listOf(lg),
+        addon = listOf(x),
+        filters = Streams.StreamFilters(addon = "Luna"),
+        remote = listOf(group("rlibB", "emby", "Serial", a)),
+        origins = origins,
+      ).map { it.sourceId },
+    )
+    assertEquals(
+      listOf(lg.sourceId),
+      Streams.catalogSourceList(
+        local = listOf(lg),
+        addon = listOf(x),
+        filters = Streams.StreamFilters(addon = Streams.LOCAL_FILTER),
+        remote = listOf(group("rlibB", "emby", "Serial", a)),
+        origins = origins,
+      ).map { it.sourceId },
+    )
+  }
+
+  @Test
+  fun `a file the detail holds is one row of the Local choice and of the count`() {
+    val own = local("/f", "It.mkv")
+    val other = local("/g", "It.1080.mkv")
+    val origins = Streams.Origins(rows = listOf(own))
+
+    val localChoice = Streams.catalogSourceList(
+      local = listOf(other),
+      addon = emptyList(),
+      filters = Streams.StreamFilters(addon = Streams.LOCAL_FILTER),
+      origins = origins,
+    )
+    assertEquals(listOf(own.sourceId, other.sourceId), localChoice.map { it.sourceId })
+
+    val lists = Streams.sourceLists(
+      streams = emptyList(),
+      addons = emptyList(),
+      filters = Streams.StreamFilters(),
+      preferredLanguage = "en",
+      showTorrents = true,
+      metaLanguage = null,
+      local = listOf(other),
+      origins = origins,
+    )
+    // The file's own row and the library's other copy, counted once each.
+    assertEquals(2, lists.options.localCount)
+    assertEquals(listOf(own.sourceId, other.sourceId), lists.rows.map { it.sourceId })
+  }
+
+  @Test
   fun `remoteVersionsOf keeps one item's versions and no other item's`() {
     val a1 = remote("a1", "rlibA", "iA", "A1")
     val a2 = remote("a2", "rlibA", "iA", "A2")
