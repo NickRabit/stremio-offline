@@ -12,7 +12,7 @@ import { LibraryManagerDialog, libraryTypeLabel } from "./LibraryManager";
 import { RemoteLibraryBrowser } from "./RemoteLibraryBrowser";
 import { LocalLibraryDetail, type AlternativePlay } from "./LocalLibraryDetail";
 import { DetailDescription, DetailHero } from "./DetailHero";
-import { LibraryItem, LibraryItemMenu } from "./library-item";
+import { folderTitle, LibraryItem, LibraryItemMenu, rowDescription } from "./library-item";
 import { LibraryTile } from "./library-tile";
 import { TitleChips } from "./TitleChips";
 import { RemotePersonalShelf } from "./RemotePersonalShelf";
@@ -611,11 +611,6 @@ export function App() {
     [item.year, t("library.fileCount", { count: item.fileCount }), bytes(item.size)].filter(Boolean).join(" · ");
   const fileMeta = (item: Extract<BrowseItem, { kind: "file" }>) =>
     [item.year, bytes(item.size)].filter(Boolean).join(" · ");
-  const descriptionLine = (item: TreeItem) => item.description
-    ? (item.catalogName ? `${item.catalogName} · ${item.description}` : item.description)
-    : item.match === "suggested" && item.suggestion
-      ? t("library.suggestionLine", { name: item.suggestion.name, score: item.suggestion.titleSimilarity ?? item.suggestion.score })
-      : item.catalogName;
   const [localStream, setLocalStream] = useState<Stream | null>(null); const [localTitle, setLocalTitle] = useState("");
   /** Whether the local film now opening must ignore its saved position and start at zero. */
   const [localFromBeginning, setLocalFromBeginning] = useState(false);
@@ -1684,6 +1679,7 @@ export function App() {
     if (!request) return false;
     try {
       await api.download(request.title, request.stream, request.media, target);
+      setScanEpoch((value) => value + 1);
       notify(t("downloads.queued"));
       await loadDownloads();
       return true;
@@ -2252,6 +2248,7 @@ export function App() {
     const media = selectedMedia();
     try {
       const job = await api.download(videoTitle, selectedStream, media, target);
+      setScanEpoch((value) => value + 1);
       notify(t(job.status === "waiting" ? "downloads.waitingDebrid" : "downloads.queued"));
       await loadDownloads(); return true;
     } catch (e) { fail(e); return false; }
@@ -2308,6 +2305,7 @@ export function App() {
   const submitBulkDownload = async (selection: DownloadSelection, target?: SaveTarget) => {
     if (!bulkDownload) return;
     const result = await api.downloadBulk(bulkDownload.title, bulkDownload.type, bulkDownload.episodes, selection, bulkDownload.media, target);
+    setScanEpoch((value) => value + 1);
     notify(t("episodes.bulkAdded", { count: result.added }) + (result.skipped ? ` ${t("episodes.bulkSkipped", { count: result.skipped })}` : ""));
     await loadDownloads();
   };
@@ -2779,7 +2777,7 @@ export function App() {
                           : <TileArt shape={settings.libraryTileShape} poster={item.poster} wide={item.wide} fallback={<FolderOpen/>}/>}
                       <i className="browse-badge">{item.fileCount}</i>{item.favorite && <i className="fav-mark"><Star/></i>}
                     </>}
-                    title={item.name} meta={folderMeta(item)} description={descriptionLine(item)}
+                    title={folderTitle(item)} meta={folderMeta(item)} description={rowDescription(item)}
                     action={item.match === "matched" && item.titleType === "movie"
                       ? <>{t("home.openTitle")}<ChevronRight/></> : <><FolderOpen/> {t("library.openFolder")} <ChevronRight/></>}>
                     {selectionMode && <button className="browse-select" aria-label={t("library.selectItem", { name: item.name })} aria-pressed={selectedPaths.has(item.path)} onClick={(event) => { event.stopPropagation(); toggleSelection(item.path); }}>{selectedPaths.has(item.path) && <Check/>}</button>}
@@ -2801,7 +2799,7 @@ export function App() {
                       {browseFocus === item.path && <i className="browse-focus-mark">{t("library.thisFile")}</i>}
                       {item.progress && <i className="resume-bar"><i style={{ width: `${Math.min(100, Math.round(item.progress.position / (item.progress.duration || 1) * 100))}%` }}/></i>}</>}
                     title={item.season != null ? `${item.season}×${String(item.episode ?? 0).padStart(2, "0")} ${item.label}` : item.label}
-                    meta={fileMeta(item)} description={descriptionLine(item)}
+                    meta={fileMeta(item)} description={rowDescription(item)}
                     action={<>{t("home.openTitle")}<ChevronRight/></>}>
                     {selectionMode && <button className="browse-select" aria-label={t("library.selectItem", { name: item.label })} aria-pressed={selectedPaths.has(item.path)} onClick={(event) => { event.stopPropagation(); toggleSelection(item.path); }}>{selectedPaths.has(item.path) && <Check/>}</button>}
                     {!selectionMode && (item.gallery ?? 0) > 0 && <button className="browse-gallery" aria-label={t("gallery.openStored", { name: item.label })} title={t("gallery.openStored", { name: item.label })} onClick={(event) => { event.stopPropagation(); void openStoredGallery(item.path); }}><Images/></button>}

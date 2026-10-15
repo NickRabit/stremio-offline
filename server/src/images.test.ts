@@ -532,3 +532,13 @@ test("concurrent maintenance and a download leave a consistent cache", async () 
   assert.equal((await cached(dir)).length, 1, "index and disk agree");
   assert.equal(proxy.original(`/api/image/${id}`), "https://cdn.example/gated.jpg");
 });
+
+test("an addon that names its own poster as the backdrop has no backdrop", () => {
+  const images = new ImageProxy();
+  const poster = "https://images.metahub.space/poster/medium/tt1/img";
+  const empty = images.rewriteMeta({ id: "tt1", type: "series", name: "One", poster, background: poster });
+  assert.equal(empty.poster, `/api/image/${imageId(poster)}`, "the poster still stands");
+  assert.equal(empty.background, undefined, "the poster is not a backdrop");
+  const real = images.rewriteMeta({ id: "tt1", type: "series", name: "One", poster, background: "https://images.metahub.space/background/medium/tt1/img" });
+  assert.match(String(real.background), /^\/api\/image\//, "a real backdrop is kept");
+});

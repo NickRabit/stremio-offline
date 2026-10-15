@@ -729,11 +729,26 @@ const mediaSource = (value: unknown): MediaInfo | undefined => {
 const mediaView = (media: MediaInfo) => ({ ...media, poster: images.proxied(media.poster), background: images.proxied(media.background) });
 /** A job's target is stored qualified, like every other key; the client gets the wire form,
  *  which stays relative while one library is configured. */
-const jobView = <T extends { media?: MediaInfo; target?: string }>(job: T): T => ({
-  ...job,
-  ...(job.target ? { target: wirePath(job.target) } : {}),
-  ...(job.media ? { media: mediaView(job.media) } : {}),
-});
+const jobView = async <T extends { media?: MediaInfo; target?: string }>(job: T): Promise<T> => {
+  const current = await currentTargetArtwork(job.target);
+  return {
+    ...job,
+    ...(job.target ? { target: wirePath(job.target) } : {}),
+    // A title re-assigned since the download shows the picture the library has for it now; the
+    // one captured then is what a job outside a library, or without a picture of its own, keeps.
+    ...(job.media ? { media: mediaView(current === undefined ? job.media : { ...job.media, poster: current }) } : {}),
+  };
+};
+
+/** The library's own picture for one job target, when that file sits in a library and has one.
+ *  It is the same address the library tile draws, stamp and all, so the browser asks for the new
+ *  picture after a re-assignment instead of keeping the one it cached. */
+const currentTargetArtwork = async (target: string | undefined): Promise<string | undefined> => {
+  if (!target || !parseLibraryPath(target)) return undefined;
+  const file = isVideo(posixBase(target)) ? await locateFileArtwork(target) : await locateFolderArtwork(target);
+  if (!file) return undefined;
+  return thumbUrl(isVideo(posixBase(target)) ? "path" : "dir", wirePath(target), file);
+};
 
 /** An addon logo sits on the provider's server as well, so it takes the same detour. */
 const withProxiedLogo = <T extends { manifest: { logo?: string } }>(view: T): T =>
@@ -1262,7 +1277,11 @@ const catalogArt = async (wanted: ArtShape, posterUrl?: string, backdropUrl?: st
   const ownUrl = wanted === "wide" ? backdropUrl : posterUrl;
   if (!ownUrl) return undefined;
   const own = await takePicture(ownUrl);
-  if (wanted !== "wide" || !own.ok || !posterUrl || posterUrl === ownUrl) return own;
+  if (wanted !== "wide" || !own.ok || !posterUrl) return own;
+  // An addon that names its own poster as the backdrop is handing over a portrait picture, not
+  // a backdrop. It fills the wide slot only when it really is a landscape one; otherwise the slot
+  // is left empty so the frame grab -- a real wide picture -- takes it.
+  if (posterUrl === ownUrl) return pictureShape(own.picture.data) === "wide" ? own : undefined;
   if (pictureShape(own.picture.data) !== "poster") return own;
   const poster = await takePicture(posterUrl);
   if (!poster.ok || pictureShape(poster.picture.data) !== "wide") return own;
@@ -1541,6 +1560,16 @@ const artworkTarget = async (key: string, shape: ArtShape) =>
  *  backdrop is queued while the poster job for the same item is still running. */
 const artworkQueueKey = (key: string, shape: ArtShape) =>
   artVariantKey(isFileKey(key) ? `file:${key}` : `dir:${key}`, shape);
+/** Whether a picture this key draws is being written right now, queued or running. A listing
+ *  that answers while such a job waits mints its address from the file the job is about to
+ *  replace, and the browser keeps an address of the thumbnail route for a year: the row has to
+ *  say that it is still moving, so the interface asks for the page again once it lands. */
+const artworkBusy = (key: string) => {
+  const item = isFileKey(key) ? `file:${key}` : `dir:${key}`;
+  // `ART_VARIANTS` carries the bare item key as its poster; the root listing queues under the
+  // plain key instead, and both are a picture this row draws.
+  return artworkQueue.has(key) || ART_VARIANTS.some((variant) => artworkQueue.has(artVariantKey(item, variant)));
+};
 const mediaArtExists = async (key: string, shape: ArtShape) => {
   // A file's poster is written as its own `<episode>.jpg`; one already there is the user's
   // still and wins exactly like the folder's picture does.
@@ -1584,15 +1613,6 @@ const writeCatalogPoster = async (key: string, url?: string, backdrop?: string) 
 /** The binding on this exact path, ignoring one inherited from a parent folder. */
 const ownRecord = (relative: string, records: Record<string, LibraryMetaRecord>) =>
   (records[relative]?.id ? records[relative] : undefined);
-
-/** Generated thumbnails of a path and everything under it. A changed binding makes
- *  them stale: the poster of the old title, or a frame grabbed while unmatched. */
-const clearGeneratedArt = async (key: string) => {
-  await removeGeneratedArt(key);
-  for (const file of await libraryFiles()) {
-    if (file.relative !== key && isPathWithin(file.relative, key)) await removeGeneratedArt(file.relative);
-  }
-};
 
 const attachBrowseMeta = async <T extends { path: string; kind: string; name?: string; label?: string }>(item: T, language: string, options: { prewarm?: boolean } = {}) => {
   const records = metaStore.qualifiedMeta();
@@ -1664,19 +1684,32 @@ const rememberBackdropAttempt = (key: string) => {
  *  left alone: this is the most expensive picture the server makes. */
 const backdropWanted = (queueKey: string) => backdropDue(queueKey) && !playbackBusy();
 
-/** The wide variant of a bound title, taken from the catalogue. An episode still is not a
- *  backdrop: the still next to the file is landscape already and was found before this runs. */
+/** The wide variant of a bound title: the catalogue's own backdrop, then TMDb when the catalogue
+ *  has nothing the wide slot can use. An episode still is not a backdrop: the still next to the
+ *  file is landscape already and was found before this runs. */
 async function catalogBackdropIfBound(key: string, target: string) {
   const known = knownTitleOf(key, metaStore.qualifiedMeta());
   if (!known) return false;
   const meta = await cachedMeta(known.type, known.id);
-  if (!meta?.background) return false;
-  const wide = await catalogArt("wide", meta.poster, meta.background);
+  const fromCatalog = meta?.background === undefined ? undefined : await catalogArt("wide", meta.poster, meta.background);
+  const wide = fromCatalog ?? await tmdbBackdropIfBound(known);
   if (wide && await saveBackdropReport(key, target, wide)) {
     log("INFO", "Backdrop filled in from metadata", { path: key });
     return true;
   }
   return false;
+}
+
+/** A mapped title's own backdrop from TMDb, taken only when a key is configured and the picture
+ *  really is a wide one. Without a key, or when TMDb has nothing or only a portrait picture, this
+ *  answers nothing and the caller keeps its old order: the frame grab takes the slot. */
+async function tmdbBackdropIfBound(known: { type: string; id: string }) {
+  if (!store.settings().tmdbApiKey) return undefined;
+  const meta = await cachedMeta(known.type, known.id, undefined, undefined, { artwork: true }).catch(() => undefined);
+  if (!meta?.background) return undefined;
+  const picture = await takePicture(meta.background);
+  if (!picture.ok || pictureShape(picture.picture.data) !== "wide") return undefined;
+  return picture;
 }
 
 function scheduleFileArtwork(key: string, shape: ArtShape = "poster") {
@@ -1866,7 +1899,7 @@ registerFollowRoutes(app, { ...routeContext, follows: followService, followStore
 
 // The file operations on library items live in `library-actions.ts`; these bindings keep the
 // call sites and the route dependency objects unchanged.
-const { deleteLibraryItem, relocateLibraryPath, transferLibraryItem, rerootItem } = createLibraryActions({
+const { clearGeneratedArt, deleteLibraryItem, relocateLibraryPath, transferLibraryItem, rerootItem } = createLibraryActions({
   store,
   metaStore,
   artworks,
@@ -2002,7 +2035,7 @@ const libraryPathBusy = async (keys: string[]): Promise<string | undefined> => {
   return undefined;
 };
 
-registerContentRoutes(app, { ...routeContext, artStamp, mosaics, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, fileSnaps, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, metaStore, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
+registerContentRoutes(app, { ...routeContext, artStamp, artworkBusy, mosaics, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, fileSnaps, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, metaStore, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
 /** The one search and resolution service behind both the scan and the manual identity
  *  search, so the row somebody picks by hand is the row the scanner would have picked. */
 const libraryCandidates = createLibraryCandidates({

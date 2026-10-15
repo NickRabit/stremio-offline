@@ -161,7 +161,7 @@ const mount = async (
       },
     } as unknown as DownloadsDeps["mediaSources"],
     deviceTransfers: transfers,
-    jobView: <T extends { media?: MediaInfo; target?: string }>(job: T) => {
+    jobView: async <T extends { media?: MediaInfo; target?: string }>(job: T) => {
       viewed.push(job);
       return { ...job, viewed: true } as T;
     },

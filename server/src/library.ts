@@ -229,6 +229,18 @@ export function isPathWithin(value: string, parent: string): boolean {
   return Boolean(parent) && SEPARATORS.some((separator) => value.startsWith(`${parent}${separator}`));
 }
 
+/** The folder keys between an item and one of the files inside it, nearest first. Everything a
+ *  title draws lives under the item's own key and under the keys of the files in it -- a season
+ *  folder between the two draws a picture of its own -- so a caller clearing what a binding
+ *  change made stale needs the folders nobody walks. */
+export function foldersBetween(parent: string, file: string): string[] {
+  const found: string[] = [];
+  for (let folder = posixDir(file); folder !== "" && folder !== parent && isPathWithin(folder, parent); folder = posixDir(folder)) {
+    found.push(folder);
+  }
+  return found;
+}
+
 /** True when `relative` is another library's root itself or holds one: deleting, moving or
  *  renaming it would take that library with it. */
 export function holdsLibraryRoot(

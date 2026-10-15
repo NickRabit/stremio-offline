@@ -3,7 +3,7 @@ import path from "node:path";
 import { ART_VARIANTS, artVariantKey } from "./artwork.js";
 import type { ArtworkCache } from "./artwork-cache.js";
 import { AppError } from "./errors.js";
-import { emptiedFolders, holdsLibraryRoot, isPathWithin, moveDestination, orphanedCatalogKeys, remapPath, type FoundFile } from "./library.js";
+import { emptiedFolders, foldersBetween, holdsLibraryRoot, isPathWithin, moveDestination, orphanedCatalogKeys, remapPath, type FoundFile } from "./library.js";
 import { dropKeyed, knownTitleEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
 import type { LibraryMetaStore } from "./library-meta-store.js";
 import type { LibraryHealth } from "./library-probe.js";
@@ -42,6 +42,7 @@ export interface LibraryActionDeps {
 
 export interface LibraryActions {
   forgetLibraryPath(key: string): Promise<Set<string>>;
+  clearGeneratedArt(key: string): Promise<void>;
   remapPersonalState(key: string, nextKey: string): Promise<void>;
   relocateLibraryPath(key: string, nextKey: string, pin?: boolean): Promise<void>;
   relocateArtwork(items: string[], relative: string, nextRelative: string): Promise<void>;
@@ -201,6 +202,22 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
     }
     if (gone.length) log("INFO", "Emptied folders removed", { folders: gone });
     return gone;
+  };
+
+  /** Generated thumbnails of a path and everything under it. A changed binding makes them stale:
+   *  the poster of the old title, a season folder's picture, or a frame grabbed while unmatched. */
+  const clearGeneratedArt = async (key: string) => {
+    // One pass over the keys: a season folder sits between every episode in it and the title, and
+    // removing it once per file would be thousands of lookups over a whole series.
+    const keys = new Set<string>([key]);
+    for (const file of await libraryFiles()) {
+      if (file.relative === key || !isPathWithin(file.relative, key)) continue;
+      keys.add(file.relative);
+      // A season folder between the title and its files draws a picture of its own, and the new
+      // binding makes that one stale exactly like the files' own.
+      for (const folder of foldersBetween(key, file.relative)) keys.add(folder);
+    }
+    for (const target of keys) await removeGeneratedArt(target);
   };
 
   const deleteLibraryItem = async (relative: string) => {
@@ -447,7 +464,7 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
   };
 
   return {
-    forgetLibraryPath, remapPersonalState, relocateLibraryPath, relocateArtwork, duplicateArtwork,
+    forgetLibraryPath, clearGeneratedArt, remapPersonalState, relocateLibraryPath, relocateArtwork, duplicateArtwork,
     carryCoveringArtwork, pruneEmptiedFolders, deleteLibraryItem, assertMoveType, pathPresent,
     finishTransfer, recordPublished, resumeTransfer, transferLibraryItem, rerootItem,
   };
