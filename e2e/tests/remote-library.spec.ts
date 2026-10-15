@@ -33,6 +33,10 @@ async function remoteLibraries(page: Page, options: { folders?: number; items?: 
         type: "mixed", enabled: true, order: i, showOnHome: true, showInContinueWatching: true,
         showInFavorites: true, browseMode: "folders", mosaic: true, provider: "emby", capabilities,
       })) };
+    } else if (url.pathname.endsWith("/mosaic")) {
+      // The composed fan is a picture of its own: this fixture answers one like any artwork.
+      await route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="480" height="720"><rect width="480" height="720" fill="#2b3440"/></svg>' });
+      return;
     } else if (url.pathname.endsWith("/preview")) {
       const posters = [0, 1, 2, 3].map(i => `/remote-test-art/${i}.svg`);
       body = { posters, mosaic: "/api/remote-libraries/" + url.pathname.split("/").at(-2) + "/mosaic?v=e2e" };
