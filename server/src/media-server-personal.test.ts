@@ -36,21 +36,23 @@ class FakeServer {
   detailOf: Record<string, ProviderItem> = { m1: movie("m1", "Alien"), s1: { id: "s1", name: "Show", type: "series", providerIds: {} } };
   ancestorsOf: Record<string, string[]> = { m1: ["remote-1"], s1: ["remote-1"] };
   versionsOf: Record<string, Array<{ id: string; name?: string }>> = { m1: [{ id: "v1", name: "1080p" }, { id: "v2", name: "720p" }] };
+  /** Every provider operation that ran, for the assertions about the shared window. */
+  calls: string[] = [];
 }
 
 const provider = (server: FakeServer): MediaServerProvider => {
-  const run = async () => undefined;
+  const run = async (operation: string) => { server.calls.push(operation); };
   return {
-    verifyIdentity: async () => { await run(); return { serverId: server.serverId, version: "1" }; },
-    authenticate: async () => { await run(); return { serverId: server.serverId, accountId: server.accountId, token: "token-1" }; },
-    currentAccount: async () => { await run(); return { accountId: server.accountId, policy: structuredClone(server.policy) }; },
-    listLibraries: async () => { await run(); return structuredClone(server.libraries); },
+    verifyIdentity: async () => { await run("info"); return { serverId: server.serverId, version: "1" }; },
+    authenticate: async () => { await run("login"); return { serverId: server.serverId, accountId: server.accountId, token: "token-1" }; },
+    currentAccount: async () => { await run("user"); return { accountId: server.accountId, policy: structuredClone(server.policy) }; },
+    listLibraries: async () => { await run("views"); return structuredClone(server.libraries); },
     pageItems: async () => { throw new MediaServerError("not-found", "unused"); },
     pageDirectory: async () => { throw new MediaServerError("not-found", "unused"); },
     findByProviderIds: async () => { throw new MediaServerError("not-found", "unused"); },
-    detail: async (_t, _a, itemId) => { await run(); const item = server.detailOf[itemId]; if (!item) throw new MediaServerError("not-found", "missing"); return structuredClone(item); },
-    ancestors: async (_t, _a, itemId) => { await run(); return [...(server.ancestorsOf[itemId] ?? [])]; },
-    versions: async (_t, _a, itemId) => { await run(); return structuredClone(server.versionsOf[itemId] ?? []); },
+    detail: async (_t, _a, itemId) => { await run("detail"); const item = server.detailOf[itemId]; if (!item) throw new MediaServerError("not-found", "missing"); return structuredClone(item); },
+    ancestors: async (_t, _a, itemId) => { await run("ancestors"); return [...(server.ancestorsOf[itemId] ?? [])]; },
+    versions: async (_t, _a, itemId) => { await run("versions"); return structuredClone(server.versionsOf[itemId] ?? []); },
   };
 };
 const transport: MediaServerTransport = {
@@ -131,6 +133,10 @@ const forgetSession = (h: Harness): void => {
   (h.manager as unknown as { runtimes: Map<string, unknown> }).runtimes.delete(h.connectionId);
 };
 
+/** How many times one provider operation has run, for the assertions about the shared window. */
+const providerCalls = (h: Harness, operation: string): number =>
+  h.server.calls.filter((call) => call === operation).length;
+
 const withHarness = async (run: (harness: Harness) => Promise<void>) => {
   const harness = await mount();
   try { await run(harness); } finally { await harness.close(); }
@@ -153,6 +159,24 @@ test("favourite and watched persist; a picked version must be a current ordinary
     const again = await harness.personal.read(harness.admin, harness.libraryId, "m1");
     assert.deepEqual(again, patched);
     await assert.rejects(harness.personal.patch(harness.admin, harness.libraryId, "m1", { mediaSourceId: "v9" }), { code: "not-found" });
+  });
+});
+
+test("repeated local progress over one item costs the provider nothing inside the shared window", async () => {
+  await withHarness(async (harness) => {
+    const first = await harness.personal.patch(harness.admin, harness.libraryId, "m1", { position: 10, duration: 100, mediaSourceId: "v1" });
+    assert.equal(first.position, 10);
+    const read = { detail: providerCalls(harness, "detail"), versions: providerCalls(harness, "versions") };
+    assert.equal(read.detail, 1, "the write's own preflight reads the row once");
+    assert.equal(read.versions, 1, "and the picked version once");
+
+    const second = await harness.personal.patch(harness.admin, harness.libraryId, "m1", { position: 20, duration: 100, mediaSourceId: "v1" });
+    assert.equal(second.position, 20, "the second save still lands");
+    assert.equal(providerCalls(harness, "detail"), read.detail, "the row comes from the shared window");
+    assert.equal(providerCalls(harness, "versions"), read.versions, "and so does the version list");
+    assert.equal((await harness.personal.read(harness.admin, harness.libraryId, "m1")).position, 20, "the account's own state is read locally");
+    assert.equal(providerCalls(harness, "detail"), read.detail);
+    assert.equal(JSON.stringify(harness.store.userData(ADA).remoteMedia).includes('"position":20'), true, "and the write landed in the state");
   });
 });
 
