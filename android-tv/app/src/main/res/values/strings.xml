@@ -244,6 +244,7 @@
   <string name="save_adding">Adding…</string>
   <string name="save_target_default_library">Default library</string>
   <string name="save_target_no_library">No library you can write to takes this kind of title.</string>
+  <string name="save_target_automatic">Automatic</string>
   <plurals name="episodes_bulk_added">
     <item quantity="one">1 episode added to the queue.</item>
     <item quantity="other">%1$s episodes added to the queue.</item>
@@ -293,6 +294,9 @@
   <string name="media_server_state_error">Your saved position could not be loaded.</string>
   <string name="media_server_group_failed">%1$s could not be loaded.</string>
   <string name="media_server_personal_empty">Nothing here yet.</string>
+  <string name="sources_load_addons">Sources from addons</string>
+  <string name="sources_load_provider">Load sources</string>
+  <string name="sources_no_addon_providers">No addons offer sources for this title.</string>
   <string name="resume_filter_remote">Media servers</string>
   <string name="resume_empty_remote_title">No remote progress</string>
   <string name="resume_empty_remote_text">Titles you watch from a connected Jellyfin or Emby server appear here.</string>

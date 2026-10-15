@@ -101,6 +101,10 @@ data class PlayTarget(
   val remoteItem: RemoteItemContext? = null,
   /** The versions of one remote item the player offers; empty for every other kind of play. */
   val remoteSources: List<StreamDto> = emptyList(),
+  /** The exact addon rows a native detail had already loaded when one of them was played: a
+   *  snapshot the player offers as its own sources. Nonnull means the player must not discover
+   *  any other addon or library, and it is never set by a catalogue or library play. */
+  val initialSources: List<StreamDto>? = null,
 )
 
 /** Everything the title detail draws: the artwork, the meta line and the files that sit under it. */

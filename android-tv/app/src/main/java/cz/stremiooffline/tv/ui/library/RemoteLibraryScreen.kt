@@ -55,6 +55,7 @@ import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
+import cz.stremiooffline.tv.data.CatalogApi
 import cz.stremiooffline.tv.data.DownloadTargetDto
 import cz.stremiooffline.tv.data.LibraryDto
 import cz.stremiooffline.tv.data.MediaDto
@@ -323,6 +324,8 @@ internal fun RemoteSeriesScreen(
   restoreToken: Int = 0,
   loadDestinations: (suspend () -> List<LibraryDto>)? = null,
   onQueue: (suspend (title: String, sourceId: String, media: MediaDto, target: DownloadTargetDto?) -> Unit)? = null,
+  /** The catalogue port the explicit addon discovery needs, forwarded to an episode's detail. */
+  catalogueApi: CatalogApi? = null,
 ) {
   val viewModel = viewModel<RemoteLibraryViewModel>(
     key = "remote-series:${data.libraryId}:${data.item.id}",
@@ -504,6 +507,7 @@ internal fun RemoteSeriesScreen(
         restoreToken = returnToken + restoreToken,
         loadDestinations = loadDestinations,
         onQueue = onQueue,
+        catalogueApi = catalogueApi,
       )
     }
 

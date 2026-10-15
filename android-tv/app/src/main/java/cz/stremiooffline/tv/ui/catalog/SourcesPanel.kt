@@ -4,6 +4,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -66,6 +67,7 @@ const val TagSourcesCount = "catalog_sources_count"
 const val TagSourceFilterOptions = "catalog_source_filter_options"
 
 fun sourceRowTag(index: Int): String = "source_row_$index"
+fun sourceSaveTag(index: Int): String = "source_save_$index"
 fun sourceFilterTag(key: String): String = "source_filter_$key"
 fun sourceFilterOptionTag(index: Int): String = "source_filter_option_$index"
 
@@ -112,6 +114,13 @@ fun SourcesPanel(
   countText: String? = null,
   /** A red line under the rows naming a remote group that could not be reached; null hides it. */
   remoteNote: String? = null,
+  /** An extra row after every stream, for a caller that draws its own controls there (the native
+   *  detail's addon discovery). It is an ordinary list item, so it scrolls with the rows. */
+  additionalContent: (@Composable () -> Unit)? = null,
+  /** One exact stream's explicit Save action; null keeps every row without one, as before. */
+  onSaveToLibrary: ((StreamDto) -> Unit)? = null,
+  /** Whether one row may offer that Save at all: the caller marks exactly the rows it wants. */
+  canSaveToLibrary: (StreamDto) -> Boolean = { false },
   modifier: Modifier = Modifier,
   initialFocus: FocusRequester? = null,
 ) {
@@ -120,6 +129,7 @@ fun SourcesPanel(
   val loadErrorText = stringResource(R.string.tv_load_error)
   val tryAgainText = stringResource(R.string.tv_try_again)
   val findingSourcesText = stringResource(R.string.tv_finding_sources)
+  val saveText = stringResource(R.string.save_to_library)
   val entry = focusIndex.coerceIn(0, maxOf(0, streams.size - 1))
   val listState = rememberLazyListState()
 
@@ -218,6 +228,7 @@ fun SourcesPanel(
         }
         else -> {
           itemsIndexed(streams, key = { index, stream -> sourceRowKey(stream, index) }) { index, stream ->
+            val save = if (onSaveToLibrary != null && canSaveToLibrary(stream)) onSaveToLibrary else null
             SourceRow(
               stream = stream,
               default = default === stream,
@@ -242,6 +253,9 @@ fun SourcesPanel(
                   },
                 )
                 .then(if (initialFocus != null && index == entry) Modifier.focusRequester(initialFocus) else Modifier),
+              onSave = save?.let { callback -> { callback(stream) } },
+              saveText = saveText,
+              saveModifier = Modifier.testTag(sourceSaveTag(index)),
             )
           }
           // Rows have arrived but more addons still owe one: the list is not final yet.
@@ -276,6 +290,8 @@ fun SourcesPanel(
           }
         }
       }
+      // The caller's own controls, if any, come after every row so they never stand in for one.
+      if (additionalContent != null) item(key = "additional_content") { additionalContent() }
     }
   }
 }
@@ -450,6 +466,10 @@ internal fun SourceRow(
   titleLanguage: String?,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
+  /** An explicit Save action for this exact row; null draws none. */
+  onSave: (() -> Unit)? = null,
+  saveText: String = "",
+  saveModifier: Modifier = Modifier,
 ) {
   val shape = RoundedCornerShape(8.dp)
   val local = Streams.isLocalStream(stream)
@@ -473,9 +493,9 @@ internal fun SourceRow(
   val localHint = stringResource(R.string.sources_local_hint)
   val remoteHint = stringResource(R.string.media_server_source_hint)
   val rowModifier = when {
-    local -> modifier.semantics { contentDescription = localHint }
-    remote -> modifier.semantics { contentDescription = remoteHint }
-    else -> modifier
+    local -> Modifier.semantics { contentDescription = localHint }
+    remote -> Modifier.semantics { contentDescription = remoteHint }
+    else -> Modifier
   }
   // A remote version names the server and library it comes from, so a viewer sees which account
   // and which collection a row belongs to before playing it.
@@ -485,54 +505,73 @@ internal fun SourceRow(
     local -> stream.libraryName.orEmpty()
     else -> stream.addonName.orEmpty()
   }
-  Surface(
-    onClick = onClick,
-    modifier = rowModifier.fillMaxWidth(),
-    shape = ClickableSurfaceDefaults.shape(shape = shape),
-    colors = ClickableSurfaceDefaults.colors(
-      containerColor = if (default || playing) Tokens.Panel2 else Color.Transparent,
-      contentColor = Tokens.Text,
-      focusedContainerColor = Tokens.Panel2,
-      focusedContentColor = Tokens.Text,
-      pressedContainerColor = Tokens.Panel2,
-      pressedContentColor = Tokens.Text,
-    ),
-    // Panel rows do not scale on focus: the list viewport would clip the first and last row.
-    scale = ClickableSurfaceDefaults.scale(focusedScale = 1f, pressedScale = 1f),
-    border = ClickableSurfaceDefaults.border(
-      border = Border.None,
-      focusedBorder = Border(BorderStroke(1.5.dp, Tokens.Accent2), shape = shape),
-    ),
-  ) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-      // The playing row's accent bar takes the place of the default tick.
-      Box(Modifier.width(3.dp).height(30.dp).background(if (playing) Tokens.Accent else Color.Transparent))
-      Row(
-        modifier = Modifier.weight(1f).padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-      ) {
-        Text(badge, color = badgeColour, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-          Text(sourceName, color = Tokens.Muted, fontSize = 9.5.sp, maxLines = 1)
-          Text(
-            if (local) stream.behaviorHints?.filename ?: streamLabel(stream) else streamLabel(stream),
-            fontSize = 12.5.sp,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-          if (meta.isNotEmpty()) Text(meta.joinToString(" · "), color = Tokens.Muted, fontSize = 10.sp, maxLines = 1)
-        }
-        // One mark only: the playing row is the playing one, otherwise the picked row, otherwise
-        // the default.
-        when {
-          playing -> Text(nowPlayingText, color = Tokens.Accent, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
-          chosen -> Text(if (default) "✓ $defaultText" else "✓", color = Tokens.Green, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
-          default && !anyChosen -> Text("✓ $defaultText", color = Tokens.Green, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
-          default -> Text(defaultText, color = Tokens.Muted, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+
+  @Composable
+  fun body(bodyModifier: Modifier) {
+    Surface(
+      onClick = onClick,
+      modifier = bodyModifier.then(rowModifier),
+      shape = ClickableSurfaceDefaults.shape(shape = shape),
+      colors = ClickableSurfaceDefaults.colors(
+        containerColor = if (default || playing) Tokens.Panel2 else Color.Transparent,
+        contentColor = Tokens.Text,
+        focusedContainerColor = Tokens.Panel2,
+        focusedContentColor = Tokens.Text,
+        pressedContainerColor = Tokens.Panel2,
+        pressedContentColor = Tokens.Text,
+      ),
+      // Panel rows do not scale on focus: the list viewport would clip the first and last row.
+      scale = ClickableSurfaceDefaults.scale(focusedScale = 1f, pressedScale = 1f),
+      border = ClickableSurfaceDefaults.border(
+        border = Border.None,
+        focusedBorder = Border(BorderStroke(1.5.dp, Tokens.Accent2), shape = shape),
+      ),
+    ) {
+      Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        // The playing row's accent bar takes the place of the default tick.
+        Box(Modifier.width(3.dp).height(30.dp).background(if (playing) Tokens.Accent else Color.Transparent))
+        Row(
+          modifier = Modifier.weight(1f).padding(horizontal = 12.dp, vertical = 10.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          Text(badge, color = badgeColour, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+          Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(sourceName, color = Tokens.Muted, fontSize = 9.5.sp, maxLines = 1)
+            Text(
+              if (local) stream.behaviorHints?.filename ?: streamLabel(stream) else streamLabel(stream),
+              fontSize = 12.5.sp,
+              fontWeight = FontWeight.SemiBold,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+            if (meta.isNotEmpty()) Text(meta.joinToString(" · "), color = Tokens.Muted, fontSize = 10.sp, maxLines = 1)
+          }
+          // One mark only: the playing row is the playing one, otherwise the picked row, otherwise
+          // the default.
+          when {
+            playing -> Text(nowPlayingText, color = Tokens.Accent, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+            chosen -> Text(if (default) "✓ $defaultText" else "✓", color = Tokens.Green, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+            default && !anyChosen -> Text("✓ $defaultText", color = Tokens.Green, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+            default -> Text(defaultText, color = Tokens.Muted, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+          }
         }
       }
+    }
+  }
+
+  if (onSave == null) {
+    body(modifier.fillMaxWidth())
+  } else {
+    // The Save is this row's sibling, not its child: a focusable inside a focusable row cannot be
+    // reached with the D-pad, and the group is what walks between the row and its own action.
+    Row(
+      modifier = Modifier.fillMaxWidth().focusGroup(),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+      body(modifier.weight(1f))
+      FocusButton(text = saveText, onClick = onSave, modifier = saveModifier)
     }
   }
 }

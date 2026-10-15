@@ -73,6 +73,9 @@
   <string name="catalog_search_scope_in">w</string>
   <string name="sources_heading">Źródła</string>
   <string name="sources_none">Żaden aktywny dodatek źródłowy nie ma strumienia dla tego tytułu.</string>
+  <string name="sources_load_addons">Źródła z dodatków</string>
+  <string name="sources_load_provider">Wczytaj źródła</string>
+  <string name="sources_no_addon_providers">Żaden dodatek nie oferuje źródeł dla tego tytułu.</string>
   <string name="sources_local_badge">Lokalny</string>
   <string name="sources_local_hint">Już jest w twojej bibliotece — odtwarzany z dysku serwera</string>
   <string name="sources_addon">Dodatek</string>
@@ -250,6 +253,7 @@
   <string name="save_adding">Dodawanie…</string>
   <string name="save_target_default_library">Domyślna biblioteka</string>
   <string name="save_target_no_library">Żadna biblioteka, w której można pisać, nie ma takiego tytułu.</string>
+  <string name="save_target_automatic">Automatycznie</string>
   <plurals name="episodes_bulk_added">
     <item quantity="one">Do kolejki dodano 1 odcinek.</item>
     <item quantity="few">Do kolejki dodane %1$s odcinki.</item>

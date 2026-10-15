@@ -36,6 +36,8 @@ class LibraryPlaySources(private val api: TvApi) {
    *  cancelled caller stops the loading; nothing is reported for a catalogue play, a target
    *  without a path, an unbound file or a failed lookup. */
   suspend fun load(target: PlayTarget, report: (OfferedSources) -> Unit) {
+    // A target that already carries its own addon rows must not discover anything else.
+    if (target.initialSources != null) return
     val path = target.path ?: return
     // A native media-server play offers its own remote versions; nothing in the filesystem or the
     // addon machinery is asked about it.

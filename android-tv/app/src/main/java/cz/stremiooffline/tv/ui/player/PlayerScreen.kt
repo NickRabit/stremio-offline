@@ -370,7 +370,9 @@ fun PlayerScreen(
       addonKey = currentTarget.addonKey,
       subtitleType = currentTarget.subtitleType,
       subtitleTarget = currentTarget.subtitleTarget,
-      catalogue = true,
+      catalogue = currentTarget.catalogue,
+      // A snapshot the caller handed over stays the player's own list across a switch.
+      initialSources = currentTarget.initialSources,
     )
   }
 

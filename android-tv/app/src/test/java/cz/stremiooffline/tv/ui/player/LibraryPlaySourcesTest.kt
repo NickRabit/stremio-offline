@@ -152,4 +152,54 @@ class LibraryPlaySourcesTest {
     assertEquals(listOf("Filmy/Heat/Heat.mkv", "srcA"), reports.last().streams.map { it.localPath ?: it.sourceId })
     assertFalse(reports.last().loading)
   }
+
+  @Test
+  fun `a snapshot target discovers nothing at all`() = runTest {
+    val api = FakeTvApi()
+    api.libraryTitleValues["Filmy/Heat/Heat.mkv"] = LibraryTitleDto("movie", "tt1", name = "Heat")
+    val reports = mutableListOf<OfferedSources>()
+
+    LibraryPlaySources(api).load(
+      PlayTarget(
+        key = "movie:tt1",
+        title = "It",
+        resume = true,
+        sourceId = "srcA",
+        subtitleType = "movie",
+        subtitleTarget = "tt1",
+        initialSources = listOf(alpha()),
+      ),
+    ) { reports += it }
+
+    assertTrue(reports.isEmpty())
+    assertTrue(api.libraryTitleRequests.isEmpty())
+    assertTrue(api.localStreamsRequests.isEmpty())
+    assertTrue(api.streamSourcesRequests.isEmpty())
+    assertTrue(api.remoteMatchRequests.isEmpty())
+    assertEquals(0, api.settingsCalls)
+    assertEquals(0, api.addonsCalls)
+  }
+
+  @Test
+  fun `a snapshot target with a path still discovers nothing`() = runTest {
+    val api = FakeTvApi()
+    api.libraryTitleValues["Filmy/Heat/Heat.mkv"] = LibraryTitleDto("movie", "tt1", name = "Heat")
+    val reports = mutableListOf<OfferedSources>()
+
+    LibraryPlaySources(api).load(
+      PlayTarget(
+        key = "movie:tt1",
+        title = "It",
+        resume = true,
+        path = "Filmy/Heat/Heat.mkv",
+        sourceId = "srcA",
+        initialSources = listOf(alpha()),
+      ),
+    ) { reports += it }
+
+    assertTrue(reports.isEmpty())
+    assertTrue(api.libraryTitleRequests.isEmpty())
+    assertTrue(api.localStreamsRequests.isEmpty())
+    assertTrue(api.streamSourcesRequests.isEmpty())
+  }
 }

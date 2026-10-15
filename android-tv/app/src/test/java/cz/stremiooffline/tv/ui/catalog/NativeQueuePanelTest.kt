@@ -4,6 +4,7 @@ package cz.stremiooffline.tv.ui.catalog
 
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -16,6 +17,7 @@ import cz.stremiooffline.tv.data.RemoteCapabilitiesDto
 import cz.stremiooffline.tv.data.RemoteItemContext
 import cz.stremiooffline.tv.data.StreamDto
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -161,5 +163,75 @@ class NativeQueuePanelTest {
     press(Key.DirectionUp)
     press(Key.DirectionCenter)
     assertEquals(listOf("only" to "libA"), queued)
+  }
+
+  /** One addon row the viewer picked: a caller may offer the server's own rule beside the exact
+   *  libraries, and the two must be told apart. */
+  private fun addonRow(id: String) = StreamDto(sourceId = id, kind = "remote", playable = true, title = "Czech 8 GB")
+
+  private var defaults = 0
+
+  private fun mountAddon(versions: List<StreamDto>, libraries: List<LibraryDto>, realDebrid: Boolean = false) {
+    compose.setContent {
+      NativeQueuePanel(
+        versions = versions,
+        libraries = libraries,
+        preferred = null,
+        realDebridConfigured = realDebrid,
+        onQueueDefault = { defaults += 1 },
+        onQueue = { stream, libraryId -> queued += stream.sourceId to libraryId },
+        onClose = { closed += 1 },
+      )
+    }
+    compose.waitForIdle()
+  }
+
+  @Test
+  fun `an addon copy leads with the server's own rule and still offers the libraries`() {
+    mountAddon(listOf(addonRow("srcA")), listOf(library("libA", "Films"), library("libB", "Series")))
+
+    // The automatic row holds the focus, so OK hands the choice to the server without a target.
+    compose.onNodeWithTag(TagNativeQueueDefault).assertIsFocused()
+    press(Key.DirectionCenter)
+    assertEquals(1, defaults)
+    assertTrue(queued.isEmpty())
+  }
+
+  @Test
+  fun `an addon library row stays selectable as an explicit override`() {
+    mountAddon(listOf(addonRow("srcA")), listOf(library("libA", "Films")))
+    // Down moves from the automatic row to the exact library; OK takes that one.
+    press(Key.DirectionDown)
+    press(Key.DirectionCenter)
+    assertEquals(listOf("srcA" to "libA"), queued)
+    assertEquals(0, defaults)
+  }
+
+  @Test
+  fun `an addon panel with no writable library still offers the server's rule`() {
+    mountAddon(listOf(addonRow("srcA")), emptyList())
+
+    compose.onNodeWithTag(TagNativeQueueDefault).assertExists()
+    compose.onNodeWithTag(TagNativeQueueNoTargets).assertDoesNotExist()
+    press(Key.DirectionCenter)
+    assertEquals(1, defaults)
+  }
+
+  @Test
+  fun `a torrent addon row is refused without debrid`() {
+    val torrent = StreamDto(sourceId = "tor1", kind = "torrent", playable = false, title = "Czech 8 GB")
+    mountAddon(listOf(torrent), listOf(library("libA", "Films")))
+    // Without debrid the row is not copyable, so the panel names the refused right.
+    compose.onNodeWithTag(TagNativeQueueDenied).assertExists()
+    assertTrue(queued.isEmpty())
+  }
+
+  @Test
+  fun `a torrent addon row is copyable with debrid configured`() {
+    val torrent = StreamDto(sourceId = "tor1", kind = "torrent", playable = false, title = "Czech 8 GB")
+    mountAddon(listOf(torrent), listOf(library("libA", "Films")), realDebrid = true)
+    press(Key.DirectionDown)
+    press(Key.DirectionCenter)
+    assertEquals(listOf("tor1" to "libA"), queued)
   }
 }

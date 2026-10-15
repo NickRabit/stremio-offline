@@ -403,6 +403,9 @@ fun Shell(
       restoreToken = detailReturnToken,
       loadDestinations = nativeDestinations,
       onQueue = nativeQueue,
+      // The screen's own RemoteLibraryApi stays exactly that; the addon discovery needs the
+      // catalogue surface, which the shell's real api already implements.
+      catalogueApi = api,
     )
   }
 
@@ -457,7 +460,14 @@ private fun OverlayFocusTrap(fenced: Boolean, content: @Composable () -> Unit) {
  *  there -- no Sources button, as before. Kept here so the expression can be tested without a
  *  whole shell. */
 internal fun playerSourcesFor(target: PlayTarget, catalogue: OfferedSources, library: OfferedSources): OfferedSources =
-  if (target.remoteItem != null) OfferedSources(target.remoteSources) else if (target.catalogue) catalogue else library
+  when {
+    // A native detail's addon play carries the rows it had already loaded: the player offers
+    // exactly those, so no catalogue or library discovery is asked about it.
+    target.initialSources != null -> OfferedSources(target.initialSources)
+    target.remoteItem != null -> OfferedSources(target.remoteSources)
+    target.catalogue -> catalogue
+    else -> library
+  }
 
 
 /**

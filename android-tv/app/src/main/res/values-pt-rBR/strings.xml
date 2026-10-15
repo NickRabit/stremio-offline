@@ -73,6 +73,9 @@
   <string name="catalog_search_scope_in">em</string>
   <string name="sources_heading">Fontes</string>
   <string name="sources_none">Nenhum complemento de fonte ativo possui um stream para este título.</string>
+  <string name="sources_load_addons">Fontes dos complementos</string>
+  <string name="sources_load_provider">Carregar fontes</string>
+  <string name="sources_no_addon_providers">Nenhum complemento oferece fontes para este título.</string>
   <string name="sources_local_badge">Local</string>
   <string name="sources_local_hint">Já está na sua biblioteca — é reproduzido do disco do servidor</string>
   <string name="sources_addon">Complemento</string>
@@ -244,6 +247,7 @@
   <string name="save_adding">Adicionando…</string>
   <string name="save_target_default_library">Biblioteca padrão</string>
   <string name="save_target_no_library">Nenhuma biblioteca na qual você possa escrever leva esse tipo de título.</string>
+  <string name="save_target_automatic">Automático</string>
   <plurals name="episodes_bulk_added">
     <item quantity="one">%1$s episódio adicionado à fila.</item>
     <item quantity="other">%1$s episódios adicionados à fila.</item>

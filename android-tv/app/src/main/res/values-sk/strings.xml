@@ -73,6 +73,9 @@
   <string name="catalog_search_scope_in">v</string>
   <string name="sources_heading">Zdroje</string>
   <string name="sources_none">Žiadny aktívny zdrojový doplnok nemá stream pre tento titul.</string>
+  <string name="sources_load_addons">Zdroje z doplnkov</string>
+  <string name="sources_load_provider">Načítať zdroje</string>
+  <string name="sources_no_addon_providers">Žiadny doplnok neponúka zdroje pre tento titul.</string>
   <string name="sources_local_badge">Lokálne</string>
   <string name="sources_local_hint">Už je vo vašej knižnici — prehráva sa z disku servera</string>
   <string name="sources_addon">Addon</string>
@@ -250,6 +253,7 @@
   <string name="save_adding">Pridáva sa…</string>
   <string name="save_target_default_library">Predvolená knižnica</string>
   <string name="save_target_no_library">Žiadna knižnica, do ktorej môžete písať, nemá tento druh titulov.</string>
+  <string name="save_target_automatic">Automaticky</string>
   <plurals name="episodes_bulk_added">
     <item quantity="one">1 epizóda pridaná do poradia.</item>
     <item quantity="few">%1$s epizódy pridané do poradia.</item>

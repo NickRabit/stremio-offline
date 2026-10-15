@@ -73,6 +73,9 @@
   <string name="catalog_search_scope_in">в</string>
   <string name="sources_heading">Источники</string>
   <string name="sources_none">Ни один активный исходный аддон не имеет потока для этого заголовка.</string>
+  <string name="sources_load_addons">Источники из аддонов</string>
+  <string name="sources_load_provider">Загрузить источники</string>
+  <string name="sources_no_addon_providers">Ни один аддон не предлагает источники для этого заголовка.</string>
   <string name="sources_local_badge">Локальный</string>
   <string name="sources_local_hint">Уже в вашей библиотеке — воспроизводится с диска сервера</string>
   <string name="sources_addon">Аддон</string>
@@ -250,6 +253,7 @@
   <string name="save_adding">Добавление…</string>
   <string name="save_target_default_library">Библиотека по умолчанию</string>
   <string name="save_target_no_library">Ни одна библиотека, в которую вы можете писать, не имеет такого названия.</string>
+  <string name="save_target_automatic">Автоматически</string>
   <plurals name="episodes_bulk_added">
     <item quantity="one">В очередь добавлена ​​%1$s серия.</item>
     <item quantity="few">В очередь добавлено %1$s серии.</item>

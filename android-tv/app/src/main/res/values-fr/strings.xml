@@ -73,6 +73,9 @@
   <string name="catalog_search_scope_in">dans</string>
   <string name="sources_heading">Sources</string>
   <string name="sources_none">Aucun module complémentaire source actif n\'a de flux pour ce titre.</string>
+  <string name="sources_load_addons">Sources depuis les modules</string>
+  <string name="sources_load_provider">Charger les sources</string>
+  <string name="sources_no_addon_providers">Aucun module complémentaire n\'offre de sources pour ce titre.</string>
   <string name="sources_local_badge">Local</string>
   <string name="sources_local_hint">Déjà dans votre bibliothèque — lu depuis le disque du serveur</string>
   <string name="sources_addon">Module complémentaire</string>
@@ -244,6 +247,7 @@
   <string name="save_adding">Ajout…</string>
   <string name="save_target_default_library">Bibliothèque par défaut</string>
   <string name="save_target_no_library">Aucune bibliothèque dans laquelle vous pouvez écrire ne prend ce genre de titre.</string>
+  <string name="save_target_automatic">Automatique</string>
   <plurals name="episodes_bulk_added">
     <item quantity="one">%1$s épisode ajouté à la file d\'attente.</item>
     <item quantity="other">%1$s épisodes ajoutés à la file d\'attente.</item>

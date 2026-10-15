@@ -73,6 +73,9 @@
   <string name="catalog_search_scope_in">in</string>
   <string name="sources_heading">Quellen</string>
   <string name="sources_none">Kein aktives Quell-Add-on verfügt über einen Stream für diesen Titel.</string>
+  <string name="sources_load_addons">Quellen aus Add-ons</string>
+  <string name="sources_load_provider">Quellen laden</string>
+  <string name="sources_no_addon_providers">Kein Add-on bietet Quellen für diesen Titel.</string>
   <string name="sources_local_badge">Lokal</string>
   <string name="sources_local_hint">Bereits in deiner Bibliothek — wird von der Festplatte des Servers abgespielt</string>
   <string name="sources_addon">Addon</string>
@@ -244,6 +247,7 @@
   <string name="save_adding">Hinzufügen…</string>
   <string name="save_target_default_library">Standardbibliothek</string>
   <string name="save_target_no_library">Keine Bibliothek, in die Sie schreiben können, nimmt einen solchen Titel an.</string>
+  <string name="save_target_automatic">Automatisch</string>
   <plurals name="episodes_bulk_added">
     <item quantity="one">1 Episode zur Warteschlange hinzugefügt.</item>
     <item quantity="other">%1$s Episoden zur Warteschlange hinzugefügt.</item>
