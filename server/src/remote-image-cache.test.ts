@@ -69,6 +69,16 @@ test("the key is a hex digest of the parts and names no tag, token or address", 
   assert.notEqual(key, keyOf("other-secret", "detail"));
 });
 
+test("close waits for a poster that has just finished, so the file is durable", async () => {
+  await withDir(async (dir) => {
+    const cache = new RemoteImageCache(dir, 1024 * 1024, 0);
+    await cache.load();
+    await drain(await cache.open(keyOf("tag-1"), undefined, upstreamOf(Buffer.from("poster")).load));
+    await cache.close();
+    assert.equal((await stored(dir)).length, 1);
+  });
+});
+
 test("two proof tags are two files, and an empty size is not the detail size", async () => {
   await withDir(async (dir) => {
     const cache = new RemoteImageCache(dir, 1024 * 1024, 0);
