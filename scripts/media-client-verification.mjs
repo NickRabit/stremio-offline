@@ -669,9 +669,9 @@ async function verifyItem({ app, config, client, identity, observer, attached, m
     await verifyExternalSubtitle({ app, itemLabel, streams: remote, recorder });
     await verifySidecar({ app, session: active, itemLabel, recorder });
     await verifyResume({ app, itemLabel, session: active, chosen, versions, recorder });
-    await verifySecondVersion({ app, client, itemId, itemLabel, remote, versions, recorder });
-    const mp4Alternate = remote.slice(1).find((stream) => versions.some((version) => version.id === stream.remoteItem.mediaSourceId && version.container?.toLowerCase() === "mp4"));
-    if (mp4Alternate) await verifySecondVersion({ app, client, itemId, itemLabel: `${itemLabel}.direct-alternate`, remote: [remote[0], mp4Alternate], versions, recorder });
+    await verifySecondVersion({ app, client, itemId, itemLabel, remote, versions, recorder, observer });
+    const mp4Alternate = remote.slice(1).find((stream) => versions.some((version) => version.id === stream.remoteItem.mediaSourceId && version.container?.toLowerCase().split(",").map((entry) => entry.trim()).includes("mp4")));
+    if (mp4Alternate) await verifySecondVersion({ app, client, itemId, itemLabel: `${itemLabel}.direct-alternate`, remote: [remote[0], mp4Alternate], versions, recorder, observer });
 
     await verifyRecovery({ app, observer, itemLabel, sourceId: chosen.sourceId, libraryId, recorder, delayMs: config.delayMs });
   } finally {
@@ -1003,7 +1003,33 @@ async function verifyResumeAcrossVersions({ app, itemLabel, statePath, session, 
   });
 }
 
-async function verifySecondVersion({ app, client, itemId, itemLabel, remote, versions, recorder }) {
+async function verifyRangeRecovery({ app, client, observer, itemId, itemLabel, session, mediaSourceId, recorder }) {
+  const range = "bytes=65536-131071";
+  const servedBefore = observer.faultServed("original", "drop");
+  const dialsBefore = observer.dials("original");
+  observer.armFault("original", { kind: "drop", times: 1 });
+  let firstStatus = 0;
+  try {
+    firstStatus = (await app.bytes(session.url, { headers: { range }, maxBytes: 65536, timeoutMs: 30_000 })).status;
+  } catch { /* A failed first attempt is expected in this controlled fault. */ }
+  finally { observer.clearFaults("original"); }
+  const served = observer.faultServed("original", "drop") - servedBefore;
+  const recovered = await app.bytes(session.url, { headers: { range }, maxBytes: 65536, timeoutMs: 30_000 });
+  const attempts = observer.dials("original") - dialsBefore;
+  const theirs = await client.original(itemId, mediaSourceId, range);
+  const verdict = classifyContentProbe({ requestedRange: range, responseStatus: recovered.status,
+    responseRange: recovered.headers.get("content-range"), responseBytes: recovered.bytes.length,
+    responseHash: sha256Hex(recovered.bytes), providerStatus: theirs?.status, providerRange: theirs?.contentRange,
+    providerBytes: theirs?.bytes?.length, providerHash: theirs?.bytes ? sha256Hex(theirs.bytes) : undefined });
+  const status = !served ? SKIPPED : attempts < 1 || attempts > RECOVERY_ATTEMPT_MAX ? FAIL : verdict.status;
+  recorder.record(`${itemLabel}.range-drop-recovery`, status, {
+    firstStatus, recoveredStatus: recovered.status, faultsServed: served, upstreamAttempts: attempts,
+    hashCompared: verdict.status === PASS,
+    reason: !served ? "The original was answered without reaching the controlled fault." : verdict.reason,
+  });
+}
+
+async function verifySecondVersion({ app, client, itemId, itemLabel, remote, versions, recorder, observer }) {
   if (remote.length < 2) {
     recorder.skip(`${itemLabel}.second-version`, "the provider exposes a single playable version", { versions: remote.length });
     return;
@@ -1021,6 +1047,12 @@ async function verifySecondVersion({ app, client, itemId, itemLabel, remote, ver
       // The second version gets the same nonzero-range comparison as the first:
       // two versions of one item are the case a "which file did we really play"
       // mistake hides in.
+      const size = versions.find((version) => version.id === second.remoteItem.mediaSourceId)?.size;
+      app.dropObservers ??= new WeakSet();
+      if (started.body.mode === "direct" && size > 131072 && !app.dropObservers.has(observer)) {
+        app.dropObservers.add(observer);
+        await verifyRangeRecovery({ app, client, observer, itemId, itemLabel, session: started.body, mediaSourceId: second.remoteItem.mediaSourceId, recorder });
+      }
       await verifyContent({
         app,
         client,

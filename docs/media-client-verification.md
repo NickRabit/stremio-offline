@@ -266,6 +266,36 @@ also boots a disposable application to prove its own vault key and library roots
 are used and to prove `stop()` removes the tree and is idempotent; it skips
 itself when the checkout has no build. They need no provider.
 
+## Recorded verification (2026-10-15)
+
+The disposable Linux run against Jellyfin 12.2.0 and Emby 4.9.3.0 produced
+**141 passing checks, zero failures, 43 skips and 23 unmeasured checks**. Four
+18-second fixture variants cover H.264/AAC, H.264/AC3, HEVC/AAC, two audio tracks,
+embedded text subtitles and external subtitles. Additional short fixtures explain
+some capability skips and ranges too small to compare.
+
+Both providers delivered verified direct-play ranges, remux segments and
+transcoded segments. Dropping the first direct-play range produced `502`, then
+`206` on retry, with one upstream dial and the same nonzero-range SHA-256 as the
+provider. Eight supplied items retained all five compared provider `UserData`
+fields; no prohibited mutation was attempted.
+
+The cancellation reproduction initially left preparation running after the client
+left. With the fix, the held original was canceled before any upstream dial,
+there were no late starts, child processes returned from one to zero, and a
+following inspection succeeded with a fresh original read.
+
+The synthetic 100,000-item catalogue passed all 11 checks. Six requested pages
+returned 360 distinct rows in six upstream listing requests, with no per-item
+metadata fan-out. Extra repeat, folder, cancellation and isolation scenarios
+remained within their page budget. This does not measure a 100,000-row browser
+DOM or hardware decoder performance.
+
+The final gates passed 2,419 server tests (eight skipped), 983 web tests, 301
+desktop tests, 30 harness tests, and 22 remote-library Playwright cases in Docker.
+The Playwright cases include returning from detail while a page is canceled,
+retaining rows, retrying the same cursor and rejecting a late response.
+
 ## Out of scope
 
 Bulk copying of remote items into local libraries, app-local manual matching and

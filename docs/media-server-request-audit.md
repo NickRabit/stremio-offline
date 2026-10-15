@@ -48,7 +48,9 @@ Detail plus PlaybackInfo to validate the version. The player saves progress ever
 10 seconds: this code path can therefore generate **18 metadata requests per
 minute per playing item**, before periodic authorization and byte requests. This
 is a code-derived rate, not a timed playback measurement on the user's library.
-The progress itself is stored only in this application.
+The progress itself is stored only in this application. A subsequent disposable
+real-provider run measured one warm progress PATCH on each provider: both made
+two Detail and one PlaybackInfo request, confirming the per-save cost above.
 
 ### Preparation and subtitles
 
