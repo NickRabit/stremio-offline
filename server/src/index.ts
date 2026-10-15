@@ -1683,19 +1683,32 @@ const rememberBackdropAttempt = (key: string) => {
  *  left alone: this is the most expensive picture the server makes. */
 const backdropWanted = (queueKey: string) => backdropDue(queueKey) && !playbackBusy();
 
-/** The wide variant of a bound title, taken from the catalogue. An episode still is not a
- *  backdrop: the still next to the file is landscape already and was found before this runs. */
+/** The wide variant of a bound title: the catalogue's own backdrop, then TMDb when the catalogue
+ *  has nothing the wide slot can use. An episode still is not a backdrop: the still next to the
+ *  file is landscape already and was found before this runs. */
 async function catalogBackdropIfBound(key: string, target: string) {
   const known = knownTitleOf(key, metaStore.qualifiedMeta());
   if (!known) return false;
   const meta = await cachedMeta(known.type, known.id);
-  if (!meta?.background) return false;
-  const wide = await catalogArt("wide", meta.poster, meta.background);
+  const fromCatalog = meta?.background === undefined ? undefined : await catalogArt("wide", meta.poster, meta.background);
+  const wide = fromCatalog ?? await tmdbBackdropIfBound(known);
   if (wide && await saveBackdropReport(key, target, wide)) {
     log("INFO", "Backdrop filled in from metadata", { path: key });
     return true;
   }
   return false;
+}
+
+/** A mapped title's own backdrop from TMDb, taken only when a key is configured and the picture
+ *  really is a wide one. Without a key, or when TMDb has nothing or only a portrait picture, this
+ *  answers nothing and the caller keeps its old order: the frame grab takes the slot. */
+async function tmdbBackdropIfBound(known: { type: string; id: string }) {
+  if (!store.settings().tmdbApiKey) return undefined;
+  const meta = await cachedMeta(known.type, known.id, undefined, undefined, { artwork: true }).catch(() => undefined);
+  if (!meta?.background) return undefined;
+  const picture = await takePicture(meta.background);
+  if (!picture.ok || pictureShape(picture.picture.data) !== "wide") return undefined;
+  return picture;
 }
 
 function scheduleFileArtwork(key: string, shape: ArtShape = "poster") {

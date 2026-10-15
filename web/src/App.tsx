@@ -1684,6 +1684,7 @@ export function App() {
     if (!request) return false;
     try {
       await api.download(request.title, request.stream, request.media, target);
+      setScanEpoch((value) => value + 1);
       notify(t("downloads.queued"));
       await loadDownloads();
       return true;
@@ -2252,6 +2253,7 @@ export function App() {
     const media = selectedMedia();
     try {
       const job = await api.download(videoTitle, selectedStream, media, target);
+      setScanEpoch((value) => value + 1);
       notify(t(job.status === "waiting" ? "downloads.waitingDebrid" : "downloads.queued"));
       await loadDownloads(); return true;
     } catch (e) { fail(e); return false; }
@@ -2308,6 +2310,7 @@ export function App() {
   const submitBulkDownload = async (selection: DownloadSelection, target?: SaveTarget) => {
     if (!bulkDownload) return;
     const result = await api.downloadBulk(bulkDownload.title, bulkDownload.type, bulkDownload.episodes, selection, bulkDownload.media, target);
+    setScanEpoch((value) => value + 1);
     notify(t("episodes.bulkAdded", { count: result.added }) + (result.skipped ? ` ${t("episodes.bulkSkipped", { count: result.skipped })}` : ""));
     await loadDownloads();
   };
