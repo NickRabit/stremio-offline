@@ -1277,7 +1277,11 @@ const catalogArt = async (wanted: ArtShape, posterUrl?: string, backdropUrl?: st
   const ownUrl = wanted === "wide" ? backdropUrl : posterUrl;
   if (!ownUrl) return undefined;
   const own = await takePicture(ownUrl);
-  if (wanted !== "wide" || !own.ok || !posterUrl || posterUrl === ownUrl) return own;
+  if (wanted !== "wide" || !own.ok || !posterUrl) return own;
+  // An addon that names its own poster as the backdrop is handing over a portrait picture, not
+  // a backdrop. It fills the wide slot only when it really is a landscape one; otherwise the slot
+  // is left empty so the frame grab -- a real wide picture -- takes it.
+  if (posterUrl === ownUrl) return pictureShape(own.picture.data) === "wide" ? own : undefined;
   if (pictureShape(own.picture.data) !== "poster") return own;
   const poster = await takePicture(posterUrl);
   if (!poster.ok || pictureShape(poster.picture.data) !== "wide") return own;
