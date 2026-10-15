@@ -21,17 +21,22 @@ const REACHABILITY_TIMEOUT_MS = 8_000;
 
 /** A one-byte range request is far cheaper than spawning ffprobe, so a source that is simply
  *  gone -- a dead torrent, an expired debrid link -- is ruled out before paying for that. Only
- *  a plain HTTP(S) address can be checked this way; a local file has nothing to connect to. */
-export async function sourceReachable(stream: StreamItem, timeoutMs = REACHABILITY_TIMEOUT_MS): Promise<boolean> {
+ *  a plain HTTP(S) address can be checked this way; a local file has nothing to connect to.
+ *  A caller that aborts gets its abort back; an ordinary failure is still just `false`. */
+export async function sourceReachable(stream: StreamItem, timeoutMs = REACHABILITY_TIMEOUT_MS, signal?: AbortSignal): Promise<boolean> {
+  signal?.throwIfAborted();
   if (!stream.url || !/^https?:\/\//i.test(stream.url)) return true;
+  const deadline = AbortSignal.timeout(timeoutMs);
   try {
     const response = await safeFetch(stream.url, {
       headers: { ...(stream.behaviorHints?.proxyHeaders?.request ?? {}), range: "bytes=0-0" },
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: signal ? AbortSignal.any([signal, deadline]) : deadline,
     });
     await response.body?.cancel().catch(() => undefined);
+    signal?.throwIfAborted();
     return response.ok;
-  } catch {
+  } catch (error) {
+    if (signal?.aborted) throw signal.reason ?? error;
     return false;
   }
 }
@@ -318,6 +323,10 @@ export class PlaybackManager {
   private readonly abandoned = new WeakSet<ChildProcess>();
   private inspected = new Map<string, { info?: MediaInfo; at: number }>();
   private inspecting = new Map<string, Promise<MediaInfo | undefined>>();
+  /** Cancelable in-flight probes, per caller signal. A route binds its own private media resource
+   *  per request, so an aborted request that released that resource must not be shared with -- or
+   *  tear down -- another request's probe of the same logical source. */
+  private readonly cancelableInspecting = new WeakMap<AbortSignal, Map<string, Promise<MediaInfo | undefined>>>();
   private sidecars = new PlayerSidecars(undefined, (id, error) => {
     const reason = error instanceof Error ? error.message : String(error);
     log("WARN", "Embedded subtitles could not be extracted as a sidecar", { id, reason: reason.slice(0, 200) });
@@ -413,59 +422,75 @@ export class PlaybackManager {
     }
   }
 
-  /** Reads the source tracks without starting playback; the result is held for a while so the source is left alone. */
-  async inspect(stream: StreamItem): Promise<MediaInfo | undefined> {
+  /** Reads the source tracks without starting playback; the result is held for a while so the source is left alone.
+   *  A cancelable caller is served from the shared metadata cache like anyone else, but its cold miss
+   *  runs on its own resource-bound entry so one request's abort cannot stop another one's probe. */
+  async inspect(stream: StreamItem, signal?: AbortSignal): Promise<MediaInfo | undefined> {
     if (!stream.url) throw new AppError("This source has no direct address to play.", "err.noPlayableAddress");
+    signal?.throwIfAborted();
     const key = this.inspectionKey(stream);
     const cached = this.inspected.get(key);
     if (cached && Date.now() - cached.at < 10 * 60_000) return cached.info;
-    const inflight = this.inspecting.get(key);
+    const map = signal ? this.cancelableMap(signal) : this.inspecting;
+    const inflightKey = signal ? `${key}:${this.proxyPath(stream)}` : key;
+    const inflight = map.get(inflightKey);
     if (inflight) return inflight;
-    const pending = this.loadInspection(stream);
-    this.inspecting.set(key, pending);
+    const pending = this.loadInspection(stream, signal);
+    map.set(inflightKey, pending);
+    // Cleanup belongs here, and only for the entry this call created: a completion that replaced
+    // an older one must not delete the newer work.
+    void pending.finally(() => { if (map.get(inflightKey) === pending) map.delete(inflightKey); }).catch(() => undefined);
     return pending;
+  }
+
+  private cancelableMap(signal: AbortSignal) {
+    let map = this.cancelableInspecting.get(signal);
+    if (!map) { map = new Map(); this.cancelableInspecting.set(signal, map); }
+    return map;
   }
 
   private inspectionKey(stream: StreamItem) {
     return createHash("sha256").update(JSON.stringify([stream.url, stream.behaviorHints?.proxyHeaders?.request])).digest("hex");
   }
 
-  private async loadInspection(stream: StreamItem) {
-    try {
-      const info = await this.probeSource(stream);
-      log(info ? "INFO" : "WARN", info ? "Source inspected" : "Source could not be inspected (ffprobe found nothing usable)", {
-        video: info?.video?.codec, duration: info?.duration ? Math.round(info.duration) : undefined,
-        profile: info?.video?.profile, pixelFormat: info?.video?.pixelFormat,
-        size: info?.video?.width && info.video.height ? `${info.video.width}x${info.video.height}` : undefined,
-        dolbyVisionProfile: info?.video?.dolbyVisionProfile,
-        dolbyVisionEnhancementLayer: info?.video?.dolbyVisionEnhancementLayer,
-        audio: info?.audioTracks.map((track) => `${track.codec}/${track.language ?? "?"}${track.title ? `/${track.title}` : ""}`),
-        subtitles: info?.subtitleTracks.map((track) => `${track.codec}/${track.language ?? "?"}${track.title ? `/${track.title}` : ""}`),
-      });
-      if (this.inspected.size > 200) this.inspected.clear();
-      if (info?.video) this.inspected.set(this.inspectionKey(stream), { info, at: Date.now() });
-      return info;
-    } finally {
-      this.inspecting.delete(this.inspectionKey(stream));
-    }
+  private async loadInspection(stream: StreamItem, signal?: AbortSignal) {
+    const info = await this.probeSource(stream, signal);
+    // Only a source that was still wanted when the probe finished is worth logging or remembering.
+    signal?.throwIfAborted();
+    log(info ? "INFO" : "WARN", info ? "Source inspected" : "Source could not be inspected (ffprobe found nothing usable)", {
+      video: info?.video?.codec, duration: info?.duration ? Math.round(info.duration) : undefined,
+      profile: info?.video?.profile, pixelFormat: info?.video?.pixelFormat,
+      size: info?.video?.width && info.video.height ? `${info.video.width}x${info.video.height}` : undefined,
+      dolbyVisionProfile: info?.video?.dolbyVisionProfile,
+      dolbyVisionEnhancementLayer: info?.video?.dolbyVisionEnhancementLayer,
+      audio: info?.audioTracks.map((track) => `${track.codec}/${track.language ?? "?"}${track.title ? `/${track.title}` : ""}`),
+      subtitles: info?.subtitleTracks.map((track) => `${track.codec}/${track.language ?? "?"}${track.title ? `/${track.title}` : ""}`),
+    });
+    if (this.inspected.size > 200) this.inspected.clear();
+    if (info?.video) this.inspected.set(this.inspectionKey(stream), { info, at: Date.now() });
+    return info;
   }
 
-  private async probeSource(stream: StreamItem) {
-    if (!(await sourceReachable(stream))) {
+  private async probeSource(stream: StreamItem, signal?: AbortSignal) {
+    signal?.throwIfAborted();
+    if (!(await sourceReachable(stream, REACHABILITY_TIMEOUT_MS, signal))) {
       log("INFO", "Source unreachable, ffprobe was skipped", { host: this.hostOf(stream.url) });
       return undefined;
     }
-    return probe(this.localUrl(this.proxyPath(stream)));
+    signal?.throwIfAborted();
+    return probe(this.localUrl(this.proxyPath(stream)), signal);
   }
 
   private hostOf(url?: string) { try { return url ? new URL(url).hostname : undefined; } catch { return undefined; } }
 
-  async start(stream: StreamItem, capabilities: ClientCapabilities = {}, options: PlaybackOptions = {}): Promise<PlaybackDescriptor> {
+  async start(stream: StreamItem, capabilities: ClientCapabilities = {}, options: PlaybackOptions = {}, signal?: AbortSignal): Promise<PlaybackDescriptor> {
+    signal?.throwIfAborted();
     if (!stream.url) throw new AppError("This source has no direct address to play.", "err.noPlayableAddress");
     const id = crypto.randomUUID();
     const source = this.proxyPath(stream);
     // Through inspect(), so the source list and the player never disagree about what the file holds.
-    const info = await this.inspect(stream);
+    const info = await this.inspect(stream, signal);
+    signal?.throwIfAborted();
     const audioTracks = info?.audioTracks ?? [];
     const subtitleTracks = info?.subtitleTracks ?? [];
 
@@ -484,25 +509,34 @@ export class PlaybackManager {
       video: info?.video?.codec, audio: info?.audio?.codec, audioTracks: audioTracks.length, subtitleTracks: subtitleTracks.length,
       dolbyVisionEnhancementLayer: info?.video?.dolbyVisionEnhancementLayer,
     };
-
-    // Audio and quality decide conversion. Embedded subtitles ride as a sidecar unless the
-    // client renders them itself: muxing WebVTT into fMP4 HLS makes the muxer die with
-    // "timescale not set".
-    const avDefault = audioTrack === 0 && quality === null;
-    const direct = this.directAllowed(session);
-    if (direct.ok) {
-      if (subtitleTrack !== null && !this.clientRendersSubtitle(session)) this.extractSidecar(session);
-      log("INFO", "Direct play from source", { id, reason: direct.reason, ...summary });
-      return this.describe(session, source);
-    }
-
-    const plan = this.plan(session);
-    session.mode = plan.copyVideo ? "remux" : "transcode";
-    const reason = avDefault && subtitleTrack === null ? direct.reason : "a non-default track or quality was requested";
+    // The request that created a session can close while its conversion is still opening the
+    // source. Cancelling then stops the session; the listener is temporary, because once start()
+    // has answered the session belongs to the player, not to the response that asked for it.
+    let stopping: Promise<void> | undefined;
+    let reason = "";
+    const abort = () => { stopping ??= this.stop(id).catch(() => undefined); };
+    signal?.addEventListener("abort", abort, { once: true });
     try {
+      if (signal?.aborted) signal.throwIfAborted();
+      // Audio and quality decide conversion. Embedded subtitles ride as a sidecar unless the
+      // client renders them itself: muxing WebVTT into fMP4 HLS makes the muxer die with
+      // "timescale not set".
+      const avDefault = audioTrack === 0 && quality === null;
+      const direct = this.directAllowed(session);
+      reason = avDefault && subtitleTrack === null ? direct.reason : "a non-default track or quality was requested";
+      if (direct.ok) {
+        signal?.throwIfAborted();
+        if (subtitleTrack !== null && !this.clientRendersSubtitle(session)) this.extractSidecar(session);
+        log("INFO", "Direct play from source", { id, reason: direct.reason, ...summary });
+        return this.describe(session, source);
+      }
+
+      const plan = this.plan(session);
+      session.mode = plan.copyVideo ? "remux" : "transcode";
       const limit = info?.duration ? Math.max(0, info.duration - 2) : Number.POSITIVE_INFINITY;
       const startTime = Math.max(0, Math.min(options.startTime ?? 0, limit));
       const url = await this.spawnAt(session, startTime);
+      signal?.throwIfAborted();
       if (subtitleTrack !== null) this.extractSidecar(session);
       log("INFO", "Conversion started", {
         id, mode: session.mode, reason, hardware: session.hardware,
@@ -511,8 +545,12 @@ export class PlaybackManager {
       });
       return this.describe(session, url);
     } catch (error) {
-      log("ERROR", "Playback could not be started", { id, mode: session.mode, plan: reason, error });
-      await this.stop(id); throw error;
+      if (!signal?.aborted) log("ERROR", "Playback could not be started", { id, mode: session.mode, plan: reason, error });
+      // Wait for the stop the abort already started, so nothing is left running behind the throw.
+      await (stopping ?? this.stop(id));
+      throw error;
+    } finally {
+      signal?.removeEventListener("abort", abort);
     }
   }
 

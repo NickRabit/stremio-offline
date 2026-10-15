@@ -19,7 +19,7 @@
   ],
   "scripts": {
     "build": "npm run build -w web && npm run build -w server",
-    "test": "npm run test -w server && npm run test -w web && npm run test -w desktop",
+    "test": "npm run test -w server && npm run test -w web && npm run test -w desktop && npm run test:media-client",
     "test:e2e": "playwright test",
     "test:e2e:restricted": "playwright test -c playwright.restricted.config.ts",
     "test:e2e:docker": "npm run build && docker build -t stremio-offline-e2e -f e2e/Dockerfile . && docker run --rm -v \"$PWD\":/work -w /work -e CI=1 stremio-offline-e2e sh -c 'npx playwright test && npx playwright test -c playwright.restricted.config.ts'",
@@ -28,7 +28,8 @@
     "dev:web": "npm run dev -w web",
     "dev:desktop": "npm run dev -w desktop",
     "complexity": "node scripts/complexity-report.mjs",
-    "android:strings": "node scripts/android-strings.mjs"
+    "android:strings": "node scripts/android-strings.mjs",
+    "test:media-client": "node --test scripts/media-client-verification.test.mjs"
   },
   "engines": {
     "node": ">=22"
