@@ -98,10 +98,10 @@ still run once, in the `e2e` job.
 
 Locally and in each CI job the specs still share one server and still run with
 `workers: 1`. CI runs the seven layout viewports as seven separate jobs, each on
-its own server, so they do not wait on each other. Every one of those jobs
-replays `setup` and the chromium journeys first, because the layout projects
-declare that dependency, and the screenshot baselines are taken against the
-state those journeys leave behind.
+its own server, so they do not wait on each other. Each of those jobs runs
+`setup` and then `layout/seed.spec.ts`. The screenshot baselines are taken
+against the state that seed leaves behind. The chromium journeys are not a
+dependency of the layout projects; they run once, in the `e2e` job.
 
 The `setup` project runs first and is a real journey, not scaffolding: a fresh
 server has no account, so it creates one and installs the fake addon through the
