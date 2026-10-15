@@ -333,8 +333,22 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     if (!ref) { ref = { current: null }; tileRefs.current.set(key, ref); }
     return ref;
   };
-  const cancelItemsMore = () => { itemsMoreAbort.current?.abort(); itemsMoreAbort.current = null; itemsMoreBusy.current = false; };
-  const cancelEpisodesMore = () => { episodesMoreAbort.current?.abort(); episodesMoreAbort.current = null; episodesMoreBusy.current = false; };
+  const cancelItemsMore = () => {
+    if (itemsMoreAbort.current) {
+      itemsMoreAbort.current.abort();
+      setListing((current) => ({ ...current, loading: false }));
+    }
+    itemsMoreAbort.current = null;
+    itemsMoreBusy.current = false;
+  };
+  const cancelEpisodesMore = () => {
+    if (episodesMoreAbort.current) {
+      episodesMoreAbort.current.abort();
+      setEpisodes((current) => ({ ...current, loading: false }));
+    }
+    episodesMoreAbort.current = null;
+    episodesMoreBusy.current = false;
+  };
   const cancelHandoff = () => {
     handoffEpoch.current += 1;
     handoffAbort.current?.abort();

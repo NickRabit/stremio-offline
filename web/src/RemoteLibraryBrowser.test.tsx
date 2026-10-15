@@ -554,6 +554,41 @@ describe("RemoteLibraryBrowser automatic pagination and navigation", () => {
     expect(calls.browse.at(-1)!.searchParams.get("parentId")).toBe("f1");
   });
 
+  it.each([false, true])("retries a canceled page after returning from detail (episodes=%s)", async (episodeList) => {
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+    const held = deferred<Response>();
+    const show: RemoteItem = { id: "ser1", name: "Show", type: "series", providerIds: {} };
+    const first = episodeList
+      ? { id: "e1", name: "Pilot", type: "episode" as const, season: 1, episode: 1, providerIds: {} }
+      : movie("m1", "One");
+    let nextRequests = 0;
+    let canceledSignal: AbortSignal | null | undefined;
+    browse = (url, init) => {
+      if (episodeList && url.searchParams.get("type") !== "episode") return json(page([show]));
+      if (url.searchParams.get("cursor") === "c1") {
+        nextRequests += 1;
+        if (nextRequests === 1) { canceledSignal = init?.signal; return held.promise; }
+        return json(page([movie("m2", "Two")], { total: 2 }));
+      }
+      return json(page([first], { total: 2, cursor: "c1" }));
+    };
+    await openRootLibrary();
+    if (episodeList) await click(tileButtons()[0]!);
+    await act(async () => { sentinels().at(-1)!.fire(); });
+    expect(nextRequests).toBe(1);
+    await click(tileButtons()[0]!);
+    expect(canceledSignal?.aborted).toBe(true);
+    await click(byText(".crumbs button", episodeList ? "Show" : "Music videos")!);
+    expect(host.querySelector<HTMLButtonElement>(".load-more button")!.disabled).toBe(false);
+    await act(async () => { sentinels().at(-1)!.fire(); });
+    await flush();
+    expect(nextRequests).toBe(2);
+    expect(host.textContent).toContain("Two");
+    await act(async () => { held.resolve(json(page([movie("stale", "Stale")]))); });
+    await flush();
+    expect(host.textContent).not.toContain("Stale");
+  });
+
   it("asks for the next page from the scroll handler when no observer fires", async () => {
     browse = (url) => url.searchParams.get("cursor") === "c1"
       ? json(page([movie("m2", "Two")], { total: 2 }))
