@@ -33,8 +33,13 @@ async function remoteLibraries(page: Page, options: { folders?: number; items?: 
         type: "mixed", enabled: true, order: i, showOnHome: true, showInContinueWatching: true,
         showInFavorites: true, browseMode: "folders", mosaic: true, provider: "emby", capabilities,
       })) };
+    } else if (url.pathname.endsWith("/mosaic")) {
+      // The composed fan is a picture of its own: this fixture answers one like any artwork.
+      await route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="480" height="720"><rect width="480" height="720" fill="#2b3440"/></svg>' });
+      return;
     } else if (url.pathname.endsWith("/preview")) {
-      body = { posters: [0, 1, 2, 3].map(i => `/remote-test-art/${i}.svg`) };
+      const posters = [0, 1, 2, 3].map(i => `/remote-test-art/${i}.svg`);
+      body = { posters, mosaic: "/api/remote-libraries/" + url.pathname.split("/").at(-2) + "/mosaic?v=e2e" };
     } else if (url.pathname.endsWith("/browse")) {
       requests.push(url);
       const parent = url.searchParams.get("parentId");
@@ -312,7 +317,7 @@ test("remote and local library blocks share tile markup and every root stays rea
   await remoteLibraries(page);
   const roots = page.locator(".remote-libraries .browse-item.library");
   await expect(roots).toHaveCount(8);
-  await expect(roots.first().locator(".library-preview-collage")).toBeVisible();
+  await expect(roots.first().locator("img")).toHaveAttribute("src", /\/mosaic\?v=e2e&shape=poster$/);
   for (const viewport of [{ width: 1440, height: 900 }, { width: 820, height: 1180 }, { width: 390, height: 844 }, { width: 844, height: 390 }]) {
     await page.setViewportSize(viewport);
     await roots.last().scrollIntoViewIfNeeded();

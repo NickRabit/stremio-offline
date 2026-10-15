@@ -348,6 +348,8 @@ export interface BrowseFolder extends BrowseMeta {
   /** The distinct films this folder holds, when it is a collection of more than one: a poster
    *  mosaic instead of the folder's own picture. Absent on a folder that is one title. */
   posters?: string[];
+  /** The one address the server composes that mosaic at, when it composes one. */
+  mosaic?: string;
 }
 export interface BrowseFile extends LibraryFile, BrowseMeta {
   poster?: string; wide?: string; progress?: { position: number; duration: number };
@@ -360,7 +362,7 @@ export type LibraryType = "movie" | "series" | "mixed";
 export interface BrowseLibrary {
   kind: "library"; libraryId: string; name: string; label: string; type: LibraryType;
   enabled: boolean; fileCount: number; titles: number; size: number;
-  unreachable: boolean; readOnly: boolean; path: string; poster?: string; posters?: string[];
+  unreachable: boolean; readOnly: boolean; path: string; poster?: string; posters?: string[]; mosaic?: string;
 }
 /** One library in `GET /api/libraries`. `root` is absent in restricted mode. */
 export interface LibraryView {

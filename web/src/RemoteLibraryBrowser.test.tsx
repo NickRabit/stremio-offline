@@ -732,15 +732,17 @@ describe("RemoteLibraryBrowser preferences and detail", () => {
 });
 
 describe("RemoteLibraryBrowser lazy mosaics", () => {
-  it("asks for a preview only once a tile is on screen", async () => {
+  const mosaic = (stamp: string) => `/api/remote-libraries/rlib_a/mosaic?v=${stamp}`;
+
+  it("asks for a preview only once a tile is on screen, then draws the fan it named", async () => {
     vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
-    preview = () => json({ posters: ["/a.jpg", "/b.jpg"] });
+    preview = () => json({ posters: ["/a.jpg", "/b.jpg"], mosaic: mosaic("one") });
     await render();
     expect(calls.preview).toHaveLength(0);
     await act(async () => { FakeIntersectionObserver.live.at(-1)!.fire(); });
     await flush();
     expect(calls.preview).toHaveLength(1);
-    expect(host.querySelector(".remote-libraries .library-preview-collage")).not.toBeNull();
+    expect(host.querySelector(".remote-libraries .browse-art img")?.getAttribute("src")).toBe(`${mosaic("one")}&shape=poster`);
   });
 
   it("issues no preview request when the library has mosaics off", async () => {
@@ -750,41 +752,39 @@ describe("RemoteLibraryBrowser lazy mosaics", () => {
     expect(host.querySelector(".remote-libraries .browse-art svg")).not.toBeNull();
   });
 
-  it("keeps the library's own poster in the frame while the child collage loads, then covers it", async () => {
+  it("keeps the library's own poster in the frame until the fan answers", async () => {
     libraries = [library({ poster: "/own-root.jpg" })];
     const pending = deferred<Response>();
     preview = () => pending.promise;
     await render();
     expect(host.querySelector(".remote-libraries .browse-art img")?.getAttribute("src")).toBe("/own-root.jpg");
-    expect(host.querySelector(".remote-libraries .library-preview-collage")).toBeNull();
-    await act(async () => { pending.resolve(json({ posters: ["/a.jpg", "/b.jpg"] })); });
+    await act(async () => { pending.resolve(json({ posters: ["/a.jpg", "/b.jpg"], mosaic: mosaic("two") })); });
     await flush();
-    expect([...host.querySelectorAll(".remote-libraries .browse-art img")].map((img) => img.getAttribute("src"))).toEqual(["/a.jpg", "/a.jpg", "/b.jpg"]);
+    expect(host.querySelector(".remote-libraries .browse-art img")?.getAttribute("src")).toBe(`${mosaic("two")}&shape=poster`);
   });
 
-  it("paints the last mosaic again while the next preview is still out", async () => {
-    preview = () => json({ posters: ["/a.jpg", "/b.jpg"] });
+  it("paints the remembered fan again while the next answer is still out", async () => {
+    preview = () => json({ posters: ["/a.jpg", "/b.jpg"], mosaic: mosaic("three") });
     await render();
+    await flush();
     const pending = deferred<Response>();
     preview = () => pending.promise;
     await act(async () => { root.unmount(); });
     root = createRoot(host);
     await render();
-    expect([...host.querySelectorAll(".remote-libraries .browse-art img")].map((img) => img.getAttribute("src"))).toEqual(["/a.jpg", "/a.jpg", "/b.jpg"]);
-    expect(host.querySelector(".remote-libraries .library-preview-collage.is-pending")).toBeNull();
-    await act(async () => { pending.resolve(json({ posters: ["/a.jpg", "/b.jpg"] })); });
+    expect(host.querySelector(".remote-libraries .browse-art img")?.getAttribute("src")).toBe(`${mosaic("three")}&shape=poster`);
+    await act(async () => { pending.resolve(json({ posters: ["/a.jpg", "/b.jpg"], mosaic: mosaic("three") })); });
     await flush();
-    expect(host.querySelector(".remote-libraries .library-preview-collage.is-pending")).toBeNull();
+    expect(host.querySelector(".remote-libraries .browse-art img")?.getAttribute("src")).toBe(`${mosaic("three")}&shape=poster`);
   });
 
-  it("draws the children's collage for a root and leaves the library's own poster aside", async () => {
+  it("draws the children's fan for a root and leaves the library's own poster aside", async () => {
     libraries = [library({ poster: "/own-root.jpg" })];
-    preview = () => json({ posters: ["/a.jpg", "/b.jpg"] });
+    preview = () => json({ posters: ["/a.jpg", "/b.jpg"], mosaic: mosaic("root") });
     await render();
     await flush();
     expect(calls.preview.at(-1)!.searchParams.get("artwork")).toBe("children");
-    expect(host.querySelector(".remote-libraries .library-preview-collage.is-pending")).not.toBeNull();
-    expect([...host.querySelectorAll(".remote-libraries .browse-art img")].every((img) => img.getAttribute("src") !== "/own-root.jpg")).toBe(true);
+    expect(host.querySelector(".remote-libraries .browse-art img")?.getAttribute("src")).toBe(`${mosaic("root")}&shape=poster`);
   });
 
   it("keeps a library root's own poster when its mosaic is off and asks for nothing", async () => {
@@ -794,7 +794,7 @@ describe("RemoteLibraryBrowser lazy mosaics", () => {
     expect(host.querySelector(".remote-libraries .browse-art img")?.getAttribute("src")).toBe("/own-root.jpg");
   });
 
-  it("falls back to the library's own poster when the child preview comes back empty", async () => {
+  it("draws the single picture a folder carries itself", async () => {
     libraries = [library({ poster: "/own-root.jpg" })];
     preview = () => json({ posters: [] });
     await render();
@@ -802,26 +802,22 @@ describe("RemoteLibraryBrowser lazy mosaics", () => {
     expect(host.querySelector(".remote-libraries .browse-art img")?.getAttribute("src")).toBe("/own-root.jpg");
   });
 
-  it("draws a folder's own poster and asks for no preview of that folder", async () => {
+  it("draws a folder's own poster in its own shape and asks for no fan", async () => {
     browse = () => json(page([{ ...folder("f1", "Show"), poster: "/folder.jpg" }]));
     await openRootLibrary();
     expect(calls.preview.filter((url) => url.searchParams.get("parentId") === "f1")).toHaveLength(0);
     expect([...host.querySelectorAll(".browse-panel .browse-art img")].some((img) => img.getAttribute("src") === "/folder.jpg")).toBe(true);
   });
 
-  it("keeps a folder mosaic in place when one of its posters fails", async () => {
+  it("draws one fan address for a folder the server composed one for", async () => {
     browse = () => json(page([folder("f1", "Show")]));
     preview = (url) => url.searchParams.get("parentId") === "f1"
-      ? json({ posters: ["/a.jpg", "/b.jpg", "/c.jpg"] })
+      ? json({ posters: ["/a.jpg", "/b.jpg", "/c.jpg"], mosaic: "/api/remote-libraries/rlib_a/mosaic?v=folder&parent=f1" })
       : json({ posters: [] });
     await openRootLibrary();
-    const collage = host.querySelector(".browse-panel .library-preview-collage");
-    expect(collage?.querySelectorAll("img")).toHaveLength(3);
-    await act(async () => { collage!.querySelector("img")!.dispatchEvent(new Event("error")); });
-    const images = host.querySelectorAll(".browse-panel .library-preview-collage img");
-    expect(images).toHaveLength(3);
-    expect(images[0]?.classList.contains("broken")).toBe(true);
-    expect(host.querySelector(".browse-panel .browse-art > img")?.getAttribute("src")).toBe("/a.jpg");
+    const drawn = [...host.querySelectorAll(".browse-panel .browse-art img")].map((img) => img.getAttribute("src"));
+    expect(drawn).toContain("/api/remote-libraries/rlib_a/mosaic?v=folder&parent=f1&shape=poster");
+    expect(drawn.some((src) => src === "/a.jpg"), "no picture of the fan is fetched on its own").toBe(false);
   });
 
   it("asks a folder for its own poster-first preview, never the children mode", async () => {
@@ -859,6 +855,7 @@ describe("RemoteLibraryBrowser lazy mosaics", () => {
     expect(calls.preview).toHaveLength(2);
     await act(async () => { pending.resolve(json({ posters: [] })); });
     await flush();
+    expect(calls.preview).toHaveLength(4);
   });
 
   it("drops queued previews when their tiles are removed", async () => {

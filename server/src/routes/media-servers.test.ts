@@ -4,6 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { once } from "node:events";
 import { request as httpRequest } from "node:http";
+import { MosaicCache } from "../mosaic.js";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -167,7 +168,7 @@ const mount = async (): Promise<Harness> => {
   const mediaSources = new MediaServerSources(store, manager, resources);
   const remotePersonal = new MediaServerPersonal(store, manager);
   const ownerOf = (req: express.Request) => ({ userId: currentUser(req)?.id ?? ADA, sid: "routes-sid", expiresAt: Date.now() + 3_600_000 });
-  registerMediaServerRoutes(app, { ...ctx, mediaServers: manager, mediaSources, remotePersonal, ownerOf });
+  registerMediaServerRoutes(app, { ...ctx, mediaServers: manager, mosaics: new MosaicCache(path.join(tmpdir(), `mos-${randomBytes(6).toString("hex")}`)), mediaSources, remotePersonal, ownerOf });
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     const status = typeof (error as { status?: unknown }).status === "number" ? (error as { status: number }).status : 400;
     const retryAfterMs = (error as { retryAfterMs?: unknown }).retryAfterMs;

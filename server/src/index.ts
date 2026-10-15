@@ -14,6 +14,7 @@ import { DeviceTransfers } from "./device-transfers.js";
 import { ClientLogStore } from "./client-logs.js";
 import { selectDownloadSource, selectTorrentSource } from "./download-selection.js";
 import { ImageStats, useImageStats } from "./image-stats.js";
+import { MosaicCache } from "./mosaic.js";
 import { ProviderStats, useProviderStats } from "./provider-stats.js";
 import { StatsLog, type TrafficEvent, type TrafficMeta } from "./stats.js";
 import { Throughput } from "./throughput.js";
@@ -278,6 +279,7 @@ const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () =
 const stats = new StatsLog();
 const imageStats = new ImageStats(path.join(DATA_DIR, "image-stats.json"));
 useImageStats(imageStats);
+const mosaics = new MosaicCache();
 const providerStats = new ProviderStats(path.join(DATA_DIR, "provider-stats.json"));
 useProviderStats(providerStats);
 let libraryOpsWriting = false;
@@ -1141,6 +1143,7 @@ const libraryRootBrowse = async (viewer: Viewer, options: { prewarm?: boolean } 
     const key = libraryPath(library.id, "");
     const path = wirePath(key);
     const posters = new Set<string>();
+    let mosaic: string | undefined;
     const previewEntries = entries.filter((entry) => parseLibraryPath(entry.key)?.libraryId === library.id);
     if (library.mosaic !== false) {
       const records = metaStore.meta(library.id);
@@ -1158,16 +1161,21 @@ const libraryRootBrowse = async (viewer: Viewer, options: { prewarm?: boolean } 
         // Only a bound title has catalogue artwork to wait for. An unbound folder is shown as
         // it is rather than paying for a video frame the mosaic never asked to generate.
         if (!art && entry.meta?.id && !options.prewarm) { scheduleArtwork(entry); pending = true; }
-        return thumbUrl("key", wirePath(entry.key), art);
+        return { art, poster: await thumbUrl("key", wirePath(entry.key), art) };
       }));
-      for (const poster of previews) if (poster) posters.add(poster);
+      for (const preview of previews) if (preview.poster) posters.add(preview.poster);
+      const fan = previews.filter((preview) => preview.art !== undefined);
+      if (fan.length > 1) {
+        const versions = await Promise.all(fan.map((preview) => artStamp(preview.art as string)));
+        mosaic = `/api/library/mosaic?key=${encodeURIComponent(key)}&v=${encodeURIComponent(MosaicCache.stamp(versions))}`;
+      }
     }
     return {
       kind: "library" as const, libraryId: library.id, name: library.name, label: library.name,
       type: library.type, enabled: library.enabled,
       fileCount: counts.files, titles: counts.titles, size: counts.bytes,
       unreachable: healthOf(library).unreachable, readOnly: healthOf(library).readOnly,
-      path, posters: [...posters], poster: await thumbUrl("dir", path, await locateFolderArtwork(key)),
+      path, posters: [...posters], ...(mosaic === undefined ? {} : { mosaic }), poster: await thumbUrl("dir", path, await locateFolderArtwork(key)),
     };
   }));
   return { path: "", items, total: items.length, pending };
@@ -1994,7 +2002,7 @@ const libraryPathBusy = async (keys: string[]): Promise<string | undefined> => {
   return undefined;
 };
 
-registerContentRoutes(app, { ...routeContext, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, fileSnaps, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, metaStore, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
+registerContentRoutes(app, { ...routeContext, artStamp, mosaics, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, fileSnaps, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, metaStore, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
 /** The one search and resolution service behind both the scan and the manual identity
  *  search, so the row somebody picks by hand is the row the scanner would have picked. */
 const libraryCandidates = createLibraryCandidates({
@@ -2372,7 +2380,7 @@ const freeSpace = async (target: string) => {
 };
 registerDiagnosticsRoutes(app, { ...routeContext, stats, imageStats, providerStats, playback, throughput, queue, libraryScan, playbackMeta, freeSpace, clientLogs, dataDir: DATA_DIR });
 registerSettingsRoutes(app, { ...routeContext, STREAM_SORTS, accountIdOf, invalidateLibrary, mediaServers, metaCache, metaStore, mutateData, prefsOf, queue, streamCache });
-registerMediaServerRoutes(app, { ...routeContext, mediaServers, mediaSources: mediaServerSources, remotePersonal: mediaServerPersonal, ownerOf });
+registerMediaServerRoutes(app, { ...routeContext, mediaServers, mosaics, mediaSources: mediaServerSources, remotePersonal: mediaServerPersonal, ownerOf });
 registerPlaybackRoutes(app, { ...routeContext, mediaSources: mediaServerSources, mediaServerGuard, airplayAccess, airplayRequest, answerHeaders, countBytes, httpSourceOf, internalMediaRequest, libraryTarget, noteSourceQuiet, ownerOf, playback, playbackMeta, playbackOwners, playbackResponse, prefsOf, quietSources, rangeCache, safeInspection, sleep, sourceIsQuiet, stats, subtitleDelay, trackMedia, SOURCE_ATTEMPTS, SOURCE_RETRY_MS, SOURCE_RESUMES, SOURCE_HEADER_MS, SOURCE_QUIET_HEADER_MS });
 
 app.all(["/api/proxy", "/api/subtitle", "/api/library/file"], (_req, res) => {
