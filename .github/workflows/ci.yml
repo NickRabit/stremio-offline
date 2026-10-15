@@ -83,10 +83,11 @@ jobs:
           path: playwright-report/
           retention-days: 7
 
-  # The WebKit journeys and the two mobile-locale checks were part of the job above, where they
-  # waited for the whole chromium suite -- five minutes of page launches -- to finish first. They
-  # need the account that setup leaves and nothing the journeys build, so they run beside it.
-  e2e-webkit:
+  # The WebKit journeys, the two mobile-locale checks and the two files that talk to the addon and
+  # the proxy over HTTP were part of the job above, where they waited for the whole chromium suite
+  # -- five minutes of page launches -- to finish first. None of them needs anything the journeys
+  # build: the account setup leaves is enough, so they run beside it instead of after it.
+  e2e-browsers:
     runs-on: ubuntu-24.04
     container:
       image: mcr.microsoft.com/playwright:v1.56.1-noble
@@ -101,13 +102,15 @@ jobs:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       - run: npm run build
       - run: apt-get update && apt-get install -y --no-install-recommends ffmpeg
-      - run: npx playwright test --project=safari-seek --project=safari-landscape --project=safari-queue --project=mobile-locales
+      - run: npx playwright test --project=chromium-transport --project=safari-seek --project=safari-landscape --project=safari-queue --project=mobile-locales
         env:
           HOME: /root
+          # One project subset per job: the seed is the state builder, not the journeys.
+          LAYOUT_SEED_ONLY: "1"
       - uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
         with:
-          name: playwright-report-webkit
+          name: playwright-report-browsers
           path: playwright-report/
           retention-days: 7
 
