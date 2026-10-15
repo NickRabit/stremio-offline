@@ -75,6 +75,14 @@
 .title-chips .follow-chip.on{color:#17120a;border-color:#f0d089;background:#f0d089;font-weight:700}.title-chips .follow-chip.on:hover{background:#f5dca6}
 .title-chips .follow-chip-download{display:inline-flex;align-items:center}
 .detail-copy>.title-chips{margin:0 0 7px}
+/* Flatten the caller's chip row so its controls wrap together with the favorite. */
+.library-detail-chips{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.detail-copy>.library-detail-chips{margin:0 0 7px}
+.library-detail-chips>.title-chips{display:contents}
+.library-detail-chips>.watch-star{flex:0 0 auto;width:44px;min-width:44px;height:44px;padding:0;border-radius:99px;background:#0b0e13cc;color:var(--muted)}
+.library-detail-chips>.watch-star svg{width:18px;height:18px;fill:none}
+.library-detail-chips>.watch-star.on{color:#f0d089;border-color:#f0d08955;background:#f0d0890f}
+.library-detail-chips>.watch-star.on svg{fill:#f0d089}
 /* In a menu the row sits above the actions, so it keeps the separator the buttons do not need. */
 .browse-actions .title-chips{margin:1px 2px 5px;padding:2px 2px 8px;border-bottom:1px solid var(--line)}
 /* A finger needs more than 24px. The chips grow; they do not change shape. */
@@ -2006,10 +2014,10 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 .library-detail-synopsis{margin:9px 0 0;max-width:680px;font-size:13px;line-height:1.6;color:#dce3ed}
 .library-title-detail>.remote-error,.library-title-detail>.loading,.library-title-detail>.identify-hint,.library-title-detail>.library-detail-progress,.library-title-detail>.library-detail-actions,.library-title-detail>.remote-episodes-head,.library-title-detail>.remote-season-group,.library-title-detail>.load-more,.library-title-detail>.remote-season-group .browse-grid,.library-title-detail>.remote-season-group .browse-rows{position:relative;z-index:1}
 .library-detail-progress{display:flex;flex-wrap:wrap;align-items:center;gap:10px;max-width:680px;margin-top:2px}
-.library-detail-progress .progress{flex:1 1 160px;max-width:280px;margin:0}
+.library-detail-progress .progress{flex:1 1 80px;max-width:280px;margin:0}
 .library-detail-progress>span{font-size:11px;color:var(--muted);white-space:nowrap}
-.library-detail-progress .icon-button{padding:5px}
-.library-detail-progress .icon-button svg{width:14px;height:14px}
+.library-detail-progress .icon-button{width:44px;min-width:44px;height:44px;padding:0}
+.library-detail-progress .icon-button svg{width:16px;height:16px}
 .library-title-detail>.library-detail-actions{margin-top:4px}
 @media(max-width:700px){.library-title-detail{min-height:max(300px,calc(100dvh - 310px));padding:16px}.library-detail-hero .detail-copy h2{font-size:21px}.library-detail-synopsis{font-size:12px}}
 @media(max-height:500px) and (orientation:landscape){.library-title-detail{min-height:max(190px,calc(100dvh - 150px));padding:14px}}
@@ -2021,17 +2029,21 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 .remote-detail{display:grid;gap:10px;align-content:start}
 .library-title-detail .remote-episodes-head{margin-top:2px}
 .library-detail-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.library-detail-actions button{min-height:44px}
+.library-detail-actions .library-detail-icon-action{width:44px;min-width:44px;padding:0}
+.library-detail-actions .split-button>.split-button-toggle{min-width:44px}
 .library-detail-actions button svg{width:16px;height:16px}
 .library-detail-play{justify-content:flex-start}
+@media(max-width:700px),(max-height:500px) and (orientation:landscape){
+  .library-detail-actions .library-detail-action-label{display:none}
+  .library-detail-actions>button{min-width:44px;padding:0}
+}
 .library-source-card{width:min(560px,100%)}
 .library-source-list{max-height:none}
-.remote-streams{display:grid;gap:6px}
-.remote-streams button{display:grid;grid-template-columns:auto minmax(0,1fr) 18px;align-items:center;gap:10px;padding:9px 11px;text-align:left;background:var(--panel)}
-.remote-streams button>span{display:grid;gap:3px;min-width:0}
-.remote-streams button strong{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.remote-streams button small{font-size:10px;color:var(--muted)}
-.remote-streams button.selected{border-color:var(--accent);background:#ff5b3812}
-.remote-streams button.selected>svg{color:var(--accent)}
+/* The chooser draws the catalogue's own row template, so it only widens the list. */
+.remote-streams{background:transparent}
+.library-source-card .stream-list button{background:var(--panel)}
+.library-source-card .notice{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:6px}
 .stream-list button>i.remote{color:var(--accent2)}
 @media(max-width:980px){.media-server-connections{grid-template-columns:1fr}.media-server-grants{grid-template-columns:1fr}}
 

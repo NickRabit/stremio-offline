@@ -29,7 +29,6 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.foundation.focusGroup
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -101,6 +100,17 @@ fun LibraryRoute(
   val requesters = remember { mutableMapOf<String, FocusRequester>() }
   val gridFocus = remember { FocusRequester() }
   val fallbackTitle = stringResource(R.string.tv_library_title)
+  // The query the level on screen is narrowed by, and the editor's own text while it is open. A
+  // level carries its own search, so Back from a title lands on the parent's list, not on all of it.
+  val committed = state.current?.search.orEmpty()
+  var editorOpen by remember { mutableStateOf(false) }
+  var query by remember { mutableStateOf("") }
+  val searchAction = remember { FocusRequester() }
+  val searchField = remember { FocusRequester() }
+  LaunchedEffect(segment, state.pages.size) {
+    editorOpen = false
+    query = state.current?.search.orEmpty()
+  }
 
   // Bumped whenever Back pops a level, so the return restores the card that opened that level.
   var backToken by remember { mutableIntStateOf(0) }
@@ -115,10 +125,14 @@ fun LibraryRoute(
     if (viewModel.back()) backToken++
   }
 
-  // A new page focuses its own first card; a return restores the card that opened the page.
-  LaunchedEffect(state.loading, state.pages.size, items.size, restoreToken, backToken) {
+  // A new page focuses its own first card; a return restores the card that opened the page. An open
+  // search editor and a section a detail covers both keep the remote where it is.
+  LaunchedEffect(segment, state.loading, state.pages.size, items.size, restoreToken, backToken, backEnabled) {
+    // Only the files half owns this grid: a late local answer, a half a detail covers and an open
+    // search editor all leave the remote where it is.
+    if (segment != LibrarySegment.Files || !backEnabled) return@LaunchedEffect
     val keys = items.map { it.path.ifEmpty { it.title } }
-    if (!state.loading && keys.isNotEmpty()) {
+    if (!state.loading && !editorOpen && keys.isNotEmpty()) {
       val target = restoreKey.takeIf { key -> key.isNotEmpty() && key in keys }
       restoreKey = ""
       val kept = selectedPath.takeIf { key -> key.isNotEmpty() && key in keys }
@@ -148,45 +162,45 @@ fun LibraryRoute(
 
   Column(
     modifier = modifier.fillMaxSize().padding(start = Tokens.SafeX, top = Tokens.SafeY, end = Tokens.SafeX),
-    verticalArrangement = Arrangement.spacedBy(9.dp),
+    verticalArrangement = Arrangement.spacedBy(6.dp),
   ) {
-    Text(
-      stringResource(R.string.nav_library).uppercase(),
-      color = Tokens.Accent,
-      fontSize = 10.sp,
-      fontWeight = FontWeight.Bold,
-      letterSpacing = 1.8.sp,
-    )
-    Text(
-      stringResource(R.string.tv_library_title),
-      color = Tokens.Text,
-      fontSize = 26.sp,
-      fontWeight = FontWeight.ExtraBold,
-      letterSpacing = (-0.8).sp,
-    )
-    if (state.pages.size > 1) {
-      Text(
-        state.pages.joinToString("  ›  ") { it.title.ifEmpty { fallbackTitle } },
-        color = Tokens.Muted,
-        fontSize = 10.sp,
-        fontWeight = FontWeight.Medium,
-        modifier = Modifier.testTag(TagLibraryBreadcrumb),
-      )
-    }
-
-    LibrarySegments(
+    LibraryHeader(
       segment = segment,
       onFiles = { segment = LibrarySegment.Files },
       onServers = { segment = LibrarySegment.Servers },
     )
 
     if (segment == LibrarySegment.Files) {
+      // The filesystem's own path, and only while the files half is the one on screen.
+      if (state.pages.size > 1) {
+        LibraryBreadcrumbLine(
+          state.pages.joinToString("  ›  ") { it.title.ifEmpty { fallbackTitle } },
+          TagLibraryBreadcrumb,
+        )
+      }
+      // The root that lists the libraries themselves is the one level the server cannot narrow; a
+      // real directory stays searchable while it loads, answers nothing or fails, so a committed
+      // query can always be reopened and cleared.
+      val searchable = state.current?.searchable == true
+      LibraryToolbar(
+        open = editorOpen && searchable,
+        query = query,
+        onQuery = { query = it },
+        onOpen = { editorOpen = true; query = committed },
+        onSubmit = { editorOpen = false; viewModel.search(query) },
+        onClose = { editorOpen = false },
+        committed = committed,
+        available = searchable,
+        openFocus = searchAction,
+        fieldFocus = searchField,
+      )
       Box(Modifier.weight(1f).fillMaxWidth()) {
         when {
           state.loading -> ShimmerCards()
           state.error -> ErrorPanel { viewModel.retry() }
           items.isEmpty() -> Text(
-            stringResource(R.string.tv_library_empty),
+            // A level that was narrowed and matched nothing says so rather than reading as empty.
+            stringResource(if (committed.isNotEmpty()) R.string.media_server_no_matches else R.string.tv_library_empty),
             color = Tokens.Muted,
             fontSize = 12.sp,
           )
@@ -245,6 +259,8 @@ fun LibraryRoute(
         backEnabled = backEnabled,
         loadDestinations = loadDestinations,
         onQueue = onQueue,
+        // The section's own header and padding are already in place above and around this half.
+        embedded = true,
       )
     }
   }

@@ -148,14 +148,60 @@ object Streams {
       it.remoteItem?.libraryId == item.libraryId && it.remoteItem?.itemId == item.itemId
     }
 
+  /**
+   * What identifies one row across the groups a panel merges, as the web's `sourceIdentity` does:
+   * a media-server version names itself with its whole library/item/media-source tuple, a file on
+   * disk with its own path, and an addon row with its source id. Each kind is prefixed, so two
+   * kinds that happen to carry the same text stay two rows, and two libraries offering the same
+   * version id stay two versions.
+   *
+   * A row that carries none of the three has no identity at all and answers the empty string: its
+   * caller draws it positionally, because nothing about it is stable across a reload.
+   */
+  fun rowIdentity(stream: StreamDto): String {
+    val remote = stream.remoteItem
+    if (remote != null) {
+      val mediaSource = remote.mediaSourceId?.takeIf { it.isNotBlank() } ?: return ""
+      return "remote:${remote.libraryId}\u0000${remote.itemId}\u0000$mediaSource"
+    }
+    stream.localPath?.takeIf { it.isNotBlank() }?.let { return "local:$it" }
+    return stream.sourceId.takeIf { it.isNotBlank() }?.let { "source:$it" } ?: ""
+  }
+
+  /** [rows] without a row whose identity already appeared in [seen], which is extended in place,
+   *  and without a row that names nothing at all. */
+  fun deduped(rows: List<StreamDto>, seen: MutableSet<String> = HashSet()): List<StreamDto> =
+    rows.filter { rowIdentity(it).isNotBlank() }.filter { seen.add(rowIdentity(it)) }
+
   /** One remote group choice: its filter value, its label and how many rows it holds. */
   data class RemoteGroupCount(val value: String, val label: String, val count: Int)
+
+  /**
+   * The rows a detail already holds, before any supplementary group answers: a native item's own
+   * versions, or the copies a library detail was opened on. They are ordinary rows of the list --
+   * they obey the same source choice and the same size sorts -- and they lead the recommended and
+   * addon-priority orders. [libraryId] names the media-server library they are versions of, so the
+   * addon filter can offer that library and choosing it answers with exactly these rows; it is null
+   * when the rows are copies on disk, which belong to the Local choice instead.
+   */
+  data class Origins(
+    val rows: List<StreamDto> = emptyList(),
+    val libraryId: String? = null,
+    val label: String = "",
+  )
 
   /**
    * The list a source panel shows, as the web builds it. [addon] is already filtered and sorted.
    * The Local choice of the addon filter shows the library copies alone, a named addon shows its
    * streams alone, and with no addon filter the copies lead the recommended and addon-priority
-   * orders but rank with the addon rows under the size sorts.
+   * orders but rank with the addon rows under the size sorts. [origins] are drawn in the same list,
+   * ahead of everything under the recommended order.
+   *
+   * [local] is the copies the caller did not already hand over as [origins], so a file the detail
+   * holds and the viewer's library both know is one row of the list, not two.
+   *
+   * A media-server origin is offered through its library's own group, so a named provider other
+   * than that library hides it exactly as it hides every other library's versions.
    */
   fun catalogSourceList(
     local: List<StreamDto>,
@@ -165,22 +211,30 @@ object Streams {
     priority: Map<String, Int> = emptyMap(),
     titleLanguage: String? = null,
     remote: List<RemoteGroup> = emptyList(),
+    origins: Origins = Origins(),
   ): List<StreamDto> = when {
-    filters.addon == LOCAL_FILTER -> local
+    filters.addon == LOCAL_FILTER -> origins.rows.filter { isLocalStream(it) } + local
+    // The item's own library answers with the rows the detail holds, which are not among the
+    // groups the supplementary discovery matched.
+    originFilterLibrary(filters.addon, origins) != null -> origins.rows
     // A remote filter shows that one library's matched versions, even when it matched nothing.
     remoteFilterLibrary(filters.addon) != null ->
       remote.firstOrNull { it.libraryId == remoteFilterLibrary(filters.addon) }?.streams.orEmpty()
     filters.addon.isNotEmpty() -> addon
     filters.sort == StreamSort.Recommended || filters.sort == StreamSort.Addon ->
-      local + remote.flatMap { it.streams } + addon
+      origins.rows + local + remote.flatMap { it.streams } + addon
     else -> arrangeStreams(
-      remote.flatMap { it.streams } + addon + local,
+      origins.rows + remote.flatMap { it.streams } + addon + local,
       StreamFilters(sort = filters.sort),
       preferredLanguage,
       priority,
       titleLanguage,
     )
   }
+
+  /** The origin library a filter value names, or null when the value names anything else. */
+  private fun originFilterLibrary(value: String, origins: Origins): String? =
+    origins.libraryId?.takeIf { it.isNotBlank() && value == remoteFilter(it) }
 
   /** What a repick decided: [move] is false when the current pick stays. */
   data class Repick<T>(val move: Boolean, val to: T? = null)
@@ -271,6 +325,7 @@ object Streams {
     titleLanguage: String? = null,
     localCount: Int = 0,
     remote: List<RemoteGroup> = emptyList(),
+    origins: Origins = Origins(),
   ): SourceFilterOptions {
     val byLanguage = if (filters.language.isEmpty()) listed
     else listed.filter { streamLanguages(it, titleLanguage).contains(filters.language) }
@@ -297,8 +352,11 @@ object Streams {
     if (filters.language.isNotEmpty() && !languageCounts.containsKey(filters.language)) languageCounts[filters.language] = 0
     val languages = languageCounts.map { StreamCount(it.key, it.value) }.sortedByDescending { it.count }
 
-    // Every group with a match leads; one that is chosen stays visible even when it matched nothing.
-    val remoteGroups = remote
+    // The item's own library leads the choices -- it is what the detail is showing -- then every
+    // group with a match; one that is chosen stays visible even when it matched nothing.
+    val ownGroup = origins.libraryId?.takeIf { it.isNotBlank() && origins.rows.isNotEmpty() }
+      ?.let { RemoteGroupCount(remoteFilter(it), origins.label, origins.rows.size) }
+    val remoteGroups = listOfNotNull(ownGroup) + remote
       .filter { it.streams.isNotEmpty() || chosenRemote == it.libraryId }
       .map { RemoteGroupCount(remoteFilter(it.libraryId), it.label, it.streams.size) }
     return SourceFilterOptions(addons, languages, localCount, remoteGroups)
@@ -328,6 +386,7 @@ object Streams {
     metaLanguage: String?,
     local: List<StreamDto> = emptyList(),
     remote: List<RemoteGroup> = emptyList(),
+    origins: Origins = Origins(),
   ): SourceLists {
     val offered = offeredStreams(streams)
     val priority = addons.mapIndexed { index, addon -> addon.manifest.name to index }.toMap()
@@ -339,8 +398,16 @@ object Streams {
       visible = visible,
       notices = addonNotices(streams),
       titleLanguage = titleLanguage,
-      options = filterOptions(listed, filters, priority, titleLanguage, local.size, remote),
-      rows = catalogSourceList(local, visible, filters, preferredLanguage, priority, titleLanguage, remote),
+      options = filterOptions(
+        listed,
+        filters,
+        priority,
+        titleLanguage,
+        localCount = local.size + origins.rows.count { isLocalStream(it) },
+        remote = remote,
+        origins = origins,
+      ),
+      rows = catalogSourceList(local, visible, filters, preferredLanguage, priority, titleLanguage, remote, origins),
     )
   }
 

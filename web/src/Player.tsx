@@ -10,11 +10,12 @@ import { releaseMediaElement, AHEAD_CATCHUP_MS, HLS_PLAYER_CONFIG, ignoreHlsErro
 import { clampVolume, readVolume, writeVolume } from "./player-volume";
 import { PlaybackWakeLock, screenWakeLock } from "./playback-wake-lock";
 import { initialPlaybackPosition, progressToSave } from "./player-progress";
+import { remoteVersionKey } from "./source-progress";
 import { detectCapabilities } from "./capabilities";
 import { t, useI18n, type Key } from "./i18n";
 import type { Capabilities, PlaybackMode, PlaybackSession, Stream, Subtitle, Track } from "./types";
 
-interface Props { previousTitle?: string; onPrevious?: () => Promise<boolean>; nextTitle?: string; nextBusy?: boolean; onNext?: () => Promise<boolean>; autoNext?: boolean; open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; audioLanguage: string; onPreferences?: (preferences: { audioLanguage?: string; subtitleLanguage?: string | null }) => void; progressKey?: string; progressPoster?: string; progressAddonKey?: string; favorite?: boolean; fromBeginning?: boolean; onToggleFavorite?: () => void; onDownload: () => Promise<boolean>; onDeviceDownload: () => Promise<boolean>; onClose: () => void }
+interface Props { previousTitle?: string; onPrevious?: () => Promise<boolean>; nextTitle?: string; nextBusy?: boolean; onNext?: () => Promise<boolean>; autoNext?: boolean; open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; audioLanguage: string; onPreferences?: (preferences: { audioLanguage?: string; subtitleLanguage?: string | null }) => void; progressKey?: string; progressPoster?: string; progressAddonKey?: string; favorite?: boolean; fromBeginning?: boolean; onToggleFavorite?: () => void; onDownload: () => Promise<boolean>; onDeviceDownload: () => Promise<boolean>; onProgressSaved?: (key: string) => void; onClose: () => void }
 
 const fmt = (seconds: number) => !Number.isFinite(seconds) ? "0:00" : `${Math.floor(seconds / 3600) ? `${Math.floor(seconds / 3600)}:` : ""}${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
 
@@ -195,10 +196,12 @@ const trackLabel = (track: Track) => {
 const SUBTITLE_DELAY_STEP_S = 0.25;
 const SUBTITLE_DELAY_LIMIT_S = 30;
 
-export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext, autoNext, open, title, stream, subtitles, subtitleLanguage, audioLanguage, onPreferences, progressKey, progressPoster, progressAddonKey, favorite, fromBeginning = false, onToggleFavorite, onDownload, onDeviceDownload, onClose }: Props) {
+export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext, autoNext, open, title, stream, subtitles, subtitleLanguage, audioLanguage, onPreferences, progressKey, progressPoster, progressAddonKey, favorite, fromBeginning = false, onToggleFavorite, onDownload, onDeviceDownload, onProgressSaved, onClose }: Props) {
   // Subscribes the whole overlay to the language, so a switch behind it redraws every label.
   useI18n();
   const [subtitleIds, setSubtitleIds] = useState<Record<string, string>>({});
+  const onProgressSavedRef = useRef(onProgressSaved);
+  onProgressSavedRef.current = onProgressSaved;
   const overlayRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -371,7 +374,10 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   // reported through the local remote-state API and never through the generic progress store.
   const remoteItem = stream?.remoteItem;
   const remoteSource = Boolean(stream?.provider || remoteItem);
-  const canSaveToLibrary = !remoteSource && stream?.capabilities?.downloadToLibrary !== false;
+  // A copy of another media server is queued only where the server proved the right for this
+  // exact source; everything else keeps its own policy, where only an explicit refusal hides it.
+  const libraryRight = stream?.capabilities?.downloadToLibrary;
+  const canSaveToLibrary = remoteSource ? libraryRight === true : libraryRight !== false;
   const canSaveToDevice = !remoteSource && stream?.capabilities?.downloadToDevice !== false;
   const addonSubtitles = [...(stream?.subtitles ?? []), ...subtitles];
 
@@ -861,11 +867,14 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       poster: progressPoster,
       addonKey: progressAddonKey,
     });
-    const send = () => { const body = payload(); if (body) void api.saveProgress(body).catch(() => undefined); };
+    const send = (final = false) => {
+      const body = payload();
+      if (body) void api.saveProgress(body).then(() => { if (final) onProgressSavedRef.current?.(body.key); }).catch(() => undefined);
+    };
     const leaving = () => { const body = payload(); if (body) api.saveProgressOnUnload(body); };
     const timer = setInterval(send, 10_000);
     window.addEventListener("pagehide", leaving);
-    return () => { clearInterval(timer); window.removeEventListener("pagehide", leaving); send(); };
+    return () => { clearInterval(timer); window.removeEventListener("pagehide", leaving); send(true); };
   }, [open, progressKey, title, progressPoster, progressAddonKey]);
 
   // The same cadence for a remote source, written to the local remote-state store under the
@@ -877,11 +886,18 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       if (!duration || position < 5) return null;
       return { position: Math.round(position), duration: Math.round(duration), mediaSourceId: remoteItem.mediaSourceId };
     };
-    const send = () => { const body = payload(); if (body) void api.saveRemoteState(remoteItem.libraryId, remoteItem.itemId, body).catch(() => undefined); };
+    // The final write names the version it wrote, so the detail behind the player can read its own
+    // store again the moment the write landed -- never before it, and never on another version's.
+    const send = (final = false) => {
+      const body = payload();
+      if (body) void api.saveRemoteState(remoteItem.libraryId, remoteItem.itemId, body)
+        .then(() => { if (final) onProgressSavedRef.current?.(remoteVersionKey(remoteItem)); })
+        .catch(() => undefined);
+    };
     const leaving = () => { const body = payload(); if (body) api.saveRemoteStateOnUnload(remoteItem.libraryId, remoteItem.itemId, body); };
     const timer = setInterval(send, 10_000);
     window.addEventListener("pagehide", leaving);
-    return () => { clearInterval(timer); window.removeEventListener("pagehide", leaving); send(); };
+    return () => { clearInterval(timer); window.removeEventListener("pagehide", leaving); send(true); };
   }, [open, remoteItem]);
 
   useEffect(() => {

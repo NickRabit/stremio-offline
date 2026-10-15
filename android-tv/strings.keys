@@ -85,6 +85,7 @@ sources.sortAddon
 auth.language
 common.sorting
 save.toLibrary
+save.targetAutomatic
 save.queued
 player.play
 player.seekRestored
@@ -287,3 +288,7 @@ favorites.tabServers
 mediaServer.personalPartial
 
 err.mediaServerFormatUnknown
+
+sources.loadAddons
+sources.loadProvider
+sources.noAddonProviders

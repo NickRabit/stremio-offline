@@ -86,6 +86,7 @@
   <string name="auth_language">Sprache</string>
   <string name="common_sorting">Sortieren</string>
   <string name="save_to_library">Zur Bibliothek</string>
+  <string name="save_target_automatic">Automatisch</string>
   <string name="save_queued">In der Warteschlange</string>
   <string name="player_play">Spielen</string>
   <string name="player_seek_restored">Springen nicht möglich. Die vorherige Position wurde beibehalten.</string>
@@ -300,4 +301,7 @@
   <string name="favorites_tab_servers">Medienserver</string>
   <string name="media_server_personal_partial">Einige Einträge konnten nicht geladen werden.</string>
   <string name="err_media_server_format_unknown">Der Medienserver hat kein unterstütztes Format der Originaldatei angegeben.</string>
+  <string name="sources_load_addons">Quellen aus Add-ons</string>
+  <string name="sources_load_provider">Quellen laden</string>
+  <string name="sources_no_addon_providers">Kein Add-on bietet Quellen für diesen Titel.</string>
 </resources>

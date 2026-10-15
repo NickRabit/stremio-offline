@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowDown, ArrowUp, Check, ChevronLeft, ChevronRight, CirclePlay, Film, FolderOpen, HardDrive, Images, LayoutGrid, List, Play, RectangleHorizontal, RectangleVertical, Search, SlidersHorizontal, Star } from "lucide-react";
-import { ApiError, api, describeError } from "./api";
+import { ApiError, api, describeError, saveToDevice } from "./api";
 import { relativeAge } from "./home-cards";
 import { localeTag, t, useI18n } from "./i18n";
 import { LibraryItem, LibraryItemMenu } from "./library-item";
@@ -8,7 +8,13 @@ import { LibraryTile } from "./library-tile";
 import { LibraryTitleDetail } from "./LibraryTitleDetail";
 import { NativeLibrarySaveDialog, type NativeSaveLibrary } from "./NativeLibrarySaveDialog";
 import { sourceIdentity } from "./library-detail-sources";
+import { useLibrarySources } from "./library-sources";
 import { Player } from "./Player";
+import { SaveTargetDialog } from "./SaveTargetDialog";
+import { alternativeSaveRequest } from "./alternative-save";
+import { addonMediaSubject, genericProgressKey, supplementaryIdentity } from "./native-addon-sources";
+import { sourceProgressOwner, type SourceProgressOwner } from "./source-progress";
+import { canQueue, isRemoteStream } from "./streams";
 import { DetailHero, LIBRARY_HERO_EMPTY_GRADIENT, LIBRARY_HERO_GRADIENT, useBackdrop } from "./DetailHero";
 import { remoteDetailArtwork } from "./remote-artwork";
 import { RemoteFolderArt, RemoteLibraryArt, RemoteTileArt } from "./remote-mosaic";
@@ -18,7 +24,8 @@ import { catalogueGalleryImages, mergeGallery, posterAndWide, type GalleryImage 
 import { createCompactOnScroll } from "./scroll-fold";
 import { bytes, hideBroken } from "./settings-ui";
 import { catalogueRef, useTitleEnrichment, type CatalogueRef } from "./title-enrichment";
-import type { LibraryType, LibraryView, LibraryViewPrefs, MediaServerProvider, RemoteBrowseMode, RemoteItem, RemoteItemState, RemoteItemType, RemoteLibrary, Stream, TileShape, Trailer, UserViews } from "./types";
+import type { SaveTarget } from "./save-target";
+import type { Addon, AddonDownloadSettings, LibraryType, LibraryView, LibraryViewPrefs, MediaServerProvider, RemoteBrowseMode, RemoteItem, RemoteItemState, RemoteItemType, RemoteLibrary, Stream, Subtitle, TileShape, Trailer, UserViews } from "./types";
 
 interface Props {
   onRootPresenceChange?: (visible: boolean) => void;
@@ -55,10 +62,56 @@ interface Props {
   downloadLibraries: LibraryView[];
   /** A copy was queued here: the app refreshes its downloads and shows the toast. */
   onDownloadQueued?: () => void;
+  /** A short message the app shows, such as a device save that started through the server. */
+  onNotify?: (text: string) => void;
+  /** The signed-in account: supplementary source state never spans accounts. */
+  accountScope?: string;
+  /** This account's addons, so a loaded row names its provider and takes its download rule. */
+  addons?: Addon[];
+  /** Whether a debrid token is configured, so a torrent row may be queued. */
+  realDebridConfigured?: boolean;
 }
 
 type Status = { items: RemoteItem[]; cursor?: string; total: number; loading: boolean; error: string };
-type Playing = { stream: Stream; libraryId: string; item: RemoteItem; title: string; favorite: boolean; fromBeginning?: boolean };
+/** The captured identity of an addon row: everything its progress, subtitles and saves need,
+ *  so nothing it does can be routed through the native item it was opened beside. */
+type AddonPlayback = {
+  identity: CatalogueRef;
+  progressKey: string;
+  /** The title/library/account scope this playback belongs to, so a late answer cannot land
+   *  on another title that happens to reuse the same source id. */
+  scope: string;
+  media: Record<string, unknown>;
+  subtitles: Subtitle[];
+  poster?: string;
+};
+/** A copy that belongs to another library, to the viewer's own files or to an addon is played on
+ *  its own terms: no native favourite, no episode hand-off, and its own progress store, named by
+ *  the owner captured at the click. */
+type Playing = {
+  stream: Stream; libraryId: string; item: RemoteItem; title: string; favorite: boolean; fromBeginning?: boolean;
+  addon?: AddonPlayback; foreign?: boolean;
+  /** Where this row's saved position lives; the same owner the detail reads and clears. */
+  owner: SourceProgressOwner;
+  /** The title/library/account scope the playback belongs to, so a late answer cannot land on
+   *  another title that happens to reuse the same source id. */
+  scope: string;
+};
+/** The addon save the viewer opened: the exact stream, subject and labels captured at the click,
+ *  so no later state change can alter what is submitted. `title` labels the episode, while
+ *  `previewTitle` is the media subject's own title the storage preview resolves. */
+type AddonSaveRequest = {
+  stream: Stream;
+  media: Record<string, unknown>;
+  title: string;
+  previewTitle: string;
+  kind: "movie" | "series";
+  season?: number;
+  /** The destination the exact source projects; an addon answer leaves it to the addon's rule. */
+  rule?: AddonDownloadSettings;
+  /** A native copy whose server projected no destination: the viewer picks one themselves. */
+  ruleUnavailable?: boolean;
+};
 /** The open native-copy dialog: the library and item captured at the click, the versions the
  *  detail already holds (or nothing, so the dialog reads them once) and an exact artwork hint. */
 type SaveRequest = {
@@ -166,7 +219,7 @@ const groupEpisodes = (items: RemoteItem[]) => {
   return [...groups.entries()].map(([season, group]) => ({ season, items: group }));
 };
 
-export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLanguage, subtitleLanguage, onError, libraryTileShape, onToggleLibraryShape, views, onPersistPrefs, onOpenChange, compact, onCompactChange, initialTarget, onPersonalChange, uiLanguage, secureMode, onTrailer, onGallery, resetSignal, downloadLibraries, onDownloadQueued }: Props) {
+export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLanguage, subtitleLanguage, onError, libraryTileShape, onToggleLibraryShape, views, onPersistPrefs, onOpenChange, compact, onCompactChange, initialTarget, onPersonalChange, uiLanguage, secureMode, onTrailer, onGallery, resetSignal, downloadLibraries, onDownloadQueued, onNotify, accountScope = "", addons = [], realDebridConfigured = false }: Props) {
   useI18n();
   // The listing effect must not restart when the shape changes. It still warms only the
   // picture that shape draws, so the other role is fetched when a tile actually asks for it.
@@ -209,7 +262,13 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   /** The open native-copy dialog: the exact item, its parent series and the versions the
    *  detail already holds, or nothing so the dialog reads them once after the click. */
   const [saveRequest, setSaveRequest] = useState<SaveRequest | null>(null);
-
+  /** The open addon-save dialog: the exact stream and media subject captured at the click, so no
+   *  later state change can alter what is submitted. */
+  const [addonSave, setAddonSave] = useState<AddonSaveRequest | null>(null);
+  /** The saved position of the selected addon row; a native selection reads the remote state. */
+  const [alternativeProgress, setAlternativeProgress] = useState<{ sourceKey: string; position: number; duration: number } | null>(null);
+  /** Whether the source chooser is open: the one intent that reads every extra source group. */
+  const [chooserOpen, setChooserOpen] = useState(false);
   const listEpoch = useRef(0);
   const episodeEpoch = useRef(0);
   const detailEpoch = useRef(0);
@@ -242,6 +301,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   const selectedRef = useRef<RemoteLibrary | null>(null);
   const detailRef = useRef<RemoteItem | null>(null);
   const playingRef = useRef<Playing | null>(null);
+  const detailStreamRef = useRef<Stream | null>(null);
   /** The latest listing/episode page, read by the observer and the scroll fallback, which are set
    *  up once and never capture a stale render. */
   const listingRef = useRef(listing);
@@ -255,6 +315,8 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   const autoLoadRef = useRef<() => void>(() => {});
   const menuEpoch = useRef(0);
   const menuAbort = useRef<AbortController | null>(null);
+  const addonProgressEpoch = useRef(0);
+  const addonSubtitleAbort = useRef<AbortController | null>(null);
   /** Set when a detail was opened from a listing, whose page carries no overview or genres, so its
    *  full record is read once; the direct Home card path already reads it and clears this. */
   const needsDetailMeta = useRef(false);
@@ -262,6 +324,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   selectedRef.current = selected;
   detailRef.current = detail;
   playingRef.current = playing;
+  detailStreamRef.current = detailStream;
   listingRef.current = listing;
   episodesRef.current = episodes;
 
@@ -483,6 +546,8 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     setState(null);
     setStateError("");
     setDetailStream(null);
+    setAlternativeProgress(null);
+    setChooserOpen(false);
     if (!handoff) {
       void api.remoteSources(library.id, itemId, controller.signal)
         .then((found) => {
@@ -944,7 +1009,11 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
         setDetail(episode);
         return true;
       }
-      setPlaying({ stream: pick, libraryId: library.id, item: episode, title: episodeTitle(episode), favorite: false });
+      // The hand-off stays a version of this library's own item, so the owner is the copy's own
+      // remote context: the next episode reports its position under its own identity.
+      const owner = sourceProgressOwner(pick, addonIdentity);
+      if (!owner) return false;
+      setPlaying({ stream: pick, libraryId: library.id, item: episode, title: episodeTitle(episode), favorite: false, owner, scope: titleScope });
       needsDetailMeta.current = true;
       setDetail(episode);
       return true;
@@ -971,11 +1040,69 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   // shell probes for a playable title through the same hook.
   const seriesBackdrop = useBackdrop(detail?.type === "series" ? detailBackdrops : []);
   const seriesGallery: GalleryImage[] = mergeGallery(posterAndWide(detailPreview, detail?.wide), catalogueGalleryImages(enrichment.meta));
-  // Only the version the selector actually holds may show its position; the saved state was
-  // read once for the item, so no version needs a call of its own.
+  // The supplementary identity of the title on screen: the exact key its addons, the viewer's own
+  // copies of it and the other libraries are asked by. Nothing is read until the chooser opens.
+  const addonIdentity = supplementaryIdentity(detail, series);
+  const addonKey = addonIdentity ? `${addonIdentity.type}:${addonIdentity.id}` : "";
+  // Which store the selected row's position lives in, read from the row itself: this item's own
+  // remote state while its library owns the version, and the selected version's own store
+  // otherwise -- the viewer's own file, another library's copy, or the addon's catalogue key.
   const detailStreamKey = detailStream ? sourceIdentity(detailStream) : null;
-  const detailProgress = state && detailStreamKey && state.mediaSourceId === detailStreamKey
-    ? { position: state.position, duration: state.duration, sourceKey: detailStreamKey } : undefined;
+  const detailOwner = detailStream ? sourceProgressOwner(detailStream, addonIdentity) : null;
+  // The row is one of this item's own versions only when it carries this item's own context.
+  const ownVersion = Boolean(detailOwner?.kind === "remote" && detailOwner.item.libraryId === selected?.id && detailOwner.item.itemId === detail?.id);
+  const alternativeSelected = Boolean(detailStream && detailOwner && !ownVersion);
+  const detailProgress = detailStreamKey
+    ? ownVersion
+      ? (detailOwner?.kind === "remote" && state && state.mediaSourceId === detailOwner.item.mediaSourceId
+        ? { position: state.position, duration: state.duration, sourceKey: detailStreamKey } : undefined)
+      : (alternativeProgress && alternativeProgress.sourceKey === detailStreamKey
+        ? { position: alternativeProgress.position, duration: alternativeProgress.duration, sourceKey: detailStreamKey } : undefined)
+    : undefined;
+  // The owner's own fields, as primitives: the read effect must restart on a change of version,
+  // never on a redraw that happens to rebuild the object.
+  const ownerKind = detailOwner?.kind ?? "";
+  const ownerLibrary = detailOwner?.kind === "remote" ? detailOwner.item.libraryId : "";
+  const ownerItemId = detailOwner?.kind === "remote" ? detailOwner.item.itemId : "";
+  const ownerSourceId = detailOwner?.kind === "remote" ? detailOwner.item.mediaSourceId : "";
+  const ownerProgressKey = detailOwner && detailOwner.kind !== "remote" ? detailOwner.progressKey : "";
+  // Everything one title's supplementary work is bound to: the account, the library, the item and
+  // the exact catalogue key. A late answer from another scope is refused by comparing this string.
+  const titleScope = `${accountScope}\u0000${selected?.id ?? ""}\u0000${detail?.id ?? ""}\u0000${addonKey}`;
+  const titleScopeRef = useRef(titleScope);
+  titleScopeRef.current = titleScope;
+  // Opening the chooser is the one intent that reads every group: the addons that offer this
+  // title, the viewer's own copies of it, and every other library the account may browse. The
+  // library the detail already came from is never asked again.
+  const extra = useLibrarySources({
+    scope: titleScope, open: chooserOpen, catalogue: addonIdentity,
+    ...(series?.name ? { nameHint: series.name } : {}),
+    libraries, localCopies: true, ...(selected ? { originLibraryId: selected.id } : {}),
+  });
+  // The selected row's own saved position, from the store its owner names: the viewer's own file
+  // under its path, another library's copy under its own remote state, an addon row under the
+  // catalogue key. A remote answer counts only when it reports the very media source on screen,
+  // and a late answer can never land on another row or another title, even one that reuses the
+  // same source id.
+  useEffect(() => {
+    if (!alternativeSelected || !detailStreamKey || !detailOwner) { setAlternativeProgress(null); return; }
+    const mine = ++addonProgressEpoch.current;
+    const scope = titleScope;
+    const controller = new AbortController();
+    // Only a remote state that names the very media source on screen stands in for this row.
+    const read: Promise<{ position: number; duration: number } | null> = detailOwner.kind === "remote"
+      ? api.remoteState(detailOwner.item.libraryId, detailOwner.item.itemId, controller.signal)
+        .then((value) => value && value.mediaSourceId === detailOwner.item.mediaSourceId ? value : null)
+      : api.progressOf(detailOwner.progressKey, controller.signal);
+    void read
+      .then((entry) => {
+        if (mine !== addonProgressEpoch.current || titleScopeRef.current !== scope || controller.signal.aborted) return;
+        setAlternativeProgress(entry && entry.position > 0
+          ? { sourceKey: detailStreamKey, position: entry.position, duration: entry.duration } : null);
+      })
+      .catch(() => undefined);
+    return () => { controller.abort(); if (addonProgressEpoch.current === mine) addonProgressEpoch.current += 1; };
+  }, [alternativeSelected, detailStreamKey, detailNonce, titleScope, selected?.id, ownerKind, ownerLibrary, ownerItemId, ownerSourceId, ownerProgressKey]);
 
   if (!librariesError && !targetError && (libraries === null || !libraries.length)) return null;
 
@@ -1004,6 +1131,177 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   };
   const detailCrumb = (item: RemoteItem) =>
     item.type === "episode" ? `${t("mediaServer.episodeLabel", { season: item.season ?? 0, episode: item.episode ?? 0 })} · ${item.name}` : item.name;
+
+  /** The title line a detail's playback and saves are labelled with. */
+  const detailTitle = (item: RemoteItem) =>
+    item.type === "episode" ? `${series ? `${series.name} · ` : ""}${episodeTitle(item)}` : item.name;
+  /** Catalogue artwork only: a provider proxy path never travels into an addon save. */
+  const addonArtwork = () => ({
+    ...(enrichment.meta?.poster ? { poster: enrichment.meta.poster } : {}),
+    ...(enrichment.meta?.background ? { background: enrichment.meta.background } : {}),
+  });
+
+  /** Reads the subtitles of an explicitly started generic playback; an empty or failing answer
+   *  never blocks the film, and a late one belongs to a playback that is gone. */
+  const loadAddonSubtitles = (ref: CatalogueRef, stream: Stream) => {
+    addonSubtitleAbort.current?.abort();
+    const controller = new AbortController();
+    addonSubtitleAbort.current = controller;
+    const key = genericProgressKey(ref);
+    void api.subtitles(ref.type, ref.id, controller.signal)
+      .then((found) => {
+        if (controller.signal.aborted) return;
+        // The playback it answers for must be the one still on screen: another title reusing the
+        // same source id has a different catalogue key and never receives these subtitles.
+        setPlaying((value) => value && value.stream.sourceId === stream.sourceId && value.addon?.progressKey === key
+          ? { ...value, addon: { ...value.addon, subtitles: found } } : value);
+      })
+      .catch(() => undefined);
+  };
+
+  /** Play from the detail: a version of this detail's own library keeps the provider's path and
+   *  its favorite and hand-off, while a row of the viewer's own files, a copy from another library
+   *  and an addon answer play on their own terms -- the file under its path, the copy under its own
+   *  remote identity, the addon under the catalogue key -- and none of them borrows this item's
+   *  history. */
+  const playDetailStream = (stream: Stream, fromBeginning?: boolean) => {
+    if (!detail || !selected) return;
+    const owner = sourceProgressOwner(stream, addonIdentity);
+    if (!owner) return;
+    if (isRemoteStream(stream)) {
+      // A copy that reports its own remote identity and belongs elsewhere is another library's
+      // item: it plays under that identity, never under the item this detail was opened on.
+      const foreign = stream.remoteItem && stream.remoteItem.libraryId !== selected.id ? stream.remoteItem : null;
+      if (foreign) {
+        setPlaying({ stream, libraryId: foreign.libraryId, item: detail, title: detailTitle(detail), favorite: false, fromBeginning, foreign: true, owner, scope: titleScope });
+        return;
+      }
+      setPlaying({ stream, libraryId: selected.id, item: detail, title: detailTitle(detail), favorite: state?.favorite ?? false, fromBeginning, owner, scope: titleScope });
+      return;
+    }
+    // The viewer's own copy of the title is a file on this server's disk: it plays and reports
+    // under its own path, never under the catalogue key of the title it was listed beside, and
+    // the catalogue is asked for no subtitles for it. Like a copy from another library it is not
+    // this item's own version, so it borrows neither its favorite nor its hand-off.
+    if (owner.kind === "file") {
+      setPlaying({ stream, libraryId: selected.id, item: detail, title: detailTitle(detail), favorite: false, fromBeginning, owner, scope: titleScope, foreign: true });
+      return;
+    }
+    const ref = addonIdentity;
+    if (!ref) return;
+    const poster = enrichment.meta?.poster;
+    setPlaying({
+      stream, libraryId: selected.id, item: detail, title: detailTitle(detail), favorite: false, fromBeginning,
+      owner, scope: titleScope,
+      addon: {
+        identity: ref, progressKey: genericProgressKey(ref), scope: titleScope, media: addonMediaSubject(detail, series, addonArtwork()),
+        subtitles: [], ...(poster ? { poster } : {}),
+      },
+    });
+    loadAddonSubtitles(ref, stream);
+  };
+
+  /** The exact subject and labels one addon row is saved under: the media identity keeps the
+   *  parent series' catalogue id with no episode suffix, while the label stays episode-specific
+   *  and the storage preview resolves the media subject's own title. */
+  const addonSaveState = (stream: Stream, item: RemoteItem, title: string, media: Record<string, unknown>): AddonSaveRequest => {
+    const kind = item.type === "movie" ? "movie" : "series";
+    // The exact source decides the destination: another library's copy brings its own projection,
+    // an addon answer the rule of its own addon.
+    const destination = alternativeSaveRequest(title, stream, media, kind);
+    return {
+      stream, media, title, previewTitle: typeof media.title === "string" ? media.title : title, kind,
+      ...(item.type === "episode" && item.season != null ? { season: item.season } : {}),
+      ...(destination.rule ? { rule: destination.rule } : {}),
+      ...(destination.ruleUnavailable ? { ruleUnavailable: true } : {}),
+    };
+  };
+
+  /** Opens the destination dialog for the exact addon row that was clicked; a row the existing
+   *  capability checks would refuse is never offered a queue. */
+  const openAddonSave = (request: AddonSaveRequest) => {
+    if (!canQueue(request.stream, realDebridConfigured)) return;
+    setAddonSave(request);
+  };
+
+  /**
+   * Saves one row of this detail exactly as the row itself is: a version of the library the detail
+   * was opened on keeps the native dialog and the versions already read for it, a copy that belongs
+   * elsewhere is queued as the copy it is with the destination its own source projected, an addon
+   * answer takes its addon's rule, and the viewer's own file is never offered. The detail's Save
+   * action and the player of an already started row both come through here, so neither can drift.
+   */
+  const saveDetailStream = (stream: Stream, item: RemoteItem, title: string, media?: Record<string, unknown>) => {
+    const library = selectedRef.current;
+    if (isRemoteStream(stream) && library && stream.remoteItem?.libraryId === library.id) {
+      setSaveRequest({ library: saveLibrary(library), item, series, knownSources: sources, initialSource: stream, artwork: addonArtwork() });
+      return;
+    }
+    openAddonSave(addonSaveState(stream, item, title, media ?? addonMediaSubject(item, series, addonArtwork())));
+  };
+  const submitAddonSave = async (request: AddonSaveRequest, target?: SaveTarget) => {
+    await api.download(request.title, request.stream, request.media, target);
+    onDownloadQueued?.();
+    return true;
+  };
+  const saveAddonToDevice = async (request: { stream: Stream; media: Record<string, unknown>; title: string }) => {
+    try {
+      const filename = await saveToDevice({ title: request.title, stream: request.stream, media: request.media });
+      onNotify?.(t("save.startedViaServer", { filename }));
+      return true;
+    } catch (error) { onError(error); return false; }
+  };
+  /** A file of the viewer's own library reaches the device from its own path, exactly as the
+   *  library listing offers it: the server resolves the file again rather than trusting the row. */
+  const saveLibraryFileToDevice = async (path: string) => {
+    try {
+      const filename = await saveToDevice({ path });
+      onNotify?.(t("save.startedViaServer", { filename }));
+      return true;
+    } catch (error) { onError(error); return false; }
+  };
+
+  /** Clears the selected row's own store and nothing else: the viewer's own file under its path,
+   *  an addon row under the catalogue key of the episode, a copy in another library under that
+   *  copy's own remote state. The item on screen keeps its favorite, watched flag and position,
+   *  and a scope that moved on keeps its state. */
+  const clearAlternativeProgress = async (stream: Stream): Promise<boolean> => {
+    const owner = sourceProgressOwner(stream, addonIdentity);
+    if (!owner || (owner.kind === "remote" && owner.item.libraryId === selected?.id && owner.item.itemId === detail?.id)) return false;
+    const scope = titleScope;
+    try {
+      if (owner.kind === "remote") await api.saveRemoteState(owner.item.libraryId, owner.item.itemId, { position: 0, duration: 0, mediaSourceId: owner.item.mediaSourceId });
+      else await api.forgetProgress(owner.progressKey);
+      if (titleScopeRef.current !== scope) return false;
+      setAlternativeProgress((current) => current && current.sourceKey === sourceIdentity(stream) ? null : current);
+      return true;
+    } catch (error) { onError(error); return false; }
+  };
+  /** After playback the panel shows what was really written, and only for the row still on screen
+   *  in the scope the playback belonged to. A remote answer stands in only when it reports the very
+   *  version that was played. */
+  const refreshPlayedProgress = async (current: Playing) => {
+    const owner = current.owner;
+    const scope = current.scope;
+    try {
+      if (owner.kind === "remote" && owner.item.libraryId === selectedRef.current?.id && owner.item.itemId === detailRef.current?.id) {
+        // The read itself is scoped to the item on screen: it is refused there when the reader
+        // has moved on, so a completed hand-off still reports what it wrote.
+        await refreshState();
+        return;
+      }
+      const entry = owner.kind === "remote"
+        ? await api.remoteState(owner.item.libraryId, owner.item.itemId)
+          .then((value) => value && value.mediaSourceId === owner.item.mediaSourceId ? value : null)
+        : await api.progressOf(owner.progressKey);
+      if (titleScopeRef.current !== scope) return;
+      const shown = detailStreamRef.current;
+      if (!shown || sourceIdentity(shown) !== sourceIdentity(current.stream)) return;
+      setAlternativeProgress(entry && entry.position > 0
+        ? { sourceKey: sourceIdentity(current.stream), position: entry.position, duration: entry.duration } : null);
+      onPersonalChange?.();
+    } catch { /* the panel keeps the position it had */ }
+  };
 
   const renderTile = (item: RemoteItem, onOpen: (item: RemoteItem) => void, preview: PreviewInput): ReactNode => {
     const key = `${preview.parentId ?? "root"}:${item.id}`;
@@ -1186,20 +1484,28 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
             watchedDisabled={!state}
             onToggleWatched={() => void toggleState({ watched: !(state?.watched ?? false) })}
             sources={sources}
+            defaultSources={sources}
+            {...(addonIdentity ? {
+              sourceGroups: { groups: extra.groups, retry: extra.retry },
+              onOpenSources: () => setChooserOpen(true),
+              nativeSourceLabel: `${t(providerKey(selected!.provider))} · ${selected!.name}`,
+              preferredLanguage: audioLanguage,
+            } : {})}
             {...(sourceError ? { sourceError } : {})}
             onRetry={retryDetail}
             {...(detailProgress ? { progress: detailProgress } : {})}
             onSourceChange={setDetailStream}
-            onClearProgress={() => toggleState({ position: 0, duration: 0 })}
-            onPlay={(stream, fromBeginning) => setPlaying({ stream, libraryId: selected!.id, item: detail, title: detail.type === "episode" ? `${series ? `${series.name} · ` : ""}${episodeTitle(detail)}` : detail.name, favorite: state?.favorite ?? false, fromBeginning })}
-            onSaveToLibrary={(stream) => setSaveRequest({
-              library: saveLibrary(selected!),
-              item: detail, series, knownSources: sources, initialSource: stream,
-              artwork: {
-                ...(enrichment.meta?.poster ? { poster: enrichment.meta.poster } : {}),
-                ...(enrichment.meta?.background ? { background: enrichment.meta.background } : {}),
-              },
-            })}
+            onClearProgress={(stream) => isRemoteStream(stream) && stream.remoteItem?.libraryId === selected!.id
+              ? toggleState({ position: 0, duration: 0 })
+              : clearAlternativeProgress(stream)}
+            onPlay={playDetailStream}
+            // Every row is saved as the row it is: the native dialog for this library's own
+            // version, the copy's own projected destination for another library's, the addon's
+            // rule for an answer, and nothing at all for a file that is already here.
+            onSaveToLibrary={(stream) => saveDetailStream(stream, detail, detailTitle(detail))}
+            // Only a source the server proved may be copied is offered the action, so a click
+            // always reaches a real decision instead of a button that does nothing.
+            saveSupported={(stream) => canQueue(stream, realDebridConfigured)}
             sourceBadge={() => t(providerKey(selected!.provider))}
           />
           {stateError && <div className="remote-error" role="alert">
@@ -1209,25 +1515,65 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
         </div>}
       </div>
     </div>}
-    {playing && <Player
-      open
-      title={playing.title}
-      stream={playing.stream}
-      subtitles={[]}
-      subtitleLanguage={subtitleLanguage}
-      audioLanguage={audioLanguage}
-      previousTitle={playPrevious ? episodeTitle(playPrevious) : undefined}
-      onPrevious={playPrevious ? () => changeEpisode(playPrevious) : undefined}
-      nextTitle={playNext ? episodeTitle(playNext) : undefined}
-      onNext={playNext ? () => changeEpisode(playNext) : undefined}
-      autoNext={false}
-      nextBusy={nextBusy}
-      favorite={playing.favorite}
-      fromBeginning={playing.fromBeginning}
-      onToggleFavorite={() => void togglePlayingFavorite()}
-      onDownload={async () => false}
-      onDeviceDownload={async () => false}
-      onClose={() => { cancelHandoff(); setPlaying(null); void refreshState(); }}/>}
+    {playing && (() => {
+      // A row that is not one of this item's own versions -- the viewer's own file, another
+      // library's copy, an addon answer -- plays on its own terms: no native favorite, no
+      // next/previous hand-off, and its own progress store. A version of this detail's own
+      // library keeps every one of them.
+      const addon = playing.addon;
+      const away = Boolean(addon || playing.foreign);
+      return <Player
+        open
+        title={playing.title}
+        stream={playing.stream}
+        subtitles={addon?.subtitles ?? []}
+        subtitleLanguage={subtitleLanguage}
+        audioLanguage={audioLanguage}
+        previousTitle={away ? undefined : playPrevious ? episodeTitle(playPrevious) : undefined}
+        onPrevious={away ? undefined : playPrevious ? () => changeEpisode(playPrevious) : undefined}
+        nextTitle={away ? undefined : playNext ? episodeTitle(playNext) : undefined}
+        onNext={away ? undefined : playNext ? () => changeEpisode(playNext) : undefined}
+        autoNext={false}
+        nextBusy={nextBusy}
+        favorite={away ? undefined : playing.favorite}
+        fromBeginning={playing.fromBeginning}
+        onToggleFavorite={away ? undefined : () => void togglePlayingFavorite()}
+        progressKey={playing.owner.kind === "remote" ? undefined : playing.owner.progressKey}
+        progressPoster={away ? (addon?.poster ?? playing.item.poster) : undefined}
+        // The row that is playing is the row that is saved, whichever way it was started: an addon
+        // answer through its own captured subject, a copy of another media server through the
+        // destination that copy projects, a version of this detail's own library through the
+        // native dialog. The viewer's own file is already here and is never queued as a copy.
+        onDownload={async () => {
+          if (addon) openAddonSave(addonSaveState(playing.stream, playing.item, playing.title, addon.media));
+          else saveDetailStream(playing.stream, playing.item, playing.title);
+          return false;
+        }}
+        onDeviceDownload={addon
+          ? () => saveAddonToDevice({ stream: playing.stream, media: addon.media, title: playing.title })
+          : async () => {
+            // A file of the viewer's own library is pulled down from the path it already has; a
+            // copy another media server owns is never taken to the device from here.
+            const path = playing.owner.kind === "file" ? playing.stream.localPath : undefined;
+            return path ? saveLibraryFileToDevice(path) : false;
+          }}
+        // The final write names its own version: another source's completion never redraws this
+        // panel, and the refresh waits for the write itself rather than for a guessed delay.
+        onProgressSaved={(key) => {
+          if (key === playing.owner.key && !playingRef.current) void refreshPlayedProgress(playing);
+        }}
+        onClose={() => {
+          cancelHandoff(); addonSubtitleAbort.current?.abort(); setPlaying(null);
+        }}/>;
+    })()}
+    {addonSave && <SaveTargetDialog
+      label={addonSave.title} kind={addonSave.kind} title={addonSave.previewTitle}
+      {...(addonSave.season != null ? { season: addonSave.season } : {})}
+      libraries={downloadLibraries}
+      rule={addonSave.rule ?? addons.find((addon) => addon.key === addonSave.stream.addonKey)?.downloadSettings}
+      ruleUnavailable={addonSave.ruleUnavailable ?? false}
+      onClose={() => setAddonSave(null)}
+      onSubmit={(target) => submitAddonSave(addonSave, target)}/>}
     {saveRequest && <NativeLibrarySaveDialog
       key={`${saveRequest.item.id}:${saveRequest.knownSources ? "known" : "lazy"}`}
       library={saveRequest.library}

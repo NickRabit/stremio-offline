@@ -323,6 +323,7 @@ export const cs: Catalog = {
   "favorite.off": "Oblíbené",
   "favorite.added": "Přidáno do oblíbených.",
   "favorite.removed": "Odebráno z oblíbených.",
+  "save.targetAutomatic": "Automaticky",
   "save.toLibrary": "Do knihovny",
   "save.toLibraryElsewhere": "Uložit jinam…",
   "save.toLibraryHint": "Uložit do knihovny na serveru",
@@ -611,6 +612,10 @@ export const cs: Catalog = {
   "sources.loadingFrom": { one: "načítám z 1 doplňku…", few: "načítám z {count} doplňků…", other: "načítám z {count} doplňků…" },
   "sources.addon": "Doplněk",
   "sources.allAddons": "Všechny",
+  "sources.allSources": "Všechny zdroje",
+  "sources.askingOthers": "Zjišťuji další zdroje…",
+  "sources.discoveryAddons": "Zdrojové doplňky",
+  "sources.discoveryLibraries": "Další knihovny",
   "sources.anyLanguage": "Libovolný",
   "sources.sortRecommended": "Doporučené",
   "sources.sortLargest": "Od největšího",
@@ -631,6 +636,9 @@ export const cs: Catalog = {
   "sources.localBadge": "Lokální",
   "sources.localHint": "Už je ve vaší knihovně — přehrává se z disku serveru",
   "sources.localFilter": "Lokální soubory",
+  "sources.loadAddons": "Zdroje z doplňků",
+  "sources.loadProvider": "Načíst zdroje",
+  "sources.noAddonProviders": "Žádný doplněk nenabízí zdroje pro tento titul.",
 
   // První spuštění bez doplňků.
   "onboarding.title": "Přidejte první Stremio doplněk",

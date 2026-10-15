@@ -328,6 +328,7 @@ export const en = {
   "favorite.off": "Favorites",
   "favorite.added": "Added to favorites.",
   "favorite.removed": "Removed from favorites.",
+  "save.targetAutomatic": "Automatic",
   "save.toLibrary": "To library",
   "save.toLibraryElsewhere": "Save to another place…",
   "save.toLibraryHint": "Save to the library on the server",
@@ -616,6 +617,10 @@ export const en = {
   "sources.loadingFrom": { one: "loading from 1 addon…", other: "loading from {count} addons…" },
   "sources.addon": "Addon",
   "sources.allAddons": "All",
+  "sources.allSources": "All sources",
+  "sources.askingOthers": "Asking the other sources…",
+  "sources.discoveryAddons": "Source addons",
+  "sources.discoveryLibraries": "Other libraries",
   "sources.anyLanguage": "Any",
   "sources.sortRecommended": "Recommended",
   "sources.sortLargest": "Largest first",
@@ -636,6 +641,9 @@ export const en = {
   "sources.localBadge": "Local",
   "sources.localHint": "Already in your library — plays from the server's disk",
   "sources.localFilter": "Local files",
+  "sources.loadAddons": "Sources from addons",
+  "sources.loadProvider": "Load sources",
+  "sources.noAddonProviders": "No addons offer sources for this title.",
 
   // First run with no addons.
   "onboarding.title": "Add your first Stremio addon",

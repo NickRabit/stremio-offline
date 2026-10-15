@@ -86,6 +86,7 @@
   <string name="auth_language">Jazyk</string>
   <string name="common_sorting">Triedenie</string>
   <string name="save_to_library">Do knižnice</string>
+  <string name="save_target_automatic">Automaticky</string>
   <string name="save_queued">Vo fronte</string>
   <string name="player_play">Hrať</string>
   <string name="player_seek_restored">Nepodarilo sa preskočiť. Zostáva predchádzajúca pozícia.</string>
@@ -310,4 +311,7 @@
   <string name="favorites_tab_servers">Mediálne servery</string>
   <string name="media_server_personal_partial">Niektoré položky sa nepodarilo načítať.</string>
   <string name="err_media_server_format_unknown">Server neposkytol podporovaný formát pôvodného súboru.</string>
+  <string name="sources_load_addons">Zdroje z doplnkov</string>
+  <string name="sources_load_provider">Načítať zdroje</string>
+  <string name="sources_no_addon_providers">Žiadny doplnok neponúka zdroje pre tento titul.</string>
 </resources>

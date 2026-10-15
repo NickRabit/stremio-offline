@@ -12,12 +12,17 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
 
 /** The independent remote group deadlines of the library-bound loader. */
 private const val REMOTE_DISCOVERY_TIMEOUT_MS = 3_000L
 private const val REMOTE_MATCH_TIMEOUT_MS = 8_000L
+/** Two requests of one category at a time, the same budget the catalogue's own panel keeps: enough
+ *  to overlap the slow ones, few enough that opening the panel does not flood the server. */
+private const val MAX_GROUP_REQUESTS = 2
 
 /**
  * The sources a play that started from the library offers. A file bound to a catalogue title is
@@ -32,10 +37,15 @@ private const val REMOTE_MATCH_TIMEOUT_MS = 8_000L
  */
 class LibraryPlaySources(private val api: TvApi) {
 
+  private val addonPermits = Semaphore(MAX_GROUP_REQUESTS)
+  private val remotePermits = Semaphore(MAX_GROUP_REQUESTS)
+
   /** Loads the offered rows of [target] and reports them until the last addon answered. A
    *  cancelled caller stops the loading; nothing is reported for a catalogue play, a target
    *  without a path, an unbound file or a failed lookup. */
   suspend fun load(target: PlayTarget, report: (OfferedSources) -> Unit) {
+    // A target that already carries its own addon rows must not discover anything else.
+    if (target.initialSources != null) return
     val path = target.path ?: return
     // A native media-server play offers its own remote versions; nothing in the filesystem or the
     // addon machinery is asked about it.
@@ -100,17 +110,20 @@ class LibraryPlaySources(private val api: TvApi) {
       // The remote groups are their own child, so a slow or offline media server never holds the
       // local copy or the addons back, and they publish the moment a group answers.
       launch {
-        val libraries = try {
+        val discovered = try {
           withTimeoutOrNull(REMOTE_DISCOVERY_TIMEOUT_MS) { api.remoteLibraries() }
         } catch (cancelled: CancellationException) {
           throw cancelled
         } catch (_: ApiError) {
           null
         }
-        if (libraries == null) {
+        if (discovered == null) {
           lock.withLock { remoteDiscoveryFailed = true; remoteAsking = false; publish() }
           return@launch
         }
+        // A library the account switched off takes no part in matching: it is not asked, and it is
+        // not named as a failure either.
+        val libraries = discovered.filter { it.enabled }
         if (libraries.isEmpty()) {
           lock.withLock { remoteAsking = false; publish() }
           return@launch
@@ -122,7 +135,9 @@ class LibraryPlaySources(private val api: TvApi) {
               val part = try {
                 // The bound catalogue title's own name is the provider's filter hint; for an
                 // episode that is the series name, because the binding names the series.
-                withTimeoutOrNull(REMOTE_MATCH_TIMEOUT_MS) { api.remoteMatchedStreams(library.id, type, id, nameHint = title.name) }
+                remotePermits.withPermit {
+                  withTimeoutOrNull(REMOTE_MATCH_TIMEOUT_MS) { api.remoteMatchedStreams(library.id, type, id, nameHint = title.name) }
+                }
               } catch (cancelled: CancellationException) {
                 throw cancelled
               } catch (_: ApiError) {
@@ -144,7 +159,9 @@ class LibraryPlaySources(private val api: TvApi) {
           }
         }
       }
-      val sources = read { api.streamSources(type, id) }.orEmpty()
+      // A provider that came back without a key names nothing to ask on its own, and an unfiltered
+      // call would fan out into every addon at once: it is left out of the providers.
+      val sources = read { api.streamSources(type, id) }.orEmpty().filter { it.key.isNotBlank() }
       var pending = sources.size
       lock.withLock {
         if (pending == 0) addonsAsking = false
@@ -153,7 +170,9 @@ class LibraryPlaySources(private val api: TvApi) {
       coroutineScope {
         sources.forEach { source ->
           launch {
-            val part = read { api.streams(type, id, source.key.ifEmpty { null }) }.orEmpty()
+            val part = addonPermits.withPermit {
+              read { api.streams(type, id, source.key) }.orEmpty()
+            }
             // Addon answers can resume on different threads, so their updates take a lock: a lost
             // decrement would leave the panel asking forever.
             lock.withLock {

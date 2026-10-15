@@ -86,6 +86,7 @@
   <string name="auth_language">Langue</string>
   <string name="common_sorting">Tri</string>
   <string name="save_to_library">Vers la bibliothèque</string>
+  <string name="save_target_automatic">Automatique</string>
   <string name="save_queued">En file d\'attente</string>
   <string name="player_play">Jouer</string>
   <string name="player_seek_restored">Impossible de changer de position. La position précédente a été conservée.</string>
@@ -300,4 +301,7 @@
   <string name="favorites_tab_servers">Serveurs multimédia</string>
   <string name="media_server_personal_partial">Certains éléments n\'ont pas pu être chargés.</string>
   <string name="err_media_server_format_unknown">Le serveur multimédia n’a pas fourni de format pris en charge pour le fichier original.</string>
+  <string name="sources_load_addons">Sources des modules</string>
+  <string name="sources_load_provider">Charger les sources</string>
+  <string name="sources_no_addon_providers">Aucun module complémentaire ne propose de sources pour ce titre.</string>
 </resources>

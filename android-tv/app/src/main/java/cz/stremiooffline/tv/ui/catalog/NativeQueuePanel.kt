@@ -24,6 +24,7 @@ import cz.stremiooffline.tv.catalog.Streams
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.DownloadTargetDto
 import cz.stremiooffline.tv.data.LibraryDto
+import cz.stremiooffline.tv.data.LibraryTitleDto
 import cz.stremiooffline.tv.data.MediaDto
 import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.RemoteLibraryApi
@@ -35,6 +36,7 @@ import kotlinx.coroutines.CancellationException
 const val TagNativeQueuePanel = "native_queue_panel"
 const val TagNativeQueueDenied = "native_queue_denied"
 const val TagNativeQueueNoTargets = "native_queue_no_targets"
+const val TagNativeQueueDefault = "native_queue_default"
 
 fun nativeQueueVersionTag(sourceId: String): String = "native_queue_version_$sourceId"
 fun nativeQueueLibraryTag(id: String): String = "native_queue_library_$id"
@@ -93,6 +95,33 @@ fun nativeCopySubject(item: RemoteItemDto, seriesName: String?, seriesIds: Remot
       metaType = identity?.second,
     )
   }
+
+/**
+ * The subject of one library file, from the catalogue title the server bound it to. A series file
+ * copies as its own episode -- the series name is the title, the season and episode come from the
+ * binding's video id, and [episodeTitle] is the file's own episode label -- and a movie file copies
+ * as the film. The video id is read as the bound id (colons and all) plus its two numeric fields, so
+ * a `tmdb:123` binding keeps its id whole and its episode copies as season 4, episode 5. An id or a
+ * number the binding could not name is left out rather than guessed.
+ */
+fun libraryCopySubject(binding: LibraryTitleDto, episodeTitle: String? = null): NativeCopySubject {
+  val type = binding.type.trim()
+  val id = binding.id.trim().takeIf { it.isNotEmpty() }
+  val title = binding.name?.trim().orEmpty()
+  if (type != "series") {
+    return NativeCopySubject(kind = "movie", title = title, id = id, metaType = "movie")
+  }
+  val numbers = id?.let { episodeNumbers(it, binding.videoId) }
+  return NativeCopySubject(
+    kind = "episode",
+    title = title,
+    id = id,
+    metaType = "series",
+    season = numbers?.first,
+    episode = numbers?.second,
+    episodeTitle = episodeTitle,
+  )
+}
 
 /** What one version row reads: its own name and size, with a localized version number when two
  *  rows would otherwise read identically. An opaque source id is never a label. */
@@ -192,11 +221,17 @@ fun NativeQueuePanel(
   busy: Boolean = false,
   /** A refusal from the last attempt, shown inside the open panel so the choice is kept. */
   notice: String? = null,
+  /** Whether this account has Real-Debrid: a torrent may only be copied with it. The native
+   *  callers keep the default, so their own rule is unchanged. */
+  realDebridConfigured: Boolean = false,
+  /** An extra destination that hands the choice back to the server, which resolves the addon's
+   *  own storage rules. A caller that offers none draws no such row. */
+  onQueueDefault: (() -> Unit)? = null,
   onQueue: (StreamDto, String) -> Unit,
   onClose: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  val copyable = remember(versions) { versions.filter { Streams.canQueue(it, false) } }
+  val copyable = remember(versions, realDebridConfigured) { versions.filter { Streams.canQueue(it, realDebridConfigured) } }
   val initial = remember(copyable, preferred) {
     preferred?.takeIf { want -> copyable.any { it.sourceId == want.sourceId } }
       ?: copyable.maxByOrNull { Streams.streamSize(it) ?: -1.0 }
@@ -261,6 +296,12 @@ fun NativeQueuePanel(
     return
   }
 
+  // The destination rows in the order they are drawn: the server's own choice first when the
+  // caller offers it, then the exact libraries. A panel with neither names the missing right.
+  val showDefault = onQueueDefault != null
+  val showNoTargets = libraries.isEmpty() && !showDefault
+  val libraryOffset = if (showDefault) 1 else 0
+  val focusRow = if (showDefault || libraries.isEmpty()) 0 else destinationIndex
   SidePanel(
     title = stringResource(R.string.save_to_library),
     onClose = { if (copyable.size > 1) { if (!busy) step = Step.Version } else close() },
@@ -268,23 +309,33 @@ fun NativeQueuePanel(
     initialFocus = destinationFocus,
   ) {
     PanelNotice(notice)
-    if (libraries.isEmpty()) {
+    if (showDefault) {
+      PanelOption(
+        text = stringResource(R.string.save_target_automatic),
+        onClick = { if (!busy) onQueueDefault?.invoke() },
+        modifier = Modifier
+          .testTag(TagNativeQueueDefault)
+          .then(if (focusRow == 0) Modifier.focusRequester(destinationFocus) else Modifier),
+      )
+    }
+    if (showNoTargets) {
       PanelOption(
         text = stringResource(R.string.save_target_no_library),
         onClick = close,
-        modifier = Modifier.testTag(TagNativeQueueNoTargets).focusRequester(destinationFocus),
+        modifier = Modifier
+          .testTag(TagNativeQueueNoTargets)
+          .then(if (focusRow == 0) Modifier.focusRequester(destinationFocus) else Modifier),
       )
-    } else {
-      libraries.forEachIndexed { index, library ->
-        PanelOption(
-          text = library.name,
-          selected = index == destinationIndex,
-          onClick = { if (!busy) chosen?.let { onQueue(it, library.id) } },
-          modifier = Modifier
-            .testTag(nativeQueueLibraryTag(library.id))
-            .then(if (index == destinationIndex) Modifier.focusRequester(destinationFocus) else Modifier),
-        )
-      }
+    }
+    libraries.forEachIndexed { index, library ->
+      PanelOption(
+        text = library.name,
+        selected = index == destinationIndex,
+        onClick = { if (!busy) chosen?.let { onQueue(it, library.id) } },
+        modifier = Modifier
+          .testTag(nativeQueueLibraryTag(library.id))
+          .then(if (focusRow == libraryOffset + index) Modifier.focusRequester(destinationFocus) else Modifier),
+      )
     }
   }
 }

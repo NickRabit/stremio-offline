@@ -10,7 +10,7 @@ import { IdentifyDialog } from "./IdentifyDialog";
 import { AddonManager } from "./AddonManager";
 import { LibraryManagerDialog, libraryTypeLabel } from "./LibraryManager";
 import { RemoteLibraryBrowser } from "./RemoteLibraryBrowser";
-import { LocalLibraryDetail } from "./LocalLibraryDetail";
+import { LocalLibraryDetail, type AlternativePlay } from "./LocalLibraryDetail";
 import { DetailDescription, DetailHero } from "./DetailHero";
 import { LibraryItem, LibraryItemMenu } from "./library-item";
 import { LibraryTile } from "./library-tile";
@@ -31,7 +31,10 @@ import { report } from "./diagnostics";
 import { label, titleLanguage } from "./languages";
 import { locale, localeTag, setLocale, t, useI18n, type Key } from "./i18n";
 import { catalogTypeTag } from "./catalog-labels";
-import { addonNotices, canQueue, catalogSourceRows, filmHasNoSource, isLocalStream, isRemoteStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, remoteFilterId, remoteSourceFilter, repickStream, streamBadge, streamLanguages, streamSize, visibleCatalogStreams, type StreamSort } from "./streams";
+import { addonNotices, canQueue, catalogSourceRows, filmHasNoSource, isLocalStream, isRemoteStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, remoteFilterId, remoteSourceFilter, repickStream, streamLanguages, visibleCatalogStreams, type StreamSort } from "./streams";
+import { providerLabel, SourceFilters, SourceRows } from "./source-rows";
+import { alternativeProgressSaved, sourceProgressOwner, type SourceProgressOwner } from "./source-progress";
+import { alternativeSaveRequest } from "./alternative-save";
 import { parseSearchScope } from "./search-scope";
 import { createLiveSearch, type LiveSearch, type LiveSearchState } from "./live-search";
 import { rankByTitle } from "./title-match";
@@ -90,7 +93,6 @@ type PlaybackReturn = {
   catalogCompact: boolean;
   anchor?: PlaybackAnchor & { element: HTMLElement; ratio: number };
 };
-const streamLabel = (item: Stream) => item.name || item.title?.split("\n")[0] || item.description?.split("\n")[0] || "Stream";
 const abortedRequest = (error: unknown) => error instanceof DOMException && error.name === "AbortError";
 
 /** Addons name types freely; only the two we filter by have a translation. */
@@ -618,6 +620,15 @@ export function App() {
   /** Whether the local film now opening must ignore its saved position and start at zero. */
   const [localFromBeginning, setLocalFromBeginning] = useState(false);
   const [localProgressRevision, setLocalProgressRevision] = useState(0);
+  /** A row a library detail offered that is not one of its own files: an addon answer or a copy
+   *  another media server holds. It plays on its own terms, never through the library's player. */
+  const [alternative, setAlternative] = useState<{ stream: Stream; title: string; poster?: string; owner: SourceProgressOwner; scope: number; subtitles: Subtitle[]; media: Record<string, unknown>; kind: "movie" | "series"; fromBeginning?: boolean } | null>(null);
+  const alternativeScope = JSON.stringify([session?.username, view, localDetail?.item.path, remoteOpen, playerOpen]);
+  const alternativeScopeRef = useRef({ key: alternativeScope, generation: 0 });
+  if (alternativeScopeRef.current.key !== alternativeScope) {
+    alternativeScopeRef.current = { key: alternativeScope, generation: alternativeScopeRef.current.generation + 1 };
+  }
+  const [alternativeSave, setAlternativeSave] = useState<{ title: string; kind: "movie" | "series"; stream: Stream; media: Record<string, unknown>; rule?: AddonDownloadSettings; ruleUnavailable?: boolean } | null>(null);
   const [streamAddon, setStreamAddon] = useState(""); const [streamLanguage, setStreamLanguage] = useState(""); const [streamSort, setStreamSort] = useState<StreamSort>("recommended");
   useEffect(() => { setStreamSort(settings.streamSort as StreamSort); }, [settings.streamSort]);
   const [submittedQuery, setSubmittedQuery] = useState(""); const [searchScopeValue, setSearchScopeValue] = useState(""); const [searchable, setSearchable] = useState<SearchableCatalog[]>([]); const [typeFilter, setTypeFilter] = useState(""); const [genre, setGenre] = useState(""); const [sort, setSort] = useState("default"); const [searchSort, setSearchSort] = useState("default");
@@ -1641,6 +1652,43 @@ export function App() {
       return true;
     } catch (error) { fail(error); return false; }
   };
+  /** Starts a row a library detail offered beside its own files: an addon answer plays under the
+   *  title's catalogue key with its own subtitles, a copy from another media server under the
+   *  remote identity the row carries, the viewer's own copy under its file path. None of them
+   *  borrows the library file's player, and each reports to the store its owner reads. */
+  const playAlternative = (request: AlternativePlay) => {
+    const owner = sourceProgressOwner(request.stream, request.catalogue);
+    if (!owner) return;
+    const scope = ++alternativeScopeRef.current.generation;
+    setAlternative({
+      stream: request.stream, title: request.title, ...(request.poster ? { poster: request.poster } : {}),
+      owner, scope, subtitles: [], media: request.media, kind: request.kind, ...(request.fromBeginning ? { fromBeginning: true } : {}),
+    });
+    // Only a generic addon answer has subtitles to ask the catalogue for: a copy of another
+    // library and a file of the viewer's own are never turned into a catalogue request.
+    if (owner.kind !== "catalogue" || !request.catalogue) return;
+    const addon = request.catalogue;
+    // The subtitles belong to one playback: another row started in the meantime never receives them.
+    const key = owner.key;
+    void api.subtitles(addon.type, addon.id)
+      .then((found) => setAlternative((value) => value && value.scope === scope && alternativeScopeRef.current.generation === scope && value.owner.key === key ? { ...value, subtitles: found } : value))
+      .catch(() => undefined);
+  };
+  /** Opens the destination dialog for one row a detail offered: the exact copy of a media server
+   *  takes the destination its own library projected and the server re-resolves, an addon answer
+   *  the addon's own rule. */
+  const openAlternativeSave = (request: { title: string; kind: "movie" | "series"; stream: Stream; media: Record<string, unknown> }) =>
+    setAlternativeSave(alternativeSaveRequest(request.title, request.stream, request.media, request.kind));
+  const submitAlternativeSave = async (target?: SaveTarget) => {
+    const request = alternativeSave;
+    if (!request) return false;
+    try {
+      await api.download(request.title, request.stream, request.media, target);
+      notify(t("downloads.queued"));
+      await loadDownloads();
+      return true;
+    } catch (error) { fail(error); return false; }
+  };
   // Polling reschedules itself instead of running on a fixed interval: a hidden tab
   // does nothing, and a failing server is asked ever less often. A toast on every tick
   // would only cover the screen while the server restarts.
@@ -1913,8 +1961,7 @@ export function App() {
       return [] as Stream[];
     }
   };
-  const remoteProviderLabel = (provider: MediaServerProvider) =>
-    t(provider === "emby" ? "mediaServer.provider.emby" : "mediaServer.provider.jellyfin");
+  const remoteProviderLabel = providerLabel;
   const cancelRemoteWork = () => {
     remoteAbortRef.current?.abort();
     remoteEpochRef.current += 1;
@@ -2507,36 +2554,24 @@ export function App() {
             <div className="detail-workflow">
             {selected.videos?.length ? !(chosenEpisode && sourcesLoaded) && <div className={`episodes ${chosenEpisode ? "collapsed" : ""}`}>{chosenEpisode ?? <><div className="subhead episode-head"><h3>{t("episodes.heading")}</h3><div className="episode-tools">{seasons.length > 1 && <select className="season-select" aria-label={t("episodes.season")} value={activeSeason ?? ""} onChange={(event) => setSeason(Number(event.target.value))}>{seasons.map((value) => <option key={value} value={value}>{value === 0 ? t("episodes.specials") : t("episodes.seasonNumber", { season: value })}</option>)}</select>}{activeSeason != null && !remoteFilterId(streamAddon) && !(selectedStream && isRemoteStream(selectedStream)) && <button title={activeSeason === 0 ? t("episodes.downloadSpecials") : t("episodes.downloadSeason", { season: activeSeason })} onClick={() => void enqueueEpisodes("season")}><Download/> {activeSeason === 0 ? t("episodes.specials") : t("episodes.seasonShort", { season: activeSeason })}</button>}{!remoteFilterId(streamAddon) && !(selectedStream && isRemoteStream(selectedStream)) && <button title={t("episodes.downloadShow")} onClick={() => void enqueueEpisodes("series")}><Download/> {t("episodes.wholeShow")}</button>}{selectedVideo ? <button onClick={() => setEpisodesOpen(false)}>{t("common.collapse")}</button> : <span>{visibleEpisodes.length}</span>}</div></div><div className="episode-list" onScroll={(event) => compactOnScroll(event, detailCompact, setDetailCompact, true)}>{visibleEpisodes.map((video, index) => <button key={video.id || index} className={selectedVideo?.id === video.id ? "selected" : ""} onClick={() => { setEpisodesOpen(false); void loadSources(video); }}><b>{video.season != null ? `${String(video.season).padStart(2,"0")}×${String(video.episode || 0).padStart(2,"0")}` : index + 1}</b><span>{video.title || video.name || t("episodes.one")}</span><ChevronRight/></button>)}</div></>}</div> : !sourcesLoaded && <button className="primary wide" onClick={() => loadSources()} disabled={busy}>{t("sources.load")}</button>}
             {sourcesLoaded && (!selected.videos?.length || !episodesOpen) && <div className="sources"><div className={`subhead ${chosenEpisode ? "sources-episode" : ""}`}>{chosenEpisode ?? <h3>{t("sources.heading")}</h3>}<span>{sourceRows.length === sourceTotal ? sourceTotal : t("sources.ofTotal", { shown: sourceRows.length, total: sourceTotal })}{pendingSources > 0 ? ` · ${t("sources.loadingFrom", { count: pendingSources })}` : ""}</span></div>
-              {(offered.length > 1 || localStreams.length > 0 || remoteGroups.length > 0) && <div className="stream-filters">
-                <label><span>{t("sources.addon")}</span><select value={streamAddon} onChange={(event) => setStreamAddon(event.target.value)}>
-                  <option value="">{t("sources.allAddons")} ({byLanguage.length + localByLanguage.length + remoteFlat.length})</option>
-                  {(localStreams.length > 0 || localSelected) && <option value={LOCAL_SOURCE}>{t("sources.localFilter")} ({localStreams.length})</option>}
-                  {streamAddons.map(([name, count]) => <option key={name} value={name}>{name} ({count})</option>)}
-                  {remoteByLanguage.map((group) => <option key={group.libraryId} value={remoteSourceFilter(group.libraryId)}>{remoteProviderLabel(group.provider)} · {group.name} ({group.streams.length})</option>)}
-                  {remoteSelected !== undefined && !remoteByLanguage.some((group) => group.libraryId === remoteSelected) && <option value={streamAddon}>{remoteLibraryLabel(remoteSelected)} (0)</option>}
-                </select></label>
-                {streamLangs.length > 0 && <label><span>{t("auth.language")}</span><select value={streamLanguage} onChange={(event) => setStreamLanguage(event.target.value)}>
-                  <option value="">{t("sources.anyLanguage")} ({languageSources.length})</option>
-                  {streamLangs.map(([code, count]) => <option key={code} value={code}>{label(code)} ({count})</option>)}
-                </select></label>}
-                <label><span>{t("common.sorting")}</span><select value={streamSort} onChange={(event) => setStreamSort(event.target.value as StreamSort)}>
-                  <option value="recommended">{t("sources.sortRecommended")}</option>
-                  <option value="size-desc">{t("sources.sortLargest")}</option>
-                  <option value="size-asc">{t("sources.sortSmallest")}</option>
-                  <option value="addon">{t("sources.sortAddon")}</option>
-                </select></label>
-              </div>}<div className="stream-list" onScroll={(event) => compactOnScroll(event, detailCompact, setDetailCompact, true)}>{sourceRows.map((stream, index) => {
-                const local = isLocalStream(stream);
-                const remote = isRemoteStream(stream);
-                const probedLanguages = local && selectedStream === stream ? [...new Set((inspection?.audioTracks ?? []).map((track) => track.language).filter((language): language is string => Boolean(language)))] : [];
-                const languagesForRow = probedLanguages.length ? probedLanguages : streamLanguages(stream, metaLanguage);
-                return <button key={index} className={selectedStream === stream ? "selected" : ""} title={local ? t("sources.localHint") : remote ? t("sources.remoteHint") : undefined} onClick={() => { pickedRef.current = true; setSelectedStream(stream); }}>
-                  <i className={local ? "local" : remote ? "remote" : stream.kind === "torrent" ? "rd" : stream.playable ? undefined : "ext"}>{local ? <><HardDrive/>{t("sources.localBadge")}</> : streamBadge(stream)}</i>
-                  <span><strong>{local ? stream.behaviorHints?.filename ?? streamLabel(stream) : streamLabel(stream)}</strong><small>{local ? stream.libraryName : remote ? [stream.provider ? remoteProviderLabel(stream.provider) : "", stream.libraryName].filter(Boolean).join(" · ") : stream.addonName}</small></span>
-                  <span className="stream-meta">{streamSize(stream) ? <b>{bytes(streamSize(stream))}</b> : null}<small>{languagesForRow.map((code) => <em className="lang-badge" key={code} title={probedLanguages.length ? t("sources.audioInFile") : t("sources.languageGuess")}>{label(code)}</em>)}</small></span>
-                  {selectedStream === stream && <Check/>}
-                </button>;
-              })}</div>
+              <SourceFilters visible={offered.length > 1 || localStreams.length > 0 || remoteGroups.length > 0} addon={{
+                value: streamAddon, onChange: setStreamAddon,
+                all: { label: t("sources.allAddons"), count: byLanguage.length + localByLanguage.length + remoteFlat.length },
+                options: [
+                  ...((localStreams.length > 0 || localSelected) ? [{ value: LOCAL_SOURCE, label: t("sources.localFilter"), count: localStreams.length }] : []),
+                  ...streamAddons.map(([name, count]) => ({ value: name, label: name, count })),
+                  ...remoteByLanguage.map((group) => ({ value: remoteSourceFilter(group.libraryId), label: `${remoteProviderLabel(group.provider)} · ${group.name}`, count: group.streams.length })),
+                  ...(remoteSelected !== undefined && !remoteByLanguage.some((group) => group.libraryId === remoteSelected) ? [{ value: streamAddon, label: remoteLibraryLabel(remoteSelected), count: 0 }] : []),
+                ],
+              }} {...(streamLangs.length > 0 ? { language: {
+                value: streamLanguage, onChange: setStreamLanguage,
+                all: { label: t("sources.anyLanguage"), count: languageSources.length },
+                options: streamLangs.map(([code, count]) => ({ value: code, label: label(code), count })),
+              } } : {})} sort={{ value: streamSort, onChange: setStreamSort }}/>
+              <SourceRows rows={sourceRows} selected={selectedStream} onSelect={setSelectedStream} onPicked={() => { pickedRef.current = true; }}
+                titleLanguage={metaLanguage} onScroll={(event) => compactOnScroll(event, detailCompact, setDetailCompact, true)}
+                probe={(stream) => isLocalStream(stream) && selectedStream === stream
+                  ? [...new Set((inspection?.audioTracks ?? []).map((track) => track.language).filter((language): language is string => Boolean(language)))] : []}/>
               {!sourceRows.length && sourcesPending && <div className="no-sources">{t("sources.asking")}</div>}
               {!sourceRows.length && !sourcesPending && (!offered.length || localSelected || remoteSelected !== undefined) && <div className="no-sources">{t("sources.none")}</div>}
               {Boolean(offered.length) && !sourceRows.length && !sourcesPending && !localSelected && hiddenTorrents && !addonFilter && !streamLanguage && <div className="no-sources">{t("sources.onlyTorrentsBefore")} <button className="link-button" onClick={() => openView("settings")}>{t("nav.settings")}</button> {t("sources.onlyTorrentsAfter")}</div>}
@@ -2563,7 +2598,9 @@ export function App() {
           {...(remoteTarget ? { initialTarget: remoteTarget } : {})} onPersonalChange={refreshPersonal}
           uiLanguage={settings.uiLanguage} secureMode={settings.secureMode} onTrailer={setTrailerOpen}
           onGallery={presentGallery} resetSignal={libraryReset}
-          downloadLibraries={libraries} onDownloadQueued={() => { notify(t("downloads.queued")); void loadDownloads(); }}/>
+          downloadLibraries={libraries} onDownloadQueued={() => { notify(t("downloads.queued")); void loadDownloads(); }}
+          onNotify={notify}
+          accountScope={session!.username} addons={addons} realDebridConfigured={settings.realDebridConfigured}/>
         {!remoteOpen && <div className="panel browse-panel">
         <div className="browse-head">
         <div className="browse-bar">
@@ -2693,10 +2730,18 @@ export function App() {
           onResetProgress={(path) => forgetWatched(path)}
           onOpenFolder={() => { if (localDetail.item.kind === "folder") goLocalFolder(localDetail.item.path); }}
           uiLanguage={settings.uiLanguage} secureMode={settings.secureMode} onTrailer={setTrailerOpen}
+          accountScope={session!.username} preferredLanguage={settings.audioLanguage}
           onGallery={(images, path, ref) => { setMenuFor(null); presentGallery(images, ref, path); }}
+          onPlayAlternative={playAlternative}
+          realDebridConfigured={settings.realDebridConfigured}
+          onSaveAlternative={openAlternativeSave}
           onPlay={(stream, fromBeginning) => {
+            // Only the library's own file goes through the library player: a row that arrived from
+            // an addon or from another media server is started as the source it really is, and the
+            // clicked folder's path must never stand in for a copy that lives somewhere else.
+            if (!stream.localPath) return;
             const clicked = localDetail.item;
-            void playLocal(clicked.kind === "file" ? clicked.label : clicked.name, stream.localPath ?? clicked.path, clicked.poster,
+            void playLocal(clicked.kind === "file" ? clicked.label : clicked.name, stream.localPath, clicked.poster,
               clicked.kind === "file" && clicked.season != null, { kind: "library", key: clicked.path }, fromBeginning);
           }}/> : <>
         {!browsePath && !scanHintDismissed && !libraryScan?.finishedAt && (browse?.total ?? 0) >= 10 && <div className="library-scan-hint" role="status">
@@ -2827,6 +2872,39 @@ export function App() {
       onDownload={enqueue}
       onDeviceDownload={() => localStream?.localPath ? downloadLibraryFile(localStream.localPath) : downloadStreamToDevice()}
       onClose={stopPlayback}/>
+    {alternative && <Player open title={alternative.title} stream={alternative.stream} subtitles={alternative.subtitles}
+      subtitleLanguage={settings.subtitleLanguage} audioLanguage={settings.audioLanguage}
+      {...(alternative.owner.kind === "remote" ? {} : { progressKey: alternative.owner.progressKey })}
+      progressPoster={alternative.poster}
+      {...(alternative.fromBeginning ? { fromBeginning: true } : {})} nextBusy={false}
+      onDownload={async () => {
+        // The exact row that is playing is the row that is saved, through the same dialog and the
+        // same destination the detail would use; a copy of another media server keeps its own
+        // projected target, an addon answer the addon's rule.
+        openAlternativeSave({ stream: alternative.stream, title: alternative.title, media: alternative.media, kind: alternative.kind });
+        return false;
+      }}
+      onDeviceDownload={async () => {
+        // A copy another media server owns is never pulled down to the device from here.
+        if (alternative.stream.remoteItem) return false;
+        try {
+          const filename = await saveToDevice({ title: alternative.title, stream: alternative.stream, media: alternative.media });
+          notify(t("save.startedViaServer", { filename }));
+          return true;
+        } catch (error) { fail(error); return false; }
+      }}
+      onProgressSaved={(key) => {
+        // The row's own final write landed: the shelves that read that store are refreshed then,
+        // never on close, which happens while the write is still out. A generic addon answer
+        // writes the same catalogue progress the Home shelves read, so it redraws them too.
+        alternativeProgressSaved(alternative.owner, key, {
+          personal: refreshPersonal,
+          detail: () => setLocalProgressRevision((value) => value + 1),
+        }, { captured: alternative.scope, current: alternativeScopeRef.current.generation });
+      }}
+      onClose={() => {
+        setAlternative(null);
+      }}/>}
     {libraryManagerOpen && <LibraryManagerDialog restricted={restricted || !admin} onClose={() => setLibraryManagerOpen(false)} onChanged={refreshLibraries} onError={fail} onNotify={notify}/>}
     {movePath && <MoveDialog path={movePath.path} paths={movePath.paths} copy={movePath.copy} label={movePath.label}
       itemType={movePath.type} libraries={libraries} onClose={() => setMovePath(null)}
@@ -2837,6 +2915,12 @@ export function App() {
       rule={sourceTargetRule(selectedStream) ?? addons.find((addon) => addon.key === selectedStream.addonKey)?.downloadSettings}
       ruleUnavailable={isRemoteStream(selectedStream) && sourceTargetRule(selectedStream) === undefined}
       onClose={() => setSaveTargetOpen(false)} onSubmit={enqueue}/>}
+    {alternativeSave && <SaveTargetDialog
+      label={alternativeSave.title} kind={alternativeSave.kind} title={alternativeSave.title}
+      libraries={libraries}
+      rule={alternativeSave.rule ?? addons.find((addon) => addon.key === alternativeSave.stream.addonKey)?.downloadSettings}
+      ruleUnavailable={alternativeSave.ruleUnavailable ?? false}
+      onClose={() => setAlternativeSave(null)} onSubmit={submitAlternativeSave}/>}
     {identifyPath && <IdentifyDialog path={identifyPath} onClose={() => setIdentifyPath(null)}
       onApplied={() => { setIdentifyPath(null); void loadSuggestionCount(); void loadBrowse(browsePath); }}/>}
     {bulkIdentifyPaths?.length && <IdentifyDialog path={bulkIdentifyPaths[0]!} paths={bulkIdentifyPaths}

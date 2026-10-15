@@ -86,6 +86,7 @@
   <string name="auth_language">Язык</string>
   <string name="common_sorting">Сортировка</string>
   <string name="save_to_library">В библиотеку</string>
+  <string name="save_target_automatic">Автоматически</string>
   <string name="save_queued">В очереди</string>
   <string name="player_play">Играть</string>
   <string name="player_seek_restored">Не удалось перемотать. Сохранена предыдущая позиция.</string>
@@ -310,4 +311,7 @@
   <string name="favorites_tab_servers">Медиасерверы</string>
   <string name="media_server_personal_partial">Некоторые элементы не удалось загрузить.</string>
   <string name="err_media_server_format_unknown">Медиасервер не указал поддерживаемый формат исходного файла.</string>
+  <string name="sources_load_addons">Источники из аддонов</string>
+  <string name="sources_load_provider">Загрузить источники</string>
+  <string name="sources_no_addon_providers">Ни один аддон не предлагает источники для этого заголовка.</string>
 </resources>

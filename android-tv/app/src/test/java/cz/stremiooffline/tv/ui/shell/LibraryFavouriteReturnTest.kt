@@ -59,7 +59,7 @@ class LibraryFavouriteReturnTest {
     var root: List<BrowseItem> = emptyList()
     var folder: Map<String, List<BrowseItem.File>> = emptyMap()
 
-    override suspend fun browse(path: String?, limit: Int, skip: Int): BrowseResult {
+    override suspend fun browse(path: String?, limit: Int, skip: Int, query: String): BrowseResult {
       browseCalls += path to skip
       val items = if (path == null) root else folder[path].orEmpty()
       return BrowseResult(path.orEmpty(), items.map(::withFavorite), items.size, false)

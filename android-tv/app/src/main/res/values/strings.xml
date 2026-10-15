@@ -86,6 +86,7 @@
   <string name="auth_language">Language</string>
   <string name="common_sorting">Sorting</string>
   <string name="save_to_library">To library</string>
+  <string name="save_target_automatic">Automatic</string>
   <string name="save_queued">Queued</string>
   <string name="player_play">Play</string>
   <string name="player_seek_restored">Could not seek. Kept the previous position.</string>
@@ -300,4 +301,7 @@
   <string name="favorites_tab_servers">Media servers</string>
   <string name="media_server_personal_partial">Some items could not be loaded.</string>
   <string name="err_media_server_format_unknown">The media server did not provide a supported original file format.</string>
+  <string name="sources_load_addons">Sources from addons</string>
+  <string name="sources_load_provider">Load sources</string>
+  <string name="sources_no_addon_providers">No addons offer sources for this title.</string>
 </resources>

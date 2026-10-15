@@ -86,6 +86,7 @@
   <string name="auth_language">Lingua</string>
   <string name="common_sorting">Ordinamento</string>
   <string name="save_to_library">In libreria</string>
+  <string name="save_target_automatic">Automatico</string>
   <string name="save_queued">In coda</string>
   <string name="player_play">Gioca</string>
   <string name="player_seek_restored">Impossibile cambiare posizione. È stata mantenuta la posizione precedente.</string>
@@ -300,4 +301,7 @@
   <string name="favorites_tab_servers">Server multimediali</string>
   <string name="media_server_personal_partial">Alcuni elementi non sono stati caricati.</string>
   <string name="err_media_server_format_unknown">Il server multimediale non ha fornito un formato supportato per il file originale.</string>
+  <string name="sources_load_addons">Fonti dai componenti aggiuntivi</string>
+  <string name="sources_load_provider">Carica fonti</string>
+  <string name="sources_no_addon_providers">Nessun componente aggiuntivo offre fonti per questo titolo.</string>
 </resources>

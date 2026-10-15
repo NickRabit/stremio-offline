@@ -1,6 +1,7 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 import { goToView } from "./nav";
 import { resetViews } from "./library-tools";
+import { checkDetailActions, detailArtwork } from "./detail-layout";
 
 /** The one local film the detail journeys work on: a file bound to a title that exists in two
  *  copies, so the source picker has something to choose between. */
@@ -50,7 +51,11 @@ async function openDetail(page: Page, manyFiles = false) {
   return offset;
 }
 
-test.beforeEach(async ({ request }) => { await resetViews(request); });
+test.beforeEach(async ({ request, page }) => {
+  await resetViews(request);
+  await page.route("**/api/stream-sources/**", route => route.fulfill({ json: [] }));
+  await page.route("**/api/remote-libraries/*/streams/**", route => route.fulfill({ json: { streams: [] } }));
+});
 
 test("a local file opens its own detail instead of playing, and Back returns to the listing", async ({ page }) => {
   await openDetail(page);
@@ -72,7 +77,7 @@ test("the largest copy is the default and the arrow opens the picker", async ({ 
   // The picker is the one place a version is named, so the default is read by reopening it.
   await arrow.click();
   const dialog = page.getByRole("dialog", { name: "Vybrat zdroj" });
-  const rows = dialog.locator(".remote-streams button");
+  const rows = dialog.locator(".stream-list button");
   await expect(rows).toHaveCount(3);
   await expect(rows.first()).toHaveAttribute("aria-pressed", "true");
   await expect(rows.first()).toContainText(largerCopy);
@@ -81,7 +86,7 @@ test("the largest copy is the default and the arrow opens the picker", async ({ 
   // Escape closes the picker and hands focus back to the arrow.
   await arrow.click();
   await expect(dialog).toBeVisible();
-  await expect(dialog.locator('.remote-streams button[aria-pressed="true"]')).toContainText(otherCopy);
+  await expect(dialog.locator('.stream-list button[aria-pressed="true"]')).toContainText(otherCopy);
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
   await expect(arrow).toBeFocused();
@@ -206,6 +211,7 @@ test("local detail starts its selected version at zero without forgetting progre
 });
 
 test("saved-position controls remain usable across desktop and mobile viewports", async ({ page }) => {
+  await detailArtwork(page);
   await page.route("**/api/progress/*", async (route) => {
     const key = decodeURIComponent(new URL(route.request().url()).pathname.slice("/api/progress/".length));
     await route.fulfill({ json: { key, position: 3723, duration: 7200 } });
@@ -224,6 +230,76 @@ test("saved-position controls remain usable across desktop and mobile viewports"
       expect(box!.x).toBeGreaterThanOrEqual(0);
       expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width + 1);
     }
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await expect(detail.locator(".gallery-open")).toBeVisible();
+    await expect(detail.locator(".title-links a")).toHaveCount(3);
+    await checkDetailActions(page, detail);
+    await detail.locator(".library-detail-actions").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: `e2e/.tmp/local-detail-actions-${viewport.width}.png` });
   }
 });
+
+for (const [width, height] of [[1440, 900], [390, 844], [844, 390]]) {
+  test(`local movie offers local remote and addon rows in the shared chooser at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height });
+    await openDetail(page);
+    let discovery = 0;
+    const called: string[] = [];
+    const downloads: Array<Record<string, unknown>> = [];
+    await page.route("**/api/stream-sources/movie/tt-detail", route => {
+      discovery++;
+      return route.fulfill({ json: [{ key: "fixture", name: "Fixture addon" }] });
+    });
+    await page.route("**/api/streams/movie/tt-detail**", route => {
+      called.push(new URL(route.request().url()).searchParams.get("addon") ?? "unfiltered");
+      return route.fulfill({ json: [{ sourceId: "local-detail-addon", kind: "remote", playable: true,
+        name: "Addon FullHD", title: "CZ 25 GB", addonKey: "fixture", addonName: "Fixture addon" }] });
+    });
+    await page.route("**/api/remote-libraries", route => route.fulfill({ json: { libraries: [{
+      id: "rlib_fixture", connectionId: "fixture", remoteId: "root", name: "Remote fixture", type: "movie", provider: "jellyfin", enabled: true,
+    }] } }));
+    await page.route("**/api/remote-libraries/rlib_fixture/streams/movie/tt-detail**", route => route.fulfill({ json: { streams: [{
+      sourceId: "local-detail-remote", kind: "remote", playable: true, name: "Remote FullHD", provider: "jellyfin",
+      libraryId: "rlib_fixture", libraryName: "Remote fixture", capabilities: { downloadToLibrary: true }, behaviorHints: { videoSize: 50_000_000_000 },
+      remoteItem: { libraryId: "rlib_fixture", itemId: "film", mediaSourceId: "v1", progressKey: "remote:fixture" },
+    }] } }));
+    await page.route("**/api/downloads", route => {
+      if (route.request().method() !== "POST") return route.continue();
+      downloads.push(route.request().postDataJSON());
+      return route.fulfill({ status: 201, json: { id: "fixture-job", status: "queued" } });
+    });
+    const detail = page.locator(".library-local-detail");
+    expect(discovery).toBe(0);
+    await detail.getByRole("button", { name: "Vybrat zdroj" }).click();
+    const dialog = page.getByRole("dialog", { name: "Vybrat zdroj" });
+    const rows = dialog.locator(".stream-list button");
+    await expect(rows.filter({ hasText: "Addon FullHD" })).toBeVisible();
+    await expect(rows.filter({ hasText: "Remote FullHD" })).toBeVisible();
+    await expect(rows.first()).toContainText(largerCopy);
+    await expect(rows.first()).toHaveAttribute("aria-pressed", "true");
+    expect(discovery).toBe(1);
+    expect(called).toEqual(["fixture"]);
+    await expect(dialog.getByRole("combobox", { name: "Doplněk" })).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Zdroje z doplňků" })).toHaveCount(0);
+    expect(await dialog.evaluate(node => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
+    await page.screenshot({ path: `e2e/.tmp/local-unified-picker-${width}.png` });
+    await rows.filter({ hasText: "Addon FullHD" }).click();
+    await detail.getByRole("button", { name: "Do knihovny", exact: true }).click();
+    const save = page.getByRole("dialog");
+    await save.getByRole("button", { name: "Do knihovny", exact: true }).click();
+    await expect(save).toHaveCount(0);
+    expect(downloads).toHaveLength(1);
+    expect(downloads[0]).toMatchObject({ sourceId: "local-detail-addon", media: { id: "tt-detail", kind: "movie" } });
+    await detail.getByRole("button", { name: "Vybrat zdroj" }).click();
+    await expect(dialog.locator('.stream-list button[aria-pressed="true"]')).toContainText("Addon FullHD");
+    expect(discovery).toBe(1);
+    expect(called).toEqual(["fixture"]);
+    await dialog.locator(".stream-list button").filter({ hasText: "Remote FullHD" }).click();
+    await detail.getByRole("button", { name: "Do knihovny", exact: true }).click();
+    const remoteSave = page.getByRole("dialog");
+    await remoteSave.getByRole("radio", { name: "Jinam", exact: true }).check();
+    await remoteSave.getByRole("button", { name: "Do knihovny", exact: true }).click();
+    await expect(remoteSave).toHaveCount(0);
+    expect(downloads).toHaveLength(2);
+    expect(downloads[1]).toMatchObject({ sourceId: "local-detail-remote", media: { id: "tt-detail", kind: "movie" } });
+  });
+}

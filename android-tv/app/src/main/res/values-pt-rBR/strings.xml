@@ -86,6 +86,7 @@
   <string name="auth_language">Idioma</string>
   <string name="common_sorting">Classificando</string>
   <string name="save_to_library">Salvar na biblioteca</string>
+  <string name="save_target_automatic">Automático</string>
   <string name="save_queued">Na fila</string>
   <string name="player_play">Jogar</string>
   <string name="player_seek_restored">Não foi possível mudar de posição. A posição anterior foi mantida.</string>
@@ -300,4 +301,7 @@
   <string name="favorites_tab_servers">Servidores de mídia</string>
   <string name="media_server_personal_partial">Alguns itens não puderam ser carregados.</string>
   <string name="err_media_server_format_unknown">O servidor de mídia não forneceu um formato compatível para o arquivo original.</string>
+  <string name="sources_load_addons">Fontes de complementos</string>
+  <string name="sources_load_provider">Carregar fontes</string>
+  <string name="sources_no_addon_providers">Nenhum complemento oferece fontes para este título.</string>
 </resources>

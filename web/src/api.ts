@@ -94,10 +94,10 @@ export const api = {
   libraryTrailer: (path: string, language: string) => request<{ trailer: Trailer | null }>(`/api/library/trailer?${q({ path, language })}`),
   titleGallery: (type: string, id: string, language: string) => request<{ images: Array<{ url: string; kind: "poster" | "background" | "logo" | "still"; shape: "poster" | "wide" }> }>(`/api/meta/${encodeURIComponent(type)}/${encodeURIComponent(id)}?${q({ language, gallery: "1" })}`),
   libraryGallery: (path: string) => request<{ images: Array<{ url: string; kind: "poster" | "background" | "logo" | "still"; shape: "poster" | "wide" }> }>(`/api/library/gallery?${q({ path })}`),
-  streamSources: (type: string, id: string) => request<Array<{ key: string; name: string }>>(`/api/stream-sources/${encodeURIComponent(type)}/${encodeURIComponent(id)}`),
-  streams: (type: string, id: string, addon?: string) => request<Stream[]>(`/api/streams/${encodeURIComponent(type)}/${encodeURIComponent(id)}${addon ? `?addon=${encodeURIComponent(addon)}` : ""}`),
+  streamSources: (type: string, id: string, signal?: AbortSignal) => request<Array<{ key: string; name: string }>>(`/api/stream-sources/${encodeURIComponent(type)}/${encodeURIComponent(id)}`, { signal }),
+  streams: (type: string, id: string, addon?: string, signal?: AbortSignal) => request<Stream[]>(`/api/streams/${encodeURIComponent(type)}/${encodeURIComponent(id)}${addon ? `?addon=${encodeURIComponent(addon)}` : ""}`, { signal }),
   localStreams: (type: string, id: string, signal?: AbortSignal) => request<Stream[]>(`/api/local-streams/${encodeURIComponent(type)}/${encodeURIComponent(id)}`, { signal }),
-  subtitles: (type: string, id: string) => request<Subtitle[]>(`/api/subtitles/${encodeURIComponent(type)}/${encodeURIComponent(id)}`),
+  subtitles: (type: string, id: string, signal?: AbortSignal) => request<Subtitle[]>(`/api/subtitles/${encodeURIComponent(type)}/${encodeURIComponent(id)}`, { signal }),
   downloads: (timeoutMs?: number) => request<DownloadSnapshot>("/api/downloads", { timeoutMs }),
   download: (title: string, stream: Stream, media?: Record<string, unknown>, target?: SaveTarget) => request<Download>("/api/downloads", { method: "POST", body: JSON.stringify({ title, sourceId: stream.sourceId, media, ...(target ? { target } : {}) }) }),
   prepareDeviceDownload: (payload: { title?: string; stream?: Stream; media?: Record<string, unknown>; path?: string }) =>

@@ -86,6 +86,7 @@
   <string name="auth_language">Język</string>
   <string name="common_sorting">Sortowanie</string>
   <string name="save_to_library">Do biblioteki</string>
+  <string name="save_target_automatic">Automatycznie</string>
   <string name="save_queued">W kolejce</string>
   <string name="player_play">Zagraj</string>
   <string name="player_seek_restored">Nie udało się przewinąć. Zachowano poprzednią pozycję.</string>
@@ -310,4 +311,7 @@
   <string name="favorites_tab_servers">Serwery multimediów</string>
   <string name="media_server_personal_partial">Nie udało się wczytać niektórych elementów.</string>
   <string name="err_media_server_format_unknown">Serwer multimediów nie podał obsługiwanego formatu oryginalnego pliku.</string>
+  <string name="sources_load_addons">Źródła z dodatków</string>
+  <string name="sources_load_provider">Załaduj źródła</string>
+  <string name="sources_no_addon_providers">Żaden dodatek nie oferuje źródeł dla tego tytułu.</string>
 </resources>

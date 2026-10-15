@@ -22,16 +22,21 @@ import cz.stremiooffline.tv.data.BehaviorHintsDto
 import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.BrowseResult
 import cz.stremiooffline.tv.data.LibraryTitleDto
+import cz.stremiooffline.tv.data.RemoteItemContext
+import cz.stremiooffline.tv.data.RemoteLibraryDto
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.StreamSourceDto
 import cz.stremiooffline.tv.ui.FakeTvApi
+import cz.stremiooffline.tv.ui.catalog.OfferedSources
 import cz.stremiooffline.tv.ui.catalog.TagSourcesPanel
 import cz.stremiooffline.tv.ui.catalog.sourceRowTag
+import cz.stremiooffline.tv.ui.detail.PlayTarget
 import cz.stremiooffline.tv.ui.player.TAG_OSD_SOURCES
 import kotlinx.coroutines.CompletableDeferred
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -56,7 +61,7 @@ class LibraryPlaySourcesShellTest {
   private val path = "It/It.mkv"
 
   private class LibraryFake : FakeTvApi() {
-    override suspend fun browse(path: String?, limit: Int, skip: Int): BrowseResult {
+    override suspend fun browse(path: String?, limit: Int, skip: Int, query: String): BrowseResult {
       browseCalls += path to skip
       val items: List<BrowseItem> = if (path == null) listOf(BrowseItem.Folder(path = "It", name = "It", fileCount = 1))
       else listOf(BrowseItem.File(path = "It/It.mkv", label = "It.mkv"))
@@ -154,6 +159,53 @@ class LibraryPlaySourcesShellTest {
     compose.onNodeWithTag(TAG_OSD_SOURCES).assertDoesNotExist()
   }
 
+  /** The library flow keeps its own list: switching to an addon row inside the player must not
+   *  shrink the panel to that row, and must not make anything discover a second time. */
+  @Test
+  fun `a library play keeps its rows across a switch to another source`() {
+    val fake = api()
+    fake.remoteLibrariesValue = listOf(RemoteLibraryDto(id = "rlibB", name = "Serialy", provider = "jellyfin"))
+    fake.remoteMatchValues["rlibB|movie|tt1"] = listOf(
+      StreamDto(
+        sourceId = "ms9",
+        kind = "remote",
+        playable = true,
+        name = "Version ms9",
+        remoteItem = RemoteItemContext(
+          libraryId = "rlibB",
+          itemId = "iB",
+          mediaSourceId = "ms9",
+          progressKey = "remote:rlibB:iB",
+        ),
+      )
+    )
+    fake.libraryTitleValues[path] = LibraryTitleDto("movie", "tt1", name = "It")
+    mount(fake)
+
+    playFromLibrary()
+    openSources()
+    compose.onNodeWithTag(sourceRowTag(0)).assert(hasText("Playing"))
+    compose.onNodeWithTag(sourceRowTag(1)).assert(hasText("Version ms9"))
+    compose.onNodeWithTag(sourceRowTag(2)).assert(hasText("Alpha"))
+
+    // DOWN from the file that is playing reaches the other library's version, and OK plays it.
+    press(Key.DirectionDown)
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { fake.startedSources.size == 2 }
+    assertEquals(listOf("src:$path", "ms9"), fake.startedSources)
+
+    // The panel is still the caller's whole list, and nothing was asked a second time.
+    openSources()
+    compose.onNodeWithTag(sourceRowTag(0)).assert(hasText("It.mkv"))
+    compose.onNodeWithTag(sourceRowTag(1)).assert(hasText("Version ms9"))
+    compose.onNodeWithTag(sourceRowTag(2)).assert(hasText("Alpha"))
+    press(Key.Back)
+    assertEquals(1, fake.libraryTitleRequests.size)
+    assertEquals(1, fake.streamSourcesRequests.size)
+    assertEquals(1, fake.localStreamsRequests.size)
+    assertEquals(1, fake.remoteMatchRequests.size)
+  }
+
   @Test
   fun `a slow source answer does not delay Play`() {
     val fake = api()
@@ -172,5 +224,49 @@ class LibraryPlaySourcesShellTest {
     compose.waitForIdle()
 
     compose.onNodeWithTag(TAG_OSD_SOURCES).assertExists()
+  }
+
+  /** An addon play a native detail started carries its own rows: the player offers exactly those,
+   *  never the catalogue list the shell happens to still hold or the library loader's own. */
+  @Test
+  fun `a native detail's addon snapshot is the player's list, whatever else is in flight`() {
+    val row = StreamDto(sourceId = "srcA", kind = "remote", playable = true, title = "Czech 8 GB", addonName = "Alpha")
+    val stale = StreamDto(sourceId = "stale", kind = "remote", playable = true, title = "Stale", addonName = "Old")
+    val libraryRow = StreamDto(sourceId = "lib1", kind = "library", playable = true, localPath = "It/It.mkv")
+    val target = PlayTarget(
+      key = "movie:tt1",
+      title = "It",
+      resume = true,
+      sourceId = "srcA",
+      subtitleType = "movie",
+      subtitleTarget = "tt1",
+      initialSources = listOf(row),
+    )
+
+    val sources = playerSourcesFor(target, OfferedSources(listOf(stale), loading = true), OfferedSources(listOf(libraryRow)))
+
+    assertEquals(listOf(row), sources.streams)
+    assertFalse(sources.loading)
+  }
+
+  @Test
+  fun `a native version still offers its own versions and a catalogue play its own list`() {
+    val remote = StreamDto(sourceId = "ms1", kind = "remote", playable = true, title = "Remote 8 GB")
+    val remoteTarget = PlayTarget(
+      key = "remote:rlibA:iA",
+      title = "Heat",
+      resume = true,
+      remoteItem = RemoteItemContext(libraryId = "rlibA", itemId = "iA", mediaSourceId = "ms1", progressKey = "remote:rlibA:iA"),
+      remoteSources = listOf(remote),
+    )
+    assertEquals(listOf(remote), playerSourcesFor(remoteTarget, OfferedSources(listOf(remote)), OfferedSources()).streams)
+
+    val catalogueTarget = PlayTarget(key = "movie:tt1", title = "It", resume = false, catalogue = true)
+    val catalogue = OfferedSources(listOf(remote), loading = true)
+    assertEquals(catalogue, playerSourcesFor(catalogueTarget, catalogue, OfferedSources()))
+
+    val libraryTarget = PlayTarget(key = "file:It/It.mkv", title = "It", resume = false, path = "It/It.mkv")
+    val library = OfferedSources(listOf(remote), loading = true)
+    assertEquals(library, playerSourcesFor(libraryTarget, OfferedSources(), library))
   }
 }

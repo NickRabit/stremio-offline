@@ -70,7 +70,7 @@ class LibraryReturnTest {
     val grown = first + listOf("G", "H")
     var browseCount = 0
     val api = object : FakeTvApi() {
-      override suspend fun browse(path: String?, limit: Int, skip: Int): BrowseResult {
+      override suspend fun browse(path: String?, limit: Int, skip: Int, query: String): BrowseResult {
         browseCalls += path to skip
         val all = if (browseCount++ == 0) first else grown
         return BrowseResult(path.orEmpty(), folders(all).drop(skip).take(limit), all.size, pending = false)

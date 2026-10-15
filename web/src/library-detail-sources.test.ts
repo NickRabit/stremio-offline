@@ -32,9 +32,13 @@ describe("orderSources and defaultSource", () => {
 });
 
 describe("sourceIdentity", () => {
-  it("names a remote version by its media-source id, a local copy by its path, else the source id", () => {
-    expect(sourceIdentity(stream({ sourceId: "raw", remoteItem: { libraryId: "l", itemId: "i", mediaSourceId: "ms", progressKey: "k" } }))).toBe("ms");
-    expect(sourceIdentity(stream({ sourceId: "raw", localPath: "Films/Heat.mkv" }))).toBe("Films/Heat.mkv");
+  it("names a remote version by its whole incoming context, a local copy by its file key, else the source id", () => {
+    expect(sourceIdentity(stream({ sourceId: "raw", remoteItem: { libraryId: "l", itemId: "i", mediaSourceId: "ms", progressKey: "k" } }))).toBe("remote:l\u0000i\u0000ms");
+    // Two libraries may hand out the same media-source id for two different copies: the id alone
+    // is never an identity, so the whole context has to travel.
+    expect(sourceIdentity(stream({ sourceId: "raw", remoteItem: { libraryId: "other", itemId: "i", mediaSourceId: "ms", progressKey: "k" } })))
+      .not.toBe(sourceIdentity(stream({ sourceId: "raw", remoteItem: { libraryId: "l", itemId: "i", mediaSourceId: "ms", progressKey: "k" } })));
+    expect(sourceIdentity(stream({ sourceId: "raw", localPath: "Films/Heat.mkv" }))).toBe("file:Films/Heat.mkv");
     expect(sourceIdentity(stream({ sourceId: "raw" }))).toBe("raw");
   });
 });

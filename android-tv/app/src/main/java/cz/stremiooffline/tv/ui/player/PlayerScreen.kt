@@ -56,7 +56,9 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaSession
 import androidx.media3.ui.PlayerView
 import cz.stremiooffline.tv.R
+import cz.stremiooffline.tv.catalog.ProgressKey
 import cz.stremiooffline.tv.catalog.Streams
+import cz.stremiooffline.tv.data.RemoteItemContext
 import cz.stremiooffline.tv.data.AddonSubtitleDto
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.StreamDto
@@ -309,7 +311,10 @@ fun PlayerScreen(
       addonSubtitles = remoteSelectedSubtitles(from, sources)
       return
     }
-    val type = from.subtitleType
+    // A play of an actual file on disk mints its source from a path and takes no catalogue addon
+    // subtitles: the identity a native detail carries on such a target is there for the generic
+    // row a switch may land on later, not for the file itself.
+    val type = from.subtitleType.takeIf { from.path == null }
     val id = from.subtitleTarget
     addonSubtitles = if (type != null && id != null) runCatching { api.subtitles(type, id) }.getOrDefault(emptyList()) else emptyList()
   }
@@ -326,60 +331,10 @@ fun PlayerScreen(
     ?: offeredSources.firstOrNull { Streams.isLocalStream(it) && it.localPath != null && it.localPath == currentTarget.path }
   val quality = qualityChoice(state.quality, state.escalatedByViewer)
 
-  /**
-   * The target a chosen row switches to. The incoming stream's own `remoteItem` is authoritative:
-   * a remote version keeps this item's identity and stable key, and any non-remote stream drops
-   * the remote context entirely. A library copy becomes the file's own session; an addon row keeps
-   * the running title's key, so a switch away from a library file stays on that one file's progress.
-   */
-  fun switchTargetOf(stream: StreamDto): PlayTarget {
-    val incomingRemote = stream.remoteItem
-    if (incomingRemote != null) {
-      return PlayTarget(
-        key = incomingRemote.progressKey.ifEmpty { currentTarget.key },
-        title = currentTarget.title,
-        resume = false,
-        sourceId = stream.sourceId.takeIf { it.isNotBlank() },
-        poster = currentTarget.poster,
-        remoteItem = incomingRemote,
-        // Only the same item's versions: another library or item never lends its list.
-        remoteSources = Streams.remoteVersionsOf(incomingRemote, currentTarget.remoteSources).ifEmpty { listOf(stream) },
-      )
-    }
-    val path = stream.localPath
-    if (Streams.isLocalStream(stream) && path != null) {
-      return PlayTarget(
-        key = Progress.libraryKey(path),
-        title = stream.behaviorHints?.filename?.takeIf { it.isNotBlank() } ?: currentTarget.title,
-        resume = false,
-        path = path,
-        poster = currentTarget.poster,
-        catalogue = true,
-      )
-    }
-    // An ordinary addon row: it never inherits a remote item's key or identity. When the running
-    // target was remote there is no catalogue key to keep, so the source id names the row instead.
-    val fromRemote = currentTarget.remoteItem != null
-    return PlayTarget(
-      key = if (fromRemote) stream.sourceId.ifBlank { currentTarget.title } else currentTarget.key,
-      title = currentTarget.title,
-      resume = false,
-      path = currentTarget.path,
-      sourceId = stream.sourceId,
-      poster = currentTarget.poster,
-      addonKey = currentTarget.addonKey,
-      subtitleType = currentTarget.subtitleType,
-      subtitleTarget = currentTarget.subtitleTarget,
-      catalogue = true,
-    )
-  }
-
   /** Starts [target], leaving the outgoing session saved and deleted behind it. A different remote
    *  version is a different file and begins at 0; a same-version restart keeps [at]. */
   fun startSwitch(target: PlayTarget, at: Double) {
-    val fromMediaSourceId = currentTarget.remoteItem?.mediaSourceId
-    val toMediaSourceId = target.remoteItem?.mediaSourceId
-    val startAt = if (target.remoteItem != null && fromMediaSourceId != toMediaSourceId) 0.0 else at
+    val startAt = sourceSwitchPosition(currentTarget.remoteItem, target.remoteItem, at)
     title = target.title
     currentTarget = target
     scope.launch {
@@ -409,7 +364,7 @@ fun PlayerScreen(
     sourcesOpen = false
     restoreFocus = sourcesFocus
     if (playingSource === stream) return
-    val target = switchTargetOf(stream)
+    val target = switchedTarget(currentTarget, stream)
     previousTarget = currentTarget
     switchTarget = target
     switchAt = controller.position
@@ -907,6 +862,82 @@ internal suspend fun playerRetry(
 ) {
   readAccount()
   if (started) restart() else startOver()
+}
+
+internal fun sourceSwitchPosition(from: RemoteItemContext?, to: RemoteItemContext?, position: Double): Double =
+  if (to != null && (from == null || from.libraryId != to.libraryId || from.itemId != to.itemId || from.mediaSourceId != to.mediaSourceId)) 0.0 else position
+
+/**
+ * The target a chosen source switches to, built from the running target and the incoming row.
+ *
+ * The incoming row's own `remoteItem` is authoritative: a media-server version becomes a play of
+ * exactly that item, under its own stable key, with only the versions of that same library item.
+ * A library copy becomes the file's own session, under the file's own key. An addon row keeps the
+ * running title's own generic key and subtitles -- the catalogue key a catalogue play already
+ * carries, or the identity a native detail loaded its addon rows under -- never the key of the
+ * file or the remote version it was reached from, and never the row's opaque source id.
+ *
+ * The snapshot the caller handed over travels with every switch, so the player's list never
+ * shrinks to the row it landed on and no kind of switch makes it discover anything itself.
+ */
+internal fun switchedTarget(current: PlayTarget, stream: StreamDto): PlayTarget {
+  val incomingRemote = stream.remoteItem
+  if (incomingRemote != null) {
+    return PlayTarget(
+      key = incomingRemote.progressKey.ifEmpty { current.key },
+      title = current.title,
+      resume = false,
+      sourceId = stream.sourceId.takeIf { it.isNotBlank() },
+      poster = current.poster,
+      addonKey = current.addonKey,
+      subtitleType = current.subtitleType,
+      subtitleTarget = current.subtitleTarget,
+      catalogue = current.catalogue,
+      remoteItem = incomingRemote,
+      // Only the same item's versions: another library or item never lends its list.
+      remoteSources = Streams.remoteVersionsOf(incomingRemote, current.remoteSources + current.initialSources.orEmpty())
+        .ifEmpty { listOf(stream) },
+      initialSources = current.initialSources,
+    )
+  }
+  val path = stream.localPath
+  if (Streams.isLocalStream(stream) && path != null) {
+    return PlayTarget(
+      key = Progress.libraryKey(path),
+      title = stream.behaviorHints?.filename?.takeIf { it.isNotBlank() } ?: current.title,
+      resume = false,
+      path = path,
+      poster = current.poster,
+      addonKey = current.addonKey,
+      subtitleType = current.subtitleType,
+      subtitleTarget = current.subtitleTarget,
+      catalogue = current.catalogue,
+      initialSources = current.initialSources,
+    )
+  }
+  // An ordinary addon row. A catalogue play and a native detail's play both carry the title's own
+  // generic identity, which is the key this row keeps; a library file carries none, so the file's
+  // own key stays what the addon row is watched under, as it always was.
+  return PlayTarget(
+    key = genericKeyOf(current) ?: current.key,
+    title = current.title,
+    resume = false,
+    sourceId = stream.sourceId,
+    poster = current.poster,
+    // The title's owner, never the row's own addon provider.
+    addonKey = current.addonKey,
+    subtitleType = current.subtitleType,
+    subtitleTarget = current.subtitleTarget,
+    catalogue = current.catalogue,
+    initialSources = current.initialSources,
+  )
+}
+
+/** The generic catalogue key the running target's own identity makes, if it carries one. */
+private fun genericKeyOf(target: PlayTarget): String? {
+  val type = target.subtitleType?.takeIf { it.isNotBlank() } ?: return null
+  val id = target.subtitleTarget?.takeIf { it.isNotBlank() } ?: return null
+  return ProgressKey.of(type, id)
 }
 
 /**

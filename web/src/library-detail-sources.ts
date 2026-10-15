@@ -1,4 +1,5 @@
 import { t } from "./i18n";
+import { localFileProgressKey, remoteVersionKey } from "./source-progress";
 import type { Stream } from "./types";
 
 /** The size one source is compared by: the version's own reported size and nothing guessed.
@@ -26,10 +27,19 @@ export const defaultSource = (streams: Stream[]): Stream | null => {
   return playable.length ? orderSources(playable)[0]! : null;
 };
 
-/** What identifies a source across a refresh, never the object a reload replaces: a remote
- *  version names itself with its media-source id, a local copy with its own path. */
+/** What identifies a source across a refresh, never the object a reload replaces: a remote version
+ *  names its whole incoming context, a local copy its own path. Two libraries may hand out the same
+ *  media-source id for two different copies, so the id alone is never an identity. */
 export const sourceIdentity = (stream: Stream): string =>
-  stream.remoteItem?.mediaSourceId ?? stream.localPath ?? stream.sourceId;
+  stream.remoteItem ? remoteVersionKey(stream.remoteItem) : stream.localPath ? localFileProgressKey(stream.localPath) : stream.sourceId;
+
+/** What identifies a row of the chooser, which is narrower than the version's own identity: two
+ *  libraries may offer the same underlying file, and the viewer's pick has to name the one they
+ *  clicked rather than whichever row happens to be listed first. */
+export const sourceRowKey = (stream: Stream): string =>
+  stream.remoteItem
+    ? `${stream.remoteItem.libraryId}\u0000${stream.remoteItem.itemId}\u0000${stream.remoteItem.mediaSourceId}`
+    : stream.localPath ?? stream.sourceId;
 
 /** The name a row and the play summary show: a local copy's file name first, then the version's
  *  own name, the way an addon or a media server labels it. */

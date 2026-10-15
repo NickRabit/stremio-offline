@@ -5,7 +5,13 @@ import okhttp3.OkHttpClient
 
 /** The library browse and paging one screen needs. */
 interface LibraryApi {
-  suspend fun browse(path: String?, limit: Int = 60, skip: Int = 0): BrowseResult
+  /**
+   * One page of the library tree. [query] narrows the level to the items whose own name contains
+   * it, the server's case-insensitive browse matching (no metadata is consulted); an empty query is
+   * the whole level. The filter runs before paging, so a matching item on the second page is never
+   * missed and the page's total counts only the matches.
+   */
+  suspend fun browse(path: String?, limit: Int = 60, skip: Int = 0, query: String = ""): BrowseResult
 }
 
 /** The one merged Favourites list: library stars and catalogue stars in one page. */
