@@ -40,14 +40,18 @@ let addonProviders: Handler;
 let addonStreams: Handler;
 let addonSubtitles: Handler;
 let addonProgress: Handler;
+let localCopies: Handler;
+let remoteLibraryStreams: Handler;
 let forgetReply: Handler | undefined;
 let playback: Handler;
 const calls = { browse: [] as URL[], preview: [] as URL[], sources: [] as URL[], item: [] as URL[], state: [] as Array<{ method: string; body: unknown }>, stateUrls: [] as string[], title: [] as string[] };
 const downloadCalls: Array<Record<string, unknown>> = [];
 const deviceCalls: Array<Record<string, unknown>> = [];
+const librarySourceCalls: Array<Record<string, unknown>> = [];
 const playbackCalls: Array<Record<string, unknown>> = [];
 const addonCalls = {
   sources: [] as URL[], streams: [] as URL[], subtitles: [] as URL[],
+  local: [] as URL[], remote: [] as URL[],
   progress: [] as Array<{ method: string; path: string }>, subtitleSignals: [] as Array<AbortSignal | null | undefined>,
 };
 
@@ -79,8 +83,9 @@ beforeEach(() => {
   calls.browse = []; calls.preview = []; calls.sources = []; calls.item = []; calls.state = []; calls.stateUrls = []; calls.title = [];
   downloadCalls.length = 0;
   deviceCalls.length = 0;
+  librarySourceCalls.length = 0;
   playbackCalls.length = 0;
-  addonCalls.sources = []; addonCalls.streams = []; addonCalls.subtitles = []; addonCalls.progress = []; addonCalls.subtitleSignals = [];
+  addonCalls.sources = []; addonCalls.streams = []; addonCalls.subtitles = []; addonCalls.local = []; addonCalls.remote = []; addonCalls.progress = []; addonCalls.subtitleSignals = [];
   libraries = [library()];
   browse = () => json(page([]));
   preview = () => json({ posters: [] });
@@ -91,6 +96,8 @@ beforeEach(() => {
   addonStreams = () => json([]);
   addonSubtitles = () => json([]);
   addonProgress = () => json(null);
+  localCopies = () => json([]);
+  remoteLibraryStreams = () => json({ streams: [] });
   forgetReply = undefined;
   playback = () => json({
     id: "sess1", mode: "direct", url: "/api/stream/sess1", offset: 0, duration: 3600, hardware: false, acceleration: false,
@@ -112,6 +119,11 @@ beforeEach(() => {
       deviceCalls.push(JSON.parse(String(init.body)) as Record<string, unknown>);
       return Promise.resolve(json({ url: "/api/device-download/ticket/1", filename: "film.mp4" }));
     }
+    if (path === "/api/library/source" && init?.method === "POST") {
+      const body = JSON.parse(String(init.body)) as { path: string };
+      librarySourceCalls.push(body);
+      return Promise.resolve(json({ sourceId: "exact", kind: "library", playable: true, localPath: body.path, behaviorHints: { filename: body.path.split("/").pop() } }));
+    }
     if (path === "/api/playback" && init?.method === "POST") {
       playbackCalls.push(JSON.parse(String(init.body)) as Record<string, unknown>);
       return Promise.resolve(playback(url, init));
@@ -120,6 +132,8 @@ beforeEach(() => {
     if (path.startsWith("/api/stream-sources/")) { addonCalls.sources.push(url); return Promise.resolve(addonProviders(url, init)); }
     if (path.startsWith("/api/streams/")) { addonCalls.streams.push(url); return Promise.resolve(addonStreams(url, init)); }
     if (path.startsWith("/api/subtitles/")) { addonCalls.subtitles.push(url); addonCalls.subtitleSignals.push(init?.signal); return Promise.resolve(addonSubtitles(url, init)); }
+    if (/^\/api\/local-streams\/[^/]+\/[^/]+$/.test(path)) { addonCalls.local.push(url); return Promise.resolve(localCopies(url, init)); }
+    if (/^\/api\/remote-libraries\/[^/]+\/streams\/[^/]+\/[^/]+$/.test(path)) { addonCalls.remote.push(url); return Promise.resolve(remoteLibraryStreams(url, init)); }
     if (path.startsWith("/api/progress")) {
       addonCalls.progress.push({ method: init?.method ?? "GET", path });
       if (init?.method === "DELETE") return Promise.resolve(forgetReply ? forgetReply(url, init) : new Response(null, { status: 204 }));
@@ -1058,9 +1072,9 @@ it("draws a remote backdrop at the listing width while the gallery keeps the wid
 });
 
 describe("RemoteLibraryBrowser saved position", () => {
-  const version = (name: string, mediaSourceId: string, bytes: number): Stream => ({
+  const version = (name: string, mediaSourceId: string, bytes: number, itemId = "m1"): Stream => ({
     sourceId: mediaSourceId, kind: "remote", playable: true, name, provider: "jellyfin",
-    remoteItem: { libraryId: "rlib_a", itemId: "m1", mediaSourceId, progressKey: "k" },
+    remoteItem: { libraryId: "rlib_a", itemId, mediaSourceId, progressKey: "k" },
     behaviorHints: { videoSize: bytes },
   });
   const savedText = () => host.querySelector(".library-detail-progress span")!.textContent;
@@ -1103,7 +1117,8 @@ describe("RemoteLibraryBrowser saved position", () => {
   it("drops a clear that lands after the reader moved to another title", async () => {
     const held = deferred<Response>();
     browse = () => json(page([movie("m1", "One"), movie("m2", "Two")]));
-    sources = () => json({ streams: [version("1080p", "ms1", 2_000_000_000)] });
+    // Each title's version names the item it belongs to, the way the server hands it over.
+    sources = (url) => json({ streams: [version("1080p", "ms1", 2_000_000_000, url.pathname.includes("/items/m2/") ? "m2" : "m1")] });
     state = (url, init) => {
       if (init?.method === "PATCH") return held.promise;
       return url.pathname.includes("/m1/")
@@ -1227,6 +1242,12 @@ describe("RemoteLibraryBrowser addon sources", () => {
     remoteItem: { libraryId: "rlib_a", itemId: "1", mediaSourceId, progressKey: "k" },
     behaviorHints: { videoSize: size },
   });
+  /** A copy the detail did not come from: another library's own item and version. */
+  const foreignVersion = (libraryId: string, itemId: string, mediaSourceId: string, name: string, size: number): Stream => ({
+    sourceId: `src-${libraryId}-${mediaSourceId}`, kind: "remote", playable: true, name, provider: "jellyfin",
+    remoteItem: { libraryId, itemId, mediaSourceId, progressKey: "k" },
+    behaviorHints: { videoSize: size },
+  });
   const addonWithRule = (): Addon => ({
     key: "torrentio", role: "source", enabled: true, globalSearch: false, manifest: { id: "org.torrentio", name: "Torrentio", version: "1.0.0" },
     downloadSettings: {
@@ -1241,11 +1262,11 @@ describe("RemoteLibraryBrowser addon sources", () => {
   const inDialog = (selector: string, text: string) => byTextIn(document, selector, text);
 
   /** Opens a movie's native detail with one version and the addon panel available. */
-  const openDetail = async (over: Partial<Parameters<typeof RemoteLibraryBrowser>[0]> = {}) => {
+  const openDetail = async (over: Partial<Parameters<typeof RemoteLibraryBrowser>[0]> = {}, native: Stream[] = [nativeVersion("ms1", "1080p", 2_000_000_000)]) => {
     const onDownloadQueued = vi.fn();
     const onNotify = vi.fn();
     browse = () => json(page([identified("1", "One")]));
-    sources = () => json({ streams: [nativeVersion("ms1", "1080p", 2_000_000_000)] });
+    sources = () => json({ streams: native });
     addonProviders = () => json([{ key: "torrentio", name: "Torrentio" }]);
     addonStreams = () => json([addonRow("addon-1", "Torrentio 4K")]);
     const rendered = await render({ addons: [addonWithRule()], downloadLibraries: [saveView()], onDownloadQueued, onNotify, ...over });
@@ -1255,11 +1276,6 @@ describe("RemoteLibraryBrowser addon sources", () => {
     return { ...rendered, onDownloadQueued, onNotify };
   };
   const openPicker = async () => { await click(host.querySelector(".split-button-toggle")!); };
-  const loadProvider = async () => {
-    await click(document.querySelector(".addon-sources-toggle")!);
-    await click(document.querySelector(".addon-provider button")!);
-    await flush();
-  };
   const selectAddonRow = async () => {
     await click(inDialog(".library-source-card .remote-streams button", "Torrentio 4K")!);
     await flush();
@@ -1271,8 +1287,7 @@ describe("RemoteLibraryBrowser addon sources", () => {
     await openDetail();
     addonStreams = () => json({ error: "Alpha is down" }, 502);
     await openPicker();
-    await loadProvider();
-    expect(document.querySelector(".addon-provider")!.textContent).toContain("Alpha is down");
+    expect(document.querySelector(".library-source-card")!.textContent).toContain("Alpha is down");
     await closePicker();
     await click(playButton());
     await flush();
@@ -1280,22 +1295,23 @@ describe("RemoteLibraryBrowser addon sources", () => {
     expect(addonCalls.subtitles).toHaveLength(0);
   });
 
-  it("keeps every addon endpoint untouched until asked, then clears addon progress without a native patch", async () => {
+  it("reads every group the moment the chooser opens, and clears addon progress without a native patch", async () => {
     addonProgress = () => json({ key: "movie:tt5000", position: 600, duration: 3600, title: "One", updatedAt: "2026-01-01T00:00:00.000Z" });
     await openDetail();
+    // A detail that is merely open asks nothing: no addon, no library, no viewer's own copies.
     expect(addonCalls.sources).toHaveLength(0);
     expect(addonCalls.streams).toHaveLength(0);
+    expect(addonCalls.local).toHaveLength(0);
+    expect(addonCalls.remote).toHaveLength(0);
     expect(addonCalls.subtitles).toHaveLength(0);
-    // The dialog alone asks for nothing: discovery is one press, the provider one more.
+    // Opening the chooser is the single intent: every addon that offers the title and the
+    // viewer's own copies of it are read at once, with no further press.
     await openPicker();
-    expect(addonCalls.sources).toHaveLength(0);
-    await click(document.querySelector(".addon-sources-toggle")!);
     expect(addonCalls.sources).toHaveLength(1);
     expect(addonCalls.sources[0]!.pathname).toBe("/api/stream-sources/movie/tt5000");
-    await click(document.querySelector(".addon-provider button")!);
-    await flush();
     expect(addonCalls.streams).toHaveLength(1);
     expect(addonCalls.streams[0]!.searchParams.get("addon")).toBe("torrentio");
+    expect(addonCalls.local.map((url) => url.pathname)).toEqual(["/api/local-streams/movie/tt5000"]);
     await selectAddonRow();
     expect(addonGetPaths()).toEqual(["/api/progress/movie%3Att5000"]);
     expect(host.querySelector(".library-detail-progress")).not.toBeNull();
@@ -1320,10 +1336,7 @@ describe("RemoteLibraryBrowser addon sources", () => {
     await click(tileButtons()[0]!);
     await flush();
     await openPicker();
-    await click(document.querySelector(".addon-sources-toggle")!);
     expect(addonCalls.sources[0]!.pathname).toBe("/api/stream-sources/series/tt7000%3A1%3A2");
-    await click(document.querySelector(".addon-provider button")!);
-    await flush();
     expect(addonCalls.streams[0]!.pathname).toBe("/api/streams/series/tt7000%3A1%3A2");
     expect(addonCalls.streams.some((url) => url.pathname.includes("tt9999"))).toBe(false);
     await selectAddonRow();
@@ -1333,8 +1346,7 @@ describe("RemoteLibraryBrowser addon sources", () => {
   it("queues the exact addon row into the addon's own rule and keeps a refusal in the dialog", async () => {
     const { onDownloadQueued } = await openDetail();
     await openPicker();
-    await loadProvider();
-    await selectAddonRow();
+      await selectAddonRow();
     await click(byText(".library-detail-actions button", "To library")!);
     const card = document.querySelector<HTMLElement>(".save-target-card")!;
     expect(card.textContent).toContain("Films › Films › One");
@@ -1354,8 +1366,7 @@ describe("RemoteLibraryBrowser addon sources", () => {
   it("plays an addon row generically: real downloads and no native favorite or episode hand-off", async () => {
     const { onDownloadQueued, onNotify } = await openDetail();
     await openPicker();
-    await loadProvider();
-    await selectAddonRow();
+      await selectAddonRow();
     await click(playButton());
     await flush();
     expect(playbackCalls).toHaveLength(1);
@@ -1407,8 +1418,7 @@ describe("RemoteLibraryBrowser addon sources", () => {
     addonSubtitles = () => held.promise;
     await openDetail();
     await openPicker();
-    await loadProvider();
-    await selectAddonRow();
+      await selectAddonRow();
     expect(addonCalls.subtitles).toHaveLength(0);
     await click(playButton());
     await flush();
@@ -1435,10 +1445,7 @@ describe("RemoteLibraryBrowser addon sources", () => {
     expect(addonCalls.sources).toHaveLength(0);
     expect(addonCalls.streams).toHaveLength(0);
     await openPicker();
-    await click(document.querySelector(".addon-sources-toggle")!);
     expect(addonCalls.sources).toHaveLength(1);
-    await click(document.querySelector(".addon-provider button")!);
-    await flush();
     await selectAddonRow();
     expect(addonGetPaths()).toEqual(["/api/progress/movie%3Att5000"]);
     await click(playButton());
@@ -1464,8 +1471,7 @@ describe("RemoteLibraryBrowser addon sources", () => {
     await click(tileButtons()[0]!);
     await flush();
     await openPicker();
-    await loadProvider();
-    await selectAddonRow();
+      await selectAddonRow();
     await click(byText(".library-detail-actions button", "To library")!);
     const card = document.querySelector(".save-target-card")!;
     // The storage preview resolves the media subject: the show and its season, never the episode label.
@@ -1494,8 +1500,7 @@ describe("RemoteLibraryBrowser addon sources", () => {
       };
       await openDetail();
       await openPicker();
-      await loadProvider();
-      await selectAddonRow();
+          await selectAddonRow();
       await click(playButton());
       await flush();
       const video = host.querySelector<HTMLVideoElement>(".player-overlay video")!;
@@ -1527,8 +1532,7 @@ describe("RemoteLibraryBrowser addon sources", () => {
     await click(tileButtons()[0]!);
     await flush();
     await openPicker();
-    await loadProvider();
-    await selectAddonRow();
+      await selectAddonRow();
     await click(playButton());
     await flush();
     const video = host.querySelector<HTMLVideoElement>(".player-overlay video")!;
@@ -1544,8 +1548,7 @@ describe("RemoteLibraryBrowser addon sources", () => {
     await click(tileButtons()[1]!);
     await flush();
     await openPicker();
-    await loadProvider();
-    await selectAddonRow();
+      await selectAddonRow();
     await flush();
     expect(host.querySelector(".library-detail-progress")).toBeNull();
     await act(async () => { held.resolve(json({ key: "movie:tt5000", position: 1200, duration: 3600, title: "One", updatedAt: "2026-01-01T00:00:00.000Z" })); });
@@ -1567,8 +1570,7 @@ describe("RemoteLibraryBrowser addon sources", () => {
     await click(tileButtons()[0]!);
     await flush();
     await openPicker();
-    await loadProvider();
-    await selectAddonRow();
+      await selectAddonRow();
     expect(host.querySelector(".library-detail-progress")).not.toBeNull();
     holdForget = true;
     await click(host.querySelector(".library-detail-progress button")!);
@@ -1579,13 +1581,415 @@ describe("RemoteLibraryBrowser addon sources", () => {
     await click(tileButtons()[1]!);
     await flush();
     await openPicker();
-    await loadProvider();
-    await selectAddonRow();
+      await selectAddonRow();
     await flush();
     expect(host.querySelector(".library-detail-progress")).not.toBeNull();
     // The first title's clear lands late; the second title keeps its own saved position.
     await act(async () => { held.resolve(new Response(null, { status: 204 })); });
     await flush();
     expect(host.querySelector(".library-detail-progress")).not.toBeNull();
+  });
+
+  it("asks the library the detail already came from nothing, and reads every other group once", async () => {
+    libraries = [library(), library({ id: "rlib_b", name: "Second", order: 1 })];
+    await openDetail();
+    await openPicker();
+    expect(calls.sources.map((url) => url.pathname)).toHaveLength(1);
+    expect(addonCalls.remote.map((url) => url.pathname)).toEqual(["/api/remote-libraries/rlib_b/streams/movie/tt5000"]);
+    expect(addonCalls.sources).toHaveLength(1);
+    expect(addonCalls.streams).toHaveLength(1);
+    expect(addonCalls.local.map((url) => url.pathname)).toEqual(["/api/local-streams/movie/tt5000"]);
+    // Closing and reopening the chooser reuses every answer instead of asking again.
+    await closePicker();
+    await openPicker();
+    expect(addonCalls.sources).toHaveLength(1);
+    expect(addonCalls.streams).toHaveLength(1);
+    expect(addonCalls.local).toHaveLength(1);
+    expect(addonCalls.remote).toHaveLength(1);
+  });
+
+  it("holds at most two addon providers and two other libraries out at once", async () => {
+    const held: Array<() => void> = [];
+    let addonLive = 0, addonPeak = 0, remoteLive = 0, remotePeak = 0;
+    libraries = [library(), library({ id: "rlib_b", name: "B", order: 1 }), library({ id: "rlib_c", name: "C", order: 2 }), library({ id: "rlib_d", name: "D", order: 3 })];
+    await openDetail();
+    addonProviders = () => json([{ key: "a", name: "Alpha" }, { key: "b", name: "Beta" }, { key: "c", name: "Gamma" }]);
+    addonStreams = () => {
+      addonLive += 1; addonPeak = Math.max(addonPeak, addonLive);
+      return new Promise<Response>((done) => held.push(() => { addonLive -= 1; done(json([addonRow("addon-1", "Torrentio 4K")])); }));
+    };
+    remoteLibraryStreams = () => {
+      remoteLive += 1; remotePeak = Math.max(remotePeak, remoteLive);
+      return new Promise<Response>((done) => held.push(() => { remoteLive -= 1; done(json({ streams: [] })); }));
+    };
+    await openPicker();
+    expect(addonPeak).toBeLessThanOrEqual(2);
+    expect(remotePeak).toBeLessThanOrEqual(2);
+    while (held.length) {
+      const release = held.shift()!;
+      await act(async () => { release(); });
+      await flush();
+    }
+    expect(addonCalls.streams).toHaveLength(3);
+    expect(addonCalls.remote).toHaveLength(3);
+  });
+
+  it("plays another library's copy under its own identity and never borrows this item's history", async () => {
+    libraries = [library(), library({ id: "rlib_b", name: "Second", order: 1 })];
+    remoteLibraryStreams = (url) => url.pathname.includes("rlib_b")
+      ? json({ streams: [foreignVersion("rlib_b", "9", "msX", "Other copy", 8_000_000_000)] })
+      : json({ streams: [] });
+    state = (url, init) => {
+      if (url.pathname.includes("/rlib_b/items/9/state")) {
+        if (init?.method === "PATCH") return json({ key: "k", position: 0, duration: 0, favorite: false, watched: false });
+        // The copy's own store names the copy's own media source.
+        return json({ key: "k", position: 300, duration: 3600, favorite: false, watched: false, mediaSourceId: "msX" });
+      }
+      return init?.method === "PATCH"
+        ? json({ key: "k", position: 0, duration: 0, favorite: true, watched: false })
+        : json({ key: "k", position: 0, duration: 0, favorite: false, watched: false });
+    };
+    await openDetail();
+    await openPicker();
+    await click(inDialog(".library-source-card .remote-streams button", "Other copy")!);
+    await flush();
+    // The row shows the copy's own saved position, read from the copy's own store.
+    expect(host.querySelector(".library-detail-progress")).not.toBeNull();
+    expect(calls.stateUrls.at(-1)).toContain("/api/remote-libraries/rlib_b/items/9/state");
+    expect(host.querySelector(".library-detail-progress")!.textContent).toContain("5:00");
+    await click(playButton());
+    await flush();
+    expect(playbackCalls[0]!.sourceId).toBe("src-rlib_b-msX");
+    const overlay = host.querySelector(".player-overlay")!;
+    expect(overlay.querySelector(".player-star")).toBeNull();
+    expect(overlay.querySelector(".next-episode")).toBeNull();
+    expect(overlay.querySelector(".previous-episode")).toBeNull();
+    // Resetting clears the copy's own position and never patches the original item's state.
+    await click(host.querySelector(".player-head button.icon-button")!);
+    await flush();
+    await click(host.querySelector(".library-detail-progress button")!);
+    await flush();
+    expect(calls.stateUrls.at(-1)).toContain("/api/remote-libraries/rlib_b/items/9/state");
+    const patches = calls.state.filter((call) => call.method === "PATCH");
+    expect(patches).toHaveLength(1);
+    expect(patches[0]!.body).toMatchObject({ position: 0, duration: 0, mediaSourceId: "msX" });
+    expect(host.querySelector(".library-detail-progress")).toBeNull();
+  });
+
+  it("reads, plays and clears the viewer's own copy under its file key, never the catalogue's", async () => {
+    const ownFile: Stream = {
+      sourceId: "local-1", kind: "library", playable: true, localPath: "Films/One.mkv", libraryName: "Films",
+      behaviorHints: { filename: "One.mkv", videoSize: 3_000_000_000 },
+    };
+    localCopies = () => json([ownFile]);
+    let stored: unknown = { key: "file:Films/One.mkv", position: 600, duration: 3600, title: "One", updatedAt: "2026-01-01T00:00:00.000Z" };
+    const writes: Array<Record<string, unknown>> = [];
+    const finalWrite = deferred<Response>();
+    let holdFinal = false;
+    addonProgress = (_url, init) => {
+      if (init?.method === "DELETE") { stored = null; return new Response(null, { status: 204 }); }
+      if (init?.method === "POST") {
+        writes.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+        if (!holdFinal) return new Response(null, { status: 204 });
+        return finalWrite.promise.then((response) => { stored = { key: "file:Films/One.mkv", position: 120, duration: 3600, title: "One", updatedAt: "2026-01-01T00:00:00.000Z" }; return response; });
+      }
+      return json(stored);
+    };
+    await openDetail();
+    await openPicker();
+    const requested = { sources: addonCalls.sources.length, streams: addonCalls.streams.length };
+    await click(inDialog(".library-source-card .remote-streams button", "One.mkv")!);
+    await flush();
+    // The row is owned by the file itself: its own key is read, never the catalogue key.
+    expect(addonCalls.progress.filter((call) => call.method === "GET").map((call) => decodeURIComponent(call.path)))
+      .toEqual(["/api/progress/file:Films/One.mkv"]);
+    expect(host.querySelector(".library-detail-progress")!.textContent).toContain("10:00");
+    // A click on the same version's reset clears the file's own key, not the title's.
+    await click(host.querySelector(".library-detail-progress button")!);
+    await flush();
+    expect(addonCalls.progress.filter((call) => call.method === "DELETE").map((call) => decodeURIComponent(call.path)))
+      .toEqual(["/api/progress/file:Films/One.mkv"]);
+    expect(host.querySelector(".library-detail-progress")).toBeNull();
+    await click(playButton());
+    await flush();
+    expect(playbackCalls[0]!.sourceId).toBe("local-1");
+    // Nothing about the file is asked of the catalogue, not even the subtitles of an addon answer.
+    expect(addonCalls.sources).toHaveLength(requested.sources);
+    expect(addonCalls.streams).toHaveLength(requested.streams);
+    expect(addonCalls.subtitles).toHaveLength(0);
+    const video = host.querySelector<HTMLVideoElement>(".player-overlay video")!;
+    await act(async () => { video.currentTime = 120; video.dispatchEvent(new Event("timeupdate", { bubbles: true })); });
+    const reads = addonCalls.progress.filter((call) => call.method === "GET").length;
+    holdFinal = true;
+    await click(host.querySelector(".player-head button.icon-button")!);
+    await flush();
+    // The final write names the file, and the panel reads its own store only once it landed.
+    expect(writes.at(-1)).toMatchObject({ key: "file:Films/One.mkv", position: 120, duration: 3600 });
+    expect(addonCalls.progress.filter((call) => call.method === "GET")).toHaveLength(reads);
+    await act(async () => { finalWrite.resolve(new Response(null, { status: 204 })); });
+    await flush();
+    expect(addonCalls.progress.filter((call) => call.method === "GET")).toHaveLength(reads + 1);
+    expect(host.querySelector(".library-detail-progress")!.textContent).toContain("2:00");
+    expect(calls.state.filter((call) => call.method === "PATCH")).toHaveLength(0);
+  });
+
+  it("keeps two remote copies that reuse one media source apart, each under its own store", async () => {
+    libraries = [library(), library({ id: "rlib_b", name: "Second", order: 1 }), library({ id: "rlib_c", name: "Third", order: 2 })];
+    remoteLibraryStreams = (url) => url.pathname.includes("rlib_b")
+      ? json({ streams: [foreignVersion("rlib_b", "9", "msX", "Copy B", 8_000_000_000)] })
+      : json({ streams: [foreignVersion("rlib_c", "7", "msX", "Copy C", 4_000_000_000)] });
+    state = (url, init) => {
+      if (init?.method === "PATCH") return json({ key: "k", position: 0, duration: 0, favorite: false, watched: false });
+      // Both copies report the same media source; only the item they belong to tells them apart.
+      return url.pathname.includes("/rlib_c/")
+        ? json({ key: "k", position: 0, duration: 0, favorite: false, watched: false, mediaSourceId: "msX" })
+        : json({ key: "k", position: 600, duration: 3600, favorite: false, watched: false, mediaSourceId: "msX" });
+    };
+    await openDetail();
+    await openPicker();
+    await click(inDialog(".library-source-card .remote-streams button", "Copy B")!);
+    await flush();
+    expect(calls.stateUrls.at(-1)).toContain("/api/remote-libraries/rlib_b/items/9/state");
+    expect(host.querySelector(".library-detail-progress")!.textContent).toContain("10:00");
+    // The other copy shares the media source but none of the store: its own read answers for it.
+    await openPicker();
+    await click(inDialog(".library-source-card .remote-streams button", "Copy C")!);
+    await flush();
+    expect(calls.stateUrls.at(-1)).toContain("/api/remote-libraries/rlib_c/items/7/state");
+    expect(host.querySelector(".library-detail-progress")).toBeNull();
+  });
+
+  it("never shows another media source's position for a copy of another library", async () => {
+    libraries = [library(), library({ id: "rlib_b", name: "Second", order: 1 })];
+    remoteLibraryStreams = () => json({ streams: [foreignVersion("rlib_b", "9", "msX", "Other copy", 8_000_000_000)] });
+    // The copy's item holds a position that belongs to a different version of it.
+    state = () => json({ key: "k", position: 600, duration: 3600, favorite: false, watched: false, mediaSourceId: "msOther" });
+    await openDetail();
+    await openPicker();
+    await click(inDialog(".library-source-card .remote-streams button", "Other copy")!);
+    await flush();
+    expect(calls.stateUrls.at(-1)).toContain("/api/remote-libraries/rlib_b/items/9/state");
+    expect(host.querySelector(".library-detail-progress")).toBeNull();
+    // And playback starts it from the top rather than inheriting that position.
+    await click(playButton());
+    await flush();
+    expect(playbackCalls[0]!.sourceId).toBe("src-rlib_b-msX");
+    expect(playbackCalls[0]!.time).toBe(0);
+  });
+
+  it("refreshes another library's copy only once its final remote write landed", async () => {
+    libraries = [library(), library({ id: "rlib_b", name: "Second", order: 1 })];
+    remoteLibraryStreams = () => json({ streams: [foreignVersion("rlib_b", "9", "msX", "Other copy", 8_000_000_000)] });
+    const finalPatch = deferred<Response>();
+    let hold = false;
+    let stored: Record<string, unknown> = { key: "k", position: 600, duration: 3600, favorite: false, watched: false, mediaSourceId: "msX" };
+    state = (_url, init) => {
+      if (init?.method !== "PATCH") return json(stored);
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      if (!hold) return json({ ...stored, ...body });
+      return finalPatch.promise.then((response) => { stored = { ...stored, ...body }; return response; });
+    };
+    const copyGets = () => calls.state.filter((call, index) => call.method === "GET" && calls.stateUrls[index]!.includes("/rlib_b/")).length;
+    await openDetail();
+    await openPicker();
+    await click(inDialog(".library-source-card .remote-streams button", "Other copy")!);
+    await flush();
+    await click(playButton());
+    await flush();
+    const video = host.querySelector<HTMLVideoElement>(".player-overlay video")!;
+    await act(async () => { video.currentTime = 120; video.dispatchEvent(new Event("timeupdate", { bubbles: true })); });
+    const reads = copyGets();
+    hold = true;
+    await click(host.querySelector(".player-head button.icon-button")!);
+    await flush();
+    // The final write is out: the panel has not read the copy's store again behind it.
+    expect(calls.state.filter((call) => call.method === "PATCH")).toHaveLength(1);
+    expect(copyGets()).toBe(reads);
+    await act(async () => { finalPatch.resolve(json({ key: "k", position: 120, duration: 3600, favorite: false, watched: false, mediaSourceId: "msX" })); });
+    await flush();
+    // It lands, and only then does the panel read what was really written.
+    expect(copyGets()).toBe(reads + 1);
+    expect(host.querySelector(".library-detail-progress")!.textContent).toContain("2:00");
+  });
+
+  it("refreshes the detail's own state after its final write, and never on another row's", async () => {
+    const finalPatch = deferred<Response>();
+    let hold = false;
+    let stored: Record<string, unknown> = { key: "k", position: 600, duration: 3600, favorite: false, watched: false, mediaSourceId: "ms1" };
+    state = (_url, init) => {
+      if (init?.method !== "PATCH") return json(stored);
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      if (!hold) return json({ ...stored, ...body });
+      // The server drops the position of a film watched to its end; the panel must follow it there.
+      return finalPatch.promise.then((response) => {
+        stored = { ...stored, position: 0, duration: 0, watched: true };
+        return response;
+      });
+    };
+    const itemGets = () => calls.state.filter((call, index) => call.method === "GET" && calls.stateUrls[index]!.includes("/rlib_a/items/1/")).length;
+    await openDetail();
+    expect(host.querySelector(".library-detail-progress")!.textContent).toContain("10:00");
+    await click(playButton());
+    await flush();
+    const video = host.querySelector<HTMLVideoElement>(".player-overlay video")!;
+    await act(async () => { video.currentTime = 3540; video.dispatchEvent(new Event("timeupdate", { bubbles: true })); });
+    const reads = itemGets();
+    hold = true;
+    await click(host.querySelector(".player-head button.icon-button")!);
+    await flush();
+    expect(calls.state.filter((call) => call.method === "PATCH")).toHaveLength(1);
+    expect(itemGets()).toBe(reads);
+    await act(async () => { finalPatch.resolve(json({ key: "k", position: 0, duration: 0, favorite: false, watched: true, mediaSourceId: "ms1" })); });
+    await flush();
+    expect(itemGets()).toBe(reads + 1);
+    expect(host.querySelector(".library-detail-progress")).toBeNull();
+  });
+
+
+  it("shows a failed source-addon discovery and retries only that lookup", async () => {
+    await openDetail();
+    addonProviders = () => json({ error: "The addon list is unavailable" }, 502);
+    await openPicker();
+    const card = document.querySelector<HTMLElement>(".library-source-card")!;
+    // The lookup behind the whole class names itself, and nothing of the class was asked.
+    expect(card.querySelector(".notice")!.textContent).toContain("Source addons");
+    expect(card.querySelector(".notice")!.textContent).toContain("The addon list is unavailable");
+    expect(addonCalls.streams).toHaveLength(0);
+    expect(addonCalls.local).toHaveLength(1);
+    addonProviders = () => json([{ key: "torrentio", name: "Torrentio" }]);
+    await click(card.querySelector(".notice button")!);
+    await flush();
+    expect(addonCalls.sources).toHaveLength(2);
+    expect(addonCalls.streams).toHaveLength(1);
+    // The viewer's own copies answered before the retry and were not read again.
+    expect(addonCalls.local).toHaveLength(1);
+    expect(inDialog(".library-source-card .remote-streams button", "Torrentio 4K")).not.toBeNull();
+  });
+
+  it("saves another library's copy with the destination its own source projects", async () => {
+    libraries = [library(), library({ id: "rlib_b", name: "Second", order: 1 })];
+    const projected: Stream = {
+      ...foreignVersion("rlib_b", "9", "msX", "Other copy", 8_000_000_000),
+      capabilities: { ...capabilities, downloadToLibrary: true },
+      downloadTarget: { subfolder: "Keep", layout: "structured", libraryId: "lib_1" },
+    };
+    remoteLibraryStreams = () => json({ streams: [projected] });
+    const { onDownloadQueued } = await openDetail({ downloadLibraries: [saveView()] });
+    await openPicker();
+    await click(inDialog(".library-source-card .remote-streams button", "Other copy")!);
+    await flush();
+    await click(byText(".library-detail-actions button", "To library")!);
+    const card = document.querySelector<HTMLElement>(".save-target-card")!;
+    // The automatic destination is this copy's own projection: not the addon's rule, not a default.
+    const automatic = [...card.querySelectorAll<HTMLElement>("label")].find((label) => label.textContent?.includes("Keep"))!;
+    expect(automatic.textContent).toContain("Films › Keep › One");
+    await click(document.querySelector(".save-target-card footer button.primary")!);
+    expect(downloadCalls[0]!.sourceId).toBe("src-rlib_b-msX");
+    expect(downloadCalls[0]!.media).toMatchObject({ kind: "movie", title: "One", id: "tt5000", metaType: "movie" });
+    expect(onDownloadQueued).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers the copy action only where the server proved the right", async () => {
+    libraries = [library(), library({ id: "rlib_b", name: "Second", order: 1 })];
+    localCopies = () => json([{ sourceId: "local-1", kind: "library", playable: true, localPath: "Films/One.mkv", libraryName: "Films", behaviorHints: { filename: "One.mkv", videoSize: 3_000_000_000 } }]);
+    remoteLibraryStreams = () => json({ streams: [foreignVersion("rlib_b", "9", "msX", "Plain copy", 8_000_000_000)] });
+    const proofed: Stream = { ...nativeVersion("ms1", "1080p", 2_000_000_000), capabilities: { ...capabilities, downloadToLibrary: true } };
+    await openDetail({ downloadLibraries: [saveView()] }, [proofed]);
+    const save = () => byText(".library-detail-actions button", "To library")! as HTMLButtonElement;
+    // The detail's own version keeps its native dialog: the server proved that copy may be made.
+    expect(save().disabled).toBe(false);
+    await openPicker();
+    await click(inDialog(".library-source-card .remote-streams button", "Plain copy")!);
+    await flush();
+    // This copy reports no native download right, so the action is not offered for it.
+    expect(save().disabled).toBe(true);
+    await openPicker();
+    await click(inDialog(".library-source-card .remote-streams button", "One.mkv")!);
+    await flush();
+    // The viewer's own file is already here: it is never queued as a copy of itself.
+    expect(save().disabled).toBe(true);
+  });
+
+  const playerSave = async (label: string) => {
+    await click(host.querySelector(".player-settings-toggle")!);
+    await click(byText(".player-action", label)!);
+  };
+
+  it("saves the copy that is playing through the destination that copy projects", async () => {
+    libraries = [library(), library({ id: "rlib_b", name: "Second", order: 1 })];
+    const projected: Stream = {
+      ...foreignVersion("rlib_b", "9", "msX", "Other copy", 8_000_000_000),
+      capabilities: { ...capabilities, downloadToLibrary: true },
+      downloadTarget: { subfolder: "Keep", layout: "structured", libraryId: "lib_1" },
+    };
+    remoteLibraryStreams = () => json({ streams: [projected] });
+    const { onDownloadQueued } = await openDetail({ downloadLibraries: [saveView()] });
+    await openPicker();
+    await click(inDialog(".library-source-card .remote-streams button", "Other copy")!);
+    await flush();
+    await click(playButton());
+    await flush();
+    // The player offers the round's own right, and the row it saves is the row that is playing.
+    await playerSave("To library");
+    const card = document.querySelector<HTMLElement>(".save-target-card")!;
+    expect(card).not.toBeNull();
+    const automatic = [...card.querySelectorAll<HTMLElement>("label")].find((label) => label.textContent?.includes("Keep"))!;
+    expect(automatic.textContent).toContain("Films › Keep › One");
+    await click(document.querySelector(".save-target-card footer button.primary")!);
+    expect(downloadCalls[0]!.sourceId).toBe("src-rlib_b-msX");
+    expect(downloadCalls[0]!.media).toMatchObject({ kind: "movie", title: "One", id: "tt5000", metaType: "movie" });
+    expect(onDownloadQueued).toHaveBeenCalledTimes(1);
+  });
+
+  it("saves this detail's own version from the player through the native copy dialog", async () => {
+    const proofed: Stream = {
+      ...nativeVersion("ms1", "1080p", 2_000_000_000),
+      capabilities: { ...capabilities, downloadToLibrary: true },
+      downloadTarget: { subfolder: "", layout: "structured", libraryId: "lib_1" },
+    };
+    const { onDownloadQueued } = await openDetail({ downloadLibraries: [saveView()] }, [proofed]);
+    await click(playButton());
+    await flush();
+    await playerSave("To library");
+    const card = document.querySelector<HTMLElement>(".save-target-card")!;
+    expect(card).not.toBeNull();
+    // The dialog holds the versions the detail already read, so no further read is made for it.
+    expect(calls.sources).toHaveLength(1);
+    await click(document.querySelector(".save-target-card footer button.primary")!);
+    expect(downloadCalls[0]!.sourceId).toBe("src-ms1");
+    expect(downloadCalls[0]!.media).toMatchObject({ kind: "movie", title: "One", id: "tt5000", metaType: "movie" });
+    expect(onDownloadQueued).toHaveBeenCalledTimes(1);
+  });
+
+  it("pulls a file of the viewer's own library down to the device from the player, by its path", async () => {
+    localCopies = () => json([{ sourceId: "local-1", kind: "library", playable: true, localPath: "Films/One.mkv", libraryName: "Films", behaviorHints: { filename: "One.mkv", videoSize: 3_000_000_000 } }]);
+    const { onNotify } = await openDetail();
+    await openPicker();
+    await click(inDialog(".library-source-card .remote-streams button", "One.mkv")!);
+    await flush();
+    await click(playButton());
+    await flush();
+    await click(host.querySelector(".player-settings-toggle")!);
+    // A file that is already here is never queued as a copy of itself, but it does reach the
+    // device: the server resolves the file from its own path again.
+    expect(byText(".player-action", "To library")).toBeUndefined();
+    await click(byText(".player-action", "To device")!);
+    expect(librarySourceCalls).toEqual([{ path: "Films/One.mkv" }]);
+    expect(deviceCalls[0]!.sourceId).toBe("exact");
+    expect(onNotify).toHaveBeenCalledWith("film.mp4 is downloading through the server.");
+  });
+
+  it("tags a copy from another library with its own provider, not the one the detail came from", async () => {
+    libraries = [library({ provider: "emby" }), library({ id: "rlib_b", name: "Second", order: 1, provider: "jellyfin" })];
+    const mine: Stream = { ...nativeVersion("ms1", "1080p", 2_000_000_000), provider: "emby", libraryName: "My library" };
+    const other: Stream = { ...foreignVersion("rlib_b", "9", "msX", "Another copy", 8_000_000_000), libraryName: "Second" };
+    remoteLibraryStreams = () => json({ streams: [other] });
+    await openDetail({}, [mine]);
+    await openPicker();
+    const rows = () => [...document.querySelectorAll<HTMLElement>(".library-source-card .remote-streams button")];
+    // An Emby detail offering a Jellyfin copy: each row wears the provider it really comes from.
+    // The addon answer beside them keeps its own transport tag and its own name as the caption.
+    expect(rows().map((row) => row.querySelector("i")!.textContent)).toEqual(["Emby", "Jellyfin", "HTTP"]);
+    expect(rows().map((row) => row.querySelector("small")!.textContent)).toEqual(["Emby · My library", "Jellyfin · Second", "Torrentio"]);
   });
 });

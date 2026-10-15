@@ -1,14 +1,5 @@
 import { catalogueRef, type CatalogueRef } from "./title-enrichment";
-import { streamSize } from "./streams";
 import type { RemoteItem, Stream } from "./types";
-
-/** Largest first by the size the addon reported in its own text, the order it gave kept on a
- *  tie. The response objects are read, never rewritten, and a missing size sorts last. */
-export const rankAddonStreams = (streams: Stream[]): Stream[] =>
-  streams
-    .map((stream, index) => ({ stream, index, size: streamSize(stream) ?? -1 }))
-    .sort((left, right) => right.size - left.size || left.index - right.index)
-    .map((entry) => entry.stream);
 
 /**
  * The identity a native title is looked up under on the catalogue, when it can be named exactly.

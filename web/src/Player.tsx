@@ -10,6 +10,7 @@ import { releaseMediaElement, AHEAD_CATCHUP_MS, HLS_PLAYER_CONFIG, ignoreHlsErro
 import { clampVolume, readVolume, writeVolume } from "./player-volume";
 import { PlaybackWakeLock, screenWakeLock } from "./playback-wake-lock";
 import { initialPlaybackPosition, progressToSave } from "./player-progress";
+import { remoteVersionKey } from "./source-progress";
 import { detectCapabilities } from "./capabilities";
 import { t, useI18n, type Key } from "./i18n";
 import type { Capabilities, PlaybackMode, PlaybackSession, Stream, Subtitle, Track } from "./types";
@@ -373,7 +374,10 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   // reported through the local remote-state API and never through the generic progress store.
   const remoteItem = stream?.remoteItem;
   const remoteSource = Boolean(stream?.provider || remoteItem);
-  const canSaveToLibrary = !remoteSource && stream?.capabilities?.downloadToLibrary !== false;
+  // A copy of another media server is queued only where the server proved the right for this
+  // exact source; everything else keeps its own policy, where only an explicit refusal hides it.
+  const libraryRight = stream?.capabilities?.downloadToLibrary;
+  const canSaveToLibrary = remoteSource ? libraryRight === true : libraryRight !== false;
   const canSaveToDevice = !remoteSource && stream?.capabilities?.downloadToDevice !== false;
   const addonSubtitles = [...(stream?.subtitles ?? []), ...subtitles];
 
@@ -882,11 +886,18 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       if (!duration || position < 5) return null;
       return { position: Math.round(position), duration: Math.round(duration), mediaSourceId: remoteItem.mediaSourceId };
     };
-    const send = () => { const body = payload(); if (body) void api.saveRemoteState(remoteItem.libraryId, remoteItem.itemId, body).catch(() => undefined); };
+    // The final write names the version it wrote, so the detail behind the player can read its own
+    // store again the moment the write landed -- never before it, and never on another version's.
+    const send = (final = false) => {
+      const body = payload();
+      if (body) void api.saveRemoteState(remoteItem.libraryId, remoteItem.itemId, body)
+        .then(() => { if (final) onProgressSavedRef.current?.(remoteVersionKey(remoteItem)); })
+        .catch(() => undefined);
+    };
     const leaving = () => { const body = payload(); if (body) api.saveRemoteStateOnUnload(remoteItem.libraryId, remoteItem.itemId, body); };
     const timer = setInterval(send, 10_000);
     window.addEventListener("pagehide", leaving);
-    return () => { clearInterval(timer); window.removeEventListener("pagehide", leaving); send(); };
+    return () => { clearInterval(timer); window.removeEventListener("pagehide", leaving); send(true); };
   }, [open, remoteItem]);
 
   useEffect(() => {

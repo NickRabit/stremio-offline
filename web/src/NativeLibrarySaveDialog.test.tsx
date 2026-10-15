@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { NativeLibrarySaveDialog } from "./NativeLibrarySaveDialog";
+import { sourceIdentity } from "./library-detail-sources";
 import { setLocale } from "./i18n";
 import type { LibraryView, RemoteItem, Stream } from "./types";
 
@@ -96,7 +97,7 @@ describe("NativeLibrarySaveDialog", () => {
     const options = [...chooser()!.options];
     expect(options).toHaveLength(2);
     await act(async () => {
-      chooser()!.value = "v1";
+      chooser()!.value = sourceIdentity(stream("v1", "720p", 800_000_000, true, "lib_1"));
       chooser()!.dispatchEvent(new Event("change", { bubbles: true }));
     });
     await click(primary());

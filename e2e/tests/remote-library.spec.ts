@@ -484,9 +484,10 @@ test("a native copy keeps the projected destination as its automatic default", a
 });
 
 for (const [width, height] of [[1440, 900], [390, 844], [844, 390]]) {
-  test(`native detail loads one addon on demand and copies the exact source at ${width}px`, async ({ page }) => {
+  test(`native detail automatically unifies sources and copies the exact source at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height });
     const requests: string[] = [];
+    const matches: string[] = [];
     const copies: Array<{ sourceId: string; target?: unknown; media: { id: string; kind: string } }> = [];
     await page.route("**/api/meta/movie/tt1234567**", route => route.fulfill({ json: { id: "tt1234567", type: "movie", name: "On demand film" } }));
     await page.route("**/api/links/movie/tt1234567**", route => route.fulfill({ json: { links: [] } }));
@@ -498,8 +499,8 @@ for (const [width, height] of [[1440, 900], [390, 844], [844, 390]]) {
     await page.route("**/api/streams/movie/tt1234567**", async route => {
       const provider = new URL(route.request().url()).searchParams.get("addon");
       requests.push(provider ?? "unfiltered");
-      await route.fulfill({ json: [{ sourceId: "addon-copy-exact", kind: "remote", playable: true,
-        name: "Addon 20 GB", addonKey: provider, addonName: "Provider one" }] });
+      await route.fulfill({ json: provider === "provider-one" ? [{ sourceId: "addon-copy-exact", kind: "remote", playable: true,
+        name: "Addon 20 GB", title: "CZ 20 GB", addonKey: provider, addonName: "Provider one" }] : [] });
     });
     await page.route("**/api/downloads", async route => {
       if (route.request().method() !== "POST") return route.continue();
@@ -508,7 +509,23 @@ for (const [width, height] of [[1440, 900], [390, 844], [844, 390]]) {
     });
     await remoteLibraries(page, {
       items: () => [{ id: "addon-film", name: "On demand film", type: "movie", providerIds: { imdb: "tt1234567" } }],
-      sources: [{ sourceId: "native-small", kind: "remote", playable: true, name: "Native 1080p", provider: "emby", behaviorHints: { videoSize: 1_000_000_000 } }],
+      sources: [{ sourceId: "native-small", kind: "remote", playable: true, name: "Native 1080p", provider: "emby", libraryId,
+        remoteItem: { libraryId, itemId: "addon-film", mediaSourceId: "v1", progressKey: "remote:native" },
+        behaviorHints: { videoSize: 1_000_000_000 } }],
+    });
+    await page.route("**/api/local-streams/movie/tt1234567", route => route.fulfill({ json: [{
+      sourceId: "local-copy", kind: "library", playable: true, localPath: "Other/copy.mkv", libraryName: "Local roots",
+      behaviorHints: { filename: "Local 40 GB.mkv", videoSize: 40_000_000_000 },
+    }] }));
+    await page.route("**/api/remote-libraries/*/streams/movie/tt1234567**", route => {
+      const id = new URL(route.request().url()).pathname.split("/")[3]!;
+      matches.push(id);
+      return route.fulfill({ json: { streams: id.endsWith("2") ? [{ sourceId: "foreign-copy", kind: "remote", playable: true,
+        name: "Other server 30 GB", provider: "jellyfin", libraryId: id, libraryName: "Other server",
+        capabilities: { ...capabilities, downloadToLibrary: true }, downloadLibraryId: localLibraryIds[1],
+        behaviorHints: { videoSize: 30_000_000_000 },
+        remoteItem: { libraryId: id, itemId: "foreign-film", mediaSourceId: "v1", progressKey: "remote:foreign" },
+      }] : [] } });
     });
     await page.locator(".remote-libraries .browse-item.library").filter({ hasText: "Remote clips" }).getByRole("button").click();
     const detail = page.locator(".remote-browse-panel .library-title-detail");
@@ -518,16 +535,21 @@ for (const [width, height] of [[1440, 900], [390, 844], [844, 390]]) {
     await detail.getByRole("button", { name: "Vybrat zdroj" }).click();
     const dialog = page.getByRole("dialog", { name: "Vybrat zdroj" });
     await expect(dialog).toBeVisible();
-    expect(requests).toEqual([]);
-    await dialog.getByRole("button", { name: "Zdroje z doplňků" }).click();
-    await expect(dialog.getByText("Provider two", { exact: true })).toBeVisible();
-    expect(requests).toEqual(["discovery"]);
-    await dialog.locator(".addon-provider").filter({ hasText: "Provider one" }).getByRole("button", { name: "Načíst zdroje" }).click();
-    const native = dialog.locator(".library-source-list button").filter({ hasText: "Native 1080p" });
-    const addon = dialog.locator(".library-source-list button").filter({ hasText: "Addon 20 GB" });
+    const native = dialog.locator(".stream-list button").filter({ hasText: "Native 1080p" });
+    const addon = dialog.locator(".stream-list button").filter({ hasText: "Addon 20 GB" });
     await expect(addon).toBeVisible();
-    expect(requests).toEqual(["discovery", "provider-one"]);
+    await expect(dialog.locator(".stream-list button").filter({ hasText: "Local 40 GB" })).toBeVisible();
+    await expect(dialog.locator(".stream-list button").filter({ hasText: "Other server 30 GB" })).toBeVisible();
+    await expect.poll(() => [...requests].sort()).toEqual(["discovery", "provider-one", "provider-two"]);
+    await expect.poll(() => matches.length).toBe(7);
+    expect(matches).not.toContain(libraryId);
+    await expect(dialog.getByRole("button", { name: "Načíst zdroje" })).toHaveCount(0);
+    await expect(dialog.getByRole("button", { name: "Zdroje z doplňků" })).toHaveCount(0);
     await expect(native).toHaveAttribute("aria-pressed", "true");
+    await expect(dialog.locator(".stream-list button").first()).toContainText("Native 1080p");
+    await expect(dialog.getByRole("combobox", { name: "Doplněk" })).toBeVisible();
+    await expect(dialog.getByRole("combobox", { name: "Jazyk" })).toBeVisible();
+    await expect(dialog.getByRole("combobox", { name: "Řazení" })).toBeVisible();
     await page.keyboard.press("Tab");
     expect(await dialog.evaluate(node => node.contains(document.activeElement))).toBe(true);
     const overflowing = await dialog.evaluate(node => node.scrollWidth > node.clientWidth + 1);
@@ -543,8 +565,62 @@ for (const [width, height] of [[1440, 900], [390, 844], [844, 390]]) {
     expect(copies[0]).toMatchObject({ sourceId: "addon-copy-exact", media: { id: "tt1234567", kind: "movie" } });
     expect(copies[0]).not.toHaveProperty("target");
     await detail.getByRole("button", { name: "Vybrat zdroj" }).click();
-    await dialog.getByRole("button", { name: "Zdroje z doplňků" }).click();
-    await expect(dialog.locator(".library-source-list button").filter({ hasText: "Addon 20 GB" })).toHaveAttribute("aria-pressed", "true");
-    expect(requests).toEqual(["discovery", "provider-one"]);
+    await expect(dialog.locator(".stream-list button").filter({ hasText: "Addon 20 GB" })).toHaveAttribute("aria-pressed", "true");
+    expect([...requests].sort()).toEqual(["discovery", "provider-one", "provider-two"]);
+    expect(matches).toHaveLength(7);
+    await dialog.locator(".stream-list button").filter({ hasText: "Other server 30 GB" }).click();
+    await detail.getByRole("button", { name: "Vybrat zdroj" }).click();
+    await expect(dialog.locator('.stream-list button[aria-pressed="true"]')).toContainText("Other server 30 GB");
+    await page.keyboard.press("Escape");
+    await detail.getByRole("button", { name: "Do knihovny", exact: true }).click();
+    const foreignSave = page.getByRole("dialog");
+    await foreignSave.getByRole("button", { name: "Do knihovny", exact: true }).click();
+    await expect(foreignSave).toHaveCount(0);
+    expect(copies).toHaveLength(2);
+    expect(copies[1]).toMatchObject({ sourceId: "foreign-copy", media: { id: "tt1234567", kind: "movie" } });
+    if (width === 1440) {
+      const starts: Array<{ sourceId: string }> = [];
+      const devicePaths: string[] = [];
+      await page.route("**/unified-player.mp4", route => route.fulfill({ path: path.resolve("e2e/fixtures/media/sample.mp4"), contentType: "video/mp4" }));
+      await page.route("**/api/playback", route => {
+        starts.push(route.request().postDataJSON());
+        return route.fulfill({ json: { id: "unified-source-player", mode: "direct", url: "/unified-player.mp4", offset: 0, duration: 600,
+          hardware: false, acceleration: false, audioTracks: [], subtitleTracks: [], audioTrack: 0, subtitleTrack: null, quality: null } });
+      });
+      await page.route("**/api/playback/unified-source-player", route => route.fulfill({ status: 204 }));
+      await page.route("**/api/library/source", route => {
+        const body = route.request().postDataJSON() as { path: string };
+        devicePaths.push(body.path);
+        return route.fulfill({ json: { sourceId: "exact-local-device-copy", kind: "library", playable: true } });
+      });
+      await page.route("**/api/device-download", route => route.fulfill({ json: { url: "/unified-device-file", filename: "copy.mkv" } }));
+      await page.route("**/unified-device-file", route => route.fulfill({ body: "fixture", headers: { "Content-Disposition": 'attachment; filename="copy.mkv"' } }));
+      await detail.getByRole("button", { name: "Přehrát", exact: true }).click();
+      const player = page.locator(".player-overlay");
+      await expect(player).toBeVisible();
+      await player.dispatchEvent("pointermove");
+      await expect(player.getByRole("button", { name: "Uložit do knihovny na serveru", exact: true })).toBeVisible();
+      await expect(player.getByRole("button", { name: "Uložit do tohoto zařízení", exact: true })).toHaveCount(0);
+      await player.getByRole("button", { name: "Uložit do knihovny na serveru", exact: true }).click();
+      const playerSave = page.locator('.identify-overlay[role="dialog"]').filter({ has: page.locator(".save-target-card") });
+      await playerSave.getByRole("button", { name: "Do knihovny", exact: true }).click();
+      await expect(playerSave).toHaveCount(0);
+      expect(copies).toHaveLength(3);
+      expect(copies[2]).toMatchObject({ sourceId: "foreign-copy", media: { id: "tt1234567", kind: "movie" } });
+      await player.dispatchEvent("pointermove");
+      await player.getByRole("button", { name: "Zavřít přehrávač", exact: true }).click();
+      await expect(player).toHaveCount(0);
+      await detail.getByRole("button", { name: "Vybrat zdroj" }).click();
+      await dialog.locator(".stream-list button").filter({ hasText: "Local 40 GB" }).click();
+      await detail.getByRole("button", { name: "Přehrát", exact: true }).click();
+      await expect(player).toBeVisible();
+      await player.dispatchEvent("pointermove");
+      await expect(player.getByRole("button", { name: "Uložit do knihovny na serveru", exact: true })).toHaveCount(0);
+      await player.getByRole("button", { name: "Uložit do tohoto zařízení", exact: true }).click();
+      await expect.poll(() => devicePaths).toContain("Other/copy.mkv");
+      expect(starts.map(item => item.sourceId)).toEqual(["foreign-copy", "local-copy"]);
+      await player.dispatchEvent("pointermove");
+      await player.getByRole("button", { name: "Zavřít přehrávač", exact: true }).click();
+    }
   });
 }

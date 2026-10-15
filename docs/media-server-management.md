@@ -458,14 +458,57 @@ refresh of the same title. The arrow beside Play opens a keyboard-accessible
 picker, focuses the current choice and returns focus on close. It accepts the
 same public stream shape as catalogue sources.
 
-Supplementary add-on sources are read only on demand. The picker keeps a
-collapsed "Sources from addons" action below the native versions; discovery runs
-once when the viewer presses it, and one named provider is read only when the
-viewer asks for that provider, so browsing, opening a detail and playing a
-native version send no add-on stream, discovery or subtitle request at all. A
-loaded provider's rows are cached for the open title only and dropped once the
-title, library or account changes; the native versions stay the default and stay
-visible, and a larger add-on row never replaces them by itself.
+The picker is the catalogue's own list: the same source, language and order
+menus and the same row template, drawn from `SourceFilters`/`SourceRows`. It
+leads with the versions the detail already had — the clicked file's copies, or
+the library the detail was opened in — then the viewer's other copies, then the
+other libraries this account may browse, then the add-on rows; a named sort
+ranks every class together. The selected row's own store supplies its position,
+and two libraries offering the same underlying file stay distinct rows. A row is
+identified by its whole source identity: a group landing while the viewer walks
+the list leaves the focused row the source it was, and two groups repeating one
+source are listed once. A picked source keeps its option even when a language
+filter leaves it no row, with the picker's own way back clearing both menus.
+
+Opening the chooser is the single intent that reads every group at once: the
+add-ons that offer the title, each other library, and the viewer's own copies of
+it, discovered through the title's exact catalogue id (a series id with its own
+season and episode for an episode). The library the detail came from is never
+asked again. At most two add-on stream calls and two library matches are out at
+once, a failing group keeps its own error and retry without touching the others,
+and a group that already answered is not read again while the same title and
+account stay open, and a library the account cannot browse is never asked. A
+group waits for nobody: the viewer's own copies and every add-on the discovery
+has already named are read the moment the chooser opens, and the two lookups
+still needed — the source add-ons, and the other libraries when the caller does
+not already hold them — are listed in the picker with their own loading, error
+and retry state. A failed lookup keeps every row that did land and is asked
+again on its own, and the recommended and by-add-on orders rank the add-on rows
+by the configured provider order the discovery answered in, never by the order
+two answers happened to land in. A late answer from a title, library or account
+that moved on is aborted and dropped. Browsing lists, opening a detail, changing
+the tile style and pressing the native Play send no add-on stream, discovery or
+subtitle request at all, and no per-provider load control exists.
+
+Playing a row that is not the detail's own file is routed by what it really is:
+an add-on row plays under the title's catalogue key, a copy in another library
+under that copy's own remote identity, a copy of the viewer's own files under
+its path. None of them borrows the opened item's watch history, favourite or
+next-episode hand-off, and each resumes and resets only its own store: a
+media-server version is named by its whole library, item and version rather than
+by a version id two libraries may reuse, and a state that reports a different
+version counts as no position at all. After a playback the panel reads that
+store again only once the final write of that same version landed. Saving a row
+queues that exact source: a media-server copy with the destination its own
+source projects, an add-on answer under its add-on's rule, and a file of the
+viewer's own library with nothing to queue at all. The player of a row started
+from this detail offers the same actions over the exact row it is playing: To
+library re-enters that row's own path — the native dialog for a version of the
+opened library, the copy's projected destination for another library's, the
+add-on's rule for an answer — while a file of the viewer's own library is never
+queued as a copy and is instead downloaded to the device from its own path. A
+row also wears the transport it really carries: a copy from another library
+names its own provider, never the provider of the detail it is listed in.
 
 Local discovery reads the clicked file and its identity once, then lists exact
 copies of the bound movie or episode. A failed identity lookup does not hide a

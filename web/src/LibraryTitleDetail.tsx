@@ -1,15 +1,16 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useDialogFocus } from "./dialog-focus";
 import { useDialogViewport } from "./dialog-viewport";
 import { Check, ChevronDown, CirclePlay, FolderOpen, HardDrive, Images, RotateCcw, Star, X } from "lucide-react";
 import { DetailHero, LIBRARY_HERO_EMPTY_GRADIENT, LIBRARY_HERO_GRADIENT, useBackdrop } from "./DetailHero";
 import type { GalleryImage } from "./gallery-images";
-import { bytes, hideBroken } from "./settings-ui";
+import { hideBroken } from "./settings-ui";
 import { t, useI18n } from "./i18n";
-import { defaultSource, orderSources, playableSources, sourceIdentity, sourceName } from "./library-detail-sources";
-import { rankAddonStreams } from "./native-addon-sources";
-import { streamBadge, streamSize } from "./streams";
+import { defaultSource, orderSources, playableSources, sourceIdentity, sourceRowKey } from "./library-detail-sources";
+import { librarySourceChoices, librarySourceEntries, librarySourceRows, type LibrarySourceGroup, type LibrarySourcePanel } from "./library-sources";
+import { providerLabel, SourceFilters, SourceRows } from "./source-rows";
+import { addonNotices, isRemoteStream, noticeText, streamBadge, type StreamSort } from "./streams";
 import type { Stream } from "./types";
 
 export interface LibraryTitleDetailProps {
@@ -46,9 +47,15 @@ export interface LibraryTitleDetailProps {
   /** The native rows alone, when `sources` merges them with loaded addon rows: the default
    *  version is then drawn from these, so a larger addon answer never replaces it. */
   defaultSources?: Stream[] | null;
-  /** The supplementary addon panel, drawn under the version rows. Its presence alone makes the
-   *  arrow appear, so a title with one or two versions still offers addon sources. */
-  sourcePickerExtra?: ReactNode;
+  /** The groups beside the title's own versions: addon answers, the viewer's other copies and the
+   *  other libraries. Its presence alone makes the arrow appear, and opening it reads them all. */
+  sourceGroups?: LibrarySourcePanel;
+  /** Told the moment the chooser opens: the one intent that starts every group. */
+  onOpenSources?: () => void;
+  /** What the title's own rows are called in the filter menu. */
+  nativeSourceLabel?: string;
+  /** The viewer's audio language, which the recommended order prefers. */
+  preferredLanguage?: string;
   sourceError?: string;
   onRetry?: () => void;
   /** The saved position of the selected source, keyed by its identity so another version's
@@ -63,17 +70,11 @@ export interface LibraryTitleDetailProps {
   /** Queues a copy of the currently selected version into a local library. Absent where saving
    *  has no meaning, so the action only appears for a source that can be copied. */
   onSaveToLibrary?: (stream: Stream) => void;
+  /** Whether one row may be copied at all; absent offers the action for every row. */
+  saveSupported?: (stream: Stream) => boolean;
   /** A source row's own tag; absent falls back to the library's name. */
   sourceBadge?: (stream: Stream) => string;
 }
-
-/** A native row only ever reports its size; an addon row keeps it in its own text. */
-const sizeLabel = (stream: Stream) => {
-  const value = stream.behaviorHints?.videoSize;
-  if (typeof value === "number" && value > 0) return bytes(value);
-  const guessed = stream.addonKey ? streamSize(stream) : undefined;
-  return guessed ? bytes(guessed) : "";
-};
 
 /** A nonnegative, floored clock, with hours only when they are there. */
 const clock = (value: number) => {
@@ -85,7 +86,7 @@ const clock = (value: number) => {
 /** The one detail body a playable title shares, local or remote: the catalogue hero, the synopsis
  *  and the sources with a split Play button. The provider-specific parts arrive as props, so the
  *  two containers cannot drift apart and a future add-on stream joins the same selector. */
-export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backdrops, gallery, onGallery, facts, description, chips, favorite, onToggleFavorite, favoriteDisabled, watched, onToggleWatched, watchedDisabled, watchedLabel, onOpenFolder, sources, defaultSources, sourcePickerExtra, sourceError, onRetry, progress, onSourceChange, onClearProgress, onPlay, onSaveToLibrary, sourceBadge }: LibraryTitleDetailProps) {
+export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backdrops, gallery, onGallery, facts, description, chips, favorite, onToggleFavorite, favoriteDisabled, watched, onToggleWatched, watchedDisabled, watchedLabel, onOpenFolder, sources, defaultSources, sourceGroups, onOpenSources, nativeSourceLabel, preferredLanguage, sourceError, onRetry, progress, onSourceChange, onClearProgress, onPlay, onSaveToLibrary, saveSupported, sourceBadge }: LibraryTitleDetailProps) {
   useI18n();
   const backdrop = useBackdrop(backdrops ?? []);
   const [chosen, setChosen] = useState<{ identity: string; key: string } | null>(null);
@@ -104,25 +105,31 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
     wasOpen.current = pickerOpen;
   }, [pickerOpen]);
 
-  // The native versions lead the picker, largest reported size first. The supplementary addon
-  // rows follow in the size order their own text reported, which the shared ranking keeps.
-  const playable = playableSources(sources ?? []);
-  const pickable = [
-    ...orderSources(playable.filter((stream) => !stream.addonKey)),
-    ...rankAddonStreams(playable.filter((stream) => stream.addonKey)),
-  ];
-  // The default is the largest native version. An explicitly passed null or empty native list
-  // means the title has no native default: a supplementary row is never chosen silently, though
-  // the viewer can still pick one. Leaving `defaultSources` undefined keeps the local behaviour
-  // of defaulting to the largest row.
-  const defaultPick = defaultSource(defaultSources === undefined ? pickable : (defaultSources ?? []));
+  // The title's own versions lead the picker, largest reported size first; the groups follow in
+  // the order their plan gave. The default is the largest own version: a row that arrived from
+  // another library or an addon is never chosen silently, though the viewer can still pick one.
+  const own = orderSources(playableSources(sources ?? []));
+  const groups = sourceGroups?.groups ?? [];
+  const pickable = useMemo(() => librarySourceRows(
+    librarySourceEntries(own, nativeSourceLabel ?? t("sources.localFilter"), groups, () => ""), "", "", "recommended", preferredLanguage ?? ""), [own, groups, nativeSourceLabel, preferredLanguage]);
+  const defaultPick = defaultSource(defaultSources === undefined ? own : (defaultSources ?? []));
   const selected = (chosen?.identity === identityKey
-    ? pickable.find((stream) => sourceIdentity(stream) === chosen.key) : undefined) ?? defaultPick;
-  const multiple = pickable.length > 1 || sourcePickerExtra != null;
-  const badgeOf = (stream: Stream) =>
-    stream.addonName || (stream.addonKey ? streamBadge(stream) : "") || sourceBadge?.(stream) || stream.libraryName || t("sources.localBadge");
+    ? pickable.find((stream) => sourceRowKey(stream) === chosen.key) : undefined) ?? defaultPick;
+  const multiple = own.length > 1 || sourceGroups != null;
+  // The tag a row wears: the transport the catalogue names it by (HTTP, RD, the provider, the local
+  // chip), never the addon's own label, which travels as the row's caption instead. A caller's own
+  // badge dresses a row that names no transport itself, and never overrides what the row's own
+  // provider or the addon's answer says.
+  const badgeOf = (stream: Stream) => {
+    if (stream.addonName || stream.addonKey) return streamBadge(stream);
+    // A copy another media server owns wears its own provider, never the one the detail was
+    // opened on: the caller's badge is a fallback, not the row's identity.
+    if (isRemoteStream(stream) && stream.provider) return providerLabel(stream.provider);
+    return sourceBadge?.(stream) || (stream.provider ? providerLabel(stream.provider) : "")
+      || stream.libraryName || t("sources.localBadge");
+  };
   const choose = (stream: Stream) => {
-    setChosen({ identity: identityKey, key: sourceIdentity(stream) });
+    setChosen({ identity: identityKey, key: sourceRowKey(stream) });
     setPickerOpen(false);
   };
 
@@ -218,12 +225,13 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
         {multiple ? <div className="split-button">
           <button ref={playRef} className="primary" disabled={!selected} onClick={() => selected && onPlay(selected)}><CirclePlay/> {t("player.play")}</button>
           <button ref={arrowRef} type="button" className="split-button-toggle" aria-haspopup="dialog" aria-expanded={pickerOpen}
-            aria-label={t("library.chooseSource")} title={t("library.chooseSource")} onClick={() => setPickerOpen(true)}><ChevronDown/></button>
+            aria-label={t("library.chooseSource")} title={t("library.chooseSource")} onClick={() => { onOpenSources?.(); setPickerOpen(true); }}><ChevronDown/></button>
         </div>
           : <button ref={playRef} className="primary" disabled={!selected} onClick={() => selected && onPlay(selected)}><CirclePlay/> {t("player.play")}</button>}
       </div>
       {savedPosition && <button type="button" onClick={() => selected && onPlay(selected, true)}>{t("player.playFromStart")}</button>}
-      {onSaveToLibrary && <button type="button" disabled={!selected} onClick={() => selected && onSaveToLibrary(selected)}><HardDrive/> {t("save.toLibrary")}</button>}
+      {onSaveToLibrary && <button type="button" disabled={!selected || !(saveSupported?.(selected) ?? true)}
+        onClick={() => selected && saveSupported?.(selected) !== false && onSaveToLibrary(selected)}><HardDrive/> {t("save.toLibrary")}</button>}
       {onToggleFavorite && <button type="button" className="icon-button" aria-pressed={favorite ?? false} disabled={favoriteDisabled ?? false}
         aria-label={t(favorite ? "favorite.remove" : "favorite.add")} title={t(favorite ? "favorite.remove" : "favorite.add")}
         onClick={() => onToggleFavorite(!(favorite ?? false))}><Star fill={favorite ? "currentColor" : "none"}/></button>}
@@ -232,25 +240,44 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
         onClick={() => onToggleWatched()}>{watched === undefined ? <RotateCcw/> : <Check/>}</button>}
       {onOpenFolder && <button type="button" onClick={onOpenFolder}><FolderOpen/> {t("library.openFolder")}</button>}
     </div>
-    {pickerOpen && <SourcePicker sources={pickable} selected={selected} badgeOf={badgeOf} extra={sourcePickerExtra} onSelect={choose} onClose={() => setPickerOpen(false)}/>}
+    {pickerOpen && <SourcePicker own={own} groups={groups} panel={sourceGroups} selected={selected} badgeOf={badgeOf}
+      nativeLabel={nativeSourceLabel ?? t("sources.localFilter")} preferredLanguage={preferredLanguage ?? ""}
+      onSelect={choose} onClose={() => setPickerOpen(false)}/>}
   </div>;
 }
 
 /** The destination picker beside Play: the same dialog shell as Save to…, one row per playable
- *  source. Clicking a row chooses it and closes; Escape returns to the arrow. */
-function SourcePicker({ sources, selected, badgeOf, extra, onSelect, onClose }: {
-  sources: Stream[];
+ *  source with the catalogue's own filters and rows. Clicking a row chooses it and closes; Escape
+ *  returns to the arrow. */
+function SourcePicker({ own, groups, panel, selected, badgeOf, nativeLabel, preferredLanguage, onSelect, onClose }: {
+  own: Stream[];
+  groups: LibrarySourceGroup[];
+  panel?: LibrarySourcePanel;
   selected: Stream | null;
   badgeOf: (stream: Stream) => string;
-  extra?: ReactNode;
+  nativeLabel: string;
+  preferredLanguage: string;
   onSelect: (stream: Stream) => void;
   onClose: () => void;
 }) {
   useI18n();
+  const [filter, setFilter] = useState("");
+  const [language, setLanguage] = useState("");
+  const [sort, setSort] = useState<StreamSort>("recommended");
   const listRef = useRef<HTMLDivElement | null>(null);
   const overlayRef = useRef<HTMLDivElement | null>(null);
   useDialogFocus(overlayRef);
   useDialogViewport(overlayRef);
+  const labelOf = (group: LibrarySourceGroup) =>
+    group.kind === "discovery" ? group.name
+      : group.kind === "addon" ? group.name
+        : group.provider ? `${providerLabel(group.provider)} · ${group.name}` : t("sources.localFilter");
+  const entries = useMemo(() => librarySourceEntries(own, nativeLabel, groups, labelOf), [own, groups, nativeLabel]);
+  const choices = useMemo(() => librarySourceChoices(entries, filter, language), [entries, filter, language]);
+  const rows = useMemo(() => librarySourceRows(entries, filter, language, sort, preferredLanguage), [entries, filter, language, sort, preferredLanguage]);
+  /** A discovery or a group still out: the list is not empty yet, it is still arriving. */
+  const pending = groups.some((group) => group.status === "idle" || group.status === "loading");
+  const notices = addonNotices(groups.filter((group) => group.kind === "addon" && group.status === "loaded").flatMap((group) => group.streams));
   useEffect(() => {
     const node = listRef.current?.querySelector<HTMLButtonElement>("button.selected") ?? listRef.current?.querySelector<HTMLButtonElement>("button");
     node?.focus();
@@ -260,7 +287,6 @@ function SourcePicker({ sources, selected, badgeOf, extra, onSelect, onClose }: 
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
-  const selectedKey = selected ? sourceIdentity(selected) : "";
   // The library panel is a container-query container, which would trap a fixed overlay inside it
   // and clip it; the dialog is portalled to the body so it covers the viewport as the shell intends.
   return createPortal(<div ref={overlayRef} tabIndex={-1} className="identify-overlay" role="dialog" aria-modal="true" aria-label={t("library.chooseSource")}
@@ -275,18 +301,29 @@ function SourcePicker({ sources, selected, badgeOf, extra, onSelect, onClose }: 
       </div>
       <div className="dialog-body">
         <p className="identify-hint">{t("mediaServer.versionsHint")}</p>
-        <div className="remote-streams library-source-list" ref={listRef}>
-          {sources.map((stream) => {
-            const key = sourceIdentity(stream);
-            const line = [sizeLabel(stream), badgeOf(stream) === stream.libraryName ? "" : stream.libraryName].filter(Boolean).join(" · ");
-            return <button type="button" key={key} className={key === selectedKey ? "selected" : ""} aria-pressed={key === selectedKey} onClick={() => onSelect(stream)}>
-              <i className="library-badge">{badgeOf(stream)}</i>
-              <span><strong>{sourceName(stream)}</strong>{line && <small>{line}</small>}</span>
-              {key === selectedKey && <Check aria-hidden="true"/>}
-            </button>;
-          })}
-        </div>
-        {extra}
+        <SourceFilters visible={groups.length > 0 || own.length > 1} addon={{
+          value: filter, onChange: setFilter, all: { label: t("sources.allSources"), count: choices.total }, options: choices.options,
+        }} {...(choices.languages.length ? { language: {
+          value: language, onChange: setLanguage, all: { label: t("sources.anyLanguage"), count: choices.languageTotal }, options: choices.languages,
+        } } : {})} sort={{ value: sort, onChange: setSort }}/>
+        {notices.map((notice) => <p className="notice" key={notice.sourceId}><b>{notice.addonName}</b> {noticeText(notice)}</p>)}
+        <SourceRows className="stream-list remote-streams library-source-list" rows={rows} selected={selected} onSelect={onSelect}
+          badgeOf={badgeOf} listRef={listRef}/>
+        {pending && <p className="identify-hint" role="status">{t("sources.askingOthers")}</p>}
+        {/* One line for the whole list, never one per silent library: seven libraries that found
+            nothing are one fact, and the per-group failures below keep their own retry. */}
+        {!rows.length && !pending && <p className="identify-hint" role="status">{filter || language
+          ? t("sources.noneMatchFilter", { count: filter ? entries.find((entry) => entry.key === filter)?.streams.length ?? 0 : choices.total })
+          : t("sources.none")}</p>}
+        {/* The filters emptied a list that is not empty: the way back is the one the catalogue
+            offers, clearing both menus at once. */}
+        {!rows.length && !pending && Boolean(filter || language) && <p className="identify-hint">
+          <button type="button" className="link-button" onClick={() => { setFilter(""); setLanguage(""); }}>{t("sources.clearFilters")}</button>
+        </p>}
+        {groups.filter((group) => group.status === "error").map((group) => <p className="notice" role="alert" key={group.key}>
+          <b>{labelOf(group)}</b> {group.error}
+          {panel && <button type="button" className="link-button" onClick={() => panel.retry(group.key)}>{t("home.retry")}</button>}
+        </p>)}
       </div>
       <footer className="dialog-foot">
         <button type="button" onClick={onClose}>{t("common.close")}</button>
