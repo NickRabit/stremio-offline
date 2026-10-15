@@ -1,7 +1,7 @@
 {
   "name": "@stremio-offline/desktop",
   "private": true,
-  "version": "0.5.75",
+  "version": "0.5.76",
   "description": "Desktop client for connecting to Stremio Offline servers",
   "homepage": "https://github.com/NickRabit/stremio-offline",
   "author": "Stremio Offline contributors",
