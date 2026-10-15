@@ -1,4 +1,5 @@
 import { useState, type ReactNode, type SyntheticEvent } from "react";
+import { remoteTileArtwork } from "./remote-artwork";
 import { fitFor, pickTileArt, type TileFit } from "./tile-shape";
 import type { TileShape } from "./types";
 
@@ -40,7 +41,10 @@ export function TileArt({ shape, poster, wide, fallback }: {
   const identity = JSON.stringify([poster, wide]);
   const [failure, setFailure] = useState({ identity, urls: [] as string[] });
   const failed = failure.identity === identity ? failure.urls : [];
-  const { url, fit } = pickTileArt(shape, failed.includes(poster ?? "") ? undefined : poster, failed.includes(wide ?? "") ? undefined : wide);
+  // A tile draws the listing width of the wide picture, so that is the address whose failure it
+  // remembers; `pickTileArt` narrows the same way, and narrowing twice is the same address.
+  const tiled = remoteTileArtwork(wide);
+  const { url, fit } = pickTileArt(shape, failed.includes(poster ?? "") ? undefined : poster, failed.includes(tiled ?? "") ? undefined : wide);
   const [measured, setMeasured] = useState<{ url: string; width: number; height: number }>();
   const onLoad = (event: SyntheticEvent<HTMLImageElement>) => {
     if (url) setMeasured({ url, width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight });

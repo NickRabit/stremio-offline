@@ -49,7 +49,7 @@ const upstreamOf = (bytes: Buffer, type = "image/png", status = 200) => {
 
 const never = async (): Promise<Response> => { throw new Error("the upstream must not be read"); };
 
-const keyOf = (proofTag: string, size: "" | "detail" = "") =>
+const keyOf = (proofTag: string, size: "" | "tile" | "detail" = "") =>
   remoteImageKey({ connectionId: "conn-1", itemId: "item-1", imageType: "Primary", size, proofTag });
 
 /** A file the index recognises, with a distinct mtime. */
@@ -67,6 +67,10 @@ test("the key is a hex digest of the parts and names no tag, token or address", 
   assert.equal(key.includes("tag-secret"), false);
   assert.equal(key.includes("conn-1"), false);
   assert.notEqual(key, keyOf("other-secret", "detail"));
+  // A width is its own entry: a tile can never be served the detail bytes, or the reverse, and a
+  // request that names no size keeps the entry it always had.
+  assert.notEqual(keyOf("tag-secret", "tile"), keyOf("tag-secret", "detail"));
+  assert.notEqual(keyOf("tag-secret", "tile"), keyOf("tag-secret"));
 });
 
 test("close waits for a poster that has just finished, so the file is durable", async () => {

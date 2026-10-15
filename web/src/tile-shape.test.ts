@@ -22,6 +22,24 @@ describe("pickTileArt", () => {
     expect(pickTileArt("poster", "   ", "wide.jpg")).toEqual({ url: "wide.jpg", fit: "contain" });
     expect(pickTileArt("poster", "", "")).toEqual({ fit: "cover" });
   });
+
+  it("asks for the listing width of a remote backdrop", () => {
+    const backdrop = "/api/remote-libraries/rlib_a/items/item-1/artwork/Backdrop";
+    expect(pickTileArt("wide", undefined, `${backdrop}?tag=abc`)).toEqual({ url: `${backdrop}?tag=abc&size=tile`, fit: "cover" });
+    expect(pickTileArt("poster", undefined, `${backdrop}?tag=abc`)).toEqual({ url: `${backdrop}?tag=abc&size=tile`, fit: "contain" });
+    expect(pickTileArt("wide", undefined, `${backdrop}?size=detail`)).toEqual({ url: `${backdrop}?size=tile`, fit: "cover" });
+  });
+
+  it("leaves artwork that already carries its own size alone", () => {
+    for (const url of [
+      "/api/library/thumb?dir=a%2Fb&shape=wide",
+      "/api/image/abc123",
+      "https://example.com/backdrop.jpg",
+      "/api/remote-libraries/rlib_a/items/item-1/artwork/Primary?tag=abc",
+    ]) {
+      expect(pickTileArt("wide", undefined, url)).toEqual({ url, fit: "cover" });
+    }
+  });
 });
 
 describe("fitFor", () => {

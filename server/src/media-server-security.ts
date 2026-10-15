@@ -44,14 +44,15 @@ export interface MediaServerTransport {
 }
 
 /** The only artwork request the transport can make: a fixed image role for one opaque item id, at
- *  most one validated tag and at most one fixed size variant. A URL, query, header, method,
- *  arbitrary dimension or output format is never caller text. */
+ *  most one validated tag and at most one of the two fixed size variants. A URL, query, header,
+ *  method, arbitrary dimension or output format is never caller text. */
 export interface ArtworkRequest {
   itemId: string;
   imageType: "Primary" | "Backdrop";
   tag?: string;
-  /** A fixed full-detail width for the role; never an arbitrary dimension. */
-  size?: "detail";
+  /** One of the two fixed widths: the listing tile or the full detail; never an arbitrary
+   *  dimension. Absent keeps whatever a role was fetched at before the variants existed. */
+  size?: "tile" | "detail";
 }
 
 /** The only original-media request the transport can make: a fixed static stream path built from
@@ -642,9 +643,9 @@ function checkAssetRequest(args: unknown): MediaServerAssetRequest {
 const ARTWORK_REQUEST_KEYS: readonly string[] = ["itemId", "imageType", "tag", "size"];
 
 /** A plain object with exactly the artwork fields: one bounded item id, one fixed image role, at
- *  most one validated tag and at most the one fixed `detail` size. A symbol key, an accessor, an
- *  inherited or spoofed prototype, an unknown field, a wrong-typed value, an invalid tag or an
- *  unsupported size is refused before any DNS or network work. */
+ *  most one validated tag and at most one fixed size, `tile` or `detail`. A symbol key, an
+ *  accessor, an inherited or spoofed prototype, an unknown field, a wrong-typed value, an invalid
+ *  tag or an unsupported size is refused before any DNS or network work. */
 function checkArtworkRequest(args: unknown): ArtworkRequest {
   if (typeof args !== "object" || args === null || Array.isArray(args)
     || ![Object.prototype, null].includes(Object.getPrototypeOf(args))) {
@@ -669,8 +670,8 @@ function checkArtworkRequest(args: unknown): ArtworkRequest {
   const imageType = record.imageType;
   if (imageType !== "Primary" && imageType !== "Backdrop") throw invalid("The media-server image type is not allowed.");
   const rawSize = record.size;
-  if (rawSize !== undefined && rawSize !== "detail") throw invalid("The media-server artwork size is not allowed.");
-  const size: ArtworkRequest["size"] = rawSize === "detail" ? "detail" : undefined;
+  if (rawSize !== undefined && rawSize !== "tile" && rawSize !== "detail") throw invalid("The media-server artwork size is not allowed.");
+  const size: ArtworkRequest["size"] = rawSize === "tile" || rawSize === "detail" ? rawSize : undefined;
   const tag = record.tag === undefined ? undefined : validateArtworkTag(record.tag);
   return {
     itemId,
@@ -679,6 +680,15 @@ function checkArtworkRequest(args: unknown): ArtworkRequest {
     ...(size === undefined ? {} : { size }),
   };
 }
+
+/** The provider width behind each artwork variant. A request that names no size keeps the legacy
+ *  default -- a Backdrop was always fetched at the detail width, a Primary already at the listing
+ *  one -- so a client that predates `tile` is served exactly what it was before. */
+const artworkMaxWidth = (request: ArtworkRequest): string => {
+  const width = request.size === "tile" ? 640 : request.size === "detail" ? 1920
+    : request.imageType === "Backdrop" ? 1920 : 640;
+  return String(width);
+};
 
 /** The declared media type, lower-cased and stripped of parameters, from a bounded printable
  *  header. It is checked against the kind's allow-list and the actual bytes. */
@@ -1424,7 +1434,7 @@ export function createMediaServerTransport(
     const bearer = validateMediaServerToken(token);
     const query = new URLSearchParams();
     if (request.tag !== undefined) query.set("tag", request.tag);
-    query.set("MaxWidth", request.imageType === "Backdrop" || request.size === "detail" ? "1920" : "640");
+    query.set("MaxWidth", artworkMaxWidth(request));
     query.set("Quality", "85");
     query.set("Format", "Jpg");
     const url = `${baseUrl}/Items/${encodeURIComponent(request.itemId)}/Images/${request.imageType}?${query.toString()}`;

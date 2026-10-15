@@ -1001,6 +1001,24 @@ it("uses the high-resolution native preview when a remote item has no backdrop o
   expect(onGallery.mock.calls[0]?.[0]?.[0]?.url).toBe(`${preview}&size=detail`);
 });
 
+it("draws a remote backdrop at the listing width while the gallery keeps the wide address", async () => {
+  const wide = "/api/remote-libraries/rlib_a/items/clip/artwork/Backdrop?tag=b1";
+  const clip: RemoteItem = { id: "clip", name: "Wide and tall", type: "movie", providerIds: {}, poster: "/api/remote-libraries/rlib_a/items/clip/artwork/Primary?tag=p1", wide };
+  browse = () => json(page([clip]));
+  item = () => json({ item: clip, capabilities });
+  const onGallery = vi.fn();
+  await render({ onGallery, libraryTileShape: "wide" });
+  await click(host.querySelector('.remote-libraries button.library-open')!);
+  expect(host.querySelector('.browse-item img')?.getAttribute('src')).toBe(`${wide}&size=tile`);
+  await click(tileButtons()[0]!);
+  await flush();
+  const surface = host.querySelector<HTMLElement>('.library-title-detail')!;
+  await click(surface.querySelector('.gallery-open')!);
+  const gallery = onGallery.mock.calls[0]?.[0] as Array<{ url: string }>;
+  expect(gallery.map((image) => image.url)).toContain(wide);
+  expect(gallery.some((image) => image.url.includes("size=tile"))).toBe(false);
+});
+
 describe("RemoteLibraryBrowser saved position", () => {
   const version = (name: string, mediaSourceId: string, bytes: number): Stream => ({
     sourceId: mediaSourceId, kind: "remote", playable: true, name, provider: "jellyfin",

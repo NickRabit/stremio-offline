@@ -313,11 +313,12 @@ const readIfNoneMatch = (value: unknown): string | undefined => {
   return value;
 };
 
-/** The one optional artwork size a read accepts: the fixed `detail` variant, or nothing. */
-const readArtworkSize = (value: unknown): "detail" | undefined => {
+/** The optional artwork size a read accepts: the fixed `tile` or `detail` variant, or nothing,
+ *  which keeps the width a role was fetched at before the variants existed. */
+const readArtworkSize = (value: unknown): "tile" | "detail" | undefined => {
   if (value === undefined) return undefined;
-  if (value !== "detail") throw invalid("The media-server artwork size is not supported.");
-  return "detail";
+  if (value !== "tile" && value !== "detail") throw invalid("The media-server artwork size is not supported.");
+  return value;
 };
 
 /** A strong or weak `If-None-Match` match against the one current tag. */
@@ -1384,15 +1385,16 @@ export class MediaServerManager {
   }
 
   /** One item's official artwork as a scoped, streaming response. The image role is one of two
-   *  fixed values, the optional `tag` is a bounded opaque string and the optional `size` is the one
-   *  fixed `detail` variant; the item may be of any kind. Membership is taken from a short-lived
-   *  proof (an id a page already returned, or a one-time detail and ancestor proof for an unknown
-   *  id) so a page's images never fan out into per-image detail and ancestor calls. `If-None-Match`
-   *  is answered locally with a 304 once the local authority and the current tag still hold, and a
-   *  detail variant carries its own ETag so a tile ETag can never answer a detail request; the bytes
-   *  stream through the image lane so an image burst never consumes a metadata or playback-guard
-   *  slot. A read whose URL tag equals the proof's tag may be replayed from the disk and memory
-   *  cache, and is then immutable to the browser; the grant is rechecked either way. */
+   *  fixed values, the optional `tag` is a bounded opaque string and the optional `size` is one of
+   *  the two fixed widths, `tile` or `detail`; the item may be of any kind. Membership is taken
+   *  from a short-lived proof (an id a page already returned, or a one-time detail and ancestor
+   *  proof for an unknown id) so a page's images never fan out into per-image detail and ancestor
+   *  calls. `If-None-Match` is answered locally with a 304 once the local authority and the current
+   *  tag still hold, and a size variant carries its own ETag so one width's ETag can never answer a
+   *  read of the other; the bytes stream through the image lane so an image burst never consumes a
+   *  metadata or playback-guard slot. A read whose URL tag equals the proof's tag may be replayed
+   *  from the disk and memory cache, and is then immutable to the browser; the grant is rechecked
+   *  either way. */
   async readArtwork(
     authority: MediaServerAuthority,
     libraryId: unknown,
@@ -1421,7 +1423,7 @@ export class MediaServerManager {
     const proofTag = imageType === "Primary" ? proof.primaryImageTag : proof.backdropImageTag;
     const versioned = tag !== undefined && tag === proofTag;
     const cacheControl = versioned ? IMAGE_IMMUTABLE_CACHE_CONTROL : IMAGE_CACHE_CONTROL;
-    const etagValue = proofTag === undefined ? undefined : size === "detail" ? `${proofTag}:detail` : proofTag;
+    const etagValue = proofTag === undefined ? undefined : size === undefined ? proofTag : `${proofTag}:${size}`;
     const etag = etagValue === undefined ? undefined : `"${etagValue}"`;
     if (etag !== undefined && ifNoneMatch !== undefined && ifNoneMatchMatches(ifNoneMatch, etag)) {
       this.recheckContent(authority, request, library.id, connection);
