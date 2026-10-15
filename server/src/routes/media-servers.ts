@@ -366,11 +366,7 @@ export function registerMediaServerRoutes(app: express.Application, deps: MediaS
       return void res.status(304).end();
     }
     const key = `${String(req.params.id)}\u0000${String(requested.parent ?? "")}\u0000${shape}\u0000${stamp}`;
-    const composed = await mosaics.read(key) ?? await (async () => {
-      const bytes = await composeMosaic(sources, shape);
-      await mosaics.write(key, bytes);
-      return bytes;
-    })();
+    const composed = await mosaics.compose(key, () => composeMosaic(sources, shape));
     res.setHeader("content-type", "image/jpeg");
     res.setHeader("x-content-type-options", "nosniff");
     res.setHeader("cache-control", versioned ? IMAGE_IMMUTABLE_CACHE_CONTROL : IMAGE_CACHE_CONTROL);

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -15,6 +15,15 @@ import { ffmpegPath } from "./media-tools.js";
  */
 
 const run = promisify(execFile);
+
+/** The extension a source really is: the bytes come from a provider or from a thumbnail and may
+ *  be any of the four formats the image cache stores. */
+const imageExtension = (bytes: Buffer): string => {
+  if (bytes.length > 8 && bytes[0] === 0x89 && bytes.toString("latin1", 1, 4) === "PNG") return "png";
+  if (bytes.length > 12 && bytes.toString("latin1", 0, 4) === "RIFF" && bytes.toString("latin1", 8, 12) === "WEBP") return "webp";
+  if (bytes.length > 6 && bytes.toString("latin1", 0, 4) === "GIF8") return "gif";
+  return "jpg";
+};
 
 /** The size a tile actually draws, per shape. */
 export const MOSAIC_SIZES = { poster: { width: 480, height: 720 }, wide: { width: 960, height: 540 } } as const;
@@ -39,6 +48,15 @@ const even = (value: number) => Math.max(2, value - (value % 2));
  *  four or more fill a grid; one covers the frame, which a tile only asks for with no fan. */
 export function mosaicCells(count: number, shape: MosaicShape): MosaicCell[] {
   const { width, height } = MOSAIC_SIZES[shape];
+  if (count <= 1) return [{ x: 0, y: 0, width: even(width), height: even(height) }];
+  // A wide frame is a row of pictures: stacked cells there would be letterbox slivers, while a
+  // column keeps each one close to its own portrait shape.
+  if (shape === "wide") {
+    const column = even(Math.floor((width - GAP * (count - 1)) / count));
+    return Array.from({ length: count }, (_unused, index) => ({
+      x: index * (column + GAP), y: 0, width: column, height: even(height),
+    }));
+  }
   const columns = () => {
     const left = even(Math.floor((width - GAP) / 2));
     return { left, right: even(width - GAP - left) };
@@ -47,7 +65,6 @@ export function mosaicCells(count: number, shape: MosaicShape): MosaicCell[] {
     const top = even(Math.floor((height - GAP) / 2));
     return { top, bottom: even(height - GAP - top) };
   };
-  if (count <= 1) return [{ x: 0, y: 0, width: even(width), height: even(height) }];
   if (count === 2) {
     const { left, right } = columns();
     return [
@@ -100,7 +117,7 @@ export async function composeMosaic(sources: readonly Buffer[], shape: MosaicSha
   try {
     const inputs: string[] = [];
     for (const [index, bytes] of images.entries()) {
-      const file = path.join(dir, `${index}.jpg`);
+      const file = path.join(dir, `${index}.${imageExtension(bytes)}`);
       await writeFile(file, bytes);
       inputs.push(file);
     }
@@ -129,11 +146,14 @@ export class MosaicCache {
   private entries = new Map<string, Buffer>();
   private bytes = 0;
   private maintenance?: Promise<void>;
+  private readonly composing = new Map<string, Promise<Buffer>>();
+  private active = 0;
+  private readonly waiting: Array<() => void> = [];
 
   constructor(
     private readonly dir = path.join(process.env.DATA_DIR ?? "/data", "mosaics"),
     private readonly cap = megabytes(process.env.MOSAIC_CACHE_MB, 128),
-    private readonly memoryCap = 32 * 1024 * 1024,
+    private readonly memoryCap = megabytes(process.env.MOSAIC_MEMORY_MB, 32),
   ) {}
 
   file(key: string): string {
@@ -148,10 +168,40 @@ export class MosaicCache {
       this.entries.set(key, known);
       return known;
     }
-    const bytes = await readFile(this.file(key)).catch(() => undefined);
+    const file = this.file(key);
+    const bytes = await readFile(file).catch(() => undefined);
     if (!bytes?.length) return undefined;
+    // A fan somebody draws is a fan somebody wants: its place in the eviction order is now.
+    await utimes(file, new Date(), new Date()).catch(() => undefined);
     this.remember(key, bytes);
     return bytes;
+  }
+
+  /** The composed fan for a key, composing it once: two requests for the same fan wait on one
+   *  composition, and at most two composes run at once no matter how many tiles ask. */
+  async compose(key: string, work: () => Promise<Buffer>): Promise<Buffer> {
+    const known = await this.read(key);
+    if (known) return known;
+    const running = this.composing.get(key);
+    if (running) return running;
+    const pass = (async () => {
+      await this.acquire(slot => this.waiting.push(slot));
+      try {
+        const bytes = await work();
+        await this.write(key, bytes);
+        return bytes;
+      } finally {
+        const next = this.waiting.shift();
+        if (next) next(); else this.active -= 1;
+      }
+    })().finally(() => { this.composing.delete(key); });
+    this.composing.set(key, pass);
+    return pass;
+  }
+
+  private async acquire(queue: (slot: () => void) => void): Promise<void> {
+    if (this.active < 2) { this.active += 1; return; }
+    await new Promise<void>((resolve) => queue(resolve));
   }
 
   async write(key: string, bytes: Buffer): Promise<void> {

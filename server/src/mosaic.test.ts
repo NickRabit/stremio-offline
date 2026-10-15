@@ -6,9 +6,10 @@ import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 import { composeMosaic, MosaicCache, mosaicCells, mosaicShape, MOSAIC_SIZES } from "./mosaic.js";
+import { ffmpegPath } from "./media-tools.js";
 
 const run = promisify(execFile);
-const hasFfmpeg = await run("ffmpeg", ["-version"]).then(() => true, () => false);
+const hasFfmpeg = await run(ffmpegPath(), ["-version"]).then(() => true, () => false);
 
 test("a fan lays its pictures out inside the frame", () => {
   for (const shape of ["poster", "wide"] as const) {
@@ -47,7 +48,7 @@ test("a composed fan is one JPEG at the size a tile draws", { skip: !hasFfmpeg }
     const sources: Buffer[] = [];
     for (const [index, size] of ["400x600", "500x750", "300x450", "640x960"].entries()) {
       const file = path.join(dir, `${index}.jpg`);
-      await run("ffmpeg", ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", `testsrc=size=${size}:duration=1`, "-frames:v", "1", "-y", file]);
+      await run(ffmpegPath(), ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", `testsrc=size=${size}:duration=1`, "-frames:v", "1", "-y", file]);
       sources.push(await readFile(file));
     }
     for (const shape of ["poster", "wide"] as const) {
