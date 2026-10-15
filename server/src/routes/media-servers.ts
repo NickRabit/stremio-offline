@@ -5,7 +5,8 @@ import { log } from "../logger.js";
 import { ResourceError } from "../media-resources.js";
 import { ForbiddenError } from "../roles.js";
 import { MEDIA_SERVER_LIMITS, MediaServerError, isMediaServerError } from "../media-server-types.js";
-import type { MediaServerAuthority, MediaServerManager } from "../media-server-manager.js";
+import { IMAGE_CACHE_CONTROL, IMAGE_IMMUTABLE_CACHE_CONTROL, type MediaServerAuthority, type MediaServerManager } from "../media-server-manager.js";
+import { composeMosaic, MosaicCache, mosaicShape } from "../mosaic.js";
 import type { MediaServerPersonal, RemoteCards } from "../media-server-personal.js";
 import type { MediaServerSources } from "../media-server-sources.js";
 import type { ResourceOwner } from "../media-resources.js";
@@ -13,6 +14,8 @@ import { asyncRoute, type RouteContext } from "./context.js";
 
 export interface MediaServersDeps extends RouteContext {
   mediaServers: MediaServerManager;
+  /** Composed fans: one picture per tile that stands for several films. */
+  mosaics: MosaicCache;
   mediaSources: MediaServerSources;
   remotePersonal: MediaServerPersonal;
   ownerOf(req: express.Request): ResourceOwner;
@@ -190,7 +193,7 @@ const streamName = (req: express.Request): string | undefined => {
 };
 
 export function registerMediaServerRoutes(app: express.Application, deps: MediaServersDeps): void {
-  const { mediaServers, mediaSources, remotePersonal, ownerOf, currentUser, requireAccess } = deps;
+  const { mediaServers, mosaics, mediaSources, remotePersonal, ownerOf, currentUser, requireAccess } = deps;
 
   /** The one request guard: the acting account, the captured library and connection, the abort
    *  wiring, and every re-check the response boundary repeats before a byte or a JSON value
@@ -332,8 +335,48 @@ export function registerMediaServerRoutes(app: express.Application, deps: MediaS
   }, 200, true));
   app.get("/api/remote-libraries/:id/preview", handle(async (req, authority, signal) => {
     const parentId = previewParent(req);
-    return mediaServers.previewDirectory(authority, req.params.id, parentId, signal, req.query.artwork === "children");
+    const { posters, versions } = await mediaServers.previewDirectory(authority, req.params.id, parentId, signal, req.query.artwork === "children");
+    // More than one picture is one fan, composed on demand behind an address that is stable
+    // until one of those pictures changes: the tile asks for it with its own shape.
+    if (posters.length < 2) return { posters };
+    const parent = parentId === undefined ? "" : `&parent=${encodeURIComponent(parentId)}`;
+    return { posters, mosaic: `/api/remote-libraries/${encodeURIComponent(String(req.params.id))}/mosaic?v=${encodeURIComponent(MosaicCache.stamp(versions))}${parent}` };
   }, 200, true));
+  /** One folder's fan, composed here from the pictures the tile would have drawn itself. The
+   *  address carries the stamp of those pictures and the shape the tile draws, so a changed fan
+   *  is a new address; the bytes are kept under both. Private, a year, and immutable only when
+   *  the stamp the client asked for is still the current one. */
+  app.get("/api/remote-libraries/:id/mosaic", asyncRoute(async (req, res) => {
+    const requested = req.query as Record<string, unknown>;
+    for (const key of Object.keys(requested)) {
+      if (key !== "parent" && key !== "shape" && key !== "v") throw malformed("The mosaic request has an unknown query field.");
+    }
+    const shape = mosaicShape(requested.shape);
+    const { sources, versions } = await guardRequest<{ sources: Buffer[]; versions: string[] }>(req, res, true, (request, authority, signal) => {
+      assertNoBody(request);
+      return mediaServers.mosaicSources(authority, request.params.id, requested.parent, signal);
+    });
+    if (sources.length < 2) return void res.status(404).end();
+    const stamp = MosaicCache.stamp(versions);
+    const versioned = typeof requested.v === "string" && requested.v === stamp;
+    const etag = `"${stamp}"`;
+    if (req.headers["if-none-match"] === etag) {
+      res.setHeader("etag", etag);
+      res.setHeader("cache-control", versioned ? IMAGE_IMMUTABLE_CACHE_CONTROL : IMAGE_CACHE_CONTROL);
+      return void res.status(304).end();
+    }
+    const key = `${String(req.params.id)}\u0000${String(requested.parent ?? "")}\u0000${shape}\u0000${stamp}`;
+    const composed = await mosaics.read(key) ?? await (async () => {
+      const bytes = await composeMosaic(sources, shape);
+      await mosaics.write(key, bytes);
+      return bytes;
+    })();
+    res.setHeader("content-type", "image/jpeg");
+    res.setHeader("x-content-type-options", "nosniff");
+    res.setHeader("cache-control", versioned ? IMAGE_IMMUTABLE_CACHE_CONTROL : IMAGE_CACHE_CONTROL);
+    res.setHeader("etag", etag);
+    res.send(composed);
+  }));
   app.get("/api/remote-libraries/:id/items/:itemId/episodes", handle(async (req, authority, signal) => {
     assertNoBody(req);
     return mediaServers.itemEpisodes(authority, req.params.id, req.params.itemId, req.query, signal);

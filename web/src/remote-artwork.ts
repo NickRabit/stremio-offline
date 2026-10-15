@@ -18,3 +18,13 @@ export function remoteTileArtwork(url?: string): string | undefined {
   params.set("size", "tile");
   return `${path}?${params.toString()}`;
 }
+
+/** A composed fan at the shape a tile draws. The address the server hands out carries the stamp
+ *  of the pictures behind it, so the same fan serves both shapes and each shape is its own entry.
+ *  Every other address is handed back untouched. */
+export function remoteMosaicArtwork(url: string | undefined | null, shape: "poster" | "wide"): string | undefined {
+  if (!url || !/\/mosaic\?/.test(url)) return url ?? undefined;
+  const params = new URLSearchParams(url.split("?", 2)[1]);
+  params.set("shape", shape);
+  return `${url.split("?", 1)[0]}?${params.toString()}`;
+}

@@ -323,12 +323,13 @@ export const api = {
    *  attached root; the cursor, search, sort and order all stay inside that same directory. */
   remoteBrowse: (libraryId: string, options: { parentId?: string; mode?: RemoteBrowseMode; limit?: number; cursor?: string; search?: string; type?: RemoteItemType; sort?: RemoteBrowseSort; order?: RemoteBrowseOrder; signal?: AbortSignal } = {}) =>
     request<RemoteItemPage>(`/api/remote-libraries/${encodeURIComponent(libraryId)}/browse?${q({ parentId: options.parentId, mode: options.mode, limit: options.limit ?? 60, cursor: options.cursor, search: options.search, type: options.type, sort: options.sort, order: options.order })}`, { signal: options.signal }),
-  /** Up to four authorized artwork URLs drawn from a library root or one folder, for the tile
-   *  mosaic. A library with mosaics off answers an empty list without touching the provider.
-   *  `preferChildren` asks for the children's own artwork instead of one composited library
-   *  picture, which is only wanted for a root tile that draws the local collage. */
+  /** What a tile draws for a library root or one folder: `mosaic`, one address the server
+   *  composes and caches when more than one picture stands behind it, or `posters`, the single
+   *  picture the folder carries itself. A library with mosaics off answers neither without
+   *  touching the provider. `preferChildren` asks for the children's pictures rather than the
+   *  root's own, which a root tile that stands for its films wants. */
   remotePreview: (libraryId: string, parentId?: string, signal?: AbortSignal, preferChildren = false) =>
-    request<{ posters: string[] }>(`/api/remote-libraries/${encodeURIComponent(libraryId)}/preview?${q({ parentId, artwork: preferChildren ? "children" : undefined })}`, { signal }),
+    request<{ posters: string[]; mosaic?: string }>(`/api/remote-libraries/${encodeURIComponent(libraryId)}/preview?${q({ parentId, artwork: preferChildren ? "children" : undefined })}`, { signal }),
   remoteItem: (libraryId: string, itemId: string, signal?: AbortSignal) =>
     request<{ item: RemoteItem; capabilities: RemoteItemPage["capabilities"] }>(`/api/remote-libraries/${encodeURIComponent(libraryId)}/items/${encodeURIComponent(itemId)}`, { signal }),
   remoteEpisodes: (libraryId: string, itemId: string, options: { limit?: number; cursor?: string; signal?: AbortSignal } = {}) =>

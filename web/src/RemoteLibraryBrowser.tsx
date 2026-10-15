@@ -11,7 +11,7 @@ import { sourceIdentity } from "./library-detail-sources";
 import { Player } from "./Player";
 import { DetailHero, LIBRARY_HERO_EMPTY_GRADIENT, LIBRARY_HERO_GRADIENT, useBackdrop } from "./DetailHero";
 import { remoteDetailArtwork } from "./remote-artwork";
-import { preloadRemotePosters, RemoteFolderArt, RemoteLibraryArt, RemoteTileArt } from "./remote-mosaic";
+import { RemoteFolderArt, RemoteLibraryArt, RemoteTileArt } from "./remote-mosaic";
 import { pickTileArt } from "./tile-shape";
 import { TitleChips } from "./TitleChips";
 import { catalogueGalleryImages, mergeGallery, posterAndWide, type GalleryImage } from "./gallery-images";
@@ -419,7 +419,6 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     api.remoteBrowse(library.id, { parentId, mode, limit: PAGE_SIZE, search: query || undefined, sort, order: desc ? "desc" : "asc", signal: controller.signal })
       .then((page) => {
         if (epoch !== listEpoch.current) return;
-        preloadRemotePosters(page.items.map((item) => pickTileArt(tileShape.current, item.poster, item.wide).url));
         setListing({ items: page.items, cursor: page.cursor, total: page.total, loading: false, error: "" });
       })
       .catch((error) => {
@@ -440,7 +439,6 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     api.remoteBrowse(library.id, { parentId: series.id, mode: "titles", type: "episode", limit: PAGE_SIZE, signal: controller.signal })
       .then((page) => {
         if (epoch !== episodeEpoch.current) return;
-        preloadRemotePosters(page.items.map((item) => pickTileArt(tileShape.current, item.poster, item.wide).url));
         setEpisodes({ items: page.items, cursor: page.cursor, total: page.total, loading: false, error: "" });
       })
       .catch((error) => {

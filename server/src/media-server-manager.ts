@@ -340,8 +340,8 @@ const ifNoneMatchMatches = (header: string, etag: string): boolean => {
  *  is a year without it. A request that arrives still rechecks the grant, and a matching ETag
  *  is a local 304. A revoked grant or a disabled library may keep a poster a browser already
  *  holds for up to a year; that tradeoff is accepted. */
-const IMAGE_CACHE_CONTROL = "private, max-age=31536000";
-const IMAGE_IMMUTABLE_CACHE_CONTROL = "private, max-age=31536000, immutable";
+export const IMAGE_CACHE_CONTROL = "private, max-age=31536000";
+export const IMAGE_IMMUTABLE_CACHE_CONTROL = "private, max-age=31536000, immutable";
 
 const artworkNotModified = (etag: string, cacheControl: string): Response =>
   new Response(null, { status: 304, headers: { etag, "cache-control": cacheControl } });
@@ -463,6 +463,12 @@ interface CachedPreview {
   items: ProviderItem[];
   posters: string[];
 }
+
+/** The version of each picture a fan would use, in the order the fan draws them: what the stamp
+ *  of a composed mosaic is drawn from, so a fan changes exactly when one of its pictures does. */
+const mosaicVersions = (items: readonly ProviderItem[]): string[] =>
+  items.filter((item) => item.hasPrimaryImage === true).slice(0, 4)
+    .map((item) => `${item.id}:${item.primaryImageTag ?? ""}`);
 
 /** One proved original: the item detail, ancestor chain and named version were shown to hold for
  *  one acting account under one connection generation and secret. Cached for one playback-guard
@@ -1274,13 +1280,14 @@ export class MediaServerManager {
     return result;
   }
 
-  /** Own artwork wins; otherwise one bounded child page supplies the mosaic. */
-  async previewDirectory(authority: MediaServerAuthority, libraryId: unknown, parentId?: unknown, signal?: AbortSignal, preferChildren = false): Promise<{ posters: string[] }> {
+  /** Own artwork wins; otherwise one bounded child page supplies the mosaic. The versions travel
+   *  with the posters so the caller can name the fan it is about to ask for. */
+  async previewDirectory(authority: MediaServerAuthority, libraryId: unknown, parentId?: unknown, signal?: AbortSignal, preferChildren = false): Promise<{ posters: string[]; versions: string[] }> {
     const request = this.requestSignal(signal);
     const user = this.currentActor(authority, request);
     const library = this.requireVisibleLibrary(user, libraryId);
     const connection = this.requireConnection(library.connectionId);
-    if (!effectiveMosaic(library)) return { posters: [] };
+    if (!effectiveMosaic(library)) return { posters: [], versions: [] };
     const requestedParent = parseParentId(typeof parentId === "string" ? parentId : undefined);
     const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId }, request);
     this.recheckContent(authority, request, library.id, connection);
@@ -1291,7 +1298,7 @@ export class MediaServerManager {
     const remembered = this.previewFor(library, connection, requestedParent, preferChildren);
     if (remembered) {
       for (const item of remembered.items) this.putProof(this.proofOf(user, library, connection, item));
-      return { posters: remembered.posters };
+      return { posters: remembered.posters, versions: mosaicVersions(remembered.items) };
     }
     let root = library.remoteId;
     let tag: string | undefined;
@@ -1299,12 +1306,14 @@ export class MediaServerManager {
       tag = session.libraries.find((entry) => entry.id === root)?.primaryImageTag;
     } else {
       const parent = await this.proveParent(authority, request, library, connection, session, requestedParent);
-      if (parent.type === "season") return { posters: [] };
+      if (parent.type === "season") return { posters: [], versions: [] };
       root = parent.itemId;
       tag = parent.primaryImageTag;
     }
     this.recheckContent(authority, request, library.id, connection);
-    if (tag !== undefined && (!preferChildren || requestedParent !== undefined)) return { posters: [remoteArtworkPath(library.id, root, "Primary", tag)] };
+    if (tag !== undefined && (!preferChildren || requestedParent !== undefined)) {
+      return { posters: [remoteArtworkPath(library.id, root, "Primary", tag)], versions: [] };
+    }
     const page = await this.upstream(connection, request, () => session.provider.pageDirectory(session.token, connection.accountId, root, {
       mode: preferChildren && requestedParent === undefined && library.type !== "mixed" ? "titles" : "folders",
       ...(preferChildren && requestedParent === undefined && library.type !== "mixed" ? { type: library.type } : {}),
@@ -1315,7 +1324,39 @@ export class MediaServerManager {
     const posters = page.items.filter((item) => item.hasPrimaryImage === true).slice(0, 4)
       .map((item) => remoteArtworkPath(library.id, item.id, "Primary", item.primaryImageTag));
     this.rememberPreview(library, connection, requestedParent, preferChildren, page.items, posters);
-    return { posters };
+    return { posters, versions: mosaicVersions(page.items) };
+  }
+
+  /** One folder's fan as bytes: the pictures the tile would have drawn itself, read here under
+   *  the viewer's own grant and through the image cache, so the browser asks for one address and
+   *  composes nothing. Fewer than two pictures is no fan. */
+  async mosaicSources(authority: MediaServerAuthority, libraryId: unknown, itemId: unknown, signal?: AbortSignal): Promise<{ sources: Buffer[]; versions: string[] }> {
+    const request = this.requestSignal(signal);
+    const user = this.currentActor(authority, request);
+    const library = this.requireVisibleLibrary(user, libraryId);
+    const connection = this.requireConnection(library.connectionId);
+    if (!effectiveMosaic(library)) return { sources: [], versions: [] };
+    const requested = parseParentId(typeof itemId === "string" ? itemId : undefined);
+    const parent = requested === library.remoteId ? undefined : requested;
+    const preferChildren = parent === undefined;
+    await this.previewDirectory(authority, library.id, parent, request, preferChildren);
+    const rows = this.previewFor(library, connection, parent, preferChildren)?.items ?? [];
+    // The listing's own rows name the tag each poster was listed under, so the picture read below
+    // asks for exactly what the tile would have asked for.
+    const wanted = rows.filter((item) => item.hasPrimaryImage === true).slice(0, 4);
+    const sources: Buffer[] = [];
+    const versions: string[] = [];
+    for (const row of wanted) {
+      const response = await this.readArtwork(authority, library.id, row.id, "Primary", request, {
+        ...(row.primaryImageTag === undefined ? {} : { tag: row.primaryImageTag }),
+        size: "tile",
+      });
+      if (response.status !== 200 || !response.body) continue;
+      sources.push(Buffer.from(await response.arrayBuffer()));
+      versions.push(`${row.id}:${row.primaryImageTag ?? ""}`);
+    }
+    if (sources.length < 2) return { sources: [], versions: [] };
+    return { sources, versions };
   }
 
   async itemDetail(authority: MediaServerAuthority, libraryId: unknown, itemId: unknown, signal?: AbortSignal): Promise<MediaServerDetail> {

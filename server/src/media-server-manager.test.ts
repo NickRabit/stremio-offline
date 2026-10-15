@@ -2256,7 +2256,7 @@ test("previewDirectory prefers owned posters and bounds fallback to one child pa
 
     const off = await directoryLibrary(harness, "music-2", "mixed", { mosaic: false });
     const before = harness.server.directoryCalls.length;
-    assert.deepEqual(await harness.manager.previewDirectory(harness.admin, off.id), { posters: [] });
+    assert.deepEqual(await harness.manager.previewDirectory(harness.admin, off.id), { posters: [], versions: [] });
     assert.equal(harness.server.directoryCalls.length, before, "a library with the mosaic off makes no provider call");
   });
 });
@@ -2274,7 +2274,7 @@ test("root child mosaics read one bounded page and never walk folders", async ()
     assert.ok(preview.posters.every((url) => url.includes("/items/child-")));
     const off = await directoryLibrary(harness, "music-off", "mixed", { mosaic: false });
     const calls = harness.server.calls.length;
-    assert.deepEqual(await harness.manager.previewDirectory(harness.admin, off.id, undefined, undefined, true), { posters: [] });
+    assert.deepEqual(await harness.manager.previewDirectory(harness.admin, off.id, undefined, undefined, true), { posters: [], versions: [] });
     assert.equal(harness.server.calls.length, calls);
   });
 });
