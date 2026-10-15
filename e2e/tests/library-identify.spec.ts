@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { libraryTool } from "./library-tools";
+import { scanLibrary } from "./library-tools";
 import { addonManifest, appUrl } from "../../playwright.config";
 import { copyFile, mkdir } from "node:fs/promises";
 import path from "node:path";
@@ -24,8 +24,7 @@ test("scan library matches the unique fixture folder", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Knihovna", exact: true }).click();
   await expect(fixtureTile(page)).toBeVisible();
-  (await libraryTool(page, "Prohledat knihovnu")).click();
-  await expect(page.getByText(/spárováno,/)).toBeVisible({ timeout: 20_000 });
+  await scanLibrary(page);
   await expect(fixtureTile(page).locator(".library-desc")).toContainText("Film, který existuje jen pro testy.");
 });
 
@@ -68,8 +67,7 @@ test("unmatch lets a later scan match again", async ({ page }) => {
   } else {
     await page.keyboard.press("Escape");
   }
-  (await libraryTool(page, "Prohledat knihovnu")).click();
-  await expect(page.getByText(/spárováno,/)).toBeVisible({ timeout: 20_000 });
+  await scanLibrary(page);
   await expect(fixtureTile(page).locator(".library-desc")).toContainText("Film, který existuje jen pro testy.");
 });
 
@@ -83,8 +81,7 @@ test("skip catalog lookup keeps the title unmatched through a scan", async ({ pa
   }
   await page.getByRole("button", { name: "Vyloučit z přiřazování" }).click();
   await expect(page.getByText("Vyloučeno z přiřazování.")).toBeVisible();
-  (await libraryTool(page, "Prohledat knihovnu")).click();
-  await expect(page.getByText(/spárováno,/)).toBeVisible({ timeout: 20_000 });
+  await scanLibrary(page);
   await expect(fixtureTile(page).locator(".library-desc")).toHaveCount(0);
   await page.getByRole("button", { name: `Možnosti: ${folderName}` }).click();
   await page.getByRole("button", { name: "Zahrnout do přiřazování" }).click();

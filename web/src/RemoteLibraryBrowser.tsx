@@ -334,20 +334,19 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     return ref;
   };
   const cancelItemsMore = () => {
-    if (itemsMoreAbort.current) {
-      itemsMoreAbort.current.abort();
-      setListing((current) => ({ ...current, loading: false }));
-    }
+    itemsMoreAbort.current?.abort();
     itemsMoreAbort.current = null;
     itemsMoreBusy.current = false;
+    // Leaving a listing cancels the page it was reading, and a canceled page is not a page being
+    // read: the action has to be usable again the moment the listing comes back, whether or not a
+    // request was still in flight when it was left.
+    setListing((current) => (current.loading ? { ...current, loading: false } : current));
   };
   const cancelEpisodesMore = () => {
-    if (episodesMoreAbort.current) {
-      episodesMoreAbort.current.abort();
-      setEpisodes((current) => ({ ...current, loading: false }));
-    }
+    episodesMoreAbort.current?.abort();
     episodesMoreAbort.current = null;
     episodesMoreBusy.current = false;
+    setEpisodes((current) => (current.loading ? { ...current, loading: false } : current));
   };
   const cancelHandoff = () => {
     handoffEpoch.current += 1;
