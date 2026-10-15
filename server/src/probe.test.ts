@@ -126,7 +126,7 @@ test("a probe whose caller already aborted never starts ffprobe", async (t) => {
   assert.deepEqual(calls(), [], "no ffprobe process was spawned at all");
 });
 
-test("an abort during the fast probe stops it and never reaches the deep probe", async (t) => {
+test("an abort during the fast probe stops it and never reaches the deep probe", { skip: process.platform === "win32" ? "The executable fixture requires a POSIX shebang." : false }, async (t) => {
   const { calls, waitForCall } = await fakeFfprobe(t, { fastMs: 5_000 });
   const controller = new AbortController();
   const startedAt = Date.now();
@@ -139,7 +139,7 @@ test("an abort during the fast probe stops it and never reaches the deep probe",
   assert.deepEqual(calls(), ["fast"], "the killed ffprobe never finished and the deep probe never started");
 });
 
-test("an abort during the deep probe stops the deep round", async (t) => {
+test("an abort during the deep probe stops the deep round", { skip: process.platform === "win32" ? "The executable fixture requires a POSIX shebang." : false }, async (t) => {
   const { calls, waitForCall } = await fakeFfprobe(t, { deepMs: 5_000 });
   const controller = new AbortController();
   const pending = probe("https://cdn.example/movie.mkv", controller.signal);
