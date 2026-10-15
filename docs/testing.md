@@ -481,3 +481,17 @@ The transfer meter is held to the reading, not to how it stores it: one regressi
 forty thousand writes past repeated compaction and an idle gap, comparing every reading
 against a plain model of the same history, and another sends a burst inside a single
 millisecond and expects the reading of the one write it stands for.
+
+
+## Media-server production-path verification
+
+`npm test` also runs `npm run test:media-client`: bounded loopback HTTP tests for
+request observation, streaming, cancellation, fixture authentication and isolated
+application lifecycle. The lifecycle case skips when a build is unavailable.
+These gates never contact a configured Jellyfin/Emby installation.
+
+The opt-in [media-client runner](media-client-verification.md) verifies the built
+application against either owned local provider fixtures or a generated large
+catalogue. Read the [request audit](media-server-request-audit.md) for current
+normal-operation costs, cache behavior and proposed optimization acceptance
+criteria. Real-provider and generated results are distinct evidence layers.

@@ -16,7 +16,7 @@ const localOtherRoot = path.resolve("e2e/.tmp/remote-library-local-b");
 const LOCAL_FOLDERS = 60;
 const localLibraryIds: string[] = [];
 
-async function remoteLibraries(page: Page, options: { folders?: number; items?: (url: URL) => BrowseItem[] | null; sources?: unknown[] } = {}) {
+async function remoteLibraries(page: Page, options: { folders?: number; items?: (url: URL) => BrowseItem[] | null; sources?: unknown[]; browse?: (url: URL) => unknown | Promise<unknown> } = {}) {
   const requests: URL[] = [];
   let sources = 0;
   await page.route("**/remote-test-art/*.svg", async (route) => {
@@ -43,6 +43,7 @@ async function remoteLibraries(page: Page, options: { folders?: number; items?: 
       body = { posters, mosaic: "/api/remote-libraries/" + url.pathname.split("/").at(-2) + "/mosaic?v=e2e" };
     } else if (url.pathname.endsWith("/browse")) {
       requests.push(url);
+      if (options.browse) { await route.fulfill({ json: await options.browse(url) }); return; }
       const parent = url.searchParams.get("parentId");
       const custom = options.items?.(url) ?? null;
       const items: BrowseItem[] = custom ?? (options.folders
@@ -121,6 +122,55 @@ test("remote folders keep their hierarchy and the next page appends without a cl
   await panel.locator(".library-back").click();
   await expect(panel.locator(".browse-item.folder")).toHaveCount(3);
   await expect(panel.locator(".browse-item.folder").filter({ hasText: "Category Alpha" }).getByRole("button")).toBeFocused();
+});
+
+test("a large listing resumes its canceled page after a detail return without refetching loaded rows", async ({ page }) => {
+  const total = 6000;
+  const rows = (start: number) => Array.from({ length: 60 }, (_, i) => ({
+    id: `large-${start + i}`, name: `Synthetic title ${String(start + i).padStart(4, "0")}`, type: "movie", providerIds: {},
+  }));
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  let secondAttempts = 0;
+  const remote = await remoteLibraries(page, {
+    items: () => rows(0),
+    browse: async (url) => {
+      const start = Number(url.searchParams.get("cursor") ?? 0);
+      if (start === 60 && ++secondAttempts === 1) await held;
+      return { items: rows(start), total, cursor: String(start + 60), capabilities, asOf: "2026-01-01T00:00:00Z", stale: false };
+    },
+  });
+  await page.locator(".remote-libraries .browse-item.library").filter({ hasText: "Remote clips" }).getByRole("button").click();
+  const panel = page.locator(".remote-browse-panel");
+  const tiles = panel.locator(".browse-item");
+  await expect(tiles).toHaveCount(60);
+  const nudge = () => panel.locator(".browse-scroll").evaluate((node) => {
+    node.scrollTop = node.scrollHeight;
+    for (let i = 0; i < 10; i++) node.dispatchEvent(new Event("scroll"));
+  });
+  await nudge();
+  await expect.poll(() => secondAttempts).toBe(1);
+  expect(remote.requests).toHaveLength(2);
+  await tiles.first().locator(".library-open").click();
+  await expect(panel.locator(".crumbs button[aria-current=page]")).toContainText("Synthetic title");
+  await panel.locator(".library-back").click();
+  await expect(tiles).toHaveCount(60);
+  await expect(panel.locator(".load-more button")).toBeEnabled();
+  await nudge();
+  await expect(tiles).toHaveCount(120);
+  expect(secondAttempts).toBe(2);
+  release();
+  await nudge();
+  await expect(tiles).toHaveCount(180);
+  const loaded = await tiles.locator(".library-copy strong").allTextContents();
+  expect(new Set(loaded).size).toBe(180);
+  expect(remote.requests.filter((url) => !url.searchParams.has("cursor"))).toHaveLength(1);
+  expect(remote.requests.every((url) => url.searchParams.get("limit") === "60")).toBe(true);
+  await tiles.first().locator(".library-open").click();
+  await panel.locator(".library-back").click();
+  await expect(tiles).toHaveCount(180);
+  expect(await tiles.locator(".library-copy strong").allTextContents()).toEqual(loaded);
+  expect(remote.requests.filter((url) => !url.searchParams.has("cursor"))).toHaveLength(1);
 });
 
 test("item and series breadcrumbs walk the remote hierarchy", async ({ page }) => {

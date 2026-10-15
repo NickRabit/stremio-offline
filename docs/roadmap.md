@@ -546,8 +546,29 @@ The [repository analysis](media-server-libraries-analysis.md) and
 [delivery tasks](media-server-libraries-tasks.md) record the read-only boundary
 and sequential implementation. Original-media access, external SRT subtitles
 and history isolation are verified against local Docker instances of both
-products. Remote transcoding, direct client connections, remote history synchronization and remote-source downloads are
-later work. Nuvio is an architectural reference, not a compatibility guarantee.
+products. Remote-source copying into local libraries is implemented. Remote transcoding,
+direct client connections and remote history synchronization remain outside the
+read-only integration scope. Nuvio is an architectural reference, not a compatibility guarantee.
+
+### Next media-server work
+
+The active verification block covers production-path Jellyfin/Emby playback and
+large-library behavior under latency, interruption and restoration. Keep measured
+real-provider results separate from simulated transport and browser results.
+The [request audit](media-server-request-audit.md) records measured navigation
+costs and the next optimization: scoped raw metadata reuse for concurrent detail
+reads and locally stored progress, preserving fresh access checks.
+
+Recorded follow-ups, not part of this verification block:
+
+- Bulk copying of selected remote items or a season into local libraries, with
+  destination/layout selection and bounded upstream transfers.
+- App-local manual catalogue matching for unidentified remote items, without
+  changing the provider metadata; use the match for enrichment and addon sources.
+- A playback-source chooser inside the web/desktop video player with TV parity:
+  local, Jellyfin/Emby and addon rows, current-source selection and safe switching.
+  Keep this distinct from the title-detail chooser. Refine the interaction when
+  the user supplies the next requirement.
 
 ## Later
 

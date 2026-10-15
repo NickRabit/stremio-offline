@@ -39,9 +39,13 @@ const sealedRemote = (): string => sealRemoteContent({
 interface Harness {
   base: string;
   attended: string[];
+  errors: unknown[];
   stopped: string[];
   mediaSources: MediaServerSources;
   playbackOwners: Map<string, { owner: ResourceOwner; resourceId: string }>;
+  /** The manager the routes call; a test can replace one method to hold a preparation open. */
+  playback: Record<string, any>;
+  useSource(stream: StreamItem): void;
   seedRemote(): string;
   close(): Promise<void>;
 }
@@ -50,7 +54,9 @@ interface Harness {
  *  instance over a playback manager that records what it was asked to do. */
 const mount = async (): Promise<Harness> => {
   const attended: string[] = [];
+  const errors: unknown[] = [];
   const stopped: string[] = [];
+  let source = { url: "https://example.test/video.mp4" } as StreamItem;
   const sessions = { ada: ADA, bob: BOB };
   const userOf = (req: express.Request) => (req.header("x-user") === "bob" ? "bob" : "ada");
   const ownerOf = (req: express.Request) => sessions[userOf(req)];
@@ -65,6 +71,19 @@ const mount = async (): Promise<Harness> => {
     sources: mediaSources, resources, playbackOwners, activeMedia: new Set(),
     revocations: { stopResource: async () => undefined },
   }, { intervalMs: 30_000, timeoutMs: 5_000 });
+
+  const playback: Record<string, any> = {
+    attended: (id: string) => { attended.push(id); },
+    stop: async (id: string) => { stopped.push(id); },
+    directory: () => "/tmp/session-generation",
+    preview: async () => undefined,
+    sidecar: async () => undefined,
+    seek: async () => ({ id: ID, url: "u" }),
+    escalate: async () => ({ id: ID, url: "u" }),
+    track: async () => ({ id: ID, url: "u" }),
+    inspect: async () => undefined,
+    start: async () => ({ id: "pb_started", url: "/api/playback/pb_started/0/master.m3u8" }),
+  };
 
   const deps: PlaybackDeps = {
     store: { addons: () => [], libraries: () => [] } as unknown as Store,
@@ -83,21 +102,12 @@ const mount = async (): Promise<Harness> => {
     },
     answerHeaders: () => ({}),
     countBytes: () => undefined,
-    httpSourceOf: async () => ({ url: "https://example.test/video.mp4" }) as StreamItem,
+    httpSourceOf: async () => source,
     internalMediaRequest: () => false,
     libraryTarget: async (value: string) => value,
     noteSourceQuiet: () => undefined,
     ownerOf,
-    playback: {
-      attended: (id: string) => { attended.push(id); },
-      stop: async (id: string) => { stopped.push(id); },
-      directory: () => "/tmp/session-generation",
-      preview: async () => undefined,
-      sidecar: async () => undefined,
-      seek: async () => ({ id: ID, url: "u" }),
-      escalate: async () => ({ id: ID, url: "u" }),
-      track: async () => ({ id: ID, url: "u" }),
-    } as unknown as PlaybackManager,
+    playback: playback as unknown as PlaybackManager,
     mediaSources,
     mediaServerGuard,
     playbackMeta: () => ({ source: "catalog", provider: "example.test", title: "title", kind: "other" }),
@@ -123,6 +133,7 @@ const mount = async (): Promise<Harness> => {
   app.use(express.json());
   registerPlaybackRoutes(app, deps);
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    errors.push(error);
     const status = typeof (error as { status?: unknown }).status === "number" ? (error as { status: number }).status : 400;
     res.status(status).json({ error: error instanceof Error ? error.message : String(error) });
   });
@@ -132,9 +143,12 @@ const mount = async (): Promise<Harness> => {
   return {
     base: `http://127.0.0.1:${port}`,
     attended,
+    errors,
     stopped,
     mediaSources,
     playbackOwners,
+    playback,
+    useSource: (stream: StreamItem) => { source = stream; },
     seedRemote: () => registry.mediaStream({ url: sealedRemote() } as StreamItem, ADA).resourceId,
     close: async () => {
       server.closeAllConnections();
@@ -342,4 +356,91 @@ test("the remote media proxy returns quietly when the player is already gone", a
   const after = await api(harness.base, `/api/media/${harness.seedRemote()}`, { user: "ada" });
   assert.equal(after.status, 206, "the route returned instead of throwing into the error middleware");
   await after.arrayBuffer();
+});
+
+/** Waits for a state the server reaches after the client itself has already gone. */
+const waitFor = async (predicate: () => boolean) => {
+  for (let attempt = 0; attempt < 400 && !predicate(); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.ok(predicate(), "the expected server state never arrived");
+};
+
+/** Records what the route mints and releases without changing the registry's own behaviour. */
+const watchResources = (t: { after(fn: () => unknown): unknown }) => {
+  const minted: Array<{ stream: StreamItem; resourceId: string }> = [];
+  const removed: string[] = [];
+  const originalMediaStream = registry.mediaStream.bind(registry);
+  const originalRemove = registry.remove.bind(registry);
+  registry.mediaStream = (stream: StreamItem, owner: ResourceOwner) => {
+    const prepared = originalMediaStream(stream, owner);
+    minted.push(prepared);
+    return prepared;
+  };
+  registry.remove = (id: string) => { removed.push(id); return originalRemove(id); };
+  t.after(() => { registry.mediaStream = originalMediaStream; registry.remove = originalRemove; });
+  return { minted, removed };
+};
+
+test("a canceled inspect hands its signal to the manager and releases the prepared resource", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const { minted, removed } = watchResources(t);
+  harness.useSource({ url: sealedRemote() } as StreamItem);
+  const sources = harness.mediaSources as unknown as { assertCurrent(): void; authorize(): Promise<void> };
+  sources.assertCurrent = () => undefined;
+  sources.authorize = async () => undefined;
+  let seen: AbortSignal | undefined;
+  let answer!: () => void;
+  harness.playback.inspect = (_stream: StreamItem, signal?: AbortSignal) => {
+    seen = signal;
+    return new Promise((resolve) => { answer = () => resolve(undefined); });
+  };
+
+  const controller = new AbortController();
+  const request = fetch(`${harness.base}/api/inspect`, {
+    method: "POST", headers: { "content-type": "application/json", "x-user": "ada" }, body: "{}", signal: controller.signal,
+  }).catch(() => undefined);
+  await waitFor(() => seen !== undefined);
+  controller.abort();
+  await request;
+  await waitFor(() => seen?.aborted === true);
+  answer();
+  await waitFor(() => removed.length === 1);
+
+  assert.ok(seen?.aborted, "the manager was handed the request's own signal");
+  assert.equal(minted.length, 1, "the request minted one private resource");
+  assert.deepEqual(removed, [minted[0].resourceId], "and released exactly that one");
+  assert.equal(harness.errors.length, 0, "ordinary client cancellation does not enter error logging");
+});
+
+test("a canceled playback request stops a descriptor that raced the disconnect", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const { minted, removed } = watchResources(t);
+  harness.useSource({ url: sealedRemote() } as StreamItem);
+  const sources = harness.mediaSources as unknown as { assertCurrent(): void; authorize(): Promise<void> };
+  sources.assertCurrent = () => undefined;
+  sources.authorize = async () => undefined;
+  let seen: AbortSignal | undefined;
+  let answer!: () => void;
+  harness.playback.start = (_stream: StreamItem, _caps: unknown, _options: unknown, signal?: AbortSignal) => {
+    seen = signal;
+    return new Promise((resolve) => { answer = () => resolve({ id: "pb_raced", url: "/api/playback/pb_raced/0/master.m3u8" }); });
+  };
+
+  const controller = new AbortController();
+  const request = fetch(`${harness.base}/api/playback`, {
+    method: "POST", headers: { "content-type": "application/json", "x-user": "ada" }, body: "{}", signal: controller.signal,
+  }).catch(() => undefined);
+  await waitFor(() => seen !== undefined);
+  controller.abort();
+  await request;
+  await waitFor(() => seen?.aborted === true);
+  answer();
+  await waitFor(() => harness.stopped.length === 1);
+
+  assert.ok(seen?.aborted, "the manager was handed the request's own signal");
+  assert.deepEqual(harness.stopped, ["pb_raced"], "the raced session was stopped, never registered");
+  assert.equal(harness.playbackOwners.has("pb_raced"), false, "the response closed before registration");
+  assert.deepEqual(removed, [minted[0].resourceId], "the prepared resource was released");
+  assert.equal(harness.errors.length, 0, "ordinary client cancellation does not enter error logging");
 });

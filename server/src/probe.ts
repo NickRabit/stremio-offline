@@ -129,31 +129,37 @@ const UNREACHABLE = /connection refused|no route to host|network is unreachable|
 
 interface Inspection { info?: MediaInfo; unreachable: boolean }
 
-/** Finds the source's real codecs. An addon sends a non-binding hint at best; ffprobe tells the truth. */
-export async function probe(input: string): Promise<MediaInfo | undefined> {
+/** Finds the source's real codecs. An addon sends a non-binding hint at best; ffprobe tells the truth.
+ *  A caller that aborts -- the request went away -- stops the running ffprobe rather than letting it
+ *  finish and cache what nobody is waiting for. */
+export async function probe(input: string, signal?: AbortSignal): Promise<MediaInfo | undefined> {
   // The default limits read only a few megabytes from a remote source, which is enough for ordinary files.
   // The deep probe (up to 100 MB) comes in only when the quick round misses something that matters.
-  const fast = await inspect(input, [], 20_000, "fast");
+  signal?.throwIfAborted();
+  const fast = await inspect(input, [], 20_000, "fast", signal);
+  signal?.throwIfAborted();
   if (fast.info?.video && fast.info.duration && fast.info.audioTracks.length) return fast.info;
   if (fast.unreachable) {
     log("INFO", "The source refused the connection, the deeper probe was skipped");
     return undefined;
   }
   log("DEBUG", "The fast probe was not enough, reading more of the source", { found: fast.info ? { video: fast.info.video?.codec, duration: fast.info.duration, audioTracks: fast.info.audioTracks.length } : null });
-  const deep = await inspect(input, ["-analyzeduration", "60M", "-probesize", "100M"], 45_000, "deep");
+  signal?.throwIfAborted();
+  const deep = await inspect(input, ["-analyzeduration", "60M", "-probesize", "100M"], 45_000, "deep", signal);
   return deep.info ?? fast.info;
 }
 
 export const looksUnreachable = (stderr: string) => UNREACHABLE.test(stderr);
 
-async function inspect(input: string, limits: string[], timeout: number, stage: string): Promise<Inspection> {
+async function inspect(input: string, limits: string[], timeout: number, stage: string, signal?: AbortSignal): Promise<Inspection> {
   try {
+    signal?.throwIfAborted();
     const { stdout } = await run(ffprobePath(), [
       "-v", "error", "-print_format", "json",
       ...await playlistArgs("ffprobe"),
       ...limits,
       "-show_format", "-show_streams", input,
-    ], { timeout, maxBuffer: 8 * 1024 * 1024 });
+    ], { timeout, maxBuffer: 8 * 1024 * 1024, signal });
     const data = JSON.parse(stdout) as { format?: { format_name?: string; duration?: string }; streams?: ProbeStream[] };
     const streams = data.streams ?? [];
     const variant = pickVariant(streams);
@@ -184,6 +190,9 @@ async function inspect(input: string, limits: string[], timeout: number, stage: 
       },
     };
   } catch (error) {
+    // A caller that aborted gets its abort back: swallowing it here would read as an ordinary
+    // failed probe and send `probe` on to the deep round the caller no longer wants.
+    if (signal?.aborted) throw signal.reason ?? error;
     // Without this entry a failed probe surfaces two layers later as "the source could not be
     // parsed", with not a trace of what ffprobe actually said.
     const failure = error as { stderr?: string; killed?: boolean; code?: number };

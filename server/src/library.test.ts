@@ -453,7 +453,10 @@ test("a video written into a folder shows up in its listing", async () => {
     await writeFile(path.join(root, "Alpha", "01.mkv"), "x");
     const before = await browseDirectory(root, "Alpha", "", 0, 20, "name");
     assert.deepEqual(before.items.map((item) => item.path), ["Alpha/01.mkv"]);
+    const folderTime = (await stat(path.join(root, "Alpha"))).mtimeMs;
     await writeFile(path.join(root, "Alpha", "02.mkv"), "x");
+    // Consecutive writes can share a timestamp; this case specifically tests a changed mtime.
+    await utimes(path.join(root, "Alpha"), new Date(folderTime + 1000), new Date(folderTime + 1000));
     const after = await browseDirectory(root, "Alpha", "", 0, 20, "name");
     assert.equal(after.total, 2, "the folder's own mtime moved, so the cached listing is stale");
     assert.deepEqual(after.items.map((item) => item.path), ["Alpha/01.mkv", "Alpha/02.mkv"]);

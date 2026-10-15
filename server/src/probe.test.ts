@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
-import { dolbyVisionProfile, hasDolbyVisionEnhancementLayer, looksUnreachable, pickVariant, playlistArgsFrom } from "./probe.js";
+import { dolbyVisionProfile, hasDolbyVisionEnhancementLayer, looksUnreachable, pickVariant, playlistArgsFrom, probe } from "./probe.js";
 
 test("the picky segment options are passed only to a build that has them", () => {
   assert.deepEqual(
@@ -60,4 +64,88 @@ test("the Dolby Vision profile is read from the configuration record for the log
   assert.equal(dolbyVisionProfile({ side_data_list: [{ side_data_type: "DOVI configuration record", dv_profile: 8 }] }), 8);
   assert.equal(dolbyVisionProfile({ side_data_list: [{ side_data_type: "Mastering display metadata" }] }), undefined);
   assert.equal(dolbyVisionProfile({}), undefined);
+});
+
+// A real process stands in for ffprobe here: the point of these tests is that an aborted probe
+// kills the running child and never reaches the deep round, which a stubbed runner could not show.
+const FAKE_FFPROBE = String.raw`#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+if (args.includes("-h")) process.exit(0);
+const deep = args.includes("60M");
+const write = (line) => fs.appendFileSync(process.env.FAKE_LOG, line + "\n");
+write(deep ? "deep" : "fast");
+setTimeout(() => {
+  write(deep ? "deep-done" : "fast-done");
+  process.stdout.write(JSON.stringify(deep
+    ? { format: { format_name: "matroska", duration: "120" }, streams: [
+        { index: 0, codec_type: "video", codec_name: "h264" },
+        { index: 1, codec_type: "audio", codec_name: "aac" }] }
+    : { format: { format_name: "matroska" }, streams: [{ index: 0, codec_type: "video", codec_name: "h264" }] }));
+  process.exit(0);
+}, Number(deep ? process.env.FAKE_DEEP_MS : process.env.FAKE_FAST_MS) || 0);
+`;
+
+const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const fakeFfprobe = async (t: { after(fn: () => unknown): void }, delays: { fastMs?: number; deepMs?: number } = {}) => {
+  const dir = await mkdtemp(path.join(tmpdir(), "fake-ffprobe-"));
+  const binary = path.join(dir, "ffprobe");
+  const logFile = path.join(dir, "calls.log");
+  await writeFile(binary, FAKE_FFPROBE);
+  await chmod(binary, 0o755);
+  const previous = {
+    binary: process.env.FFPROBE_PATH, log: process.env.FAKE_LOG,
+    fast: process.env.FAKE_FAST_MS, deep: process.env.FAKE_DEEP_MS,
+  };
+  process.env.FFPROBE_PATH = binary;
+  process.env.FAKE_LOG = logFile;
+  process.env.FAKE_FAST_MS = String(delays.fastMs ?? 0);
+  process.env.FAKE_DEEP_MS = String(delays.deepMs ?? 0);
+  t.after(() => {
+    for (const [name, value] of [["FFPROBE_PATH", previous.binary], ["FAKE_LOG", previous.log], ["FAKE_FAST_MS", previous.fast], ["FAKE_DEEP_MS", previous.deep]] as const) {
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
+    return rm(dir, { recursive: true, force: true });
+  });
+  const calls = () => { try { return readFileSync(logFile, "utf8").split("\n").filter(Boolean); } catch { return []; } };
+  const waitForCall = async (line: string) => {
+    for (let attempt = 0; attempt < 400 && !calls().includes(line); attempt += 1) await pause(5);
+    assert.ok(calls().includes(line), `the fake ffprobe never reported "${line}"`);
+  };
+  return { calls, waitForCall };
+};
+
+const abortError = (error: Error) => error.name === "AbortError";
+
+test("a probe whose caller already aborted never starts ffprobe", async (t) => {
+  const { calls } = await fakeFfprobe(t);
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(probe("https://cdn.example/movie.mkv", controller.signal), abortError);
+  assert.deepEqual(calls(), [], "no ffprobe process was spawned at all");
+});
+
+test("an abort during the fast probe stops it and never reaches the deep probe", { skip: process.platform === "win32" ? "The executable fixture requires a POSIX shebang." : false }, async (t) => {
+  const { calls, waitForCall } = await fakeFfprobe(t, { fastMs: 5_000 });
+  const controller = new AbortController();
+  const startedAt = Date.now();
+  const pending = probe("https://cdn.example/movie.mkv", controller.signal);
+  await waitForCall("fast");
+  controller.abort();
+  await assert.rejects(pending, abortError);
+  assert.ok(Date.now() - startedAt < 3_000, "the probe returned on the abort, not on its own delay");
+  await pause(100);
+  assert.deepEqual(calls(), ["fast"], "the killed ffprobe never finished and the deep probe never started");
+});
+
+test("an abort during the deep probe stops the deep round", { skip: process.platform === "win32" ? "The executable fixture requires a POSIX shebang." : false }, async (t) => {
+  const { calls, waitForCall } = await fakeFfprobe(t, { deepMs: 5_000 });
+  const controller = new AbortController();
+  const pending = probe("https://cdn.example/movie.mkv", controller.signal);
+  await waitForCall("deep");
+  controller.abort();
+  await assert.rejects(pending, abortError);
+  await pause(100);
+  assert.deepEqual(calls(), ["fast", "fast-done", "deep"], "the deep probe was started and then cancelled");
 });

@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { DOLBY_VISION_UNITS_FILTER, PlaybackManager, SOURCE_UNREACHABLE, SerialOperations, clientCapabilities, describeFailure, hlsCanStart, hlsPlaylistFiles, isPlaylistSource, sourceReachable, nvencBusy } from "./playback.js";
+import { mediaResources as registry, type ResourceOwner } from "./media-resources.js";
 import { setFetchTransport } from "./security.js";
 
 const runFfmpeg = promisify(execFile);
@@ -848,6 +849,172 @@ test("inspect of different URLs is not coalesced", async () => {
     manager.inspect({ url: "https://cdn.example/b.mkv" }),
   ]);
   assert.deepEqual(seen.sort(), ["https://cdn.example/a.mkv", "https://cdn.example/b.mkv"]);
+});
+
+const aborted = (error: unknown) => (error as Error)?.name === "AbortError";
+const cancelableInfo = { container: "matroska", duration: 120, video: { codec: "h264" }, audioTracks: [], subtitleTracks: [] };
+const later = () => Date.now() + 3_600_000;
+
+/** A probe that honours the caller's signal the way the real one does, so a cancel lands promptly. */
+const cancelableProbe = (manager: any) => {
+  const started: string[] = [];
+  manager.probeSource = (stream: { url: string }, signal?: AbortSignal) => new Promise((resolve, reject) => {
+    started.push(stream.url);
+    const timer = setTimeout(() => resolve(cancelableInfo), 60);
+    signal?.addEventListener("abort", () => { clearTimeout(timer); reject(signal.reason); }, { once: true });
+  });
+  return started;
+};
+
+test("a reachability check whose caller already aborted asks the source nothing", async (t) => {
+  let asked = 0;
+  setFetchTransport(async () => { asked += 1; return new Response(null, { status: 206 }); });
+  t.after(() => setFetchTransport());
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(sourceReachable({ url: "https://cdn.example/movie.mkv" }, 8_000, controller.signal), aborted);
+  assert.equal(asked, 0, "the abort is not turned into an ordinary reachability answer");
+});
+
+test("an inspection whose caller already aborted reaches neither the source nor ffprobe", async (t) => {
+  let asked = 0;
+  setFetchTransport(async () => { asked += 1; return new Response(null, { status: 206 }); });
+  t.after(() => setFetchTransport());
+  const manager = new PlaybackManager(tmp("test-preabort-inspect")) as any;
+  const controller = new AbortController();
+  controller.abort();
+  // The real probeSource runs, so this fails unless both guards hold: the reachability range
+  // request is never sent, and the ffprobe process (covered in probe.test.ts) never starts.
+  await assert.rejects(manager.inspect({ url: "https://cdn.example/movie.mkv" }, controller.signal), aborted);
+  assert.equal(asked, 0);
+});
+
+test("one request's abort leaves another request's inspection of the same source alone", async (t) => {
+  const manager = new PlaybackManager(tmp("test-cancelable-inspect")) as any;
+  const started = cancelableProbe(manager);
+  const url = "https://cdn.example/shared.mkv";
+  const owner = (sid: string): ResourceOwner => ({ userId: "usr_00000001", sid, expiresAt: later() });
+  const one = registry.mediaStream({ url }, owner("sid-one"));
+  const two = registry.mediaStream({ url }, owner("sid-two"));
+  t.after(() => { registry.remove(one.resourceId); registry.remove(two.resourceId); });
+  assert.notEqual(manager.proxyPath(one.stream), manager.proxyPath(two.stream), "each request holds its own private resource");
+
+  const first = new AbortController();
+  const second = new AbortController();
+  const canceled = manager.inspect(one.stream, first.signal);
+  const kept = manager.inspect(two.stream, second.signal);
+  assert.equal(started.length, 2, "a cold miss is independent per private resource");
+
+  first.abort();
+  await assert.rejects(canceled, aborted);
+  assert.equal((await kept)?.duration, 120, "the other request finished untouched");
+  assert.equal(started.length, 2, "it was neither restarted nor cancelled");
+  assert.equal(manager.cancelableInspecting.get(first.signal)?.size, 0, "the cancelled request kept no entry");
+});
+
+test("a cancelled inspection caches nothing and a retry really probes", async () => {
+  const manager = new PlaybackManager(tmp("test-cancelable-retry")) as any;
+  const started = cancelableProbe(manager);
+  const stream = { url: "https://cdn.example/retry.mkv" };
+  const first = new AbortController();
+  const canceled = manager.inspect(stream, first.signal);
+  first.abort();
+  await assert.rejects(canceled, aborted);
+  assert.equal(manager.cancelableInspecting.get(first.signal)?.size ?? 0, 0, "the aborted entry was dropped");
+
+  const retry = new AbortController();
+  assert.equal((await manager.inspect(stream, retry.signal))?.duration, 120, "the retry probed for real");
+  assert.equal(started.length, 2);
+  assert.equal((await manager.inspect(stream, new AbortController().signal))?.duration, 120, "a finished probe is shared from the cache");
+  assert.equal(started.length, 2, "a cache hit probes nothing");
+});
+
+test("a cancelled inspection does not delete another request's in-flight probe", async (t) => {
+  const manager = new PlaybackManager(tmp("test-cancelable-shared")) as any;
+  const started = cancelableProbe(manager);
+  const url = "https://cdn.example/also-shared.mkv";
+  const resource = registry.mediaStream({ url }, { userId: "usr_00000001", sid: "sid-shared", expiresAt: later() });
+  t.after(() => registry.remove(resource.resourceId));
+
+  const plain = manager.inspect({ url });
+  const controller = new AbortController();
+  const canceled = manager.inspect(resource.stream, controller.signal);
+  assert.equal(started.length, 2, "the shared map and the cancelable map do not share a cold probe");
+
+  controller.abort();
+  await assert.rejects(canceled, aborted);
+  // The no-signal probe is still running: asking again must join it, not start a third one.
+  const joined = manager.inspect({ url });
+  assert.equal(started.length, 2, "the cancelled completion left the other pending probe in place");
+  assert.equal((await joined)?.duration, 120);
+  assert.equal((await plain)?.duration, 120);
+});
+
+test("a start canceled before any work opens no session", async () => {
+  const manager = new PlaybackManager(tmp("test-preabort-start")) as any;
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(manager.start({ url: "https://cdn.example/movie.mkv" }, {}, {}, controller.signal), aborted);
+  assert.equal(manager.sessions.size, 0);
+});
+
+test("a start canceled while the source is being inspected creates no session", async () => {
+  const manager = new PlaybackManager(tmp("test-cancel-start-inspect")) as any;
+  manager.inspect = (_stream: unknown, signal?: AbortSignal) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => resolve(cancelableInfo), 5_000);
+    signal?.addEventListener("abort", () => { clearTimeout(timer); reject(signal.reason); }, { once: true });
+  });
+  const controller = new AbortController();
+  const started = manager.start({ url: "https://cdn.example/movie.mkv" }, {}, {}, controller.signal);
+  await pause(20);
+  controller.abort();
+  await assert.rejects(started, aborted);
+  assert.equal(manager.sessions.size, 0, "nothing was registered");
+});
+
+test("a start canceled while the conversion opens leaves no session, converter or sidecar", async () => {
+  const manager = new PlaybackManager(tmp("test-cancel-start-open")) as any;
+  manager.inspect = async () => ({
+    container: "matroska,webm", duration: 3600,
+    video: { codec: "hevc" }, audio: { codec: "aac" },
+    audioTracks: [{ index: 0, codec: "aac" }], subtitleTracks: [],
+  });
+  const converter = { exitCode: null, signalCode: null };
+  const killed: unknown[] = [];
+  let releaseKill!: () => void;
+  const killGate = new Promise<void>((resolve) => { releaseKill = resolve; });
+  manager.killChild = async (child?: unknown) => { if (child) { killed.push(child); await killGate; } };
+  const purged: string[] = [];
+  manager.purgeNow = async (directory: string) => { purged.push(directory); };
+  const sidecarStops: string[] = [];
+  let ensured = 0;
+  manager.sidecars = { stop: async (id: string) => { sidecarStops.push(id); }, ensure: () => { ensured += 1; } };
+  manager.spawnAt = async (session: any) => {
+    session.process = converter;
+    session.directory = tmp("test-cancel-start-open/1");
+    while (!session.stopped) await pause(5);
+    throw new Error("The playback session no longer exists.");
+  };
+
+  const controller = new AbortController();
+  const started = manager.start({ url: "https://cdn.example/large.mkv" }, {}, {}, controller.signal);
+  await pause(30);
+  assert.equal(manager.sessions.size, 1, "the session exists while the conversion is opening");
+
+  let settled = false;
+  void started.then(() => { settled = true; }, () => { settled = true; });
+  controller.abort();
+  try {
+    await pause(20);
+    assert.equal(manager.sessions.size, 0, "the session is removed while cleanup is still pending");
+    assert.equal(settled, false, "start waits for the first asynchronous stop, even after the session was removed");
+  } finally { releaseKill(); }
+  await assert.rejects(started, /no longer exists/);
+  assert.equal(manager.sessions.size, 0, "no session is left behind");
+  assert.deepEqual(killed, [converter], "the converter was stopped exactly once");
+  assert.equal(sidecarStops.length, 1, "the sidecars were stopped with the session");
+  assert.equal(ensured, 0, "no sidecar reader was started");
+  assert.equal(purged.length, 1, "the session's directory was cleaned up");
 });
 
 const playCaps = {

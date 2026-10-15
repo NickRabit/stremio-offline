@@ -93,11 +93,19 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     // is never handed to FFprobe, and an unbound remote source is never resolved internally.
     const prepared = remote ? mediaResources.mediaStream(stream, owner) : undefined;
     try {
-      const info = await playback.inspect(prepared ? prepared.stream : stream);
+      const info = await playback.inspect(prepared ? prepared.stream : stream, controller.signal);
+      controller.signal.throwIfAborted();
       requireAccess(req, need);
-      if (remote) { mediaSources.assertCurrent(stream, owner); await mediaSources.authorize(stream, owner, controller.signal); }
+      if (remote) {
+        mediaSources.assertCurrent(stream, owner);
+        await mediaSources.authorize(stream, owner, controller.signal);
+        controller.signal.throwIfAborted();
+      }
       if (res.destroyed || res.writableEnded) return;
       res.setHeader("cache-control", "private, no-store").json(safeInspection(info, stream));
+    } catch (error) {
+      if (controller.signal.aborted && res.destroyed) return;
+      throw error;
     } finally {
       if (prepared) mediaResources.remove(prepared.resourceId);
     }
@@ -134,16 +142,22 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
         const subtitle = mediaResources.get(id, owner.sid, "subtitle");
         subtitleIds[id] = mediaResources.add(subtitle.stream, owner, "subtitle", prepared.resourceId);
       }
-      started = await playback.start(prepared.stream, clientCapabilities(req.body.capabilities), options);
+      started = await playback.start(prepared.stream, clientCapabilities(req.body.capabilities), options, controller.signal);
+      controller.signal.throwIfAborted();
       // FFmpeg took its time starting: the account, its session and its rights are re-read
       // here, and the registration below follows in the same synchronous step.
       requireAccess(req, need);
-      if (remote) { mediaSources.assertCurrent(stream, owner); await mediaSources.authorize(stream, owner, controller.signal); }
+      if (remote) {
+        mediaSources.assertCurrent(stream, owner);
+        await mediaSources.authorize(stream, owner, controller.signal);
+        controller.signal.throwIfAborted();
+      }
       playbackOwners.set(started.id, { owner, resourceId: prepared.resourceId });
       if (req.body.capabilities?.airplay === true) airplayAccess.create(started.id, owner, prepared.resourceId);
     } catch (error) {
-      if (started) await playback.stop(started.id);
-      mediaResources.remove(prepared.resourceId);
+      try { if (started) await playback.stop(started.id); }
+      finally { mediaResources.remove(prepared.resourceId); }
+      if (controller.signal.aborted && res.destroyed) return;
       throw error;
     }
     // Bytes are counted by the proxy or by the library; only the item itself is added here,
