@@ -1,4 +1,6 @@
 import type express from "express";
+import { randomBytes } from "node:crypto";
+import os from "node:os";
 import path from "node:path";
 import { mkdir, readFile, rename, stat } from "node:fs/promises";
 import { artworks } from "../artwork-cache.js";
@@ -9,6 +11,7 @@ import { folderMosaicUnits, pendingSuggestionKeys, unitFor, type GalleryEntry, t
 import { AppError } from "../errors.js";
 import { assertStillAdmin } from "../roles.js";
 import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, posixBase, posixDir, posixJoin, resolveLibraryPath, sameFile, visibleLibraries, type LibraryRecord, type Viewer } from "../libraries.js";
+import { composeMosaic, MOSAIC_CACHE_CONTROL, MOSAIC_IMMUTABLE_CACHE_CONTROL, MosaicCache, mosaicShape } from "../mosaic.js";
 import { browseDirectory, holdsLibraryRoot, isVideo, listFolders, type LibraryEntry } from "../library.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { LibraryHealth } from "../library-probe.js";
@@ -57,27 +60,45 @@ export interface ContentDeps extends RouteContext {
   withFavorites<T extends { path: string }>(items: T[], data: UserData): Array<T & { favorite: boolean }>;
   /** The memory copy of the library poster and wide bytes. Omitted, one is built here. */
   fileSnaps?: FileSnapCache;
+  /** Composed fans: one picture per folder that stands for several films. Omitted in tests. */
+  mosaics?: MosaicCache;
+  /** The version a generated picture is at, so a fan's address changes with its pictures. */
+  artStamp(file: string): Promise<string>;
 }
 
 export function registerContentRoutes(app: express.Application, deps: ContentDeps): void {
-  const { store, currentUser, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, metaStore, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites } = deps;
+  const { artStamp, store, currentUser, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, metaStore, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites } = deps;
   const fileSnaps = deps.fileSnaps ?? new FileSnapCache();
+  const mosaics = deps.mosaics ?? new MosaicCache(path.join(os.tmpdir(), `mosaics-${randomBytes(6).toString("hex")}`));
 
   /** The distinct films a folder holds, one catalogue picture each, bounded and deduplicated
    *  by identity. A folder that is one film or a series answers with nothing, so it keeps the
    *  single poster it has always had. Only artwork already on disk is used: grouping films
    *  into a mosaic never pays for a video frame of its own. */
-  const folderPosters = async (folderKey: string, library: LibraryRecord, units: TitleUnit[]): Promise<string[]> => {
-    if (library.mosaic === false) return [];
+  const folderPosters = async (folderKey: string, library: LibraryRecord, units: TitleUnit[]): Promise<string[]> =>
+    (await folderFan(folderKey, library, units)).posters;
+
+  /** One folder's fan: the pictures it draws, the files behind them and the versions those files
+   *  are at. The listing hands out the addresses, the mosaic route composes the same set into one
+   *  picture, and both name it by the same stamp so a changed fan is a changed address. */
+  const folderFan = async (folderKey: string, library: LibraryRecord, units: TitleUnit[]): Promise<{ posters: string[]; files: string[]; stamp: string }> => {
+    const empty = { posters: [], files: [], stamp: "" };
+    if (library.mosaic === false) return empty;
     const distinct = folderMosaicUnits(units, folderKey, metaStore.qualifiedMeta(), metaStore.qualifiedSuggestions(), 5);
-    if (distinct.length < 2) return [];
-    const previews = await Promise.all(distinct.map(async (unit) => {
+    if (distinct.length < 2) return empty;
+    const found = await Promise.all(distinct.map(async (unit) => {
       const file = isVideo(posixBase(unit.key));
       const art = file ? await locateFileArtwork(unit.key) : await locateFolderArtwork(unit.key);
-      return thumbUrl(file ? "path" : "dir", wirePath(unit.key), art);
+      if (!art) return undefined;
+      return { art, poster: await thumbUrl(file ? "path" : "dir", wirePath(unit.key), art) };
     }));
-    const posters = previews.filter((poster): poster is string => Boolean(poster));
-    return posters.length > 1 ? posters : [];
+    const kept = found.filter((entry): entry is { art: string; poster: string | undefined } => entry !== undefined);
+    const posters = kept.map((entry) => entry.poster).filter((poster): poster is string => Boolean(poster));
+    if (posters.length < 2) return empty;
+    // The stamp is the version of every file that went into the fan, drawn the way the listing
+    // draws it: the same pictures are the same stamp, and one new film is a new one.
+    const versions = await Promise.all(kept.map((entry) => artStamp(entry.art)));
+    return { posters, files: kept.map((entry) => entry.art), stamp: MosaicCache.stamp(versions) };
   };
 
   /** The relative paths a pending suggestion covers: its own row, plus every folder above
@@ -155,8 +176,11 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
         const { item: withMeta, backfill } = await attachBrowseMeta({ ...item, path }, prefsOf(req).uiLanguage, { prewarm });
         // A collection stands for several films: it shows their posters rather than a folder
         // frame of its own, and no frame is scheduled for it.
-        const posters = await folderPosters(key, library, units);
-        if (posters.length > 1) return { ...withMeta, path, posters, poster: undefined, wide: undefined, backfill };
+        const fan = await folderFan(key, library, units);
+        if (fan.posters.length > 1) {
+          const mosaic = `/api/library/mosaic?key=${encodeURIComponent(key)}&v=${encodeURIComponent(fan.stamp)}`;
+          return { ...withMeta, path, posters: fan.posters, mosaic, poster: undefined, wide: undefined, backfill };
+        }
         const { poster: art, wide } = await locateFolderArtworkPair(key);
         if (!prewarm) {
           if (!art) scheduleFolderArtwork(key);
@@ -303,6 +327,33 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
         url: `/api/library/thumb?path=${encodeURIComponent(wire)}&gallery=${index}`,
       })),
     });
+  }));
+
+  /** One folder's fan, composed here from the pictures the tile would have drawn itself. The
+   *  address carries the stamp of those pictures and the shape the tile draws; the bytes are kept
+   *  under both. Private, a year, and immutable only while the client's stamp is the current one. */
+  app.get("/api/library/mosaic", asyncRoute(async (req, res) => {
+    const viewer = viewerOf(currentUser(req));
+    const shape = mosaicShape(req.query.shape);
+    const resolved = await resolveLibraryPath(store.libraries(), String(req.query.key ?? ""));
+    if (!resolved || !libraryVisible(resolved.library, viewer)) return void res.status(404).end();
+    const fan = await folderFan(resolved.key, resolved.library, await libraryUnits());
+    if (fan.files.length < 2 || !fan.stamp) return void res.status(404).end();
+    const versioned = typeof req.query.v === "string" && req.query.v === fan.stamp;
+    const etag = `"${fan.stamp}"`;
+    if (req.headers["if-none-match"] === etag) {
+      res.setHeader("etag", etag);
+      res.setHeader("cache-control", versioned ? MOSAIC_IMMUTABLE_CACHE_CONTROL : MOSAIC_CACHE_CONTROL);
+      return void res.status(304).end();
+    }
+    const key = `${resolved.key}\u0000${shape}\u0000${fan.stamp}`;
+    const composed = await mosaics.compose(key, async () => composeMosaic(
+      await Promise.all(fan.files.map((file) => readFile(file))), shape));
+    res.setHeader("content-type", "image/jpeg");
+    res.setHeader("x-content-type-options", "nosniff");
+    res.setHeader("cache-control", versioned ? MOSAIC_IMMUTABLE_CACHE_CONTROL : MOSAIC_CACHE_CONTROL);
+    res.setHeader("etag", etag);
+    res.send(composed);
   }));
 
   app.get("/api/library/thumb", asyncRoute(async (req, res) => {

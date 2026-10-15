@@ -96,6 +96,8 @@ thumbnails; **remove and forget** deletes them.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
+| `MOSAIC_CACHE_MB` | `128` | Composed fan pictures on disk before the oldest are dropped. |
+| `MOSAIC_MEMORY_MB` | `32` | Composed fans kept in memory. `0` turns that layer off. |
 | `ARTWORK_CACHE_MB` | `256` | Disk those thumbnails may take before the least recently used are dropped. |
 | `THUMB_MEMORY_MB` | `32` | Process memory in front of the library poster and wide bytes. A hit does not touch the disk; `0` turns the layer off. |
 | `LIBRARY_META_TTL_DAYS` | `14` | Age at which the scan re-reads a bound series, so its episode titles stay current. `0` switches the pass off. Only libraries the interface opened are refreshed. |

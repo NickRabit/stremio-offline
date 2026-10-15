@@ -1,4 +1,5 @@
 import type { ReactNode, Ref } from "react";
+import { remoteMosaicArtwork } from "./remote-artwork";
 import { hideBroken } from "./settings-ui";
 
 /**
@@ -8,8 +9,8 @@ import { hideBroken } from "./settings-ui";
  * action line. `art` lets the remote root swap in a lazily loaded mosaic in place of the
  * ordinary picture without changing the shell around it.
  */
-export function LibraryTile({ name, meta, posters, poster, fallback, count, enabled = true, action, unreachable, path, art, containerRef, onOpen }: {
-  name: string; meta: string; posters?: string[]; poster?: string; fallback: ReactNode;
+export function LibraryTile({ name, meta, posters, mosaic, shape = "poster", poster, fallback, count, enabled = true, action, unreachable, path, art, containerRef, onOpen }: {
+  name: string; meta: string; posters?: string[]; mosaic?: string; shape?: "poster" | "wide"; poster?: string; fallback: ReactNode;
   count?: number; enabled?: boolean; action: ReactNode; unreachable?: boolean;
   /** A stable key that survives into the DOM, so the same browse-focus machinery finds the tile. */
   path?: string;
@@ -21,7 +22,9 @@ export function LibraryTile({ name, meta, posters, poster, fallback, count, enab
 }) {
   return <article className={`browse-item library${unreachable ? " unreachable" : ""}`} data-path={path} ref={containerRef}>
     <button className="library-open" disabled={!enabled} onClick={onOpen}>
-      <span className="browse-art">{art ?? ((posters?.length ?? 0) > 1
+      <span className="browse-art">{art ?? (mosaic
+        ? <img src={remoteMosaicArtwork(mosaic, shape)} alt="" loading="lazy" onError={hideBroken}/>
+        : (posters?.length ?? 0) > 1
         ? <span className="library-preview-collage" aria-hidden="true">{posters?.map((url) => <img key={url} src={url} alt="" loading="lazy" onError={hideBroken}/>)}</span>
         : posters?.[0] || poster ? <img src={posters?.[0] ?? poster} alt="" loading="lazy" onError={hideBroken}/> : fallback)}
         {count != null && <i className="browse-badge">{count}</i>}</span>

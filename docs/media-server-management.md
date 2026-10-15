@@ -487,7 +487,10 @@ library chrome.
 
 Native lists read one provider page at a time, with a default of 60 items.
 Remote artwork is mounted near the visible viewport; a tile's mosaic is its own
-poster (or its library's own view image). The tile keeps that frame — its own
+poster (or its library's own view image). A tile that stands for several films draws
+one picture the server composed for it -- two pictures share the frame, three give
+the first the left two thirds, a wide tile keeps a row of columns -- cached under the
+version of the pictures that went into it, so a changed fan is a changed address. The tile keeps that frame — its own
 picture, the first of the fan, or the folder or drive icon — while a fan is
 fetched, and the fan covers it once every poster has decoded, so a reload never
 leaves the tile empty. Without one, a preview reads one bounded child

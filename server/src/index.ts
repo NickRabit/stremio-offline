@@ -1143,6 +1143,7 @@ const libraryRootBrowse = async (viewer: Viewer, options: { prewarm?: boolean } 
     const key = libraryPath(library.id, "");
     const path = wirePath(key);
     const posters = new Set<string>();
+    let mosaic: string | undefined;
     const previewEntries = entries.filter((entry) => parseLibraryPath(entry.key)?.libraryId === library.id);
     if (library.mosaic !== false) {
       const records = metaStore.meta(library.id);
@@ -1160,16 +1161,21 @@ const libraryRootBrowse = async (viewer: Viewer, options: { prewarm?: boolean } 
         // Only a bound title has catalogue artwork to wait for. An unbound folder is shown as
         // it is rather than paying for a video frame the mosaic never asked to generate.
         if (!art && entry.meta?.id && !options.prewarm) { scheduleArtwork(entry); pending = true; }
-        return thumbUrl("key", wirePath(entry.key), art);
+        return { art, poster: await thumbUrl("key", wirePath(entry.key), art) };
       }));
-      for (const poster of previews) if (poster) posters.add(poster);
+      for (const preview of previews) if (preview.poster) posters.add(preview.poster);
+      const fan = previews.filter((preview) => preview.art !== undefined);
+      if (fan.length > 1) {
+        const versions = await Promise.all(fan.map((preview) => artStamp(preview.art as string)));
+        mosaic = `/api/library/mosaic?key=${encodeURIComponent(key)}&v=${encodeURIComponent(MosaicCache.stamp(versions))}`;
+      }
     }
     return {
       kind: "library" as const, libraryId: library.id, name: library.name, label: library.name,
       type: library.type, enabled: library.enabled,
       fileCount: counts.files, titles: counts.titles, size: counts.bytes,
       unreachable: healthOf(library).unreachable, readOnly: healthOf(library).readOnly,
-      path, posters: [...posters], poster: await thumbUrl("dir", path, await locateFolderArtwork(key)),
+      path, posters: [...posters], ...(mosaic === undefined ? {} : { mosaic }), poster: await thumbUrl("dir", path, await locateFolderArtwork(key)),
     };
   }));
   return { path: "", items, total: items.length, pending };
@@ -1996,7 +2002,7 @@ const libraryPathBusy = async (keys: string[]): Promise<string | undefined> => {
   return undefined;
 };
 
-registerContentRoutes(app, { ...routeContext, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, fileSnaps, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, metaStore, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
+registerContentRoutes(app, { ...routeContext, artStamp, mosaics, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, fileSnaps, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, metaStore, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
 /** The one search and resolution service behind both the scan and the manual identity
  *  search, so the row somebody picks by hand is the row the scanner would have picked. */
 const libraryCandidates = createLibraryCandidates({

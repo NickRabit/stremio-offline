@@ -16,6 +16,7 @@ import { LibraryItem, LibraryItemMenu } from "./library-item";
 import { LibraryTile } from "./library-tile";
 import { TitleChips } from "./TitleChips";
 import { RemotePersonalShelf } from "./RemotePersonalShelf";
+import { remoteMosaicArtwork } from "./remote-artwork";
 import { PosterMosaic, TileArt } from "./TileArt";
 import { MoveDialog } from "./MoveDialog";
 import { SaveTargetDialog } from "./SaveTargetDialog";
@@ -2712,7 +2713,7 @@ export function App() {
           : <>
             <div className={browseView === "grid" ? "browse-grid" : "browse-rows"}>
               {browse.items.map((item) => item.kind === "library"
-                ? <LibraryTile key={item.path} name={item.name} meta={libraryMeta(item)} posters={item.posters} poster={item.poster}
+                ? <LibraryTile key={item.path} name={item.name} meta={libraryMeta(item)} posters={item.posters} mosaic={item.mosaic} poster={item.poster}
                     fallback={<HardDrive/>} count={item.fileCount} enabled={item.enabled} unreachable={item.unreachable} path={item.path}
                     action={item.enabled ? <><FolderOpen/> {t("library.openFolder")} <ChevronRight/></> : t("library.disabled")}
                     onOpen={() => { setBrowseQuery(""); setFromFavorites(false); setMenuFor(null); setBrowsePath(item.path); }}/>
@@ -2726,9 +2727,11 @@ export function App() {
                       setBrowseQuery(""); setFromFavorites(browsePath === ":favorites" || fromFavorites); setBrowsePath(item.path);
                     }}
                     art={<>
-                      {(item.posters?.length ?? 0) > 1
-                        ? <PosterMosaic posters={item.posters ?? []} label={t("library.mosaicAlt", { count: item.posters?.length ?? 0 })}/>
-                        : <TileArt shape={settings.libraryTileShape} poster={item.poster} wide={item.wide} fallback={<FolderOpen/>}/>}
+                      {item.mosaic
+                        ? <TileArt shape={settings.libraryTileShape} poster={remoteMosaicArtwork(item.mosaic, settings.libraryTileShape)} fallback={<FolderOpen/>}/>
+                        : (item.posters?.length ?? 0) > 1
+                          ? <PosterMosaic posters={item.posters ?? []} label={t("library.mosaicAlt", { count: item.posters?.length ?? 0 })}/>
+                          : <TileArt shape={settings.libraryTileShape} poster={item.poster} wide={item.wide} fallback={<FolderOpen/>}/>}
                       <i className="browse-badge">{item.fileCount}</i>{item.favorite && <i className="fav-mark"><Star/></i>}
                     </>}
                     title={item.name} meta={folderMeta(item)} description={descriptionLine(item)}

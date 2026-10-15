@@ -82,6 +82,7 @@ const makeRoot = () => mkdtemp(path.join(tmpdir(), "stremio-content-"));
 const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], activeItems: () => string[] = () => [], state: LibraryState = {}): Promise<Harness> => {
   const calls: Calls = { browsed: [], rootBrowses: 0, deleted: [], transfers: [], relocated: [], thumbAsked: [], entriesAsked: 0, entriesStale: [], artworkAsked: [], swept: 0, scheduledFolder: [], scheduledFile: [], rootPrewarm: [], browseMetaPrewarm: [] };
   const deps: ContentDeps = {
+    artStamp: async () => "stamp",
     store: { libraries: () => libraries, users: () => [admin, ordinary] } as unknown as Store,
     needsSetup: () => false,
     currentSession: () => undefined,
@@ -390,12 +391,14 @@ test("GET /api/library/browse gives a collection folder a mosaic of its distinct
   t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
 
   const body = await (await api(harness.base, "/api/library/browse")).json() as {
-    items: Array<{ path: string; kind: string; posters?: string[]; poster?: string }>; pending: boolean;
+    items: Array<{ path: string; kind: string; posters?: string[]; mosaic?: string; poster?: string }>; pending: boolean;
   };
   const collection = body.items.find((item) => item.path === "Collection")!;
   assert.equal(collection.kind, "folder");
   assert.deepEqual(collection.posters, ["path:Collection/Heat (1995).mkv", "path:Collection/Ronin (1998).mkv"],
     "one catalogue picture per distinct film, deduplicated by identity");
+  assert.match(collection.mosaic ?? "", /^\/api\/library\/mosaic\?key=lib_00000001%2FCollection&v=[A-Za-z0-9_-]+$/,
+    "the collection also names the one address its fan is composed at");
   assert.equal(collection.poster, undefined, "the collection shows the mosaic instead of a folder frame");
   const solo = body.items.find((item) => item.path === "Solo")!;
   assert.equal(solo.posters, undefined, "a folder holding one film keeps its own poster");

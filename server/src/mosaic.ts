@@ -31,6 +31,11 @@ export type MosaicShape = keyof typeof MOSAIC_SIZES;
 
 export const mosaicShape = (value: unknown): MosaicShape => (value === "wide" ? "wide" : "poster");
 
+/** A fan is kept like any other picture: private, a year, and immutable only while the stamp the
+ *  address names is still the current one. */
+export const MOSAIC_CACHE_CONTROL = "private, max-age=31536000";
+export const MOSAIC_IMMUTABLE_CACHE_CONTROL = "private, max-age=31536000, immutable";
+
 /** The space between two cells, in the tiles' own background colour, so a fan blends into a tile. */
 const GAP = 4;
 const BACKGROUND = "0x0d1117";
