@@ -305,8 +305,12 @@ export class ImageProxy {
     const width = detail ? DETAIL_WIDTH : TILE_WIDTH;
     // The listing narrows a Metahub backdrop to a tile; the detail page draws it full width.
     const background = typeof item.background === "string" ? (detail ? item.background : narrowArtwork(item.background)) : item.background;
+    // An addon that names its own poster as the backdrop leaves every wide surface with a
+    // portrait picture to draw. That is not a backdrop, so it is dropped here and the page falls
+    // back to the gallery's own picture, the video frame, or its gradient.
+    const duplicated = typeof item.background === "string" && item.background === item.poster;
     // Secure mode off still narrows a background: the page then loads it from the CDN itself.
-    if (!secureMode()) return background === item.background ? item : { ...item, background };
+    if (!secureMode()) return background === item.background && !duplicated ? item : { ...item, background: duplicated ? undefined : background };
     const videos = item.videos?.map((video) => {
       const thumbnail = typeof video.thumbnail === "string" ? this.proxied(video.thumbnail) : video.thumbnail;
       return thumbnail === video.thumbnail ? video : { ...video, thumbnail };
@@ -317,7 +321,7 @@ export class ImageProxy {
       ...item,
       ...galleries,
       poster: this.proxied(item.poster),
-      background: this.proxied(background, width),
+      background: duplicated ? undefined : this.proxied(background, width),
       logo: typeof item.logo === "string" ? this.proxied(item.logo) : item.logo,
       ...(videos ? { videos } : {}),
     };
