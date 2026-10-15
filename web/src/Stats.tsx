@@ -88,6 +88,32 @@ function ImageCountsPanel({ images }: { images: NonNullable<StatsSummary["images
   </section>;
 }
 
+/** What the server asked Emby or Jellyfin for: every request that really left the process, by the
+ *  operation behind it. A picture or a listing answered from a cache is not in here. */
+function ProviderCallsPanel({ provider }: { provider: NonNullable<StatsSummary["provider"]> }) {
+  const kinds = [
+    "directory", "items", "match",
+    "detail", "ancestors", "versions",
+    "artwork", "subtitle", "original",
+    "views", "user", "info", "login",
+  ] as const;
+  const total = kinds.reduce((sum, kind) => sum + provider[kind], 0);
+  return <section className="panel">
+    <h3>{t("stats.provider.title")}</h3>
+    <p className="stats-hint">{t("stats.provider.hint")}</p>
+    <div className="stats-cards">
+      <div className="stats-card">
+        <small>{t("stats.provider.total")}</small>
+        <strong>{total.toLocaleString(localeTag())}</strong>
+      </div>
+      {kinds.map((kind) => <div key={kind} className="stats-card">
+        <small>{t(`stats.provider.${kind}`)}</small>
+        <span>{provider[kind].toLocaleString(localeTag())}</span>
+      </div>)}
+    </div>
+  </section>;
+}
+
 function Card({ title, window }: { title: string; window: { bytes: number; count: number } }) {
   return <div className="stats-card">
     <small>{title}</small>
@@ -361,6 +387,7 @@ export function StatsPanel({ onError }: { onError: (error: unknown) => void }) {
       </div>
 
       {summary.images && <ImageCountsPanel images={summary.images}/>}
+      {summary.provider && <ProviderCallsPanel provider={summary.provider}/>}
 
       <section className="panel stats-graph">
         <div className="stats-graph-head">

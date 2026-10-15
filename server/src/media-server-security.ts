@@ -8,6 +8,7 @@ import {
   validateMediaServerToken,
   type MediaServerKind,
 } from "./media-server-types.js";
+import { noteProviderCall } from "./provider-stats.js";
 
 /** Requests the metadata transport is allowed to make, with the exact argument fields each
  *  one accepts. Anything else -- a raw path, a header, a stream or artwork URL -- is refused. */
@@ -1164,6 +1165,10 @@ export function createMediaServerTransport(
         // before the socket is touched.
         const lateCooling = coolingError();
         if (lateCooling) throw lateCooling;
+        // Counted here, not where the call was asked for: past the cooling re-check and about to
+        // reach the socket. A request that then fails to connect or answers 404 is still a call
+        // that left this process, and the counter is for those.
+        noteProviderCall(operation);
         response = await guard(sendFetch(built.url, { ...init, signal: controller.signal }), controller.signal, isTimedOut);
       } catch (error) {
         throw mapTransportError(error, controller.signal, isTimedOut);
@@ -1309,6 +1314,7 @@ export function createMediaServerTransport(
       // Recheck now: a 429 observed while this stream was being prepared must stop it here.
       const lateCooling = coolingError();
       if (lateCooling) throw lateCooling;
+      noteProviderCall("original");
       const response = await guard(sendFetch(url, { ...init, signal: controller.signal }), controller.signal, isTimedOut);
       upstreamBody = response.body;
       clearTimeout(headerTimer);
@@ -1516,6 +1522,7 @@ export function createMediaServerTransport(
       // Recheck now: a 429 observed while this image was preparing must stop it before the socket.
       const lateCooling = coolingError();
       if (lateCooling) throw lateCooling;
+      noteProviderCall("artwork");
       const response = await guard(sendFetch(url, { ...init, signal: controller.signal }), controller.signal, isTimedOut);
       upstreamBody = response.body;
       clearTimeout(headerTimer);
@@ -1707,6 +1714,7 @@ export function createMediaServerTransport(
       // is cancelled here rather than left open.
       const lateCooling = coolingError();
       if (lateCooling) throw lateCooling;
+      noteProviderCall(checked.kind === "subtitle" ? "subtitle" : "artwork");
       const response = await guard(
         sendFetch(url, { ...init, signal: controller.signal }).then((value) => {
           if (controller.signal.aborted) {

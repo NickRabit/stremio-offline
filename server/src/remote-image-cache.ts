@@ -8,8 +8,10 @@ import { MediaServerError } from "./media-server-types.js";
 /**
  * The posters and backdrops a Jellyfin or Emby library hands out. They belong to a connection,
  * not to the catalogue: a remote address can carry a token, so the key is drawn from the
- * connection, the item, the role, the size and the membership proof's tag -- never from a URL,
- * a token or a user id. Every request rechecks the viewer's grant before either copy is read.
+ * connection, the item, the role, the size and the tag the bytes belong to -- never from a URL,
+ * a token or a user id. The tag is the one the client asked for, or the proof's current one for
+ * a request that names none, so an address a page still holds keeps its own entry and does not
+ * reach the provider again. Every request rechecks the viewer's grant before either copy is read.
  */
 
 const MAX_STORED_BYTES = 5 * 1024 * 1024;
@@ -47,10 +49,11 @@ export function remoteImageKey(parts: {
   itemId: string;
   imageType: "Primary" | "Backdrop";
   size: "" | "tile" | "detail";
-  proofTag: string;
+  /** The image version the bytes belong to: what the client named, or the proof's tag. */
+  tag: string;
 }): string {
   return createHash("sha256")
-    .update([parts.connectionId, parts.itemId, parts.imageType, parts.size, parts.proofTag].join("\u0000"))
+    .update([parts.connectionId, parts.itemId, parts.imageType, parts.size, parts.tag].join("\u0000"))
     .digest("hex");
 }
 

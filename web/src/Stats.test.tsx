@@ -68,6 +68,21 @@ const render = async () => {
   await act(async () => { await Promise.resolve(); });
 };
 
+it("counts the calls that reached the media server, in total and by kind", async () => {
+  const withProvider: StatsSummary = { ...data, provider: {
+    info: 1, login: 1, user: 1, views: 2, items: 0, directory: 4, match: 0,
+    detail: 3, ancestors: 1, versions: 2, artwork: 12, subtitle: 0, original: 0,
+  } };
+  fetchMock.mockImplementation((input: RequestInfo | URL) => Promise.resolve(json(
+    String(input).includes("/api/stats/activity") ? { items: [], users: [], total: 0 }
+      : String(input).includes("/api/stats/streams") ? [] : withProvider)));
+  await render();
+  const cards = [...hostElement.querySelectorAll(".stats-card")].map((card) => card.textContent);
+  expect(cards).toContain("All calls27");
+  expect(cards).toContain("Browsing4");
+  expect(cards).toContain("Pictures12");
+});
+
 /** The first panel is the provider breakdown, the second the addon one. */
 const panel = (order: number) => hostElement.querySelectorAll(".stats-breakdown")[order] as HTMLElement;
 const rows = (order: number) => panel(order).querySelectorAll(".stats-pick").length;
