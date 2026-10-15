@@ -60,7 +60,9 @@ export default defineConfig({
     {
       name: "safari-landscape",
       testMatch: /safari-scroll\.spec\.ts/,
-      dependencies: ["setup", "chromium"],
+      // Scrolling and section restoration only need the account the setup project leaves: the
+      // journey suite used to run in front of it for no reason the spec can name.
+      dependencies: ["setup"],
       use: { ...devices["iPhone 13 landscape"], browserName: "webkit", storageState },
     },
     {

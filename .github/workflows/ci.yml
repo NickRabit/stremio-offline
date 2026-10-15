@@ -73,13 +73,41 @@ jobs:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       - run: npm run build
       - run: apt-get update && apt-get install -y --no-install-recommends ffmpeg
-      - run: npx playwright test --project=chromium --project=safari-seek --project=safari-landscape --project=safari-queue --project=mobile-locales
+      - run: npx playwright test --project=chromium
         env:
           HOME: /root
       - uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
         with:
           name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+
+  # The WebKit journeys and the two mobile-locale checks were part of the job above, where they
+  # waited for the whole chromium suite -- five minutes of page launches -- to finish first. They
+  # need the account that setup leaves and nothing the journeys build, so they run beside it.
+  e2e-webkit:
+    runs-on: ubuntu-24.04
+    container:
+      image: mcr.microsoft.com/playwright:v1.56.1-noble
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - run: npm run build
+      - run: apt-get update && apt-get install -y --no-install-recommends ffmpeg
+      - run: npx playwright test --project=safari-seek --project=safari-landscape --project=safari-queue --project=mobile-locales
+        env:
+          HOME: /root
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: playwright-report-webkit
           path: playwright-report/
           retention-days: 7
 
