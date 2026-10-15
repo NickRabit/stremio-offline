@@ -306,6 +306,7 @@ export const sk: Catalog = {
   "favorite.off": "Obľúbené",
   "favorite.added": "Pridané medzi obľúbené.",
   "favorite.removed": "Odstránené z obľúbených.",
+  "save.targetAutomatic": "Automaticky",
   "save.toLibrary": "Do knižnice",
   "save.toLibraryElsewhere": "Uložiť na iné miesto…",
   "save.toLibraryHint": "Uložiť do knižnice na serveri",

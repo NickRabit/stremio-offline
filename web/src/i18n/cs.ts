@@ -323,6 +323,7 @@ export const cs: Catalog = {
   "favorite.off": "Oblíbené",
   "favorite.added": "Přidáno do oblíbených.",
   "favorite.removed": "Odebráno z oblíbených.",
+  "save.targetAutomatic": "Automaticky",
   "save.toLibrary": "Do knihovny",
   "save.toLibraryElsewhere": "Uložit jinam…",
   "save.toLibraryHint": "Uložit do knihovny na serveru",

@@ -306,6 +306,7 @@ export const it: Catalog = {
   "favorite.off": "Preferiti",
   "favorite.added": "Aggiunto ai preferiti.",
   "favorite.removed": "Rimosso dai preferiti.",
+  "save.targetAutomatic": "Automatico",
   "save.toLibrary": "In libreria",
   "save.toLibraryElsewhere": "Salva in un altro posto...",
   "save.toLibraryHint": "Salva nella libreria sul server",

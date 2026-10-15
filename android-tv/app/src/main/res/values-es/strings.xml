@@ -73,9 +73,6 @@
   <string name="catalog_search_scope_in">en</string>
   <string name="sources_heading">Fuentes</string>
   <string name="sources_none">Ningún complemento de fuente activa tiene una transmisión para este título.</string>
-  <string name="sources_load_addons">Fuentes desde complementos</string>
-  <string name="sources_load_provider">Cargar fuentes</string>
-  <string name="sources_no_addon_providers">Ningún complemento ofrece fuentes para este título.</string>
   <string name="sources_local_badge">Local</string>
   <string name="sources_local_hint">Ya está en tu biblioteca — se reproduce desde el disco del servidor</string>
   <string name="sources_addon">complemento</string>
@@ -89,6 +86,7 @@
   <string name="auth_language">Idioma</string>
   <string name="common_sorting">Clasificación</string>
   <string name="save_to_library">A la biblioteca</string>
+  <string name="save_target_automatic">Automático</string>
   <string name="save_queued">En cola</string>
   <string name="player_play">Jugar</string>
   <string name="player_seek_restored">No se pudo cambiar de posición. Se mantuvo la posición anterior.</string>
@@ -247,7 +245,6 @@
   <string name="save_adding">Añadiendo…</string>
   <string name="save_target_default_library">Biblioteca predeterminada</string>
   <string name="save_target_no_library">Ninguna biblioteca en la que puedas escribir tiene este tipo de título.</string>
-  <string name="save_target_automatic">Automático</string>
   <plurals name="episodes_bulk_added">
     <item quantity="one">1 episodio añadido a la cola.</item>
     <item quantity="other">%1$s episodios agregados a la cola.</item>
@@ -304,4 +301,7 @@
   <string name="favorites_tab_servers">Servidores multimedia</string>
   <string name="media_server_personal_partial">No se pudieron cargar algunos elementos.</string>
   <string name="err_media_server_format_unknown">El servidor multimedia no proporcionó un formato compatible para el archivo original.</string>
+  <string name="sources_load_addons">Fuentes de complementos</string>
+  <string name="sources_load_provider">Cargar fuentes</string>
+  <string name="sources_no_addon_providers">Ningún complemento ofrece fuentes para este título.</string>
 </resources>

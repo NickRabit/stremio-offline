@@ -73,9 +73,6 @@
   <string name="catalog_search_scope_in">em</string>
   <string name="sources_heading">Fontes</string>
   <string name="sources_none">Nenhum complemento de fonte ativo possui um stream para este título.</string>
-  <string name="sources_load_addons">Fontes dos complementos</string>
-  <string name="sources_load_provider">Carregar fontes</string>
-  <string name="sources_no_addon_providers">Nenhum complemento oferece fontes para este título.</string>
   <string name="sources_local_badge">Local</string>
   <string name="sources_local_hint">Já está na sua biblioteca — é reproduzido do disco do servidor</string>
   <string name="sources_addon">Complemento</string>
@@ -89,6 +86,7 @@
   <string name="auth_language">Idioma</string>
   <string name="common_sorting">Classificando</string>
   <string name="save_to_library">Salvar na biblioteca</string>
+  <string name="save_target_automatic">Automático</string>
   <string name="save_queued">Na fila</string>
   <string name="player_play">Jogar</string>
   <string name="player_seek_restored">Não foi possível mudar de posição. A posição anterior foi mantida.</string>
@@ -247,7 +245,6 @@
   <string name="save_adding">Adicionando…</string>
   <string name="save_target_default_library">Biblioteca padrão</string>
   <string name="save_target_no_library">Nenhuma biblioteca na qual você possa escrever leva esse tipo de título.</string>
-  <string name="save_target_automatic">Automático</string>
   <plurals name="episodes_bulk_added">
     <item quantity="one">%1$s episódio adicionado à fila.</item>
     <item quantity="other">%1$s episódios adicionados à fila.</item>
@@ -304,4 +301,7 @@
   <string name="favorites_tab_servers">Servidores de mídia</string>
   <string name="media_server_personal_partial">Alguns itens não puderam ser carregados.</string>
   <string name="err_media_server_format_unknown">O servidor de mídia não forneceu um formato compatível para o arquivo original.</string>
+  <string name="sources_load_addons">Fontes de complementos</string>
+  <string name="sources_load_provider">Carregar fontes</string>
+  <string name="sources_no_addon_providers">Nenhum complemento oferece fontes para este título.</string>
 </resources>

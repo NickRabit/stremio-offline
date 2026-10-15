@@ -73,9 +73,6 @@
   <string name="catalog_search_scope_in">dentro</string>
   <string name="sources_heading">Fonti</string>
   <string name="sources_none">Nessun componente aggiuntivo di origine attivo ha uno streaming per questo titolo.</string>
-  <string name="sources_load_addons">Fonti dai componenti aggiuntivi</string>
-  <string name="sources_load_provider">Carica fonti</string>
-  <string name="sources_no_addon_providers">Nessun componente aggiuntivo offre fonti per questo titolo.</string>
   <string name="sources_local_badge">Locale</string>
   <string name="sources_local_hint">Già nella tua libreria — viene riprodotto dal disco del server</string>
   <string name="sources_addon">Componente aggiuntivo</string>
@@ -89,6 +86,7 @@
   <string name="auth_language">Lingua</string>
   <string name="common_sorting">Ordinamento</string>
   <string name="save_to_library">In libreria</string>
+  <string name="save_target_automatic">Automatico</string>
   <string name="save_queued">In coda</string>
   <string name="player_play">Gioca</string>
   <string name="player_seek_restored">Impossibile cambiare posizione. È stata mantenuta la posizione precedente.</string>
@@ -247,7 +245,6 @@
   <string name="save_adding">Aggiunta…</string>
   <string name="save_target_default_library">Libreria predefinita</string>
   <string name="save_target_no_library">Nessuna biblioteca a cui puoi scrivere prende questo tipo di titolo.</string>
-  <string name="save_target_automatic">Automatico</string>
   <plurals name="episodes_bulk_added">
     <item quantity="one">1 episodio aggiunto alla coda.</item>
     <item quantity="other">%1$s episodi aggiunti alla coda.</item>
@@ -304,4 +301,7 @@
   <string name="favorites_tab_servers">Server multimediali</string>
   <string name="media_server_personal_partial">Alcuni elementi non sono stati caricati.</string>
   <string name="err_media_server_format_unknown">Il server multimediale non ha fornito un formato supportato per il file originale.</string>
+  <string name="sources_load_addons">Fonti dai componenti aggiuntivi</string>
+  <string name="sources_load_provider">Carica fonti</string>
+  <string name="sources_no_addon_providers">Nessun componente aggiuntivo offre fonti per questo titolo.</string>
 </resources>

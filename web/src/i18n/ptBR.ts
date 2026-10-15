@@ -306,6 +306,7 @@ export const ptBR: Catalog = {
   "favorite.off": "Favoritos",
   "favorite.added": "Adicionado aos favoritos.",
   "favorite.removed": "Removido dos favoritos.",
+  "save.targetAutomatic": "Automático",
   "save.toLibrary": "Salvar na biblioteca",
   "save.toLibraryElsewhere": "Salve em outro lugar…",
   "save.toLibraryHint": "Salve na biblioteca do servidor",

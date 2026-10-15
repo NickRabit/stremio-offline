@@ -306,6 +306,7 @@ export const ru: Catalog = {
   "favorite.off": "Избранное",
   "favorite.added": "Добавлено в избранное.",
   "favorite.removed": "Удален из избранного.",
+  "save.targetAutomatic": "Автоматически",
   "save.toLibrary": "В библиотеку",
   "save.toLibraryElsewhere": "Сохранить в другое место…",
   "save.toLibraryHint": "Сохраняем в библиотеку на сервере",

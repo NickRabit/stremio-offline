@@ -328,6 +328,7 @@ export const en = {
   "favorite.off": "Favorites",
   "favorite.added": "Added to favorites.",
   "favorite.removed": "Removed from favorites.",
+  "save.targetAutomatic": "Automatic",
   "save.toLibrary": "To library",
   "save.toLibraryElsewhere": "Save to another place…",
   "save.toLibraryHint": "Save to the library on the server",

@@ -86,6 +86,7 @@
   <string name="auth_language">Jazyk</string>
   <string name="common_sorting">Řazení</string>
   <string name="save_to_library">Do knihovny</string>
+  <string name="save_target_automatic">Automaticky</string>
   <string name="save_queued">Ve frontě</string>
   <string name="player_play">Přehrát</string>
   <string name="player_seek_restored">Nepodařilo se přeskočit. Zůstává předchozí pozice.</string>
@@ -250,7 +251,6 @@
   <string name="save_adding">Přidávám…</string>
   <string name="save_target_default_library">Výchozí knihovna</string>
   <string name="save_target_no_library">Pro tento druh titulu nemáte knihovnu, do které lze zapisovat.</string>
-  <string name="save_target_automatic">Automaticky</string>
   <plurals name="episodes_bulk_added">
     <item quantity="one">Do fronty přidána 1 epizoda.</item>
     <item quantity="few">Do fronty přidány %1$s epizody.</item>
@@ -304,9 +304,6 @@
   <string name="media_server_state_error">Uloženou polohu se nepodařilo načíst.</string>
   <string name="media_server_group_failed">%1$s se nepodařilo načíst.</string>
   <string name="media_server_personal_empty">Zatím tu nic není.</string>
-  <string name="sources_load_addons">Zdroje z doplňků</string>
-  <string name="sources_load_provider">Načíst zdroje</string>
-  <string name="sources_no_addon_providers">Žádný doplněk nenabízí zdroje pro tento titul.</string>
   <string name="resume_filter_remote">Mediální servery</string>
   <string name="resume_empty_remote_title">Žádný průběh ze serverů</string>
   <string name="resume_empty_remote_text">Zde se objeví tituly, které sledujete z připojeného serveru Jellyfin nebo Emby.</string>
@@ -314,4 +311,7 @@
   <string name="favorites_tab_servers">Mediální servery</string>
   <string name="media_server_personal_partial">Některé položky se nepodařilo načíst.</string>
   <string name="err_media_server_format_unknown">Server neposkytl podporovaný formát původního souboru.</string>
+  <string name="sources_load_addons">Zdroje z doplňků</string>
+  <string name="sources_load_provider">Načíst zdroje</string>
+  <string name="sources_no_addon_providers">Žádný doplněk nenabízí zdroje pro tento titul.</string>
 </resources>
