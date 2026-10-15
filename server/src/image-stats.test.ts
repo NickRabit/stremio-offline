@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { ImageStats, imageSurface, noteImage, useImageStats } from "./image-stats.js";
+import { ImageStats, askedSurface, imageSurface, noteImage, useImageStats } from "./image-stats.js";
 
 test("image counts stay inside the selected period and survive a restart", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "image-stats-"));
@@ -37,6 +37,9 @@ test("image counts stay inside the selected period and survive a restart", async
 test("an unknown surface keeps the store's own layer and an unset counter records nothing", () => {
   assert.equal(imageSurface("home", "remote"), "home");
   assert.equal(imageSurface("nope", "catalog"), "catalog");
+  assert.equal(askedSurface(undefined), "unset");
+  assert.equal(askedSurface("home"), "home");
+  assert.equal(askedSurface("nope"), "other");
   useImageStats(undefined);
   noteImage("library", "memory");
 });
