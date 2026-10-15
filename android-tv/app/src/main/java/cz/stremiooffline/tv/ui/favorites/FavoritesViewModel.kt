@@ -23,6 +23,8 @@ data class FavoritesState(
   val loading: Boolean = true,
   val loadingMore: Boolean = false,
   val error: Boolean = false,
+  /** A media server that could not be read: the local stars are still there. */
+  val partial: Boolean = false,
 )
 
 /** The one Favourites grid: the merged list, its filter and its pages. Held in a view model so
@@ -57,7 +59,7 @@ class FavoritesViewModel(private val api: FavoritesApi) : ViewModel() {
     job?.cancel()
     job = viewModelScope.launch {
       val page = pageOrNull(filter, 0) ?: return@launch
-      state = state.copy(items = page.items, total = page.total, loading = false, loadingMore = false, error = false)
+      state = state.copy(items = page.items, total = page.total, loading = false, loadingMore = false, error = false, partial = page.partial)
     }
   }
 
@@ -71,7 +73,7 @@ class FavoritesViewModel(private val api: FavoritesApi) : ViewModel() {
     job = viewModelScope.launch {
       try {
         val page = api.favorites(state.filter, limit = PAGE, skip = state.items.size)
-        state = state.copy(items = state.items + page.items, total = page.total.coerceAtLeast(state.total), loadingMore = false)
+        state = state.copy(items = state.items + page.items, total = page.total.coerceAtLeast(state.total), loadingMore = false, partial = state.partial || page.partial)
       } catch (cancelled: CancellationException) {
         throw cancelled
       } catch (_: ApiError) {
@@ -82,13 +84,13 @@ class FavoritesViewModel(private val api: FavoritesApi) : ViewModel() {
 
   private fun load(filter: FavoriteFilter) {
     job?.cancel()
-    state = state.copy(filter = filter, items = emptyList(), total = 0, loading = true, loadingMore = false, error = false)
+    state = state.copy(filter = filter, items = emptyList(), total = 0, loading = true, loadingMore = false, error = false, partial = false)
     job = viewModelScope.launch {
       val page = pageOrNull(filter, 0)
       state = if (page == null) {
         state.copy(loading = false, error = true)
       } else {
-        state.copy(items = page.items, total = page.total, loading = false, error = false)
+        state.copy(items = page.items, total = page.total, loading = false, error = false, partial = page.partial)
       }
     }
   }

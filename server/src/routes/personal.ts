@@ -5,7 +5,11 @@ import { AppError } from "../errors.js";
 import {
   filterFavorites, mergeFavorites, parseFavoriteFilter, type FavoriteCatalogItem, type FavoriteEntry,
   type FavoriteEntryCatalog, type FavoriteEntryLibrary, type FavoriteItem, type FavoriteLibraryItem,
+  type FavoriteRemoteItem,
 } from "../favorites.js";
+import type { RemoteHomeCard } from "../home.js";
+import type { MediaServerAuthority } from "../media-server-manager.js";
+import type { MediaServerPersonal } from "../media-server-personal.js";
 import { HOME_FORGET_LIMIT, HOME_RESUME_FILE_LIMIT } from "../home.js";
 import { images } from "../images.js";
 import { knownEntryForUnit, knownTitleEntry, unitFor, type LibraryMetaRecord, type TitleUnit } from "../library-match.js";
@@ -49,6 +53,10 @@ export interface PersonalDeps extends RouteContext {
   updateData(req: express.Request | undefined, mutate: (data: UserData) => void): Promise<void>;
   watchlistOf(data: UserData): Record<string, WatchlistEntry>;
   wirePath(key: string): string;
+  /** The account's own verified media-server cards, read for the one merged Favourites list. */
+  remotePersonal: MediaServerPersonal;
+  /** The media-server authority for the request, built the way the media-server routes build it. */
+  authorityOf(req: express.Request): MediaServerAuthority;
 }
 
 /** What `GET /api/progress` hands the interface: one row per show, already wire-keyed and
@@ -109,8 +117,17 @@ export interface FavoritesOptions {
   limit?: number;
   /** Home drops the library stars of a library switched off there. */
   onHome?: boolean;
+  /** Whether this page reads the media server itself. Home's shelf mixes the local page with
+   *  the remote cards on its own, so it asks for the local half alone. */
+  remote?: boolean;
 }
-export interface FavoritesPage { items: FavoriteItem[]; total: number; pending: boolean }
+export interface FavoritesPage {
+  items: FavoriteItem[];
+  total: number;
+  pending: boolean;
+  /** A remote read that failed or could not confirm every library, with the local stars kept. */
+  partial?: boolean;
+}
 
 /** The pieces `registerHomeRoutes` reads from the personal routes instead of reaching into
  *  the store itself, so exactly one place applies the permission rules. */
@@ -133,7 +150,7 @@ async function withDeadline<T>(work: Promise<T>, ms?: number): Promise<T | typeo
 }
 
 export function registerPersonalRoutes(app: express.Application, deps: PersonalDeps): PersonalApi {
-  const { store, currentUser, attachBrowseMeta, cachedMeta, dataOf, describeLibraryPath, libraryKey, libraryOfKey, libraryUnits, locateFileArtwork, locateFolderArtworkPair, markersOf, metaStore, posterOf, prefsOf, progressOf, scheduleFileArtwork, scheduleFolderArtwork, setLibraryFavorite, thumbUrl, updateData, watchlistOf, wirePath } = deps;
+  const { store, currentUser, attachBrowseMeta, cachedMeta, dataOf, describeLibraryPath, libraryKey, libraryOfKey, libraryUnits, locateFileArtwork, locateFolderArtworkPair, markersOf, metaStore, posterOf, prefsOf, progressOf, scheduleFileArtwork, scheduleFolderArtwork, setLibraryFavorite, thumbUrl, updateData, watchlistOf, wirePath, remotePersonal, authorityOf } = deps;
 
   /** Whether the caller may see the library a stored path names. A path that names no
    *  library -- an unqualified row from before, or one whose library is gone -- is kept:
@@ -563,16 +580,64 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     } satisfies FavoriteLibraryItem;
   };
 
+  /** One remote card as the Favourites grid shows it: the library it belongs to and the item its
+   *  own detail opens, never a token, a stream address or a user id. */
+  const favoriteRemoteItem = (card: RemoteHomeCard): FavoriteRemoteItem => ({
+    kind: "remote",
+    libraryId: card.libraryId,
+    itemId: card.itemId,
+    title: card.title,
+    provider: card.provider,
+    libraryName: card.libraryName,
+    itemType: card.itemType,
+    ...(card.poster ? { poster: card.poster } : {}),
+    ...(card.wide ? { wide: card.wide } : {}),
+    ...(card.season === undefined ? {} : { season: card.season }),
+    ...(card.episode === undefined ? {} : { episode: card.episode }),
+  });
+
+  /** The stars a media server holds. A library that cannot be confirmed, or a projection that
+   *  no longer stands, leaves the answer partial instead of failing it or blocking the local
+   *  stars, so the one list is never emptied by a server that is slow or down. */
+  const remoteFavorites = async (req: express.Request, skip: number, limit: number, onHome: boolean):
+    Promise<{ items: FavoriteRemoteItem[]; total: number; partial: boolean } | undefined> => {
+    try {
+      const authority = authorityOf(req);
+      const cards = await remotePersonal.cards(authority, { filter: "favorites", skip, limit, ...(onHome ? { onHome: true } : {}) });
+      remotePersonal.assertCardsCurrent(authority, cards);
+      return { items: cards.items.map(favoriteRemoteItem), total: cards.total, partial: cards.partial === true };
+    } catch { return undefined; }
+  };
+
   const favoritesPage = async (req: express.Request, options: FavoritesOptions = {}): Promise<FavoritesPage> => {
-    const entries = await favoritesEntries(req, options);
+    const filter = options.filter ?? "all";
     const skip = Math.max(0, options.skip ?? 0);
     const limit = Math.max(1, Math.min(120, options.limit ?? 60));
+    if (filter === "remote") {
+      const remote = await remoteFavorites(req, skip, limit, options.onHome === true);
+      return remote
+        ? { items: remote.items, total: remote.total, pending: false, ...(remote.partial ? { partial: true } : {}) }
+        : { items: [], total: 0, pending: false, partial: true };
+    }
+    const entries = await favoritesEntries(req, options);
     // Every entry is described before the slice, so `total` counts only what can be returned:
     // a key the disk no longer answers cannot make a page repeat or stall the "load more".
-    const described = (await Promise.all(entries.map((entry) => describeFavorite(req, entry))))
+    const local = (await Promise.all(entries.map((entry) => describeFavorite(req, entry))))
       .filter((item): item is FavoriteItem => item !== undefined);
-    const items = described.slice(skip, skip + limit);
-    return { items, total: described.length, pending: items.some((item) => item.kind === "library" && (!item.poster || !item.wide)) };
+    const pendingIn = (items: FavoriteItem[]) => items.some((item) => item.kind === "library" && (!item.poster || !item.wide));
+    if (filter !== "all" || options.remote === false) {
+      const items = local.slice(skip, skip + limit);
+      return { items, total: local.length, pending: pendingIn(items) };
+    }
+    // The local stars lead the page and the media server's fill what is left of it. The remote
+    // slice starts past the local entries the request already asked for, so a page boundary
+    // never repeats a card or drops the local tail; a page the local half already fills asks
+    // the server for one row alone, which is enough for `total`.
+    const page = local.slice(skip, skip + limit);
+    const remote = await remoteFavorites(req, Math.max(0, skip - local.length), page.length < limit ? limit : 1, options.onHome === true);
+    if (!remote) return { items: page, total: local.length, pending: pendingIn(page), partial: true };
+    const items = [...page, ...remote.items.slice(0, Math.max(0, limit - page.length))];
+    return { items, total: local.length + remote.total, pending: pendingIn(items), ...(remote.partial ? { partial: true } : {}) };
   };
   /** One Favourites list for every signed-in account: its own library stars first (newest
    *  star first by the stored order, because a library star carries no time) and then the

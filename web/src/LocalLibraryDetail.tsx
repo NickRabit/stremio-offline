@@ -49,6 +49,9 @@ interface Props {
   accountScope?: string;
   /** Starts an addon or another library's copy, which the library's own player cannot hold. */
   onPlayAlternative?: (request: AlternativePlay) => void;
+  /** Saves one of this library's own files to the device at the keyboard; the parent owns the
+   *  transfer itself. A remote or addon row is never handed to it. */
+  onDownloadToDevice?: (path: string) => void;
   /** Queues an addon or another library's copy; a row of this library's own files is never
    *  offered a second copy of itself. */
   onSaveAlternative?: (request: AlternativePlay) => void;
@@ -62,7 +65,7 @@ interface Props {
  *  file or its folder is bound to a title, the other copies of that same title, then hands them to
  *  the shared shell. The catalogue hero, the synopsis and the source picker are the ones a remote
  *  library uses. */
-export function LocalLibraryDetail({ item, favorite, progress, progressRevision = 0, onToggleFavorite, onResetProgress, onPlay, onOpenFolder, uiLanguage, secureMode, onTrailer, onGallery, accountScope = "", onPlayAlternative, onSaveAlternative, preferredLanguage, realDebridConfigured = false }: Props) {
+export function LocalLibraryDetail({ item, favorite, progress, progressRevision = 0, onToggleFavorite, onResetProgress, onPlay, onOpenFolder, uiLanguage, secureMode, onTrailer, onGallery, accountScope = "", onPlayAlternative, onSaveAlternative, onDownloadToDevice: downloadToDevice, preferredLanguage, realDebridConfigured = false }: Props) {
   useI18n();
   const [sources, setSources] = useState<Stream[] | null>(null);
   const [error, setError] = useState("");
@@ -266,6 +269,9 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
       // proved the account may copy is offered at all: a click always reaches a real decision.
       saveSupported: (stream: Stream) => canQueue(stream, realDebridConfigured),
     } : {})}
+    // The clicked file is a file on this machine, so the device action is offered for it and for
+    // any other local copy; a row that belongs to an addon or another server is never one of these.
+    {...(isFile && downloadToDevice ? { onDownloadToDevice: (stream: Stream) => { if (stream.localPath) downloadToDevice(stream.localPath); } } : {})}
     {...(preferredLanguage ? { preferredLanguage } : {})}
     onPlay={(stream, fromBeginning) => {
       // The library's own file plays through the library player; a row that belongs to an addon or

@@ -137,9 +137,11 @@
   <string name="favorites_filter_all">Alle</string>
   <string name="favorites_filter_library">In der Bibliothek</string>
   <string name="favorites_filter_catalog">Aus dem Katalog</string>
+  <string name="favorites_filter_remote">Medienserver</string>
   <string name="favorites_empty_all_text">Markiere eine Datei in der Bibliothek oder einen Titel im Katalog mit einem Stern, und er erscheint hier.</string>
   <string name="favorites_empty_library_text">Markiere eine Datei oder einen Ordner in der Bibliothek mit einem Stern, und er erscheint hier.</string>
   <string name="favorites_empty_catalog_text">Markiere einen Titel im Katalog mit einem Stern, und er erscheint hier.</string>
+  <string name="favorites_empty_remote_text">Markiere einen Titel auf einem Jellyfin- oder Emby-Server, und er erscheint hier.</string>
   <string name="resume_title">Weiterschauen</string>
   <string name="resume_filter_all">Alle</string>
   <string name="resume_filter_library">In der Bibliothek</string>
@@ -297,8 +299,6 @@
   <string name="resume_filter_remote">Medienserver</string>
   <string name="resume_empty_remote_title">Kein Fortschritt von Servern</string>
   <string name="resume_empty_remote_text">Titel, die du von einem verbundenen Jellyfin- oder Emby-Server siehst, erscheinen hier.</string>
-  <string name="favorites_tab_local">Dateien und Katalog</string>
-  <string name="favorites_tab_servers">Medienserver</string>
   <string name="media_server_personal_partial">Einige Einträge konnten nicht geladen werden.</string>
   <string name="err_media_server_format_unknown">Der Medienserver hat kein unterstütztes Format der Originaldatei angegeben.</string>
   <string name="sources_load_addons">Quellen aus Add-ons</string>

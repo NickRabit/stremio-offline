@@ -137,9 +137,11 @@
   <string name="favorites_filter_all">Tutti</string>
   <string name="favorites_filter_library">In libreria</string>
   <string name="favorites_filter_catalog">Dal catalogo</string>
+  <string name="favorites_filter_remote">Server multimediali</string>
   <string name="favorites_empty_all_text">Aggiungi una stella a un file della libreria o a un titolo del catalogo e comparirà qui.</string>
   <string name="favorites_empty_library_text">Aggiungi una stella a un file o a una cartella della libreria e comparirà qui.</string>
   <string name="favorites_empty_catalog_text">Aggiungi una stella a un titolo del catalogo e comparirà qui.</string>
+  <string name="favorites_empty_remote_text">Metti tra i preferiti un titolo su un server Jellyfin o Emby e comparirà qui.</string>
   <string name="resume_title">Continua a guardare</string>
   <string name="resume_filter_all">Tutti</string>
   <string name="resume_filter_library">In libreria</string>
@@ -297,8 +299,6 @@
   <string name="resume_filter_remote">Server multimediali</string>
   <string name="resume_empty_remote_title">Nessun avanzamento remoto</string>
   <string name="resume_empty_remote_text">I titoli che guardi da un server Jellyfin o Emby collegato compaiono qui.</string>
-  <string name="favorites_tab_local">File e catalogo</string>
-  <string name="favorites_tab_servers">Server multimediali</string>
   <string name="media_server_personal_partial">Alcuni elementi non sono stati caricati.</string>
   <string name="err_media_server_format_unknown">Il server multimediale non ha fornito un formato supportato per il file originale.</string>
   <string name="sources_load_addons">Fonti dai componenti aggiuntivi</string>

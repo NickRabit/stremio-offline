@@ -396,6 +396,22 @@ test("a row written before the absence flags still emits both untagged URLs", as
   });
 });
 
+test("a card of a row with a Thumb carries the Thumb, the card of a row without one the Backdrop", async () => {
+  await withHarness(async (harness) => {
+    harness.server.detailOf.m1 = { ...movie("m1", "Alien"), thumbImageTag: "thumb-1" };
+    await harness.personal.patch(harness.admin, harness.libraryId, "m1", { position: 12, duration: 100 });
+    // A second row whose provider reports no Thumb keeps the Backdrop it always drew.
+    harness.server.detailOf.m2 = { ...movie("m2", "Aliens"), backdropImageTag: "back-2" };
+    harness.server.ancestorsOf.m2 = ["remote-1"];
+    await harness.personal.patch(harness.admin, harness.libraryId, "m2", { position: 5, duration: 100 });
+
+    const resume = await harness.personal.cards(harness.admin, { filter: "resume" });
+    const byItem = new Map(resume.items.map((card) => [card.itemId, card]));
+    assert.match(byItem.get("m1")!.wide!, /\/items\/m1\/artwork\/Thumb$/);
+    assert.match(byItem.get("m2")!.wide!, /\/items\/m2\/artwork\/Backdrop$/);
+  });
+});
+
 test("cards mark a library partial when it cannot be confirmed and project nothing for it", async () => {
   await withHarness(async (harness) => {
     await harness.personal.patch(harness.admin, harness.libraryId, "m1", { position: 12, duration: 100 });

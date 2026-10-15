@@ -160,9 +160,10 @@ export const api = {
     request<ScanState>("/api/library/scan", { method: "POST", body: JSON.stringify(body) }),
   stopLibraryScan: () => request<void>("/api/library/scan/stop", { method: "POST" }),
   watchlist: () => request<WatchlistEntry[]>("/api/watchlist"),
-  /** The one Favourites list: library stars and catalogue stars merged. */
+  /** The one Favourites list: library stars, catalogue stars and media-server stars merged.
+   *  `partial` says a media server could not be read, so the local stars are all there is. */
   favoritesList: (options: { filter?: FavoriteFilter; skip?: number; limit?: number } = {}) =>
-    request<{ items: FavoriteItem[]; total: number; pending: boolean }>(`/api/favorites?${q({
+    request<{ items: FavoriteItem[]; total: number; pending: boolean; partial?: boolean }>(`/api/favorites?${q({
       filter: options.filter && options.filter !== "all" ? options.filter : undefined,
       skip: options.skip || undefined,
       limit: options.limit ?? 60,

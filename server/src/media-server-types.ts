@@ -229,7 +229,7 @@ export const adminRemoteLibrary = (record: RemoteLibraryRecord, provider?: Media
  *  unknown fact keeps the legacy URL. Two optional paths built from an encoded local library and
  *  item handle, a fixed image role and a validated tag can never turn a cached provider row into
  *  a client-admitted URL. */
-export type PublicRemoteItem = Omit<ProviderItem, "hasPrimaryImage" | "hasBackdropImage" | "primaryImageTag" | "backdropImageTag"> & { poster?: string; wide?: string };
+export type PublicRemoteItem = Omit<ProviderItem, "hasPrimaryImage" | "hasBackdropImage" | "hasThumbImage" | "primaryImageTag" | "backdropImageTag" | "thumbImageTag"> & { poster?: string; wide?: string; fanart?: string };
 
 /** The one shape an artwork tag may take: bounded, URL-safe and credential-free, so it can travel
  *  in a query string verbatim and never smuggle a remote path, query or address. */
@@ -242,28 +242,41 @@ export function validateArtworkTag(value: unknown): string {
   return value;
 }
 
-export const remoteArtworkPath = (libraryId: string, itemId: string, imageType: "Primary" | "Backdrop", tag?: string): string => {
+export const remoteArtworkPath = (libraryId: string, itemId: string, imageType: "Primary" | "Backdrop" | "Thumb", tag?: string): string => {
   const path = `/api/remote-libraries/${encodeURIComponent(libraryId)}/items/${encodeURIComponent(itemId)}/artwork/${imageType}`;
   return tag === undefined ? path : `${path}?tag=${encodeURIComponent(tag)}`;
 };
 
-export const publicRemoteItem = (item: ProviderItem, libraryId: string): PublicRemoteItem => ({
-  ...scrubInternalItemFields(item),
-  ...(item.hasPrimaryImage === false ? {} : { poster: remoteArtworkPath(libraryId, item.id, "Primary", item.primaryImageTag) }),
-  ...(item.hasBackdropImage === false ? {} : { wide: remoteArtworkPath(libraryId, item.id, "Backdrop", item.backdropImageTag) }),
-});
+/** The picture a wide tile draws: the provider's landscape Thumb when the row has one, else its
+ *  Backdrop. A role the metadata proved absent is omitted, and a row that names neither keeps no
+ *  wide path at all. The Backdrop is also carried as `fanart`, which is what a full-bleed hero
+ *  reads; a tile never does. */
+export const publicRemoteItem = (item: ProviderItem, libraryId: string): PublicRemoteItem => {
+  const thumb = item.thumbImageTag === undefined ? undefined : remoteArtworkPath(libraryId, item.id, "Thumb", item.thumbImageTag);
+  const backdrop = item.hasBackdropImage === false ? undefined : remoteArtworkPath(libraryId, item.id, "Backdrop", item.backdropImageTag);
+  const wide = thumb ?? backdrop;
+  return {
+    ...scrubInternalItemFields(item),
+    ...(item.hasPrimaryImage === false ? {} : { poster: remoteArtworkPath(libraryId, item.id, "Primary", item.primaryImageTag) }),
+    ...(wide === undefined ? {} : { wide }),
+    ...(backdrop === undefined ? {} : { fanart: backdrop }),
+  };
+};
 
 /** Internal provider-only facts never reach a client projection. A captured tag proves the exact
  *  image version the manager must ask for; the resolved tag role is carried on the public URL, so
  *  the raw tags never leave the server. */
-const scrubInternalItemFields = (item: ProviderItem): Omit<ProviderItem, "hasPrimaryImage" | "hasBackdropImage" | "primaryImageTag" | "backdropImageTag"> => {
+const scrubInternalItemFields = (item: ProviderItem): Omit<ProviderItem, "hasPrimaryImage" | "hasBackdropImage" | "hasThumbImage" | "primaryImageTag" | "backdropImageTag" | "thumbImageTag"> => {
   if (item.hasPrimaryImage === undefined && item.hasBackdropImage === undefined
-    && item.primaryImageTag === undefined && item.backdropImageTag === undefined) return item;
+    && item.hasThumbImage === undefined && item.primaryImageTag === undefined
+    && item.backdropImageTag === undefined && item.thumbImageTag === undefined) return item;
   const clone: ProviderItem = { ...item };
   delete clone.hasPrimaryImage;
   delete clone.hasBackdropImage;
+  delete clone.hasThumbImage;
   delete clone.primaryImageTag;
   delete clone.backdropImageTag;
+  delete clone.thumbImageTag;
   return clone;
 };
 

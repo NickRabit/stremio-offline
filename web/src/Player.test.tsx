@@ -147,6 +147,62 @@ describe("Player save actions", () => {
   });
 });
 
+describe("Player source switching", () => {
+  const sourceButton = () => host.querySelector<HTMLButtonElement>(".player-sources-toggle");
+  const sourceRows = () => [...host.querySelectorAll<HTMLButtonElement>("#player-sources button")].filter((node) => node.getAttribute("aria-pressed") !== null);
+
+  it("offers no Sources control for a title whose sources were never handed over", async () => {
+    await render();
+    expect(sourceButton()).toBeNull();
+    expect(host.querySelector("#player-sources")).toBeNull();
+  });
+
+  it("reads the list on open, marks the playing row and hands another one over with the time", async () => {
+    const playing = addonRow({ sourceId: "addon-1", name: "4K" });
+    const other = addonRow({ sourceId: "addon-2", name: "1080p" });
+    const loadSources = vi.fn(async () => [playing, other]);
+    const onSwitchSource = vi.fn(async () => undefined);
+    await render({ stream: playing, loadSources, onSwitchSource });
+    expect(loadSources).not.toHaveBeenCalled();
+    await click(sourceButton()!);
+    expect(loadSources).toHaveBeenCalledTimes(1);
+    expect(sourceRows().map((row) => row.textContent)).toEqual(["4K", "1080p"]);
+    expect(sourceRows()[0]!.getAttribute("aria-pressed")).toBe("true");
+    expect(sourceRows()[0]!.disabled).toBe(true);
+    await click(sourceRows()[1]!);
+    expect(onSwitchSource).toHaveBeenCalledWith(other, expect.any(Number));
+    expect(host.querySelector("#player-sources")).toBeNull();
+
+    // Another open of the same playing source reuses the answer it already has, and another
+    // source on screen is what makes it ask again.
+    await click(sourceButton()!);
+    expect(loadSources).toHaveBeenCalledTimes(1);
+    await rerender({ stream: other, loadSources, onSwitchSource });
+    await click(sourceButton()!);
+    expect(loadSources).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the list open with the failure and leaves the playing row alone when the switch is refused", async () => {
+    const playing = addonRow({ sourceId: "addon-1", name: "4K" });
+    const other = addonRow({ sourceId: "addon-2", name: "1080p" });
+    const onSwitchSource = vi.fn(async () => { throw new Error("that source is gone"); });
+    await render({ stream: playing, loadSources: async () => [playing, other], onSwitchSource });
+    await click(sourceButton()!);
+    await click(sourceRows()[1]!);
+    expect(onSwitchSource).toHaveBeenCalledTimes(1);
+    expect(host.querySelector("#player-sources")).not.toBeNull();
+    expect(host.querySelector("#player-sources .notice")!.textContent).toContain("that source is gone");
+    expect(sourceRows()[0]!.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("says so when the list could not be read at all", async () => {
+    await render({ loadSources: async () => { throw new Error("the addons are down"); } });
+    await click(sourceButton()!);
+    expect(host.querySelector("#player-sources .notice")!.textContent).toContain("the addons are down");
+    expect(sourceRows()).toHaveLength(0);
+  });
+});
+
 describe("Player progress reporting", () => {
   it("names the played row only once its final write landed, never while it is still out", async () => {
     let release!: (response: Response) => void;

@@ -24,6 +24,7 @@ import cz.stremiooffline.tv.data.FavoritesPage
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs
 import cz.stremiooffline.tv.ui.detail.DetailData
+import cz.stremiooffline.tv.ui.detail.RemoteDetailData
 import cz.stremiooffline.tv.ui.file
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -62,15 +63,19 @@ class FavoritesScreenTest {
   private fun catalog(id: String, name: String = id, type: String = "movie") =
     FavoriteItemDto.Catalog(type = type, id = id, name = name)
 
+  private fun remote(id: String = "m1", title: String = "Alien") =
+    FavoriteItemDto.Remote(libraryId = "rlib_a", itemId = id, title = title, provider = "jellyfin", libraryName = "Server")
+
   private fun mount(
     api: FakeTvApi,
     onOpenDetail: (DetailData) -> Unit = {},
     onOpenCatalog: (CatalogDetailArgs) -> Unit = {},
+    onOpenRemote: (RemoteDetailData) -> Unit = {},
     onOpenLibrary: (String) -> Unit = {},
   ) {
     scenario.onActivity { activity ->
       activity.setContent {
-        FavoritesRoute(api = api, onOpenDetail = onOpenDetail, onOpenCatalog = onOpenCatalog, onOpenLibrary = onOpenLibrary)
+        FavoritesRoute(api = api, onOpenDetail = onOpenDetail, onOpenCatalog = onOpenCatalog, onOpenRemote = onOpenRemote, onOpenLibrary = onOpenLibrary)
       }
     }
     compose.waitForIdle()
@@ -182,5 +187,30 @@ class FavoritesScreenTest {
     assertEquals("tt2", opened[0].meta.id)
     assertEquals("series", opened[0].type)
     assertEquals("", opened[0].addonName)
+  }
+
+  @Test
+  fun `the one grid carries a media-server star and its filter`() {
+    val api = FakeTvApi()
+    api.favoritesValue = FavoritesPage(listOf(remote()), 1, false)
+    val opened = mutableListOf<RemoteDetailData>()
+    mount(api, onOpenRemote = { opened += it })
+
+    // The grid holds the focus while the one list is on screen, and the chips sit above it: the
+    // four filters are the list's own, with no Local / Media servers switch beside them.
+    compose.onNodeWithTag(favoriteCardTag(remote())).assertIsFocused()
+    press(Key.DirectionUp)
+    focusBy(favoritesFilterTag(FavoriteFilter.All), Key.DirectionLeft)
+    focusBy(favoritesFilterTag(FavoriteFilter.Remote), Key.DirectionRight)
+    press(Key.DirectionCenter)
+    assertEquals(listOf(FavoriteFilter.All, FavoriteFilter.Remote), api.favoritesRequests)
+    compose.onNodeWithTag(favoriteCardTag(remote())).assertIsFocused()
+    press(Key.DirectionCenter)
+    compose.waitForIdle()
+
+    assertEquals(1, opened.size)
+    assertEquals("rlib_a", opened[0].libraryId)
+    assertEquals("m1", opened[0].item.id)
+    assertEquals("Alien", opened[0].item.name)
   }
 }

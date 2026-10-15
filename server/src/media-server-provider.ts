@@ -80,12 +80,18 @@ export interface ProviderItem {
    *  client projection; the item projection omits the wide path only when this is explicitly
    *  false, so a row that never reported image metadata keeps the legacy path. */
   hasBackdropImage?: boolean;
+  /** Internal only: whether the provider row carries an actual Thumb image. Never part of a
+   *  client projection; a wide tile draws the provider's landscape still when there is one. */
+  hasThumbImage?: boolean;
   /** Internal only: the exact Primary image tag the row reported, so the client URL can request
    *  that version and a 404 proves the membership is gone. Never part of a client projection. */
   primaryImageTag?: string;
   /** Internal only: the exact Backdrop image tag the row reported, read from BackdropImageTags or
    *  the legacy ImageTags.Backdrop. Never part of a client projection. */
   backdropImageTag?: string;
+  /** Internal only: the exact Thumb image tag the row reported, read from the legacy
+   *  ImageTags.Thumb. Never part of a client projection. */
+  thumbImageTag?: string;
   /** The bounded number of children the row reports, when the server calculates one. */
   childCount?: number;
 }
@@ -221,6 +227,12 @@ function readPrimaryTag(raw: unknown): string | undefined {
   return lenientArtworkTag((raw as Record<string, unknown>).Primary);
 }
 
+/** The Thumb tag `ImageTags` reports, or undefined for a missing, blank or malformed one. */
+function readThumbTag(raw: unknown): string | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
+  return lenientArtworkTag((raw as Record<string, unknown>).Thumb);
+}
+
 /** The first trustworthy tag from `BackdropImageTags`, else the legacy `ImageTags.Backdrop`. An
  *  empty or malformed list is the metadata's own statement of absence. */
 function readBackdropTag(backdropTags: unknown, imageTags: unknown): string | undefined {
@@ -297,6 +309,9 @@ function providerItem(raw: unknown): ProviderItem {
     const tag = readPrimaryTag(item.ImageTags);
     result.hasPrimaryImage = tag !== undefined;
     if (tag !== undefined) result.primaryImageTag = tag;
+    const thumb = readThumbTag(item.ImageTags);
+    result.hasThumbImage = thumb !== undefined;
+    if (thumb !== undefined) result.thumbImageTag = thumb;
   }
   if (item.BackdropImageTags !== undefined) {
     const tag = readBackdropTag(item.BackdropImageTags, undefined);

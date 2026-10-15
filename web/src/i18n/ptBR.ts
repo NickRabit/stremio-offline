@@ -1838,4 +1838,10 @@ export const ptBR: Catalog = {
   "favorites.tabLocal": "Arquivos e catálogo",
   "favorites.tabServers": "Servidores de mídia",
   "mediaServer.personalPartial": "Alguns itens não puderam ser carregados.",
+  "favorites.filterRemote": "Servidores de mídia",
+  "favorites.emptyRemoteTitle": "Nenhum favorito nos servidores de mídia",
+  "favorites.emptyRemoteText": "Marque um título com estrela em um servidor Jellyfin ou Emby e ele aparece aqui.",
+  "catalog.openDetail": "Abrir detalhes",
+  "player.sourcesFailed": "Não foi possível carregar as fontes.",
+  "player.noOtherSource": "Não há outra fonte disponível para este título.",
 };

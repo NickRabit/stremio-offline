@@ -18,7 +18,7 @@ import { ResourceError } from "../media-resources.js";
 import type { Store, UserPrefs } from "../store.js";
 import { emptyUserData, type UserData, type UserRecord } from "../users.js";
 import type { AddonRecord, MetaItem } from "../types.js";
-import { homeCatalogRowId, homeFeedSelectionKey } from "../home.js";
+import { homeCatalogRowId, homeFeedSelectionKey, type RemoteHomeCard } from "../home.js";
 import { registerPersonalRoutes, type PersonalDeps } from "./personal.js";
 import { registerHomeRoutes, type CompletedJobView, type HomeDeps } from "./home.js";
 
@@ -87,6 +87,12 @@ interface Harness {
   catalogCalls: Array<{ addonKey: string; type: string; catalogId: string; extras: Record<string, string | number> }>;
   /** How long the fake addon takes to answer a catalogue. */
   catalogDelayMs: number;
+  /** The media-server stars the fake card projection hands out, in its own order. */
+  remoteCards: RemoteHomeCard[];
+  /** Every card page the favourite routes asked for. */
+  remoteCalls: Array<{ filter: string; skip: number; limit: number; onHome: boolean }>;
+  remoteThrows: boolean;
+  remotePartial: boolean;
   data(user: string): UserData;
   close(): Promise<void>;
 }
@@ -125,6 +131,7 @@ const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number
     episodes: [], episodesThrows: false, newEpisodesCalls: [], suggestions: [], suggestionsThrow: false, suggestionCalls: 0,
     now: options.now ?? Date.parse("2026-01-15T12:00:00.000Z"),
     metaDelayMs: 0, metaAnswer: null, lookups: [], catalogCalls: [], catalogDelayMs: 0,
+    remoteCards: [], remoteCalls: [], remoteThrows: false, remotePartial: false,
     data: () => { throw new Error("not mounted"); }, close: async () => undefined,
   };
   const users = new Map<string, UserData>([[ALICE, emptyUserData()], [BOB, emptyUserData()], [ADMIN, emptyUserData()]]);
@@ -196,6 +203,19 @@ const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number
       mutate(users.get(id)!);
     },
     watchlistOf: (data) => data.watchlist as Record<string, WatchlistEntry>,
+    // The remote half is a card projection here; the media-server read itself has its own suite.
+    remotePersonal: {
+      cards: async (_authority: unknown, options: { filter: string; skip?: number; limit?: number; onHome?: boolean }) => {
+        state.remoteCalls.push({ filter: options.filter, skip: options.skip ?? 0, limit: options.limit ?? 60, onHome: options.onHome === true });
+        if (state.remoteThrows) throw new Error("the media server is unavailable");
+        const skip = options.skip ?? 0;
+        const limit = options.limit ?? 60;
+        return { items: state.remoteCards.slice(skip, skip + limit), total: state.remoteCards.length,
+          ...(state.remotePartial ? { partial: true } : {}) };
+      },
+      assertCardsCurrent: () => undefined,
+    } as unknown as PersonalDeps["remotePersonal"],
+    authorityOf: () => ({ actor: { id: ALICE, secret: "unused" }, assertCurrent: () => undefined }),
     wirePath: (key) => {
       const parsed = parseLibraryPath(key);
       return parsed && libraries.length === 1 ? relativeWithin(libraries[0]!.id, key) : key;
@@ -207,11 +227,7 @@ const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number
   const homeDeps: HomeDeps = {
     ...personalDeps,
     personal,
-    // The remote half is empty here; the media-server card projection has its own suite.
-    remotePersonal: {
-      cards: async () => ({ items: [], total: 0 }),
-      assertCardsCurrent: () => undefined,
-    } as unknown as HomeDeps["remotePersonal"],
+    remotePersonal: personalDeps.remotePersonal,
     authorityOf: () => ({ actor: { id: "usr_00000001", secret: "unused" }, assertCurrent: () => undefined }),
     completedJobs: () => { if (state.completedThrows) throw new Error("the queue is unavailable"); return state.completed; },
     newEpisodes: (ownerUserId, watched) => {
@@ -1409,8 +1425,16 @@ test("GET /api/home/layout lists every arrangeable row with its state and the cu
   assert.ok(body.layout.order.indexOf("favorites") < body.layout.order.indexOf("resume"));
 });
 
-const favorites = async (harness: Harness, query: string, user = ALICE): Promise<{ items: Array<{ kind: string; type?: string; path?: string; id?: string; name?: string; catalogId?: string; year?: string; itemKind?: string; label?: string; progress?: { position: number; duration: number }; poster?: string }>; total: number }> =>
+const favorites = async (harness: Harness, query: string, user = ALICE): Promise<{ items: Array<{ kind: string; type?: string; path?: string; id?: string; name?: string; catalogId?: string; year?: string; itemKind?: string; label?: string; progress?: { position: number; duration: number }; poster?: string; wide?: string; title?: string; provider?: string; libraryId?: string; itemId?: string; libraryName?: string; itemType?: string; season?: number; episode?: number }>; total: number; partial?: boolean }> =>
   (await api(harness.base, `/api/favorites${query}`, user)).json() as never;
+
+const remoteCard = (id: string, over: Partial<RemoteHomeCard> = {}): RemoteHomeCard => ({
+  kind: "remote", key: `remote:${id}`, title: `Remote ${id}`, provider: "jellyfin",
+  libraryId: "rlib_00000000000000000000000000000001", libraryName: "Server", itemId: id,
+  itemType: "movie", poster: `/api/remote-libraries/rlib_00000000000000000000000000000001/items/${id}/artwork/Primary`,
+  wide: `/api/remote-libraries/rlib_00000000000000000000000000000001/items/${id}/artwork/Thumb`,
+  updatedAt: "2024-01-01T00:00:00.000Z", ...over,
+});
 
 test("GET /api/favorites merges both sources, library stars first, each newest first", async (t) => {
   const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
@@ -1558,6 +1582,88 @@ test("total counts only entries that can be returned, so paging neither repeats 
   const second = await favorites(harness, "?limit=1&skip=1");
   assert.deepEqual(second.items, [], "the page after the last one is empty, not the first page again");
   assert.equal(second.total, 1);
+});
+
+test("the remote filter returns the media-server stars and only reads it there and for all", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  harness.remoteCards = [remoteCard("m1"), remoteCard("m2", { itemType: "episode", season: 2, episode: 4, wide: undefined })];
+  harness.data(ALICE).favorites = ["lib_00000001/Star.mkv"];
+  harness.data(ALICE).watchlist = { "movie:tt1": { type: "movie", id: "tt1", name: "Star", addedAt: "2024-01-01T00:00:00.000Z" } };
+
+  const remote = await favorites(harness, "?filter=remote");
+  assert.deepEqual(remote.items.map((item) => item.kind), ["remote", "remote"]);
+  assert.deepEqual(remote.items.map((item) => item.itemId), ["m1", "m2"]);
+  assert.deepEqual(remote.items[0], {
+    kind: "remote", libraryId: "rlib_00000000000000000000000000000001", itemId: "m1", title: "Remote m1",
+    provider: "jellyfin", libraryName: "Server", itemType: "movie",
+    poster: "/api/remote-libraries/rlib_00000000000000000000000000000001/items/m1/artwork/Primary",
+    wide: "/api/remote-libraries/rlib_00000000000000000000000000000001/items/m1/artwork/Thumb",
+  }, "the card is mapped to the fields the grid needs, and nothing else");
+  assert.equal("wide" in remote.items[1]!, false);
+  assert.deepEqual([remote.items[1]!.season, remote.items[1]!.episode], [2, 4]);
+
+  harness.remoteCalls.length = 0;
+  const libraryOnly = await favorites(harness, "?filter=library");
+  assert.deepEqual(libraryOnly.items.map((item) => item.kind), ["library"]);
+  assert.equal(harness.remoteCalls.length, 0, "the library filter never asks the media server");
+  const catalog = await favorites(harness, "?filter=catalog");
+  assert.deepEqual(catalog.items.map((item) => item.kind), ["catalog"]);
+  assert.equal(harness.remoteCalls.length, 0, "the catalogue filter never asks the media server");
+
+  const all = await favorites(harness, "");
+  assert.deepEqual(all.items.map((item) => item.kind), ["library", "catalog", "remote", "remote"]);
+  assert.equal(all.total, 4);
+  assert.deepEqual(harness.remoteCalls.map((call) => [call.filter, call.skip, call.onHome]), [["favorites", 0, false]]);
+});
+
+test("a media server that fails leaves the local stars and marks the page partial", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  harness.remoteCards = [remoteCard("m1")];
+  harness.remoteThrows = true;
+  harness.data(ALICE).favorites = ["lib_00000001/Star.mkv"];
+  harness.data(ALICE).watchlist = { "movie:tt1": { type: "movie", id: "tt1", name: "Star", addedAt: "2024-01-01T00:00:00.000Z" } };
+
+  const all = await favorites(harness, "");
+  assert.deepEqual(all.items.map((item) => item.kind), ["library", "catalog"]);
+  assert.equal(all.total, 2);
+  assert.equal(all.partial, true);
+  const libraryOnly = await favorites(harness, "?filter=library");
+  assert.deepEqual(libraryOnly.items.map((item) => item.kind), ["library"], "a filter that needs no server still answers");
+});
+
+test("a partial remote answer keeps whatever cards did land and marks the page partial", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  harness.remoteCards = [remoteCard("m1")];
+  harness.remotePartial = true;
+  harness.data(ALICE).favorites = ["lib_00000001/Star.mkv"];
+
+  const all = await favorites(harness, "");
+  assert.deepEqual(all.items.map((item) => item.kind), ["library", "remote"]);
+  assert.equal(all.total, 2);
+  assert.equal(all.partial, true);
+});
+
+test("favourites paging crosses the local tail and the remote pages without repeating a card", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  harness.data(ALICE).favorites = ["lib_00000001/A.mkv", "lib_00000001/B.mkv", "lib_00000001/C.mkv", "lib_00000001/D.mkv", "lib_00000001/E.mkv"];
+  harness.remoteCards = ["m1", "m2", "m3", "m4", "m5"].map((id) => remoteCard(id));
+
+  const pages = [
+    await favorites(harness, "?limit=3&skip=0"),
+    await favorites(harness, "?limit=3&skip=3"),
+    await favorites(harness, "?limit=3&skip=6"),
+    await favorites(harness, "?limit=3&skip=9"),
+  ];
+  assert.deepEqual(pages.map((page) => page.total), [10, 10, 10, 10]);
+  const seen = pages.flatMap((page) => page.items.map((item) => item.path ?? item.itemId));
+  assert.deepEqual(seen, ["E.mkv", "D.mkv", "C.mkv", "B.mkv", "A.mkv", "m1", "m2", "m3", "m4", "m5"]);
+  assert.equal(new Set(seen).size, 10, "paging never repeats a card");
+  assert.deepEqual(harness.remoteCalls.map((call) => [call.skip, call.limit]),
+    [[0, 1], [0, 3], [1, 3], [4, 3]], "the remote slice starts past the local entries already served");
 });
 
 test("a folded catalogue star answers the catalogue filter as well as the library's", async (t) => {

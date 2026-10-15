@@ -141,9 +141,11 @@
   <string name="favorites_filter_all">Все</string>
   <string name="favorites_filter_library">В библиотеке</string>
   <string name="favorites_filter_catalog">Из каталога</string>
+  <string name="favorites_filter_remote">Медиасерверы</string>
   <string name="favorites_empty_all_text">Отметьте звёздочкой файл в библиотеке или название в каталоге, и оно появится здесь.</string>
   <string name="favorites_empty_library_text">Отметьте звёздочкой файл или папку в библиотеке, и они появятся здесь.</string>
   <string name="favorites_empty_catalog_text">Отметьте звёздочкой название в каталоге, и оно появится здесь.</string>
+  <string name="favorites_empty_remote_text">Отметьте тайтл на сервере Jellyfin или Emby — он появится здесь.</string>
   <string name="resume_title">Продолжить просмотр</string>
   <string name="resume_filter_all">Все</string>
   <string name="resume_filter_library">В библиотеке</string>
@@ -307,8 +309,6 @@
   <string name="resume_filter_remote">Медиасерверы</string>
   <string name="resume_empty_remote_title">Нет удалённого прогресса</string>
   <string name="resume_empty_remote_text">Здесь появятся тайтлы, которые вы смотрите с подключённого сервера Jellyfin или Emby.</string>
-  <string name="favorites_tab_local">Файлы и каталог</string>
-  <string name="favorites_tab_servers">Медиасерверы</string>
   <string name="media_server_personal_partial">Некоторые элементы не удалось загрузить.</string>
   <string name="err_media_server_format_unknown">Медиасервер не указал поддерживаемый формат исходного файла.</string>
   <string name="sources_load_addons">Источники из аддонов</string>

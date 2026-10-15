@@ -1838,4 +1838,10 @@ export const de: Catalog = {
   "favorites.tabLocal": "Dateien und Katalog",
   "favorites.tabServers": "Medienserver",
   "mediaServer.personalPartial": "Einige Einträge konnten nicht geladen werden.",
+  "favorites.filterRemote": "Medienserver",
+  "favorites.emptyRemoteTitle": "Keine Favoriten auf Medienservern",
+  "favorites.emptyRemoteText": "Markiere einen Titel auf einem Jellyfin- oder Emby-Server, und er erscheint hier.",
+  "catalog.openDetail": "Detail öffnen",
+  "player.sourcesFailed": "Die Quellen konnten nicht geladen werden.",
+  "player.noOtherSource": "Für diesen Titel ist keine andere Quelle verfügbar.",
 };

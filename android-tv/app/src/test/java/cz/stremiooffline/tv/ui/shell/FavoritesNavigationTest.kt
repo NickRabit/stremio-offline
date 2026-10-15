@@ -65,6 +65,7 @@ class FavoritesNavigationTest {
           FavoriteFilter.All -> true
           FavoriteFilter.Library -> it is FavoriteItemDto.Library
           FavoriteFilter.Catalog -> it is FavoriteItemDto.Catalog
+          FavoriteFilter.Remote -> it is FavoriteItemDto.Remote
         }
       }
       return FavoritesPage(items, items.size, false)

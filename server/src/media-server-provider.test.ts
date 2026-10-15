@@ -499,6 +499,27 @@ test("backdrop presence is read from BackdropImageTags, then ImageTags.Backdrop,
   assert.equal(page.items[6].hasBackdropImage, false, "a non-string entry proves absence");
 });
 
+test("a Thumb tag is read from ImageTags with the same alphabet a Primary tag is held to", async () => {
+  const { provider } = fixture(() => ({
+    Items: [
+      { Id: "m1", Name: "Still", Type: "Movie", ProviderIds: {}, ImageTags: { Primary: "p1", Thumb: "th.1~x" } },
+      { Id: "m2", Name: "Blank thumb", Type: "Movie", ProviderIds: {}, ImageTags: { Primary: "p2", Thumb: "" } },
+      { Id: "m3", Name: "Foreign thumb", Type: "Movie", ProviderIds: {}, ImageTags: { Thumb: "bad tag!" } },
+      { Id: "m4", Name: "No tags", Type: "Movie", ProviderIds: {} },
+    ],
+    TotalRecordCount: 4,
+  }));
+  const page = await provider.pageDirectory("tok", "user-1", "library-1", { mode: "titles", limit: 4 });
+  assert.equal(page.items[0].thumbImageTag, "th.1~x");
+  assert.equal(page.items[0].hasThumbImage, true);
+  assert.equal(page.items[1].thumbImageTag, undefined, "a blank thumb is never captured");
+  assert.equal(page.items[1].hasThumbImage, false, "a blank thumb proves the image is absent");
+  assert.equal(page.items[2].thumbImageTag, undefined, "a tag outside the alphabet is never captured");
+  assert.equal(page.items[2].hasThumbImage, false);
+  assert.equal(page.items[3].hasThumbImage, undefined, "no image metadata leaves the thumb unknown");
+  assert.equal(page.items[0].primaryImageTag, "p1", "the Primary tag is still read beside it");
+});
+
 
 test("native movie filters retain music videos and folders, and episode pages use numeric order", async () => {
   const calls: Array<Record<string, unknown>> = [];

@@ -1838,4 +1838,10 @@ export const es: Catalog = {
   "favorites.tabLocal": "Archivos y catálogo",
   "favorites.tabServers": "Servidores multimedia",
   "mediaServer.personalPartial": "No se pudieron cargar algunos elementos.",
+  "favorites.filterRemote": "Servidores multimedia",
+  "favorites.emptyRemoteTitle": "Sin favoritos en servidores multimedia",
+  "favorites.emptyRemoteText": "Marca un título en un servidor Jellyfin o Emby y aparecerá aquí.",
+  "catalog.openDetail": "Abrir detalle",
+  "player.sourcesFailed": "No se pudieron cargar las fuentes.",
+  "player.noOtherSource": "No hay otra fuente disponible para este título.",
 };

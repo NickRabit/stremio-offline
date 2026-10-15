@@ -467,8 +467,10 @@ interface MembershipProof {
   type: ProviderItemType;
   hasPrimaryImage?: boolean;
   hasBackdropImage?: boolean;
+  hasThumbImage?: boolean;
   primaryImageTag?: string;
   backdropImageTag?: string;
+  thumbImageTag?: string;
   at: number;
 }
 
@@ -1503,7 +1505,7 @@ export class MediaServerManager {
     return out;
   }
 
-  /** One item's official artwork as a scoped, streaming response. The image role is one of two
+  /** One item's official artwork as a scoped, streaming response. The image role is one of three
    *  fixed values, the optional `tag` is a bounded opaque string and the optional `size` is one of
    *  the two fixed widths, `tile` or `detail`; the item may be of any kind. Membership is taken
    *  from a short-lived proof (an id a page already returned, or a one-time detail and ancestor
@@ -1523,7 +1525,7 @@ export class MediaServerManager {
     options?: { tag?: unknown; ifNoneMatch?: unknown; size?: unknown; surface?: unknown },
   ): Promise<Response> {
     const request = this.requestSignal(signal);
-    if (imageType !== "Primary" && imageType !== "Backdrop") throw invalid("The media-server image type is not supported.");
+    if (imageType !== "Primary" && imageType !== "Backdrop" && imageType !== "Thumb") throw invalid("The media-server image type is not supported.");
     const user = this.currentActor(authority, request);
     const library = this.requireVisibleLibrary(user, libraryId);
     const connection = this.requireConnection(library.connectionId);
@@ -1539,7 +1541,9 @@ export class MediaServerManager {
       this.recheckContent(authority, request, library.id, connection);
       this.putProof(proof);
     }
-    const proofTag = imageType === "Primary" ? proof.primaryImageTag : proof.backdropImageTag;
+    const proofTag = imageType === "Primary" ? proof.primaryImageTag
+      : imageType === "Backdrop" ? proof.backdropImageTag
+      : proof.thumbImageTag;
     // The address a client asks for names the picture it gets: an older tag is a different
     // picture, so it becomes its own cache entry and its own validator instead of being fetched
     // from the provider on every visit. A request that names no tag is the current one.
@@ -1945,8 +1949,10 @@ export class MediaServerManager {
       type: item.type,
       ...(item.hasPrimaryImage === undefined ? {} : { hasPrimaryImage: item.hasPrimaryImage }),
       ...(item.hasBackdropImage === undefined ? {} : { hasBackdropImage: item.hasBackdropImage }),
+      ...(item.hasThumbImage === undefined ? {} : { hasThumbImage: item.hasThumbImage }),
       ...(item.primaryImageTag === undefined ? {} : { primaryImageTag: item.primaryImageTag }),
       ...(item.backdropImageTag === undefined ? {} : { backdropImageTag: item.backdropImageTag }),
+      ...(item.thumbImageTag === undefined ? {} : { thumbImageTag: item.thumbImageTag }),
       at: this.clock(),
     };
   }

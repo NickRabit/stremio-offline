@@ -141,9 +141,11 @@
   <string name="favorites_filter_all">Wszystko</string>
   <string name="favorites_filter_library">W bibliotece</string>
   <string name="favorites_filter_catalog">Z katalogu</string>
+  <string name="favorites_filter_remote">Serwery multimedialne</string>
   <string name="favorites_empty_all_text">Dodaj gwiazdkę plikowi w bibliotece lub tytułowi w katalogu, a pojawi się tutaj.</string>
   <string name="favorites_empty_library_text">Dodaj gwiazdkę plikowi lub folderowi w bibliotece, a pojawi się tutaj.</string>
   <string name="favorites_empty_catalog_text">Dodaj gwiazdkę tytułowi w katalogu, a pojawi się tutaj.</string>
+  <string name="favorites_empty_remote_text">Dodaj gwiazdkę przy tytule na serwerze Jellyfin lub Emby, a pojawi się tutaj.</string>
   <string name="resume_title">Kontynuuj oglądanie</string>
   <string name="resume_filter_all">Wszystko</string>
   <string name="resume_filter_library">W bibliotece</string>
@@ -307,8 +309,6 @@
   <string name="resume_filter_remote">Serwery multimedialne</string>
   <string name="resume_empty_remote_title">Brak zdalnego postępu</string>
   <string name="resume_empty_remote_text">Tytuły oglądane z podłączonego serwera Jellyfin lub Emby pojawią się tutaj.</string>
-  <string name="favorites_tab_local">Pliki i katalog</string>
-  <string name="favorites_tab_servers">Serwery multimediów</string>
   <string name="media_server_personal_partial">Nie udało się wczytać niektórych elementów.</string>
   <string name="err_media_server_format_unknown">Serwer multimediów nie podał obsługiwanego formatu oryginalnego pliku.</string>
   <string name="sources_load_addons">Źródła z dodatków</string>

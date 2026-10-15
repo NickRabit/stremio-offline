@@ -137,9 +137,11 @@
   <string name="favorites_filter_all">Todo</string>
   <string name="favorites_filter_library">En la biblioteca</string>
   <string name="favorites_filter_catalog">Del catálogo</string>
+  <string name="favorites_filter_remote">Servidores multimedia</string>
   <string name="favorites_empty_all_text">Marca con una estrella un archivo de la biblioteca o un título del catálogo y aparecerá aquí.</string>
   <string name="favorites_empty_library_text">Marca con una estrella un archivo o carpeta de la biblioteca y aparecerá aquí.</string>
   <string name="favorites_empty_catalog_text">Marca con una estrella un título del catálogo y aparecerá aquí.</string>
+  <string name="favorites_empty_remote_text">Marca un título en un servidor Jellyfin o Emby y aparecerá aquí.</string>
   <string name="resume_title">Seguir viendo</string>
   <string name="resume_filter_all">Todo</string>
   <string name="resume_filter_library">En la biblioteca</string>
@@ -297,8 +299,6 @@
   <string name="resume_filter_remote">Servidores multimedia</string>
   <string name="resume_empty_remote_title">Sin progreso remoto</string>
   <string name="resume_empty_remote_text">Los títulos que ves desde un servidor Jellyfin o Emby conectado aparecen aquí.</string>
-  <string name="favorites_tab_local">Archivos y catálogo</string>
-  <string name="favorites_tab_servers">Servidores multimedia</string>
   <string name="media_server_personal_partial">No se pudieron cargar algunos elementos.</string>
   <string name="err_media_server_format_unknown">El servidor multimedia no proporcionó un formato compatible para el archivo original.</string>
   <string name="sources_load_addons">Fuentes de complementos</string>
