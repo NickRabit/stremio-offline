@@ -7,7 +7,7 @@ import { artworks } from "../artwork-cache.js";
 import { askedSurface, imageSurface, logPoster, noteImage, type ImageFrom } from "../image-stats.js";
 import { FileSnapCache, fileEtag } from "../byte-cache.js";
 import type { ArtShape } from "../artwork.js";
-import { folderMosaicUnits, pendingSuggestionKeys, unitFor, type GalleryEntry, type LibraryMetaRecord, type LibrarySuggestion, type TitleUnit } from "../library-match.js";
+import { folderMosaicUnits, mosaicIdentities, mosaicSkipped, pendingSuggestionKeys, unitFor, type GalleryEntry, type LibraryMetaRecord, type LibrarySuggestion, type TitleUnit } from "../library-match.js";
 import { AppError } from "../errors.js";
 import { assertStillAdmin } from "../roles.js";
 import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, posixBase, posixDir, posixJoin, resolveLibraryPath, sameFile, visibleLibraries, type LibraryRecord, type Viewer } from "../libraries.js";
@@ -337,7 +337,12 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     const shape = mosaicShape(req.query.shape);
     const resolved = await resolveLibraryPath(store.libraries(), String(req.query.key ?? ""));
     if (!resolved || !libraryVisible(resolved.library, viewer)) return void res.status(404).end();
-    const fan = await folderFan(resolved.key, resolved.library, await libraryUnits());
+    // The library's own tile draws one picture per film it stands for, whichever kind that film
+    // is: a series library shows its series, the way its listing has always chosen them. A folder
+    // inside it keeps the folder rule below.
+    const fan = resolved.relative === ""
+      ? await rootFan(resolved.library, viewer)
+      : await folderFan(resolved.key, resolved.library, await libraryUnits());
     if (fan.files.length < 2 || !fan.stamp) return void res.status(404).end();
     const versioned = typeof req.query.v === "string" && req.query.v === fan.stamp;
     const etag = `"${fan.stamp}"`;
@@ -355,6 +360,40 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     res.setHeader("etag", etag);
     res.send(composed);
   }));
+
+  /** The fan a library's own tile draws: one picture per distinct film or series the library
+   *  holds, exactly as the root listing picked them. */
+  const rootFan = async (library: LibraryRecord, viewer: Viewer): Promise<{ posters: string[]; files: string[]; stamp: string }> => {
+    const empty = { posters: [], files: [], stamp: "" };
+    if (library.mosaic === false) return empty;
+    const entries = (await libraryEntries({ stale: true }))
+      .filter((entry) => entry.key.startsWith(`${library.id}/`))
+      .filter((entry) => {
+        const relative = relativeKeyIn(library.id, entry.key);
+        return relative !== undefined && !mosaicSkipped(relative, metaStore.meta(library.id));
+      });
+    const distinct = mosaicIdentities(entries.map((entry) => ({ key: entry.key, meta: entry.meta })), 5);
+    const found = await Promise.all(distinct.map(async (source) => {
+      const entry = entries.find((candidate) => candidate.key === source.key);
+      if (!entry) return undefined;
+      const art = await locateArtwork(entry);
+      return art ? { key: entry.key, art } : undefined;
+    }));
+    const posters: string[] = [];
+    const files: string[] = [];
+    for (const entry of found) {
+      if (!entry) continue;
+      const poster = await thumbUrl("key", wirePath(entry.key), entry.art);
+      if (!poster) continue;
+      posters.push(poster);
+      files.push(entry.art);
+    }
+    if (posters.length < 2) return empty;
+    const versions = await Promise.all(files.map((file) => artStamp(file)));
+    return { posters, files, stamp: MosaicCache.stamp(versions) };
+  };
+
+  /** The fan a folder's tile draws: the same pictures its collage used. */
 
   app.get("/api/library/thumb", asyncRoute(async (req, res) => {
     // An unknown shape asks for the poster, the way an unknown tile size is the medium one: every

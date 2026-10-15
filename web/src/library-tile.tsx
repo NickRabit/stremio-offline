@@ -23,7 +23,10 @@ export function LibraryTile({ name, meta, posters, mosaic, shape = "poster", pos
   return <article className={`browse-item library${unreachable ? " unreachable" : ""}`} data-path={path} ref={containerRef}>
     <button className="library-open" disabled={!enabled} onClick={onOpen}>
       <span className="browse-art">{art ?? (mosaic
-        ? <img src={remoteMosaicArtwork(mosaic, shape)} alt="" loading="lazy" onError={hideBroken}/>
+        ? <>
+          {posters?.[0] || poster ? <img src={posters?.[0] ?? poster} alt="" loading="lazy" onError={hideBroken}/> : null}
+          <img src={remoteMosaicArtwork(mosaic, shape)} alt="" loading="lazy" onError={hideBroken}/>
+        </>
         : (posters?.length ?? 0) > 1
         ? <span className="library-preview-collage" aria-hidden="true">{posters?.map((url) => <img key={url} src={url} alt="" loading="lazy" onError={hideBroken}/>)}</span>
         : posters?.[0] || poster ? <img src={posters?.[0] ?? poster} alt="" loading="lazy" onError={hideBroken}/> : fallback)}

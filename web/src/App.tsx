@@ -2728,7 +2728,7 @@ export function App() {
                     }}
                     art={<>
                       {item.mosaic
-                        ? <TileArt shape={settings.libraryTileShape} poster={remoteMosaicArtwork(item.mosaic, settings.libraryTileShape)} fallback={<FolderOpen/>}/>
+                        ? <TileArt shape={settings.libraryTileShape} poster={remoteMosaicArtwork(item.mosaic, settings.libraryTileShape)} wide={item.poster ?? item.wide} fallback={<FolderOpen/>}/>
                         : (item.posters?.length ?? 0) > 1
                           ? <PosterMosaic posters={item.posters ?? []} label={t("library.mosaicAlt", { count: item.posters?.length ?? 0 })}/>
                           : <TileArt shape={settings.libraryTileShape} poster={item.poster} wide={item.wide} fallback={<FolderOpen/>}/>}
