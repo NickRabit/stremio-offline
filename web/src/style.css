@@ -947,7 +947,10 @@ img.broken{visibility:hidden}
 @media(prefers-reduced-motion:reduce){.skeleton-line{animation:none}.fold,.fold>*{transition:none}}
 @media(max-width:700px) and (orientation:portrait){
   main.view-catalog>.catalog-view>.heading,main.view-library>.library-page>.heading{display:none}
-  .detail-panel .catalog-description summary{min-height:44px;display:flex;align-items:center}
+  .detail-panel .catalog-description summary{min-height:44px;display:flex;align-items:center;padding-right:8.5em}
+  .detail-panel .detail-copy{position:relative}
+  /* The detail link sits on the summary row. A new line here pushes the source actions into the tab bar. */
+  .detail-panel .catalog-open-detail{position:absolute;right:0;bottom:0;z-index:1;margin:0;min-height:44px;display:flex;align-items:center}
   .detail-panel .catalog-description summary:before{content:"▸";margin-right:6px}
   .detail-panel .catalog-description details[open] summary:before{content:"▾"}
   .detail-panel .catalog-description p{max-height:100px}
@@ -2036,7 +2039,7 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 .library-detail-play{justify-content:flex-start}
 @media(max-width:700px),(max-height:500px) and (orientation:landscape){
   .library-detail-actions .library-detail-action-label{display:none}
-  .library-detail-actions>button{min-width:44px;padding:0}
+  .library-detail-actions>button,.library-detail-actions>.split-button>button{min-width:44px;padding:0}
 }
 .library-source-card{width:min(560px,100%)}
 .library-source-list{max-height:none}
