@@ -1,21 +1,25 @@
 import { expect, test, type Page } from "@playwright/test";
 import { scanLibrary } from "./library-tools";
+import { fixtureLibraryTitles } from "./fixture-library";
 import { addonManifest, appUrl } from "../../playwright.config";
 import { copyFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 
 const sample = path.resolve("e2e/fixtures/media/sample.mp4");
-const folderName = "Zkušební film (2024)";
-const folder = path.resolve("e2e/.tmp/downloads", folderName);
-const seriesName = "Zkušební seriál";
-const seriesFolder = path.resolve("e2e/.tmp/downloads", seriesName);
+// The journeys copy the shared rows straight in. The layout seed queues a
+// download of the movie first (see downloads.spec.ts) and copies this same
+// list in afterwards, so the screens show the download beside these files.
+const movie = fixtureLibraryTitles[0]!;
+const series = fixtureLibraryTitles[1]!;
+const folderName = movie.folder;
+const seriesName = series.folder;
 
 test.beforeAll(async () => {
-  await mkdir(folder, { recursive: true });
-  await copyFile(sample, path.join(folder, "Zkušební film.mkv"));
-  await mkdir(seriesFolder, { recursive: true });
-  await copyFile(sample, path.join(seriesFolder, "Zkušební seriál S01E01.mkv"));
-  await copyFile(sample, path.join(seriesFolder, "Zkušební seriál S01E02.mkv"));
+  for (const title of fixtureLibraryTitles) {
+    const directory = path.resolve("e2e/.tmp/downloads", title.folder);
+    await mkdir(directory, { recursive: true });
+    for (const file of title.files) await copyFile(sample, path.join(directory, file));
+  }
 });
 
 const fixtureTile = (page: Page) => page.locator(".browse-item", { hasText: folderName });

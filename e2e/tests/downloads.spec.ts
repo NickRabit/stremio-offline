@@ -1,5 +1,8 @@
 import { expect, test } from "@playwright/test";
 
+// The layout seed repeats this queue, and it does so before it copies in the
+// files from `fixture-library.ts`. A download that landed after those files
+// would be a different library from the one the baselines show.
 test("queues a source and the job reaches the download list", async ({ page }) => {
   await page.route("**/api/meta/movie/tt-e2e-movie?*", async (route) => {
     const response = await route.fetch();
