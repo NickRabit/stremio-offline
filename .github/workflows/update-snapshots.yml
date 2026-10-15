@@ -36,6 +36,11 @@ jobs:
       - run: npx playwright test e2e/tests/layout/screenshots.spec.ts e2e/tests/layout/library.spec.ts --update-snapshots
         env:
           HOME: /root
+          # The layout jobs build their state with the seed only. Without this the
+          # chromium journeys run first on the same server: a proxy test leaves the
+          # fixture addon in browser mode, and a search test leaves history. The
+          # title detail and the clear-history button then differ on every viewport.
+          LAYOUT_SEED_ONLY: "1"
       - name: Commit the new baselines
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"

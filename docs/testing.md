@@ -189,7 +189,12 @@ npm run test:e2e:snapshots
 The **Update screenshot baselines** workflow does the same thing on a branch and
 pushes the result. It runs on the same amd64 runner that checks them, so it is
 the path that cannot get the architecture wrong -- prefer it whenever a change
-touches a baseline at all.
+touches a baseline at all. It sets `LAYOUT_SEED_ONLY=1`, the same as the layout
+jobs. Without that flag the chromium journeys run first on the shared server: a
+proxy test leaves the fixture addon in browser mode (the title detail then shows
+three sources and no language filter) and a search test leaves history (the
+clear-history button is enabled). Layout CI does neither, and those two
+differences fail every viewport.
 
 **The container is not enough; the architecture has to match too.** The image
 pins the browser and the fonts, but glyph rasterisation still differs between
@@ -202,7 +207,7 @@ an Apple Silicon Mac, force the platform on both the build and the run:
 
 ```
 docker build --platform linux/amd64 -t stremio-offline-e2e -f e2e/Dockerfile .
-docker run --rm --platform linux/amd64 -v "$PWD":/work -w /work -e CI=1 \
+docker run --rm --platform linux/amd64 -v "$PWD":/work -w /work -e CI=1 -e LAYOUT_SEED_ONLY=1 \
   stremio-offline-e2e npx playwright test layout/screenshots.spec.ts --update-snapshots
 ```
 
