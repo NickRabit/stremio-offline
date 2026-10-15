@@ -59,9 +59,10 @@ test.describe("screenshots", () => {
 
     const detail = page.locator(".detail-panel");
     await expect(detail.getByRole("heading", { name: "Zdroje" })).toBeVisible();
+    // Both language streams, so a partial list or the addon's browser mode cannot be the baseline.
+    // The language menu's label is hidden on a short landscape, so the rows are the check.
     await expect(detail.getByRole("button", { name: /E2E 1080p/ })).toBeVisible();
     await expect(detail.getByRole("button", { name: /E2E 720p/ })).toBeVisible();
-    await expect(detail.getByRole("combobox", { name: "Jazyk" })).toBeVisible();
     await settle(page);
 
     await expect(page).toHaveScreenshot("title-detail.png", {
