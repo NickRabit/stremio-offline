@@ -47,7 +47,19 @@ export default defineConfig({
     {
       // The journeys are about behaviour, not layout, so one viewport is enough.
       name: "chromium",
-      testIgnore: [/setup\.spec\.ts/, /layout\//, /restricted\.spec\.ts/, /safari-scroll\.spec\.ts/],
+      // The two files that talk to the addon and the proxy over HTTP rather than through a page
+      // run as their own project: between them they are seventy seconds of test time, and a job of
+      // its own lets CI run them beside the WebKit journeys instead of at the far end of this
+      // suite.
+      testIgnore: [/setup\.spec\.ts/, /layout\//, /restricted\.spec\.ts/, /safari-scroll\.spec\.ts/, /(proxy|remote-library)\.spec\.ts/],
+      dependencies: ["setup"],
+      use: { ...devices["Desktop Chrome"], storageState },
+    },
+    {
+      // Nothing here needs a page it did not open itself: both files ask the server and the addon
+      // directly, and each keeps its own fixture roots.
+      name: "chromium-transport",
+      testMatch: /(proxy|remote-library)\.spec\.ts/,
       dependencies: ["setup"],
       use: { ...devices["Desktop Chrome"], storageState },
     },
