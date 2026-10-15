@@ -463,6 +463,22 @@ npm run test:e2e:snapshots  # regenerate the screenshot baselines
 Docker, builds first, and matches CI exactly -- use it when a result has to be
 comparable, and always once screenshot baselines exist.
 
+### On an Apple Silicon Mac
+
+`npm run test:e2e:docker` runs the amd64 image, which Docker then emulates. Playback specs decode
+video inside that emulation, and a renderer that runs out of patience takes the whole page with it
+(`locator.evaluate: Target crashed`); the rest of the suite is simply slower than some of the
+timeouts assume. For behaviour, run the journeys natively instead -- Chromium installed, FFmpeg on
+PATH -- and leave the layout matrix to CI:
+
+```
+npx playwright test --project=chromium --project=safari-seek --project=safari-landscape --project=safari-queue --project=mobile-locales
+```
+
+The layout projects compare screenshot baselines that were generated on amd64, so a native arm64
+run of those fails on glyph rasterisation alone. Regenerate baselines through the "Update
+screenshot baselines" workflow rather than by hand.
+
 Media ownership tests require FFmpeg and ffprobe. The Docker commands build
 `e2e/Dockerfile`, which adds FFmpeg to the pinned Playwright image; native runs
 need FFmpeg on PATH. The fake addon generates a small VP9/Opus WebM from the

@@ -1,4 +1,4 @@
-import type { APIRequestContext, Page } from "@playwright/test";
+import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
 const libraryViewDefaults = { sort: "name", order: "asc", favoritesOnly: false, view: "grid" };
 const downloadsViewDefaults = { sort: "order", direction: "asc", status: "", dateField: "createdAt", pageSize: 20 };
@@ -32,4 +32,19 @@ export async function openLibraryTools(page: Page) {
 export async function libraryTool(page: Page, name: string) {
   await openLibraryTools(page);
   return page.getByRole("button", { name, exact: true });
+}
+
+/**
+ * Scans the library the way a person does, and only returns once the scan is over.
+ *
+ * The action is disabled while the server still has a scan of its own -- a run another spec
+ * started, or one paused behind a player a previous test left on the server -- and a click on a
+ * disabled button does nothing, which left the test waiting for a summary that could not come.
+ * The wait for the action to be enabled is therefore part of the journey, not politeness.
+ */
+export async function scanLibrary(page: Page) {
+  const scan = await libraryTool(page, "Prohledat knihovnu");
+  await expect(scan).toBeEnabled({ timeout: 60_000 });
+  await scan.click();
+  await expect(page.getByText(/spárováno,/)).toBeVisible({ timeout: 60_000 });
 }

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { libraryTool } from "./library-tools";
+import { scanLibrary } from "./library-tools";
 import { copyFile, mkdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 
@@ -102,9 +102,7 @@ test("the awaiting-confirmation filter lists only what the scan has not bound", 
   await page.goto("/");
   await page.getByRole("button", { name: "Knihovna", exact: true }).click();
   await expect(row(page, proposed)).toBeVisible();
-  (await libraryTool(page, "Prohledat knihovnu")).click();
-  await expect(page.getByText(/spárováno,/)).toBeVisible({ timeout: 30_000 });
-
+  await scanLibrary(page);
   // One folder the catalogue matched on its own, one it only proposed.
   await expect(row(page, bound).locator(".library-desc")).toContainText("Film, který existuje jen pro testy.");
   const filter = page.getByRole("button", { name: "Jen čekající na potvrzení" });

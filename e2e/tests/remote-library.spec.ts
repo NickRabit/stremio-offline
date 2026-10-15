@@ -155,6 +155,9 @@ test("a large listing resumes its canceled page after a detail return without re
   await expect(panel.locator(".crumbs button[aria-current=page]")).toContainText("Synthetic title");
   await panel.locator(".library-back").click();
   await expect(tiles).toHaveCount(60);
+  // The page canceled on the way into the detail left the action disabled once, and the listing
+  // then refused every later page: what makes the resume below possible is a canceled load that
+  // is over as far as the listing is concerned.
   await expect(panel.locator(".load-more button")).toBeEnabled();
   await nudge();
   await expect(tiles).toHaveCount(120);
@@ -368,7 +371,10 @@ test("remote and local library blocks share tile markup and every root stays rea
   await remoteLibraries(page);
   const roots = page.locator(".remote-libraries .browse-item.library");
   await expect(roots).toHaveCount(8);
-  await expect(roots.first().locator("img")).toHaveAttribute("src", /\/mosaic\?v=e2e&shape=poster$/);
+  // The fan is composed when the library's preview answers, which is a round trip after the row
+  // is drawn: the row starts on its fallback, and this is the wait for the picture that replaces
+  // it rather than a check that it was already there.
+  await expect(roots.first().locator(".browse-art img")).toHaveAttribute("src", /\/mosaic\?v=e2e&shape=poster$/, { timeout: 20_000 });
   for (const viewport of [{ width: 1440, height: 900 }, { width: 820, height: 1180 }, { width: 390, height: 844 }, { width: 844, height: 390 }]) {
     await page.setViewportSize(viewport);
     await roots.last().scrollIntoViewIfNeeded();
@@ -396,13 +402,20 @@ test("a missing backdrop falls back to its poster through repeated tile style ch
   await page.locator(".remote-libraries .browse-item.library").filter({ hasText: "Remote clips" }).getByRole("button").click();
   const panel = page.locator(".remote-browse-panel");
   const image = panel.locator(".browse-art img:not(.tile-blur)");
-  for (let i = 0; i < 6; i++) {
+  // The broken backdrop is asked for while the wide shape draws it; one render may put the same
+  // address on the wire more than once, so what the page must not do is ask again for every style
+  // change that follows a failure it has already seen.
+  await panel.locator(".shape-toggle").click();
+  await expect(image).toHaveAttribute("src", "/remote-test-art/0.svg");
+  await expect.poll(() => backdropRequests, { message: "the wide shape never drew the backdrop" }).toBeGreaterThan(0);
+  const asked = backdropRequests;
+  for (let i = 0; i < 5; i++) {
     await panel.locator(".shape-toggle").click();
     await expect(image).toHaveAttribute("src", "/remote-test-art/0.svg");
     await expect.poll(() => image.evaluate((node: HTMLImageElement) => node.complete && node.naturalWidth > 0)).toBe(true);
     await expect(panel.locator(".browse-art .broken")).toHaveCount(0);
   }
-  expect(backdropRequests).toBe(1);
+  expect(backdropRequests, "the failure is remembered, so no later style change asks for it again").toBe(asked);
   await expect(panel.locator(".library-desc")).toHaveText("A metadata description");
   await expect(panel.locator(".browse-menu")).toBeVisible();
 });
