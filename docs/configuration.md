@@ -214,6 +214,7 @@ The scan is described in [Library identification](library-metadata.md).
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `LIBRARY_SCAN_GAP_MS` | `0` | Pause between two metadata lookups while a scan runs. Off by default: the scan asks one trusted provider at a time and honours TMDB's `Retry-After`. Set it only for a provider that needs pacing. |
+| `PLAYBACK_IDLE_SECONDS` | `300` | How long a session nobody came back for still counts as watching, which is what pauses a scan (and the backdrop work) behind it. The end-to-end stack shortens it, because its players die rather than leave. |
 | `LIBRARY_AUTO_SCAN` | `1` | `0` stops the server ever scanning on its own, whatever the switch in Settings says. |
 | `LIBRARY_AUTO_SCAN_INTERVAL_MS` | `21600000` | How often the automatic scan checks whether the library changed. A check on an unchanged tree asks the addons nothing. |
 
