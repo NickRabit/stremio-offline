@@ -5,3 +5,16 @@ export function remoteDetailArtwork(url?: string): string | undefined {
   params.set("size", "detail");
   return `${path}?${params.toString()}`;
 }
+
+/** The listing width of a remote picture, which is what a tile draws. The proxy serves a Backdrop
+ *  at the detail width unless the request names the tile variant, and a tile is the one place that
+ *  wants the narrow one. A Primary poster is already fetched at the listing width, so its address
+ *  is left exactly as it is; anything that is not remote artwork keeps its own size. Setting the
+ *  size twice changes nothing, so applying this to an address that already names the tile is safe. */
+export function remoteTileArtwork(url?: string): string | undefined {
+  if (!url || !/^\/api\/remote-libraries\/[^/?#]+\/items\/[^/?#]+\/artwork\/Backdrop(?:\?|$)/.test(url)) return url;
+  const [path, query] = url.split("?", 2);
+  const params = new URLSearchParams(query);
+  params.set("size", "tile");
+  return `${path}?${params.toString()}`;
+}

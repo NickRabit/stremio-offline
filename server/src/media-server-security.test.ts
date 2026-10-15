@@ -1513,7 +1513,7 @@ test("artwork validates and encodes the tag before any network work", async () =
   }
 });
 
-test("artwork builds the fixed detail width and refuses any other size", async () => {
+test("artwork builds the two fixed widths and refuses any other size", async () => {
   const captured: string[] = [];
   const transport = createMediaServerTransport({ baseUrl: "http://media.example", allowLan: false, allowLoopback: false }, {
     lookupAll: async () => [{ address: "93.184.216.34", family: 4 }],
@@ -1527,13 +1527,16 @@ test("artwork builds the fixed detail width and refuses any other size", async (
       { itemId: "i1", imageType: "Primary", tag: "Ab.c-9_~" } as const,
       { itemId: "i1", imageType: "Primary", tag: "Ab.c-9_~", size: "detail" } as const,
       { itemId: "i1", imageType: "Backdrop", size: "detail" } as const,
+      { itemId: "i1", imageType: "Backdrop", tag: "Ab.c-9_~", size: "tile" } as const,
+      { itemId: "i1", imageType: "Backdrop" } as const,
     ]) {
       await (await transport.requestArtwork(request, "tok")).arrayBuffer();
     }
-    assert.deepEqual(captured.map((url) => new URL(url).searchParams.get("MaxWidth")), ["640", "1920", "1920"], "a tile keeps 640 while Primary and Backdrop detail both ask 1920");
+    assert.deepEqual(captured.map((url) => new URL(url).searchParams.get("MaxWidth")), ["640", "1920", "1920", "640", "1920"], "the tile variant asks 640 and the detail variant 1920, while a request that names no size keeps a Backdrop wide");
     assert.equal(new URL(captured[1]).searchParams.get("tag"), "Ab.c-9_~", "the tag still round-trips beside a detail size");
+    assert.equal(new URL(captured[3]).searchParams.get("tag"), "Ab.c-9_~", "and beside a tile size");
 
-    for (const size of ["wide", "Detail", "1920", "", "detail ", 1920, ["detail"], { width: 1920 }, null]) {
+    for (const size of ["wide", "Detail", "tile ", "1920", "", "detail ", 1920, ["detail"], { width: 1920 }, null]) {
       await assert.rejects(transport.requestArtwork({ itemId: "i", imageType: "Primary", size: size as never }, "tok"), { code: "invalid-input" }, String(size));
     }
     for (const args of [
@@ -1543,7 +1546,7 @@ test("artwork builds the fixed detail width and refuses any other size", async (
     ]) {
       await assert.rejects(transport.requestArtwork(args as never, "tok"), { code: "invalid-input" }, JSON.stringify(args));
     }
-    assert.equal(captured.length, 3, "an invalid size or an arbitrary dimension never reaches the socket");
+    assert.equal(captured.length, 5, "an invalid size or an arbitrary dimension never reaches the socket");
   } finally {
     await transport.close();
   }

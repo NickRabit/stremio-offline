@@ -317,7 +317,7 @@ test("a granted member browses and previews natively, and only GET reaches those
   });
 });
 
-test("the artwork route forwards only the fixed detail size and refuses anything else", async () => {
+test("the artwork route forwards only the two fixed sizes and refuses anything else", async () => {
   await withHarness(async (harness) => {
     harness.server.artwork = { bytes: new Uint8Array([0xff, 0xd8, 0xff, 0xe0]), contentType: "image/jpeg" };
     const path = `/api/remote-libraries/${harness.libraryId}/items/m1/artwork/Primary`;
@@ -335,12 +335,18 @@ test("the artwork route forwards only the fixed detail size and refuses anything
     await detail.arrayBuffer();
     assert.deepEqual(harness.server.artworkRequests.at(-1), { itemId: "m1", imageType: "Primary", size: "detail" }, "an accepted size reaches the transport");
 
+    const tile = await api(harness.base, `/api/remote-libraries/${harness.libraryId}/items/m1/artwork/Backdrop?tag=t1&size=tile`, { user: BOB });
+    assert.equal(tile.status, 200);
+    assert.equal(tile.headers.get("content-length"), "4");
+    await tile.arrayBuffer();
+    assert.deepEqual(harness.server.artworkRequests.at(-1), { itemId: "m1", imageType: "Backdrop", tag: "t1", size: "tile" }, "a listing tile reaches the transport as a tile");
+
     assert.equal((await api(harness.base, `${path}?nope=1`, { user: BOB })).status, 400, "an unknown query field is refused");
     assert.equal((await api(harness.base, `${path}?size=wide`, { user: BOB })).status, 400, "an unknown size value is refused");
     assert.equal((await api(harness.base, `${path}?size=1920`, { user: BOB })).status, 400, "an arbitrary width is refused");
     assert.equal((await api(harness.base, `${path}?size=detail&size=wide`, { user: BOB })).status, 400, "a repeated size is refused");
     assert.equal((await api(harness.base, `${path}?tag=bad%20tag`, { user: BOB })).status, 400, "a malformed tag is still refused");
-    assert.equal(harness.server.artworkRequests.length, 2, "only the two accepted requests reached the transport");
+    assert.equal(harness.server.artworkRequests.length, 3, "only the three accepted requests reached the transport");
   });
 });
 

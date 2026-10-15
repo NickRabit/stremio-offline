@@ -2664,6 +2664,33 @@ test("a detail artwork variant carries its own ETag that a tile conditional can 
   });
 });
 
+test("a backdrop tile and its detail variant carry their own ETags", async () => {
+  await withHarness(async (harness) => {
+    const library = await directoryLibrary(harness, "music");
+    harness.server.directories["music"] = [{ ...artMovie("a1"), hasBackdropImage: true, backdropImageTag: "b1" }];
+    harness.server.artwork = { bytes: new Uint8Array([1]), contentType: "image/png" };
+    await harness.manager.browseDirectory(harness.admin, library.id, {});
+
+    const tile = await harness.manager.readArtwork(harness.admin, library.id, "a1", "Backdrop", undefined, { size: "tile" });
+    assert.equal(tile.headers.get("etag"), `"b1:tile"`, "the tile variant is tagged apart from the wide backdrop");
+    await imageBytes(tile);
+    const detail = await harness.manager.readArtwork(harness.admin, library.id, "a1", "Backdrop", undefined, { size: "detail" });
+    assert.equal(detail.headers.get("etag"), `"b1:detail"`);
+    await imageBytes(detail);
+    assert.notEqual(tile.headers.get("etag"), detail.headers.get("etag"));
+
+    const imagesBefore = harness.server.artworkRequests.length;
+    const mismatch = await harness.manager.readArtwork(harness.admin, library.id, "a1", "Backdrop", undefined, { size: "tile", ifNoneMatch: `"b1:detail"` });
+    assert.equal(mismatch.status, 200, "a detail ETag is never a false 304 for a tile request");
+    assert.equal(harness.server.artworkRequests.length, imagesBefore + 1, "the tile fetch did run");
+    await imageBytes(mismatch);
+
+    const notModified = await harness.manager.readArtwork(harness.admin, library.id, "a1", "Backdrop", undefined, { size: "tile", ifNoneMatch: `"b1:tile"` });
+    assert.equal(notModified.status, 304, "the tile's own ETag answers a tile conditional");
+    assert.equal(notModified.headers.get("etag"), `"b1:tile"`);
+  });
+});
+
 test("a revoked grant refuses a detail artwork read exactly like a tile", async () => {
   await withHarness(async (harness) => {
     const library = await directoryLibrary(harness, "music");

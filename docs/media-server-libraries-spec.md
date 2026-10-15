@@ -209,11 +209,17 @@ catalogue identity. Existing metadata, trailer and external-link endpoints suppl
 optional catalogue artwork and links. Episode enrichment uses the series identity
 for artwork and links while retaining the episode's own synopsis. Missing or failed
 metadata never prevents playback, and a poster is never enlarged into a backdrop.
-Remote Backdrop requests use a maximum width of 1920 pixels; Primary posters remain
-at 640 pixels. Explicit catalogue detail metadata also registers a separate 1920px
-background cache variant, preserving the 640px listing optimization and never
-reusing an old tile as a detail backdrop. TMDB detail metadata includes artwork,
-and metadata fallback continues past an overview that lacks a backdrop. Both retain the existing image byte cap and artwork request pool.
+An artwork request names the width it draws: a listing tile asks for `size=tile`
+and gets 640 pixels for either role, a detail surface asks for `size=detail` and
+gets 1920, and the two variants are separate cache entries with separate `ETag`s.
+A request that names no size keeps the older rule, where a Backdrop was always the
+wide variant at 1920 pixels and a Primary poster already the 640px listing width,
+so a client that predates the tile variant is served what it was served before.
+Explicit catalogue detail metadata also registers a separate 1920px background
+cache variant, preserving the 640px listing optimization and never reusing an old
+tile as a detail backdrop. TMDB detail metadata includes artwork, and metadata
+fallback continues past an overview that lacks a backdrop. Both retain the existing
+image byte cap and artwork request pool.
 
 The corner picture opens the existing shared gallery. It combines saved local
 pictures with provider/catalogue artwork and preserves the originating control's

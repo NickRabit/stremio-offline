@@ -46,7 +46,7 @@ export function remoteImageKey(parts: {
   connectionId: string;
   itemId: string;
   imageType: "Primary" | "Backdrop";
-  size: "" | "detail";
+  size: "" | "tile" | "detail";
   proofTag: string;
 }): string {
   return createHash("sha256")

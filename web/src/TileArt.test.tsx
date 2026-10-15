@@ -54,6 +54,14 @@ describe("TileArt image failures", () => {
     }
   });
 
+  it("draws the listing width of a remote backdrop and falls back from that same address", () => {
+    const backdrop = "/api/remote-libraries/rlib_a/items/item-1/artwork/Backdrop";
+    render("wide", "poster.jpg", `${backdrop}?tag=abc`);
+    expect(host.querySelector("img:not(.tile-blur)")?.getAttribute("src")).toBe(`${backdrop}?tag=abc&size=tile`);
+    fail();
+    expect(host.querySelector("img:not(.tile-blur)")?.getAttribute("src")).toBe("poster.jpg");
+  });
+
   it("uses the icon when both images fail, and resets failures for a different item", () => {
     render("wide"); fail(); fail();
     expect(host.querySelector("[data-fallback]")).not.toBeNull();
