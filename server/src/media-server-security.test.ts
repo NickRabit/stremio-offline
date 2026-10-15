@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import http from "node:http";
+import { mkdtemp, rm } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
+import os from "node:os";
+import path from "node:path";
 import { test } from "node:test";
 import {
   assertMediaServerAddress,
@@ -10,6 +13,7 @@ import {
   type LookupAddress,
 } from "./media-server-security.js";
 import { MediaServerError } from "./media-server-types.js";
+import { ProviderStats, useProviderStats } from "./provider-stats.js";
 
 interface Recorded {
   method: string;
@@ -1682,4 +1686,24 @@ test("real artwork sockets stream tagged images and reuse their connection pool"
     assert.equal(query.get("MaxWidth"), "640");
     assert.equal(query.get("Quality"), "85");
   } finally { await transport.close(); await fixture.close(); }
+});
+
+test("a call that reaches the media server is counted once, by its operation", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "stremio-provider-call-"));
+  const stats = new ProviderStats(path.join(dir, "provider-stats.json"), () => Date.now());
+  await stats.load();
+  useProviderStats(stats);
+  const transport = createMediaServerTransport({ baseUrl: "http://media.example", allowLan: false, allowLoopback: false }, {
+    lookupAll: async () => [{ address: "93.184.216.34", family: 4 }],
+    fetch: async () => new Response(JSON.stringify({ Id: "i1" }), { status: 200, headers: { "content-type": "application/json" } }),
+  });
+  try {
+    await transport.requestJson("detail", { userId: "u1", itemId: "i1" }, "tok");
+    assert.equal(stats.summary(1).detail, 1, "the answer that reached the server is the call");
+    assert.equal(stats.summary(1).ancestors, 0, "nothing that was not asked for is counted");
+  } finally {
+    useProviderStats(undefined);
+    await transport.close();
+    await rm(dir, { recursive: true, force: true });
+  }
 });

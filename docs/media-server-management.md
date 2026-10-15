@@ -75,7 +75,7 @@ another instance's token through a shared device identifier.
 | `GET /api/remote-libraries/:id/items/:itemId/episodes` | `limit` and `cursor` only; the parent must be a verified `series` or `season`. |
 | `GET /api/remote-libraries/:id/items/:itemId/sources` | The verified ordinary file versions of one playable item as sealed, source-owned streams. Each carries its external text subtitles as sealed references. No upstream address or token is returned. |
 | `GET /api/remote-libraries/:id/streams/:type/:catalogId` | Optional `name` (≤256 chars, the resolved catalogue or series title). The verified sources behind one exact external id (`ttN`, `tmdb:N`, `tvdb:N`, or a series episode `ttN:S:E`). One bounded provider-id query finds candidates; a movie re-reads each, and an episode reads one series query and one parent-scoped season page. Every candidate is re-read and re-matched before its versions are minted, and an id this app does not match exactly answers `{ streams: [] }` with no upstream work. Any other query key is refused. |
-| `GET /api/remote-libraries/:id/items/:itemId/artwork/:imageType` | Fixed `Primary`/`Backdrop` bytes and at most one optional `tag` and one optional `size` query, streaming through the image lane. `size=tile` asks the provider for 640 pixels and `size=detail` for 1920; a request that names no size keeps the older widths, 1920 for a Backdrop and 640 for a Primary. Private, `max-age=31536000`, and `immutable` only when the `tag` query matches the current tag, `nosniff`, with an `ETag` of that tag and the size variant. A changed tag is a new URL, and so is the tile variant of a backdrop. A repeat of the same proof tag and variant is served from memory or disk, so the image itself is not fetched from the provider again. A matching `If-None-Match` that does arrive is a local `304` after the local checks. Missing artwork answers `404` and the client falls back. |
+| `GET /api/remote-libraries/:id/items/:itemId/artwork/:imageType` | Fixed `Primary`/`Backdrop` bytes and at most one optional `tag` and one optional `size` query, streaming through the image lane. `size=tile` asks the provider for 640 pixels and `size=detail` for 1920; a request that names no size keeps the older widths, 1920 for a Backdrop and 640 for a Primary. Private, `max-age=31536000`, and `immutable` only when the `tag` query matches the current tag, `nosniff`, with an `ETag` of the tag the bytes belong to and the size variant. A changed tag is a new URL, and so is the tile variant of a backdrop. A repeat of the same tag and variant is served from memory or disk — an address that names an outdated tag is the entry for that tag — so the image itself is not fetched from the provider again. A matching `If-None-Match` that does arrive is a local `304` after the local checks. Missing artwork answers `404` and the client falls back. |
 | `GET /api/remote-libraries/:id/items/:itemId/state`, `PATCH …/state` | The account's own position, duration, favourite, watched and chosen version for a verified item. Kept apart from the generic progress map, so a `remote:` key never resolves through the filesystem or catalogue parsers. |
 | `GET /api/remote-libraries/personal?filter=resume\|favorites&skip&limit` | The account's own resume or favourite cards, each library confirmed against the live remote policy first. A library that cannot be confirmed is dropped and the answer is marked `partial`; `skip` is 0–1000 and `limit` 1–120. The whole projection runs under one budget — 1.5 s for Home, 5 s otherwise, two confirmations at a time — and every card is re-proved against the account, the connection, the remote identity, the upstream library and the switches as they stand before the JSON leaves. |
 
@@ -139,8 +139,8 @@ publish-time check stops any late read from being returned.
 
 ## Caches (bounded, in memory only)
 
-Two short-lived caches speed up reads while allowing briefly stale upstream policy and image membership, and
-nothing on the interactive path scans a whole library.
+Three short-lived caches speed up reads while allowing briefly stale upstream policy, image membership and
+one folder listing, and nothing on the interactive path scans a whole library.
 
 **Session facts (30 seconds).** The proved server identity, account policy and
 view list are cached on the connection's runtime for 30 seconds, so a burst of
@@ -155,15 +155,29 @@ proved to sit inside one granted library for one acting account is cached for up
 to 5 minutes, keyed by the actor, the library, the connection generation and the
 secret reference. A page that passed its permission re-check registers each of
 its rows, so listing a library and then loading its images repeats no per-image
-detail or ancestor call; an id that was never proved is proved once. A proof
+detail or ancestor call; an id that was never proved is proved once. The row a
+title detail or a sources read asks for is still read live — a grid row carries
+neither an overview nor genres — but the ancestor walk behind it is skipped when
+that very item was proved within the window; reading a title again proves it
+again, so an item opened more often than once per window stays proved. A proof
 carries only membership and the current image role tags — never a playback
 decision — and a proof never crosses actors, libraries or generations.
 
-**Invalidation.** Both caches live on the runtime and are dropped with it: an
+**Mosaic listings (5 minutes, at most 128).** A folder that has no picture of its
+own is listed once and the page is kept, together with the up to four posters the
+tile draws from it, so reopening a grid of folders does not ask the provider once
+per tile. The entry is keyed by the library, its type, the folder, whether the
+tile asked for the folder's own picture or its children's, and the connection
+generation and secret; a re-served listing puts its rows back into the proof
+cache, so the pictures the tile then loads still need no walk of their own. A
+folder that carries its own tag, and a mosaic that is switched off, never look at
+this cache.
+
+**Invalidation.** All three caches are dropped with the runtime: an
 authentication refusal from any operation marks the connection
-`reauthentication-required` and throws away its session facts, its proofs and its
-transport; a generation change, a removal or `close()` does the same. Nothing is
-written to disk: the caches have a zero disk footprint.
+`reauthentication-required` and throws away its session facts, its proofs, its
+mosaic listings and its transport; a generation change, a removal or `close()`
+does the same. Nothing is written to disk: the caches have a zero disk footprint.
 
 Visible library lists remain local-only. A fresh cached view can add the library's
 own tagged poster; a cold list falls back to one lazy preview request. Signed

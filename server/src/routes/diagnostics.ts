@@ -9,6 +9,7 @@ import { safeSourceText } from "../media-resources.js";
 import { metadataOutbound, outbound } from "../outbound.js";
 import { sourceTitle, type PlaybackManager } from "../playback.js";
 import type { ImageStats } from "../image-stats.js";
+import type { ProviderStats } from "../provider-stats.js";
 import type { StatsLog, TrafficMeta } from "../stats.js";
 import type { Throughput } from "../throughput.js";
 import type { StreamItem } from "../types.js";
@@ -18,6 +19,8 @@ export interface DiagnosticsDeps extends RouteContext {
   stats: StatsLog;
   /** Picture counts for the statistics page. Absent in route tests that only stub traffic. */
   imageStats?: ImageStats;
+  /** Counts of the calls that left for a media server. Absent in route tests. */
+  providerStats?: ProviderStats;
   playback: PlaybackManager;
   throughput: Throughput;
   queue: DownloadQueue;
@@ -73,7 +76,7 @@ const bundleLine = (raw: unknown): ClientLogLine | undefined => {
 };
 
 export function registerDiagnosticsRoutes(app: express.Application, deps: DiagnosticsDeps): void {
-  const { store, currentUser, stats, imageStats, playback, throughput, queue, libraryScan, playbackMeta, freeSpace, clientLogs, dataDir } = deps;
+  const { store, currentUser, stats, imageStats, providerStats, playback, throughput, queue, libraryScan, playbackMeta, freeSpace, clientLogs, dataDir } = deps;
 
   app.get("/api/stats/activity", (req, res) => {
     res.setHeader("cache-control", "private, no-store");
@@ -82,7 +85,11 @@ export function registerDiagnosticsRoutes(app: express.Application, deps: Diagno
   app.get("/api/stats", (req, res) => {
     const hours = Number(req.query.hours) || 720;
     const summary = stats.summary(hours);
-    res.json(imageStats ? { ...summary, images: imageStats.summary(hours) } : summary);
+    res.json({
+      ...summary,
+      ...(imageStats ? { images: imageStats.summary(hours) } : {}),
+      ...(providerStats ? { provider: providerStats.summary(hours) } : {}),
+    });
   });
   /** Playback running at this moment. The statistics otherwise look backwards; this is the
    * one view of what the line is carrying right now. */

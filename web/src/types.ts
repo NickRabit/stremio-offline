@@ -217,6 +217,11 @@ export interface StatsBucket {
 }
 export interface StatsSeries { key: string; label: string; points: number[] }
 export interface ImageCounts { memory: number; disk: number; upstream: number }
+/** The calls that left for an Emby or Jellyfin server, by the operation that was asked for. */
+export type ProviderCallKind =
+  | "info" | "login" | "user" | "views" | "items" | "directory" | "match"
+  | "detail" | "ancestors" | "versions"
+  | "artwork" | "subtitle" | "original";
 export interface StatsSummary {
   hour: StatsWindow; day: StatsWindow; week: StatsWindow; month: StatsWindow; total: StatsWindow;
   step: "minute" | "hour" | "day";
@@ -226,6 +231,9 @@ export interface StatsSummary {
   since?: string;
   /** Served posters in the selected period. Absent on a server that does not count them. */
   images?: { catalog: ImageCounts; library: ImageCounts; remote: ImageCounts; home: ImageCounts };
+  /** Calls made to the media servers in the selected period, by kind. Absent on a server that does
+   *  not count them. */
+  provider?: Record<ProviderCallKind, number>;
 }
 /** One playback running at this moment; the statistics page polls these. */
 export interface ActiveStream {

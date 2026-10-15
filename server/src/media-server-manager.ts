@@ -163,6 +163,11 @@ const SESSION_FACTS_TTL_MS = 30_000;
 const PROOF_TTL_MS = 5 * 60_000;
 /** The most membership proofs held at once; the oldest is evicted past this bound. */
 const PROOF_MAX = 8192;
+/** How long one folder's mosaic listing stays usable, so reopening a grid of folders does not
+ *  ask the provider again for every tile. The window matches a membership proof. */
+const PREVIEW_TTL_MS = PROOF_TTL_MS;
+/** The most mosaic listings held at once; the oldest is evicted past this bound. */
+const PREVIEW_MAX = 128;
 /** How long one proved original stays usable once it was proved: one playback-guard interval. */
 const ORIGINAL_PROOF_TTL_MS = 30_000;
 /** The most original proofs held at once; the oldest is evicted past this bound. */
@@ -450,6 +455,15 @@ interface MembershipProof {
   at: number;
 }
 
+/** One folder's mosaic as it was listed: the rows a tile's posters were drawn from, the posters
+ *  themselves and the connection secret that was live when the listing was read. */
+interface CachedPreview {
+  connectionId: string;
+  at: number;
+  items: ProviderItem[];
+  posters: string[];
+}
+
 /** One proved original: the item detail, ancestor chain and named version were shown to hold for
  *  one acting account under one connection generation and secret. Cached for one playback-guard
  *  interval so a further byte range of the same source skips the preflight and repeats only the
@@ -556,6 +570,12 @@ export class MediaServerManager {
    *  connection generation/secret, they never grant playback and are dropped with an
    *  invalidated connection. */
   private readonly proofs = new Map<string, MembershipProof>();
+  /** Bounded, time-limited folder listings behind a mosaic: the rows and the four posters a
+   *  tile draws from them. The listing belongs to the connection's provider account rather than
+   *  to a viewer, so the key binds the connection instead of the actor; a viewer still passes the
+   *  same library grant check before one is read, and they are dropped with an invalidated
+   *  connection. */
+  private readonly previews = new Map<string, CachedPreview>();
   /** Bounded, time-limited original proofs. Keyed like the membership proofs plus the media
    *  source, they never substitute for the local grant and are dropped with an invalidated
    *  connection. */
@@ -644,6 +664,7 @@ export class MediaServerManager {
     this.statuses.clear();
     this.proofs.clear();
     this.originalProofs.clear();
+    this.previews.clear();
     const logins = [...this.loginTransports];
     this.loginTransports.clear();
     await Promise.allSettled([...transports, ...logins].map((transport) => transport.close()));
@@ -1262,6 +1283,16 @@ export class MediaServerManager {
     if (!effectiveMosaic(library)) return { posters: [] };
     const requestedParent = parseParentId(typeof parentId === "string" ? parentId : undefined);
     const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId }, request);
+    this.recheckContent(authority, request, library.id, connection);
+    // A folder whose picture was already listed for this tile is answered from that listing, so
+    // reopening a grid of folders does not ask the provider once per tile. The rows go back into
+    // the proof cache with them -- proved again at this moment, because the fan the tile is about
+    // to draw is about to ask for them -- so its pictures need no per-image walk.
+    const remembered = this.previewFor(library, connection, requestedParent, preferChildren);
+    if (remembered) {
+      for (const item of remembered.items) this.putProof(this.proofOf(user, library, connection, item));
+      return { posters: remembered.posters };
+    }
     let root = library.remoteId;
     let tag: string | undefined;
     if (requestedParent === undefined) {
@@ -1281,8 +1312,10 @@ export class MediaServerManager {
     }, request));
     this.recheckContent(authority, request, library.id, connection);
     for (const item of page.items) this.putProof(this.proofOf(user, library, connection, item));
-    return { posters: page.items.filter((item) => item.hasPrimaryImage === true).slice(0, 4)
-      .map((item) => remoteArtworkPath(library.id, item.id, "Primary", item.primaryImageTag)) };
+    const posters = page.items.filter((item) => item.hasPrimaryImage === true).slice(0, 4)
+      .map((item) => remoteArtworkPath(library.id, item.id, "Primary", item.primaryImageTag));
+    this.rememberPreview(library, connection, requestedParent, preferChildren, page.items, posters);
+    return { posters };
   }
 
   async itemDetail(authority: MediaServerAuthority, libraryId: unknown, itemId: unknown, signal?: AbortSignal): Promise<MediaServerDetail> {
@@ -1421,25 +1454,27 @@ export class MediaServerManager {
       this.putProof(proof);
     }
     const proofTag = imageType === "Primary" ? proof.primaryImageTag : proof.backdropImageTag;
+    // The address a client asks for names the picture it gets: an older tag is a different
+    // picture, so it becomes its own cache entry and its own validator instead of being fetched
+    // from the provider on every visit. A request that names no tag is the current one.
+    const versionTag = tag ?? proofTag;
     const versioned = tag !== undefined && tag === proofTag;
     const cacheControl = versioned ? IMAGE_IMMUTABLE_CACHE_CONTROL : IMAGE_CACHE_CONTROL;
-    const etagValue = proofTag === undefined ? undefined : size === undefined ? proofTag : `${proofTag}:${size}`;
+    const etagValue = versionTag === undefined ? undefined : size === undefined ? versionTag : `${versionTag}:${size}`;
     const etag = etagValue === undefined ? undefined : `"${etagValue}"`;
     if (etag !== undefined && ifNoneMatch !== undefined && ifNoneMatchMatches(ifNoneMatch, etag)) {
       this.recheckContent(authority, request, library.id, connection);
       return artworkNotModified(etag, cacheControl);
     }
-    // The proof's tag is the cache key and never travels upstream: a client tag that does not
-    // match the proof is a different picture and is streamed without touching the cache.
     const upstream = {
       itemId: requested,
       imageType,
       ...(tag === undefined ? {} : { tag }),
       ...(size === undefined ? {} : { size }),
     } as const;
-    const cacheable = this.remoteImages !== undefined && proofTag !== undefined && (tag === undefined || tag === proofTag);
+    const cacheable = this.remoteImages !== undefined && versionTag !== undefined;
     if (cacheable) {
-      const key = remoteImageKey({ connectionId: connection.id, itemId: requested, imageType, size: size ?? "", proofTag });
+      const key = remoteImageKey({ connectionId: connection.id, itemId: requested, imageType, size: size ?? "", tag: versionTag });
       const body = await this.remoteImages!.open(key, request, (upstreamSignal) =>
         this.imageUpstream(connection, upstreamSignal, () => session.transport.requestArtwork(upstream, session.token, upstreamSignal)));
       try {
@@ -1839,6 +1874,41 @@ export class MediaServerManager {
     }
   }
 
+  /** The mosaic cache key: the folder and what was asked of it, bound to the connection
+   *  generation and secret, so a bumped generation or a re-authenticated credential can never
+   *  read a listing a previous one produced. */
+  private previewKey(library: RemoteLibraryRecord, connection: MediaConnectionRecord, parent: string | undefined, preferChildren: boolean): string {
+    return [library.id, library.type, parent ?? "", preferChildren ? "children" : "own", connection.id, String(connection.generation), connection.secretRef ?? ""].join("\u0000");
+  }
+
+  private previewFor(library: RemoteLibraryRecord, connection: MediaConnectionRecord, parent: string | undefined, preferChildren: boolean): CachedPreview | undefined {
+    const key = this.previewKey(library, connection, parent, preferChildren);
+    const cached = this.previews.get(key);
+    if (!cached) return undefined;
+    if (this.clock() - cached.at > PREVIEW_TTL_MS) {
+      this.previews.delete(key);
+      return undefined;
+    }
+    return cached;
+  }
+
+  private rememberPreview(library: RemoteLibraryRecord, connection: MediaConnectionRecord, parent: string | undefined, preferChildren: boolean, items: ProviderItem[], posters: string[]): void {
+    const key = this.previewKey(library, connection, parent, preferChildren);
+    this.previews.delete(key);
+    this.previews.set(key, { connectionId: connection.id, at: this.clock(), items, posters });
+    while (this.previews.size > PREVIEW_MAX) {
+      const oldest = this.previews.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.previews.delete(oldest);
+    }
+  }
+
+  private dropPreviews(connectionId: string): void {
+    for (const [key, cached] of [...this.previews]) {
+      if (cached.connectionId === connectionId) this.previews.delete(key);
+    }
+  }
+
   /** Proves one item belongs to a granted library, once: a library root is taken from the view
    *  list the live session already proved, so it never asks for an ancestor of itself, and any
    *  other id reads its detail and ancestor chain exactly once. The result is the proof a later
@@ -2017,12 +2087,18 @@ export class MediaServerManager {
     session: { token: string; provider: MediaServerProvider },
     itemId: string,
   ): Promise<ProviderItem> {
+    // The row is read live -- a grid row carries neither an overview nor genres -- but the walk
+    // up the ancestor chain is already covered when this very item was proved to sit in this
+    // library under this connection generation and secret within the proof's window.
+    const proved = this.proofFor(this.currentActor(authority, signal), library, connection, itemId);
     const item = await this.upstream(connection, signal, () => session.provider.detail(session.token, connection.accountId, itemId, signal));
     this.recheckContent(authority, signal, library.id, connection);
     if (item.id !== itemId) throw new MediaServerError("invalid-response", "The media-server item identity changed.");
-    const ancestors = await this.upstream(connection, signal, () => session.provider.ancestors(session.token, connection.accountId, item.id, signal));
-    if (!ancestors.includes(library.remoteId)) throw notFound("That item is not in this library.");
-    this.recheckContent(authority, signal, library.id, connection);
+    if (!proved) {
+      const ancestors = await this.upstream(connection, signal, () => session.provider.ancestors(session.token, connection.accountId, item.id, signal));
+      if (!ancestors.includes(library.remoteId)) throw notFound("That item is not in this library.");
+      this.recheckContent(authority, signal, library.id, connection);
+    }
     this.putProof(this.proofOf(this.currentActor(authority, signal), library, connection, item));
     return item;
   }
@@ -2113,12 +2189,17 @@ export class MediaServerManager {
     requested: string,
   ): Promise<MediaServerItemVersions> {
     this.recheckContent(authority, request, library.id, connection);
+    // As in `verifiedDetail`: the item row and its version list are read live, while the ancestor
+    // walk is skipped for an item this very library already proved within the proof's window.
+    const proved = this.proofFor(this.currentActor(authority, request), library, connection, requested);
     const item = await this.upstream(connection, request, () => session.provider.detail(session.token, connection.accountId, requested, request));
     this.recheckContent(authority, request, library.id, connection);
     if (item.id !== requested) throw new MediaServerError("invalid-response", "The media-server item identity changed.");
-    const ancestors = await this.upstream(connection, request, () => session.provider.ancestors(session.token, connection.accountId, item.id, request));
-    if (!ancestors.includes(library.remoteId)) throw notFound("That item is not in this library.");
-    this.recheckContent(authority, request, library.id, connection);
+    if (!proved) {
+      const ancestors = await this.upstream(connection, request, () => session.provider.ancestors(session.token, connection.accountId, item.id, request));
+      if (!ancestors.includes(library.remoteId)) throw notFound("That item is not in this library.");
+      this.recheckContent(authority, request, library.id, connection);
+    }
     if (item.type !== "movie" && item.type !== "episode") throw invalid("That item has no playable media.");
     const versions = await this.upstream(connection, request, () => session.provider.versions(session.token, connection.accountId, item.id, request));
     this.recheckContent(authority, request, library.id, connection);
@@ -2281,6 +2362,7 @@ export class MediaServerManager {
     // A dropped runtime means the identity or the credential is no longer trusted: every proof
     // taken under that connection goes with it, so a 401 invalidates the membership cache too.
     this.dropProofs(connectionId);
+    this.dropPreviews(connectionId);
     this.index.invalidateConnection(connectionId);
   }
 

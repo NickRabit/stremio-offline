@@ -30,6 +30,7 @@ hashes. Store them like passwords. The settings export is described in
 | `library-ops.json` | Queued and recent library operations, and the record of a move in progress | Yes |
 | `library-scan.json` | Progress of an interrupted library scan | Optional — a scan can run again |
 | `stats.json`, `activity.json` | Traffic statistics and the activity history | Optional — lost history only |
+| `provider-stats.json` | Hourly counts of the calls made to Jellyfin and Emby | Optional — lost history only |
 | `external-ids.json` | Cached links between catalogue identifiers | Optional — rebuilt on demand |
 | `artwork/` | Thumbnails the server generated from the media | Optional — regenerated, which takes ffmpeg time |
 | `images/` | Cached posters and backgrounds from the catalogues | **No** — refetched on demand; often the largest folder |

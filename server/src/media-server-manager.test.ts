@@ -2290,6 +2290,51 @@ test("a film root mosaic reads one native title page instead of posterless physi
   });
 });
 
+test("a folder's mosaic is listed once and served from that listing afterwards", async () => {
+  await withHarness(async (harness) => {
+    const library = await directoryLibrary(harness, "movies", "movie");
+    harness.server.directories["movies"] = [{ ...movie("film"), hasPrimaryImage: true, primaryImageTag: "poster" }];
+    const first = await harness.manager.previewDirectory(harness.admin, library.id, undefined, undefined, true);
+    assert.equal(first.posters.length, 1);
+    assert.equal(harness.server.directoryCalls.length, 1);
+
+    const second = await harness.manager.previewDirectory(harness.admin, library.id, undefined, undefined, true);
+    assert.deepEqual(second.posters, first.posters, "the same posters are handed out again");
+    assert.equal(harness.server.directoryCalls.length, 1, "the mosaic is not listed a second time");
+
+    // The rows come back with the listing, so the pictures the tile draws need no walk of their own.
+    harness.server.artwork = { bytes: Uint8Array.from([0xff, 0xd8, 0xff, 0xdb]), contentType: "image/jpeg" };
+    const detailsBefore = harness.server.calls.filter((call) => call === "detail").length;
+    const image = await harness.manager.readArtwork(harness.admin, library.id, "film", "Primary");
+    await image.arrayBuffer();
+    assert.equal(harness.server.calls.filter((call) => call === "detail").length, detailsBefore, "a re-served listing proves its items again");
+  });
+});
+
+test("a title the listing just proved opens without walking its ancestors again", async () => {
+  await withHarness(async (harness) => {
+    const library = await directoryLibrary(harness, "movies", "movie");
+    harness.server.directories["movies"] = [{ ...movie("m1"), hasPrimaryImage: true, primaryImageTag: "poster" }];
+    harness.server.detailOf["m1"] = { ...movie("m1"), hasPrimaryImage: true, primaryImageTag: "poster" };
+    harness.server.ancestorsOf["m1"] = ["movies"];
+    await harness.manager.browseDirectory(harness.admin, library.id, {});
+    const walked = harness.server.calls.filter((call) => call === "ancestors").length;
+
+    const detail = await harness.manager.itemDetail(harness.admin, library.id, "m1");
+    assert.equal(detail.item.id, "m1");
+    assert.equal(harness.server.calls.filter((call) => call === "ancestors").length, walked, "the listing's proof stands in for the ancestor walk");
+
+    await harness.manager.itemVersions(harness.admin, library.id, "m1");
+    assert.equal(harness.server.calls.filter((call) => call === "ancestors").length, walked, "and for the sources read behind the same title");
+
+    // A title no listing mentioned is proved the way it always was.
+    harness.server.detailOf["m2"] = movie("m2");
+    harness.server.ancestorsOf["m2"] = ["movies"];
+    await harness.manager.itemDetail(harness.admin, library.id, "m2");
+    assert.equal(harness.server.calls.filter((call) => call === "ancestors").length, walked + 1, "an unproved title still walks");
+  });
+});
+
 test("previewDirectory refuses an aborted or revoked request", async () => {
   await withHarness(async (harness) => {
     const library = await directoryLibrary(harness, "music");
@@ -2461,22 +2506,24 @@ test("a URL whose tag equals the proof tag is a cache hit and is immutable", asy
   }, { cacheRemoteImages: true });
 });
 
-test("a client tag that differs from the proof tag never touches the cache", async () => {
+test("a client tag that differs from the proof tag is cached under its own tag", async () => {
   await withHarness(async (harness) => {
     const library = await taggedLibrary(harness);
     for (let index = 0; index < 2; index += 1) {
       const response = await harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary", undefined, { tag: "other" });
       assert.deepEqual(await imageBytes(response), [1, 2, 3]);
-      assert.equal(response.headers.get("cache-control")!.includes("immutable"), false);
+      assert.equal(response.headers.get("cache-control")!.includes("immutable"), false, "an outdated address is not immutable");
     }
     assert.deepEqual(harness.server.artworkRequests, [
       { itemId: "a1", imageType: "Primary", tag: "other" },
-      { itemId: "a1", imageType: "Primary", tag: "other" },
-    ], "a mismatched tag is fetched every time and never stored");
+    ], "an outdated address is fetched once and then served from its own entry");
+
+    const conditional = await harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary", undefined, { tag: "other", ifNoneMatch: `"other"` });
+    assert.equal(conditional.status, 304, "its own validator answers a repeat of that address");
 
     const plain = await harness.manager.readArtwork(harness.admin, library.id, "a1", "Primary");
     await imageBytes(plain);
-    assert.deepEqual(harness.server.artworkRequests.at(-1), { itemId: "a1", imageType: "Primary" }, "the untagged read is not served from those bytes");
+    assert.deepEqual(harness.server.artworkRequests.at(-1), { itemId: "a1", imageType: "Primary" }, "the untagged read is still its own entry");
   }, { cacheRemoteImages: true });
 });
 

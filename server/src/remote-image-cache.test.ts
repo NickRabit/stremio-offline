@@ -49,8 +49,8 @@ const upstreamOf = (bytes: Buffer, type = "image/png", status = 200) => {
 
 const never = async (): Promise<Response> => { throw new Error("the upstream must not be read"); };
 
-const keyOf = (proofTag: string, size: "" | "tile" | "detail" = "") =>
-  remoteImageKey({ connectionId: "conn-1", itemId: "item-1", imageType: "Primary", size, proofTag });
+const keyOf = (tag: string, size: "" | "tile" | "detail" = "") =>
+  remoteImageKey({ connectionId: "conn-1", itemId: "item-1", imageType: "Primary", size, tag });
 
 /** A file the index recognises, with a distinct mtime. */
 const plant = async (dir: string, index: number, bytes: number, at: number) => {
@@ -62,7 +62,7 @@ const plant = async (dir: string, index: number, bytes: number, at: number) => {
 };
 
 test("the key is a hex digest of the parts and names no tag, token or address", () => {
-  const key = remoteImageKey({ connectionId: "conn-1", itemId: "item-1", imageType: "Backdrop", size: "detail", proofTag: "tag-secret" });
+  const key = remoteImageKey({ connectionId: "conn-1", itemId: "item-1", imageType: "Backdrop", size: "detail", tag: "tag-secret" });
   assert.match(key, /^[0-9a-f]{64}$/);
   assert.equal(key.includes("tag-secret"), false);
   assert.equal(key.includes("conn-1"), false);
