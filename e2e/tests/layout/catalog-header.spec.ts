@@ -119,7 +119,8 @@ test("phone source scrolling hides metadata and restores it on an intentional pu
   await page.route("**/api/streams/**", async (route) => {
     const response = await route.fetch();
     const streams = await response.json();
-    await route.fulfill({ json: Array.from({ length: 40 }, (_, i) => ({ ...streams[0], name: `Source ${i}` })) });
+    // Distinct sources, not one repeated: the list groups the rows that name the same source.
+    await route.fulfill({ json: Array.from({ length: 40 }, (_, i) => ({ ...streams[0], sourceId: `${streams[0].sourceId}#${i}`, name: `Source ${i}` })) });
   });
   // The library copies the journeys leave behind are not what this list is about, and the
   // count below is the mocked addon answer alone.
