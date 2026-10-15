@@ -90,7 +90,8 @@ test.describe("screenshots", () => {
       })) });
     });
     await openView(page, "Nastavení");
-    await expect(page.getByRole("combobox", { name: "Velikost dlaždic" })).toBeVisible();
+    // The shot is the tab the page opens on: the library manager and its rows.
+    await expect(page.locator(".library-manager-actions button.primary")).toBeVisible();
     // The report count is different on every run, and at the narrow viewports its width
     // decides whether the header wraps. The section is masked anyway, so drop the chip and
     // let the baseline measure the header, not the noise.

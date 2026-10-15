@@ -11,7 +11,9 @@ test.describe("language", () => {
     await page.goto("/");
     await page.getByRole("button", { name: "Nastavení", exact: true }).click();
 
+    await page.getByRole("tab", { name: "Domů", exact: true }).click();
     await expect(page.getByRole("combobox", { name: "Jazyk rozhraní" })).toHaveValue("cs");
+    await page.getByRole("tab", { name: "Přehrávání", exact: true }).click();
     await expect(page.getByRole("combobox", { name: "Preferovaný jazyk zvuku" })).toHaveValue("cs");
     await expect(page.getByRole("combobox", { name: "Preferovaný jazyk titulků" })).toHaveValue("cs");
   });
@@ -19,6 +21,7 @@ test.describe("language", () => {
   test("switching the language applies at once and survives a reload", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Nastavení", exact: true }).click();
+    await page.getByRole("tab", { name: "Domů", exact: true }).click();
     await page.getByRole("combobox", { name: "Jazyk rozhraní" }).selectOption("en");
 
     // No reload in between: the whole shell redraws, sidebar included.
@@ -28,9 +31,11 @@ test.describe("language", () => {
     await page.reload();
     await expect(page.getByRole("button", { name: "Settings", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("tab", { name: "Home", exact: true }).click();
     await expect(page.getByRole("combobox", { name: "Interface language" })).toHaveValue("en");
 
     // The track preferences are a deliberate choice; a UI language switch leaves them alone.
+    await page.getByRole("tab", { name: "Playback", exact: true }).click();
     await expect(page.getByRole("combobox", { name: "Preferred audio language" })).toHaveValue("cs");
   });
 

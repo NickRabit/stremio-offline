@@ -22,6 +22,7 @@ for (const locale of locales) {
     await page.goto("/");
     // Settings sits behind More at this width; the page is still in Czech here.
     await goToView(page, "Nastavení");
+    await page.getByRole("tab", { name: "Domů", exact: true }).click();
     await page.locator(".language-section select").first().selectOption(locale.code);
     await expect(page.locator("html")).toHaveAttribute("lang", locale.tag);
 

@@ -8,7 +8,7 @@ import { MediaServerManager } from "./MediaServerManager";
 import { SearchSettings } from "./SearchSettings";
 import { HomeLayoutSettings } from "./HomeLayoutSettings";
 import { Heading, SettingControl, SettingsSectionHead } from "./settings-ui";
-import { LOCALES, LOCALE_NAMES, languageName, localeTag, t, useI18n, type Locale } from "./i18n";
+import { LOCALES, LOCALE_NAMES, languageName, localeTag, t, useI18n, type Key, type Locale } from "./i18n";
 import type { BuildInfo, LibraryView, SearchState, Session, Settings as AppSettings, SettingsPatch } from "./types";
 import { UserManager } from "./UserManager";
 
@@ -88,6 +88,20 @@ const refreshIntervalLabel = (hours: number) =>
   : hours === 168 ? t("settings.addonRefreshWeekly")
   : t("settings.addonRefreshHoursOption", { count: hours });
 
+const SETTINGS_TABS = ["libraries", "playback", "downloads", "home", "account"] as const;
+type SettingsTab = (typeof SETTINGS_TABS)[number];
+/** One panel is rendered at a time, so the tab strip and the panel share a single id pair. */
+const SETTINGS_PANEL_ID = "settings-panel";
+const SETTINGS_TAB_KEY = "stremio-offline-settings-tab";
+const SETTINGS_TAB_LABEL: Record<SettingsTab, Key> = {
+  libraries: "settings.tab.libraries",
+  playback: "settings.tab.playback",
+  downloads: "settings.tab.downloads",
+  home: "settings.tab.home",
+  account: "settings.tab.account",
+};
+const isSettingsTab = (value: string | null): value is SettingsTab => SETTINGS_TABS.includes(value as SettingsTab);
+
 export function SettingsPage({ build, restricted = false, settings, search, onSearch, languages, libraries = [], session, onSession, onSave, onImported, onLibrariesChanged, onNotify, onError }: { build: BuildInfo | null; restricted?: boolean; settings: AppSettings; search: SearchState | null; onSearch: (state: SearchState) => void; languages: Array<{ code: string; name: string }>; libraries?: LibraryView[]; session: Session; onSession: (session: Session) => void; onSave: (patch: SettingsPatch) => Promise<void>; onImported: (backup: unknown) => Promise<void>; onLibrariesChanged: () => void; onNotify: (message: string) => void; onError: (error: unknown) => void }) {
   const { t, locale, setLocale } = useI18n();
   // An ordinary user decides only what is personal, and the panels the instance owns are
@@ -96,6 +110,17 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
   // from an administrator too. The server is what enforces either; this is the interface
   // agreeing with it.
   const admin = session.role === "admin";
+  // Every account keeps all five tabs: the same-titles control in Libraries is not
+  // administrator-only, and the other four hold the account's own preferences. A stored tab
+  // that is not one of them falls back to the first.
+  const [tab, setTab] = useState<SettingsTab>(() => {
+    try { const stored = sessionStorage.getItem(SETTINGS_TAB_KEY); return isSettingsTab(stored) ? stored : SETTINGS_TABS[0]; }
+    catch { return SETTINGS_TABS[0]; }
+  });
+  const selectTab = (next: SettingsTab) => {
+    setTab(next);
+    try { sessionStorage.setItem(SETTINGS_TAB_KEY, next); } catch { /* private mode may refuse storage */ }
+  };
   // The names come from the browser in the active language, so they need sorting there too.
   const languageOptions = languages
     .map((item) => ({ code: item.code, name: languageName(item.code) }))
@@ -136,10 +161,17 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
   };
   return <section className="settings-page"><div className="settings-title"><Heading eyebrow={t("settings.eyebrow")} title={t("settings.title")}/><span><Check/> {t("settings.autosave")}</span></div>
     {restricted && <p className="notice">{t("restricted.notice")}</p>}
-    <div className="settings-grid">
+    <div className="filterbar section-filter">
+      <div className="library-shelf-segments" role="tablist" aria-label={t("settings.title")}>
+        {SETTINGS_TABS.map((id) => <button key={id} type="button" role="tab" id={`settings-tab-${id}`} aria-selected={id === tab}
+          aria-controls={SETTINGS_PANEL_ID} className={id === tab ? "active" : undefined}
+          onClick={() => selectTab(id)}>{t(SETTINGS_TAB_LABEL[id])}</button>)}
+      </div>
+    </div>
+    <div className="settings-grid" id={SETTINGS_PANEL_ID} role="tabpanel" aria-labelledby={`settings-tab-${tab}`}>
+      {tab === "libraries" && <>
       {admin && <section className="panel settings-section library-manager-section"><SettingsSectionHead icon={<Library/>} title={t("library.libraries")} text={t("library.librariesHint")}/><LibraryManager restricted={restricted || !admin} onChanged={onLibrariesChanged} onError={onError} onNotify={onNotify}/></section>}
       {admin && !restricted && <section className="panel settings-section media-server-section"><SettingsSectionHead icon={<Server/>} title={t("mediaServer.title")} text={t("mediaServer.hint")}/><MediaServerManager onError={onError} onChanged={onLibrariesChanged} localLibraries={libraries}/></section>}
-      {admin && <section className="panel settings-section user-manager-section"><SettingsSectionHead icon={<Users/>} title={t("users.title")} text={t("users.hint")}/><UserManager session={session} restricted={restricted} onChanged={onLibrariesChanged} onNotify={onNotify} onError={onError}/></section>}
       <section className="panel settings-section"><SettingsSectionHead icon={<Library/>} title={t("nav.library")} /><SettingControl title={t("settings.sameTitles")} text={t("settings.sameTitlesHint")}><select aria-label={t("settings.sameTitles")} disabled={restricted} value={settings.mergeByName ? "1" : "0"} onChange={(event) => void onSave({ mergeByName: event.target.value === "1" })}><option value="1">{t("settings.merge")}</option><option value="0">{t("settings.showSeparately")}</option></select></SettingControl>
         {admin && <SettingControl title={t("settings.autoScan")} text={t("settings.autoScanHint")}>
           <select aria-label={t("settings.autoScanLabel")} disabled={restricted || !admin} value={settings.libraryAutoScan ? "1" : "0"} onChange={(event) => void onSave({ libraryAutoScan: event.target.value === "1" })}>
@@ -151,6 +183,8 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
           </select></SettingControl>}
       </section>
       {admin && <section className="panel settings-section storage-section"><SettingsSectionHead icon={<HardDrive/>} title={t("settings.storageTitle")} text={t("settings.storageText")}/><p>{t("settings.artworkMoved")}</p><div className="storage-path"><span>{t("settings.dockerPath")}</span><code>{libraryRoot}</code></div><p>{t("settings.storageNoteBefore")} <code>DOWNLOAD_PATH</code> {t("settings.storageNoteAfter")}</p></section>}
+      </>}
+      {tab === "downloads" && <>
       {admin && <section className="panel settings-section"><SettingsSectionHead icon={<PackagePlus/>} title={t("settings.addonsTitle")} text={t("settings.addonsText")}/>
         <SettingControl title={t("settings.addonRefresh")} text={t("settings.addonRefreshHint")}>
           <select aria-label={t("settings.addonRefreshLabel")} disabled={restricted} value={settings.addonRefreshHours ?? 24} onChange={(event) => void onSave({ addonRefreshHours: Number(event.target.value) })}>
@@ -176,6 +210,8 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
           </select></SettingControl>}</section>
       {admin && <TmdbSettings configured={settings.tmdbConfigured} onSave={onSave} onError={onError} restricted={restricted || !admin}/>}
       {admin && <RealDebridSettings configured={settings.realDebridConfigured} onSave={onSave} onError={onError} restricted={restricted || !admin}/>}
+      </>}
+      {tab === "playback" && <>
       <section className="panel settings-section playback-section"><SettingsSectionHead icon={<CirclePlay/>} title={t("settings.playbackTitle")} text={t("settings.playbackText")}/><div className="playback-settings"><SettingControl title={t("settings.audioLanguage")} text={t("settings.audioLanguageHint")}><select aria-label={t("settings.audioLanguageLabel")} disabled={restricted} value={settings.audioLanguage} onChange={(event) => void onSave({ audioLanguage: event.target.value })}>{languageOptions}</select></SettingControl><SettingControl title={t("settings.subtitleLanguage")} text={t("settings.subtitleLanguageHint")}><select aria-label={t("settings.subtitleLanguageLabel")} disabled={restricted} value={settings.subtitleLanguage} onChange={(event) => void onSave({ subtitleLanguage: event.target.value })}>{languageOptions}</select></SettingControl></div><SettingControl title={t("settings.streamSort")} text={t("settings.streamSortHint")}><select aria-label={t("settings.streamSort")} disabled={restricted} value={settings.streamSort} onChange={(event) => void onSave({ streamSort: event.target.value })}><option value="recommended">{t("sources.sortRecommended")}</option><option value="size-desc">{t("sources.sortLargest")}</option><option value="size-asc">{t("sources.sortSmallest")}</option><option value="addon">{t("sources.sortAddon")}</option></select></SettingControl><SettingControl title={t("settings.trackProgress")} text={t("settings.trackProgressHint")}>
           <select aria-label={t("settings.trackProgressLabel")} disabled={restricted} value={settings.trackProgress ? "1" : "0"} onChange={(event) => void onSave({ trackProgress: event.target.value === "1" })}>
             <option value="1">{t("settings.store")}</option><option value="0">{t("settings.doNotStore")}</option>
@@ -184,6 +220,8 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
             if (!confirm(t("settings.historyConfirm"))) return;
             try { await api.clearProgress(); onNotify(t("settings.historyCleared")); } catch (error) { onError(error); }
           }}><Trash2/> {t("settings.clearHistory")}</button></SettingControl>}</section>
+      </>}
+      {tab === "home" && <>
       <SearchSettings state={search} onState={onSearch} onNotify={onNotify} onError={onError}/>
       <HomeLayoutSettings disabled={restricted} onError={onError}/>
       <section className="panel settings-section language-section"><SettingsSectionHead icon={<Languages/>} title={t("settings.appearanceTitle")}/>
@@ -200,6 +238,9 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
           </select>
         </SettingControl>
         <SettingControl title={t("settings.tileSize")} text={t("settings.tileSizeHint")}><select aria-label={t("settings.tileSize")} disabled={restricted} value={settings.tileSize} onChange={(event) => void onSave({ tileSize: event.target.value as AppSettings["tileSize"] })}>{tileSizes.map((size) => <option key={size.value} value={size.value}>{t(size.key)}</option>)}</select></SettingControl><SettingControl title={t("settings.catalogShape")} text={t("settings.catalogShapeHint")}><select aria-label={t("settings.catalogShape")} disabled={restricted} value={settings.catalogTileShape} onChange={(event) => void onSave({ catalogTileShape: event.target.value as AppSettings["catalogTileShape"] })}>{tileShapes.map((shape) => <option key={shape.value} value={shape.value}>{t(shape.key)}</option>)}</select></SettingControl><SettingControl title={t("settings.libraryShape")} text={t("settings.libraryShapeHint")}><select aria-label={t("settings.libraryShape")} disabled={restricted} value={settings.libraryTileShape} onChange={(event) => void onSave({ libraryTileShape: event.target.value as AppSettings["libraryTileShape"] })}>{tileShapes.map((shape) => <option key={shape.value} value={shape.value}>{t(shape.key)}</option>)}</select></SettingControl></section>
+      </>}
+      {tab === "account" && <>
+      {admin && <section className="panel settings-section user-manager-section"><SettingsSectionHead icon={<Users/>} title={t("users.title")} text={t("users.hint")}/><UserManager session={session} restricted={restricted} onChanged={onLibrariesChanged} onNotify={onNotify} onError={onError}/></section>}
       {admin && <section className="panel settings-section"><SettingsSectionHead icon={<ShieldCheck/>} title={t("settings.privacyTitle")} text={t("settings.privacyText")}/>
         <SettingControl title={t("settings.secureMode")} text={t("settings.secureModeHint")}>
           <select aria-label={t("settings.secureModeLabel")} disabled={restricted} value={settings.secureMode ? "1" : "0"} onChange={(event) => void onSave({ secureMode: event.target.value === "1" })}>
@@ -209,6 +250,7 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
       <AccountSettings session={session} onSession={onSession} onNotify={onNotify} onError={onError} restricted={restricted}/>
       {!restricted && admin && <section className="panel settings-section backup-section"><SettingsSectionHead icon={<FileJson/>} title={t("settings.backupTitle")} text={t("settings.backupText")}/><p>{t("settings.backupBody")}</p><p className="notice">{t("settings.backupWarning")}</p><p>{t("settings.backupRemote")}</p><div className="setting-actions"><button disabled={backupBusy} onClick={() => void exportSettings()}><Download/> {t("settings.export")}</button><button disabled={backupBusy} onClick={() => importInput.current?.click()}><Upload/> {t("settings.import")}</button><input ref={importInput} className="file-input" type="file" accept="application/json,.json" aria-label={t("settings.pickBackup")} onChange={(event) => void importSettings(event.target.files?.[0])}/></div></section>}
       {!restricted && admin && <DiagnosticsSection build={build} onNotify={onNotify} onError={onError}/>}
+      </>}
     </div>
     <a className="support-link" href="https://ko-fi.com/nickrabit" target="_blank" rel="noopener noreferrer"><Heart aria-hidden="true"/><span><strong>{t("settings.supportTitle")}</strong><small>{t("settings.supportText")}</small></span><ChevronRight aria-hidden="true"/></a>
   </section>;

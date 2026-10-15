@@ -4,6 +4,7 @@ test.describe("settings", () => {
   test("a changed setting survives a reload", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Nastavení", exact: true }).click();
+    await page.getByRole("tab", { name: "Domů", exact: true }).click();
 
     const tileSize = page.getByRole("combobox", { name: "Velikost dlaždic" });
     await tileSize.selectOption("large");
@@ -11,6 +12,7 @@ test.describe("settings", () => {
 
     await page.reload();
     await page.getByRole("button", { name: "Nastavení", exact: true }).click();
+    await page.getByRole("tab", { name: "Domů", exact: true }).click();
     await expect(page.getByRole("combobox", { name: "Velikost dlaždic" })).toHaveValue("large");
 
     await page.getByRole("combobox", { name: "Velikost dlaždic" }).selectOption("medium");
@@ -19,12 +21,14 @@ test.describe("settings", () => {
   test("downloaded titles follow the interface language unless overridden", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Nastavení", exact: true }).click();
+    await page.getByRole("tab", { name: "Stahování", exact: true }).click();
 
     const titleLanguage = page.getByRole("combobox", { name: "Jazyk názvů ke stažení" });
     await expect(titleLanguage).toHaveValue("ui");
     await titleLanguage.selectOption("en");
     await page.reload();
     await page.getByRole("button", { name: "Nastavení", exact: true }).click();
+    await page.getByRole("tab", { name: "Stahování", exact: true }).click();
     await expect(page.getByRole("combobox", { name: "Jazyk názvů ke stažení" })).toHaveValue("en");
     await page.getByRole("combobox", { name: "Jazyk názvů ke stažení" }).selectOption("ui");
   });
@@ -32,6 +36,7 @@ test.describe("settings", () => {
   test("diagnostics reports the running server", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Nastavení", exact: true }).click();
+    await page.getByRole("tab", { name: "Účet", exact: true }).click();
     await page.locator("button.diagnostics-toggle").click();
 
     const facts = page.locator(".diagnostics-facts");

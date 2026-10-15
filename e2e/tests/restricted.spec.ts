@@ -90,14 +90,18 @@ test.describe("restricted mode", () => {
     await expect(page.getByRole("button", { name: "Add", exact: true })).toHaveCount(0);
 
     await page.getByRole("button", { name: "Settings", exact: true }).click();
-    await expect(page.getByRole("combobox", { name: "Interface language" })).toBeDisabled();
-    await expect(page.locator("button.diagnostics-toggle")).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Change credentials" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Sign out everywhere" })).toHaveCount(0);
     // The library list is readable, without the controls the API would refuse.
     const manager = page.locator(".library-manager");
     await expect(manager.locator(".library-admin-row")).toHaveCount(1);
     await expect(manager.getByRole("button", { name: "Add library", exact: true })).toHaveCount(0);
     await expect(manager.getByRole("button", { name: "Remove", exact: true })).toHaveCount(0);
+
+    await page.getByRole("tab", { name: "Home", exact: true }).click();
+    await expect(page.getByRole("combobox", { name: "Interface language" })).toBeDisabled();
+
+    await page.getByRole("tab", { name: "Account", exact: true }).click();
+    await expect(page.locator("button.diagnostics-toggle")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Change credentials" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Sign out everywhere" })).toHaveCount(0);
   });
 });

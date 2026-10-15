@@ -37,6 +37,7 @@ test.describe("addons", () => {
   test("the refresh interval is a setting and survives a reload", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Nastavení", exact: true }).click();
+    await page.getByRole("tab", { name: "Stahování", exact: true }).click();
 
     const interval = page.getByRole("combobox", { name: "Jak často se obnovují manifesty" });
     await interval.selectOption("0");
@@ -44,6 +45,7 @@ test.describe("addons", () => {
 
     await page.reload();
     await page.getByRole("button", { name: "Nastavení", exact: true }).click();
+    await page.getByRole("tab", { name: "Stahování", exact: true }).click();
     await expect(page.getByRole("combobox", { name: "Jak často se obnovují manifesty" })).toHaveValue("0");
 
     await page.getByRole("combobox", { name: "Jak často se obnovují manifesty" }).selectOption("24");
