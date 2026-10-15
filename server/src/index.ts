@@ -1474,7 +1474,11 @@ async function locateFileArtwork(key: string, shape: ArtShape = "poster", read: 
   return undefined;
 }
 
-const PLAYBACK_IDLE_SECONDS = 300;
+/** How long a session nobody came back for still counts as watching. `PLAYBACK_IDLE_SECONDS`
+ *  shortens it for a stack whose players die rather than leave: the e2e image runs amd64 under
+ *  emulation, where a renderer can take the page down with it and leave a session behind. */
+const playbackIdleSeconds = Number(process.env.PLAYBACK_IDLE_SECONDS);
+const PLAYBACK_IDLE_SECONDS = Number.isFinite(playbackIdleSeconds) && playbackIdleSeconds > 0 ? playbackIdleSeconds : 300;
 const playbackBusy = () => playback.diagnostics().sessions.some((session) => session.idleSeconds < PLAYBACK_IDLE_SECONDS);
 const metaBackfill = new ArtworkQueue();
 // A title the catalogue answers without a description would otherwise be asked

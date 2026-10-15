@@ -40,6 +40,9 @@ const child = spawn(process.execPath, [path.join(appDir, "server", "dist", "inde
     LOG_LEVEL: process.env.E2E_LOG_LEVEL ?? "WARN",
     LOG_STDOUT: "1",
     LIBRARY_SCAN_GAP_MS: "0",
+    // A renderer that crashes under emulation leaves a session behind, and the scan stays paused
+    // behind it; the default five minutes outlive the tests that are waiting for a scan.
+    PLAYBACK_IDLE_SECONDS: "3",
     // The tests drive the scan themselves; an automatic one would rematch titles mid-run.
     LIBRARY_AUTO_SCAN: "0",
     // The fake addon is the only manifest here; a background refresh round would be
