@@ -599,6 +599,7 @@ for (const [width, height] of [[1440, 900], [390, 844], [844, 390]]) {
       const player = page.locator(".player-overlay");
       await expect(player).toBeVisible();
       await player.dispatchEvent("pointermove");
+      await player.locator(".player-settings-toggle").click();
       await expect(player.getByRole("button", { name: "Uložit do knihovny na serveru", exact: true })).toBeVisible();
       await expect(player.getByRole("button", { name: "Uložit do tohoto zařízení", exact: true })).toHaveCount(0);
       await player.getByRole("button", { name: "Uložit do knihovny na serveru", exact: true }).click();
@@ -615,6 +616,7 @@ for (const [width, height] of [[1440, 900], [390, 844], [844, 390]]) {
       await detail.getByRole("button", { name: "Přehrát", exact: true }).click();
       await expect(player).toBeVisible();
       await player.dispatchEvent("pointermove");
+      await player.locator(".player-settings-toggle").click();
       await expect(player.getByRole("button", { name: "Uložit do knihovny na serveru", exact: true })).toHaveCount(0);
       await player.getByRole("button", { name: "Uložit do tohoto zařízení", exact: true }).click();
       await expect.poll(() => devicePaths).toContain("Other/copy.mkv");

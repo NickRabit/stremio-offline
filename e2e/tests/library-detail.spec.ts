@@ -290,6 +290,7 @@ for (const [width, height] of [[1440, 900], [390, 844], [844, 390]]) {
     await dialog.locator(".stream-list button").filter({ hasText: "Remote FullHD" }).click();
     await detail.getByRole("button", { name: "Do knihovny", exact: true }).click();
     const remoteSave = page.getByRole("dialog");
+    await remoteSave.getByRole("radio", { name: "Jinam", exact: true }).check();
     await remoteSave.getByRole("button", { name: "Do knihovny", exact: true }).click();
     await expect(remoteSave).toHaveCount(0);
     expect(downloads).toHaveLength(2);
