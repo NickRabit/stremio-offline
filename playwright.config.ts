@@ -73,9 +73,15 @@ export default defineConfig({
       // The library the layout screens draw, built through the API rather than by replaying the
       // journeys: a baseline has to be taken against a state that is the same every run, and one
       // job per viewport paying for the whole journey suite to get it made that state expensive.
+      //
+      // Whether the seed is enough depends on what else the run takes. CI gives every layout
+      // viewport its own job -- `LAYOUT_SEED_ONLY=1`, so the seed is the only state builder it
+      // needs. A run that takes every project in one pass shares one server, and there the
+      // journeys stay first: they expect a library with nothing in it, and the seed puts files
+      // there.
       name: "layout-seed",
       testMatch: /layout\/seed\.spec\.ts/,
-      dependencies: ["setup"],
+      dependencies: process.env.LAYOUT_SEED_ONLY === "1" ? ["setup"] : ["setup", "chromium"],
       use: { ...devices["Desktop Chrome"], storageState },
     },
     // The layout projects run after that seed, not merely after setup: a library file and a
@@ -85,7 +91,7 @@ export default defineConfig({
       testMatch: /layout\//,
       // The seed is the dependency, not part of the matrix: it is already done before these run.
       testIgnore: /layout\/seed\.spec\.ts/,
-      dependencies: ["setup", "layout-seed"],
+      dependencies: process.env.LAYOUT_SEED_ONLY === "1" ? ["setup", "layout-seed"] : ["setup", "chromium", "layout-seed"],
       use: { ...use, storageState },
     })),
     {

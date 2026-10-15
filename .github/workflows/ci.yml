@@ -111,6 +111,8 @@ jobs:
       - run: npx playwright test --project=${{ matrix.project }}
         env:
           HOME: /root
+          # One viewport per job: the seed is the state builder, not the journeys.
+          LAYOUT_SEED_ONLY: "1"
       - uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
         with:
