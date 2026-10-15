@@ -1,6 +1,7 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 import { goToView } from "./nav";
 import { resetViews } from "./library-tools";
+import { checkDetailActions, detailArtwork } from "./detail-layout";
 
 /** The one local film the detail journeys work on: a file bound to a title that exists in two
  *  copies, so the source picker has something to choose between. */
@@ -210,6 +211,7 @@ test("local detail starts its selected version at zero without forgetting progre
 });
 
 test("saved-position controls remain usable across desktop and mobile viewports", async ({ page }) => {
+  await detailArtwork(page);
   await page.route("**/api/progress/*", async (route) => {
     const key = decodeURIComponent(new URL(route.request().url()).pathname.slice("/api/progress/".length));
     await route.fulfill({ json: { key, position: 3723, duration: 7200 } });
@@ -228,7 +230,11 @@ test("saved-position controls remain usable across desktop and mobile viewports"
       expect(box!.x).toBeGreaterThanOrEqual(0);
       expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width + 1);
     }
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await expect(detail.locator(".gallery-open")).toBeVisible();
+    await expect(detail.locator(".title-links a")).toHaveCount(3);
+    await checkDetailActions(page, detail);
+    await detail.locator(".library-detail-actions").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: `e2e/.tmp/local-detail-actions-${viewport.width}.png` });
   }
 });
 

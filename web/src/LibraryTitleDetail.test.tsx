@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { LibraryTitleDetail, type LibraryTitleDetailProps } from "./LibraryTitleDetail";
+import { TitleChips } from "./TitleChips";
 import type { LibrarySourceGroup } from "./library-sources";
 import type { GalleryImage } from "./gallery-images";
 import { sourceIdentity } from "./library-detail-sources";
@@ -64,7 +65,9 @@ const clickAsync = async (element: Element | null) => { await act(async () => { 
 const saved = () => host.querySelector(".library-detail-progress");
 const savedText = () => host.querySelector(".library-detail-progress span")!.textContent;
 const clearButton = () => host.querySelector<HTMLButtonElement>('.library-detail-progress button[aria-label="Forget progress"]');
-const startOverButton = () => [...host.querySelectorAll<HTMLButtonElement>(".library-detail-actions button")].find((button) => button.textContent?.includes("Play from the start")) ?? null;
+const startOverButton = () => host.querySelector<HTMLButtonElement>('.library-detail-actions button[aria-label="Play from the start"]');
+const favoriteButton = () => host.querySelector<HTMLButtonElement>(".library-detail-chips > button.watch-star");
+const lowerActions = () => host.querySelector(".library-detail-actions")!;
 const deferred = <T,>() => {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((done) => { resolve = done; });
@@ -200,19 +203,22 @@ describe("LibraryTitleDetail sources", () => {
     expect(hero.style.backgroundImage).toBe("");
   });
 
-  it("draws the play, favorite, watched and open-folder controls on one row", () => {
+  it("draws the play, watched and open-folder controls on the lower row, with the favourite above them", () => {
     const onToggleFavorite = vi.fn();
     const onToggleWatched = vi.fn();
     const onOpenFolder = vi.fn();
     render({ sources: [remote("s1", "1080p", 1)], favorite: true, watched: false, onToggleFavorite, onToggleWatched, onOpenFolder });
-    const row = host.querySelector(".library-detail-actions")!;
+    const row = lowerActions();
     expect(row.querySelector(".library-detail-play button.primary")).not.toBeNull();
-    click(row.querySelector('button[aria-label="Remove from favorites"]'));
+    click(favoriteButton());
     expect(onToggleFavorite).toHaveBeenCalledWith(false);
     click(row.querySelector('button[aria-label="Mark watched"]'));
     expect(onToggleWatched).toHaveBeenCalled();
-    click([...row.querySelectorAll("button")].find((button) => button.textContent?.includes("Open folder")) ?? null);
+    click(row.querySelector('button[aria-label="Open folder"]'));
     expect(onOpenFolder).toHaveBeenCalled();
+    // The star is not drawn a second time beside the actions.
+    expect(row.querySelector(".watch-star")).toBeNull();
+    expect(row.querySelector('button[aria-label="Remove from favorites"]')).toBeNull();
   });
 });
 
@@ -374,6 +380,93 @@ describe("LibraryTitleDetail save to library", () => {
     render({ sources: [], onSaveToLibrary: vi.fn() });
     const save = [...host.querySelectorAll<HTMLButtonElement>(".library-detail-actions button")].find((button) => button.textContent?.includes("To library"))!;
     expect(save.disabled).toBe(true);
+  });
+});
+
+describe("LibraryTitleDetail favourite and action row", () => {
+  const chipsRow = () => host.querySelector(".library-detail-chips");
+  const titleChips = (kind: string) => <TitleChips kind={kind} trailer={null} links={[]} onTrailer={vi.fn()} secureMode/>;
+  const versions = () => [remote("s1", "720p", 1_000_000_000), remote("s2", "1080p", 3_000_000_000)];
+  const saved = { position: 120, duration: 3600, sourceKey: key("s2") };
+
+  it("leads the caller's own chip row with the favourite, and keeps its own semantics", () => {
+    const onToggleFavorite = vi.fn();
+    render({ chips: titleChips("One film"), favorite: true, onToggleFavorite });
+    const row = chipsRow()!;
+    const star = favoriteButton()!;
+    // The star comes first and the caller's own chips follow it, still the shared component's row.
+    expect(row.firstElementChild).toBe(star);
+    expect(star.nextElementSibling).toBe(row.querySelector(".title-chips"));
+    expect(star.classList.contains("watch-star")).toBe(true);
+    expect(star.classList.contains("on")).toBe(true);
+    expect(star.getAttribute("aria-pressed")).toBe("true");
+    expect(star.getAttribute("aria-label")).toBe("Remove from favorites");
+    expect(star.title).toBe("Remove from favorites");
+    click(star);
+    expect(onToggleFavorite).toHaveBeenCalledWith(false);
+  });
+
+  it("draws the same star off and disabled, and no row at all when there is nothing to put in it", () => {
+    const onToggleFavorite = vi.fn();
+    render({ favorite: false, onToggleFavorite });
+    const star = favoriteButton()!;
+    expect(star.classList.contains("on")).toBe(false);
+    expect(star.getAttribute("aria-pressed")).toBe("false");
+    expect(star.getAttribute("aria-label")).toBe("Add to favorites");
+    click(star);
+    expect(onToggleFavorite).toHaveBeenCalledWith(true);
+    // An owner that cannot star the title right now keeps the control, disabled, in the same place.
+    rerender({ favorite: true, onToggleFavorite, favoriteDisabled: true });
+    expect(favoriteButton()!.disabled).toBe(true);
+    // Chips without a favourite draw the chips alone; neither of the two draws no row at all.
+    rerender({ chips: titleChips("One film") });
+    expect(chipsRow()).not.toBeNull();
+    expect(chipsRow()!.querySelector("button.watch-star")).toBeNull();
+    expect(chipsRow()!.querySelector(".title-chips")).not.toBeNull();
+    rerender({});
+    expect(chipsRow()).toBeNull();
+  });
+
+  it("starts the selected version over from its own icon action, never through the progress reset", () => {
+    const onPlay = vi.fn();
+    const onClearProgress = vi.fn();
+    render({ sources: versions(), progress: saved, onPlay, onClearProgress });
+    const start = startOverButton()!;
+    expect(start.textContent).toBe("");
+    expect(start.querySelector("svg")).not.toBeNull();
+    expect(start.title).toBe("Play from the start");
+    click(start);
+    expect(onPlay.mock.calls.at(-1)![1]).toBe(true);
+    expect(onPlay.mock.calls.at(-1)![0]).toEqual(expect.objectContaining({ sourceId: "s2" }));
+    // The two controls stay distinct: the reset forgets the position and is never the way to play.
+    expect(onClearProgress).not.toHaveBeenCalled();
+    expect(clearButton()).not.toBe(start);
+    expect(clearButton()!.getAttribute("aria-label")).toBe("Forget progress");
+    expect(lowerActions().querySelector('button[aria-label="Play from the start"]')).toBe(start);
+  });
+
+  it("keeps every lower action's callback, name and label, and the play text", () => {
+    const onSaveToLibrary = vi.fn();
+    const onToggleWatched = vi.fn();
+    const onOpenFolder = vi.fn();
+    render({ sources: versions(), onSaveToLibrary, watched: true, onToggleWatched, onOpenFolder });
+    const action = (name: string) => lowerActions().querySelector<HTMLButtonElement>(`button[aria-label="${name}"]`)!;
+    // A labelled action keeps its own name, so hiding the label at a narrow width cannot rename it.
+    for (const [name, className] of [["To library", "To library"], ["Open folder", "Open folder"]] as const) {
+      const button = action(name);
+      expect(button.title).toBe(className);
+      expect(button.querySelector(".library-detail-action-label")!.textContent).toBe(className);
+    }
+    const watched = action("Mark unwatched");
+    expect(watched.getAttribute("aria-pressed")).toBe("true");
+    expect(watched.querySelector(".library-detail-action-label")).toBeNull();
+    click(action("To library"));
+    expect(onSaveToLibrary).toHaveBeenCalled();
+    click(watched);
+    expect(onToggleWatched).toHaveBeenCalled();
+    click(action("Open folder"));
+    expect(onOpenFolder).toHaveBeenCalled();
+    expect(playButton().textContent).toContain("Play");
   });
 });
 

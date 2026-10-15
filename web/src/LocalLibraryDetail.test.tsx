@@ -198,7 +198,7 @@ describe("LocalLibraryDetail actions", () => {
   it("toggles the clicked file's favorite and clears its saved position", async () => {
     progressOf = (url) => json(savedEntry(progressKey(url), 10, 100));
     const { onToggleFavorite, props } = await render(file(), { favorite: true, progress: { position: 10, duration: 100 } });
-    await click(host.querySelector('.library-detail-actions button[aria-label="Remove from favorites"]'));
+    await click(host.querySelector('.library-detail-chips button[aria-label="Remove from favorites"]'));
     expect(onToggleFavorite).toHaveBeenCalledWith(false);
     expect(props.onResetProgress).not.toHaveBeenCalled();
     await click(host.querySelector('.library-detail-progress button[aria-label="Forget progress"]'));
@@ -207,7 +207,7 @@ describe("LocalLibraryDetail actions", () => {
 
   it("keeps the favorite control pressed and shows no position controls when nothing is saved", async () => {
     await render(file(), { favorite: true });
-    const favorite = host.querySelector('.library-detail-actions button[aria-label="Remove from favorites"]');
+    const favorite = host.querySelector('.library-detail-chips button[aria-label="Remove from favorites"]');
     expect(favorite?.getAttribute("aria-pressed")).toBe("true");
     expect(host.querySelector(".library-detail-progress")).toBeNull();
   });
@@ -371,7 +371,7 @@ describe("LocalLibraryDetail saved position", () => {
     progressOf = (url) => json(savedEntry(progressKey(url), 120, 3600));
     const { onPlay, props } = await render(file(), { progress: { position: 120, duration: 3600 } });
     await flush();
-    const startOver = [...host.querySelectorAll<HTMLButtonElement>(".library-detail-actions button")].find((button) => button.textContent?.includes("Play from the start"));
+    const startOver = host.querySelector<HTMLButtonElement>('.library-detail-actions button[aria-label="Play from the start"]');
     await click(startOver!);
     expect(onPlay.mock.calls.at(-1)![1]).toBe(true);
     expect(props.onResetProgress).not.toHaveBeenCalled();

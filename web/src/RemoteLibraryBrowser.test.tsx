@@ -627,7 +627,7 @@ describe("RemoteLibraryBrowser preferences and detail", () => {
     await flush();
     // Two versions open a picker behind the arrow, not an always-visible list.
     expect(host.querySelector(".library-title-detail .remote-streams")).toBeNull();
-    const favorite = host.querySelector<HTMLButtonElement>('.library-detail-actions button[aria-label="Add to favorites"]')!;
+    const favorite = host.querySelector<HTMLButtonElement>('.library-detail-chips button[aria-label="Add to favorites"]')!;
     expect(favorite.disabled).toBe(false);
     await click(favorite);
     expect(calls.state.at(-1)).toEqual({ method: "PATCH", body: { favorite: true } });
@@ -1029,7 +1029,7 @@ it("keeps the favorite learned in detail on its tile after Back", async () => {
   await render();
   await click(host.querySelector(".remote-libraries .library-open")!);
   await click(host.querySelector(".browse-panel .library-open")!);
-  expect(host.querySelector('.library-detail-actions button[aria-label="Remove from favorites"]')?.getAttribute("aria-pressed")).toBe("true");
+  expect(host.querySelector('.library-detail-chips button[aria-label="Remove from favorites"]')?.getAttribute("aria-pressed")).toBe("true");
   await click(host.querySelector(".library-back")!);
   expect(host.querySelector(".fav-mark")).not.toBeNull();
 });
@@ -1097,7 +1097,7 @@ describe("RemoteLibraryBrowser saved position", () => {
     await click(clearButton()!);
     expect(calls.state.at(-1)).toEqual({ method: "PATCH", body: { position: 0, duration: 0 } });
     expect(host.querySelector(".library-detail-progress")).toBeNull();
-    expect(host.querySelector('.library-detail-actions button[aria-label="Remove from favorites"]')?.getAttribute("aria-pressed")).toBe("true");
+    expect(host.querySelector('.library-detail-chips button[aria-label="Remove from favorites"]')?.getAttribute("aria-pressed")).toBe("true");
     expect(host.querySelector('.library-detail-actions button[aria-label="Mark unwatched"]')?.getAttribute("aria-pressed")).toBe("true");
   });
 
@@ -1137,7 +1137,7 @@ describe("RemoteLibraryBrowser saved position", () => {
     await flush();
     expect(host.querySelector(".library-title-detail h2")!.textContent).toBe("Two");
     expect(host.querySelector(".library-detail-progress")).toBeNull();
-    expect(host.querySelector('.library-detail-actions button[aria-label="Add to favorites"]')?.getAttribute("aria-pressed")).toBe("false");
+    expect(host.querySelector('.library-detail-chips button[aria-label="Add to favorites"]')?.getAttribute("aria-pressed")).toBe("false");
   });
 });
 

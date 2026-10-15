@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useDialogFocus } from "./dialog-focus";
 import { useDialogViewport } from "./dialog-viewport";
-import { Check, ChevronDown, CirclePlay, FolderOpen, HardDrive, Images, RotateCcw, Star, X } from "lucide-react";
+import { Check, ChevronDown, CirclePlay, FolderOpen, HardDrive, Images, ListRestart, RotateCcw, Star, X } from "lucide-react";
 import { DetailHero, LIBRARY_HERO_EMPTY_GRADIENT, LIBRARY_HERO_GRADIENT, useBackdrop } from "./DetailHero";
 import type { GalleryImage } from "./gallery-images";
 import { hideBroken } from "./settings-ui";
@@ -181,7 +181,12 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
   };
 
   const copy = <>
-    {chips}
+    {chips || onToggleFavorite ? <div className="library-detail-chips">
+      {onToggleFavorite && <button type="button" className={`watch-star${favorite ? " on" : ""}`} aria-pressed={favorite ?? false} disabled={favoriteDisabled ?? false}
+        aria-label={t(favorite ? "favorite.remove" : "favorite.add")} title={t(favorite ? "favorite.remove" : "favorite.add")}
+        onClick={() => onToggleFavorite(!(favorite ?? false))}><Star/></button>}
+      {chips}
+    </div> : null}
     <h2>{title}</h2>
     {subtitle && <p className="meta-line">{subtitle}</p>}
     {facts && <p className="meta-line">{facts}</p>}
@@ -223,22 +228,20 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
     <div className="library-detail-actions">
       <div className="actions library-detail-play">
         {multiple ? <div className="split-button">
-          <button ref={playRef} className="primary" disabled={!selected} onClick={() => selected && onPlay(selected)}><CirclePlay/> {t("player.play")}</button>
+          <button ref={playRef} type="button" className="primary" disabled={!selected} onClick={() => selected && onPlay(selected)}><CirclePlay/> {t("player.play")}</button>
           <button ref={arrowRef} type="button" className="split-button-toggle" aria-haspopup="dialog" aria-expanded={pickerOpen}
             aria-label={t("library.chooseSource")} title={t("library.chooseSource")} onClick={() => { onOpenSources?.(); setPickerOpen(true); }}><ChevronDown/></button>
         </div>
-          : <button ref={playRef} className="primary" disabled={!selected} onClick={() => selected && onPlay(selected)}><CirclePlay/> {t("player.play")}</button>}
+          : <button ref={playRef} type="button" className="primary" disabled={!selected} onClick={() => selected && onPlay(selected)}><CirclePlay/> {t("player.play")}</button>}
       </div>
-      {savedPosition && <button type="button" onClick={() => selected && onPlay(selected, true)}>{t("player.playFromStart")}</button>}
-      {onSaveToLibrary && <button type="button" disabled={!selected || !(saveSupported?.(selected) ?? true)}
-        onClick={() => selected && saveSupported?.(selected) !== false && onSaveToLibrary(selected)}><HardDrive/> {t("save.toLibrary")}</button>}
-      {onToggleFavorite && <button type="button" className="icon-button" aria-pressed={favorite ?? false} disabled={favoriteDisabled ?? false}
-        aria-label={t(favorite ? "favorite.remove" : "favorite.add")} title={t(favorite ? "favorite.remove" : "favorite.add")}
-        onClick={() => onToggleFavorite(!(favorite ?? false))}><Star fill={favorite ? "currentColor" : "none"}/></button>}
-      {onToggleWatched && <button type="button" className="icon-button" aria-pressed={watched} disabled={watchedDisabled ?? false}
+      {savedPosition && <button type="button" className="icon-button library-detail-icon-action" aria-label={t("player.playFromStart")} title={t("player.playFromStart")}
+        onClick={() => selected && onPlay(selected, true)}><ListRestart/></button>}
+      {onSaveToLibrary && <button type="button" aria-label={t("save.toLibrary")} title={t("save.toLibrary")} disabled={!selected || !(saveSupported?.(selected) ?? true)}
+        onClick={() => selected && saveSupported?.(selected) !== false && onSaveToLibrary(selected)}><HardDrive/> <span className="library-detail-action-label">{t("save.toLibrary")}</span></button>}
+      {onToggleWatched && <button type="button" className="icon-button library-detail-icon-action" aria-pressed={watched} disabled={watchedDisabled ?? false}
         aria-label={(watchedLabel ?? t(watched ? "mediaServer.markUnwatched" : "mediaServer.markWatched"))} title={(watchedLabel ?? t(watched ? "mediaServer.markUnwatched" : "mediaServer.markWatched"))}
         onClick={() => onToggleWatched()}>{watched === undefined ? <RotateCcw/> : <Check/>}</button>}
-      {onOpenFolder && <button type="button" onClick={onOpenFolder}><FolderOpen/> {t("library.openFolder")}</button>}
+      {onOpenFolder && <button type="button" aria-label={t("library.openFolder")} title={t("library.openFolder")} onClick={onOpenFolder}><FolderOpen/> <span className="library-detail-action-label">{t("library.openFolder")}</span></button>}
     </div>
     {pickerOpen && <SourcePicker own={own} groups={groups} panel={sourceGroups} selected={selected} badgeOf={badgeOf}
       nativeLabel={nativeSourceLabel ?? t("sources.localFilter")} preferredLanguage={preferredLanguage ?? ""}

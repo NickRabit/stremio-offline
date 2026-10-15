@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { appUrl } from "../../playwright.config";
+import { checkDetailActions, detailArtwork } from "./detail-layout";
 
 const libraryId = `rlib_${"1".repeat(32)}`;
 const capabilities = { rename: false, move: false, delete: false, identify: false, writeArtwork: false, downloadToLibrary: false, downloadToDevice: false };
@@ -626,3 +627,25 @@ for (const [width, height] of [[1440, 900], [390, 844], [844, 390]]) {
     }
   });
 }
+
+
+test("remote detail actions align across phone tablet and desktop", async ({ page }) => {
+  await detailArtwork(page);
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 820, height: 1180 }, { width: 390, height: 844 }, { width: 844, height: 390 }]) {
+    await page.setViewportSize(viewport);
+    await remoteLibraries(page, {
+      items: () => [{ id: "layout-film", name: "Film One", type: "movie", providerIds: { imdb: "tt123" }, poster: "/detail-layout-art/poster.svg", wide: "/detail-layout-art/background.svg", overview: "A family sets out on a journey through an unfamiliar world. Along the way they meet new friends, overcome unexpected obstacles and discover what matters most. The complete description stays visible while title links, artwork and the action toolbar keep their own space." }],
+      sources: [{ sourceId: "layout-source", kind: "remote", playable: true, provider: "emby", remoteItem: { libraryId, itemId: "layout-film", mediaSourceId: "layout-source" } }],
+    });
+    await page.route("**/api/remote-libraries/*/items/layout-film/state", route => route.fulfill({ json: { position: 3723, duration: 7200, mediaSourceId: "layout-source", favorite: false, watched: false } }));
+    await page.locator(".remote-libraries .browse-item.library").filter({ hasText: "Remote clips" }).getByRole("button").click();
+    await page.locator(".remote-browse-panel .browse-item").filter({ hasText: "Film One" }).locator(".library-open").click();
+    const detail = page.locator(".remote-browse-panel .library-title-detail");
+    await expect(detail.getByRole("button", { name: "Přehrát od začátku", exact: true })).toBeVisible();
+    await expect(detail.locator(".gallery-open")).toBeVisible();
+    await expect(detail.locator(".title-links a")).toHaveCount(3);
+    await checkDetailActions(page, detail);
+    await detail.locator(".library-detail-actions").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: `e2e/.tmp/remote-detail-actions-${viewport.width}.png` });
+  }
+});
