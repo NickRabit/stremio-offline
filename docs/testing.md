@@ -89,6 +89,13 @@ The fixture stack is two servers, both started by Playwright itself:
 Because there is one server with one state file, the specs run serially
 (`workers: 1`) rather than fighting over it.
 
+The layout projects run after `layout/seed.spec.ts`, which builds the state their baselines are
+taken against through the API -- the fixture titles in the download library, bound to the catalogue
+and with a finished download beside them. The chromium journeys used to be that state's builder,
+which meant every one of the seven layout jobs replayed the whole journey suite (79 page launches,
+around two minutes) before its own two dozen specs; the seed does it in seconds, and the journeys
+still run once, in the `e2e` job.
+
 Locally and in each CI job the specs still share one server and still run with
 `workers: 1`. CI runs the seven layout viewports as seven separate jobs, each on
 its own server, so they do not wait on each other. Every one of those jobs

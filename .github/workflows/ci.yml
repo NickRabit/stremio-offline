@@ -84,9 +84,10 @@ jobs:
           retention-days: 7
 
   # Every layout viewport would otherwise queue behind the other six on one server.
-  # Each job replays "setup" and "chromium" itself, because the layout projects
-  # declare that dependency and the baselines come from the state those journeys
-  # leave behind.
+  # Each job runs "setup" and the layout seed, and the seed is what the baselines are
+  # taken against: a library with the fixture titles in it, built through the API in
+  # seconds. The chromium journeys used to be that state's builder, which cost every
+  # viewport a replay of the whole journey suite -- around two minutes per job.
   e2e-layout:
     runs-on: ubuntu-24.04
     container:

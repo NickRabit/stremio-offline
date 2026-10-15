@@ -69,13 +69,23 @@ export default defineConfig({
       dependencies: ["setup"],
       use: { ...devices["iPhone 13"], viewport: { width: 360, height: 780 }, browserName: "webkit", storageState },
     },
-    // The layout projects run after the journeys, not merely after setup: the
-    // journeys leave a queued download and a library file behind, and a baseline
-    // has to be taken against a state that is the same every run.
+    {
+      // The library the layout screens draw, built through the API rather than by replaying the
+      // journeys: a baseline has to be taken against a state that is the same every run, and one
+      // job per viewport paying for the whole journey suite to get it made that state expensive.
+      name: "layout-seed",
+      testMatch: /layout\/seed\.spec\.ts/,
+      dependencies: ["setup"],
+      use: { ...devices["Desktop Chrome"], storageState },
+    },
+    // The layout projects run after that seed, not merely after setup: a library file and a
+    // bound title are what the screens show, and the seed is what leaves them behind.
     ...viewports.map(({ name, use }) => ({
       name,
       testMatch: /layout\//,
-      dependencies: ["setup", "chromium"],
+      // The seed is the dependency, not part of the matrix: it is already done before these run.
+      testIgnore: /layout\/seed\.spec\.ts/,
+      dependencies: ["setup", "layout-seed"],
       use: { ...use, storageState },
     })),
     {
