@@ -6,7 +6,7 @@ import { clearRemoteMosaicCache } from "./remote-mosaic";
 import { setLocale } from "./i18n";
 import { clearTitleEnrichment } from "./title-enrichment";
 import { emptyViews } from "./views";
-import type { LibraryView, RemoteCapabilities, RemoteItem, RemoteItemPage, RemoteLibrary, Stream } from "./types";
+import type { Addon, LibraryView, RemoteCapabilities, RemoteItem, RemoteItemPage, RemoteLibrary, Stream } from "./types";
 
 const capabilities: RemoteCapabilities = { rename: false, move: false, delete: false, identify: false, writeArtwork: false, downloadToLibrary: false, downloadToDevice: false };
 const json = (body: unknown, status = 200) =>
@@ -36,8 +36,20 @@ let sources: Handler;
 let item: Handler;
 let state: Handler;
 let downloadReply: Handler | undefined;
+let addonProviders: Handler;
+let addonStreams: Handler;
+let addonSubtitles: Handler;
+let addonProgress: Handler;
+let forgetReply: Handler | undefined;
+let playback: Handler;
 const calls = { browse: [] as URL[], preview: [] as URL[], sources: [] as URL[], item: [] as URL[], state: [] as Array<{ method: string; body: unknown }>, stateUrls: [] as string[], title: [] as string[] };
 const downloadCalls: Array<Record<string, unknown>> = [];
+const deviceCalls: Array<Record<string, unknown>> = [];
+const playbackCalls: Array<Record<string, unknown>> = [];
+const addonCalls = {
+  sources: [] as URL[], streams: [] as URL[], subtitles: [] as URL[],
+  progress: [] as Array<{ method: string; path: string }>, subtitleSignals: [] as Array<AbortSignal | null | undefined>,
+};
 
 /** A controllable IntersectionObserver: tiles only ask for a preview once it fires. */
 class FakeIntersectionObserver {
@@ -66,12 +78,24 @@ beforeEach(() => {
   FakeIntersectionObserver.live = [];
   calls.browse = []; calls.preview = []; calls.sources = []; calls.item = []; calls.state = []; calls.stateUrls = []; calls.title = [];
   downloadCalls.length = 0;
+  deviceCalls.length = 0;
+  playbackCalls.length = 0;
+  addonCalls.sources = []; addonCalls.streams = []; addonCalls.subtitles = []; addonCalls.progress = []; addonCalls.subtitleSignals = [];
   libraries = [library()];
   browse = () => json(page([]));
   preview = () => json({ posters: [] });
   sources = () => json({ streams: [] });
   item = () => json({ item: movie("m1", "One"), capabilities });
   downloadReply = undefined;
+  addonProviders = () => json([]);
+  addonStreams = () => json([]);
+  addonSubtitles = () => json([]);
+  addonProgress = () => json(null);
+  forgetReply = undefined;
+  playback = () => json({
+    id: "sess1", mode: "direct", url: "/api/stream/sess1", offset: 0, duration: 3600, hardware: false, acceleration: false,
+    audioTracks: [], subtitleTracks: [], audioTrack: 0, subtitleTrack: null, quality: null,
+  });
   state = (url, init) => {
     if (init?.method === "PATCH") return json({ key: "k", position: 0, duration: 0, favorite: true, watched: false });
     return json({ key: "k", position: 0, duration: 0, favorite: false, watched: false });
@@ -83,6 +107,23 @@ beforeEach(() => {
     if (path === "/api/downloads" && init?.method === "POST") {
       downloadCalls.push(JSON.parse(String(init.body)) as Record<string, unknown>);
       return Promise.resolve(downloadReply ? downloadReply(url, init) : json({ id: "job1", status: "queued" }, 201));
+    }
+    if (path === "/api/device-download" && init?.method === "POST") {
+      deviceCalls.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+      return Promise.resolve(json({ url: "/api/device-download/ticket/1", filename: "film.mp4" }));
+    }
+    if (path === "/api/playback" && init?.method === "POST") {
+      playbackCalls.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+      return Promise.resolve(playback(url, init));
+    }
+    if (/^\/api\/playback\/[^/]+$/.test(path)) return Promise.resolve(new Response(null, { status: 204 }));
+    if (path.startsWith("/api/stream-sources/")) { addonCalls.sources.push(url); return Promise.resolve(addonProviders(url, init)); }
+    if (path.startsWith("/api/streams/")) { addonCalls.streams.push(url); return Promise.resolve(addonStreams(url, init)); }
+    if (path.startsWith("/api/subtitles/")) { addonCalls.subtitles.push(url); addonCalls.subtitleSignals.push(init?.signal); return Promise.resolve(addonSubtitles(url, init)); }
+    if (path.startsWith("/api/progress")) {
+      addonCalls.progress.push({ method: init?.method ?? "GET", path });
+      if (init?.method === "DELETE") return Promise.resolve(forgetReply ? forgetReply(url, init) : new Response(null, { status: 204 }));
+      return Promise.resolve(addonProgress(url, init));
     }
     if (/^\/api\/remote-libraries\/[^/]+\/browse$/.test(path)) { calls.browse.push(url); return browse(url, init); }
     if (/^\/api\/remote-libraries\/[^/]+\/preview$/.test(path)) { calls.preview.push(url); return preview(url, init); }
@@ -1152,5 +1193,399 @@ describe("RemoteLibraryBrowser native copy", () => {
     await click(primary());
     expect(card()).not.toBeNull();
     expect(card()!.textContent).toContain("This source is already in the library.");
+  });
+});
+
+describe("RemoteLibraryBrowser addon sources", () => {
+  /** The player measures its control bar; jsdom does not ship the observer. */
+  beforeEach(() => {
+    vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: false, media: query, onchange: null,
+      addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+    }));
+    Object.defineProperty(HTMLMediaElement.prototype, "textTracks", {
+      configurable: true,
+      get: () => ({ length: 0, addEventListener() {}, removeEventListener() {}, item: () => null, [Symbol.iterator]: [][Symbol.iterator] }),
+    });
+    HTMLMediaElement.prototype.play = () => Promise.resolve();
+    HTMLMediaElement.prototype.pause = () => undefined;
+    HTMLMediaElement.prototype.load = () => undefined;
+  });
+
+  const saveView = (over: Partial<LibraryView> = {}): LibraryView => ({
+    id: "lib_1", name: "Films", type: "mixed", enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z",
+    writeArtwork: false, autoScanMetadata: false, unreachable: false, readOnly: false, writable: true,
+    defaultMovie: true, defaultSeries: true, titles: 0, files: 0, bytes: 0, ...over,
+  });
+  /** A supplementary row: a generic addon source with no native identity of any kind. */
+  const addonRow = (sourceId: string, name: string): Stream => ({
+    sourceId, kind: "remote", playable: true, name, title: "💾 4 GB", addonKey: "torrentio", addonName: "Torrentio",
+  });
+  const nativeVersion = (mediaSourceId: string, name: string, size: number): Stream => ({
+    sourceId: `src-${mediaSourceId}`, kind: "remote", playable: true, name, provider: "jellyfin",
+    remoteItem: { libraryId: "rlib_a", itemId: "1", mediaSourceId, progressKey: "k" },
+    behaviorHints: { videoSize: size },
+  });
+  const addonWithRule = (): Addon => ({
+    key: "torrentio", role: "source", enabled: true, globalSearch: false, manifest: { id: "org.torrentio", name: "Torrentio", version: "1.0.0" },
+    downloadSettings: {
+      movie: { subfolder: "Films", layout: "structured", libraryId: "lib_1" },
+      series: { subfolder: "Shows", layout: "structured", libraryId: "lib_1" },
+    },
+  });
+  const identified = (id: string, name: string): RemoteItem => ({ ...movie(id, name), providerIds: { imdb: "tt5000" } });
+  const playButton = () => host.querySelector<HTMLButtonElement>(".library-detail-play button.primary")!;
+  const byTextIn = (root: ParentNode, selector: string, text: string) =>
+    [...root.querySelectorAll<HTMLElement>(selector)].find((node) => node.textContent?.includes(text)) ?? null;
+  const inDialog = (selector: string, text: string) => byTextIn(document, selector, text);
+
+  /** Opens a movie's native detail with one version and the addon panel available. */
+  const openDetail = async (over: Partial<Parameters<typeof RemoteLibraryBrowser>[0]> = {}) => {
+    const onDownloadQueued = vi.fn();
+    const onNotify = vi.fn();
+    browse = () => json(page([identified("1", "One")]));
+    sources = () => json({ streams: [nativeVersion("ms1", "1080p", 2_000_000_000)] });
+    addonProviders = () => json([{ key: "torrentio", name: "Torrentio" }]);
+    addonStreams = () => json([addonRow("addon-1", "Torrentio 4K")]);
+    const rendered = await render({ addons: [addonWithRule()], downloadLibraries: [saveView()], onDownloadQueued, onNotify, ...over });
+    await click(host.querySelector(".remote-libraries button.library-open")!);
+    await click(tileButtons()[0]!);
+    await flush();
+    return { ...rendered, onDownloadQueued, onNotify };
+  };
+  const openPicker = async () => { await click(host.querySelector(".split-button-toggle")!); };
+  const loadProvider = async () => {
+    await click(document.querySelector(".addon-sources-toggle")!);
+    await click(document.querySelector(".addon-provider button")!);
+    await flush();
+  };
+  const selectAddonRow = async () => {
+    await click(inDialog(".library-source-card .remote-streams button", "Torrentio 4K")!);
+    await flush();
+  };
+  const closePicker = async () => { await click(document.querySelector(".library-source-card .dialog-foot button")!); };
+  const addonGetPaths = () => addonCalls.progress.filter((call) => call.method === "GET").map((call) => call.path);
+
+  it("keeps the native version playable while a provider fails", async () => {
+    await openDetail();
+    addonStreams = () => json({ error: "Alpha is down" }, 502);
+    await openPicker();
+    await loadProvider();
+    expect(document.querySelector(".addon-provider")!.textContent).toContain("Alpha is down");
+    await closePicker();
+    await click(playButton());
+    await flush();
+    expect(playbackCalls[0]!.sourceId).toBe("src-ms1");
+    expect(addonCalls.subtitles).toHaveLength(0);
+  });
+
+  it("keeps every addon endpoint untouched until asked, then clears addon progress without a native patch", async () => {
+    addonProgress = () => json({ key: "movie:tt5000", position: 600, duration: 3600, title: "One", updatedAt: "2026-01-01T00:00:00.000Z" });
+    await openDetail();
+    expect(addonCalls.sources).toHaveLength(0);
+    expect(addonCalls.streams).toHaveLength(0);
+    expect(addonCalls.subtitles).toHaveLength(0);
+    // The dialog alone asks for nothing: discovery is one press, the provider one more.
+    await openPicker();
+    expect(addonCalls.sources).toHaveLength(0);
+    await click(document.querySelector(".addon-sources-toggle")!);
+    expect(addonCalls.sources).toHaveLength(1);
+    expect(addonCalls.sources[0]!.pathname).toBe("/api/stream-sources/movie/tt5000");
+    await click(document.querySelector(".addon-provider button")!);
+    await flush();
+    expect(addonCalls.streams).toHaveLength(1);
+    expect(addonCalls.streams[0]!.searchParams.get("addon")).toBe("torrentio");
+    await selectAddonRow();
+    expect(addonGetPaths()).toEqual(["/api/progress/movie%3Att5000"]);
+    expect(host.querySelector(".library-detail-progress")).not.toBeNull();
+    await click(host.querySelector(".library-detail-progress button")!);
+    expect(addonCalls.progress.at(-1)).toEqual({ method: "DELETE", path: "/api/progress/movie%3Att5000" });
+    expect(host.querySelector(".library-detail-progress")).toBeNull();
+    expect(calls.state.filter((call) => call.method === "PATCH")).toHaveLength(0);
+  });
+
+  it("asks an episode about its parent series with the season and episode appended", async () => {
+    const show: RemoteItem = { id: "show", name: "Show", type: "series", providerIds: { imdb: "tt7000" } };
+    const episode: RemoteItem = { id: "e1", name: "Pilot", type: "episode", season: 1, episode: 2, seriesId: "show", providerIds: { imdb: "tt9999" } };
+    browse = (url) => json(page(url.searchParams.get("type") === "episode" ? [episode] : [show]));
+    item = (url) => json({ item: url.pathname.endsWith("/show") ? show : episode, capabilities });
+    sources = () => json({ streams: [] });
+    addonProviders = () => json([{ key: "torrentio", name: "Torrentio" }]);
+    addonStreams = () => json([addonRow("addon-1", "Torrentio 4K")]);
+    await render({ addons: [addonWithRule()] });
+    await click(host.querySelector(".remote-libraries button.library-open")!);
+    await click(tileButtons()[0]!);
+    await flush();
+    await click(tileButtons()[0]!);
+    await flush();
+    await openPicker();
+    await click(document.querySelector(".addon-sources-toggle")!);
+    expect(addonCalls.sources[0]!.pathname).toBe("/api/stream-sources/series/tt7000%3A1%3A2");
+    await click(document.querySelector(".addon-provider button")!);
+    await flush();
+    expect(addonCalls.streams[0]!.pathname).toBe("/api/streams/series/tt7000%3A1%3A2");
+    expect(addonCalls.streams.some((url) => url.pathname.includes("tt9999"))).toBe(false);
+    await selectAddonRow();
+    expect(addonGetPaths()).toEqual(["/api/progress/series%3Att7000%3A1%3A2"]);
+  });
+
+  it("queues the exact addon row into the addon's own rule and keeps a refusal in the dialog", async () => {
+    const { onDownloadQueued } = await openDetail();
+    await openPicker();
+    await loadProvider();
+    await selectAddonRow();
+    await click(byText(".library-detail-actions button", "To library")!);
+    const card = document.querySelector<HTMLElement>(".save-target-card")!;
+    expect(card.textContent).toContain("Films › Films › One");
+    downloadReply = () => json({ error: "This source is already in the library." }, 409);
+    await click(document.querySelector(".save-target-card footer button.primary")!);
+    expect(document.querySelector(".save-target-card")).not.toBeNull();
+    expect(document.querySelector(".save-target-card")!.textContent).toContain("This source is already in the library.");
+    expect(onDownloadQueued).not.toHaveBeenCalled();
+    downloadReply = undefined;
+    await click(document.querySelector(".save-target-card footer button.primary")!);
+    expect(downloadCalls[0]!.sourceId).toBe("addon-1");
+    expect(downloadCalls[0]!.media).toMatchObject({ kind: "movie", title: "One", id: "tt5000", metaType: "movie" });
+    expect(onDownloadQueued).toHaveBeenCalledTimes(1);
+    expect(document.querySelector(".save-target-card")).toBeNull();
+  });
+
+  it("plays an addon row generically: real downloads and no native favorite or episode hand-off", async () => {
+    const { onDownloadQueued, onNotify } = await openDetail();
+    await openPicker();
+    await loadProvider();
+    await selectAddonRow();
+    await click(playButton());
+    await flush();
+    expect(playbackCalls).toHaveLength(1);
+    expect(playbackCalls[0]!.sourceId).toBe("addon-1");
+    const overlay = host.querySelector(".player-overlay")!;
+    expect(overlay).not.toBeNull();
+    expect(overlay.querySelector(".next-episode")).toBeNull();
+    expect(overlay.querySelector(".previous-episode")).toBeNull();
+    expect(overlay.querySelector(".player-star")).toBeNull();
+    // The player's own save actions run the real flows rather than no-op callbacks.
+    await click(host.querySelector(".player-settings-toggle")!);
+    await click(byText(".player-action", "To library")!);
+    expect(document.querySelector(".save-target-card")).not.toBeNull();
+    await click(document.querySelector(".save-target-card footer button.primary")!);
+    expect(downloadCalls[0]!.sourceId).toBe("addon-1");
+    expect(onDownloadQueued).toHaveBeenCalledTimes(1);
+    await click(byText(".player-action", "To device")!);
+    await flush();
+    expect(deviceCalls[0]!.sourceId).toBe("addon-1");
+    expect(deviceCalls[0]!.media).toMatchObject({ id: "tt5000", metaType: "movie" });
+    // A device save is not a queued library copy: it notifies instead of refreshing downloads.
+    expect(onDownloadQueued).toHaveBeenCalledTimes(1);
+    expect(onNotify).toHaveBeenCalledWith("film.mp4 is downloading through the server.");
+  });
+
+  it("keeps the native player's own episode hand-off for a native version", async () => {
+    const show: RemoteItem = { id: "show", name: "Show", type: "series", providerIds: { imdb: "tt7000" } };
+    const e1: RemoteItem = { id: "e1", name: "Pilot", type: "episode", season: 1, episode: 1, seriesId: "show", providerIds: {} };
+    const e2: RemoteItem = { id: "e2", name: "Second", type: "episode", season: 1, episode: 2, seriesId: "show", providerIds: {} };
+    browse = (url) => json(page(url.searchParams.get("type") === "episode" ? [e1, e2] : [show]));
+    item = (url) => json({ item: url.pathname.endsWith("/show") ? show : url.pathname.endsWith("/e1") ? e1 : e2, capabilities });
+    sources = () => json({ streams: [nativeVersion("ms1", "1080p", 2_000_000_000)] });
+    await render({ addons: [] });
+    await click(host.querySelector(".remote-libraries button.library-open")!);
+    await click(tileButtons()[0]!);
+    await flush();
+    await click(tileButtons()[0]!);
+    await flush();
+    await click(playButton());
+    await flush();
+    const overlay = host.querySelector(".player-overlay")!;
+    expect(overlay.querySelector(".next-episode")).not.toBeNull();
+    expect(overlay.querySelector(".player-star")).not.toBeNull();
+    expect(addonCalls.sources).toHaveLength(0);
+  });
+
+  it("reads addon subtitles only when addon playback starts and drops a stale answer", async () => {
+    const held = deferred<Response>();
+    addonSubtitles = () => held.promise;
+    await openDetail();
+    await openPicker();
+    await loadProvider();
+    await selectAddonRow();
+    expect(addonCalls.subtitles).toHaveLength(0);
+    await click(playButton());
+    await flush();
+    expect(addonCalls.subtitles).toHaveLength(1);
+    expect(addonCalls.subtitles[0]!.pathname).toBe("/api/subtitles/movie/tt5000");
+    await click(host.querySelector(".player-head button.icon-button")!);
+    expect(addonCalls.subtitleSignals.at(-1)!.aborted).toBe(true);
+    await act(async () => { held.resolve(json([{ subtitleId: "sub1", lang: "en" }])); });
+    await flush();
+    expect(host.querySelector(".player-overlay")).toBeNull();
+  });
+
+  it("still offers an explicitly loaded addon when the native source read failed", async () => {
+    browse = () => json(page([identified("1", "One")]));
+    sources = () => json({ error: "provider down" }, 502);
+    addonProviders = () => json([{ key: "torrentio", name: "Torrentio" }]);
+    addonStreams = () => json([addonRow("addon-1", "Torrentio 4K")]);
+    await render({ addons: [addonWithRule()], downloadLibraries: [saveView()] });
+    await click(host.querySelector(".remote-libraries button.library-open")!);
+    await click(tileButtons()[0]!);
+    await flush();
+    // The native error is shown and the addon side is still untouched.
+    expect(host.textContent).toContain("provider down");
+    expect(addonCalls.sources).toHaveLength(0);
+    expect(addonCalls.streams).toHaveLength(0);
+    await openPicker();
+    await click(document.querySelector(".addon-sources-toggle")!);
+    expect(addonCalls.sources).toHaveLength(1);
+    await click(document.querySelector(".addon-provider button")!);
+    await flush();
+    await selectAddonRow();
+    expect(addonGetPaths()).toEqual(["/api/progress/movie%3Att5000"]);
+    await click(playButton());
+    await flush();
+    expect(playbackCalls).toHaveLength(1);
+    expect(playbackCalls[0]!.sourceId).toBe("addon-1");
+    // The failed native read never gave the addon row any native provenance.
+    expect(calls.state.filter((call) => call.method === "PATCH")).toHaveLength(0);
+  });
+
+  it("saves an episode under its parent series identity while the preview names the show season", async () => {
+    const show: RemoteItem = { id: "show", name: "Show", type: "series", providerIds: { imdb: "tt7000" } };
+    const episode: RemoteItem = { id: "e1", name: "Pilot", type: "episode", season: 1, episode: 2, seriesId: "show", providerIds: { imdb: "tt9999" } };
+    browse = (url) => json(page(url.searchParams.get("type") === "episode" ? [episode] : [show]));
+    item = (url) => json({ item: url.pathname.endsWith("/show") ? show : episode, capabilities });
+    sources = () => json({ streams: [nativeVersion("ms1", "1080p", 2_000_000_000)] });
+    addonProviders = () => json([{ key: "torrentio", name: "Torrentio" }]);
+    addonStreams = () => json([addonRow("addon-1", "Torrentio 4K")]);
+    await render({ addons: [addonWithRule()], downloadLibraries: [saveView()] });
+    await click(host.querySelector(".remote-libraries button.library-open")!);
+    await click(tileButtons()[0]!);
+    await flush();
+    await click(tileButtons()[0]!);
+    await flush();
+    await openPicker();
+    await loadProvider();
+    await selectAddonRow();
+    await click(byText(".library-detail-actions button", "To library")!);
+    const card = document.querySelector(".save-target-card")!;
+    // The storage preview resolves the media subject: the show and its season, never the episode label.
+    const preview = [...card.querySelectorAll<HTMLElement>("small")].map((node) => node.textContent ?? "").find((text) => text.includes("›")) ?? "";
+    const segments = preview.split(" › ");
+    expect(segments).toContain("Show");
+    expect(segments).toContain("01 serie");
+    expect(segments.some((segment) => segment.includes("Pilot"))).toBe(false);
+    expect(card.querySelector("h2")!.textContent).toContain("Pilot");
+    await click(document.querySelector(".save-target-card footer button.primary")!);
+    expect(downloadCalls[0]!.sourceId).toBe("addon-1");
+    expect(downloadCalls[0]!.media).toMatchObject({ kind: "episode", title: "Show", season: 1, episode: 2, episodeTitle: "Pilot", id: "tt7000", metaType: "series" });
+  });
+
+  for (const position of [20, 3500]) {
+    it(`refreshes the detail only after the final generic progress write at ${position}s`, async () => {
+      const finalWrite = deferred<Response>();
+      let saved: unknown = { key: "movie:tt5000", position: 600, duration: 3600, title: "One", updatedAt: "2026-01-01T00:00:00.000Z" };
+      let payload: Record<string, unknown> | null = null;
+      addonProgress = (_url, init) => {
+        if (init?.method === "POST") {
+          payload = JSON.parse(String(init.body));
+          return finalWrite.promise.then((response) => { saved = null; return response; });
+        }
+        return json(saved);
+      };
+      await openDetail();
+      await openPicker();
+      await loadProvider();
+      await selectAddonRow();
+      await click(playButton());
+      await flush();
+      const video = host.querySelector<HTMLVideoElement>(".player-overlay video")!;
+      await act(async () => { video.currentTime = position; video.dispatchEvent(new Event("timeupdate", { bubbles: true })); });
+      const reads = addonGetPaths().length;
+      await click(host.querySelector(".player-head button.icon-button")!);
+      await flush();
+      expect(payload).toMatchObject({ key: "movie:tt5000", position, duration: 3600 });
+      expect(payload).not.toHaveProperty("addonKey");
+      expect(addonGetPaths()).toHaveLength(reads);
+      await act(async () => { finalWrite.resolve(new Response(null, { status: 204 })); });
+      await flush();
+      expect(addonGetPaths()).toHaveLength(reads + 1);
+      expect(host.querySelector(".library-detail-progress")).toBeNull();
+      expect(calls.state.filter(call => call.method === "PATCH")).toHaveLength(0);
+    });
+  }
+
+  it("drops a late progress refresh once another title is on screen", async () => {
+    const held = deferred<Response>();
+    let holdRefresh = false;
+    addonProgress = (_url, init) => init?.method === "POST" ? new Response(null, { status: 204 }) : holdRefresh ? held.promise : json(null);
+    browse = () => json(page([identified("1", "One"), identified("2", "Two")]));
+    sources = () => json({ streams: [nativeVersion("ms1", "1080p", 2_000_000_000)] });
+    addonProviders = () => json([{ key: "torrentio", name: "Torrentio" }]);
+    addonStreams = () => json([addonRow("addon-1", "Torrentio 4K")]);
+    await render({ addons: [addonWithRule()] });
+    await click(host.querySelector(".remote-libraries button.library-open")!);
+    await click(tileButtons()[0]!);
+    await flush();
+    await openPicker();
+    await loadProvider();
+    await selectAddonRow();
+    await click(playButton());
+    await flush();
+    const video = host.querySelector<HTMLVideoElement>(".player-overlay video")!;
+    await act(async () => { video.currentTime = 120; video.dispatchEvent(new Event("timeupdate", { bubbles: true })); });
+    const reads = addonGetPaths().length;
+    holdRefresh = true;
+    await click(host.querySelector(".player-head button.icon-button")!);
+    expect(addonGetPaths()).toHaveLength(reads + 1);
+    holdRefresh = false;
+    await flush();
+    await click(host.querySelector(".library-back")!);
+    await flush();
+    await click(tileButtons()[1]!);
+    await flush();
+    await openPicker();
+    await loadProvider();
+    await selectAddonRow();
+    await flush();
+    expect(host.querySelector(".library-detail-progress")).toBeNull();
+    await act(async () => { held.resolve(json({ key: "movie:tt5000", position: 1200, duration: 3600, title: "One", updatedAt: "2026-01-01T00:00:00.000Z" })); });
+    await flush();
+    expect(host.querySelector(".library-detail-progress")).toBeNull();
+  });
+
+  it("does not let a late clear touch the next title's saved position", async () => {
+    const held = deferred<Response>();
+    let holdForget = false;
+    addonProgress = () => json({ key: "movie:tt5000", position: 600, duration: 3600, title: "One", updatedAt: "2026-01-01T00:00:00.000Z" });
+    forgetReply = () => holdForget ? held.promise : new Response(null, { status: 204 });
+    browse = () => json(page([identified("1", "One"), identified("2", "Two")]));
+    sources = () => json({ streams: [nativeVersion("ms1", "1080p", 2_000_000_000)] });
+    addonProviders = () => json([{ key: "torrentio", name: "Torrentio" }]);
+    addonStreams = () => json([addonRow("addon-1", "Torrentio 4K")]);
+    await render({ addons: [addonWithRule()] });
+    await click(host.querySelector(".remote-libraries button.library-open")!);
+    await click(tileButtons()[0]!);
+    await flush();
+    await openPicker();
+    await loadProvider();
+    await selectAddonRow();
+    expect(host.querySelector(".library-detail-progress")).not.toBeNull();
+    holdForget = true;
+    await click(host.querySelector(".library-detail-progress button")!);
+    holdForget = false;
+    expect(addonCalls.progress.at(-1)).toEqual({ method: "DELETE", path: "/api/progress/movie%3Att5000" });
+    await click(host.querySelector(".library-back")!);
+    await flush();
+    await click(tileButtons()[1]!);
+    await flush();
+    await openPicker();
+    await loadProvider();
+    await selectAddonRow();
+    await flush();
+    expect(host.querySelector(".library-detail-progress")).not.toBeNull();
+    // The first title's clear lands late; the second title keeps its own saved position.
+    await act(async () => { held.resolve(new Response(null, { status: 204 })); });
+    await flush();
+    expect(host.querySelector(".library-detail-progress")).not.toBeNull();
   });
 });

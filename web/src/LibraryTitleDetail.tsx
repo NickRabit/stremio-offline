@@ -1,11 +1,15 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { useDialogFocus } from "./dialog-focus";
+import { useDialogViewport } from "./dialog-viewport";
 import { Check, ChevronDown, CirclePlay, FolderOpen, HardDrive, Images, RotateCcw, Star, X } from "lucide-react";
 import { DetailHero, LIBRARY_HERO_EMPTY_GRADIENT, LIBRARY_HERO_GRADIENT, useBackdrop } from "./DetailHero";
 import type { GalleryImage } from "./gallery-images";
 import { bytes, hideBroken } from "./settings-ui";
 import { t, useI18n } from "./i18n";
 import { defaultSource, orderSources, playableSources, sourceIdentity, sourceName } from "./library-detail-sources";
+import { rankAddonStreams } from "./native-addon-sources";
+import { streamBadge, streamSize } from "./streams";
 import type { Stream } from "./types";
 
 export interface LibraryTitleDetailProps {
@@ -39,6 +43,12 @@ export interface LibraryTitleDetailProps {
   onOpenFolder?: () => void;
   /** The playable versions, or null while they are still being read. */
   sources: Stream[] | null;
+  /** The native rows alone, when `sources` merges them with loaded addon rows: the default
+   *  version is then drawn from these, so a larger addon answer never replaces it. */
+  defaultSources?: Stream[] | null;
+  /** The supplementary addon panel, drawn under the version rows. Its presence alone makes the
+   *  arrow appear, so a title with one or two versions still offers addon sources. */
+  sourcePickerExtra?: ReactNode;
   sourceError?: string;
   onRetry?: () => void;
   /** The saved position of the selected source, keyed by its identity so another version's
@@ -57,9 +67,12 @@ export interface LibraryTitleDetailProps {
   sourceBadge?: (stream: Stream) => string;
 }
 
+/** A native row only ever reports its size; an addon row keeps it in its own text. */
 const sizeLabel = (stream: Stream) => {
   const value = stream.behaviorHints?.videoSize;
-  return typeof value === "number" && value > 0 ? bytes(value) : "";
+  if (typeof value === "number" && value > 0) return bytes(value);
+  const guessed = stream.addonKey ? streamSize(stream) : undefined;
+  return guessed ? bytes(guessed) : "";
 };
 
 /** A nonnegative, floored clock, with hours only when they are there. */
@@ -72,7 +85,7 @@ const clock = (value: number) => {
 /** The one detail body a playable title shares, local or remote: the catalogue hero, the synopsis
  *  and the sources with a split Play button. The provider-specific parts arrive as props, so the
  *  two containers cannot drift apart and a future add-on stream joins the same selector. */
-export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backdrops, gallery, onGallery, facts, description, chips, favorite, onToggleFavorite, favoriteDisabled, watched, onToggleWatched, watchedDisabled, watchedLabel, onOpenFolder, sources, sourceError, onRetry, progress, onSourceChange, onClearProgress, onPlay, onSaveToLibrary, sourceBadge }: LibraryTitleDetailProps) {
+export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backdrops, gallery, onGallery, facts, description, chips, favorite, onToggleFavorite, favoriteDisabled, watched, onToggleWatched, watchedDisabled, watchedLabel, onOpenFolder, sources, defaultSources, sourcePickerExtra, sourceError, onRetry, progress, onSourceChange, onClearProgress, onPlay, onSaveToLibrary, sourceBadge }: LibraryTitleDetailProps) {
   useI18n();
   const backdrop = useBackdrop(backdrops ?? []);
   const [chosen, setChosen] = useState<{ identity: string; key: string } | null>(null);
@@ -91,12 +104,23 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
     wasOpen.current = pickerOpen;
   }, [pickerOpen]);
 
-  // Largest first, so the default the Play button uses is the row on top of the picker.
-  const pickable = orderSources(playableSources(sources ?? []));
+  // The native versions lead the picker, largest reported size first. The supplementary addon
+  // rows follow in the size order their own text reported, which the shared ranking keeps.
+  const playable = playableSources(sources ?? []);
+  const pickable = [
+    ...orderSources(playable.filter((stream) => !stream.addonKey)),
+    ...rankAddonStreams(playable.filter((stream) => stream.addonKey)),
+  ];
+  // The default is the largest native version. An explicitly passed null or empty native list
+  // means the title has no native default: a supplementary row is never chosen silently, though
+  // the viewer can still pick one. Leaving `defaultSources` undefined keeps the local behaviour
+  // of defaulting to the largest row.
+  const defaultPick = defaultSource(defaultSources === undefined ? pickable : (defaultSources ?? []));
   const selected = (chosen?.identity === identityKey
-    ? pickable.find((stream) => sourceIdentity(stream) === chosen.key) : undefined) ?? defaultSource(pickable);
-  const multiple = pickable.length > 1;
-  const badgeOf = (stream: Stream) => sourceBadge?.(stream) || stream.libraryName || t("sources.localBadge");
+    ? pickable.find((stream) => sourceIdentity(stream) === chosen.key) : undefined) ?? defaultPick;
+  const multiple = pickable.length > 1 || sourcePickerExtra != null;
+  const badgeOf = (stream: Stream) =>
+    stream.addonName || (stream.addonKey ? streamBadge(stream) : "") || sourceBadge?.(stream) || stream.libraryName || t("sources.localBadge");
   const choose = (stream: Stream) => {
     setChosen({ identity: identityKey, key: sourceIdentity(stream) });
     setPickerOpen(false);
@@ -208,22 +232,25 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
         onClick={() => onToggleWatched()}>{watched === undefined ? <RotateCcw/> : <Check/>}</button>}
       {onOpenFolder && <button type="button" onClick={onOpenFolder}><FolderOpen/> {t("library.openFolder")}</button>}
     </div>
-    {pickerOpen && <SourcePicker sources={pickable} selected={selected} badgeOf={badgeOf} onSelect={choose} onClose={() => setPickerOpen(false)}/>}
+    {pickerOpen && <SourcePicker sources={pickable} selected={selected} badgeOf={badgeOf} extra={sourcePickerExtra} onSelect={choose} onClose={() => setPickerOpen(false)}/>}
   </div>;
 }
 
 /** The destination picker beside Play: the same dialog shell as Save to…, one row per playable
  *  source. Clicking a row chooses it and closes; Escape returns to the arrow. */
-function SourcePicker({ sources, selected, badgeOf, onSelect, onClose }: {
+function SourcePicker({ sources, selected, badgeOf, extra, onSelect, onClose }: {
   sources: Stream[];
   selected: Stream | null;
   badgeOf: (stream: Stream) => string;
+  extra?: ReactNode;
   onSelect: (stream: Stream) => void;
   onClose: () => void;
 }) {
   useI18n();
   const listRef = useRef<HTMLDivElement | null>(null);
   const overlayRef = useRef<HTMLDivElement | null>(null);
+  useDialogFocus(overlayRef);
+  useDialogViewport(overlayRef);
   useEffect(() => {
     const node = listRef.current?.querySelector<HTMLButtonElement>("button.selected") ?? listRef.current?.querySelector<HTMLButtonElement>("button");
     node?.focus();
@@ -236,15 +263,9 @@ function SourcePicker({ sources, selected, badgeOf, onSelect, onClose }: {
   const selectedKey = selected ? sourceIdentity(selected) : "";
   // The library panel is a container-query container, which would trap a fixed overlay inside it
   // and clip it; the dialog is portalled to the body so it covers the viewport as the shell intends.
-  return createPortal(<div ref={overlayRef} className="identify-overlay" role="dialog" aria-modal="true" aria-label={t("library.chooseSource")}
+  return createPortal(<div ref={overlayRef} tabIndex={-1} className="identify-overlay" role="dialog" aria-modal="true" aria-label={t("library.chooseSource")}
     onKeyDown={(event) => {
       if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onClose(); return; }
-      if (event.key !== "Tab") return;
-      const controls = [...(overlayRef.current?.querySelectorAll<HTMLButtonElement>("button:not([disabled])") ?? [])];
-      const first = controls[0];
-      const last = controls.at(-1);
-      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
-      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
     }}
     onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <div className="panel identify-card dialog-split library-source-card">
@@ -265,6 +286,7 @@ function SourcePicker({ sources, selected, badgeOf, onSelect, onClose }: {
             </button>;
           })}
         </div>
+        {extra}
       </div>
       <footer className="dialog-foot">
         <button type="button" onClick={onClose}>{t("common.close")}</button>

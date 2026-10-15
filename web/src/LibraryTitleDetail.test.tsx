@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act } from "react";
+import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { LibraryTitleDetail, type LibraryTitleDetailProps } from "./LibraryTitleDetail";
 import type { GalleryImage } from "./gallery-images";
@@ -15,12 +15,19 @@ const remote = (id: string, name: string, bytes?: number): Stream => ({
   behaviorHints: bytes === undefined ? undefined : { videoSize: bytes },
 });
 
+/** A supplementary addon row: no remote identity at all, only its own addon and source id. */
+const addon = (id: string, name: string, size?: number): Stream => ({
+  sourceId: id, kind: "remote", playable: true, name, addonKey: "torrentio", addonName: "Torrentio",
+  ...(size === undefined ? {} : { behaviorHints: { videoSize: size } }),
+});
+
 let root: Root;
 let host: HTMLDivElement;
 
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   setLocale("en");
+  vi.spyOn(HTMLElement.prototype, "getClientRects").mockReturnValue({ length: 1 } as DOMRectList);
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
@@ -29,6 +36,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   host.remove();
+  vi.restoreAllMocks();
 });
 
 const render = (over: Partial<LibraryTitleDetailProps> = {}) => {
@@ -362,4 +370,114 @@ describe("LibraryTitleDetail save to library", () => {
     const save = [...host.querySelectorAll<HTMLButtonElement>(".library-detail-actions button")].find((button) => button.textContent?.includes("To library"))!;
     expect(save.disabled).toBe(true);
   });
+});
+
+describe("LibraryTitleDetail supplementary addon sources", () => {
+  const panel = <p className="addon-panel-marker">panel</p>;
+
+  it("offers the arrow beside a single native version and keeps it the default", () => {
+    const native = remote("n1", "1080p", 2_000_000_000);
+    const { onPlay } = render({ sources: [native], defaultSources: [native], sourcePickerExtra: panel });
+    expect(host.querySelector(".split-button-toggle")).not.toBeNull();
+    click(playButton());
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "n1" }));
+    click(host.querySelector(".split-button-toggle"));
+    expect(pickerRows()).toHaveLength(1);
+    expect(chosenRow()!.textContent).toContain("1080p");
+    expect(document.querySelector(".library-source-card")!.textContent).toContain("panel");
+  });
+
+  it("offers the arrow with no native version at all, but nothing to play", () => {
+    render({ sources: [], defaultSources: [], sourcePickerExtra: panel });
+    expect(host.querySelector(".split-button-toggle")).not.toBeNull();
+    expect(playButton().disabled).toBe(true);
+    click(host.querySelector(".split-button-toggle"));
+    expect(pickerRows()).toHaveLength(0);
+    expect(document.querySelector(".library-source-card")!.textContent).toContain("panel");
+  });
+
+  it("keeps the largest native version as the default when a larger addon row arrives", () => {
+    const native = remote("n1", "1080p", 2_000_000_000);
+    const big = addon("a1", "4K", 8_000_000_000);
+    const { onPlay } = render({ sources: [native, big], defaultSources: [native], sourcePickerExtra: panel });
+    click(playButton());
+    expect(onPlay.mock.calls.at(-1)![0]).toEqual(expect.objectContaining({ sourceId: "n1" }));
+    click(host.querySelector(".split-button-toggle"));
+    expect(chosenRow()!.textContent).toContain("1080p");
+  });
+
+  it("keeps an explicit addon choice across a refresh of the same title", () => {
+    const native = remote("n1", "1080p", 2_000_000_000);
+    render({ sources: [native, addon("a1", "4K", 8_000_000_000)], defaultSources: [native], sourcePickerExtra: panel });
+    click(host.querySelector(".split-button-toggle"));
+    click(pickerRows().find((row) => row.textContent?.includes("Torrentio"))!);
+    const onPlay = rerender({ sources: [remote("n1", "1080p", 2_000_000_000), addon("a1", "4K", 8_000_000_000)], defaultSources: [remote("n1", "1080p", 2_000_000_000)], sourcePickerExtra: panel });
+    click(playButton());
+    expect(onPlay.mock.calls.at(-1)![0]).toEqual(expect.objectContaining({ sourceId: "a1" }));
+    click(host.querySelector(".split-button-toggle"));
+    expect(chosenRow()!.textContent).toContain("4K");
+  });
+
+  it("falls back to the native default when the chosen addon row disappears", () => {
+    const native = remote("n1", "1080p", 2_000_000_000);
+    render({ sources: [native, addon("a1", "4K", 8_000_000_000)], defaultSources: [native], sourcePickerExtra: panel });
+    click(host.querySelector(".split-button-toggle"));
+    click(pickerRows().find((row) => row.textContent?.includes("Torrentio"))!);
+    const onPlay = rerender({ sources: [remote("n1", "1080p", 2_000_000_000)], defaultSources: [remote("n1", "1080p", 2_000_000_000)], sourcePickerExtra: panel });
+    click(playButton());
+    expect(onPlay.mock.calls.at(-1)![0]).toEqual(expect.objectContaining({ sourceId: "n1" }));
+  });
+
+  it("badges a native row with its provider and an addon row with its addon name", () => {
+    const native = remote("n1", "1080p", 2_000_000_000);
+    render({ sources: [native, addon("a1", "4K", 8_000_000_000)], defaultSources: [native], sourcePickerExtra: panel, sourceBadge: () => "Jellyfin" });
+    click(host.querySelector(".split-button-toggle"));
+    expect(pickerRows().map((row) => row.querySelector(".library-badge")!.textContent)).toEqual(["Jellyfin", "Torrentio"]);
+    expect(pickerRows()[1]!.textContent).toContain("8.0 GB");
+  });
+
+  it("never silently defaults to an addon when the native default is explicitly null", () => {
+    const only = addon("a1", "4K", 8_000_000_000);
+    const { onPlay } = render({ sources: [only], defaultSources: null, sourcePickerExtra: panel });
+    expect(host.querySelector(".split-button-toggle")).not.toBeNull();
+    expect(playButton().disabled).toBe(true);
+    click(host.querySelector(".split-button-toggle"));
+    expect(chosenRow()).toBeUndefined();
+    // The viewer can still pick the supplementary row themselves.
+    click(pickerRows()[0]!);
+    click(playButton());
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "a1" }));
+  });
+
+  it("keeps native rows first and ranks supplementary rows by the size their text reported", () => {
+    const native = remote("n1", "1080p", 1_000_000_000);
+    const hinted = addon("a1", "2 GB hint", 2_000_000_000);
+    const text = { ...addon("a2", "20 GB text"), title: "💾 20 GB" };
+    const { onPlay } = render({ sources: [hinted, text, native], defaultSources: [native], sourcePickerExtra: panel });
+    click(playButton());
+    expect(onPlay.mock.calls.at(-1)![0]).toEqual(expect.objectContaining({ sourceId: "n1" }));
+    click(host.querySelector(".split-button-toggle"));
+    expect(pickerRows()[0]!.textContent).toContain("1080p");
+    expect(pickerRows()[1]!.textContent).toContain("20 GB text");
+    expect(pickerRows()[2]!.textContent).toContain("2 GB hint");
+  });
+});
+
+function PendingProviderControl() {
+  const [pending, setPending] = useState(false);
+  return pending ? <span role="status">Loading</span> : <button onClick={() => setPending(true)}>Load provider</button>;
+}
+
+it("keeps keyboard focus inside the picker after a provider load removes its button", () => {
+  const rects = vi.spyOn(HTMLElement.prototype, "getClientRects").mockReturnValue([new DOMRect(0, 0, 100, 40)] as unknown as DOMRectList);
+  try {
+    render({ sourcePickerExtra: <PendingProviderControl/> });
+    click(host.querySelector(".split-button-toggle"));
+    const button = [...document.querySelectorAll<HTMLButtonElement>(".library-source-card button")].find(node => node.textContent === "Load provider")!;
+    button.focus();
+    click(button);
+    expect(document.activeElement).toBe(document.body);
+    act(() => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true })); });
+    expect(document.querySelector('[role="dialog"]')?.contains(document.activeElement)).toBe(true);
+  } finally { rects.mockRestore(); }
 });

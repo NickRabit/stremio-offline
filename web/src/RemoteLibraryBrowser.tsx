@@ -1,14 +1,19 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowDown, ArrowUp, Check, ChevronLeft, ChevronRight, CirclePlay, Film, FolderOpen, HardDrive, Images, LayoutGrid, List, Play, RectangleHorizontal, RectangleVertical, Search, SlidersHorizontal, Star } from "lucide-react";
-import { ApiError, api, describeError } from "./api";
+import { ApiError, api, describeError, saveToDevice } from "./api";
 import { relativeAge } from "./home-cards";
 import { localeTag, t, useI18n } from "./i18n";
 import { LibraryItem, LibraryItemMenu } from "./library-item";
 import { LibraryTile } from "./library-tile";
 import { LibraryTitleDetail } from "./LibraryTitleDetail";
+import { NativeAddonSources } from "./NativeAddonSources";
 import { NativeLibrarySaveDialog, type NativeSaveLibrary } from "./NativeLibrarySaveDialog";
 import { sourceIdentity } from "./library-detail-sources";
 import { Player } from "./Player";
+import { SaveTargetDialog } from "./SaveTargetDialog";
+import { addonMediaSubject, genericProgressKey, supplementaryIdentity } from "./native-addon-sources";
+import { canQueue, isRemoteStream } from "./streams";
+import { useNativeAddonSources } from "./use-native-addon-sources";
 import { DetailHero, LIBRARY_HERO_EMPTY_GRADIENT, LIBRARY_HERO_GRADIENT, useBackdrop } from "./DetailHero";
 import { remoteDetailArtwork } from "./remote-artwork";
 import { RemoteFolderArt, RemoteLibraryArt, RemoteTileArt } from "./remote-mosaic";
@@ -18,7 +23,8 @@ import { catalogueGalleryImages, mergeGallery, posterAndWide, type GalleryImage 
 import { createCompactOnScroll } from "./scroll-fold";
 import { bytes, hideBroken } from "./settings-ui";
 import { catalogueRef, useTitleEnrichment, type CatalogueRef } from "./title-enrichment";
-import type { LibraryType, LibraryView, LibraryViewPrefs, MediaServerProvider, RemoteBrowseMode, RemoteItem, RemoteItemState, RemoteItemType, RemoteLibrary, Stream, TileShape, Trailer, UserViews } from "./types";
+import type { SaveTarget } from "./save-target";
+import type { Addon, LibraryType, LibraryView, LibraryViewPrefs, MediaServerProvider, RemoteBrowseMode, RemoteItem, RemoteItemState, RemoteItemType, RemoteLibrary, Stream, Subtitle, TileShape, Trailer, UserViews } from "./types";
 
 interface Props {
   onRootPresenceChange?: (visible: boolean) => void;
@@ -55,10 +61,41 @@ interface Props {
   downloadLibraries: LibraryView[];
   /** A copy was queued here: the app refreshes its downloads and shows the toast. */
   onDownloadQueued?: () => void;
+  /** A short message the app shows, such as a device save that started through the server. */
+  onNotify?: (text: string) => void;
+  /** The signed-in account: supplementary source state never spans accounts. */
+  accountScope?: string;
+  /** This account's addons, so a loaded row names its provider and takes its download rule. */
+  addons?: Addon[];
+  /** Whether a debrid token is configured, so a torrent row may be queued. */
+  realDebridConfigured?: boolean;
 }
 
 type Status = { items: RemoteItem[]; cursor?: string; total: number; loading: boolean; error: string };
-type Playing = { stream: Stream; libraryId: string; item: RemoteItem; title: string; favorite: boolean; fromBeginning?: boolean };
+/** The captured identity of an addon row: everything its progress, subtitles and saves need,
+ *  so nothing it does can be routed through the native item it was opened beside. */
+type AddonPlayback = {
+  identity: CatalogueRef;
+  progressKey: string;
+  /** The title/library/account scope this playback belongs to, so a late answer cannot land
+   *  on another title that happens to reuse the same source id. */
+  scope: string;
+  media: Record<string, unknown>;
+  subtitles: Subtitle[];
+  poster?: string;
+};
+type Playing = { stream: Stream; libraryId: string; item: RemoteItem; title: string; favorite: boolean; fromBeginning?: boolean; addon?: AddonPlayback };
+/** The addon save the viewer opened: the exact stream, subject and labels captured at the click,
+ *  so no later state change can alter what is submitted. `title` labels the episode, while
+ *  `previewTitle` is the media subject's own title the storage preview resolves. */
+type AddonSaveRequest = {
+  stream: Stream;
+  media: Record<string, unknown>;
+  title: string;
+  previewTitle: string;
+  kind: "movie" | "series";
+  season?: number;
+};
 /** The open native-copy dialog: the library and item captured at the click, the versions the
  *  detail already holds (or nothing, so the dialog reads them once) and an exact artwork hint. */
 type SaveRequest = {
@@ -166,7 +203,7 @@ const groupEpisodes = (items: RemoteItem[]) => {
   return [...groups.entries()].map(([season, group]) => ({ season, items: group }));
 };
 
-export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLanguage, subtitleLanguage, onError, libraryTileShape, onToggleLibraryShape, views, onPersistPrefs, onOpenChange, compact, onCompactChange, initialTarget, onPersonalChange, uiLanguage, secureMode, onTrailer, onGallery, resetSignal, downloadLibraries, onDownloadQueued }: Props) {
+export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLanguage, subtitleLanguage, onError, libraryTileShape, onToggleLibraryShape, views, onPersistPrefs, onOpenChange, compact, onCompactChange, initialTarget, onPersonalChange, uiLanguage, secureMode, onTrailer, onGallery, resetSignal, downloadLibraries, onDownloadQueued, onNotify, accountScope = "", addons = [], realDebridConfigured = false }: Props) {
   useI18n();
   // The listing effect must not restart when the shape changes. It still warms only the
   // picture that shape draws, so the other role is fetched when a tile actually asks for it.
@@ -209,6 +246,11 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   /** The open native-copy dialog: the exact item, its parent series and the versions the
    *  detail already holds, or nothing so the dialog reads them once after the click. */
   const [saveRequest, setSaveRequest] = useState<SaveRequest | null>(null);
+  /** The open addon-save dialog: the exact stream and media subject captured at the click, so no
+   *  later state change can alter what is submitted. */
+  const [addonSave, setAddonSave] = useState<AddonSaveRequest | null>(null);
+  /** The saved position of the selected addon row; a native selection reads the remote state. */
+  const [addonProgress, setAddonProgress] = useState<{ sourceKey: string; position: number; duration: number } | null>(null);
 
   const listEpoch = useRef(0);
   const episodeEpoch = useRef(0);
@@ -242,6 +284,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   const selectedRef = useRef<RemoteLibrary | null>(null);
   const detailRef = useRef<RemoteItem | null>(null);
   const playingRef = useRef<Playing | null>(null);
+  const detailStreamRef = useRef<Stream | null>(null);
   /** The latest listing/episode page, read by the observer and the scroll fallback, which are set
    *  up once and never capture a stale render. */
   const listingRef = useRef(listing);
@@ -255,6 +298,8 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   const autoLoadRef = useRef<() => void>(() => {});
   const menuEpoch = useRef(0);
   const menuAbort = useRef<AbortController | null>(null);
+  const addonProgressEpoch = useRef(0);
+  const addonSubtitleAbort = useRef<AbortController | null>(null);
   /** Set when a detail was opened from a listing, whose page carries no overview or genres, so its
    *  full record is read once; the direct Home card path already reads it and clears this. */
   const needsDetailMeta = useRef(false);
@@ -262,6 +307,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   selectedRef.current = selected;
   detailRef.current = detail;
   playingRef.current = playing;
+  detailStreamRef.current = detailStream;
   listingRef.current = listing;
   episodesRef.current = episodes;
 
@@ -974,8 +1020,44 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   // Only the version the selector actually holds may show its position; the saved state was
   // read once for the item, so no version needs a call of its own.
   const detailStreamKey = detailStream ? sourceIdentity(detailStream) : null;
-  const detailProgress = state && detailStreamKey && state.mediaSourceId === detailStreamKey
-    ? { position: state.position, duration: state.duration, sourceKey: detailStreamKey } : undefined;
+  const addonSelected = Boolean(detailStream && !isRemoteStream(detailStream));
+  const detailProgress = addonSelected
+    ? (addonProgress && detailStreamKey && addonProgress.sourceKey === detailStreamKey
+      ? { position: addonProgress.position, duration: addonProgress.duration, sourceKey: detailStreamKey } : undefined)
+    : (state && detailStreamKey && state.mediaSourceId === detailStreamKey
+      ? { position: state.position, duration: state.duration, sourceKey: detailStreamKey } : undefined);
+  // The supplementary identity of the title on screen and the panel that reads it on demand.
+  // Nothing here is asked until the viewer presses the action in the picker.
+  const addonIdentity = supplementaryIdentity(detail, series);
+  const addonKey = addonIdentity ? `${addonIdentity.type}:${addonIdentity.id}` : "";
+  // Everything one title's supplementary work is bound to: the account, the library, the item and
+  // the exact catalogue key. A late answer from another scope is refused by comparing this string.
+  const titleScope = `${accountScope}\u0000${selected?.id ?? ""}\u0000${detail?.id ?? ""}\u0000${addonKey}`;
+  const titleScopeRef = useRef(titleScope);
+  titleScopeRef.current = titleScope;
+  const addonSources = useNativeAddonSources({ scope: titleScope, identity: addonIdentity });
+  // A loaded addon row is one more selectable version beside the native ones; the native rows
+  // stay the default and keep their own order and badges. When the native read failed or is still
+  // out, the loaded addons are shown on their own, with the native error drawn separately.
+  const mergedSources = sources !== null ? [...sources, ...addonSources.streams]
+    : addonSources.streams.length ? addonSources.streams : null;
+  // The selected addon row's own saved position, read through the generic progress API. A native
+  // selection reads the remote state instead, and a late answer can never land on another row or
+  // another title, even one that happens to reuse the same source id.
+  useEffect(() => {
+    if (!addonSelected || !detailStream || !addonIdentity) { setAddonProgress(null); return; }
+    const mine = ++addonProgressEpoch.current;
+    const scope = titleScope;
+    const controller = new AbortController();
+    void api.progressOf(genericProgressKey(addonIdentity), controller.signal)
+      .then((entry) => {
+        if (mine !== addonProgressEpoch.current || titleScopeRef.current !== scope || controller.signal.aborted) return;
+        setAddonProgress(entry && entry.position > 0
+          ? { sourceKey: sourceIdentity(detailStream), position: entry.position, duration: entry.duration } : null);
+      })
+      .catch(() => undefined);
+    return () => { controller.abort(); if (addonProgressEpoch.current === mine) addonProgressEpoch.current += 1; };
+  }, [addonSelected, detailStream, addonKey, detailNonce, titleScope]);
 
   if (!librariesError && !targetError && (libraries === null || !libraries.length)) return null;
 
@@ -1004,6 +1086,111 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   };
   const detailCrumb = (item: RemoteItem) =>
     item.type === "episode" ? `${t("mediaServer.episodeLabel", { season: item.season ?? 0, episode: item.episode ?? 0 })} · ${item.name}` : item.name;
+
+  /** The title line a detail's playback and saves are labelled with. */
+  const detailTitle = (item: RemoteItem) =>
+    item.type === "episode" ? `${series ? `${series.name} · ` : ""}${episodeTitle(item)}` : item.name;
+  /** Catalogue artwork only: a provider proxy path never travels into an addon save. */
+  const addonArtwork = () => ({
+    ...(enrichment.meta?.poster ? { poster: enrichment.meta.poster } : {}),
+    ...(enrichment.meta?.background ? { background: enrichment.meta.background } : {}),
+  });
+
+  /** Reads the subtitles of an explicitly started generic playback; an empty or failing answer
+   *  never blocks the film, and a late one belongs to a playback that is gone. */
+  const loadAddonSubtitles = (ref: CatalogueRef, stream: Stream) => {
+    addonSubtitleAbort.current?.abort();
+    const controller = new AbortController();
+    addonSubtitleAbort.current = controller;
+    const key = genericProgressKey(ref);
+    void api.subtitles(ref.type, ref.id, controller.signal)
+      .then((found) => {
+        if (controller.signal.aborted) return;
+        // The playback it answers for must be the one still on screen: another title reusing the
+        // same source id has a different catalogue key and never receives these subtitles.
+        setPlaying((value) => value && value.stream.sourceId === stream.sourceId && value.addon?.progressKey === key
+          ? { ...value, addon: { ...value.addon, subtitles: found } } : value);
+      })
+      .catch(() => undefined);
+  };
+
+  /** Play from the detail: a native version keeps the provider's own path, an addon row starts a
+   *  generic playback that reports under the catalogue key and never patches native progress. */
+  const playDetailStream = (stream: Stream, fromBeginning?: boolean) => {
+    if (!detail || !selected) return;
+    if (isRemoteStream(stream)) {
+      setPlaying({ stream, libraryId: selected.id, item: detail, title: detailTitle(detail), favorite: state?.favorite ?? false, fromBeginning });
+      return;
+    }
+    const ref = addonIdentity;
+    if (!ref) return;
+    const poster = enrichment.meta?.poster;
+    setPlaying({
+      stream, libraryId: selected.id, item: detail, title: detailTitle(detail), favorite: false, fromBeginning,
+      addon: {
+        identity: ref, progressKey: genericProgressKey(ref), scope: titleScope, media: addonMediaSubject(detail, series, addonArtwork()),
+        subtitles: [], ...(poster ? { poster } : {}),
+      },
+    });
+    loadAddonSubtitles(ref, stream);
+  };
+
+  /** The exact subject and labels one addon row is saved under: the media identity keeps the
+   *  parent series' catalogue id with no episode suffix, while the label stays episode-specific
+   *  and the storage preview resolves the media subject's own title. */
+  const addonSaveState = (stream: Stream, item: RemoteItem, title: string, media: Record<string, unknown>): AddonSaveRequest => ({
+    stream, media, title,
+    previewTitle: typeof media.title === "string" ? media.title : title,
+    kind: item.type === "movie" ? "movie" : "series",
+    ...(item.type === "episode" && item.season != null ? { season: item.season } : {}),
+  });
+
+  /** Opens the destination dialog for the exact addon row that was clicked; a row the existing
+   *  capability checks would refuse is never offered a queue. */
+  const openAddonSave = (request: AddonSaveRequest) => {
+    if (!canQueue(request.stream, realDebridConfigured)) return;
+    setAddonSave(request);
+  };
+  const submitAddonSave = async (request: AddonSaveRequest, target?: SaveTarget) => {
+    await api.download(request.title, request.stream, request.media, target);
+    onDownloadQueued?.();
+    return true;
+  };
+  const saveAddonToDevice = async (request: { stream: Stream; media: Record<string, unknown>; title: string }) => {
+    try {
+      const filename = await saveToDevice({ title: request.title, stream: request.stream, media: request.media });
+      onNotify?.(t("save.startedViaServer", { filename }));
+      return true;
+    } catch (error) { onError(error); return false; }
+  };
+
+  /** Clears the selected addon row's saved position through the generic API; the native item's
+   *  own state is never patched for a generic stream, and a scope that moved on keeps its state. */
+  const clearAddonProgress = async (stream: Stream): Promise<boolean> => {
+    const ref = addonIdentity;
+    if (!ref) return false;
+    const scope = titleScope;
+    try {
+      await api.forgetProgress(genericProgressKey(ref));
+      if (titleScopeRef.current !== scope) return false;
+      setAddonProgress((current) => current && current.sourceKey === sourceIdentity(stream) ? null : current);
+      return true;
+    } catch (error) { onError(error); return false; }
+  };
+  /** After generic playback the panel shows what was really written, for the row still on screen. */
+  const refreshAddonProgress = async (current: Playing) => {
+    const addon = current.addon;
+    if (!addon) return;
+    try {
+      const entry = await api.progressOf(addon.progressKey);
+      if (titleScopeRef.current !== addon.scope) return;
+      const shown = detailStreamRef.current;
+      if (!shown || sourceIdentity(shown) !== sourceIdentity(current.stream)) return;
+      setAddonProgress(entry && entry.position > 0
+        ? { sourceKey: sourceIdentity(current.stream), position: entry.position, duration: entry.duration } : null);
+      onPersonalChange?.();
+    } catch { /* the panel keeps the position it had */ }
+  };
 
   const renderTile = (item: RemoteItem, onOpen: (item: RemoteItem) => void, preview: PreviewInput): ReactNode => {
     const key = `${preview.parentId ?? "root"}:${item.id}`;
@@ -1185,21 +1372,24 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
             watched={state?.watched ?? false}
             watchedDisabled={!state}
             onToggleWatched={() => void toggleState({ watched: !(state?.watched ?? false) })}
-            sources={sources}
+            sources={mergedSources}
+            defaultSources={sources}
+            {...(addonIdentity ? { sourcePickerExtra: <NativeAddonSources key={addonKey} state={addonSources}/> } : {})}
             {...(sourceError ? { sourceError } : {})}
             onRetry={retryDetail}
             {...(detailProgress ? { progress: detailProgress } : {})}
             onSourceChange={setDetailStream}
-            onClearProgress={() => toggleState({ position: 0, duration: 0 })}
-            onPlay={(stream, fromBeginning) => setPlaying({ stream, libraryId: selected!.id, item: detail, title: detail.type === "episode" ? `${series ? `${series.name} · ` : ""}${episodeTitle(detail)}` : detail.name, favorite: state?.favorite ?? false, fromBeginning })}
-            onSaveToLibrary={(stream) => setSaveRequest({
-              library: saveLibrary(selected!),
-              item: detail, series, knownSources: sources, initialSource: stream,
-              artwork: {
-                ...(enrichment.meta?.poster ? { poster: enrichment.meta.poster } : {}),
-                ...(enrichment.meta?.background ? { background: enrichment.meta.background } : {}),
-              },
-            })}
+            onClearProgress={(stream) => isRemoteStream(stream)
+              ? toggleState({ position: 0, duration: 0 })
+              : clearAddonProgress(stream)}
+            onPlay={playDetailStream}
+            onSaveToLibrary={(stream) => {
+              if (isRemoteStream(stream)) {
+                setSaveRequest({ library: saveLibrary(selected!), item: detail, series, knownSources: sources, initialSource: stream, artwork: addonArtwork() });
+                return;
+              }
+              openAddonSave(addonSaveState(stream, detail, detailTitle(detail), addonMediaSubject(detail, series, addonArtwork())));
+            }}
             sourceBadge={() => t(providerKey(selected!.provider))}
           />
           {stateError && <div className="remote-error" role="alert">
@@ -1209,25 +1399,47 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
         </div>}
       </div>
     </div>}
-    {playing && <Player
-      open
-      title={playing.title}
-      stream={playing.stream}
-      subtitles={[]}
-      subtitleLanguage={subtitleLanguage}
-      audioLanguage={audioLanguage}
-      previousTitle={playPrevious ? episodeTitle(playPrevious) : undefined}
-      onPrevious={playPrevious ? () => changeEpisode(playPrevious) : undefined}
-      nextTitle={playNext ? episodeTitle(playNext) : undefined}
-      onNext={playNext ? () => changeEpisode(playNext) : undefined}
-      autoNext={false}
-      nextBusy={nextBusy}
-      favorite={playing.favorite}
-      fromBeginning={playing.fromBeginning}
-      onToggleFavorite={() => void togglePlayingFavorite()}
-      onDownload={async () => false}
-      onDeviceDownload={async () => false}
-      onClose={() => { cancelHandoff(); setPlaying(null); void refreshState(); }}/>}
+    {playing && (() => {
+      // An addon row plays generically: it carries no native favorite, no next/previous hand-off
+      // and its own progress key. A native version keeps every one of them.
+      const addon = playing.addon;
+      return <Player
+        open
+        title={playing.title}
+        stream={playing.stream}
+        subtitles={addon?.subtitles ?? []}
+        subtitleLanguage={subtitleLanguage}
+        audioLanguage={audioLanguage}
+        previousTitle={addon ? undefined : playPrevious ? episodeTitle(playPrevious) : undefined}
+        onPrevious={addon ? undefined : playPrevious ? () => changeEpisode(playPrevious) : undefined}
+        nextTitle={addon ? undefined : playNext ? episodeTitle(playNext) : undefined}
+        onNext={addon ? undefined : playNext ? () => changeEpisode(playNext) : undefined}
+        autoNext={false}
+        nextBusy={nextBusy}
+        favorite={addon ? undefined : playing.favorite}
+        fromBeginning={playing.fromBeginning}
+        onToggleFavorite={addon ? undefined : () => void togglePlayingFavorite()}
+        progressKey={addon?.progressKey}
+        progressPoster={addon ? (addon.poster ?? playing.item.poster) : undefined}
+        onDownload={addon ? async () => {
+          openAddonSave(addonSaveState(playing.stream, playing.item, playing.title, addon.media));
+          return false;
+        } : async () => false}
+        onDeviceDownload={addon
+          ? () => saveAddonToDevice({ stream: playing.stream, media: addon.media, title: playing.title })
+          : async () => false}
+        onProgressSaved={addon ? (key) => {
+          if (key === addon.progressKey && !playingRef.current) void refreshAddonProgress(playing);
+        } : undefined}
+        onClose={() => { cancelHandoff(); addonSubtitleAbort.current?.abort(); setPlaying(null); if (!addon) void refreshState(); }}/>;
+    })()}
+    {addonSave && <SaveTargetDialog
+      label={addonSave.title} kind={addonSave.kind} title={addonSave.previewTitle}
+      {...(addonSave.season != null ? { season: addonSave.season } : {})}
+      libraries={downloadLibraries}
+      rule={addons.find((addon) => addon.key === addonSave.stream.addonKey)?.downloadSettings}
+      onClose={() => setAddonSave(null)}
+      onSubmit={(target) => submitAddonSave(addonSave, target)}/>}
     {saveRequest && <NativeLibrarySaveDialog
       key={`${saveRequest.item.id}:${saveRequest.knownSources ? "known" : "lazy"}`}
       library={saveRequest.library}

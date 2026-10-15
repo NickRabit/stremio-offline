@@ -631,6 +631,9 @@ export const cs: Catalog = {
   "sources.localBadge": "Lokální",
   "sources.localHint": "Už je ve vaší knihovně — přehrává se z disku serveru",
   "sources.localFilter": "Lokální soubory",
+  "sources.loadAddons": "Zdroje z doplňků",
+  "sources.loadProvider": "Načíst zdroje",
+  "sources.noAddonProviders": "Žádný doplněk nenabízí zdroje pro tento titul.",
 
   // První spuštění bez doplňků.
   "onboarding.title": "Přidejte první Stremio doplněk",

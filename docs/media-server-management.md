@@ -456,8 +456,16 @@ The largest playable version with a reported file size is the default. Unknown
 sizes retain the provider's order, and a user's explicit choice survives a
 refresh of the same title. The arrow beside Play opens a keyboard-accessible
 picker, focuses the current choice and returns focus on close. It accepts the
-same public stream shape as catalogue sources, without fetching add-on sources
-for library details in this stage.
+same public stream shape as catalogue sources.
+
+Supplementary add-on sources are read only on demand. The picker keeps a
+collapsed "Sources from addons" action below the native versions; discovery runs
+once when the viewer presses it, and one named provider is read only when the
+viewer asks for that provider, so browsing, opening a detail and playing a
+native version send no add-on stream, discovery or subtitle request at all. A
+loaded provider's rows are cached for the open title only and dropped once the
+title, library or account changes; the native versions stay the default and stay
+visible, and a larger add-on row never replaces them by itself.
 
 Local discovery reads the clicked file and its identity once, then lists exact
 copies of the bound movie or episode. A failed identity lookup does not hide a

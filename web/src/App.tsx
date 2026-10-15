@@ -2563,7 +2563,9 @@ export function App() {
           {...(remoteTarget ? { initialTarget: remoteTarget } : {})} onPersonalChange={refreshPersonal}
           uiLanguage={settings.uiLanguage} secureMode={settings.secureMode} onTrailer={setTrailerOpen}
           onGallery={presentGallery} resetSignal={libraryReset}
-          downloadLibraries={libraries} onDownloadQueued={() => { notify(t("downloads.queued")); void loadDownloads(); }}/>
+          downloadLibraries={libraries} onDownloadQueued={() => { notify(t("downloads.queued")); void loadDownloads(); }}
+          onNotify={notify}
+          accountScope={session!.username} addons={addons} realDebridConfigured={settings.realDebridConfigured}/>
         {!remoteOpen && <div className="panel browse-panel">
         <div className="browse-head">
         <div className="browse-bar">

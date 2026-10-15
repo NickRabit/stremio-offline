@@ -636,6 +636,9 @@ export const en = {
   "sources.localBadge": "Local",
   "sources.localHint": "Already in your library — plays from the server's disk",
   "sources.localFilter": "Local files",
+  "sources.loadAddons": "Sources from addons",
+  "sources.loadProvider": "Load sources",
+  "sources.noAddonProviders": "No addons offer sources for this title.",
 
   // First run with no addons.
   "onboarding.title": "Add your first Stremio addon",
