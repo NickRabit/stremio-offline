@@ -64,10 +64,12 @@ export interface ContentDeps extends RouteContext {
   mosaics?: MosaicCache;
   /** The version a generated picture is at, so a fan's address changes with its pictures. */
   artStamp(file: string): Promise<string>;
+  /** Whether a picture this key draws is being written right now, queued or running. */
+  artworkBusy(key: string): boolean;
 }
 
 export function registerContentRoutes(app: express.Application, deps: ContentDeps): void {
-  const { artStamp, store, currentUser, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, metaStore, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites } = deps;
+  const { artStamp, artworkBusy, store, currentUser, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, metaStore, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites } = deps;
   const fileSnaps = deps.fileSnaps ?? new FileSnapCache();
   const mosaics = deps.mosaics ?? new MosaicCache(path.join(os.tmpdir(), `mosaics-${randomBytes(6).toString("hex")}`));
 
@@ -81,8 +83,8 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
   /** One folder's fan: the pictures it draws, the files behind them and the versions those files
    *  are at. The listing hands out the addresses, the mosaic route composes the same set into one
    *  picture, and both name it by the same stamp so a changed fan is a changed address. */
-  const folderFan = async (folderKey: string, library: LibraryRecord, units: TitleUnit[]): Promise<{ posters: string[]; files: string[]; stamp: string }> => {
-    const empty = { posters: [], files: [], stamp: "" };
+  const folderFan = async (folderKey: string, library: LibraryRecord, units: TitleUnit[]): Promise<{ posters: string[]; files: string[]; stamp: string; moving: boolean }> => {
+    const empty = { posters: [], files: [], stamp: "", moving: false };
     if (library.mosaic === false) return empty;
     const distinct = folderMosaicUnits(units, folderKey, metaStore.qualifiedMeta(), metaStore.qualifiedSuggestions(), 5);
     if (distinct.length < 2) return empty;
@@ -98,7 +100,9 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     // The stamp is the version of every file that went into the fan, drawn the way the listing
     // draws it: the same pictures are the same stamp, and one new film is a new one.
     const versions = await Promise.all(kept.map((entry) => artStamp(entry.art)));
-    return { posters, files: kept.map((entry) => entry.art), stamp: MosaicCache.stamp(versions) };
+    // A cell the server is rewriting is a reason to ask again too: the fan's own address is
+    // minted from those files.
+    return { posters, files: kept.map((entry) => entry.art), stamp: MosaicCache.stamp(versions), moving: distinct.some((unit) => artworkBusy(unit.key)) };
   };
 
   /** The relative paths a pending suggestion covers: its own row, plus every folder above
@@ -172,6 +176,9 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     const items = await Promise.all(result.items.map(async (item) => {
       const key = inLibrary(item.path);
       const path = wirePath(key);
+      // A job already writing this row's picture leaves the address minted from the file it is
+      // about to replace, so the row says "ask again" for as long as the write is in flight.
+      const moving = artworkBusy(key);
       if (item.kind === "folder") {
         const { item: withMeta, backfill } = await attachBrowseMeta({ ...item, path }, prefsOf(req).uiLanguage, { prewarm });
         // A collection stands for several films: it shows their posters rather than a folder
@@ -179,7 +186,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
         const fan = await folderFan(key, library, units);
         if (fan.posters.length > 1) {
           const mosaic = `/api/library/mosaic?key=${encodeURIComponent(key)}&v=${encodeURIComponent(fan.stamp)}`;
-          return { ...withMeta, path, posters: fan.posters, mosaic, poster: undefined, wide: undefined, backfill };
+          return { ...withMeta, path, posters: fan.posters, mosaic, poster: undefined, wide: undefined, backfill, moving: moving || fan.moving };
         }
         const { poster: art, wide } = await locateFolderArtworkPair(key);
         if (!prewarm) {
@@ -190,7 +197,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
           ...withMeta, path,
           poster: await thumbUrl("dir", path, art),
           wide: await thumbUrl("dir", path, wide, "wide"),
-          backfill,
+          backfill, moving,
         };
       }
       const art = await locateFileArtwork(key);
@@ -207,15 +214,20 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
         poster: await thumbUrl("path", path, art),
         wide: await thumbUrl("path", path, wide, "wide"),
         progress: watched ? { position: watched.position, duration: watched.duration } : undefined,
-        backfill,
+        backfill, moving,
       };
     }));
     const marked = withFavorites(items, data);
     const collage = (item: { kind: string; posters?: string[] }) => item.kind === "folder" && (item.posters?.length ?? 0) > 1;
     res.json({
       ...result, path: wirePath(inLibrary(result.path)),
-      items: marked.map(({ backfill: _backfill, ...item }) => item),
-      pending: marked.some((item) => (collage(item) ? Boolean(item.backfill) : !item.poster || !item.wide || item.backfill)),
+      items: marked.map(({ backfill: _backfill, moving: _moving, ...item }) => item),
+      // A picture still being written is as much a reason to ask again as one that is missing:
+      // the address the row carries names the file that job is about to replace, and the browser
+      // keeps an address of the thumbnail route for a year.
+      pending: marked.some((item) => (collage(item)
+        ? Boolean(item.backfill) || item.moving
+        : !item.poster || !item.wide || item.backfill || item.moving)),
     });
   }));
 
@@ -434,24 +446,19 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     if (!art) return res.status(404).end();
     // The listing address carries the file's mtime, so a replaced picture is a new URL the
     // browser has never seen. This one may therefore be kept for a year, and the bytes may come
-    // straight from memory. A request that does arrive still resolves the path and refuses a
-    // library the viewer cannot see before the cache is touched.
+    // straight from memory -- as long as they are still what this file holds. A request that does
+    // arrive still resolves the path and refuses a library the viewer cannot see before any cache
+    // is touched.
     const cacheControl = "private, max-age=31536000, immutable";
     const surface = imageSurface(req.query.surface, "library");
     const asked = askedSurface(req.query.surface);
     const poster = (from: ImageFrom | undefined, status: number, bytes: number) =>
       logPoster({ kind: "library", surface, asked, from, status, bytes, cache: cacheControl });
+    // A snapshot is only a copy, and the file behind it can be replaced under the same address:
+    // a re-assignment writes the new picture over the old one, a bind clears it, a frame grab
+    // fills a hole. Answering from memory without looking would hand the browser the picture it
+    // has just stopped drawing, under the new address it would then keep for a year.
     const snap = fileSnaps.get(art);
-    if (req.headers["if-none-match"] === undefined && snap) {
-      artworks.touch(art);
-      noteImage(surface, "memory");
-      poster("memory", 200, snap.bytes.length);
-      res.setHeader("cache-control", cacheControl);
-      res.setHeader("etag", snap.etag);
-      res.type(path.extname(art));
-      res.end(snap.bytes);
-      return;
-    }
     const info = await stat(art).catch(() => undefined);
     if (!info?.isFile()) return res.status(404).end();
     const etag = fileEtag(info.size, info.mtime.getTime());

@@ -101,6 +101,9 @@ async function serveVideo(req, res, file = videoFile) {
 let proxyMode = "video";
 // How many times the source was actually asked for the film, which is what the cache is about.
 let mediaRequests = 0;
+// A test can slow the poster down, so the write a tile waits for lands after the listing that
+// named the picture it replaces.
+let posterDelayMs = 0;
 const server = createServer(async (req, res) => {
   const { pathname, searchParams } = new URL(req.url ?? "/", `http://127.0.0.1:${port}`);
   const parts = route(pathname);
@@ -167,7 +170,9 @@ const server = createServer(async (req, res) => {
     return res.end(status === 200 ? req.method : "provider-canary-secret");
   }
   if (pathname === "/manifest.json") return json(res, MANIFEST);
+  if (pathname === "/poster-delay") { posterDelayMs = Math.max(0, Number(searchParams.get("ms")) || 0); res.writeHead(204); return res.end(); }
   if (pathname === "/poster.svg") {
+    if (posterDelayMs) await new Promise((resolve) => setTimeout(resolve, posterDelayMs));
     res.writeHead(200, { "content-type": "image/svg+xml" });
     return res.end(POSTER);
   }

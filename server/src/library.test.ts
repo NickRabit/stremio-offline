@@ -3,7 +3,7 @@ import { chmod, mkdir, mkdtemp, rm, stat, utimes, writeFile } from "node:fs/prom
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { browseDirectory, buildLibrary, clearBrowseCache, describePath, emptiedFolders, hasVideo, holdsLibraryRoot, listFolders, moveDestination, libraryFingerprint, numberedEpisode, isPathWithin, isVideo, listVideos, listVideosChecked, orphanedCatalogKeys, pageFiles, parseEpisode, parseSeason, remapPath, resolveInside, sortFiles, summarize, type BrowseResult } from "./library.js";
+import { browseDirectory, buildLibrary, clearBrowseCache, describePath, emptiedFolders, foldersBetween, hasVideo, holdsLibraryRoot, listFolders, moveDestination, libraryFingerprint, numberedEpisode, isPathWithin, isVideo, listVideos, listVideosChecked, orphanedCatalogKeys, pageFiles, parseEpisode, parseSeason, remapPath, resolveInside, sortFiles, summarize, type BrowseResult } from "./library.js";
 
 const file = (relative: string, size = 100, modified = "2026-01-01T00:00:00.000Z") => ({ relative, size, modified });
 
@@ -194,6 +194,15 @@ test("renaming a path keeps its children and leaves a similar name alone", () =>
   assert.equal(remapPath("Serial 2/01.mkv", "Serial", "Novy serial"), "Serial 2/01.mkv");
   assert.equal(isPathWithin("Serial/01 serie/01.mkv", "Serial"), true);
   assert.equal(isPathWithin("Serial 2/01.mkv", "Serial"), false);
+});
+
+test("the folders between an item and its files are the ones a binding change makes stale", () => {
+  assert.deepEqual(foldersBetween("lib_1/Serial", "lib_1/Serial/01 serie/01.mkv"), ["lib_1/Serial/01 serie"],
+    "a season folder draws a picture of its own between the show and its episodes");
+  assert.deepEqual(foldersBetween("lib_1/Serial", "lib_1/Serial/S01/Disk 1/01.mkv"), ["lib_1/Serial/S01/Disk 1", "lib_1/Serial/S01"],
+    "every folder in between, nearest first");
+  assert.deepEqual(foldersBetween("lib_1/Serial", "lib_1/Serial/01.mkv"), [], "a file directly in the item has none");
+  assert.deepEqual(foldersBetween("lib_1/Serial", "lib_1/Serial 2/01.mkv"), [], "another item's file is not inside this one");
 });
 
 test("a folder is refused when it is another library's root or holds one, at any depth", () => {

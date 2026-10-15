@@ -55,6 +55,8 @@ interface LibraryState {
   units?: import("../library-match.js").TitleUnit[];
   /** A fake catalogue picture per key, so a test can see where a mosaic reads its posters. */
   artwork?: (key: string) => string | undefined;
+  /** Whether a picture for this key is being written right now. */
+  writing?: (key: string) => boolean;
 }
 
 const library = (id: string, root: string, order = 0, visibleTo?: string[]): LibraryRecord => ({
@@ -83,6 +85,7 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], a
   const calls: Calls = { browsed: [], rootBrowses: 0, deleted: [], transfers: [], relocated: [], thumbAsked: [], entriesAsked: 0, entriesStale: [], artworkAsked: [], swept: 0, scheduledFolder: [], scheduledFile: [], rootPrewarm: [], browseMetaPrewarm: [] };
   const deps: ContentDeps = {
     artStamp: async () => "stamp",
+    artworkBusy: (key) => state.writing?.(key) === true,
     store: { libraries: () => libraries, users: () => [admin, ordinary] } as unknown as Store,
     needsSetup: () => false,
     currentSession: () => undefined,
@@ -406,6 +409,55 @@ test("GET /api/library/browse gives a collection folder a mosaic of its distinct
   assert.equal(body.pending, false, "a mosaic is not a missing poster and does not keep the page asking");
 });
 
+test("a row whose picture is being written keeps the page asking until the write lands", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Films/Heat.mkv");
+  let writing = true;
+  const harness = await mount([library("lib_00000001", root)], [], () => [], {
+    artwork: (key) => (key.endsWith("Heat.mkv") ? "heat.jpg" : undefined),
+    writing: (key) => writing && key.endsWith("Heat.mkv"),
+  });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+  const page = async () => {
+    const response = await api(harness.base, "/api/library/browse?path=Films");
+    return await response.json() as { items: Array<Record<string, unknown>>; pending: boolean };
+  };
+
+  const during = await page();
+  assert.equal(during.pending, true, "the address the row drew names the picture the job is about to replace");
+  assert.deepEqual(during.items.map((item) => "moving" in item), [false], "why a page has to ask again is not part of a row");
+
+  writing = false;
+  const after = await page();
+  assert.equal(after.pending, false, "a row that has its picture and nothing being written is asked for once");
+});
+
+test("a fan whose cell is being rewritten keeps the page asking too", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Collection/Heat (1995).mkv");
+  await put(root, "Collection/Ronin (1998).mkv");
+  const heat = "lib_00000001/Collection/Heat (1995).mkv";
+  const ronin = "lib_00000001/Collection/Ronin (1998).mkv";
+  const harness = await mount([library("lib_00000001", root)], [], () => [], {
+    units: [
+      { key: heat, kind: "movie", relative: "Collection/Heat (1995).mkv", sampleFiles: [heat] },
+      { key: ronin, kind: "movie", relative: "Collection/Ronin (1998).mkv", sampleFiles: [ronin] },
+    ],
+    records: {
+      [heat]: { type: "movie", id: "tt-heat", source: "scan" },
+      [ronin]: { type: "movie", id: "tt-ronin", source: "scan" },
+    },
+    artwork: (key) => (key.includes("Heat") ? "heat.jpg" : "ronin.jpg"),
+    writing: (key) => key === ronin,
+  });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const body = await (await api(harness.base, "/api/library/browse")).json() as { items: Array<{ path: string; mosaic?: string }>; pending: boolean };
+  const collection = body.items.find((item) => item.path === "Collection")!;
+  assert.match(collection.mosaic ?? "", /^\/api\/library\/mosaic\?/, "the fan is drawn from the cells it names");
+  assert.equal(body.pending, true, "the fan's address is minted from the files a job is rewriting");
+});
+
 test("a folder mosaic obeys the flags and leaves a series alone", async (t) => {
   const root = await makeRoot();
   await put(root, "Collection/Heat (1995).mkv");
@@ -671,4 +723,24 @@ test("library thumbnails revalidate cached bytes and still enforce library visib
   const changed = await fetch(url, { headers: { "if-none-match": etag, "cache-control": "max-age=0" } });
   assert.equal(changed.status, 200);
   assert.equal(await changed.text(), "updated poster bytes");
+});
+
+test("a fresh thumbnail address never serves the bytes of the picture it replaced", async (t) => {
+  const root = await makeRoot();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const art = path.join(root, "poster.jpg");
+  await writeFile(art, "the old picture");
+  const harness = await mount([library("lib_00000001", root, 0, [ADA])], [], () => [], { artwork: () => art });
+  t.after(() => harness.close());
+  const address = (version: string) => `${harness.base}/api/library/thumb?path=${encodeURIComponent("Films/Heat.mkv")}&v=${version}`;
+
+  const before = await fetch(address("one"));
+  assert.equal(await before.text(), "the old picture");
+  // Re-assigning a title writes a new picture over the same file. The memory copy of the old one
+  // belongs to the address that named it, and never to the address the listing mints next -- the
+  // browser would keep that one for a year.
+  await writeFile(art, "the picture the new binding wrote");
+  const after = await fetch(address("two"));
+  assert.equal(after.status, 200);
+  assert.equal(await after.text(), "the picture the new binding wrote");
 });

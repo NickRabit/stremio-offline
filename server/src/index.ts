@@ -1560,6 +1560,16 @@ const artworkTarget = async (key: string, shape: ArtShape) =>
  *  backdrop is queued while the poster job for the same item is still running. */
 const artworkQueueKey = (key: string, shape: ArtShape) =>
   artVariantKey(isFileKey(key) ? `file:${key}` : `dir:${key}`, shape);
+/** Whether a picture this key draws is being written right now, queued or running. A listing
+ *  that answers while such a job waits mints its address from the file the job is about to
+ *  replace, and the browser keeps an address of the thumbnail route for a year: the row has to
+ *  say that it is still moving, so the interface asks for the page again once it lands. */
+const artworkBusy = (key: string) => {
+  const item = isFileKey(key) ? `file:${key}` : `dir:${key}`;
+  // `ART_VARIANTS` carries the bare item key as its poster; the root listing queues under the
+  // plain key instead, and both are a picture this row draws.
+  return artworkQueue.has(key) || ART_VARIANTS.some((variant) => artworkQueue.has(artVariantKey(item, variant)));
+};
 const mediaArtExists = async (key: string, shape: ArtShape) => {
   // A file's poster is written as its own `<episode>.jpg`; one already there is the user's
   // still and wins exactly like the folder's picture does.
@@ -1603,15 +1613,6 @@ const writeCatalogPoster = async (key: string, url?: string, backdrop?: string) 
 /** The binding on this exact path, ignoring one inherited from a parent folder. */
 const ownRecord = (relative: string, records: Record<string, LibraryMetaRecord>) =>
   (records[relative]?.id ? records[relative] : undefined);
-
-/** Generated thumbnails of a path and everything under it. A changed binding makes
- *  them stale: the poster of the old title, or a frame grabbed while unmatched. */
-const clearGeneratedArt = async (key: string) => {
-  await removeGeneratedArt(key);
-  for (const file of await libraryFiles()) {
-    if (file.relative !== key && isPathWithin(file.relative, key)) await removeGeneratedArt(file.relative);
-  }
-};
 
 const attachBrowseMeta = async <T extends { path: string; kind: string; name?: string; label?: string }>(item: T, language: string, options: { prewarm?: boolean } = {}) => {
   const records = metaStore.qualifiedMeta();
@@ -1898,7 +1899,7 @@ registerFollowRoutes(app, { ...routeContext, follows: followService, followStore
 
 // The file operations on library items live in `library-actions.ts`; these bindings keep the
 // call sites and the route dependency objects unchanged.
-const { deleteLibraryItem, relocateLibraryPath, transferLibraryItem, rerootItem } = createLibraryActions({
+const { clearGeneratedArt, deleteLibraryItem, relocateLibraryPath, transferLibraryItem, rerootItem } = createLibraryActions({
   store,
   metaStore,
   artworks,
@@ -2034,7 +2035,7 @@ const libraryPathBusy = async (keys: string[]): Promise<string | undefined> => {
   return undefined;
 };
 
-registerContentRoutes(app, { ...routeContext, artStamp, mosaics, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, fileSnaps, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, metaStore, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
+registerContentRoutes(app, { ...routeContext, artStamp, artworkBusy, mosaics, attachBrowseMeta, carveOutsOf, dataOf, deleteLibraryItem, fileExists, fileSnaps, galleryArtwork, galleryOf, healthOf, invalidateLibrary, libraryEntries, libraryKey, libraryPathBusy, libraryRootBrowse, libraryUnits, locateArtwork, locateFileArtwork, locateFolderArtwork, locateFolderArtworkPair, markBrowsed, metaStore, prefsOf, progressOf, relativeKeyIn, relocateLibraryPath, scheduleFileArtwork, scheduleFolderArtwork, sweepArtwork, thumbUrl, transferLibraryItem, wirePath, withFavorites });
 /** The one search and resolution service behind both the scan and the manual identity
  *  search, so the row somebody picks by hand is the row the scanner would have picked. */
 const libraryCandidates = createLibraryCandidates({

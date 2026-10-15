@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { createLibraryActions, type LibraryActionDeps, type TransferStep } from "./library-actions.js";
+import type { FoundFile } from "./library.js";
 import type { LibraryRecord } from "./libraries.js";
 
 /** The operations are exercised through the factory with fakes: no server boot, and the only
@@ -16,11 +17,12 @@ const library: LibraryRecord = {
 
 const exists = async (file: string) => { try { await access(file); return true; } catch { return false; } };
 
-const harness = (options: { holds?: (key: string) => boolean; libraries?: () => LibraryRecord[] } = {}) => {
+const harness = (options: { holds?: (key: string) => boolean; libraries?: () => LibraryRecord[]; files?: Array<{ relative: string }> } = {}) => {
   const calls = {
     relocate: [] as Array<{ from: string; to: string; pin: boolean }>,
     moved: [] as string[],
     invalidated: 0,
+    cleared: [] as string[],
   };
   const holds = options.holds ?? (() => false);
   const deps: LibraryActionDeps = {
@@ -37,7 +39,7 @@ const harness = (options: { holds?: (key: string) => boolean; libraries?: () => 
       moveKey: async (from: string) => { calls.moved.push(from); return { carried: true as const }; },
       copyKey: async () => ({ carried: true as const }),
     },
-    libraryFiles: async () => [],
+    libraryFiles: async () => (options.files ?? []) as FoundFile[],
     libraryUnits: async () => [],
     carveOutsOf: () => new Set<string>(),
     healthOf: (entry) => ({ unreachable: false, readOnly: false, realRoot: entry.root, caseInsensitive: false }),
@@ -46,7 +48,7 @@ const harness = (options: { holds?: (key: string) => boolean; libraries?: () => 
     mediaPath: (key) => `/library/${key}`,
     fileExists: exists,
     isFileKey: (key) => key.endsWith(".mkv"),
-    removeGeneratedArt: async () => undefined,
+    removeGeneratedArt: async (key) => { calls.cleared.push(key); },
     ownRecord: () => undefined,
     progressOf: () => ({}),
     watchlistOf: () => ({}),
@@ -67,6 +69,25 @@ test("resumeTransfer finishes a published record from what it says", async () =>
   // A replay only relocates when the source still holds rows or the destination does not.
   assert.deepEqual(calls.relocate, [{ from: step.from, to: step.to, pin: true }]);
   assert.equal(calls.invalidated, 1);
+});
+
+test("a changed binding clears the item's pictures, its files' and the folders between them", async () => {
+  const { actions, calls } = harness({
+    files: [
+      { relative: `${LIBRARY_ID}/Show/01 serie/S01E01.mkv` },
+      { relative: `${LIBRARY_ID}/Show/01 serie/S01E02.mkv` },
+      { relative: `${LIBRARY_ID}/Show/extra.mkv` },
+      { relative: `${LIBRARY_ID}/Show 2/01.mkv` },
+    ],
+  });
+  await actions.clearGeneratedArt(`${LIBRARY_ID}/Show`);
+  assert.deepEqual(calls.cleared, [
+    `${LIBRARY_ID}/Show`,
+    `${LIBRARY_ID}/Show/01 serie/S01E01.mkv`,
+    `${LIBRARY_ID}/Show/01 serie`,
+    `${LIBRARY_ID}/Show/01 serie/S01E02.mkv`,
+    `${LIBRARY_ID}/Show/extra.mkv`,
+  ], "a season folder's own picture goes stale with its episodes, and a similar name is another item");
 });
 
 test("resumeTransfer drops a reserved placeholder and runs the transfer from the start", async () => {

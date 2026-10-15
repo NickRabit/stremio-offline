@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { LibraryItem, LibraryItemMenu } from "./library-item";
-import { setLocale } from "./i18n";
+import { folderTitle, LibraryItem, LibraryItemMenu, rowDescription } from "./library-item";
+import { setLocale, t } from "./i18n";
 
 let root: Root;
 let host: HTMLDivElement;
@@ -26,6 +26,28 @@ const render = async (element: React.ReactElement) => {
 const click = async (element: Element) => { await act(async () => { (element as HTMLElement).click(); }); };
 
 describe("LibraryItem", () => {
+  describe("what a row says", () => {
+    it("calls a bound folder by the title it was assigned to and keeps the folder's own name under it", () => {
+      expect(folderTitle({ name: "Kriminálka Las Vegas", catalogName: "South Park" })).toBe("South Park");
+      expect(folderTitle({ name: "Kriminálka Las Vegas" })).toBe("Kriminálka Las Vegas");
+      expect(rowDescription({ kind: "folder", name: "Kriminálka Las Vegas", catalogName: "South Park", description: "A town of misfits." }))
+        .toBe("Kriminálka Las Vegas · A town of misfits.");
+      expect(rowDescription({ kind: "folder", name: "Kriminálka Las Vegas", description: "A quiet film." }))
+        .toBe("A quiet film.");
+    });
+
+    it("keeps the catalogue name on a file row, whose own name says nothing about the title", () => {
+      expect(rowDescription({ kind: "file", catalogName: "South Park", description: "How to eat with your butt." }))
+        .toBe("South Park · How to eat with your butt.");
+      expect(rowDescription({ kind: "file", catalogName: "South Park" })).toBe("South Park");
+    });
+
+    it("still says what was proposed while nobody has confirmed the row", () => {
+      expect(rowDescription({ kind: "folder", match: "suggested", suggestion: { type: "series", id: "tt1", name: "South Park", score: 91, titleSimilarity: 88 } }))
+        .toBe(t("library.suggestionLine", { name: "South Park", score: 88 }));
+    });
+  });
+
   it("draws the folder row with the local classes and custom attributes", async () => {
     await render(<LibraryItem folder focused selected dataPath="lib_a/films"
       art={<><span className="browse-badge">12</span><i className="fav-mark">star</i></>}
