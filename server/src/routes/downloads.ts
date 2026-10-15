@@ -24,7 +24,7 @@ export interface DownloadsDeps extends RouteContext {
    *  minted, and only for a sealed source this session actually resolved. */
   mediaSources: MediaServerSources;
   deviceTransfers: DeviceTransfers;
-  jobView: <T extends { media?: MediaInfo; target?: string }>(job: T) => T;
+  jobView: <T extends { media?: MediaInfo; target?: string }>(job: T) => Promise<T>;
   sourceOf(req: express.Request): StreamItem;
   /** The session the request speaks for, as a media resource owner. */
   ownerOf(req: express.Request): ResourceOwner;
@@ -182,12 +182,12 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
     return id;
   };
 
-  app.get("/api/downloads", (req, res) => {
+  app.get("/api/downloads", asyncRoute(async (req, res) => {
     const viewer = viewerOf(currentUser(req));
     const snapshot = queue.snapshot();
     const jobs = snapshot.jobs.filter((job) => viewer.role === "admin" || job.ownerUserId === viewer.id);
-    res.json({ ...snapshot, jobs: jobs.map((job) => jobView({ ...job, mine: job.ownerUserId === viewer.id })), deviceTransfers: deviceTransfers.list(viewer) });
-  });
+    res.json({ ...snapshot, jobs: await Promise.all(jobs.map((job) => jobView({ ...job, mine: job.ownerUserId === viewer.id }))), deviceTransfers: deviceTransfers.list(viewer) });
+  }));
   app.post("/api/downloads", asyncRoute(async (req, res) => {
     const owner = currentUser(req);
     assertMayQueue(req);
@@ -242,7 +242,7 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
       const posterKey = titleKey(job.target, media, targetSettings.layout === "flat");
       if (posterKey && posterKey !== ".") saveCatalogPoster(libraryKey(posterKey), media?.poster);
     }
-    res.status(201).json(jobView(job));
+    res.status(201).json(await jobView(job));
   }));
   // Adding episodes in bulk: the jobs are lazy, streams are asked for at download time.
   app.post("/api/downloads/bulk", asyncRoute(async (req, res) => {

@@ -729,11 +729,26 @@ const mediaSource = (value: unknown): MediaInfo | undefined => {
 const mediaView = (media: MediaInfo) => ({ ...media, poster: images.proxied(media.poster), background: images.proxied(media.background) });
 /** A job's target is stored qualified, like every other key; the client gets the wire form,
  *  which stays relative while one library is configured. */
-const jobView = <T extends { media?: MediaInfo; target?: string }>(job: T): T => ({
-  ...job,
-  ...(job.target ? { target: wirePath(job.target) } : {}),
-  ...(job.media ? { media: mediaView(job.media) } : {}),
-});
+const jobView = async <T extends { media?: MediaInfo; target?: string }>(job: T): Promise<T> => {
+  const current = await currentTargetArtwork(job.target);
+  return {
+    ...job,
+    ...(job.target ? { target: wirePath(job.target) } : {}),
+    // A title re-assigned since the download shows the picture the library has for it now; the
+    // one captured then is what a job outside a library, or without a picture of its own, keeps.
+    ...(job.media ? { media: mediaView(current === undefined ? job.media : { ...job.media, poster: current }) } : {}),
+  };
+};
+
+/** The library's own picture for one job target, when that file sits in a library and has one.
+ *  It is the same address the library tile draws, stamp and all, so the browser asks for the new
+ *  picture after a re-assignment instead of keeping the one it cached. */
+const currentTargetArtwork = async (target: string | undefined): Promise<string | undefined> => {
+  if (!target || !parseLibraryPath(target)) return undefined;
+  const file = isVideo(posixBase(target)) ? await locateFileArtwork(target) : await locateFolderArtwork(target);
+  if (!file) return undefined;
+  return thumbUrl(isVideo(posixBase(target)) ? "path" : "dir", wirePath(target), file);
+};
 
 /** An addon logo sits on the provider's server as well, so it takes the same detour. */
 const withProxiedLogo = <T extends { manifest: { logo?: string } }>(view: T): T =>
