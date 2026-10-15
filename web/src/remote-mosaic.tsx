@@ -233,15 +233,15 @@ function LibraryCollage({ posters, instant = false }: { posters: string[]; insta
 }
 
 /** A remote root library's picture: a collage of its films, one film, the library's own poster or
- *  the drive icon. The own poster is not drawn while the child preview is still coming: that
- *  first picture uses a different frame, and replacing it with the fan reshuffles the tile.
- *  With mosaics off the own poster is drawn as it is. */
+ *  the drive icon. The tile keeps that frame while the fan assembles -- the fan covers it once
+ *  every poster has decoded -- so a reload never leaves the tile empty while four pictures are
+ *  fetched. With mosaics off the own poster is drawn as it is. */
 export function RemoteLibraryArt(props: PreviewKey & { target: TileRef; poster?: string }) {
   const { target, poster, ...key } = props;
   const { posters, pending, instant } = useRemotePosters(key, target, true);
-  if (key.enabled && pending) return null;
-  if (posters.length > 1) return <LibraryCollage posters={posters} instant={instant}/>;
-  return <TileArt shape="poster" poster={key.enabled ? posters[0] ?? poster : poster} fallback={<HardDrive/>}/>;
+  const tile = <TileArt shape="poster" poster={key.enabled ? posters[0] ?? poster : poster} fallback={<HardDrive/>}/>;
+  if (posters.length > 1) return <>{tile}<LibraryCollage posters={posters} instant={instant}/></>;
+  return tile;
 }
 
 /** The picture the listing already named. It is drawn at once, the way a local tile is;
@@ -258,7 +258,9 @@ export function RemoteFolderArt({ shape, poster, wide, ...picture }: PreviewKey 
   const { target, ...key } = picture;
   const ask = key.enabled && !poster;
   const { posters, pending, instant } = useRemotePosters({ ...key, enabled: ask }, target);
-  if (posters.length > 1) return <LibraryCollage posters={posters} instant={instant}/>;
-  if (ask && pending) return <RemoteTileArt shape={shape} fallback={<FolderOpen/>}/>;
-  return <RemoteTileArt shape={shape} poster={poster ?? posters[0]} wide={wide} fallback={<FolderOpen/>}/>;
+  // What the folder would draw without a fan -- its own picture, the first of the fan, or the
+  // folder icon -- stays in the frame until the fan is ready to cover it.
+  const tile = <RemoteTileArt shape={shape} poster={poster ?? posters[0]} wide={wide} fallback={<FolderOpen/>}/>;
+  if (posters.length > 1) return <>{tile}<LibraryCollage posters={posters} instant={instant}/></>;
+  return tile;
 }

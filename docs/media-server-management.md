@@ -487,7 +487,10 @@ library chrome.
 
 Native lists read one provider page at a time, with a default of 60 items.
 Remote artwork is mounted near the visible viewport; a tile's mosaic is its own
-poster (or its library's own view image). Without one, a preview reads one bounded child
+poster (or its library's own view image). The tile keeps that frame — its own
+picture, the first of the fan, or the folder or drive icon — while a fan is
+fetched, and the fan covers it once every poster has decoded, so a reload never
+leaves the tile empty. Without one, a preview reads one bounded child
 page without traversing nested folders at all and changing tile shape does not repeat any discovery. Known absent
 image roles are not requested, and a thumbnail a few minutes old is acceptable —
 the client does not insist on zero-latency upstream metadata revocation.
