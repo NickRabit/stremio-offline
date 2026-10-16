@@ -212,16 +212,15 @@ test("list mints verified public sources without leaking the internal address", 
 
 const openedRef = (harness: Harness, sourceId: string) => openRemoteContent(streamOf(harness, sourceId).url);
 
-test("a granted native account projects the copy capability on an original", async () => {
+test("a granted native account projects the copy and device capabilities on an original", async () => {
   await withHarness(async (harness) => {
     const listed = await harness.sources.list(harness.adminAuthority, harness.owner, harness.libraryId, "item-1");
     assert.equal(listed.length, 2, "both versions are listed");
     for (const source of listed) {
-      assert.equal(source.capabilities?.downloadToLibrary, true, "the native flag and the account's right project the copy");
       assert.deepEqual(source.capabilities, {
         rename: false, move: false, delete: false, identify: false, writeArtwork: false,
-        downloadToLibrary: true, downloadToDevice: false,
-      }, "every other capability stays false");
+        downloadToLibrary: true, downloadToDevice: true,
+      }, "the media server's own flag and the account's own rights project both downloads");
     }
     assert.equal(harness.server.originalCalls, 0, "the projection costs no extra provider read");
   }, { contentDownloading: true });

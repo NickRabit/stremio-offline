@@ -240,7 +240,7 @@ test("accessLost permits a genuine remote download to a library and re-checks th
   assert.equal(accessLost(remoteSource(), claim, { remote: { ...ref, owner: { ...ref.owner, sid: "other" } } }), true, "the claim session must own the reference");
 });
 
-test("accessLost denies saving a remote original to a device, even for an administrator", () => {
+test("accessLost permits saving a remote original to a device and re-checks the remote record", () => {
   const secret = remoteSecret;
   const token = createSession(secret, "usr_a", Date.now() + 3_600_000, remoteSid);
   const claim = { userId: "usr_a", sid: remoteSid, token, permissionsVersion: 0 };
@@ -249,8 +249,11 @@ test("accessLost denies saving a remote original to a device, even for an admini
     connectionId: CONNECTION_A, libraryId: REMOTE_LIBRARY, generation: 2, mediaSourceId: "v1",
     owner: { userId: "usr_a", sid: remoteSid, expiresAt: Number.MAX_SAFE_INTEGER, secretStamp: remoteSecretStamp(secret) },
   };
-  const adminSource = remoteSource({ user: remoteUser({ role: "admin" }) });
-  assert.equal(accessLost(adminSource, claim, { remote: ref, permission: "downloadToDevice" }), true);
+  // The device is the same kind of copy as a local library: the account's own right decides, and
+  // the session's grant to the original has to hold exactly as it does for the copy or a playback.
+  assert.equal(accessLost(remoteSource(), claim, { remote: ref, permission: "downloadToDevice" }), false);
+  assert.equal(accessLost(remoteSource({ library: remoteLibrary({ enabled: false }) }), claim, { remote: ref, permission: "downloadToDevice" }), true, "a disabled library is caught");
+  assert.equal(accessLost(remoteSource(), claim, { remote: { ...ref, owner: { ...ref.owner, sid: "other" } }, permission: "downloadToDevice" }), true, "the claim session must own the reference");
 });
 
 test("a connection sweep stops remote resources, playback and AirPlay without the records", async () => {

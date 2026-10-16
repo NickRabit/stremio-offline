@@ -144,10 +144,9 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
   const selected = picked ?? seeded ?? defaultPick;
   const multiple = own.length > 1 || sourceGroups != null;
   const canSave = selected !== null && (saveSupported?.(selected) ?? true);
-  // A device save is offered wherever the caller can hand the row to the server -- a file of this
-  // machine, an addon answer, another library's copy -- and wherever the source itself allows it.
-  // A media server's own original never does: its projection is read-only, and that flag is false
-  // by construction, so the button is not drawn for a row the app may not take to the device.
+  // A device save is offered wherever the caller can hand the row to the server: a file of this
+  // machine, an addon answer, and a media server's own original, whose projection carries the
+  // account's own right the way its copy into a library does. Only a source that says no hides it.
   const canDownloadToDevice = Boolean(onDownloadToDevice && selected && selected.playable)
     && selected?.capabilities?.downloadToDevice !== false;
   // The tag a row wears: the transport the catalogue names it by (HTTP, RD, the provider, the local

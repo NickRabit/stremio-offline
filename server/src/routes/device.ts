@@ -3,12 +3,14 @@ import { randomBytes } from "node:crypto";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
-import { isPlaylist, isRemoteDownloadSource, mayDownloadToDevice, remoteDownloadRefused } from "../downloads.js";
+import { isPlaylist, mayDownloadToDevice } from "../downloads.js";
 import type { DeviceTransfers } from "../device-transfers.js";
 import { AppError } from "../errors.js";
 import { posixBase, type Viewer } from "../libraries.js";
 import { log } from "../logger.js";
+import { isRemoteMediaStream } from "../media-server-reference.js";
 import { ResourceError, type DeviceDownloadTicket, type ResourceOwner } from "../media-resources.js";
+import type { MediaServerSources } from "../media-server-sources.js";
 import { defaultDownloadSettings, deviceFilename, type MediaInfo } from "../naming.js";
 import { contentOf, type AccessNeed } from "../revocation.js";
 import { safeFetch, validateRemoteUrl } from "../security.js";
@@ -31,6 +33,9 @@ export interface DeviceDeps extends RouteContext {
   httpSourceOf(req: express.Request): Promise<StreamItem>;
   libraryTarget(value: string, viewer: Viewer | undefined): Promise<string>;
   mediaSource(value: unknown): MediaInfo | undefined;
+  /** The scoped transport a media server's own original leaves through: its sealed address is
+   *  resolved there with the provider's own credentials, never as a plain URL. */
+  mediaSources: MediaServerSources;
   ownerOf(req: express.Request): ResourceOwner;
   pruneDeviceDownloadTickets(): void;
   requireAccess(req: express.Request, need?: AccessNeed): void;
@@ -39,7 +44,7 @@ export interface DeviceDeps extends RouteContext {
 }
 
 export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps): void {
-  const { store, currentUser, stats, countBytes, deviceDownloadTickets, deviceTransfers, DEVICE_TICKET_TTL, httpSourceOf, libraryTarget, mediaSource, ownerOf, pruneDeviceDownloadTickets, requireAccess, statMeta, trackMedia } = deps;
+  const { store, currentUser, stats, countBytes, deviceDownloadTickets, deviceTransfers, DEVICE_TICKET_TTL, httpSourceOf, libraryTarget, mediaSource, mediaSources, ownerOf, pruneDeviceDownloadTickets, requireAccess, statMeta, trackMedia } = deps;
 
   /** Saving to the device is a right an administrator hands out, and it is read at every use:
    *  taking it away stops a ticket that was minted while it was still there. This governs the
@@ -58,7 +63,8 @@ export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps)
     let ticket: DeviceDownloadTicket;
     const owner = ownerOf(req);
     const stream = await httpSourceOf(req);
-    if (isRemoteDownloadSource(stream)) throw remoteDownloadRefused();
+    // A media server\u2019s own original reaches the device the same way its copy reaches a local
+    // library: the account\u2019s right decides, and the server fetches the sealed source itself.
     if (stream.url?.startsWith("file://")) {
       const relative = stream.url.slice(7);
       const target = relative ? await libraryTarget(relative, currentUser(req)).catch(() => undefined) : undefined;
@@ -71,7 +77,9 @@ export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps)
       };
     } else {
       if (!stream?.url || stream.url.startsWith("file://")) throw new AppError("Only a direct HTTP stream can be saved to a device.", "err.deviceNeedsHttp");
-      await validateRemoteUrl(stream.url);
+      // A media server's own original carries the internal sealed address, which is resolved by the
+      // scoped transport when its bytes are asked for; every other row is a plain address.
+      if (!isRemoteMediaStream(stream)) await validateRemoteUrl(stream.url);
       const title = String(req.body.title ?? "video");
       const media = mediaSource(req.body.media);
       const addon = store.addons().find((item) => item.key === stream.addonKey);
@@ -133,7 +141,6 @@ export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps)
     }
 
     const { stream, title, media } = ticket.source;
-    if (isRemoteDownloadSource(stream)) throw remoteDownloadRefused();
     // The client only requests the ticket URL; the server handles debrid headers and ranges from its own IP.
     const headers: Record<string, string> = { ...(stream.behaviorHints?.proxyHeaders?.request ?? {}) };
     if (req.headers.range) headers.range = req.headers.range;
@@ -196,7 +203,15 @@ export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps)
     const headerTimeout = setTimeout(() => controller.abort(), 30_000);
     res.on("close", () => { if (!res.writableEnded) controller.abort(); });
     let upstream: Response;
-    try { upstream = await safeFetch(stream.url!, { method: req.method === "HEAD" ? "HEAD" : "GET", headers, signal: controller.signal }); }
+    const init = { method: req.method === "HEAD" ? ("HEAD" as const) : ("GET" as const), ...(req.headers.range ? { range: String(req.headers.range) } : {}) };
+    try {
+      upstream = isRemoteMediaStream(stream)
+        // A media server's own original leaves through the same scoped transport a playback of it
+        // uses: the server resolves the sealed address with the provider's credentials, and the
+        // range the browser asked for travels unchanged.
+        ? await mediaSources.open(stream, ticket.owner, init, controller.signal)
+        : await safeFetch(stream.url!, { ...init, headers, signal: controller.signal });
+    }
     finally { clearTimeout(headerTimeout); }
     if (!upstream.ok) { await upstream.body?.cancel(); throw new Error("Download source unavailable."); }
     if (expired()) { await upstream.body?.cancel(); return expiredAnswer(); }

@@ -80,9 +80,8 @@ export function accessLost(source: AccessSource, claim: AccessClaim | undefined,
     if (!addon || !addon.enabled || !addonAllowed(addon, viewer)) return true;
   }
   if (need.permission === "downloadToLibrary" || need.permission === "downloadToDevice") {
-    // Saving to the device never accepts a remote original. Copying one into a local library is
-    // the one authorized remote download, and it holds only while the grant checked above does.
-    if (need.remote !== undefined && need.permission === "downloadToDevice") return true;
+    // Either download of a remote original holds only while the grant checked above does, and the
+    // right the account was granted for it is re-resolved whenever its own counter moved.
     if (user.permissionsVersion !== claim.permissionsVersion) {
       // The counter moved, so the right has to re-resolve from the account as it stands now
       // rather than be assumed: an edit that took it away and one that gave it back look the
