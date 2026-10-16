@@ -16,9 +16,12 @@ describe("the alternative player's save and close wiring", () => {
     // The queue accepts the row as it is: a copy of another media server is no longer refused here.
     expect(download).toContain("openAlternativeSave({ stream: alternative.stream");
     expect(download).not.toContain("remoteItem");
-    // Saving the copy down to the device stays refused, as it is for every native source.
+    // Taking it to the device is offered wherever the row's own source allows it: a copy of another
+    // media server is fetched by the server through its scoped transport, exactly as an addon
+    // answer is, so nothing here refuses the row the player is showing.
     const device = alternativeBlock.slice(alternativeBlock.indexOf("onDeviceDownload={async () => {"), alternativeBlock.indexOf("onProgressSaved="));
-    expect(device).toContain("if (alternative.stream.remoteItem) return false;");
+    expect(device).toContain("await saveToDevice({ title: alternative.title, stream: alternative.stream, media: alternative.media })");
+    expect(device).not.toContain("remoteItem");
   });
 
   it("refreshes only when the played row's own final write landed, never on close", () => {

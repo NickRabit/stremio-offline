@@ -184,13 +184,14 @@ test("item and series breadcrumbs walk the remote hierarchy", async ({ page }) =
   const panel = page.locator(".remote-browse-panel");
   const crumbs = panel.locator(".crumbs button");
   await panel.locator(".browse-item").filter({ hasText: "Show" }).locator(".library-open").click();
-  await expect(crumbs).toHaveText(["", "Remote clips", "Show"]);
+  // The trail starts with the section it is in, the way the library's own listing does.
+  await expect(crumbs).toHaveText(["", "Knihovna", "Remote clips", "Show"]);
   await panel.locator(".browse-item").filter({ hasText: "Pilot" }).locator(".library-open").click();
-  await expect(crumbs).toHaveText(["", "Remote clips", "Show", "S1 E1 · Pilot"]);
+  await expect(crumbs).toHaveText(["", "Knihovna", "Remote clips", "Show", "S1 E1 · Pilot"]);
   await expect(panel.locator('.crumbs button[aria-current="page"]')).toBeDisabled();
   // The series crumb goes back to the series and returns focus to the episode it came from.
   await panel.locator(".crumbs button").filter({ hasText: "Show" }).click();
-  await expect(crumbs).toHaveText(["", "Remote clips", "Show"]);
+  await expect(crumbs).toHaveText(["", "Knihovna", "Remote clips", "Show"]);
   await expect(panel.locator(".browse-item").filter({ hasText: "Pilot" }).locator(".library-open")).toBeFocused();
 });
 
@@ -620,7 +621,9 @@ for (const [width, height] of [[1440, 900], [390, 844], [844, 390]]) {
     expect(overflowing).toBe(false);
     await page.screenshot({ path: `e2e/.tmp/native-addon-picker-${width}.png` });
     await addon.click();
-    await detail.getByRole("button", { name: "Do knihovny", exact: true }).click();
+    // The button queues the row through the destination its own source projects; the arrow beside
+    // it is the one that asks, which is the dialog this journey is about.
+    await detail.locator(".library-detail-save .split-button-toggle").click();
     const save = page.getByRole("dialog");
     await expect(save).toBeVisible();
     await save.getByRole("button", { name: "Do knihovny", exact: true }).click();
@@ -636,7 +639,7 @@ for (const [width, height] of [[1440, 900], [390, 844], [844, 390]]) {
     await detail.getByRole("button", { name: "Vybrat zdroj" }).click();
     await expect(dialog.locator('.stream-list button[aria-pressed="true"]')).toContainText("Other server 30 GB");
     await page.keyboard.press("Escape");
-    await detail.getByRole("button", { name: "Do knihovny", exact: true }).click();
+    await detail.locator(".library-detail-save .split-button-toggle").click();
     const foreignSave = page.getByRole("dialog");
     await foreignSave.getByRole("button", { name: "Do knihovny", exact: true }).click();
     await expect(foreignSave).toHaveCount(0);

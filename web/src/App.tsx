@@ -2655,7 +2655,9 @@ export function App() {
     // A library file of the previous playback is not what is playing now, and its title, poster
     // and next-file context have no business in this player.
     setLocalStream(null); setLocalTitle(""); setLocalEpisode(false); setLocalFromBeginning(false); setLocalPoster(undefined);
-    setPlayingCatalogue(null);
+    // The identity the player is identified by, so its own list can switch versions while it runs:
+    // a detail's play is a catalogue play, whichever panel happens to be open behind it.
+    setPlayingCatalogue({ type: target.type, id: catalogueStreamId(target) });
     setStartAtSeconds(undefined);
     setDetailPlaying({ target, stream, subtitles: [], title: detailPlaybackTitle(target), ...(fromBeginning ? { fromBeginning: true } : {}) });
     // The detail is the subject of the play: the header names its own title and episode, the star
@@ -3408,8 +3410,9 @@ export function App() {
         return false;
       }}
       onDeviceDownload={async () => {
-        // A copy another media server owns is never pulled down to the device from here.
-        if (alternative.stream.remoteItem) return false;
+        // The device action is offered for this row wherever its own source allows it -- a copy of
+        // another media server included, whose bytes the server fetches through its scoped
+        // transport -- so the handler takes whatever row the player is showing.
         try {
           const filename = await saveToDevice({ title: alternative.title, stream: alternative.stream, media: alternative.media });
           notify(t("save.startedViaServer", { filename }));

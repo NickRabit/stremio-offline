@@ -80,6 +80,10 @@ export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps)
       // A media server's own original carries the internal sealed address, which is resolved by the
       // scoped transport when its bytes are asked for; every other row is a plain address.
       if (!isRemoteMediaStream(stream)) await validateRemoteUrl(stream.url);
+      // The account's right is what the app grants; whether the media server lets this account
+      // download the item at all is its own answer, and it is asked again here rather than trusted
+      // from the listing that drew the button.
+      if (isRemoteMediaStream(stream)) await mediaSources.authorize(stream, owner, undefined, { download: true });
       const title = String(req.body.title ?? "video");
       const media = mediaSource(req.body.media);
       const addon = store.addons().find((item) => item.key === stream.addonKey);
@@ -209,7 +213,12 @@ export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps)
         // A media server's own original leaves through the same scoped transport a playback of it
         // uses: the server resolves the sealed address with the provider's credentials, and the
         // range the browser asked for travels unchanged.
-        ? await mediaSources.open(stream, ticket.owner, init, controller.signal)
+        ? await (async () => {
+          // Asked again at hand-over, exactly as a playback re-checks its own grant: a permission
+          // that was taken away between minting the ticket and asking for its bytes stops here.
+          await mediaSources.authorize(stream, ticket.owner, controller.signal, { download: true });
+          return mediaSources.open(stream, ticket.owner, init, controller.signal);
+        })()
         : await safeFetch(stream.url!, { ...init, headers, signal: controller.signal });
     }
     finally { clearTimeout(headerTimeout); }

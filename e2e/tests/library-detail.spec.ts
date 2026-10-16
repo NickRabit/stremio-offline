@@ -283,7 +283,9 @@ for (const [width, height] of [[1440, 900], [390, 844], [844, 390]]) {
     expect(await dialog.evaluate(node => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
     await page.screenshot({ path: `e2e/.tmp/local-unified-picker-${width}.png` });
     await rows.filter({ hasText: "Addon FullHD" }).click();
-    await detail.getByRole("button", { name: "Do knihovny", exact: true }).click();
+    // The button queues the row through the destination its own source projects; the arrow beside
+    // it is the one that asks, which is the dialog this journey is about.
+    await detail.locator(".library-detail-save .split-button-toggle").click();
     const save = page.getByRole("dialog");
     await save.getByRole("button", { name: "Do knihovny", exact: true }).click();
     await expect(save).toHaveCount(0);
