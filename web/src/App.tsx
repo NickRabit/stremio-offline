@@ -1206,6 +1206,7 @@ export function App() {
   const refresh = async (selectFirst = false) => {
     const [nextAddons, nextCatalogs] = await Promise.all([api.addons(), api.catalogs()]); setAddons(nextAddons); setCatalogs(nextCatalogs);
     if ((selectFirst || !selectedCatalog) && nextCatalogs[0]) setSelectedCatalog(`${nextCatalogs[0].addonKey}:${nextCatalogs[0].type}:${nextCatalogs[0].id}`);
+    return nextCatalogs;
   };
   const downloadsSeen = useRef(false);
   const jobStatus = useRef(new Map<string, DownloadJob["status"]>());
@@ -1307,13 +1308,15 @@ export function App() {
     // A fresh sign-in re-arms the start page: signing out again must not remember the last
     // switch as if the person had navigated.
     if (!ready) { navigated.current = false; return; }
-    refresh().catch(fail); loadDownloads(); loadFollows();
-    api.settings().then((next) => {
+    const loaded = refresh().catch((error: unknown) => { fail(error); return null; }); loadDownloads(); loadFollows();
+    api.settings().then(async (next) => {
       setSettings((current: AppSettings) => ({ ...current, ...next }));
       setLocale(next.uiLanguage);
+      // An install with no catalogue yet keeps its first run on the catalogue's onboarding.
+      const hasCatalogs = Boolean((await loaded)?.length);
       // The chosen page is opened once, and only while nobody has gone anywhere yet.
       if (view === "catalog" && !navigated.current && !selected && !playerOpen) {
-        const target = resolveStartView(next.startView, { restricted, navigated: navigated.current });
+        const target = resolveStartView(next.startView, { restricted, navigated: navigated.current, hasCatalogs });
         if (target) { navigated.current = true; openView(target); }
       }
     }).catch(fail);
@@ -3386,7 +3389,7 @@ export function App() {
         </div>
         </div>}
       </section>}
-      {view === "addons" && <AddonManager addons={addons} libraries={libraries} restricted={restricted} admin={admin} onChanged={refresh} onNotify={notify} onError={fail}/>} 
+      {view === "addons" && <AddonManager addons={addons} libraries={libraries} restricted={restricted} admin={admin} onChanged={async () => { await refresh(); }} onNotify={notify} onError={fail}/>} 
       {view === "resume" && <ResumeView
         filter={resumeFilter} onFilter={setResumeFilter}
         items={resumeCards} busy={resumeBusy} shape={settings.resumeTileShape} onToggleShape={() => void toggleShape("resumeTileShape")} actions={resumeActions}

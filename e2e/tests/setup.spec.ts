@@ -33,5 +33,14 @@ test("first run: pick a language, create the account and install an addon", asyn
   await expect(page.getByText("Manifest byl přidán.")).toBeVisible();
   await expect(page.getByRole("heading", { name: "E2E doplněk" })).toBeVisible();
 
+  // With a catalogue in place, an account that never chose a start page opens on Home.
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Domů", exact: true })).toBeVisible();
+  // The rest of the suite is written from the catalogue, so this account starts there.
+  expect((await page.request.patch("/api/settings", { data: { startView: "catalog" } })).ok()).toBe(true);
+  await page.reload();
+  await expect(page.getByPlaceholder(/Hledat ve všech doplňcích/)).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Domů", exact: true })).toHaveCount(0);
+
   await page.context().storageState({ path: "e2e/.tmp/session.json" });
 });
