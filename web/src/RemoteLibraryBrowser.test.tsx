@@ -2072,8 +2072,16 @@ describe("RemoteLibraryBrowser addon sources", () => {
     expect(rows().map((row) => row.querySelector("small")!.textContent)).toEqual(["Emby · My library", "Jellyfin · Second", "Torrentio"]);
   });
 
+  it("leads the chooser with the item's own version, the viewer's copy after it", async () => {
+    localCopies = () => json([{ sourceId: "local-1", kind: "library", playable: true, localPath: "Films/One.mkv", libraryName: "Films", behaviorHints: { filename: "One.mkv", videoSize: 40_000_000_000 } }]);
+    await openDetail({}, [nativeVersion("ms1", "1080p", 1_000_000_000)]);
+    await openPicker();
+    // The item's own version is what this place is about, whatever size the copy on disk reports.
+    const listed = [...document.querySelectorAll<HTMLElement>(".library-source-card .remote-streams button")];
+    expect(listed.slice(0, 2).map((row) => row.textContent)).toEqual([expect.stringContaining("1080p"), expect.stringContaining("One.mkv")]);
+  });
+
   it("hands the detail's own versions to the player's Sources, and switches at the position it holds", async () => {
-    // The chooser was opened once, so the addon group is loaded and belongs to the list too.
     await openDetail({}, [nativeVersion("ms1", "1080p", 2_000_000_000), nativeVersion("ms2", "4K", 8_000_000_000)]);
     await openPicker();
     await closePicker();
@@ -2105,11 +2113,17 @@ describe("RemoteLibraryBrowser addon sources", () => {
     await flush();
     const toggle = host.querySelector<HTMLButtonElement>(".player-sources-toggle");
     expect(toggle).not.toBeNull();
+    // A play that merely runs asks nothing of any group: the panel is the one intent that reads.
+    expect(addonCalls.sources).toHaveLength(0);
+    expect(addonCalls.streams).toHaveLength(0);
+    expect(addonCalls.local).toHaveLength(0);
+    expect(addonCalls.remote).toHaveLength(0);
     await click(toggle!);
     await flush();
     await flush();
     const rows = [...host.querySelectorAll("#player-sources .player-source-list button")].map((node) => node.textContent ?? "");
     expect(rows.some((text) => text.includes("Torrentio 4K"))).toBe(true);
+    expect(addonCalls.sources).toHaveLength(1);
   });
 
   it("opens on the source the stored record names, once the group that holds it has answered", async () => {

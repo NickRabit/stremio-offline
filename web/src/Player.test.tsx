@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { Player } from "./Player";
+import type { PlayerSources } from "./Player";
 import { setLocale } from "./i18n";
+import type { LibrarySourceGroup } from "./library-sources";
 import type { RemoteCapabilities, Stream } from "./types";
 
 const json = (body: unknown, status = 200) =>
@@ -180,6 +182,12 @@ describe("Player save actions", () => {
 describe("Player source switching", () => {
   const sourceButton = () => host.querySelector<HTMLButtonElement>(".player-sources-toggle");
   const sourceRows = () => [...host.querySelectorAll<HTMLButtonElement>("#player-sources button")].filter((node) => node.getAttribute("aria-pressed") !== null);
+  /** One group of the title, as `useLibrarySources` hands it to the player: an addon's answer. */
+  const addonGroup = (key: string, name: string, streams: Stream[]): LibrarySourceGroup =>
+    ({ key: `addon:${key}`, kind: "addon", name, status: "loaded", streams, error: "" });
+  /** What a host hands the player: the row it leads with and the actions over the list. */
+  const sourcesOf = (lead: Stream, groups: LibrarySourceGroup[] = [], over: Partial<PlayerSources> = {}): PlayerSources =>
+    ({ lead: [lead], leadLabel: "Local files", groups, onOpen: vi.fn(), onSwitch: vi.fn(async () => undefined), ...over });
 
   it("offers no Sources control for a title whose sources were never handed over", async () => {
     await render();
@@ -191,7 +199,7 @@ describe("Player source switching", () => {
     const playing = ownFile({ sourceId: "local-1" });
     const torrentio = addonRow({ sourceId: "addon-1", name: "4K" });
     const other = addonRow({ sourceId: "addon-2", name: "1080p", addonKey: "cinema", addonName: "Cinema" });
-    await render({ stream: playing, loadSources: vi.fn(async () => [torrentio, other, playing]), onSwitchSource: vi.fn(async () => undefined) });
+    await render({ stream: playing, sources: sourcesOf(playing, [addonGroup("torrentio", "Torrentio", [torrentio]), addonGroup("cinema", "Cinema", [other])]) });
     await click(sourceButton()!);
     const selects = host.querySelectorAll<HTMLSelectElement>("#player-sources select");
     expect(selects.length).toBeGreaterThanOrEqual(2);
@@ -208,12 +216,13 @@ describe("Player source switching", () => {
   it("reads the list on open, marks the playing row and hands another one over with the time", async () => {
     const playing = addonRow({ sourceId: "addon-1", name: "4K", behaviorHints: { videoSize: 8_000_000_000 } });
     const other = addonRow({ sourceId: "addon-2", name: "1080p" });
-    const loadSources = vi.fn(async () => [playing, other]);
-    const onSwitchSource = vi.fn(async () => undefined);
-    await render({ stream: playing, loadSources, onSwitchSource });
-    expect(loadSources).not.toHaveBeenCalled();
+    const onOpen = vi.fn();
+    const onSwitch = vi.fn(async () => undefined);
+    await render({ stream: playing, sources: sourcesOf(playing, [addonGroup("cinema", "Cinema", [other])], { onOpen, onSwitch }) });
+    // Nothing is asked for while the title is merely playing: the panel is the one intent.
+    expect(onOpen).not.toHaveBeenCalled();
     await click(sourceButton()!);
-    expect(loadSources).toHaveBeenCalledTimes(1);
+    expect(onOpen).toHaveBeenCalledTimes(1);
     // The player's list is the detail's own row template: the transport badge, the label and the
     // size the source reported, the playing row first.
     expect(sourceRows()).toHaveLength(2);
@@ -225,42 +234,59 @@ describe("Player source switching", () => {
     expect(sourceRows()[1]!.getAttribute("aria-pressed")).toBe("false");
     // The row already on screen is not a switch, whatever the click says.
     await click(sourceRows()[0]!);
-    expect(onSwitchSource).not.toHaveBeenCalled();
+    expect(onSwitch).not.toHaveBeenCalled();
     expect(host.querySelector("#player-sources")).not.toBeNull();
     const video = host.querySelector<HTMLVideoElement>(".player-overlay video")!;
     await act(async () => { video.currentTime = 620; video.dispatchEvent(new Event("timeupdate", { bubbles: true })); });
     await click(sourceRows()[1]!);
     // The position the row was chosen at travels with it, so the new source starts there.
-    expect(onSwitchSource).toHaveBeenCalledWith(other, 620);
+    expect(onSwitch).toHaveBeenCalledWith(other, 620);
     expect(host.querySelector("#player-sources")).toBeNull();
 
-    // Another open of the same playing source reuses the answer it already has, and another
-    // source on screen is what makes it ask again.
+    // Another source on screen reopens on the row that now plays, and the host reads nothing
+    // again for it: the groups arrive as props.
     await click(sourceButton()!);
-    expect(loadSources).toHaveBeenCalledTimes(1);
-    await rerender({ stream: other, loadSources, onSwitchSource });
+    await rerender({ stream: other, sources: sourcesOf(other, [addonGroup("cinema", "Cinema", [other])], { onOpen, onSwitch }) });
     await click(sourceButton()!);
-    expect(loadSources).toHaveBeenCalledTimes(2);
+    expect(sourceRows()[0]!.textContent).toContain("1080p");
+    expect(sourceRows()[0]!.getAttribute("aria-pressed")).toBe("true");
   });
 
   it("keeps the list open with the failure and leaves the playing row alone when the switch is refused", async () => {
     const playing = addonRow({ sourceId: "addon-1", name: "4K" });
     const other = addonRow({ sourceId: "addon-2", name: "1080p" });
-    const onSwitchSource = vi.fn(async () => { throw new Error("that source is gone"); });
-    await render({ stream: playing, loadSources: async () => [playing, other], onSwitchSource });
+    const onSwitch = vi.fn(async () => { throw new Error("that source is gone"); });
+    await render({ stream: playing, sources: sourcesOf(playing, [addonGroup("cinema", "Cinema", [other])], { onSwitch }) });
     await click(sourceButton()!);
     await click(sourceRows()[1]!);
-    expect(onSwitchSource).toHaveBeenCalledTimes(1);
+    expect(onSwitch).toHaveBeenCalledTimes(1);
     expect(host.querySelector("#player-sources")).not.toBeNull();
     expect(host.querySelector("#player-sources .notice")!.textContent).toContain("that source is gone");
     expect(sourceRows()[0]!.getAttribute("aria-pressed")).toBe("true");
   });
 
-  it("says so when the list could not be read at all", async () => {
-    await render({ loadSources: async () => { throw new Error("the addons are down"); } });
+  it("keeps the lead row alone for a play nothing names, and asks no group for it", async () => {
+    const loose = ownFile({ sourceId: "local-9", localPath: "Films/Loose.mkv", behaviorHints: { filename: "Loose.mkv" } });
+    const onOpen = vi.fn();
+    await render({ stream: loose, sources: sourcesOf(loose, [], { onOpen }) });
     await click(sourceButton()!);
-    expect(host.querySelector("#player-sources .notice")!.textContent).toContain("the addons are down");
-    expect(sourceRows()).toHaveLength(0);
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    // The control is there, and the only row it holds is the file on screen, already marked.
+    expect(sourceRows()).toHaveLength(1);
+    expect(sourceRows()[0]!.getAttribute("aria-pressed")).toBe("true");
+    expect(sourceRows()[0]!.textContent).toContain("Loose.mkv");
+  });
+
+  it("shows a failed group with its own retry, asking that group again", async () => {
+    const playing = addonRow({ sourceId: "addon-1", name: "4K" });
+    const retry = vi.fn();
+    const failed: LibrarySourceGroup = { key: "addon:cinema", kind: "addon", name: "Cinema", status: "error", streams: [], error: "Cinema is down" };
+    await render({ stream: playing, sources: sourcesOf(playing, [failed], { panel: { groups: [failed], retry } }) });
+    await click(sourceButton()!);
+    const notice = host.querySelector<HTMLElement>("#player-sources .notice")!;
+    expect(notice.textContent).toContain("Cinema is down");
+    await click(notice.querySelector("button")!);
+    expect(retry).toHaveBeenCalledWith("addon:cinema");
   });
 });
 

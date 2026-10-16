@@ -58,7 +58,8 @@ import { catalogueGalleryImages, mergeGallery, localGalleryImage, type GalleryIm
 import { loadTitleGallery, type CatalogueRef } from "./title-enrichment";
 import { SettingsPage } from "./SettingsPage";
 import { resolveStartView } from "./start-view";
-import { titlePlaybackSources } from "./title-sources";
+import { useLibrarySources } from "./library-sources";
+import { streamGroupLabel } from "./source-rows";
 import { playbackIdentity } from "./playback-identity";
 import type { Addon, BuildInfo, BrowseItem, BrowseLibrary, BrowseResult, DeviceTransfer, DownloadsViewPrefs, FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem, FavoriteRemoteItem, FollowView, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, LibraryViewPrefs, MediaServerProvider, NewEpisode, ProgressEntry, RemoteLibrary, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, Stream, Subtitle, Trailer, Video, SearchState } from "./types";
 
@@ -896,6 +897,7 @@ export function App() {
     setPlayerSubject(subject);
     setLocalFromBeginning(false);
     setStartAtSeconds(undefined);
+    setPlayerSourcesOpen(false);
     setPlayerOpen(true);
   };
 
@@ -1763,6 +1765,7 @@ export function App() {
       setLocalEpisode(episode);
       setLocalStream({ ...source, localPath: path });
       setLocalFromBeginning(fromBeginning);
+      setPlayerSourcesOpen(false);
       playbackReturn.current = returning;
       scrollByView.current[view] = returning.windowY;
       playerOpenRef.current = true;
@@ -1779,6 +1782,7 @@ export function App() {
     const owner = sourceProgressOwner(request.stream, request.catalogue);
     if (!owner) return;
     const scope = ++alternativeScopeRef.current.generation;
+    setAlternativeSourcesOpen(false);
     setAlternative({
       stream: request.stream, title: request.title, ...(request.poster ? { poster: request.poster } : {}),
       owner, scope, subtitles: [], media: request.media, kind: request.kind, catalogue: request.catalogue,
@@ -2267,7 +2271,7 @@ export function App() {
     void promise.catch(() => undefined);
     nextEpisodePrefetchRef.current = { id, promise };
   }, [playerOpen, localStream, detailPlaying, selected?.id, selected?.type, catalogueNext?.id, currentCatalog?.type]);
-  const stopPlayback = () => { setPlayerOpen(false); setLocalStream(null); setLocalEpisode(false); setLocalFromBeginning(false); setStartAtSeconds(undefined); setPlayingCatalogue(null); setPlayerSubject(null); setDetailPlaying(null); setPlaybackPreferences({}); };
+  const stopPlayback = () => { setPlayerOpen(false); setPlayerSourcesOpen(false); setLocalStream(null); setLocalEpisode(false); setLocalFromBeginning(false); setStartAtSeconds(undefined); setPlayingCatalogue(null); setPlayerSubject(null); setDetailPlaying(null); setPlaybackPreferences({}); };
   /** The next episode is a new subject for the player on screen: the header names it, the
    *  progress store takes its key and the source list asks for its own sources, never the
    *  episode's that just ended. */
@@ -2665,12 +2669,17 @@ export function App() {
     }, sourcesComplete ? streams : undefined);
   };
   /** The subject a catalogue queue call is proved against, built the way the panel builds it. An
-   *  episode's numbering has to travel with its own video: a series is never queued as a film. */
-  const catalogueMedia = (detail: CatalogueDetailTarget): Record<string, unknown> =>
-    detail.type === "movie"
-      ? { kind: "movie", title: detail.name, id: detail.id, metaType: detail.type }
+   *  episode's numbering has to travel with its own video: a series is never queued as a film, and
+   *  a film carries the year the catalogue named, which is what names its folder. */
+  const catalogueMedia = (detail: CatalogueDetailTarget): Record<string, unknown> => {
+    const read = detailRead && detailRead.target.type === detail.type && detailRead.target.id === detail.id ? detailRead.meta : null;
+    const release = read ?? detail.initialMeta;
+    const year = Number(String(release?.releaseInfo ?? release?.year ?? "").slice(0, 4)) || 0;
+    return detail.type === "movie"
+      ? { kind: "movie", title: detail.name, ...(year ? { year } : {}), id: detail.id, metaType: detail.type }
       : { kind: "episode", title: detail.name, id: detail.id, metaType: detail.type,
         ...(detail.season != null ? { season: detail.season } : {}), ...(detail.episode != null ? { episode: detail.episode } : {}) };
+  };
   const queueCatalogueStream = async (detail: CatalogueDetailTarget, stream: Stream, target?: SaveTarget) => {
     if (!canQueue(stream, settings.realDebridConfigured)) return false;
     try {
@@ -2784,15 +2793,33 @@ export function App() {
     finally { nextBusyRef.current = false; setNextBusy(false); }
   };
 
+  /** Whether the player's own Sources panel is open. The panel and the detail's chooser read the
+   *  same groups, and this flag is the hook's own `open`: nothing is asked for before it is set. */
+  const [playerSourcesOpen, setPlayerSourcesOpen] = useState(false);
+  /** The playing title's other sources: the viewer's copies, the libraries and the addons. Read
+   *  the moment the panel opens, and only for the title the player is identified by. */
+  const playingSources = useLibrarySources({
+    scope: `player:${playingCatalogue ? `${playingCatalogue.type}:${playingCatalogue.id}` : "-"}`,
+    open: playerOpen && playerSourcesOpen,
+    catalogue: playingCatalogue,
+    libraries: null,
+    localCopies: true,
+  });
+  /** The same state for the second player, which is opened on one row of a title beside the
+   *  first: its own identity, its own groups, and the same single intent that reads them. */
+  const [alternativeSourcesOpen, setAlternativeSourcesOpen] = useState(false);
+  const alternativeSources = useLibrarySources({
+    scope: `alternative:${alternative?.catalogue ? `${alternative.catalogue.type}:${alternative.catalogue.id}` : "-"}`,
+    open: alternativeSourcesOpen,
+    catalogue: alternative?.catalogue ?? null,
+    libraries: null,
+    localCopies: true,
+  });
+
   /** The catalogue identity the player is identified by: the title playback started on, and an
    *  episode the exact video on screen. An identified library file plays under the same identity
    *  as the catalogue row of its title, so a local row never loses it. */
   const playbackCatalogueRef = (): { type: "movie" | "series"; id: string } | null => playingCatalogue;
-  /** A title with no catalogue identity has no other sources to offer. */
-  const loadPlaybackSources = async (): Promise<Stream[]> => {
-    const ref = playbackCatalogueRef();
-    return ref ? titlePlaybackSources(ref) : [];
-  };
   /** Handing the player another source of the same title: it starts through the ordinary play
    *  path at the position it was chosen at, and the title's own progress is left untouched. */
   const switchPlaybackSource = async (stream: Stream, positionSeconds: number): Promise<void> => {
@@ -2834,10 +2861,6 @@ export function App() {
   };
   /** The same switch for the second player, which is opened on one row of a title and replaces
    *  that row alone: the library player on screen behind it is never touched. */
-  const loadAlternativeSources = async (): Promise<Stream[]> => {
-    const ref = alternative?.catalogue;
-    return ref ? titlePlaybackSources(ref) : [];
-  };
   const switchAlternativeSource = (stream: Stream, positionSeconds: number): void => {
     if (!alternative?.catalogue) throw new Error(t("player.noOtherSource"));
     const catalogue = alternative.catalogue;
@@ -2910,6 +2933,10 @@ export function App() {
     ...(session!.role === "admin" ? [{ key: "stats", icon: <BarChart3/>, label: t("nav.stats"), active: view === "stats", onSelect: () => openView("stats") }] : []),
   ];
   const moreActive = view === "favorites" || view === "resume" || view === "following" || view === "addons" || view === "settings" || view === "stats";
+
+  // The row the main player is on: the file of the library, the row the shared detail started, or
+  // the row a catalogue tile played. It leads the player's chooser under its own class's name.
+  const playingStream = localStream ?? detailPlaying?.stream ?? selectedStream;
 
   return <div className={`app-shell tile-size-${settings.tileSize} catalog-shape-${settings.catalogTileShape} library-shape-${settings.libraryTileShape} home-shape-${settings.homeTileShape}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
     <header className="topbar"><button className="brand brand-home" title={t(startHome ? "app.goToStart" : "app.goToCleanCatalog")} aria-label={t(startHome ? "app.goToStart" : "app.goToCleanCatalog")} onClick={goToStart}><div className="brand-mark"><CirclePlay/></div><div><small>{t("auth.brandEyebrow")}</small><h1>Stremio <span>Offline</span></h1></div></button><div className="topbar-right">{restricted && <div className="restricted-chip">{t("restricted.chip")}</div>}<div className="online"><i/> {t("app.serverOnline")}</div>
@@ -3435,22 +3462,34 @@ export function App() {
       onToggleFavorite={localStream?.localPath || detailPlaying || (playerSubject?.panel && selected) ? () => void togglePlayerFavorite() : undefined}
       onDownload={detailPlaying ? () => queueCatalogueStream(detailPlaying.target, detailPlaying.stream) : enqueue}
       onDeviceDownload={() => localStream?.localPath ? downloadLibraryFile(localStream.localPath) : detailPlaying ? downloadCatalogueStream(detailPlaying.target, detailPlaying.stream) : downloadStreamToDevice()}
-      {...(playingCatalogue ? {
-        loadSources: loadPlaybackSources,
-        onSwitchSource: switchPlaybackSource,
-        ...(startAtSeconds !== undefined ? { startAtSeconds } : {}),
-      } : {})}
+      // The title's sources are offered on every play, a file with no catalogue identity
+      // included: its own row leads, and the groups of whatever title it is bound to follow.
+      sources={{
+        lead: playingStream ? [playingStream] : [],
+        leadLabel: playingStream ? streamGroupLabel(playingStream) : t("sources.heading"),
+        groups: playingSources.groups,
+        panel: { groups: playingSources.groups, retry: playingSources.retry },
+        onOpen: () => setPlayerSourcesOpen(true),
+        onSwitch: switchPlaybackSource,
+      }}
+      {...(startAtSeconds !== undefined ? { startAtSeconds } : {})}
       onClose={stopPlayback}/>
     {alternative && <Player open title={alternative.stream.localPath ? alternative.stream.behaviorHints?.filename ?? alternative.title : alternative.title} stream={alternative.stream} subtitles={alternative.subtitles}
       subtitleLanguage={settings.subtitleLanguage} audioLanguage={settings.audioLanguage}
       {...(alternative.stream.localPath ? { progressKey: `file:${alternative.stream.localPath}` } : alternative.owner.kind === "remote" ? {} : { progressKey: alternative.owner.progressKey })}
       progressPoster={alternative.poster}
       {...(alternative.fromBeginning ? { fromBeginning: true } : {})} nextBusy={false}
-      {...(alternative.catalogue ? {
-        loadSources: loadAlternativeSources,
-        onSwitchSource: switchAlternativeSource,
-        ...(alternative.at !== undefined ? { startAtSeconds: alternative.at } : {}),
-      } : {})}
+      // The row this play started on leads, and the title's other groups follow once the panel
+      // asks for them -- the same state the library detail behind the player offers.
+      sources={{
+        lead: [alternative.stream],
+        leadLabel: streamGroupLabel(alternative.stream),
+        groups: alternativeSources.groups,
+        panel: { groups: alternativeSources.groups, retry: alternativeSources.retry },
+        onOpen: () => setAlternativeSourcesOpen(true),
+        onSwitch: switchAlternativeSource,
+      }}
+      {...(alternative.at !== undefined ? { startAtSeconds: alternative.at } : {})}
       onDownload={async () => {
         // The exact row that is playing is the row that is saved, through the same dialog and the
         // same destination the detail would use; a copy of another media server keeps its own

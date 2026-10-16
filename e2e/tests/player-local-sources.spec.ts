@@ -107,11 +107,17 @@ test.describe("the player's sources for a library file", () => {
     await expect(ownRows(page, filmFile).first()).toHaveAttribute("aria-pressed", "true");
   });
 
-  test("a file nothing binds plays as itself, with no sources control", async ({ page }) => {
+  test("a file nothing binds plays as itself, offering its own row and nothing else", async ({ page }) => {
     await openLibraryRow(page, looseFile.replace(/\.webm$/, ""));
     await play(page);
     await expect(playerTitle(page)).toHaveText("Nespárovaný film");
-    await expect(page.getByRole("button", { name: "Zdroje", exact: true })).toHaveCount(0);
+    // No title names this file, so nothing can be asked about it: the control is still offered,
+    // and the one row it holds is the file on screen, already marked as the row that plays.
+    await page.getByRole("button", { name: "Zdroje", exact: true }).click();
+    await expect(page.locator("#player-sources")).toBeVisible();
+    await expect(sources(page)).toHaveCount(1);
+    await expect(sources(page).first()).toHaveAttribute("aria-pressed", "true");
+    await expect(addonRows(page)).toHaveCount(0);
   });
 
   test("a catalogue play keeps switching both ways", async ({ page }) => {
