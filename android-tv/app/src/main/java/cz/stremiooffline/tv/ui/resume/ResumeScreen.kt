@@ -30,11 +30,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
-import cz.stremiooffline.tv.catalog.ResumeEpisode
-import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.HomeCard
-import cz.stremiooffline.tv.data.MetaDto
-import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.ResumeFilter
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.data.displayTitle
@@ -46,8 +42,10 @@ import cz.stremiooffline.tv.ui.components.FocusButtonKind
 import cz.stremiooffline.tv.ui.components.ShimmerCards
 import cz.stremiooffline.tv.ui.components.WideCard
 import cz.stremiooffline.tv.ui.components.leftToNeighbour
-import cz.stremiooffline.tv.ui.detail.DetailData
 import cz.stremiooffline.tv.ui.detail.RemoteDetailData
+import cz.stremiooffline.tv.ui.detail.PlayTarget
+import cz.stremiooffline.tv.ui.home.HomeAction
+import cz.stremiooffline.tv.ui.home.actionFor
 import cz.stremiooffline.tv.ui.home.cardLabel
 import cz.stremiooffline.tv.ui.home.captionOf
 import cz.stremiooffline.tv.ui.home.remoteDetailOf
@@ -59,12 +57,12 @@ fun resumeFilterTag(filter: ResumeFilter): String = "resume_filter_" + filter.wi
 fun resumeCardTag(key: String): String = "resume:$key"
 
 /** The one Continue watching section: the merged cards Home's resume row draws, paged past
- *  that row's bound and narrowed by filter chips. A library card opens the library detail, a
- *  catalogue card the catalogue detail on the episode it remembers. */
+ *  that row's bound and narrowed by filter chips. OK follows the one rule the Home row reads. */
 @Composable
 fun ResumeRoute(
   api: TvApi,
-  onOpenDetail: (DetailData) -> Unit,
+  /** A card that names the file it was written from plays it, exactly as on Home. */
+  onPlay: (PlayTarget) -> Unit,
   onOpenCatalog: (CatalogDetailArgs) -> Unit,
   /** A remote media-server card opens its own playable detail. */
   onOpenRemote: (RemoteDetailData) -> Unit = {},
@@ -156,7 +154,7 @@ fun ResumeRoute(
                 completed = false,
                 caption = captionOf(card, label),
                 cardTag = resumeCardTag(card.key),
-                onClick = { openResume(card, onOpenDetail, onOpenCatalog, onOpenRemote) },
+                onClick = { openResume(card, onPlay, onOpenCatalog, onOpenRemote) },
                 modifier = Modifier
                   .focusRequester(requester)
                   .onFocusChanged {
@@ -175,63 +173,40 @@ fun ResumeRoute(
   }
 }
 
-/** Where OK goes: the library detail of a file, or the catalogue detail on the remembered episode. */
+/** Where OK goes: the one rule Home reads, handed to this screen's own callbacks. */
 private fun openResume(
   card: HomeCard,
-  onOpenDetail: (DetailData) -> Unit,
+  onPlay: (PlayTarget) -> Unit,
   onOpenCatalog: (CatalogDetailArgs) -> Unit,
   onOpenRemote: (RemoteDetailData) -> Unit,
 ) {
-  when (card) {
-    is HomeCard.ResumeFile -> onOpenDetail(
-      DetailData.ofFile(
-        BrowseItem.File(
-          path = card.path,
-          label = card.title,
-          season = card.season,
-          episode = card.episode,
-          progress = card.progress?.let { ProgressDto(it.position, it.duration) },
-          poster = card.poster,
-          wide = card.wide,
-        ),
-      ).copy(forgetKeys = card.forgetKeys),
-    )
-    is HomeCard.ResumeCatalogue -> onOpenCatalog(
-      CatalogDetailArgs(
-        meta = MetaDto(id = card.id, type = card.type, name = card.name, poster = card.poster),
-        addonName = "",
-        type = card.type,
-        episode = card.season?.let { season -> card.episode?.let { episode -> ResumeEpisode(card.key, season, episode) } },
-        forgetKeys = card.forgetKeys,
-      ),
-    )
-    is HomeCard.Remote -> onOpenRemote(remoteDetailOf(card))
-    else -> Unit
+  when (val action = actionFor(card)) {
+    is HomeAction.Play -> onPlay(action.target)
+    is HomeAction.OpenCatalog -> onOpenCatalog(action.args)
+    is HomeAction.OpenRemote -> onOpenRemote(action.data)
+    is HomeAction.OpenLibrary -> Unit
   }
 }
 
 @StringRes
 private fun filterLabel(filter: ResumeFilter): Int = when (filter) {
   ResumeFilter.All -> R.string.resume_filter_all
-  ResumeFilter.Library -> R.string.resume_filter_library
-  ResumeFilter.Catalog -> R.string.resume_filter_catalog
-  ResumeFilter.Remote -> R.string.resume_filter_remote
+  ResumeFilter.Movies -> R.string.resume_filter_movies
+  ResumeFilter.Series -> R.string.resume_filter_series
 }
 
 @StringRes
 private fun filterEmptyTitle(filter: ResumeFilter): Int = when (filter) {
   ResumeFilter.All -> R.string.resume_empty_all_title
-  ResumeFilter.Library -> R.string.resume_empty_library_title
-  ResumeFilter.Catalog -> R.string.resume_empty_catalog_title
-  ResumeFilter.Remote -> R.string.resume_empty_remote_title
+  ResumeFilter.Movies -> R.string.resume_empty_movies_title
+  ResumeFilter.Series -> R.string.resume_empty_series_title
 }
 
 @StringRes
 private fun filterEmptyText(filter: ResumeFilter): Int = when (filter) {
   ResumeFilter.All -> R.string.resume_empty_all_text
-  ResumeFilter.Library -> R.string.resume_empty_library_text
-  ResumeFilter.Catalog -> R.string.resume_empty_catalog_text
-  ResumeFilter.Remote -> R.string.resume_empty_remote_text
+  ResumeFilter.Movies -> R.string.resume_empty_movies_text
+  ResumeFilter.Series -> R.string.resume_empty_series_text
 }
 
 @Composable

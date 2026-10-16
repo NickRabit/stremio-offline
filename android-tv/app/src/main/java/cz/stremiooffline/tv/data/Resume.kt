@@ -4,13 +4,11 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 
-/** Which half of the one Continue watching list to ask for; `All` is both. */
+/** Which part of the one Continue watching list to ask for; `All` is all of it. */
 enum class ResumeFilter(val wire: String) {
   All("all"),
-  Library("library"),
-  Catalog("catalog"),
-  /** The media-server items this account has started; exclusive, unlike `All`. */
-  Remote("remote"),
+  Movies("movies"),
+  Series("series"),
 }
 
 /** The raw `GET /api/resume` answer: the same card shapes Home draws, kept unparsed so one

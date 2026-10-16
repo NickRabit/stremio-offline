@@ -154,9 +154,9 @@ class ApiClientTest {
           """{"kind":"catalog","type":"series","id":"tt2","name":"Show"}],"total":2,"pending":false}"""
       )
     )
-    val result = client(start()).favorites(FavoriteFilter.Library, limit = 30, skip = 60)
+    val result = client(start()).favorites(FavoriteFilter.Movies, limit = 30, skip = 60)
 
-    assertEquals("/api/favorites?filter=library&limit=30&skip=60", server.takeRequest().path)
+    assertEquals("/api/favorites?filter=movies&limit=30&skip=60", server.takeRequest().path)
     assertEquals(2, result.total)
     assertEquals(2, result.items.size)
     assertEquals("library:lib_1/It.mkv", result.items[0].key)

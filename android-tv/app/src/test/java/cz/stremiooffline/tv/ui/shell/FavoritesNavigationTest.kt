@@ -61,11 +61,11 @@ class FavoritesNavigationTest {
     override suspend fun favorites(filter: FavoriteFilter, limit: Int, skip: Int): FavoritesPage {
       favoritesRequests += filter
       val items = merged.filter {
+        // The journey walks All; the fake splits the rest so both chips answer something.
         when (filter) {
           FavoriteFilter.All -> true
-          FavoriteFilter.Library -> it is FavoriteItemDto.Library
-          FavoriteFilter.Catalog -> it is FavoriteItemDto.Catalog
-          FavoriteFilter.Remote -> it is FavoriteItemDto.Remote
+          FavoriteFilter.Movies -> it is FavoriteItemDto.Library
+          FavoriteFilter.Series -> it is FavoriteItemDto.Catalog || it is FavoriteItemDto.Remote
         }
       }
       return FavoritesPage(items, items.size, false)

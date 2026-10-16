@@ -10,6 +10,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
@@ -21,6 +22,7 @@ import cz.stremiooffline.tv.data.BrowseResult
 import cz.stremiooffline.tv.data.FavoriteFilter
 import cz.stremiooffline.tv.data.FavoriteItemDto
 import cz.stremiooffline.tv.data.FavoritesPage
+import cz.stremiooffline.tv.data.TitleRefDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs
 import cz.stremiooffline.tv.ui.detail.DetailData
@@ -28,6 +30,7 @@ import cz.stremiooffline.tv.ui.detail.RemoteDetailData
 import cz.stremiooffline.tv.ui.file
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -59,6 +62,9 @@ class FavoritesScreenTest {
 
   private fun library(path: String, label: String = path, kind: String = "file") =
     FavoriteItemDto.Library(path = path, label = label, itemKind = kind)
+
+  private fun bound(path: String, label: String, type: String = "movie", id: String = "tt1", kind: String = "file") =
+    FavoriteItemDto.Library(path = path, label = label, itemKind = kind, title = TitleRefDto(type = type, id = id))
 
   private fun catalog(id: String, name: String = id, type: String = "movie") =
     FavoriteItemDto.Catalog(type = type, id = id, name = name)
@@ -105,10 +111,10 @@ class FavoritesScreenTest {
     mount(api)
 
     compose.onNodeWithTag(favoritesFilterTag(FavoriteFilter.All)).assertIsFocused()
-    focusBy(favoritesFilterTag(FavoriteFilter.Library), Key.DirectionRight)
+    focusBy(favoritesFilterTag(FavoriteFilter.Movies), Key.DirectionRight)
     press(Key.DirectionCenter)
 
-    assertEquals(listOf(FavoriteFilter.All, FavoriteFilter.Library), api.favoritesRequests)
+    assertEquals(listOf(FavoriteFilter.All, FavoriteFilter.Movies), api.favoritesRequests)
   }
 
   @Test
@@ -120,10 +126,47 @@ class FavoritesScreenTest {
     compose.onNodeWithTag(favoriteCardTag(library("browse/A.mkv"))).assertIsFocused()
     press(Key.DirectionUp)
     focusBy(favoritesFilterTag(FavoriteFilter.All), Key.DirectionLeft)
-    focusBy(favoritesFilterTag(FavoriteFilter.Library), Key.DirectionRight)
+    focusBy(favoritesFilterTag(FavoriteFilter.Movies), Key.DirectionRight)
     press(Key.DirectionCenter)
 
-    assertEquals(listOf(FavoriteFilter.All, FavoriteFilter.Library), api.favoritesRequests)
+    assertEquals(listOf(FavoriteFilter.All, FavoriteFilter.Movies), api.favoritesRequests)
+  }
+
+  @Test
+  fun `ok on a copy bound to a title opens that title's detail`() {
+    val api = FakeTvApi()
+    val copy = bound("browse/It.mkv", "It")
+    api.favoritesValue = FavoritesPage(listOf(copy), 1, false)
+    val opened = mutableListOf<CatalogDetailArgs>()
+    val details = mutableListOf<DetailData>()
+    mount(api, onOpenCatalog = { opened += it }, onOpenDetail = { details += it })
+
+    compose.onNodeWithTag(favoriteCardTag(copy)).assertIsFocused()
+    press(Key.DirectionCenter)
+
+    assertEquals(1, opened.size)
+    assertEquals("tt1", opened[0].meta.id)
+    assertEquals("movie", opened[0].type)
+    assertEquals("It", opened[0].meta.name)
+    assertEquals("the file's own detail is not opened", 0, details.size)
+  }
+
+  @Test
+  fun `ok on a bound folder favourite opens the title's detail too`() {
+    val api = FakeTvApi()
+    val folder = bound("browse/Show", "Show", type = "series", id = "tt2", kind = "folder")
+    api.favoritesValue = FavoritesPage(listOf(folder), 1, false)
+    val opened = mutableListOf<CatalogDetailArgs>()
+    val details = mutableListOf<DetailData>()
+    mount(api, onOpenCatalog = { opened += it }, onOpenDetail = { details += it })
+
+    compose.onNodeWithTag(favoriteCardTag(folder)).assertIsFocused()
+    press(Key.DirectionCenter)
+
+    assertEquals(1, opened.size)
+    assertEquals("tt2", opened[0].meta.id)
+    assertEquals("series", opened[0].type)
+    assertEquals(0, details.size)
   }
 
   @Test
@@ -197,13 +240,13 @@ class FavoritesScreenTest {
     mount(api, onOpenRemote = { opened += it })
 
     // The grid holds the focus while the one list is on screen, and the chips sit above it: the
-    // four filters are the list's own, with no Local / Media servers switch beside them.
+    // three filters are the list's own, with no Local / Media servers switch beside them.
     compose.onNodeWithTag(favoriteCardTag(remote())).assertIsFocused()
     press(Key.DirectionUp)
     focusBy(favoritesFilterTag(FavoriteFilter.All), Key.DirectionLeft)
-    focusBy(favoritesFilterTag(FavoriteFilter.Remote), Key.DirectionRight)
+    focusBy(favoritesFilterTag(FavoriteFilter.Series), Key.DirectionRight)
     press(Key.DirectionCenter)
-    assertEquals(listOf(FavoriteFilter.All, FavoriteFilter.Remote), api.favoritesRequests)
+    assertEquals(listOf(FavoriteFilter.All, FavoriteFilter.Series), api.favoritesRequests)
     compose.onNodeWithTag(favoriteCardTag(remote())).assertIsFocused()
     press(Key.DirectionCenter)
     compose.waitForIdle()
@@ -212,5 +255,18 @@ class FavoritesScreenTest {
     assertEquals("rlib_a", opened[0].libraryId)
     assertEquals("m1", opened[0].item.id)
     assertEquals("Alien", opened[0].item.name)
+  }
+
+  @Test
+  fun `a media-server favourite's caption names neither the server nor its library`() {
+    val api = FakeTvApi()
+    api.favoritesValue = FavoritesPage(listOf(remote(title = "Alien")), 1, false)
+    mount(api)
+
+    compose.onNodeWithTag(favoriteCardTag(remote())).assertIsFocused()
+    assertTrue(compose.onAllNodesWithText("Jellyfin", substring = true).fetchSemanticsNodes().isEmpty())
+    assertTrue(compose.onAllNodesWithText("Server", substring = true).fetchSemanticsNodes().isEmpty())
+    // The title is still drawn, so the card is not simply empty.
+    assertTrue(compose.onAllNodesWithText("Alien", substring = true).fetchSemanticsNodes().isNotEmpty())
   }
 }

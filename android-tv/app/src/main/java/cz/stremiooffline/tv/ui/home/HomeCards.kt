@@ -6,6 +6,7 @@ import cz.stremiooffline.tv.catalog.ResumeEpisode
 import cz.stremiooffline.tv.data.HomeCard
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.RemoteItemDto
+import cz.stremiooffline.tv.data.TitleRefDto
 import cz.stremiooffline.tv.data.episodeCodeText
 import cz.stremiooffline.tv.data.yearText
 import cz.stremiooffline.tv.playback.Progress
@@ -68,14 +69,12 @@ fun remoteDetailOf(card: HomeCard.Remote): RemoteDetailData = RemoteDetailData(
   ),
 )
 
-/** The web's `captionOf`, minus the age and release-date text the TV deliberately leaves out. */
+/** The web's `captionOf`, minus the age and release-date text the TV deliberately leaves out.
+ *  No caption names the library or the media server a row came from. */
 fun captionOf(card: HomeCard, label: String?): String? = listOfNotNull(
   label,
   card.episodeCodeText,
   (card as? HomeCard.ResumeFile)?.subtitle?.takeIf { it.isNotBlank() },
-  (card as? HomeCard.Remote)?.let { remote ->
-    listOf(remote.provider, remote.libraryName).filter { it.isNotBlank() }.joinToString(" · ").takeIf { it.isNotBlank() }
-  },
   card.yearText?.takeIf { it.isNotBlank() },
 ).joinToString(" · ").ifEmpty { null }
 
@@ -114,22 +113,33 @@ fun heroDescription(card: HomeCard, meta: MetaDto?): String? =
     (card as? HomeCard.ResumeFile)?.subtitle?.takeIf { it.isNotBlank() }
   }
 
-/** Where OK on a card goes: the player, the library folder or a catalogue detail. */
+/** Where OK on a card goes, for Home and for Continue watching alike: the version the card was
+ *  written from when it names one, the title's own detail when it is bound to a title, else the
+ *  player, the library folder or the catalogue detail the kind has always opened. */
 fun actionFor(card: HomeCard): HomeAction = when (card) {
   is HomeCard.ResumeFile -> play(card.path, card.title)
   is HomeCard.Completed -> play(card.path, card.title)
   is HomeCard.Recent -> play(card.path, card.label)
-  is HomeCard.Favorite -> if (card.itemKind == "folder") HomeAction.OpenLibrary(card.path) else play(card.path, card.label)
+  is HomeCard.Favorite -> when {
+    card.title != null -> titleDetail(card.title, card.label, card.poster)
+    card.itemKind == "folder" -> HomeAction.OpenLibrary(card.path)
+    else -> play(card.path, card.label)
+  }
   is HomeCard.Tonight -> if (card.itemKind == "folder") HomeAction.OpenLibrary(card.path) else play(card.path, card.label)
-  is HomeCard.ResumeCatalogue -> HomeAction.OpenCatalog(
-    CatalogDetailArgs(
-      meta = MetaDto(id = card.id, type = card.type, name = card.name, poster = card.poster),
-      addonName = "",
-      type = card.type,
-      episode = card.episode?.let { episode -> card.season?.let { season -> ResumeEpisode(card.key, season, episode) } },
-      forgetKeys = card.forgetKeys,
-    ),
-  )
+  // A catalogue row written from a library file is that file: it plays where the file plays.
+  is HomeCard.ResumeCatalogue -> if (card.path != null) {
+    play(card.path, card.title)
+  } else {
+    HomeAction.OpenCatalog(
+      CatalogDetailArgs(
+        meta = MetaDto(id = card.id, type = card.type, name = card.name, poster = card.poster),
+        addonName = "",
+        type = card.type,
+        episode = card.episode?.let { episode -> card.season?.let { season -> ResumeEpisode(card.key, season, episode) } },
+        forgetKeys = card.forgetKeys,
+      ),
+    )
+  }
   is HomeCard.Episode -> HomeAction.OpenCatalog(
     CatalogDetailArgs(
       meta = MetaDto(id = card.metaId, type = card.type, name = card.name, poster = card.poster),
@@ -157,3 +167,13 @@ fun actionFor(card: HomeCard): HomeAction = when (card) {
 
 private fun play(path: String, title: String): HomeAction.Play =
   HomeAction.Play(PlayTarget(key = Progress.libraryKey(path), title = title, resume = true, path = path))
+
+/** The catalogue detail of the title a bound card stands for, named by the card's own label. */
+private fun titleDetail(title: TitleRefDto, label: String, poster: String?): HomeAction.OpenCatalog =
+  HomeAction.OpenCatalog(
+    CatalogDetailArgs(
+      meta = MetaDto(id = title.id, type = title.type, name = label, poster = poster),
+      addonName = "",
+      type = title.type,
+    ),
+  )
