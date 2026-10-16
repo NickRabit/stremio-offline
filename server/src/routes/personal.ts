@@ -2,6 +2,7 @@ import type express from "express";
 import { allowedAddons } from "../addons.js";
 import type { ArtShape } from "../artwork.js";
 import { AppError } from "../errors.js";
+import { favoriteIdentity, titleOfPath } from "../favorite-identity.js";
 import {
   filterFavorites, mergeFavorites, parseFavoriteFilter, type FavoriteCatalogItem, type FavoriteEntry,
   type FavoriteEntryCatalog, type FavoriteEntryLibrary, type FavoriteItem, type FavoriteLibraryItem,
@@ -9,10 +10,10 @@ import {
 } from "../favorites.js";
 import type { RemoteHomeCard } from "../home.js";
 import type { MediaServerAuthority } from "../media-server-manager.js";
-import type { MediaServerPersonal } from "../media-server-personal.js";
+import { CARD_LIMIT_MAX as REMOTE_FAVORITE_LIMIT, type MediaServerPersonal } from "../media-server-personal.js";
 import { HOME_FORGET_LIMIT, HOME_RESUME_FILE_LIMIT, type ResumeIdentity } from "../home.js";
 import { images } from "../images.js";
-import { knownEntryForUnit, knownTitleEntry, unitFor, type LibraryMetaRecord, type TitleUnit } from "../library-match.js";
+import { knownTitleEntry, type LibraryMetaRecord, type TitleUnit } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { isVideo, sortFiles, type BrowseItem, type BrowseMeta, type LibraryFile } from "../library.js";
 import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, posixBase, showsInContinueWatching, showsInFavorites, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
@@ -181,11 +182,18 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     if (!id) throw new AppError("Missing title id.", "err.missingTitleId");
     const key = `${type}:${id}`;
     const wanted = Boolean(req.body.favorite);
+    // One title wears one star: clearing the catalogue's own clears the library paths that stand
+    // for it too, or the star would come straight back from the other side.
+    const records = wanted ? {} : metaStore.qualifiedMeta();
+    const units = wanted ? [] : await libraryUnits();
+    const starredPaths: ReadonlySet<string> = new Set(wanted ? [] : (dataOf(req).favorites ?? [])
+      .filter((path) => { const title = titleOfPath(path, records, units); return Boolean(title && `${title.type}:${title.id}` === key); }));
     await updateData(req, (data) => {
       const all = { ...watchlistOf(data) };
       if (wanted) all[key] = { type, id, name: String(req.body.name ?? id), poster: posterOf(req.body.poster), addedAt: new Date().toISOString() };
       else delete all[key];
       data.watchlist = all;
+      if (starredPaths.size) data.favorites = data.favorites.filter((path) => !starredPaths.has(path));
     });
     res.json({ key, favorite: wanted });
   }));
@@ -552,17 +560,6 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     return library.enabled && !library.unreachable;
   };
 
-  /** The identified title a starred key belongs to, resolved the way the library listing
-   *  resolves it: through the key's unit, so a starred episode answers with its show's folder
-   *  and folds with the show's catalogue star. Falls back to the key itself when nothing
-   *  groups it. */
-  const favoriteIdentity = (
-    key: string,
-    records: Record<string, LibraryMetaRecord>,
-    units: TitleUnit[],
-  ): { key: string; record: LibraryMetaRecord } | undefined =>
-    knownEntryForUnit(unitFor(key, units) ?? key, records, isVideo(posixBase(key)) ? key : undefined);
-
   /** The merged Favourites list, ordered and permission-filtered but not yet described.
    *  Order: the account's own library stars first, newest star first by the stored order
    *  (a library star carries no time of its own and the storage stays as it is), then the
@@ -602,7 +599,8 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
       const target = known?.key ?? key;
       // A newer star of the same title already drew this card.
       if (drawn.has(target)) continue;
-      const entry: FavoriteEntryLibrary = { kind: "library", key: target };
+      const title = titleOfPath(key, records, units);
+      const entry: FavoriteEntryLibrary = { kind: "library", key: target, ...(title ? { title: { type: title.type, id: title.id } } : {}) };
       drawn.set(target, entry);
       if (known?.record.id) owner.set(`${known.record.type}:${known.record.id}`, entry);
       library.push(entry);
@@ -622,7 +620,8 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
       // The binding is looked up by the entry's own kind, never across kinds.
       const bound = boundByImdb.get(identity);
       if (bound !== undefined && !drawn.has(bound)) {
-        const card: FavoriteEntryLibrary = { kind: "library", key: bound, catalogId: entry.id };
+        const title = titleOfPath(bound, records, units);
+        const card: FavoriteEntryLibrary = { kind: "library", key: bound, catalogId: entry.id, ...(title ? { title: { type: title.type, id: title.id } } : {}) };
         drawn.set(bound, card);
         owner.set(identity, card);
         library.push(card);
@@ -658,20 +657,25 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     // A starred file draws the position of the title it is bound to, wherever that row sits.
     const all = progressOf(dataOf(req));
     const resolved = await resolveProgressKey(`file:${key}`);
-    const rows = standingKeys(resolved, all, records, await libraryUnits())
+    const units = await libraryUnits();
+    const rows = standingKeys(resolved, all, records, units)
       .filter((stored) => all[stored] !== undefined)
       .map((stored): [string, StoredProgress] => [stored, all[stored]!]);
     const stored = newestProgress(rows, resolved.key)?.[1];
     const progress = stored && stored.duration > 0 ? { position: stored.position, duration: stored.duration } : undefined;
+    // A copy that stands for a title is named as the title, never by its folder or file name.
+    const titleName = entry.title ? favoriteIdentity(key, records, units)?.record.name : undefined;
     return {
       kind: "library", path: wire,
-      label: item.kind === "folder" ? item.name : item.label,
+      label: titleName || (item.kind === "folder" ? item.name : item.label),
       ...(poster ? { poster } : {}),
       ...(wideUrl ? { wide: wideUrl } : {}),
       ...(record?.year ? { year: record.year } : {}),
       itemKind: item.kind,
       ...(progress ? { progress } : {}),
       ...(entry.catalogId ? { catalogId: entry.catalogId } : {}),
+      // The copy stands for a title: the card opens that title's detail, not the file.
+      ...(entry.title ? { title: entry.title } : {}),
     } satisfies FavoriteLibraryItem;
   };
 
@@ -714,6 +718,24 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
         ? { items: remote.items, total: remote.total, pending: false, ...(remote.partial ? { partial: true } : {}) }
         : { items: [], total: 0, pending: false, partial: true };
     }
+    // The two title filters read the media server's own stars too: one call for every card, kept
+    // by the kind of item, and merged with the local half the way `all` merges them.
+    if (filter === "movies" || filter === "series") {
+      const wanted = filter === "movies" ? "movie" : "series";
+      const entries = await favoritesEntries(req, options);
+      const local = await Promise.all(entries.map((entry) => describeFavorite(req, entry)));
+      const described = local.filter((item): item is FavoriteItem => item !== undefined);
+      const remote = await remoteFavorites(req, 0, REMOTE_FAVORITE_LIMIT, options.onHome === true);
+      const remoteItems = (remote?.items ?? []).filter((item) =>
+        wanted === "movie" ? item.itemType === "movie" : item.itemType === "series" || item.itemType === "episode");
+      const merged = [...described, ...remoteItems];
+      return {
+        items: merged.slice(skip, skip + limit),
+        total: described.length + remoteItems.length,
+        pending: described.some((item) => item.kind === "library" && (!item.poster || !item.wide)),
+        ...(remote === undefined ? { partial: true } : {}),
+      };
+    }
     const entries = await favoritesEntries(req, options);
     // Every entry is described before the slice, so `total` counts only what can be returned:
     // a key the disk no longer answers cannot make a page repeat or stall the "load more".
@@ -753,12 +775,18 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     const viewer = viewerOf(currentUser(req));
     const libraries = store.libraries();
     const records = metaStore.qualifiedMeta();
+    const units = await libraryUnits();
+    // A bound file's position is stored under its title, with the file as the row's `path`: that
+    // row is still the file's own, so the library lists it as long as the file stands for it.
     const entries = Object.entries(progressOf(data)).filter(([key, entry]) =>
-      key.startsWith("file:") && Boolean(entry.path) && showsInContinueWatching(entry.path!, libraries)
+      (key.startsWith("file:") || (Boolean(entry.path) && isVideo(posixBase(entry.path!))))
+      && Boolean(entry.path) && showsInContinueWatching(entry.path!, libraries)
       && (!options.onHome || showsOnHome(entry.path!, libraries)) && pathVisible(entry.path!, viewer, libraries));
-    const described = await Promise.all(entries.map(async ([, entry]) => {
+    const described = await Promise.all(entries.map(async ([stored, entry]) => {
       const item = await describeLibraryPath(entry.path!);
       if (!item || item.kind !== "file") return [];
+      if (!stored.startsWith("file:")
+        && titleProgressKey(entry.path!, records, units, { season: item.season, episode: item.episode })?.key !== stored) return [];
       // `describePath` answers library-relative, and the row already knows which library it
       // came from. Qualifying it through the single-library shim instead asks an install with
       // two of them a question it cannot answer, and the whole resume row returns 400.

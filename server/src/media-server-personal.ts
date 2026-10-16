@@ -208,7 +208,8 @@ const MAX_RECORDS = 1000;
 const MAX_SECONDS = 31_536_000;
 const PATCH_KEYS = ["position", "duration", "favorite", "watched", "mediaSourceId"];
 const CARD_LIMIT_DEFAULT = 20;
-const CARD_LIMIT_MAX = 1000;
+/** The most cards one call may ask for, so a whole shelf can be filtered in one read. */
+export const CARD_LIMIT_MAX = 1000;
 const CARD_SKIP_MAX = 1000;
 const CARD_DEADLINE_HOME_MS = 1500;
 const CARD_DEADLINE_MS = 5000;

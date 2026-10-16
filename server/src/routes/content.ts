@@ -58,7 +58,8 @@ export interface ContentDeps extends RouteContext {
   thumbUrl(param: "path" | "dir" | "key", value: string, art: string | undefined, shape?: ArtShape): Promise<string | undefined>;
   transferLibraryItem(relative: string, folder: string, copy?: boolean, progress?: TransferProgress, confirmTypeMismatch?: boolean): Promise<string>;
   wirePath(key: string): string;
-  withFavorites<T extends { path: string }>(items: T[], data: UserData): Array<T & { favorite: boolean }>;
+  /** Whether each row's path is starred -- its own star, or the star of the title it stands for. */
+  withFavorites<T extends { path: string }>(items: T[], data: UserData, records: Record<string, LibraryMetaRecord>, units: TitleUnit[]): Array<T & { favorite: boolean }>;
   /** The memory copy of the library poster and wide bytes. Omitted, one is built here. */
   fileSnaps?: FileSnapCache;
   /** Composed fans: one picture per folder that stands for several films. Omitted in tests. */
@@ -231,7 +232,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
         backfill, moving,
       };
     }));
-    const marked = withFavorites(items, data);
+    const marked = withFavorites(items, data, progressRecords, progressUnits);
     const collage = (item: { kind: string; posters?: string[] }) => item.kind === "folder" && (item.posters?.length ?? 0) > 1;
     res.json({
       ...result, path: wirePath(inLibrary(result.path)),

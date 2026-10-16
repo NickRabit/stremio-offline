@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import express from "express";
 import { messageKeyOf } from "../errors.js";
+import type { RemoteHomeCard } from "../home.js";
 import { parseLibraryPath, type LibraryRecord } from "../libraries.js";
 import type { LibraryMetaRecord, TitleUnit } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
@@ -43,6 +44,9 @@ interface Harness {
   remoteLibraries: Array<Record<string, unknown>>;
   /** Keys `describeLibraryPath` must throw on, the way a library that is gone does. */
   broken: Set<string>;
+  /** The media-server stars the card projection hands out, and every page it was asked for. */
+  remoteCards: RemoteHomeCard[];
+  remoteCalls: Array<{ filter: string; skip: number; limit: number }>;
   /** How many writes reached `updateData`, so a single-operation forget can be counted. */
   updates: number;
   data(user: string): UserData;
@@ -64,6 +68,8 @@ const mount = async (libraries: LibraryRecord[] = []): Promise<Harness> => {
   const broken = new Set<string>();
   const mediaConnections: Array<Record<string, unknown>> = [];
   const remoteLibraries: Array<Record<string, unknown>> = [];
+  const remoteCards: RemoteHomeCard[] = [];
+  const remoteCalls: Harness["remoteCalls"] = [];
   let updates = 0;
   const userOf = (req?: express.Request) => {
     const id = req?.header("x-user");
@@ -132,7 +138,12 @@ const mount = async (libraries: LibraryRecord[] = []): Promise<Harness> => {
     },
     watchlistOf: (data) => data.watchlist as Record<string, WatchlistEntry>,
     remotePersonal: {
-      cards: async () => ({ items: [], total: 0 }),
+      cards: async (_authority: unknown, options: { filter: string; skip?: number; limit?: number }) => {
+        remoteCalls.push({ filter: options.filter, skip: options.skip ?? 0, limit: options.limit ?? 60 });
+        const skip = options.skip ?? 0;
+        const limit = options.limit ?? 60;
+        return { items: remoteCards.slice(skip, skip + limit), total: remoteCards.length };
+      },
       assertCardsCurrent: () => undefined,
     } as unknown as PersonalDeps["remotePersonal"],
     authorityOf: () => ({ actor: { id: ALICE, secret: "unused" }, assertCurrent: () => undefined }),
@@ -161,6 +172,8 @@ const mount = async (libraries: LibraryRecord[] = []): Promise<Harness> => {
     broken,
     mediaConnections,
     remoteLibraries,
+    remoteCards,
+    remoteCalls,
     get updates() { return updates; },
     data: (user) => users.get(user)!,
     close: async () => {
@@ -316,6 +329,13 @@ const filmLibrary: LibraryRecord = {
 const bindFilm = (harness: Harness): void => {
   harness.records["lib_00000001/Films/Heat"] = { type: "movie", id: "tt9", name: "Heat" };
   harness.units.push({ key: "lib_00000001/Films/Heat", kind: "movie", relative: "Films/Heat", sampleFiles: [FILM_FILE] });
+};
+
+const SHOW_FILE = "lib_00000001/Shows/Dark/S01/Dark.S01E02.mkv";
+/** One show whose episode file the harness knows, so a starred episode can stand for its show. */
+const bindShow = (harness: Harness): void => {
+  harness.records["lib_00000001/Shows/Dark"] = { type: "series", id: "tt5", name: "Dark" };
+  harness.units.push({ key: "lib_00000001/Shows/Dark", kind: "series", relative: "Shows/Dark", sampleFiles: [SHOW_FILE] });
 };
 
 const legacyFilmRow = (position: number, updatedAt: string): StoredProgress =>
@@ -550,6 +570,96 @@ test("a malformed remote is dropped while the write still lands, and a write wit
   await writePosition(harness, { key: "movie:tt1", remote: { libraryId: "rlib_a", itemId: "1", mediaSourceId: "ms1" } });
   await writePosition(harness, { key: "movie:tt1" });
   assert.equal(stored().remote, undefined, "the version a later write names, or does not, is what stands");
+});
+
+test("unstarring a title through the watchlist clears the library paths that stand for it", async (t) => {
+  const harness = await mount([filmLibrary]);
+  t.after(harness.close);
+  bindFilm(harness);
+  harness.data(ALICE).favorites = [FILM_FILE, "lib_00000001/Films/Heat/Copy.mkv", "lib_00000001/Films/Loose.mkv"];
+  harness.data(ALICE).watchlist = { "movie:tt9": { type: "movie", id: "tt9", name: "Heat", addedAt: "2024-01-01T00:00:00.000Z" } };
+
+  const response = await api(harness.base, "/api/watchlist", { method: "POST", user: ALICE, body: { type: "movie", id: "tt9", favorite: false } });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(harness.data(ALICE).watchlist, {});
+  assert.deepEqual(harness.data(ALICE).favorites, ["lib_00000001/Films/Loose.mkv"], "every copy of the film goes, the unbound star stays");
+});
+
+test("a starred episode stands for its show in every title read", async (t) => {
+  const harness = await mount([filmLibrary]);
+  t.after(harness.close);
+  bindShow(harness);
+  harness.data(ALICE).favorites = [SHOW_FILE];
+  harness.data(ALICE).watchlist = { "series:tt5": { type: "series", id: "tt5", name: "Dark", addedAt: "2024-01-01T00:00:00.000Z" } };
+
+  const body = await (await api(harness.base, "/api/favorites", { user: ALICE })).json() as {
+    items: Array<{ kind: string; title?: { type: string; id: string }; catalogId?: string }>;
+  };
+
+  assert.equal(body.items.length, 1, "the episode and the show's star are one card");
+  assert.deepEqual(body.items[0]!.title, { type: "series", id: "tt5" });
+  assert.equal(body.items[0]!.catalogId, "tt5");
+});
+
+test("a film starred in the library and in the catalogue is one card that names its title", async (t) => {
+  const harness = await mount([filmLibrary]);
+  t.after(harness.close);
+  bindFilm(harness);
+  harness.data(ALICE).favorites = [FILM_FILE];
+  harness.data(ALICE).watchlist = { "movie:tt9": { type: "movie", id: "tt9", name: "Heat", addedAt: "2024-01-01T00:00:00.000Z" } };
+
+  const body = await (await api(harness.base, "/api/favorites", { user: ALICE })).json() as {
+    items: Array<{ kind: string; path: string; catalogId?: string; title?: { type: string; id: string } }>;
+  };
+
+  assert.equal(body.items.length, 1);
+  assert.equal(body.items[0]!.kind, "library");
+  assert.equal(body.items[0]!.catalogId, "tt9");
+  assert.deepEqual(body.items[0]!.title, { type: "movie", id: "tt9" }, "the card opens the one title detail");
+});
+
+test("the Favourites filters read the titles, local copies and media-server stars alike", async (t) => {
+  const harness = await mount([filmLibrary]);
+  t.after(harness.close);
+  bindFilm(harness);
+  bindShow(harness);
+  harness.data(ALICE).favorites = [FILM_FILE, SHOW_FILE, "lib_00000001/Films/Loose.mkv"];
+  harness.data(ALICE).watchlist = { "movie:tt7": { type: "movie", id: "tt7", name: "Starred film", addedAt: "2024-01-02T00:00:00.000Z" } };
+  harness.remoteCards.push(
+    { kind: "remote", key: "remote:a", title: "Remote film", libraryId: "rlib_a", itemId: "1", provider: "jellyfin", libraryName: "Server", itemType: "movie", updatedAt: "2024-01-03T00:00:00.000Z" },
+    { kind: "remote", key: "remote:b", title: "Remote episode", libraryId: "rlib_a", itemId: "2", provider: "jellyfin", libraryName: "Server", itemType: "episode", season: 1, episode: 1, updatedAt: "2024-01-04T00:00:00.000Z" },
+  );
+  type Page = { items: Array<{ kind: string; path?: string; id?: string; itemId?: string }>; total: number };
+  const page = async (filter: string) => (await (await api(harness.base, `/api/favorites?filter=${filter}`, { user: ALICE })).json()) as Page;
+  const labels = (body: Page) => body.items.map((item) => item.kind === "remote" ? item.itemId : item.path ?? item.id).sort();
+
+  const movies = await page("movies");
+  assert.equal(movies.total, 3, "the film, the media-server film and the catalogue star of the film's id");
+  assert.deepEqual(labels(movies), ["1", "lib_00000001/Films/Heat", "tt7"]);
+  const series = await page("series");
+  assert.equal(series.total, 2, "the show's library copy and the media-server episode");
+  assert.deepEqual(labels(series), ["2", "lib_00000001/Shows/Dark"]);
+  // The names an older client still sends answer the way they always did.
+  assert.deepEqual(labels(await page("library")), ["lib_00000001/Films/Heat", "lib_00000001/Films/Loose.mkv", "lib_00000001/Shows/Dark"]);
+  assert.deepEqual(labels(await page("catalog")), ["tt7"]);
+  assert.deepEqual(labels(await page("remote")), ["1", "2"]);
+  assert.deepEqual(labels(await page("all")), ["1", "2", "lib_00000001/Films/Heat", "lib_00000001/Films/Loose.mkv", "lib_00000001/Shows/Dark", "tt7"].sort());
+  assert.deepEqual(labels(await page("nonsense")), labels(await page("all")), "an unknown filter reads as all");
+});
+
+test("the Favourites page asks the media server once for all of its stars", async (t) => {
+  const harness = await mount([filmLibrary]);
+  t.after(harness.close);
+  harness.remoteCards.push(
+    { kind: "remote", key: "remote:a", title: "Remote film", libraryId: "rlib_a", itemId: "1", provider: "jellyfin", libraryName: "Server", itemType: "movie", updatedAt: "2024-01-03T00:00:00.000Z" },
+    { kind: "remote", key: "remote:b", title: "Remote show", libraryId: "rlib_a", itemId: "2", provider: "jellyfin", libraryName: "Server", itemType: "series", updatedAt: "2024-01-04T00:00:00.000Z" },
+  );
+
+  const page = await (await api(harness.base, "/api/favorites?filter=movies", { user: ALICE })).json() as { items: Array<{ itemId?: string }> };
+
+  assert.deepEqual(harness.remoteCalls, [{ filter: "favorites", skip: 0, limit: 1000 }], "one read of every card the filter may keep");
+  assert.deepEqual(page.items.map((item) => item.itemId), ["1"]);
 });
 
 test("POST /api/library/favorite hands setLibraryFavorite the relative path and the wanted state", async (t) => {

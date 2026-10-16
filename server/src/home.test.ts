@@ -177,11 +177,38 @@ test("the winner of a merged show does not depend on the input order", () => {
 });
 
 test("parseResumeFilter keeps the two card kinds and folds anything else into all", () => {
+  assert.equal(parseResumeFilter("movies"), "movies");
+  assert.equal(parseResumeFilter("series"), "series");
   assert.equal(parseResumeFilter("library"), "library");
   assert.equal(parseResumeFilter("catalog"), "catalog");
+  assert.equal(parseResumeFilter("remote"), "remote");
   assert.equal(parseResumeFilter("all"), "all");
   assert.equal(parseResumeFilter(undefined), "all");
   assert.equal(parseResumeFilter("nope"), "all");
+});
+
+test("the two title filters read every kind of card", () => {
+  const sources = {
+    files: [
+      file({ key: "file:film", identity: { type: "movie", id: "tt1" }, updatedAt: at(1) }),
+      file({ key: "file:episode", identity: { type: "series", id: "tt5" }, season: 1, episode: 2, updatedAt: at(2) }),
+      // An unbound file carries no title: its numbering is all it says about itself.
+      file({ key: "file:numbered", season: 3, episode: 4, updatedAt: at(3) }),
+      file({ key: "file:loose", updatedAt: at(4) }),
+    ],
+    catalogue: [
+      catalogue({ key: "movie:tt9", type: "movie", id: "tt9", updatedAt: at(5) }),
+      catalogue({ key: "series:tt6:1:1", type: "series", id: "tt6", name: "Show", updatedAt: at(6) }),
+    ],
+    remote: [
+      { kind: "remote" as const, key: "remote:a", title: "Remote film", libraryId: "rlib_a", itemId: "1", provider: "jellyfin" as const, libraryName: "Server", itemType: "movie" as const, updatedAt: at(7) },
+      { kind: "remote" as const, key: "remote:b", title: "Remote episode", libraryId: "rlib_a", itemId: "2", provider: "jellyfin" as const, libraryName: "Server", itemType: "episode" as const, season: 1, episode: 1, updatedAt: at(8) },
+    ],
+  };
+  const keys = (filter: "movies" | "series") => resumePage(sources, { filter }).items.map((item) => item.key).sort();
+
+  assert.deepEqual(keys("movies"), ["file:film", "file:loose", "movie:tt9", "remote:a"]);
+  assert.deepEqual(keys("series"), ["file:episode", "file:numbered", "remote:b", "series:tt6:1:1"]);
 });
 
 test("the first page of resumePage is exactly Home's row", () => {

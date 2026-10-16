@@ -185,7 +185,7 @@ test("a film watched from its library file and from the catalogue is one card", 
     // A bound file is stored as its title, so both writes land on one row; a legacy file row
     // stored before that is folded into the same card by the merge (server unit tests).
     expect(items, "the file and the catalogue play are one card").toHaveLength(1);
-    expect(items[0]!.forgetKeys).toEqual([catalogueKey]);
+    expect(items[0]!.forgetKeys).toContain(catalogueKey);
 
     await page.goto("/");
     await goToView(page, "Pokračovat ve sledování");
@@ -201,6 +201,44 @@ test("a film watched from its library file and from the catalogue is one card", 
     await request.delete(`/api/progress/${encodeURIComponent(fileKey)}`);
     await request.delete(`/api/progress/${encodeURIComponent(catalogueKey)}`);
     await request.post("/api/library/match", { data: { path: "resume-film", id: "", type: "movie" } });
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+/** A catalogue card written from a bound library file names that file, so a click plays it the way
+ *  a library card plays its own -- the detail is what the menu is for. */
+test("a catalogue card written from a library file plays on click", async ({ page, request }) => {
+  const directory = path.resolve("e2e/.tmp/downloads/resume-click");
+  const fileRelative = "resume-click/film.mp4";
+  const fileKey = `file:${fileRelative}`;
+  const titleKey = "movie:tt-e2e-click";
+  const title = "Zkušební film";
+  await rm(directory, { recursive: true, force: true });
+  await mkdir(directory, { recursive: true });
+  await writeFile(path.join(directory, "film.mp4"), "fixture");
+  const card = () => page.locator(".section-grid .browse-item", { hasText: title });
+  try {
+    expect((await request.post("/api/library/match", { data: { path: "resume-click", type: "movie", id: "tt-e2e-click" } })).ok()).toBe(true);
+    expect((await request.post("/api/progress", { data: { key: fileKey, path: fileRelative, title, position: 300, duration: 2400 } })).ok()).toBe(true);
+    // A player journey never needs a real video: the session is the server's own answer.
+    await page.route("**/api/playback", (route) => route.request().method() === "POST"
+      ? route.fulfill({ json: { id: "click", mode: "direct", url: "/api/stream/click", offset: 0, duration: 2400, hardware: false, acceleration: false, audioTracks: [], subtitleTracks: [], audioTrack: 0, subtitleTrack: null, quality: null } })
+      : route.continue());
+    await page.route("**/api/playback/click", (route) => route.fulfill({ status: 204 }));
+    await page.route("**/api/stream/click**", (route) => route.fulfill({ contentType: "video/mp4", body: "" }));
+
+    await page.goto("/");
+    await goToView(page, "Pokračovat ve sledování");
+    await expect(card()).toBeVisible();
+    await card().locator(".browse-open").click();
+
+    // Played, not opened: the player covers the page and the title's detail stays away.
+    await expect(page.locator(".player-overlay")).toBeVisible();
+    await expect(page.locator("main.view-title-detail")).toHaveCount(0);
+  } finally {
+    await request.delete(`/api/progress/${encodeURIComponent(fileKey)}`);
+    await request.delete(`/api/progress/${encodeURIComponent(titleKey)}`);
+    await request.post("/api/library/match", { data: { path: "resume-click", id: "", type: "movie" } });
     await rm(directory, { recursive: true, force: true });
   }
 });

@@ -43,14 +43,20 @@ const cards = () => [...host.querySelectorAll<HTMLButtonElement>(".browse-grid .
 const click = async (element: HTMLElement) => { await act(async () => { element.click(); await Promise.resolve(); }); };
 
 describe("ResumeView", () => {
-  it("offers library, catalogue and remote filters and reports the chosen one", async () => {
+  it("offers the three title filters and reports the chosen one", async () => {
     const { onFilter } = await render({ filter: "all", items: [file()] });
-    expect(chips().map((button) => button.textContent)).toEqual(["All", "In library", "From catalog", "Media servers"]);
+    expect(chips().map((button) => button.textContent)).toEqual(["All", "Films", "Series"]);
     expect(chips()[0]!.getAttribute("aria-pressed")).toBe("true");
     await click(chips()[1]!);
-    expect(onFilter).toHaveBeenCalledWith("library");
-    await click(chips()[3]!);
-    expect(onFilter).toHaveBeenCalledWith("remote");
+    expect(onFilter).toHaveBeenCalledWith("movies");
+    await click(chips()[2]!);
+    expect(onFilter).toHaveBeenCalledWith("series");
+  });
+
+  it("names the chips in the reader's language", async () => {
+    setLocale("cs");
+    await render({ filter: "all", items: [file()] });
+    expect(chips().map((button) => button.textContent)).toEqual(["Vše", "Filmy", "Seriály"]);
   });
 
   it("draws the Favourites grid and reports the page shape setting", async () => {
@@ -85,7 +91,7 @@ describe("ResumeView", () => {
 
   it("names an empty state per filter", async () => {
     const titles = new Map<ResumeFilter, string>();
-    for (const filter of ["all", "library", "catalog"] as ResumeFilter[]) {
+    for (const filter of ["all", "movies", "series"] as ResumeFilter[]) {
       await render({ filter });
       titles.set(filter, host.querySelector(".empty h3")!.textContent!);
     }

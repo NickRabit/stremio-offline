@@ -25,9 +25,29 @@ test("filterFavorites keeps a folded catalogue star under both of its filters", 
     "the fold is the catalogue's own star, the identified library star without one is not");
 });
 
-test("parseFavoriteFilter accepts the three names and falls back to all", () => {
+test("filterFavorites counts a library entry by the title it is bound to", () => {
+  const entries = mergeFavorites(
+    [
+      { kind: "library", key: "lib_a/Heat", title: { type: "movie", id: "tt1" } },
+      { kind: "library", key: "lib_a/Dark", title: { type: "series", id: "tt5" } },
+      library("lib_a/Loose"),
+    ],
+    [catalog("tt2"), { kind: "catalog", type: "series", id: "tt7", name: "Show" }],
+  );
+  const names = (kept: typeof entries) => kept.map((entry) => entry.kind === "library" ? entry.key : entry.id);
+
+  assert.deepEqual(names(filterFavorites(entries, "movies")), ["lib_a/Heat", "tt2"]);
+  assert.deepEqual(names(filterFavorites(entries, "series")), ["lib_a/Dark", "tt7"]);
+  // An unbound library entry is nobody's title, so it keeps to All and to the library filter.
+  assert.deepEqual(names(filterFavorites(entries, "library")), ["lib_a/Heat", "lib_a/Dark", "lib_a/Loose"]);
+});
+
+test("parseFavoriteFilter accepts the title filters, the older names and falls back to all", () => {
+  assert.equal(parseFavoriteFilter("movies"), "movies");
+  assert.equal(parseFavoriteFilter("series"), "series");
   assert.equal(parseFavoriteFilter("library"), "library");
   assert.equal(parseFavoriteFilter("catalog"), "catalog");
+  assert.equal(parseFavoriteFilter("remote"), "remote");
   assert.equal(parseFavoriteFilter("all"), "all");
   assert.equal(parseFavoriteFilter("nonsense"), "all");
   assert.equal(parseFavoriteFilter(undefined), "all");

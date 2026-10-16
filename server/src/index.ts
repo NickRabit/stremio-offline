@@ -46,6 +46,7 @@ import { createArtworkSweep, type SweepDeps, type SweepLibrary } from "./artwork
 import { createMaintenance } from "./maintenance.js";
 import { createShutdown, installSignalHandlers } from "./server-shutdown.js";
 import { switchRerootedRoot } from "./library-admin.js";
+import { starredPath, titleOfPath } from "./favorite-identity.js";
 import { browseMeta, cacheFieldsFromMeta, dropAutomaticInside, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, folderMosaicUnits, knownEntryForUnit, knownTitleOf, knownTitleForUnit, matchKeyFor, mosaicIdentities, mosaicSkipped, needsBackfill, needsEpisodes, staleScanRecordKeys, staleSuggestionKeys, titleUnits, unitFor, unmatchAt, withSkipFlag, type GalleryEntry, type LibraryMetaRecord, type TitleKind, type TitleUnit } from "./library-match.js";
 import { LibraryScan } from "./library-scan.js";
 import { probe } from "./probe.js";
@@ -1811,10 +1812,17 @@ async function sweepArtwork() {
   await maintenance.run();
 }
 
-// A favourite is only a flag on a path. Nothing is moved anywhere.
-const withFavorites = <T extends { path: string }>(items: T[], data: UserData) => {
+/** A favourite is a flag on a path, and one title wears one star: a copy of a starred title is
+ *  drawn starred too. Nothing is moved anywhere. */
+const withFavorites = <T extends { path: string }>(
+  items: T[],
+  data: UserData,
+  records: Record<string, LibraryMetaRecord>,
+  units: TitleUnit[],
+) => {
   const favorites = new Set(data.favorites);
-  return items.map((item) => ({ ...item, favorite: favorites.has(libraryKey(item.path)) }));
+  const watchlist = watchlistOf(data);
+  return items.map((item) => ({ ...item, favorite: starredPath(libraryKey(item.path), favorites, watchlist, records, units) }));
 };
 
 /** A star is one person's, so whoever asked for it owns it. Called from the route and from a
@@ -1827,10 +1835,29 @@ const setLibraryFavorite = async (relative: string, wanted: boolean, userId: str
   // answers exactly like one that does not exist -- the way the read side already filters.
   const resolved = relative ? await resolveLibraryPath(visibleLibraries(store.libraries(), { id: owner.id, role: owner.role }), relative) : undefined;
   if (!resolved) throw new AppError("Invalid path.", "err.invalidPath");
+  // A path bound to a title stars that title too, and unstarring either side clears both: the
+  // catalogue star and the paths that stand for it are one favourite.
+  const records = metaStore.qualifiedMeta();
+  const units = await libraryUnits();
+  const title = titleOfPath(resolved.key, records, units);
+  const identity = title ? `${title.type}:${title.id}` : undefined;
   await updateOneData(owner.id, (data) => {
     const current = new Set(data.favorites);
     if (wanted) current.add(resolved.key); else current.delete(resolved.key);
-    data.favorites = [...current];
+    data.favorites = identity && !wanted
+      ? [...current].filter((path) => {
+        const other = titleOfPath(path, records, units);
+        return !other || `${other.type}:${other.id}` !== identity;
+      })
+      : [...current];
+    if (!title || !identity) return;
+    const watchlist = { ...watchlistOf(data) };
+    if (wanted) {
+      if (!watchlist[identity]) {
+        watchlist[identity] = { type: title.type, id: title.id, name: title.name ?? posixBase(resolved.key), addedAt: new Date().toISOString() };
+      }
+    } else delete watchlist[identity];
+    data.watchlist = watchlist;
   });
 };
 

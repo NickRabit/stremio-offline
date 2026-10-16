@@ -6,22 +6,20 @@ import type { ResumeCard, ResumeFilter, TileShape } from "./types";
 
 const FILTERS = [
   { value: "all", label: "resume.filterAll" },
-  { value: "library", label: "resume.filterLibrary" },
-  { value: "catalog", label: "resume.filterCatalog" },
-  { value: "remote", label: "resume.filterRemote" },
-] as const satisfies ReadonlyArray<{ value: ResumeFilter; label: "resume.filterAll" | "resume.filterLibrary" | "resume.filterCatalog" | "resume.filterRemote" }>;
+  { value: "movies", label: "resume.filterMovies" },
+  { value: "series", label: "resume.filterSeries" },
+] as const satisfies ReadonlyArray<{ value: ResumeFilter; label: "resume.filterAll" | "resume.filterMovies" | "resume.filterSeries" }>;
 
 const EMPTY = {
   all: { title: "resume.emptyAllTitle", text: "resume.emptyAllText" },
-  library: { title: "resume.emptyLibraryTitle", text: "resume.emptyLibraryText" },
-  catalog: { title: "resume.emptyCatalogTitle", text: "resume.emptyCatalogText" },
-  remote: { title: "resume.emptyRemoteTitle", text: "resume.emptyRemoteText" },
+  movies: { title: "resume.emptyMoviesTitle", text: "resume.emptyMoviesText" },
+  series: { title: "resume.emptySeriesTitle", text: "resume.emptySeriesText" },
 } as const;
 
-/** The one Continue watching section: the same merged cards Home's resume row draws, paged
- *  past that row's bound and filtered by card kind. A library card plays from the library, a
- *  catalogue card opens the episode it remembers, and the menu forgets the progress behind
- *  the card. */
+/** The one Continue watching section: the same merged cards Home's resume row draws, paged past
+ *  that row's bound and filtered by the kind of title. A card written from a library file plays it,
+ *  anything else opens the episode it remembers, and the menu forgets the progress behind the
+ *  card. */
 export function ResumeView({ filter, onFilter, items, busy, shape, onToggleShape, actions, hasMore, loadingMore, onLoadMore }: {
   filter: ResumeFilter;
   onFilter: (filter: ResumeFilter) => void;

@@ -13,8 +13,8 @@ import {
   type HomeCard, type HomeLayout, type HomeLayoutEntry, type HomeLayoutResponse, type HomeResponse, type HomeRow, type HomeRowError, type HomeRowId,
   type BuiltinHomeRowId, type RemoteHomeCard, type ResumeCatalogueItem, type ResumeFileItem, type ResumeIdentity, type ResumeSources,
 } from "../home.js";
-import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, showsInContinueWatching, showsInFavorites, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
-import { isPathWithin, type BrowseItem } from "../library.js";
+import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, posixBase, showsInContinueWatching, showsInFavorites, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
+import { isPathWithin, isVideo, type BrowseItem } from "../library.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { knownTitleEntry } from "../library-match.js";
 import type { LibrarySeenStore } from "../library-seen.js";
@@ -231,6 +231,9 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
           type, id, name: series ? series.name : row.title,
           ...(series?.season !== undefined ? { season: series.season } : {}),
           ...(series?.episode !== undefined ? { episode: series.episode } : {}),
+          // The file that wrote this row, when it is a video the viewer may see: the card plays it
+          // the way a library file plays.
+          ...(row.path && isVideo(posixBase(row.path)) ? { path: row.path } : {}),
           ...(row.pending ? { pending: true as const } : { progress: { position: row.position, duration: row.duration } }),
           ...(row.addonKey ? { addonKey: row.addonKey } : {}),
           ...(identity ? { identity } : {}),
@@ -312,6 +315,7 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
       kind: "favorite", key: item.path, path: item.path, itemKind: item.itemKind, label: item.label,
       ...(item.poster ? { poster: item.poster } : {}),
       ...(item.wide ? { wide: item.wide } : {}),
+      ...(item.title ? { title: item.title } : {}),
     } : {
       kind: "favorite-catalogue", key: `${item.type}:${item.id}`, type: item.type, id: item.id, name: item.name,
       ...(item.poster ? { poster: item.poster } : {}),

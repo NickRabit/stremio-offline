@@ -68,3 +68,40 @@ describe("one Continue watching section in the shell", () => {
     expect(source("./types.ts")).not.toMatch(/ExtraView =[^;]*:resume/);
   });
 });
+
+describe("one star per title in the shell", () => {
+  const app = source("./App.tsx");
+
+  it("sends a favourite bound to a title to the one catalogue detail", () => {
+    expect(app).toContain("onOpenTitle={openFavoriteTitle}");
+    expect(app).toMatch(/const openFavoriteTitle = \(item: FavoriteLibraryItem\) => \{[\s\S]*?openCatalogueDetail\(\{ type: item\.title\.type, id: item\.title\.id/);
+  });
+
+  it("reads the other side of a star again after either side is toggled", () => {
+    // A library star writes the title's own star too, so the watchlist is read again with it.
+    expect(app).toMatch(/await api\.setFavorite\(itemPath, favorite\);[\s\S]*?setWatchlist\(await api\.watchlist\(\)\)/);
+    // A catalogue star clears or writes the library's stars, so the listing on screen is read again.
+    expect(app).toMatch(/await api\.setWatchlist\(\{[\s\S]*?\n[\s\S]*?setWatchlist\(await api\.watchlist\(\)\);\n[\s\S]*?await loadBrowse\(browsePath\)/);
+  });
+
+  it("fills the player's star from the title a library file plays as", () => {
+    expect(app).toMatch(/localStream\?\.localPath \? libraryFavorites\.includes\(localStream\.localPath\) \|\| Boolean\(playingCatalogue && inWatchlist\(playingCatalogue\.type, playingCatalogue\.id\)\)/);
+    expect(app).toMatch(/const starred = libraryFavorites\.includes\(path\) \|\| Boolean\(playingCatalogue && inWatchlist\(playingCatalogue\.type, playingCatalogue\.id\)\);/);
+  });
+});
+
+describe("one click rule in the shell", () => {
+  const app = source("./App.tsx");
+
+  it("plays the file a catalogue card was written from, and opens the detail without one", () => {
+    expect(app).toMatch(/card\.kind === "resume-catalogue"\) \{[\s\S]{0,200}?if \(card\.path\) void playLocal\(card\.title, card\.path, card\.poster, card\.season != null\)/);
+  });
+
+  it("opens the catalogue detail a resume file is bound to, at its episode", () => {
+    expect(app).toMatch(/card\.kind === "resume-file"\) \{[\s\S]{0,120}?if \(!card\.identity\) return;[\s\S]{0,400}?openCatalogueDetail\(\{ type: card\.identity\.type, id: card\.identity\.id, name: card\.title/);
+  });
+
+  it("opens the catalogue detail a Home favourite is bound to", () => {
+    expect(app).toMatch(/card\.kind === "favorite"\) \{[\s\S]{0,120}?if \(!card\.title\) return;[\s\S]{0,200}?openCatalogueDetail\(\{ type: card\.title\.type, id: card\.title\.id, name: card\.label/);
+  });
+});

@@ -650,6 +650,34 @@ test("a library film and a stored catalogue row for it merge into a single card"
   assert.deepEqual(rows.resume!.items[0]!.forgetKeys, ["file:Films/Film/Film.mkv", "movie:tt9"]);
 });
 
+test("a title row a bound file wrote is the file's own card, and the library lists it", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  harness.records["lib_00000001/Films/Film"] = { type: "movie", id: "tt9", name: "Film" };
+  harness.data(ALICE).progress = {
+    "movie:tt9": { position: 60, duration: 600, title: "Film", path: "lib_00000001/Films/Film/Film.mkv", updatedAt: "2024-01-02T00:00:00.000Z" },
+  };
+
+  const rows = await allRows(harness, ALICE);
+  assert.equal(rows.resume!.items.length, 1);
+  assert.equal(rows.resume!.items[0]!.kind, "resume-file", "the card plays the file that wrote the position");
+  assert.ok((rows.resume!.items[0] as { forgetKeys: string[] }).forgetKeys.includes("movie:tt9"));
+  const listed = await (await api(harness.base, "/api/library/resume", ALICE)).json() as { items: Array<{ path: string }> };
+  assert.deepEqual(listed.items.map((item) => item.path), ["Films/Film/Film.mkv"]);
+});
+
+test("a title row whose file no longer stands for it stays a catalogue card", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  harness.data(ALICE).progress = {
+    "movie:tt9": { position: 60, duration: 600, title: "Film", path: "lib_00000001/Films/Film/Film.mkv", updatedAt: "2024-01-02T00:00:00.000Z" },
+  };
+
+  const rows = await allRows(harness, ALICE);
+  assert.equal(rows.resume!.items.length, 1);
+  assert.equal(rows.resume!.items[0]!.kind, "resume-catalogue");
+});
+
 test("a bound film file with no catalogue row is still one card", async (t) => {
   const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
   t.after(harness.close);
@@ -799,6 +827,53 @@ test("GET /api/resume filters by card kind and pages one stable order", async (t
   assert.equal(second.items.length, 6);
   const seen = new Set([...first.items, ...second.items].map((item) => item.key));
   assert.equal(seen.size, 26, "no page repeats a card");
+});
+
+test("GET /api/resume answers the two title filters beside the card kinds", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  harness.records["lib_00000001/Films/Film"] = { type: "movie", id: "tt9", name: "Film" };
+  harness.data(ALICE).progress = {
+    "file:lib_00000001/Films/Film/Film.mkv": { position: 60, duration: 600, title: "Film", path: "lib_00000001/Films/Film/Film.mkv", updatedAt: "2024-01-02T00:00:00.000Z" },
+    "series:tt5:1:2": { position: 30, duration: 600, title: "Show · Second", series: { id: "tt5", name: "Show", season: 1, episode: 2 }, updatedAt: "2024-01-01T00:00:00.000Z" },
+  };
+  const keys = async (filter: string) => (await resumePageOf(harness, `?filter=${filter}&limit=40`)).items.map((item) => item.key);
+
+  assert.deepEqual(await keys("movies"), ["file:Films/Film/Film.mkv"], "a bound file answers as the film it plays");
+  assert.deepEqual(await keys("series"), ["series:tt5:1:2"]);
+  // The names an older client still sends keep meaning what they meant.
+  assert.deepEqual(await keys("library"), ["file:Films/Film/Film.mkv"]);
+  assert.deepEqual(await keys("catalog"), ["series:tt5:1:2"]);
+});
+
+test("a resume card carries what one click needs", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  harness.records["lib_00000001/Films/Film"] = { type: "movie", id: "tt9", name: "Film" };
+  harness.data(ALICE).progress = {
+    "file:lib_00000001/Films/Film/Film.mkv": { position: 60, duration: 600, title: "Film", path: "lib_00000001/Films/Film/Film.mkv", updatedAt: "2024-01-03T00:00:00.000Z" },
+    "movie:tt8": { position: 30, duration: 600, title: "Other film", path: "lib_00000001/Films/Other/Other.mkv", updatedAt: "2024-01-02T00:00:00.000Z" },
+    "movie:tt7": { position: 20, duration: 600, title: "No file", path: "lib_00000001/Films/Nothing", updatedAt: "2024-01-01T00:00:00.000Z" },
+  };
+
+  const rows = await allRows(harness, ALICE);
+  const card = (key: string) => rows.resume!.items.find((item) => item.key === key) as { kind: string; path?: string; identity?: unknown };
+
+  assert.deepEqual(card("file:Films/Film/Film.mkv").identity, { type: "movie", id: "tt9" }, "the file says which title it plays as");
+  assert.equal(card("movie:tt8").path, "Films/Other/Other.mkv", "the catalogue row plays the file that wrote it");
+  assert.equal(card("movie:tt7").path, undefined, "a path that is no video is never played");
+});
+
+test("a bound library favourite card names the title it stands for", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  harness.records["lib_00000001/Films/Film"] = { type: "movie", id: "tt9", name: "Film" };
+  harness.data(ALICE).favorites = ["lib_00000001/Films/Film"];
+
+  const card = (await allRows(harness, ALICE)).favorites!.items[0] as { kind: string; title?: unknown };
+
+  assert.equal(card.kind, "favorite");
+  assert.deepEqual(card.title, { type: "movie", id: "tt9" }, "one click opens the one title detail");
 });
 
 test("GET /api/resume keeps only the rows Home would draw", async (t) => {
@@ -1535,7 +1610,7 @@ test("GET /api/favorites filters by source and treats an unknown filter as all",
 test("a catalogue star folds into the library star it matches, one entry with the catalogue id", async (t) => {
   const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
   t.after(harness.close);
-  harness.records["lib_00000001/Films/Heat.mkv"] = { type: "movie", id: "tt1", name: "Heat", year: "1995" };
+  harness.records["lib_00000001/Films/Heat.mkv"] = { type: "movie", id: "tt1", name: "Heat (1995)", year: "1995" };
   harness.data(ALICE).favorites = ["lib_00000001/Films/Heat.mkv"];
   harness.data(ALICE).watchlist = { "movie:tt1": { type: "movie", id: "tt1", name: "Heat", addedAt: "2024-01-01T00:00:00.000Z" } };
 
@@ -1545,6 +1620,7 @@ test("a catalogue star folds into the library star it matches, one entry with th
   assert.equal(body.items[0]!.path, "Films/Heat.mkv");
   assert.equal(body.items[0]!.catalogId, "tt1");
   assert.equal(body.items[0]!.year, "1995");
+  assert.equal(body.items[0]!.label, "Heat (1995)", "a copy that stands for a title is named as the title, not as the file");
 });
 
 test("a catalogue star for a downloaded title is served as the local copy", async (t) => {

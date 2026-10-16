@@ -143,15 +143,21 @@ export type HomeCard =
   | RemoteHomeCard
   | { kind: "resume-file"; key: string; title: string; subtitle?: string; poster?: string; wide?: string;
       path: string; progress: HomeProgress; season?: number; episode?: number;
-      updatedAt: string; forgetKeys: string[] }
+      updatedAt: string; forgetKeys: string[];
+      /** The catalogue title the file is bound to, when it is: its detail is one click away.
+       *  Named `identity` because the card's `title` is the label it draws. */
+      identity?: ResumeIdentity }
   | { kind: "resume-catalogue"; key: string; title: string; poster?: string; wide?: string;
       type: string; id: string; name: string; season?: number; episode?: number;
       progress?: HomeProgress; pending?: true; addonKey?: string;
+      /** The wire path of the library file that wrote the row, when it is a video: the card plays
+       *  that file the way a library card plays its own. */
+      path?: string;
       updatedAt: string; forgetKeys: string[] }
   | { kind: "completed"; key: string; title: string; poster?: string; wide?: string;
       path: string; completedAt: string; season?: number; episode?: number }
   | { kind: "favorite"; key: string; path: string; itemKind: "file" | "folder"; label: string;
-      poster?: string; wide?: string }
+      poster?: string; wide?: string; title?: { type: "movie" | "series"; id: string } }
   | { kind: "favorite-catalogue"; key: string; type: string; id: string; name: string;
       poster?: string; wide?: string; year?: string }
   | { kind: "recent"; key: string; path: string; label: string; poster?: string; wide?: string;
@@ -231,6 +237,9 @@ export interface ResumeCatalogueItem {
   pending?: true;
   addonKey?: string;
   identity?: ResumeIdentity;
+  /** The wire path of the library file that wrote the row, when that file is a video the caller
+   *  may see: the card plays it the way a library file plays. */
+  path?: string;
 }
 
 /** One input per source, already permission-filtered by the caller of the builder. */
@@ -270,6 +279,7 @@ function cardFor(candidates: ResumeCandidate[]): Extract<HomeCard, { kind: "resu
       path: item.path, progress: item.progress,
       ...(item.season !== undefined ? { season: item.season } : {}),
       ...(item.episode !== undefined ? { episode: item.episode } : {}),
+      ...(item.identity ? { identity: item.identity } : {}),
       updatedAt: item.updatedAt, forgetKeys,
     };
   }
@@ -281,6 +291,7 @@ function cardFor(candidates: ResumeCandidate[]): Extract<HomeCard, { kind: "resu
     type: item.type, id: item.id, name: item.name,
     ...(item.season !== undefined ? { season: item.season } : {}),
     ...(item.episode !== undefined ? { episode: item.episode } : {}),
+    ...(item.path ? { path: item.path } : {}),
     ...(item.pending ? { pending: true as const } : item.progress ? { progress: item.progress } : {}),
     ...(item.addonKey ? { addonKey: item.addonKey } : {}),
     updatedAt: item.updatedAt, forgetKeys,
@@ -316,11 +327,12 @@ export function mergeResume(sources: ResumeSources, limit: number = HOME_ROW_LIM
   return boundCards(resumeGroups(sources).map((group) => group.card), limit);
 }
 
-export type ResumeFilter = "all" | "library" | "catalog" | "remote";
+export type ResumeFilter = "all" | "movies" | "series" | "library" | "catalog" | "remote";
 
-/** The filter a Continue watching request asks for: anything but a card kind means all. */
+/** The filter a Continue watching request asks for: anything but a known one means all. The two
+ *  title filters are what the interface offers; the card kinds are kept for older clients. */
 export const parseResumeFilter = (value: unknown): ResumeFilter =>
-  value === "library" || value === "catalog" || value === "remote" ? value : "all";
+  value === "movies" || value === "series" || value === "library" || value === "catalog" || value === "remote" ? value : "all";
 
 /** One merged card and the sources it stands for. A folded title that kept a local copy
  *  counts under both filters, whichever kind won the card. */
@@ -333,9 +345,27 @@ export type ResumeCard = Extract<HomeCard, { kind: "resume-file" | "resume-catal
 export function resumePage(sources: ResumeSources, options: { filter?: ResumeFilter; skip?: number; limit?: number } = {}):
   { items: ResumeCard[]; total: number; hasMore: boolean } {
   const filter = options.filter ?? "all";
-  const kept = resumeGroups(sources).filter((group) => filter === "all" || (filter === "library" ? group.file : filter === "remote" ? group.card.kind === "remote" : group.catalogue));
+  const kept = resumeGroups(sources).filter((group) => {
+    if (filter === "all") return true;
+    if (filter === "library") return group.file;
+    if (filter === "catalog") return group.catalogue;
+    if (filter === "remote") return group.card.kind === "remote";
+    return cardWantedByTitle(group.card, filter === "movies" ? "movie" : "series");
+  });
   const cards = kept.map((group) => group.card);
   const skip = Math.max(0, options.skip ?? 0);
   const limit = Math.max(1, options.limit ?? HOME_ROW_LIMIT);
   return { items: cards.slice(skip, skip + limit), total: cards.length, hasMore: skip + limit < cards.length };
+}
+
+/** Whether one card is a film or a show: a bound file answers with the title it plays as, an
+ *  unbound file only by the numbering it carries, a catalogue row by its own type, and a
+ *  media-server card by the kind of item it stands for. */
+function cardWantedByTitle(card: ResumeCard, wanted: "movie" | "series"): boolean {
+  if (card.kind === "resume-file") {
+    if (card.identity) return card.identity.type === wanted;
+    return wanted === "movie" ? card.season === undefined : card.season !== undefined;
+  }
+  if (card.kind === "resume-catalogue") return card.type === wanted;
+  return wanted === "series" ? card.itemType === "series" || card.itemType === "episode" : card.itemType === "movie";
 }

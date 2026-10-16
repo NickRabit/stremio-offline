@@ -2,13 +2,21 @@
  *  different maps and merged here, once, so the web, Home and the TV all read the same
  *  list in the same order. Nothing here touches a request or a store. */
 
-export type FavoriteFilter = "all" | "library" | "catalog" | "remote";
+export type FavoriteFilter = "all" | "movies" | "series" | "library" | "catalog" | "remote";
 
+/** The filters the interface offers name the kind of title; `library`, `catalog` and `remote`
+ *  are the ones it used before and are kept answering for clients that still send them. */
 export const parseFavoriteFilter = (value: unknown): FavoriteFilter =>
-  value === "library" || value === "catalog" || value === "remote" ? value : "all";
+  value === "movies" || value === "series" || value === "library" || value === "catalog" || value === "remote" ? value : "all";
 
 /** One library star, either its own or folded with the catalogue star it answers. */
-export interface FavoriteEntryLibrary { kind: "library"; key: string; catalogId?: string }
+export interface FavoriteEntryLibrary {
+  kind: "library";
+  key: string;
+  catalogId?: string;
+  /** The title the path is bound to, when it is: the film or show filter reads it. */
+  title?: { type: "movie" | "series"; id: string };
+}
 export interface FavoriteEntryCatalog {
   kind: "catalog";
   type: string;
@@ -35,6 +43,9 @@ export interface FavoriteLibraryItem {
   /** The IMDb id of the catalogue star this card folds in, and only then: the card answers
    *  the catalogue's own filter and tells the interface which star chose the local copy. */
   catalogId?: string;
+  /** The catalogue title this copy stands for, when it is bound to one: an identified favourite
+   *  opens the one title detail, whichever side was starred. */
+  title?: { type: "movie" | "series"; id: string };
 }
 
 /** One catalogue star with no library copy behind it. */
@@ -76,9 +87,14 @@ export function mergeFavorites(library: FavoriteEntryLibrary[], catalog: Favorit
 }
 
 /** How many entries a filter keeps. A library card that folded a catalogue star answers
- *  both filters: it is a library star and it is that catalogue star. */
+ *  both filters: it is a library star and it is that catalogue star. The two title filters
+ *  count a library entry by the title it is bound to, so an unbound path keeps out of both. */
 export function filterFavorites(entries: FavoriteEntry[], filter: FavoriteFilter): FavoriteEntry[] {
   if (filter === "all") return entries;
+  if (filter === "movies" || filter === "series") {
+    const wanted = filter === "movies" ? "movie" : "series";
+    return entries.filter((entry) => entry.kind === "library" ? entry.title?.type === wanted : entry.type === wanted);
+  }
   return entries.filter((entry) => entry.kind === filter
     || (filter === "catalog" && entry.kind === "library" && entry.catalogId !== undefined));
 }

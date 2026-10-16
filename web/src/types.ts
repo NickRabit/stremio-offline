@@ -2,8 +2,12 @@ import type { Locale } from "./i18n";
 import type { DownloadSnapshot as ServerDownloadSnapshot, PublicDownload } from "../../server/src/api-types";
 import type { HomeLayout } from "../../server/src/home";
 import type { MediaServerConfigurationExport } from "../../server/src/media-server-store";
-export type { FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem, FavoriteRemoteItem } from "../../server/src/favorites";
-export type { RemoteHomeCard, ResumeCard, ResumeFilter } from "../../server/src/home";
+export type { FavoriteCatalogItem, FavoriteItem, FavoriteLibraryItem, FavoriteRemoteItem } from "../../server/src/favorites";
+export type { RemoteHomeCard, ResumeCard } from "../../server/src/home";
+/** What the interface offers: the kind of title. The server keeps answering the card kinds an
+ *  older TV build asks for, and the web app never sends them. */
+export type FavoriteFilter = "all" | "movies" | "series";
+export type ResumeFilter = "all" | "movies" | "series";
 export type DownloadLayout = "flat" | "structured";
 export interface DownloadTargetSettings {
   subfolder: string;
