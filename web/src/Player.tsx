@@ -11,7 +11,9 @@ import { clampVolume, readVolume, writeVolume } from "./player-volume";
 import { PlaybackWakeLock, screenWakeLock } from "./playback-wake-lock";
 import { initialPlaybackPosition, progressToSave } from "./player-progress";
 import { remoteVersionKey, versionSavedRow } from "./source-progress";
-import { SourceRows } from "./source-rows";
+import { SourceFilters, SourceRows, providerLabel } from "./source-rows";
+import { librarySourceChoices, librarySourceRows, type LibrarySourceEntry } from "./library-sources";
+import { isLocalStream, isRemoteStream, type StreamSort } from "./streams";
 import { detectCapabilities } from "./capabilities";
 import { t, useI18n, type Key } from "./i18n";
 import type { Capabilities, PlaybackMode, PlaybackSession, Stream, Subtitle, Track } from "./types";
@@ -1093,11 +1095,16 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const isPlayingRow = (row: Stream) => row.sourceId === playingSourceId || (Boolean(row.localPath) && row.localPath === stream?.localPath);
   /** The row on screen leads the list it was read from, and every other row keeps the order the
    *  answer gave. */
+  const [sourceFilter, setSourceFilter] = useState("");
+  const [sourceLanguage, setSourceLanguage] = useState("");
+  const [sourceSort, setSourceSort] = useState<StreamSort>("recommended");
+  const sourceEntries = useMemo(() => playerSourceEntries(sourceList?.streams ?? []), [sourceList]);
+  const sourceChoices = useMemo(() => librarySourceChoices(sourceEntries, sourceFilter, sourceLanguage), [sourceEntries, sourceFilter, sourceLanguage]);
   const sourceRows = useMemo(() => {
-    const rows = sourceList?.streams ?? [];
+    const rows = librarySourceRows(sourceEntries, sourceFilter, sourceLanguage, sourceSort, audioLanguage);
     const playing = rows.find(isPlayingRow);
     return playing ? [playing, ...rows.filter((row) => row !== playing)] : rows;
-  }, [sourceList, playingSourceId, stream?.localPath]);
+  }, [sourceEntries, sourceFilter, sourceLanguage, sourceSort, audioLanguage, playingSourceId, stream?.localPath]);
   const playingRow = sourceRows.find(isPlayingRow) ?? null;
   const openSources = () => {
     if (!loadSources) return;
@@ -1325,6 +1332,11 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       {!sourceLoading && !sourceFailure && !sourceList?.streams.length && <p className="identify-hint">{t("player.noOtherSource")}</p>}
       {/* The row on screen first and marked, every row drawn exactly as the detail's own chooser
           draws it: the same badge, label, provider, size and languages. */}
+      {(sourceList?.streams.length ?? 0) > 1 && <SourceFilters visible addon={{
+        value: sourceFilter, onChange: setSourceFilter, all: { label: t("sources.allSources"), count: sourceChoices.total }, options: sourceChoices.options,
+      }} {...(sourceChoices.languages.length ? { language: {
+        value: sourceLanguage, onChange: setSourceLanguage, all: { label: t("sources.anyLanguage"), count: sourceChoices.languageTotal }, options: sourceChoices.languages,
+      } } : {})} sort={{ value: sourceSort, onChange: setSourceSort }}/>}
       {sourceRows.length > 0 && <div className="player-source-scroll">
         <SourceRows className="stream-list player-source-list" rows={sourceRows} selected={playingRow} onSelect={(row) => void chooseSource(row)}/>
       </div>}
@@ -1379,4 +1391,22 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       </button>}
     </div>}
   </div>;
+}
+
+/** The player's flat list as the detail's chooser groups it: the viewer's own copies, each media
+ *  library and each addon, so the same source, language and order menus can narrow it. */
+function playerSourceEntries(rows: Stream[]): LibrarySourceEntry[] {
+  const entries = new Map<string, LibrarySourceEntry>();
+  for (const row of rows) {
+    const local = isLocalStream(row);
+    const remote = !local && isRemoteStream(row);
+    const key = local ? "local" : remote ? `remote:${row.libraryId ?? ""}` : `addon:${row.addonKey ?? row.addonName ?? ""}`;
+    const label = local ? t("sources.localFilter")
+      : remote ? [row.provider ? providerLabel(row.provider) : "", row.libraryName].filter(Boolean).join(" · ")
+        : row.addonName ?? "";
+    const entry = entries.get(key) ?? { key, kind: local ? "local" as const : remote ? "remote" as const : "addon" as const, label, streams: [] };
+    entry.streams.push(row);
+    entries.set(key, entry);
+  }
+  return [...entries.values()];
 }

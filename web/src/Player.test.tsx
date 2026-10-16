@@ -187,6 +187,24 @@ describe("Player source switching", () => {
     expect(host.querySelector("#player-sources")).toBeNull();
   });
 
+  it("narrows the list with the detail's own source menu, the playing row still first", async () => {
+    const playing = ownFile({ sourceId: "local-1" });
+    const torrentio = addonRow({ sourceId: "addon-1", name: "4K" });
+    const other = addonRow({ sourceId: "addon-2", name: "1080p", addonKey: "cinema", addonName: "Cinema" });
+    await render({ stream: playing, loadSources: vi.fn(async () => [torrentio, other, playing]), onSwitchSource: vi.fn(async () => undefined) });
+    await click(sourceButton()!);
+    const selects = host.querySelectorAll<HTMLSelectElement>("#player-sources select");
+    expect(selects.length).toBeGreaterThanOrEqual(2);
+    expect(sourceRows()).toHaveLength(3);
+    expect(sourceRows()[0]!.getAttribute("aria-pressed")).toBe("true");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(selects[0], "addon:cinema");
+      selects[0]!.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(sourceRows()).toHaveLength(1);
+    expect(sourceRows()[0]!.textContent).toContain("1080p");
+  });
+
   it("reads the list on open, marks the playing row and hands another one over with the time", async () => {
     const playing = addonRow({ sourceId: "addon-1", name: "4K", behaviorHints: { videoSize: 8_000_000_000 } });
     const other = addonRow({ sourceId: "addon-2", name: "1080p" });

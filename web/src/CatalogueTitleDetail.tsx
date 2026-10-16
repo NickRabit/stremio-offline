@@ -266,6 +266,7 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
       {...(onGallery ? { onGallery: (images: GalleryImage[]) => onGallery(images, effective) } : {})}
       {...(facts ? { facts } : {})}
       {...(snapshot?.description ? { description: snapshot.description } : {})}
+      descriptionLoading={snapshot === null && !metaError}
       {...(chips ? { chips } : {})}
       sources={rows}
       {...(seed ? { initialSource: seed } : {})}

@@ -115,7 +115,16 @@ describe("LibraryTitleDetail sources", () => {
   it("disables Play while loading and shows the status", () => {
     render({ sources: null });
     expect(playButton().disabled).toBe(true);
-    expect(host.querySelector(".library-title-detail .loading")).not.toBeNull();
+    // The status sits where the chosen source's row will be, so the actions never move.
+    expect(host.querySelector(".library-detail-source.detail-skeleton[role=status]")).not.toBeNull();
+    expect(host.querySelector(".library-title-detail .loading")).toBeNull();
+  });
+
+  it("keeps the synopsis in place while the metadata is still on its way", () => {
+    render({ sources: null, descriptionLoading: true });
+    expect(host.querySelector(".library-detail-synopsis.detail-skeleton")).not.toBeNull();
+    render({ sources: null, descriptionLoading: true, description: "A quiet film." });
+    expect(host.querySelector(".library-detail-synopsis")!.textContent).toBe("A quiet film.");
   });
 
   it("shows a failed read with its retry and an empty list as no playable version", () => {

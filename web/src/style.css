@@ -826,6 +826,11 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 /* The player's source list is the detail dialog's own row template. The panel's button shape
    (inline-flex, centred, fixed width) would flatten it, so the row is restored to its grid and
    carries the panel's dark surface. The list scrolls inside the panel, which keeps its heading. */
+.player-sources{width:min(520px,calc(100% - 32px))}
+/* The detail's own menus over the player's list: name above the menu, the three side by side. */
+.player-sources .stream-filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin:0}
+.player-sources .stream-filters label{flex-direction:column;align-items:stretch;gap:4px}
+.player-sources .stream-filters select{width:100%;max-width:none}
 .player-source-scroll{max-height:min(52vh,380px);overflow-y:auto;overscroll-behavior:contain}
 .player-source-list{max-height:none}
 .player-sources .stream-list button{display:grid;justify-content:initial;min-height:44px;padding:9px 11px;background:var(--panel)}
@@ -2058,6 +2063,12 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 /* The version the buttons act on, named the way its own row reads: one line above them, so Play,
    To library and To device visibly act on the same one. */
 .library-detail-source{display:flex;flex-wrap:wrap;align-items:center;gap:7px;min-width:0;margin-top:2px;font-size:11px;color:var(--muted)}
+.detail-skeleton>i{display:block;height:10px;border-radius:99px;background:#ffffff1c;animation:detail-pulse 1.1s ease-in-out infinite alternate}
+.library-detail-synopsis.detail-skeleton{display:grid;gap:8px;max-width:640px;padding:3px 0}
+.library-detail-synopsis.detail-skeleton>i:nth-child(2){width:88%}.library-detail-synopsis.detail-skeleton>i:nth-child(3){width:62%}
+.library-detail-source.detail-skeleton{min-height:18px}.library-detail-source.detail-skeleton>i{width:min(260px,70%)}
+@keyframes detail-pulse{from{opacity:.4}to{opacity:1}}
+@media(prefers-reduced-motion:reduce){.detail-skeleton>i{animation:none}}
 .library-detail-source>i{font-style:normal;font-size:9px;font-weight:800;color:var(--green);text-transform:uppercase}
 .library-detail-source>i.remote{color:var(--accent2)}
 .library-detail-source>strong{min-width:0;max-width:min(100%,420px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);font-size:12px}
