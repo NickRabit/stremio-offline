@@ -1634,7 +1634,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
         fromBeginning={playing.fromBeginning}
         onToggleFavorite={away ? undefined : () => void togglePlayingFavorite()}
         progressKey={playing.owner.kind === "remote" ? undefined : playing.owner.progressKey}
-        progressPoster={away ? (addon?.poster ?? playing.item.poster) : undefined}
+        progressPoster={addon?.poster ?? playing.item.poster}
         // The row that is playing is the row that is saved, whichever way it was started: an addon
         // answer through its own captured subject, a copy of another media server through the
         // destination that copy projects, a version of this detail's own library through the

@@ -1,4 +1,5 @@
 import type express from "express";
+import { remoteArtworkPath } from "../media-server-types.js";
 import type { ArtShape } from "../artwork.js";
 import { messageKeyOf } from "../errors.js";
 import type { FavoriteCatalogItem, FavoriteLibraryItem } from "../favorites.js";
@@ -228,6 +229,8 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
         return {
           key: row.key, updatedAt: row.updatedAt, title: row.title,
           ...(row.poster ? { poster: row.poster } : {}),
+          // The media-server version that wrote the row lends its landscape picture too.
+          ...(row.remote ? { wide: remoteArtworkPath(row.remote.libraryId, row.remote.itemId, "Backdrop") } : {}),
           type, id, name: series ? series.name : row.title,
           ...(series?.season !== undefined ? { season: series.season } : {}),
           ...(series?.episode !== undefined ? { episode: series.episode } : {}),

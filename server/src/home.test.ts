@@ -263,6 +263,20 @@ test("a media-server card of a named title merges with the same title's local ro
   assert.deepEqual(card.kind === "remote" ? card.forgetKeys : undefined, ["movie:tt1"], "the media-server card carries the local keys it stands for");
 });
 
+test("a merged card written without artwork borrows the title's pictures from another copy", () => {
+  const identity = { type: "movie" as const, id: "tt1" };
+  // A media-server version played under the title's key wrote no poster; the item's own card has one.
+  const sources = {
+    files: [],
+    catalogue: [catalogue({ key: "movie:tt1", type: "movie", id: "tt1", identity, updatedAt: at(5) })],
+    remote: [remoteCard({ key: "remote:a", identity, poster: "/remote/poster", wide: "/remote/wide", updatedAt: at(1) })],
+  };
+  const card = mergeResume(sources).items[0]!;
+  assert.equal(card.kind, "resume-catalogue");
+  assert.equal(card.poster, "/remote/poster");
+  assert.equal(card.wide, "/remote/wide");
+});
+
 test("a media-server card of a show merges by the show's own id", () => {
   const identity = { type: "series" as const, id: "tt5" };
   const sources = {

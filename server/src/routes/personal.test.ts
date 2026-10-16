@@ -629,6 +629,19 @@ test("a position names the media-server version that wrote it, while its library
   assert.equal((await listed(BOB))?.remote, undefined);
 });
 
+test("a row a media-server version wrote without a poster shows that item's picture", async (t) => {
+  const harness = await mount([filmLibrary]);
+  t.after(harness.close);
+  attachMediaServer(harness);
+  await writePosition(harness, { key: "movie:tt1", remote: { libraryId: "rlib_a", itemId: "1", mediaSourceId: "ms1" } });
+  const listed = async (user: string) => (await (await api(harness.base, "/api/progress", { user })).json() as Array<StoredProgress & { key: string }>)
+    .find((row) => row.key === "movie:tt1");
+  assert.equal((await listed(ALICE))?.poster, "/api/remote-libraries/rlib_a/items/1/artwork/Primary");
+  // A viewer who may not browse that library gets no picture of it.
+  harness.data(BOB).progress = { "movie:tt1": { ...(harness.data(ALICE).progress["movie:tt1"] as StoredProgress) } };
+  assert.equal((await listed(BOB))?.poster, undefined);
+});
+
 test("a malformed remote is dropped while the write still lands, and a write without one clears it", async (t) => {
   const harness = await mount([filmLibrary]);
   t.after(harness.close);

@@ -13,6 +13,7 @@ import type { MediaServerAuthority } from "../media-server-manager.js";
 import { CARD_LIMIT_MAX as REMOTE_FAVORITE_LIMIT, type MediaServerPersonal } from "../media-server-personal.js";
 import { HOME_FORGET_LIMIT, HOME_RESUME_FILE_LIMIT, type ResumeIdentity } from "../home.js";
 import { images } from "../images.js";
+import { remoteArtworkPath } from "../media-server-types.js";
 import { knownTitleEntry, type LibraryMetaRecord, type TitleUnit } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { isVideo, sortFiles, type BrowseItem, type BrowseMeta, type LibraryFile } from "../library.js";
@@ -75,6 +76,8 @@ export interface ProgressPageItem {
   series?: ProgressSeries;
   /** The source the stored position was played from, as the player named it. */
   stableKey?: string;
+  /** The media-server version that wrote the row, while its library is the caller's. */
+  remote?: RemoteProgressWriter;
   pending?: true;
   updatedAt: string;
 }
@@ -415,9 +418,13 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     const items = [...rows, ...pending.filter((row) => row !== undefined)]
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       .slice(0, options.limit ?? 40)
-      .map((value) => ({ ...value, key: wireProgressKey(value.key), path: value.path ? wirePath(value.path) : value.path, poster: images.proxied(value.poster),
+      .map((value) => {
         // The media-server version that wrote a row is named only while its library is the caller's.
-        remote: value.remote && remoteWriterVisible(value.remote, req) ? value.remote : undefined }));
+        const remote = value.remote && remoteWriterVisible(value.remote, req) ? value.remote : undefined;
+        // A row a media-server version wrote without a poster takes that item's own picture.
+        const poster = images.proxied(value.poster) ?? (remote ? remoteArtworkPath(remote.libraryId, remote.itemId, "Primary") : undefined);
+        return { ...value, key: wireProgressKey(value.key), path: value.path ? wirePath(value.path) : value.path, poster, remote };
+      });
     return { items, partial };
   };
   app.get("/api/progress", asyncRoute(async (req, res) => {
