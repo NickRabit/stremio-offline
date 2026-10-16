@@ -1597,6 +1597,13 @@ export function App() {
 
   /** Jumping from the download queue: opens the folder the file sits in and finds it there.
    * The filters have to be cleared, or the wanted file would stay filtered out of the listing. */
+  /** Shows a library copy where the viewer would look for it: a file inside a title's own folder
+   *  is that folder in its parent listing, since the folder itself opens as the title's detail. A
+   *  file straight in a library root is the file. */
+  const revealLibraryCopy = (file: string) => {
+    const parts = file.split("/");
+    revealInLibrary(parts.length > 2 ? parts.slice(0, -1).join("/") : file);
+  };
   const revealInLibrary = (target: string) => {
     navigated.current = true;
     const slash = target.lastIndexOf("/");
@@ -3143,7 +3150,7 @@ export function App() {
               <div className="source-footer"><div className="source-info"><Subtitles/> {t("sources.subtitleCount", { count: selectedLocalPath ? 0 : subtitles.length + (selectedStream?.subtitles?.length || 0) })}
                 {inspection && <> · <b>{t("sources.audioInFile")}</b> {inspection.audioTracks.length ? inspection.audioTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}
                 · <b>{t("sources.subtitlesInFile")}</b> {inspection.subtitleTracks.length ? inspection.subtitleTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}</>}
-              {selectedStream?.playable && !inspection && <> · {t("sources.probing")}</>}</div><div className="action-slot"><div className="actions"><button className="primary" disabled={!canPlay} onClick={startCatalogPlayback}><CirclePlay/> {t("player.play")}</button>{selectedLocalPath ? <button onClick={() => revealInLibrary(selectedLocalPath)}><FolderOpen/> {t("library.showInLibrary")}</button> : <div className="split-button"><button disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} onClick={primarySave}><HardDrive/> {t("save.toLibrary")}</button><button className="split-button-toggle" disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} aria-haspopup="dialog" aria-label={t("save.toLibraryElsewhere")} title={t("save.toLibraryElsewhere")} onClick={() => setSaveTargetOpen(true)}><ChevronDown/></button></div>}<button disabled={!canPlay || Boolean(selectedStream && isRemoteStream(selectedStream))} onClick={() => { if (selectedLocalPath) void downloadLibraryFile(selectedLocalPath); else void downloadStreamToDevice(); }}><Download/> {t("save.toDevice")}</button></div></div></div>
+              {selectedStream?.playable && !inspection && <> · {t("sources.probing")}</>}</div><div className="action-slot"><div className="actions"><button className="primary" disabled={!canPlay} onClick={startCatalogPlayback}><CirclePlay/> {t("player.play")}</button>{selectedLocalPath ? <button onClick={() => revealLibraryCopy(selectedLocalPath)}><FolderOpen/> {t("library.showInLibrary")}</button> : <div className="split-button"><button disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} onClick={primarySave}><HardDrive/> {t("save.toLibrary")}</button><button className="split-button-toggle" disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} aria-haspopup="dialog" aria-label={t("save.toLibraryElsewhere")} title={t("save.toLibraryElsewhere")} onClick={() => setSaveTargetOpen(true)}><ChevronDown/></button></div>}<button disabled={!canPlay || Boolean(selectedStream && isRemoteStream(selectedStream))} onClick={() => { if (selectedLocalPath) void downloadLibraryFile(selectedLocalPath); else void downloadStreamToDevice(); }}><Download/> {t("save.toDevice")}</button></div></div></div>
             </div>}
             </div>
           </> : <Empty icon={<Film/>} title={t("catalog.pickTitle")} text={t("catalog.pickText")}/>}</section></div>
