@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -37,10 +38,13 @@ import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.DownloadTargetDto
 import cz.stremiooffline.tv.data.RemoteItemDto
+import cz.stremiooffline.tv.data.RemoteLibraryApi
 import cz.stremiooffline.tv.data.LibraryDto
 import cz.stremiooffline.tv.data.MediaDto
 import cz.stremiooffline.tv.data.TvApi
-import cz.stremiooffline.tv.data.RemoteLibraryApi
+import cz.stremiooffline.tv.ui.catalog.VoiceLauncher
+import cz.stremiooffline.tv.ui.catalog.rememberVoiceSearch
+import cz.stremiooffline.tv.ui.catalog.voiceSearchAvailable
 import cz.stremiooffline.tv.ui.components.CardRowInset
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
@@ -49,9 +53,28 @@ import cz.stremiooffline.tv.ui.components.ShimmerCards
 import cz.stremiooffline.tv.ui.detail.DetailData
 import cz.stremiooffline.tv.ui.detail.episodeLabel
 import cz.stremiooffline.tv.ui.theme.Tokens
+import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.launch
 
 const val TagLibraryBreadcrumb = "library_breadcrumb"
+
+/** The composed mosaic in the poster shape, as the web's `remoteMosaicArtwork` asks for it: the URL
+ *  with its `shape` query parameter set to `poster` (added, or replaced if present). */
+internal fun posterMosaicUrl(url: String): String {
+  val base = url.substringBefore('?')
+  val query = url.substringAfter('?', "")
+  var shaped = false
+  val kept = query.split('&').filter { it.isNotEmpty() }.map { param ->
+    if (param.substringBefore('=') == "shape") {
+      shaped = true
+      "shape=poster"
+    } else {
+      param
+    }
+  }
+  val params = if (shaped) kept else kept + "shape=poster"
+  return if (params.isEmpty()) base else "$base?${params.joinToString("&")}"
+}
 
 @Composable
 fun LibraryRoute(
@@ -74,15 +97,25 @@ fun LibraryRoute(
   loadDestinations: (suspend () -> List<LibraryDto>)? = null,
   /** Queues one exact native version into the chosen library. */
   onQueue: (suspend (title: String, sourceId: String, media: MediaDto, target: DownloadTargetDto?) -> Unit)? = null,
+  /** Whether a recognizer answers here; overrides the device check when non-null. */
+  voiceAvailable: Boolean? = null,
+  /** Test seam: answers a mic press without a device. Null asks the platform recognizer. */
+  voiceLauncher: VoiceLauncher? = null,
 ) {
-  var segment by rememberSaveable { mutableStateOf(LibrarySegment.Files) }
+  var segment by rememberSaveable { mutableStateOf(LibrarySegment.All) }
+  // The All tile the viewer opened, so Back to All lands on it rather than on the grid's start.
+  var enteredFromAll by rememberSaveable { mutableStateOf<String?>(null) }
   val remoteApi: RemoteLibraryApi = api
   val viewModel = viewModel<LibraryViewModel>(factory = LibraryViewModel.factory(api, pendingDelayMs))
+  val remoteViewModel = viewModel<RemoteLibraryViewModel>(factory = RemoteLibraryViewModel.factory(api))
   // A fresh entry starts at the root; a Home jump (arriving with a path) pushes its folder.
   LaunchedEffect(Unit) { if (viewModel.state.pages.isEmpty() || viewModel.needsRootReset) viewModel.start() }
   LaunchedEffect(pushPath) {
     if (pushPath.isNullOrEmpty()) return@LaunchedEffect
     val title = pushPath.substringAfterLast('/').ifEmpty { pushPath }
+    // A Home or catalogue jump is a folder inside the filesystem, so the section shows Files.
+    enteredFromAll = null
+    segment = LibrarySegment.Files
     viewModel.openHere(pushPath, title)
     onPushConsumed()
   }
@@ -107,6 +140,17 @@ fun LibraryRoute(
   var query by remember { mutableStateOf("") }
   val searchAction = remember { FocusRequester() }
   val searchField = remember { FocusRequester() }
+  val allGridFocus = remember { FocusRequester() }
+  val allRequesters = remember { mutableMapOf<String, FocusRequester>() }
+  val voice = rememberVoiceSearch(
+    voiceAvailable ?: voiceSearchAvailable(),
+    onVoiceResult = { spoken ->
+      query = spoken
+      editorOpen = false
+      viewModel.search(spoken)
+    },
+    launcher = voiceLauncher,
+  )
   LaunchedEffect(segment, state.pages.size) {
     editorOpen = false
     query = state.current?.search.orEmpty()
@@ -122,7 +166,37 @@ fun LibraryRoute(
   // pops its own stack through RemoteLibraryRoute below.
   BackHandler(enabled = segment == LibrarySegment.Files && state.pages.size > 1 && backEnabled) {
     restoreKey = openedBy.removeLastOrNull() ?: ""
-    if (viewModel.back()) backToken++
+    if (viewModel.back()) {
+      // A library entered from All has no Files root above it: the pop lands back on the All grid.
+      if (viewModel.state.pages.size == 1 && enteredFromAll != null) {
+        segment = LibrarySegment.All
+      } else {
+        backToken++
+      }
+    }
+  }
+
+  // Returning to the All grid focuses the tile that was opened, then forgets it.
+  LaunchedEffect(
+    segment,
+    enteredFromAll,
+    state.pages.firstOrNull()?.items?.size,
+    remoteViewModel.state.libraries.size,
+    backEnabled,
+  ) {
+    if (segment != LibrarySegment.All || !backEnabled) return@LaunchedEffect
+    val key = enteredFromAll ?: return@LaunchedEffect
+    val requester = allRequesters[key] ?: return@LaunchedEffect
+    awaitFrame()
+    if (runCatching { requester.requestFocus() }.isSuccess) enteredFromAll = null
+  }
+
+  // A plain entry into All takes the first tile, or the grid itself when it holds none, so the
+  // remote starts inside the half and the rail is one LEFT away. A return is left to the effect above.
+  LaunchedEffect(segment, state.loading) {
+    if (segment != LibrarySegment.All || state.loading || enteredFromAll != null) return@LaunchedEffect
+    awaitFrame()
+    runCatching { (allRequesters.values.firstOrNull() ?: allGridFocus).requestFocus() }
   }
 
   // A new page focuses its own first card; a return restores the card that opened the page. An open
@@ -166,11 +240,95 @@ fun LibraryRoute(
   ) {
     LibraryHeader(
       segment = segment,
-      onFiles = { segment = LibrarySegment.Files },
-      onServers = { segment = LibrarySegment.Servers },
+      onAll = { enteredFromAll = null; segment = LibrarySegment.All },
+      onFiles = { enteredFromAll = null; segment = LibrarySegment.Files },
+      onServers = { enteredFromAll = null; segment = LibrarySegment.Servers },
     )
 
-    if (segment == LibrarySegment.Files) {
+    if (segment == LibrarySegment.All) {
+      val local = state.pages.firstOrNull()?.items.orEmpty().filterIsInstance<BrowseItem.Library>()
+      val remote = remoteViewModel.state.libraries
+      // The All grid draws the same rows the two halves do, so it loads the root and the list itself.
+      LaunchedEffect(Unit) { if (viewModel.state.pages.isEmpty()) viewModel.start() }
+      LaunchedEffect(Unit) {
+        if (remoteViewModel.state.libraries.isEmpty() && !remoteViewModel.state.librariesLoading) {
+          remoteViewModel.loadLibraries()
+        }
+      }
+      LibraryToolbar(
+        open = false,
+        query = "",
+        onQuery = {},
+        onOpen = {},
+        onSubmit = {},
+        onClose = {},
+        committed = "",
+        available = false,
+        openFocus = searchAction,
+        fieldFocus = searchField,
+        voice = voice,
+      )
+      Box(Modifier.weight(1f).fillMaxWidth()) {
+        // The local root's loading is the only one the All grid waits for; the media-server list
+        // simply contributes no tiles while it is empty, loading or failed.
+        if (state.loading && local.isEmpty()) {
+          ShimmerCards()
+        } else {
+          BoxWithConstraints(Modifier.fillMaxSize()) {
+            val columns = (((maxWidth.value + 18f) / 128f).toInt()).coerceAtLeast(1)
+            LazyVerticalGrid(
+              columns = GridCells.Fixed(columns),
+              modifier = Modifier.focusRequester(allGridFocus).focusGroup(),
+              contentPadding = PaddingValues(start = CardRowInset, top = 10.dp, end = CardRowInset, bottom = 40.dp),
+              horizontalArrangement = Arrangement.spacedBy(18.dp),
+              verticalArrangement = Arrangement.spacedBy(18.dp),
+            ) {
+              itemsIndexed(local, key = { _, item -> allLocalKey(item.path) }) { _, item ->
+                val key = allLocalKey(item.path)
+                val requester = remember(key) { FocusRequester() }
+                allRequesters[key] = requester
+                LocalLibraryCard(
+                  item = item,
+                  api = api,
+                  cardTag = allLocalTag(item.path),
+                  onClick = {
+                    enteredFromAll = key
+                    segment = LibrarySegment.Files
+                    viewModel.open(item.path, item.title)
+                  },
+                  modifier = Modifier
+                    .focusRequester(requester)
+                    .onFocusChanged { if (it.isFocused) viewModel.selectedPath = item.path },
+                )
+              }
+              items(remote, key = { library -> allRemoteKey(library.id) }) { library ->
+                val key = allRemoteKey(library.id)
+                val requester = remember(key) { FocusRequester() }
+                allRequesters[key] = requester
+                RemoteArtTile(
+                  title = library.name,
+                  libraryId = library.id,
+                  parentId = null,
+                  mosaic = library.mosaic,
+                  poster = library.poster,
+                  container = true,
+                  viewModel = remoteViewModel,
+                  imageUrl = { path -> path?.let(api::url) },
+                  cardTag = allRemoteTag(library.id),
+                  caption = libraryCaption(library.provider),
+                  onClick = {
+                    enteredFromAll = key
+                    segment = LibrarySegment.Servers
+                    remoteViewModel.openLibrary(library)
+                  },
+                  modifier = Modifier.focusRequester(requester),
+                )
+              }
+            }
+          }
+        }
+      }
+    } else if (segment == LibrarySegment.Files) {
       // The filesystem's own path, and only while the files half is the one on screen.
       if (state.pages.size > 1) {
         LibraryBreadcrumbLine(
@@ -193,6 +351,7 @@ fun LibraryRoute(
         available = searchable,
         openFocus = searchAction,
         fieldFocus = searchField,
+        voice = voice,
       )
       Box(Modifier.weight(1f).fillMaxWidth()) {
         when {
@@ -218,13 +377,10 @@ fun LibraryRoute(
                 val key = item.path.ifEmpty { item.title }
                 val requester = remember(key) { FocusRequester() }
                 requesters[key] = requester
-                PosterCard(
-                  name = item.title,
-                  imageUrl = (item.poster ?: item.wide)?.let(api::url),
-                  progress = progressFraction(item),
-                  caption = caption(item),
+                LocalLibraryCard(
+                  item = item,
+                  api = api,
                   cardTag = key,
-                  mosaic = item.mosaic.map(api::url),
                   onClick = {
                     when (item) {
                       is BrowseItem.Library -> viewModel.open(item.path, item.title)
@@ -254,9 +410,12 @@ fun LibraryRoute(
         segment = segment,
         onOpenItem = onOpenRemoteItem,
         onBackToFiles = { segment = LibrarySegment.Files },
+        onBackToAll = if (enteredFromAll != null) ({ segment = LibrarySegment.All }) else null,
         modifier = Modifier.weight(1f),
         restoreToken = restoreToken,
         backEnabled = backEnabled,
+        voiceAvailable = voiceAvailable,
+        voiceLauncher = voiceLauncher,
         loadDestinations = loadDestinations,
         onQueue = onQueue,
         // The section's own header and padding are already in place above and around this half.
@@ -264,6 +423,37 @@ fun LibraryRoute(
       )
     }
   }
+}
+
+/** The tag and the restore key of one All grid tile, so Back lands on the tile the viewer opened. */
+private fun allLocalKey(path: String): String = "local:$path"
+
+private fun allRemoteKey(libraryId: String): String = "remote:$libraryId"
+
+/** The tag of one All grid card; distinct from the restore key so the two halves' tags stay apart. */
+private fun allLocalTag(path: String): String = "all_local:$path"
+
+private fun allRemoteTag(libraryId: String): String = "all_remote:$libraryId"
+
+/** One library tile of the filesystem root, drawn the same way by the Files grid and the All grid. */
+@Composable
+private fun LocalLibraryCard(
+  item: BrowseItem,
+  api: TvApi,
+  cardTag: String,
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  PosterCard(
+    name = item.title,
+    imageUrl = (item.mosaicImage?.let(::posterMosaicUrl) ?: item.poster ?: item.wide)?.let(api::url),
+    progress = progressFraction(item),
+    caption = caption(item),
+    cardTag = cardTag,
+    mosaic = if (item.mosaicImage != null) emptyList() else item.mosaic.map(api::url),
+    onClick = onClick,
+    modifier = modifier,
+  )
 }
 
 @Composable

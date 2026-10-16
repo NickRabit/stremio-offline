@@ -20,6 +20,9 @@ sealed class BrowseItem {
   abstract val poster: String?
   abstract val wide: String?
 
+  /** The picture behind the `mosaic` URL the listing composes, when the server sent one. */
+  open val mosaicImage: String? get() = null
+
   @Serializable
   @SerialName("library")
   data class Library(
@@ -32,6 +35,7 @@ sealed class BrowseItem {
     val size: Double = 0.0,
     val unreachable: Boolean = false,
     val posters: List<String>? = null,
+    @SerialName("mosaic") override val mosaicImage: String? = null,
     override val poster: String? = null,
     override val wide: String? = null,
   ) : BrowseItem()
@@ -48,6 +52,7 @@ sealed class BrowseItem {
     val catalogName: String? = null,
     val posters: List<String>? = null,
     val favorite: Boolean = false,
+    @SerialName("mosaic") override val mosaicImage: String? = null,
     override val poster: String? = null,
     override val wide: String? = null,
   ) : BrowseItem()

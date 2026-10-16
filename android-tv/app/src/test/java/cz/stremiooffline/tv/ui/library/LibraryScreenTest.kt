@@ -16,6 +16,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performSemanticsAction
@@ -29,6 +30,8 @@ import cz.stremiooffline.tv.data.BrowseResult
 import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.RemoteItemsPageDto
 import cz.stremiooffline.tv.data.RemoteLibraryDto
+import cz.stremiooffline.tv.ui.catalog.VoiceLauncher
+import cz.stremiooffline.tv.ui.components.TagPosterMosaic
 import cz.stremiooffline.tv.ui.BrowseRequest
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.detail.DetailData
@@ -74,6 +77,8 @@ class LibraryScreenTest {
     api: FakeTvApi,
     pendingDelayMs: Long = 1_500L,
     onDetail: (DetailData) -> Unit = {},
+    voiceAvailable: Boolean? = null,
+    voiceLauncher: VoiceLauncher? = null,
   ) {
     scenario.onActivity { activity ->
       host = activity
@@ -82,6 +87,8 @@ class LibraryScreenTest {
         api = api,
         onOpenDetail = onDetail,
         pendingDelayMs = pendingDelayMs,
+        voiceAvailable = voiceAvailable,
+        voiceLauncher = voiceLauncher,
       )
       }
     }
@@ -109,6 +116,7 @@ class LibraryScreenTest {
     val api = FakeTvApi()
     api.pages[null] = BrowseResult("", listOf(folder("Films", "Films"), folder("Shows", "Shows")), 2, false)
     mount(api)
+    switchTo("Files")
 
     compose.onNodeWithTag("Films").assertIsFocused()
     compose.onNodeWithTag("Shows").assertExists()
@@ -121,6 +129,7 @@ class LibraryScreenTest {
     api.pages["Films/It"] = BrowseResult("Films/It", listOf(file("Films/It/It.mkv")), 1, false)
     val details = mutableListOf<DetailData>()
     mount(api, onDetail = { details += it })
+    switchTo("Files")
 
     compose.waitForIdle()
     compose.onNodeWithTag("Films/It").performKeyInput { pressKey(Key.DirectionCenter) }
@@ -136,6 +145,7 @@ class LibraryScreenTest {
     api.pages[null] = BrowseResult("", listOf(folder("Shows", "Shows")), 1, false)
     api.pages["Shows"] = BrowseResult("Shows", listOf(folder("Shows/S1", "S1"), folder("Shows/S2", "S2")), 2, false)
     mount(api)
+    switchTo("Files")
 
     compose.onNodeWithTag("Shows").performKeyInput { pressKey(Key.DirectionCenter) }
     compose.waitForIdle()
@@ -172,6 +182,7 @@ class LibraryScreenTest {
     api.pages["S1"] = BrowseResult("S1", listOf(folder("S1/E1", "E1")), 1, false)
     val details = mutableListOf<DetailData>()
     mount(api, onDetail = { details += it })
+    switchTo("Files")
     compose.waitForIdle()
 
     // Open the only-files folder: it opens the detail and must not be booked as a pushed level.
@@ -201,6 +212,7 @@ class LibraryScreenTest {
     val api = FakeTvApi()
     api.pages[null] = BrowseResult("", listOf(folder("Films", "Films")), 1, false)
     mount(api)
+    switchTo("Files")
     compose.waitForIdle()
 
     compose.onNodeWithTag("Films").assertIsFocused()
@@ -258,6 +270,7 @@ class LibraryScreenTest {
   @Test
   fun `the first grid card starts high on the page while the editor is closed`() {
     mount(nested())
+    switchTo("Files")
     compose.waitForIdle()
 
     // The qualifier fixes the density at 2, so 180dp is 360px: no editor, no second heading and no
@@ -271,6 +284,7 @@ class LibraryScreenTest {
     val api = nested()
     api.remoteLibrariesValue = listOf(RemoteLibraryDto(id = "rlibA", name = "Server", provider = "emby"))
     mount(api)
+    switchTo("Files")
     compose.waitForIdle()
 
     compose.onNodeWithTag("Shows").performKeyInput { pressKey(Key.DirectionCenter) }
@@ -305,6 +319,7 @@ class LibraryScreenTest {
     val api = nested()
     api.browseQueries["Shows|S1"] = BrowseResult("Shows", listOf(folder("Shows/S1", "S1")), 1, false)
     mount(api)
+    switchTo("Files")
     compose.waitForIdle()
     compose.onNodeWithTag("Shows").performKeyInput { pressKey(Key.DirectionCenter) }
     compose.waitForIdle()
@@ -340,6 +355,7 @@ class LibraryScreenTest {
   @Test
   fun `back closes the open editor before the level is left`() {
     mount(nested())
+    switchTo("Files")
     compose.waitForIdle()
     compose.onNodeWithTag("Shows").performKeyInput { pressKey(Key.DirectionCenter) }
     compose.waitForIdle()
@@ -365,6 +381,7 @@ class LibraryScreenTest {
     val api = nested()
     api.browseQueries["Shows|S1"] = BrowseResult("Shows", listOf(folder("Shows/S1", "S1")), 1, false)
     mount(api)
+    switchTo("Files")
     compose.waitForIdle()
     compose.onNodeWithTag("Shows").performKeyInput { pressKey(Key.DirectionCenter) }
     compose.waitForIdle()
@@ -426,6 +443,7 @@ class LibraryScreenTest {
       }
     }
     compose.waitForIdle()
+    switchTo("Files")
     compose.onNodeWithTag("Shows").assertIsFocused()
 
     switchTo("Media servers")
@@ -453,6 +471,7 @@ class LibraryScreenTest {
     val api = nested()
     api.browseQueries["Shows|zz"] = BrowseResult("Shows", emptyList(), 0, false)
     mount(api)
+    switchTo("Files")
     compose.waitForIdle()
     compose.onNodeWithTag("Shows").performKeyInput { pressKey(Key.DirectionCenter) }
     compose.waitForIdle()
@@ -508,6 +527,7 @@ class LibraryScreenTest {
       activity.setContent { LibraryRoute(api = api, onOpenDetail = {}, refreshToken = refresh.value) }
     }
     compose.waitForIdle()
+    switchTo("Files")
     compose.onNodeWithTag("Shows/F1").assertIsFocused()
 
     // Walking down to the end of the first page asks for the next one, and the remote lands on a
@@ -529,5 +549,160 @@ class LibraryScreenTest {
     // Only the first page was re-read: the tail came from the level itself, not another walk.
     assertEquals(reads + 1, api.browseRequests.size)
     assertEquals(0, api.browseRequests.last().skip)
+  }
+
+  // --- The All grid and the search row ----------------------------------------------------------
+
+  /** The microphone seam: each press is recorded and answered when the test says so. */
+  private class Voice {
+    val calls = mutableListOf<(String) -> Unit>()
+
+    fun answer(spoken: String) {
+      calls.last()(spoken)
+    }
+  }
+
+  private fun localLibrary(path: String, name: String = path) = BrowseItem.Library(path = path, name = name)
+
+  @Test
+  fun `a library that carries a composed mosaic draws it instead of the collage`() {
+    val api = FakeTvApi()
+    api.pages[null] = BrowseResult(
+      "",
+      listOf(
+        BrowseItem.Library(path = "A", name = "A", mosaicImage = "/api/library/mosaic?dir=A&shape=wide"),
+        BrowseItem.Library(path = "B", name = "B", posters = listOf("/p1.jpg", "/p2.jpg")),
+      ),
+      2,
+      false,
+    )
+    mount(api)
+    switchTo("Files")
+    compose.waitForIdle()
+
+    // The composed mosaic replaces the collage; only the library without one keeps today's drawing.
+    assertEquals(1, compose.onAllNodesWithTag(TagPosterMosaic, useUnmergedTree = true).fetchSemanticsNodes().size)
+  }
+
+  @Test
+  fun `the section opens on the All grid with the local and the remote library`() {
+    val api = FakeTvApi()
+    api.pages[null] = BrowseResult("", listOf(localLibrary("Films")), 1, false)
+    api.remoteLibrariesValue = listOf(RemoteLibraryDto(id = "rlibA", name = "Server", provider = "emby"))
+    mount(api)
+    compose.waitUntil(5_000) { api.remoteLibrariesCalls > 0 }
+    compose.waitForIdle()
+    compose.mainClock.advanceTimeBy(200)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag("all_local:Films").assertExists()
+    compose.onNodeWithTag("all_remote:rlibA").assertExists()
+  }
+
+  @Test
+  fun `a local library opened from All lands in Files and Back returns to All focused`() {
+    val api = FakeTvApi()
+    api.pages[null] = BrowseResult("", listOf(localLibrary("Films")), 1, false)
+    api.pages["Films"] = BrowseResult("Films", listOf(folder("Films/It", "It")), 1, false)
+    mount(api)
+    compose.waitForIdle()
+    compose.mainClock.advanceTimeBy(200)
+    compose.waitForIdle()
+
+    focusOn("all_local:Films")
+    compose.onNodeWithTag("all_local:Films").performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
+    compose.mainClock.advanceTimeBy(200)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagLibraryBreadcrumb).assertExists()
+    compose.onNodeWithTag("Films/It").assertExists()
+
+    host!!.onBackPressedDispatcher.onBackPressed()
+    compose.waitForIdle()
+    compose.mainClock.advanceTimeBy(200)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag("all_local:Films").assertIsFocused()
+    compose.onNodeWithTag("Films/It").assertDoesNotExist()
+  }
+
+  @Test
+  fun `a media-server library opened from All lands in Servers and Back returns to All focused`() {
+    val api = FakeTvApi()
+    api.pages[null] = BrowseResult("", listOf(localLibrary("Films")), 1, false)
+    api.remoteLibrariesValue = listOf(RemoteLibraryDto(id = "rlibA", name = "Server", provider = "emby", type = "mixed"))
+    api.remoteBrowsePages["rlibA||"] = RemoteItemsPageDto(items = listOf(remoteFolder("f1", "Shows")), total = 1)
+    mount(api)
+    compose.waitUntil(5_000) { api.remoteLibrariesCalls > 0 }
+    compose.waitForIdle()
+    compose.mainClock.advanceTimeBy(200)
+    compose.waitForIdle()
+
+    focusOn("all_remote:rlibA")
+    compose.onNodeWithTag("all_remote:rlibA").performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitUntil(5_000) { api.remoteBrowseRequests.isNotEmpty() }
+    compose.waitForIdle()
+    compose.mainClock.advanceTimeBy(200)
+    compose.waitForIdle()
+    compose.onNodeWithTag(TagRemoteBreadcrumb).assertExists()
+
+    host!!.onBackPressedDispatcher.onBackPressed()
+    compose.waitForIdle()
+    compose.mainClock.advanceTimeBy(200)
+    compose.waitForIdle()
+
+    // Back lands on the All grid rather than on the media-server picker, on the tile that was opened.
+    compose.onNodeWithTag("all_remote:rlibA").assertIsFocused()
+    compose.onNodeWithTag(remoteLibraryTag("rlibA")).assertDoesNotExist()
+  }
+
+  @Test
+  fun `Files chosen on the switch keeps Back at its root away from All`() {
+    val api = FakeTvApi()
+    api.pages[null] = BrowseResult("", listOf(localLibrary("Films")), 1, false)
+    mount(api)
+    switchTo("Files")
+    compose.waitForIdle()
+
+    compose.onNodeWithTag("all_local:Films").assertDoesNotExist()
+    compose.onNodeWithTag("Films").assertExists()
+
+    host!!.onBackPressedDispatcher.onBackPressed()
+    compose.waitForIdle()
+    compose.mainClock.advanceTimeBy(200)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag("all_local:Films").assertDoesNotExist()
+    compose.onNodeWithTag("Films").assertExists()
+  }
+
+  @Test
+  fun `the mic on a files level submits what it heard`() {
+    val voice = Voice()
+    val api = nested()
+    api.browseQueries["Shows|matrix"] = BrowseResult("Shows", emptyList(), 0, false)
+    mount(api, voiceAvailable = true, voiceLauncher = { onResult -> voice.calls += onResult })
+    switchTo("Files")
+    compose.waitForIdle()
+    compose.onNodeWithTag("Shows").performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
+    compose.mainClock.advanceTimeBy(100)
+    compose.waitForIdle()
+
+    focusOn(TagLibrarySearchAction)
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagLibrarySearchVoice).assertExists()
+    focusOn(TagLibrarySearchVoice)
+    press(Key.DirectionCenter)
+    assertEquals(1, voice.calls.size)
+    voice.answer("matrix")
+    compose.waitForIdle()
+    compose.mainClock.advanceTimeBy(200)
+    compose.waitForIdle()
+
+    assertEquals("matrix", api.browseRequests.last().query)
+    compose.onNodeWithTag(TagLibrarySearchField).assertDoesNotExist()
+    compose.onNodeWithTag(TagLibrarySearchAction).assert(hasText("matrix"))
   }
 }

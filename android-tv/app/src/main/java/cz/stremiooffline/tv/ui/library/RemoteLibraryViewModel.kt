@@ -19,7 +19,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 
 /** Which half of the Library section is on screen. */
-enum class LibrarySegment { Files, Servers }
+enum class LibrarySegment { All, Files, Servers }
 
 /** The type filter over one remote item list: the wire value is `null`, `movie` or `series`. */
 enum class RemoteTypeFilter(val wire: String?) {

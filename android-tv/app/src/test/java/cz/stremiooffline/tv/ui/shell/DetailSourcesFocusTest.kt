@@ -12,6 +12,7 @@ import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performSemanticsAction
@@ -94,6 +95,11 @@ class DetailSourcesFocusTest {
 
   /** A play the library view started, opened from the detail's own Sources panel. */
   private fun playFromPanel(api: FakeTvApi) {
+    compose.waitForIdle()
+    // The section opens on the All grid; the filesystem's rows are one switch press away.
+    compose.onNodeWithText("Files").performSemanticsAction(SemanticsActions.RequestFocus)
+    compose.waitForIdle()
+    compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
     compose.waitForIdle()
     // The only folder holds one file, so opening it is the detail of that film.
     compose.onNodeWithTag("It").performSemanticsAction(SemanticsActions.RequestFocus)

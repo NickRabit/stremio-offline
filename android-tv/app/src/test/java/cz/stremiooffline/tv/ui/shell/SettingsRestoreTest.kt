@@ -3,14 +3,17 @@
 package cz.stremiooffline.tv.ui.shell
 
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.pressKey
 import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.BrowseResult
@@ -48,6 +51,11 @@ class SettingsRestoreTest {
     val tester = StateRestorationTester(compose)
     tester.setContent { Shell(start = Section.Library, api = api, username = "demo", onSignOut = {}) }
     compose.waitForIdle()
+
+    // The section opens on the All grid; the filesystem's rows are one switch press away.
+    compose.onNodeWithText("Files").performSemanticsAction(SemanticsActions.RequestFocus)
+    compose.waitForIdle()
+    press(Key.DirectionCenter)
 
     // The account item of the rail opens Settings.
     press(Key.DirectionLeft)

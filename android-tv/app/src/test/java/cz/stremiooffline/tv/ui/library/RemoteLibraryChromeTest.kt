@@ -27,6 +27,7 @@ import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.RemoteItemsPageDto
 import cz.stremiooffline.tv.data.RemoteLibraryDto
 import cz.stremiooffline.tv.ui.FakeTvApi
+import cz.stremiooffline.tv.ui.catalog.VoiceLauncher
 import cz.stremiooffline.tv.ui.detail.RemoteDetailData
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -51,6 +52,15 @@ class RemoteLibraryChromeTest {
   private lateinit var scenario: ActivityScenario<ComponentActivity>
   private var host: ComponentActivity? = null
 
+  /** The microphone seam: each press is recorded and answered when the test says so. */
+  private class Voice {
+    val calls = mutableListOf<(String) -> Unit>()
+
+    fun answer(spoken: String) {
+      calls.last()(spoken)
+    }
+  }
+
   @Before
   fun launchHost() {
     scenario = ActivityScenario.launch(
@@ -73,11 +83,17 @@ class RemoteLibraryChromeTest {
   }
 
   /** The half on its own, the way the section embeds it, with the section header above it. */
-  private fun mountEmbedded(api: FakeTvApi) {
+  private fun mountEmbedded(api: FakeTvApi, voiceAvailable: Boolean? = null, voiceLauncher: VoiceLauncher? = null) {
     scenario.onActivity { activity ->
       host = activity
       activity.setContent {
-        LibraryRoute(api = api, onOpenDetail = {}, pendingDelayMs = 10L)
+        LibraryRoute(
+          api = api,
+          onOpenDetail = {},
+          pendingDelayMs = 10L,
+          voiceAvailable = voiceAvailable,
+          voiceLauncher = voiceLauncher,
+        )
       }
     }
     compose.waitForIdle()
@@ -149,7 +165,8 @@ class RemoteLibraryChromeTest {
     compose.onNodeWithText("Server").assertExists()
     // The type chips and the search live in the one compact toolbar row.
     compose.onNodeWithTag(TagLibraryToolbar).assertExists()
-    compose.onNodeWithText(ApplicationProvider.getApplicationContext<android.content.Context>().getString(R.string.media_server_filter_all))
+    // The switch's own All button is on the same screen, so the chip is named by its tag.
+    compose.onNodeWithTag(remoteFilterTag(ApplicationProvider.getApplicationContext<android.content.Context>().getString(R.string.media_server_filter_all)))
       .assertExists()
 
     compose.onNodeWithTag(TagLibrarySearchField).assertDoesNotExist()
@@ -254,5 +271,63 @@ class RemoteLibraryChromeTest {
     compose.onNodeWithTag(remoteItemTag("e1")).assertExists()
     // No section heading beside it: this screen is not the Library section's own page.
     compose.onNodeWithTag(TagLibraryHeaderTitle).assertDoesNotExist()
+  }
+
+  @Test
+  fun `the mic submits what it heard on the level`() {
+    val voice = Voice()
+    val api = api()
+    mountEmbedded(api, voiceAvailable = true, voiceLauncher = { onResult -> voice.calls += onResult })
+    openLibrary(api)
+
+    // While the search action is closed the mic already follows it.
+    compose.onNodeWithTag(TagLibrarySearchVoice).assertExists()
+    focusOn(TagLibrarySearchAction)
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagLibrarySearchField).assertIsFocused()
+    compose.onNodeWithTag(TagLibrarySearchVoice).assertExists()
+
+    focusOn(TagLibrarySearchVoice)
+    press(Key.DirectionCenter)
+    assertEquals(1, voice.calls.size)
+    voice.answer("matrix")
+    compose.waitForIdle()
+    compose.mainClock.advanceTimeBy(200)
+    compose.waitForIdle()
+
+    // The spoken phrase becomes the query and is submitted exactly as a typed one.
+    assertEquals("matrix", api.remoteBrowseRequests.last().search)
+    compose.onNodeWithTag(TagLibrarySearchField).assertDoesNotExist()
+    compose.onNodeWithTag(TagLibrarySearchAction).assert(hasText("matrix"))
+  }
+
+  @Test
+  fun `without a recognizer the search row draws no mic`() {
+    val api = api()
+    mountEmbedded(api, voiceAvailable = false)
+    openLibrary(api)
+
+    compose.onNodeWithTag(TagLibrarySearchVoice).assertDoesNotExist()
+    focusOn(TagLibrarySearchAction)
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagLibrarySearchField).assertIsFocused()
+    compose.onNodeWithTag(TagLibrarySearchVoice).assertDoesNotExist()
+  }
+
+  @Test
+  fun `the field and the submit button share their bottom edge`() {
+    val api = api()
+    mountEmbedded(api, voiceAvailable = false)
+    openLibrary(api)
+    focusOn(TagLibrarySearchAction)
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagLibrarySearchField).assertExists()
+
+    val field = compose.onNodeWithTag(TagLibrarySearchField).fetchSemanticsNode().boundsInRoot
+    val submit = compose.onNodeWithTag(TagLibrarySearchSubmit).fetchSemanticsNode().boundsInRoot
+    val gap = kotlin.math.abs(field.bottom - submit.bottom)
+    assertTrue("the field ends at ${field.bottom}px and the button at ${submit.bottom}px", gap <= 2f)
+    // The field's own box is 38.dp high, so sharing its height is the 38.dp button the row wants.
+    assertEquals(field.height, submit.height, 0.5f)
   }
 }
