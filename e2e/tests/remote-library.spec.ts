@@ -717,3 +717,25 @@ test("remote detail actions align across phone tablet and desktop", async ({ pag
     await page.screenshot({ path: `e2e/.tmp/remote-detail-actions-${viewport.width}.png` });
   }
 });
+
+/** One position per title: a media-server film the catalogue can name shows the position the title
+ *  holds, not the state of the version that happens to be listed first. */
+test("a media-server film shows the title's own position", async ({ page, request }) => {
+  const key = "movie:tt9900001";
+  const film: BrowseItem = { id: "identified-film", name: "Identified film", type: "movie", providerIds: { imdb: "tt9900001" } };
+  expect((await request.post("/api/progress", { data: { key, title: "Identified film", position: 600, duration: 2400 } })).ok()).toBe(true);
+  try {
+    await remoteLibraries(page, {
+      items: () => [film],
+      sources: [{ sourceId: "native-1", kind: "remote", playable: true, name: "Native 1080p", provider: "emby", libraryId,
+        remoteItem: { libraryId, itemId: "identified-film", mediaSourceId: "v1", progressKey: "remote:native" },
+        behaviorHints: { videoSize: 1_000_000_000 } }],
+    });
+    await page.locator(".remote-libraries .browse-item.library").filter({ hasText: "Remote clips" }).getByRole("button").click();
+    await page.locator(".remote-browse-panel .browse-item").filter({ hasText: "Identified film" }).locator(".library-open").click();
+    const detail = page.locator(".remote-browse-panel .library-title-detail");
+    await expect(detail.locator(".library-detail-progress span")).toContainText("10:00", { timeout: 15_000 });
+  } finally {
+    await request.delete(`/api/progress/${encodeURIComponent(key)}`);
+  }
+});

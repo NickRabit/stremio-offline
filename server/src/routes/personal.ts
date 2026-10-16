@@ -17,12 +17,13 @@ import type { LibraryMetaStore } from "../library-meta-store.js";
 import { isVideo, sortFiles, type BrowseItem, type BrowseMeta, type LibraryFile } from "../library.js";
 import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, posixBase, showsInContinueWatching, showsInFavorites, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
 import { log } from "../logger.js";
+import { remoteLibraryVisibleTo } from "../media-server-access.js";
 import { markersOwingRow, nextEpisodeOf } from "../next-episode.js";
 import { fileProgressKeys, newestProgress, titleProgressKey } from "../progress-identity.js";
 import { groupSeriesProgress, seriesOf, type ProgressSeries } from "../progress-series.js";
 import { groupResumeRows } from "../resume-group.js";
 import { defaultSearchState, parseRecordBody, parseSearchPreferencesPatch, parseSearchState, publicSearchState, withRecorded, withoutQuery, type SearchState } from "../search-state.js";
-import type { StoredProgress, UserPrefs, WatchedMarker, WatchlistEntry } from "../store.js";
+import type { RemoteProgressWriter, StoredProgress, UserPrefs, WatchedMarker, WatchlistEntry } from "../store.js";
 import type { MetaItem } from "../types.js";
 import type { UserData } from "../users.js";
 import { applyPatch, parseViews } from "../views.js";
@@ -274,6 +275,13 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     const title = titleProgressKey(file, metaStore.qualifiedMeta(), await libraryUnits(), listed);
     return title ? { key: title.key, file, title } : { key: stored, file };
   };
+  /** Whether the caller may still see the remote library the version that wrote a row belongs to. */
+  const remoteWriterVisible = (writer: RemoteProgressWriter, req: express.Request): boolean => {
+    const user = currentUser(req);
+    if (!user) return false;
+    const library = store.remoteLibraries().find((candidate) => candidate.id === writer.libraryId);
+    return Boolean(library) && remoteLibraryVisibleTo(store.mediaConnections(), library!, user);
+  };
   /** Every legacy `file:` key in `all` whose file resolves to `titleKey`. The stored progress
    *  map is bounded at 60 rows, so the scan behind it is bounded too. */
   const legacyKeysFor = (all: Record<string, StoredProgress>, titleKey: string, records: Record<string, LibraryMetaRecord>, units: TitleUnit[]): string[] =>
@@ -309,6 +317,17 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
       season: Number.isFinite(season) ? season : derived?.season ?? 0,
       episode: Number.isFinite(episode) ? episode : derived?.episode ?? 0,
     };
+  };
+  /** The media-server version a report was played from, when it names a usable one: three
+   *  non-empty ids, each short enough to be a stored value rather than a payload. */
+  const reportedRemote = (body: unknown): RemoteProgressWriter | undefined => {
+    const field = body && typeof body === "object" ? body as { libraryId?: unknown; itemId?: unknown; mediaSourceId?: unknown } : {};
+    const id = (raw: unknown) => {
+      const value = typeof raw === "string" ? raw.trim() : "";
+      return value && value.length <= 256 ? value : undefined;
+    };
+    const libraryId = id(field.libraryId), itemId = id(field.itemId), mediaSourceId = id(field.mediaSourceId);
+    return libraryId && itemId && mediaSourceId ? { libraryId, itemId, mediaSourceId } : undefined;
   };
   /** One row of Continue watching, either a stored position or the next episode a finished
    *  one left behind. */
@@ -374,7 +393,9 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     const items = [...rows, ...pending.filter((row) => row !== undefined)]
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       .slice(0, options.limit ?? 40)
-      .map((value) => ({ ...value, key: wireProgressKey(value.key), path: value.path ? wirePath(value.path) : value.path, poster: images.proxied(value.poster) }));
+      .map((value) => ({ ...value, key: wireProgressKey(value.key), path: value.path ? wirePath(value.path) : value.path, poster: images.proxied(value.poster),
+        // The media-server version that wrote a row is named only while its library is the caller's.
+        remote: value.remote && remoteWriterVisible(value.remote, req) ? value.remote : undefined }));
     return { items, partial };
   };
   app.get("/api/progress", asyncRoute(async (req, res) => {
@@ -392,7 +413,8 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
       .map((key): [string, StoredProgress] => [key, all[key]!]);
     const found = newestProgress(rows, resolved.key)?.[1];
     const visible = !found?.path || pathVisible(found.path, viewerOf(currentUser(req)), store.libraries());
-    res.json(found && visible ? { ...found, poster: images.proxied(found.poster) } : null);
+    const answer = found && visible ? { ...found, poster: images.proxied(found.poster) } : null;
+    res.json(answer && answer.remote && !remoteWriterVisible(answer.remote, req) ? { ...answer, remote: undefined } : answer);
   }));
   app.post("/api/progress", asyncRoute(async (req, res) => {
     // With tracking switched off the position is written nowhere.
@@ -424,6 +446,9 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
           season: resolved.title.season!, episode: resolved.title.episode!,
         }
         : previous?.series;
+      // The writer is read from this body alone: a write that names no version stores none, so a
+      // row a catalogue play overwrote never keeps claiming a media-server version.
+      const writer = reportedRemote(req.body.remote);
       const record: StoredProgress = {
         position, duration,
         title,
@@ -431,6 +456,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
         poster: posterOf(req.body.poster) ?? previous?.poster,
         addonKey: typeof req.body.addonKey === "string" ? req.body.addonKey : previous?.addonKey,
         series: reportedSeries(key, title, req.body.series) ?? boundSeries,
+        ...(writer ? { remote: writer } : {}),
         updatedAt: new Date().toISOString(),
       };
       const series = seriesOf(key, record);

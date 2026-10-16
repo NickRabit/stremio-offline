@@ -23,7 +23,11 @@ export const describeError = (error: unknown): string => {
   return error.reference ? `${text} ${t("error.reference", { reference: error.reference })}` : text;
 };
 
-export interface ProgressPayload { key: string; position: number; duration: number; title?: string; path?: string; poster?: string; addonKey?: string }
+export interface ProgressPayload {
+  key: string; position: number; duration: number; title?: string; path?: string; poster?: string; addonKey?: string;
+  /** The media-server version this position was played from, so the detail can say which one. */
+  remote?: { libraryId: string; itemId: string; mediaSourceId: string };
+}
 
 /** Every call gets a deadline. A stalled connection would otherwise be held until the
  * operating system gives up, which takes minutes, and six of those exhaust the browser's

@@ -14,7 +14,7 @@ import type { MetaItem, AddonRecord } from "../types.js";
 import { registerPersonalRoutes, type PersonalDeps } from "./personal.js";
 
 type WatchlistEntry = { type: string; id: string; name: string; poster?: string; addedAt: string };
-type StoredProgress = { position: number; duration: number; title: string; path?: string; poster?: string; addonKey?: string; series?: { id: string; name: string; season: number; episode: number }; updatedAt: string };
+type StoredProgress = { position: number; duration: number; title: string; path?: string; poster?: string; addonKey?: string; series?: { id: string; name: string; season: number; episode: number }; remote?: { libraryId: string; itemId: string; mediaSourceId: string }; updatedAt: string };
 type WatchedMarker = { name: string; poster?: string; addonKey?: string; season: number; episode: number; updatedAt: string };
 
 const ALICE = "usr_00000001";
@@ -38,6 +38,9 @@ interface Harness {
   records: Record<string, LibraryMetaRecord>;
   /** The title units the library walk found. */
   units: TitleUnit[];
+  /** The media-server connections and libraries a written position may name. */
+  mediaConnections: Array<Record<string, unknown>>;
+  remoteLibraries: Array<Record<string, unknown>>;
   /** Keys `describeLibraryPath` must throw on, the way a library that is gone does. */
   broken: Set<string>;
   /** How many writes reached `updateData`, so a single-operation forget can be counted. */
@@ -59,13 +62,18 @@ const mount = async (libraries: LibraryRecord[] = []): Promise<Harness> => {
   const records: Record<string, LibraryMetaRecord> = {};
   const units: TitleUnit[] = [];
   const broken = new Set<string>();
+  const mediaConnections: Array<Record<string, unknown>> = [];
+  const remoteLibraries: Array<Record<string, unknown>> = [];
   let updates = 0;
   const userOf = (req?: express.Request) => {
     const id = req?.header("x-user");
     return id && users.has(id) ? id : undefined;
   };
   const deps: PersonalDeps = {
-    store: { libraries: () => libraries, addons: () => addons, settings: () => ({ ...instancePrefs }) } as unknown as Store,
+    store: {
+      libraries: () => libraries, addons: () => addons, settings: () => ({ ...instancePrefs }),
+      mediaConnections: () => mediaConnections, remoteLibraries: () => remoteLibraries,
+    } as unknown as Store,
     needsSetup: () => false,
     currentSession: () => undefined,
     currentUser: (req) => {
@@ -151,6 +159,8 @@ const mount = async (libraries: LibraryRecord[] = []): Promise<Harness> => {
     records,
     units,
     broken,
+    mediaConnections,
+    remoteLibraries,
     get updates() { return updates; },
     data: (user) => users.get(user)!,
     close: async () => {
@@ -485,6 +495,61 @@ test("a bound file's position is written nowhere while tracking is off", async (
 
   assert.equal(response.status, 204);
   assert.deepEqual(harness.data(BOB).progress, {}, "the person's own switch decides before the key is resolved");
+});
+
+/** One attached media server the account may see, as the store holds it. */
+const attachMediaServer = (harness: Harness, allowedUsers: string[] = [ALICE]): void => {
+  harness.mediaConnections.push({ id: "mconn_1", provider: "jellyfin", name: "Home", baseUrl: "http://media", enabled: true, serverId: "srv1", accountId: "acc1", secretRef: "secret1", order: 0, addedAt: "" });
+  harness.remoteLibraries.push({ id: "rlib_a", connectionId: "mconn_1", remoteId: "1", name: "Films", type: "movie", enabled: true, order: 0, showOnHome: true, showInContinueWatching: true, provider: "jellyfin", allowedUsers, addedAt: "", capabilities: {} });
+};
+const writePosition = (harness: Harness, body: Record<string, unknown>, user = ALICE) =>
+  api(harness.base, "/api/progress", { method: "POST", user, body: { position: 120, duration: 3600, title: "One", ...body } });
+
+test("a position names the media-server version that wrote it, while its library is the viewer's", async (t) => {
+  const harness = await mount([filmLibrary]);
+  t.after(harness.close);
+  attachMediaServer(harness);
+
+  const response = await writePosition(harness, { key: "movie:tt1", remote: { libraryId: "rlib_a", itemId: "1", mediaSourceId: "ms1" } });
+
+  assert.equal(response.status, 204);
+  assert.deepEqual((harness.data(ALICE).progress["movie:tt1"] as StoredProgress).remote, { libraryId: "rlib_a", itemId: "1", mediaSourceId: "ms1" });
+
+  const read = await api(harness.base, `/api/progress/${encodeURIComponent("movie:tt1")}`, { user: ALICE });
+  assert.deepEqual((await read.json() as StoredProgress).remote, { libraryId: "rlib_a", itemId: "1", mediaSourceId: "ms1" });
+
+  // A viewer who may not browse that library still reads the row, without the version it names.
+  harness.data(BOB).progress = { "movie:tt1": { ...(harness.data(ALICE).progress["movie:tt1"] as StoredProgress) } };
+  const other = await api(harness.base, `/api/progress/${encodeURIComponent("movie:tt1")}`, { user: BOB });
+  const answer = await other.json() as StoredProgress;
+  assert.equal(answer.position, 120, "the row is the viewer's own");
+  assert.equal(answer.remote, undefined, "the version is not");
+
+  // The list answers the same: the row with its version for the viewer who may see it, without it for the other.
+  const listed = async (user: string) => (await (await api(harness.base, "/api/progress", { user })).json() as Array<StoredProgress & { key: string }>)
+    .find((row) => row.key === "movie:tt1");
+  assert.deepEqual((await listed(ALICE))?.remote, { libraryId: "rlib_a", itemId: "1", mediaSourceId: "ms1" });
+  assert.equal((await listed(BOB))?.remote, undefined);
+});
+
+test("a malformed remote is dropped while the write still lands, and a write without one clears it", async (t) => {
+  const harness = await mount([filmLibrary]);
+  t.after(harness.close);
+  attachMediaServer(harness);
+  const stored = () => harness.data(ALICE).progress["movie:tt1"] as StoredProgress;
+
+  await writePosition(harness, { key: "movie:tt1", remote: { libraryId: "rlib_a", itemId: "1", mediaSourceId: "ms1" } });
+  assert.deepEqual(stored().remote, { libraryId: "rlib_a", itemId: "1", mediaSourceId: "ms1" });
+
+  for (const remote of [{ libraryId: "rlib_a", itemId: "1" }, { libraryId: "rlib_a", itemId: 7, mediaSourceId: "ms1" }, { libraryId: "rlib_a", itemId: "1", mediaSourceId: "x".repeat(300) }]) {
+    await writePosition(harness, { key: "movie:tt1", remote });
+    assert.equal(stored().remote, undefined, `a malformed remote stores none: ${JSON.stringify(remote)}`);
+    assert.equal(stored().position, 120, "and the position still lands");
+  }
+
+  await writePosition(harness, { key: "movie:tt1", remote: { libraryId: "rlib_a", itemId: "1", mediaSourceId: "ms1" } });
+  await writePosition(harness, { key: "movie:tt1" });
+  assert.equal(stored().remote, undefined, "the version a later write names, or does not, is what stands");
 });
 
 test("POST /api/library/favorite hands setLibraryFavorite the relative path and the wanted state", async (t) => {

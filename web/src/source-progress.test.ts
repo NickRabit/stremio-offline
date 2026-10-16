@@ -14,12 +14,28 @@ describe("sourceProgressOwner", () => {
     expect(owner).toEqual({ kind: "file", key: localFileProgressKey("Films/Heat.mkv"), path: "Films/Heat.mkv", progressKey: "file:Films/Heat.mkv" });
   });
 
-  it("owns a remote version by its whole incoming context, never by the media-source id alone", () => {
-    const first = sourceProgressOwner(remote("rlib_a", "9", "msX"), catalogue);
-    const second = sourceProgressOwner(remote("rlib_b", "9", "msX"), catalogue);
-    const third = sourceProgressOwner(remote("rlib_a", "10", "msX"), catalogue);
+  it("owns every version of a named title by the title's key, whichever store it came from", () => {
+    // A media-server version of a title the catalogue can name is the title: one position per film,
+    // and the version's own context only says which one wrote the row.
+    expect(sourceProgressOwner(remote("rlib_a", "9", "msX"), catalogue)).toEqual({
+      kind: "catalogue", key: "movie:tt5000", progressKey: "movie:tt5000",
+      remote: { libraryId: "rlib_a", itemId: "9", mediaSourceId: "msX", progressKey: "remote:msX" },
+    });
+    // Another library's copy of the same film, and another version of it, are the same title.
+    const copy = sourceProgressOwner(remote("rlib_b", "9", "msX"), catalogue);
+    const other = sourceProgressOwner(remote("rlib_a", "10", "ms1"), catalogue);
+    expect(copy?.key).toBe("movie:tt5000");
+    expect(other?.key).toBe("movie:tt5000");
+    expect(sourceProgressOwner(remote("rlib_a", "9", "msX"), { type: "series", id: "tt7000:1:2" }))
+      .toMatchObject({ kind: "catalogue", key: "series:tt7000:1:2" });
+  });
+
+  it("owns a media-server version by its own item only while no title can name it", () => {
+    const first = sourceProgressOwner(remote("rlib_a", "9", "msX"), null);
+    const second = sourceProgressOwner(remote("rlib_b", "9", "msX"), null);
+    const third = sourceProgressOwner(remote("rlib_a", "10", "msX"), null);
     expect(first).toEqual({ kind: "remote", key: remoteVersionKey({ libraryId: "rlib_a", itemId: "9", mediaSourceId: "msX" }), item: { libraryId: "rlib_a", itemId: "9", mediaSourceId: "msX", progressKey: "remote:msX" } });
-    // Two copies that happen to reuse one media-source id keep two separate stores.
+    // Two unnamed copies that happen to reuse one media-source id keep two separate stores.
     expect(new Set([first!.key, second!.key, third!.key]).size).toBe(3);
   });
 
@@ -37,7 +53,7 @@ describe("sourceProgressOwner", () => {
   it("never takes the path of a row that only carries one, and never the native item's identity", () => {
     // A row of another library's item keeps that item's own context, not this detail's identity.
     const owner = sourceProgressOwner(remote("rlib_b", "9", "msX"), catalogue);
-    expect(owner?.kind).toBe("remote");
+    expect(owner).toMatchObject({ kind: "catalogue", remote: { libraryId: "rlib_b", itemId: "9", mediaSourceId: "msX" } });
     // A non-local stream that somehow carries a path is still not a file of the viewer's library.
     expect(sourceProgressOwner(stream({ localPath: "Film.mkv" }), catalogue)).toEqual({ kind: "catalogue", key: "movie:tt5000", progressKey: "movie:tt5000" });
   });

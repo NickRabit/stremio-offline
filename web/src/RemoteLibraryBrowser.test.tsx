@@ -1354,7 +1354,9 @@ describe("RemoteLibraryBrowser addon sources", () => {
     expect(addonCalls.streams[0]!.searchParams.get("addon")).toBe("torrentio");
     expect(addonCalls.local.map((url) => url.pathname)).toEqual(["/api/local-streams/movie/tt5000"]);
     await selectAddonRow();
-    expect(addonGetPaths()).toEqual(["/api/progress/movie%3Att5000"]);
+    // The detail's own version reads the title's row as the item opens, and the addon row reads the
+    // very same key: one position for every version of a title the catalogue can name.
+    expect(addonGetPaths()).toEqual(["/api/progress/movie%3Att5000", "/api/progress/movie%3Att5000"]);
     expect(host.querySelector(".library-detail-progress")).not.toBeNull();
     await click(host.querySelector(".library-detail-progress button")!);
     expect(addonCalls.progress.at(-1)).toEqual({ method: "DELETE", path: "/api/progress/movie%3Att5000" });
@@ -1742,9 +1744,10 @@ describe("RemoteLibraryBrowser addon sources", () => {
     const requested = { sources: addonCalls.sources.length, streams: addonCalls.streams.length };
     await click(inDialog(".library-source-card .remote-streams button", "One.mkv")!);
     await flush();
-    // The row is owned by the file itself: its own key is read, never the catalogue key.
+    // The detail's own version reads the title's row, and the viewer's own copy of it is a file
+    // that reads its own key: the file key is the one this selection added.
     expect(addonCalls.progress.filter((call) => call.method === "GET").map((call) => decodeURIComponent(call.path)))
-      .toEqual(["/api/progress/file:Films/One.mkv"]);
+      .toEqual(["/api/progress/movie:tt5000", "/api/progress/file:Films/One.mkv"]);
     expect(host.querySelector(".library-detail-progress")!.textContent).toContain("10:00");
     // A click on the same version's reset clears the file's own key, not the title's.
     await click(host.querySelector(".library-detail-progress button")!);
@@ -1819,19 +1822,51 @@ describe("RemoteLibraryBrowser addon sources", () => {
     expect(playbackCalls[0]!.time).toBe(0);
   });
 
-  it("refreshes another library's copy only once its final remote write landed", async () => {
+  it("shows the title's own position for the item's own version and for another version", async () => {
     libraries = [library(), library({ id: "rlib_b", name: "Second", order: 1 })];
     remoteLibraryStreams = () => json({ streams: [foreignVersion("rlib_b", "9", "msX", "Other copy", 8_000_000_000)] });
-    const finalPatch = deferred<Response>();
+    addonProgress = () => json({ key: "movie:tt5000", position: 600, duration: 3600, title: "One", updatedAt: "2026-01-01T00:00:00.000Z" });
+    await openDetail();
+    // The item's own version reads the title's row, not the state of its own item, and resumes there.
+    expect(host.querySelector(".library-detail-progress")!.textContent).toContain("10:00");
+    await click(playButton());
+    await flush();
+    expect(playbackCalls[0]!.time).toBe(600);
+    await click(host.querySelector(".player-head button.icon-button")!);
+    await flush();
+    // Another library's copy of the same film reads the very same row.
+    await openPicker();
+    await click(inDialog(".library-source-card .remote-streams button", "Other copy")!);
+    await flush();
+    expect(host.querySelector(".library-detail-progress")!.textContent).toContain("10:00");
+    expect(new Set(addonGetPaths())).toEqual(new Set(["/api/progress/movie%3Att5000"]));
+  });
+
+  it("marks an identified item watched and forgets the title's position with it", async () => {
+    await openDetail();
+    await click(host.querySelector('.library-detail-actions button[aria-label="Mark watched"]')!);
+    await flush();
+    expect(calls.state.at(-1)).toEqual({ method: "PATCH", body: { watched: true } });
+    expect(addonCalls.progress.at(-1)).toEqual({ method: "DELETE", path: "/api/progress/movie%3Att5000" });
+  });
+
+  it("refreshes the title's row after a copy of another library played, only once its write landed", async () => {
+    libraries = [library(), library({ id: "rlib_b", name: "Second", order: 1 })];
+    remoteLibraryStreams = () => json({ streams: [foreignVersion("rlib_b", "9", "msX", "Other copy", 8_000_000_000)] });
+    const finalWrite = deferred<Response>();
     let hold = false;
-    let stored: Record<string, unknown> = { key: "k", position: 600, duration: 3600, favorite: false, watched: false, mediaSourceId: "msX" };
-    state = (_url, init) => {
-      if (init?.method !== "PATCH") return json(stored);
-      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
-      if (!hold) return json({ ...stored, ...body });
-      return finalPatch.promise.then((response) => { stored = { ...stored, ...body }; return response; });
+    // The copy's own store holds the position kept there before the title did, and the title's row
+    // is what its play writes.
+    let stored: unknown = { key: "movie:tt5000", position: 600, duration: 3600, title: "One", updatedAt: "2026-01-01T00:00:00.000Z" };
+    addonProgress = (_url, init) => {
+      if (init?.method !== "POST") return json(stored);
+      if (!hold) return new Response(null, { status: 204 });
+      return finalWrite.promise.then((response) => {
+        stored = { key: "movie:tt5000", position: 120, duration: 3600, title: "One", updatedAt: "2026-01-01T00:01:00.000Z" };
+        return response;
+      });
     };
-    const copyGets = () => calls.state.filter((call, index) => call.method === "GET" && calls.stateUrls[index]!.includes("/rlib_b/")).length;
+    const titleGets = () => addonCalls.progress.filter((call) => call.method === "GET" && call.path === "/api/progress/movie%3Att5000").length;
     await openDetail();
     await openPicker();
     await click(inDialog(".library-source-card .remote-streams button", "Other copy")!);
@@ -1840,50 +1875,55 @@ describe("RemoteLibraryBrowser addon sources", () => {
     await flush();
     const video = host.querySelector<HTMLVideoElement>(".player-overlay video")!;
     await act(async () => { video.currentTime = 120; video.dispatchEvent(new Event("timeupdate", { bubbles: true })); });
-    const reads = copyGets();
+    const reads = titleGets();
     hold = true;
     await click(host.querySelector(".player-head button.icon-button")!);
     await flush();
-    // The final write is out: the panel has not read the copy's store again behind it.
-    expect(calls.state.filter((call) => call.method === "PATCH")).toHaveLength(1);
-    expect(copyGets()).toBe(reads);
-    await act(async () => { finalPatch.resolve(json({ key: "k", position: 120, duration: 3600, favorite: false, watched: false, mediaSourceId: "msX" })); });
+    // The final write is out: the panel has not read the title's row again behind it.
+    expect(addonCalls.progress.filter((call) => call.method === "POST")).toHaveLength(1);
+    expect(titleGets()).toBe(reads);
+    await act(async () => { finalWrite.resolve(new Response(null, { status: 204 })); });
     await flush();
     // It lands, and only then does the panel read what was really written.
-    expect(copyGets()).toBe(reads + 1);
+    expect(titleGets()).toBe(reads + 1);
     expect(host.querySelector(".library-detail-progress")!.textContent).toContain("2:00");
   });
 
-  it("refreshes the detail's own state after its final write, and never on another row's", async () => {
-    const finalPatch = deferred<Response>();
+  it("refreshes the title's row after the item's own version played, and leaves its remote state alone", async () => {
+    const finalWrite = deferred<Response>();
     let hold = false;
-    let stored: Record<string, unknown> = { key: "k", position: 600, duration: 3600, favorite: false, watched: false, mediaSourceId: "ms1" };
-    state = (_url, init) => {
-      if (init?.method !== "PATCH") return json(stored);
-      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
-      if (!hold) return json({ ...stored, ...body });
-      // The server drops the position of a film watched to its end; the panel must follow it there.
-      return finalPatch.promise.then((response) => {
-        stored = { ...stored, position: 0, duration: 0, watched: true };
+    let stored: unknown = { key: "movie:tt5000", position: 600, duration: 3600, title: "One", updatedAt: "2026-01-01T00:00:00.000Z" };
+    addonProgress = (_url, init) => {
+      if (init?.method !== "POST") return json(stored);
+      if (!hold) return new Response(null, { status: 204 });
+      // The server forgets the position of a film watched to its end; the panel must follow it there.
+      return finalWrite.promise.then((response) => {
+        stored = null;
         return response;
       });
     };
+    // The item's own state still carries what only the media server has: its favourite and watched.
+    state = () => json({ key: "k", position: 600, duration: 3600, favorite: false, watched: false, mediaSourceId: "ms1" });
     const itemGets = () => calls.state.filter((call, index) => call.method === "GET" && calls.stateUrls[index]!.includes("/rlib_a/items/1/")).length;
+    const titleGets = () => addonCalls.progress.filter((call) => call.method === "GET" && call.path === "/api/progress/movie%3Att5000").length;
     await openDetail();
     expect(host.querySelector(".library-detail-progress")!.textContent).toContain("10:00");
     await click(playButton());
     await flush();
     const video = host.querySelector<HTMLVideoElement>(".player-overlay video")!;
     await act(async () => { video.currentTime = 3540; video.dispatchEvent(new Event("timeupdate", { bubbles: true })); });
-    const reads = itemGets();
+    const reads = titleGets();
+    const stateReads = itemGets();
     hold = true;
     await click(host.querySelector(".player-head button.icon-button")!);
     await flush();
-    expect(calls.state.filter((call) => call.method === "PATCH")).toHaveLength(1);
-    expect(itemGets()).toBe(reads);
-    await act(async () => { finalPatch.resolve(json({ key: "k", position: 0, duration: 0, favorite: false, watched: true, mediaSourceId: "ms1" })); });
+    expect(addonCalls.progress.filter((call) => call.method === "POST")).toHaveLength(1);
+    expect(titleGets()).toBe(reads);
+    // The item's own state is not what holds the position any more.
+    expect(itemGets()).toBe(stateReads);
+    await act(async () => { finalWrite.resolve(new Response(null, { status: 204 })); });
     await flush();
-    expect(itemGets()).toBe(reads + 1);
+    expect(titleGets()).toBe(reads + 1);
     expect(host.querySelector(".library-detail-progress")).toBeNull();
   });
 
