@@ -73,6 +73,7 @@ import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.data.VideoDto
 import cz.stremiooffline.tv.playback.Progress
+import cz.stremiooffline.tv.playback.VersionProgress
 import cz.stremiooffline.tv.ui.components.CardRowInset
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
@@ -534,22 +535,26 @@ fun CatalogDetailScreen(
     pick.localProgress = if (path == null) null else runCatching { api.progress(Progress.libraryKey(path)) }.getOrNull()
   }
 
-  // The active remote version's own row, re-read for its identity, the chosen version and the
-  // restore token. The row is cleared first, so a replaced source or a read still under way shows
-  // Play, and a late answer for an earlier identity is dropped.
+  // The active remote version's row, re-read for its identity, the chosen version and the restore
+  // token. The row is cleared first, so a replaced source or a read still under way shows Play, and
+  // a late answer for an earlier identity is dropped. A version the catalogue can name reads the
+  // title's own key first, so every version of the title resumes the position the title holds; the
+  // item's own remote state is the fallback for what was stored before.
   LaunchedEffect(remoteIdentity, restoreToken) {
     val request = ++remoteProgress.request
     remoteProgress.key = null
     remoteProgress.row = null
     val item = activeRemoteItem ?: return@LaunchedEffect
     if (item.libraryId.isBlank() || item.itemId.isBlank()) return@LaunchedEffect
-    val loaded = try {
-      api.remoteItemState(item.libraryId, item.itemId)
-    } catch (cancelled: CancellationException) {
-      throw cancelled
-    } catch (_: ApiError) {
-      return@LaunchedEffect
-    }
+    // Computed here rather than in a local of the body: this composable sits at the limit of the
+    // registers Android's verifier allows.
+    val titleKey = ProgressKey.of(streamType, meta.id, pick.selectedVideo?.id)
+    val loaded = VersionProgress.savedState(
+      titleKey,
+      item,
+      { key -> api.progress(key) },
+      { libraryId, itemId -> api.remoteItemState(libraryId, itemId) },
+    ) ?: return@LaunchedEffect
     if (request != remoteProgress.request) return@LaunchedEffect
     remoteProgress.row = loaded
     remoteProgress.key = remoteIdentity
@@ -627,7 +632,7 @@ fun CatalogDetailScreen(
       val remoteItem = stream.remoteItem
       onPlay(
         PlayTarget(
-          key = remoteItem?.progressKey?.takeIf { it.isNotBlank() } ?: progressKey,
+          key = progressKey,
           title = playerTitle,
           resume = resuming,
           sourceId = stream.sourceId,
@@ -775,7 +780,7 @@ fun CatalogDetailScreen(
         val remoteItem = stream.remoteItem
         onPlay(
           PlayTarget(
-            key = remoteItem?.progressKey?.takeIf { it.isNotBlank() } ?: progressKey,
+            key = progressKey,
             title = playerTitle,
             resume = false,
             sourceId = stream.sourceId,

@@ -1,6 +1,7 @@
 package cz.stremiooffline.tv.data
 
 import cz.stremiooffline.tv.playback.SubtitleUrls
+import cz.stremiooffline.tv.playback.VersionProgress
 import cz.stremiooffline.tv.diagnostics.AppLog
 import java.io.IOException
 import java.util.concurrent.TimeUnit
@@ -607,11 +608,12 @@ class ApiClient(
     path: String?,
     poster: String?,
     addonKey: String?,
+    remote: RemoteItemContext?,
   ) {
     // The body drops what it does not have instead of sending nulls, the way the download body does.
     val payload = progressJson.encodeToString(
       ProgressRequest.serializer(),
-      ProgressRequest(key, position, duration, title, path, poster, addonKey),
+      ProgressRequest(key, position, duration, title, path, poster, addonKey, VersionProgress.writer(remote)?.let { ProgressWriter(it.first, it.second, it.third) }),
     )
     request(Request.Builder().url(address.resolve("/api/progress")).post(payload.toRequestBody(mediaType)).build())
   }
@@ -750,4 +752,9 @@ private data class ProgressRequest(
   val path: String? = null,
   val poster: String? = null,
   val addonKey: String? = null,
+  /** The version that wrote a title-owned row; omitted unless the caller named all three ids. */
+  val remote: ProgressWriter? = null,
 )
+
+@Serializable
+private data class ProgressWriter(val libraryId: String, val itemId: String, val mediaSourceId: String)

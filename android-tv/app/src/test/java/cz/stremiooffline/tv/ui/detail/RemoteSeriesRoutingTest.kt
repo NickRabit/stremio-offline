@@ -9,6 +9,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertContentDescriptionEquals
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
@@ -16,10 +17,12 @@ import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
+import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.RemoteItemContext
 import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.RemoteItemsPageDto
 import cz.stremiooffline.tv.data.RemoteItemStateDto
+import cz.stremiooffline.tv.data.RemoteProviderIdsDto
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.library.remoteItemTag
@@ -56,11 +59,13 @@ class RemoteSeriesRoutingTest {
     scenario.close()
   }
 
-  private fun series() = RemoteDetailData(
+  private val played = mutableListOf<PlayTarget>()
+
+  private fun series(ids: RemoteProviderIdsDto = RemoteProviderIdsDto()) = RemoteDetailData(
     libraryId = "rlibA",
     libraryName = "Filmy",
     provider = "jellyfin",
-    item = RemoteItemDto(id = "s1", name = "Show", type = "series"),
+    item = RemoteItemDto(id = "s1", name = "Show", type = "series", providerIds = ids),
   )
 
   private fun episode(id: String) = RemoteItemDto(id = id, name = "Pilot", type = "episode", season = 1, episode = 1)
@@ -76,6 +81,39 @@ class RemoteSeriesRoutingTest {
   private fun press(key: Key) {
     compose.onRoot().performKeyInput { pressKey(key) }
     compose.waitForIdle()
+  }
+
+  @Test
+  fun `an episode of a named show resumes the show's own row`() {
+    val api = FakeTvApi()
+    api.remoteEpisodesPages["s1|"] = RemoteItemsPageDto(items = listOf(episode("e1")), total = 1)
+    api.remoteSourcesValue = listOf(version())
+    // The episode's own item stores nothing; the show's own row holds the position the catalogue
+    // and the player write, so the episode's detail has to read the same one.
+    api.remoteStateValue = RemoteItemStateDto()
+    api.progressValues["series:tt7:1:1"] = ProgressDto(position = 900.0, duration = 3600.0)
+    scenario.onActivity { activity ->
+      activity.setContent {
+        RemoteDetailScreen(
+          api = api,
+          data = series(RemoteProviderIdsDto(imdb = "tt7")),
+          onPlay = { played += it },
+          onBack = {},
+          titleProgress = api::progress,
+        )
+      }
+    }
+    compose.waitUntil(5_000) { api.remoteEpisodesRequests.isNotEmpty() }
+    compose.waitForIdle()
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { api.remoteSourcesRequests.contains("rlibA" to "e1") }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagRemoteDetailPlay).assertTextContains("Resume")
+    press(Key.DirectionCenter)
+
+    assertEquals(listOf("series:tt7:1:1"), played.map { it.key })
+    assertTrue(played.single().resume)
   }
 
   @Test

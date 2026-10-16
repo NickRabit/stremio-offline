@@ -257,7 +257,8 @@ class NativeSourcesDetailTest {
     // The item's own version is playable without any of that.
     focusOn(TagRemoteDetailPlay)
     press(Key.DirectionCenter)
-    assertEquals("remote:rlibA:iA", played.single().key)
+    // The catalogue names the item, so the title's own key owns the play.
+    assertEquals("movie:tt1", played.single().key)
     assertEquals(listOf("ms1"), played.single().initialSources?.map { it.sourceId })
   }
 
@@ -307,7 +308,7 @@ class NativeSourcesDetailTest {
     }
     press(Key.DirectionCenter)
 
-    assertEquals("remote:rlibA:iA", played.last().key)
+    assertEquals("movie:tt1", played.last().key)
     assertEquals(listOf("ms1", "lib1", "ms9", "srcA"), played.last().initialSources?.map { it.sourceId })
   }
 
@@ -350,8 +351,9 @@ class NativeSourcesDetailTest {
     press(Key.DirectionCenter)
 
     val target = played.single()
-    // The row's own identity, never the item the detail was opened on.
-    assertEquals("remote:rlibB:iB", target.key)
+    // The title the detail was opened on keeps the key, while the row's own item travels with the
+    // play so its own exact versions and state are what is offered.
+    assertEquals("movie:tt1", target.key)
     assertEquals("rlibB", target.remoteItem?.libraryId)
     assertEquals("iB", target.remoteItem?.itemId)
     assertEquals("ms10", target.sourceId)

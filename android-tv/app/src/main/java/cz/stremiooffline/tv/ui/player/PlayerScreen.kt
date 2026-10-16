@@ -76,6 +76,7 @@ import cz.stremiooffline.tv.playback.QualityChoice
 import cz.stremiooffline.tv.playback.SidecarState
 import cz.stremiooffline.tv.playback.SubtitleChoice
 import cz.stremiooffline.tv.playback.SubtitleDelay
+import cz.stremiooffline.tv.playback.VersionProgress
 import cz.stremiooffline.tv.playback.VttCue
 import cz.stremiooffline.tv.playback.absoluteCues
 import cz.stremiooffline.tv.playback.activeCue
@@ -332,9 +333,10 @@ fun PlayerScreen(
   val quality = qualityChoice(state.quality, state.escalatedByViewer)
 
   /** Starts [target], leaving the outgoing session saved and deleted behind it. A different remote
-   *  version is a different file and begins at 0; a same-version restart keeps [at]. */
+   *  version of an item no title names is a different file and begins at 0; a same-version restart,
+   *  and a switch between two versions of one nameable title, keeps [at]. */
   fun startSwitch(target: PlayTarget, at: Double) {
-    val startAt = sourceSwitchPosition(currentTarget.remoteItem, target.remoteItem, at)
+    val startAt = sourceSwitchPosition(currentTarget.remoteItem, target.remoteItem, target.key, at)
     title = target.title
     currentTarget = target
     scope.launch {
@@ -864,14 +866,23 @@ internal suspend fun playerRetry(
   if (started) restart() else startOver()
 }
 
-internal fun sourceSwitchPosition(from: RemoteItemContext?, to: RemoteItemContext?, position: Double): Double =
-  if (to != null && (from == null || from.libraryId != to.libraryId || from.itemId != to.itemId || from.mediaSourceId != to.mediaSourceId)) 0.0 else position
+/**
+ * Where a switch lands. Two versions of one nameable title share one position, so a switch between
+ * them carries it; an item no title names keeps its own store, so another version of it is another
+ * file and starts at 0.
+ */
+internal fun sourceSwitchPosition(from: RemoteItemContext?, to: RemoteItemContext?, toKey: String, position: Double): Double =
+  if (VersionProgress.titleOwned(toKey, to)) position
+  else if (to != null && (from == null || from.libraryId != to.libraryId || from.itemId != to.itemId || from.mediaSourceId != to.mediaSourceId)) 0.0
+  else position
 
 /**
  * The target a chosen source switches to, built from the running target and the incoming row.
  *
  * The incoming row's own `remoteItem` is authoritative: a media-server version becomes a play of
- * exactly that item, under its own stable key, with only the versions of that same library item.
+ * exactly that item, under the running play's own title key when it has one -- the title owns the
+ * position of a version the catalogue can name -- and under the item's own stable key otherwise,
+ * with only the versions of that same library item either way.
  * A library copy becomes the file's own session, under the file's own key. An addon row keeps the
  * running title's own generic key and subtitles -- the catalogue key a catalogue play already
  * carries, or the identity a native detail loaded its addon rows under -- never the key of the
@@ -884,7 +895,9 @@ internal fun switchedTarget(current: PlayTarget, stream: StreamDto): PlayTarget 
   val incomingRemote = stream.remoteItem
   if (incomingRemote != null) {
     return PlayTarget(
-      key = incomingRemote.progressKey.ifEmpty { current.key },
+      // A version of the title the running play already names is watched under that title's key;
+      // an item nothing can name keeps its own item state.
+      key = genericKeyOf(current) ?: incomingRemote.progressKey.ifEmpty { current.key },
       title = current.title,
       resume = false,
       sourceId = stream.sourceId.takeIf { it.isNotBlank() },

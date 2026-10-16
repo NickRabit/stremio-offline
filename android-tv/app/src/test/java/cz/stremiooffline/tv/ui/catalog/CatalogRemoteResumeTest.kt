@@ -34,7 +34,10 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/** Matched remote sources resume from their per-user local remote-state row. */
+/**
+ * Matched remote sources resume from the title's own row when the catalogue can name them, and
+ * from their per-user local remote-state row otherwise -- what was stored before a title held it.
+ */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w960dp-h540dp-xhdpi")
 class CatalogRemoteResumeTest {
@@ -118,8 +121,8 @@ class CatalogRemoteResumeTest {
   fun `the exact version that stored the position resumes from the remote row`() {
     val api = FakeTvApi()
     twoVersions(api)
-    // The catalogue has its own progress, but a remote version never reads it.
-    api.progressValues["movie:tt1"] = ProgressDto(position = 1200.0, duration = 3600.0)
+    // The title holds nothing, so the item's own row is the only position there is; the play still
+    // carries the title's key, which is what the position is written under.
     api.remoteStateValue = RemoteItemStateDto(position = 900.0, duration = 1800.0, watched = false, mediaSourceId = "a1")
     mount(api)
     compose.waitUntil(5_000) { api.remoteMatchRequests.contains("rlibA|movie|tt1") }
@@ -134,7 +137,7 @@ class CatalogRemoteResumeTest {
     press(Key.DirectionCenter)
 
     val target = played.single()
-    assertEquals("remote:rlibA:iA", target.key)
+    assertEquals("movie:tt1", target.key)
     assertTrue(target.resume)
     assertEquals("rlibA", target.remoteItem?.libraryId)
     assertEquals("iA", target.remoteItem?.itemId)
@@ -143,10 +146,10 @@ class CatalogRemoteResumeTest {
   }
 
   @Test
-  fun `a watched version offers Play from the start despite catalogue progress`() {
+  fun `a watched version offers Play from the start when the title holds nothing`() {
     val api = FakeTvApi()
     twoVersions(api)
-    api.progressValues["movie:tt1"] = ProgressDto(position = 1200.0, duration = 3600.0)
+    // The title's own key answers nothing, so the item's row still carries today's guards.
     api.remoteStateValue = RemoteItemStateDto(position = 900.0, duration = 1800.0, watched = true, mediaSourceId = "a1")
     mount(api)
     compose.waitUntil(5_000) { api.remoteMatchRequests.contains("rlibA|movie|tt1") }
@@ -166,8 +169,8 @@ class CatalogRemoteResumeTest {
   fun `a version other than the stored one offers Play from the start`() {
     val api = FakeTvApi()
     twoVersions(api)
-    api.progressValues["movie:tt1"] = ProgressDto(position = 1200.0, duration = 3600.0)
-    // The stored row belongs to `a1`; the viewer picks `a2`, which has no position of its own.
+    // The title's own key answers nothing; the stored row belongs to `a1` and the viewer picks `a2`,
+    // which has no position of its own.
     api.remoteStateValue = RemoteItemStateDto(position = 900.0, duration = 1800.0, watched = false, mediaSourceId = "a1")
     mount(api)
     compose.waitUntil(5_000) { api.remoteMatchRequests.contains("rlibA|movie|tt1") }
@@ -218,10 +221,37 @@ class CatalogRemoteResumeTest {
   }
 
   @Test
-  fun `a failed remote read offers Play with no bar`() {
+  fun `a title row resumes every version of the title`() {
     val api = FakeTvApi()
     twoVersions(api)
     api.progressValues["movie:tt1"] = ProgressDto(position = 1200.0, duration = 3600.0)
+    // The item's own store says something else entirely: the title's row is the one that decides,
+    // for any version of it.
+    api.remoteStateValue = RemoteItemStateDto(position = 900.0, duration = 1800.0, watched = false, mediaSourceId = "a1")
+    mount(api)
+    compose.waitUntil(5_000) { api.remoteMatchRequests.contains("rlibA|movie|tt1") }
+    compose.waitForIdle()
+
+    chooseSourceRow(1)
+
+    compose.onNodeWithTag(TagCatalogPrimary).assertTextContains("Resume")
+    compose.onNodeWithTag(TagCatalogStartOver).assertExists()
+    assertEquals(1, barTextCount())
+
+    compose.onNodeWithTag(TagCatalogPrimary).assertIsFocused()
+    press(Key.DirectionCenter)
+
+    val target = played.single()
+    assertTrue(target.resume)
+    assertEquals("movie:tt1", target.key)
+    assertEquals("a2", target.remoteItem?.mediaSourceId)
+  }
+
+  @Test
+  fun `a failed remote read offers Play with no bar`() {
+    val api = FakeTvApi()
+    twoVersions(api)
+    // Nothing to fall back to either: the title holds nothing and the item's own read fails.
     api.remoteStateValue = RemoteItemStateDto(position = 900.0, duration = 1800.0, watched = false, mediaSourceId = "a1")
     api.remoteStateFailure = ApiError(ApiFailure.Generic)
     mount(api)

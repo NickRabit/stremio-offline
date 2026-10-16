@@ -58,6 +58,7 @@ class RemoteResumeTest {
       path: String?,
       poster: String?,
       addonKey: String?,
+      remote: RemoteItemContext?,
     ) {}
 
     override suspend fun remoteItemState(libraryId: String, itemId: String): RemoteItemStateDto = stored

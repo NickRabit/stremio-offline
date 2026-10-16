@@ -44,6 +44,7 @@ import cz.stremiooffline.tv.data.CatalogApi
 import cz.stremiooffline.tv.data.DownloadTargetDto
 import cz.stremiooffline.tv.data.LibraryDto
 import cz.stremiooffline.tv.data.MediaDto
+import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.RemoteItemStateDto
 import cz.stremiooffline.tv.data.RemoteItemStatePatch
@@ -127,6 +128,12 @@ fun RemoteDetailScreen(
   /** The catalogue surface the explicit addon discovery needs. Null keeps the whole addon block
    *  off, which is what a harness with no catalogue surface passes. */
   catalogueApi: CatalogApi? = null,
+  /** The title's own stored row, read for the item's catalogue identity when one can be derived.
+   *  Null leaves the item's own remote state as the only store, which is what a harness with no
+   *  progress route passes. */
+  titleProgress: (suspend (String) -> ProgressDto?)? = null,
+  /** Forgets the title's own row; Forget and Mark watched clear it beside the item's own state. */
+  forgetTitle: (suspend (String) -> Unit)? = null,
 ) {
   // A series has no playable versions of its own: its card opens the episode grid instead.
   if (data.item.type == "series" || data.item.type == "season") {
@@ -141,6 +148,8 @@ fun RemoteDetailScreen(
       loadDestinations = loadDestinations,
       onQueue = onQueue,
       catalogueApi = catalogueApi,
+      titleProgress = titleProgress,
+      forgetTitle = forgetTitle,
     )
     return
   }
@@ -159,6 +168,9 @@ fun RemoteDetailScreen(
   var sourcesLoading by remember(identity) { mutableStateOf(true) }
   var sourcesError by remember(identity) { mutableStateOf(false) }
   var state by remember(identity) { mutableStateOf<RemoteItemStateDto?>(null) }
+  // The title's own row, when the catalogue can name this item: it outranks the item's state, so
+  // every version of the title resumes the one position the title holds.
+  var titleRow by remember(identity) { mutableStateOf<ProgressDto?>(null) }
   var stateLoading by remember(identity) { mutableStateOf(true) }
   var stateError by remember(identity) { mutableStateOf(false) }
   var mutationError by remember(identity) { mutableStateOf(false) }
@@ -242,9 +254,25 @@ fun RemoteDetailScreen(
     }
   }
 
+  /** The title's own row, read under the item's catalogue identity; nothing else can name it. */
+  suspend fun loadTitleRow(): ProgressDto? {
+    val read = titleProgress ?: return null
+    val identity = sourcesIdentity ?: return null
+    return try {
+      read(ProgressKey.of(identity.first, identity.second))
+    } catch (cancelled: CancellationException) {
+      throw cancelled
+    } catch (_: ApiError) {
+      null
+    }
+  }
+
   suspend fun loadState(mine: Pair<String, String>) {
     stateLoading = true
     stateError = false
+    titleRow = null
+    val loadedTitle = loadTitleRow()
+    if (live.value == mine) titleRow = loadedTitle
     try {
       val loaded = api.remoteItemState(data.libraryId, data.item.id)
       if (live.value != mine) return
@@ -282,23 +310,35 @@ fun RemoteDetailScreen(
   val savedSourceId = stored?.mediaSourceId
   val favorite = stored?.favorite == true
   val watched = stored?.watched == true
+  // The title's own row decides the position whenever it answered: whichever version stored it,
+  // every version of the title resumes it.
+  val title = titleRow
   // The version the viewer last watched leads, so its Resume is the one offered.
   val primary = sources.firstOrNull { it.remoteItem?.mediaSourceId != null && it.remoteItem.mediaSourceId == savedSourceId }
     ?: sources.firstOrNull()
   // The saved position belongs to the exact version that stored it; another version shows none.
-  val sameVersion = primary?.remoteItem?.mediaSourceId == savedSourceId
+  val sameVersion = title != null || primary?.remoteItem?.mediaSourceId == savedSourceId
   // Resume is offered only for the same version that stored the position and never for an item
-  // already marked watched; any other version, or an unknown one, starts from the beginning.
-  val resuming = stateLoaded && savedSourceId != null && !watched && sameVersion &&
-    Progress.resumePosition(stored?.position ?: 0.0, stored?.duration ?: 0.0) != null
+  // already marked watched; the title's own row resumes any version, while another version of an
+  // item the title does not name, or an unknown one, starts from the beginning.
+  val resuming = if (title != null) {
+    stateLoaded && !watched && Progress.resumePosition(title.position, title.duration) != null
+  } else {
+    stateLoaded && savedSourceId != null && !watched && sameVersion &&
+      Progress.resumePosition(stored?.position ?: 0.0, stored?.duration ?: 0.0) != null
+  }
   /** A stored position the primary version owns, so Start over can still be offered beside Play. */
-  val savedOnPrimary = stateLoaded && sameVersion && (stored?.position ?: 0.0) > 0.0
+  val savedOnPrimary = if (title != null) {
+    stateLoaded && title.position > 0.0
+  } else {
+    stateLoaded && sameVersion && (stored?.position ?: 0.0) > 0.0
+  }
 
   fun play(source: StreamDto?, resume: Boolean) {
     val context = source?.remoteItem ?: return
     onPlay(
       PlayTarget(
-        key = context.progressKey,
+        key = sourcesIdentity?.let { ProgressKey.of(it.first, it.second) } ?: context.progressKey,
         title = titleOf(data),
         resume = resume,
         sourceId = source.sourceId.takeIf { it.isNotBlank() },
@@ -432,6 +472,14 @@ fun RemoteDetailScreen(
     }
   }
 
+  /** Clears the title's own row, so the item's cleared state is not outranked by a stale position. */
+  suspend fun clearTitleRow() {
+    val forget = forgetTitle ?: return
+    val identity = sourcesIdentity ?: return
+    forget(ProgressKey.of(identity.first, identity.second))
+    if (live.value == mine) titleRow = null
+  }
+
   fun toggleWatched() {
     if (watchedBusy || !stateLoaded) return
     val wanted = !watched
@@ -441,6 +489,8 @@ fun RemoteDetailScreen(
       try {
         val next = api.patchRemoteItemState(data.libraryId, data.item.id, RemoteItemStatePatch(watched = wanted))
         if (live.value == mine) state = next
+        // A finished title keeps no position, as on the web: the title's row goes with it.
+        if (wanted) clearTitleRow()
       } catch (cancelled: CancellationException) {
         throw cancelled
       } catch (_: ApiError) {
@@ -451,14 +501,15 @@ fun RemoteDetailScreen(
     }
   }
 
-  /** Forgetting this item's stored position: the same local remote-state endpoint, cleared to
-   *  zero, never the generic forget route. */
+  /** Forgetting this item's stored position: the title's own row when the catalogue names it, and
+   *  the item's own remote state cleared to zero, which the title's read falls back to. */
   fun forgetProgress() {
     if (forgetBusy || !stateLoaded) return
     forgetBusy = true
     mutationError = false
     scope.launch {
       try {
+        clearTitleRow()
         val next = api.patchRemoteItemState(data.libraryId, data.item.id, RemoteItemStatePatch(position = 0.0, duration = 0.0))
         if (live.value == mine) state = next
       } catch (cancelled: CancellationException) {
@@ -623,8 +674,9 @@ fun RemoteDetailScreen(
       // The same bar the local detail draws, from the same saved position numbers.
       if (stateLoaded && sameVersion) {
         SavedPlaybackProgress(
-          position = stored?.position ?: 0.0,
-          duration = stored?.duration ?: 0.0,
+          // The title's own row when it answered, the item's own numbers otherwise.
+          position = title?.position ?: (stored?.position ?: 0.0),
+          duration = title?.duration ?: (stored?.duration ?: 0.0),
           tag = TagRemoteDetailWatched,
         )
       }

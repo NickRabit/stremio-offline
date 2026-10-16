@@ -403,7 +403,7 @@ internal fun nativeRowTarget(
   val remoteItem = row.remoteItem
   if (remoteItem != null) {
     return PlayTarget(
-      key = remoteItem.progressKey,
+      key = identity?.let { ProgressKey.of(it.first, it.second) } ?: remoteItem.progressKey,
       title = title,
       resume = true,
       sourceId = row.sourceId.takeIf { it.isNotBlank() },

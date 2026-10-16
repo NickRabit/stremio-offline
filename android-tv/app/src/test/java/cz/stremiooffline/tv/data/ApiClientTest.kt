@@ -225,6 +225,29 @@ class ApiClientTest {
   }
 
   @Test
+  fun `a title-owned save names the version that wrote the row`() = runTest {
+    val api = client(start())
+    val context = RemoteItemContext(libraryId = "rlibA", itemId = "iA", mediaSourceId = "ms1", progressKey = "remote:rlibA:iA")
+
+    server.enqueue(MockResponse().setResponseCode(204))
+    api.saveProgress("movie:tt1", 42.0, 1_000.0, "It", null, remote = context)
+    val named = server.takeRequest().body.readUtf8()
+    assertTrue(named, named.contains("\"remote\":{\"libraryId\":\"rlibA\",\"itemId\":\"iA\",\"mediaSourceId\":\"ms1\"}"))
+
+    // A play with nothing to name, and one whose version names no media source, send no writer at
+    // all: the body drops what it does not have.
+    server.enqueue(MockResponse().setResponseCode(204))
+    api.saveProgress("file:Films/It.mkv", 42.0, 1_000.0, "It", "Films/It.mkv")
+    val plain = server.takeRequest().body.readUtf8()
+    assertTrue(plain, !plain.contains("remote"))
+
+    server.enqueue(MockResponse().setResponseCode(204))
+    api.saveProgress("movie:tt1", 42.0, 1_000.0, "It", null, remote = context.copy(mediaSourceId = null))
+    val unnamed = server.takeRequest().body.readUtf8()
+    assertTrue(unnamed, !unnamed.contains("remote"))
+  }
+
+  @Test
   fun `a refused seek keeps the stream and says so`() = runTest {
     server.enqueue(
       MockResponse().setBody(
