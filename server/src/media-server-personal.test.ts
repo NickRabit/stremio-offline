@@ -299,10 +299,10 @@ test("a record stored before titles were is given its title once, in the backgro
       const libraryId = provider === "jellyfin" ? harness.libraryId : harness.embyLibraryId;
       await harness.personal.patch(harness.admin, libraryId, "tm", { position: 60, duration: 600 });
       await harness.personal.patch(harness.admin, libraryId, "te1", { position: 60, duration: 600 });
-      // As an older build stored them: no title on either record.
+      // As an older build stored them: no title on either record, and a star of its own on one.
       await harness.store.update((state) => {
         const map = state.userData![ADA]!.remoteMedia as Record<string, Record<string, unknown>>;
-        for (const row of Object.values(map)) delete row.title;
+        for (const row of Object.values(map)) { delete row.title; if (row.itemId === "tm") row.favorite = true; }
       });
       const reads = countDetails(harness);
 
@@ -311,6 +311,7 @@ test("a record stored before titles were is given its title once, in the backgro
       await harness.personal.titleBackfill;
       assert.deepEqual(recordOf(harness, "tm")?.title, { type: "movie", id: "tt0078748" }, provider);
       assert.deepEqual(recordOf(harness, "te1")?.title, { type: "series", id: "tt0903747" }, "an episode stands for its show");
+      assert.deepEqual(Object.keys(harness.store.userData(ADA).watchlist ?? {}), ["movie:tt0078748"], "the old star becomes the title's star");
 
       const second = await harness.personal.cards(harness.admin, { filter: "resume" });
       assert.deepEqual(second.items.map((card) => card.identity).filter(Boolean).length, 2, "the next list draws both titles");
@@ -319,6 +320,18 @@ test("a record stored before titles were is given its title once, in the backgro
       assert.equal(reads(), after, "an item is asked about once");
     });
   }
+});
+
+test("a remote star given before stars were the title's becomes the title's star", async () => {
+  await withHarness(async (harness) => {
+    await harness.personal.patch(harness.admin, harness.libraryId, "tm", { favorite: true });
+    // As an older build left it: the record starred and titled, the title not starred.
+    await harness.store.update((state) => { (state.userData![ADA] as { watchlist?: unknown }).watchlist = {}; });
+
+    await harness.personal.cards(harness.admin, { filter: "favorites" });
+    await harness.personal.titleBackfill;
+    assert.deepEqual(Object.keys(harness.store.userData(ADA).watchlist ?? {}), ["movie:tt0078748"]);
+  });
 });
 
 test("a starred title is left out of the favourite cards before they are paged", async () => {

@@ -604,7 +604,13 @@ export class MediaServerPersonal {
       .filter((record) => !record.title && !this.titleTried.has(record.key))
       .map((record) => ({ libraryId: group.library.id, record })))
       .slice(0, TITLE_BACKFILL_LIMIT);
-    if (untitled.length) this.titleBackfill = this.backfillTitles(authority, user.id, untitled);
+    // A star given before stars were the title's: it becomes the title's star the first time a list
+    // meets it. Clearing a star on any side clears these flags, so nothing else leaves one behind.
+    const watchlist = watchlistOf(this.store.userData(user.id));
+    const loose = confirmed.flatMap((group) => group.records)
+      .filter((record) => record.favorite && record.title && watchlist[titleKeyOf(record.title)] === undefined);
+    const stars = loose.length ? this.adoptStars(user.id, loose) : Promise.resolve();
+    this.titleBackfill = untitled.length ? Promise.all([stars, this.backfillTitles(authority, user.id, untitled)]).then(() => undefined) : stars;
     const proof: CardProof = {
       actor: { id: user.id, secret: user.secret },
       filter,
@@ -628,28 +634,54 @@ export class MediaServerPersonal {
     return result;
   }
 
+  /** Writes the title's watchlist entry for remote records starred before a star was the title's. */
+  private async adoptStars(userId: string, records: RemoteMediaRecord[]): Promise<void> {
+    try {
+      await this.store.update((next) => {
+        const data = next.userData?.[userId];
+        if (!data) return;
+        const watchlist = { ...watchlistOf(data) };
+        for (const record of records) {
+          if (!record.title || watchlist[titleKeyOf(record.title)] !== undefined) continue;
+          watchlist[titleKeyOf(record.title)] = { type: record.title.type, id: record.title.id, name: record.name, addedAt: record.updatedAt || new Date().toISOString() };
+        }
+        next.userData = { ...(next.userData ?? {}), [userId]: { ...data, watchlist } };
+      });
+    } catch (error) {
+      log("WARN", "Media-server stars could not be kept", { reason: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
   /** Reads the title of records stored before titles were, a few at a time, and stores what it
    *  found. Nothing here fails a request: an item the server no longer answers is simply left. */
   private async backfillTitles(authority: MediaServerAuthority, userId: string, untitled: Array<{ libraryId: string; record: RemoteMediaRecord }>): Promise<void> {
     for (const { record } of untitled) this.titleTried.add(record.key);
     const found = new Map<string, RemoteTitle>();
+    const names = new Map<string, string>();
     try {
       await runBounded(untitled, TITLE_BACKFILL_CONCURRENCY, async ({ libraryId, record }) => {
         const detail = await this.manager.itemDetail(authority, libraryId, record.itemId).catch(() => undefined);
         if (!detail) return;
-        const { title } = await this.titleOfWrite(authority, libraryId, detail.item);
+        const { title, name } = await this.titleOfWrite(authority, libraryId, detail.item);
         if (title) found.set(record.key, title);
+        if (name) names.set(record.key, name);
       }, () => false);
       if (!found.size) return;
       await this.store.update((next) => {
         const data = next.userData?.[userId];
         if (!data) return;
         const map = { ...(data.remoteMedia ?? {}) };
+        const watchlist = { ...watchlistOf(data) };
         for (const [key, title] of found) {
           const stored = validRecord(map[key]);
-          if (stored && !stored.title) map[key] = { ...stored, title };
+          if (!stored || stored.title) continue;
+          map[key] = { ...stored, title };
+          // A star given before titles were stored is the title's star from now on.
+          if (stored.favorite && watchlist[titleKeyOf(title)] === undefined) {
+            watchlist[titleKeyOf(title)] = { type: title.type, id: title.id, name: names.get(key) ?? stored.name, addedAt: stored.updatedAt || new Date().toISOString() };
+          }
         }
-        next.userData = { ...(next.userData ?? {}), [userId]: { ...data, remoteMedia: map } };
+        next.userData = { ...(next.userData ?? {}), [userId]: { ...data, remoteMedia: map, watchlist } };
       });
     } catch (error) {
       log("WARN", "Media-server titles could not be read", { reason: error instanceof Error ? error.message : String(error) });
