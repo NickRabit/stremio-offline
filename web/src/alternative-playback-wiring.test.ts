@@ -16,9 +16,12 @@ describe("the alternative player's save and close wiring", () => {
     // The queue accepts the row as it is: a copy of another media server is no longer refused here.
     expect(download).toContain("openAlternativeSave({ stream: alternative.stream");
     expect(download).not.toContain("remoteItem");
-    // Saving the copy down to the device stays refused, as it is for every native source.
+    // Taking it to the device is offered wherever the row's own source allows it: a copy of another
+    // media server is fetched by the server through its scoped transport, exactly as an addon
+    // answer is, so nothing here refuses the row the player is showing.
     const device = alternativeBlock.slice(alternativeBlock.indexOf("onDeviceDownload={async () => {"), alternativeBlock.indexOf("onProgressSaved="));
-    expect(device).toContain("if (alternative.stream.remoteItem) return false;");
+    expect(device).toContain("await saveToDevice({ title: alternative.title, stream: alternative.stream, media: alternative.media })");
+    expect(device).not.toContain("remoteItem");
   });
 
   it("refreshes only when the played row's own final write landed, never on close", () => {
@@ -36,7 +39,10 @@ describe("the alternative player's save and close wiring", () => {
   });
 
   it("reuses the one save request helper for the detail rows and the player", () => {
-    expect(appSource).toContain("setAlternativeSave(alternativeSaveRequest(request.title, request.stream, request.media, request.kind))");
+    // The row's own destination is resolved by the server; the helper is what names one when the
+    // viewer asks for the dialog, and the dialog is the only thing that reads it back.
+    expect(appSource).toContain("const save = alternativeSaveRequest(request.title, request.stream, request.media, request.kind);");
+    expect(appSource).toContain("if (request.choose || (isRemoteStream(request.stream) && sourceTargetRule(request.stream) === undefined)) {");
     expect(appSource).toContain("rule={alternativeSave.rule ?? addons.find((addon) => addon.key === alternativeSave.stream.addonKey)?.downloadSettings}");
   });
 });

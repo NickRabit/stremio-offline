@@ -197,6 +197,20 @@ describe("LocalLibraryDetail actions", () => {
     expect(onOpenFolder).toHaveBeenCalledOnce();
   });
 
+  it("offers the device action for a movie folder's own copy, not only for a detail that is one file", async () => {
+    // The folder stands for the title, and the row on screen is the file: that is the row the
+    // device action takes, exactly as it does in a detail opened on the file itself.
+    copies = () => json([copy("Films/Heat.mkv", "Heat.mkv", 2_000_000_000)]);
+    identityHandler = () => json(identity({ file: false, kind: "movie", bound: { type: "movie", id: "tt1", name: "Heat" } }));
+    const onDownloadToDevice = vi.fn();
+    await render({ kind: "folder", path: "Films/Heat", name: "Heat", fileCount: 1, size: 2_000_000_000 }, { onDownloadToDevice });
+    const device = [...host.querySelectorAll<HTMLButtonElement>(".library-detail-actions button")]
+      .find((button) => button.getAttribute("aria-label") === "Save to this device");
+    expect(device).toBeDefined();
+    await click(device!);
+    expect(onDownloadToDevice).toHaveBeenCalledWith(expect.objectContaining({ localPath: "Films/Heat.mkv" }));
+  });
+
   it("toggles the clicked file's favorite and clears its saved position", async () => {
     progressOf = (url) => json(savedEntry(progressKey(url), 10, 100));
     const { onToggleFavorite, props } = await render(file(), { favorite: true, progress: { position: 10, duration: 100 } });

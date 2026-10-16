@@ -113,10 +113,12 @@ export interface RemoteCapabilities {
   delete: false;
   identify: false;
   writeArtwork: false;
-  /** The one flag a trusted source projection may turn on: an original a local library may
-   *  copy, proved by the account's native permission and never from caller fields. */
+  /** The flags a trusted source projection may turn on: an original the acting account may copy
+   *  into a local library, and one it may take to the device it is using. Both are proved by the
+   *  account's own right and by what the media server lets that account download, never from
+   *  caller fields; nothing else about a remote original is ever true. */
   downloadToLibrary: boolean;
-  downloadToDevice: false;
+  downloadToDevice: boolean;
 }
 
 export const READ_ONLY_MEDIA_CAPABILITIES: RemoteCapabilities = Object.freeze({

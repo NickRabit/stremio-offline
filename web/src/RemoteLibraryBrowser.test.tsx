@@ -74,6 +74,10 @@ class FakeIntersectionObserver {
 let root: Root;
 let host: HTMLDivElement;
 
+/** The arrow half of the save split: the one that asks where the copy should go, where the button
+ *  beside it queues the row through the destination its own source projects. */
+const saveElsewhere = () => host.querySelector<HTMLButtonElement>(".library-detail-actions .library-detail-save .split-button-toggle")!;
+
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   setLocale("en");
@@ -223,11 +227,11 @@ describe("RemoteLibraryBrowser listing", () => {
     expect(calls.browse).toHaveLength(2);
     expect(calls.browse[1]!.searchParams.get("parentId")).toBe("f1");
     expect(calls.browse[1]!.searchParams.get("mode")).toBe("folders");
-    expect([...host.querySelectorAll(".crumbs button")].map((node) => node.textContent?.trim())).toEqual(["", "Music videos", "Concerts"]);
+    expect([...host.querySelectorAll(".crumbs button")].map((node) => node.textContent?.trim())).toEqual(["", "Library", "Music videos", "Concerts"]);
     // Back climbs one level from the listing the folder left behind, without a new provider read.
     await click(host.querySelector(".library-back")!);
     expect(calls.browse).toHaveLength(2);
-    expect([...host.querySelectorAll(".crumbs button")].map((node) => node.textContent?.trim())).toEqual(["", "Music videos"]);
+    expect([...host.querySelectorAll(".crumbs button")].map((node) => node.textContent?.trim())).toEqual(["", "Library", "Music videos"]);
     expect(host.querySelector('.browse-item[data-remote-id="f1"]')).not.toBeNull();
     expect(host.querySelector<HTMLElement>('.browse-item[data-remote-id="f1"] .library-open')).toBe(document.activeElement);
     // From the root, Back leaves the browser entirely.
@@ -401,7 +405,8 @@ describe("RemoteLibraryBrowser listing", () => {
     browse = (url) => (url.searchParams.get("parentId") ? stale.promise : json(page([folder("f1", "Concerts")])));
     await openRootLibrary();
     await click(tileButtons()[0]!);          // the folder read is held open
-    await click(host.querySelector(".crumbs button:not(.library-back)")!); // back to the cached root
+    // The library's own crumb, not the section's: the section leaves the browser altogether.
+    await click([...host.querySelectorAll<HTMLButtonElement>(".crumbs button")].find((node) => node.textContent?.includes("Music videos"))!);
     expect(calls.browse).toHaveLength(2);
     expect(host.querySelector('.browse-item[data-remote-id="f1"]')).not.toBeNull();
     await act(async () => { stale.resolve(json(page([movie("m9", "Stale")]))); });
@@ -608,13 +613,13 @@ describe("RemoteLibraryBrowser automatic pagination and navigation", () => {
       : json(page([show]));
     await openRootLibrary();
     await click(tileButtons()[0]!);
-    expect([...host.querySelectorAll(".crumbs button")].map((node) => node.textContent?.trim())).toEqual(["", "Music videos", "Show"]);
+    expect([...host.querySelectorAll(".crumbs button")].map((node) => node.textContent?.trim())).toEqual(["", "Library", "Music videos", "Show"]);
     await click(tileButtons()[0]!);
-    expect([...host.querySelectorAll(".crumbs button")].map((node) => node.textContent?.trim())).toEqual(["", "Music videos", "Show", "S1 E1 · Pilot"]);
+    expect([...host.querySelectorAll(".crumbs button")].map((node) => node.textContent?.trim())).toEqual(["", "Library", "Music videos", "Show", "S1 E1 · Pilot"]);
     const current = host.querySelector<HTMLButtonElement>('.crumbs button[aria-current="page"]')!;
     expect(current.disabled).toBe(true);
     await click(byText(".crumbs button", "Show")!);
-    expect([...host.querySelectorAll(".crumbs button")].map((node) => node.textContent?.trim())).toEqual(["", "Music videos", "Show"]);
+    expect([...host.querySelectorAll(".crumbs button")].map((node) => node.textContent?.trim())).toEqual(["", "Library", "Music videos", "Show"]);
   });
 
   it("hides the root block and reports no roots while a local folder owns the page", async () => {
@@ -1224,7 +1229,8 @@ describe("RemoteLibraryBrowser native copy", () => {
     await click(tileButtons()[0]!);
     await flush();
     expect(calls.sources).toHaveLength(1);
-    await click(byText(".library-detail-actions button", "To library")!);
+    // The arrow asks for the native dialog, which is the one that lists the versions to copy.
+    await click(saveElsewhere());
     expect(calls.sources).toHaveLength(1);
     await click(primary());
     expect(downloadCalls[0]!.sourceId).toBe("src-v2");
@@ -1382,7 +1388,7 @@ describe("RemoteLibraryBrowser addon sources", () => {
     const { onDownloadQueued } = await openDetail();
     await openPicker();
       await selectAddonRow();
-    await click(byText(".library-detail-actions button", "To library")!);
+    await click(saveElsewhere());
     const card = document.querySelector<HTMLElement>(".save-target-card")!;
     expect(card.textContent).toContain("Films › Films › One");
     downloadReply = () => json({ error: "This source is already in the library." }, 409);
@@ -1414,8 +1420,9 @@ describe("RemoteLibraryBrowser addon sources", () => {
     // The player's own save actions run the real flows rather than no-op callbacks.
     await click(host.querySelector(".player-settings-toggle")!);
     await click(byText(".player-action", "To library")!);
-    expect(document.querySelector(".save-target-card")).not.toBeNull();
-    await click(document.querySelector(".save-target-card footer button.primary")!);
+    // The player has one save button, and it saves: the destination is the row's own, resolved by
+    // the server, the same way the main player's does.
+    await flush();
     expect(downloadCalls[0]!.sourceId).toBe("addon-1");
     expect(onDownloadQueued).toHaveBeenCalledTimes(1);
     await click(byText(".player-action", "To device")!);
@@ -1507,7 +1514,7 @@ describe("RemoteLibraryBrowser addon sources", () => {
     await flush();
     await openPicker();
       await selectAddonRow();
-    await click(byText(".library-detail-actions button", "To library")!);
+    await click(saveElsewhere());
     const card = document.querySelector(".save-target-card")!;
     // The storage preview resolves the media subject: the show and its season, never the episode label.
     const preview = [...card.querySelectorAll<HTMLElement>("small")].map((node) => node.textContent ?? "").find((text) => text.includes("›")) ?? "";
@@ -1913,7 +1920,7 @@ describe("RemoteLibraryBrowser addon sources", () => {
     await openPicker();
     await click(inDialog(".library-source-card .remote-streams button", "Other copy")!);
     await flush();
-    await click(byText(".library-detail-actions button", "To library")!);
+    await click(saveElsewhere());
     const card = document.querySelector<HTMLElement>(".save-target-card")!;
     // The automatic destination is this copy's own projection: not the addon's rule, not a default.
     const automatic = [...card.querySelectorAll<HTMLElement>("label")].find((label) => label.textContent?.includes("Keep"))!;
@@ -1966,17 +1973,15 @@ describe("RemoteLibraryBrowser addon sources", () => {
     await flush();
     // The player offers the round's own right, and the row it saves is the row that is playing.
     await playerSave("To library");
-    const card = document.querySelector<HTMLElement>(".save-target-card")!;
-    expect(card).not.toBeNull();
-    const automatic = [...card.querySelectorAll<HTMLElement>("label")].find((label) => label.textContent?.includes("Keep"))!;
-    expect(automatic.textContent).toContain("Films › Keep › One");
-    await click(document.querySelector(".save-target-card footer button.primary")!);
+    // The destination is the one the copy itself projected; the player's one button saves through it
+    // rather than opening a dialog the round's own right does not need.
+    await flush();
     expect(downloadCalls[0]!.sourceId).toBe("src-rlib_b-msX");
     expect(downloadCalls[0]!.media).toMatchObject({ kind: "movie", title: "One", id: "tt5000", metaType: "movie" });
     expect(onDownloadQueued).toHaveBeenCalledTimes(1);
   });
 
-  it("saves this detail's own version from the player through the native copy dialog", async () => {
+  it("saves this detail's own version from the player through the destination the row projects", async () => {
     const proofed: Stream = {
       ...nativeVersion("ms1", "1080p", 2_000_000_000),
       capabilities: { ...capabilities, downloadToLibrary: true },
@@ -1986,11 +1991,10 @@ describe("RemoteLibraryBrowser addon sources", () => {
     await click(playButton());
     await flush();
     await playerSave("To library");
-    const card = document.querySelector<HTMLElement>(".save-target-card")!;
-    expect(card).not.toBeNull();
-    // The dialog holds the versions the detail already read, so no further read is made for it.
+    // A version of this library's own carries the destination its library projected: the player's
+    // single button queues it there, and reads no further versions to do it.
+    await flush();
     expect(calls.sources).toHaveLength(1);
-    await click(document.querySelector(".save-target-card footer button.primary")!);
     expect(downloadCalls[0]!.sourceId).toBe("src-ms1");
     expect(downloadCalls[0]!.media).toMatchObject({ kind: "movie", title: "One", id: "tt5000", metaType: "movie" });
     expect(onDownloadQueued).toHaveBeenCalledTimes(1);

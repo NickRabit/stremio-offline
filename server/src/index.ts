@@ -2409,7 +2409,7 @@ const homeCatalogs = new HomeCatalogCache();
 const warmHomeCatalogs = () => { if (!homeCatalogs.idle) homeCatalogs.warm(homeCatalogTargets(store.addons())); };
 registerHomeRoutes(app, { ...routeContext, homeCatalogs, personal, remotePersonal: mediaServerPersonal, authorityOf, completedJobs: () => queue.list(), newEpisodes: (ownerUserId, watched) => followService.newEpisodes(ownerUserId, watched), describeLibraryPath, locateFileArtwork, locateFolderArtworkPair, thumbUrl, scheduleFileArtwork, scheduleFolderArtwork, wirePath, dataOf, markersOf, progressOf, metaStore, seen, suggestionRows: curate.suggestionRows });
 
-registerDeviceRoutes(app, { ...routeContext, stats, countBytes, deviceDownloadTickets, deviceTransfers, DEVICE_TICKET_TTL, httpSourceOf, libraryTarget, mediaSource, ownerOf, pruneDeviceDownloadTickets, statMeta, trackMedia });
+registerDeviceRoutes(app, { ...routeContext, stats, countBytes, deviceDownloadTickets, deviceTransfers, DEVICE_TICKET_TTL, httpSourceOf, libraryTarget, mediaSource, mediaSources: mediaServerSources, ownerOf, pruneDeviceDownloadTickets, statMeta, trackMedia });
 registerDownloadRoutes(app, { ...routeContext, queue, mediaSources: mediaServerSources, deviceTransfers, jobView, sourceOf, ownerOf, mediaSource, posterOf, rememberTitle, titleKey, saveCatalogPoster, libraryKey, cachedMeta, prefsOf, defaultDownloadLibrary: downloadDefaultLibrary });
 const freeSpace = async (target: string) => {
   try { const info = await statfs(target); return { path: target, freeBytes: info.bavail * info.bsize, totalBytes: info.blocks * info.bsize }; }

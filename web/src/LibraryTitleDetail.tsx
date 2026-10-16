@@ -9,8 +9,10 @@ import { hideBroken } from "./settings-ui";
 import { t, useI18n } from "./i18n";
 import { defaultSource, orderSources, playableSources, sourceIdentity, sourceRowKey } from "./library-detail-sources";
 import { librarySourceChoices, librarySourceEntries, librarySourceRows, type LibrarySourceGroup, type LibrarySourcePanel } from "./library-sources";
-import { providerLabel, SourceFilters, SourceRows } from "./source-rows";
-import { addonNotices, isRemoteStream, noticeText, streamBadge, type StreamSort } from "./streams";
+import { providerLabel, SourceFilters, SourceRows, streamLabel } from "./source-rows";
+import { addonNotices, isLocalStream, isRemoteStream, noticeText, streamBadge, streamLanguages, streamSize, type StreamSort } from "./streams";
+import { label } from "./languages";
+import { bytes } from "./settings-ui";
 import type { Stream } from "./types";
 
 export interface LibraryTitleDetailProps {
@@ -44,6 +46,9 @@ export interface LibraryTitleDetailProps {
   onOpenFolder?: () => void;
   /** The playable versions, or null while they are still being read. */
   sources: Stream[] | null;
+  /** The row the caller opened this detail on. It is selected as soon as the listing holds it,
+   *  a row that arrives later never replaces it, and a row the viewer picks still wins. */
+  initialSource?: Stream;
   /** The native rows alone, when `sources` merges them with loaded addon rows: the default
    *  version is then drawn from these, so a larger addon answer never replaces it. */
   defaultSources?: Stream[] | null;
@@ -58,6 +63,11 @@ export interface LibraryTitleDetailProps {
   preferredLanguage?: string;
   sourceError?: string;
   onRetry?: () => void;
+  /** What the caller wants in the source list's own place while it has nothing of its own to
+   *  show -- an episode still to be chosen. Left out, the list says loading or that it is empty. */
+  placeholder?: ReactNode;
+  /** The caller's own block under the hero: an episode's picker or the episode now on screen. */
+  episodes?: ReactNode;
   /** The saved position of the selected source, keyed by its identity so another version's
    *  position can never be drawn. */
   progress?: { position: number; duration: number; sourceKey: string };
@@ -92,7 +102,7 @@ const clock = (value: number) => {
 /** The one detail body a playable title shares, local or remote: the catalogue hero, the synopsis
  *  and the sources with a split Play button. The provider-specific parts arrive as props, so the
  *  two containers cannot drift apart and a future add-on stream joins the same selector. */
-export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backdrops, gallery, onGallery, facts, description, chips, favorite, onToggleFavorite, favoriteDisabled, watched, onToggleWatched, watchedDisabled, watchedLabel, onOpenFolder, sources, defaultSources, sourceGroups, onOpenSources, nativeSourceLabel, preferredLanguage, sourceError, onRetry, progress, onSourceChange, onClearProgress, onPlay, onSaveToLibrary, onSaveElsewhere, onDownloadToDevice, saveSupported, sourceBadge }: LibraryTitleDetailProps) {
+export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backdrops, gallery, onGallery, facts, description, chips, favorite, onToggleFavorite, favoriteDisabled, watched, onToggleWatched, watchedDisabled, watchedLabel, onOpenFolder, sources, initialSource, defaultSources, sourceGroups, onOpenSources, nativeSourceLabel, preferredLanguage, sourceError, onRetry, placeholder, episodes, progress, onSourceChange, onClearProgress, onPlay, onSaveToLibrary, onSaveElsewhere, onDownloadToDevice, saveSupported, sourceBadge }: LibraryTitleDetailProps) {
   useI18n();
   const backdrop = useBackdrop(backdrops ?? []);
   const [chosen, setChosen] = useState<{ identity: string; key: string } | null>(null);
@@ -114,18 +124,30 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
   // The title's own versions lead the picker, largest reported size first; the groups follow in
   // the order their plan gave. The default is the largest own version: a row that arrived from
   // another library or an addon is never chosen silently, though the viewer can still pick one.
-  const own = orderSources(playableSources(sources ?? []));
+  // The row the caller opened on leads the title's own versions when the listing does not hold it
+  // yet, matched by row identity so two names for one file are never listed twice.
+  const own = useMemo(() => {
+    const rows = orderSources(playableSources(sources ?? []));
+    if (!initialSource?.playable) return rows;
+    const key = sourceRowKey(initialSource);
+    return rows.some((stream) => sourceRowKey(stream) === key) ? rows : orderSources([initialSource, ...rows]);
+  }, [sources, initialSource]);
   const groups = sourceGroups?.groups ?? [];
   const pickable = useMemo(() => librarySourceRows(
     librarySourceEntries(own, nativeSourceLabel ?? t("sources.localFilter"), groups, () => ""), "", "", "recommended", preferredLanguage ?? ""), [own, groups, nativeSourceLabel, preferredLanguage]);
   const defaultPick = defaultSource(defaultSources === undefined ? own : (defaultSources ?? []));
-  const selected = (chosen?.identity === identityKey
-    ? pickable.find((stream) => sourceRowKey(stream) === chosen.key) : undefined) ?? defaultPick;
+  const picked = chosen?.identity === identityKey ? pickable.find((stream) => sourceRowKey(stream) === chosen.key) : undefined;
+  // The row this detail was opened on is the selection until the viewer picks another one: later
+  // arrivals keep it, and while it is still on its way the default stands in for it.
+  const seeded = initialSource && initialSource.playable
+    ? pickable.find((stream) => sourceRowKey(stream) === sourceRowKey(initialSource)) : undefined;
+  const selected = picked ?? seeded ?? defaultPick;
   const multiple = own.length > 1 || sourceGroups != null;
   const canSave = selected !== null && (saveSupported?.(selected) ?? true);
-  // A device save is for a file this machine can read: never a remote original or an addon
-  // answer, and never where the source itself says the account may not.
-  const canDownloadToDevice = Boolean(onDownloadToDevice && selected && selected.localPath && !isRemoteStream(selected))
+  // A device save is offered wherever the caller can hand the row to the server: a file of this
+  // machine, an addon answer, and a media server's own original, whose projection carries the
+  // account's own right the way its copy into a library does. Only a source that says no hides it.
+  const canDownloadToDevice = Boolean(onDownloadToDevice && selected && selected.playable)
     && selected?.capabilities?.downloadToDevice !== false;
   // The tag a row wears: the transport the catalogue names it by (HTTP, RD, the provider, the local
   // chip), never the addon's own label, which travels as the row's caption instead. A caller's own
@@ -191,13 +213,15 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
     }
   };
 
-  const copy = <>
-    {chips || onToggleFavorite ? <div className="library-detail-chips">
+  // The chips are the hero's own row rather than the first line of the copy: the corner art sits
+  // beside that row, and a row it narrows is a row that wraps on a phone.
+  const chipRow = chips || onToggleFavorite ? <div className="library-detail-chips">
       {onToggleFavorite && <button type="button" className={`watch-star${favorite ? " on" : ""}`} aria-pressed={favorite ?? false} disabled={favoriteDisabled ?? false}
         aria-label={t(favorite ? "favorite.remove" : "favorite.add")} title={t(favorite ? "favorite.remove" : "favorite.add")}
         onClick={() => onToggleFavorite(!(favorite ?? false))}><Star/></button>}
       {chips}
-    </div> : null}
+    </div> : undefined;
+  const copy = <>
     <h2>{title}</h2>
     {subtitle && <p className="meta-line">{subtitle}</p>}
     {facts && <p className="meta-line">{facts}</p>}
@@ -217,15 +241,17 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
   return <div className="library-title-detail"
     style={backdrop ? { backgroundImage: `${LIBRARY_HERO_GRADIENT},url(${backdrop})` } : { backgroundImage: LIBRARY_HERO_EMPTY_GRADIENT }}>
     <DetailHero className="library-detail-hero"
+      {...(chipRow ? { chips: chipRow } : {})}
       gallery={trigger ? <button type="button" className={`gallery-open ${trigger.wide ? "wide" : "poster"}`} title={t("gallery.openHint")} onClick={() => trigger.open()}>
         <img key={trigger.image} src={trigger.image} alt="" onError={hideBroken}/><span><Images/> {trigger.label}</span>
       </button> : undefined}
       copy={copy}/>
+    {episodes}
     {sourceError ? <div className="remote-error" role="alert">
       <span>{sourceError}</span>
       {onRetry && <button type="button" onClick={onRetry}>{t("home.retry")}</button>}
-    </div> : sources === null ? <div className="loading" role="status">{t("common.loading")}</div>
-      : !pickable.length ? <><p className="identify-hint">{t("mediaServer.noSources")}</p><p className="identify-hint">{t("mediaServer.noSourcesHint")}</p></> : null}
+    </div> : sources === null ? (placeholder === undefined ? <div className="loading" role="status">{t("common.loading")}</div> : placeholder)
+      : !pickable.length ? (placeholder === undefined ? <><p className="identify-hint">{t("mediaServer.noSources")}</p><p className="identify-hint">{t("mediaServer.noSourcesHint")}</p></> : placeholder) : null}
     {savedPosition && <div className="library-detail-progress">
       {fullDuration && <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} aria-label={t("player.position")}>
         <i style={{ width: `${percent}%` }}/>
@@ -235,6 +261,15 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
         : t("library.savedPositionUnknown", { position: clock(savedPosition.position) })}</span>
       {onClearProgress && <button type="button" className="icon-button" aria-label={t("home.forget")} title={t("home.forget")}
         disabled={clearing === selectedKey} onClick={() => selected && void clear(selected)}><RotateCcw/></button>}
+    </div>}
+    {/* What the buttons act on: the row the viewer has chosen, named and measured the way its own
+        row reads, so Play, To library and To device visibly act on one version of the title. */}
+    {selected && <div className="library-detail-source">
+      {!isLocalStream(selected) && <i className={isRemoteStream(selected) ? "remote" : undefined}>{badgeOf(selected)}</i>}
+      <strong>{streamLabel(selected)}</strong>
+      {!isLocalStream(selected) && <small>{selected.addonName || [selected.provider ? providerLabel(selected.provider) : "", selected.libraryName].filter(Boolean).join(" · ")}</small>}
+      {streamSize(selected) ? <b>{bytes(streamSize(selected)!)}</b> : null}
+      <small>{streamLanguages(selected, preferredLanguage ?? "").map((code) => <em className="lang-badge" key={code}>{label(code)}</em>)}</small>
     </div>}
     <div className="library-detail-actions">
       <div className="actions library-detail-play">
@@ -247,8 +282,13 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
       </div>
       {savedPosition && <button type="button" className="icon-button library-detail-icon-action" aria-label={t("player.playFromStart")} title={t("player.playFromStart")}
         onClick={() => selected && onPlay(selected, true)}><ListRestart/></button>}
+      {/* Beside the position it belongs to, wherever a detail draws it: the two are the pair that
+          reads and writes what the store holds for the row on screen. */}
+      {onToggleWatched && <button type="button" className="icon-button library-detail-icon-action" aria-pressed={watched} disabled={watchedDisabled ?? false}
+        aria-label={(watchedLabel ?? t(watched ? "mediaServer.markUnwatched" : "mediaServer.markWatched"))} title={(watchedLabel ?? t(watched ? "mediaServer.markUnwatched" : "mediaServer.markWatched"))}
+        onClick={() => onToggleWatched()}>{watched === undefined ? <RotateCcw/> : <Check/>}</button>}
       {onSaveToLibrary && (onSaveElsewhere
-        ? <div className="split-button">
+        ? <div className="split-button library-detail-save">
           <button type="button" aria-label={t("save.toLibrary")} title={t("save.toLibrary")} disabled={!canSave}
             onClick={() => selected && canSave && onSaveToLibrary(selected)}><HardDrive/> <span className="library-detail-action-label">{t("save.toLibrary")}</span></button>
           <button type="button" className="split-button-toggle" aria-haspopup="dialog" aria-label={t("save.toLibraryElsewhere")} title={t("save.toLibraryElsewhere")} disabled={!canSave}
@@ -258,9 +298,6 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
           onClick={() => selected && canSave && onSaveToLibrary(selected)}><HardDrive/> <span className="library-detail-action-label">{t("save.toLibrary")}</span></button>)}
       {canDownloadToDevice && <button type="button" aria-label={t("library.downloadToDevice")} title={t("library.downloadToDevice")}
         onClick={() => selected && onDownloadToDevice?.(selected)}><Download/> <span className="library-detail-action-label">{t("library.downloadToDevice")}</span></button>}
-      {onToggleWatched && <button type="button" className="icon-button library-detail-icon-action" aria-pressed={watched} disabled={watchedDisabled ?? false}
-        aria-label={(watchedLabel ?? t(watched ? "mediaServer.markUnwatched" : "mediaServer.markWatched"))} title={(watchedLabel ?? t(watched ? "mediaServer.markUnwatched" : "mediaServer.markWatched"))}
-        onClick={() => onToggleWatched()}>{watched === undefined ? <RotateCcw/> : <Check/>}</button>}
       {onOpenFolder && <button type="button" aria-label={t("library.openFolder")} title={t("library.openFolder")} onClick={onOpenFolder}><FolderOpen/> <span className="library-detail-action-label">{t("library.openFolder")}</span></button>}
     </div>
     {pickerOpen && <SourcePicker own={own} groups={groups} panel={sourceGroups} selected={selected} badgeOf={badgeOf}

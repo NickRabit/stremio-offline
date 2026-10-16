@@ -1,4 +1,4 @@
-import { mayDownloadToLibrary } from "./downloads.js";
+import { mayDownloadToDevice, mayDownloadToLibrary } from "./downloads.js";
 import { libraryVisible, type DefaultLibrarySettings, type LibraryRecord } from "./libraries.js";
 import { remoteContentAccessible } from "./media-server-access.js";
 import { canonicalRemoteDownloadReference, defaultRemoteCopyTarget, takesRemoteTarget, type RemoteDownloadReference } from "./media-server-download.js";
@@ -133,14 +133,16 @@ export class MediaServerSources {
     return target;
   }
 
-  /** The listed sources, with the one capability a trusted projection may add: an original the
-   *  acting account may still copy into a local library. It needs the session's native flag and
-   *  the account's own right; a subtitle never carries it, and no other flag is ever true. The
-   *  copy destination rides along with it, as a preselection only. */
+  /** The listed sources, with the capabilities a trusted projection may add: an original the
+   *  account may still copy into a local library, and one it may take to the device it is using.
+   *  Both need the media server's own flag for the account and the account's own right; a subtitle
+   *  never carries either, and no other flag is ever true. The copy destination rides along with
+   *  the copy right alone, as a preselection only. */
   private listed(sealed: SealedStreams[], owner: ResourceOwner): PublicStream[] {
     const listed = this.resources.listing(sealed.map((entry) => entry.stream), owner);
     const user = this.currentUser(owner.userId);
     const mayCopy = user !== undefined && mayDownloadToLibrary(user);
+    const mayTakeToDevice = user !== undefined && mayDownloadToDevice(user);
     // Read once for the whole listing: a version read never fans out into one store read each.
     const libraries = this.store.libraries();
     const settings = this.store.settings();
@@ -148,8 +150,11 @@ export class MediaServerSources {
     for (let index = 0; index < listed.length; index += 1) {
       const entry = sealed[index]!;
       listed[index]!.libraryName = entry.libraryName;
-      if (!mayCopy || !user || !entry.downloadAllowed) continue;
-      listed[index]!.capabilities = { ...READ_ONLY_MEDIA_CAPABILITIES, downloadToLibrary: true };
+      // The media server's own answer decides whether this account may download the item at all;
+      // what the app then offers is the account's own right, for the copy or for the device.
+      if (!user || !entry.downloadAllowed || (!mayCopy && !mayTakeToDevice)) continue;
+      listed[index]!.capabilities = { ...READ_ONLY_MEDIA_CAPABILITIES, downloadToLibrary: mayCopy, downloadToDevice: mayTakeToDevice };
+      if (!mayCopy) continue;
       const destination = this.copyDestination(entry, user, libraries, settings, remotes);
       if (destination?.libraryId !== undefined) {
         listed[index]!.downloadTarget = destination;

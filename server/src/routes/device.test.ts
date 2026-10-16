@@ -8,6 +8,7 @@ import { test } from "node:test";
 import express from "express";
 import { DeviceTransfers } from "../device-transfers.js";
 import { messageKeyOf } from "../errors.js";
+import { remoteSecretStamp, sealRemoteContent } from "../media-server-reference.js";
 import { ResourceError, type ResourceOwner } from "../media-resources.js";
 import type { Store } from "../store.js";
 import type { StreamItem } from "../types.js";
@@ -33,7 +34,13 @@ interface Harness {
 
 /** The two routes keep the tickets in a map the server owns, so the harness hands over a real
  *  one and remembers which session a request speaks for. */
-const mount = async (options: { holdLibrary?: (call: number) => Promise<void> | undefined; source?: StreamItem } = {}): Promise<Harness> => {
+const mount = async (options: {
+  holdLibrary?: (call: number) => Promise<void> | undefined;
+  source?: StreamItem;
+  /** What the media server answers for a row of its own: a policy that forbids downloading
+   *  refuses the ticket the way the live server does. */
+  download?: () => Promise<void>;
+} = {}): Promise<Harness> => {
   const dir = await mkdtemp(path.join(tmpdir(), "routes-device-"));
   const file = path.join(dir, "Some Movie.mkv");
   await writeFile(file, "movie bytes");
@@ -74,6 +81,12 @@ const mount = async (options: { holdLibrary?: (call: number) => Promise<void> | 
       return file;
     },
     mediaSource: () => undefined,
+    mediaSources: {
+      authorize: async (_stream: StreamItem, _owner: ResourceOwner, _signal?: AbortSignal, asked?: { download?: boolean }) => {
+        if (asked?.download && options.download) await options.download();
+      },
+      open: (stream: StreamItem) => Promise.resolve(new Response(stream.url)),
+    } as unknown as DeviceDeps["mediaSources"],
     ownerOf,
     pruneDeviceDownloadTickets: () => {
       const now = Date.now();
@@ -311,12 +324,54 @@ test("DELETE /api/device-transfers clears the caller's finished rows only", asyn
   assert.equal(harness.transfers.list({ id: ADA_ID, role: "admin" }).length, 1, "ada's row stays");
 });
 
-test("a remote media-server original can never be saved to a device", async (t) => {
+test("a remote original the server never minted is refused, and no ticket is made for it", async (t) => {
   const harness = await mount({ source: { url: "media-server:forged" } });
   t.after(harness.close);
 
   const response = await api(harness.base, "/api/device-download", { method: "POST", user: "ada", body: {} });
-  assert.equal(response.status, 403);
-  assert.equal((await response.json() as { messageKey?: string }).messageKey, "library.readOnly");
+  assert.ok(response.status >= 400, `a forged source is refused, got ${response.status}`);
   assert.equal(harness.tickets.size, 0, "no ticket is minted for a remote original");
+});
+
+test("a media server's own original is saved to the device through a ticket like any other row", async (t) => {
+  // The sealed address the listing minted: the server reads it itself, so the copy reaches the
+  // device the way a copy into a local library does, with the account's right deciding.
+  const sealed = sealRemoteContent({
+    provider: "jellyfin", serverId: "server-1", accountId: "account-1", itemId: "item-1",
+    connectionId: "mconn_00000000000000000000000000000000", libraryId: "rlib_00000000000000000000000000000000",
+    generation: 1, mediaSourceId: "v1",
+    owner: { userId: ADA_ID, sid: "sid-ada", expiresAt: Date.now() + 60_000, secretStamp: remoteSecretStamp("secret") },
+  });
+  const harness = await mount({ source: { url: sealed, addonKey: "addon" } });
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/device-download", { method: "POST", user: "bob", body: { title: "Some Movie" } });
+  const minted = await response.json() as { url: string; filename: string };
+  assert.equal(response.status, 201, JSON.stringify(minted));
+  assert.equal(harness.tickets.size, 1, "a ticket is minted");
+  const [ticket] = [...harness.tickets.values()];
+  assert.equal(ticket!.source.kind, "remote", "the ticket keeps the sealed source, never the address");
+  assert.equal(JSON.stringify(ticket!.source).includes(sealed), true, "the sealed source stays in the server's own map");
+  assert.equal(JSON.stringify(minted).includes("media-server:"), false, "the internal address never leaves the server");
+});
+
+test("a media server that forbids downloading mints no ticket for its own original", async (t) => {
+  // The account's own right is what the app grants; whether the media server lets it download the
+  // item is the media server's answer, asked again here rather than trusted from the listing that
+  // drew the button. `contentDownloading: false` refuses a playable account exactly like this.
+  const sealed = sealRemoteContent({
+    provider: "jellyfin", serverId: "server-1", accountId: "account-1", itemId: "item-1",
+    connectionId: "mconn_00000000000000000000000000000000", libraryId: "rlib_00000000000000000000000000000000",
+    generation: 1, mediaSourceId: "v1",
+    owner: { userId: ADA_ID, sid: "sid-ada", expiresAt: Date.now() + 60_000, secretStamp: remoteSecretStamp("secret") },
+  });
+  const harness = await mount({
+    source: { url: sealed, addonKey: "addon" },
+    download: () => Promise.reject(new ResourceError(403, "FORBIDDEN")),
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/device-download", { method: "POST", user: "bob", body: { title: "Some Movie" } });
+  assert.equal(response.status, 403, await response.text());
+  assert.equal(harness.tickets.size, 0, "no ticket is minted for a row the media server forbids");
 });

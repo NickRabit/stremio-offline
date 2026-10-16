@@ -71,7 +71,8 @@ async function remoteLibraries(page: Page, options: { folders?: number; items?: 
     await route.fulfill({ json: body });
   });
   await page.goto("/");
-  await page.getByRole("button", { name: "Knihovna", exact: true }).click();
+  // The section's own entry in the sidebar, not the crumb the trail now starts with.
+  await page.locator(".sidebar").getByRole("button", { name: "Knihovna", exact: true }).click();
   return { requests, sources: () => sources };
 }
 
@@ -184,13 +185,14 @@ test("item and series breadcrumbs walk the remote hierarchy", async ({ page }) =
   const panel = page.locator(".remote-browse-panel");
   const crumbs = panel.locator(".crumbs button");
   await panel.locator(".browse-item").filter({ hasText: "Show" }).locator(".library-open").click();
-  await expect(crumbs).toHaveText(["", "Remote clips", "Show"]);
+  // The trail starts with the section it is in, the way the library's own listing does.
+  await expect(crumbs).toHaveText(["", "Knihovna", "Remote clips", "Show"]);
   await panel.locator(".browse-item").filter({ hasText: "Pilot" }).locator(".library-open").click();
-  await expect(crumbs).toHaveText(["", "Remote clips", "Show", "S1 E1 · Pilot"]);
+  await expect(crumbs).toHaveText(["", "Knihovna", "Remote clips", "Show", "S1 E1 · Pilot"]);
   await expect(panel.locator('.crumbs button[aria-current="page"]')).toBeDisabled();
   // The series crumb goes back to the series and returns focus to the episode it came from.
   await panel.locator(".crumbs button").filter({ hasText: "Show" }).click();
-  await expect(crumbs).toHaveText(["", "Remote clips", "Show"]);
+  await expect(crumbs).toHaveText(["", "Knihovna", "Remote clips", "Show"]);
   await expect(panel.locator(".browse-item").filter({ hasText: "Pilot" }).locator(".library-open")).toBeFocused();
 });
 
@@ -322,7 +324,8 @@ test("the sidebar returns to the libraries and the next remote open starts fresh
   await expect(panel.locator('.browse-item[data-remote-id="clip-79"]')).toBeVisible();
   expect(await panel.locator(".browse-scroll").evaluate(node => node.scrollTop)).toBeGreaterThan(100);
   const reads = remote.requests.length;
-  await page.getByRole("button", { name: "Knihovna", exact: true }).click();
+  // The section's own entry in the sidebar, not the crumb the trail now starts with.
+  await page.locator(".sidebar").getByRole("button", { name: "Knihovna", exact: true }).click();
   await expect(page.locator(".remote-libraries .browse-item.library")).toHaveCount(8);
   await expect(panel).toHaveCount(0);
   await openLibrary();
@@ -620,7 +623,9 @@ for (const [width, height] of [[1440, 900], [390, 844], [844, 390]]) {
     expect(overflowing).toBe(false);
     await page.screenshot({ path: `e2e/.tmp/native-addon-picker-${width}.png` });
     await addon.click();
-    await detail.getByRole("button", { name: "Do knihovny", exact: true }).click();
+    // The button queues the row through the destination its own source projects; the arrow beside
+    // it is the one that asks, which is the dialog this journey is about.
+    await detail.locator(".library-detail-save .split-button-toggle").click();
     const save = page.getByRole("dialog");
     await expect(save).toBeVisible();
     await save.getByRole("button", { name: "Do knihovny", exact: true }).click();
@@ -636,7 +641,7 @@ for (const [width, height] of [[1440, 900], [390, 844], [844, 390]]) {
     await detail.getByRole("button", { name: "Vybrat zdroj" }).click();
     await expect(dialog.locator('.stream-list button[aria-pressed="true"]')).toContainText("Other server 30 GB");
     await page.keyboard.press("Escape");
-    await detail.getByRole("button", { name: "Do knihovny", exact: true }).click();
+    await detail.locator(".library-detail-save .split-button-toggle").click();
     const foreignSave = page.getByRole("dialog");
     await foreignSave.getByRole("button", { name: "Do knihovny", exact: true }).click();
     await expect(foreignSave).toHaveCount(0);
@@ -667,9 +672,9 @@ for (const [width, height] of [[1440, 900], [390, 844], [844, 390]]) {
       await expect(player.getByRole("button", { name: "Uložit do knihovny na serveru", exact: true })).toBeVisible();
       await expect(player.getByRole("button", { name: "Uložit do tohoto zařízení", exact: true })).toHaveCount(0);
       await player.getByRole("button", { name: "Uložit do knihovny na serveru", exact: true }).click();
-      const playerSave = page.locator('.identify-overlay[role="dialog"]').filter({ has: page.locator(".save-target-card") });
-      await playerSave.getByRole("button", { name: "Do knihovny", exact: true }).click();
-      await expect(playerSave).toHaveCount(0);
+      // The player has one save button and it saves: the row on screen goes through the destination
+      // its own source projects, with no dialog in the way.
+      await expect(page.locator('.identify-overlay[role="dialog"]').filter({ has: page.locator(".save-target-card") })).toHaveCount(0);
       expect(copies).toHaveLength(3);
       expect(copies[2]).toMatchObject({ sourceId: "foreign-copy", media: { id: "tt1234567", kind: "movie" } });
       await player.dispatchEvent("pointermove");

@@ -47,7 +47,11 @@ shape, and an older settings backup simply carries no remote configuration.
   mistaken for a local one, and vice versa.
 - `READ_ONLY_MEDIA_CAPABILITIES` is frozen with every capability false
   (rename, move, delete, identify, writeArtwork, downloadToLibrary,
-  downloadToDevice).
+  downloadToDevice). A projection turns on `downloadToLibrary` and
+  `downloadToDevice` only where the media server's own flag lets the account
+  download the item and the account's own right says so; every other
+  capability stays false, so nothing about a remote original is ever written
+  back to its server.
 - `publicMediaConnection` is a member allow-list: `id`, `provider`, `name`,
   `enabled`, `generation`, `configured`. It never carries the account id, server
   id, address or secret reference. `adminMediaConnection` adds `baseUrl`,

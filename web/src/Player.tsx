@@ -392,7 +392,9 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   // exact source; everything else keeps its own policy, where only an explicit refusal hides it.
   const libraryRight = stream?.capabilities?.downloadToLibrary;
   const canSaveToLibrary = remoteSource ? libraryRight === true : libraryRight !== false;
-  const canSaveToDevice = !remoteSource && stream?.capabilities?.downloadToDevice !== false;
+  // The device is the same kind of copy: a media server's own original is offered it wherever the
+  // projection says the account's right is there, and only an explicit refusal hides it.
+  const canSaveToDevice = remoteSource ? stream?.capabilities?.downloadToDevice === true : stream?.capabilities?.downloadToDevice !== false;
   const addonSubtitles = [...(stream?.subtitles ?? []), ...subtitles];
 
   // Some browsers paint native WebVTT below the visible video box. Active cues
