@@ -755,10 +755,12 @@ describe("LibraryTitleDetail device download", () => {
     expect(deviceButton()).toBeNull();
   });
 
-  it("hides it for a remote original and for a source the account may not save", () => {
+  it("offers it for a remote original too, and hides it only where the account may not save", () => {
     const onDownloadToDevice = vi.fn();
     render({ sources: [remote("s1", "1080p", 1)], onDownloadToDevice });
-    expect(deviceButton()).toBeNull();
+    // The caller hands this row to the server, which reads a media server's own original through its
+    // proxy; nothing here keeps it from the device.
+    expect(deviceButton()).not.toBeNull();
     rerender({ sources: [{ ...local, capabilities: capabilities(false) }], onDownloadToDevice });
     expect(deviceButton()).toBeNull();
     rerender({ sources: [{ ...local, capabilities: capabilities(true) }], onDownloadToDevice });

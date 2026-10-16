@@ -143,9 +143,9 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
   const multiple = own.length > 1 || sourceGroups != null;
   const canSave = selected !== null && (saveSupported?.(selected) ?? true);
   // A device save is offered wherever the caller can hand the row to the server: a file of this
-  // machine, a copy of another one, an addon answer. A media server's own original is not one of
-  // them -- the server cannot read it -- so the caller is never asked for it.
-  const canDownloadToDevice = Boolean(onDownloadToDevice && selected && selected.playable && !isRemoteStream(selected))
+  // machine, a copy of another one, an addon answer, a media server's own original -- which the
+  // server reads through its own proxy. A source that says the account may not have it says no.
+  const canDownloadToDevice = Boolean(onDownloadToDevice && selected && selected.playable)
     && selected?.capabilities?.downloadToDevice !== false;
   // The tag a row wears: the transport the catalogue names it by (HTTP, RD, the provider, the local
   // chip), never the addon's own label, which travels as the row's caption instead. A caller's own

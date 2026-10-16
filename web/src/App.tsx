@@ -1675,19 +1675,12 @@ export function App() {
   }, [localDetail, remoteOpen, view, browsePath, remoteRootsPresent, browse?.path, browseBusy]);
   /** The listing's live row for the open detail, so its favorite and position never go stale. */
   const liveLocalItem = localDetail ? browseItemAt(localDetail.item.path) : null;
-  /** A library file carries no watched flag of its own: the position the store holds is the record,
-   *  which is the same thing the tile menu's "mark unwatched" reads. Marking a file seen writes the
-   *  position the player leaves a film at, and taking that back forgets it. */
-  const localProgress = liveLocalItem?.kind === "file" ? liveLocalItem.progress : undefined;
-  const localWatched = Boolean(localProgress);
-  const toggleLocalWatched = async (itemPath: string, watched: boolean): Promise<boolean> => {
+  /** A library file carries no watched flag of its own, and the store keeps resume positions only:
+   *  a finished film is already dropped by the server. So "seen" for a file is that there is nothing
+   *  left to resume, and marking one seen drops the position it kept. */
+  const markLocalWatched = async (itemPath: string): Promise<boolean> => {
     try {
-      if (watched) {
-        const label = localDetail?.item.kind === "file" ? localDetail.item.label : localDetail?.item.name ?? "";
-        await api.saveProgress({
-          key: `file:${itemPath}`, position: localProgress?.duration ?? 1, duration: localProgress?.duration ?? 1, title: label,
-        });
-      } else await api.forgetProgress(`file:${itemPath}`);
+      await api.forgetProgress(`file:${itemPath}`);
       await loadBrowse(browsePath);
       setResume(await api.progressList());
       return true;
@@ -2394,8 +2387,10 @@ export function App() {
     void enqueue();
   };
 
+  /** The device action of the panel\u2019s player: the server fetches the row, its own proxy included,
+   *  so a copy of a media server reaches the device the same way an addon answer does. */
   const downloadStreamToDevice = async () => {
-    if (!selectedStream?.playable || isRemoteStream(selectedStream)) return false;
+    if (!selectedStream?.playable) return false;
     try {
       const filename = await saveToDevice({ title: videoTitle, stream: selectedStream, media: selectedMedia() });
       notify(t("save.startedViaServer", { filename }));
@@ -2413,7 +2408,7 @@ export function App() {
    *  from its own path, and every other row is fetched by the server on the viewer's behalf. */
   const downloadAlternativeToDevice = async (stream: Stream): Promise<boolean> => {
     if (stream.localPath) return downloadLibraryFile(stream.localPath);
-    if (!stream.playable || isRemoteStream(stream)) return false;
+    if (!stream.playable) return false;
     try {
       const filename = await saveToDevice({ title: localDetail?.item.kind === "file" ? localDetail.item.label : localDetail?.item.name ?? "", stream });
       notify(t("save.startedViaServer", { filename }));
@@ -2635,7 +2630,7 @@ export function App() {
   };
   /** A title the account owns is saved from its own path; anything else is the source itself. */
   const downloadCatalogueStream = async (detail: CatalogueDetailTarget, stream: Stream) => {
-    if (!stream.playable || isRemoteStream(stream)) return false;
+    if (!stream.playable) return false;
     try {
       if (stream.localPath) {
         const filename = await saveToDevice({ path: stream.localPath });
@@ -3237,10 +3232,7 @@ export function App() {
           {...(liveLocalItem?.kind === "file" && liveLocalItem.progress ? { progress: liveLocalItem.progress } : {})}
           onToggleFavorite={(favorite) => void toggleFavorite(localDetail.item.path, favorite)}
           onResetProgress={(path) => forgetWatched(path)}
-          {...(liveLocalItem?.kind === "file" ? {
-            watched: localWatched,
-            onToggleWatched: () => void toggleLocalWatched(localDetail.item.path, !localWatched),
-          } : {})}
+          onToggleWatched={(path) => void markLocalWatched(path)}
           onOpenFolder={() => { if (localDetail.item.kind === "folder") goLocalFolder(localDetail.item.path); }}
           uiLanguage={settings.uiLanguage} secureMode={settings.secureMode} onTrailer={setTrailerOpen}
           accountScope={session!.username} preferredLanguage={settings.audioLanguage}

@@ -345,7 +345,8 @@ main.view-catalog{padding-top:98px}main.view-catalog .heading{margin-bottom:8px}
   .detail-panel .hero.has-chips>.detail-chips{margin:0 0 3px}
   /* The trailer is the one chip whose words can go without losing it: the row keeps its shape and
      the sites beside it fit on a phone, where that label alone pushed them onto a second line. */
-  .title-chips .trailer-action{font-size:0;padding:0 9px}
+  /* The words are dropped, not the gap they sat in: a bare gap left the mark off centre. */
+  .title-chips .trailer-action{font-size:0;gap:0;padding:0 9px;justify-content:center}
   .title-chips .trailer-action svg{width:15px;height:15px}
   /* A finger still needs the height, not the width: the row spends it on the sites instead. */
   .detail-panel .title-chips>*,.detail-panel .title-chips .title-links a{padding:0 9px}

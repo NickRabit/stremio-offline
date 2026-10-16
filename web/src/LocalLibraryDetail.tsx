@@ -39,12 +39,9 @@ interface Props {
   onToggleFavorite: (favorite: boolean) => void;
   /** Forgets one file's saved position; true once the owner's write and refresh succeeded. */
   onResetProgress: (path: string) => Promise<boolean>;
-  /** Whether this item counts as seen. A library file carries no flag of its own, so the caller
-   *  reads that from the position the store holds and writes the same position to change it. */
-  watched?: boolean;
-  watchedDisabled?: boolean;
-  watchedLabel?: string;
-  onToggleWatched?: () => void;
+  /** Marks the row on screen as seen, or takes that back. Only the caller knows where a file's own
+   *  position is written, so it is handed the path the viewer has chosen. */
+  onToggleWatched?: (path: string) => void;
   /** Plays one of this library's own files. The identity the detail already resolved travels with
    *  it, so the player can offer the title's other sources without resolving it a second time. */
   onPlay: (stream: Stream, fromBeginning: boolean | undefined, catalogue: CatalogueRef | null) => void;
@@ -77,7 +74,7 @@ interface Props {
  *  file or its folder is bound to a title, the other copies of that same title, then hands them to
  *  the shared shell. The catalogue hero, the synopsis and the source picker are the ones a remote
  *  library uses. */
-export function LocalLibraryDetail({ item, favorite, progress, progressRevision = 0, onToggleFavorite, onResetProgress, watched, watchedDisabled, watchedLabel, onToggleWatched, onPlay, onOpenFolder, uiLanguage, secureMode, onTrailer, onGallery, accountScope = "", onPlayAlternative, onSaveAlternative, onDownloadToDevice: downloadToDevice, preferredLanguage, realDebridConfigured = false }: Props) {
+export function LocalLibraryDetail({ item, favorite, progress, progressRevision = 0, onToggleFavorite, onResetProgress, onToggleWatched, onPlay, onOpenFolder, uiLanguage, secureMode, onTrailer, onGallery, accountScope = "", onPlayAlternative, onSaveAlternative, onDownloadToDevice: downloadToDevice, preferredLanguage, realDebridConfigured = false }: Props) {
   useI18n();
   const [sources, setSources] = useState<Stream[] | null>(null);
   const [error, setError] = useState("");
@@ -287,7 +284,13 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
       // proved the account may copy is offered at all: a click always reaches a real decision.
       saveSupported: (stream: Stream) => canQueue(stream, realDebridConfigured),
     } : {})}
-    {...(onToggleWatched ? { watched: watched ?? false, ...(watchedDisabled ? { watchedDisabled } : {}), ...(watchedLabel ? { watchedLabel } : {}), onToggleWatched } : {})}
+    // The position belongs to the row on screen, never to the item as a whole: a detail that stands
+    // for a title still knows which of its copies the viewer picked. Only a file of this machine has
+    // a store this caller can write, and only a row with something to resume has anything to mark:
+    // the store keeps resume positions, so a file with none is already as seen as it gets.
+    {...(selectedPath && onToggleWatched && saved && saved.position > 0
+      ? { watched: false, watchedLabel: t("mediaServer.markWatched"), onToggleWatched: () => onToggleWatched(selectedPath) }
+      : {})}
     // The device action is the caller's: it fetches its own file from its path and hands an addon
     // answer to the server, which downloads it on the viewer's behalf.
     {...(isFile && downloadToDevice ? { onDownloadToDevice: (stream: Stream) => downloadToDevice(stream) } : {})}
