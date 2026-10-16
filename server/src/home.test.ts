@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { HOME_ROWS, HOME_ROW_LIMIT, boundCards, homeCatalogRowId, homeRowOrder, mergeResume, parseHomeCatalogRowId, parseResumeFilter, resumePage, type HomeCard, type ResumeCatalogueItem, type ResumeFileItem } from "./home.js";
+import { HOME_ROWS, HOME_ROW_LIMIT, boundCards, homeCatalogRowId, homeRowOrder, mergeResume, parseHomeCatalogRowId, parseResumeFilter, resumePage, type HomeCard, type RemoteHomeCard, type ResumeCatalogueItem, type ResumeFileItem, type ResumeFilter } from "./home.js";
 
 const at = (day: number) => `2024-01-${String(day).padStart(2, "0")}T00:00:00.000Z`;
 
@@ -15,10 +15,15 @@ const catalogue = (over: Partial<ResumeCatalogueItem> & { key: string }): Resume
   updatedAt: at(1), title: "Catalogue", type: "series", id: "tt1", name: "Show", ...over,
 });
 
+const remoteCard = (over: Partial<RemoteHomeCard> & { key: string }): RemoteHomeCard => ({
+  kind: "remote", title: "Remote", provider: "jellyfin", libraryId: "rlib_a", libraryName: "Server",
+  itemId: "i1", itemType: "movie", updatedAt: at(1), ...over,
+});
+
 test("two cards with the same verified series id merge into one", () => {
   const { items } = mergeResume({
-    files: [file({ key: "file:a", seriesId: "tt1", updatedAt: at(2) })],
-    catalogue: [catalogue({ key: "series:tt1:1:2", seriesId: "tt1", updatedAt: at(1) })],
+    files: [file({ key: "file:a", identity: { type: "series", id: "tt1" }, updatedAt: at(2) })],
+    catalogue: [catalogue({ key: "series:tt1:1:2", identity: { type: "series", id: "tt1" }, updatedAt: at(1) })],
   });
   assert.equal(items.length, 1);
   assert.equal(items[0]!.kind, "resume-file");
@@ -27,8 +32,8 @@ test("two cards with the same verified series id merge into one", () => {
 
 test("unequal series ids stay as two cards", () => {
   const { items } = mergeResume({
-    files: [file({ key: "file:a", seriesId: "tt1" })],
-    catalogue: [catalogue({ key: "series:tt2:1:1", seriesId: "tt2" })],
+    files: [file({ key: "file:a", identity: { type: "series", id: "tt1" } })],
+    catalogue: [catalogue({ key: "series:tt2:1:1", identity: { type: "series", id: "tt2" } })],
   });
   assert.equal(items.length, 2);
   assert.deepEqual(items.map((item) => item.key).sort(), ["file:a", "series:tt2:1:1"]);
@@ -47,42 +52,108 @@ test("a card without a series id never merges", () => {
 
 test("when the times tie the library file wins, because it is playable now", () => {
   const { items } = mergeResume({
-    files: [file({ key: "file:a", seriesId: "tt1", updatedAt: at(2) })],
-    catalogue: [catalogue({ key: "series:tt1:1:2", seriesId: "tt1", updatedAt: at(2) })],
+    files: [file({ key: "file:a", identity: { type: "series", id: "tt1" }, updatedAt: at(2) })],
+    catalogue: [catalogue({ key: "series:tt1:1:2", identity: { type: "series", id: "tt1" }, updatedAt: at(2) })],
   });
   assert.equal(items[0]!.kind, "resume-file");
 });
 
 test("the newest candidate wins over the library file", () => {
   const { items } = mergeResume({
-    files: [file({ key: "file:a", seriesId: "tt1", updatedAt: at(1) })],
-    catalogue: [catalogue({ key: "series:tt1:1:2", seriesId: "tt1", updatedAt: at(3) })],
+    files: [file({ key: "file:a", identity: { type: "series", id: "tt1" }, updatedAt: at(1) })],
+    catalogue: [catalogue({ key: "series:tt1:1:2", identity: { type: "series", id: "tt1" }, updatedAt: at(3) })],
   });
   assert.equal(items[0]!.kind, "resume-catalogue");
 });
 
 test("a pending next episode is chosen only when the show has no playable candidate", () => {
-  const alone = mergeResume({ files: [], catalogue: [catalogue({ key: "series:tt1:1:3", seriesId: "tt1", pending: true, updatedAt: at(5) })] });
+  const alone = mergeResume({ files: [], catalogue: [catalogue({ key: "series:tt1:1:3", identity: { type: "series", id: "tt1" }, pending: true, updatedAt: at(5) })] });
   assert.equal(alone.items[0]!.kind, "resume-catalogue");
   assert.deepEqual((alone.items[0] as { pending?: true }).pending, true);
   assert.equal("progress" in alone.items[0]!, false, "a pending row carries no invented progress bar");
 
   const together = mergeResume({
-    files: [file({ key: "file:a", seriesId: "tt1", updatedAt: at(1) })],
-    catalogue: [catalogue({ key: "series:tt1:1:3", seriesId: "tt1", pending: true, updatedAt: at(5) })],
+    files: [file({ key: "file:a", identity: { type: "series", id: "tt1" }, updatedAt: at(1) })],
+    catalogue: [catalogue({ key: "series:tt1:1:3", identity: { type: "series", id: "tt1" }, pending: true, updatedAt: at(5) })],
   });
   assert.equal(together.items[0]!.kind, "resume-file", "unfinished playback beats a later marker");
 });
 
 test("the winning card forgets every key the show stands for", () => {
   const { items } = mergeResume({
-    files: [file({ key: "file:a", seriesId: "tt1", updatedAt: at(3) })],
+    files: [file({ key: "file:a", identity: { type: "series", id: "tt1" }, updatedAt: at(3) })],
     catalogue: [
-      catalogue({ key: "series:tt1:1:2", seriesId: "tt1", updatedAt: at(1) }),
-      catalogue({ key: "series:tt1:1:3", seriesId: "tt1", pending: true, updatedAt: at(2) }),
+      catalogue({ key: "series:tt1:1:2", identity: { type: "series", id: "tt1" }, updatedAt: at(1) }),
+      catalogue({ key: "series:tt1:1:3", identity: { type: "series", id: "tt1" }, pending: true, updatedAt: at(2) }),
     ],
   });
   assert.deepEqual(forgetKeys(items[0]!), ["file:a", "series:tt1:1:2", "series:tt1:1:3"]);
+});
+
+test("a library film and its catalogue row merge into one card, whichever half is newer", () => {
+  const fileHalf = file({ key: "file:a", identity: { type: "movie", id: "tt9" }, updatedAt: at(2) });
+  const catalogueHalf = catalogue({ key: "movie:tt9", type: "movie", id: "tt9", identity: { type: "movie", id: "tt9" }, updatedAt: at(1) });
+
+  const { items } = mergeResume({ files: [fileHalf], catalogue: [catalogueHalf] });
+  assert.equal(items.length, 1);
+  assert.equal(items[0]!.kind, "resume-file", "the playable file wins when it is the newer half");
+  assert.deepEqual(forgetKeys(items[0]!), ["file:a", "movie:tt9"]);
+
+  const newer = mergeResume({ files: [fileHalf], catalogue: [{ ...catalogueHalf, updatedAt: at(3) }] });
+  assert.equal(newer.items.length, 1);
+  assert.equal(newer.items[0]!.kind, "resume-catalogue");
+  assert.deepEqual(forgetKeys(newer.items[0]!), ["file:a", "movie:tt9"]);
+
+  const tie = mergeResume({ files: [fileHalf], catalogue: [{ ...catalogueHalf, updatedAt: at(2) }] });
+  assert.equal(tie.items.length, 1);
+  assert.equal(tie.items[0]!.kind, "resume-file");
+});
+
+test("a film and a series that share an id never merge, because the identity is typed", () => {
+  const { items } = mergeResume({
+    files: [],
+    catalogue: [
+      catalogue({ key: "movie:tt1", type: "movie", id: "tt1", identity: { type: "movie", id: "tt1" }, updatedAt: at(2) }),
+      catalogue({ key: "series:tt1:1:1", identity: { type: "series", id: "tt1" }, updatedAt: at(1) }),
+    ],
+  });
+  assert.equal(items.length, 2);
+  assert.deepEqual(items.map((item) => item.key).sort(), ["movie:tt1", "series:tt1:1:1"]);
+});
+
+test("two library files bound to the same film merge into one card", () => {
+  const { items } = mergeResume({
+    files: [
+      file({ key: "file:a", identity: { type: "movie", id: "tt9" }, updatedAt: at(1) }),
+      file({ key: "file:b", identity: { type: "movie", id: "tt9" }, updatedAt: at(2) }),
+    ],
+    catalogue: [],
+  });
+  assert.equal(items.length, 1);
+  assert.equal(items[0]!.key, "file:b");
+  assert.deepEqual(forgetKeys(items[0]!), ["file:a", "file:b"]);
+});
+
+test("an unbound file and a catalogue row of another title stay their own cards", () => {
+  const { items } = mergeResume({
+    files: [file({ key: "file:a", updatedAt: at(2) })],
+    catalogue: [catalogue({ key: "movie:tt9", type: "movie", id: "tt9", identity: { type: "movie", id: "tt9" }, updatedAt: at(1) })],
+  });
+  assert.equal(items.length, 2);
+  assert.deepEqual(items.map((item) => item.key).sort(), ["file:a", "movie:tt9"]);
+});
+
+test("a merged film answers both the library and the catalogue filter", () => {
+  const sources = {
+    files: [file({ key: "file:a", identity: { type: "movie", id: "tt9" }, updatedAt: at(1) })],
+    // The newer marker wins the card; the film still has a local copy behind it.
+    catalogue: [catalogue({ key: "movie:tt9", type: "movie", id: "tt9", identity: { type: "movie", id: "tt9" }, updatedAt: at(3) })],
+  };
+  assert.equal(resumePage(sources, {}).items[0]!.kind, "resume-catalogue");
+  assert.deepEqual(resumePage(sources, { filter: "library" }).items.map((item) => item.key), ["movie:tt9"]);
+  assert.equal(resumePage(sources, { filter: "library" }).total, 1);
+  assert.deepEqual(resumePage(sources, { filter: "catalog" }).items.map((item) => item.key), ["movie:tt9"]);
+  assert.equal(resumePage(sources, { filter: "catalog" }).total, 1);
 });
 
 test("cards are ordered newest first, cut to the row limit, and report hasMore", () => {
@@ -102,8 +173,8 @@ test("exactly the limit is not reported as more", () => {
 
 test("the winner of a merged show does not depend on the input order", () => {
   const sources = {
-    files: [file({ key: "file:a", seriesId: "tt1", updatedAt: at(2) })],
-    catalogue: [catalogue({ key: "series:tt1:1:2", seriesId: "tt1", updatedAt: at(3) })],
+    files: [file({ key: "file:a", identity: { type: "series", id: "tt1" }, updatedAt: at(2) })],
+    catalogue: [catalogue({ key: "series:tt1:1:2", identity: { type: "series", id: "tt1" }, updatedAt: at(3) })],
   };
   const forward = mergeResume(sources);
   const reversed = mergeResume({ files: [...sources.files].reverse(), catalogue: [...sources.catalogue].reverse() });
@@ -111,19 +182,46 @@ test("the winner of a merged show does not depend on the input order", () => {
 });
 
 test("parseResumeFilter keeps the two card kinds and folds anything else into all", () => {
+  assert.equal(parseResumeFilter("movies"), "movies");
+  assert.equal(parseResumeFilter("series"), "series");
   assert.equal(parseResumeFilter("library"), "library");
   assert.equal(parseResumeFilter("catalog"), "catalog");
+  assert.equal(parseResumeFilter("remote"), "remote");
   assert.equal(parseResumeFilter("all"), "all");
   assert.equal(parseResumeFilter(undefined), "all");
   assert.equal(parseResumeFilter("nope"), "all");
 });
 
+test("the two title filters read every kind of card", () => {
+  const sources = {
+    files: [
+      file({ key: "file:film", identity: { type: "movie", id: "tt1" }, updatedAt: at(1) }),
+      file({ key: "file:episode", identity: { type: "series", id: "tt5" }, season: 1, episode: 2, updatedAt: at(2) }),
+      // An unbound file carries no title: its numbering is all it says about itself.
+      file({ key: "file:numbered", season: 3, episode: 4, updatedAt: at(3) }),
+      file({ key: "file:loose", updatedAt: at(4) }),
+    ],
+    catalogue: [
+      catalogue({ key: "movie:tt9", type: "movie", id: "tt9", updatedAt: at(5) }),
+      catalogue({ key: "series:tt6:1:1", type: "series", id: "tt6", name: "Show", updatedAt: at(6) }),
+    ],
+    remote: [
+      { kind: "remote" as const, key: "remote:a", title: "Remote film", libraryId: "rlib_a", itemId: "1", provider: "jellyfin" as const, libraryName: "Server", itemType: "movie" as const, updatedAt: at(7) },
+      { kind: "remote" as const, key: "remote:b", title: "Remote episode", libraryId: "rlib_a", itemId: "2", provider: "jellyfin" as const, libraryName: "Server", itemType: "episode" as const, season: 1, episode: 1, updatedAt: at(8) },
+    ],
+  };
+  const keys = (filter: "movies" | "series") => resumePage(sources, { filter }).items.map((item) => item.key).sort();
+
+  assert.deepEqual(keys("movies"), ["file:film", "file:loose", "movie:tt9", "remote:a"]);
+  assert.deepEqual(keys("series"), ["file:episode", "file:numbered", "remote:b", "series:tt6:1:1"]);
+});
+
 test("the first page of resumePage is exactly Home's row", () => {
   const sources = {
-    files: [file({ key: "file:a", seriesId: "tt1", updatedAt: at(1) })],
+    files: [file({ key: "file:a", identity: { type: "series", id: "tt1" }, updatedAt: at(1) })],
     catalogue: [
       catalogue({ key: "movie:tt2", type: "movie", id: "tt2", updatedAt: at(3) }),
-      catalogue({ key: "series:tt1:1:2", seriesId: "tt1", updatedAt: at(2) }),
+      catalogue({ key: "series:tt1:1:2", identity: { type: "series", id: "tt1" }, updatedAt: at(2) }),
     ],
   };
   const row = mergeResume(sources);
@@ -134,9 +232,9 @@ test("the first page of resumePage is exactly Home's row", () => {
 
 test("a folded show that kept a local copy answers both filters, whichever card won", () => {
   const sources = {
-    files: [file({ key: "file:a", seriesId: "tt1", updatedAt: at(1) })],
+    files: [file({ key: "file:a", identity: { type: "series", id: "tt1" }, updatedAt: at(1) })],
     // The newer marker wins the card, but the show still has a local copy behind it.
-    catalogue: [catalogue({ key: "series:tt1:1:2", seriesId: "tt1", updatedAt: at(3) })],
+    catalogue: [catalogue({ key: "series:tt1:1:2", identity: { type: "series", id: "tt1" }, updatedAt: at(3) })],
   };
   assert.equal(resumePage(sources, {}).items[0]!.kind, "resume-catalogue");
   assert.deepEqual(resumePage(sources, { filter: "library" }).items.map((item) => item.key), ["series:tt1:1:2"]);
@@ -150,6 +248,70 @@ test("a card with only one source answers only its own filter", () => {
   assert.deepEqual(resumePage(local, { filter: "catalog" }).items, []);
   assert.deepEqual(resumePage(remote, { filter: "library" }).items, []);
   assert.deepEqual(resumePage(remote, { filter: "catalog" }).items.map((item) => item.key), ["movie:tt1"]);
+});
+
+test("a media-server card of a named title merges with the same title's local rows", () => {
+  const identity = { type: "movie" as const, id: "tt1" };
+  const newer = { files: [], catalogue: [catalogue({ key: "movie:tt1", type: "movie", id: "tt1", identity, updatedAt: at(3) })], remote: [remoteCard({ key: "remote:a", identity, updatedAt: at(1) })] };
+  const merged = mergeResume(newer);
+  assert.equal(merged.items.length, 1, "one card for the title");
+  assert.equal(merged.items[0]!.kind, "resume-catalogue", "the newest row speaks for it");
+
+  const remoteWins = { ...newer, remote: [remoteCard({ key: "remote:a", identity, updatedAt: at(9) })] };
+  const card = mergeResume(remoteWins).items[0]!;
+  assert.equal(card.kind, "remote");
+  assert.deepEqual(card.kind === "remote" ? card.forgetKeys : undefined, ["movie:tt1"], "the media-server card carries the local keys it stands for");
+});
+
+test("a media-server card of a show merges by the show's own id", () => {
+  const identity = { type: "series" as const, id: "tt5" };
+  const sources = {
+    files: [file({ key: "file:a", identity, season: 1, episode: 2, updatedAt: at(1) })],
+    catalogue: [catalogue({ key: "series:tt5:1:2", identity, season: 1, episode: 2, updatedAt: at(2) })],
+    remote: [remoteCard({ key: "remote:a", identity, itemType: "episode", season: 1, episode: 2, updatedAt: at(4) })],
+  };
+  const card = mergeResume(sources).items[0]!;
+  assert.equal(card.kind, "remote", "the newest episode is the media server's");
+  assert.deepEqual(card.kind === "remote" ? card.forgetKeys : undefined, ["file:a", "series:tt5:1:2"], "and it forgets the rows behind it");
+});
+
+test("within one title a tie goes to the library file, then the catalogue, then the media server", () => {
+  const identity = { type: "movie" as const, id: "tt1" };
+  const remote = remoteCard({ key: "remote:a", identity, updatedAt: at(2) });
+  const catalogued = catalogue({ key: "movie:tt1", type: "movie", id: "tt1", identity, updatedAt: at(2) });
+  const local = file({ key: "file:a", identity, updatedAt: at(2) });
+  const kind = (sources: Parameters<typeof mergeResume>[0]) => mergeResume(sources).items[0]!.kind;
+
+  assert.equal(kind({ files: [local], catalogue: [catalogued], remote: [remote] }), "resume-file");
+  assert.equal(kind({ files: [], catalogue: [catalogued], remote: [remote] }), "resume-catalogue");
+  assert.equal(kind({ files: [], catalogue: [], remote: [remote] }), "remote");
+});
+
+test("a media-server card nothing can name stays its own card and forgets nothing else", () => {
+  const sources = {
+    files: [],
+    catalogue: [catalogue({ key: "movie:tt1", type: "movie", id: "tt1", updatedAt: at(1) })],
+    remote: [remoteCard({ key: "remote:a", updatedAt: at(9) })],
+  };
+  const cards = mergeResume(sources).items;
+  assert.deepEqual(cards.map((card) => card.kind).sort(), ["remote", "resume-catalogue"]);
+  const card = cards.find((item) => item.kind === "remote")!;
+  assert.equal(card.kind === "remote" ? card.forgetKeys : undefined, undefined);
+});
+
+test("a merged group answers each filter by the members it holds", () => {
+  const identity = { type: "movie" as const, id: "tt1" };
+  const sources = {
+    files: [file({ key: "file:a", identity, updatedAt: at(1) })],
+    catalogue: [],
+    remote: [remoteCard({ key: "remote:a", identity, updatedAt: at(9) })],
+  };
+  const keys = (filter: ResumeFilter) => resumePage(sources, { filter }).items.map((item) => item.key);
+
+  assert.equal(resumePage(sources, {}).items[0]!.kind, "remote", "the newer media-server card is the card");
+  assert.deepEqual(keys("library"), ["remote:a"], "the group still answers the library filter");
+  assert.deepEqual(keys("remote"), ["remote:a"]);
+  assert.deepEqual(keys("movies"), ["remote:a"]);
 });
 
 test("paging walks one stable, de-duplicated order past the Home bound", () => {

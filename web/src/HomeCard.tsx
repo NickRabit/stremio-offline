@@ -13,14 +13,11 @@ export interface HomeCardActions {
   forget: (card: HomeCardData) => void;
 }
 
-const providerLabel = (provider: "jellyfin" | "emby") =>
-  t(provider === "emby" ? "mediaServer.provider.emby" : "mediaServer.provider.jellyfin");
-
-/** The card's own line: its label, its numbering and whatever else the kind adds. */
+/** The card's own line: its label, its numbering and whatever else the kind adds. No card names
+ *  the library or media server it came from: a list is about titles, not about sources. */
 function captionOf(card: HomeCardData, locale: string): string {
   const label = cardLabel(card);
   const parts: Array<string | undefined> = [label && t(label), cardNumbering(card)];
-  if (card.kind === "remote") parts.push(`${providerLabel(card.provider)} · ${card.libraryName}`);
   if (card.kind === "resume-file") parts.push(card.subtitle);
   if (card.kind === "episode") parts.push(new Intl.DateTimeFormat(locale, { dateStyle: "short" }).format(new Date(card.released)));
   if (card.kind === "recent") parts.push(relativeAge(card.addedAt, Date.now(), locale));
@@ -56,7 +53,11 @@ export function HomeCard({ card, shape, actions }: { card: HomeCardData; shape: 
   const menu = card.kind !== "episode" && card.kind !== "discovery" && card.kind !== "confirm" && card.kind !== "favorite-catalogue";
 
   const primary = () => {
-    if (card.kind === "remote" || card.kind === "resume-catalogue" || card.kind === "episode" || card.kind === "discovery" || card.kind === "confirm" || card.kind === "favorite-catalogue") { actions.open(card); return; }
+    if (card.kind === "remote" || card.kind === "episode" || card.kind === "discovery" || card.kind === "confirm" || card.kind === "favorite-catalogue") { actions.open(card); return; }
+    // A catalogue card written from a library file is that file: it plays where the file plays.
+    if (card.kind === "resume-catalogue") { if (card.path) actions.play(card); else actions.open(card); return; }
+    // A favourite bound to a title is that title, whatever kind of copy it is.
+    if (card.kind === "favorite" && card.title) { actions.open(card); return; }
     if (folder) { actions.reveal(card.path); return; }
     actions.play(card);
   };
@@ -72,6 +73,7 @@ export function HomeCard({ card, shape, actions }: { card: HomeCardData; shape: 
       {menu && <button className="browse-menu" aria-label={t("home.menu", { title })} aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}><MoreVertical/></button>}
     </div>
     {menu && menuOpen && <span className="browse-actions home-actions" onClick={(event) => event.stopPropagation()}>
+      {((card.kind === "resume-file" && card.identity) || card.kind === "resume-catalogue") && <button onClick={() => { setMenuOpen(false); actions.open(card); }}><Film/> {t("home.openDetail")}</button>}
       {hasPath(card) && <button onClick={() => { setMenuOpen(false); actions.reveal(card.path); }}><HardDrive/> {t("library.showInLibrary")}</button>}
       {(card.kind === "resume-file" || card.kind === "resume-catalogue" || card.kind === "remote") && <button onClick={() => { setMenuOpen(false); actions.forget(card); }}><RotateCcw/> {t("home.forget")}</button>}
     </span>}

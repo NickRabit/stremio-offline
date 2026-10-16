@@ -10,7 +10,7 @@ import { releaseMediaElement, AHEAD_CATCHUP_MS, HLS_PLAYER_CONFIG, ignoreHlsErro
 import { clampVolume, readVolume, writeVolume } from "./player-volume";
 import { PlaybackWakeLock, screenWakeLock } from "./playback-wake-lock";
 import { initialPlaybackPosition, progressToSave } from "./player-progress";
-import { remoteVersionKey } from "./source-progress";
+import { remoteVersionKey, versionSavedRow } from "./source-progress";
 import { detectCapabilities } from "./capabilities";
 import { t, useI18n, type Key } from "./i18n";
 import type { Capabilities, PlaybackMode, PlaybackSession, Stream, Subtitle, Track } from "./types";
@@ -384,8 +384,9 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const reportRef = useRef<{ position: number; duration: number }>({ position: 0, duration: 0 });
   // A library file is already on disk, so offering to download it makes no sense.
   const isLocal = stream?.kind === "library";
-  // A remote media-server source is read-only: it never reaches the download queue, is
-  // reported through the local remote-state API and never through the generic progress store.
+  // A remote media-server source is read-only: it never reaches the download queue. Its position
+  // is reported through the generic store under the title's key whenever the row carries one; only
+  // a version no title can name reports through the local remote-state API.
   const remoteItem = stream?.remoteItem;
   const remoteSource = Boolean(stream?.provider || remoteItem);
   // A copy of another media server is queued only where the server proved the right for this
@@ -603,15 +604,15 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     // Resuming: the server knows the position and starts playback right there. A start-over
     // never reads the store and never writes to it -- the saved position simply stays.
     (async () => {
-      const saved = fromBeginning ? null
-        : remoteItem ? await api.remoteState(remoteItem.libraryId, remoteItem.itemId).catch(() => null)
-          : progressKey ? await api.progressOf(progressKey).catch(() => null) : null;
+      // A key the row was handed is the title's own, and wins over the version's own store; without
+      // one the version's remote state is the store, read with the guard it has always had.
+      const saved = fromBeginning ? null : await versionSavedRow(progressKey, remoteItem);
       // The player may have been closed or handed another film while the state was in flight;
       // starting a session here would leave an orphan nobody watches.
       if (disposed) return null;
       // A switch hands over the position the other source was left at; anything else resumes
       // from the store the title keeps.
-      const from = startAtSeconds !== undefined ? Math.max(0, startAtSeconds) : initialPlaybackPosition(saved, remoteItem, fromBeginning);
+      const from = startAtSeconds !== undefined ? Math.max(0, startAtSeconds) : initialPlaybackPosition(saved, null, fromBeginning);
       if (from) setResumedFrom(from);
       return { created: await api.startPlayback(stream, capabilities(), from, addonSubtitles.map((item) => item.subtitleId), { audioLanguage: audioPreferenceRef.current, subtitleLanguage: subtitlePreferenceRef.current }), from };
     })().then((result) => {
@@ -878,12 +879,14 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   // Leaving the page unmounts nothing, so a closed tab or a desktop window switching servers
   // reports it from `pagehide` with a request that outlives the page.
   useEffect(() => {
-    if (!open || remoteItem || !progressKey) return;
+    if (!open || !progressKey) return;
     const payload = () => progressToSave(reportRef.current, {
       key: progressKey, title,
       path: stream?.localPath,
       poster: progressPoster,
       addonKey: progressAddonKey,
+      // The row says which media-server version it was played from, so the detail can name it.
+      ...(remoteItem ? { remote: { libraryId: remoteItem.libraryId, itemId: remoteItem.itemId, mediaSourceId: remoteItem.mediaSourceId } } : {}),
     });
     const send = (final = false) => {
       const body = payload();
@@ -893,12 +896,12 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     const timer = setInterval(send, 10_000);
     window.addEventListener("pagehide", leaving);
     return () => { clearInterval(timer); window.removeEventListener("pagehide", leaving); send(true); };
-  }, [open, progressKey, title, progressPoster, progressAddonKey]);
+  }, [open, progressKey, remoteItem, title, progressPoster, progressAddonKey]);
 
-  // The same cadence for a remote source, written to the local remote-state store under the
-  // stream's own identity; the generic progress route never sees a remote key.
+  // The same cadence for a media-server version the catalogue cannot name: the only one that keeps
+  // the position in the remote-state store of its own item.
   useEffect(() => {
-    if (!open || !remoteItem) return;
+    if (!open || !remoteItem || progressKey) return;
     const payload = () => {
       const { position, duration } = reportRef.current;
       if (!duration || position < 5) return null;
@@ -916,7 +919,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     const timer = setInterval(send, 10_000);
     window.addEventListener("pagehide", leaving);
     return () => { clearInterval(timer); window.removeEventListener("pagehide", leaving); send(true); };
-  }, [open, remoteItem]);
+  }, [open, remoteItem, progressKey]);
 
   useEffect(() => {
     if (!open) return;

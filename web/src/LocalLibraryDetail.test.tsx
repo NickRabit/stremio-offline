@@ -548,29 +548,33 @@ describe("LocalLibraryDetail extra sources", () => {
     }));
   });
 
-  it("reads, plays and clears another library's copy through that copy's own store", async () => {
+  it("reads the title's row for another library's copy, falling back to that copy's own store", async () => {
     identityHandler = boundMovie;
     copies = oneNative;
     remoteLibraries = () => json({ libraries: [remoteLibrary("rlib_b", "Second")] });
     remoteMatches = () => json({ streams: [otherCopy("rlib_b", "9")] });
-    // The store names the version its position belongs to; the copy on screen played that one.
+    // The copy's own store names the version its position belongs to; it is what the read falls
+    // back to while the title itself holds no position yet.
     remoteState = (_url, init) => init?.method === "PATCH"
       ? json({ key: "k", position: 0, duration: 0, favorite: false, watched: false })
       : json({ key: "k", position: 600, duration: 3600, favorite: false, watched: false, mediaSourceId: "msX" });
     const onPlayAlternative = vi.fn();
     await render(folder(), { onPlayAlternative });
-    // Only the detail's own row was read from the file store; selecting the copy adds no read of it.
+    // The detail's own row was read from the file store; selecting the copy reads the title's key.
     const ownReads = calls.progress.length;
     await openPicker();
     await click(rows().find((row) => row.textContent?.includes("Other copy"))!);
     await flush();
     expect(calls.remoteState.map((url) => url.pathname)).toEqual(["/api/remote-libraries/rlib_b/items/9/state"]);
     expect(host.querySelector(".library-detail-progress span")!.textContent).toBe("10:00 of 1:00:00");
-    expect(calls.progress).toHaveLength(ownReads);
+    expect(calls.progress.slice(ownReads).map(progressKey)).toEqual(["movie:tt1"]);
     await click(host.querySelector(".library-detail-play button.primary"));
     expect(onPlayAlternative).toHaveBeenCalledWith(expect.objectContaining({ stream: expect.objectContaining({ sourceId: "src-rlib_b" }) }));
     await click(host.querySelector(".library-detail-progress button")!);
     await flush();
+    // The clear forgets the title's row, and the copy's own row with it, or the fallback would
+    // hand the dropped position straight back.
+    expect(calls.progress.map(progressKey).at(-1)).toBe("movie:tt1");
     expect(calls.remoteWrites).toEqual([{ position: 0, duration: 0, mediaSourceId: "msX" }]);
     expect(host.querySelector(".library-detail-progress")).toBeNull();
   });

@@ -2,6 +2,7 @@ import type express from "express";
 import { allowedAddons } from "../addons.js";
 import type { ArtShape } from "../artwork.js";
 import { AppError } from "../errors.js";
+import { favoriteIdentity, titleOfPath } from "../favorite-identity.js";
 import {
   filterFavorites, mergeFavorites, parseFavoriteFilter, type FavoriteCatalogItem, type FavoriteEntry,
   type FavoriteEntryCatalog, type FavoriteEntryLibrary, type FavoriteItem, type FavoriteLibraryItem,
@@ -9,19 +10,21 @@ import {
 } from "../favorites.js";
 import type { RemoteHomeCard } from "../home.js";
 import type { MediaServerAuthority } from "../media-server-manager.js";
-import type { MediaServerPersonal } from "../media-server-personal.js";
-import { HOME_FORGET_LIMIT, HOME_RESUME_FILE_LIMIT } from "../home.js";
+import { CARD_LIMIT_MAX as REMOTE_FAVORITE_LIMIT, type MediaServerPersonal } from "../media-server-personal.js";
+import { HOME_FORGET_LIMIT, HOME_RESUME_FILE_LIMIT, type ResumeIdentity } from "../home.js";
 import { images } from "../images.js";
-import { knownEntryForUnit, knownTitleEntry, unitFor, type LibraryMetaRecord, type TitleUnit } from "../library-match.js";
+import { knownTitleEntry, type LibraryMetaRecord, type TitleUnit } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { isVideo, sortFiles, type BrowseItem, type BrowseMeta, type LibraryFile } from "../library.js";
 import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, posixBase, showsInContinueWatching, showsInFavorites, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
 import { log } from "../logger.js";
+import { remoteLibraryVisibleTo } from "../media-server-access.js";
 import { markersOwingRow, nextEpisodeOf } from "../next-episode.js";
+import { fileProgressKeys, newestProgress, titleProgressKey } from "../progress-identity.js";
 import { groupSeriesProgress, seriesOf, type ProgressSeries } from "../progress-series.js";
 import { groupResumeRows } from "../resume-group.js";
 import { defaultSearchState, parseRecordBody, parseSearchPreferencesPatch, parseSearchState, publicSearchState, withRecorded, withoutQuery, type SearchState } from "../search-state.js";
-import type { StoredProgress, UserPrefs, WatchedMarker, WatchlistEntry } from "../store.js";
+import type { RemoteProgressWriter, StoredProgress, UserPrefs, WatchedMarker, WatchlistEntry } from "../store.js";
 import type { MetaItem } from "../types.js";
 import type { UserData } from "../users.js";
 import { applyPatch, parseViews } from "../views.js";
@@ -96,7 +99,7 @@ export interface ResumeRowOptions {
   limit?: number;
 }
 
-/** One row of `GET /api/library/resume` as the handler serialises it, plus the series
+/** One row of `GET /api/library/resume` as the handler serialises it, plus the title
  *  identity Home needs -- the handler strips it, exactly as it strips the show key today. */
 export type ResumePageItem = LibraryFile & BrowseMeta & {
   kind: "file";
@@ -105,8 +108,7 @@ export type ResumePageItem = LibraryFile & BrowseMeta & {
   poster?: string;
   wide?: string;
   seriesKey?: string;
-  seriesId?: string;
-  seriesType?: string;
+  identity?: ResumeIdentity;
   backfill?: boolean;
 };
 export interface ResumePage { items: ResumePageItem[]; total: number; pending: boolean }
@@ -136,6 +138,9 @@ export interface PersonalApi {
   libraryResumeItems(req: express.Request, options?: ResumeRowOptions): Promise<ResumePage>;
   favoritesPage(req: express.Request, options?: FavoritesOptions): Promise<FavoritesPage>;
   pathVisible(key: string, viewer: Viewer, libraries: LibraryRecord[]): boolean;
+  /** The catalogue keys the account starred: a media-server record of one of them is that title,
+   *  so a caller that draws the title itself leaves the record out. */
+  watchlistKeys(req: express.Request): string[];
 }
 
 const LOOKUP_TIMEOUT = Symbol("home-lookup-timeout");
@@ -180,11 +185,20 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     if (!id) throw new AppError("Missing title id.", "err.missingTitleId");
     const key = `${type}:${id}`;
     const wanted = Boolean(req.body.favorite);
+    // One title wears one star: clearing the catalogue's own clears the library paths that stand
+    // for it too, or the star would come straight back from the other side.
+    const records = wanted ? {} : metaStore.qualifiedMeta();
+    const units = wanted ? [] : await libraryUnits();
+    const starredPaths: ReadonlySet<string> = new Set(wanted ? [] : (dataOf(req).favorites ?? [])
+      .filter((path) => { const title = titleOfPath(path, records, units); return Boolean(title && `${title.type}:${title.id}` === key); }));
     await updateData(req, (data) => {
       const all = { ...watchlistOf(data) };
       if (wanted) all[key] = { type, id, name: String(req.body.name ?? id), poster: posterOf(req.body.poster), addedAt: new Date().toISOString() };
       else delete all[key];
       data.watchlist = all;
+      if (starredPaths.size) data.favorites = data.favorites.filter((path) => !starredPaths.has(path));
+      // The title's star is one: clearing it clears the media-server records that stand for it.
+      if (!wanted) remotePersonal.clearTitleFavorites(data, key);
     });
     res.json({ key, favorite: wanted });
   }));
@@ -263,6 +277,49 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
   // The reserved prefix of the per-account remote map. The generic progress map never holds
   // one, so a forged key is refused at the door and a read of one never returns a row.
   const isRemoteProgressKey = (key: string) => key.startsWith("remote:");
+  /** The stored key a client key stands for: a bound file's `file:` key becomes its title key. */
+  const resolveProgressKey = async (stored: string): Promise<{ key: string; file?: string; title?: ReturnType<typeof titleProgressKey> }> => {
+    if (!stored.startsWith("file:")) return { key: stored };
+    const file = stored.slice(5);
+    // A key naming a library that is gone cannot be described; it stays its own file key, so the
+    // row stored under it is still read, and removed, as it was before this change.
+    const item = await describeLibraryPath(file, { stale: true }).catch(() => undefined);
+    const listed = item?.kind === "file" ? { season: item.season, episode: item.episode } : undefined;
+    const title = titleProgressKey(file, metaStore.qualifiedMeta(), await libraryUnits(), listed);
+    return title ? { key: title.key, file, title } : { key: stored, file };
+  };
+  /** Whether the caller may still see the remote library the version that wrote a row belongs to. */
+  const remoteWriterVisible = (writer: RemoteProgressWriter, req: express.Request): boolean => {
+    const user = currentUser(req);
+    if (!user) return false;
+    const library = store.remoteLibraries().find((candidate) => candidate.id === writer.libraryId);
+    return Boolean(library) && remoteLibraryVisibleTo(store.mediaConnections(), library!, user);
+  };
+  /** The title keys among the stored keys a write touches: forgetting one also forgets the
+   *  media-server version's own position of that title. A `file:` key already resolved to its
+   *  title key by then. */
+  const forgottenTitles = (keys: Iterable<string>): Set<string> =>
+    new Set([...keys].filter((key) => key.startsWith("movie:") || key.startsWith("series:")));
+  /** Every legacy `file:` key in `all` whose file resolves to `titleKey`. The stored progress
+   *  map is bounded at 60 rows, so the scan behind it is bounded too. */
+  const legacyKeysFor = (all: Record<string, StoredProgress>, titleKey: string, records: Record<string, LibraryMetaRecord>, units: TitleUnit[]): string[] =>
+    Object.keys(all).filter((key) => key.startsWith("file:") && titleProgressKey(key.slice(5), records, units)?.key === titleKey);
+  /** Every stored key that stands for one resolved key: the key itself, the file the caller
+   *  read it through, and the legacy `file:` rows whose file resolves to it. The rows naming the
+   *  file are what a move that renumbers it needs: its title row keeps the key it was written
+   *  with, and only its `path` follows the file. */
+  const standingKeys = (
+    resolved: { key: string; file?: string },
+    all: Record<string, StoredProgress>,
+    records: Record<string, LibraryMetaRecord>,
+    units: TitleUnit[],
+  ): string[] => [
+    ...new Set([
+      resolved.key,
+      ...(resolved.file ? fileProgressKeys(all, resolved.file) : []),
+      ...(resolved.key.startsWith("file:") ? [] : legacyKeysFor(all, resolved.key, records, units)),
+    ]),
+  ];
   /** The `series` field of a report: the body names the series, and whatever it leaves
    *  out the episode key fills in. An id that is not a non-empty string means no series. */
   const reportedSeries = (key: string, title: string, body: unknown): ProgressSeries | undefined => {
@@ -278,6 +335,17 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
       season: Number.isFinite(season) ? season : derived?.season ?? 0,
       episode: Number.isFinite(episode) ? episode : derived?.episode ?? 0,
     };
+  };
+  /** The media-server version a report was played from, when it names a usable one: three
+   *  non-empty ids, each short enough to be a stored value rather than a payload. */
+  const reportedRemote = (body: unknown): RemoteProgressWriter | undefined => {
+    const field = body && typeof body === "object" ? body as { libraryId?: unknown; itemId?: unknown; mediaSourceId?: unknown } : {};
+    const id = (raw: unknown) => {
+      const value = typeof raw === "string" ? raw.trim() : "";
+      return value && value.length <= 256 ? value : undefined;
+    };
+    const libraryId = id(field.libraryId), itemId = id(field.itemId), mediaSourceId = id(field.mediaSourceId);
+    return libraryId && itemId && mediaSourceId ? { libraryId, itemId, mediaSourceId } : undefined;
   };
   /** One row of Continue watching, either a stored position or the next episode a finished
    *  one left behind. */
@@ -343,38 +411,70 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     const items = [...rows, ...pending.filter((row) => row !== undefined)]
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       .slice(0, options.limit ?? 40)
-      .map((value) => ({ ...value, key: wireProgressKey(value.key), path: value.path ? wirePath(value.path) : value.path, poster: images.proxied(value.poster) }));
+      .map((value) => ({ ...value, key: wireProgressKey(value.key), path: value.path ? wirePath(value.path) : value.path, poster: images.proxied(value.poster),
+        // The media-server version that wrote a row is named only while its library is the caller's.
+        remote: value.remote && remoteWriterVisible(value.remote, req) ? value.remote : undefined }));
     return { items, partial };
   };
   app.get("/api/progress", asyncRoute(async (req, res) => {
     res.json((await progressRows(req)).items);
   }));
-  app.get("/api/progress/:key", (req, res) => {
+  app.get("/api/progress/:key", asyncRoute(async (req, res) => {
     const raw = String(req.params.key);
     if (isRemoteProgressKey(raw)) return void res.json(null);
-    const found = progressOf(dataOf(req))[storedProgressKey(raw)];
+    const all = progressOf(dataOf(req));
+    const resolved = await resolveProgressKey(storedProgressKey(raw));
+    // Every row that stands for the same title is a candidate: the title's own, the legacy
+    // `file:` rows resolving to it, and the file this key names. The newest of them answers.
+    const rows = standingKeys(resolved, all, metaStore.qualifiedMeta(), await libraryUnits())
+      .filter((key) => all[key] !== undefined)
+      .map((key): [string, StoredProgress] => [key, all[key]!]);
+    const found = newestProgress(rows, resolved.key)?.[1];
     const visible = !found?.path || pathVisible(found.path, viewerOf(currentUser(req)), store.libraries());
-    res.json(found && visible ? { ...found, poster: images.proxied(found.poster) } : null);
-  });
+    const answer = found && visible ? { ...found, poster: images.proxied(found.poster) } : null;
+    res.json(answer && answer.remote && !remoteWriterVisible(answer.remote, req) ? { ...answer, remote: undefined } : answer);
+  }));
   app.post("/api/progress", asyncRoute(async (req, res) => {
     // With tracking switched off the position is written nowhere.
     if (!prefsOf(req).trackProgress) return res.status(204).end();
-    const key = storedProgressKey(String(req.body.key ?? "").trim());
+    const sent = storedProgressKey(String(req.body.key ?? "").trim());
     const position = Number(req.body.position) || 0;
     const duration = Number(req.body.duration) || 0;
-    if (!key) throw new AppError("Missing title key.", "err.missingTitleKey");
-    if (isRemoteProgressKey(key)) throw new AppError("The item was not found.", "err.itemNotFound", 404);
+    if (!sent) throw new AppError("Missing title key.", "err.missingTitleKey");
+    if (isRemoteProgressKey(sent)) throw new AppError("The item was not found.", "err.itemNotFound", 404);
+    // A bound file is stored as its title, so one title keeps one position. The rows the write
+    // replaces are read before the mutator, which stays synchronous.
+    const resolved = await resolveProgressKey(sent);
+    const key = resolved.key;
+    const records = metaStore.qualifiedMeta();
+    const units = await libraryUnits();
+    const legacy = key.startsWith("file:") ? [] : legacyKeysFor(progressOf(dataOf(req)), key, records, units);
     await updateData(req, (data) => {
       const all = { ...progressOf(data) };
+      for (const legacyKey of legacy) delete all[legacyKey];
+      if (resolved.file && resolved.title) delete all[`file:${resolved.file}`];
       const previous = all[key];
       const title = String(req.body.title ?? previous?.title ?? "Video");
+      // A file the title was read from carries the title's own series row, never the player's
+      // idea of one: the binding states the show, and the file names the episode of it.
+      const boundSeries = resolved.title?.type === "series"
+        ? {
+          id: resolved.title.id,
+          name: resolved.title.name || seriesOf(key, { title })?.name || title,
+          season: resolved.title.season!, episode: resolved.title.episode!,
+        }
+        : previous?.series;
+      // The writer is read from this body alone: a write that names no version stores none, so a
+      // row a catalogue play overwrote never keeps claiming a media-server version.
+      const writer = reportedRemote(req.body.remote);
       const record: StoredProgress = {
         position, duration,
         title,
-        path: req.body.path ? libraryKey(String(req.body.path)) : previous?.path,
+        path: req.body.path ? libraryKey(String(req.body.path)) : resolved.title ? resolved.file : previous?.path,
         poster: posterOf(req.body.poster) ?? previous?.poster,
         addonKey: typeof req.body.addonKey === "string" ? req.body.addonKey : previous?.addonKey,
-        series: reportedSeries(key, title, req.body.series) ?? previous?.series,
+        series: reportedSeries(key, title, req.body.series) ?? boundSeries,
+        ...(writer ? { remote: writer } : {}),
         updatedAt: new Date().toISOString(),
       };
       const series = seriesOf(key, record);
@@ -407,34 +507,13 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
   }));
   app.delete("/api/progress/:key", asyncRoute(async (req, res) => {
     if (isRemoteProgressKey(String(req.params.key))) return void res.status(404).end();
-    await updateData(req, (data) => {
-      const key = storedProgressKey(String(req.params.key));
-      const all = { ...progressOf(data) };
-      const removed = all[key];
-      delete all[key];
-      data.progress = all;
-      // The row a finished episode leaves behind is not stored, so forgetting that row has
-      // to forget the marker that draws it.
-      const series = seriesOf(key, { title: removed?.title ?? "", series: removed?.series });
-      if (series) {
-        const markers = { ...markersOf(data) };
-        delete markers[series.id];
-        data.watchedSeries = markers;
-      }
-    });
-    res.status(204).end();
-  }));
-  /** Forgetting a merged Home card forgets every key it stands for, and the marker of any
-   *  show it implies, in one owner-scoped write. */
-  app.post("/api/progress/forget", asyncRoute(async (req, res) => {
-    const raw = (req.body ?? {}) as { keys?: unknown };
-    if (!Array.isArray(raw.keys)) throw new AppError("The forget request names no keys.", "err.invalidRequest");
-    if (raw.keys.length > HOME_FORGET_LIMIT) throw new AppError("Too many keys to forget at once.", "err.invalidRequest");
-    const keys = raw.keys.map((key) => storedProgressKey(String(key))).filter((key) => !isRemoteProgressKey(key));
-    if (!keys.length) return res.status(204).end();
+    const resolved = await resolveProgressKey(storedProgressKey(String(req.params.key)));
+    const keys = standingKeys(resolved, progressOf(dataOf(req)), metaStore.qualifiedMeta(), await libraryUnits());
     await updateData(req, (data) => {
       const all = { ...progressOf(data) };
       const markers = { ...markersOf(data) };
+      // Forgetting either key forgets the title: every row standing for it goes, and every
+      // key deleted takes the marker of the show it names with it.
       for (const key of keys) {
         const removed = all[key];
         delete all[key];
@@ -444,6 +523,37 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
       data.progress = all;
       data.watchedSeries = markers;
     });
+    const titles = forgottenTitles(keys);
+    if (titles.size) await remotePersonal.forgetTitlePositions(currentUser(req)?.id, titles);
+    res.status(204).end();
+  }));
+  /** Forgetting a merged Home card forgets every key it stands for, and the marker of any
+   *  show it implies, in one owner-scoped write. */
+  app.post("/api/progress/forget", asyncRoute(async (req, res) => {
+    const raw = (req.body ?? {}) as { keys?: unknown };
+    if (!Array.isArray(raw.keys)) throw new AppError("The forget request names no keys.", "err.invalidRequest");
+    if (raw.keys.length > HOME_FORGET_LIMIT) throw new AppError("Too many keys to forget at once.", "err.invalidRequest");
+    const sent = raw.keys.map((key) => storedProgressKey(String(key))).filter((key) => !isRemoteProgressKey(key));
+    if (!sent.length) return res.status(204).end();
+    const records = metaStore.qualifiedMeta();
+    const units = await libraryUnits();
+    const all = progressOf(dataOf(req));
+    const resolved = await Promise.all(sent.map((key) => resolveProgressKey(key)));
+    const keys = [...new Set(resolved.flatMap((entry) => standingKeys(entry, all, records, units)))];
+    await updateData(req, (data) => {
+      const stored = { ...progressOf(data) };
+      const markers = { ...markersOf(data) };
+      for (const key of keys) {
+        const removed = stored[key];
+        delete stored[key];
+        const series = seriesOf(key, { title: removed?.title ?? "", series: removed?.series });
+        if (series) delete markers[series.id];
+      }
+      data.progress = stored;
+      data.watchedSeries = markers;
+    });
+    const titles = forgottenTitles(keys);
+    if (titles.size) await remotePersonal.forgetTitlePositions(currentUser(req)?.id, titles);
     res.status(204).end();
   }));
 
@@ -463,17 +573,6 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     if (!library) return true;
     return library.enabled && !library.unreachable;
   };
-
-  /** The identified title a starred key belongs to, resolved the way the library listing
-   *  resolves it: through the key's unit, so a starred episode answers with its show's folder
-   *  and folds with the show's catalogue star. Falls back to the key itself when nothing
-   *  groups it. */
-  const favoriteIdentity = (
-    key: string,
-    records: Record<string, LibraryMetaRecord>,
-    units: TitleUnit[],
-  ): { key: string; record: LibraryMetaRecord } | undefined =>
-    knownEntryForUnit(unitFor(key, units) ?? key, records, isVideo(posixBase(key)) ? key : undefined);
 
   /** The merged Favourites list, ordered and permission-filtered but not yet described.
    *  Order: the account's own library stars first, newest star first by the stored order
@@ -514,7 +613,8 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
       const target = known?.key ?? key;
       // A newer star of the same title already drew this card.
       if (drawn.has(target)) continue;
-      const entry: FavoriteEntryLibrary = { kind: "library", key: target };
+      const title = titleOfPath(key, records, units);
+      const entry: FavoriteEntryLibrary = { kind: "library", key: target, ...(title ? { title: { type: title.type, id: title.id } } : {}) };
       drawn.set(target, entry);
       if (known?.record.id) owner.set(`${known.record.type}:${known.record.id}`, entry);
       library.push(entry);
@@ -534,7 +634,8 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
       // The binding is looked up by the entry's own kind, never across kinds.
       const bound = boundByImdb.get(identity);
       if (bound !== undefined && !drawn.has(bound)) {
-        const card: FavoriteEntryLibrary = { kind: "library", key: bound, catalogId: entry.id };
+        const title = titleOfPath(bound, records, units);
+        const card: FavoriteEntryLibrary = { kind: "library", key: bound, catalogId: entry.id, ...(title ? { title: { type: title.type, id: title.id } } : {}) };
         drawn.set(bound, card);
         owner.set(identity, card);
         library.push(card);
@@ -565,18 +666,30 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     const wire = wirePath(key);
     const poster = await thumbUrl(item.kind === "folder" ? "dir" : "path", wire, art);
     const wideUrl = await thumbUrl(item.kind === "folder" ? "dir" : "path", wire, wide, "wide");
-    const record = metaStore.qualifiedMeta()[key];
-    const stored = progressOf(dataOf(req))[`file:${key}`];
+    const records = metaStore.qualifiedMeta();
+    const record = records[key];
+    // A starred file draws the position of the title it is bound to, wherever that row sits.
+    const all = progressOf(dataOf(req));
+    const resolved = await resolveProgressKey(`file:${key}`);
+    const units = await libraryUnits();
+    const rows = standingKeys(resolved, all, records, units)
+      .filter((stored) => all[stored] !== undefined)
+      .map((stored): [string, StoredProgress] => [stored, all[stored]!]);
+    const stored = newestProgress(rows, resolved.key)?.[1];
     const progress = stored && stored.duration > 0 ? { position: stored.position, duration: stored.duration } : undefined;
+    // A copy that stands for a title is named as the title, never by its folder or file name.
+    const titleName = entry.title ? favoriteIdentity(key, records, units)?.record.name : undefined;
     return {
       kind: "library", path: wire,
-      label: item.kind === "folder" ? item.name : item.label,
+      label: titleName || (item.kind === "folder" ? item.name : item.label),
       ...(poster ? { poster } : {}),
       ...(wideUrl ? { wide: wideUrl } : {}),
       ...(record?.year ? { year: record.year } : {}),
       itemKind: item.kind,
       ...(progress ? { progress } : {}),
       ...(entry.catalogId ? { catalogId: entry.catalogId } : {}),
+      // The copy stands for a title: the card opens that title's detail, not the file.
+      ...(entry.title ? { title: entry.title } : {}),
     } satisfies FavoriteLibraryItem;
   };
 
@@ -599,11 +712,15 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
   /** The stars a media server holds. A library that cannot be confirmed, or a projection that
    *  no longer stands, leaves the answer partial instead of failing it or blocking the local
    *  stars, so the one list is never emptied by a server that is slow or down. */
-  const remoteFavorites = async (req: express.Request, skip: number, limit: number, onHome: boolean):
+  const remoteFavorites = async (req: express.Request, skip: number, limit: number, onHome: boolean, excludeTitles?: ReadonlySet<string>):
     Promise<{ items: FavoriteRemoteItem[]; total: number; partial: boolean } | undefined> => {
     try {
       const authority = authorityOf(req);
-      const cards = await remotePersonal.cards(authority, { filter: "favorites", skip, limit, ...(onHome ? { onHome: true } : {}) });
+      const cards = await remotePersonal.cards(authority, {
+        filter: "favorites", skip, limit,
+        ...(onHome ? { onHome: true } : {}),
+        ...(excludeTitles?.size ? { excludeTitles } : {}),
+      });
       remotePersonal.assertCardsCurrent(authority, cards);
       return { items: cards.items.map(favoriteRemoteItem), total: cards.total, partial: cards.partial === true };
     } catch { return undefined; }
@@ -613,11 +730,32 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     const filter = options.filter ?? "all";
     const skip = Math.max(0, options.skip ?? 0);
     const limit = Math.max(1, Math.min(120, options.limit ?? 60));
+    // The titles the account starred: the local half draws them, so a media-server record of one
+    // of them is not drawn a second time.
+    const starredTitles = new Set(Object.keys(watchlistOf(dataOf(req))));
     if (filter === "remote") {
-      const remote = await remoteFavorites(req, skip, limit, options.onHome === true);
+      const remote = await remoteFavorites(req, skip, limit, options.onHome === true, starredTitles);
       return remote
         ? { items: remote.items, total: remote.total, pending: false, ...(remote.partial ? { partial: true } : {}) }
         : { items: [], total: 0, pending: false, partial: true };
+    }
+    // The two title filters read the media server's own stars too: one call for every card, kept
+    // by the kind of item, and merged with the local half the way `all` merges them.
+    if (filter === "movies" || filter === "series") {
+      const wanted = filter === "movies" ? "movie" : "series";
+      const entries = await favoritesEntries(req, options);
+      const local = await Promise.all(entries.map((entry) => describeFavorite(req, entry)));
+      const described = local.filter((item): item is FavoriteItem => item !== undefined);
+      const remote = await remoteFavorites(req, 0, REMOTE_FAVORITE_LIMIT, options.onHome === true, starredTitles);
+      const remoteItems = (remote?.items ?? []).filter((item) =>
+        wanted === "movie" ? item.itemType === "movie" : item.itemType === "series" || item.itemType === "episode");
+      const merged = [...described, ...remoteItems];
+      return {
+        items: merged.slice(skip, skip + limit),
+        total: described.length + remoteItems.length,
+        pending: described.some((item) => item.kind === "library" && (!item.poster || !item.wide)),
+        ...(remote === undefined ? { partial: true } : {}),
+      };
     }
     const entries = await favoritesEntries(req, options);
     // Every entry is described before the slice, so `total` counts only what can be returned:
@@ -634,7 +772,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     // never repeats a card or drops the local tail; a page the local half already fills asks
     // the server for one row alone, which is enough for `total`.
     const page = local.slice(skip, skip + limit);
-    const remote = await remoteFavorites(req, Math.max(0, skip - local.length), page.length < limit ? limit : 1, options.onHome === true);
+    const remote = await remoteFavorites(req, Math.max(0, skip - local.length), page.length < limit ? limit : 1, options.onHome === true, starredTitles);
     if (!remote) return { items: page, total: local.length, pending: pendingIn(page), partial: true };
     const items = [...page, ...remote.items.slice(0, Math.max(0, limit - page.length))];
     return { items, total: local.length + remote.total, pending: pendingIn(items), ...(remote.partial ? { partial: true } : {}) };
@@ -658,12 +796,18 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     const viewer = viewerOf(currentUser(req));
     const libraries = store.libraries();
     const records = metaStore.qualifiedMeta();
+    const units = await libraryUnits();
+    // A bound file's position is stored under its title, with the file as the row's `path`: that
+    // row is still the file's own, so the library lists it as long as the file stands for it.
     const entries = Object.entries(progressOf(data)).filter(([key, entry]) =>
-      key.startsWith("file:") && Boolean(entry.path) && showsInContinueWatching(entry.path!, libraries)
+      (key.startsWith("file:") || (Boolean(entry.path) && isVideo(posixBase(entry.path!))))
+      && Boolean(entry.path) && showsInContinueWatching(entry.path!, libraries)
       && (!options.onHome || showsOnHome(entry.path!, libraries)) && pathVisible(entry.path!, viewer, libraries));
-    const described = await Promise.all(entries.map(async ([, entry]) => {
+    const described = await Promise.all(entries.map(async ([stored, entry]) => {
       const item = await describeLibraryPath(entry.path!);
       if (!item || item.kind !== "file") return [];
+      if (!stored.startsWith("file:")
+        && titleProgressKey(entry.path!, records, units, { season: item.season, episode: item.episode })?.key !== stored) return [];
       // `describePath` answers library-relative, and the row already knows which library it
       // came from. Qualifying it through the single-library shim instead asks an install with
       // two of them a question it cannot answer, and the whole resume row returns 400.
@@ -673,10 +817,14 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
       // same key and the grouping below turns them into a single tile.
       const bound = knownTitleEntry(libraryKey(key), records);
       const series = bound?.record.type === "series" ? { key: bound.key, id: bound.record.id, name: bound.record.name } : undefined;
+      // A film gets no series key: that grouping would fold two films sharing a folder into one.
+      const identity: ResumeIdentity | undefined = series
+        ? { type: "series", id: series.id }
+        : bound?.record.type === "movie" ? { type: "movie", id: bound.record.id } : undefined;
       return [{ ...item, path: wirePath(key), label: entry.title || item.label, modified: entry.updatedAt,
         progress: { position: entry.position, duration: entry.duration }, favorite: favorites.has(key),
         seriesKey: series?.key,
-        seriesId: series?.id, seriesType: series ? "series" : undefined,
+        ...(identity ? { identity } : {}),
         ...(series?.name ? { series: { name: series.name } } : {}) }];
     }));
     // One tile per show before the filters, the sort and the slice, so `total` and the paging
@@ -705,7 +853,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
   };
   app.get("/api/library/resume", asyncRoute(async (req, res) => {
     const result = await libraryResumeItems(req);
-    res.json({ path: ":resume", items: result.items.map(({ backfill: _backfill, seriesKey: _seriesKey, seriesId: _seriesId, seriesType: _seriesType, ...item }) => item), total: result.total, pending: result.pending });
+    res.json({ path: ":resume", items: result.items.map(({ backfill: _backfill, seriesKey: _seriesKey, identity: _identity, ...item }) => item), total: result.total, pending: result.pending });
   }));
 
   app.get("/api/library/favorites", asyncRoute(async (req, res) => {
@@ -741,5 +889,5 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     res.json({ path: ":favorites", items: page.map(({ backfill: _backfill, ...item }) => item), total: ordered.length, pending: page.some((item) => !item.poster || !item.wide || item.backfill) });
   }));
 
-  return { progressRows, libraryResumeItems, favoritesPage, pathVisible };
+  return { progressRows, libraryResumeItems, favoritesPage, pathVisible, watchlistKeys: (req) => Object.keys(watchlistOf(dataOf(req))) };
 }

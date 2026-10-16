@@ -7,6 +7,8 @@ import type { FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibrary
 
 const film = (over: Partial<FavoriteLibraryItem> = {}): FavoriteLibraryItem =>
   ({ kind: "library", path: "lib_00000001/Films/Heat.mkv", label: "Heat", itemKind: "file", ...over });
+const boundShow = (over: Partial<FavoriteLibraryItem> = {}): FavoriteLibraryItem =>
+  ({ kind: "library", path: "lib_00000001/Shows/Show", label: "Show", itemKind: "folder", title: { type: "series", id: "tt5" }, ...over });
 const show = (): FavoriteLibraryItem => ({ kind: "library", path: "lib_00000001/Shows", label: "Shows", itemKind: "folder" });
 const catalog = (): FavoriteCatalogItem => ({ kind: "catalog", type: "movie", id: "tt9", name: "Starred" });
 const remoteStar = (over: Partial<FavoriteRemoteItem> = {}): FavoriteRemoteItem => ({
@@ -35,7 +37,7 @@ type Overrides = Partial<Parameters<typeof FavoritesView>[0]>;
 const render = async (over: Overrides = {}) => {
   const props: Parameters<typeof FavoritesView>[0] = {
     filter: "all", onFilter: vi.fn(), items: [], busy: false, shape: "poster",
-    onToggleShape: vi.fn(), onPlay: vi.fn(), onOpenFolder: vi.fn(), onOpenCatalog: vi.fn(), onOpenRemote: vi.fn(),
+    onToggleShape: vi.fn(), onPlay: vi.fn(), onOpenFolder: vi.fn(), onOpenTitle: vi.fn(), onOpenCatalog: vi.fn(), onOpenRemote: vi.fn(),
     hasMore: false, loadingMore: false, onLoadMore: vi.fn(), ...over,
   };
   await act(async () => { root.render(<FavoritesView {...props}/>); });
@@ -47,14 +49,20 @@ const cards = () => [...host.querySelectorAll<HTMLButtonElement>(".favorites-gri
 const click = async (element: HTMLElement) => { await act(async () => { element.click(); await Promise.resolve(); }); };
 
 describe("FavoritesView", () => {
-  it("offers the four filters and reports the chosen one", async () => {
+  it("offers the three title filters and reports the chosen one", async () => {
     const { onFilter } = await render({ filter: "all", items: [film()] });
-    expect(chips().map((button) => button.textContent)).toEqual(["All", "In library", "From catalog", "Media servers"]);
+    expect(chips().map((button) => button.textContent)).toEqual(["All", "Films", "Series"]);
     expect(chips()[0]!.getAttribute("aria-pressed")).toBe("true");
+    await click(chips()[1]!);
+    expect(onFilter).toHaveBeenCalledWith("movies");
     await click(chips()[2]!);
-    expect(onFilter).toHaveBeenCalledWith("catalog");
-    await click(chips()[3]!);
-    expect(onFilter).toHaveBeenCalledWith("remote");
+    expect(onFilter).toHaveBeenCalledWith("series");
+  });
+
+  it("names the chips in the reader's language", async () => {
+    setLocale("cs");
+    await render({ filter: "all", items: [film()] });
+    expect(chips().map((button) => button.textContent)).toEqual(["Vše", "Filmy", "Seriály"]);
   });
 
   it("reports the shared shape setting from its toggle", async () => {
@@ -83,6 +91,24 @@ describe("FavoritesView", () => {
     expect(onOpenRemote).toHaveBeenCalledWith(remote);
   });
 
+  it("opens the one title detail for a copy bound to a catalogue title", async () => {
+    const { onOpenTitle, onOpenFolder, onPlay } = await render({ items: [boundShow(), film()] });
+
+    await click(cards()[0]!);
+
+    expect(onOpenTitle).toHaveBeenCalledWith(boundShow());
+    expect(onOpenFolder).not.toHaveBeenCalled();
+    expect(onPlay).not.toHaveBeenCalled();
+  });
+
+  it("never names the media server or its library on a card", async () => {
+    await render({ items: [remoteStar()] });
+
+    expect(cards()[0]!.textContent).toContain("Alien");
+    expect(cards()[0]!.textContent).not.toContain("Jellyfin");
+    expect(cards()[0]!.textContent).not.toContain("Server");
+  });
+
   it("shows a media-server star in the one grid and nowhere else", async () => {
     await render({ items: [film(), remoteStar()] as FavoriteItem[] });
     expect(host.querySelectorAll(".favorites-grid .browse-item")).toHaveLength(2);
@@ -93,11 +119,11 @@ describe("FavoritesView", () => {
 
   it("names an empty state per filter", async () => {
     const titles = new Map<FavoriteFilter, string>();
-    for (const filter of ["all", "library", "catalog", "remote"] as FavoriteFilter[]) {
+    for (const filter of ["all", "movies", "series"] as FavoriteFilter[]) {
       await render({ filter });
       titles.set(filter, host.querySelector(".empty h3")!.textContent!);
     }
-    expect(new Set(titles.values()).size).toBe(4);
+    expect(new Set(titles.values()).size).toBe(3);
   });
 
   it("offers more only when the server has more", async () => {

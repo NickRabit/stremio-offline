@@ -20,9 +20,12 @@ import cz.stremiooffline.tv.data.HomeCard
 import cz.stremiooffline.tv.data.HomeProgress
 import cz.stremiooffline.tv.data.ResumeFilter
 import cz.stremiooffline.tv.data.ResumePage
+import cz.stremiooffline.tv.playback.Progress
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs
-import cz.stremiooffline.tv.ui.detail.DetailData
+import cz.stremiooffline.tv.ui.detail.PlayTarget
+import cz.stremiooffline.tv.ui.home.HomeAction
+import cz.stremiooffline.tv.ui.home.actionFor
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -80,6 +83,7 @@ class ResumeScreenTest {
     name: String = "Show",
     season: Int? = 1,
     episode: Int? = 2,
+    path: String? = null,
   ) = HomeCard.ResumeCatalogue(
     key = key,
     title = title,
@@ -89,17 +93,18 @@ class ResumeScreenTest {
     season = season,
     episode = episode,
     progress = HomeProgress(30.0, 120.0),
+    path = path,
     forgetKeys = listOf(key),
   )
 
   private fun mount(
     api: FakeTvApi,
-    onOpenDetail: (DetailData) -> Unit = {},
+    onPlay: (PlayTarget) -> Unit = {},
     onOpenCatalog: (CatalogDetailArgs) -> Unit = {},
   ) {
     scenario.onActivity { activity ->
       activity.setContent {
-        ResumeRoute(api = api, onOpenDetail = onOpenDetail, onOpenCatalog = onOpenCatalog)
+        ResumeRoute(api = api, onPlay = onPlay, onOpenCatalog = onOpenCatalog)
       }
     }
     compose.waitForIdle()
@@ -129,10 +134,10 @@ class ResumeScreenTest {
     mount(api)
 
     compose.onNodeWithTag(resumeFilterTag(ResumeFilter.All)).assertIsFocused()
-    focusBy(resumeFilterTag(ResumeFilter.Library), Key.DirectionRight)
+    focusBy(resumeFilterTag(ResumeFilter.Movies), Key.DirectionRight)
     press(Key.DirectionCenter)
 
-    assertEquals(listOf(ResumeFilter.All, ResumeFilter.Library), api.resumeRequests)
+    assertEquals(listOf(ResumeFilter.All, ResumeFilter.Movies), api.resumeRequests)
   }
 
   @Test
@@ -144,26 +149,40 @@ class ResumeScreenTest {
     compose.onNodeWithTag(resumeCardTag(fileCard().key)).assertIsFocused()
     press(Key.DirectionUp)
     focusBy(resumeFilterTag(ResumeFilter.All), Key.DirectionLeft)
-    focusBy(resumeFilterTag(ResumeFilter.Catalog), Key.DirectionRight)
+    focusBy(resumeFilterTag(ResumeFilter.Series), Key.DirectionRight)
     press(Key.DirectionCenter)
 
-    assertEquals(listOf(ResumeFilter.All, ResumeFilter.Catalog), api.resumeRequests)
+    assertEquals(listOf(ResumeFilter.All, ResumeFilter.Series), api.resumeRequests)
   }
 
   @Test
-  fun `ok on a library file opens its detail`() {
+  fun `ok on a library file plays it, the way Home does`() {
     val api = FakeTvApi()
     api.resumeValue = ResumePage(listOf(fileCard()), 1, false)
-    val details = mutableListOf<DetailData>()
-    mount(api, onOpenDetail = { details += it })
+    val played = mutableListOf<PlayTarget>()
+    mount(api, onPlay = { played += it })
 
     compose.onNodeWithTag(resumeCardTag(fileCard().key)).assertIsFocused()
     press(Key.DirectionCenter)
 
-    assertEquals(1, details.size)
-    assertEquals("browse/A.mkv", details[0].gridPath)
-    assertEquals("A", details[0].title)
-    assertEquals(listOf("file:browse/A.mkv"), details[0].forgetKeys)
+    // The very target the one rule builds, which is what Home hands the shell for the same card.
+    assertEquals(listOf((actionFor(fileCard()) as HomeAction.Play).target), played)
+  }
+
+  @Test
+  fun `ok on a catalogue card that names its file plays that file`() {
+    val api = FakeTvApi()
+    val card = catalogueCard(path = "browse/A.mkv", title = "Which file")
+    api.resumeValue = ResumePage(listOf(card), 1, false)
+    val played = mutableListOf<PlayTarget>()
+    val opened = mutableListOf<CatalogDetailArgs>()
+    mount(api, onPlay = { played += it }, onOpenCatalog = { opened += it })
+
+    compose.onNodeWithTag(resumeCardTag(card.key)).assertIsFocused()
+    press(Key.DirectionCenter)
+
+    assertEquals(listOf((actionFor(card) as HomeAction.Play).target), played)
+    assertEquals(0, opened.size)
   }
 
   @Test

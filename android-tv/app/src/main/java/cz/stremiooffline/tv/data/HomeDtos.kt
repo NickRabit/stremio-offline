@@ -64,6 +64,11 @@ data class HomeResponseDto(
 @Serializable
 data class HomeProgress(val position: Double = 0.0, val duration: Double = 0.0)
 
+/** The catalogue title a card or a favourite stands for: the type and the id a detail is opened
+ *  with. The server names it `identity` on a resume card and `title` on a favourite. */
+@Serializable
+data class TitleRefDto(val type: String = "movie", val id: String = "")
+
 /**
  * One card of a Home row, the way `server/src/home.ts` shapes it. The twelve kinds the TV
  * knows; `confirm` and anything the app does not model decode to nothing and are skipped.
@@ -86,6 +91,8 @@ sealed interface HomeCard {
     val progress: HomeProgress? = null,
     val season: Int? = null,
     val episode: Int? = null,
+    /** The title the file is bound to, when the catalogue can name it. */
+    val identity: TitleRefDto? = null,
     /** Every stored key this card stands for; the detail forgets them together. */
     val forgetKeys: List<String> = emptyList(),
   ) : HomeCard
@@ -104,6 +111,8 @@ sealed interface HomeCard {
     val episode: Int? = null,
     val progress: HomeProgress? = null,
     val pending: Boolean = false,
+    /** The library file that wrote the position, when it is a video: the card plays that file. */
+    val path: String? = null,
     val forgetKeys: List<String> = emptyList(),
   ) : HomeCard
 
@@ -128,6 +137,8 @@ sealed interface HomeCard {
     val label: String = "",
     override val poster: String? = null,
     override val wide: String? = null,
+    /** The title the copy is bound to, when it is: OK opens that title's detail. */
+    val title: TitleRefDto? = null,
   ) : HomeCard
 
   @Serializable
@@ -210,6 +221,10 @@ sealed interface HomeCard {
     override val poster: String? = null,
     override val wide: String? = null,
     val progress: HomeProgress? = null,
+    /** The title the item stands for, when the provider named one. */
+    val identity: TitleRefDto? = null,
+    /** The local keys a merged card stands for, when it won one. */
+    val forgetKeys: List<String> = emptyList(),
     val updatedAt: String? = null,
   ) : HomeCard
 }

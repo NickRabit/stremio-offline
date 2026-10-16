@@ -60,11 +60,11 @@ class ResumeNavigationTest {
     override suspend fun resume(filter: ResumeFilter, limit: Int, skip: Int): ResumePage {
       resumeRequests += filter
       val items = merged.filter {
+        // The journey walks All; the fake splits the rest so both chips answer something.
         when (filter) {
           ResumeFilter.All -> true
-          ResumeFilter.Library -> it is HomeCard.ResumeFile
-          ResumeFilter.Catalog -> it is HomeCard.ResumeCatalogue
-          ResumeFilter.Remote -> it is HomeCard.Remote
+          ResumeFilter.Movies -> it is HomeCard.ResumeFile
+          ResumeFilter.Series -> it is HomeCard.ResumeCatalogue || it is HomeCard.Remote
         }
       }
       return ResumePage(items, items.size, false)
@@ -133,8 +133,10 @@ class ResumeNavigationTest {
     compose.onNodeWithTag(second).assertIsFocused()
     press(Key.DirectionCenter)
 
-    // The card's progress is forgotten while its detail is open.
+    // OK plays the file now, so the card is removed elsewhere while the player is up. Leaving the
+    // player takes two Backs: the first hides its controls, the second exits and re-reads the list.
     api.merged.removeAll { it.key == "file:browse/B.mkv" }
+    back()
     back()
 
     compose.onNodeWithTag(second).assertDoesNotExist()

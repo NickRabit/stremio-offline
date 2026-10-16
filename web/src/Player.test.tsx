@@ -32,6 +32,14 @@ let root: Root;
 let host: HTMLDivElement;
 let progressPosts: Array<Record<string, unknown>>;
 let remotePosts: Array<Record<string, unknown>>;
+/** Every generic key the player read, and what each one holds. */
+let progressReads: string[];
+let progressAnswers: Record<string, unknown>;
+/** Every media-server state route the player touched, and what its own item holds. */
+let remoteReads: string[];
+let remoteAnswers: Record<string, unknown>;
+/** Every playback session started, so the position it resumed from can be read back. */
+let playbackPosts: Array<Record<string, unknown>>;
 /** The answer of the next `/api/progress` write, when the test holds it open. */
 let heldWrite: Promise<Response> | null;
 
@@ -53,6 +61,11 @@ beforeEach(() => {
   HTMLMediaElement.prototype.load = () => undefined;
   progressPosts = [];
   remotePosts = [];
+  progressReads = [];
+  progressAnswers = {};
+  remoteReads = [];
+  remoteAnswers = {};
+  playbackPosts = [];
   heldWrite = null;
   host = document.createElement("div");
   document.body.appendChild(host);
@@ -60,16 +73,28 @@ beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), "http://localhost");
     const path = url.pathname;
-    if (path === "/api/playback" && init?.method === "POST") return Promise.resolve(json(session()));
+    if (path === "/api/playback" && init?.method === "POST") {
+      playbackPosts.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+      return Promise.resolve(json(session()));
+    }
     if (/^\/api\/playback\/[^/]+$/.test(path) && init?.method === "DELETE") return Promise.resolve(new Response(null, { status: 204 }));
     if (/^\/api\/playback\/[^/]+\/ping$/.test(path)) return Promise.resolve(new Response(null, { status: 204 }));
+    if (/^\/api\/progress\/[^/]+$/.test(path)) {
+      const key = decodeURIComponent(path.slice("/api/progress/".length));
+      progressReads.push(key);
+      return Promise.resolve(json(progressAnswers[key] ?? null));
+    }
     if (path === "/api/progress" && init?.method === "POST") {
       progressPosts.push(JSON.parse(String(init.body)) as Record<string, unknown>);
       return heldWrite ? heldWrite : Promise.resolve(new Response(null, { status: 204 }));
     }
-    if (/^\/api\/remote-libraries\/[^/]+\/items\/[^/]+\/state$/.test(path) && init?.method === "PATCH") {
-      remotePosts.push(JSON.parse(String(init.body)) as Record<string, unknown>);
-      return Promise.resolve(new Response(null, { status: 204 }));
+    if (/^\/api\/remote-libraries\/[^/]+\/items\/[^/]+\/state$/.test(path)) {
+      remoteReads.push(path);
+      if (init?.method === "PATCH") {
+        remotePosts.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }
+      return Promise.resolve(json(remoteAnswers[path] ?? null));
     }
     if (path.startsWith("/api/progress")) return Promise.resolve(json(null));
     return Promise.resolve(json(null));
@@ -229,5 +254,47 @@ describe("Player progress reporting", () => {
     await rerender({ stream: remoteVersion(), onProgressSaved, open: false });
     expect(remotePosts).toEqual([expect.objectContaining({ position: 400, duration: 3600, mediaSourceId: "ms1" })]);
     expect(onProgressSaved).toHaveBeenCalledWith("remote:rlib_a\u00001\u0000ms1");
+  });
+
+  it("plays and reports a remote version under the title's key it was handed", async () => {
+    const onProgressSaved = vi.fn();
+    progressAnswers["movie:tt5000"] = { key: "movie:tt5000", position: 300, duration: 3600, title: "One", updatedAt: "2026-01-01T00:00:00.000Z" };
+    await render({ stream: remoteVersion(), progressKey: "movie:tt5000", onProgressSaved });
+    // The title's own row is what the version resumes from; its own store is not consulted.
+    expect(progressReads).toEqual(["movie:tt5000"]);
+    expect(remoteReads).toEqual([]);
+    expect(playbackPosts[0]!.time).toBe(300);
+
+    const video = host.querySelector<HTMLVideoElement>(".player-overlay video")!;
+    await act(async () => { video.currentTime = 400; video.dispatchEvent(new Event("timeupdate", { bubbles: true })); });
+    await rerender({ stream: remoteVersion(), progressKey: "movie:tt5000", onProgressSaved, open: false });
+    expect(progressPosts).toEqual([expect.objectContaining({
+      key: "movie:tt5000", position: 400, duration: 3600,
+      remote: { libraryId: "rlib_a", itemId: "1", mediaSourceId: "ms1" },
+    })]);
+    // The position is written to the title, not to the version's own store.
+    expect(remotePosts).toEqual([]);
+    expect(onProgressSaved).toHaveBeenCalledWith("movie:tt5000");
+  });
+
+  it("keeps the media-source guard off a title's row and on the version's own", async () => {
+    // The title's row names no media source at all: it is the film's position, so it is resumed.
+    progressAnswers["movie:tt5000"] = { key: "movie:tt5000", position: 300, duration: 3600, title: "One", updatedAt: "2026-01-01T00:00:00.000Z" };
+    await render({ stream: remoteVersion(), progressKey: "movie:tt5000" });
+    expect(playbackPosts[0]!.time).toBe(300);
+
+    // Nothing under the title's key yet: the version's own row stands in, as it did before the title
+    // held the position, and only while it names the very media source about to play.
+    delete progressAnswers["movie:tt5000"];
+    const statePath = "/api/remote-libraries/rlib_a/items/1/state";
+    remoteAnswers[statePath] = { key: "k", position: 300, duration: 3600, favorite: false, watched: false, mediaSourceId: "ms1" };
+    await render({ stream: remoteVersion({ sourceId: "src-ms1b" }), progressKey: "movie:tt5000" });
+    expect(remoteReads).toContain(statePath);
+    expect(playbackPosts[1]!.time).toBe(300);
+
+    remoteAnswers[statePath] = { key: "k", position: 900, duration: 3600, favorite: false, watched: false, mediaSourceId: "msOther" };
+    await render({ stream: remoteVersion({ sourceId: "src-ms1c" }), progressKey: "movie:tt5000" });
+    // Another version's own position is not this one's.
+    expect(playbackPosts[2]!.time).toBe(0);
   });
 });

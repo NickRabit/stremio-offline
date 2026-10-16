@@ -196,6 +196,24 @@ test("item and series breadcrumbs walk the remote hierarchy", async ({ page }) =
   await expect(panel.locator(".browse-item").filter({ hasText: "Pilot" }).locator(".library-open")).toBeFocused();
 });
 
+/** The section's own crumb leaves the media server entirely, from a title as from a listing: no
+ *  detail or remote panel may stay behind over the libraries it returns to. */
+test("the Library crumb of a remote title's detail returns to the libraries", async ({ page }) => {
+  await remoteLibraries(page, { items: () => [{ id: "m1", name: "Film One", type: "movie", providerIds: {} }] });
+  await page.locator(".remote-libraries .browse-item.library").filter({ hasText: "Remote clips" }).getByRole("button").click();
+  const panel = page.locator(".remote-browse-panel");
+  await panel.locator(".browse-item").filter({ hasText: "Film One" }).locator(".library-open").click();
+  await expect(panel.locator(".library-title-detail")).toBeVisible();
+  await panel.locator(".crumbs").getByRole("button", { name: "Knihovna", exact: true }).click();
+  await expect(page.locator(".remote-browse-panel")).toHaveCount(0);
+  await expect(page.locator(".library-title-detail")).toHaveCount(0);
+  await expect(page.locator(".remote-libraries .browse-item.library").filter({ hasText: "Remote clips" })).toBeVisible();
+  // Opening the library again starts at its listing, not at the title that was left.
+  await page.locator(".remote-libraries .browse-item.library").filter({ hasText: "Remote clips" }).getByRole("button").click();
+  await expect(page.locator(".remote-browse-panel .browse-item").filter({ hasText: "Film One" })).toBeVisible();
+  await expect(page.locator(".library-title-detail")).toHaveCount(0);
+});
+
 for (const nested of [false, true]) {
   test(`current remote breadcrumb restores a paginated ${nested ? "folder" : "root"} listing`, async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
@@ -716,4 +734,52 @@ test("remote detail actions align across phone tablet and desktop", async ({ pag
     await detail.locator(".library-detail-actions").scrollIntoViewIfNeeded();
     await page.screenshot({ path: `e2e/.tmp/remote-detail-actions-${viewport.width}.png` });
   }
+});
+
+/** One position per title: a media-server film the catalogue can name shows the position the title
+ *  holds, not the state of the version that happens to be listed first. */
+test("a media-server film shows the title's own position", async ({ page, request }) => {
+  const key = "movie:tt9900001";
+  const film: BrowseItem = { id: "identified-film", name: "Identified film", type: "movie", providerIds: { imdb: "tt9900001" } };
+  expect((await request.post("/api/progress", { data: { key, title: "Identified film", position: 600, duration: 2400 } })).ok()).toBe(true);
+  try {
+    await remoteLibraries(page, {
+      items: () => [film],
+      sources: [{ sourceId: "native-1", kind: "remote", playable: true, name: "Native 1080p", provider: "emby", libraryId,
+        remoteItem: { libraryId, itemId: "identified-film", mediaSourceId: "v1", progressKey: "remote:native" },
+        behaviorHints: { videoSize: 1_000_000_000 } }],
+    });
+    await page.locator(".remote-libraries .browse-item.library").filter({ hasText: "Remote clips" }).getByRole("button").click();
+    await page.locator(".remote-browse-panel .browse-item").filter({ hasText: "Identified film" }).locator(".library-open").click();
+    const detail = page.locator(".remote-browse-panel .library-title-detail");
+    await expect(detail.locator(".library-detail-progress span")).toContainText("10:00", { timeout: 15_000 });
+  } finally {
+    await request.delete(`/api/progress/${encodeURIComponent(key)}`);
+  }
+});
+
+/** One star per title, media server included: starring a film from its own detail stars
+ *  `movie:<id>`, and clearing that from the catalogue clears the detail's star again.
+ *
+ *  Skipped: `remoteLibraries` answers every `/api/remote-libraries**` request itself, so the star
+ *  PATCH never reaches the server's own state and `/api/watchlist` cannot be read back here. The
+ *  rule is covered by `server/src/media-server-personal.test.ts`. */
+test.skip("a media-server film's star is its title's star", async ({ page, request }) => {
+  const imdb = "tt9900002";
+  await remoteLibraries(page, {
+    items: () => [{ id: "starred-film", name: "Starred film", type: "movie", providerIds: { imdb } }],
+    sources: [{ sourceId: "native-1", kind: "remote", playable: true, name: "Native 1080p", provider: "emby", libraryId,
+      remoteItem: { libraryId, itemId: "starred-film", mediaSourceId: "v1", progressKey: "remote:native" } }],
+  });
+  await page.locator(".remote-libraries .browse-item.library").filter({ hasText: "Remote clips" }).getByRole("button").click();
+  await page.locator(".remote-browse-panel .browse-item").filter({ hasText: "Starred film" }).locator(".library-open").click();
+  const detail = page.locator(".remote-browse-panel .library-title-detail");
+
+  await detail.getByRole("button", { name: "Přidat do oblíbených", exact: true }).click();
+  await expect.poll(async () => ((await (await request.get("/api/watchlist")).json()) as Array<{ key: string }>).map((entry) => entry.key))
+    .toContain(`movie:${imdb}`);
+
+  await request.post("/api/watchlist", { data: { type: "movie", id: imdb, favorite: false } });
+  await page.reload();
+  await expect(detail.getByRole("button", { name: "Přidat do oblíbených", exact: true })).toHaveAttribute("aria-pressed", "false");
 });

@@ -1,3 +1,4 @@
+import { api } from "./api";
 import { genericProgressKey } from "./native-addon-sources";
 import { isLocalStream } from "./streams";
 import type { CatalogueRef } from "./title-enrichment";
@@ -19,15 +20,17 @@ export type SourceProgressOwner =
   | { kind: "file"; key: string; path: string; progressKey: string }
   /** A version a media server owns; read and written through the remote state of its own item. */
   | { kind: "remote"; key: string; item: RemoteStreamContext }
-  /** An addon answer, held under the exact catalogue key of the title it answered for. */
-  | { kind: "catalogue"; key: string; progressKey: string };
+  /** A version of a title the catalogue can name, held under the title's own key. `remote` is the
+   *  incoming context of a media-server version, and says which version wrote the row. */
+  | { kind: "catalogue"; key: string; progressKey: string; remote?: RemoteStreamContext };
 
 /**
  * The one place a selected row's progress, subtitles and saves are resolved from, so a detail and
  * the player it hands the row to can never disagree about which version is on screen. A row of the
- * viewer's own library is a file, a version with a remote context belongs to that library's item,
- * and anything else is an addon answer that only the catalogue can name -- nothing falls back to
- * the path or the item a detail happened to be opened on.
+ * viewer's own library is a file; everything else is the title, so one film or episode keeps one
+ * position whichever version plays it, whether that is an addon answer or a version a media server
+ * owns. Only a media-server version no title can name keeps the store of its own item, and nothing
+ * falls back to the path or the item a detail happened to be opened on.
  */
 export function sourceProgressOwner(stream: Stream, catalogue: CatalogueRef | null): SourceProgressOwner | null {
   if (isLocalStream(stream) && stream.localPath) {
@@ -35,10 +38,33 @@ export function sourceProgressOwner(stream: Stream, catalogue: CatalogueRef | nu
     const progressKey = localFileProgressKey(path);
     return { kind: "file", key: progressKey, path, progressKey };
   }
-  if (stream.remoteItem) return { kind: "remote", key: remoteVersionKey(stream.remoteItem), item: stream.remoteItem };
-  if (!catalogue) return null;
+  // A media-server version the catalogue cannot name is the only one that keeps its own store.
+  if (!catalogue) return stream.remoteItem ? { kind: "remote", key: remoteVersionKey(stream.remoteItem), item: stream.remoteItem } : null;
   const progressKey = genericProgressKey(catalogue);
-  return { kind: "catalogue", key: progressKey, progressKey };
+  return { kind: "catalogue", key: progressKey, progressKey, ...(stream.remoteItem ? { remote: stream.remoteItem } : {}) };
+}
+
+/** What one version's saved row says, from whichever store answered it. */
+export interface SavedVersionProgress { position: number; duration: number; watched?: boolean; mediaSourceId?: string }
+
+/**
+ * The row one version resumes from: the title's own row when it answers, and otherwise the
+ * version's own remote state -- where a media server kept the position before the title held it --
+ * which the media-source guard reads exactly as it always has. A row another media source wrote is
+ * another version's and counts as nothing.
+ */
+export async function versionSavedRow(
+  progressKey: string | null | undefined,
+  remote: RemoteStreamContext | null | undefined,
+  signal?: AbortSignal,
+): Promise<SavedVersionProgress | null> {
+  if (progressKey) {
+    const title = await api.progressOf(progressKey, signal).catch(() => null);
+    if (title) return title;
+  }
+  if (!remote) return null;
+  const own = await api.remoteState(remote.libraryId, remote.itemId, signal).catch(() => null);
+  return own && own.mediaSourceId === remote.mediaSourceId ? own : null;
 }
 
 /**

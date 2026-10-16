@@ -91,6 +91,50 @@ class HomeCardsTest {
   }
 
   @Test
+  fun `the optional identity, path and forget keys decode, and a body without them still does`() {
+    val decoded = decodeHomeRow(
+      row(
+        """
+        {"status":"ok","hasMore":false,"items":[
+          {"kind":"resume-file","key":"file:a","title":"It","path":"browse/a","identity":{"type":"movie","id":"tt9"}},
+          {"kind":"resume-catalogue","key":"series:x:1:2","title":"Show","type":"series","id":"tt1","name":"Show","path":"browse/a","forgetKeys":["file:a"]},
+          {"kind":"favorite","key":"browse/c","path":"browse/c","itemKind":"folder","label":"Fav","title":{"type":"series","id":"tt2"}},
+          {"kind":"remote","key":"remote:1","title":"Heat","itemId":"iA","itemType":"movie","identity":{"type":"movie","id":"tt9"},"forgetKeys":["file:a"]}
+        ]}
+        """,
+      ),
+    )
+
+    assertEquals(TitleRefDto("movie", "tt9"), (decoded.items[0] as HomeCard.ResumeFile).identity)
+    assertEquals("browse/a", (decoded.items[1] as HomeCard.ResumeCatalogue).path)
+    assertEquals(listOf("file:a"), (decoded.items[1] as HomeCard.ResumeCatalogue).forgetKeys)
+    assertEquals(TitleRefDto("series", "tt2"), (decoded.items[2] as HomeCard.Favorite).title)
+    assertEquals(TitleRefDto("movie", "tt9"), (decoded.items[3] as HomeCard.Remote).identity)
+    assertEquals(listOf("file:a"), (decoded.items[3] as HomeCard.Remote).forgetKeys)
+
+    // The same kinds arrive without them from an older server.
+    val plain = decodeHomeRow(
+      row(
+        """
+        {"status":"ok","hasMore":false,"items":[
+          {"kind":"resume-file","key":"file:a","title":"It","path":"browse/a"},
+          {"kind":"resume-catalogue","key":"series:x:1:2","title":"Show","type":"series","id":"tt1","name":"Show"},
+          {"kind":"favorite","key":"browse/c","path":"browse/c","itemKind":"folder","label":"Fav"},
+          {"kind":"remote","key":"remote:1","title":"Heat","itemId":"iA","itemType":"movie"}
+        ]}
+        """,
+      ),
+    )
+
+    assertNull((plain.items[0] as HomeCard.ResumeFile).identity)
+    assertNull((plain.items[1] as HomeCard.ResumeCatalogue).path)
+    assertTrue((plain.items[1] as HomeCard.ResumeCatalogue).forgetKeys.isEmpty())
+    assertNull((plain.items[2] as HomeCard.Favorite).title)
+    assertNull((plain.items[3] as HomeCard.Remote).identity)
+    assertTrue((plain.items[3] as HomeCard.Remote).forgetKeys.isEmpty())
+  }
+
+  @Test
   fun `an error row keeps its status and has no cards`() {
     val decoded = decodeHomeRow(row("""{"status":"error","error":{"error":"boom"},"items":[],"hasMore":false}"""))
 

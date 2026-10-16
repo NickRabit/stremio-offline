@@ -430,7 +430,13 @@ export function App() {
   };
   const toggleFavorite = async (itemPath: string, favorite: boolean) => {
     setMenuFor(null);
-    try { await api.setFavorite(itemPath, favorite); await loadBrowse(browsePath); } catch (error) { fail(error); }
+    try {
+      await api.setFavorite(itemPath, favorite);
+      // One star per title: starring a bound copy stars its title too, so the catalogue's own
+      // list has to be read again for the star to read filled everywhere.
+      setWatchlist(await api.watchlist());
+      await loadBrowse(browsePath);
+    } catch (error) { fail(error); }
   };
   const inWatchlist = (type?: string, id?: string) => Boolean(id && watchlist.some((item) => item.key === `${type ?? "movie"}:${id}`));
   const toggleWatchlist = async (item: Meta) => {
@@ -438,6 +444,8 @@ export function App() {
     try {
       await api.setWatchlist({ type: item.type || "movie", id: item.id, name: item.name, poster: item.poster, favorite });
       setWatchlist(await api.watchlist());
+      // The library's own stars follow the title's: the listing draws them from the browse rows.
+      await loadBrowse(browsePath);
       notify(t(favorite ? "watchlist.added" : "watchlist.removed"));
     } catch (error) { fail(error); }
   };
@@ -445,9 +453,13 @@ export function App() {
   const togglePlayerFavorite = async () => {
     const path = localStream?.localPath;
     if (path) {
-      const wanted = !libraryFavorites.includes(path);
+      // The file plays as the title it is bound to, so its star is filled by either star and a
+      // click clears whichever one stands.
+      const starred = libraryFavorites.includes(path) || Boolean(playingCatalogue && inWatchlist(playingCatalogue.type, playingCatalogue.id));
+      const wanted = !starred;
       try {
         await api.setFavorite(path, wanted);
+        setWatchlist(await api.watchlist());
         setLibraryFavorites((current) => wanted ? [...current, path] : current.filter((item) => item !== path));
         notify(t(wanted ? "favorite.added" : "favorite.removed"));
       } catch (error) { fail(error); }
@@ -493,6 +505,11 @@ export function App() {
   const openFavorite = (item: FavoriteLibraryItem) => {
     if (item.itemKind === "folder") { navigated.current = true; setBrowseQuery(""); setFromFavorites(false); setMenuFor(null); setBrowsePath(item.path); setView("library"); return; }
     void playLocal(item.label, item.path, item.poster);
+  };
+  /** A favourite bound to a title is that title, whatever kind of copy it is: one star, one click. */
+  const openFavoriteTitle = (item: FavoriteLibraryItem) => {
+    if (!item.title) return;
+    openCatalogueDetail({ type: item.title.type, id: item.title.id, name: item.label, ...(item.poster ? { poster: item.poster } : {}) });
   };
 
   const forgetWatched = async (itemPath: string): Promise<boolean> => {
@@ -2455,13 +2472,31 @@ export function App() {
    *  the dialog the library page opens. */
   const homePlay = (card: HomeCard) => {
     if (card.kind === "remote") { openRemoteCard(card); return; }
-    if (card.kind === "resume-catalogue" || card.kind === "episode" || card.kind === "discovery" || card.kind === "confirm" || card.kind === "favorite-catalogue") return;
+    if (card.kind === "episode" || card.kind === "discovery" || card.kind === "confirm" || card.kind === "favorite-catalogue") return;
+    // A catalogue card written from a library file plays that file; without one it has nothing to
+    // play and opens its detail instead.
+    if (card.kind === "resume-catalogue") {
+      if (card.path) void playLocal(card.title, card.path, card.poster, card.season != null);
+      return;
+    }
     const title = card.kind === "favorite" || card.kind === "recent" || card.kind === "tonight" ? card.label : card.title;
     void playLocal(title, card.path, card.poster, (card.kind === "resume-file" || card.kind === "completed" || card.kind === "recent") && card.season != null);
   };
   const homeOpen = (card: HomeCard) => {
     if (card.kind === "remote") { openRemoteCard(card); return; }
     // A catalogue card opens the shared detail: the same body the libraries use, over this page.
+    if (card.kind === "resume-file") {
+      if (!card.identity) return;
+      openCatalogueDetail({ type: card.identity.type, id: card.identity.id, name: card.title,
+        ...(card.poster ? { poster: card.poster } : {}),
+        ...(card.season != null && card.episode != null ? { season: card.season, episode: card.episode } : {}) });
+      return;
+    }
+    if (card.kind === "favorite") {
+      if (!card.title) return;
+      openCatalogueDetail({ type: card.title.type, id: card.title.id, name: card.label, ...(card.poster ? { poster: card.poster } : {}) });
+      return;
+    }
     if (card.kind === "episode") { openCatalogueDetail({ type: card.type, id: card.metaId, name: card.name, ...(card.poster ? { poster: card.poster } : {}), season: card.season, episode: card.episode }); return; }
     if (card.kind === "discovery") { openCatalogueDetail({ type: card.type, id: card.id, name: card.name, ...(card.poster ? { poster: card.poster } : {}) }); return; }
     if (card.kind === "confirm") { setSuggestionsOpen(true); return; }
@@ -2811,8 +2846,10 @@ export function App() {
   const forgetResume = (card: HomeCard) => {
     if (card.kind === "remote") {
       if (!window.confirm(t("home.forgetConfirm", { title: card.title }))) return;
-      // Only the position is cleared; the remote favourite and watched flags are kept.
+      // Only the position is cleared; the remote favourite and watched flags are kept. A card that
+      // won a merged group forgets the library files and catalogue rows behind it with it.
       void api.saveRemoteState(card.libraryId, card.itemId, { position: 0, duration: 0 })
+        .then(() => (card.forgetKeys?.length ? api.forgetManyProgress(card.forgetKeys) : Promise.resolve()))
         .then(() => { void loadResume(resumeFilter, 0); home.refresh(["resume"]); refreshPersonal(); }, fail);
       return;
     }
@@ -3353,7 +3390,7 @@ export function App() {
       {view === "favorites" && <FavoritesView
         filter={favoritesFilter} onFilter={setFavoritesFilter}
         items={favorites} busy={favoritesBusy} shape={settings.favoritesTileShape} onToggleShape={() => void toggleShape("favoritesTileShape")}
-        onPlay={openFavorite} onOpenFolder={openFavorite}
+        onPlay={openFavorite} onOpenFolder={openFavorite} onOpenTitle={openFavoriteTitle}
         onOpenCatalog={(item: FavoriteCatalogItem) => openCatalogueDetail({ type: item.type, id: item.id, name: item.name, ...(item.poster ? { poster: item.poster } : {}) })}
         onOpenRemote={(item: FavoriteRemoteItem) => openRemoteCard({ kind: "remote", key: `remote:${item.libraryId}:${item.itemId}`, title: item.title,
           provider: item.provider, libraryId: item.libraryId, libraryName: item.libraryName, itemId: item.itemId, itemType: item.itemType,
@@ -3381,7 +3418,7 @@ export function App() {
       progressKey={localStream?.localPath ? `file:${localStream.localPath}` : detailPlaying ? `${detailPlaying.target.type}:${catalogueStreamId(detailPlaying.target)}` : playerSubject?.key ?? (playingCatalogue ? `${playingCatalogue.type}:${playingCatalogue.id}` : undefined)}
       progressPoster={localStream ? localPoster : detailPlaying ? detailPlaying.target.poster : playerSubject?.poster ?? localPoster}
       progressAddonKey={localStream ? undefined : detailPlaying ? detailPlaying.stream.addonKey : playerSubject?.panel ? currentCatalog?.addonKey : selectedStream?.addonKey}
-      favorite={localStream?.localPath ? libraryFavorites.includes(localStream.localPath) : detailPlaying ? inWatchlist(detailPlaying.target.type, detailPlaying.target.id) : playerSubject?.panel && selected ? inWatchlist(selected.type, selected.id) : false}
+      favorite={localStream?.localPath ? libraryFavorites.includes(localStream.localPath) || Boolean(playingCatalogue && inWatchlist(playingCatalogue.type, playingCatalogue.id)) : detailPlaying ? inWatchlist(detailPlaying.target.type, detailPlaying.target.id) : playerSubject?.panel && selected ? inWatchlist(selected.type, selected.id) : false}
       fromBeginning={localStream ? localFromBeginning : detailPlaying?.fromBeginning}
       onToggleFavorite={localStream?.localPath || detailPlaying || (playerSubject?.panel && selected) ? () => void togglePlayerFavorite() : undefined}
       onDownload={detailPlaying ? () => queueCatalogueStream(detailPlaying.target, detailPlaying.stream) : enqueue}

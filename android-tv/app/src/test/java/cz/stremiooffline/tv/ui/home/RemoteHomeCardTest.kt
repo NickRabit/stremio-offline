@@ -25,12 +25,13 @@ class RemoteHomeCardTest {
   """.trimIndent()
 
   @Test
-  fun `a remote card decodes and renders its provider, library and progress`() {
+  fun `a remote card decodes and renders its title and progress`() {
     val card = decode(movie)
     assertTrue(card is HomeCard.Remote)
     val remote = card as HomeCard.Remote
     assertEquals("Heat", remote.displayTitle)
-    assertEquals("jellyfin · Filmy", captionOf(remote, null))
+    // A list never names the server or its library; this row carries no numbering or year.
+    assertNull(captionOf(remote, null))
     assertEquals(0.1f, remote.progressFraction!!, 0.001f)
     assertEquals(false, remote.isWideKind)
   }

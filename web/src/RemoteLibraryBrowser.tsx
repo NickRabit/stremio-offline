@@ -13,7 +13,7 @@ import { Player } from "./Player";
 import { SaveTargetDialog } from "./SaveTargetDialog";
 import { alternativeSaveRequest } from "./alternative-save";
 import { addonMediaSubject, genericProgressKey, supplementaryIdentity } from "./native-addon-sources";
-import { sourceProgressOwner, type SourceProgressOwner } from "./source-progress";
+import { sourceProgressOwner, versionSavedRow, type SourceProgressOwner } from "./source-progress";
 import { canQueue, isLocalStream, isRemoteStream } from "./streams";
 import { sourceTargetRule } from "./save-target";
 import { DetailHero, LIBRARY_HERO_EMPTY_GRADIENT, LIBRARY_HERO_GRADIENT, useBackdrop } from "./DetailHero";
@@ -266,7 +266,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   /** The open addon-save dialog: the exact stream and media subject captured at the click, so no
    *  later state change can alter what is submitted. */
   const [addonSave, setAddonSave] = useState<AddonSaveRequest | null>(null);
-  /** The saved position of the selected addon row; a native selection reads the remote state. */
+  /** The saved position of the selected version; the item's own state is read for the row it owns. */
   const [alternativeProgress, setAlternativeProgress] = useState<{ sourceKey: string; position: number; duration: number } | null>(null);
   /** Whether the source chooser is open: the one intent that reads every extra source group. */
   const [chooserOpen, setChooserOpen] = useState(false);
@@ -973,6 +973,17 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
       onPersonalChange?.();
     } catch (error) { onError(error); }
   };
+  /** Marking the item watched also forgets the title's position: the position row and the card
+   *  Continue watching draws would otherwise disagree about a title that is finished. */
+  const toggleWatched = async (): Promise<void> => {
+    const next = !(state?.watched ?? false);
+    const scope = titleScope;
+    if (!await toggleState({ watched: next })) return;
+    if (!next || !addonIdentity) return;
+    await api.forgetProgress(genericProgressKey(addonIdentity)).catch(() => undefined);
+    if (titleScopeRef.current === scope) setAlternativeProgress(null);
+    onPersonalChange?.();
+  };
   const refreshState = async () => {
     const library = selectedRef.current;
     const item = detailRef.current;
@@ -1058,9 +1069,9 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   // copies of it and the other libraries are asked by. Nothing is read until the chooser opens.
   const addonIdentity = supplementaryIdentity(detail, series);
   const addonKey = addonIdentity ? `${addonIdentity.type}:${addonIdentity.id}` : "";
-  // Which store the selected row's position lives in, read from the row itself: this item's own
-  // remote state while its library owns the version, and the selected version's own store
-  // otherwise -- the viewer's own file, another library's copy, or the addon's catalogue key.
+  // Which store the selected row's position lives in, read from the row itself: the title's own key
+  // for every version when the catalogue can name it, this item's own remote state while its library
+  // owns a version nothing names, and the viewer's own file under its path.
   const detailStreamKey = detailStream ? sourceIdentity(detailStream) : null;
   const detailOwner = detailStream ? sourceProgressOwner(detailStream, addonIdentity) : null;
   // The row is one of this item's own versions only when it carries this item's own context.
@@ -1073,12 +1084,15 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
       : (alternativeProgress && alternativeProgress.sourceKey === detailStreamKey
         ? { position: alternativeProgress.position, duration: alternativeProgress.duration, sourceKey: detailStreamKey } : undefined)
     : undefined;
+  // The version's own remote context, whichever kind of owner the row resolved to: a media-server
+  // version named by the catalogue carries it too, and its own store is still the fallback.
+  const ownerRemote = detailOwner?.kind === "catalogue" ? detailOwner.remote : detailOwner?.kind === "remote" ? detailOwner.item : undefined;
   // The owner's own fields, as primitives: the read effect must restart on a change of version,
   // never on a redraw that happens to rebuild the object.
   const ownerKind = detailOwner?.kind ?? "";
-  const ownerLibrary = detailOwner?.kind === "remote" ? detailOwner.item.libraryId : "";
-  const ownerItemId = detailOwner?.kind === "remote" ? detailOwner.item.itemId : "";
-  const ownerSourceId = detailOwner?.kind === "remote" ? detailOwner.item.mediaSourceId : "";
+  const ownerLibrary = ownerRemote?.libraryId ?? "";
+  const ownerItemId = ownerRemote?.itemId ?? "";
+  const ownerSourceId = ownerRemote?.mediaSourceId ?? "";
   const ownerProgressKey = detailOwner && detailOwner.kind !== "remote" ? detailOwner.progressKey : "";
   // Everything one title's supplementary work is bound to: the account, the library, the item and
   // the exact catalogue key. A late answer from another scope is refused by comparing this string.
@@ -1093,22 +1107,16 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     ...(series?.name ? { nameHint: series.name } : {}),
     libraries, localCopies: true, ...(selected ? { originLibraryId: selected.id } : {}),
   });
-  // The selected row's own saved position, from the store its owner names: the viewer's own file
-  // under its path, another library's copy under its own remote state, an addon row under the
-  // catalogue key. A remote answer counts only when it reports the very media source on screen,
-  // and a late answer can never land on another row or another title, even one that reuses the
-  // same source id.
+  // The selected row's saved position: the title's own key for every version of a title the
+  // catalogue can name, the viewer's own file under its path, and a media-server version's own
+  // store only while no title names it -- or as the fallback for a position kept there before the
+  // title held it. A late answer can never land on another row or another title.
   useEffect(() => {
     if (!alternativeSelected || !detailStreamKey || !detailOwner) { setAlternativeProgress(null); return; }
     const mine = ++addonProgressEpoch.current;
     const scope = titleScope;
     const controller = new AbortController();
-    // Only a remote state that names the very media source on screen stands in for this row.
-    const read: Promise<{ position: number; duration: number } | null> = detailOwner.kind === "remote"
-      ? api.remoteState(detailOwner.item.libraryId, detailOwner.item.itemId, controller.signal)
-        .then((value) => value && value.mediaSourceId === detailOwner.item.mediaSourceId ? value : null)
-      : api.progressOf(detailOwner.progressKey, controller.signal);
-    void read
+    void versionSavedRow(ownerProgressKey || undefined, ownerRemote, controller.signal)
       .then((entry) => {
         if (mine !== addonProgressEpoch.current || titleScopeRef.current !== scope || controller.signal.aborted) return;
         setAlternativeProgress(entry && entry.position > 0
@@ -1293,17 +1301,23 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     } catch (error) { onError(error); return false; }
   };
 
-  /** Clears the selected row's own store and nothing else: the viewer's own file under its path,
-   *  an addon row under the catalogue key of the episode, a copy in another library under that
-   *  copy's own remote state. The item on screen keeps its favorite, watched flag and position,
-   *  and a scope that moved on keeps its state. */
+  /** Clears the selected row's own stores and nothing else: the title's key every version of a
+   *  named title shares, the viewer's own file under its path, and the version's own remote state.
+   *  The item on screen keeps its favorite and its watched flag, and a scope that moved on keeps its
+   *  state. */
   const clearAlternativeProgress = async (stream: Stream): Promise<boolean> => {
     const owner = sourceProgressOwner(stream, addonIdentity);
     if (!owner || (owner.kind === "remote" && owner.item.libraryId === selected?.id && owner.item.itemId === detail?.id)) return false;
     const scope = titleScope;
     try {
-      if (owner.kind === "remote") await api.saveRemoteState(owner.item.libraryId, owner.item.itemId, { position: 0, duration: 0, mediaSourceId: owner.item.mediaSourceId });
-      else await api.forgetProgress(owner.progressKey);
+      if (owner.kind === "file") await api.forgetProgress(owner.progressKey);
+      else {
+        if (owner.kind === "catalogue") await api.forgetProgress(owner.progressKey);
+        // The version's own row goes with the title's: a position kept there before the title held
+        // it is what the read falls back to, and it would hand the dropped position straight back.
+        const remote = owner.kind === "remote" ? owner.item : owner.remote;
+        if (remote) await api.saveRemoteState(remote.libraryId, remote.itemId, { position: 0, duration: 0, mediaSourceId: remote.mediaSourceId });
+      }
       if (titleScopeRef.current !== scope) return false;
       setAlternativeProgress((current) => current && current.sourceKey === sourceIdentity(stream) ? null : current);
       return true;
@@ -1424,8 +1438,9 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
             <button className="library-back" aria-label={detail || stack.length ? t("mediaServer.back") : t("mediaServer.backToLibraries")}
               title={detail || stack.length ? t("mediaServer.back") : t("mediaServer.backToLibraries")} onClick={stepBack}><ChevronLeft/></button>
             {/* The same first step the library's own listing keeps: whichever library is open, the
-                way back to the section is named the same way, and only that step wears the icon. */}
-            <button onClick={() => onOpenChange(false)}><HardDrive/> {t("nav.library")}</button>
+                way back to the section is named the same way, and only that step wears the icon. It
+                closes the remote library the way Back from its listing does, so no detail stays behind. */}
+            <button onClick={closeLibrary}><HardDrive/> {t("nav.library")}</button>
             <span><ChevronRight/></span>
             <button onClick={goLibraryRoot} disabled={!detail && !stack.length}>{selected.name}</button>
             {stack.map((folder, index) => <span key={folder.id}>
@@ -1519,7 +1534,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
             onToggleFavorite={(next) => void toggleState({ favorite: next })}
             watched={state?.watched ?? false}
             watchedDisabled={!state}
-            onToggleWatched={() => void toggleState({ watched: !(state?.watched ?? false) })}
+            onToggleWatched={() => void toggleWatched()}
             sources={sources}
             defaultSources={sources}
             {...(addonIdentity ? {
@@ -1532,9 +1547,15 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
             onRetry={retryDetail}
             {...(detailProgress ? { progress: detailProgress } : {})}
             onSourceChange={setDetailStream}
-            onClearProgress={(stream) => isRemoteStream(stream) && stream.remoteItem?.libraryId === selected!.id
-              ? toggleState({ position: 0, duration: 0 })
-              : clearAlternativeProgress(stream)}
+            // Only the item's own version drops the media-server item's own state; every other row
+            // -- and every version of a title the catalogue can name -- clears what the row itself
+            // stands for.
+            onClearProgress={(stream) => {
+              const owner = sourceProgressOwner(stream, addonIdentity);
+              return owner?.kind === "remote" && owner.item.libraryId === selected!.id && owner.item.itemId === detail?.id
+                ? toggleState({ position: 0, duration: 0 })
+                : clearAlternativeProgress(stream);
+            }}
             onPlay={playDetailStream}
             // Every row is saved as the row it is: the native dialog for this library's own
             // version, the copy's own projected destination for another library's, the addon's

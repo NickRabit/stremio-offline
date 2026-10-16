@@ -262,7 +262,11 @@ fun Shell(
         )
         Section.Resume -> ResumeRoute(
           api = api,
-          onOpenDetail = { detail = it },
+          onPlay = { target ->
+            playerSources = OfferedSources()
+            playedSourceId = null
+            player = target
+          },
           onOpenCatalog = { catalogDetail = it },
           onOpenRemote = { remoteDetail = it },
           restoreToken = returnToken,

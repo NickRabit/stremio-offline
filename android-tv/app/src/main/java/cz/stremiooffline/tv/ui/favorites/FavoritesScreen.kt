@@ -238,7 +238,16 @@ private fun openFavorite(
         ),
       ),
     )
-    is FavoriteItemDto.Library -> if (item.itemKind != "folder") {
+    is FavoriteItemDto.Library -> if (item.title != null) {
+      // A copy bound to a catalogue title is that title: one star, one click, file or folder alike.
+      onOpenCatalog(
+        CatalogDetailArgs(
+          meta = MetaDto(id = item.title.id, type = item.title.type, name = item.label, poster = item.poster),
+          addonName = "",
+          type = item.title.type,
+        ),
+      )
+    } else if (item.itemKind != "folder") {
       onOpenDetail(
         DetailData.ofFile(
           BrowseItem.File(
@@ -294,14 +303,8 @@ private fun favoriteImage(item: FavoriteItemDto): String? = when (item) {
 private fun favoriteCaption(item: FavoriteItemDto): String? = when (item) {
   is FavoriteItemDto.Library -> item.year
   is FavoriteItemDto.Catalog -> item.year
-  is FavoriteItemDto.Remote -> listOf(providerLabel(item.provider), item.libraryName)
-    .filter { it.isNotBlank() }.joinToString(" · ").ifEmpty { null }
-}
-
-private fun providerLabel(provider: String): String = when (provider.lowercase()) {
-  "jellyfin" -> "Jellyfin"
-  "emby" -> "Emby"
-  else -> provider
+  // A list never names its source, and the card projection carries no year of its own.
+  is FavoriteItemDto.Remote -> null
 }
 
 private fun favoriteProgress(item: FavoriteItemDto): Float? {
@@ -313,17 +316,15 @@ private fun favoriteProgress(item: FavoriteItemDto): Float? {
 @StringRes
 private fun filterLabel(filter: FavoriteFilter): Int = when (filter) {
   FavoriteFilter.All -> R.string.favorites_filter_all
-  FavoriteFilter.Library -> R.string.favorites_filter_library
-  FavoriteFilter.Catalog -> R.string.favorites_filter_catalog
-  FavoriteFilter.Remote -> R.string.favorites_filter_remote
+  FavoriteFilter.Movies -> R.string.favorites_filter_movies
+  FavoriteFilter.Series -> R.string.favorites_filter_series
 }
 
 @StringRes
 private fun filterEmpty(filter: FavoriteFilter): Int = when (filter) {
   FavoriteFilter.All -> R.string.favorites_empty_all_text
-  FavoriteFilter.Library -> R.string.favorites_empty_library_text
-  FavoriteFilter.Catalog -> R.string.favorites_empty_catalog_text
-  FavoriteFilter.Remote -> R.string.favorites_empty_remote_text
+  FavoriteFilter.Movies -> R.string.favorites_empty_movies_text
+  FavoriteFilter.Series -> R.string.favorites_empty_series_text
 }
 
 @Composable

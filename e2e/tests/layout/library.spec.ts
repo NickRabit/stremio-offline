@@ -90,7 +90,7 @@ test("the favourites section holds both kinds and filters them", async ({ page }
   await page.route("**/api/favorites?*", (route) => {
     const filter = new URL(route.request().url()).searchParams.get("filter") || "all";
     filters.push(filter);
-    const items = filter === "library" ? [favoriteFolder, favoriteFile] : filter === "catalog" ? [favoriteCatalog] : [favoriteFolder, favoriteFile, favoriteCatalog];
+    const items = filter === "movies" ? [favoriteFile, favoriteCatalog] : filter === "series" ? [favoriteFolder] : [favoriteFolder, favoriteFile, favoriteCatalog];
     return route.fulfill({ json: { items, total: items.length, pending: false } });
   });
   await page.route("**/api/library/browse?*", (route) => {
@@ -102,15 +102,16 @@ test("the favourites section holds both kinds and filters them", async ({ page }
   const grid = page.locator(".favorites-grid");
   await expect(grid.locator(".browse-item")).toHaveCount(3);
   await expect(grid.locator('[data-kind="favorite-catalog"]')).toHaveCount(1);
-  await page.getByRole("button", { name: "V knihovně", exact: true }).click();
+  const chips = page.locator(".favorites-view .filterbar");
+  await chips.getByRole("button", { name: "Filmy", exact: true }).click();
   await expect(grid.locator(".browse-item")).toHaveCount(2);
-  await page.getByRole("button", { name: "Z katalogu", exact: true }).click();
+  await chips.getByRole("button", { name: "Seriály", exact: true }).click();
   await expect(grid.locator(".browse-item")).toHaveCount(1);
-  await expect(grid.locator('[data-kind="favorite-catalog"]')).toContainText("Cesta za obzor");
-  await page.getByRole("button", { name: "Vše", exact: true }).click();
+  await expect(grid.locator('[data-kind="favorite-library"]')).toContainText("Seriály");
+  await chips.getByRole("button", { name: "Vše", exact: true }).click();
   await expect(grid.locator(".browse-item")).toHaveCount(3);
-  expect(filters).toContain("library");
-  expect(filters).toContain("catalog");
+  expect(filters).toContain("movies");
+  expect(filters).toContain("series");
   await grid.locator('[data-kind="favorite-library"]').first().click();
   await expect(page.locator(".crumbs")).toContainText("Seriály");
 });
@@ -120,39 +121,41 @@ test("empty favorites explain how to add titles", async ({ page }) => {
   await page.goto("/");
   await goToView(page, "Oblíbené");
   await expect(page.getByText("Zatím žádné oblíbené", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "V knihovně", exact: true }).click();
-  await expect(page.getByText("Žádné oblíbené v knihovně", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Z katalogu", exact: true }).click();
-  await expect(page.getByText("Žádné oblíbené v katalogu", { exact: true })).toBeVisible();
+  const chips = page.locator(".favorites-view .filterbar");
+  await chips.getByRole("button", { name: "Filmy", exact: true }).click();
+  await expect(page.getByText("Žádné oblíbené filmy", { exact: true })).toBeVisible();
+  await chips.getByRole("button", { name: "Seriály", exact: true }).click();
+  await expect(page.getByText("Žádné oblíbené seriály", { exact: true })).toBeVisible();
 });
 
 test("the Continue watching section merges both kinds, filters and pages them", async ({ page }) => {
   // The merged Home shape: a library card and a catalogue card in one list.
   const fileCard = (index: number) => ({ kind: "resume-file", key: `file:resume-${index}.mp4`, title: `Rozkoukaný film ${index}`, path: `resume-${index}.mp4`, progress: { position: 120, duration: 2400 }, updatedAt: "2026-09-01T00:00:00.000Z", forgetKeys: [`file:resume-${index}.mp4`] });
-  const catalogCard = { kind: "resume-catalogue", key: "movie:tt9", title: "Z katalogu", type: "movie", id: "tt9", name: "Z katalogu", progress: { position: 60, duration: 600 }, updatedAt: "2026-09-01T00:00:00.000Z", forgetKeys: ["movie:tt9"] };
+  const catalogCard = { kind: "resume-catalogue", key: "series:tt9:1:2", title: "Ze seriálu", type: "series", id: "tt9", name: "Seriál", season: 1, episode: 2, progress: { position: 60, duration: 600 }, updatedAt: "2026-09-01T00:00:00.000Z", forgetKeys: ["series:tt9:1:2"] };
   const all = [catalogCard, ...Array.from({ length: 9 }, (_, index) => fileCard(index))];
   const filters: string[] = [];
   await page.route("**/api/resume?*", (route) => {
     const filter = new URL(route.request().url()).searchParams.get("filter") || "all";
     filters.push(filter);
-    const kept = filter === "library" ? all.filter((item) => item.kind === "resume-file")
-      : filter === "catalog" ? all.filter((item) => item.kind === "resume-catalogue") : all;
+    const kept = filter === "movies" ? all.filter((item) => item.kind === "resume-file")
+      : filter === "series" ? all.filter((item) => item.kind === "resume-catalogue") : all;
     return route.fulfill({ json: { items: kept, total: kept.length, pending: false } });
   });
   await page.goto("/");
   await goToView(page, "Pokračovat ve sledování");
   const grid = page.locator(".section-grid");
   await expect(grid.locator(".browse-item")).toHaveCount(10);
-  await page.getByRole("button", { name: "V knihovně", exact: true }).click();
+  const chips = page.locator(".section-view .filterbar");
+  await chips.getByRole("button", { name: "Filmy", exact: true }).click();
   await expect(grid.locator(".browse-item")).toHaveCount(9);
   await expect(grid.locator('[data-kind="resume-catalogue"]')).toHaveCount(0);
-  await page.getByRole("button", { name: "Z katalogu", exact: true }).click();
+  await chips.getByRole("button", { name: "Seriály", exact: true }).click();
   await expect(grid.locator(".browse-item")).toHaveCount(1);
-  await expect(grid.locator('[data-kind="resume-catalogue"]')).toContainText("Z katalogu");
-  await page.getByRole("button", { name: "Vše", exact: true }).click();
+  await expect(grid.locator('[data-kind="resume-catalogue"]')).toContainText("Ze seriálu");
+  await chips.getByRole("button", { name: "Vše", exact: true }).click();
   await expect(grid.locator(".browse-item")).toHaveCount(10);
-  expect(filters).toContain("library");
-  expect(filters).toContain("catalog");
+  expect(filters).toContain("movies");
+  expect(filters).toContain("series");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 

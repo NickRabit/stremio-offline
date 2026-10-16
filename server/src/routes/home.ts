@@ -11,10 +11,10 @@ import {
   arrangeHomeRows, boundCards, homeCatalogRowId, homeFeedSelectionKey, homeRowOrder, mergeResume, parseHomeLayout,
   parseResumeFilter, resumePage,
   type HomeCard, type HomeLayout, type HomeLayoutEntry, type HomeLayoutResponse, type HomeResponse, type HomeRow, type HomeRowError, type HomeRowId,
-  type BuiltinHomeRowId, type RemoteHomeCard, type ResumeCatalogueItem, type ResumeFileItem, type ResumeSources,
+  type BuiltinHomeRowId, type RemoteHomeCard, type ResumeCatalogueItem, type ResumeFileItem, type ResumeIdentity, type ResumeSources,
 } from "../home.js";
-import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, showsInFavorites, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
-import { isPathWithin, type BrowseItem } from "../library.js";
+import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, posixBase, showsInContinueWatching, showsInFavorites, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
+import { isPathWithin, isVideo, type BrowseItem } from "../library.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { knownTitleEntry } from "../library-match.js";
 import type { LibrarySeenStore } from "../library-seen.js";
@@ -80,6 +80,8 @@ export interface HomeDeps extends RouteContext {
   scheduleFileArtwork(key: string, shape?: ArtShape): void;
   scheduleFolderArtwork(key: string, shape?: ArtShape): void;
   wirePath(key: string): string;
+  /** Qualifies a wire path: a row's `path` travels relative while one library is configured. */
+  libraryKey(value: string): string;
   dataOf(req: express.Request): UserData;
   markersOf(data: UserData): Record<string, WatchedMarker>;
   progressOf(data: UserData): Record<string, StoredProgress>;
@@ -138,7 +140,7 @@ const shuffleOf = (raw: unknown): number => {
 };
 
 export function registerHomeRoutes(app: express.Application, deps: HomeDeps): void {
-  const { store, currentUser, requireAccess, personal, remotePersonal, authorityOf, completedJobs, newEpisodes, describeLibraryPath, locateFileArtwork, locateFolderArtworkPair, thumbUrl, scheduleFileArtwork, scheduleFolderArtwork, wirePath, dataOf, markersOf, progressOf, metaStore, seen, suggestionRows, now = Date.now, homeLookupDeadlineMs = HOME_LOOKUP_DEADLINE_MS } = deps;
+  const { store, currentUser, requireAccess, personal, remotePersonal, authorityOf, completedJobs, newEpisodes, describeLibraryPath, libraryKey, locateFileArtwork, locateFolderArtworkPair, thumbUrl, scheduleFileArtwork, scheduleFolderArtwork, wirePath, dataOf, markersOf, progressOf, metaStore, seen, suggestionRows, now = Date.now, homeLookupDeadlineMs = HOME_LOOKUP_DEADLINE_MS } = deps;
 
   /** A key the caller may open now: its library is still configured, switched on and granted.
    *  `pathVisible` covers the removed and the lost-grant case; the enabled switch is Home's.
@@ -203,8 +205,14 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     // The addon's own switches for the row, as the catalogue row reads them: a row whose addon
     // is gone, or that never recorded one, stays. Home also drops an add-on switched off there.
     const addons = store.addons();
+    const libraries = store.libraries();
+    // A title row a bound file wrote carries that file's path, so the library's own switches
+    // hide it exactly as they hide the file half. The path travels wire-shaped; the two
+    // predicates read the stored (qualified) form the file half feeds them.
+    const pathShown = (path: string) => showsInContinueWatching(path, libraries) && (!home || showsOnHome(path, libraries));
     const catalogue: ResumeCatalogueItem[] = progress.items
       .filter((row) => !row.key.startsWith("file:"))
+      .filter((row) => !row.path || pathShown(libraryKey(row.path)))
       .filter((row) => {
         const addon = addons.find((entry) => entry.key === row.addonKey);
         return addon?.showInContinueWatching !== false && (!home || addon?.showOnHome !== false);
@@ -214,15 +222,21 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
         const colon = row.key.indexOf(":");
         const type = series ? "series" : colon > 0 ? row.key.slice(0, colon) : "movie";
         const id = series ? series.id : colon > 0 ? row.key.slice(colon + 1) : row.key;
+        const identity: ResumeIdentity | undefined = series
+          ? { type: "series", id: series.id }
+          : type === "movie" && id ? { type: "movie", id } : undefined;
         return {
           key: row.key, updatedAt: row.updatedAt, title: row.title,
           ...(row.poster ? { poster: row.poster } : {}),
           type, id, name: series ? series.name : row.title,
           ...(series?.season !== undefined ? { season: series.season } : {}),
           ...(series?.episode !== undefined ? { episode: series.episode } : {}),
+          // The file that wrote this row, when it is a video the viewer may see: the card plays it
+          // the way a library file plays.
+          ...(row.path && isVideo(posixBase(row.path)) ? { path: row.path } : {}),
           ...(row.pending ? { pending: true as const } : { progress: { position: row.position, duration: row.duration } }),
           ...(row.addonKey ? { addonKey: row.addonKey } : {}),
-          ...(series ? { seriesId: series.id, seriesType: "series" } : {}),
+          ...(identity ? { identity } : {}),
         };
       });
     const files: ResumeFileItem[] = resume.items.map((item) => ({
@@ -234,7 +248,7 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
       path: item.path, progress: item.progress,
       ...(typeof item.season === "number" ? { season: item.season } : {}),
       ...(typeof item.episode === "number" ? { episode: item.episode } : {}),
-      ...(item.seriesId ? { seriesId: item.seriesId, seriesType: item.seriesType } : {}),
+      ...(item.identity ? { identity: item.identity } : {}),
     }));
     return {
       sources: { catalogue, files, ...(remote ? { remote: remote.items } : {}) },
@@ -301,6 +315,7 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
       kind: "favorite", key: item.path, path: item.path, itemKind: item.itemKind, label: item.label,
       ...(item.poster ? { poster: item.poster } : {}),
       ...(item.wide ? { wide: item.wide } : {}),
+      ...(item.title ? { title: item.title } : {}),
     } : {
       kind: "favorite-catalogue", key: `${item.type}:${item.id}`, type: item.type, id: item.id, name: item.name,
       ...(item.poster ? { poster: item.poster } : {}),
@@ -308,7 +323,13 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
       ...(item.year ? { year: item.year } : {}),
     });
     const authority = authorityOf(req);
-    const remote = await remotePersonal.cards(authority, { filter: "favorites", onHome: true, limit: HOME_ROW_LIMIT }).catch(() => undefined);
+    // The local half draws a starred title once; a media-server record of the same title is left
+    // out, so the shelf never shows it twice.
+    const starredTitles = personal.watchlistKeys(req);
+    const remote = await remotePersonal.cards(authority, {
+      filter: "favorites", onHome: true, limit: HOME_ROW_LIMIT,
+      ...(starredTitles.length ? { excludeTitles: new Set(starredTitles) } : {}),
+    }).catch(() => undefined);
     if (remote) proofs.push({ authority, cards: remote });
     const cards = fairFavorites(local, remote?.items ?? []);
     const total = page.total + (remote?.total ?? 0);

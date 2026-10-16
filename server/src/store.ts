@@ -21,7 +21,9 @@ export const SCHEMA_VERSION = 3;
  *  the progress and library modules; they are pinned here, once, because both `index.ts` and
  *  the route modules read the same rows and two copies would drift apart in silence. */
 export type WatchlistEntry = { type: string; id: string; name: string; poster?: string; addedAt: string };
-export type StoredProgress = { position: number; duration: number; title: string; path?: string; poster?: string; addonKey?: string; series?: ProgressSeries; updatedAt: string };
+/** The media-server version a title's position was played from, so the detail can name it. */
+export type RemoteProgressWriter = { libraryId: string; itemId: string; mediaSourceId: string };
+export type StoredProgress = { position: number; duration: number; title: string; path?: string; poster?: string; addonKey?: string; series?: ProgressSeries; remote?: RemoteProgressWriter; updatedAt: string };
 export type WatchedMarker = { name: string; poster?: string; addonKey?: string; season: number; episode: number; updatedAt: string };
 
 

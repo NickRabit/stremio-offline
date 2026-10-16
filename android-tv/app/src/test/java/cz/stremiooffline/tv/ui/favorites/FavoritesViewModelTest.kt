@@ -38,11 +38,11 @@ class FavoritesViewModelTest {
     advanceUntilIdle()
     assertEquals(listOf(FavoriteFilter.All), api.favoritesRequests)
 
-    viewModel.select(FavoriteFilter.Catalog)
+    viewModel.select(FavoriteFilter.Series)
     advanceUntilIdle()
 
-    assertEquals(listOf(FavoriteFilter.All, FavoriteFilter.Catalog), api.favoritesRequests)
-    assertEquals(FavoriteFilter.Catalog, viewModel.state.filter)
+    assertEquals(listOf(FavoriteFilter.All, FavoriteFilter.Series), api.favoritesRequests)
+    assertEquals(FavoriteFilter.Series, viewModel.state.filter)
     assertEquals(1, viewModel.state.items.size)
   }
 

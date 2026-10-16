@@ -7,11 +7,12 @@ import path from "node:path";
 import { test } from "node:test";
 import express from "express";
 import { messageKeyOf } from "../errors.js";
+import { starredPath } from "../favorite-identity.js";
 import { libraryPath, parseLibraryPath, relativeWithin, resolveLibraryPath, visibleLibraries, type LibraryRecord } from "../libraries.js";
 import type { LibraryMetaRecord, LibrarySuggestion } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { isPathWithin, type LibraryEntry } from "../library.js";
-import type { Store, UserPrefs } from "../store.js";
+import type { Store, StoredProgress, UserPrefs } from "../store.js";
 import { emptyUserData, type UserRecord } from "../users.js";
 import { registerContentRoutes, type ContentDeps } from "./content.js";
 
@@ -52,6 +53,10 @@ interface LibraryState {
   records?: Record<string, LibraryMetaRecord>;
   suggestions?: Record<string, LibrarySuggestion>;
   favorites?: string[];
+  /** The account's catalogue stars: a copy of a starred title is drawn starred too. */
+  watchlist?: Record<string, unknown>;
+  /** The stored positions the browse listing reads a file row's `watched` from. */
+  progress?: Record<string, StoredProgress>;
   units?: import("../library-match.js").TitleUnit[];
   /** A fake catalogue picture per key, so a test can see where a mosaic reads its posters. */
   artwork?: (key: string) => string | undefined;
@@ -83,6 +88,12 @@ const makeRoot = () => mkdtemp(path.join(tmpdir(), "stremio-content-"));
  *  is real: the resolver, the browse walk and the name checks are module singletons. */
 const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], activeItems: () => string[] = () => [], state: LibraryState = {}): Promise<Harness> => {
   const calls: Calls = { browsed: [], rootBrowses: 0, deleted: [], transfers: [], relocated: [], thumbAsked: [], entriesAsked: 0, entriesStale: [], artworkAsked: [], swept: 0, scheduledFolder: [], scheduledFile: [], rootPrewarm: [], browseMetaPrewarm: [] };
+  /** A wire path qualified against the single library, the way production does it. */
+  const qualify = (value: string) => {
+    const parsed = parseLibraryPath(value);
+    if (parsed) return libraryPath(parsed.libraryId, parsed.relative);
+    return libraries.length === 1 ? libraryPath(libraries[0]!.id, value) : value;
+  };
   const deps: ContentDeps = {
     artStamp: async () => "stamp",
     artworkBusy: (key) => state.writing?.(key) === true,
@@ -97,7 +108,7 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], a
     stopContentAccess: async () => undefined,
     attachBrowseMeta: async (item, _language, options) => { calls.browseMetaPrewarm.push(options?.prewarm === true); return { item, backfill: false }; },
     carveOutsOf: () => new Set(),
-    dataOf: () => ({ ...emptyUserData(), favorites: state.favorites ?? [] }),
+    dataOf: () => ({ ...emptyUserData(), favorites: state.favorites ?? [], watchlist: state.watchlist ?? {} }),
     deleteLibraryItem: async (relative) => { calls.deleted.push(relative); },
     fileExists: async (file) => exists(file),
     galleryOf: () => [],
@@ -105,11 +116,7 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], a
     healthOf: (record) => ({ unreachable: false, readOnly: false, realRoot: record.root, caseInsensitive: false }),
     invalidateLibrary: () => undefined,
     libraryEntries: async (read?: { stale?: boolean }) => { calls.entriesAsked += 1; calls.entriesStale.push(read?.stale === true); return entries; },
-    libraryKey: (value) => {
-      const parsed = parseLibraryPath(value);
-      if (parsed) return libraryPath(parsed.libraryId, parsed.relative);
-      return libraries.length === 1 ? libraryPath(libraries[0]!.id, value) : value;
-    },
+    libraryKey: (value) => qualify(value),
     // The same question the server asks: is the key an active job's business, either way round.
     libraryPathBusy: async (keys) => {
       for (const key of keys) {
@@ -139,7 +146,7 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], a
       qualifiedSuggestions: () => state.suggestions ?? {},
     } as unknown as LibraryMetaStore,
     prefsOf: () => instancePrefs,
-    progressOf: () => ({}),
+    progressOf: () => state.progress ?? {},
     relativeKeyIn: (libraryId, key) => (key.startsWith(`${libraryId}/`) ? key.slice(libraryId.length + 1) : undefined),
     relocateLibraryPath: async (key, nextKey) => { calls.relocated.push({ key, nextKey }); },
     scheduleFileArtwork: (key) => { calls.scheduledFile.push(key); },
@@ -151,7 +158,11 @@ const mount = async (libraries: LibraryRecord[], entries: LibraryEntry[] = [], a
       return `library/${relative}`;
     },
     wirePath: (key) => (libraries.length === 1 ? relativeWithin(libraries[0]!.id, key) : key),
-    withFavorites: (items) => items.map((item) => ({ ...item, favorite: false })),
+    // The rule the server applies: a row is starred by its own path, or by the title it stands for.
+    withFavorites: (items, data, records, units) => items.map((item) => ({
+      ...item,
+      favorite: starredPath(qualify(item.path), new Set(data.favorites), data.watchlist as Record<string, unknown>, records, units),
+    })),
   };
   const app = express();
   app.use(express.json());
@@ -251,6 +262,68 @@ test("an ordinary browse still sweeps and schedules the missing artwork", async 
   assert.equal(response.status, 200);
   assert.equal(harness.calls.swept, 1, "an ordinary browse sweeps the artwork cache");
   assert.deepEqual(harness.calls.scheduledFile, ["lib_00000001/Films/Heat.mkv", "lib_00000001/Films/Heat.mkv"], "the missing poster and backdrop are scheduled");
+});
+
+test("a bound film's browse row reports the position its title is stored under", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Films/Heat/Heat.mkv");
+  const harness = await mount([library("lib_00000001", root)], [], () => [], {
+    records: { "lib_00000001/Films/Heat": { type: "movie", id: "tt1", name: "Heat" } },
+    units: [{ key: "lib_00000001/Films/Heat", kind: "movie", relative: "Films/Heat", sampleFiles: ["lib_00000001/Films/Heat/Heat.mkv"] }],
+    progress: { "movie:tt1": { position: 300, duration: 2400, title: "Heat", path: "lib_00000001/Films/Heat/Heat.mkv", updatedAt: "2024-01-01T00:00:00.000Z" } },
+  });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const response = await api(harness.base, "/api/library/browse?path=Films/Heat");
+
+  assert.equal(response.status, 200);
+  const body = await response.json() as { items: Array<{ kind: string; path: string; progress?: { position: number } }> };
+  assert.deepEqual(body.items.map((item) => [item.kind, item.path, item.progress?.position]), [["file", "Films/Heat/Heat.mkv", 300]]);
+});
+
+test("a starred title draws every bound copy of it starred in the listing", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Films/Heat/Heat.mkv");
+  await put(root, "Films/Copies/Heat.mkv");
+  const unit = (key: string, file: string): import("../library-match.js").TitleUnit =>
+    ({ key, kind: "movie", relative: key.slice("lib_00000001/".length), sampleFiles: [file] });
+  const state: LibraryState = {
+    records: {
+      "lib_00000001/Films/Heat": { type: "movie", id: "tt1", name: "Heat" },
+      "lib_00000001/Films/Copies": { type: "movie", id: "tt1", name: "Heat" },
+    },
+    units: [unit("lib_00000001/Films/Heat", "lib_00000001/Films/Heat/Heat.mkv"), unit("lib_00000001/Films/Copies", "lib_00000001/Films/Copies/Heat.mkv")],
+    // Only the first copy carries a path star of its own; the title's star is the other side.
+    favorites: ["lib_00000001/Films/Heat"],
+  };
+  const harness = await mount([library("lib_00000001", root)], [], () => [], state);
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+  const rows = async () => ((await (await api(harness.base, "/api/library/browse?path=Films")).json()) as { items: Array<{ path: string; favorite: boolean }> }).items
+    .map((item) => [item.path, item.favorite]);
+
+  assert.deepEqual(await rows(), [["Films/Copies", false], ["Films/Heat", true]], "a path star is one copy's alone");
+
+  state.watchlist = { "movie:tt1": { type: "movie", id: "tt1", name: "Heat", addedAt: "" } };
+  assert.deepEqual(await rows(), [["Films/Copies", true], ["Films/Heat", true]], "the title's star is every copy's");
+});
+
+test("a file row reports a title row that names it, whichever key that row kept", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Shows/Dark/S01/Dark.S01E01.mkv");
+  const harness = await mount([library("lib_00000001", root)], [], () => [], {
+    records: { "lib_00000001/Shows/Dark": { type: "series", id: "tt5", name: "Dark" } },
+    units: [{ key: "lib_00000001/Shows/Dark", kind: "series", relative: "Shows/Dark", sampleFiles: ["lib_00000001/Shows/Dark/S01/Dark.S01E01.mkv"] }],
+    // The row kept the numbering of the season the file was moved out of; only its `path` names
+    // this file, so the listing reads it through that.
+    progress: { "series:tt5:3:9": { position: 300, duration: 2400, title: "Dark", path: "lib_00000001/Shows/Dark/S01/Dark.S01E01.mkv", updatedAt: "2024-01-01T00:00:00.000Z" } },
+  });
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const response = await api(harness.base, "/api/library/browse?path=Shows/Dark/S01");
+
+  assert.equal(response.status, 200);
+  const body = await response.json() as { items: Array<{ kind: string; path: string; progress?: { position: number } }> };
+  assert.deepEqual(body.items.map((item) => [item.kind, item.path, item.progress?.position]), [["file", "Shows/Dark/S01/Dark.S01E01.mkv", 300]]);
 });
 
 test("a prewarm root browse sweeps nothing and asks the root listing for a prewarm", async (t) => {

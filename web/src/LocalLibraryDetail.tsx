@@ -5,7 +5,7 @@ import { t, useI18n } from "./i18n";
 import { LibraryTitleDetail } from "./LibraryTitleDetail";
 import { sourceIdentity } from "./library-detail-sources";
 import { useLibrarySources } from "./library-sources";
-import { sourceProgressOwner } from "./source-progress";
+import { sourceProgressOwner, versionSavedRow } from "./source-progress";
 import { TitleChips } from "./TitleChips";
 import { catalogueGalleryImages, mergeGallery, posterAndWide, type GalleryImage } from "./gallery-images";
 import { canQueue, isLocalStream } from "./streams";
@@ -169,13 +169,13 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
 
   const selectedPath = owner?.kind === "file" ? owner.path : undefined;
   const selectedRemote = owner?.kind === "remote" ? owner.item : null;
+  const ownerRemote = owner?.kind === "catalogue" ? owner.remote : owner?.kind === "remote" ? owner.item : undefined;
 
-  // The played version's own saved position, never another's: the clicked file's value stands in
-  // at once, then the authoritative read replaces it. A local copy reads its file key, a copy in
-  // another library its own remote state, an addon row the generic key of the same episode. A
-  // remote answer belongs to this version only when it reports the same media source, and a failed
-  // read keeps only what already belonged to this same version, so nothing of another one can
-  // flash over it.
+  // The selected version's saved position: the clicked file's value stands in at once, then the
+  // authoritative read replaces it. The viewer's own file reads its own key; every other version
+  // reads the title's, falling back to the version's own remote state, where a media server kept
+  // the position before the title held it. A failed read keeps only what already belonged to this
+  // same version, so nothing of another one can flash over it.
   useEffect(() => {
     if (!selectedKey || !ownerKey || !owner) { setSaved(null); return; }
     const controller = new AbortController();
@@ -185,13 +185,7 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
       ? { sourceKey: selectedKey, position: progress.position, duration: progress.duration }
       : null;
     setSaved(initial);
-    // A remote state that reports another media source is another version of the item and counts
-    // as nothing here: the selected row starts without a position it never had.
-    const read: Promise<{ position: number; duration: number } | null> = owner.kind === "remote"
-      ? api.remoteState(owner.item.libraryId, owner.item.itemId, controller.signal)
-        .then((value) => value && value.mediaSourceId === owner.item.mediaSourceId ? value : null)
-      : api.progressOf(owner.progressKey, controller.signal);
-    void read
+    void versionSavedRow(owner.kind === "remote" ? undefined : owner.progressKey, ownerRemote, controller.signal)
       .then((entry) => {
         if (!live()) return;
         const own = entry && entry.position > 0 ? entry : { position: 0, duration: 0 };
@@ -210,8 +204,13 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
       try { await api.saveRemoteState(own.item.libraryId, own.item.itemId, { position: 0, duration: 0, mediaSourceId: own.item.mediaSourceId }); done = true; }
       catch { done = false; }
     } else if (own?.kind === "catalogue") {
-      try { await api.forgetProgress(own.progressKey); done = true; }
-      catch { done = false; }
+      try {
+        await api.forgetProgress(own.progressKey);
+        // The version's own row goes with the title's: the read falls back to it, and it would hand
+        // the dropped position straight back.
+        if (own.remote) await api.saveRemoteState(own.remote.libraryId, own.remote.itemId, { position: 0, duration: 0, mediaSourceId: own.remote.mediaSourceId });
+        done = true;
+      } catch { done = false; }
     }
     if (done && currentSelection.current === key) {
       progressEpoch.current += 1;

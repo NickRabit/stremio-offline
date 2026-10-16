@@ -8,9 +8,8 @@ import kotlinx.serialization.json.JsonObject
 /** Which part of the one Favourites list to ask for; `All` is every part of it. */
 enum class FavoriteFilter(val wire: String) {
   All("all"),
-  Library("library"),
-  Catalog("catalog"),
-  Remote("remote"),
+  Movies("movies"),
+  Series("series"),
 }
 
 /** One entry of `GET /api/favorites`: a library star, a catalogue star or a media-server star. */
@@ -30,6 +29,8 @@ sealed class FavoriteItemDto {
     val itemKind: String = "file",
     val progress: ProgressDto? = null,
     val catalogId: String? = null,
+    /** The title the copy is bound to, when it is: OK opens that title's detail. */
+    val title: TitleRefDto? = null,
   ) : FavoriteItemDto() {
     override val key: String get() = "library:$path"
   }

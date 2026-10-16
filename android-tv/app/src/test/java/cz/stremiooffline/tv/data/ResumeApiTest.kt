@@ -21,9 +21,9 @@ class ResumeApiTest {
   fun `the resume page names its filter, limit and skip`() = runTest {
     server.enqueue(MockResponse().setBody("""{"items":[],"total":0,"pending":false}"""))
 
-    client(start()).resume(ResumeFilter.Library, limit = 60, skip = 20)
+    client(start()).resume(ResumeFilter.Movies, limit = 60, skip = 20)
 
-    assertEquals("/api/resume?filter=library&limit=60&skip=20", server.takeRequest().path)
+    assertEquals("/api/resume?filter=movies&limit=60&skip=20", server.takeRequest().path)
   }
 
   @Test

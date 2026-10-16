@@ -162,3 +162,117 @@ test("a card can be forgotten from the Continue watching section", async ({ page
     await request.delete(`/api/progress/${encodeURIComponent(key)}`);
   }
 });
+
+/** A film the account keeps in its library and also has in the catalogue is one title: one
+ *  card, drawn once, and one action that forgets both halves of it. */
+test("a film watched from its library file and from the catalogue is one card", async ({ page, request }) => {
+  const directory = path.resolve("e2e/.tmp/downloads/resume-film");
+  const fileRelative = "resume-film/film.mp4";
+  const fileKey = `file:${fileRelative}`;
+  const catalogueKey = "movie:tt-e2e-movie";
+  const title = "Zkušební film";
+  await rm(directory, { recursive: true, force: true });
+  await mkdir(directory, { recursive: true });
+  await writeFile(path.join(directory, "film.mp4"), "fixture");
+  const card = () => page.locator(".section-grid .browse-item", { hasText: title });
+  try {
+    expect((await request.post("/api/library/match", { data: { path: "resume-film", type: "movie", id: "tt-e2e-movie" } })).ok()).toBe(true);
+    expect((await request.post("/api/progress", { data: { key: fileKey, path: fileRelative, title, position: 120, duration: 2400 } })).ok()).toBe(true);
+    expect((await request.post("/api/progress", { data: { key: catalogueKey, title, position: 60, duration: 2400 } })).ok()).toBe(true);
+
+    const items = ((await (await request.get("/api/resume?limit=60")).json()).items as Array<{ key: string; forgetKeys?: string[] }>)
+      .filter((item) => item.forgetKeys?.some((key) => key === fileKey || key === catalogueKey));
+    // A bound file is stored as its title, so both writes land on one row; a legacy file row
+    // stored before that is folded into the same card by the merge (server unit tests).
+    expect(items, "the file and the catalogue play are one card").toHaveLength(1);
+    expect(items[0]!.forgetKeys).toContain(catalogueKey);
+
+    await page.goto("/");
+    await goToView(page, "Pokračovat ve sledování");
+    await expect(card()).toHaveCount(1);
+
+    page.once("dialog", (dialog) => dialog.accept());
+    await card().getByRole("button", { name: /Akce pro/ }).click();
+    await page.getByRole("button", { name: "Zapomenout postup" }).click();
+    await expect(card()).toHaveCount(0);
+    expect(await (await request.get(`/api/progress/${encodeURIComponent(fileKey)}`)).json()).toBeNull();
+    expect(await (await request.get(`/api/progress/${encodeURIComponent(catalogueKey)}`)).json()).toBeNull();
+  } finally {
+    await request.delete(`/api/progress/${encodeURIComponent(fileKey)}`);
+    await request.delete(`/api/progress/${encodeURIComponent(catalogueKey)}`);
+    await request.post("/api/library/match", { data: { path: "resume-film", id: "", type: "movie" } });
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+/** A catalogue card written from a bound library file names that file, so a click plays it the way
+ *  a library card plays its own -- the detail is what the menu is for. */
+test("a catalogue card written from a library file plays on click", async ({ page, request }) => {
+  const directory = path.resolve("e2e/.tmp/downloads/resume-click");
+  const fileRelative = "resume-click/film.mp4";
+  const fileKey = `file:${fileRelative}`;
+  const titleKey = "movie:tt-e2e-click";
+  const title = "Zkušební film";
+  await rm(directory, { recursive: true, force: true });
+  await mkdir(directory, { recursive: true });
+  await writeFile(path.join(directory, "film.mp4"), "fixture");
+  const card = () => page.locator(".section-grid .browse-item", { hasText: title });
+  try {
+    expect((await request.post("/api/library/match", { data: { path: "resume-click", type: "movie", id: "tt-e2e-click" } })).ok()).toBe(true);
+    expect((await request.post("/api/progress", { data: { key: fileKey, path: fileRelative, title, position: 300, duration: 2400 } })).ok()).toBe(true);
+    // A player journey never needs a real video: the session is the server's own answer.
+    await page.route("**/api/playback", (route) => route.request().method() === "POST"
+      ? route.fulfill({ json: { id: "click", mode: "direct", url: "/api/stream/click", offset: 0, duration: 2400, hardware: false, acceleration: false, audioTracks: [], subtitleTracks: [], audioTrack: 0, subtitleTrack: null, quality: null } })
+      : route.continue());
+    await page.route("**/api/playback/click", (route) => route.fulfill({ status: 204 }));
+    await page.route("**/api/stream/click**", (route) => route.fulfill({ contentType: "video/mp4", body: "" }));
+
+    await page.goto("/");
+    await goToView(page, "Pokračovat ve sledování");
+    await expect(card()).toBeVisible();
+    await card().locator(".browse-open").click();
+
+    // Played, not opened: the player covers the page and the title's detail stays away.
+    await expect(page.locator(".player-overlay")).toBeVisible();
+    await expect(page.locator("main.view-title-detail")).toHaveCount(0);
+  } finally {
+    await request.delete(`/api/progress/${encodeURIComponent(fileKey)}`);
+    await request.delete(`/api/progress/${encodeURIComponent(titleKey)}`);
+    await request.post("/api/library/match", { data: { path: "resume-click", id: "", type: "movie" } });
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+/** The same film, played from its library file and from the catalogue, keeps one position: the
+ *  file's key is an alias of the title's, whichever one a client writes. */
+test("a bound film keeps one position whichever key it is played under", async ({ request }) => {
+  const directory = path.resolve("e2e/.tmp/downloads/resume-film");
+  const fileRelative = "resume-film/film.mp4";
+  const fileKey = `file:${fileRelative}`;
+  const catalogueKey = "movie:tt-e2e-movie";
+  const title = "Zkušební film";
+  await rm(directory, { recursive: true, force: true });
+  await mkdir(directory, { recursive: true });
+  await writeFile(path.join(directory, "film.mp4"), "fixture");
+  const read = async (key: string): Promise<{ position: number } | null> =>
+    await (await request.get(`/api/progress/${encodeURIComponent(key)}`)).json();
+  try {
+    expect((await request.post("/api/library/match", { data: { path: "resume-film", type: "movie", id: "tt-e2e-movie" } })).ok()).toBe(true);
+    expect((await request.post("/api/progress", { data: { key: fileKey, path: fileRelative, title, position: 300, duration: 2400 } })).ok()).toBe(true);
+    expect(await read(catalogueKey), "the file's position is the title's").toMatchObject({ position: 300 });
+    expect(await read(fileKey)).toMatchObject({ position: 300 });
+
+    expect((await request.post("/api/progress", { data: { key: catalogueKey, title, position: 600, duration: 2400 } })).ok()).toBe(true);
+    expect(await read(fileKey), "the catalogue's position is the file's").toMatchObject({ position: 600 });
+    expect(await read(catalogueKey)).toMatchObject({ position: 600 });
+
+    expect((await request.delete(`/api/progress/${encodeURIComponent(fileKey)}`)).ok()).toBe(true);
+    expect(await read(fileKey), "forgetting either key forgets the title").toBeNull();
+    expect(await read(catalogueKey)).toBeNull();
+  } finally {
+    await request.delete(`/api/progress/${encodeURIComponent(fileKey)}`);
+    await request.delete(`/api/progress/${encodeURIComponent(catalogueKey)}`);
+    await request.post("/api/library/match", { data: { path: "resume-film", id: "", type: "movie" } });
+    await rm(directory, { recursive: true, force: true });
+  }
+});
