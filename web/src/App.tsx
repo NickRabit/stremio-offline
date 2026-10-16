@@ -2907,6 +2907,9 @@ export function App() {
             onSourceChange={setDetailSource}
             {...(detailProgress ? { progress: detailProgress } : {})}
             onClearProgress={() => clearDetailProgress()}
+            // The same pair a library detail draws: the position it holds for the episode on screen,
+            // and the way to say that episode is seen -- which is that position going away.
+            {...(detailProgress ? { watched: true, watchedLabel: t("mediaServer.markWatched"), onToggleWatched: () => void clearDetailProgress() } : {})}
             onPlay={playCatalogueDetail}
             onSaveToLibrary={(stream, effective) => void queueCatalogueStream(effective, stream)}
             onSaveElsewhere={(stream, effective) => setCatalogueSave({

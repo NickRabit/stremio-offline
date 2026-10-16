@@ -56,6 +56,11 @@ export interface CatalogueTitleDetailProps {
   onSourceChange?: (stream: Stream | null) => void;
   /** Clears the saved position of the title this detail holds; true once the write succeeded. */
   onClearProgress?: (stream: Stream) => Promise<boolean>;
+  /** Whether the episode on screen has anything left to resume, and the way to say it is seen:
+   *  the store keeps resume positions, so "seen" is that nothing is left to resume. */
+  watched?: boolean;
+  watchedLabel?: string;
+  onToggleWatched?: () => void;
   onPlay: (stream: Stream, target: CatalogueDetailTarget, fromBeginning: boolean) => void;
   onSaveToLibrary: (stream: Stream, target: CatalogueDetailTarget) => void;
   onSaveElsewhere: (stream: Stream, target: CatalogueDetailTarget) => void;
@@ -77,7 +82,7 @@ const dedupe = (streams: Stream[]): Stream[] => {
 };
 
 export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
-  const { target, initialSources, onGallery, chips, preferredLanguage, onRead, progress, onSourceChange, onClearProgress, onPlay, onSaveToLibrary, onSaveElsewhere, saveSupported, onDownloadToDevice } = props;
+  const { target, initialSources, onGallery, chips, preferredLanguage, onRead, progress, onSourceChange, onClearProgress, watched, watchedLabel, onToggleWatched, onPlay, onSaveToLibrary, onSaveElsewhere, saveSupported, onDownloadToDevice } = props;
   const { locale } = useI18n();
   const { type, id, name } = target;
   const incomingId = catalogueStreamId(target);
@@ -269,6 +274,8 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
       {...(progress ? { progress } : {})}
       {...(onSourceChange ? { onSourceChange } : {})}
       {...(onClearProgress ? { onClearProgress } : {})}
+      {...(onToggleWatched ? { watched: watched ?? false, onToggleWatched } : {})}
+      {...(watchedLabel ? { watchedLabel } : {})}
       {...(sourceError ? { sourceError } : {})}
       onRetry={() => setNonce((value) => value + 1)}
       onPlay={(stream, fromBeginning) => onPlay(stream, effective, fromBeginning ?? false)}

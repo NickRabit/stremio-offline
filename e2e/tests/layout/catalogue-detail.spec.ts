@@ -178,9 +178,13 @@ test("the full detail shows the saved position it holds and can start over", asy
     const row = page.locator("main.view-title-detail .library-detail-progress");
     await expect(row).toBeVisible();
     await expect(row).toContainText("5:00");
+    // The pair stands together: the position the store holds, and the way to say the episode is
+    // seen -- which is that position going away.
+    const watched = page.locator("main.view-title-detail").getByRole("button", { name: "Označit jako zhlédnuté" });
+    await expect(watched).toBeVisible();
 
-    // Start over clears it, and the row goes with it: there is nothing left to resume.
-    await row.getByRole("button").click();
+    // Marking it seen clears it, and the row goes with it: there is nothing left to resume.
+    await watched.click();
     await expect(row).toHaveCount(0);
     const list = await (await request.get("/api/progress")).json() as Array<{ key: string }>;
     expect(list.some((entry) => entry.key === key)).toBe(false);
