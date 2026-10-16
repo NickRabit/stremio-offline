@@ -97,7 +97,9 @@ const renderManager = async (localLibraries: LibraryView[] = []) => {
 const render = async (localLibraries: LibraryView[] = []) => {
   await renderManager(localLibraries);
   await click(byText("button", "Edit library")!);
-  return document.querySelector(".media-server-library-card")!;
+  const dialog = document.querySelector(".library-edit-card");
+  expect(dialog, "the remote editor draws the same card as the local one").not.toBeNull();
+  return dialog!;
 };
 const rowNames = () =>
   [...host.querySelectorAll(".media-server-attached .library-admin-title strong")].map((node) => node.textContent);
@@ -211,7 +213,7 @@ describe("RemoteLibraryDialog", () => {
     const dialog = await render([localLibrary({ id: "lib_a", name: "Films" })]);
     await selectOption(ruleLibrary(dialog), "lib_a");
     await click(saveButton());
-    expect(document.querySelector(".media-server-library-card")).not.toBeNull();
+    expect(document.querySelector(".library-edit-card")).not.toBeNull();
     expect(dialog.textContent).toContain("The media-server copy destination is malformed.");
     expect(ruleLibrary(dialog).value).toBe("lib_a");
   });
@@ -243,6 +245,14 @@ describe("RemoteLibraryDialog", () => {
     await click(saveButton());
     expect(patches[0]!.body).toMatchObject({ downloadSettings: { movie: { subfolder: "Filmy/2024", layout: "flat" } } });
   });
+});
+
+it("draws a remote row as one Edit action in the shared footer", async () => {
+  await renderManager();
+  const row = host.querySelector(".media-server-attached .library-admin-row")!;
+  expect(row.closest(".library-manager"), "the remote row sits in the shared list").not.toBeNull();
+  const footer = row.querySelector(".library-admin-footer")!;
+  expect([...footer.querySelectorAll("button")].map((button) => button.textContent?.trim())).toEqual(["Edit library"]);
 });
 
 describe("Remote library ordering", () => {
@@ -311,7 +321,7 @@ describe("Remote library ordering", () => {
     expect(onError).toHaveBeenCalledTimes(1);
     expect((onError.mock.calls[0][0] as { status: number }).status).toBe(409);
     expect(patches, "the first refusal stops the run").toHaveLength(1);
-    expect(document.querySelector(".media-server-library-card"), "the failure is not hidden in a dialog").toBeNull();
+    expect(document.querySelector(".library-edit-card"), "the failure is not hidden in a dialog").toBeNull();
     expect(rowNames(), "the list is re-read and shows the order the server kept").toEqual(["Alpha", "Beta"]);
   });
 });

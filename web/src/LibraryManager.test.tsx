@@ -506,3 +506,18 @@ it("cancelling the system dialog grants nothing", async () => {
   await clickIn(picker(), "Choose a folder on this computer…");
   expect(fetchMock.mock.calls.some(([url, init]) => url === "/api/libraries/grants" && (init as RequestInit | undefined)?.method === "POST")).toBe(false);
 });
+
+/** The row the Settings panel and the library tools dialog both draw: one Edit action in the
+ *  footer, and an editor that wears the same card as the remote one. */
+it("draws a local row as one Edit action in the shared footer", async () => {
+  fetchMock.mockResolvedValue(json([library()]));
+  await act(async () => { root.render(<LibraryManager onError={vi.fn()} onNotify={vi.fn()}/>); });
+  await act(async () => { await Promise.resolve(); });
+
+  const row = host.querySelector(".library-manager > .library-admin-row")!;
+  const footer = row.querySelector(".library-admin-footer")!;
+  expect([...footer.querySelectorAll("button")].map((button) => button.textContent?.trim())).toEqual(["Edit library"]);
+
+  await openEditor();
+  expect(host.querySelector(".library-edit-card")).not.toBeNull();
+});

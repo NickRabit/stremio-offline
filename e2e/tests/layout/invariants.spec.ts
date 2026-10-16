@@ -221,6 +221,9 @@ test.describe("layout invariants", () => {
     await page.route("**/api/addons", (route) => route.fulfill({ json: addons }));
 
     await openView(page, "Nastavení");
+    // The page tablist is the one outside the dialog that is opened below; the dialog has a
+    // tab of the same name once it is up.
+    await page.getByRole("tab", { name: "Účet", exact: true }).click();
     const edit = page.locator(".user-manager-section").getByRole("button", { name: "Upravit", exact: true });
     await expect(edit).toBeVisible();
     await edit.click();

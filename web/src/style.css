@@ -841,6 +841,10 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .settings-page .support-link span{display:grid;gap:3px}
 .settings-page .support-link small{color:var(--muted)}
 .settings-page .support-link:hover{border-color:var(--accent)}
+/* The tab strip wraps instead of scrolling. At phone width each tab takes its own row. */
+.settings-page .section-filter .library-shelf-segments{flex:0 1 auto;flex-wrap:wrap;justify-content:flex-start}
+.settings-page .section-filter .library-shelf-segments button{flex:0 0 auto;padding:0 14px;overflow:visible;text-overflow:clip}
+@media(max-width:700px){.settings-page .section-filter .library-shelf-segments button{flex:1 1 100%}}
 .settings-page .settings-grid{grid-template-columns:minmax(0,1fr);gap:18px}
 .settings-page .settings-section{grid-column:1;padding:22px 24px}
 .settings-page .settings-section-head{margin-bottom:16px}
@@ -1087,10 +1091,9 @@ img.broken{visibility:hidden}
 .player-settings .subtitle-delay button{min-width:34px}
 .player-settings .subtitle-delay .subtitle-delay-reset svg{width:16px;height:16px}
 
-.library-manager{display:grid;gap:12px}
+.library-manager{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(min(440px,100%),1fr));align-items:stretch}
 .library-manager-section{grid-column:1/-1}
-.library-manager-section .library-manager{grid-template-columns:repeat(auto-fit,minmax(min(440px,100%),1fr));align-items:stretch}
-.library-manager-section .library-manager-actions,.library-manager-section .identify-hint{grid-column:1/-1}
+.library-manager .library-manager-actions,.library-manager .identify-hint{grid-column:1/-1}
 .library-manager-actions{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:4px}
 .library-manager-actions .primary{min-width:170px}
 .library-admin-row{display:grid;grid-template-rows:auto auto 1fr auto;gap:14px;min-width:0;padding:18px;border:1px solid var(--line);border-radius:12px;background:#10151d}
@@ -1280,10 +1283,10 @@ img.broken{visibility:hidden}
 }
 @media(max-height:460px){
   .library-edit-section,.addon-edit-section{gap:8px;padding-block:10px}
-  /* Scoped to the dialog's own card: `.library-manager` and `.library-admin-row` are also
-     the Settings page's inline library section, which this block was never aimed at. */
+  /* The list gap is the dialog's own; the rows tighten everywhere, because the Settings page
+     draws the same row outside a dialog. */
   .library-manager-card .library-manager{gap:8px}
-  .library-manager-card .library-admin-row{gap:8px;padding-block:10px}
+  .library-admin-row{gap:8px;padding-block:10px}
   .move-card .move-list button{padding-block:8px}
   /* Narrow stacks the footer's buttons full width, which is right on a phone held upright
      and wrong held sideways: 667x375 is both narrow and short, and stacked they took 173px
@@ -1980,7 +1983,6 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 .media-server-attached{display:grid;gap:12px;margin-top:6px}
 .media-server-attached>h3{margin:0;font-size:12px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted)}
 .media-server-card{width:min(560px,100%);max-height:100%}
-.media-server-library-card{width:min(620px,100%);max-height:100%}
 .media-server-form{display:grid;gap:12px}
 .media-server-form label,.media-server-field{display:grid;gap:6px;min-width:0}
 .media-server-form label>span,.media-server-field>span{font-size:10px;color:var(--muted)}

@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { SettingsPage } from "./SettingsPage";
 import { setLocale } from "./i18n";
-import type { Settings as AppSettings } from "./types";
+import type { Session, Settings as AppSettings } from "./types";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -24,6 +24,7 @@ let host: HTMLDivElement;
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   setLocale("en");
+  sessionStorage.clear();
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
     if (String(input).includes("/api/home/layout")) {
       return Promise.resolve(json({ rows: [], layout: { order: [], hidden: [], feeds: [] } }));
@@ -41,22 +42,35 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-const render = async (over: Partial<AppSettings> = {}, restricted = false) => {
+const render = async (over: Partial<AppSettings> = {}, restricted = false, role: Session["role"] = "user") => {
   const onSave = vi.fn(() => Promise.resolve());
   await act(async () => {
     root.render(<SettingsPage build={null} restricted={restricted} settings={settings(over)} search={null}
       onSearch={vi.fn()} languages={[{ code: "en", name: "English" }]} libraries={[]}
-      session={{ username: "bob", role: "user" }} onSession={vi.fn()} onSave={onSave}
+      session={{ username: "bob", role }} onSession={vi.fn()} onSave={onSave}
       onImported={vi.fn(() => Promise.resolve())} onLibrariesChanged={vi.fn()} onNotify={vi.fn()} onError={vi.fn()}/>);
   });
   return { onSave };
 };
 
+const tab = (name: string) => {
+  const button = [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+    .find((candidate) => candidate.textContent?.trim() === name);
+  expect(button, `the ${name} tab is on screen`).toBeTruthy();
+  return button!;
+};
+
+const selectTab = async (name: string) => {
+  await act(async () => { tab(name).click(); await Promise.resolve(); });
+};
+
 const startView = () => host.querySelector<HTMLSelectElement>('select[aria-label="Start page"]')!;
 
-describe("SettingsPage start page", () => {
-  it("saves the chosen start page on change", async () => {
+describe("SettingsPage tabs", () => {
+  it("moves the start page onto the Home tab and saves the choice", async () => {
     const { onSave } = await render();
+    expect(startView(), "the start page is not on the tab the page opens on").toBeNull();
+    await selectTab("Home");
     const control = startView();
     expect(control.value).toBe("catalog");
     await act(async () => { control.value = "library"; control.dispatchEvent(new Event("change", { bubbles: true })); });
@@ -65,14 +79,52 @@ describe("SettingsPage start page", () => {
 
   it("is disabled for a restricted account", async () => {
     await render({}, true);
+    await selectTab("Home");
     expect(startView().disabled).toBe(true);
+  });
+
+  it("reopens the tab the session stored", async () => {
+    await render();
+    await selectTab("Home");
+    await act(async () => { root.unmount(); });
+    root = createRoot(host);
+    await render();
+    expect(host.querySelector('.section-filter [role="tab"][aria-selected="true"]')?.textContent).toBe("Home");
+    expect(startView()).not.toBeNull();
+  });
+
+  it("shows an administrator the Libraries tab, and Playback only once it is chosen", async () => {
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/media-servers/libraries")) return Promise.resolve(json({ libraries: [] }));
+      if (url.includes("/api/media-servers")) return Promise.resolve(json({ connections: [], keyConfigured: true }));
+      if (url.includes("/api/libraries")) return Promise.resolve(json([]));
+      if (url.includes("/api/users")) return Promise.resolve(json([]));
+      return Promise.resolve(json({}));
+    }));
+
+    await render({}, false, "admin");
+    expect(host.querySelector(".library-manager"), "the manager is on the tab the page opens on").not.toBeNull();
+    expect(host.querySelector('select[aria-label="Preferred audio language"]')).toBeNull();
+    await selectTab("Playback");
+    expect(host.querySelector('select[aria-label="Preferred audio language"]')).not.toBeNull();
   });
 });
 
-describe("SettingsPage Home layout", () => {
+describe("SettingsPage Home tab", () => {
   it("shows the Home section to an ordinary account", async () => {
     await render();
+    await selectTab("Home");
     expect(host.querySelector(".home-layout-section")).not.toBeNull();
+  });
+});
+
+describe("SettingsPage Libraries tab", () => {
+  it("shows an ordinary account the same-titles control and no manager", async () => {
+    await render();
+    expect(host.querySelector('select[aria-label="Identical titles"]')).not.toBeNull();
+    expect(host.querySelector(".library-manager")).toBeNull();
+    expect(host.querySelector(".media-server-manager")).toBeNull();
   });
 });
 

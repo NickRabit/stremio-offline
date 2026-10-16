@@ -31,8 +31,8 @@ const statusClass = (status: MediaServerStatus) => status === "available" ? "" :
 type Removal = { kind: "connection"; connection: MediaServerConnection } | { kind: "library"; library: AdminRemoteLibrary };
 
 /** The standard dialog shell: head with an X, a scrolling body, a footer of buttons. */
-function Dialog({ title, cardClass, onClose, children, footer, busy }: {
-  title: string; cardClass?: string; onClose: () => void; children: ReactNode; footer?: ReactNode; busy?: boolean;
+function Dialog({ title, cardClass, footerClass, onClose, children, footer, busy }: {
+  title: string; cardClass?: string; footerClass?: string; onClose: () => void; children: ReactNode; footer?: ReactNode; busy?: boolean;
 }) {
   const overlay = useRef<HTMLDivElement>(null);
   useDialogFocus(overlay);
@@ -50,7 +50,7 @@ function Dialog({ title, cardClass, onClose, children, footer, busy }: {
         <button type="button" className="icon-button" aria-label={t("common.close")} disabled={busy} onClick={onClose}><X/></button>
       </div>
       <div className="dialog-body">{children}</div>
-      {footer && <footer className="dialog-foot">{footer}</footer>}
+      {footer && <footer className={`dialog-foot${footerClass ? ` ${footerClass}` : ""}`}>{footer}</footer>}
     </div>
   </div>, document.body);
 }
@@ -487,7 +487,7 @@ function RemoteLibraryDialog({ library, localLibraries, users, usersError, busy,
     if (on) next.add(id); else next.delete(id);
     return { ...current, allowedUsers: next };
   });
-  return <Dialog title={t("mediaServer.libraryEditTitle")} cardClass="media-server-library-card" busy={busy} onClose={onClose}
+  return <Dialog title={t("mediaServer.libraryEditTitle")} cardClass="library-edit-card" footerClass="library-edit-footer" busy={busy} onClose={onClose}
     footer={<>
       {error && <p className="login-error" role="alert">{error}</p>}
       <button type="button" disabled={busy} onClick={onClose}>{t("common.cancel")}</button>
