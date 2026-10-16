@@ -256,14 +256,27 @@ mixed into the list the filters, counts and notices are computed from.
 
 - A local play behaves like a library play everywhere: progress key
   `file:<localPath>`, favourites star on the file, previous/next file, device
-  download of the file.
+  download of the file. While a file of the viewer's own is on screen the header
+  names that file: the title a catalogue panel behind the player happens to have
+  open never reaches it.
+- An identified file keeps its catalogue identity while it plays, on every
+  client. A matched film or episode offers the title's other sources in the
+  player the same way a catalogue play does, and switching to one of them leaves
+  the file's own progress untouched. A file whose binding the matcher only
+  suggested, or whose lookup failed, has no title to switch to and gets no
+  sources control, exactly as before.
 - A play the catalogue detail started keeps its **full source list** in the
   player: the local copies first, in the detail's order, then the addon streams
   the detail shows. That holds whether the play started on an addon row or on a
   local row, so from either start the viewer can jump to any other source,
-  including the library copy. A play the catalogue never started — the Library
-  view, a Continue card of a library file, a next-episode play — still gets no
-  catalogue sources, whatever the detail underneath reports.
+  including the library copy. A play no detail started — the Library view, a
+  Continue card of a library file, a next-episode play — offers the sources of
+  the file's own title and never a source of a detail that merely happens to be
+  open.
+- The subject a play runs under is the one it started with: the title of the
+  detail that started it, or the file it opened. That subject is what the header
+  shows, what the star belongs to and what the progress is written for, and
+  switching the source replaces the row on screen without ever replacing it.
 - The list reaches the player through the detail's existing `onSources`; the
   detail keeps reporting while the player is open, so the list can still be
   loading and the panel already shows that state. On TV the marker for this is
@@ -289,8 +302,9 @@ mixed into the list the filters, counts and notices are computed from.
   or a lookup that failed, has nothing to ask the addons about and gets no Sources
   button, exactly as before. The loader is `LibraryPlaySources`
   (`android-tv/.../ui/player/LibraryPlaySources.kt`), started by `Shell.kt` while
-  the player is open and cancelled when it closes. The web still offers no sources
-  for a library play.
+  the player is open and cancelled when it closes. The web reads the same binding
+  for itself (`GET /api/library/identity`) when a library play starts, so both
+  clients offer a bound file the same list.
 - A **next episode** started inside the player replaces the file, and with it the
   file's list: the addon rows would name the episode that just ended, so the
   player drops them and offers no sources for the new file.
@@ -373,3 +387,8 @@ it to `android-tv/strings.keys` if TV does not use it yet.
 13. On TV, ordinary local Play resumes saved file progress even without
     catalogue progress; Start over starts at zero. Both are catalogue plays,
     so both keep the title's source list in the player.
+14. On the web, a matched library file plays with the title's own sources in the
+    player — the same list the catalogue detail shows — and switching to one of
+    them and back keeps the header, the star and the progress key on the title
+    the play started under. An unmatched file plays as itself, with no sources
+    control.

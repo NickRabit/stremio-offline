@@ -14,7 +14,9 @@ const folder = (over: Partial<Extract<LocalDetailItem, { kind: "folder" }>> = {}
   ({ kind: "folder", path: "Heat", name: "Heat", fileCount: 2, size: 4_000_000_000, match: "matched", titleType: "movie", ...over });
 const identity = (over: Partial<IdentityPreview> = {}): IdentityPreview => ({
   path: "Films/Heat.mkv", key: "Films/Heat.mkv", kind: "movie", file: true, label: "Heat.mkv",
-  parsed: { title: "Heat", query: "Heat" }, match: "unmatched", ...over,
+  // A row the server reports a binding for is one the matcher confirmed: it never sends `bound`
+  // with another verdict, and the player refuses an identity a proposal only suggested.
+  parsed: { title: "Heat", query: "Heat" }, match: over.bound ? "matched" : "unmatched", ...over,
 });
 const copy = (localPath: string, filename: string, bytes: number, libraryName = "Films"): Stream =>
   ({ sourceId: `lib:${localPath}`, kind: "library", playable: true, localPath, libraryName, behaviorHints: { filename, videoSize: bytes } });

@@ -10,6 +10,7 @@ import { TitleChips } from "./TitleChips";
 import { catalogueGalleryImages, mergeGallery, posterAndWide, type GalleryImage } from "./gallery-images";
 import { canQueue, isLocalStream } from "./streams";
 import { useTitleEnrichment, type CatalogueRef } from "./title-enrichment";
+import { playbackIdentity } from "./playback-identity";
 import type { BrowseFile, BrowseFolder, IdentityPreview, Stream, Trailer } from "./types";
 
 export type LocalDetailItem = ({ kind: "folder" } & BrowseFolder) | ({ kind: "file" } & BrowseFile);
@@ -288,32 +289,19 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
 
 /** The exact catalogue request an episode's extra sources are asked by: its parent show with its
  *  own numbering appended, and only when both numbers are really there. A film asks by its own
- *  id; anything else has no title to ask about. */
+ *  id; anything else has no title to ask about, and a row the matcher only suggested asks about
+ *  nothing -- the same rule the player resolves a playing file by. */
 export function sourceRef(identity: IdentityPreview, item: LocalDetailItem): CatalogueRef | null {
-  const bound = identity.bound;
-  if (!bound) return null;
-  if (bound.type === "movie") return { type: "movie", id: bound.id };
-  if (bound.type !== "series") return null;
-  const id = episodeId(identity, item);
-  if (!id) return null;
-  const season = (item.kind === "file" ? item.season : undefined) ?? identity.parsed?.season ?? bound.season;
-  const episode = (item.kind === "file" ? item.episode : undefined) ?? identity.parsed?.episode ?? bound.episode;
-  if (typeof season !== "number" || !Number.isInteger(season) || season < 0) return null;
-  if (typeof episode !== "number" || !Number.isInteger(episode) || episode < 1) return null;
-  return { type: "series", id };
+  return playbackIdentity(identity, item.kind === "file"
+    ? { kind: "file", season: item.season, episode: item.episode }
+    : { kind: "folder" });
 }
 
-/** The catalogue id of the exact episode a file holds, or the title id of a film. Nothing is
- *  guessed from a loose number: without both numbers there is no episode to ask for. */
+/** The catalogue id of the exact episode a file holds, or the title id of a film: the one rule,
+ *  so a file the detail offers the title's sources for is a file the player reports under the
+ *  same identity. Nothing is guessed from a loose number. */
 export function episodeId(identity: IdentityPreview, item: LocalDetailItem): string | null {
-  const bound = identity.bound;
-  if (!bound) return null;
-  if (bound.type === "movie") return bound.id;
-  if (bound.type !== "series") return null;
-  const season = (item.kind === "file" ? item.season : undefined) ?? identity.parsed?.season ?? bound.season;
-  const episode = (item.kind === "file" ? item.episode : undefined) ?? identity.parsed?.episode ?? bound.episode;
-  if (season == null || episode == null) return null;
-  return `${bound.id}:${season}:${episode}`;
+  return sourceRef(identity, item)?.id ?? null;
 }
 
 /** The catalogue identity a bound library item already carries, so the enrichment never has to

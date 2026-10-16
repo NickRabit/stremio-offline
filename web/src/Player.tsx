@@ -1296,10 +1296,12 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       {sourceFailure && <p className="notice" role="alert">{sourceFailure}</p>}
       {!sourceLoading && !sourceFailure && !sourceList?.streams.length && <p className="identify-hint">{t("player.noOtherSource")}</p>}
       {(sourceList?.streams ?? []).map((row) => {
-        const playing = row.sourceId === playingSourceId;
+        // A row of the viewer's own library is marked by the file it points at: the row and the
+        // session can be minted apart, so their ids are not the same handle for one file.
+        const playing = row.sourceId === playingSourceId || (Boolean(row.localPath) && row.localPath === stream?.localPath);
         return <div className="track-picker" key={row.sourceId}>
           <button type="button" className={playing ? "selected" : undefined} aria-pressed={playing} disabled={playing || sourceBusy !== null}
-            onClick={() => void chooseSource(row)}>{playing ? <Check/> : <ListVideo/>}<span>{row.name || row.title || t("sources.heading")}</span></button>
+            onClick={() => void chooseSource(row)}>{playing ? <Check/> : <ListVideo/>}<span>{row.name || row.title || row.behaviorHints?.filename || t("sources.heading")}</span></button>
         </div>;
       })}
     </div>}
