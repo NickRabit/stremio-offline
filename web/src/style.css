@@ -2049,6 +2049,14 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 .library-detail-progress>span{font-size:11px;color:var(--muted);white-space:nowrap}
 .library-detail-progress .icon-button{width:44px;min-width:44px;height:44px;padding:0}
 .library-detail-progress .icon-button svg{width:16px;height:16px}
+/* The version the buttons act on, named the way its own row reads: one line above them, so Play,
+   To library and To device visibly act on the same one. */
+.library-detail-source{display:flex;flex-wrap:wrap;align-items:center;gap:7px;min-width:0;margin-top:2px;font-size:11px;color:var(--muted)}
+.library-detail-source>i{font-style:normal;font-size:9px;font-weight:800;color:var(--green);text-transform:uppercase}
+.library-detail-source>i.remote{color:var(--accent2)}
+.library-detail-source>strong{min-width:0;max-width:min(100%,420px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);font-size:12px}
+.library-detail-source>b{color:var(--text)}
+.library-detail-source>small{display:inline-flex;align-items:center;gap:4px;min-width:0;max-width:min(100%,320px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .library-title-detail>.library-detail-actions{margin-top:4px}
 @media(max-width:700px){.library-title-detail{min-height:max(300px,calc(100dvh - 310px));padding:16px}.library-detail-hero .detail-copy h2{font-size:21px}.library-detail-synopsis{font-size:12px}}
 @media(max-height:500px) and (orientation:landscape){.library-title-detail{min-height:max(190px,calc(100dvh - 150px));padding:14px}}

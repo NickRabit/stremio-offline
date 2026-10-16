@@ -9,8 +9,10 @@ import { hideBroken } from "./settings-ui";
 import { t, useI18n } from "./i18n";
 import { defaultSource, orderSources, playableSources, sourceIdentity, sourceRowKey } from "./library-detail-sources";
 import { librarySourceChoices, librarySourceEntries, librarySourceRows, type LibrarySourceGroup, type LibrarySourcePanel } from "./library-sources";
-import { providerLabel, SourceFilters, SourceRows } from "./source-rows";
-import { addonNotices, isRemoteStream, noticeText, streamBadge, type StreamSort } from "./streams";
+import { providerLabel, SourceFilters, SourceRows, streamLabel } from "./source-rows";
+import { addonNotices, isLocalStream, isRemoteStream, noticeText, streamBadge, streamLanguages, streamSize, type StreamSort } from "./streams";
+import { label } from "./languages";
+import { bytes } from "./settings-ui";
 import type { Stream } from "./types";
 
 export interface LibraryTitleDetailProps {
@@ -259,6 +261,15 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
         : t("library.savedPositionUnknown", { position: clock(savedPosition.position) })}</span>
       {onClearProgress && <button type="button" className="icon-button" aria-label={t("home.forget")} title={t("home.forget")}
         disabled={clearing === selectedKey} onClick={() => selected && void clear(selected)}><RotateCcw/></button>}
+    </div>}
+    {/* What the buttons act on: the row the viewer has chosen, named and measured the way its own
+        row reads, so Play, To library and To device visibly act on one version of the title. */}
+    {selected && <div className="library-detail-source">
+      {!isLocalStream(selected) && <i className={isRemoteStream(selected) ? "remote" : undefined}>{badgeOf(selected)}</i>}
+      <strong>{streamLabel(selected)}</strong>
+      {!isLocalStream(selected) && <small>{selected.addonName || [selected.provider ? providerLabel(selected.provider) : "", selected.libraryName].filter(Boolean).join(" · ")}</small>}
+      {streamSize(selected) ? <b>{bytes(streamSize(selected)!)}</b> : null}
+      <small>{streamLanguages(selected, preferredLanguage ?? "").map((code) => <em className="lang-badge" key={code}>{label(code)}</em>)}</small>
     </div>}
     <div className="library-detail-actions">
       <div className="actions library-detail-play">

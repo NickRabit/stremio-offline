@@ -85,6 +85,9 @@ test("a film opens the full detail over the catalogue and comes back to it", asy
   await openCatalogue(page, /Filmy/);
   await page.getByRole("button", { name: /Zkušební film/ }).click();
   const panel = page.locator(".detail-panel");
+  // A row the viewer picks on purpose, not the one that happened to be first: the detail has to
+  // open on exactly this version, and to say so before any button is pressed.
+  await panel.locator(".stream-list").getByRole("button", { name: /E2E 720p/ }).click();
   // The row the catalogue picked is the row the shared detail has to open on.
   const selected = panel.locator(".stream-list button.selected");
   await expect(selected).toHaveCount(1);
@@ -97,6 +100,10 @@ test("a film opens the full detail over the catalogue and comes back to it", asy
   await expect(detail).toBeVisible();
   await expect(detail.getByRole("heading").first()).toBeVisible();
   await expect(detail.locator(".library-detail-actions").getByRole("button", { name: "Přehrát", exact: true })).toBeVisible();
+  // The row the buttons act on is named above them, so Play, To library and To device visibly act
+  // on the version the catalogue had chosen.
+  await expect(detail.locator(".library-detail-source strong")).toHaveText(pickedRow);
+  await expect(detail.locator(".library-detail-source")).toContainText("900.0 MB");
 
   // The way back is outside the scroller, so it is reachable from wherever the reader has got to.
   const back = main.locator(".browse-head .library-back");
@@ -236,6 +243,8 @@ test("a series opens the full detail on the episode the catalogue had and lets a
   await expect(panel.getByRole("heading", { name: "Epizody" })).toBeVisible();
   await panel.getByRole("button", { name: /První díl/ }).click();
   await expect(panel.locator(".stream-list button").first()).toBeVisible();
+  // The episode's own row travels the same way: the detail opens on the version the panel picked.
+  const pickedRow = (await panel.locator(".stream-list button.selected strong").textContent())!.trim();
 
   // The way in is on screen beside the episodes and the sources: in the hero's chip row, or in
   // the head while the band is folded away.
@@ -254,6 +263,7 @@ test("a series opens the full detail on the episode the catalogue had and lets a
   await expect(main).toBeVisible();
   const episodes = main.locator(".catalogue-episodes");
   await expect(episodes.locator(".episode-current")).toContainText("První díl");
+  await expect(main.locator(".library-detail-source strong")).toHaveText(pickedRow);
   await expect(main.locator(".library-detail-actions").getByRole("button", { name: "Přehrát", exact: true })).toBeVisible();
   const back = main.locator(".browse-head .library-back");
   await expect(back).toBeInViewport();
