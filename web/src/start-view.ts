@@ -2,8 +2,8 @@ import type { StartView } from "./types";
 
 /**
  * The view the app opens on once the first settings answer arrives, or null to leave the
- * person where they are. The catalogue is the default and already on screen, a restricted
- * account never opens Home, and one who has navigated in this session keeps their choice.
+ * person where they are. Home is the default, a restricted account never opens Home, and
+ * one who has navigated in this session keeps their choice.
  */
 export function resolveStartView(
   setting: StartView,

@@ -1211,6 +1211,12 @@ test("tonight keeps a favourite show that still has an unfinished episode", asyn
   assert.equal(keys.includes("lib_00000001/Shows/StillOn"), true, "one finished episode does not hide a show still in progress");
   assert.equal(keys.includes("lib_00000001/Shows/AllDone"), false, "a show whose every episode is finished is not offered again");
   assert.equal(keys.includes("lib_00000001/Films/Blank"), true, "an empty meta id does not match a progress row that also has none");
+
+  // The card carries the catalogue title its record names, so OK can open that title.
+  const tonightCard = (key: string) => rows.tonight!.items.find((item) => item.key === key)!;
+  assert.deepEqual(tonightCard("lib_00000001/Films/A").title, { type: "movie", id: "ttA" });
+  assert.deepEqual(tonightCard("lib_00000001/Shows/StillOn").title, { type: "series", id: "ttS" });
+  assert.equal("title" in tonightCard("lib_00000001/Films/Blank"), false, "a record with no id carries no title");
 });
 
 test("tonight replaces a file that vanished with a spare", async (t) => {

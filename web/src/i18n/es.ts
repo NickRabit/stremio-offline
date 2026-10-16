@@ -1155,7 +1155,7 @@ export const es: Catalog = {
   "settings.tileSize": "Tamaño de las tarjetas",
   "settings.tileSizeHint": "Tamaño de las tarjetas en inicio, catálogo, biblioteca, favoritos y continuar viendo.",
   "settings.startView": "Página de inicio",
-  "settings.startViewHint": "La página en la que se abre la aplicación. El catálogo de forma predeterminada.",
+  "settings.startViewHint": "La página en la que se abre la aplicación. Inicio de forma predeterminada.",
   "settings.tile.compact": "Compacto",
   "settings.tile.small": "pequeño",
   "settings.tile.medium": "Medio (predeterminado)",

@@ -23,5 +23,5 @@ class ShellState(start: Section) {
  *  the section the viewer was on instead of the account's start page. */
 val ShellStateSaver: Saver<ShellState, String> = Saver(
   save = { it.selected.route },
-  restore = { route -> ShellState(Section.entries.firstOrNull { it.route == route } ?: Section.Catalog) },
+  restore = { route -> ShellState(Section.entries.firstOrNull { it.route == route } ?: Section.Home) },
 )

@@ -342,10 +342,10 @@ class SettingsScreenTest {
     focusRow(TagSettingsRowStartView)
     press(Key.DirectionCenter)
 
-    // The server would answer the catalog for an unknown value, so that is where the panel opens.
-    compose.onNodeWithTag(settingsOptionTag("start", "catalog")).assertIsFocused()
+    // The server would answer Home for an unknown value, so that is where the panel opens.
+    compose.onNodeWithTag(settingsOptionTag("start", "home")).assertIsFocused()
     press(Key.DirectionCenter)
-    assertEquals(listOf("startView" to "catalog"), api.settingsPatches)
+    assertEquals(listOf("startView" to "home"), api.settingsPatches)
   }
 
   @Test

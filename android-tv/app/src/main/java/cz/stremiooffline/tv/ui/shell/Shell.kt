@@ -99,11 +99,11 @@ enum class Section(val route: String) {
   Account("account"),
 }
 
-/** `startView` from GET /api/settings; anything the app does not know starts on the catalog. */
+/** `startView` from GET /api/settings; an absent or unknown one starts on Home. */
 fun startSection(startView: String?): Section = when (startView) {
-  "home" -> Section.Home
+  "catalog" -> Section.Catalog
   "library" -> Section.Library
-  else -> Section.Catalog
+  else -> Section.Home
 }
 
 private val Section.labelRes: Int

@@ -1155,7 +1155,7 @@ export const it: Catalog = {
   "settings.tileSize": "Dimensione delle tessere",
   "settings.tileSizeHint": "Dimensione in home, catalogo, libreria, preferiti e continua a guardare.",
   "settings.startView": "Pagina iniziale",
-  "settings.startViewHint": "La pagina con cui si apre l'app. Il catalogo per impostazione predefinita.",
+  "settings.startViewHint": "La pagina con cui si apre l'app. La home per impostazione predefinita.",
   "settings.tile.compact": "Compatto",
   "settings.tile.small": "Piccolo",
   "settings.tile.medium": "Medio (predefinito)",

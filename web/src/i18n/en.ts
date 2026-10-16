@@ -1203,7 +1203,7 @@ export const en = {
   "settings.tileSize": "Tile size",
   "settings.tileSizeHint": "Size of tiles across the home page, catalog, library, favorites and continue watching.",
   "settings.startView": "Start page",
-  "settings.startViewHint": "The page the app opens on. Catalogue unless you choose otherwise.",
+  "settings.startViewHint": "The page the app opens on. Home unless you choose otherwise.",
   "settings.tile.compact": "Compact",
   "settings.tile.small": "Small",
   "settings.tile.medium": "Medium (default)",

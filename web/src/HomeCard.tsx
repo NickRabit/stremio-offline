@@ -58,6 +58,8 @@ export function HomeCard({ card, shape, actions }: { card: HomeCardData; shape: 
     if (card.kind === "resume-catalogue") { if (card.path) actions.play(card); else actions.open(card); return; }
     // A favourite bound to a title is that title, whatever kind of copy it is.
     if (card.kind === "favorite" && card.title) { actions.open(card); return; }
+    // A Tonight card the libraries bound to a title opens that title instead of its folder.
+    if (card.kind === "tonight" && card.title) { actions.open(card); return; }
     if (folder) { actions.reveal(card.path); return; }
     actions.play(card);
   };

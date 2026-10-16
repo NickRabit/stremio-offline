@@ -1,5 +1,8 @@
 package cz.stremiooffline.tv.data
 
+import cz.stremiooffline.tv.ui.home.HomeAction
+import cz.stremiooffline.tv.ui.home.actionFor
+import cz.stremiooffline.tv.ui.home.heroMetaRef
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -88,6 +91,37 @@ class HomeCardsTest {
 
     assertEquals(1, decoded.items.size)
     assertTrue(decoded.items.single() is HomeCard.ResumeFile)
+  }
+
+  @Test
+  fun `a Tonight card bound to a title opens that title, an unbound one keeps to the library`() {
+    val bound = HomeCard.Tonight(
+      key = "lib/Films/Ton",
+      path = "lib/Films/Ton",
+      itemKind = "folder",
+      label = "Ton",
+      title = TitleRefDto("movie", "tt9"),
+    )
+    val action = actionFor(bound)
+    assertTrue(action is HomeAction.OpenCatalog)
+    val args = (action as HomeAction.OpenCatalog).args
+    assertEquals("tt9", args.meta.id)
+    assertEquals("movie", args.type)
+    assertEquals("Ton", args.meta.name)
+
+    val folder = HomeCard.Tonight(key = "lib/Films/Other", path = "lib/Films/Other", itemKind = "folder", label = "Other")
+    assertEquals(HomeAction.OpenLibrary("lib/Films/Other"), actionFor(folder))
+
+    val file = HomeCard.Tonight(key = "lib/Films/Ton.mkv", path = "lib/Films/Ton.mkv", itemKind = "file", label = "Ton")
+    assertTrue(actionFor(file) is HomeAction.Play)
+  }
+
+  @Test
+  fun `heroMetaRef names the catalogue title a Tonight or favourite card is bound to`() {
+    assertEquals("movie" to "tt9", HomeCard.Tonight(key = "k", label = "Ton", title = TitleRefDto("movie", "tt9")).heroMetaRef())
+    assertEquals("series" to "tt2", HomeCard.Favorite(key = "k", label = "Fav", title = TitleRefDto("series", "tt2")).heroMetaRef())
+    assertNull(HomeCard.Tonight(key = "k", label = "Ton").heroMetaRef())
+    assertNull(HomeCard.Favorite(key = "k", label = "Fav").heroMetaRef())
   }
 
   @Test

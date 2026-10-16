@@ -238,7 +238,7 @@ export function App() {
   const [bulkDownload, setBulkDownload] = useState<{ label: string; title: string; type: string; episodes: Array<{ id: string; season?: number; episode?: number; title?: string }>; media: { id?: string; metaType?: string; poster?: string; background?: string; gallery?: Array<{ url: string; kind: GalleryKind }> } } | null>(null);
   const [downloads, setDownloads] = useState<DownloadJob[]>([]); const [queueHalt, setQueueHalt] = useState<QueueHalt | null>(null); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState(""); const [playerOpen, setPlayerOpen] = useState(false);
   const [deviceTransfers, setDeviceTransfers] = useState<DeviceTransfer[]>([]);
-  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: locale(), audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, tileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", favoritesTileShape: "poster", resumeTileShape: "poster", followingTileShape: "poster", homeTileShape: "wide", startView: "catalog", libraryShelf: "resume", realDebridConfigured: false, tmdbConfigured: false });
+  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: locale(), audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, tileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", favoritesTileShape: "poster", resumeTileShape: "poster", followingTileShape: "poster", homeTileShape: "wide", startView: "home", libraryShelf: "resume", realDebridConfigured: false, tmdbConfigured: false });
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [session, setSession] = useState<Session | null | undefined>(undefined);
@@ -2493,6 +2493,11 @@ export function App() {
       return;
     }
     if (card.kind === "favorite") {
+      if (!card.title) return;
+      openCatalogueDetail({ type: card.title.type, id: card.title.id, name: card.label, ...(card.poster ? { poster: card.poster } : {}) });
+      return;
+    }
+    if (card.kind === "tonight") {
       if (!card.title) return;
       openCatalogueDetail({ type: card.title.type, id: card.title.id, name: card.label, ...(card.poster ? { poster: card.poster } : {}) });
       return;

@@ -173,7 +173,10 @@ export type HomeCard =
   | { kind: "discovery"; key: string; type: string; id: string; name: string; title: string;
       poster?: string; wide?: string; year?: string }
   | { kind: "tonight"; key: string; path: string; itemKind: "file" | "folder"; label: string;
-      year?: string; poster?: string; wide?: string; libraryId: string }
+      year?: string; poster?: string; wide?: string; libraryId: string;
+      /** The catalogue title the library record names, when it names one: OK opens that title's
+       *  detail instead of the folder the card stands for. */
+      title?: { type: "movie" | "series"; id: string } }
   | { kind: "confirm"; key: string; libraryId: string; library: string; label: string;
       path: string; candidate: { name: string; year?: string; poster?: string }; wide?: string };
 

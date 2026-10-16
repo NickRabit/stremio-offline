@@ -868,6 +868,71 @@ class HomeScreenTest {
   }
 
   @Test
+  fun `the hero shimmers until the focused title answers`() {
+    val api = FakeTvApi()
+    serve(api, order("tonight"), mapOf("tonight" to row(discovery("movie:tt3", "tt3"))))
+    api.metaValues["movie:tt3"] = catalogueMeta()
+    val gate = CompletableDeferred<Unit>()
+    api.metaGates["movie:tt3"] = gate
+    mount(api)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagHeroMetaLoading).assertExists()
+
+    // The ask is out and still unanswered: the placeholder stays where the line and the
+    // description will land.
+    compose.mainClock.advanceTimeBy(HERO_META_DEBOUNCE_MS + 200)
+    compose.waitForIdle()
+    assertEquals(listOf(Triple("movie", "tt3", null)), api.metaRequests)
+    compose.onNodeWithTag(TagHeroMetaLoading).assertExists()
+
+    gate.complete(Unit)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagHeroMetaLoading).assertDoesNotExist()
+    compose.onNodeWithText("A quiet film about a loud room.").assertExists()
+  }
+
+  @Test
+  fun `a remote film in the Continue watching row is drawn as a wide card`() {
+    val api = FakeTvApi()
+    val remote = HomeCard.Remote(
+      key = "remote:1",
+      title = "Heat",
+      provider = "jellyfin",
+      libraryId = "rlibA",
+      libraryName = "Filmy",
+      itemId = "iA",
+      itemType = "movie",
+    )
+    serve(api, order("resume"), mapOf("resume" to row(remote)))
+    mount(api)
+    compose.waitForIdle()
+
+    val card = compose.onNodeWithTag(homeCardTag("remote:1")).getBoundsInRoot()
+    val width = card.right - card.left
+    val height = card.bottom - card.top
+    assertTrue("the card is $width x $height, not a wide one", width > height)
+  }
+
+  @Test
+  fun `the first two catalogue rows are asked right after the built-in rows`() {
+    val api = FakeTvApi()
+    val top = "catalog:cinemeta:movie:top"
+    val popular = "catalog:cinemeta:series:popular"
+    val later = "catalog:cinemeta:movie:later"
+    serve(
+      api,
+      order("resume", top, popular, later),
+      mapOf("resume" to row(resumeFile("a", "First")), top to row(discovery("movie:tt1", "tt1"))),
+    )
+    mount(api)
+    compose.waitForIdle()
+
+    assertEquals(1, api.homeRequests.count { it == listOf(top, popular) })
+  }
+
+  @Test
   fun `a library card shows its own subtitle and asks the catalogue for nothing`() {
     val api = FakeTvApi()
     val card = HomeCard.ResumeFile(key = "a", title = "First", subtitle = "Films/First.mkv", path = "browse/a", progress = null)

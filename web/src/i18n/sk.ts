@@ -1155,7 +1155,7 @@ export const sk: Catalog = {
   "settings.tileSize": "Veľkosť dlaždíc",
   "settings.tileSizeHint": "Veľkosť dlaždíc na domovskej stránke, v katalógu, knižnici, obľúbených a pokračovaní v sledovaní.",
   "settings.startView": "Úvodná stránka",
-  "settings.startViewHint": "Stránka, na ktorej sa aplikácia otvorí. Predvolene katalóg.",
+  "settings.startViewHint": "Stránka, na ktorej sa aplikácia otvorí. Predvolene Domov.",
   "settings.tile.compact": "Kompaktný",
   "settings.tile.small": "Malý",
   "settings.tile.medium": "Stredná (predvolené)",

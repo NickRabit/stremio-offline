@@ -281,6 +281,30 @@ fun ShimmerCards(count: Int = 6, modifier: Modifier = Modifier) {
 /** One shimmering placeholder card, for example a catalogue row not revealed yet. */
 @Composable
 fun ShimmerCard(modifier: Modifier = Modifier, width: Dp = 110.dp, height: Dp = 165.dp) {
+  Box(
+    modifier
+      .size(width, height)
+      .clip(RoundedCornerShape(10.dp))
+      .background(Brush.verticalGradient(listOf(Tokens.Panel, Tokens.Panel2)))
+      .alpha(shimmerAlpha()),
+  )
+}
+
+/** A shimmering bar standing in for a line of text that is still loading. */
+@Composable
+fun ShimmerLine(width: Dp, height: Dp = 11.dp, modifier: Modifier = Modifier) {
+  Box(
+    modifier
+      .size(width, height)
+      .clip(RoundedCornerShape(999.dp))
+      .background(Tokens.Panel2)
+      .alpha(shimmerAlpha()),
+  )
+}
+
+/** The slow pulse both shimmering placeholders share. */
+@Composable
+private fun shimmerAlpha(): Float {
   val transition = rememberInfiniteTransition(label = "shimmer")
   val alpha by transition.animateFloat(
     initialValue = 0.35f,
@@ -288,13 +312,7 @@ fun ShimmerCard(modifier: Modifier = Modifier, width: Dp = 110.dp, height: Dp = 
     animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
     label = "shimmerAlpha",
   )
-  Box(
-    modifier
-      .size(width, height)
-      .clip(RoundedCornerShape(10.dp))
-      .background(Brush.verticalGradient(listOf(Tokens.Panel, Tokens.Panel2)))
-      .alpha(alpha),
-  )
+  return alpha
 }
 
 /** A small turning arc for a button that is waiting on the server. */

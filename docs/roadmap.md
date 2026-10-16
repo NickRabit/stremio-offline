@@ -151,7 +151,7 @@ The adult Home page is built (see [Home page](home-spec.md)): Downloads,
 Continue watching, New episodes, Ready to play, Recently added, Tonight,
 Favourites and, for administrators, To confirm, beside the catalogue and the
 library. Each library and add-on has a **Show on Home** switch, each account
-chooses its start page (Catalogue unless it says otherwise), and each account
+chooses its start page (Home unless it says otherwise), and each account
 arranges its own Home: which rows show, their order, and extra catalogue feeds
 from the addons it may use. **Continue watching** is also one section in the
 navigation, like Favourites: the merged Home row paged past its bound and
