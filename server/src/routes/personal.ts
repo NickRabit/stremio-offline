@@ -18,6 +18,7 @@ import { isVideo, sortFiles, type BrowseItem, type BrowseMeta, type LibraryFile 
 import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, posixBase, showsInContinueWatching, showsInFavorites, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
 import { log } from "../logger.js";
 import { markersOwingRow, nextEpisodeOf } from "../next-episode.js";
+import { fileProgressKeys, newestProgress, titleProgressKey } from "../progress-identity.js";
 import { groupSeriesProgress, seriesOf, type ProgressSeries } from "../progress-series.js";
 import { groupResumeRows } from "../resume-group.js";
 import { defaultSearchState, parseRecordBody, parseSearchPreferencesPatch, parseSearchState, publicSearchState, withRecorded, withoutQuery, type SearchState } from "../search-state.js";
@@ -262,6 +263,37 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
   // The reserved prefix of the per-account remote map. The generic progress map never holds
   // one, so a forged key is refused at the door and a read of one never returns a row.
   const isRemoteProgressKey = (key: string) => key.startsWith("remote:");
+  /** The stored key a client key stands for: a bound file's `file:` key becomes its title key. */
+  const resolveProgressKey = async (stored: string): Promise<{ key: string; file?: string; title?: ReturnType<typeof titleProgressKey> }> => {
+    if (!stored.startsWith("file:")) return { key: stored };
+    const file = stored.slice(5);
+    // A key naming a library that is gone cannot be described; it stays its own file key, so the
+    // row stored under it is still read, and removed, as it was before this change.
+    const item = await describeLibraryPath(file, { stale: true }).catch(() => undefined);
+    const listed = item?.kind === "file" ? { season: item.season, episode: item.episode } : undefined;
+    const title = titleProgressKey(file, metaStore.qualifiedMeta(), await libraryUnits(), listed);
+    return title ? { key: title.key, file, title } : { key: stored, file };
+  };
+  /** Every legacy `file:` key in `all` whose file resolves to `titleKey`. The stored progress
+   *  map is bounded at 60 rows, so the scan behind it is bounded too. */
+  const legacyKeysFor = (all: Record<string, StoredProgress>, titleKey: string, records: Record<string, LibraryMetaRecord>, units: TitleUnit[]): string[] =>
+    Object.keys(all).filter((key) => key.startsWith("file:") && titleProgressKey(key.slice(5), records, units)?.key === titleKey);
+  /** Every stored key that stands for one resolved key: the key itself, the file the caller
+   *  read it through, and the legacy `file:` rows whose file resolves to it. The rows naming the
+   *  file are what a move that renumbers it needs: its title row keeps the key it was written
+   *  with, and only its `path` follows the file. */
+  const standingKeys = (
+    resolved: { key: string; file?: string },
+    all: Record<string, StoredProgress>,
+    records: Record<string, LibraryMetaRecord>,
+    units: TitleUnit[],
+  ): string[] => [
+    ...new Set([
+      resolved.key,
+      ...(resolved.file ? fileProgressKeys(all, resolved.file) : []),
+      ...(resolved.key.startsWith("file:") ? [] : legacyKeysFor(all, resolved.key, records, units)),
+    ]),
+  ];
   /** The `series` field of a report: the body names the series, and whatever it leaves
    *  out the episode key fills in. An id that is not a non-empty string means no series. */
   const reportedSeries = (key: string, title: string, body: unknown): ProgressSeries | undefined => {
@@ -348,32 +380,57 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
   app.get("/api/progress", asyncRoute(async (req, res) => {
     res.json((await progressRows(req)).items);
   }));
-  app.get("/api/progress/:key", (req, res) => {
+  app.get("/api/progress/:key", asyncRoute(async (req, res) => {
     const raw = String(req.params.key);
     if (isRemoteProgressKey(raw)) return void res.json(null);
-    const found = progressOf(dataOf(req))[storedProgressKey(raw)];
+    const all = progressOf(dataOf(req));
+    const resolved = await resolveProgressKey(storedProgressKey(raw));
+    // Every row that stands for the same title is a candidate: the title's own, the legacy
+    // `file:` rows resolving to it, and the file this key names. The newest of them answers.
+    const rows = standingKeys(resolved, all, metaStore.qualifiedMeta(), await libraryUnits())
+      .filter((key) => all[key] !== undefined)
+      .map((key): [string, StoredProgress] => [key, all[key]!]);
+    const found = newestProgress(rows, resolved.key)?.[1];
     const visible = !found?.path || pathVisible(found.path, viewerOf(currentUser(req)), store.libraries());
     res.json(found && visible ? { ...found, poster: images.proxied(found.poster) } : null);
-  });
+  }));
   app.post("/api/progress", asyncRoute(async (req, res) => {
     // With tracking switched off the position is written nowhere.
     if (!prefsOf(req).trackProgress) return res.status(204).end();
-    const key = storedProgressKey(String(req.body.key ?? "").trim());
+    const sent = storedProgressKey(String(req.body.key ?? "").trim());
     const position = Number(req.body.position) || 0;
     const duration = Number(req.body.duration) || 0;
-    if (!key) throw new AppError("Missing title key.", "err.missingTitleKey");
-    if (isRemoteProgressKey(key)) throw new AppError("The item was not found.", "err.itemNotFound", 404);
+    if (!sent) throw new AppError("Missing title key.", "err.missingTitleKey");
+    if (isRemoteProgressKey(sent)) throw new AppError("The item was not found.", "err.itemNotFound", 404);
+    // A bound file is stored as its title, so one title keeps one position. The rows the write
+    // replaces are read before the mutator, which stays synchronous.
+    const resolved = await resolveProgressKey(sent);
+    const key = resolved.key;
+    const records = metaStore.qualifiedMeta();
+    const units = await libraryUnits();
+    const legacy = key.startsWith("file:") ? [] : legacyKeysFor(progressOf(dataOf(req)), key, records, units);
     await updateData(req, (data) => {
       const all = { ...progressOf(data) };
+      for (const legacyKey of legacy) delete all[legacyKey];
+      if (resolved.file && resolved.title) delete all[`file:${resolved.file}`];
       const previous = all[key];
       const title = String(req.body.title ?? previous?.title ?? "Video");
+      // A file the title was read from carries the title's own series row, never the player's
+      // idea of one: the binding states the show, and the file names the episode of it.
+      const boundSeries = resolved.title?.type === "series"
+        ? {
+          id: resolved.title.id,
+          name: resolved.title.name || seriesOf(key, { title })?.name || title,
+          season: resolved.title.season!, episode: resolved.title.episode!,
+        }
+        : previous?.series;
       const record: StoredProgress = {
         position, duration,
         title,
-        path: req.body.path ? libraryKey(String(req.body.path)) : previous?.path,
+        path: req.body.path ? libraryKey(String(req.body.path)) : resolved.title ? resolved.file : previous?.path,
         poster: posterOf(req.body.poster) ?? previous?.poster,
         addonKey: typeof req.body.addonKey === "string" ? req.body.addonKey : previous?.addonKey,
-        series: reportedSeries(key, title, req.body.series) ?? previous?.series,
+        series: reportedSeries(key, title, req.body.series) ?? boundSeries,
         updatedAt: new Date().toISOString(),
       };
       const series = seriesOf(key, record);
@@ -406,20 +463,21 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
   }));
   app.delete("/api/progress/:key", asyncRoute(async (req, res) => {
     if (isRemoteProgressKey(String(req.params.key))) return void res.status(404).end();
+    const resolved = await resolveProgressKey(storedProgressKey(String(req.params.key)));
+    const keys = standingKeys(resolved, progressOf(dataOf(req)), metaStore.qualifiedMeta(), await libraryUnits());
     await updateData(req, (data) => {
-      const key = storedProgressKey(String(req.params.key));
       const all = { ...progressOf(data) };
-      const removed = all[key];
-      delete all[key];
-      data.progress = all;
-      // The row a finished episode leaves behind is not stored, so forgetting that row has
-      // to forget the marker that draws it.
-      const series = seriesOf(key, { title: removed?.title ?? "", series: removed?.series });
-      if (series) {
-        const markers = { ...markersOf(data) };
-        delete markers[series.id];
-        data.watchedSeries = markers;
+      const markers = { ...markersOf(data) };
+      // Forgetting either key forgets the title: every row standing for it goes, and every
+      // key deleted takes the marker of the show it names with it.
+      for (const key of keys) {
+        const removed = all[key];
+        delete all[key];
+        const series = seriesOf(key, { title: removed?.title ?? "", series: removed?.series });
+        if (series) delete markers[series.id];
       }
+      data.progress = all;
+      data.watchedSeries = markers;
     });
     res.status(204).end();
   }));
@@ -429,18 +487,23 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     const raw = (req.body ?? {}) as { keys?: unknown };
     if (!Array.isArray(raw.keys)) throw new AppError("The forget request names no keys.", "err.invalidRequest");
     if (raw.keys.length > HOME_FORGET_LIMIT) throw new AppError("Too many keys to forget at once.", "err.invalidRequest");
-    const keys = raw.keys.map((key) => storedProgressKey(String(key))).filter((key) => !isRemoteProgressKey(key));
-    if (!keys.length) return res.status(204).end();
+    const sent = raw.keys.map((key) => storedProgressKey(String(key))).filter((key) => !isRemoteProgressKey(key));
+    if (!sent.length) return res.status(204).end();
+    const records = metaStore.qualifiedMeta();
+    const units = await libraryUnits();
+    const all = progressOf(dataOf(req));
+    const resolved = await Promise.all(sent.map((key) => resolveProgressKey(key)));
+    const keys = [...new Set(resolved.flatMap((entry) => standingKeys(entry, all, records, units)))];
     await updateData(req, (data) => {
-      const all = { ...progressOf(data) };
+      const stored = { ...progressOf(data) };
       const markers = { ...markersOf(data) };
       for (const key of keys) {
-        const removed = all[key];
-        delete all[key];
+        const removed = stored[key];
+        delete stored[key];
         const series = seriesOf(key, { title: removed?.title ?? "", series: removed?.series });
         if (series) delete markers[series.id];
       }
-      data.progress = all;
+      data.progress = stored;
       data.watchedSeries = markers;
     });
     res.status(204).end();
@@ -564,8 +627,15 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     const wire = wirePath(key);
     const poster = await thumbUrl(item.kind === "folder" ? "dir" : "path", wire, art);
     const wideUrl = await thumbUrl(item.kind === "folder" ? "dir" : "path", wire, wide, "wide");
-    const record = metaStore.qualifiedMeta()[key];
-    const stored = progressOf(dataOf(req))[`file:${key}`];
+    const records = metaStore.qualifiedMeta();
+    const record = records[key];
+    // A starred file draws the position of the title it is bound to, wherever that row sits.
+    const all = progressOf(dataOf(req));
+    const resolved = await resolveProgressKey(`file:${key}`);
+    const rows = standingKeys(resolved, all, records, await libraryUnits())
+      .filter((stored) => all[stored] !== undefined)
+      .map((stored): [string, StoredProgress] => [stored, all[stored]!]);
+    const stored = newestProgress(rows, resolved.key)?.[1];
     const progress = stored && stored.duration > 0 ? { position: stored.position, duration: stored.duration } : undefined;
     return {
       kind: "library", path: wire,

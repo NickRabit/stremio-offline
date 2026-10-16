@@ -13,7 +13,7 @@ import {
   type HomeCard, type HomeLayout, type HomeLayoutEntry, type HomeLayoutResponse, type HomeResponse, type HomeRow, type HomeRowError, type HomeRowId,
   type BuiltinHomeRowId, type RemoteHomeCard, type ResumeCatalogueItem, type ResumeFileItem, type ResumeIdentity, type ResumeSources,
 } from "../home.js";
-import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, showsInFavorites, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
+import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, showsInContinueWatching, showsInFavorites, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
 import { isPathWithin, type BrowseItem } from "../library.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { knownTitleEntry } from "../library-match.js";
@@ -80,6 +80,8 @@ export interface HomeDeps extends RouteContext {
   scheduleFileArtwork(key: string, shape?: ArtShape): void;
   scheduleFolderArtwork(key: string, shape?: ArtShape): void;
   wirePath(key: string): string;
+  /** Qualifies a wire path: a row's `path` travels relative while one library is configured. */
+  libraryKey(value: string): string;
   dataOf(req: express.Request): UserData;
   markersOf(data: UserData): Record<string, WatchedMarker>;
   progressOf(data: UserData): Record<string, StoredProgress>;
@@ -138,7 +140,7 @@ const shuffleOf = (raw: unknown): number => {
 };
 
 export function registerHomeRoutes(app: express.Application, deps: HomeDeps): void {
-  const { store, currentUser, requireAccess, personal, remotePersonal, authorityOf, completedJobs, newEpisodes, describeLibraryPath, locateFileArtwork, locateFolderArtworkPair, thumbUrl, scheduleFileArtwork, scheduleFolderArtwork, wirePath, dataOf, markersOf, progressOf, metaStore, seen, suggestionRows, now = Date.now, homeLookupDeadlineMs = HOME_LOOKUP_DEADLINE_MS } = deps;
+  const { store, currentUser, requireAccess, personal, remotePersonal, authorityOf, completedJobs, newEpisodes, describeLibraryPath, libraryKey, locateFileArtwork, locateFolderArtworkPair, thumbUrl, scheduleFileArtwork, scheduleFolderArtwork, wirePath, dataOf, markersOf, progressOf, metaStore, seen, suggestionRows, now = Date.now, homeLookupDeadlineMs = HOME_LOOKUP_DEADLINE_MS } = deps;
 
   /** A key the caller may open now: its library is still configured, switched on and granted.
    *  `pathVisible` covers the removed and the lost-grant case; the enabled switch is Home's.
@@ -203,8 +205,14 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     // The addon's own switches for the row, as the catalogue row reads them: a row whose addon
     // is gone, or that never recorded one, stays. Home also drops an add-on switched off there.
     const addons = store.addons();
+    const libraries = store.libraries();
+    // A title row a bound file wrote carries that file's path, so the library's own switches
+    // hide it exactly as they hide the file half. The path travels wire-shaped; the two
+    // predicates read the stored (qualified) form the file half feeds them.
+    const pathShown = (path: string) => showsInContinueWatching(path, libraries) && (!home || showsOnHome(path, libraries));
     const catalogue: ResumeCatalogueItem[] = progress.items
       .filter((row) => !row.key.startsWith("file:"))
+      .filter((row) => !row.path || pathShown(libraryKey(row.path)))
       .filter((row) => {
         const addon = addons.find((entry) => entry.key === row.addonKey);
         return addon?.showInContinueWatching !== false && (!home || addon?.showOnHome !== false);

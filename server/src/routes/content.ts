@@ -18,6 +18,7 @@ import type { LibraryHealth } from "../library-probe.js";
 import type { TransferProgress } from "../library-transfer.js";
 import { log } from "../logger.js";
 import { assertUsableName } from "../naming.js";
+import { fileProgressKeys, newestProgress, titleProgressKey } from "../progress-identity.js";
 import type { StoredProgress, UserPrefs } from "../store.js";
 import type { UserData } from "../users.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
@@ -167,6 +168,11 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     // a series library sits in one, while a film in a mixed library is a title of its own.
     const seriesTyped = library.type === "series";
     const units = seriesTyped ? [] : await libraryUnits({ stale: true });
+    // A file bound to a title keeps its position under the title's key; the walk answers which
+    // title that is. Read once, so a page of file rows does not ask per row.
+    const progressUnits = await libraryUnits();
+    const progressRecords = metaStore.qualifiedMeta();
+    const progress = progressOf(data);
     const relative = resolved?.relative ?? "";
     const looseEpisodes = seriesTyped || unitFor(libraryPath(library.id, relative), units)?.kind === "series";
     const result = await browseDirectory(library.root, resolved?.relative ?? "", String(req.query.query ?? ""),
@@ -206,7 +212,15 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
         if (!art) scheduleFileArtwork(key);
         if (!wide) scheduleFileArtwork(key, "wide");
       }
-      const watched = progressOf(data)[`file:${key}`];
+      const fileKey = `file:${key}`;
+      const titleKey = titleProgressKey(key, progressRecords, progressUnits, { season: item.season, episode: item.episode })?.key;
+      // A bound file's position may sit under the title key a catalogue play wrote, or under a
+      // key the file was moved away from; every row that names this file is a candidate.
+      const keys = new Set([...fileProgressKeys(progress, key), ...(titleKey ? [titleKey] : [])]);
+      const watched = newestProgress(
+        [...keys].filter((stored) => progress[stored] !== undefined).map((stored): [string, StoredProgress] => [stored, progress[stored]!]),
+        titleKey ?? fileKey,
+      )?.[1];
       const { item: withMeta, backfill } = await attachBrowseMeta({ ...item, path }, prefsOf(req).uiLanguage, { prewarm });
       return {
         ...withMeta,

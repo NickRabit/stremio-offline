@@ -5,6 +5,7 @@ import { test } from "node:test";
 import express from "express";
 import { messageKeyOf } from "../errors.js";
 import { parseLibraryPath, type LibraryRecord } from "../libraries.js";
+import type { LibraryMetaRecord, TitleUnit } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { ResourceError } from "../media-resources.js";
 import type { Store, UserPrefs } from "../store.js";
@@ -33,6 +34,12 @@ interface Harness {
   /** Whose preferences each `prefsOf` call asked for. */
   prefsAsked: string[];
   favoriteCalls: Array<{ relative: string; wanted: boolean; userId: string | undefined }>;
+  /** The library bindings the progress routes resolve a file's title through. */
+  records: Record<string, LibraryMetaRecord>;
+  /** The title units the library walk found. */
+  units: TitleUnit[];
+  /** Keys `describeLibraryPath` must throw on, the way a library that is gone does. */
+  broken: Set<string>;
   /** How many writes reached `updateData`, so a single-operation forget can be counted. */
   updates: number;
   data(user: string): UserData;
@@ -49,6 +56,9 @@ const mount = async (libraries: LibraryRecord[] = []): Promise<Harness> => {
   const users = new Map<string, UserData>([[ALICE, emptyUserData()], [BOB, emptyUserData()]]);
   const prefsAsked: string[] = [];
   const favoriteCalls: Harness["favoriteCalls"] = [];
+  const records: Record<string, LibraryMetaRecord> = {};
+  const units: TitleUnit[] = [];
+  const broken = new Set<string>();
   let updates = 0;
   const userOf = (req?: express.Request) => {
     const id = req?.header("x-user");
@@ -75,19 +85,26 @@ const mount = async (libraries: LibraryRecord[] = []): Promise<Harness> => {
       return users.get(id)!;
     },
     describeLibraryPath: async (key) => {
+      if (broken.has(key)) throw new Error("the library is gone");
       const relative = parseLibraryPath(key)?.relative ?? key;
-      return { kind: "file", path: relative, label: relative.slice(relative.lastIndexOf("/") + 1), season: null, episode: null, size: 0, modified: "2024-01-01T00:00:00.000Z" };
+      const label = relative.slice(relative.lastIndexOf("/") + 1);
+      const numbered = /S(\d+)E(\d+)/i.exec(label);
+      return {
+        kind: "file", path: relative, label,
+        season: numbered ? Number(numbered[1]) : null, episode: numbered ? Number(numbered[2]) : null,
+        size: 0, modified: "2024-01-01T00:00:00.000Z",
+      };
     },
     libraryKey: (value) => value,
     libraryOfKey: (key) => {
       const parsed = parseLibraryPath(key)!;
       return { library: libraries.find((item) => item.id === parsed.libraryId)!, relative: parsed.relative };
     },
-    libraryUnits: async () => [],
+    libraryUnits: async () => units,
     locateFileArtwork: async () => undefined,
     locateFolderArtworkPair: async () => ({ poster: undefined, wide: undefined }),
     markersOf: (data) => data.watchedSeries as Record<string, WatchedMarker>,
-    metaStore: { qualifiedMeta: () => ({}) } as unknown as LibraryMetaStore,
+    metaStore: { qualifiedMeta: () => records } as unknown as LibraryMetaStore,
     posterOf: (value) => (value ? String(value) : undefined),
     prefsOf: (req) => {
       const id = userOf(req);
@@ -131,6 +148,9 @@ const mount = async (libraries: LibraryRecord[] = []): Promise<Harness> => {
     base: `http://127.0.0.1:${port}`,
     prefsAsked,
     favoriteCalls,
+    records,
+    units,
+    broken,
     get updates() { return updates; },
     data: (user) => users.get(user)!,
     close: async () => {
@@ -272,6 +292,199 @@ test("POST /api/progress/forget refuses more than fifty keys and does nothing fo
   const none = await api(harness.base, "/api/progress/forget", { method: "POST", user: ALICE, body: { keys: [] } });
   assert.equal(none.status, 204);
   assert.equal(harness.updates, 0, "an empty list is a no-op, not a write");
+});
+
+const FILM_FILE = "lib_00000001/Films/Heat/Heat.mkv";
+const FILM_KEY = "movie:tt9";
+/** The library the bound-file tests play from; both accounts may see it. */
+const filmLibrary: LibraryRecord = {
+  id: "lib_00000001", name: "Films", type: "mixed", root: "/media/films",
+  enabled: true, order: 0, addedAt: "", writeArtwork: false, visibleTo: [ALICE, BOB],
+};
+
+/** Binds the film's folder the way the library scan does, so a file under it is its title. */
+const bindFilm = (harness: Harness): void => {
+  harness.records["lib_00000001/Films/Heat"] = { type: "movie", id: "tt9", name: "Heat" };
+  harness.units.push({ key: "lib_00000001/Films/Heat", kind: "movie", relative: "Films/Heat", sampleFiles: [FILM_FILE] });
+};
+
+const legacyFilmRow = (position: number, updatedAt: string): StoredProgress =>
+  ({ position, duration: 3600, title: "Heat", path: FILM_FILE, updatedAt });
+
+const readProgress = async (harness: Harness, key: string, user = ALICE): Promise<StoredProgress | null> =>
+  (await (await api(harness.base, `/api/progress/${encodeURIComponent(key)}`, { user })).json()) as StoredProgress | null;
+
+test("a bound file's position is stored as its title and read back under both keys", async (t) => {
+  const harness = await mount([filmLibrary]);
+  t.after(harness.close);
+  bindFilm(harness);
+
+  const response = await api(harness.base, "/api/progress", {
+    method: "POST", user: ALICE,
+    body: { key: `file:${FILM_FILE}`, path: FILM_FILE, title: "Heat", position: 120, duration: 3600 },
+  });
+
+  assert.equal(response.status, 204);
+  assert.deepEqual(Object.keys(harness.data(ALICE).progress), [FILM_KEY], "one title keeps one row");
+  const stored = harness.data(ALICE).progress[FILM_KEY] as StoredProgress;
+  assert.equal(stored.position, 120);
+  assert.equal(stored.path, FILM_FILE, "the title's row keeps the file it was played from");
+  assert.equal((await readProgress(harness, `file:${FILM_FILE}`))?.position, 120, "the file key answers the title's row");
+  assert.equal((await readProgress(harness, FILM_KEY))?.position, 120);
+});
+
+test("a legacy file row is read as its title, and the newest of the two answers", async (t) => {
+  const harness = await mount([filmLibrary]);
+  t.after(harness.close);
+  bindFilm(harness);
+  const fileKey = `file:${FILM_FILE}`;
+
+  harness.data(ALICE).progress = { [fileKey]: legacyFilmRow(10, "2024-01-01T00:00:00.000Z") };
+  assert.equal((await readProgress(harness, FILM_KEY))?.position, 10, "a row stored before this change is the title's too");
+
+  harness.data(ALICE).progress[FILM_KEY] = legacyFilmRow(20, "2024-01-02T00:00:00.000Z");
+  assert.equal((await readProgress(harness, FILM_KEY))?.position, 20, "the newer title row wins");
+
+  harness.data(ALICE).progress[fileKey] = legacyFilmRow(30, "2024-01-03T00:00:00.000Z");
+  assert.equal((await readProgress(harness, FILM_KEY))?.position, 30, "a newer legacy row wins too");
+});
+
+test("playing a title the catalogue way leaves no legacy file row behind", async (t) => {
+  const harness = await mount([filmLibrary]);
+  t.after(harness.close);
+  bindFilm(harness);
+  harness.data(ALICE).progress = { [`file:${FILM_FILE}`]: legacyFilmRow(10, "2024-01-01T00:00:00.000Z") };
+
+  const response = await api(harness.base, "/api/progress", {
+    method: "POST", user: ALICE, body: { key: FILM_KEY, title: "Heat", position: 40, duration: 3600 },
+  });
+
+  assert.equal(response.status, 204);
+  assert.deepEqual(Object.keys(harness.data(ALICE).progress), [FILM_KEY]);
+  assert.equal((harness.data(ALICE).progress[FILM_KEY] as StoredProgress).position, 40);
+});
+
+test("a file key reads and forgets a title row that names it", async (t) => {
+  const harness = await mount([filmLibrary]);
+  t.after(harness.close);
+  const file = "lib_00000001/Shows/Dark/S01/Dark.S01E01.mkv";
+  const fileKey = `file:${file}`;
+  harness.records["lib_00000001/Shows/Dark"] = { type: "series", id: "tt5", name: "Dark" };
+  harness.units.push({ key: "lib_00000001/Shows/Dark", kind: "series", relative: "Shows/Dark", sampleFiles: [file] });
+  // A row keeps the key it was written with when the file moves to another season; only its
+  // `path` says which file it came from, and that is what a read through the file key finds.
+  harness.data(ALICE).progress = { "series:tt5:3:9": { position: 30, duration: 100, title: "Dark", path: file, updatedAt: "2024-01-03T00:00:00.000Z" } };
+
+  assert.equal((await readProgress(harness, fileKey))?.position, 30, "the row that names the file answers it");
+
+  const removed = await api(harness.base, `/api/progress/${encodeURIComponent(fileKey)}`, { method: "DELETE", user: ALICE });
+  assert.equal(removed.status, 204);
+  assert.deepEqual(harness.data(ALICE).progress, {}, "forgetting the file forgets the row that names it");
+});
+
+test("forgetting either key forgets the title and its legacy row", async (t) => {
+  const harness = await mount([filmLibrary]);
+  t.after(harness.close);
+  bindFilm(harness);
+  const fileKey = `file:${FILM_FILE}`;
+  const both = () => ({ [fileKey]: legacyFilmRow(10, "2024-01-01T00:00:00.000Z"), [FILM_KEY]: legacyFilmRow(20, "2024-01-02T00:00:00.000Z") });
+
+  harness.data(ALICE).progress = both();
+  const removed = await api(harness.base, `/api/progress/${encodeURIComponent(fileKey)}`, { method: "DELETE", user: ALICE });
+  assert.equal(removed.status, 204);
+  assert.deepEqual(harness.data(ALICE).progress, {});
+  assert.equal(await readProgress(harness, fileKey), null);
+  assert.equal(await readProgress(harness, FILM_KEY), null);
+
+  harness.data(ALICE).progress = both();
+  const forgotten = await api(harness.base, "/api/progress/forget", { method: "POST", user: ALICE, body: { keys: [FILM_KEY] } });
+  assert.equal(forgotten.status, 204);
+  assert.deepEqual(harness.data(ALICE).progress, {});
+  assert.equal(await readProgress(harness, fileKey), null, "the legacy row went with the title");
+});
+
+test("a bound episode file writes the show's episode row and leaves the catalogue marker", async (t) => {
+  const harness = await mount([filmLibrary]);
+  t.after(harness.close);
+  const file = "lib_00000001/Shows/Dark/S01/Dark.S01E02.mkv";
+  harness.records["lib_00000001/Shows/Dark"] = { type: "series", id: "tt5", name: "Dark" };
+  harness.units.push({ key: "lib_00000001/Shows/Dark", kind: "series", relative: "Shows/Dark", sampleFiles: [file] });
+
+  const response = await api(harness.base, "/api/progress", {
+    method: "POST", user: ALICE,
+    body: { key: `file:${file}`, path: file, title: "Dark · Episode Two", position: 120, duration: 2400 },
+  });
+
+  assert.equal(response.status, 204);
+  assert.deepEqual(Object.keys(harness.data(ALICE).progress), ["series:tt5:1:2"]);
+  assert.deepEqual((harness.data(ALICE).progress["series:tt5:1:2"] as StoredProgress).series,
+    { id: "tt5", name: "Dark", season: 1, episode: 2 }, "the binding names the show");
+
+  const finished = await api(harness.base, "/api/progress", {
+    method: "POST", user: ALICE, body: { key: `file:${file}`, path: file, title: "Dark · Episode Two", position: 95, duration: 100 },
+  });
+  assert.equal(finished.status, 204);
+  assert.deepEqual(harness.data(ALICE).progress, {}, "a finished episode keeps no row of its own");
+
+  const catalogue = await api(harness.base, "/api/progress", {
+    method: "POST", user: BOB,
+    body: { key: "series:tt5:1:2", title: "Dark · Episode Two", position: 95, duration: 100, series: { id: "tt5", name: "Dark", season: 1, episode: 2 } },
+  });
+  assert.equal(catalogue.status, 204);
+  const fromFile = harness.data(ALICE).watchedSeries?.tt5;
+  const fromCatalogue = harness.data(BOB).watchedSeries?.tt5;
+  assert.ok(fromFile && fromCatalogue);
+  assert.deepEqual(
+    { ...fromFile, updatedAt: "" },
+    { ...fromCatalogue, updatedAt: "" },
+    "the file's episode leaves the marker a catalogue episode leaves",
+  );
+});
+
+test("an unbound file keeps its own file key", async (t) => {
+  const harness = await mount([filmLibrary]);
+  t.after(harness.close);
+  const key = "file:lib_00000001/Films/Loose.mkv";
+
+  assert.equal((await api(harness.base, "/api/progress", {
+    method: "POST", user: ALICE, body: { key, path: "lib_00000001/Films/Loose.mkv", title: "Loose", position: 120, duration: 2400 },
+  })).status, 204);
+
+  assert.deepEqual(Object.keys(harness.data(ALICE).progress), [key]);
+  assert.equal((await readProgress(harness, key))?.position, 120);
+  assert.equal((await api(harness.base, `/api/progress/${encodeURIComponent(key)}`, { method: "DELETE", user: ALICE })).status, 204);
+  assert.deepEqual(harness.data(ALICE).progress, {});
+});
+
+test("a file key naming a library that is gone still reads and removes its stored row", async (t) => {
+  const harness = await mount([filmLibrary]);
+  t.after(harness.close);
+  const file = "lib_00000009/Films/Gone.mkv";
+  const key = `file:${file}`;
+  harness.broken.add(file);
+  harness.data(ALICE).progress = { [key]: { position: 10, duration: 100, title: "Gone", path: file, updatedAt: "2024-01-01T00:00:00.000Z" } };
+
+  const read = await api(harness.base, `/api/progress/${encodeURIComponent(key)}`, { user: ALICE });
+  assert.equal(read.status, 200, "the read is answered, not refused");
+  assert.equal(await read.json(), null, "the row is hidden along with the library that owned it");
+
+  const removed = await api(harness.base, `/api/progress/${encodeURIComponent(key)}`, { method: "DELETE", user: ALICE });
+  assert.equal(removed.status, 204);
+  assert.deepEqual(harness.data(ALICE).progress, {}, "the stored row is removed");
+});
+
+test("a bound file's position is written nowhere while tracking is off", async (t) => {
+  const harness = await mount([filmLibrary]);
+  t.after(harness.close);
+  bindFilm(harness);
+  harness.data(BOB).prefs = { trackProgress: false };
+
+  const response = await api(harness.base, "/api/progress", {
+    method: "POST", user: BOB, body: { key: `file:${FILM_FILE}`, path: FILM_FILE, title: "Heat", position: 120, duration: 3600 },
+  });
+
+  assert.equal(response.status, 204);
+  assert.deepEqual(harness.data(BOB).progress, {}, "the person's own switch decides before the key is resolved");
 });
 
 test("POST /api/library/favorite hands setLibraryFavorite the relative path and the wanted state", async (t) => {

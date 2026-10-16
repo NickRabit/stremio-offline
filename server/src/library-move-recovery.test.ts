@@ -191,6 +191,15 @@ const storedFavorites = async (env: Env) => {
   };
   return Object.values(state.userData ?? {}).flatMap((data) => data.favorites ?? []);
 };
+/** The progress rows as they sit in the state file, key and stored `path`. A read through the old
+ *  file key may answer the title's row -- that is the alias -- so what the move left behind is
+ *  read back here. */
+const storedProgress = async (env: Env) => {
+  const state = JSON.parse(await readFile(path.join(env.dataDir, "state.json"), "utf8")) as {
+    userData?: Record<string, { progress?: Record<string, { path?: string }> }>;
+  };
+  return Object.values(state.userData ?? {}).flatMap((data) => Object.entries(data.progress ?? {}));
+};
 /** The state a completed cross-library move has to show: everything under the new path. */
 const assertMovedState = async (env: Env) => {
   const from = `${env.a}/${ITEM}`;
@@ -199,7 +208,8 @@ const assertMovedState = async (env: Env) => {
   assert.ok(stars.includes(to), "the star follows the item");
   assert.ok(!stars.includes(from), "the old path is not a favourite any more");
   assert.notEqual(await progressAt(env, `file:${to}`), null, "the position is under the new key");
-  assert.equal(await progressAt(env, `file:${from}`), null, "the old key holds nothing");
+  const rows = await storedProgress(env);
+  assert.equal(rows.filter(([key, row]) => key === `file:${from}` || row.path === from).length, 0, "nothing is stored for the old path");
   assert.equal((await identityOf(env, to)).bound?.id, "tt0000001", "the moved item resolves to the matched title");
 };
 

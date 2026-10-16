@@ -1782,3 +1782,25 @@ test("a catalogue star does not fold onto a library copy of another kind", async
   assert.deepEqual(body.items.map((item) => item.kind), ["catalog"]);
   assert.equal(body.items[0]!.type, "series");
 });
+
+test("a title row written from a library file follows that library's two switches", async (t) => {
+  const films = library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] });
+  const harness = await mount({ libraries: [films] });
+  t.after(harness.close);
+  // The row is a catalogue one -- it carries no `file:` key -- but the file it was played from
+  // decided which library it belongs to, and the path travels relative over the wire.
+  harness.data(ALICE).progress = {
+    "movie:tt9": { position: 120, duration: 2400, title: "Zkušební film", path: "lib_00000001/Films/Heat.mkv", updatedAt: "2024-01-02T00:00:00.000Z" },
+  };
+
+  assert.deepEqual((await resumePageOf(harness)).items.map((item) => item.key), ["movie:tt9"], "the section keeps a row whose library is shown");
+
+  films.showInContinueWatching = false;
+  assert.deepEqual((await resumePageOf(harness)).items, [], "the section honours the library's own switch");
+
+  films.showInContinueWatching = true;
+  films.showOnHome = false;
+  assert.deepEqual((await resumePageOf(harness)).items.map((item) => item.key), ["movie:tt9"], "the section reads only `showInContinueWatching`");
+  const rows = await allRows(harness, ALICE);
+  assert.deepEqual(rows.resume!.items, [], "Home drops the row with the library");
+});

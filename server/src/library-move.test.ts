@@ -421,6 +421,22 @@ const reportProgress = (target: string) =>
 
 const progressAt = async (key: string) => (await api(`/api/progress/${encodeURIComponent(key)}`)).json();
 
+/** The stored progress rows, key and stored `path`, as the state file holds them. A read through
+ *  a file key may answer the title's row -- that is the alias this suite now expects -- so what a
+ *  move left behind is read from the store itself. */
+const storedProgress = async (): Promise<Array<[string, string | undefined]>> => {
+  const state = JSON.parse(await readFile(path.join(dataDir, "state.json"), "utf8")) as {
+    userData?: Record<string, { progress?: Record<string, { path?: string }> }>;
+  };
+  return Object.values(state.userData ?? {}).flatMap((data) =>
+    Object.entries(data.progress ?? {}).map(([key, row]) => [key, row.path] as [string, string | undefined]));
+};
+
+const assertNothingStoredFor = async (file: string) => {
+  const rows = await storedProgress();
+  assert.equal(rows.filter(([key, stored]) => key === `file:${file}` || stored === file).length, 0, `nothing is stored for ${file}`);
+};
+
 const identify = (target: string) =>
   api("/api/library/match", { method: "POST", body: { path: target, type: "series", id: "tt0000001" } });
 
@@ -450,7 +466,7 @@ test("a queued move into another library carries the item's state", async () => 
   assert.ok(!stars.includes(from), "the old path is not a favourite any more");
 
   assert.notEqual(await progressAt(`file:${to}`), null, "the position is under the new key");
-  assert.equal(await progressAt(`file:${from}`), null, "the old key holds nothing");
+  await assertNothingStoredFor(from);
 
   assert.equal(identified.status, 200, "the manual match is accepted");
   assert.ok(sourceRow, "the match row reached the source library file");
@@ -488,7 +504,7 @@ test("a queued move inside one library carries the item's state", async () => {
   assert.ok(!stars.includes(from), "the old path is not a favourite any more");
 
   assert.notEqual(await progressAt(`file:${to}`), null, "the position is under the new key");
-  assert.equal(await progressAt(`file:${from}`), null, "the old key holds nothing");
+  await assertNothingStoredFor(from);
 
   assert.equal(identified.status, 200, "the manual match is accepted");
   assert.ok(sourceRow, "the match row reached the source library file");
@@ -521,7 +537,9 @@ test("a queued copy into another library carries the title and leaves the person
   assert.ok(!stars.includes(to), "the copy is not added as a favourite");
 
   assert.notEqual(await progressAt(`file:${from}`), null, "the original keeps its position");
-  assert.equal(await progressAt(`file:${to}`), null, "the copy has no position of its own");
+  // The copy is bound to the same title, so it shows the one position that title keeps.
+  const copied = await progressAt(`file:${to}`) as { position: number } | null;
+  assert.equal(copied?.position, 120, "the copy shows the title's position");
 
   assert.equal(identified.status, 200, "the manual match is accepted");
   assert.ok(sourceRow, "the match row reached the source library file");
