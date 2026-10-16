@@ -32,6 +32,11 @@ stalling worse.
 
 ## Seeking
 
+Converted segments currently stay in `DATA_DIR/playback` for the lifetime of
+their generation. The proposed [bounded playback buffer](playback-buffer-spec.md)
+describes RAM storage, safe eviction, and the verification required before
+changing this behavior; it is not implemented yet.
+
 Inside an already converted stretch, seeking is instant. A jump further ahead
 restarts conversion from the new position with `-ss`. HTTP Range means nothing
 before that point is downloaded, so a jump anywhere in a film takes about a
