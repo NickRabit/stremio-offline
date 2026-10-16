@@ -1,18 +1,25 @@
 package cz.stremiooffline.tv.ui.catalog
 
 import androidx.compose.foundation.layout.size
-import androidx.tv.material3.Icon
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.tv.material3.Icon
+import androidx.tv.material3.Text
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
 import cz.stremiooffline.tv.ui.components.outlineIcon
+import cz.stremiooffline.tv.ui.theme.Tokens
 
 /**
  * The name of the icon button that holds the remote, shown beside the action row. An icon alone
@@ -21,6 +28,69 @@ import cz.stremiooffline.tv.ui.components.outlineIcon
  */
 class ActionCaption {
   var text by mutableStateOf("")
+}
+
+/** One secondary action of a detail's action row. */
+class DetailAction(
+  val label: String,
+  val icon: ImageVector?,
+  val onClick: () -> Unit,
+  val tag: String,
+  val enabled: Boolean = true,
+  /** A text glyph instead of the icon (the favourite star). */
+  val glyph: String = "",
+  /** Extra modifiers the caller needs on the button (focus requesters, focus listeners). */
+  val modifier: Modifier = Modifier,
+)
+
+/**
+ * The one action row every title detail draws, in the one order the details share: Play, Start
+ * over, Sources, To library, Favourite, Mark as unwatched, Mark watched, then [extras] in the order
+ * given. A null action is not drawn. The focused icon's name is shown after the last button.
+ */
+@Composable
+fun DetailActionRow(
+  primary: @Composable () -> Unit,
+  startOver: DetailAction?,
+  sources: (@Composable () -> Unit)?,
+  toLibrary: DetailAction?,
+  favourite: DetailAction,
+  unwatched: DetailAction?,
+  watched: DetailAction?,
+  caption: ActionCaption,
+  modifier: Modifier = Modifier,
+  extras: List<DetailAction> = emptyList(),
+) {
+  Row(
+    modifier = modifier,
+    horizontalArrangement = Arrangement.spacedBy(11.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    primary()
+    startOver?.let { DetailActionButton(it, caption) }
+    sources?.invoke()
+    toLibrary?.let { DetailActionButton(it, caption) }
+    DetailActionButton(favourite, caption)
+    unwatched?.let { DetailActionButton(it, caption) }
+    watched?.let { DetailActionButton(it, caption) }
+    extras.forEach { DetailActionButton(it, caption) }
+    if (caption.text.isNotEmpty()) {
+      Text(caption.text, color = Tokens.Muted, fontSize = 12.sp, maxLines = 1)
+    }
+  }
+}
+
+@Composable
+private fun DetailActionButton(action: DetailAction, caption: ActionCaption) {
+  ActionIconButton(
+    label = action.label,
+    icon = action.icon,
+    onClick = action.onClick,
+    caption = caption,
+    modifier = action.modifier.testTag(action.tag),
+    enabled = action.enabled,
+    glyph = action.glyph,
+  )
 }
 
 /** A square icon button for a secondary action; [label] is its spoken name and its caption. */
@@ -55,6 +125,34 @@ val ReplayIcon: ImageVector = outlineIcon("Replay") {
   moveTo(3.51f, 15f)
   arcToRelative(9f, 9f, 0f, isMoreThanHalf = true, isPositiveArc = false, dx1 = 2.13f, dy1 = -9.36f)
   lineTo(1f, 10f)
+}
+
+/** Mark watched: the open eye, with the pupil drawn as two half circles. */
+val EyeIcon: ImageVector = outlineIcon("Eye") {
+  moveTo(2f, 12f)
+  curveTo(4.5f, 7f, 8f, 5f, 12f, 5f)
+  curveTo(16f, 5f, 19.5f, 7f, 22f, 12f)
+  curveTo(19.5f, 17f, 16f, 19f, 12f, 19f)
+  curveTo(8f, 19f, 4.5f, 17f, 2f, 12f)
+  close()
+  moveTo(15f, 12f)
+  arcTo(3f, 3f, 0f, isMoreThanHalf = false, isPositiveArc = true, x1 = 9f, y1 = 12f)
+  arcTo(3f, 3f, 0f, isMoreThanHalf = false, isPositiveArc = true, x1 = 15f, y1 = 12f)
+}
+
+/** Mark as unwatched: the same eye, struck through. */
+val EyeOffIcon: ImageVector = outlineIcon("EyeOff") {
+  moveTo(2f, 12f)
+  curveTo(4.5f, 7f, 8f, 5f, 12f, 5f)
+  curveTo(16f, 5f, 19.5f, 7f, 22f, 12f)
+  curveTo(19.5f, 17f, 16f, 19f, 12f, 19f)
+  curveTo(8f, 19f, 4.5f, 17f, 2f, 12f)
+  close()
+  moveTo(15f, 12f)
+  arcTo(3f, 3f, 0f, isMoreThanHalf = false, isPositiveArc = true, x1 = 9f, y1 = 12f)
+  arcTo(3f, 3f, 0f, isMoreThanHalf = false, isPositiveArc = true, x1 = 15f, y1 = 12f)
+  moveTo(3f, 3f)
+  lineTo(21f, 21f)
 }
 
 val ForgetIcon: ImageVector = outlineIcon("Forget") {

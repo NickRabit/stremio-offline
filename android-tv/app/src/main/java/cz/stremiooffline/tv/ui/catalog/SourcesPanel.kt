@@ -576,6 +576,20 @@ internal fun SourceRow(
 internal fun streamLabel(stream: StreamDto): String =
   stream.name ?: stream.title?.split("\n")?.firstOrNull() ?: stream.description?.split("\n")?.firstOrNull() ?: ""
 
+/**
+ * The line under the action row naming the source the viewer chose in the panel, as `group · label
+ * · size`: the same parts the catalogue detail has always drawn for its own pick, so all three
+ * details name a chosen row the same way.
+ */
+internal fun chosenSourceCaption(stream: StreamDto): List<String> {
+  val local = Streams.isLocalStream(stream)
+  val label = if (local) stream.behaviorHints?.filename ?: streamLabel(stream) else streamLabel(stream)
+  return listOfNotNull(
+    sourceGroupName(stream)?.takeIf { it.isNotBlank() },
+    label.takeIf { it.isNotBlank() },
+    formatSize(Streams.streamSize(stream)),
+  )
+}
 
 /**
  * The web's three filter menus as chips. Kept out of the detail screen on purpose: that

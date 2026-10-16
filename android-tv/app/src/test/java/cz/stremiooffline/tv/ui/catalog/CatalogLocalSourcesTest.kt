@@ -181,6 +181,32 @@ class CatalogLocalSourcesTest {
   }
 
   @Test
+  fun `Show in library is offered while an addon row is the active pick`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    api.streamSourcesValues["movie:tt1"] = listOf(source("alpha"))
+    api.addonStreams["movie:tt1|alpha"] = listOf(stream("srcA", "Czech 8 GB", "Alpha"))
+    api.localStreamsResult = listOf(local())
+    mount(api)
+    compose.waitForIdle()
+
+    openSources()
+    compose.onNodeWithTag(sourceRowTag(0)).assert(hasText("Local"))
+    compose.onNodeWithTag(sourceRowTag(1)).assert(hasText("Alpha"))
+
+    // The addon row becomes the pick, so the copy on disk is no longer the row Play would play --
+    // and Show in library is still offered for it.
+    press(Key.DirectionDown)
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagCatalogShowInLibrary).assertExists()
+
+    focusFromLeft(TagCatalogShowInLibrary)
+    press(Key.DirectionCenter)
+
+    assertEquals(listOf("Filmy/Heat (1995)"), shownInLibrary)
+  }
+
+  @Test
   fun `a failing streamSources still loads and plays the local row`() {
     val api = FakeTvApi()
     api.settingsValue = settings()

@@ -64,6 +64,7 @@ import cz.stremiooffline.tv.data.DownloadTargetDto
 import cz.stremiooffline.tv.data.LibraryDto
 import cz.stremiooffline.tv.data.MediaDto
 import cz.stremiooffline.tv.diagnostics.AppLog
+import cz.stremiooffline.tv.playback.Progress
 import cz.stremiooffline.tv.ui.components.BrandMark
 import cz.stremiooffline.tv.ui.components.outlineIcon
 import cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs
@@ -364,6 +365,8 @@ fun Shell(
       sourcesApi = api,
       loadDestinations = nativeDestinations,
       onQueue = nativeQueue,
+      // Mark watched stores the file's own key as finished, exactly as the player's last seconds do.
+      markWatched = { file -> api.saveProgress(Progress.libraryKey(file.path), 1.0, 1.0, file.label, file.path, null, null, null) },
     )
   }
 

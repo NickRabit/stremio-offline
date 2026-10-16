@@ -6,7 +6,6 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
@@ -21,7 +20,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -53,8 +51,11 @@ import cz.stremiooffline.tv.data.RemoteProviderIdsDto
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.playback.Progress
 import cz.stremiooffline.tv.ui.catalog.ActionCaption
-import cz.stremiooffline.tv.ui.catalog.ActionIconButton
-import cz.stremiooffline.tv.ui.catalog.ForgetIcon
+import cz.stremiooffline.tv.ui.catalog.DetailAction
+import cz.stremiooffline.tv.ui.catalog.DetailActionRow
+import cz.stremiooffline.tv.ui.catalog.DownloadIcon
+import cz.stremiooffline.tv.ui.catalog.EyeIcon
+import cz.stremiooffline.tv.ui.catalog.EyeOffIcon
 import cz.stremiooffline.tv.ui.catalog.NativeCopyRequest
 import cz.stremiooffline.tv.ui.catalog.NativeQueuePanel
 import cz.stremiooffline.tv.ui.catalog.NativeSourceState
@@ -64,6 +65,7 @@ import cz.stremiooffline.tv.ui.catalog.ReplayIcon
 import cz.stremiooffline.tv.ui.catalog.SourceFilterState
 import cz.stremiooffline.tv.ui.catalog.SourceSaveRequest
 import cz.stremiooffline.tv.ui.catalog.SourceSaveState
+import cz.stremiooffline.tv.ui.catalog.chosenSourceCaption
 import cz.stremiooffline.tv.ui.catalog.nativeAddonIdentity
 import cz.stremiooffline.tv.ui.catalog.nativeCopyTitle
 import cz.stremiooffline.tv.ui.catalog.nativeCopySubject
@@ -91,6 +93,9 @@ const val TagRemoteStateCaption = "remote_state_caption"
 const val TagRemoteSourcesRetry = "remote_sources_retry"
 const val TagRemoteStateRetry = "remote_state_retry"
 const val TagRemoteDetailToLibrary = "remote_to_library"
+const val TagRemoteDetailMarkWatched = "remote_detail_mark_watched"
+const val TagRemoteDetailMarkUnwatched = "remote_detail_mark_unwatched"
+const val TagRemoteDetailPickCaption = "remote_detail_pick_caption"
 const val TagRemoteCopyNotice = "remote_copy_notice"
 const val TagRemoteSourceNotice = "remote_source_notice"
 
@@ -354,10 +359,31 @@ fun RemoteDetailScreen(
     )
   }
 
+  /** The play one picked row starts, exactly as the player starts any other: Play and Start over
+   *  act on the pick, on the item's leading version while there is none. */
+  fun playPicked(resume: Boolean): Boolean {
+    val pick = pickedRow ?: return false
+    val wanted = nativeRowTarget(pick, titleOf(data), sourcesIdentity, loadedRows, data.item.poster) ?: return false
+    onPlay(if (resume) wanted else wanted.copy(resume = false))
+    return true
+  }
+
+  fun playPressed() {
+    // A picked row travels as nativeRowTarget makes it; the player re-checks what a resume means
+    // for that exact version.
+    if (playPicked(resume = true)) return
+    play(primary, resume = resuming)
+  }
+
+  fun startOverPressed() {
+    if (playPicked(resume = false)) return
+    play(primary, resume = false)
+  }
+
   /** One row of the sources panel: a media-server version plays its own exact item, a library copy
-   *  plays the file on disk, and an addon row plays the title through the generic identity its
-   *  rows were loaded under. Every play carries the whole loaded list, so the player offers it and
-   *  discovers nothing of its own. */
+   *  plays the file on disk, and an addon row plays the title through the generic identity its rows
+   *  were loaded under. Choosing only picks: Play, Start over and To library act on the pick once
+   *  the panel is gone. */
   fun choosePanelRow(row: StreamDto) {
     saveGeneration++
     save.resolving = false
@@ -367,10 +393,8 @@ fun RemoteDetailScreen(
       sourceNotice = torrentText
       return
     }
-    val wanted = nativeRowTarget(row, titleOf(data), sourcesIdentity, loadedRows, data.item.poster) ?: return
     pickedRow = row
     sourceNotice = null
-    onPlay(wanted)
   }
 
   /** Whether one panel row may offer its own Save: any row but a copy that is already on disk, and
@@ -378,6 +402,13 @@ fun RemoteDetailScreen(
   fun canSaveRow(row: StreamDto): Boolean =
     onQueue != null && loadDestinations != null &&
       !Streams.isLocalStream(row) && Streams.canQueue(row, groups?.realDebridConfigured == true)
+
+  /** The row the panel picked, while it is still one of the rows the panel holds. */
+  val pickedCopy = pickedRow?.takeIf { row -> loadedRows.any { it === row } }
+  /** The pick To library copies through its own row: any pick that is not one of the item's own
+   *  versions. Without one, or with such a version picked, the item's own copy panel is what opens. */
+  val copyPick = pickedCopy?.takeIf { row -> sources.none { it === row } }
+  val copyOffered = if (copyPick == null) canCopy else canSaveRow(copyPick)
 
   /** Reads, at the viewer's Save press, the destinations this one row may be queued into, then
    *  opens the panel with exactly that row. Nothing is queued blind and no first candidate is
@@ -520,6 +551,14 @@ fun RemoteDetailScreen(
         if (live.value == mine) forgetBusy = false
       }
     }
+  }
+
+  /** Mark as unwatched: the watched flag when it is set, and the stored position when there is one,
+   *  both through the same state endpoint the two single toggles use. */
+  fun markUnwatched() {
+    if (watchedBusy || forgetBusy || !stateLoaded) return
+    if (watched) toggleWatched()
+    if ((stored?.position ?: 0.0) > 0.0) forgetProgress()
   }
 
   /** Reads, once the action is pressed, the parent series, the versions and the destinations the
@@ -683,77 +722,89 @@ fun RemoteDetailScreen(
       Text(stringResource(R.string.media_server_state_local), color = Tokens.Muted, fontSize = 10.sp, modifier = Modifier.testTag(TagRemoteStateCaption))
       Spacer(Modifier.height(3.dp))
 
-      Row(horizontalArrangement = Arrangement.spacedBy(11.dp), verticalAlignment = Alignment.CenterVertically) {
-        FocusButton(
-          text = stringResource(if (resuming) R.string.tv_resume else R.string.tv_play),
-          onClick = { play(primary, resume = resuming) },
-          kind = FocusButtonKind.Primary,
-          enabled = primary != null,
-          modifier = Modifier.focusRequester(playFocus).testTag(TagRemoteDetailPlay),
-        )
-        if (resuming || savedOnPrimary) {
-          ActionIconButton(
-            label = stringResource(R.string.tv_start_over),
-            icon = ReplayIcon,
-            onClick = { play(primary, resume = false) },
-            caption = caption,
-            modifier = Modifier.testTag(TagRemoteDetailStartOver),
-          )
-        }
-        if (versionsAvailable) {
+      DetailActionRow(
+        primary = {
           FocusButton(
-            // One action name for the panel wherever it is opened from: the catalogue's own heading.
-            text = stringResource(R.string.sources_heading),
-            onClick = {
-              saveGeneration++
-              save.resolving = false
-              sourceListOpen = true
-            },
-            modifier = Modifier.focusRequester(versionsFocus).testTag(TagRemoteDetailVersions),
+            text = stringResource(if (resuming) R.string.tv_resume else R.string.tv_play),
+            onClick = { playPressed() },
+            kind = FocusButtonKind.Primary,
+            enabled = primary != null,
+            modifier = Modifier.focusRequester(playFocus).testTag(TagRemoteDetailPlay),
           )
-        }
-        // The copy action is shown only when an exactly copyable version is in hand: the device
-        // save stays denied and a denied native right offers nothing rather than a failing button.
-        if (canCopy) {
-          FocusButton(
-            text = stringResource(R.string.save_to_library),
-            onClick = { openCopy() },
-            enabled = !copyResolving && !copyBusy,
-            modifier = Modifier.focusRequester(copyFocus).testTag(TagRemoteDetailToLibrary),
-          )
-        }
-        // The local toggles act on the stored state; without it they would be no-ops, so they are
-        // not drawn at all until the state is known.
-        if (stateLoaded) {
-          ActionIconButton(
-            label = stringResource(if (favorite) R.string.favorite_remove else R.string.favorite_add),
-            icon = null,
-            glyph = if (favorite) "★" else "☆",
-            onClick = { toggleFavourite() },
-            enabled = !favouriteBusy && !watchedBusy,
-            caption = caption,
-            modifier = Modifier.testTag(TagRemoteDetailFavorite),
-          )
-          ActionIconButton(
-            label = stringResource(if (watched) R.string.media_server_unwatch else R.string.media_server_mark_watched),
-            icon = null,
-            glyph = if (watched) "✔" else "✓",
-            onClick = { toggleWatched() },
-            enabled = !favouriteBusy && !watchedBusy,
-            caption = caption,
-          )
-          // A stored position is this item's to forget, through the same state endpoint.
-          if ((stored?.position ?: 0.0) > 0) {
-            ActionIconButton(
-              label = stringResource(R.string.tv_forget_progress),
-              icon = ForgetIcon,
-              onClick = { forgetProgress() },
-              enabled = !favouriteBusy && !watchedBusy && !forgetBusy,
-              caption = caption,
+        },
+        startOver = if (resuming || savedOnPrimary) DetailAction(
+          label = stringResource(R.string.tv_start_over),
+          icon = ReplayIcon,
+          tag = TagRemoteDetailStartOver,
+          onClick = { startOverPressed() },
+        ) else null,
+        sources = if (versionsAvailable) {
+          {
+            FocusButton(
+              // One action name for the panel wherever it is opened from: the catalogue's heading.
+              text = stringResource(R.string.sources_heading),
+              onClick = {
+                saveGeneration++
+                save.resolving = false
+                sourceListOpen = true
+              },
+              modifier = Modifier.focusRequester(versionsFocus).testTag(TagRemoteDetailVersions),
+            )
+          }
+        } else {
+          null
+        },
+        // The copy action is shown only when the row it would copy may be: the item's own projected
+        // right while no row, or one of its own versions, is the pick, and the pick's own right for
+        // any other row. A denied native right offers nothing rather than a failing button.
+        toLibrary = if (copyOffered) DetailAction(
+          label = stringResource(R.string.save_to_library),
+          icon = DownloadIcon,
+          tag = TagRemoteDetailToLibrary,
+          enabled = !copyResolving && !copyBusy,
+          modifier = Modifier.focusRequester(copyFocus),
+          onClick = { copyPick?.let { saveRow(it) } ?: openCopy() },
+        ) else null,
+        favourite = DetailAction(
+          label = stringResource(if (favorite) R.string.favorite_remove else R.string.favorite_add),
+          icon = null,
+          glyph = if (favorite) "★" else "☆",
+          tag = TagRemoteDetailFavorite,
+          enabled = stateLoaded && !favouriteBusy && !watchedBusy,
+          onClick = { toggleFavourite() },
+        ),
+        // The local toggles act on the stored state; without it they would be no-ops, so they stay
+        // disabled until the state is known.
+        unwatched = if (stateLoaded && (watched || (stored?.position ?: 0.0) > 0.0)) DetailAction(
+          label = stringResource(R.string.media_server_unwatch),
+          icon = EyeOffIcon,
+          tag = TagRemoteDetailMarkUnwatched,
+          enabled = !favouriteBusy && !watchedBusy && !forgetBusy,
+          onClick = { markUnwatched() },
+        ) else null,
+        watched = if (stateLoaded && !watched) DetailAction(
+          label = stringResource(R.string.media_server_mark_watched),
+          icon = EyeIcon,
+          tag = TagRemoteDetailMarkWatched,
+          enabled = !favouriteBusy && !watchedBusy,
+          onClick = { toggleWatched() },
+        ) else null,
+        caption = caption,
+      )
+      if (pickedRow != null) {
+        pickedRow?.let { row ->
+          val pickedCaption = chosenSourceCaption(row).joinToString(" · ")
+          if (pickedCaption.isNotEmpty()) {
+            Text(
+              stringResource(R.string.tv_chosen_source) + " · " + pickedCaption,
+              color = Tokens.Muted,
+              fontSize = 11.sp,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier.testTag(TagRemoteDetailPickCaption),
             )
           }
         }
-        if (caption.text.isNotEmpty()) Text(caption.text, color = Tokens.Muted, fontSize = 12.sp, maxLines = 1)
       }
 
       // A copy that never opened its panel (no readable destinations, no native right) says why
@@ -829,7 +880,9 @@ fun RemoteDetailScreen(
         filters = sourceFilters.filters(groups?.settings?.streamSort),
         onFilterSelect = { chip, key -> sourceFilters.select(chip, key) },
         onChoose = { choosePanelRow(it) },
-        onSave = if (onQueue != null && loadDestinations != null) ({ row -> saveRow(row) }) else null,
+        // The panel only picks: To library on the action row acts on the pick, so no row carries a
+        // control of its own.
+        onSave = null,
         canSave = { row -> canSaveRow(row) },
         onRetry = { sourceGroups?.retry(sourceScope) },
         emptyText = stringResource(R.string.media_server_sources_empty),

@@ -30,6 +30,7 @@ import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.catalog.TagSourcesPanel
 import cz.stremiooffline.tv.ui.catalog.sourceRowTag
 import cz.stremiooffline.tv.ui.detail.TagDetailPrimary
+import cz.stremiooffline.tv.ui.detail.TagDetailPickCaption
 import cz.stremiooffline.tv.ui.detail.TagDetailSources
 import cz.stremiooffline.tv.ui.player.TAG_OSD_PLAY
 import cz.stremiooffline.tv.ui.player.TAG_OVERLAY_ROOT
@@ -106,7 +107,8 @@ class DetailSourcesFocusTest {
     press(Key.DirectionCenter)
     compose.waitUntil(5_000) { focused(TagDetailPrimary) }
 
-    // Its Sources action opens the panel; the addon row starts the session.
+    // Its Sources action opens the panel; choosing the addon row picks it and Play starts the
+    // session.
     compose.onNodeWithTag(TagDetailSources).performSemanticsAction(SemanticsActions.RequestFocus)
     press(Key.DirectionCenter)
     compose.waitUntil(5_000) { compose.onAllNodes(hasTestTag(TagSourcesPanel)).fetchSemanticsNodes().isNotEmpty() }
@@ -114,6 +116,11 @@ class DetailSourcesFocusTest {
       compose.onAllNodes(hasTestTag(sourceRowTag(1))).fetchSemanticsNodes().isNotEmpty()
     }
     compose.onNodeWithTag(sourceRowTag(1)).performSemanticsAction(SemanticsActions.RequestFocus)
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) {
+      compose.onAllNodes(hasTestTag(TagDetailPickCaption)).fetchSemanticsNodes().isNotEmpty()
+    }
+    compose.onNodeWithTag(TagDetailPrimary).performSemanticsAction(SemanticsActions.RequestFocus)
     press(Key.DirectionCenter)
     compose.waitUntil(5_000) { api.startedSources.size == 1 }
   }

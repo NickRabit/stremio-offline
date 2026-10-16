@@ -80,6 +80,15 @@ class QueueTest {
     compose.onNodeWithTag(tag).assertIsFocused()
   }
 
+  /** Walks left from the primary action, the way a viewer reaches the actions before To library. */
+  private fun focusFromRight(tag: String) {
+    repeat(6) {
+      if (focused(tag)) return
+      press(Key.DirectionLeft)
+    }
+    compose.onNodeWithTag(tag).assertIsFocused()
+  }
+
   @Test
   fun `a native original with a projected destination sends no target, without a panel`() {
     val api = readyNative(projectedLibraryId = "box")
@@ -227,7 +236,7 @@ class QueueTest {
     compose.onNodeWithTag(TagCatalogToLibrary).assert(hasContentDescription("Queued", substring = true))
 
     // Playing the other source drops the mark: the queued job is not for this one.
-    focusFromLeft(TagCatalogSources)
+    focusFromRight(TagCatalogSources)
     press(Key.DirectionCenter)
     compose.onNodeWithTag(sourceRowTag(0)).assertIsFocused()
     press(Key.DirectionDown)
