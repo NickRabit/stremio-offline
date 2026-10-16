@@ -179,6 +179,7 @@ export const en = {
 
   // Application shell.
   "app.goToCleanCatalog": "Back to a clean catalog",
+  "app.goToStart": "Go to the start page",
   "app.serverOnline": "Server online",
   "restricted.chip": "Demo mode",
   "restricted.notice": "This instance is in restricted mode. Addons, settings and the password cannot be changed.",

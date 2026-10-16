@@ -164,6 +164,7 @@ export const ptBR: Catalog = {
   "api.timeout": "O servidor não respondeu a tempo.",
   "api.copyRefused": "O navegador se recusou a copiar. Selecione o texto e copie-o manualmente.",
   "app.goToCleanCatalog": "Voltar para um catálogo limpo",
+  "app.goToStart": "Ir para a página inicial",
   "app.serverOnline": "Servidor on-line",
   "restricted.chip": "Modo de demonstração",
   "restricted.notice": "Esta instância está em modo restrito. Complementos, configurações e senha não podem ser alterados.",

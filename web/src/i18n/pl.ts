@@ -164,6 +164,7 @@ export const pl: Catalog = {
   "api.timeout": "Serwer nie odpowiedział na czas.",
   "api.copyRefused": "Przeglądarka odmówiła kopiowania. Wybierz tekst i skopiuj go ręcznie.",
   "app.goToCleanCatalog": "Powrót do czystego katalogu",
+  "app.goToStart": "Na stronę startową",
   "app.serverOnline": "Serwer działa",
   "restricted.chip": "Tryb demonstracyjny",
   "restricted.notice": "Ta instancja jest w trybie ograniczonym. Dodatków, ustawień i hasła nie można zmienić.",

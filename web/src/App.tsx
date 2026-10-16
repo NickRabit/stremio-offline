@@ -1265,6 +1265,13 @@ export function App() {
   const [setupNeeded, setSetupNeeded] = useState(false);
   const [buildInfo, setBuildInfo] = useState<BuildInfo | null>(null);
   const restricted = buildInfo?.restricted === true;
+  /** The logo leads to the account's own start page: Home or the Library when chosen (a restricted
+   *  build has no Home), otherwise a clean catalogue as it always has. */
+  const startHome = settings.startView !== "catalog" && !(restricted && settings.startView === "home");
+  const goToStart = () => {
+    if (!startHome) { resetCatalog(); return; }
+    openView(settings.startView === "library" ? "library" : "home");
+  };
   // What the instance owns is administrator-only, and an ordinary user gets the same
   // read-only shape the demo mode uses: the API refuses those writes either way.
   const admin = session?.role === "admin";
@@ -2905,7 +2912,7 @@ export function App() {
   const moreActive = view === "favorites" || view === "resume" || view === "following" || view === "addons" || view === "settings" || view === "stats";
 
   return <div className={`app-shell tile-size-${settings.tileSize} catalog-shape-${settings.catalogTileShape} library-shape-${settings.libraryTileShape} home-shape-${settings.homeTileShape}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
-    <header className="topbar"><button className="brand brand-home" title={t("app.goToCleanCatalog")} aria-label={t("app.goToCleanCatalog")} onClick={() => resetCatalog()}><div className="brand-mark"><CirclePlay/></div><div><small>{t("auth.brandEyebrow")}</small><h1>Stremio <span>Offline</span></h1></div></button><div className="topbar-right">{restricted && <div className="restricted-chip">{t("restricted.chip")}</div>}<div className="online"><i/> {t("app.serverOnline")}</div>
+    <header className="topbar"><button className="brand brand-home" title={t(startHome ? "app.goToStart" : "app.goToCleanCatalog")} aria-label={t(startHome ? "app.goToStart" : "app.goToCleanCatalog")} onClick={goToStart}><div className="brand-mark"><CirclePlay/></div><div><small>{t("auth.brandEyebrow")}</small><h1>Stremio <span>Offline</span></h1></div></button><div className="topbar-right">{restricted && <div className="restricted-chip">{t("restricted.chip")}</div>}<div className="online"><i/> {t("app.serverOnline")}</div>
       <div className="topbar-user"><span className="topbar-user-name">
         <strong title={t("auth.signedInAs", { username: session?.username ?? "" })}>{session?.username}</strong>
         {session?.role === "admin" && <i className="library-badge">{t("users.administrator")}</i>}
