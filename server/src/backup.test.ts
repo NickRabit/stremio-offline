@@ -51,7 +51,7 @@ test("an import refuses a foreign format and normalises the values", () => {
   assert.equal(parsed.settings.resumeTileShape, "poster");
   assert.equal(parsed.settings.followingTileShape, "poster");
   assert.equal(parsed.settings.homeTileShape, "wide");
-  assert.equal(parsed.settings.startView, "catalog");
+  assert.equal(parsed.settings.startView, "home");
   assert.equal(parsed.settings.downloadTitleLanguage, "sk");
   assert.deepEqual(parsed.addons[0].downloadSettings, defaultDownloadSettings());
   assert.equal(parsed.addons[0].globalSearch, true);
@@ -66,7 +66,7 @@ test("an import refuses a foreign format and normalises the values", () => {
   assert.equal(junk.settings.resumeTileShape, "poster");
   assert.equal(junk.settings.followingTileShape, "poster");
   assert.equal(junk.settings.homeTileShape, "wide");
-  assert.equal(junk.settings.startView, "catalog");
+  assert.equal(junk.settings.startView, "home");
   assert.equal(junk.settings.libraryShelf, "resume", "a shelf the backup never named falls back to Continue");
 });
 

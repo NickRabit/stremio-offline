@@ -313,12 +313,16 @@ class NativeSourcesDetailTest {
   }
 
   @Test
-  fun `an addon row plays the title's generic identity with the whole loaded list`() {
+  fun `an addon row picked in the panel plays the title's generic identity once Play is pressed`() {
     val api = seeded()
     mount(api)
     openPanel()
 
+    // Choosing only picks the row; the action row is what starts the session.
     focusOn(sourceRowTag(3))
+    press(Key.DirectionCenter)
+    assertTrue(played.isEmpty())
+    focusOn(TagRemoteDetailPlay)
     press(Key.DirectionCenter)
 
     val target = played.single()
@@ -338,7 +342,7 @@ class NativeSourcesDetailTest {
   }
 
   @Test
-  fun `a row of another media library plays its own item and its own versions`() {
+  fun `a row of another media library picked in the panel plays its own item and its own versions`() {
     val api = seeded()
     api.remoteMatchValues["rlibB|movie|tt1"] = listOf(
       version("ms10", libraryId = "rlibB", itemId = "iB"),
@@ -348,6 +352,9 @@ class NativeSourcesDetailTest {
     openPanel(rows = 5)
 
     focusOn(sourceRowTag(2))
+    press(Key.DirectionCenter)
+    assertTrue(played.isEmpty())
+    focusOn(TagRemoteDetailPlay)
     press(Key.DirectionCenter)
 
     val target = played.single()
@@ -363,20 +370,23 @@ class NativeSourcesDetailTest {
   }
 
   @Test
-  fun `a library copy plays the file's own path and offers no Save of its own`() {
+  fun `a library copy plays the file's own path and no row offers a Save anywhere`() {
     val api = seeded()
     api.remoteMatchValues["rlibB|movie|tt1"] =
       listOf(version("ms9", libraryId = "rlibB", itemId = "iB", copyable = true))
     mount(api)
     openPanel()
 
-    // A copy already on disk offers no Save; the rows that may be copied do.
+    // A library detail's panel only picks: no row carries a control of its own any more.
     compose.onNodeWithTag(sourceSaveTag(0)).assertDoesNotExist()
     compose.onNodeWithTag(sourceSaveTag(1)).assertDoesNotExist()
-    compose.onNodeWithTag(sourceSaveTag(2)).assertExists()
-    compose.onNodeWithTag(sourceSaveTag(3)).assertExists()
+    compose.onNodeWithTag(sourceSaveTag(2)).assertDoesNotExist()
+    compose.onNodeWithTag(sourceSaveTag(3)).assertDoesNotExist()
 
     focusOn(sourceRowTag(1))
+    press(Key.DirectionCenter)
+    assertTrue(played.isEmpty())
+    focusOn(TagRemoteDetailPlay)
     press(Key.DirectionCenter)
 
     val target = played.single()
@@ -389,7 +399,7 @@ class NativeSourcesDetailTest {
   }
 
   @Test
-  fun `a matched version's Save respects its projected destination`() {
+  fun `To library copies the picked version into its projected destination`() {
     val api = seeded()
     api.remoteMatchValues["rlibB|movie|tt1"] = listOf(
       version("ms9", libraryId = "rlibB", itemId = "iB", copyable = true)
@@ -399,7 +409,9 @@ class NativeSourcesDetailTest {
     mount(api)
     openPanel()
 
-    focusOn(sourceSaveTag(2))
+    focusOn(sourceRowTag(2))
+    press(Key.DirectionCenter)
+    focusOn(TagRemoteDetailToLibrary)
     press(Key.DirectionCenter)
     compose.onNodeWithTag(nativeQueueLibraryTag("libB")).assertIsSelected()
     press(Key.DirectionCenter)
@@ -413,12 +425,14 @@ class NativeSourcesDetailTest {
   }
 
   @Test
-  fun `an addon row's Save offers the automatic destination and queues with no target`() {
+  fun `To library on an addon pick offers the automatic destination and queues with no target`() {
     val api = seeded()
     mount(api)
     openPanel()
 
-    focusOn(sourceSaveTag(3))
+    focusOn(sourceRowTag(3))
+    press(Key.DirectionCenter)
+    focusOn(TagRemoteDetailToLibrary)
     press(Key.DirectionCenter)
     compose.onNodeWithTag(TagNativeQueueDefault).assertExists()
     press(Key.DirectionCenter)
@@ -449,8 +463,14 @@ class NativeSourcesDetailTest {
     // The provider's name filter takes the series name, never the episode's own.
     assertEquals(listOf("Show"), api.remoteMatchHints)
 
-    focusOn(sourceSaveTag(1))
+    focusOn(sourceRowTag(1))
     press(Key.DirectionCenter)
+    focusOn(TagRemoteDetailToLibrary)
+    press(Key.DirectionCenter)
+    // The picker takes the panel's place; its own first row is the automatic destination.
+    compose.onNodeWithTag(TagNativeQueueDefault).assertExists()
+    compose.onNodeWithTag(TagNativeQueueDefault).performSemanticsAction(SemanticsActions.RequestFocus)
+    compose.waitForIdle()
     press(Key.DirectionCenter)
     awaitQueued(1)
 
@@ -513,7 +533,7 @@ class NativeSourcesDetailTest {
   }
 
   @Test
-  fun `the D-pad walks the chips, the rows and a row's own Save, and Back restores the opener`() {
+  fun `the D-pad walks the chips and the rows, and Back restores the opener`() {
     val api = seeded()
     api.remoteMatchValues["rlibB|movie|tt1"] =
       listOf(version("ms9", libraryId = "rlibB", itemId = "iB", copyable = true))
@@ -530,14 +550,12 @@ class NativeSourcesDetailTest {
     compose.onNodeWithTag(TagSourceFilterOptions).assertDoesNotExist()
     assertEquals(sourceFilterTag("sort"), focusedTag())
 
-    // DOWN returns to the list, and RIGHT reaches the row's own Save.
+    // DOWN returns to the list and walks the rows.
     press(Key.DirectionDown)
     assertEquals(sourceRowTag(0), focusedTag())
     press(Key.DirectionDown)
     press(Key.DirectionDown)
     assertEquals(sourceRowTag(2), focusedTag())
-    press(Key.DirectionRight)
-    compose.onNodeWithTag(sourceSaveTag(2)).assertIsFocused()
 
     // Back closes the panel and hands the remote back to the button that opened it.
     press(Key.Back)
@@ -640,7 +658,9 @@ class NativeSourcesDetailTest {
     mount(api)
     openPanel()
 
-    focusOn(sourceSaveTag(3))
+    focusOn(sourceRowTag(3))
+    press(Key.DirectionCenter)
+    focusOn(TagRemoteDetailToLibrary)
     press(Key.DirectionCenter)
 
     compose.onNodeWithTag(TagRemoteSourceNotice).assertExists()
@@ -657,7 +677,9 @@ class NativeSourcesDetailTest {
     mount(api)
     openPanel()
 
-    focusOn(sourceSaveTag(2))
+    focusOn(sourceRowTag(2))
+    press(Key.DirectionCenter)
+    focusOn(TagRemoteDetailToLibrary)
     press(Key.DirectionCenter)
 
     // A media-server version has no automatic destination, so nothing is queued blind.
@@ -667,18 +689,23 @@ class NativeSourcesDetailTest {
   }
 
   @Test
-  fun `closing remote sources cancels pending destinations`() {
+  fun `a destinations read in flight opens nothing over a panel the viewer replaced`() {
     destinationsGate = CompletableDeferred()
     mount(seeded())
     openPanel()
-    focusOn(sourceSaveTag(3))
+    focusOn(sourceRowTag(3))
     press(Key.DirectionCenter)
-    press(Key.Back)
+    focusOn(TagRemoteDetailToLibrary)
+    press(Key.DirectionCenter)
+
+    // The viewer leaves while the destinations are still out and opens the panel again, which is
+    // another panel: the answer that lands belongs to nobody.
+    openPanel()
     destinationsGate?.complete(Unit)
     compose.waitForIdle()
     compose.mainClock.advanceTimeBy(200)
     compose.waitForIdle()
-    compose.onNodeWithTag(TagSourcesPanel).assertDoesNotExist()
+    compose.onNodeWithTag(TagSourcesPanel).assertExists()
     compose.onNodeWithTag(TagNativeQueuePanel).assertDoesNotExist()
     assertTrue(queued.isEmpty())
   }
@@ -698,12 +725,17 @@ class NativeSourcesDetailTest {
 
 
   @Test
-  fun `playing a remote source cancels pending destinations`() {
+  fun `picking another row cancels a pending destinations read`() {
     destinationsGate = CompletableDeferred()
     mount(seeded())
     openPanel()
-    focusOn(sourceSaveTag(3))
+    focusOn(sourceRowTag(3))
     press(Key.DirectionCenter)
+    focusOn(TagRemoteDetailToLibrary)
+    press(Key.DirectionCenter)
+
+    // A pick made while the read is out replaces what the read belongs to.
+    openPanel()
     focusOn(sourceRowTag(0))
     press(Key.DirectionCenter)
     destinationsGate?.complete(Unit)
@@ -711,7 +743,6 @@ class NativeSourcesDetailTest {
     compose.mainClock.advanceTimeBy(200)
     compose.waitForIdle()
     compose.onNodeWithTag(TagNativeQueuePanel).assertDoesNotExist()
-    assertEquals(1, played.size)
     assertTrue(queued.isEmpty())
   }
 
@@ -722,6 +753,8 @@ class NativeSourcesDetailTest {
     mount(seeded().apply { remoteStateReadGate = gate }, active = { active.value }, afterPlay = { active.value = false })
     openPanel()
     focusOn(sourceRowTag(0))
+    press(Key.DirectionCenter)
+    focusOn(TagRemoteDetailPlay)
     press(Key.DirectionCenter)
     focusOn("covered-player")
     gate.complete(Unit)

@@ -24,6 +24,10 @@ const resumeCatalogue = (over: Partial<Extract<HomeCardData, { kind: "resume-cat
 const favorite = (over: Partial<Extract<HomeCardData, { kind: "favorite" }>> = {}): HomeCardData => ({
   kind: "favorite", key: "Films/Heat", path: "Films/Heat", itemKind: "folder", label: "Heat", ...over,
 });
+const tonight = (over: Partial<Extract<HomeCardData, { kind: "tonight" }>> = {}): HomeCardData => ({
+  kind: "tonight", key: "Films/Heat", path: "Films/Heat", itemKind: "folder", label: "Heat",
+  year: "1995", libraryId: "lib_00000001", ...over,
+});
 
 let root: Root;
 let host: HTMLDivElement;
@@ -127,6 +131,19 @@ describe("HomeCard wide tiles", () => {
     expect(actions.reveal).not.toHaveBeenCalled();
 
     const loose = favorite();
+    const other = render(loose);
+    host.querySelector<HTMLButtonElement>(".browse-open")!.click();
+    expect(other.reveal).toHaveBeenCalledWith("Films/Heat");
+  });
+
+  it("opens the title of a Tonight card bound to one, and the folder otherwise", () => {
+    const bound = tonight({ title: { type: "movie", id: "tt9" } });
+    const actions = render(bound);
+    host.querySelector<HTMLButtonElement>(".browse-open")!.click();
+    expect(actions.open).toHaveBeenCalledWith(bound);
+    expect(actions.reveal).not.toHaveBeenCalled();
+
+    const loose = tonight();
     const other = render(loose);
     host.querySelector<HTMLButtonElement>(".browse-open")!.click();
     expect(other.reveal).toHaveBeenCalledWith("Films/Heat");

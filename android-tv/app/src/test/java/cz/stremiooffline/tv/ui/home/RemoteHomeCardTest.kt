@@ -3,6 +3,7 @@ package cz.stremiooffline.tv.ui.home
 import cz.stremiooffline.tv.data.HomeCard
 import cz.stremiooffline.tv.data.HomeCardsJson
 import cz.stremiooffline.tv.data.displayTitle
+import cz.stremiooffline.tv.data.drawnWide
 import cz.stremiooffline.tv.data.episodeCodeText
 import cz.stremiooffline.tv.data.isWideKind
 import cz.stremiooffline.tv.data.libraryPath
@@ -49,6 +50,22 @@ class RemoteHomeCardTest {
     val remote = decode(movie) as HomeCard.Remote
     assertNull(remote.libraryPath)
     assertNull(remote.heroMetaRef())
+  }
+
+  @Test
+  fun `a remote film is drawn wide in Continue watching and unchanged in any other row`() {
+    val remote = decode(movie) as HomeCard.Remote
+    assertEquals(true, remote.drawnWide("resume"))
+    assertEquals(false, remote.drawnWide("favorites"))
+  }
+
+  @Test
+  fun `a remote card the provider bound to a title asks the catalogue about it`() {
+    val bound = decode(
+      """{"kind":"remote","key":"remote:3","title":"Heat","provider":"jellyfin","libraryId":"rlibA",
+         "itemId":"iA","itemType":"movie","identity":{"type":"movie","id":"tt9"}}""",
+    ) as HomeCard.Remote
+    assertEquals("movie" to "tt9", bound.heroMetaRef())
   }
 
   @Test

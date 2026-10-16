@@ -266,7 +266,7 @@ fun SettingsScreen(
   val interfaceName = UI_LOCALE_NAMES.firstOrNull { it.first == uiLanguage }?.second ?: uiLanguage.orEmpty()
   val audioName = state.audioLanguage?.let { contentLanguageLabel(it, uiLanguage) }.orEmpty()
   val subtitleName = state.subtitleLanguage?.let { contentLanguageLabel(it, uiLanguage) }.orEmpty()
-  val startView = state.startView?.takeIf { it in START_VIEWS } ?: "catalog"
+  val startView = state.startView?.takeIf { it in START_VIEWS } ?: "home"
   val startName = when (startView) {
     "home" -> stringResource(R.string.nav_home)
     "library" -> stringResource(R.string.nav_library)

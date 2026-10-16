@@ -9,6 +9,7 @@ import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotFocused
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -30,6 +31,7 @@ import cz.stremiooffline.tv.data.DownloadTargetDto
 import cz.stremiooffline.tv.data.LibraryTitleDto
 import cz.stremiooffline.tv.data.LibraryDto
 import cz.stremiooffline.tv.data.MediaDto
+import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.RemoteCapabilitiesDto
 import cz.stremiooffline.tv.data.RemoteItemContext
 import cz.stremiooffline.tv.data.SettingsResponse
@@ -42,6 +44,7 @@ import cz.stremiooffline.tv.ui.catalog.TagRemoteSourcesPanelRetry
 import cz.stremiooffline.tv.ui.catalog.TagSourceFilterOptions
 import cz.stremiooffline.tv.ui.catalog.TagSourcesFilters
 import cz.stremiooffline.tv.ui.catalog.TagSourcesPanel
+import cz.stremiooffline.tv.ui.catalog.actionRowOrder
 import cz.stremiooffline.tv.ui.catalog.nativeQueueLibraryTag
 import cz.stremiooffline.tv.ui.catalog.sourceFilterTag
 import cz.stremiooffline.tv.ui.catalog.sourceFilterOptionTag
@@ -70,6 +73,7 @@ class NativeLocalSourcesTest {
 
   private val played = mutableListOf<PlayTarget>()
   private val queued = mutableListOf<Queued>()
+  private val markedWatched = mutableListOf<BrowseItem.File>()
   /** Every queue call the screen issued, in flight or not. */
   private var queueCalls = 0
   private var queuedGate: CompletableDeferred<Unit>? = null
@@ -141,6 +145,8 @@ class NativeLocalSourcesTest {
     data: DetailData = detail(listOf(file(film, "It.mkv"))),
     destinations: (suspend () -> List<LibraryDto>)? = null,
     onQueue: (suspend (String, String, MediaDto, DownloadTargetDto?) -> Unit)? = null,
+    markWatched: (suspend (BrowseItem.File) -> Unit)? = null,
+    progress: suspend (String) -> ProgressDto? = { null },
   ) {
     compose.setContent {
       DetailScreen(
@@ -148,11 +154,12 @@ class NativeLocalSourcesTest {
         imageUrl = { null },
         onPlay = { played += it },
         onBack = {},
-        progress = { null },
+        progress = progress,
         forgetProgress = {},
         sourcesApi = api,
         loadDestinations = destinations,
         onQueue = onQueue,
+        markWatched = markWatched,
       )
     }
     compose.waitForIdle()
@@ -317,12 +324,15 @@ class NativeLocalSourcesTest {
   }
 
   @Test
-  fun `the own file row plays the file and the addon row plays the generic title`() {
+  fun `the own file row and the picked addon row each play what they name`() {
     val api = seeded()
     mount(api)
     openPanel(rows = 3)
 
     focusOn(sourceRowTag(0))
+    press(Key.DirectionCenter)
+    assertTrue(played.isEmpty())
+    focusOn(TagDetailPrimary)
     press(Key.DirectionCenter)
 
     val own = played.single()
@@ -334,6 +344,9 @@ class NativeLocalSourcesTest {
 
     openPanel(rows = 3)
     focusOn(sourceRowTag(2))
+    press(Key.DirectionCenter)
+    assertTrue(played.size == 1)
+    focusOn(TagDetailPrimary)
     press(Key.DirectionCenter)
 
     val addon = played.last()
@@ -386,9 +399,11 @@ class NativeLocalSourcesTest {
     mount(api, destinations = { destinations }, onQueue = { _, _, _, _ -> })
     openPanel(rows = 3)
 
+    // A library detail's panel only picks: no row carries a save control of its own, whatever the
+    // account may copy.
     compose.onNodeWithTag(sourceSaveTag(0)).assertDoesNotExist()
-    compose.onNodeWithTag(sourceSaveTag(1)).assertExists()
-    compose.onNodeWithTag(sourceSaveTag(2)).assertExists()
+    compose.onNodeWithTag(sourceSaveTag(1)).assertDoesNotExist()
+    compose.onNodeWithTag(sourceSaveTag(2)).assertDoesNotExist()
   }
 
   // --- Two libraries, the same version id ---------------------------------------------------------
@@ -434,6 +449,9 @@ class NativeLocalSourcesTest {
 
     // Both versions travel with the play: a switch inside the player still has both of them.
     focusOn(sourceRowTag(0))
+    press(Key.DirectionCenter)
+    assertTrue(played.isEmpty())
+    focusOn(TagDetailPrimary)
     press(Key.DirectionCenter)
     val target = played.single()
     assertEquals("rlibC", target.remoteItem?.libraryId)
@@ -561,7 +579,9 @@ class NativeLocalSourcesTest {
     assertEquals(listOf("series:tmdb:123:4:5"), api.streamSourcesRequests)
     assertEquals(listOf("series:tmdb:123:4:5|alpha"), api.streamsRequests)
 
-    focusOn(sourceSaveTag(1))
+    focusOn(sourceRowTag(1))
+    press(Key.DirectionCenter)
+    focusOn(TagDetailToLibrary)
     press(Key.DirectionCenter)
     compose.waitUntil(5_000) { compose.onAllNodesWithTag(TagNativeQueuePanel).fetchSemanticsNodes().isNotEmpty() }
     focusOn(nativeQueueLibraryTag("libA"))
@@ -627,13 +647,14 @@ class NativeLocalSourcesTest {
     destinationsGate = CompletableDeferred()
     mount(api, data = episodeDetail(), destinations = heldDestinations(), onQueue = recordingQueue())
 
-    openEpisodePanel(episodeOnePath, rows = 2)
-    focusOn(sourceSaveTag(1))
+    // The action row's own panel picks the first episode's addon row; To library starts the read.
+    openPanel(rows = 2)
+    focusOn(sourceRowTag(1))
+    press(Key.DirectionCenter)
+    focusOn(TagDetailToLibrary)
     press(Key.DirectionCenter)
     compose.waitForIdle()
-    // The viewer leaves while the destinations are still out, and opens the next episode's panel.
-    press(Key.Back)
-    compose.onNodeWithTag(TagSourcesPanel).assertDoesNotExist()
+    // The viewer leaves while the destinations are still out and opens the next episode's panel.
     openEpisodePanel(episodeTwoPath, rows = 2)
 
     destinationsGate?.complete(Unit)
@@ -646,7 +667,11 @@ class NativeLocalSourcesTest {
     compose.onNodeWithTag(TagSourcesPanel).assertExists()
     compose.onNodeWithTag(TagNativeQueuePanel).assertDoesNotExist()
 
-    focusOn(sourceSaveTag(1))
+    // The second episode's panel is what saves now: it plays the row the viewer chooses, and To
+    // library then carries that episode's own subject.
+    focusOn(sourceRowTag(1))
+    press(Key.DirectionCenter)
+    focusOn(TagDetailToLibrary)
     press(Key.DirectionCenter)
     compose.waitUntil(5_000) { compose.onAllNodesWithTag(TagNativeQueuePanel).fetchSemanticsNodes().isNotEmpty() }
     focusOn(nativeQueueLibraryTag("libA"))
@@ -665,8 +690,10 @@ class NativeLocalSourcesTest {
     mount(api, data = episodeDetail(), destinations = heldDestinations(), onQueue = recordingQueue())
 
     // The first episode's queue is issued and stays in flight.
-    openEpisodePanel(episodeOnePath, rows = 2)
-    focusOn(sourceSaveTag(1))
+    openPanel(rows = 2)
+    focusOn(sourceRowTag(1))
+    press(Key.DirectionCenter)
+    focusOn(TagDetailToLibrary)
     press(Key.DirectionCenter)
     compose.waitUntil(5_000) { compose.onAllNodesWithTag(TagNativeQueuePanel).fetchSemanticsNodes().isNotEmpty() }
     focusOn(nativeQueueLibraryTag("libA"))
@@ -688,7 +715,6 @@ class NativeLocalSourcesTest {
     assertEquals(1, queueCalls)
     compose.onNodeWithTag(TagNativeQueuePanel).assertDoesNotExist()
     compose.onNodeWithTag(TagDetailSourceNotice).assertExists()
-    compose.onNodeWithText("srcA").assertDoesNotExist()
     assertEquals(listOf("srcA"), queued.map { it.sourceId })
     assertEquals(listOf(1), queued.map { it.media.episode })
   }
@@ -727,22 +753,28 @@ class NativeLocalSourcesTest {
   }
 
   @Test
-  fun `closing sources cancels a pending destination dialog intent`() {
+  fun `a destinations read in flight opens nothing once another panel owns the save work`() {
     val api = episodeFakes()
     destinationsGate = CompletableDeferred()
     mount(api, data = episodeDetail(), destinations = heldDestinations(), onQueue = recordingQueue())
-    openEpisodePanel(episodeOnePath, rows = 2)
-    focusOn(sourceSaveTag(1))
+
+    // The action row opens the panel for the first episode; picking its addon row and pressing To
+    // library starts the destination read.
+    openPanel(rows = 2)
+    focusOn(sourceRowTag(1))
+    press(Key.DirectionCenter)
+    focusOn(TagDetailToLibrary)
     press(Key.DirectionCenter)
     compose.waitForIdle()
-    press(Key.Back)
+
+    // A new panel owns the save work from here on.
+    openEpisodePanel(episodeOnePath, rows = 2)
     destinationsGate?.complete(Unit)
     compose.waitForIdle()
     compose.mainClock.advanceTimeBy(200)
     compose.waitForIdle()
-    compose.onNodeWithTag(TagSourcesPanel).assertDoesNotExist()
+    compose.onNodeWithTag(TagSourcesPanel).assertExists()
     compose.onNodeWithTag(TagNativeQueuePanel).assertDoesNotExist()
-    compose.onNodeWithTag(episodeOnePath).assertIsFocused()
     assertEquals(0, queueCalls)
   }
 
@@ -756,6 +788,138 @@ class NativeLocalSourcesTest {
     compose.onNodeWithTag(TagSourcesPanel).assertDoesNotExist()
     openPanel(rows = 3)
     compose.onNodeWithTag(sourceRowTag(2)).assertIsFocused()
+  }
+
+  // --- The one action row, the pick and Mark watched --------------------------------------------
+
+  @Test
+  fun `the action row draws the shared order`() {
+    val api = FakeTvApi().apply {
+      libraryTitleValues[film] = LibraryTitleDto("movie", "tt1", name = "It")
+      streamSourcesValues["movie:tt1"] = listOf(StreamSourceDto("alpha", "Alpha"))
+      addonStreams["movie:tt1|alpha"] = listOf(addonRow())
+      localStreamsValues["movie:tt1"] = emptyList()
+      remoteLibrariesValue = emptyList()
+    }
+    val destinations = listOf(LibraryDto(id = "libA", name = "Films", type = "movie", writable = true))
+    mount(
+      api,
+      data = detail(listOf(file(film, "It.mkv").copy(progress = ProgressDto(40.0, 120.0)))),
+      destinations = { destinations },
+      onQueue = { _, _, _, _ -> },
+      markWatched = { markedWatched += it },
+      progress = { ProgressDto(40.0, 120.0) },
+    )
+
+    // The addon row is picked first, so To library is offered beside everything else.
+    openPanel(rows = 2)
+    focusOn(sourceRowTag(1))
+    press(Key.DirectionCenter)
+
+    assertEquals(
+      listOf(
+        TagDetailPrimary,
+        TagDetailStartOver,
+        TagDetailSources,
+        TagDetailToLibrary,
+        TagDetailFavourite,
+        TagDetailForget,
+        TagDetailMarkWatched,
+      ),
+      compose.actionRowOrder(
+        TagDetailPrimary,
+        TagDetailStartOver,
+        TagDetailSources,
+        TagDetailToLibrary,
+        TagDetailFavourite,
+        TagDetailForget,
+        TagDetailMarkWatched,
+      ),
+    )
+  }
+
+  @Test
+  fun `choosing an addon row only picks it, names it and leaves Play to start it`() {
+    val api = seeded()
+    mount(api)
+    openPanel(rows = 3)
+
+    focusOn(sourceRowTag(2))
+    press(Key.DirectionCenter)
+
+    assertTrue(played.isEmpty())
+    compose.onNodeWithTag(TagSourcesPanel).assertDoesNotExist()
+    compose.onNodeWithTag(TagDetailPickCaption).assertTextContains("Source · Alpha · Czech 40 GB · 40.0 GB")
+
+    focusOn(TagDetailPrimary)
+    press(Key.DirectionCenter)
+
+    assertEquals(listOf("srcA"), played.map { it.sourceId })
+  }
+
+  @Test
+  fun `To library appears once a row is picked and queues exactly that row`() {
+    val api = seeded()
+    val destinations = listOf(LibraryDto(id = "libA", name = "Films", type = "movie", writable = true))
+    mount(api, destinations = { destinations }, onQueue = recordingQueue())
+
+    // With nothing picked there is nothing for the action to act on.
+    compose.onNodeWithTag(TagDetailToLibrary).assertDoesNotExist()
+
+    openPanel(rows = 3)
+    focusOn(sourceRowTag(2))
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagDetailToLibrary).assertExists()
+
+    focusOn(TagDetailToLibrary)
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { compose.onAllNodesWithTag(TagNativeQueuePanel).fetchSemanticsNodes().isNotEmpty() }
+    // The panel offers the destinations for exactly the picked row.
+    compose.onNodeWithTag(nativeQueueLibraryTag("libA")).assertExists()
+    focusOn(nativeQueueLibraryTag("libA"))
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { queued.isNotEmpty() }
+
+    assertEquals(listOf("srcA"), queued.map { it.sourceId })
+    // A file already on disk is never queued again.
+    openPanel(rows = 3)
+    focusOn(sourceRowTag(0))
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagDetailToLibrary).assertDoesNotExist()
+  }
+
+  @Test
+  fun `a row chosen from an episode card's panel still plays at once`() {
+    val api = episodeFakes()
+    mount(api, data = episodeDetail())
+
+    openEpisodePanel(episodeOnePath, rows = 2)
+    focusOn(sourceRowTag(1))
+    press(Key.DirectionCenter)
+
+    // The card is the episode's only button, so its panel plays the row there and then.
+    compose.onNodeWithTag(TagSourcesPanel).assertDoesNotExist()
+    assertEquals("srcA", played.single().sourceId)
+    assertEquals("Shows/Show/S01/Show.S01E01.mkv", episodeOnePath)
+  }
+
+  @Test
+  fun `Mark watched stores the file Play would start as finished`() {
+    val api = FakeTvApi()
+    mount(api, markWatched = { markedWatched += it })
+
+    focusOn(TagDetailMarkWatched)
+    press(Key.DirectionCenter)
+    compose.waitForIdle()
+
+    assertEquals(listOf(film), markedWatched.map { it.path })
+  }
+
+  @Test
+  fun `Mark watched is not drawn without a playback surface to store it`() {
+    mount(FakeTvApi())
+
+    compose.onNodeWithTag(TagDetailMarkWatched).assertDoesNotExist()
   }
 
 }

@@ -65,9 +65,12 @@ import cz.stremiooffline.tv.data.RemoteProviderIdsDto
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.ui.catalog.NativeCopyRequest
 import cz.stremiooffline.tv.ui.catalog.NativeQueuePanel
+import cz.stremiooffline.tv.ui.catalog.VoiceLauncher
 import cz.stremiooffline.tv.ui.catalog.nativeCopyTitle
 import cz.stremiooffline.tv.ui.catalog.nativeQueueTarget
+import cz.stremiooffline.tv.ui.catalog.rememberVoiceSearch
 import cz.stremiooffline.tv.ui.catalog.resolveNativeCopy
+import cz.stremiooffline.tv.ui.catalog.voiceSearchAvailable
 import cz.stremiooffline.tv.ui.catalog.FolderIcon
 import cz.stremiooffline.tv.ui.components.CardRowInset
 import cz.stremiooffline.tv.ui.components.FocusButton
@@ -104,10 +107,18 @@ fun RemoteLibraryRoute(
   onOpenItem: (libraryId: String, libraryName: String, provider: String, item: RemoteItemDto) -> Unit,
   /** Back at the library picker hands the remote to Files; a deeper level pops its own stack. */
   onBackToFiles: () -> Unit = {},
+  /** Set when the half was opened from the All grid: Back at the top level returns to All instead
+   *  of leaving the picker on screen. */
+  onBackToAll: (() -> Unit)? = null,
   modifier: Modifier = Modifier,
   restoreToken: Int = 0,
   /** False while a detail or the player covers this half, so a hidden Back never pops its stack. */
   backEnabled: Boolean = true,
+  /** Whether a recognizer answers here; the mic button and the remote's mic key follow it. Overrides
+   *  the device check when non-null, which is what a harness passes. */
+  voiceAvailable: Boolean? = null,
+  /** Test seam: answers a mic press without a device. Null asks the platform recognizer. */
+  voiceLauncher: VoiceLauncher? = null,
   /** The destinations this account may copy into, read once when a card's copy action is used;
    *  null keeps the action off. */
   loadDestinations: (suspend () -> List<LibraryDto>)? = null,
@@ -139,6 +150,16 @@ fun RemoteLibraryRoute(
   var query by remember { mutableStateOf("") }
   var committed by remember { mutableStateOf("") }
   var editorOpen by remember { mutableStateOf(false) }
+  val voice = rememberVoiceSearch(
+    voiceAvailable ?: voiceSearchAvailable(),
+    onVoiceResult = { spoken ->
+      query = spoken
+      committed = spoken
+      editorOpen = false
+      viewModel.search(spoken)
+    },
+    launcher = voiceLauncher,
+  )
 
   // The card's copy panel: nothing is read for it until the viewer presses Menu or Info on a
   // playable card, so a listing never fans out into a source read per tile. One copy is in flight
@@ -223,7 +244,11 @@ fun RemoteLibraryRoute(
   }
 
   BackHandler(enabled = segment == LibrarySegment.Servers && backEnabled) {
-    if (!viewModel.back()) onBackToFiles()
+    if (viewModel.back()) {
+      if (onBackToAll != null && viewModel.state.levels.isEmpty()) onBackToAll()
+    } else {
+      onBackToFiles()
+    }
   }
 
   LaunchedEffect(levelKey) {
@@ -281,6 +306,7 @@ fun RemoteLibraryRoute(
         available = directory != null,
         openFocus = searchAction,
         fieldFocus = searchField,
+        voice = voice,
         trailing = if (directory != null) ({ TypeFilterChips(state = directory.state, onFilter = { viewModel.filter(it) }) }) else null,
       )
       Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -555,7 +581,8 @@ internal fun RemoteSeriesScreen(
 
 /** The Files/Media servers switch at the top of the section. */
 @Composable
-internal fun LibrarySegments(segment: LibrarySegment, onFiles: () -> Unit, onServers: () -> Unit) {
+internal fun LibrarySegments(segment: LibrarySegment, onAll: () -> Unit, onFiles: () -> Unit, onServers: () -> Unit) {
+  val allFocus = remember { FocusRequester() }
   val filesFocus = remember { FocusRequester() }
   val serversFocus = remember { FocusRequester() }
   Row(
@@ -563,6 +590,12 @@ internal fun LibrarySegments(segment: LibrarySegment, onFiles: () -> Unit, onSer
     horizontalArrangement = Arrangement.spacedBy(11.dp),
     verticalAlignment = Alignment.CenterVertically,
   ) {
+    SegmentButton(
+      text = stringResource(R.string.media_server_filter_all),
+      selected = segment == LibrarySegment.All,
+      onClick = onAll,
+      modifier = Modifier.focusRequester(allFocus),
+    )
     SegmentButton(
       text = stringResource(R.string.media_server_tab_files),
       selected = segment == LibrarySegment.Files,
@@ -663,7 +696,7 @@ private fun LibraryPicker(
  * plain folder/drive icon; the provider and read-only note stay as the secondary caption.
  */
 @Composable
-private fun RemoteArtTile(
+internal fun RemoteArtTile(
   title: String,
   libraryId: String,
   parentId: String?,
@@ -957,7 +990,7 @@ private fun RemoteErrorPanel(kind: RemoteErrorKind?, onRetry: () -> Unit, focus:
 }
 
 @Composable
-private fun libraryCaption(provider: String): String =
+internal fun libraryCaption(provider: String): String =
   listOfNotNull(providerLabel(provider).takeIf { it.isNotBlank() }, stringResource(R.string.media_server_read_only))
     .joinToString(" · ")
 

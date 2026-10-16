@@ -202,6 +202,8 @@ sealed interface HomeCard {
     val year: String? = null,
     override val poster: String? = null,
     override val wide: String? = null,
+    /** The catalogue title the library record names, when it names one: OK opens that title. */
+    val title: TitleRefDto? = null,
   ) : HomeCard
 
   /** One card backed by a remote media-server item: no local path and no catalogue id. */
@@ -233,6 +235,9 @@ sealed interface HomeCard {
 val HomeCard.isWideKind: Boolean
   get() = this is HomeCard.ResumeFile || this is HomeCard.ResumeCatalogue || this is HomeCard.Episode ||
     (this is HomeCard.Remote && itemType == "episode")
+
+/** Whether the row draws this card wide: every card of Continue watching is, whatever its kind. */
+fun HomeCard.drawnWide(rowId: String): Boolean = rowId == "resume" || isWideKind
 
 /** The card's display title, exactly as the web's `titleOf` picks it. */
 val HomeCard.displayTitle: String

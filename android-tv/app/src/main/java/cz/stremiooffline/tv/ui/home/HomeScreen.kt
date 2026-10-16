@@ -75,7 +75,7 @@ import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.data.displayTitle
 import cz.stremiooffline.tv.data.episodeCodeText
-import cz.stremiooffline.tv.data.isWideKind
+import cz.stremiooffline.tv.data.drawnWide
 import cz.stremiooffline.tv.data.progressFraction
 import cz.stremiooffline.tv.data.wideImage
 import cz.stremiooffline.tv.data.yearText
@@ -83,6 +83,7 @@ import cz.stremiooffline.tv.ui.components.CardRowInset
 import cz.stremiooffline.tv.ui.components.PosterCard
 import cz.stremiooffline.tv.ui.components.ShimmerCard
 import cz.stremiooffline.tv.ui.components.ShimmerCards
+import cz.stremiooffline.tv.ui.components.ShimmerLine
 import cz.stremiooffline.tv.ui.components.WideCard
 import cz.stremiooffline.tv.ui.settings.feedTypeOf
 import cz.stremiooffline.tv.ui.settings.typeTag
@@ -93,9 +94,13 @@ import kotlinx.coroutines.delay
 const val TagDownloadsStrip = "home_downloads_strip"
 const val TagBackdropTitle = "home_backdrop_title"
 const val TagBackdropHero = "home_backdrop_hero"
+const val TagHeroMetaLoading = "home_hero_meta_loading"
 
 /** How long focus has to rest on a card before the hero asks the catalogue about it. */
 const val HERO_META_DEBOUNCE_MS = 300L
+
+/** How many rows past the focused one a catalogue row is revealed. */
+private const val ROW_PREFETCH = 3
 
 fun homeCardTag(key: String): String = "card:$key"
 
@@ -264,7 +269,11 @@ private fun HomeBody(
     delay(HERO_META_DEBOUNCE_MS)
     onHeroMeta(ref.first, ref.second)
   }
-  val heroMeta = hero?.takeIf { it.key == heroRef?.let { (type, id) -> "$type:$id" } }?.meta
+  val heroKey = heroRef?.let { (type, id) -> "$type:$id" }
+  val heroMeta = hero?.takeIf { it.key == heroKey }?.meta
+  // A title to describe, whose answer has not settled yet: the debounce has not fired, or the
+  // ask is still out there.
+  val heroLoading = heroRef != null && (hero?.key != heroKey || hero?.loading == true)
 
   fun focusCard(index: Int, cardIndex: Int): Boolean {
     val rowId = rowIds.getOrNull(index) ?: return false
@@ -278,7 +287,7 @@ private fun HomeBody(
   }
 
   fun revealNear(rowIndex: Int) {
-    for (index in 0..rowIndex + 1) {
+    for (index in 0..rowIndex + ROW_PREFETCH) {
       val slot = slots.getOrNull(index) ?: continue
       if (slot.catalog && slot.content == RowContent.Placeholder) onReveal(slot.id)
     }
@@ -310,7 +319,7 @@ private fun HomeBody(
 
   Box(Modifier.fillMaxSize()) {
     if (focusedCard != null) {
-      Backdrop(row = focusedSlot, card = focusedCard, meta = heroMeta, imageUrl = imageUrl)
+      Backdrop(row = focusedSlot, card = focusedCard, meta = heroMeta, loading = heroLoading, imageUrl = imageUrl)
     }
 
     Box(
@@ -381,7 +390,7 @@ private fun HomeBody(
 }
 
 @Composable
-private fun Backdrop(row: HomeRowSlot?, card: HomeCard, meta: MetaDto?, imageUrl: (String?) -> String?) {
+private fun Backdrop(row: HomeRowSlot?, card: HomeCard, meta: MetaDto?, loading: Boolean, imageUrl: (String?) -> String?) {
   Box(Modifier.fillMaxWidth().height(BackdropHeight).clipToBounds()) {
     Crossfade(
       targetState = imageUrl(card.wideImage),
@@ -440,7 +449,7 @@ private fun Backdrop(row: HomeRowSlot?, card: HomeCard, meta: MetaDto?, imageUrl
         overflow = TextOverflow.Ellipsis,
         modifier = Modifier.testTag(TagBackdropTitle),
       )
-      HeroCopy(line = heroMetaLine(card, meta), description = heroDescription(card, meta))
+      if (loading) HeroMetaPlaceholder() else HeroCopy(line = heroMetaLine(card, meta), description = heroDescription(card, meta))
       card.progressFraction?.let { fraction ->
         val percent = (fraction * 100).roundToInt()
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
@@ -494,6 +503,23 @@ private fun HeroCopy(line: String, description: String?) {
             overflow = TextOverflow.Ellipsis,
           )
         }
+      }
+    }
+  }
+}
+
+/** The hero's line and description while the catalogue is still answering: two fixed boxes of
+ *  the same height the text will take, so nothing under the hero moves when it arrives. */
+@Composable
+private fun HeroMetaPlaceholder() {
+  Column(Modifier.testTag(TagHeroMetaLoading)) {
+    Box(Modifier.height(HeroMetaLineHeight)) {
+      ShimmerLine(width = 260.dp, height = 11.dp)
+    }
+    Box(Modifier.height(HeroDescriptionHeight)) {
+      Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        ShimmerLine(width = 520.dp, height = 11.dp)
+        ShimmerLine(width = 380.dp, height = 11.dp)
       }
     }
   }
@@ -569,6 +595,7 @@ private fun HomeRowView(
             requesters[slot.id to card.key] = requester
             HomeCardView(
               card = card,
+              rowId = slot.id,
               imageUrl = imageUrl,
               modifier = Modifier
                 .focusRequester(requester)
@@ -634,6 +661,7 @@ private fun RowNote(text: String, retryTag: String, requester: FocusRequester, o
 @Composable
 private fun HomeCardView(
   card: HomeCard,
+  rowId: String,
   imageUrl: (String?) -> String?,
   modifier: Modifier,
   cardTag: String,
@@ -642,7 +670,7 @@ private fun HomeCardView(
   val label = cardLabel(card)?.let { stringResource(it) }
   val caption = captionOf(card, label)
   val title = card.displayTitle
-  if (card.isWideKind) {
+  if (card.drawnWide(rowId)) {
     WideCard(
       label = title,
       imageUrl = imageUrl(card.wide),

@@ -463,6 +463,9 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
         ...(record?.year ? { year: record.year } : {}),
         ...(poster ? { poster } : {}),
         ...(wide ? { wide } : {}),
+        // The record names the title the card stands for, so OK opens that title's detail.
+        ...(record && record.id !== "" && (record.type === "movie" || record.type === "series")
+          ? { title: { type: record.type, id: record.id } } : {}),
         // A favourite carried over from before libraries names no library; it still draws, and
         // only its single-library install can resolve the card.
         libraryId: parseLibraryPath(key)?.libraryId ?? "",

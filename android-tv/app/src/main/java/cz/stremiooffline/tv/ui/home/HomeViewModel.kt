@@ -65,8 +65,9 @@ data class HomeState(
 )
 
 /** The hero's lazily-loaded metadata for one catalogue card, keyed by `type:id`. [meta] is the
- *  title's own answer, or null when the card is a library one, the answer was empty or it failed. */
-data class HeroMeta(val key: String, val meta: MetaDto?)
+ *  title's own answer, or null when the card is a library one, the answer was empty or it failed.
+ *  [loading] is true between the ask and its answer, success or failure. */
+data class HeroMeta(val key: String, val meta: MetaDto?, val loading: Boolean = false)
 
 /** True when a row has something to draw: an empty, complete row is the only one left out. */
 fun drawnContent(content: RowContent): Boolean = when (content) {
@@ -120,8 +121,12 @@ class HomeViewModel(private val api: TvApi) : ViewModel() {
   fun heroMeta(type: String, id: String) {
     val key = "$type:$id"
     val cached = heroCache[key]
-    if (hero?.key != key) hero = HeroMeta(key, cached)
-    if (cached != null) return
+    if (cached != null) {
+      if (hero?.key != key) hero = HeroMeta(key, cached)
+      return
+    }
+    // The card is drawn with a placeholder from the moment it is asked until its answer lands.
+    hero = HeroMeta(key, null, loading = true)
     heroJob?.cancel()
     heroJob = viewModelScope.launch {
       val language = uiLanguage().await()
@@ -183,11 +188,16 @@ class HomeViewModel(private val api: TvApi) : ViewModel() {
       }
       state = state.copy(loading = false)
 
-      val revealed = revealedCatalogRows(slots)
-      if (revealed.isNotEmpty()) {
-        val claims = begin(revealed)
-        val answer = ask(revealed)
-        if (answer is RowAnswer.Ok) apply(revealed, answer.response, catalog = true, claims = claims)
+      // The catalogue is asked once, right after the built-ins: the rows already on screen plus
+      // the first rows a viewer would reach next. A row asked here is marked Loading like one
+      // revealed by focus, so nothing asks it a second time.
+      val prefetch = slots.filter { it.catalog && it.content == RowContent.Placeholder }.map { it.id }.take(CATALOG_PREFETCH)
+      prefetch.forEach { id -> update(id) { it.copy(content = RowContent.Loading, answerSeq = it.answerSeq + 1) } }
+      val asked = (revealedCatalogRows(slots) + prefetch).distinct()
+      if (asked.isNotEmpty()) {
+        val claims = begin(asked)
+        val answer = ask(asked)
+        if (answer is RowAnswer.Ok) apply(asked, answer.response, catalog = true, claims = claims)
       }
       refreshDownloads()
     }
@@ -314,6 +324,8 @@ class HomeViewModel(private val api: TvApi) : ViewModel() {
   }
 
   companion object {
+    /** How many catalogue rows are asked before focus ever reaches them. */
+    private const val CATALOG_PREFETCH = 2
     private const val HERO_CACHE_SIZE = 60
     fun factory(api: TvApi) = viewModelFactory { initializer { HomeViewModel(api) } }
   }

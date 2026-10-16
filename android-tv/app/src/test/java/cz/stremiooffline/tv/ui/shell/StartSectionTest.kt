@@ -14,9 +14,10 @@ class StartSectionTest {
   }
 
   @Test
-  fun `an unknown or missing start view falls back to the catalog`() {
-    assertEquals(Section.Catalog, startSection(null))
-    assertEquals(Section.Catalog, startSection(""))
-    assertEquals(Section.Catalog, startSection("following"))
+  fun `an unknown or missing start view falls back to Home`() {
+    assertEquals(Section.Home, startSection(null))
+    assertEquals(Section.Home, startSection(""))
+    assertEquals(Section.Home, startSection("anything"))
+    assertEquals(Section.Home, startSection("following"))
   }
 }

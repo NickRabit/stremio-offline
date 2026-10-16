@@ -1155,7 +1155,7 @@ export const pl: Catalog = {
   "settings.tileSize": "Rozmiar kafelków",
   "settings.tileSizeHint": "Rozmiar na stronie głównej, w katalogu, bibliotece, ulubionych i kontynuuj oglądanie.",
   "settings.startView": "Strona startowa",
-  "settings.startViewHint": "Strona, na której otwiera się aplikacja. Domyślnie katalog.",
+  "settings.startViewHint": "Strona, na której otwiera się aplikacja. Domyślnie strona główna.",
   "settings.tile.compact": "Kompaktowy",
   "settings.tile.small": "Mały",
   "settings.tile.medium": "Średni (domyślny)",

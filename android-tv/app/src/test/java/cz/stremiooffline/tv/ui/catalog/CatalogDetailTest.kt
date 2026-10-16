@@ -8,6 +8,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
@@ -21,6 +22,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.Modifier
 import androidx.compose.runtime.mutableIntStateOf
@@ -38,6 +40,7 @@ import cz.stremiooffline.tv.ui.detail.PlayTarget
 import kotlinx.coroutines.CompletableDeferred
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -72,6 +75,24 @@ class CatalogDetailTest {
     }
   }
 
+  /** A fake that also keeps what a save wrote, the way the server does, so the re-read the detail
+   *  makes after Mark watched can be seen. */
+  private class StoringApi : FakeTvApi() {
+    override suspend fun saveProgress(
+      key: String,
+      position: Double,
+      duration: Double,
+      title: String,
+      path: String?,
+      poster: String?,
+      addonKey: String?,
+      remote: cz.stremiooffline.tv.data.RemoteItemContext?,
+    ) {
+      super.saveProgress(key, position, duration, title, path, poster, addonKey, remote)
+      progressValues[key] = ProgressDto(position, duration)
+    }
+  }
+
   // Every interaction goes through the remote: a key at the root reaches whatever holds focus.
   private fun press(key: Key) {
     compose.onRoot().performKeyInput { pressKey(key) }
@@ -89,6 +110,12 @@ class CatalogDetailTest {
       press(Key.DirectionRight)
     }
     compose.onNodeWithTag(tag).assertIsFocused()
+  }
+
+  /** Land on one action directly, whatever the row holds beside it. */
+  private fun focusOn(tag: String) {
+    compose.onNodeWithTag(tag).performSemanticsAction(SemanticsActions.RequestFocus)
+    compose.waitForIdle()
   }
 
   private fun openSources() {
@@ -936,9 +963,109 @@ class CatalogDetailTest {
     compose.waitForIdle()
 
     // Icons carry their name as the description only; no text node says it until one is focused.
-    compose.onNodeWithText("Forget progress").assertDoesNotExist()
-    focusFromLeft(TagCatalogForget)
-    compose.onNodeWithText("Forget progress").assertExists()
+    compose.onNodeWithText("Mark as unwatched").assertDoesNotExist()
+    focusOn(TagCatalogForget)
+    compose.onNodeWithText("Mark as unwatched").assertExists()
+  }
+
+  // --- The one action row ------------------------------------------------------------------------
+
+  @Test
+  fun `the action row draws the shared order`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    api.streamsValues["movie:tt1"] = listOf(stream("s1", name = "FullHD"))
+    api.progressValues["movie:tt1"] = ProgressDto(38.6, 120.0)
+    mount(api, movieArgs())
+    compose.waitForIdle()
+
+    assertEquals(
+      listOf(
+        TagCatalogPrimary,
+        TagCatalogStartOver,
+        TagCatalogSources,
+        TagCatalogToLibrary,
+        TagCatalogFavourite,
+        TagCatalogForget,
+        TagCatalogMarkWatched,
+      ),
+      compose.actionRowOrder(
+        TagCatalogPrimary,
+        TagCatalogStartOver,
+        TagCatalogSources,
+        TagCatalogToLibrary,
+        TagCatalogFavourite,
+        TagCatalogForget,
+        TagCatalogMarkWatched,
+      ),
+    )
+  }
+
+  @Test
+  fun `a stored position draws the watched bar`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    api.streamsValues["movie:tt1"] = listOf(stream("s1", name = "FullHD"))
+    api.progressValues["movie:tt1"] = ProgressDto(38.6, 120.0)
+    mount(api, movieArgs())
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagCatalogWatched).assertTextContains("32 % watched")
+  }
+
+  @Test
+  fun `Mark watched stores the movie as finished and Play comes back`() {
+    val api = StoringApi()
+    api.settingsValue = settings()
+    api.streamsValues["movie:tt1"] = listOf(stream("s1", name = "FullHD"))
+    api.progressValues["movie:tt1"] = ProgressDto(38.6, 120.0)
+    mount(api, movieArgs())
+    compose.waitForIdle()
+    compose.onNodeWithText("Resume").assertIsDisplayed()
+
+    focusOn(TagCatalogMarkWatched)
+    press(Key.DirectionCenter)
+    compose.waitForIdle()
+
+    val saved = api.progressSaves.single()
+    assertEquals("movie:tt1", saved.key)
+    assertEquals(1.0, saved.position, 0.0)
+    assertEquals(1.0, saved.duration, 0.0)
+    assertNull(saved.path)
+    assertNull(saved.addonKey)
+    // The re-read the forget flow makes: the title is finished, so Play, with the full bar.
+    compose.onNodeWithText("Play").assertIsDisplayed()
+    compose.onNodeWithTag(TagCatalogWatched).assertTextContains("100 % watched")
+  }
+
+  @Test
+  fun `the catalogue's extras follow the shared actions in order`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    api.localStreamsResult = listOf(
+      StreamDto(
+        sourceId = "lib1",
+        kind = "library",
+        playable = true,
+        localPath = "Filmy/Show/S01E01.mkv",
+        libraryName = "Filmy",
+        behaviorHints = cz.stremiooffline.tv.data.BehaviorHintsDto(filename = "S01E01.mkv"),
+      ),
+    )
+    api.metaValues["series:tt1"] = MetaDto(
+      id = "tt1",
+      type = "series",
+      name = "Show",
+      videos = listOf(VideoDto(id = "tt1:1:1", title = "One", season = 1, episode = 1)),
+    )
+    api.streamsValues["series:tt1:1:1"] = listOf(stream("s1", name = "FullHD"))
+    mount(api, CatalogDetailArgs(MetaDto(id = "tt1", type = "series", name = "Show"), "Cinemeta", "series"))
+    compose.waitForIdle()
+
+    assertEquals(
+      listOf(TagCatalogSeriesDownload, TagCatalogShowInLibrary),
+      compose.actionRowOrder(TagCatalogSeriesDownload, TagCatalogShowInLibrary),
+    )
   }
 
   @Test

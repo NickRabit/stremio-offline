@@ -216,7 +216,7 @@ test("GET /api/settings tells an ordinary account nothing about the instance it 
   assert.equal(carol.uiLanguage, "en", "its own half arrives whole");
   assert.equal(carol.tileSize, "medium");
   assert.equal(carol.homeTileShape, "wide", "the Home tile shape defaults to wide");
-  assert.equal(carol.startView, "catalog", "the start page defaults to the catalogue");
+  assert.equal(carol.startView, "home", "the start page defaults to Home");
 
   const ada = await (await api(harness.base, "/api/settings", { user: "ada" })).json() as Record<string, unknown>;
   assert.equal(ada.concurrentDownloads, harness.state.settings.concurrentDownloads, "an administrator still reads it all");
@@ -276,15 +276,20 @@ test("PATCH /api/settings sends an instance key to the instance and a personal k
   assert.equal(body.startView, "library");
 });
 
-test("PATCH /api/settings coerces a start page it does not know to the catalogue", async (t) => {
+test("PATCH /api/settings keeps a known start page and coerces an unknown one to Home", async (t) => {
   const harness = await mount();
   t.after(harness.close);
+
+  const catalog = await api(harness.base, "/api/settings", { method: "PATCH", user: "carol", body: { startView: "catalog" } });
+  assert.equal(catalog.status, 200);
+  assert.equal(harness.state.userData?.[CAROL]?.prefs.startView, "catalog");
+  assert.equal((await catalog.json() as Record<string, unknown>).startView, "catalog");
 
   const response = await api(harness.base, "/api/settings", { method: "PATCH", user: "carol", body: { startView: "shelf" } });
 
   assert.equal(response.status, 200);
-  assert.equal(harness.state.userData?.[CAROL]?.prefs.startView, "catalog");
-  assert.equal((await response.json() as Record<string, unknown>).startView, "catalog");
+  assert.equal(harness.state.userData?.[CAROL]?.prefs.startView, "home");
+  assert.equal((await response.json() as Record<string, unknown>).startView, "home");
 });
 
 test("PATCH /api/settings round trips the library shelf and coerces a value it does not know", async (t) => {

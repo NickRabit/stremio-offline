@@ -6,18 +6,14 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -26,14 +22,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -66,6 +61,7 @@ import cz.stremiooffline.tv.data.MediaDto
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.ProgressEntryDto
+import cz.stremiooffline.tv.data.RemoteItemContext
 import cz.stremiooffline.tv.data.RemoteItemStateDto
 import cz.stremiooffline.tv.data.RemoteLibraryDto
 import cz.stremiooffline.tv.data.SettingsResponse
@@ -79,6 +75,7 @@ import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
 import cz.stremiooffline.tv.ui.components.TvSpinner
 import cz.stremiooffline.tv.ui.components.WideCard
+import cz.stremiooffline.tv.ui.detail.SavedPlaybackProgress
 import cz.stremiooffline.tv.ui.detail.PlayTarget
 import cz.stremiooffline.tv.ui.theme.Tokens
 import java.util.Locale
@@ -102,9 +99,11 @@ const val TagCatalogSources = "catalog_sources"
 const val TagCatalogMessage = "catalog_message"
 const val TagCatalogEpisode = "catalog_episode"
 const val TagCatalogChosenSource = "catalog_chosen_source"
+const val TagCatalogWatched = "catalog_watched"
 const val TagCatalogLibraryPanel = "catalog_library_panel"
 const val TagCatalogShowInLibrary = "catalog_show_in_library"
 const val TagCatalogForget = "catalog_forget"
+const val TagCatalogMarkWatched = "catalog_mark_watched"
 const val TagCatalogForgetPanel = "catalog_forget_panel"
 const val TagCatalogForgetCancel = "catalog_forget_cancel"
 const val TagCatalogForgetRemove = "catalog_forget_remove"
@@ -494,16 +493,6 @@ fun CatalogDetailScreen(
   val remoteRow = remoteProgress.row.takeIf { remoteProgress.key == remoteIdentity }
   // A local file and a remote version each keep their own progress; only an addon row falls back to
   // the catalogue. A remote row still arriving, or one that failed, reads as no progress at all.
-  val progressPosition = when {
-    localActive -> pick.localProgress?.position ?: 0.0
-    activeRemoteItem != null -> remoteRow?.position ?: 0.0
-    else -> storedPosition
-  }
-  val progressDuration = when {
-    localActive -> pick.localProgress?.duration ?: 0.0
-    activeRemoteItem != null -> remoteRow?.duration ?: 0.0
-    else -> storedDuration
-  }
   val resuming = when {
     localActive -> pick.localProgress?.let { Progress.resumePosition(it.position, it.duration) != null } == true
     // Only the version that stored the position may resume, and never an item marked watched.
@@ -513,20 +502,6 @@ fun CatalogDetailScreen(
     } == true
     else -> Progress.resumePosition(storedPosition, storedDuration) != null &&
       (pick.selectedVideo == null || pick.selectedVideo?.id == resumeEpisode?.id)
-  }
-  // Every stored key this title stands for: the card's own keys when it came from Continue
-  // watching, the local file's own key for a local pick, a show's stored episode otherwise.
-  val forgetKeys: List<String> = when {
-    // Remote history uses its own local endpoint; catalogue Forget cannot delete that row.
-    activeRemoteItem != null -> emptyList()
-    args.forgetKeys.isNotEmpty() && !ui.forget.done -> args.forgetKeys
-    localActive && pick.localProgress?.let { it.position > 0 } == true ->
-      activeStream?.localPath?.let { listOf(Progress.libraryKey(it)) }.orEmpty()
-    isSeries -> entries.filter {
-      it.series?.id == meta.id || (it.key.startsWith("series:") && Resume.resumeTarget(it).meta.id == meta.id)
-    }.map { it.key }
-    movieProgress?.let { it.position > 0 } == true -> listOf(ProgressKey.of(streamType, meta.id))
-    else -> emptyList()
   }
 
   // A local pick resumes from the file's own progress, read when it becomes the active row.
@@ -563,6 +538,24 @@ fun CatalogDetailScreen(
   val baseTitle = localizedTitle(args.meta, meta, settings.uiLanguage)
   val playerTitle = if (pick.selectedVideo != null) "$baseTitle · ${pick.selectedVideo!!.label}" else baseTitle
   val progressKey = ProgressKey.of(streamType, meta.id, pick.selectedVideo?.id)
+  // The stored position of what Play would play, and the one key Mark as unwatched clears: the
+  // card's own keys when the detail came from Continue watching, that key otherwise.
+  val forgetKeys: List<String> = if (args.forgetKeys.isNotEmpty() && !ui.forget.done) {
+    args.forgetKeys
+  } else {
+    listOfNotNull(
+      playProgress(
+        local = activeStream?.takeIf(Streams::isLocalStream),
+        localProgress = pick.localProgress,
+        remoteItem = activeRemoteItem,
+        remoteRow = remoteRow,
+        seriesEpisodeMatches = pick.selectedVideo == null || pick.selectedVideo?.id == resumeEpisode?.id,
+        cataloguePosition = storedPosition,
+        catalogueDuration = storedDuration,
+        catalogueKey = progressKey,
+      )?.key,
+    )
+  }
 
   fun closeSources() {
     if (!pick.sourcesOpen) return
@@ -899,8 +892,9 @@ fun CatalogDetailScreen(
       runCatching { focus.primary.requestFocus() }
     }
   }
-  LaunchedEffect(resuming) {
-    if (!resuming && startOverWasFocused) {
+  // Start over stands beside Play while a position is stored for the row both of them act on.
+  LaunchedEffect(forgetKeys.isNotEmpty()) {
+    if (forgetKeys.isEmpty() && startOverWasFocused) {
       focus.startOverFocused = false
       runCatching { focus.primary.requestFocus() }
     }
@@ -975,131 +969,118 @@ fun CatalogDetailScreen(
           modifier = Modifier.width(700.dp),
         )
       }
-      if (resuming && progressDuration > 0) {
-        val fraction = (progressPosition / progressDuration).toFloat()
-        Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-          Box(Modifier.width(140.dp).height(5.dp).clip(RoundedCornerShape(999.dp)).background(Tokens.Line)) {
-            Box(Modifier.fillMaxHeight().fillMaxWidth(fraction.coerceIn(0f, 1f)).background(Tokens.Accent))
-          }
-          Text(stringResource(R.string.tv_detail_watched, (fraction * 100).toInt().toString()), color = Tokens.Muted, fontSize = 10.sp)
-        }
+      playProgress(
+        local = activeStream?.takeIf(Streams::isLocalStream),
+        localProgress = pick.localProgress,
+        remoteItem = activeRemoteItem,
+        remoteRow = remoteRow,
+        seriesEpisodeMatches = pick.selectedVideo == null || pick.selectedVideo?.id == resumeEpisode?.id,
+        cataloguePosition = storedPosition,
+        catalogueDuration = storedDuration,
+        catalogueKey = progressKey,
+      )?.let { saved ->
+        SavedPlaybackProgress(position = saved.position, duration = saved.duration, tag = TagCatalogWatched)
       }
       Spacer(Modifier.height(3.dp))
-      Row(
-        modifier = Modifier.onFocusChanged { focus.actionRowFocused = it.hasFocus },
-        horizontalArrangement = Arrangement.spacedBy(11.dp),
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        FocusButton(
-          text = when {
-            pendingPlay -> texts.playWhenReady
-            findingSources -> texts.findingSources
-            resuming -> stringResource(R.string.tv_resume)
-            else -> stringResource(R.string.player_play)
-          },
-          onClick = { playPressed() },
-          kind = FocusButtonKind.Primary,
-          leading = if (pendingPlay || findingSources) ({ TvSpinner() }) else null,
-          modifier = Modifier.focusRequester(focus.primary).testTag(TagCatalogPrimary),
-        )
-        if (resuming) {
-          ActionIconButton(
-            label = stringResource(R.string.tv_start_over),
-            icon = ReplayIcon,
-            onClick = { startOverPressed() },
-            caption = ui.caption,
-            modifier = Modifier
-              .testTag(TagCatalogStartOver)
-              .onFocusChanged { focus.startOverFocused = it.isFocused },
+      DetailActionRow(
+        primary = {
+          FocusButton(
+            text = when {
+              pendingPlay -> texts.playWhenReady
+              findingSources -> texts.findingSources
+              resuming -> stringResource(R.string.tv_resume)
+              else -> stringResource(R.string.player_play)
+            },
+            onClick = { playPressed() },
+            kind = FocusButtonKind.Primary,
+            leading = if (pendingPlay || findingSources) ({ TvSpinner() }) else null,
+            modifier = Modifier.focusRequester(focus.primary).testTag(TagCatalogPrimary),
           )
-        }
-        if (forgetKeys.isNotEmpty()) {
-          ActionIconButton(
-            label = stringResource(R.string.tv_forget_progress),
-            icon = ForgetIcon,
-            onClick = { ui.forget.panelOpen = true },
-            enabled = !ui.forget.busy,
-            caption = ui.caption,
-            modifier = Modifier.testTag(TagCatalogForget),
-          )
-        }
-        ActionIconButton(
-          label = stringResource(if (favourite) R.string.favorite_remove else R.string.favorite_add),
-          icon = null,
-          glyph = if (favourite) "★" else "☆",
-          onClick = { toggleFavourite() },
-          caption = ui.caption,
-          modifier = Modifier.testTag(TagCatalogFavourite),
-        )
-        if (canQueueActive) {
-          ActionIconButton(
-            label = if (queued) texts.queued else texts.toLibrary,
-            icon = if (queued) CheckIcon else DownloadIcon,
-            onClick = { activeStream?.let { queue(it) } },
-            enabled = !save.queueBusy,
-            caption = ui.caption,
-            modifier = Modifier
-              .testTag(TagCatalogToLibrary)
-              .focusRequester(focus.libraryOpener)
-              .onFocusChanged { focus.toLibraryFocused = it.isFocused },
-          )
-        }
-        // The web's bulk download, for the whole batch at once: it needs no source of its own, so
-        // it sits beside To library for any series with an episode selected. A native pick has no
-        // bulk action at all: the batch would queue addons the viewer never chose.
-        if (isSeries && pick.selectedVideo != null && !meta.videos.isNullOrEmpty()
-          && activeStream?.let(Streams::isRemoteStream) != true) {
-          ActionIconButton(
-            label = stringResource(R.string.bulk_title),
-            icon = SeriesDownloadIcon,
+        },
+        // A stored position is what offers a fresh start beside Play, for the row Play would play.
+        startOver = if (forgetKeys.isNotEmpty()) catalogAction(
+          TagCatalogStartOver, stringResource(R.string.tv_start_over), ReplayIcon,
+          modifier = Modifier.onFocusChanged { focus.startOverFocused = it.isFocused },
+        ) { startOverPressed() } else null,
+        sources = {
+          FocusButton(
+            text = stringResource(R.string.tv_sources_count, rows.size.toString()),
             onClick = {
+              cancelPendingPlay()
+              pick.sourcesOpen = true
+            },
+            leading = if (anyAsking) ({ TvSpinner() }) else null,
+            modifier = Modifier.focusRequester(focus.sourcesOpener).testTag(TagCatalogSources),
+          )
+        },
+        toLibrary = if (canQueueActive) catalogAction(
+          TagCatalogToLibrary,
+          if (queued) texts.queued else texts.toLibrary,
+          if (queued) CheckIcon else DownloadIcon,
+          enabled = !save.queueBusy,
+          modifier = Modifier
+            .focusRequester(focus.libraryOpener)
+            .onFocusChanged { focus.toLibraryFocused = it.isFocused },
+        ) { activeStream?.let { queue(it) } } else null,
+        favourite = catalogAction(
+          TagCatalogFavourite,
+          stringResource(if (favourite) R.string.favorite_remove else R.string.favorite_add),
+          glyph = if (favourite) "★" else "☆",
+        ) { toggleFavourite() },
+        unwatched = if (forgetKeys.isNotEmpty()) catalogAction(
+          TagCatalogForget, stringResource(R.string.media_server_unwatch), EyeOffIcon,
+          enabled = !ui.forget.busy,
+        ) { ui.forget.panelOpen = true } else null,
+        // Anything with a row to play can be marked finished: the server then drops it from
+        // Continue watching and, for an episode, moves the show on to the next one.
+        watched = if (activeStream != null) catalogAction(
+          TagCatalogMarkWatched,
+          stringResource(R.string.media_server_mark_watched),
+          EyeIcon,
+        ) {
+            scope.launch {
+              runCatching {
+                api.saveProgress(progressKey, 1.0, 1.0, playerTitle, null, args.meta.poster ?: meta.poster, null, null)
+              }
+              if (isSeries) {
+                entries = runCatching { api.progressList() }.getOrDefault(entries)
+              } else {
+                movieProgress = runCatching { api.progress(ProgressKey.of(streamType, meta.id)) }.getOrNull()
+              }
+            }
+        } else null,
+        caption = ui.caption,
+        modifier = Modifier.onFocusChanged { focus.actionRowFocused = it.hasFocus },
+        extras = listOfNotNull(
+          // The web's bulk download, for the whole batch at once: it needs no source of its own, so
+          // it sits beside To library for any series with an episode selected. A native pick has no
+          // bulk action at all: the batch would queue addons the viewer never chose.
+          if (isSeries && pick.selectedVideo != null && !meta.videos.isNullOrEmpty()
+            && activeStream?.let(Streams::isRemoteStream) != true) {
+            catalogAction(
+              TagCatalogSeriesDownload, stringResource(R.string.bulk_title), SeriesDownloadIcon,
+              modifier = Modifier.focusRequester(ui.series.focus),
+            ) {
               if (activeStream?.let(Streams::isRemoteStream) != true) {
                 cancelPendingPlay()
                 ui.series.open = true
               }
-            },
-            caption = ui.caption,
-            modifier = Modifier
-              .testTag(TagCatalogSeriesDownload)
-              .focusRequester(ui.series.focus),
-          )
-        }
-        FocusButton(
-          text = stringResource(R.string.tv_sources_count, rows.size.toString()),
-          onClick = {
-            cancelPendingPlay()
-            pick.sourcesOpen = true
-          },
-          leading = if (anyAsking) ({ TvSpinner() }) else null,
-          modifier = Modifier.focusRequester(focus.sourcesOpener).testTag(TagCatalogSources),
-        )
-        // To library is hidden for a local pick (it is already on disk); Show in library opens
-        // the file's folder instead.
-        if (localActive) {
-          ActionIconButton(
-            label = stringResource(R.string.library_show_in_library),
-            icon = FolderIcon,
-            onClick = { activeStream?.localPath?.let { onShowInLibrary(it.substringBeforeLast('/', "")) } },
-            caption = ui.caption,
-            modifier = Modifier
-              .testTag(TagCatalogShowInLibrary)
-              .focusRequester(focus.libraryOpener)
-              .onFocusChanged { focus.toLibraryFocused = it.isFocused },
-          )
-        }
-        if (ui.caption.text.isNotEmpty()) {
-          Text(ui.caption.text, color = Tokens.Muted, fontSize = 12.sp, maxLines = 1)
-        }
-      }
+            }
+          } else null,
+          // Show in library is offered whenever the list holds a copy on disk, not only while that
+          // copy is the active pick: it opens the active row's folder when that row is the copy.
+          if (showInLibraryFolder(activeStream, rows) != null) {
+            catalogAction(
+              TagCatalogShowInLibrary,
+              stringResource(R.string.library_show_in_library),
+              FolderIcon,
+            ) { showInLibraryFolder(activeStream, rows)?.let(onShowInLibrary) }
+          } else null,
+        ),
+      )
       if (pick.chosenInPanel) {
         activeStream?.let { stream ->
-          val local = Streams.isLocalStream(stream)
-          val label = if (local) stream.behaviorHints?.filename ?: streamLabel(stream) else streamLabel(stream)
-          val caption = listOfNotNull(
-            sourceGroupName(stream)?.takeIf { it.isNotBlank() },
-            label.takeIf { it.isNotBlank() },
-            formatSize(Streams.streamSize(stream)),
-          ).joinToString(" · ")
+          val caption = chosenSourceCaption(stream).joinToString(" · ")
           if (caption.isNotEmpty()) {
             Text(
               stringResource(R.string.tv_chosen_source) + " · " + caption,
@@ -1620,6 +1601,72 @@ internal fun sourceGroupName(stream: StreamDto): String? = when {
     listOfNotNull(stream.provider, stream.libraryName).filter { it.isNotBlank() }.joinToString(" · ")
   else -> stream.addonName
 }.takeIf { !it.isNullOrBlank() }
+
+/** The stored position behind what Play would play, with the one key Mark as unwatched clears. */
+internal class PlayProgress(val position: Double, val duration: Double, val key: String)
+
+/**
+ * One action of the catalogue's own row. Built here rather than inline in the screen's body: that
+ * composable sits at the limit of the registers Android's verifier allows.
+ */
+private fun catalogAction(
+  tag: String,
+  label: String,
+  icon: ImageVector? = null,
+  glyph: String = "",
+  enabled: Boolean = true,
+  modifier: Modifier = Modifier,
+  onClick: () -> Unit,
+): DetailAction = DetailAction(
+  label = label,
+  icon = icon,
+  onClick = onClick,
+  tag = tag,
+  enabled = enabled,
+  glyph = glyph,
+  modifier = modifier,
+)
+
+/**
+ * The stored position of the row Play would play, with the key it is stored under: a copy on disk
+ * its own key, a media-server version the title's catalogue key, every other row that key too. Null
+ * when the position the detail read belongs to another row -- another version, another episode --
+ * or to nothing at all, so the watched bar, Start over and Mark as unwatched all agree.
+ *
+ * A function rather than a local: this screen is one composable close to the limit of the registers
+ * Android's verifier allows.
+ */
+internal fun playProgress(
+  local: StreamDto?,
+  localProgress: ProgressDto?,
+  remoteItem: RemoteItemContext?,
+  remoteRow: RemoteItemStateDto?,
+  seriesEpisodeMatches: Boolean,
+  cataloguePosition: Double,
+  catalogueDuration: Double,
+  catalogueKey: String,
+): PlayProgress? = when {
+  local != null -> local.localPath?.takeIf { it.isNotBlank() }?.let { path ->
+    localProgress?.takeIf { it.position > 0.0 }
+      ?.let { PlayProgress(it.position, it.duration, Progress.libraryKey(path)) }
+  }
+  // Only the version that stored the position owns it, and never an item marked watched.
+  remoteItem != null -> remoteRow
+    ?.takeIf { !it.watched && it.mediaSourceId != null && it.mediaSourceId == remoteItem.mediaSourceId }
+    ?.takeIf { it.position > 0.0 }
+    ?.let { PlayProgress(it.position, it.duration, catalogueKey) }
+  seriesEpisodeMatches -> cataloguePosition.takeIf { it > 0.0 }
+    ?.let { PlayProgress(it, catalogueDuration, catalogueKey) }
+  else -> null
+}
+
+/** The library folder Show in library opens: the active row's own when that row is a copy on disk,
+ *  else the first copy the list holds. Null when the list holds no copy on disk at all. */
+internal fun showInLibraryFolder(active: StreamDto?, rows: List<StreamDto>): String? {
+  val copies = rows.filter { Streams.isLocalStream(it) && it.localPath != null }
+  val chosen = active?.takeIf { Streams.isLocalStream(it) && it.localPath != null } ?: copies.firstOrNull()
+  return chosen?.localPath?.substringBeforeLast('/', "")
+}
 
 /** The remote failure line: which libraries could not be reached, else a plain failure. */
 @Composable

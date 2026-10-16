@@ -8,6 +8,8 @@ import androidx.activity.compose.setContent
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertTextContains
@@ -36,9 +38,13 @@ import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.RemoteItemStateDto
 import cz.stremiooffline.tv.data.RemoteProviderIdsDto
 import cz.stremiooffline.tv.data.StreamDto
+import cz.stremiooffline.tv.data.StreamSourceDto
+import cz.stremiooffline.tv.ui.catalog.TagSourcesPanel
+import cz.stremiooffline.tv.ui.catalog.actionRowOrder
 import cz.stremiooffline.tv.ui.catalog.nativeQueueLibraryTag
 import cz.stremiooffline.tv.ui.catalog.nativeQueueVersionTag
 import cz.stremiooffline.tv.ui.catalog.TagNativeQueueNoTargets
+import cz.stremiooffline.tv.ui.catalog.sourceRowTag
 import cz.stremiooffline.tv.ui.FakeTvApi
 import kotlinx.coroutines.CompletableDeferred
 import org.junit.After
@@ -136,14 +142,14 @@ class RemoteDetailTest {
     api.progressValues["movie:tt1"] = ProgressDto(position = 1200.0, duration = 3600.0)
     mountNamed(api)
 
-    focusByLabel("Forget progress")
+    focusByLabel("Mark as unwatched")
     press(Key.DirectionCenter)
 
     // Clearing only the item's row would leave the title's position offering Resume again.
     assertEquals(listOf(listOf("movie:tt1")), api.forgetCalls)
     assertEquals(0.0, api.remoteStatePatches.single().position ?: -1.0, 0.0)
     compose.onNodeWithTag(TagRemoteDetailWatched).assertDoesNotExist()
-    compose.onNodeWithContentDescription("Forget progress").assertDoesNotExist()
+    compose.onNodeWithContentDescription("Mark as unwatched").assertDoesNotExist()
   }
 
   @Test
@@ -201,19 +207,18 @@ class RemoteDetailTest {
   }
 
   @Test
-  fun `forget sends a zeroed patch without touching the favourite or watched flags`() {
+  fun `Mark as unwatched sends a zeroed patch without touching the favourite or watched flags`() {
     val api = FakeTvApi()
     api.remoteSourcesValue = listOf(version("a1"))
     api.remoteStateValue = RemoteItemStateDto(
       position = 900.0,
       duration = 1800.0,
       favorite = true,
-      watched = true,
       mediaSourceId = "a1",
     )
     mount(api)
 
-    focusByLabel("Forget progress")
+    focusByLabel("Mark as unwatched")
     press(Key.DirectionCenter)
 
     val patch = api.remoteStatePatches.single()
@@ -224,18 +229,34 @@ class RemoteDetailTest {
     assertEquals("a1", api.remoteStateValue.mediaSourceId)
     // The local stored position is gone, so the bar and the control with it.
     compose.onNodeWithTag(TagRemoteDetailWatched).assertDoesNotExist()
-    compose.onNodeWithContentDescription("Forget progress").assertDoesNotExist()
+    compose.onNodeWithContentDescription("Mark as unwatched").assertDoesNotExist()
   }
 
   @Test
-  fun `a failed forget keeps the stored position and shows the failure`() {
+  fun `Mark as unwatched clears a watched flag the item carries`() {
+    val api = FakeTvApi()
+    api.remoteSourcesValue = listOf(version("a1"))
+    api.remoteStateValue = RemoteItemStateDto(watched = true)
+    mount(api)
+
+    focusByLabel("Mark as unwatched")
+    press(Key.DirectionCenter)
+
+    assertEquals(false, api.remoteStatePatches.single().watched)
+    // The item is not watched any more, so the other half of the pair takes its place.
+    compose.onNodeWithContentDescription("Mark as unwatched").assertDoesNotExist()
+    compose.onNodeWithContentDescription("Mark watched").assertExists()
+  }
+
+  @Test
+  fun `a failed Mark as unwatched keeps the stored position and shows the failure`() {
     val api = FakeTvApi()
     api.remoteSourcesValue = listOf(version("a1"))
     api.remoteStateValue = RemoteItemStateDto(position = 900.0, duration = 1800.0, favorite = true, mediaSourceId = "a1")
     api.remoteStatePatchFailure = ApiError(ApiFailure.Generic)
     mount(api)
 
-    focusByLabel("Forget progress")
+    focusByLabel("Mark as unwatched")
     press(Key.DirectionCenter)
 
     compose.onNodeWithTag(TagRemoteDetailWatched).assertTextContains("50 % watched")
@@ -243,14 +264,14 @@ class RemoteDetailTest {
   }
 
   @Test
-  fun `a failed forget keeps a Start over that plays without resume`() {
+  fun `a failed Mark as unwatched keeps a Start over that plays without resume`() {
     val api = FakeTvApi()
     api.remoteSourcesValue = listOf(version("a1"))
     api.remoteStateValue = RemoteItemStateDto(position = 900.0, duration = 1800.0, mediaSourceId = "a1")
     api.remoteStatePatchFailure = ApiError(ApiFailure.Generic)
     mount(api)
 
-    focusByLabel("Forget progress")
+    focusByLabel("Mark as unwatched")
     press(Key.DirectionCenter)
 
     compose.onNodeWithContentDescription("Start over").assertExists()
@@ -290,6 +311,25 @@ class RemoteDetailTest {
         RemoteDetailScreen(
           api = api,
           data = data(),
+          onPlay = { played += it },
+          onBack = {},
+          loadDestinations = { api.libraries() },
+          onQueue = { title, sourceId, media, target -> api.download(title, sourceId, media, target) },
+        )
+      }
+    }
+    compose.waitForIdle()
+  }
+
+  /** The copy surface plus the addon discovery: a row other than the item's own versions can be
+   *  answered for, which is what a supplementary pick needs. */
+  private fun mountCatalogued(api: FakeTvApi) {
+    scenario.onActivity { activity ->
+      activity.setContent {
+        RemoteDetailScreen(
+          api = api,
+          data = data(RemoteProviderIdsDto(imdb = "tt1")),
+          catalogueApi = api,
           onPlay = { played += it },
           onBack = {},
           loadDestinations = { api.libraries() },
@@ -387,6 +427,120 @@ class RemoteDetailTest {
 
   private fun awaitTag(tag: String) {
     compose.waitUntil(5_000) { compose.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty() }
+  }
+
+  /** The action row's own buttons, read left to right. */
+  private fun rowOrder(): List<String> = compose.actionRowOrder(
+    TagRemoteDetailPlay,
+    TagRemoteDetailStartOver,
+    TagRemoteDetailVersions,
+    TagRemoteDetailToLibrary,
+    TagRemoteDetailFavorite,
+    TagRemoteDetailMarkUnwatched,
+    TagRemoteDetailMarkWatched,
+  )
+
+  @Test
+  fun `the action row draws the shared order`() {
+    val api = FakeTvApi()
+    api.remoteSourcesValue = listOf(copyableVersion("a1"))
+    api.remoteStateValue = RemoteItemStateDto(position = 900.0, duration = 1800.0, mediaSourceId = "a1")
+    api.librariesValue = listOf(LibraryDto(id = "libA", name = "Filmy", type = "movie", writable = true))
+    mountCopy(api)
+
+    assertEquals(
+      listOf(
+        TagRemoteDetailPlay,
+        TagRemoteDetailStartOver,
+        TagRemoteDetailVersions,
+        TagRemoteDetailToLibrary,
+        TagRemoteDetailFavorite,
+        TagRemoteDetailMarkUnwatched,
+        TagRemoteDetailMarkWatched,
+      ),
+      rowOrder(),
+    )
+  }
+
+  @Test
+  fun `picking a version and pressing Play plays exactly that version`() {
+    val api = FakeTvApi()
+    api.remoteSourcesValue = listOf(version("a1"), version("a2"))
+    api.remoteStateValue = RemoteItemStateDto(position = 900.0, duration = 1800.0, mediaSourceId = "a1")
+    mount(api)
+
+    activate(TagRemoteDetailVersions)
+    awaitTag(sourceRowTag(1))
+    compose.onNodeWithTag(sourceRowTag(1)).performSemanticsAction(SemanticsActions.RequestFocus)
+    compose.waitForIdle()
+    press(Key.DirectionCenter)
+
+    // Choosing only picks: the panel closes, the caption names the row, nothing plays.
+    assertTrue(played.isEmpty())
+    compose.onNodeWithTag(TagSourcesPanel).assertDoesNotExist()
+    compose.onNodeWithTag(TagRemoteDetailPickCaption).assertTextContains("Source · Version a2")
+
+    activate(TagRemoteDetailPlay)
+    assertEquals(1, played.size)
+    assertEquals("a2", played.single().remoteItem?.mediaSourceId)
+    assertTrue(played.single().resume)
+
+    activate(TagRemoteDetailStartOver)
+    assertEquals(2, played.size)
+    assertEquals("a2", played.last().remoteItem?.mediaSourceId)
+    assertEquals(false, played.last().resume)
+  }
+
+  @Test
+  fun `To library with an addon row picked opens that row's own panel`() {
+    val api = FakeTvApi()
+    api.remoteSourcesValue = listOf(version("ms1"))
+    api.streamSourcesValues["movie:tt1"] = listOf(StreamSourceDto("alpha", "Alpha"))
+    api.addonStreams["movie:tt1|alpha"] = listOf(
+      StreamDto(sourceId = "srcA", kind = "remote", playable = true, title = "Czech 8 GB", addonName = "Alpha"),
+    )
+    api.localStreamsValues["movie:tt1"] = emptyList()
+    api.remoteLibrariesValue = emptyList()
+    api.librariesValue = listOf(LibraryDto(id = "libA", name = "Filmy", type = "movie", writable = true))
+    mountCatalogued(api)
+
+    activate(TagRemoteDetailVersions)
+    awaitTag(sourceRowTag(1))
+    compose.onNodeWithTag(sourceRowTag(1)).performSemanticsAction(SemanticsActions.RequestFocus)
+    compose.waitForIdle()
+    press(Key.DirectionCenter)
+
+    activate(TagRemoteDetailToLibrary)
+    awaitTag(nativeQueueLibraryTag("libA"))
+    compose.onNodeWithTag(nativeQueueLibraryTag("libA")).performSemanticsAction(SemanticsActions.RequestFocus)
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { api.queuedSourceIds.isNotEmpty() }
+
+    assertEquals(listOf("srcA"), api.queuedSourceIds)
+    assertEquals("libA", api.queuedTargets.single()?.libraryId)
+  }
+
+  @Test
+  fun `To library is absent while a copy that is already on disk is the pick`() {
+    val api = FakeTvApi()
+    api.remoteSourcesValue = listOf(copyableVersion("ms1"))
+    api.localStreamsValues["movie:tt1"] = listOf(
+      StreamDto(sourceId = "lib1", kind = "library", playable = true, localPath = "Filmy/Heat/Heat.mkv", libraryName = "Filmy"),
+    )
+    api.streamSourcesValues["movie:tt1"] = emptyList()
+    api.remoteLibrariesValue = emptyList()
+    api.librariesValue = listOf(LibraryDto(id = "libA", name = "Filmy", type = "movie", writable = true))
+    mountCatalogued(api)
+
+    compose.onNodeWithTag(TagRemoteDetailToLibrary).assertExists()
+    activate(TagRemoteDetailVersions)
+    awaitTag(sourceRowTag(1))
+    compose.onNodeWithTag(sourceRowTag(1)).performSemanticsAction(SemanticsActions.RequestFocus)
+    compose.waitForIdle()
+    press(Key.DirectionCenter)
+
+    // A file that is already on disk is never queued again.
+    compose.onNodeWithTag(TagRemoteDetailToLibrary).assertDoesNotExist()
   }
 
   private fun awaitGone(tag: String) {

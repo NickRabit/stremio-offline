@@ -4,6 +4,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -21,9 +23,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.tv.material3.Icon
 import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
+import cz.stremiooffline.tv.ui.catalog.MicIcon
+import cz.stremiooffline.tv.ui.catalog.VoiceSearch
+import cz.stremiooffline.tv.ui.catalog.voiceKey
 import cz.stremiooffline.tv.ui.components.FocusButton
+import cz.stremiooffline.tv.ui.components.FocusButtonKind
 import cz.stremiooffline.tv.ui.components.TvTextField
 import cz.stremiooffline.tv.ui.theme.Tokens
 import androidx.compose.ui.text.input.ImeAction
@@ -34,6 +41,7 @@ const val TagLibrarySearchAction = "library_search_action"
 const val TagLibrarySearchField = "library_search_field"
 const val TagLibrarySearchInput = "library_search_input"
 const val TagLibrarySearchSubmit = "library_search_submit"
+const val TagLibrarySearchVoice = "library_search_voice"
 const val TagLibraryHeaderTitle = "library_header_title"
 
 /**
@@ -44,6 +52,7 @@ const val TagLibraryHeaderTitle = "library_header_title"
 @Composable
 internal fun LibraryHeader(
   segment: LibrarySegment,
+  onAll: () -> Unit,
   onFiles: () -> Unit,
   onServers: () -> Unit,
 ) {
@@ -62,7 +71,7 @@ internal fun LibraryHeader(
       overflow = TextOverflow.Ellipsis,
       modifier = Modifier.weight(1f).testTag(TagLibraryHeaderTitle),
     )
-    LibrarySegments(segment = segment, onFiles = onFiles, onServers = onServers)
+    LibrarySegments(segment = segment, onAll = onAll, onFiles = onFiles, onServers = onServers)
   }
 }
 
@@ -109,6 +118,8 @@ internal fun LibraryToolbar(
   available: Boolean,
   openFocus: FocusRequester,
   fieldFocus: FocusRequester,
+  /** The recognizer of the screen that owns this toolbar; null draws no mic. */
+  voice: VoiceSearch? = null,
   trailing: (@Composable () -> Unit)? = null,
 ) {
   BackHandler(enabled = open) { onClose() }
@@ -127,8 +138,11 @@ internal fun LibraryToolbar(
     }
   }
   Row(
-    modifier = Modifier.fillMaxWidth().testTag(TagLibraryToolbar),
-    verticalAlignment = Alignment.CenterVertically,
+    modifier = Modifier
+      .fillMaxWidth()
+      .testTag(TagLibraryToolbar)
+      .then(if (voice != null && available) Modifier.voiceKey(voice) else Modifier),
+    verticalAlignment = Alignment.Bottom,
     horizontalArrangement = Arrangement.spacedBy(9.dp),
   ) {
     if (available) {
@@ -147,8 +161,9 @@ internal fun LibraryToolbar(
         FocusButton(
           text = stringResource(R.string.media_server_search_action),
           onClick = onSubmit,
-          modifier = Modifier.testTag(TagLibrarySearchSubmit),
+          modifier = Modifier.height(38.dp).testTag(TagLibrarySearchSubmit),
         )
+        if (voice?.available == true && available) VoiceButton(voice)
       } else {
         FocusButton(
           text = committed.ifEmpty { stringResource(R.string.media_server_search_action) },
@@ -156,8 +171,22 @@ internal fun LibraryToolbar(
           labelMaxWidth = 240.dp,
           modifier = Modifier.focusRequester(openFocus).testTag(TagLibrarySearchAction),
         )
+        if (voice?.available == true && available) VoiceButton(voice)
       }
     }
     trailing?.invoke()
   }
+}
+
+/** The microphone of the search row, drawn after the search action while it is not editing. */
+@Composable
+private fun VoiceButton(voice: VoiceSearch) {
+  FocusButton(
+    text = "",
+    onClick = voice.start,
+    kind = FocusButtonKind.Icon,
+    leading = { Icon(MicIcon, contentDescription = null, modifier = Modifier.size(18.dp)) },
+    contentDescription = stringResource(R.string.tv_voice_search),
+    modifier = Modifier.size(38.dp).testTag(TagLibrarySearchVoice),
+  )
 }

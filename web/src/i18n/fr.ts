@@ -1155,7 +1155,7 @@ export const fr: Catalog = {
   "settings.tileSize": "Taille des vignettes",
   "settings.tileSizeHint": "Taille sur l’accueil, le catalogue, la bibliothèque, les favoris et la reprise.",
   "settings.startView": "Page de démarrage",
-  "settings.startViewHint": "La page sur laquelle l'application s'ouvre. Le catalogue par défaut.",
+  "settings.startViewHint": "La page sur laquelle l'application s'ouvre. L'accueil par défaut.",
   "settings.tile.compact": "Compact",
   "settings.tile.small": "Petit",
   "settings.tile.medium": "Moyen (par défaut)",

@@ -4,6 +4,7 @@ package cz.stremiooffline.tv.ui.catalog
 
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertTextContains
@@ -13,6 +14,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.pressKey
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
@@ -268,7 +270,7 @@ class CatalogRemoteResumeTest {
   }
 
   @Test
-  fun `a remote version hides the catalogue Forget action`() {
+  fun `a remote version offers Mark as unwatched for the title's own stored row`() {
     val api = FakeTvApi()
     twoVersions(api)
     api.progressValues["movie:tt1"] = ProgressDto(position = 40.0, duration = 120.0)
@@ -277,7 +279,19 @@ class CatalogRemoteResumeTest {
     compose.waitUntil(5_000) { api.remoteMatchRequests.contains("rlibA|movie|tt1") }
     compose.waitForIdle()
 
-    // The active row is remote, so the catalogue's own Forget is not offered.
-    compose.onNodeWithTag(TagCatalogForget).assertDoesNotExist()
+    // The position the active version resumes is stored under the title's own key, which is exactly
+    // the one row the catalogue can clear.
+    compose.onNodeWithTag(TagCatalogForget).assertExists()
+    compose.onNodeWithTag(TagCatalogForget).performSemanticsAction(SemanticsActions.RequestFocus)
+    compose.waitForIdle()
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagCatalogForgetPanel).assertExists()
+    press(Key.DirectionDown)
+    press(Key.DirectionCenter)
+    compose.waitForIdle()
+
+    assertEquals(listOf(listOf("movie:tt1")), api.forgetCalls)
+    // The item's own store still holds a position, so the action stays offered.
+    compose.onNodeWithTag(TagCatalogForget).assertExists()
   }
 }

@@ -264,7 +264,7 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       }
       if (req.body.startView !== undefined) {
         const value = String(req.body.startView);
-        prefs.startView = value === "home" || value === "library" ? value : "catalog";
+        prefs.startView = value === "catalog" || value === "library" ? value : "home";
       }
       if (req.body.libraryShelf !== undefined) {
         const value = String(req.body.libraryShelf);

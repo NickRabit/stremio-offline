@@ -1155,7 +1155,7 @@ export const ru: Catalog = {
   "settings.tileSize": "Размер плиток",
   "settings.tileSizeHint": "Размер плиток на главной странице, в каталоге, библиотеке, избранном и разделе продолжения просмотра.",
   "settings.startView": "Начальная страница",
-  "settings.startViewHint": "Страница, с которой открывается приложение. По умолчанию каталог.",
+  "settings.startViewHint": "Страница, с которой открывается приложение. По умолчанию главная.",
   "settings.tile.compact": "Компактный",
   "settings.tile.small": "Маленький",
   "settings.tile.medium": "Средний (по умолчанию)",

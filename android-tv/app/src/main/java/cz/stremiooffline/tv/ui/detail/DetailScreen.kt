@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
@@ -25,7 +24,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -62,8 +60,11 @@ import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.playback.Progress
 import cz.stremiooffline.tv.ui.components.CardRowInset
 import cz.stremiooffline.tv.ui.catalog.ActionCaption
-import cz.stremiooffline.tv.ui.catalog.ActionIconButton
-import cz.stremiooffline.tv.ui.catalog.ForgetIcon
+import cz.stremiooffline.tv.ui.catalog.DetailAction
+import cz.stremiooffline.tv.ui.catalog.DetailActionRow
+import cz.stremiooffline.tv.ui.catalog.DownloadIcon
+import cz.stremiooffline.tv.ui.catalog.EyeIcon
+import cz.stremiooffline.tv.ui.catalog.EyeOffIcon
 import cz.stremiooffline.tv.ui.catalog.NativeQueuePanel
 import cz.stremiooffline.tv.ui.catalog.NativeSourceState
 import cz.stremiooffline.tv.ui.catalog.NativeSources
@@ -72,6 +73,7 @@ import cz.stremiooffline.tv.ui.catalog.ReplayIcon
 import cz.stremiooffline.tv.ui.catalog.SourceFilterState
 import cz.stremiooffline.tv.ui.catalog.SourceSaveRequest
 import cz.stremiooffline.tv.ui.catalog.SourceSaveState
+import cz.stremiooffline.tv.ui.catalog.chosenSourceCaption
 import cz.stremiooffline.tv.ui.catalog.libraryAddonIdentity
 import cz.stremiooffline.tv.ui.catalog.libraryCopySubject
 import cz.stremiooffline.tv.ui.catalog.nativeCopyTitle
@@ -96,12 +98,15 @@ const val TagDetailPrimary = "detail_primary"
 const val TagDetailStartOver = "detail_start_over"
 const val TagDetailFavourite = "detail_favourite"
 const val TagDetailWatched = "detail_watched"
+const val TagDetailToLibrary = "detail_to_library"
+const val TagDetailMarkWatched = "detail_mark_watched"
 const val TagDetailForget = "detail_forget"
 const val TagDetailForgetPanel = "detail_forget_panel"
 const val TagDetailForgetCancel = "detail_forget_cancel"
 const val TagDetailForgetRemove = "detail_forget_remove"
 const val TagDetailSources = "detail_sources"
 const val TagDetailSourceNotice = "detail_source_notice"
+const val TagDetailPickCaption = "detail_pick_caption"
 
 /**
  * What to play: the progress key and title, and either a library [path] to mint a source from or
@@ -232,6 +237,9 @@ fun DetailScreen(
   loadDestinations: (suspend () -> List<LibraryDto>)? = null,
   /** Queues exactly one supplementary row into the exact library the viewer picked. */
   onQueue: (suspend (title: String, sourceId: String, media: MediaDto, target: DownloadTargetDto?) -> Unit)? = null,
+  /** Stores one file as finished; null keeps Mark watched off the action row, which is what a
+   *  harness without a playback surface passes. */
+  markWatched: (suspend (BrowseItem.File) -> Unit)? = null,
 ) {
   BackHandler(enabled = backEnabled) { onBack() }
   val scope = rememberCoroutineScope()
@@ -259,6 +267,13 @@ fun DetailScreen(
   var sourcesOpen by remember(detail.gridPath) { mutableStateOf(false) }
   var sourcesPath by remember(detail.gridPath) { mutableStateOf<String?>(null) }
   var pickedRow by remember(detail.gridPath) { mutableStateOf<StreamDto?>(null) }
+  /** Whether the row on the action row was picked in the panel the action row opened: only that
+   *  pick is named by the caption, and only it is what Play and Start over act on. */
+  var pickedInRow by remember(detail.gridPath) { mutableStateOf(false) }
+  /** A panel opened from an episode's card has to play the row at once: that card is the only
+   *  button the episode has. */
+  var sourcesFromCard by remember(detail.gridPath) { mutableStateOf(false) }
+  var markingWatched by remember(detail.gridPath) { mutableStateOf(false) }
   var sourceNotice by remember(detail.gridPath) { mutableStateOf<String?>(null) }
   /** The control the open panel must hand the remote back to: the action, or the exact card a
    *  Menu/Info press opened it from. */
@@ -342,7 +357,7 @@ fun DetailScreen(
   }
   val realDebrid = groupState?.realDebridConfigured == true
 
-  fun openSources(file: BrowseItem.File?, opener: FocusRequester?) {
+  fun openSources(file: BrowseItem.File?, opener: FocusRequester?, fromCard: Boolean = false) {
     val target = file ?: sourcesFile ?: playFile ?: return
     // A panel that replaces another one owns the save work from here on: what the old panel had
     // out is dropped, and its own delete-in-progress flags go with it so a new Save is offered.
@@ -353,6 +368,7 @@ fun DetailScreen(
     save.notice = null
     saveWasOpen = false
     sourcesOpener = opener ?: sourcesFocus
+    sourcesFromCard = fromCard
     sourcesPath = target.path
     sourcesOpen = true
     sourceNotice = null
@@ -408,9 +424,21 @@ fun DetailScreen(
   }
 
   /**
-   * One row of the panel: a library copy plays the file on disk, a media-server version plays its
-   * own exact item and an addon row plays the title under the binding's own identity. Every play
-   * carries the whole loaded list, so the player offers it and discovers nothing of its own.
+   * The play one row of a panel starts: a library copy plays the file on disk, a media-server
+   * version plays its own exact item and an addon row plays the title under the binding's own
+   * identity. Every play carries the whole loaded list, so the player offers it and discovers
+   * nothing of its own. False when the row names nothing playable.
+   */
+  fun playRow(row: StreamDto, resume: Boolean = true): Boolean {
+    val wanted = nativeRowTarget(row, current.title, sourcesIdentity, loadedRows, current.poster) ?: return false
+    onPlay(if (resume) wanted else wanted.copy(resume = false))
+    return true
+  }
+
+  /**
+   * One row of the panel. A row the viewer picked on the action row is only a pick: the panel
+   * closes, the caption names it, and Play and Start over act on it. A row picked from an episode's
+   * card has no other button, so it plays at once.
    */
   fun choosePanelRow(row: StreamDto) {
     saveGeneration++
@@ -421,10 +449,44 @@ fun DetailScreen(
       sourceNotice = torrentText
       return
     }
-    val wanted = nativeRowTarget(row, current.title, sourcesIdentity, loadedRows, current.poster) ?: return
     pickedRow = row
+    pickedInRow = !sourcesFromCard
     sourceNotice = null
-    onPlay(wanted)
+    if (sourcesFromCard) playRow(row)
+  }
+
+  /** The file Play would play without a pick, and the row the panel picked with one. */
+  fun playPressed() {
+    if (pickedRow?.let { playRow(it) } == true) return
+    playFile?.let { onPlay(PlayTarget(Progress.libraryKey(it.path), it.label, resume = resuming, path = it.path)) }
+  }
+
+  fun startOverPressed() {
+    if (pickedRow?.let { playRow(it, resume = false) } == true) return
+    playFile?.let { onPlay(PlayTarget(Progress.libraryKey(it.path), it.label, resume = false, path = it.path)) }
+  }
+
+  /** Stores one file as finished, then re-reads what the server kept, so Resume turns back to Play. */
+  fun markWatchedNow(file: BrowseItem.File) {
+    val store = markWatched ?: return
+    if (markingWatched) return
+    markingWatched = true
+    forgetError = false
+    scope.launch {
+      try {
+        store(file)
+        current = current.refresh(progress)
+        runCatching { primaryFocus.requestFocus() }
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (_: ApiError) {
+        // The file keeps its old state, so the detail keeps showing it and says the store failed.
+        forgetError = true
+        runCatching { primaryFocus.requestFocus() }
+      } finally {
+        markingWatched = false
+      }
+    }
   }
 
   /** Whether one panel row may offer its own Save: never a copy that is already on disk, only when
@@ -625,52 +687,82 @@ fun DetailScreen(
         tag = TagDetailWatched,
       )
       Spacer(Modifier.height(3.dp))
-      Row(horizontalArrangement = Arrangement.spacedBy(11.dp), verticalAlignment = Alignment.CenterVertically) {
-        FocusButton(
-          text = stringResource(if (resuming) R.string.tv_resume else R.string.tv_play),
-          onClick = { playFile?.let { onPlay(PlayTarget(Progress.libraryKey(it.path), it.label, resume = resuming, path = it.path)) } },
-          kind = FocusButtonKind.Primary,
-          modifier = Modifier.focusRequester(primaryFocus).testTag(TagDetailPrimary),
-        )
-        if (resuming || hasStoredProgress) {
-          ActionIconButton(
-            label = stringResource(R.string.tv_start_over),
-            icon = ReplayIcon,
-            onClick = { playFile?.let { onPlay(PlayTarget(Progress.libraryKey(it.path), it.label, resume = false, path = it.path)) } },
-            caption = caption,
-            modifier = Modifier.testTag(TagDetailStartOver),
+      DetailActionRow(
+        primary = {
+          FocusButton(
+            text = stringResource(if (resuming) R.string.tv_resume else R.string.tv_play),
+            onClick = { playPressed() },
+            kind = FocusButtonKind.Primary,
+            modifier = Modifier.focusRequester(primaryFocus).testTag(TagDetailPrimary),
           )
-        }
+        },
+        startOver = if (resuming || hasStoredProgress) DetailAction(
+          label = stringResource(R.string.tv_start_over),
+          icon = ReplayIcon,
+          tag = TagDetailStartOver,
+          onClick = { startOverPressed() },
+        ) else null,
         // One text action for the whole Sources panel, whatever the file turned out to be: the
         // detail's own rows are always there, and a supplementary group joins them only if it
         // answers. A file with no row to offer has nothing to open.
-        if (current.files.isNotEmpty()) {
-          FocusButton(
-            text = stringResource(R.string.sources_heading),
-            onClick = { openSources(playFile, sourcesFocus) },
-            modifier = Modifier.focusRequester(sourcesFocus).testTag(TagDetailSources),
+        sources = if (current.files.isNotEmpty()) {
+          {
+            FocusButton(
+              text = stringResource(R.string.sources_heading),
+              onClick = { openSources(playFile, sourcesFocus) },
+              modifier = Modifier.focusRequester(sourcesFocus).testTag(TagDetailSources),
+            )
+          }
+        } else {
+          null
+        },
+        // The row the viewer picked is the one To library acts on; a file already on disk has no
+        // copy to queue and never offers it.
+        toLibrary = pickedRow?.takeIf { canSaveRow(it) }?.let {
+          DetailAction(
+            label = stringResource(R.string.save_to_library),
+            icon = DownloadIcon,
+            tag = TagDetailToLibrary,
+            enabled = !save.resolving && !save.busy,
+            onClick = { pickedRow?.let { row -> saveRow(row) } },
           )
-        }
-        if (forgetKeys.isNotEmpty()) {
-          ActionIconButton(
-            label = stringResource(R.string.tv_forget_progress),
-            icon = ForgetIcon,
-            onClick = { forgetPanelOpen = true },
-            enabled = !forgetting,
-            caption = caption,
-            modifier = Modifier.testTag(TagDetailForget),
-          )
-        }
-        ActionIconButton(
+        },
+        favourite = DetailAction(
           label = stringResource(if (favourite) R.string.favorite_remove else R.string.favorite_add),
           icon = null,
           glyph = if (favourite) "★" else "☆",
+          tag = TagDetailFavourite,
           onClick = { toggleFavourite() },
-          caption = caption,
-          modifier = Modifier.testTag(TagDetailFavourite),
-        )
-        if (caption.text.isNotEmpty()) {
-          Text(caption.text, color = Tokens.Muted, fontSize = 12.sp, maxLines = 1)
+        ),
+        unwatched = if (forgetKeys.isNotEmpty()) DetailAction(
+          label = stringResource(R.string.media_server_unwatch),
+          icon = EyeOffIcon,
+          tag = TagDetailForget,
+          enabled = !forgetting,
+          onClick = { forgetPanelOpen = true },
+        ) else null,
+        watched = if (markWatched != null && playFile != null) DetailAction(
+          label = stringResource(R.string.media_server_mark_watched),
+          icon = EyeIcon,
+          tag = TagDetailMarkWatched,
+          enabled = !markingWatched,
+          onClick = { playFile?.let(::markWatchedNow) },
+        ) else null,
+        caption = caption,
+      )
+      if (pickedInRow) {
+        pickedRow?.let { row ->
+          val captionParts = chosenSourceCaption(row).joinToString(" · ")
+          if (captionParts.isNotEmpty()) {
+            Text(
+              stringResource(R.string.tv_chosen_source) + " · " + captionParts,
+              color = Tokens.Muted,
+              fontSize = 11.sp,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier.testTag(TagDetailPickCaption),
+            )
+          }
         }
       }
       if (forgetError) {
@@ -695,7 +787,7 @@ fun DetailScreen(
           imageUrl = imageUrl,
           onPlay = onPlay,
           focusRequester = rowFocus,
-          onSources = { file, card -> openSources(file, card) },
+          onSources = { file, card -> openSources(file, card, fromCard = true) },
         )
       }
     }
@@ -714,7 +806,9 @@ fun DetailScreen(
         filters = sourceFilters.filters(groupState?.settings?.streamSort),
         onFilterSelect = { chip, key -> sourceFilters.select(chip, key) },
         onChoose = { choosePanelRow(it) },
-        onSave = if (onQueue != null && loadDestinations != null) ({ row -> saveRow(row) }) else null,
+        // The panel only picks: To library on the action row acts on the pick, so no row carries
+        // a control of its own.
+        onSave = null,
         canSave = { row -> canSaveRow(row) },
         onRetry = { sourceGroups?.retry(groupScope) },
         emptyText = stringResource(R.string.media_server_sources_empty),

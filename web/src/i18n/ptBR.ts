@@ -1155,7 +1155,7 @@ export const ptBR: Catalog = {
   "settings.tileSize": "Tamanho dos cartões",
   "settings.tileSizeHint": "Tamanho na página inicial, catálogo, biblioteca, favoritos e continuar assistindo.",
   "settings.startView": "Página inicial",
-  "settings.startViewHint": "A página em que o aplicativo abre. O catálogo por padrão.",
+  "settings.startViewHint": "A página em que o aplicativo abre. O início por padrão.",
   "settings.tile.compact": "Compactar",
   "settings.tile.small": "Pequeno",
   "settings.tile.medium": "Médio (padrão)",

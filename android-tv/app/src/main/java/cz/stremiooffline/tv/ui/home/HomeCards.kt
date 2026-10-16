@@ -85,6 +85,9 @@ fun HomeCard.heroMetaRef(): Pair<String, String>? = when (this) {
   is HomeCard.Episode -> type to metaId
   is HomeCard.Discovery -> type to id
   is HomeCard.FavoriteCatalogue -> type to id
+  is HomeCard.Tonight -> title?.let { it.type to it.id }
+  is HomeCard.Favorite -> title?.let { it.type to it.id }
+  is HomeCard.Remote -> identity?.let { it.type to it.id }
   else -> null
 }
 
@@ -125,7 +128,11 @@ fun actionFor(card: HomeCard): HomeAction = when (card) {
     card.itemKind == "folder" -> HomeAction.OpenLibrary(card.path)
     else -> play(card.path, card.label)
   }
-  is HomeCard.Tonight -> if (card.itemKind == "folder") HomeAction.OpenLibrary(card.path) else play(card.path, card.label)
+  is HomeCard.Tonight -> when {
+    card.title != null -> titleDetail(card.title, card.label, card.poster)
+    card.itemKind == "folder" -> HomeAction.OpenLibrary(card.path)
+    else -> play(card.path, card.label)
+  }
   // A catalogue row written from a library file is that file: it plays where the file plays.
   is HomeCard.ResumeCatalogue -> if (card.path != null) {
     play(card.path, card.title)

@@ -238,7 +238,7 @@ export function App() {
   const [bulkDownload, setBulkDownload] = useState<{ label: string; title: string; type: string; episodes: Array<{ id: string; season?: number; episode?: number; title?: string }>; media: { id?: string; metaType?: string; poster?: string; background?: string; gallery?: Array<{ url: string; kind: GalleryKind }> } } | null>(null);
   const [downloads, setDownloads] = useState<DownloadJob[]>([]); const [queueHalt, setQueueHalt] = useState<QueueHalt | null>(null); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState(""); const [playerOpen, setPlayerOpen] = useState(false);
   const [deviceTransfers, setDeviceTransfers] = useState<DeviceTransfer[]>([]);
-  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: locale(), audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, tileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", favoritesTileShape: "poster", resumeTileShape: "poster", followingTileShape: "poster", homeTileShape: "wide", startView: "catalog", libraryShelf: "resume", realDebridConfigured: false, tmdbConfigured: false });
+  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: locale(), audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, tileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", favoritesTileShape: "poster", resumeTileShape: "poster", followingTileShape: "poster", homeTileShape: "wide", startView: "home", libraryShelf: "resume", realDebridConfigured: false, tmdbConfigured: false });
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [session, setSession] = useState<Session | null | undefined>(undefined);
@@ -1206,6 +1206,7 @@ export function App() {
   const refresh = async (selectFirst = false) => {
     const [nextAddons, nextCatalogs] = await Promise.all([api.addons(), api.catalogs()]); setAddons(nextAddons); setCatalogs(nextCatalogs);
     if ((selectFirst || !selectedCatalog) && nextCatalogs[0]) setSelectedCatalog(`${nextCatalogs[0].addonKey}:${nextCatalogs[0].type}:${nextCatalogs[0].id}`);
+    return nextCatalogs;
   };
   const downloadsSeen = useRef(false);
   const jobStatus = useRef(new Map<string, DownloadJob["status"]>());
@@ -1307,13 +1308,15 @@ export function App() {
     // A fresh sign-in re-arms the start page: signing out again must not remember the last
     // switch as if the person had navigated.
     if (!ready) { navigated.current = false; return; }
-    refresh().catch(fail); loadDownloads(); loadFollows();
-    api.settings().then((next) => {
+    const loaded = refresh().catch((error: unknown) => { fail(error); return null; }); loadDownloads(); loadFollows();
+    api.settings().then(async (next) => {
       setSettings((current: AppSettings) => ({ ...current, ...next }));
       setLocale(next.uiLanguage);
+      // An install with no catalogue yet keeps its first run on the catalogue's onboarding.
+      const hasCatalogs = Boolean((await loaded)?.length);
       // The chosen page is opened once, and only while nobody has gone anywhere yet.
       if (view === "catalog" && !navigated.current && !selected && !playerOpen) {
-        const target = resolveStartView(next.startView, { restricted, navigated: navigated.current });
+        const target = resolveStartView(next.startView, { restricted, navigated: navigated.current, hasCatalogs });
         if (target) { navigated.current = true; openView(target); }
       }
     }).catch(fail);
@@ -2497,6 +2500,11 @@ export function App() {
       openCatalogueDetail({ type: card.title.type, id: card.title.id, name: card.label, ...(card.poster ? { poster: card.poster } : {}) });
       return;
     }
+    if (card.kind === "tonight") {
+      if (!card.title) return;
+      openCatalogueDetail({ type: card.title.type, id: card.title.id, name: card.label, ...(card.poster ? { poster: card.poster } : {}) });
+      return;
+    }
     if (card.kind === "episode") { openCatalogueDetail({ type: card.type, id: card.metaId, name: card.name, ...(card.poster ? { poster: card.poster } : {}), season: card.season, episode: card.episode }); return; }
     if (card.kind === "discovery") { openCatalogueDetail({ type: card.type, id: card.id, name: card.name, ...(card.poster ? { poster: card.poster } : {}) }); return; }
     if (card.kind === "confirm") { setSuggestionsOpen(true); return; }
@@ -3381,7 +3389,7 @@ export function App() {
         </div>
         </div>}
       </section>}
-      {view === "addons" && <AddonManager addons={addons} libraries={libraries} restricted={restricted} admin={admin} onChanged={refresh} onNotify={notify} onError={fail}/>} 
+      {view === "addons" && <AddonManager addons={addons} libraries={libraries} restricted={restricted} admin={admin} onChanged={async () => { await refresh(); }} onNotify={notify} onError={fail}/>} 
       {view === "resume" && <ResumeView
         filter={resumeFilter} onFilter={setResumeFilter}
         items={resumeCards} busy={resumeBusy} shape={settings.resumeTileShape} onToggleShape={() => void toggleShape("resumeTileShape")} actions={resumeActions}

@@ -20,4 +20,9 @@ describe("resolveStartView", () => {
     expect(resolveStartView("home", { restricted: false, navigated: false })).toBe("home");
     expect(resolveStartView("library", { restricted: false, navigated: false })).toBe("library");
   });
+
+  it("keeps an install with no catalogue on the catalogue's onboarding", () => {
+    expect(resolveStartView("home", { restricted: false, navigated: false, hasCatalogs: false })).toBe(null);
+    expect(resolveStartView("library", { restricted: false, navigated: false, hasCatalogs: false })).toBe(null);
+  });
 });

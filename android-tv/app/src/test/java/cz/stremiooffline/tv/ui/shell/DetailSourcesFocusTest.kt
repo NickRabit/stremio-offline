@@ -12,6 +12,7 @@ import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performSemanticsAction
@@ -29,6 +30,7 @@ import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.catalog.TagSourcesPanel
 import cz.stremiooffline.tv.ui.catalog.sourceRowTag
 import cz.stremiooffline.tv.ui.detail.TagDetailPrimary
+import cz.stremiooffline.tv.ui.detail.TagDetailPickCaption
 import cz.stremiooffline.tv.ui.detail.TagDetailSources
 import cz.stremiooffline.tv.ui.player.TAG_OSD_PLAY
 import cz.stremiooffline.tv.ui.player.TAG_OVERLAY_ROOT
@@ -95,12 +97,18 @@ class DetailSourcesFocusTest {
   /** A play the library view started, opened from the detail's own Sources panel. */
   private fun playFromPanel(api: FakeTvApi) {
     compose.waitForIdle()
+    // The section opens on the All grid; the filesystem's rows are one switch press away.
+    compose.onNodeWithText("Files").performSemanticsAction(SemanticsActions.RequestFocus)
+    compose.waitForIdle()
+    compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
     // The only folder holds one file, so opening it is the detail of that film.
     compose.onNodeWithTag("It").performSemanticsAction(SemanticsActions.RequestFocus)
     press(Key.DirectionCenter)
     compose.waitUntil(5_000) { focused(TagDetailPrimary) }
 
-    // Its Sources action opens the panel; the addon row starts the session.
+    // Its Sources action opens the panel; choosing the addon row picks it and Play starts the
+    // session.
     compose.onNodeWithTag(TagDetailSources).performSemanticsAction(SemanticsActions.RequestFocus)
     press(Key.DirectionCenter)
     compose.waitUntil(5_000) { compose.onAllNodes(hasTestTag(TagSourcesPanel)).fetchSemanticsNodes().isNotEmpty() }
@@ -108,6 +116,11 @@ class DetailSourcesFocusTest {
       compose.onAllNodes(hasTestTag(sourceRowTag(1))).fetchSemanticsNodes().isNotEmpty()
     }
     compose.onNodeWithTag(sourceRowTag(1)).performSemanticsAction(SemanticsActions.RequestFocus)
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) {
+      compose.onAllNodes(hasTestTag(TagDetailPickCaption)).fetchSemanticsNodes().isNotEmpty()
+    }
+    compose.onNodeWithTag(TagDetailPrimary).performSemanticsAction(SemanticsActions.RequestFocus)
     press(Key.DirectionCenter)
     compose.waitUntil(5_000) { api.startedSources.size == 1 }
   }

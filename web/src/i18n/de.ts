@@ -1155,7 +1155,7 @@ export const de: Catalog = {
   "settings.tileSize": "Kachelgröße",
   "settings.tileSizeHint": "Größe der Kacheln auf der Startseite, in Katalog, Bibliothek, Favoriten und Weiterschauen.",
   "settings.startView": "Startseite",
-  "settings.startViewHint": "Die Seite, mit der die App startet. Standardmäßig der Katalog.",
+  "settings.startViewHint": "Die Seite, mit der die App startet. Standardmäßig die Startseite.",
   "settings.tile.compact": "Kompakt",
   "settings.tile.small": "Klein",
   "settings.tile.medium": "Mittel (Standard)",

@@ -70,12 +70,15 @@ class HomeOrderTest {
 
     assertEquals(emptyList<String>(), api.homeRequests[0])
     assertEquals(builtin, api.homeRequests[1])
+    // The first catalogue rows are asked with the built-ins, so by now the addon has answered.
+    assertEquals(listOf("catalog:addon:movie:top"), api.homeRequests[2])
     assertEquals(
       listOf("resume", "favorites", "tonight", "catalog:addon:movie:top", "episodes", "completed", "recent"),
       viewModel.state.rows.map { it.id },
     )
     assertEquals(
-      listOf("favorites", "catalog:addon:movie:top", "episodes", "completed"),
+      // The catalogue row answered empty, so it is hidden like any other complete empty row.
+      listOf("favorites", "episodes", "completed"),
       drawnRowIds(viewModel.state.rows),
     )
   }
@@ -171,7 +174,14 @@ class HomeOrderTest {
 
   @Test
   fun `a catalogue row revealed while another reveal is in flight is still requested`() = runTest(dispatcher) {
-    val order = listOf(HomeOrderEntry("resume"), HomeOrderEntry("catalog:a"), HomeOrderEntry("catalog:b"))
+    // Two rows ahead of the pair the reveal drives: the start asks those and leaves these alone.
+    val order = listOf(
+      HomeOrderEntry("resume"),
+      HomeOrderEntry("catalog:w1"),
+      HomeOrderEntry("catalog:w2"),
+      HomeOrderEntry("catalog:a"),
+      HomeOrderEntry("catalog:b"),
+    )
     val gate = CompletableDeferred<Unit>()
     val api = object : FakeTvApi() {
       override suspend fun home(rows: List<String>): HomeResponseDto {

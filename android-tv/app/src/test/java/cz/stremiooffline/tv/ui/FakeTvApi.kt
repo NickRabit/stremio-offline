@@ -740,8 +740,24 @@ open class FakeTvApi : TvApi {
     poster: String?,
     addonKey: String?,
     remote: RemoteItemContext?,
-  ) {}
+  ) {
+    progressSaves += ProgressSave(key, position, duration, title, path, poster, addonKey, remote)
+  }
+
+  /** Every `saveProgress()` call in order, so a test can name the key and the numbers behind it. */
+  val progressSaves: MutableList<ProgressSave> = mutableListOf()
 }
+
+data class ProgressSave(
+  val key: String,
+  val position: Double,
+  val duration: Double,
+  val title: String,
+  val path: String?,
+  val poster: String?,
+  val addonKey: String?,
+  val remote: RemoteItemContext?,
+)
 
 data class CatalogRequest(val addonKey: String, val type: String, val id: String, val skip: Int, val genre: String?)
 
