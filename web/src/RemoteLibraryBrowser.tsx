@@ -1438,8 +1438,9 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
             <button className="library-back" aria-label={detail || stack.length ? t("mediaServer.back") : t("mediaServer.backToLibraries")}
               title={detail || stack.length ? t("mediaServer.back") : t("mediaServer.backToLibraries")} onClick={stepBack}><ChevronLeft/></button>
             {/* The same first step the library's own listing keeps: whichever library is open, the
-                way back to the section is named the same way, and only that step wears the icon. */}
-            <button onClick={() => onOpenChange(false)}><HardDrive/> {t("nav.library")}</button>
+                way back to the section is named the same way, and only that step wears the icon. It
+                closes the remote library the way Back from its listing does, so no detail stays behind. */}
+            <button onClick={closeLibrary}><HardDrive/> {t("nav.library")}</button>
             <span><ChevronRight/></span>
             <button onClick={goLibraryRoot} disabled={!detail && !stack.length}>{selected.name}</button>
             {stack.map((folder, index) => <span key={folder.id}>

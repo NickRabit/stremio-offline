@@ -196,6 +196,24 @@ test("item and series breadcrumbs walk the remote hierarchy", async ({ page }) =
   await expect(panel.locator(".browse-item").filter({ hasText: "Pilot" }).locator(".library-open")).toBeFocused();
 });
 
+/** The section's own crumb leaves the media server entirely, from a title as from a listing: no
+ *  detail or remote panel may stay behind over the libraries it returns to. */
+test("the Library crumb of a remote title's detail returns to the libraries", async ({ page }) => {
+  await remoteLibraries(page, { items: () => [{ id: "m1", name: "Film One", type: "movie", providerIds: {} }] });
+  await page.locator(".remote-libraries .browse-item.library").filter({ hasText: "Remote clips" }).getByRole("button").click();
+  const panel = page.locator(".remote-browse-panel");
+  await panel.locator(".browse-item").filter({ hasText: "Film One" }).locator(".library-open").click();
+  await expect(panel.locator(".library-title-detail")).toBeVisible();
+  await panel.locator(".crumbs").getByRole("button", { name: "Knihovna", exact: true }).click();
+  await expect(page.locator(".remote-browse-panel")).toHaveCount(0);
+  await expect(page.locator(".library-title-detail")).toHaveCount(0);
+  await expect(page.locator(".remote-libraries .browse-item.library").filter({ hasText: "Remote clips" })).toBeVisible();
+  // Opening the library again starts at its listing, not at the title that was left.
+  await page.locator(".remote-libraries .browse-item.library").filter({ hasText: "Remote clips" }).getByRole("button").click();
+  await expect(page.locator(".remote-browse-panel .browse-item").filter({ hasText: "Film One" })).toBeVisible();
+  await expect(page.locator(".library-title-detail")).toHaveCount(0);
+});
+
 for (const nested of [false, true]) {
   test(`current remote breadcrumb restores a paginated ${nested ? "folder" : "root"} listing`, async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
