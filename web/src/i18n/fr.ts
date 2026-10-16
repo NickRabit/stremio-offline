@@ -164,6 +164,7 @@ export const fr: Catalog = {
   "api.timeout": "Le serveur n'a pas répondu à temps.",
   "api.copyRefused": "Le navigateur a refusé de copier. Sélectionnez le texte et copiez-le à la main.",
   "app.goToCleanCatalog": "Retour à un catalogue propre",
+  "app.goToStart": "Vers la page de démarrage",
   "app.serverOnline": "Serveur en ligne",
   "restricted.chip": "Mode démo",
   "restricted.notice": "Cette instance est en mode restreint. Les modules complémentaires, les paramètres et le mot de passe ne peuvent pas être modifiés.",

@@ -56,6 +56,11 @@ beforeEach(() => {
     configurable: true,
     get: () => ({ length: 0, addEventListener() {}, removeEventListener() {}, item: () => null, [Symbol.iterator]: [][Symbol.iterator] }),
   });
+  // jsdom ships no `HTMLTrackElement.track`, and the player mirrors the element's own track.
+  Object.defineProperty(HTMLTrackElement.prototype, "track", {
+    configurable: true,
+    get: () => ({ mode: "disabled", activeCues: null, addEventListener() {}, removeEventListener() {} }),
+  });
   HTMLMediaElement.prototype.play = () => Promise.resolve();
   HTMLMediaElement.prototype.pause = () => undefined;
   HTMLMediaElement.prototype.load = () => undefined;
@@ -182,8 +187,26 @@ describe("Player source switching", () => {
     expect(host.querySelector("#player-sources")).toBeNull();
   });
 
+  it("narrows the list with the detail's own source menu, the playing row still first", async () => {
+    const playing = ownFile({ sourceId: "local-1" });
+    const torrentio = addonRow({ sourceId: "addon-1", name: "4K" });
+    const other = addonRow({ sourceId: "addon-2", name: "1080p", addonKey: "cinema", addonName: "Cinema" });
+    await render({ stream: playing, loadSources: vi.fn(async () => [torrentio, other, playing]), onSwitchSource: vi.fn(async () => undefined) });
+    await click(sourceButton()!);
+    const selects = host.querySelectorAll<HTMLSelectElement>("#player-sources select");
+    expect(selects.length).toBeGreaterThanOrEqual(2);
+    expect(sourceRows()).toHaveLength(3);
+    expect(sourceRows()[0]!.getAttribute("aria-pressed")).toBe("true");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(selects[0], "addon:cinema");
+      selects[0]!.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(sourceRows()).toHaveLength(1);
+    expect(sourceRows()[0]!.textContent).toContain("1080p");
+  });
+
   it("reads the list on open, marks the playing row and hands another one over with the time", async () => {
-    const playing = addonRow({ sourceId: "addon-1", name: "4K" });
+    const playing = addonRow({ sourceId: "addon-1", name: "4K", behaviorHints: { videoSize: 8_000_000_000 } });
     const other = addonRow({ sourceId: "addon-2", name: "1080p" });
     const loadSources = vi.fn(async () => [playing, other]);
     const onSwitchSource = vi.fn(async () => undefined);
@@ -191,11 +214,24 @@ describe("Player source switching", () => {
     expect(loadSources).not.toHaveBeenCalled();
     await click(sourceButton()!);
     expect(loadSources).toHaveBeenCalledTimes(1);
-    expect(sourceRows().map((row) => row.textContent)).toEqual(["4K", "1080p"]);
+    // The player's list is the detail's own row template: the transport badge, the label and the
+    // size the source reported, the playing row first.
+    expect(sourceRows()).toHaveLength(2);
+    expect(sourceRows()[0]!.querySelector("i")!.textContent).toBe("HTTP");
+    expect(sourceRows()[0]!.textContent).toContain("4K");
+    expect(sourceRows()[0]!.textContent).toContain("8.0 GB");
+    expect(sourceRows()[1]!.textContent).toContain("1080p");
     expect(sourceRows()[0]!.getAttribute("aria-pressed")).toBe("true");
-    expect(sourceRows()[0]!.disabled).toBe(true);
+    expect(sourceRows()[1]!.getAttribute("aria-pressed")).toBe("false");
+    // The row already on screen is not a switch, whatever the click says.
+    await click(sourceRows()[0]!);
+    expect(onSwitchSource).not.toHaveBeenCalled();
+    expect(host.querySelector("#player-sources")).not.toBeNull();
+    const video = host.querySelector<HTMLVideoElement>(".player-overlay video")!;
+    await act(async () => { video.currentTime = 620; video.dispatchEvent(new Event("timeupdate", { bubbles: true })); });
     await click(sourceRows()[1]!);
-    expect(onSwitchSource).toHaveBeenCalledWith(other, expect.any(Number));
+    // The position the row was chosen at travels with it, so the new source starts there.
+    expect(onSwitchSource).toHaveBeenCalledWith(other, 620);
     expect(host.querySelector("#player-sources")).toBeNull();
 
     // Another open of the same playing source reuses the answer it already has, and another
@@ -225,6 +261,43 @@ describe("Player source switching", () => {
     await click(sourceButton()!);
     expect(host.querySelector("#player-sources .notice")!.textContent).toContain("the addons are down");
     expect(sourceRows()).toHaveLength(0);
+  });
+});
+
+describe("Player track preferences across a switch", () => {
+  const subtitleSelect = () => host.querySelector<HTMLSelectElement>('select[aria-label="Subtitles"]');
+  const choose = async (value: string) => {
+    await act(async () => {
+      const select = subtitleSelect()!;
+      select.value = value;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await flush();
+  };
+
+  it("keeps subtitles off across a switch whose own list carries the account's language", async () => {
+    const playing = addonRow({ sourceId: "addon-1", subtitles: [{ subtitleId: "a1", lang: "en" }] });
+    const other = addonRow({ sourceId: "addon-2", subtitles: [] });
+    await render({ stream: playing, subtitles: [], subtitleLanguage: "en" });
+    await openSettings();
+    expect(subtitleSelect()!.value).toBe("addon:0");
+    await choose("off");
+    // The viewer said no; the other source's own list is not a reason to say yes.
+    await rerender({ stream: other, subtitles: [{ subtitleId: "b1", lang: "en" }], subtitleLanguage: "en" });
+    await openSettings();
+    expect(subtitleSelect()!.value).toBe("off");
+    expect(playbackPosts[1]!.subtitleLanguage).toBe(null);
+  });
+
+  it("picks the chosen language out of the switched-to source's own list", async () => {
+    const playing = addonRow({ sourceId: "addon-1", subtitles: [{ subtitleId: "a1", lang: "cs" }] });
+    const other = addonRow({ sourceId: "addon-2", subtitles: [] });
+    await render({ stream: playing, subtitles: [], subtitleLanguage: "en" });
+    await openSettings();
+    await choose("addon:0");
+    await rerender({ stream: other, subtitles: [{ subtitleId: "b1", lang: "en" }, { subtitleId: "b2", lang: "cs" }], subtitleLanguage: "en" });
+    await openSettings();
+    expect(subtitleSelect()!.value).toBe("addon:1");
   });
 });
 
@@ -296,5 +369,30 @@ describe("Player progress reporting", () => {
     await render({ stream: remoteVersion({ sourceId: "src-ms1c" }), progressKey: "movie:tt5000" });
     // Another version's own position is not this one's.
     expect(playbackPosts[2]!.time).toBe(0);
+  });
+
+  it("stores the position with the source on screen, the one a switch moved to included", async () => {
+    const file = ownFile({ stableKey: `f:${"3".repeat(24)}` });
+    const other = addonRow({ sourceId: "addon-2", name: "4K", stableKey: `a:${"2".repeat(24)}` });
+    await render({ stream: file, progressKey: "movie:tt5000" });
+    const video = host.querySelector<HTMLVideoElement>(".player-overlay video")!;
+    await act(async () => { video.currentTime = 120; video.dispatchEvent(new Event("timeupdate", { bubbles: true })); });
+    // The source changes while the key does not: the write that lands next names the row that is
+    // really playing, and no longer the file it was switched away from.
+    await rerender({ stream: other, progressKey: "movie:tt5000" });
+    // The switched-to source runs its own session; what is written next is where it got to.
+    await act(async () => { video.currentTime = 120; video.dispatchEvent(new Event("timeupdate", { bubbles: true })); });
+    await rerender({ stream: other, progressKey: "movie:tt5000", open: false });
+    expect(progressPosts).toEqual([expect.objectContaining({ key: "movie:tt5000", position: 120, duration: 3600, stableKey: other.stableKey })]);
+    expect(progressPosts[0]).not.toHaveProperty("path");
+  });
+
+  it("names the file a library row plays from, beside the source's own handle", async () => {
+    const file = ownFile({ stableKey: `f:${"3".repeat(24)}` });
+    await render({ stream: file, progressKey: "movie:tt5000" });
+    const video = host.querySelector<HTMLVideoElement>(".player-overlay video")!;
+    await act(async () => { video.currentTime = 120; video.dispatchEvent(new Event("timeupdate", { bubbles: true })); });
+    await rerender({ stream: file, progressKey: "movie:tt5000", open: false });
+    expect(progressPosts).toEqual([expect.objectContaining({ stableKey: file.stableKey, path: "Films/One.mkv" })]);
   });
 });

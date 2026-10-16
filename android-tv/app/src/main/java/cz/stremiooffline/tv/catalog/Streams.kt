@@ -104,8 +104,12 @@ object Streams {
     return if (showTorrents) arranged else arranged.filter { it.kind != "torrent" }
   }
 
-  fun pickDefaultStream(streams: List<StreamDto>): StreamDto? =
-    streams.firstOrNull { it.playable } ?: streams.firstOrNull()
+  /** The row the list opens on: the one the viewer last played, when the caller knows its handle,
+   *  and otherwise the first playable row. */
+  fun pickDefaultStream(streams: List<StreamDto>, preferredStableKey: String? = null): StreamDto? =
+    preferredStableKey?.takeIf { it.isNotBlank() }?.let { key -> streams.firstOrNull { it.stableKey == key } }
+      ?: streams.firstOrNull { it.playable }
+      ?: streams.firstOrNull()
 
   /** A copy that already exists in one of the viewer's libraries. */
   fun isLocalStream(stream: StreamDto): Boolean = stream.kind == "library"

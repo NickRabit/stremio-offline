@@ -318,8 +318,10 @@ fun RemoteDetailScreen(
   // The title's own row decides the position whenever it answered: whichever version stored it,
   // every version of the title resumes it.
   val title = titleRow
-  // The version the viewer last watched leads, so its Resume is the one offered.
-  val primary = sources.firstOrNull { it.remoteItem?.mediaSourceId != null && it.remoteItem.mediaSourceId == savedSourceId }
+  // The version the viewer last watched leads, so its Resume is the one offered: the source the
+  // title's own stored row names when that row names one, and otherwise the stored media source.
+  val primary = title?.stableKey?.let { key -> sources.firstOrNull { it.stableKey == key } }
+    ?: sources.firstOrNull { it.remoteItem?.mediaSourceId != null && it.remoteItem.mediaSourceId == savedSourceId }
     ?: sources.firstOrNull()
   // The saved position belongs to the exact version that stored it; another version shows none.
   val sameVersion = title != null || primary?.remoteItem?.mediaSourceId == savedSourceId
@@ -347,6 +349,7 @@ fun RemoteDetailScreen(
         title = titleOf(data),
         resume = resume,
         sourceId = source.sourceId.takeIf { it.isNotBlank() },
+        stableKey = source.stableKey,
         poster = data.item.poster,
         // The title's own catalogue identity travels with a native play too: a row of another kind
         // picked later in the player keeps the generic key and subtitles this identity makes.

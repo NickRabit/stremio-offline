@@ -468,19 +468,21 @@ private fun OverlayFocusTrap(fenced: Boolean, content: @Composable () -> Unit) {
   ) { content() }
 }
 
-/** The list of sources a play is offered. A native remote play offers the item's own versions and
- *  nothing else: the server mints them, so no catalogue or library lookup is asked about it. The
- *  two local lists stay apart so neither can lend the other its title -- [catalogue] is the one
- *  the catalogue detail keeps reporting, and [library] is the one the library loader gathered for
- *  the file a library play opened. A library play that could not be resolved simply has nothing
- *  there -- no Sources button, as before. Kept here so the expression can be tested without a
- *  whole shell. */
+/** The list of sources a play is offered. A snapshot of several rows is a list of its own and is
+ *  offered as it stands: a native detail's addon rows, or a remote play's own versions. A catalogue
+ *  play keeps [catalogue], the list the catalogue detail reports. Every other play takes [library],
+ *  the list the loader gathered: for a bound library file, and for a play the detail started with a
+ *  single row and a title identity, so the Sources button appears once a second row arrives. The
+ *  two local lists stay apart so neither can lend the other its title, and a play whose loader
+ *  reported nothing simply has nothing there -- no Sources button, as before. Kept here so the
+ *  expression can be tested without a whole shell. */
 internal fun playerSourcesFor(target: PlayTarget, catalogue: OfferedSources, library: OfferedSources): OfferedSources =
   when {
-    // A native detail's addon play carries the rows it had already loaded: the player offers
-    // exactly those, so no catalogue or library discovery is asked about it.
-    target.initialSources != null -> OfferedSources(target.initialSources)
-    target.remoteItem != null -> OfferedSources(target.remoteSources)
+    // A native detail's addon play carries the rows it had already loaded, when it loaded more than
+    // one: the player offers exactly those, so no discovery is asked about it.
+    target.initialSources.orEmpty().size > 1 -> OfferedSources(target.initialSources.orEmpty())
+    // A native media-server play offers the item's own versions, again only as a list of its own.
+    target.remoteItem != null && target.remoteSources.size > 1 -> OfferedSources(target.remoteSources)
     target.catalogue -> catalogue
     else -> library
   }

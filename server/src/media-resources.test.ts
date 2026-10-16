@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isInternalMediaPath, mediaChildPath, MediaResources, openMediaUrl, ResourceError, sealedMediaUrl, streamKind } from "./media-resources.js";
+import { isInternalMediaPath, mediaChildPath, MediaResources, openMediaUrl, ResourceError, sealedMediaUrl, stableSourceKey, streamKind } from "./media-resources.js";
 import { isRemoteMediaStream, openRemoteContent, sealRemoteContent } from "./media-server-reference.js";
 
 const owner = { userId: "user-a", sid: "owner-a", expiresAt: 10_000_000 };
 const source = { url: "https://provider-canary.test/private-canary?token=query-canary", title: "Movie query-canary", behaviorHints: { proxyHeaders: { request: { Authorization: "Bearer header-canary" } } }, subtitles: [{ url: "https://subtitle-canary.test/sub?secret=sub-canary", lang: "cs" }] };
-const sealedFor = (over: { userId?: string; sid?: string; expiresAt?: number } = {}) => sealRemoteContent({
-  provider: "jellyfin", serverId: "server-1", accountId: "account-1", itemId: "item-1",
+const sealedFor = (over: { userId?: string; sid?: string; expiresAt?: number; itemId?: string; mediaSourceId?: string } = {}) => sealRemoteContent({
+  provider: "jellyfin", serverId: "server-1", accountId: "account-1", itemId: over.itemId ?? "item-1",
   connectionId: `mconn_${"a".repeat(32)}`, libraryId: `rlib_${"b".repeat(32)}`,
-  generation: 2, mediaSourceId: "source-1",
+  generation: 2, mediaSourceId: over.mediaSourceId ?? "source-1",
   owner: { userId: over.userId ?? owner.userId, sid: over.sid ?? owner.sid, expiresAt: over.expiresAt ?? owner.expiresAt, secretStamp: "c".repeat(64) },
 });
 
@@ -246,4 +246,54 @@ test("a sealed source is only recorded for the session it was sealed for", () =>
   assert.throws(() => registry.publicStream({ url: sealedFor({ sid: "other" }) }, owner), { status: 404 });
   assert.throws(() => registry.publicStream({ url: sealedFor({ userId: "user-b" }) }, owner), { status: 404 });
   assert.throws(() => registry.publicStream({ url: sealedFor({ expiresAt: owner.expiresAt - 1 }) }, owner), { status: 404 });
+});
+
+const INFO_HASH = "59e11cef8c2152ac73681092844ebd3db19025bc";
+
+test("the five kinds of source each hash to their own handle, and the same source keeps one", () => {
+  const sealed = sealedFor();
+  const keys = {
+    mediaServer: stableSourceKey({ url: sealed }, "remote"),
+    torrent: stableSourceKey({ infoHash: INFO_HASH.toUpperCase(), fileIdx: 0 }, "torrent"),
+    library: stableSourceKey({ url: "file://Films/Heat/Heat.mkv" }, "library"),
+    addonFile: stableSourceKey({ url: "https://a.test/1", addonKey: "torrentio", name: "4K", behaviorHints: { filename: "Heat.1995.4K.mkv", videoSize: 8_000_000 } }, "remote"),
+    addonRow: stableSourceKey({ url: "https://b.test/2", addonKey: "torrentio", name: "1080p" }, "remote"),
+  };
+  for (const [name, key] of Object.entries(keys)) assert.match(key, /^[mtfau]:[0-9a-f]{24}$/, name);
+  assert.deepEqual(Object.values(keys).map((key) => key.slice(0, 2)), ["m:", "t:", "f:", "a:", "u:"]);
+  assert.equal(new Set(Object.values(keys)).size, 5, "two sources of one kind never share a handle");
+  // The hash reads the fields, so its case and a repeated call change nothing.
+  assert.equal(keys.torrent, stableSourceKey({ infoHash: INFO_HASH, fileIdx: 0 }, "torrent"));
+  assert.notEqual(keys.torrent, stableSourceKey({ infoHash: INFO_HASH, fileIdx: 1 }, "torrent"));
+  assert.notEqual(keys.mediaServer, stableSourceKey({ url: sealedFor({ mediaSourceId: "source-2" }) }, "remote"));
+  assert.notEqual(keys.library, stableSourceKey({ url: "file://Films/Ronin/Ronin.mkv" }, "library"));
+  assert.notEqual(keys.addonFile, stableSourceKey({ url: "https://a.test/1", addonKey: "torrentio", name: "4K", behaviorHints: { filename: "Heat.1995.4K.mkv", videoSize: 9_000_000 } }, "remote"));
+  assert.notEqual(keys.addonRow, stableSourceKey({ url: "https://b.test/2", addonKey: "other-addon", name: "1080p" }, "remote"));
+  // Nothing an address holds reaches the handle.
+  for (const raw of [sealed, "file://Films/Heat/Heat.mkv", "https://a.test/1", "https://b.test/2"]) {
+    for (const key of Object.values(keys)) assert.equal(key.includes(raw), false, raw);
+  }
+  // An addon row with no address of its own is still told from another one.
+  assert.notEqual(stableSourceKey({ externalUrl: "https://addon.test/watch" }, "unsupported"), stableSourceKey({ externalUrl: "https://addon.test/other" }, "unsupported"));
+});
+
+test("a listing hands out the stable handle of every source, the same one in every session", () => {
+  const rows = [
+    { infoHash: INFO_HASH, fileIdx: 0 },
+    { url: "file://Films/Heat/Heat.mkv" },
+    { url: "https://a.test/1", addonKey: "torrentio", name: "4K", behaviorHints: { filename: "Heat.1995.4K.mkv", videoSize: 8_000_000 } },
+    { url: "https://b.test/2", addonKey: "torrentio", name: "1080p", externalUrl: "https://addon.test/watch" },
+  ];
+  const otherOwner = { userId: "user-b", sid: "owner-b", expiresAt: owner.expiresAt };
+  const listed = new MediaResources(() => 0).listing([{ url: sealedFor() }, ...rows], owner).map((stream) => stream.stableKey);
+  assert.equal(listed.length, rows.length + 1);
+  for (const key of listed) assert.match(key, /^[mtfau]:[0-9a-f]{24}$/);
+  // Another session and another account mint the same handles for the same sources, the sealed
+  // one included: this is what makes a stored position usable again after a sign-in.
+  const other = new MediaResources(() => 0)
+    .listing([{ url: sealedFor(otherOwner) }, ...rows], otherOwner).map((stream) => stream.stableKey);
+  assert.deepEqual(listed, other);
+  const [byId] = new MediaResources(() => 0).listing([rows[1]!], owner);
+  assert.equal(byId!.stableKey, listed[2]);
+  assert.equal(byId!.stableKey, stableSourceKey({ url: "file://Films/Heat/Heat.mkv" }, "library"));
 });

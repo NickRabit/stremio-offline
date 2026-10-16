@@ -87,8 +87,9 @@ class CatalogDetailTest {
       poster: String?,
       addonKey: String?,
       remote: cz.stremiooffline.tv.data.RemoteItemContext?,
+      stableKey: String?,
     ) {
-      super.saveProgress(key, position, duration, title, path, poster, addonKey, remote)
+      super.saveProgress(key, position, duration, title, path, poster, addonKey, remote, stableKey)
       progressValues[key] = ProgressDto(position, duration)
     }
   }

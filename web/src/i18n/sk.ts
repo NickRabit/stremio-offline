@@ -164,6 +164,7 @@ export const sk: Catalog = {
   "api.timeout": "Server neodpovedal včas.",
   "api.copyRefused": "Prehliadač odmietol kopírovať. Vyberte text a skopírujte ho ručne.",
   "app.goToCleanCatalog": "Späť k čistému katalógu",
+  "app.goToStart": "Na úvodnú stránku",
   "app.serverOnline": "Server je dostupný",
   "restricted.chip": "Demo režim",
   "restricted.notice": "Táto inštancia je v obmedzenom režime. Doplnky, nastavenia a heslo nie je možné zmeniť.",

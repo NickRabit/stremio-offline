@@ -46,4 +46,35 @@ class SourceSwitchIdentityTest {
     assertEquals("movie:tt1", incoming.key)
     assertEquals("cinemeta", incoming.addonKey)
   }
+
+  @Test
+  fun `every kind of switch carries the row's own stable handle`() {
+    val current = PlayTarget(
+      key = "movie:tt1", title = "Heat", resume = true, sourceId = "addon-a", remoteItem = origin,
+      subtitleType = "movie", subtitleTarget = "tt1", catalogue = true,
+    )
+    val addon = StreamDto(kind = "remote", playable = true, sourceId = "addon-b", stableKey = "a:${"1".repeat(24)}")
+    val file = StreamDto(kind = "library", playable = true, localPath = "films/Heat.mkv", stableKey = "f:${"2".repeat(24)}")
+    val version = StreamDto(
+      kind = "remote", playable = true, sourceId = "ms2", stableKey = "m:${"3".repeat(24)}",
+      remoteItem = origin.copy(mediaSourceId = "v2"),
+    )
+
+    assertEquals(addon.stableKey, switchedTarget(current, addon).stableKey)
+    assertEquals(file.stableKey, switchedTarget(current, file).stableKey)
+    assertEquals(version.stableKey, switchedTarget(current, version).stableKey)
+  }
+
+  @Test
+  fun `the panel lists the row that is playing first`() {
+    val first = StreamDto(sourceId = "a", kind = "remote", playable = true)
+    val playing = StreamDto(sourceId = "b", kind = "remote", playable = true)
+    val last = StreamDto(sourceId = "c", kind = "remote", playable = true)
+    val rows = listOf(first, playing, last)
+
+    assertEquals(listOf("b", "a", "c"), sourcesWithPlayingFirst(rows, playing).map { it.sourceId })
+    // Nothing playing, and a row the list does not hold, both leave the order alone.
+    assertEquals(listOf("a", "b", "c"), sourcesWithPlayingFirst(rows, null).map { it.sourceId })
+    assertEquals(listOf("a", "b", "c"), sourcesWithPlayingFirst(rows, StreamDto(sourceId = "z")).map { it.sourceId })
+  }
 }

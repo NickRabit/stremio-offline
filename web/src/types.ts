@@ -46,6 +46,9 @@ export interface Stream {
   sourceId: string; kind: "remote" | "library" | "torrent" | "unsupported"; playable: boolean; localPath?: string; libraryName?: string; name?: string; title?: string; description?: string;
   subtitles?: Subtitle[]; addonKey?: string; addonName?: string;
   behaviorHints?: { notWebReady?: boolean; filename?: string; videoSize?: number; bingeGroup?: string };
+  /** The same source's handle in every session, minted by the server: a position stored with it
+   *  resumes from this source again. */
+  stableKey?: string;
   /** Set on a source that belongs to a remote Jellyfin/Emby library, never on an addon stream. */
   provider?: MediaServerProvider;
   libraryId?: string;
@@ -478,7 +481,7 @@ export interface UserViews {
 }
 /** `pending` marks the row a finished episode left behind: the next episode of the show,
  *  not yet started. It carries no position and draws no progress bar. */
-export interface ProgressEntry { key: string; position: number; duration: number; title: string; path?: string; poster?: string; addonKey?: string; series?: { id: string; name: string; season: number; episode: number }; pending?: true; updatedAt: string }
+export interface ProgressEntry { key: string; position: number; duration: number; title: string; path?: string; poster?: string; addonKey?: string; stableKey?: string; series?: { id: string; name: string; season: number; episode: number }; pending?: true; updatedAt: string }
 export interface WatchlistEntry { key: string; type: string; id: string; name: string; poster?: string; addedAt: string }
 
 /** One episode of a followed series as the follow route names it: the slot on either side of now. */

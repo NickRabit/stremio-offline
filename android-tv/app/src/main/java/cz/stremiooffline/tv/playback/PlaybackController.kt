@@ -31,6 +31,13 @@ interface PlaybackApi {
     capabilities: ClientCapabilitiesDto,
     time: Double,
     subtitleIds: List<String> = emptyList(),
+    /** The viewer's own track choices; absent leaves them to the account's settings, which is what
+     *  a first start does. */
+    audioLanguage: String? = null,
+    subtitleLanguage: String? = null,
+    /** True when the viewer turned subtitles off: the server is told so explicitly, because an
+     *  absent field would let the account's own subtitle language put one back. */
+    subtitleOff: Boolean = false,
   ): PlaybackDescriptorDto
 
   suspend fun seekPlayback(id: String, time: Double): PlaybackDescriptorDto
@@ -55,6 +62,8 @@ interface PlaybackApi {
     addonKey: String? = null,
     /** The media-server version the row was written by, for a title-owned play. */
     remote: RemoteItemContext? = null,
+    /** The source the position was played from, so the detail can preselect it next time. */
+    stableKey: String? = null,
   )
 }
 
@@ -73,6 +82,19 @@ sealed interface SubtitleChoice {
   data class Embedded(val index: Int) : SubtitleChoice
   data class Addon(val subtitleId: String) : SubtitleChoice
 }
+
+/**
+ * The track choices in effect in a session, as a switch onto another source must carry them: the
+ * language the viewer is hearing, the language of the subtitle they are reading, and whether they
+ * turned subtitles off -- which the server must be told explicitly, because it would otherwise put
+ * the account's own subtitle back.
+ */
+data class TrackPreferences(
+  val audio: String?,
+  /** Null both when subtitles are off and when the chosen one names no language. */
+  val subtitle: String?,
+  val subtitleOff: Boolean,
+)
 
 /** What the player screen draws. `revision` changes whenever the media item must be (re)loaded;
  *  `trackRevision` changes when only the ExoPlayer track selection has to be applied again. */
@@ -150,6 +172,8 @@ class PlaybackController(
   private var path: String? = null
   private var poster: String? = null
   private var addonKey: String? = null
+  /** The stable handle of the row this session plays, written with every progress save. */
+  private var stableKey: String? = null
   /** Set only for a native remote play: the identity whose position the title's own key holds, or
    *  whose own remote-state endpoint holds it when nothing can name the title. */
   private var remote: RemoteItemContext? = null
@@ -168,6 +192,11 @@ class PlaybackController(
     val audioPreference: String?,
     val subtitlePreference: String?,
     val library: Boolean,
+    /** The viewer's own track choices, named on the wire; null leaves them to the account's
+     *  settings, which is what every start but a switch does. */
+    val trackChoice: TrackPreferences? = null,
+    /** The stable handle of the row this session plays, saved with every progress write. */
+    val stableKey: String? = null,
     /** A fresh source is minted after the outgoing session is closed, never before it. */
     val mint: (suspend () -> String?)? = null,
     /** The client's own subtitle choice, carried across a restart of the same session. */
@@ -208,6 +237,24 @@ class PlaybackController(
   /** Where a restart goes: the place it began at, or the position the player is at now. */
   private val restartPosition: Double get() = restartAt ?: position
 
+  /**
+   * The track choices in effect right now, as a switch onto another source must carry them: the
+   * spoken language the viewer is hearing, and the language of the embedded or addon subtitle they
+   * are reading -- or none at all, which the server has to be told explicitly. Nothing is read from
+   * the account's own preferences: those decided the session's start, not what the viewer chose
+   * inside it.
+   */
+  fun trackPreferences(): TrackPreferences {
+    val snapshot = _state.value
+    val audio = audioTracks.getOrNull(snapshot.audioTrackIndex)?.language ?: plan?.audioPreference
+    val subtitle = when (val choice = snapshot.subtitle) {
+      is SubtitleChoice.Embedded -> subtitleTracks.getOrNull(choice.index)?.language
+      is SubtitleChoice.Addon -> snapshot.addonSubtitles.firstOrNull { it.subtitleId == choice.subtitleId }?.lang
+      SubtitleChoice.Off -> null
+    }
+    return TrackPreferences(audio, subtitle, subtitleOff = snapshot.subtitle is SubtitleChoice.Off)
+  }
+
   private fun absolute(playerPosition: Double) = if (playlist) offset + playerPosition else playerPosition
 
   private fun startPlan(
@@ -222,10 +269,12 @@ class PlaybackController(
     subtitles: List<AddonSubtitleDto>,
     audioPreference: String?,
     subtitlePreference: String?,
+    trackChoice: TrackPreferences? = null,
+    stableKey: String? = null,
     mint: (suspend () -> String?)? = null,
     carrySubtitle: SubtitleChoice? = null,
     remote: RemoteItemContext? = null,
-  ) = StartPlan(sourceId, key, title, path, explicitTime, resume, poster, addonKey, subtitles, audioPreference, subtitlePreference, library = path != null, mint = mint, carrySubtitle = carrySubtitle, remote = remote)
+  ) = StartPlan(sourceId, key, title, path, explicitTime, resume, poster, addonKey, subtitles, audioPreference, subtitlePreference, library = path != null, trackChoice = trackChoice, stableKey = stableKey, mint = mint, carrySubtitle = carrySubtitle, remote = remote)
 
   /**
    * Starts a session for [key]. [sourceId] is a source the server already handed out; when it is
@@ -246,9 +295,13 @@ class PlaybackController(
     at: Double? = null,
     remoteItem: RemoteItemContext? = null,
     mint: (suspend () -> String?)? = null,
+    /** The stable handle of the row being played, saved with the position. */
+    stableKey: String? = null,
+    /** The viewer's own track choices; only a switch inside a session names them. */
+    trackChoice: TrackPreferences? = null,
   ) {
     if (released) return
-    begin(startPlan(sourceId, key, title, path, at, resume, poster, addonKey, subtitles, audioPreference, subtitlePreference, mint, remote = remoteItem))
+    begin(startPlan(sourceId, key, title, path, at, resume, poster, addonKey, subtitles, audioPreference, subtitlePreference, trackChoice = trackChoice, stableKey = stableKey, mint = mint, remote = remoteItem))
   }
 
   /** Starts the next library file: the old session is saved and deleted before the new start. */
@@ -262,7 +315,7 @@ class PlaybackController(
   ) {
     if (released) return
     val current = plan ?: return
-    begin(startPlan(null, key, title, path, null, resume, poster, current.addonKey, current.subtitles, current.audioPreference, current.subtitlePreference, mint))
+    begin(startPlan(null, key, title, path, null, resume, poster, current.addonKey, current.subtitles, current.audioPreference, current.subtitlePreference, mint = mint))
   }
 
   /**
@@ -297,7 +350,7 @@ class PlaybackController(
     val previousId = sessionId
     // The outgoing identity is captured before the new plan replaces it, so a switch between two
     // versions of one remote item still saves under the same stable key.
-    val previous = if (previousId != null && hasPosition) SavePayload(key, position, duration, title, path, poster, addonKey, remote) else null
+    val previous = if (previousId != null && hasPosition) SavePayload(key, position, duration, title, path, poster, addonKey, remote, stableKey) else null
     sessionId = null
     plan = next
     sourceId = next.sourceId
@@ -306,6 +359,7 @@ class PlaybackController(
     path = next.path
     poster = next.poster
     addonKey = next.addonKey
+    stableKey = next.stableKey
     remote = next.remote
     playing = false
     ready = false
@@ -344,7 +398,20 @@ class PlaybackController(
       if (mine != generation) return@launch
       if (resumeTime > 0) lastPosition = resumeTime
       val offered = next.subtitles.map { it.subtitleId }.take(MAX_SUBTITLE_IDS)
-      val descriptor = runCatching { api.startPlayback(resolved, startCapabilities, resumeTime, offered) }.getOrElse { error ->
+      // The viewer's own choice of track is named on the wire, so a switch lands on the languages
+      // that were in effect rather than on the account's. A start without one names nothing.
+      val choice = next.trackChoice
+      val descriptor = runCatching {
+        api.startPlayback(
+          resolved,
+          startCapabilities,
+          resumeTime,
+          offered,
+          audioLanguage = choice?.audio,
+          subtitleLanguage = choice?.subtitle,
+          subtitleOff = choice?.subtitleOff == true,
+        )
+      }.getOrElse { error ->
         if (mine == generation) _state.update { it.copy(loading = false, error = errorOf(error)) }
         return@launch
       }
@@ -469,8 +536,8 @@ class PlaybackController(
   fun switchSource(
     sourceId: String,
     subtitles: List<AddonSubtitleDto> = plan?.subtitles ?: emptyList(),
-    audioPreference: String? = plan?.audioPreference,
-    subtitlePreference: String? = plan?.subtitlePreference,
+    /** The tracks in effect travel by default: a switch keeps what the viewer is watching. */
+    trackChoice: TrackPreferences = trackPreferences(),
   ) {
     if (released) return
     val current = plan ?: return
@@ -483,8 +550,7 @@ class PlaybackController(
         explicitTime = at,
         resume = false,
         subtitles = subtitles,
-        audioPreference = audioPreference,
-        subtitlePreference = subtitlePreference,
+        trackChoice = trackChoice,
         mint = null,
       ),
     )
@@ -640,7 +706,7 @@ class PlaybackController(
     generation++
     cancelLoops()
     val id = sessionId
-    val payload = if (hasPosition) SavePayload(key, position, duration, title, path, poster, addonKey, remote) else null
+    val payload = if (hasPosition) SavePayload(key, position, duration, title, path, poster, addonKey, remote, stableKey) else null
     sessionId = null
     if (payload != null || id != null) {
       scope.launch {
@@ -658,7 +724,7 @@ class PlaybackController(
 
   private fun saveNow() {
     if (stopped || !hasPosition || sessionId == null) return
-    val payload = SavePayload(key, position, duration, title, path, poster, addonKey, remote)
+    val payload = SavePayload(key, position, duration, title, path, poster, addonKey, remote, stableKey)
     scope.launch { runCatching { save(payload) } }
   }
 
@@ -682,7 +748,7 @@ class PlaybackController(
       )
       return
     }
-    api.saveProgress(payload.key, payload.position, payload.duration, payload.title, payload.path, payload.poster, payload.addonKey, remote = context)
+    api.saveProgress(payload.key, payload.position, payload.duration, payload.title, payload.path, payload.poster, payload.addonKey, remote = context, stableKey = payload.stableKey)
   }
 
   private fun startLoops() {
@@ -704,7 +770,7 @@ class PlaybackController(
     saveJob = scope.launch {
       while (isActive) {
         delay(SAVE_INTERVAL_MS)
-        if (playing && hasPosition) runCatching { save(SavePayload(key, position, duration, title, path, poster, addonKey, remote)) }
+        if (playing && hasPosition) runCatching { save(SavePayload(key, position, duration, title, path, poster, addonKey, remote, stableKey)) }
       }
     }
   }
@@ -801,11 +867,18 @@ class PlaybackController(
     }
   }
 
-  /** The addon fills only a gap the file left, by the account's language, the way the web does. */
+  /** The addon fills only a gap the file left, by the viewer's own choice when the session carries
+   *  one and by the account's language otherwise, the way the web does. */
   private fun defaultAddon(plan: StartPlan, descriptor: PlaybackDescriptorDto, addons: List<AddonSubtitleDto>): AddonSubtitleDto? {
-    val preferred = plan.subtitlePreference ?: return null
+    val choice = plan.trackChoice
+    // The viewer turned subtitles off, so nothing may turn one back on behind their back.
+    if (choice?.subtitleOff == true) return null
+    val preferred = choice?.subtitle ?: plan.subtitlePreference ?: return null
     val spoken = audioTracks.getOrNull(descriptor.audioTrack.coerceIn(0, maxOf(0, audioTracks.size - 1)))?.language
-    return Languages.pickAddonSubtitle(addons, preferred, spoken, plan.audioPreference)
+    // A viewer who was reading this subtitle keeps it whatever the sound is; "the audio is already
+    // in a language they know" is the account's own rule, and it governs only an automatic pick.
+    val understood = if (choice != null) null else plan.audioPreference
+    return Languages.pickAddonSubtitle(addons, preferred, spoken, understood)
   }
 
   private fun modeOf(value: String): PlaybackMode = when (value) {
@@ -834,6 +907,8 @@ class PlaybackController(
     val addonKey: String?,
     /** Null for the generic progress route; set to store on the local remote-state endpoint. */
     val remote: RemoteItemContext?,
+    /** The stable handle of the row the position was played from. */
+    val stableKey: String?,
   )
 
   companion object {

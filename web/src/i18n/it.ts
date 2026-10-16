@@ -164,6 +164,7 @@ export const it: Catalog = {
   "api.timeout": "Il server non ha risposto in tempo.",
   "api.copyRefused": "Il browser ha rifiutato di copiare. Seleziona il testo e copialo a mano.",
   "app.goToCleanCatalog": "Ritorno a un catalogo pulito",
+  "app.goToStart": "Vai alla pagina iniziale",
   "app.serverOnline": "Server in linea",
   "restricted.chip": "Modalità dimostrativa",
   "restricted.notice": "Questa istanza è in modalità limitata. I componenti aggiuntivi, le impostazioni e la password non possono essere modificati.",

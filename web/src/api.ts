@@ -25,6 +25,9 @@ export const describeError = (error: unknown): string => {
 
 export interface ProgressPayload {
   key: string; position: number; duration: number; title?: string; path?: string; poster?: string; addonKey?: string;
+  /** The source the position was played from, as the server handed it over: a later read of the
+   *  title resumes from that source again. */
+  stableKey?: string;
   /** The media-server version this position was played from, so the detail can say which one. */
   remote?: { libraryId: string; itemId: string; mediaSourceId: string };
 }

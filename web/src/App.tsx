@@ -58,6 +58,7 @@ import { catalogueGalleryImages, mergeGallery, localGalleryImage, type GalleryIm
 import { loadTitleGallery, type CatalogueRef } from "./title-enrichment";
 import { SettingsPage } from "./SettingsPage";
 import { resolveStartView } from "./start-view";
+import { titlePlaybackSources } from "./title-sources";
 import { playbackIdentity } from "./playback-identity";
 import type { Addon, BuildInfo, BrowseItem, BrowseLibrary, BrowseResult, DeviceTransfer, DownloadsViewPrefs, FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem, FavoriteRemoteItem, FollowView, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, LibraryViewPrefs, MediaServerProvider, NewEpisode, ProgressEntry, RemoteLibrary, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, Stream, Subtitle, Trailer, Video, SearchState } from "./types";
 
@@ -1264,6 +1265,13 @@ export function App() {
   const [setupNeeded, setSetupNeeded] = useState(false);
   const [buildInfo, setBuildInfo] = useState<BuildInfo | null>(null);
   const restricted = buildInfo?.restricted === true;
+  /** The logo leads to the account's own start page: Home or the Library when chosen (a restricted
+   *  build has no Home), otherwise a clean catalogue as it always has. */
+  const startHome = settings.startView !== "catalog" && !(restricted && settings.startView === "home");
+  const goToStart = () => {
+    if (!startHome) { resetCatalog(); return; }
+    openView(settings.startView === "library" ? "library" : "home");
+  };
   // What the instance owns is administrator-only, and an ordinary user gets the same
   // read-only shape the demo mode uses: the API refuses those writes either way.
   const admin = session?.role === "admin";
@@ -1597,6 +1605,13 @@ export function App() {
 
   /** Jumping from the download queue: opens the folder the file sits in and finds it there.
    * The filters have to be cleared, or the wanted file would stay filtered out of the listing. */
+  /** Shows a library copy where the viewer would look for it: a file inside a title's own folder
+   *  is that folder in its parent listing, since the folder itself opens as the title's detail. A
+   *  file straight in a library root is the file. */
+  const revealLibraryCopy = (file: string) => {
+    const parts = file.split("/");
+    revealInLibrary(parts.length > 2 ? parts.slice(0, -1).join("/") : file);
+  };
   const revealInLibrary = (target: string) => {
     navigated.current = true;
     const slash = target.lastIndexOf("/");
@@ -2576,6 +2591,11 @@ export function App() {
     const entry = resume.find((candidate) => candidate.key === `${detailRead.target.type}:${catalogueStreamId(detailRead.target)}`);
     return entry ? { position: entry.position, duration: entry.duration, sourceKey: sourceIdentity(detailSource) } : undefined;
   }, [detailRead, detailSource, resume]);
+  /** The source the shared detail's title was last played from, so its row is preselected. */
+  const detailResumeStableKey = useMemo(() => {
+    if (!detailRead) return undefined;
+    return resume.find((candidate) => candidate.key === `${detailRead.target.type}:${catalogueStreamId(detailRead.target)}`)?.stableKey;
+  }, [detailRead, resume]);
   /** Starts over: the saved position of the title the shared detail holds is cleared. */
   const clearDetailProgress = async (): Promise<boolean> => {
     if (!detailRead) return false;
@@ -2768,23 +2788,6 @@ export function App() {
    *  episode the exact video on screen. An identified library file plays under the same identity
    *  as the catalogue row of its title, so a local row never loses it. */
   const playbackCatalogueRef = (): { type: "movie" | "series"; id: string } | null => playingCatalogue;
-  /** Every row one title's player can switch to: the catalogue's own streams, the account's own
-   *  copies and the other libraries, read at that one intent and never while browsing. */
-  const titlePlaybackSources = async (ref: { type: "movie" | "series"; id: string }): Promise<Stream[]> => {
-    const [providers, localCopies] = await Promise.all([
-      api.streamSources(ref.type, ref.id),
-      api.localStreams(ref.type, ref.id).catch(() => [] as Stream[]),
-    ]);
-    const parts = await Promise.all(providers.map((provider) => api.streams(ref.type, ref.id, provider.key).catch(() => [] as Stream[])));
-    const libraries = await api.remoteLibraries({ timeoutMs: 3_000 }).catch(() => [] as RemoteLibrary[]);
-    const remote = await Promise.all(libraries.filter((library) => library.enabled)
-      .map((library) => api.remoteLibraryStreams(library.id, ref.type, ref.id).catch(() => [] as Stream[])));
-    const seen = new Set<string>();
-    // The viewer's own copies stand where the catalogue detail puts them: first.
-    return [...localCopies.filter(isLocalStream), ...parts.flat(), ...remote.flat()]
-      .filter((stream) => stream.playable && stream.sourceId.trim().length > 0
-        && !seen.has(stream.sourceId) && (seen.add(stream.sourceId), true));
-  };
   /** A title with no catalogue identity has no other sources to offer. */
   const loadPlaybackSources = async (): Promise<Stream[]> => {
     const ref = playbackCatalogueRef();
@@ -2909,7 +2912,7 @@ export function App() {
   const moreActive = view === "favorites" || view === "resume" || view === "following" || view === "addons" || view === "settings" || view === "stats";
 
   return <div className={`app-shell tile-size-${settings.tileSize} catalog-shape-${settings.catalogTileShape} library-shape-${settings.libraryTileShape} home-shape-${settings.homeTileShape}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
-    <header className="topbar"><button className="brand brand-home" title={t("app.goToCleanCatalog")} aria-label={t("app.goToCleanCatalog")} onClick={() => resetCatalog()}><div className="brand-mark"><CirclePlay/></div><div><small>{t("auth.brandEyebrow")}</small><h1>Stremio <span>Offline</span></h1></div></button><div className="topbar-right">{restricted && <div className="restricted-chip">{t("restricted.chip")}</div>}<div className="online"><i/> {t("app.serverOnline")}</div>
+    <header className="topbar"><button className="brand brand-home" title={t(startHome ? "app.goToStart" : "app.goToCleanCatalog")} aria-label={t(startHome ? "app.goToStart" : "app.goToCleanCatalog")} onClick={goToStart}><div className="brand-mark"><CirclePlay/></div><div><small>{t("auth.brandEyebrow")}</small><h1>Stremio <span>Offline</span></h1></div></button><div className="topbar-right">{restricted && <div className="restricted-chip">{t("restricted.chip")}</div>}<div className="online"><i/> {t("app.serverOnline")}</div>
       <div className="topbar-user"><span className="topbar-user-name">
         <strong title={t("auth.signedInAs", { username: session?.username ?? "" })}>{session?.username}</strong>
         {session?.role === "admin" && <i className="library-badge">{t("users.administrator")}</i>}
@@ -2953,6 +2956,7 @@ export function App() {
             {...(detailChips ? { chips: detailChips } : {})}
             onSourceChange={setDetailSource}
             {...(detailProgress ? { progress: detailProgress } : {})}
+            {...(detailResumeStableKey ? { resumeStableKey: detailResumeStableKey } : {})}
             onClearProgress={() => clearDetailProgress()}
             // The same pair a library detail draws: the position it holds for the episode on screen,
             // and the way to say that episode is seen -- which is that position going away.
@@ -3137,7 +3141,7 @@ export function App() {
               <div className="source-footer"><div className="source-info"><Subtitles/> {t("sources.subtitleCount", { count: selectedLocalPath ? 0 : subtitles.length + (selectedStream?.subtitles?.length || 0) })}
                 {inspection && <> · <b>{t("sources.audioInFile")}</b> {inspection.audioTracks.length ? inspection.audioTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}
                 · <b>{t("sources.subtitlesInFile")}</b> {inspection.subtitleTracks.length ? inspection.subtitleTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}</>}
-              {selectedStream?.playable && !inspection && <> · {t("sources.probing")}</>}</div><div className="action-slot"><div className="actions"><button className="primary" disabled={!canPlay} onClick={startCatalogPlayback}><CirclePlay/> {t("player.play")}</button>{selectedLocalPath ? <button onClick={() => revealInLibrary(selectedLocalPath)}><FolderOpen/> {t("library.showInLibrary")}</button> : <div className="split-button"><button disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} onClick={primarySave}><HardDrive/> {t("save.toLibrary")}</button><button className="split-button-toggle" disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} aria-haspopup="dialog" aria-label={t("save.toLibraryElsewhere")} title={t("save.toLibraryElsewhere")} onClick={() => setSaveTargetOpen(true)}><ChevronDown/></button></div>}<button disabled={!canPlay || Boolean(selectedStream && isRemoteStream(selectedStream))} onClick={() => { if (selectedLocalPath) void downloadLibraryFile(selectedLocalPath); else void downloadStreamToDevice(); }}><Download/> {t("save.toDevice")}</button></div></div></div>
+              {selectedStream?.playable && !inspection && <> · {t("sources.probing")}</>}</div><div className="action-slot"><div className="actions"><button className="primary" disabled={!canPlay} onClick={startCatalogPlayback}><CirclePlay/> {t("player.play")}</button>{selectedLocalPath ? <button onClick={() => revealLibraryCopy(selectedLocalPath)}><FolderOpen/> {t("library.showInLibrary")}</button> : <div className="split-button"><button disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} onClick={primarySave}><HardDrive/> {t("save.toLibrary")}</button><button className="split-button-toggle" disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} aria-haspopup="dialog" aria-label={t("save.toLibraryElsewhere")} title={t("save.toLibraryElsewhere")} onClick={() => setSaveTargetOpen(true)}><ChevronDown/></button></div>}<button disabled={!canPlay || Boolean(selectedStream && isRemoteStream(selectedStream))} onClick={() => { if (selectedLocalPath) void downloadLibraryFile(selectedLocalPath); else void downloadStreamToDevice(); }}><Download/> {t("save.toDevice")}</button></div></div></div>
             </div>}
             </div>
           </> : <Empty icon={<Film/>} title={t("catalog.pickTitle")} text={t("catalog.pickText")}/>}</section></div>

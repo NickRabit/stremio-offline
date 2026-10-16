@@ -651,16 +651,22 @@ open class FakeTvApi : TvApi {
     capabilities: ClientCapabilitiesDto,
     time: Double,
     subtitleIds: List<String>,
+    audioLanguage: String?,
+    subtitleLanguage: String?,
+    subtitleOff: Boolean,
   ): PlaybackDescriptorDto {
     startedSources += sourceId
     startedTimes += time
     startedCapabilities += capabilities
     startedSubtitleIds += subtitleIds
+    startedLanguages += StartLanguages(audioLanguage, subtitleLanguage, subtitleOff)
     return startAnswer
   }
 
   var startAnswer: PlaybackDescriptorDto = PlaybackDescriptorDto(id = "p1", url = "stream.mp4")
   val startedSubtitleIds: MutableList<List<String>> = mutableListOf()
+  /** The track choices each start named on the wire, in order. */
+  val startedLanguages: MutableList<StartLanguages> = mutableListOf()
   /** Every start, in order: which source, at what time and with what the client claimed. */
   val startedSources: MutableList<String> = mutableListOf()
   val startedTimes: MutableList<Double> = mutableListOf()
@@ -740,8 +746,9 @@ open class FakeTvApi : TvApi {
     poster: String?,
     addonKey: String?,
     remote: RemoteItemContext?,
+    stableKey: String?,
   ) {
-    progressSaves += ProgressSave(key, position, duration, title, path, poster, addonKey, remote)
+    progressSaves += ProgressSave(key, position, duration, title, path, poster, addonKey, remote, stableKey)
   }
 
   /** Every `saveProgress()` call in order, so a test can name the key and the numbers behind it. */
@@ -757,9 +764,13 @@ data class ProgressSave(
   val poster: String?,
   val addonKey: String?,
   val remote: RemoteItemContext?,
+  val stableKey: String?,
 )
 
 data class CatalogRequest(val addonKey: String, val type: String, val id: String, val skip: Int, val genre: String?)
+
+/** What one start asked the server for: a null language is one the account's settings decide. */
+data class StartLanguages(val audio: String?, val subtitle: String?, val subtitleOff: Boolean)
 
 data class BrowseRequest(val path: String?, val limit: Int, val skip: Int, val query: String)
 

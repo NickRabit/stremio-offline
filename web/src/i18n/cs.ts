@@ -175,6 +175,7 @@ export const cs: Catalog = {
 
   // Kostra aplikace.
   "app.goToCleanCatalog": "Zpět na čistý katalog",
+  "app.goToStart": "Na úvodní stránku",
   "app.serverOnline": "Server online",
   "restricted.chip": "Demo režim",
   "restricted.notice": "Tato instance běží v omezeném režimu. Doplňky, nastavení a heslo nelze měnit.",

@@ -111,6 +111,20 @@ export function streamKind(stream: StreamItem): PublicStream["kind"] {
   return "unsupported";
 }
 
+/** The same source's handle in every session: a short hash, never an address. */
+export function stableSourceKey(stream: StreamItem, kind: PublicStream["kind"]): string {
+  const h = (...parts: string[]) => createHash("sha256").update(parts.join("\n")).digest("hex").slice(0, 24);
+  if (kind === "remote") {
+    const ref = openRemoteContent(stream.url);
+    if (ref) return `m:${h(ref.libraryId, ref.itemId, ref.mediaSourceId)}`;
+  }
+  if (typeof stream.infoHash === "string") return `t:${h(stream.addonKey ?? "", stream.infoHash.toLowerCase(), String(stream.fileIdx ?? ""))}`;
+  if (kind === "library") return `f:${h(stream.url ?? "")}`;
+  const filename = stream.behaviorHints?.filename;
+  if (filename) return `a:${h(stream.addonKey ?? "", filename, String(stream.behaviorHints?.videoSize ?? ""), stream.name ?? "")}`;
+  return `u:${h(stream.addonKey ?? "", stream.url ?? stream.externalUrl ?? "")}`;
+}
+
 function normalizedStream(input: StreamItem): StreamItem {
   if (isRemoteMediaStream(input) && !openRemoteContent(input.url)) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
   const headers = new Headers(input.behaviorHints?.proxyHeaders?.request);
@@ -296,7 +310,7 @@ export class MediaResources {
     const sourceId = this.add(stream, owner, "source", undefined, false, bill);
     const record = this.get(sourceId, owner.sid, "source").stream;
     const result: PublicStream = {
-      sourceId, kind, playable: kind === "remote" || kind === "library",
+      sourceId, kind, playable: kind === "remote" || kind === "library", stableKey: stableSourceKey(record, kind),
       name: record.name, title: record.title, description: record.description,
       addonKey: record.addonKey, addonName: record.addonName,
       behaviorHints: { filename: record.behaviorHints?.filename, videoSize: record.behaviorHints?.videoSize,

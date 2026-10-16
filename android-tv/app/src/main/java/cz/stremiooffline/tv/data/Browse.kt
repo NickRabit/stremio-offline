@@ -7,7 +7,12 @@ import kotlinx.serialization.json.JsonObject
 
 /** The stored watch position of one title, the way `GET`/`POST /api/progress` carry it. */
 @Serializable
-data class ProgressDto(val position: Double = 0.0, val duration: Double = 0.0)
+data class ProgressDto(
+  val position: Double = 0.0,
+  val duration: Double = 0.0,
+  /** The source the stored position was played from, as the player named it. */
+  val stableKey: String? = null,
+)
 
 /** The answer of `POST /api/library/favorite`: the path and the state the server stored. */
 @Serializable

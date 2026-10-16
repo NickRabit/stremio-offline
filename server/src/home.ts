@@ -289,13 +289,17 @@ function cardFor(candidates: ResumeCandidate[]): ResumeCard {
   if (winner.source === "remote") {
     return { ...winner.item, ...(forgetKeys.length ? { forgetKeys } : {}) };
   }
+  // A row written without artwork borrows the title's pictures from another copy of the same
+  // title, so a played media-server version never leaves the merged card blank.
+  const borrowed = (field: "poster" | "wide"): string | undefined =>
+    candidates.map((candidate) => (candidate.item as { poster?: string; wide?: string })[field]).find((value) => Boolean(value));
   if (winner.source === "file") {
     const item = winner.item;
     return {
       kind: "resume-file", key: item.key, title: item.title,
       ...(item.subtitle ? { subtitle: item.subtitle } : {}),
-      ...(item.poster ? { poster: item.poster } : {}),
-      ...(item.wide ? { wide: item.wide } : {}),
+      ...((item.poster ?? borrowed("poster")) ? { poster: item.poster ?? borrowed("poster") } : {}),
+      ...((item.wide ?? borrowed("wide")) ? { wide: item.wide ?? borrowed("wide") } : {}),
       path: item.path, progress: item.progress,
       ...(item.season !== undefined ? { season: item.season } : {}),
       ...(item.episode !== undefined ? { episode: item.episode } : {}),
@@ -306,8 +310,8 @@ function cardFor(candidates: ResumeCandidate[]): ResumeCard {
   const item = winner.item;
   return {
     kind: "resume-catalogue", key: item.key, title: item.title,
-    ...(item.poster ? { poster: item.poster } : {}),
-    ...(item.wide ? { wide: item.wide } : {}),
+    ...((item.poster ?? borrowed("poster")) ? { poster: item.poster ?? borrowed("poster") } : {}),
+    ...((item.wide ?? borrowed("wide")) ? { wide: item.wide ?? borrowed("wide") } : {}),
     type: item.type, id: item.id, name: item.name,
     ...(item.season !== undefined ? { season: item.season } : {}),
     ...(item.episode !== undefined ? { episode: item.episode } : {}),

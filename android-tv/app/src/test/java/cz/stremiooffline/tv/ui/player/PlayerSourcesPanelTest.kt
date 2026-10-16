@@ -156,9 +156,15 @@ class PlayerSourcesPanelTest {
   }
 
   @Test
-  fun `the sources button is hidden with a single stream`() {
+  fun `the sources button is offered with a single stream and hidden with none`() {
+    // Every play offers its sources, even when the list is only the row that plays.
     mount(FakeTvApi(), listOf(alpha))
+    compose.onNodeWithTag(TAG_OSD_SOURCES).assertExists()
+  }
 
+  @Test
+  fun `the sources button is hidden when the play offers no source at all`() {
+    mount(FakeTvApi(), emptyList())
     compose.onNodeWithTag(TAG_OSD_SOURCES).assertDoesNotExist()
   }
 
@@ -170,11 +176,10 @@ class PlayerSourcesPanelTest {
     press(Key.DirectionCenter)
 
     compose.onNodeWithTag(TagSourcesPanel).assertExists()
-    compose.onNodeWithTag(sourceRowTag(1)).assertIsFocused()
+    // The panel lists the row that is playing first and focuses it.
+    compose.onNodeWithTag(sourceRowTag(0)).assertIsFocused()
     compose.onNodeWithText("Playing").assertExists()
-    // The default keeps its own mark, on the other row.
-    compose.onNodeWithTag(sourceRowTag(0)).assertExists()
-    compose.onNodeWithText("✓ Default").assertExists()
+    compose.onNodeWithTag(sourceRowTag(1)).assertExists()
 
     back()
 
@@ -207,8 +212,10 @@ class PlayerSourcesPanelTest {
 
     focusSources()
     press(Key.DirectionCenter)
-    press(Key.DirectionUp)
     compose.onNodeWithTag(sourceRowTag(0)).assertIsFocused()
+    // The playing row leads the panel now; the other row is the one below it.
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(sourceRowTag(1)).assertIsFocused()
     press(Key.DirectionCenter)
 
     compose.onNodeWithTag(TagSourcesPanel).assertDoesNotExist()
@@ -224,7 +231,7 @@ class PlayerSourcesPanelTest {
 
     focusSources()
     press(Key.DirectionCenter)
-    compose.onNodeWithTag(sourceRowTag(1)).assertIsFocused()
+    compose.onNodeWithTag(sourceRowTag(0)).assertIsFocused()
     press(Key.DirectionCenter)
 
     compose.onNodeWithTag(TagSourcesPanel).assertDoesNotExist()
@@ -280,15 +287,14 @@ class PlayerSourcesPanelTest {
 
     focusSources()
     press(Key.DirectionCenter)
-    compose.onNodeWithTag(sourceRowTag(0)).assert(hasText("Local"))
-    // The addon source the session plays is the marked row; the file's blank id marks nothing.
-    compose.onNodeWithTag(sourceRowTag(2)).assert(hasText("Playing"))
+    // The addon source the session plays leads the panel; the file's blank id marks nothing.
+    compose.onNodeWithTag(sourceRowTag(0)).assert(hasText("Playing"))
+    compose.onNodeWithTag(sourceRowTag(1)).assert(hasText("Local"))
     compose.onAllNodesWithText("Playing").assertCountEquals(1)
 
-    // The playing row is Beta at the bottom; UP twice reaches the local row above the addons.
-    press(Key.DirectionUp)
-    press(Key.DirectionUp)
-    compose.onNodeWithTag(sourceRowTag(0)).assertIsFocused()
+    // The playing row leads the panel; the local row sits below it.
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(sourceRowTag(1)).assertIsFocused()
     press(Key.DirectionCenter)
     compose.waitUntil(5_000) { api.startedSources.size == 2 }
 
@@ -329,9 +335,9 @@ class PlayerSourcesPanelTest {
 
     focusSources()
     press(Key.DirectionCenter)
-    press(Key.DirectionUp)
-    press(Key.DirectionUp)
-    compose.onNodeWithTag(sourceRowTag(0)).assertIsFocused()
+    // The addon source that is playing leads the panel; the local row sits below it.
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(sourceRowTag(1)).assertIsFocused()
     press(Key.DirectionCenter)
     compose.waitUntil(5_000) { api.startedSources.size == 2 }
     compose.onNodeWithText("Back to the previous source").assertExists()
@@ -390,8 +396,6 @@ class PlayerSourcesPanelTest {
     val api = FakeTvApi()
     val addSecond = mountGrowing(api)
 
-    compose.onNodeWithTag(TAG_OSD_SOURCES).assertDoesNotExist()
-
     addSecond()
     compose.waitForIdle()
 
@@ -423,7 +427,7 @@ class PlayerSourcesPanelTest {
     realKey(KeyEvent.KEYCODE_DPAD_RIGHT)
     compose.onNodeWithTag(TAG_OSD_SOURCES).assertIsFocused()
 
-    sources = listOf(alpha)
+    sources = emptyList()
     compose.waitForIdle()
 
     compose.onNodeWithTag(TAG_OSD_SOURCES).assertDoesNotExist()
@@ -472,6 +476,53 @@ class PlayerSourcesPanelTest {
     assertEquals(50.0, api.subtitleTextRequests.last().second, 0.001)
   }
 
+  /**
+   * The owner's report: choosing another source threw the subtitle away and took the account's
+   * preference back. The switch must carry what is on screen, whatever the settings now say.
+   */
+  @Test
+  fun `a switch keeps the subtitle that was on screen, not the account's language`() {
+    val api = AdaptiveSubtitleApi().apply { settingsValue = SettingsResponse(subtitleLanguage = "cs") }
+    mount(api, listOf(alpha, beta), sourceId = "srcA", subtitleType = "movie", subtitleTarget = "tt1")
+    compose.waitUntil(5_000) { api.subtitleTextRequests.isNotEmpty() }
+    compose.waitForIdle()
+    assertEquals("sid-cs", api.subtitleTextRequests.last().first)
+
+    // The account's own preference moves while the session runs; the picture does not follow it.
+    api.settingsValue = SettingsResponse(subtitleLanguage = "en")
+
+    focusSources()
+    press(Key.DirectionCenter)
+    // srcA plays and leads the panel; srcB is the row below it.
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(sourceRowTag(1)).assertIsFocused()
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { api.startedSources.size == 2 }
+    compose.waitForIdle()
+
+    assertEquals(listOf("srcA", "srcB"), api.startedSources)
+    // The switch asked the addon for the Czech track again, not the English one the settings name,
+    // so the Czech subtitle the viewer was reading travels onto the new source.
+    assertEquals("sid-cs", api.startedSubtitleIds.last().first())
+    // And the server is told the same languages, so it does not put the account's own subtitle back.
+    assertEquals("cs", api.startedLanguages.last().subtitle)
+    assertEquals(false, api.startedLanguages.last().subtitleOff)
+    assertTrue(api.subtitleTextRequests.isNotEmpty())
+  }
+
+  /** A provider whose answer follows the language it was asked for, the way a real one does. */
+  private class AdaptiveSubtitleApi : FakeTvApi() {
+    override suspend fun subtitles(type: String, id: String): List<AddonSubtitleDto> {
+      subtitlesRequests += type to id
+      // Both languages on offer, so neither the old nor the new preference falls back for want of
+      // an answer: what the switch asks for is what it gets.
+      return listOf(
+        AddonSubtitleDto(subtitleId = "sid-cs", lang = "cs", addonName = "OpenSubtitles"),
+        AddonSubtitleDto(subtitleId = "sid-en", lang = "en", addonName = "OpenSubtitles"),
+      )
+    }
+  }
+
   private class GatedStartApi : FakeTvApi() {
     val gate = CompletableDeferred<Unit>()
 
@@ -480,6 +531,9 @@ class PlayerSourcesPanelTest {
       capabilities: ClientCapabilitiesDto,
       time: Double,
       subtitleIds: List<String>,
+      audioLanguage: String?,
+      subtitleLanguage: String?,
+      subtitleOff: Boolean,
     ): PlaybackDescriptorDto {
       startedSources += sourceId
       startedTimes += time
@@ -505,6 +559,9 @@ class PlayerSourcesPanelTest {
       capabilities: ClientCapabilitiesDto,
       time: Double,
       subtitleIds: List<String>,
+      audioLanguage: String?,
+      subtitleLanguage: String?,
+      subtitleOff: Boolean,
     ): PlaybackDescriptorDto {
       startedSources += sourceId
       startedTimes += time
@@ -524,6 +581,9 @@ class PlayerSourcesPanelTest {
       capabilities: ClientCapabilitiesDto,
       time: Double,
       subtitleIds: List<String>,
+      audioLanguage: String?,
+      subtitleLanguage: String?,
+      subtitleOff: Boolean,
     ): PlaybackDescriptorDto {
       startedSources += sourceId
       startedTimes += time
@@ -540,6 +600,9 @@ class PlayerSourcesPanelTest {
       capabilities: ClientCapabilitiesDto,
       time: Double,
       subtitleIds: List<String>,
+      audioLanguage: String?,
+      subtitleLanguage: String?,
+      subtitleOff: Boolean,
     ): PlaybackDescriptorDto {
       startedSources += sourceId
       startedTimes += time

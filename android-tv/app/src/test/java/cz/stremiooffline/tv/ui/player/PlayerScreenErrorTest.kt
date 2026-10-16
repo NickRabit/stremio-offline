@@ -116,6 +116,9 @@ class PlayerScreenErrorTest {
       capabilities: ClientCapabilitiesDto,
       time: Double,
       subtitleIds: List<String>,
+      audioLanguage: String?,
+      subtitleLanguage: String?,
+      subtitleOff: Boolean,
     ): PlaybackDescriptorDto {
       gate.await()
       throw ApiError(ApiFailure.Unreachable)

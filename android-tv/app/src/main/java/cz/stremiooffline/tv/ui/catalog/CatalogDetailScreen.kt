@@ -220,6 +220,8 @@ fun CatalogDetailScreen(
   // Streams belong to a video; a series asks for nothing until an episode is chosen.
   val streamVideoId = if (isSeries) pick.selectedVideo?.id else meta.id
   val streamsKey = streamVideoId?.let { "$streamType:$it" }
+  // The key the title's own position (and the source it was played from) is stored under.
+  val progressKey = ProgressKey.of(streamType, meta.id, pick.selectedVideo?.id)
 
   // The title's own requests do not depend on each other, so they all leave at once; only the
   // metadata waits for the settings it takes its language from.
@@ -425,7 +427,11 @@ fun CatalogDetailScreen(
   // The list that is drawn and picked from: the library copies arranged with the addon streams the
   // way the web does (Streams.catalogSourceList); counts and notices keep using the addon streams.
   val rows = lists.rows
-  val preferredStream = Streams.pickDefaultStream(rows)
+  // The row of the source last played leads, so Resume continues in it.
+  val preferredStream = Streams.pickDefaultStream(
+    rows,
+    (if (isSeries) entries.firstOrNull { it.key == progressKey }?.stableKey else movieProgress?.stableKey),
+  )
   val chosenStream = pick.selectedStream?.takeIf { pick.pickedStream && rows.contains(it) }
   val activeStream = chosenStream ?: pick.selectedStream?.takeIf { rows.contains(it) } ?: preferredStream
   val remoteAsking = remote.pending > 0
@@ -537,7 +543,6 @@ fun CatalogDetailScreen(
 
   val baseTitle = localizedTitle(args.meta, meta, settings.uiLanguage)
   val playerTitle = if (pick.selectedVideo != null) "$baseTitle · ${pick.selectedVideo!!.label}" else baseTitle
-  val progressKey = ProgressKey.of(streamType, meta.id, pick.selectedVideo?.id)
   // The stored position of what Play would play, and the one key Mark as unwatched clears: the
   // card's own keys when the detail came from Continue watching, that key otherwise.
   val forgetKeys: List<String> = if (args.forgetKeys.isNotEmpty() && !ui.forget.done) {
@@ -615,6 +620,7 @@ fun CatalogDetailScreen(
           resume = true,
           path = path,
           sourceId = null,
+          stableKey = stream.stableKey,
           poster = args.meta.poster ?: meta.poster,
           catalogue = true,
         ),
@@ -629,6 +635,7 @@ fun CatalogDetailScreen(
           title = playerTitle,
           resume = resuming,
           sourceId = stream.sourceId,
+          stableKey = stream.stableKey,
           poster = args.meta.poster ?: meta.poster,
           addonKey = args.addonKey,
           subtitleType = streamType,
@@ -761,6 +768,7 @@ fun CatalogDetailScreen(
             resume = false,
             path = path,
             sourceId = null,
+            stableKey = stream.stableKey,
             poster = args.meta.poster ?: meta.poster,
             catalogue = true,
           ),
@@ -777,6 +785,7 @@ fun CatalogDetailScreen(
             title = playerTitle,
             resume = false,
             sourceId = stream.sourceId,
+            stableKey = stream.stableKey,
             poster = args.meta.poster ?: meta.poster,
             addonKey = args.addonKey,
             subtitleType = streamType,

@@ -2,6 +2,7 @@ package cz.stremiooffline.tv.ui.player
 
 import cz.stremiooffline.tv.catalog.Streams
 import cz.stremiooffline.tv.data.ApiError
+import cz.stremiooffline.tv.data.LibraryTitleDto
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.TvApi
@@ -41,17 +42,26 @@ class LibraryPlaySources(private val api: TvApi) {
   private val remotePermits = Semaphore(MAX_GROUP_REQUESTS)
 
   /** Loads the offered rows of [target] and reports them until the last addon answered. A
-   *  cancelled caller stops the loading; nothing is reported for a catalogue play, a target
-   *  without a path, an unbound file or a failed lookup. */
+   *  cancelled caller stops the loading; nothing is reported for a catalogue play, a snapshot of
+   *  several rows, a target without a path, an unbound file or a failed lookup. */
   suspend fun load(target: PlayTarget, report: (OfferedSources) -> Unit) {
-    // A target that already carries its own addon rows must not discover anything else.
-    if (target.initialSources != null) return
-    val path = target.path ?: return
-    // A native media-server play offers its own remote versions; nothing in the filesystem or the
-    // addon machinery is asked about it.
-    if (target.remoteItem != null) return
+    // The rows the play carried: a native detail's addon snapshot, or the versions of a remote play.
+    val snapshot = (target.initialSources ?: target.remoteSources).orEmpty()
+    // More than one row is a list of its own and is offered as it stands; the catalogue detail
+    // reports its own list too, so nothing here asks the addons about it.
+    if (snapshot.size > 1) return
     if (target.catalogue) return
-    val title = read { api.libraryTitle(path) } ?: return
+    // One row and no identity names nothing to ask the addons about; a remote play reports its own
+    // versions instead.
+    if (target.remoteItem != null && snapshot.isNotEmpty()) return
+    val identityType = target.subtitleType?.takeIf { it.isNotBlank() }
+    val identityId = target.subtitleTarget?.takeIf { it.isNotBlank() }
+    val title = if (identityType != null && identityId != null) {
+      LibraryTitleDto(type = identityType, id = identityId, name = target.title)
+    } else {
+      val path = target.path ?: return
+      read { api.libraryTitle(path) } ?: return
+    }
     if (title.id.isBlank()) return
     val type = title.type
     // An episode is asked for the id the addon stream endpoint takes, which is the video's own.
@@ -74,7 +84,7 @@ class LibraryPlaySources(private val api: TvApi) {
     val lock = Mutex()
     fun publish() {
       val asking = addonsAsking || localAsking || remoteAsking
-      val rows = Streams.sourceLists(
+      val listed = Streams.sourceLists(
         streams = streams.toList(),
         addons = addons,
         filters = filters,
@@ -86,6 +96,10 @@ class LibraryPlaySources(private val api: TvApi) {
         local = local.toList(),
         remote = remoteGroups.toList(),
       ).rows
+      // The snapshot row the play carried leads the list; the merge dedupes it against the groups
+      // that answer with the same version.
+      val seen = HashSet<String>()
+      val rows = Streams.deduped(snapshot, seen) + Streams.deduped(listed, seen)
       val failure = when {
         remoteDiscoveryFailed -> RemoteSourcesFailure(discovery = true)
         remoteFailedLabels.isNotEmpty() -> RemoteSourcesFailure(remoteFailedLabels.toList())

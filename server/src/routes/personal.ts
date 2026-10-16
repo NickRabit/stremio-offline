@@ -13,6 +13,7 @@ import type { MediaServerAuthority } from "../media-server-manager.js";
 import { CARD_LIMIT_MAX as REMOTE_FAVORITE_LIMIT, type MediaServerPersonal } from "../media-server-personal.js";
 import { HOME_FORGET_LIMIT, HOME_RESUME_FILE_LIMIT, type ResumeIdentity } from "../home.js";
 import { images } from "../images.js";
+import { remoteArtworkPath } from "../media-server-types.js";
 import { knownTitleEntry, type LibraryMetaRecord, type TitleUnit } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { isVideo, sortFiles, type BrowseItem, type BrowseMeta, type LibraryFile } from "../library.js";
@@ -73,6 +74,10 @@ export interface ProgressPageItem {
   poster?: string;
   addonKey?: string;
   series?: ProgressSeries;
+  /** The source the stored position was played from, as the player named it. */
+  stableKey?: string;
+  /** The media-server version that wrote the row, while its library is the caller's. */
+  remote?: RemoteProgressWriter;
   pending?: true;
   updatedAt: string;
 }
@@ -277,6 +282,8 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
   // The reserved prefix of the per-account remote map. The generic progress map never holds
   // one, so a forged key is refused at the door and a read of one never returns a row.
   const isRemoteProgressKey = (key: string) => key.startsWith("remote:");
+  /** The handle a source is stored by: the one shape `stableSourceKey` mints, and nothing else. */
+  const STABLE_SOURCE_KEY = /^[mtfau]:[0-9a-f]{24}$/;
   /** The stored key a client key stands for: a bound file's `file:` key becomes its title key. */
   const resolveProgressKey = async (stored: string): Promise<{ key: string; file?: string; title?: ReturnType<typeof titleProgressKey> }> => {
     if (!stored.startsWith("file:")) return { key: stored };
@@ -411,9 +418,13 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     const items = [...rows, ...pending.filter((row) => row !== undefined)]
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       .slice(0, options.limit ?? 40)
-      .map((value) => ({ ...value, key: wireProgressKey(value.key), path: value.path ? wirePath(value.path) : value.path, poster: images.proxied(value.poster),
+      .map((value) => {
         // The media-server version that wrote a row is named only while its library is the caller's.
-        remote: value.remote && remoteWriterVisible(value.remote, req) ? value.remote : undefined }));
+        const remote = value.remote && remoteWriterVisible(value.remote, req) ? value.remote : undefined;
+        // A row a media-server version wrote without a poster takes that item's own picture.
+        const poster = images.proxied(value.poster) ?? (remote ? remoteArtworkPath(remote.libraryId, remote.itemId, "Primary") : undefined);
+        return { ...value, key: wireProgressKey(value.key), path: value.path ? wirePath(value.path) : value.path, poster, remote };
+      });
     return { items, partial };
   };
   app.get("/api/progress", asyncRoute(async (req, res) => {
@@ -440,6 +451,8 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     const sent = storedProgressKey(String(req.body.key ?? "").trim());
     const position = Number(req.body.position) || 0;
     const duration = Number(req.body.duration) || 0;
+    // The source the position was played from, when the player named one it was handed.
+    const stableKey = typeof req.body.stableKey === "string" && STABLE_SOURCE_KEY.test(req.body.stableKey) ? req.body.stableKey : undefined;
     if (!sent) throw new AppError("Missing title key.", "err.missingTitleKey");
     if (isRemoteProgressKey(sent)) throw new AppError("The item was not found.", "err.itemNotFound", 404);
     // A bound file is stored as its title, so one title keeps one position. The rows the write
@@ -470,11 +483,16 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
       const record: StoredProgress = {
         position, duration,
         title,
-        path: req.body.path ? libraryKey(String(req.body.path)) : resolved.title ? resolved.file : previous?.path,
+        // A write that names its source takes the path from this body alone, so a row that moved
+        // to an addon answer stops claiming the library file it used to be played from.
+        path: stableKey
+          ? (req.body.path ? libraryKey(String(req.body.path)) : resolved.title ? resolved.file : undefined)
+          : (req.body.path ? libraryKey(String(req.body.path)) : resolved.title ? resolved.file : previous?.path),
         poster: posterOf(req.body.poster) ?? previous?.poster,
         addonKey: typeof req.body.addonKey === "string" ? req.body.addonKey : previous?.addonKey,
         series: reportedSeries(key, title, req.body.series) ?? boundSeries,
         ...(writer ? { remote: writer } : {}),
+        ...(stableKey ? { stableKey } : previous?.stableKey ? { stableKey: previous.stableKey } : {}),
         updatedAt: new Date().toISOString(),
       };
       const series = seriesOf(key, record);

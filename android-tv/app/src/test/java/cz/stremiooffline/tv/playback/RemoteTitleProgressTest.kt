@@ -47,6 +47,9 @@ class RemoteTitleProgressTest {
       capabilities: ClientCapabilitiesDto,
       time: Double,
       subtitleIds: List<String>,
+      audioLanguage: String?,
+      subtitleLanguage: String?,
+      subtitleOff: Boolean,
     ): PlaybackDescriptorDto {
       startedTimes += time
       return PlaybackDescriptorDto(id = "p1", url = "direct.mp4")
@@ -79,6 +82,7 @@ class RemoteTitleProgressTest {
       poster: String?,
       addonKey: String?,
       remote: RemoteItemContext?,
+      stableKey: String?,
     ) {
       savedKeys += key
       savedRemotes += remote

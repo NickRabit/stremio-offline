@@ -36,6 +36,8 @@ class PlaybackControllerTest {
     val pings = mutableListOf<String>()
     val deleted = mutableListOf<String>()
     val saved = mutableListOf<Pair<String, Double>>()
+    /** The stable handle every save carried, in the order the saves arrived. */
+    val savedStableKeys = mutableListOf<String?>()
     /** Every mutating call in the order it arrived, so a stop's save-then-delete is visible. */
     val calls = mutableListOf<String>()
 
@@ -46,16 +48,22 @@ class PlaybackControllerTest {
     var descriptor = PlaybackDescriptorDto(id = "p1", mode = "direct", url = "direct.mp4", offset = 0.0, duration = 1_000.0)
 
     val subtitleIds = mutableListOf<List<String>>()
+    /** What each start named on the wire, in the order the starts arrived. */
+    val languages = mutableListOf<StartLanguages>()
 
     override suspend fun startPlayback(
       sourceId: String,
       capabilities: ClientCapabilitiesDto,
       time: Double,
       subtitleIds: List<String>,
+      audioLanguage: String?,
+      subtitleLanguage: String?,
+      subtitleOff: Boolean,
     ): PlaybackDescriptorDto {
       calls += "start"
       started += Triple(sourceId, capabilities, time)
       this.subtitleIds += subtitleIds
+      this.languages += StartLanguages(audioLanguage, subtitleLanguage, subtitleOff)
       if (startDelayMs > 0) delay(startDelayMs)
       if (failStart) throw IllegalStateException("the server said no")
       return descriptor
@@ -109,10 +117,12 @@ class PlaybackControllerTest {
       poster: String?,
       addonKey: String?,
       remote: RemoteItemContext?,
+      stableKey: String?,
     ) {
       if (failSave) throw IllegalStateException("the server said no")
       calls += "save"
       saved += key to position
+      savedStableKeys += stableKey
     }
   }
 
@@ -699,6 +709,156 @@ class PlaybackControllerTest {
   private fun trackList(json: String): List<JsonObject> =
     Json.parseToJsonElement(json).jsonArray.map { it.jsonObject }
 
+  // --- What a source switch must carry ------------------------------------------------------
+
+  @Test
+  fun `trackPreferences answers the languages on screen, or off`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1", mode = "direct", url = "direct.mp4", offset = 0.0, duration = 600.0,
+      audioTracks = trackList(
+        """[{"index":0,"language":"en","codec":"aac","channels":2},
+            {"index":1,"language":"cs","codec":"aac","channels":2}]""",
+      ),
+      audioTrack = 0,
+      subtitleTracks = trackList(
+        """[{"index":0,"language":"en","codec":"mov_text"},
+            {"index":1,"language":"cs","codec":"mov_text"}]""",
+      ),
+    )
+    val caps = ClientCapabilitiesDto(h264 = true, containers = listOf("mp4"), audioDecode = listOf("aac"), subtitles = listOf("mov_text"))
+    val controller = PlaybackController(api, backgroundScope, { 0L }, caps)
+
+    controller.start("src", "file:a", "A", "a", resume = false, audioPreference = "en", subtitlePreference = "cs")
+    runCurrent()
+    controller.onPlayerReady()
+    controller.onPlayerPosition(30.0)
+
+    // Nothing chosen: the spoken language the session started on, and no subtitle at all.
+    assertEquals(TrackPreferences("en", null, subtitleOff = true), controller.trackPreferences())
+
+    controller.selectSubtitle(SubtitleChoice.Embedded(1))
+    runCurrent()
+    assertEquals(TrackPreferences("en", "cs", subtitleOff = false), controller.trackPreferences())
+
+    controller.selectAudio(1)
+    runCurrent()
+    assertEquals(TrackPreferences("cs", "cs", subtitleOff = false), controller.trackPreferences())
+
+    controller.selectSubtitle(SubtitleChoice.Off)
+    runCurrent()
+    assertEquals(TrackPreferences("cs", null, subtitleOff = true), controller.trackPreferences())
+  }
+
+  @Test
+  fun `trackPreferences names the language of the addon subtitle that is drawn`() = runTest {
+    val api = FakeApi()
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    val addon = AddonSubtitleDto(subtitleId = "sid", lang = "cs", addonName = "OpenSubtitles")
+
+    controller.start("src", "file:a", "A", "a", resume = false, subtitles = listOf(addon), subtitlePreference = "cs")
+    runCurrent()
+
+    assertEquals(SubtitleChoice.Addon("sid"), controller.state.value.subtitle)
+    // The session named no audio language, and its own descriptor carries no track to name one.
+    assertEquals(TrackPreferences(null, "cs", subtitleOff = false), controller.trackPreferences())
+  }
+
+  @Test
+  fun `every progress write names the row the session plays`() = runTest {
+    val api = FakeApi()
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+
+    controller.start("src", "file:a", "A", "a", resume = false, stableKey = "f:${"a".repeat(24)}")
+    runCurrent()
+    controller.onPlayerReady()
+    controller.onPlayerPosition(10.0)
+    controller.onPaused()
+    runCurrent()
+
+    assertEquals(listOf("f:${"a".repeat(24)}"), api.savedStableKeys)
+  }
+
+  @Test
+  fun `a switch starts the new source with the tracks that were on screen`() = runTest {
+    val api = FakeApi()
+    api.descriptor = PlaybackDescriptorDto(
+      id = "p1", mode = "direct", url = "direct.mp4", offset = 0.0, duration = 600.0,
+      audioTracks = trackList("""[{"index":0,"language":"en","codec":"aac","channels":2}]"""),
+      audioTrack = 0,
+    )
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    val addon = AddonSubtitleDto(subtitleId = "sid", lang = "cs", addonName = "OpenSubtitles")
+
+    controller.start(
+      "srcA", "movie:tt1", "It", null, resume = false,
+      subtitles = listOf(addon), subtitlePreference = "cs",
+    )
+    runCurrent()
+    controller.onPlayerReady()
+    controller.onPlayerPosition(300.0)
+    // The Czech addon is what the viewer is reading; the track itself is English.
+    assertEquals(SubtitleChoice.Addon("sid"), controller.state.value.subtitle)
+    // The first start names no language: the account's own settings decide its tracks.
+    assertEquals(listOf(StartLanguages(null, null, subtitleOff = false)), api.languages)
+
+    assertEquals(TrackPreferences("en", "cs", subtitleOff = false), controller.trackPreferences())
+    controller.switchSource("srcB")
+    runCurrent()
+
+    // The new source still draws the Czech subtitle the viewer was reading, not nothing and not
+    // another language: the switch carried the session's own choices.
+    assertEquals(SubtitleChoice.Addon("sid"), controller.state.value.subtitle)
+    // And the server was told the same, so it does not put the account's own subtitle back.
+    assertEquals(
+      listOf(StartLanguages(null, null, false), StartLanguages("en", "cs", false)),
+      api.languages,
+    )
+    assertEquals(listOf("srcA", "srcB"), api.started.map { it.first })
+    assertEquals(300.0, api.started.last().third, 0.001)
+  }
+
+  @Test
+  fun `a switch with subtitles off tells the server so and draws no addon`() = runTest {
+    val api = FakeApi()
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    val addon = AddonSubtitleDto(subtitleId = "sid", lang = "cs", addonName = "OpenSubtitles")
+
+    controller.start("srcA", "movie:tt1", "It", null, resume = false, subtitles = listOf(addon), subtitlePreference = "cs")
+    runCurrent()
+    assertEquals(SubtitleChoice.Addon("sid"), controller.state.value.subtitle)
+    controller.onPlayerReady()
+    controller.onPlayerPosition(300.0)
+
+    controller.selectSubtitle(SubtitleChoice.Off)
+    runCurrent()
+    assertEquals(TrackPreferences(null, null, subtitleOff = true), controller.trackPreferences())
+
+    controller.switchSource("srcB")
+    runCurrent()
+
+    // The explicit null travels, and the addon the session still carries is not switched on behind
+    // the viewer's back.
+    assertEquals(StartLanguages(null, null, subtitleOff = true), api.languages.last())
+    assertEquals(SubtitleChoice.Off, controller.state.value.subtitle)
+  }
+
+  @Test
+  fun `an addon subtitle never comes back behind an explicit off`() = runTest {
+    val api = FakeApi()
+    val controller = PlaybackController(api, backgroundScope, { 0L }, capabilities)
+    val addon = AddonSubtitleDto(subtitleId = "sid", lang = "cs", addonName = "OpenSubtitles")
+
+    controller.start(
+      "srcA", "movie:tt1", "It", null, resume = false,
+      subtitles = listOf(addon), subtitlePreference = "cs",
+      trackChoice = TrackPreferences(audio = null, subtitle = null, subtitleOff = true),
+    )
+    runCurrent()
+
+    assertEquals(SubtitleChoice.Off, controller.state.value.subtitle)
+  }
+
   // --- Source switching and the Quality panel ------------------------------------------------
 
   private fun playing(controller: PlaybackController, at: Double) {
@@ -760,7 +920,7 @@ class PlaybackControllerTest {
     playing(controller, 300.0)
     api.calls.clear()
 
-    controller.start(null, "file:Films/B.mkv", "B", "Films/B.mkv", resume = false, at = 300.0) { "src:Films/B.mkv" }
+    controller.start(null, "file:Films/B.mkv", "B", "Films/B.mkv", resume = false, at = 300.0, mint = { "src:Films/B.mkv" })
     runCurrent()
 
     assertEquals(listOf("save", "delete", "start"), api.calls)
@@ -973,3 +1133,6 @@ class PlaybackControllerTest {
     assertTrue("nothing is sent when the server's own choice is already in use", api.tracks.isEmpty())
   }
 }
+
+/** What one start asked the server for: a null language is one the account's settings decide. */
+private data class StartLanguages(val audio: String?, val subtitle: String?, val subtitleOff: Boolean)

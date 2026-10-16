@@ -164,6 +164,7 @@ export const de: Catalog = {
   "api.timeout": "Der Server antwortete nicht rechtzeitig.",
   "api.copyRefused": "Der Browser weigerte sich zu kopieren. Wählen Sie den Text aus und kopieren Sie ihn von Hand.",
   "app.goToCleanCatalog": "Zurück zu einem sauberen Katalog",
+  "app.goToStart": "Zur Startseite",
   "app.serverOnline": "Server online",
   "restricted.chip": "Demo-Modus",
   "restricted.notice": "Diese Instanz befindet sich im eingeschränkten Modus. Addons, Einstellungen und das Passwort können nicht geändert werden.",

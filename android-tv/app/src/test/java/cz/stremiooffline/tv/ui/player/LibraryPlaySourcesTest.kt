@@ -259,8 +259,69 @@ class LibraryPlaySourcesTest {
     assertFalse(reports.last().loading)
   }
 
+  /** The report that made this a rule: a play the native detail started with a single row showed
+   *  no Sources button, because the detail had not opened its own panel and loaded no more. */
   @Test
-  fun `a snapshot target discovers nothing at all`() = runTest {
+  fun `one snapshot row and a title identity discover by that identity, the snapshot first`() = runTest {
+    val api = FakeTvApi()
+    api.settingsValue = SettingsResponse(uiLanguage = "en", audioLanguage = "en")
+    api.streamSourcesValues["movie:tt1"] = listOf(StreamSourceDto("alpha", "Alpha"))
+    api.addonStreams["movie:tt1|alpha"] = listOf(alpha())
+    api.localStreamsValues["movie:tt1"] = listOf(
+      library("Filmy/Heat/Heat.mkv"),
+      alpha("srcB"),
+    )
+    val snapshot = alpha("srcA")
+    val reports = mutableListOf<OfferedSources>()
+
+    LibraryPlaySources(api).load(
+      PlayTarget(
+        key = "movie:tt1",
+        title = "Heat",
+        resume = true,
+        sourceId = "srcA",
+        subtitleType = "movie",
+        subtitleTarget = "tt1",
+        initialSources = listOf(snapshot),
+      ),
+    ) { reports += it }
+
+    val rows = reports.last().streams
+    // The row the play started on leads, the discovered groups follow it.
+    assertEquals(listOf("srcA", "Filmy/Heat/Heat.mkv", "srcB"), rows.map { it.localPath ?: it.sourceId })
+    assertFalse(reports.last().loading)
+    // The identity is what is asked for: no path has to be resolved for it.
+    assertTrue(api.libraryTitleRequests.isEmpty())
+    assertEquals(listOf("movie:tt1"), api.streamSourcesRequests)
+    assertEquals(listOf("movie:tt1"), api.localStreamsRequests)
+  }
+
+  @Test
+  fun `a catalogue play publishes nothing however many rows it carries`() = runTest {
+    val api = FakeTvApi()
+    val reports = mutableListOf<OfferedSources>()
+
+    LibraryPlaySources(api).load(
+      PlayTarget(
+        key = "movie:tt1",
+        title = "Heat",
+        resume = true,
+        sourceId = "srcA",
+        subtitleType = "movie",
+        subtitleTarget = "tt1",
+        catalogue = true,
+        initialSources = listOf(alpha()),
+      ),
+    ) { reports += it }
+
+    assertTrue(reports.isEmpty())
+    assertTrue(api.libraryTitleRequests.isEmpty())
+    assertTrue(api.localStreamsRequests.isEmpty())
+    assertTrue(api.streamSourcesRequests.isEmpty())
+  }
+
+  @Test
+  fun `a snapshot of several rows is already a list and discovers nothing`() = runTest {
     val api = FakeTvApi()
     api.libraryTitleValues["Filmy/Heat/Heat.mkv"] = LibraryTitleDto("movie", "tt1", name = "Heat")
     val reports = mutableListOf<OfferedSources>()
@@ -268,12 +329,12 @@ class LibraryPlaySourcesTest {
     LibraryPlaySources(api).load(
       PlayTarget(
         key = "movie:tt1",
-        title = "It",
+        title = "Heat",
         resume = true,
         sourceId = "srcA",
         subtitleType = "movie",
         subtitleTarget = "tt1",
-        initialSources = listOf(alpha()),
+        initialSources = listOf(alpha(), alpha("srcB")),
       ),
     ) { reports += it }
 
@@ -282,30 +343,5 @@ class LibraryPlaySourcesTest {
     assertTrue(api.localStreamsRequests.isEmpty())
     assertTrue(api.streamSourcesRequests.isEmpty())
     assertTrue(api.remoteMatchRequests.isEmpty())
-    assertEquals(0, api.settingsCalls)
-    assertEquals(0, api.addonsCalls)
-  }
-
-  @Test
-  fun `a snapshot target with a path still discovers nothing`() = runTest {
-    val api = FakeTvApi()
-    api.libraryTitleValues["Filmy/Heat/Heat.mkv"] = LibraryTitleDto("movie", "tt1", name = "Heat")
-    val reports = mutableListOf<OfferedSources>()
-
-    LibraryPlaySources(api).load(
-      PlayTarget(
-        key = "movie:tt1",
-        title = "It",
-        resume = true,
-        path = "Filmy/Heat/Heat.mkv",
-        sourceId = "srcA",
-        initialSources = listOf(alpha()),
-      ),
-    ) { reports += it }
-
-    assertTrue(reports.isEmpty())
-    assertTrue(api.libraryTitleRequests.isEmpty())
-    assertTrue(api.localStreamsRequests.isEmpty())
-    assertTrue(api.streamSourcesRequests.isEmpty())
   }
 }

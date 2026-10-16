@@ -45,7 +45,7 @@ export function sourceProgressOwner(stream: Stream, catalogue: CatalogueRef | nu
 }
 
 /** What one version's saved row says, from whichever store answered it. */
-export interface SavedVersionProgress { position: number; duration: number; watched?: boolean; mediaSourceId?: string }
+export interface SavedVersionProgress { position: number; duration: number; watched?: boolean; mediaSourceId?: string; stableKey?: string }
 
 /**
  * The row one version resumes from: the title's own row when it answers, and otherwise the

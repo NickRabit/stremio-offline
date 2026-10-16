@@ -2071,4 +2071,59 @@ describe("RemoteLibraryBrowser addon sources", () => {
     expect(rows().map((row) => row.querySelector("i")!.textContent)).toEqual(["Emby", "Jellyfin", "HTTP"]);
     expect(rows().map((row) => row.querySelector("small")!.textContent)).toEqual(["Emby · My library", "Jellyfin · Second", "Torrentio"]);
   });
+
+  it("hands the detail's own versions to the player's Sources, and switches at the position it holds", async () => {
+    // The chooser was opened once, so the addon group is loaded and belongs to the list too.
+    await openDetail({}, [nativeVersion("ms1", "1080p", 2_000_000_000), nativeVersion("ms2", "4K", 8_000_000_000)]);
+    await openPicker();
+    await closePicker();
+    await click(playButton());
+    await flush();
+    const toggle = host.querySelector<HTMLButtonElement>(".player-sources-toggle")!;
+    expect(toggle).not.toBeNull();
+    await click(toggle);
+    await flush();
+    const rows = () => [...host.querySelectorAll<HTMLButtonElement>("#player-sources .stream-list button")];
+    // The version playing leads, the rest of the detail's rows follow.
+    expect(rows().map((row) => row.textContent)).toEqual([expect.stringContaining("4K"), expect.stringContaining("1080p"), expect.stringContaining("Torrentio 4K")]);
+    expect(rows()[0]!.getAttribute("aria-pressed")).toBe("true");
+    const video = host.querySelector<HTMLVideoElement>(".player-overlay video")!;
+    await act(async () => { video.currentTime = 120; video.dispatchEvent(new Event("timeupdate", { bubbles: true })); });
+    await click(rows()[1]!);
+    await flush();
+    // The chosen row starts through the detail's own play path, at the position it was left at.
+    expect(playbackCalls.at(-1)!.sourceId).toBe("src-ms1");
+    expect(playbackCalls.at(-1)!.time).toBe(120);
+    expect(host.querySelector("#player-sources")).toBeNull();
+  });
+
+  it("offers the Sources control on every play and reads the title's sources when it opens", async () => {
+    // The detail's own chooser is never opened: the player still offers the title's whole set.
+    await openDetail();
+    addonStreams = () => json([addonRow("addon-1", "Torrentio 4K")]);
+    await click(playButton());
+    await flush();
+    const toggle = host.querySelector<HTMLButtonElement>(".player-sources-toggle");
+    expect(toggle).not.toBeNull();
+    await click(toggle!);
+    await flush();
+    await flush();
+    const rows = [...host.querySelectorAll("#player-sources .player-source-list button")].map((node) => node.textContent ?? "");
+    expect(rows.some((text) => text.includes("Torrentio 4K"))).toBe(true);
+  });
+
+  it("opens on the source the stored record names, once the group that holds it has answered", async () => {
+    const stored = { ...addonRow("addon-1", "Torrentio 4K"), stableKey: `a:${"1".repeat(24)}` };
+    // The title's own row names the addon answer it was last played from.
+    addonProgress = () => json({ key: "movie:tt5000", position: 600, duration: 3600, title: "One", stableKey: stored.stableKey, updatedAt: "2026-01-01T00:00:00.000Z" });
+    await openDetail({}, [nativeVersion("ms1", "1080p", 2_000_000_000)]);
+    addonStreams = () => json([stored]);
+    await openPicker();
+    await closePicker();
+    await flush();
+    await click(playButton());
+    await flush();
+    expect(playbackCalls[0]!.sourceId).toBe("addon-1");
+    expect(playbackCalls[0]!.time).toBe(600);
+  });
 });
