@@ -10,6 +10,9 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaType
@@ -251,10 +254,22 @@ class ApiClient(
     capabilities: ClientCapabilitiesDto,
     time: Double,
     subtitleIds: List<String>,
+    audioLanguage: String?,
+    subtitleLanguage: String?,
+    subtitleOff: Boolean,
   ): PlaybackDescriptorDto {
     val payload = json.encodeToString(
       PlaybackStartRequest.serializer(),
-      PlaybackStartRequest(sourceId, capabilities, time, subtitleIds),
+      PlaybackStartRequest(
+        sourceId,
+        capabilities,
+        time,
+        subtitleIds,
+        audioLanguage = audioLanguage,
+        // An explicit null is a request of its own: "no embedded subtitle", whatever the account
+        // settings say. A null that means "the settings decide" is left out of the body entirely.
+        subtitleLanguage = if (subtitleOff) JsonNull else subtitleLanguage?.let(::JsonPrimitive),
+      ),
     )
     return request(Request.Builder().url(address.resolve("/api/playback")).post(payload.toRequestBody(mediaType)).build(), playbackClient)
       .decode<PlaybackDescriptorDto>() ?: throw ApiError(ApiFailure.Generic)
@@ -609,11 +624,12 @@ class ApiClient(
     poster: String?,
     addonKey: String?,
     remote: RemoteItemContext?,
+    stableKey: String?,
   ) {
     // The body drops what it does not have instead of sending nulls, the way the download body does.
     val payload = progressJson.encodeToString(
       ProgressRequest.serializer(),
-      ProgressRequest(key, position, duration, title, path, poster, addonKey, VersionProgress.writer(remote)?.let { ProgressWriter(it.first, it.second, it.third) }),
+      ProgressRequest(key, position, duration, title, path, poster, addonKey, VersionProgress.writer(remote)?.let { ProgressWriter(it.first, it.second, it.third) }, stableKey),
     )
     request(Request.Builder().url(address.resolve("/api/progress")).post(payload.toRequestBody(mediaType)).build())
   }
@@ -729,6 +745,10 @@ private data class PlaybackStartRequest(
   val capabilities: ClientCapabilitiesDto,
   val time: Double,
   val subtitleIds: List<String> = emptyList(),
+  /** Named only when the viewer chose a track inside the session; dropped otherwise. */
+  val audioLanguage: String? = null,
+  /** A JSON null asks for no embedded subtitle; an absent field leaves it to the settings. */
+  val subtitleLanguage: JsonElement? = null,
 )
 
 @Serializable
@@ -754,6 +774,8 @@ private data class ProgressRequest(
   val addonKey: String? = null,
   /** The version that wrote a title-owned row; omitted unless the caller named all three ids. */
   val remote: ProgressWriter? = null,
+  /** The source the position was played from; dropped when the caller named none. */
+  val stableKey: String? = null,
 )
 
 @Serializable

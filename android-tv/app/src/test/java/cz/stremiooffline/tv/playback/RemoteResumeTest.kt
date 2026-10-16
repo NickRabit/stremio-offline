@@ -30,6 +30,9 @@ class RemoteResumeTest {
       capabilities: ClientCapabilitiesDto,
       time: Double,
       subtitleIds: List<String>,
+      audioLanguage: String?,
+      subtitleLanguage: String?,
+      subtitleOff: Boolean,
     ): PlaybackDescriptorDto {
       startedTimes += time
       return PlaybackDescriptorDto(id = "p1", url = "direct.mp4")
@@ -59,6 +62,7 @@ class RemoteResumeTest {
       poster: String?,
       addonKey: String?,
       remote: RemoteItemContext?,
+      stableKey: String?,
     ) {}
 
     override suspend fun remoteItemState(libraryId: String, itemId: String): RemoteItemStateDto = stored

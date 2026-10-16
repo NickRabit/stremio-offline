@@ -330,6 +330,8 @@ fun PlayerScreen(
   // because an addon source chosen over a library file leaves that file's path on the session.
   val playingSource = offeredSources.firstOrNull { it.sourceId.isNotBlank() && it.sourceId == state.sourceId }
     ?: offeredSources.firstOrNull { Streams.isLocalStream(it) && it.localPath != null && it.localPath == currentTarget.path }
+  // The panel lists the row that is playing first, the rest in their own order.
+  val panelSources = sourcesWithPlayingFirst(offeredSources, playingSource)
   val quality = qualityChoice(state.quality, state.escalatedByViewer)
 
   /** Starts [target], leaving the outgoing session saved and deleted behind it. A different remote
@@ -337,6 +339,10 @@ fun PlayerScreen(
    *  and a switch between two versions of one nameable title, keeps [at]. */
   fun startSwitch(target: PlayTarget, at: Double) {
     val startAt = sourceSwitchPosition(currentTarget.remoteItem, target.remoteItem, target.key, at)
+    // The tracks the viewer has right now travel onto the new source, never the account defaults a
+    // fresh session would have taken: a switch keeps what is on screen, position and language alike,
+    // and the server is told the same choices.
+    val trackChoice = controller.trackPreferences()
     title = target.title
     currentTarget = target
     scope.launch {
@@ -351,12 +357,12 @@ fun PlayerScreen(
         poster = target.poster,
         addonKey = target.addonKey,
         subtitles = addonSubtitles,
-        audioPreference = settings.audioLanguage,
-        subtitlePreference = settings.subtitleLanguage,
+        trackChoice = trackChoice,
         at = startAt,
         // The source is minted inside the controller, after the outgoing session is closed.
         mint = target.path?.let { path -> { runCatching { api.librarySource(path) }.getOrNull()?.sourceId?.takeIf { it.isNotBlank() } } },
         remoteItem = target.remoteItem,
+        stableKey = target.stableKey,
       )
     }
   }
@@ -410,6 +416,7 @@ fun PlayerScreen(
       audioPreference = settings.audioLanguage,
       subtitlePreference = settings.subtitleLanguage,
       remoteItem = episode.remoteItem,
+      stableKey = episode.stableKey,
     )
   }
 
@@ -630,8 +637,6 @@ fun PlayerScreen(
     else -> stringResource(R.string.tv_subtitle_embedded)
   }
   val subtitleText = activeCue(cues, position)?.takeIf { it.isNotBlank() }
-  // The Sources panel opens on the row that is playing; without it, on the first row.
-  val sourcesIndex = playingSource?.let { offeredSources.indexOf(it) }?.takeIf { it >= 0 } ?: 0
   val sourcesTitle = stringResource(R.string.sources_heading)
   val remoteFailureNote = sourcesRemoteFailure?.let { failure ->
     if (failure.discovery) stringResource(R.string.media_server_error)
@@ -730,14 +735,14 @@ fun PlayerScreen(
 
       if (sourcesOpen) {
         SourcesPanel(
-          streams = offeredSources,
-          focusIndex = sourcesIndex,
+          streams = panelSources,
+          focusIndex = 0,
           onChoose = { chooseSource(it) },
           onClose = {
             sourcesOpen = false
             restoreFocus = sourcesFocus
           },
-          default = Streams.pickDefaultStream(offeredSources),
+          default = Streams.pickDefaultStream(panelSources),
           playing = playingSource,
           asking = sourcesAsking,
           emptyText = stringResource(R.string.sources_none),
@@ -867,6 +872,16 @@ internal suspend fun playerRetry(
 }
 
 /**
+ * The rows the Sources panel draws: the one that is playing leads, everything else keeps the order
+ * it arrived in. Nothing playing leaves the list exactly as it was.
+ */
+internal fun sourcesWithPlayingFirst(streams: List<StreamDto>, playing: StreamDto?): List<StreamDto> {
+  val index = playing?.let(streams::indexOf) ?: -1
+  if (index <= 0) return streams
+  return listOf(streams[index]) + streams.filterIndexed { position, _ -> position != index }
+}
+
+/**
  * Where a switch lands. Two versions of one nameable title share one position, so a switch between
  * them carries it; an item no title names keeps its own store, so another version of it is another
  * file and starts at 0.
@@ -901,6 +916,7 @@ internal fun switchedTarget(current: PlayTarget, stream: StreamDto): PlayTarget 
       title = current.title,
       resume = false,
       sourceId = stream.sourceId.takeIf { it.isNotBlank() },
+      stableKey = stream.stableKey,
       poster = current.poster,
       addonKey = current.addonKey,
       subtitleType = current.subtitleType,
@@ -920,6 +936,7 @@ internal fun switchedTarget(current: PlayTarget, stream: StreamDto): PlayTarget 
       title = stream.behaviorHints?.filename?.takeIf { it.isNotBlank() } ?: current.title,
       resume = false,
       path = path,
+      stableKey = stream.stableKey,
       poster = current.poster,
       addonKey = current.addonKey,
       subtitleType = current.subtitleType,
@@ -936,6 +953,7 @@ internal fun switchedTarget(current: PlayTarget, stream: StreamDto): PlayTarget 
     title = current.title,
     resume = false,
     sourceId = stream.sourceId,
+    stableKey = stream.stableKey,
     poster = current.poster,
     // The title's owner, never the row's own addon provider.
     addonKey = current.addonKey,

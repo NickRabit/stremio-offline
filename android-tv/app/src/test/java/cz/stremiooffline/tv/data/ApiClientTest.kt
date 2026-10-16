@@ -341,6 +341,40 @@ class ApiClientTest {
   }
 
   @Test
+  fun `a start names the languages only when the viewer chose them`() = runTest {
+    val api = client(start())
+
+    server.enqueue(MockResponse().setBody(DESCRIPTOR))
+    api.startPlayback("src", ClientCapabilitiesDto(), 0.0)
+    val first = server.takeRequest().body.readUtf8()
+    assertTrue(first, !first.contains("audioLanguage"))
+    assertTrue(first, !first.contains("subtitleLanguage"))
+
+    server.enqueue(MockResponse().setBody(DESCRIPTOR))
+    api.startPlayback(
+      "src",
+      ClientCapabilitiesDto(),
+      0.0,
+      audioLanguage = "cs",
+      subtitleLanguage = "cs",
+    )
+    val chosen = server.takeRequest().body.readUtf8()
+    assertTrue(chosen, chosen.contains(""""audioLanguage":"cs""""))
+    assertTrue(chosen, chosen.contains(""""subtitleLanguage":"cs""""))
+  }
+
+  @Test
+  fun `a start with subtitles off asks for none with an explicit null`() = runTest {
+    server.enqueue(MockResponse().setBody(DESCRIPTOR))
+    client(start()).startPlayback("src", ClientCapabilitiesDto(), 0.0, subtitleOff = true)
+
+    val body = server.takeRequest().body.readUtf8()
+    // A null the server reads as "no embedded subtitle"; an absent field would let the account's
+    // own subtitle language put one back.
+    assertTrue(body, body.contains(""""subtitleLanguage":null"""))
+  }
+
+  @Test
   fun `a start waits past the default timeout for a slow conversion`() = runTest {
     server.enqueue(MockResponse().setBody(DESCRIPTOR).setBodyDelay(12, TimeUnit.SECONDS))
 

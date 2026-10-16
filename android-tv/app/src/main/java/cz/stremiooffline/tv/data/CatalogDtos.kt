@@ -129,6 +129,8 @@ data class StreamDto(
   /** Source-owned external subtitles this version carries (an addon's own list, or the SRT a
    *  media server minted for one remote version), each with an opaque id. */
   val subtitles: List<AddonSubtitleDto> = emptyList(),
+  /** The same source's handle in every session; the server mints it and the app never computes it. */
+  val stableKey: String? = null,
 )
 
 /** One `GET /api/stream-sources/:type/:id` entry: a source addon the streams are asked from. */
@@ -176,6 +178,8 @@ data class ProgressEntryDto(
   val position: Double = 0.0,
   val duration: Double = 0.0,
   val title: String = "",
+  /** The source the stored position was played from, as the player named it. */
+  val stableKey: String? = null,
   val poster: String? = null,
   val addonKey: String? = null,
   val updatedAt: String? = null,

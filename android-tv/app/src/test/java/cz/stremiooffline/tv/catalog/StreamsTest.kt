@@ -26,7 +26,21 @@ class StreamsTest {
     behaviorHints: BehaviorHintsDto? = null,
     localPath: String? = null,
     libraryName: String? = null,
-  ) = StreamDto(sourceId, kind, playable, name, title, description, addonKey, addonName, behaviorHints, localPath, libraryName)
+    stableKey: String? = null,
+  ) = StreamDto(
+    sourceId = sourceId,
+    kind = kind,
+    playable = playable,
+    name = name,
+    title = title,
+    description = description,
+    addonKey = addonKey,
+    addonName = addonName,
+    behaviorHints = behaviorHints,
+    localPath = localPath,
+    libraryName = libraryName,
+    stableKey = stableKey,
+  )
 
   private fun names(list: List<StreamDto>): List<String> = list.map { it.name.orEmpty() }
 
@@ -223,6 +237,18 @@ class StreamsTest {
   fun `pickDefaultStream prefers a playable HTTP source over a torrent`() {
     assertEquals("http", Streams.pickDefaultStream(listOf(torrent, http))?.name)
     assertEquals("torrent", Streams.pickDefaultStream(listOf(torrent))?.name)
+  }
+
+  @Test
+  fun `pickDefaultStream opens on the source the viewer last played`() {
+    val first = stream(name = "first", playable = true, stableKey = "a:${"1".repeat(24)}")
+    val stored = stream(name = "stored", playable = true, stableKey = "a:${"2".repeat(24)}")
+    val rows = listOf(first, stored)
+
+    assertEquals("stored", Streams.pickDefaultStream(rows, preferredStableKey = stored.stableKey)?.name)
+    // A handle no row carries falls back to today's rule.
+    assertEquals("first", Streams.pickDefaultStream(rows, preferredStableKey = "a:${"9".repeat(24)}")?.name)
+    assertEquals("first", Streams.pickDefaultStream(rows)?.name)
   }
 
   @Test

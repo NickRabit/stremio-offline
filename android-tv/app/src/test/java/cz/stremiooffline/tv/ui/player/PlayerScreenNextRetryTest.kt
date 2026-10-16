@@ -78,6 +78,9 @@ class PlayerScreenNextRetryTest {
       capabilities: ClientCapabilitiesDto,
       time: Double,
       subtitleIds: List<String>,
+      audioLanguage: String?,
+      subtitleLanguage: String?,
+      subtitleOff: Boolean,
     ): PlaybackDescriptorDto {
       startedSources += sourceId
       startedTimes += time

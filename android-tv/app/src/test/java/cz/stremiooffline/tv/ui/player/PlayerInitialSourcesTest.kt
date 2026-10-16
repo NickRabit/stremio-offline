@@ -112,7 +112,7 @@ class PlayerInitialSourcesTest {
   fun `an addon snapshot switches among its own rows and discovers nothing`() {
     val api = object : FakeTvApi() {
       val progressOwners = mutableListOf<String?>()
-      override suspend fun saveProgress(key: String, position: Double, duration: Double, title: String, path: String?, poster: String?, addonKey: String?, remote: RemoteItemContext?) {
+      override suspend fun saveProgress(key: String, position: Double, duration: Double, title: String, path: String?, poster: String?, addonKey: String?, remote: RemoteItemContext?, stableKey: String?) {
         progressOwners += addonKey
       }
     }
@@ -215,6 +215,7 @@ class PlayerInitialSourcesTest {
         poster: String?,
         addonKey: String?,
         remote: RemoteItemContext?,
+        stableKey: String?,
       ) {
         progressKeys += key
       }
@@ -247,12 +248,15 @@ class PlayerInitialSourcesTest {
     // The other library's version -> the file on disk.
     openSources(fromPlay = false)
     press(Key.DirectionDown)
+    press(Key.DirectionDown)
     press(Key.DirectionCenter)
     compose.waitUntil(5_000) { api.startedSources.size == 3 }
     assertEquals(listOf("ms1", "ms9", "src:Filmy/Heat.mkv"), api.startedSources)
 
     // The file -> the title's generic addon row, which plays under the title's own key.
     openSources(fromPlay = false)
+    press(Key.DirectionDown)
+    press(Key.DirectionDown)
     press(Key.DirectionDown)
     press(Key.DirectionCenter)
     compose.waitUntil(5_000) { api.startedSources.size == 4 }

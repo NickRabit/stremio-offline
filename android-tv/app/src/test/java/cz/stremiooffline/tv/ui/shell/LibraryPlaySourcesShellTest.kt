@@ -208,8 +208,9 @@ class LibraryPlaySourcesShellTest {
 
     // The panel is still the caller's whole list, and nothing was asked a second time.
     openSources()
-    compose.onNodeWithTag(sourceRowTag(0)).assert(hasText("It.mkv"))
-    compose.onNodeWithTag(sourceRowTag(1)).assert(hasText("Version ms9"))
+    // The row the switch landed on leads the panel now.
+    compose.onNodeWithTag(sourceRowTag(0)).assert(hasText("Version ms9"))
+    compose.onNodeWithTag(sourceRowTag(1)).assert(hasText("It.mkv"))
     compose.onNodeWithTag(sourceRowTag(2)).assert(hasText("Alpha"))
     press(Key.Back)
     assertEquals(1, fake.libraryTitleRequests.size)
@@ -238,11 +239,12 @@ class LibraryPlaySourcesShellTest {
     compose.onNodeWithTag(TAG_OSD_SOURCES).assertExists()
   }
 
-  /** An addon play a native detail started carries its own rows: the player offers exactly those,
-   *  never the catalogue list the shell happens to still hold or the library loader's own. */
+  /** An addon play a native detail started with several rows carries its own list: the player
+   *  offers exactly those, never the catalogue list the shell happens to still hold. */
   @Test
-  fun `a native detail's addon snapshot is the player's list, whatever else is in flight`() {
+  fun `a native detail's addon snapshot of several rows is the player's list`() {
     val row = StreamDto(sourceId = "srcA", kind = "remote", playable = true, title = "Czech 8 GB", addonName = "Alpha")
+    val other = StreamDto(sourceId = "srcB", kind = "remote", playable = true, title = "Czech 4 GB", addonName = "Alpha")
     val stale = StreamDto(sourceId = "stale", kind = "remote", playable = true, title = "Stale", addonName = "Old")
     val libraryRow = StreamDto(sourceId = "lib1", kind = "library", playable = true, localPath = "It/It.mkv")
     val target = PlayTarget(
@@ -252,26 +254,57 @@ class LibraryPlaySourcesShellTest {
       sourceId = "srcA",
       subtitleType = "movie",
       subtitleTarget = "tt1",
-      initialSources = listOf(row),
+      initialSources = listOf(row, other),
     )
 
     val sources = playerSourcesFor(target, OfferedSources(listOf(stale), loading = true), OfferedSources(listOf(libraryRow)))
 
-    assertEquals(listOf(row), sources.streams)
+    assertEquals(listOf(row, other), sources.streams)
     assertFalse(sources.loading)
+  }
+
+  @Test
+  fun `one snapshot row hands the play to the loader, several rows are the list`() {
+    val row = StreamDto(sourceId = "srcA", kind = "remote", playable = true, title = "Czech 8 GB", addonName = "Alpha")
+    val other = StreamDto(sourceId = "srcB", kind = "remote", playable = true, title = "Czech 4 GB", addonName = "Alpha")
+    val loaded = OfferedSources(listOf(row, other), loading = true)
+    val snapshot = PlayTarget(
+      key = "movie:tt1",
+      title = "It",
+      resume = true,
+      sourceId = "srcA",
+      subtitleType = "movie",
+      subtitleTarget = "tt1",
+      initialSources = listOf(row),
+    )
+    // A single row names one source, not a list: the loader discovers the title's own sources.
+    assertEquals(loaded, playerSourcesFor(snapshot, OfferedSources(), loaded))
+
+    val several = snapshot.copy(initialSources = listOf(row, other))
+    assertEquals(listOf(row, other), playerSourcesFor(several, OfferedSources(), loaded).streams)
+
+    val oneRemote = PlayTarget(
+      key = "remote:rlibA:iA",
+      title = "Heat",
+      resume = true,
+      remoteItem = RemoteItemContext(libraryId = "rlibA", itemId = "iA", mediaSourceId = "ms1", progressKey = "remote:rlibA:iA"),
+      remoteSources = listOf(row),
+    )
+    assertEquals(loaded, playerSourcesFor(oneRemote, OfferedSources(), loaded))
   }
 
   @Test
   fun `a native version still offers its own versions and a catalogue play its own list`() {
     val remote = StreamDto(sourceId = "ms1", kind = "remote", playable = true, title = "Remote 8 GB")
+    val remote2 = StreamDto(sourceId = "ms2", kind = "remote", playable = true, title = "Remote 4 GB")
     val remoteTarget = PlayTarget(
       key = "remote:rlibA:iA",
       title = "Heat",
       resume = true,
       remoteItem = RemoteItemContext(libraryId = "rlibA", itemId = "iA", mediaSourceId = "ms1", progressKey = "remote:rlibA:iA"),
-      remoteSources = listOf(remote),
+      remoteSources = listOf(remote, remote2),
     )
-    assertEquals(listOf(remote), playerSourcesFor(remoteTarget, OfferedSources(listOf(remote)), OfferedSources()).streams)
+    assertEquals(listOf(remote, remote2), playerSourcesFor(remoteTarget, OfferedSources(listOf(remote)), OfferedSources()).streams)
 
     val catalogueTarget = PlayTarget(key = "movie:tt1", title = "It", resume = false, catalogue = true)
     val catalogue = OfferedSources(listOf(remote), loading = true)
