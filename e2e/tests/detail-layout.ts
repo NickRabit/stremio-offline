@@ -27,8 +27,13 @@ export async function checkDetailActions(page: Page, detail: Locator) {
   const position = await favorite.boundingBox();
   const title = await detail.getByRole("heading").first().boundingBox();
   expect(position!.y + position!.height).toBeLessThanOrEqual(title!.y + 1);
-  expect(position!.width).toBeGreaterThanOrEqual(44);
-  expect(position!.height).toBeGreaterThanOrEqual(44);
+  // The star is one of the title's chips: the same height as its neighbours, on their line.
+  const chip = await detail.locator(".library-detail-chips .pill").first().boundingBox();
+  if (chip) {
+    expect(Math.abs(position!.height - chip.height)).toBeLessThanOrEqual(1);
+    expect(Math.abs(position!.y + position!.height / 2 - chip.y - chip.height / 2)).toBeLessThanOrEqual(1);
+  }
+  expect(position!.width).toBeGreaterThanOrEqual(position!.height);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
 }
 
