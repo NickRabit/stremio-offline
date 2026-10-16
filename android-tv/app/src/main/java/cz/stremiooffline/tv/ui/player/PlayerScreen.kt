@@ -645,7 +645,7 @@ fun PlayerScreen(
   val qualityText = qualityLabel(quality)
   // Both panels act on the running session, so their buttons wait for it: a choice made before
   // the first descriptor lands would be dropped.
-  val sourcesShown = state.started && (offeredSources.size > 1 || sourcesAsking)
+  val sourcesShown = state.started && (offeredSources.isNotEmpty() || sourcesAsking)
   val qualityShown = state.started
 
   PlayerOverlayShell(

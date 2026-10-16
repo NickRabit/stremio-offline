@@ -10,6 +10,7 @@ import { NativeLibrarySaveDialog, type NativeSaveLibrary } from "./NativeLibrary
 import { sourceIdentity, sourceRowKey } from "./library-detail-sources";
 import { useLibrarySources } from "./library-sources";
 import { Player } from "./Player";
+import { titlePlaybackSources } from "./title-sources";
 import { SaveTargetDialog } from "./SaveTargetDialog";
 import { alternativeSaveRequest } from "./alternative-save";
 import { addonMediaSubject, genericProgressKey, supplementaryIdentity } from "./native-addon-sources";
@@ -1115,9 +1116,12 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
    *  group that has answered, one row per source. */
   const loadPlayerSources = useCallback(async (): Promise<Stream[]> => {
     const seen = new Set<string>();
-    return [...(sources ?? []), ...extra.groups.flatMap((group) => group.streams)]
+    // A title the catalogue can name offers everything the title has, read now even when the
+    // detail's own chooser was never opened; one it cannot name offers this item's versions.
+    const title = addonIdentity ? await titlePlaybackSources(addonIdentity).catch(() => [] as Stream[]) : [];
+    return [...(sources ?? []), ...extra.groups.flatMap((group) => group.streams), ...title]
       .filter((stream) => !seen.has(sourceRowKey(stream)) && (seen.add(sourceRowKey(stream)), true));
-  }, [sources, extra.groups]);
+  }, [sources, extra.groups, addonIdentity]);
   // The selected row's saved position: the title's own key for every version of a title the
   // catalogue can name, the viewer's own file under its path, and a media-server version's own
   // store only while no title names it -- or as the fallback for a position kept there before the
@@ -1653,9 +1657,9 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
         onProgressSaved={(key) => {
           if (key === playing.owner.key && !playingRef.current) void refreshPlayedProgress(playing);
         }}
-        // The player's own list is what the detail already holds; a detail that holds one version
-        // and no group has nothing to switch to and gets no control at all.
-        {...(sources && (sources.length > 1 || extra.groups.length > 0)
+        // Every media-server play offers the Sources control, as every other play does: the list is
+        // the title's whole set when the catalogue names it, this item's versions otherwise.
+        {...(sources && sources.length > 0
           ? { loadSources: loadPlayerSources, onSwitchSource: switchDetailSource } : {})}
         {...(playing.at !== undefined ? { startAtSeconds: playing.at } : {})}
         onClose={() => {

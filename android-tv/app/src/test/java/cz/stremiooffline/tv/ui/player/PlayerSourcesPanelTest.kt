@@ -156,9 +156,15 @@ class PlayerSourcesPanelTest {
   }
 
   @Test
-  fun `the sources button is hidden with a single stream`() {
+  fun `the sources button is offered with a single stream and hidden with none`() {
+    // Every play offers its sources, even when the list is only the row that plays.
     mount(FakeTvApi(), listOf(alpha))
+    compose.onNodeWithTag(TAG_OSD_SOURCES).assertExists()
+  }
 
+  @Test
+  fun `the sources button is hidden when the play offers no source at all`() {
+    mount(FakeTvApi(), emptyList())
     compose.onNodeWithTag(TAG_OSD_SOURCES).assertDoesNotExist()
   }
 
@@ -390,8 +396,6 @@ class PlayerSourcesPanelTest {
     val api = FakeTvApi()
     val addSecond = mountGrowing(api)
 
-    compose.onNodeWithTag(TAG_OSD_SOURCES).assertDoesNotExist()
-
     addSecond()
     compose.waitForIdle()
 
@@ -423,7 +427,7 @@ class PlayerSourcesPanelTest {
     realKey(KeyEvent.KEYCODE_DPAD_RIGHT)
     compose.onNodeWithTag(TAG_OSD_SOURCES).assertIsFocused()
 
-    sources = listOf(alpha)
+    sources = emptyList()
     compose.waitForIdle()
 
     compose.onNodeWithTag(TAG_OSD_SOURCES).assertDoesNotExist()

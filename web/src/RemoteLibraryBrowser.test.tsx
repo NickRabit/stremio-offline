@@ -2097,11 +2097,19 @@ describe("RemoteLibraryBrowser addon sources", () => {
     expect(host.querySelector("#player-sources")).toBeNull();
   });
 
-  it("offers no Sources control when the detail holds one version and no group", async () => {
+  it("offers the Sources control on every play and reads the title's sources when it opens", async () => {
+    // The detail's own chooser is never opened: the player still offers the title's whole set.
     await openDetail();
+    addonStreams = () => json([addonRow("addon-1", "Torrentio 4K")]);
     await click(playButton());
     await flush();
-    expect(host.querySelector(".player-sources-toggle")).toBeNull();
+    const toggle = host.querySelector<HTMLButtonElement>(".player-sources-toggle");
+    expect(toggle).not.toBeNull();
+    await click(toggle!);
+    await flush();
+    await flush();
+    const rows = [...host.querySelectorAll("#player-sources .player-source-list button")].map((node) => node.textContent ?? "");
+    expect(rows.some((text) => text.includes("Torrentio 4K"))).toBe(true);
   });
 
   it("opens on the source the stored record names, once the group that holds it has answered", async () => {
