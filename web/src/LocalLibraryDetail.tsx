@@ -291,9 +291,11 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
     {...(selectedPath && onToggleWatched && saved && saved.position > 0
       ? { watched: false, watchedLabel: t("mediaServer.markWatched"), onToggleWatched: () => onToggleWatched(selectedPath) }
       : {})}
-    // The device action is the caller's: it fetches its own file from its path and hands an addon
-    // answer to the server, which downloads it on the viewer's behalf.
-    {...(isFile && downloadToDevice ? { onDownloadToDevice: (stream: Stream) => downloadToDevice(stream) } : {})}
+    // The device action is the caller's: it fetches its own file from its path and hands every other
+    // row to the server, which downloads it on the viewer's behalf. It is the row on screen that
+    // decides, so a detail standing for a title offers it for the copy the viewer has chosen exactly
+    // as a detail standing for one file does.
+    {...(downloadToDevice ? { onDownloadToDevice: (stream: Stream) => downloadToDevice(stream) } : {})}
     {...(preferredLanguage ? { preferredLanguage } : {})}
     onPlay={(stream, fromBeginning) => {
       // The library's own file plays through the library player; a row that belongs to an addon or
