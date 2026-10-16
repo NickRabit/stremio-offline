@@ -12,6 +12,7 @@ import {
   type PublicRemoteItem,
   type RemoteLibraryRecord,
 } from "./media-server-types.js";
+import { log } from "./logger.js";
 import { ResourceError } from "./media-resources.js";
 import type { Store } from "./store.js";
 import { emptyUserData, findUserById, type UserData, type UserRecord } from "./users.js";
@@ -262,6 +263,9 @@ const REMOTE_TITLE_ID = /^(tt[0-9]+|tmdb:[0-9]+)$/;
 const REMOTE_TITLE_ID_MAX = 64;
 /** How long the show a series id names is remembered, so one episode page costs one parent read. */
 const SERIES_TITLE_TTL_MS = 60 * 60_000;
+/** How many untitled records one card projection reads titles for, and how many at once. */
+const TITLE_BACKFILL_LIMIT = 50;
+const TITLE_BACKFILL_CONCURRENCY = 4;
 
 const validTitle = (value: unknown): RemoteTitle | undefined => {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
@@ -386,6 +390,11 @@ const seriesOf = (item: ProviderItem): RemoteSeries | undefined => {
 export class MediaServerPersonal {
   /** The show each series id names, kept for an hour so one episode page costs one parent read. */
   private readonly seriesTitles = new Map<string, { title: RemoteTitle; name?: string; at: number }>();
+  /** Records a title read was already tried for in this process, so a list drawn again does not ask
+   *  the media server about the same item twice. */
+  private readonly titleTried = new Set<string>();
+  /** The title read the last card projection started, for a caller that has to wait for it. */
+  titleBackfill: Promise<void> | undefined;
 
   /** `titleOfPath`, when given, reads which title a starred library path stands for, so clearing a
    *  remote title's star clears the library copies' stars of that title too. It is read before a
@@ -435,14 +444,13 @@ export class MediaServerPersonal {
   /** The catalogue title one write stands for, resolved from the provider's own ids. An episode
    *  answers with its show's ids, which costs one parent read per show; a failed or empty read
    *  answers nothing, so the write keeps whatever title the record already had. */
-  private async titleOfWrite(authority: MediaServerAuthority, resolved: Resolved, signal?: AbortSignal): Promise<{ title?: RemoteTitle; name?: string }> {
-    const item = resolved.item;
+  private async titleOfWrite(authority: MediaServerAuthority, libraryId: string, item: ProviderItem, signal?: AbortSignal): Promise<{ title?: RemoteTitle; name?: string }> {
     if (item.type === "movie" || item.type === "series") return { title: remoteTitleOf(item.type, item.providerIds), name: item.name };
     if (item.type !== "episode" || item.seriesId === undefined) return {};
-    const cacheKey = `${resolved.library.id}\u0000${item.seriesId}`;
+    const cacheKey = `${libraryId}\u0000${item.seriesId}`;
     const held = this.seriesTitles.get(cacheKey);
     if (held && held.at > Date.now() - SERIES_TITLE_TTL_MS) return { title: held.title, name: held.name };
-    const parent = await this.manager.itemDetail(authority, resolved.library.id, item.seriesId, signal).catch(() => undefined);
+    const parent = await this.manager.itemDetail(authority, libraryId, item.seriesId, signal).catch(() => undefined);
     const title = parent ? remoteTitleOf("series", parent.item.providerIds) : undefined;
     if (!title) return {};
     this.seriesTitles.set(cacheKey, { title, name: parent!.item.name, at: Date.now() });
@@ -463,7 +471,7 @@ export class MediaServerPersonal {
     }
     // The title the write stands for, resolved before the state mutator: an episode needs one
     // parent read, which is the only thing here that waits.
-    const written = await this.titleOfWrite(authority, resolved, signal);
+    const written = await this.titleOfWrite(authority, resolved.library.id, resolved.item, signal);
     const pathTitle = patch.favorite === false ? await this.titleOfPath?.() : undefined;
     authority.assertCurrent();
     let state!: RemoteItemState;
@@ -590,6 +598,13 @@ export class MediaServerPersonal {
       }
     }
     cards.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || left.key.localeCompare(right.key));
+    // A record written before titles were stored has none: read it once, in the background, so the
+    // next list draws it with the title it stands for. This answer is not held up by it.
+    const untitled = confirmed.flatMap((group) => group.records
+      .filter((record) => !record.title && !this.titleTried.has(record.key))
+      .map((record) => ({ libraryId: group.library.id, record })))
+      .slice(0, TITLE_BACKFILL_LIMIT);
+    if (untitled.length) this.titleBackfill = this.backfillTitles(authority, user.id, untitled);
     const proof: CardProof = {
       actor: { id: user.id, secret: user.secret },
       filter,
@@ -611,6 +626,34 @@ export class MediaServerPersonal {
     cardProofs.set(result, proof);
     this.assertCardsCurrent(authority, result);
     return result;
+  }
+
+  /** Reads the title of records stored before titles were, a few at a time, and stores what it
+   *  found. Nothing here fails a request: an item the server no longer answers is simply left. */
+  private async backfillTitles(authority: MediaServerAuthority, userId: string, untitled: Array<{ libraryId: string; record: RemoteMediaRecord }>): Promise<void> {
+    for (const { record } of untitled) this.titleTried.add(record.key);
+    const found = new Map<string, RemoteTitle>();
+    try {
+      await runBounded(untitled, TITLE_BACKFILL_CONCURRENCY, async ({ libraryId, record }) => {
+        const detail = await this.manager.itemDetail(authority, libraryId, record.itemId).catch(() => undefined);
+        if (!detail) return;
+        const { title } = await this.titleOfWrite(authority, libraryId, detail.item);
+        if (title) found.set(record.key, title);
+      }, () => false);
+      if (!found.size) return;
+      await this.store.update((next) => {
+        const data = next.userData?.[userId];
+        if (!data) return;
+        const map = { ...(data.remoteMedia ?? {}) };
+        for (const [key, title] of found) {
+          const stored = validRecord(map[key]);
+          if (stored && !stored.title) map[key] = { ...stored, title };
+        }
+        next.userData = { ...(next.userData ?? {}), [userId]: { ...data, remoteMedia: map } };
+      });
+    } catch (error) {
+      log("WARN", "Media-server titles could not be read", { reason: error instanceof Error ? error.message : String(error) });
+    }
   }
 
   /** Clears the star of one title's remote records, inside a write the caller already has open:
