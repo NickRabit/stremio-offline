@@ -2,10 +2,10 @@
  *  different maps and merged here, once, so the web, Home and the TV all read the same
  *  list in the same order. Nothing here touches a request or a store. */
 
-export type FavoriteFilter = "all" | "library" | "catalog";
+export type FavoriteFilter = "all" | "library" | "catalog" | "remote";
 
 export const parseFavoriteFilter = (value: unknown): FavoriteFilter =>
-  value === "library" || value === "catalog" ? value : "all";
+  value === "library" || value === "catalog" || value === "remote" ? value : "all";
 
 /** One library star, either its own or folded with the catalogue star it answers. */
 export interface FavoriteEntryLibrary { kind: "library"; key: string; catalogId?: string }
@@ -44,10 +44,27 @@ export interface FavoriteCatalogItem {
   id: string;
   name: string;
   poster?: string;
+  wide?: string;
   year?: string;
 }
 
-export type FavoriteItem = FavoriteLibraryItem | FavoriteCatalogItem;
+/** One media-server star. It belongs to the account's library of a Jellyfin or Emby server
+ *  rather than to the catalogue, and opens that server's own detail. */
+export interface FavoriteRemoteItem {
+  kind: "remote";
+  libraryId: string;
+  itemId: string;
+  title: string;
+  provider: "jellyfin" | "emby";
+  libraryName: string;
+  itemType: "movie" | "series" | "episode";
+  poster?: string;
+  wide?: string;
+  season?: number;
+  episode?: number;
+}
+
+export type FavoriteItem = FavoriteLibraryItem | FavoriteCatalogItem | FavoriteRemoteItem;
 
 /** The merged order: library stars first, newest first, then the catalogue stars that
  *  no library copy answers, newest first. Library stars carry no timestamp of their own,

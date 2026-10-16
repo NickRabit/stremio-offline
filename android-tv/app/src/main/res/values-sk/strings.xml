@@ -141,9 +141,11 @@
   <string name="favorites_filter_all">Všetko</string>
   <string name="favorites_filter_library">V knižnici</string>
   <string name="favorites_filter_catalog">Z katalógu</string>
+  <string name="favorites_filter_remote">Mediálne servery</string>
   <string name="favorites_empty_all_text">Pridajte hviezdičku súboru v knižnici alebo titulu v katalógu a objaví sa tu.</string>
   <string name="favorites_empty_library_text">Pridajte hviezdičku súboru alebo priečinku v knižnici a objaví sa tu.</string>
   <string name="favorites_empty_catalog_text">Pridajte hviezdičku titulu v katalógu a objaví sa tu.</string>
+  <string name="favorites_empty_remote_text">Hviezdička pri titule na serveri Emby alebo Jellyfin sa objaví tu.</string>
   <string name="resume_title">Pokračujte v sledovaní</string>
   <string name="resume_filter_all">Všetko</string>
   <string name="resume_filter_library">V knižnici</string>
@@ -307,8 +309,6 @@
   <string name="resume_filter_remote">Mediálne servery</string>
   <string name="resume_empty_remote_title">Žiadny priebeh zo serverov</string>
   <string name="resume_empty_remote_text">Tu sa objavia tituly, ktoré sledujete z pripojeného servera Jellyfin alebo Emby.</string>
-  <string name="favorites_tab_local">Súbory a katalóg</string>
-  <string name="favorites_tab_servers">Mediálne servery</string>
   <string name="media_server_personal_partial">Niektoré položky sa nepodarilo načítať.</string>
   <string name="err_media_server_format_unknown">Server neposkytol podporovaný formát pôvodného súboru.</string>
   <string name="sources_load_addons">Zdroje z doplnkov</string>

@@ -1,6 +1,7 @@
 import type express from "express";
 import type { ArtShape } from "../artwork.js";
 import { messageKeyOf } from "../errors.js";
+import type { FavoriteCatalogItem, FavoriteLibraryItem } from "../favorites.js";
 import type { NewEpisode } from "../follows.js";
 import { images } from "../images.js";
 import { allowedAddons } from "../addons.js";
@@ -290,15 +291,20 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
   };
 
   const favoritesRow = async (req: express.Request, viewer: Viewer, proofs: RowProof[]): Promise<HomeRow> => {
-    // The one merged Favourites list, first page: library stars and catalogue stars alike.
-    const page = await personal.favoritesPage(req, { filter: "all", limit: HOME_ROW_LIMIT, onHome: true });
-    const local: HomeCard[] = page.items.map((item) => item.kind === "library" ? {
+    // The one merged Favourites list is the one place the remote stars are read; this shelf mixes
+    // the local first page with the remote cards itself, so it asks for the local half alone.
+    const page = await personal.favoritesPage(req, { filter: "all", limit: HOME_ROW_LIMIT, onHome: true, remote: false });
+    // `remote: false` keeps the media-server stars out of this page, so every entry is one of
+    // the two local kinds the shelf draws.
+    const localItems = page.items.filter((item): item is FavoriteLibraryItem | FavoriteCatalogItem => item.kind !== "remote");
+    const local: HomeCard[] = localItems.map((item) => item.kind === "library" ? {
       kind: "favorite", key: item.path, path: item.path, itemKind: item.itemKind, label: item.label,
       ...(item.poster ? { poster: item.poster } : {}),
       ...(item.wide ? { wide: item.wide } : {}),
     } : {
       kind: "favorite-catalogue", key: `${item.type}:${item.id}`, type: item.type, id: item.id, name: item.name,
       ...(item.poster ? { poster: item.poster } : {}),
+      ...(item.wide ? { wide: item.wide } : {}),
       ...(item.year ? { year: item.year } : {}),
     });
     const authority = authorityOf(req);

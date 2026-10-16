@@ -44,6 +44,7 @@ import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.FavoriteFilter
 import cz.stremiooffline.tv.data.FavoriteItemDto
 import cz.stremiooffline.tv.data.MetaDto
+import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs
 import cz.stremiooffline.tv.ui.components.CardRowInset
@@ -63,14 +64,9 @@ fun favoritesFilterTag(filter: FavoriteFilter): String = "favorites_filter_" + f
 /** The grid key of one favourite, and the tag a test focuses it by. */
 fun favoriteCardTag(item: FavoriteItemDto): String = item.key
 
-fun favoritesSegmentTag(segment: FavoritesSegment): String = "favorites_segment_" + segment.name
-
-/** Which half of Favourites is on screen. */
-enum class FavoritesSegment { Local, MediaServers }
-
-/** The one Favourites section: a merged grid of library and catalogue stars, narrowed by filter
- *  chips. A library entry opens the library detail (browsing a folder first), a catalogue entry
- *  opens the catalogue detail. */
+/** The one Favourites section: a single grid of library, catalogue and media-server stars,
+ *  narrowed by filter chips. A library entry opens the library detail (browsing a folder first),
+ *  a catalogue entry opens the catalogue detail, and a media-server entry its own playable detail. */
 @Composable
 fun FavoritesRoute(
   api: TvApi,
@@ -84,7 +80,6 @@ fun FavoritesRoute(
   restoreToken: Int = 0,
   refreshToken: Int = 0,
 ) {
-  var segment by rememberSaveable { mutableStateOf(FavoritesSegment.Local) }
   val viewModel = viewModel<FavoritesViewModel>(factory = FavoritesViewModel.factory(api))
   LaunchedEffect(Unit) { viewModel.start() }
   // Re-entering the section, or returning from a detail: the star state may have changed.
@@ -128,19 +123,6 @@ fun FavoritesRoute(
       fontWeight = FontWeight.ExtraBold,
       letterSpacing = (-0.8).sp,
     )
-    FavoritesSegments(segment = segment, onSelect = { segment = it })
-    if (segment == FavoritesSegment.MediaServers) {
-      RemotePersonalRoute(
-        api = api,
-        imageUrl = { path -> path?.let(api::url) },
-        filter = "favorites",
-        onOpenRemote = onOpenRemote,
-        modifier = Modifier.weight(1f).fillMaxWidth(),
-        restoreToken = restoreToken,
-        refreshToken = refreshToken,
-      )
-      return@Column
-    }
     Row(horizontalArrangement = Arrangement.spacedBy(9.dp), verticalAlignment = Alignment.CenterVertically) {
       FavoriteFilter.entries.forEachIndexed { index, filter ->
         FocusButton(
@@ -159,82 +141,64 @@ fun FavoritesRoute(
       when {
         state.loading -> ShimmerCards()
         state.error -> FavoritesError(onRetry = { viewModel.retry() })
-        state.items.isEmpty() -> Text(
-          stringResource(filterEmpty(filter = state.filter)),
-          color = Tokens.Muted,
-          fontSize = 12.sp,
-        )
+        state.items.isEmpty() -> Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+          if (state.partial) {
+            Text(
+              stringResource(R.string.media_server_personal_partial),
+              color = Tokens.Red,
+              fontSize = 11.sp,
+              maxLines = 1,
+            )
+          }
+          Text(
+            stringResource(filterEmpty(filter = state.filter)),
+            color = Tokens.Muted,
+            fontSize = 12.sp,
+          )
+        }
         else -> BoxWithConstraints(Modifier.fillMaxSize()) {
           val columns = (((maxWidth.value + 18f) / 128f).toInt()).coerceAtLeast(1)
-          LazyVerticalGrid(
-            columns = GridCells.Fixed(columns),
-            modifier = Modifier.focusRequester(gridFocus).focusGroup(),
-            contentPadding = PaddingValues(start = CardRowInset, top = 10.dp, end = CardRowInset, bottom = 40.dp),
-            horizontalArrangement = Arrangement.spacedBy(18.dp),
-            verticalArrangement = Arrangement.spacedBy(18.dp),
-          ) {
-            itemsIndexed(state.items, key = { _, item -> item.key }) { index, item ->
-              val requester = remember(item.key) { FocusRequester() }
-              cardFocus[item.key] = requester
-              PosterCard(
-                name = favoriteTitle(item),
-                imageUrl = favoriteImage(item)?.let(api::url),
-                progress = favoriteProgress(item),
-                caption = favoriteCaption(item),
-                cardTag = item.key,
-                onClick = { openFavorite(item, api, scope, onOpenDetail, onOpenCatalog, onOpenLibrary) },
-                modifier = Modifier
-                  .focusRequester(requester)
-                  .onFocusChanged {
-                    if (it.isFocused) {
-                      viewModel.selectedKey = item.key
-                      cardFocus[item.key] = requester
-                      if (index >= state.items.size - columns) viewModel.loadMore()
-                    }
-                  },
+          Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            // A media server that answered partially never hides the stars that did land.
+            if (state.partial) {
+              Text(
+                stringResource(R.string.media_server_personal_partial),
+                color = Tokens.Red,
+                fontSize = 11.sp,
+                maxLines = 1,
               )
+            }
+            LazyVerticalGrid(
+              columns = GridCells.Fixed(columns),
+              modifier = Modifier.focusRequester(gridFocus).focusGroup(),
+              contentPadding = PaddingValues(start = CardRowInset, top = 10.dp, end = CardRowInset, bottom = 40.dp),
+              horizontalArrangement = Arrangement.spacedBy(18.dp),
+              verticalArrangement = Arrangement.spacedBy(18.dp),
+            ) {
+              itemsIndexed(state.items, key = { _, item -> item.key }) { index, item ->
+                val requester = remember(item.key) { FocusRequester() }
+                cardFocus[item.key] = requester
+                PosterCard(
+                  name = favoriteTitle(item),
+                  imageUrl = favoriteImage(item)?.let(api::url),
+                  progress = favoriteProgress(item),
+                  caption = favoriteCaption(item),
+                  cardTag = item.key,
+                  onClick = { openFavorite(item, api, scope, onOpenDetail, onOpenCatalog, onOpenRemote, onOpenLibrary) },
+                  modifier = Modifier
+                    .focusRequester(requester)
+                    .onFocusChanged {
+                      if (it.isFocused) {
+                        viewModel.selectedKey = item.key
+                        cardFocus[item.key] = requester
+                        if (index >= state.items.size - columns) viewModel.loadMore()
+                      }
+                    },
+                )
+              }
             }
           }
         }
-      }
-    }
-  }
-}
-
-/** The Files & catalog / Media servers switch. The remote half loads on its own, so an offline
- *  media server never breaks the local grid. */
-@Composable
-private fun FavoritesSegments(segment: FavoritesSegment, onSelect: (FavoritesSegment) -> Unit) {
-  Row(
-    modifier = Modifier.focusGroup(),
-    horizontalArrangement = Arrangement.spacedBy(9.dp),
-    verticalAlignment = Alignment.CenterVertically,
-  ) {
-    FavoritesSegment.entries.forEach { entry ->
-      val label = stringResource(
-        if (entry == FavoritesSegment.Local) R.string.favorites_tab_local else R.string.favorites_tab_servers,
-      )
-      var focused by remember { mutableStateOf(false) }
-      val shape = RoundedCornerShape(8.dp)
-      Surface(
-        onClick = { onSelect(entry) },
-        modifier = Modifier
-          .testTag(favoritesSegmentTag(entry))
-          .onFocusChanged { focused = it.isFocused },
-        shape = ClickableSurfaceDefaults.shape(shape = shape),
-        scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
-        border = ClickableSurfaceDefaults.border(
-          border = Border(BorderStroke(1.dp, if (entry == segment) Tokens.Accent else Tokens.Line), shape = shape),
-          focusedBorder = Border(BorderStroke(1.5.dp, Tokens.Accent2), shape = shape),
-        ),
-        colors = ClickableSurfaceDefaults.colors(
-          containerColor = if (entry == segment) Tokens.Accent.copy(alpha = 0.15f) else Tokens.Panel2,
-          contentColor = if (entry == segment) Tokens.Accent2 else Tokens.Text,
-          focusedContainerColor = Tokens.Panel2,
-          focusedContentColor = Tokens.Text,
-        ),
-      ) {
-        Text(label, fontSize = 12.5.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp))
       }
     }
   }
@@ -247,6 +211,7 @@ private fun openFavorite(
   scope: CoroutineScope,
   onOpenDetail: (DetailData) -> Unit,
   onOpenCatalog: (CatalogDetailArgs) -> Unit,
+  onOpenRemote: (RemoteDetailData) -> Unit,
   onOpenLibrary: (String) -> Unit,
 ) {
   when (item) {
@@ -255,6 +220,22 @@ private fun openFavorite(
         meta = MetaDto(id = item.id, type = item.type, name = item.name, poster = item.poster),
         addonName = "",
         type = item.type,
+      ),
+    )
+    is FavoriteItemDto.Remote -> onOpenRemote(
+      RemoteDetailData(
+        libraryId = item.libraryId,
+        libraryName = item.libraryName,
+        provider = item.provider,
+        item = RemoteItemDto(
+          id = item.itemId,
+          name = item.title,
+          type = item.itemType,
+          season = item.season,
+          episode = item.episode,
+          poster = item.poster,
+          wide = item.wide,
+        ),
       ),
     )
     is FavoriteItemDto.Library -> if (item.itemKind != "folder") {
@@ -301,16 +282,26 @@ private fun openFavorite(
 private fun favoriteTitle(item: FavoriteItemDto): String = when (item) {
   is FavoriteItemDto.Library -> item.label
   is FavoriteItemDto.Catalog -> item.name
+  is FavoriteItemDto.Remote -> item.title
 }
 
 private fun favoriteImage(item: FavoriteItemDto): String? = when (item) {
   is FavoriteItemDto.Library -> item.poster ?: item.wide
   is FavoriteItemDto.Catalog -> item.poster
+  is FavoriteItemDto.Remote -> item.poster ?: item.wide
 }
 
 private fun favoriteCaption(item: FavoriteItemDto): String? = when (item) {
   is FavoriteItemDto.Library -> item.year
   is FavoriteItemDto.Catalog -> item.year
+  is FavoriteItemDto.Remote -> listOf(providerLabel(item.provider), item.libraryName)
+    .filter { it.isNotBlank() }.joinToString(" · ").ifEmpty { null }
+}
+
+private fun providerLabel(provider: String): String = when (provider.lowercase()) {
+  "jellyfin" -> "Jellyfin"
+  "emby" -> "Emby"
+  else -> provider
 }
 
 private fun favoriteProgress(item: FavoriteItemDto): Float? {
@@ -324,6 +315,7 @@ private fun filterLabel(filter: FavoriteFilter): Int = when (filter) {
   FavoriteFilter.All -> R.string.favorites_filter_all
   FavoriteFilter.Library -> R.string.favorites_filter_library
   FavoriteFilter.Catalog -> R.string.favorites_filter_catalog
+  FavoriteFilter.Remote -> R.string.favorites_filter_remote
 }
 
 @StringRes
@@ -331,6 +323,7 @@ private fun filterEmpty(filter: FavoriteFilter): Int = when (filter) {
   FavoriteFilter.All -> R.string.favorites_empty_all_text
   FavoriteFilter.Library -> R.string.favorites_empty_library_text
   FavoriteFilter.Catalog -> R.string.favorites_empty_catalog_text
+  FavoriteFilter.Remote -> R.string.favorites_empty_remote_text
 }
 
 @Composable

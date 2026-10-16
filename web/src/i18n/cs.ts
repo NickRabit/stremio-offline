@@ -1894,4 +1894,10 @@ export const cs: Catalog = {
   "favorites.tabLocal": "Soubory a katalog",
   "favorites.tabServers": "Mediální servery",
   "mediaServer.personalPartial": "Některé položky se nepodařilo načíst.",
+  "favorites.filterRemote": "Mediální servery",
+  "favorites.emptyRemoteTitle": "Žádné oblíbené na mediálních serverech",
+  "favorites.emptyRemoteText": "Hvězdička u titulu na Emby nebo Jellyfin se objeví tady.",
+  "catalog.openDetail": "Otevřít detail",
+  "player.sourcesFailed": "Zdroje se nepodařilo načíst.",
+  "player.noOtherSource": "Pro tento titul není jiný zdroj.",
 };

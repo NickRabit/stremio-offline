@@ -1,7 +1,7 @@
 import { enterPlayerFullscreen, exitPlayerFullscreen, playerIsFullscreen, supportsPlayerFullscreen } from "./player-fullscreen";
 import Hls from "hls.js";
 import { useEffect, useRef, useState } from "react";
-import { AudioLines, Captions, CaptionsOff, Check, Download, HardDrive, Star, Gauge, Maximize, Minimize, Pause, Play, RectangleHorizontal, RotateCcw, RotateCw, Settings, SlidersHorizontal, SkipBack, SkipForward, Volume2, X } from "lucide-react";
+import { AudioLines, Captions, CaptionsOff, Check, Download, HardDrive, ListVideo, Star, Gauge, Maximize, Minimize, Pause, Play, RectangleHorizontal, RotateCcw, RotateCw, Settings, SlidersHorizontal, SkipBack, SkipForward, Volume2, X } from "lucide-react";
 import { ApiError, api, describeError, subtitleUrl } from "./api";
 import { watchSidecar } from "./player-sidecar";
 import { label, pickAddonSubtitle } from "./languages";
@@ -15,7 +15,16 @@ import { detectCapabilities } from "./capabilities";
 import { t, useI18n, type Key } from "./i18n";
 import type { Capabilities, PlaybackMode, PlaybackSession, Stream, Subtitle, Track } from "./types";
 
-interface Props { previousTitle?: string; onPrevious?: () => Promise<boolean>; nextTitle?: string; nextBusy?: boolean; onNext?: () => Promise<boolean>; autoNext?: boolean; open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; audioLanguage: string; onPreferences?: (preferences: { audioLanguage?: string; subtitleLanguage?: string | null }) => void; progressKey?: string; progressPoster?: string; progressAddonKey?: string; favorite?: boolean; fromBeginning?: boolean; onToggleFavorite?: () => void; onDownload: () => Promise<boolean>; onDeviceDownload: () => Promise<boolean>; onProgressSaved?: (key: string) => void; onClose: () => void }
+interface Props { previousTitle?: string; onPrevious?: () => Promise<boolean>; nextTitle?: string; nextBusy?: boolean; onNext?: () => Promise<boolean>; autoNext?: boolean; open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; audioLanguage: string; onPreferences?: (preferences: { audioLanguage?: string; subtitleLanguage?: string | null }) => void; progressKey?: string; progressPoster?: string; progressAddonKey?: string; favorite?: boolean; fromBeginning?: boolean; onToggleFavorite?: () => void; onDownload: () => Promise<boolean>; onDeviceDownload: () => Promise<boolean>; onProgressSaved?: (key: string) => void; onClose: () => void;
+  /** The other sources of the playing title; absent for a title with no catalogue identity, and
+   *  the list is read only when the viewer opens it. */
+  loadSources?: () => Promise<Stream[]>;
+  /** Starts another source at the position the one on screen reached. The position is 0 when the
+   *  playing length says the new source cannot hold it. */
+  onSwitchSource?: (stream: Stream, positionSeconds: number) => Promise<void> | void;
+  /** Where a freshly handed source starts; a switch carries the position it was chosen at. */
+  startAtSeconds?: number;
+}
 
 const fmt = (seconds: number) => !Number.isFinite(seconds) ? "0:00" : `${Math.floor(seconds / 3600) ? `${Math.floor(seconds / 3600)}:` : ""}${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
 
@@ -196,7 +205,7 @@ const trackLabel = (track: Track) => {
 const SUBTITLE_DELAY_STEP_S = 0.25;
 const SUBTITLE_DELAY_LIMIT_S = 30;
 
-export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext, autoNext, open, title, stream, subtitles, subtitleLanguage, audioLanguage, onPreferences, progressKey, progressPoster, progressAddonKey, favorite, fromBeginning = false, onToggleFavorite, onDownload, onDeviceDownload, onProgressSaved, onClose }: Props) {
+export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext, autoNext, open, title, stream, subtitles, subtitleLanguage, audioLanguage, onPreferences, progressKey, progressPoster, progressAddonKey, favorite, fromBeginning = false, onToggleFavorite, onDownload, onDeviceDownload, onProgressSaved, onClose, loadSources, onSwitchSource, startAtSeconds }: Props) {
   // Subscribes the whole overlay to the language, so a switch behind it redraws every label.
   useI18n();
   const [subtitleIds, setSubtitleIds] = useState<Record<string, string>>({});
@@ -205,6 +214,11 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const overlayRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [sourcesOpen, setSourcesOpen] = useState(false);
+  const [sourceList, setSourceList] = useState<{ key: string; streams: Stream[] } | null>(null);
+  const [sourceLoading, setSourceLoading] = useState(false);
+  const [sourceFailure, setSourceFailure] = useState("");
+  const [sourceBusy, setSourceBusy] = useState<string | null>(null);
   const [pictureFilled, setPictureFilled] = useState(false);
   const [browserFullscreen, setBrowserFullscreen] = useState(false);
   const [volume, setVolume] = useState(readVolume);
@@ -333,7 +347,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const controlsTimerRef = useRef<number | undefined>(undefined);
   const automaticFullscreenRef = useRef(false);
   useEffect(() => {
-    if (!open) { setSettingsOpen(false); setBrowserFullscreen(false); setFullscreenUnavailable(false); setPictureFilled(false); return; }
+    if (!open) { setSettingsOpen(false); setSourcesOpen(false); setSourceList(null); setSourceFailure(""); setBrowserFullscreen(false); setFullscreenUnavailable(false); setPictureFilled(false); return; }
     const bottom = bottomRef.current;
     if (!bottom) return;
     const measure = () => overlayRef.current?.style.setProperty("--player-bottom-height", `${bottom.getBoundingClientRect().height}px`);
@@ -593,7 +607,9 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       // The player may have been closed or handed another film while the state was in flight;
       // starting a session here would leave an orphan nobody watches.
       if (disposed) return null;
-      const from = initialPlaybackPosition(saved, remoteItem, fromBeginning);
+      // A switch hands over the position the other source was left at; anything else resumes
+      // from the store the title keeps.
+      const from = startAtSeconds !== undefined ? Math.max(0, startAtSeconds) : initialPlaybackPosition(saved, remoteItem, fromBeginning);
       if (from) setResumedFrom(from);
       return { created: await api.startPlayback(stream, capabilities(), from, addonSubtitles.map((item) => item.subtitleId), { audioLanguage: audioPreferenceRef.current, subtitleLanguage: subtitlePreferenceRef.current }), from };
     })().then((result) => {
@@ -638,7 +654,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
         void api.stopPlayback(id).catch(() => undefined);
       }
     };
-  }, [open, stream, progressKey, fromBeginning]);
+  }, [open, stream, progressKey, fromBeginning, startAtSeconds]);
 
   useEffect(() => {
     const url = session?.sidecarUrl;
@@ -1057,6 +1073,43 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     setDownloadState(await onDownload() ? "done" : "idle");
   };
 
+  /** The list belongs to the source playing when it was read: another source reloads it. */
+  const playingSourceId = stream?.sourceId ?? "";
+  const openSources = () => {
+    if (!loadSources) return;
+    setSourceFailure("");
+    setSourcesOpen(true);
+  };
+  // Opening the list reads it once. Nothing here runs while the title is merely playing: the
+  // request waits for the viewer to ask for it, and a second open reuses what that answer held.
+  useEffect(() => {
+    if (!open || !sourcesOpen || !loadSources || sourceList?.key === playingSourceId) return;
+    let live = true;
+    setSourceLoading(true);
+    setSourceFailure("");
+    void loadSources()
+      .then((rows) => { if (live) setSourceList({ key: playingSourceId, streams: rows }); })
+      .catch((error) => { if (live) setSourceFailure(describeError(error)); })
+      .finally(() => { if (live) setSourceLoading(false); });
+    return () => { live = false; };
+  }, [open, sourcesOpen, loadSources, playingSourceId, sourceList?.key]);
+
+  /** Hands the chosen row to the parent, which starts it through the ordinary play path. A
+   *  refusal leaves the source on screen playing and says so in the list it came from. */
+  const chooseSource = async (next: Stream) => {
+    if (!onSwitchSource) return;
+    const at = duration > 0 && timeRef.current > duration ? 0 : timeRef.current;
+    setSourceBusy(next.sourceId);
+    setSourceFailure("");
+    try {
+      await onSwitchSource(next, at);
+      setSourcesOpen(false);
+    } catch (error) {
+      setSourceFailure(describeError(error));
+    } finally { setSourceBusy(null); }
+  };
+
+
   const downloadToDevice = async () => {
     if (deviceDownloadBusy) return;
     setDeviceDownloadBusy(true);
@@ -1230,12 +1283,26 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
         {((session?.subtitleTracks.length ?? 0) > 0 || addonSubtitles.length > 0 || session?.sidecarUrl) && <button disabled={subtitleValue === "off" && !session?.sidecarUrl} aria-label={subtitlesHidden ? t("player.showSubtitles") : t("player.hideSubtitles")} title={subtitlesHidden ? t("player.showSubtitlesKey") : t("player.hideSubtitlesKey")} aria-pressed={!subtitlesHidden} onClick={() => setSubtitlesHidden(!subtitlesHidden)}>{subtitlesHidden ? <CaptionsOff /> : <Captions />}</button>}
         <div className="player-view-controls">
           <button className="player-fill-toggle" aria-label={t("player.fillScreen")} title={t("player.fillScreen")} aria-pressed={pictureFilled} onClick={() => setPictureFilled(!pictureFilled)}><RectangleHorizontal /></button>
+          {loadSources && <button className="player-action player-sources-toggle" aria-label={t("sources.heading")} title={t("sources.heading")} aria-expanded={sourcesOpen} aria-controls="player-sources" onClick={() => sourcesOpen ? setSourcesOpen(false) : openSources()}><ListVideo /> <span>{t("sources.heading")}</span></button>}
           <button className="player-settings-toggle" aria-label={t("player.settings")} title={t("player.settings")} aria-expanded={settingsOpen} aria-controls="player-settings" onClick={() => setSettingsOpen(!settingsOpen)}><Settings /></button>
           {fullscreenSupported && <button className="player-action fullscreen-action" onClick={() => void toggleFullscreen()} title={t(browserFullscreen ? "player.exitFullscreen" : "player.fullscreen")} aria-label={t(browserFullscreen ? "player.exitFullscreen" : "player.fullscreen")}>{browserFullscreen ? <Minimize/> : <Maximize/>} <span>{t(browserFullscreen ? "player.exitFullscreen" : "player.fullscreen")}</span></button>}
         </div>
       </div>
     </div>
     {fullscreenUnavailable && <div className="fullscreen-notice" role="status">{t("player.fullscreenUnavailable")}</div>}
+    {sourcesOpen && <div id="player-sources" className="player-settings player-sources" role="region" aria-label={t("sources.heading")}>
+      <div className="player-settings-head"><strong>{t("sources.heading")}</strong><button aria-label={t("common.close")} onClick={() => setSourcesOpen(false)}><X /></button></div>
+      {sourceLoading && <p className="identify-hint" role="status">{t("common.loading")}</p>}
+      {sourceFailure && <p className="notice" role="alert">{sourceFailure}</p>}
+      {!sourceLoading && !sourceFailure && !sourceList?.streams.length && <p className="identify-hint">{t("player.noOtherSource")}</p>}
+      {(sourceList?.streams ?? []).map((row) => {
+        const playing = row.sourceId === playingSourceId;
+        return <div className="track-picker" key={row.sourceId}>
+          <button type="button" className={playing ? "selected" : undefined} aria-pressed={playing} disabled={playing || sourceBusy !== null}
+            onClick={() => void chooseSource(row)}>{playing ? <Check/> : <ListVideo/>}<span>{row.name || row.title || t("sources.heading")}</span></button>
+        </div>;
+      })}
+    </div>}
     {settingsOpen && <div id="player-settings" className="player-settings" role="region" aria-label={t("player.settings")}>
       <div className="player-settings-head"><strong>{t("player.settings")}</strong><button aria-label={t("player.closeSettings")} onClick={() => setSettingsOpen(false)}><X /></button></div>
       {session && <label className="track-picker" title={t("player.quality")}>

@@ -2,7 +2,7 @@ import type { Locale } from "./i18n";
 import type { DownloadSnapshot as ServerDownloadSnapshot, PublicDownload } from "../../server/src/api-types";
 import type { HomeLayout } from "../../server/src/home";
 import type { MediaServerConfigurationExport } from "../../server/src/media-server-store";
-export type { FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem } from "../../server/src/favorites";
+export type { FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem, FavoriteRemoteItem } from "../../server/src/favorites";
 export type { RemoteHomeCard, ResumeCard, ResumeFilter } from "../../server/src/home";
 export type DownloadLayout = "flat" | "structured";
 export interface DownloadTargetSettings {
@@ -125,8 +125,10 @@ export interface RemoteItem {
   /** Normalized, bounded metadata the server projects from the provider. Absent when the
    *  provider does not say it; never an upstream file path. */
   overview?: string; year?: number; genres?: string[]; size?: number; addedAt?: string;
-  /** Same-origin, content-authorized artwork; never an upstream address. */
-  poster?: string; wide?: string;
+  /** Same-origin, content-authorized artwork; never an upstream address. `wide` is the tile's
+   *  landscape slot -- the provider's Thumb when it has one -- and `fanart` is the full-bleed
+   *  backdrop a hero reads. */
+  poster?: string; wide?: string; fanart?: string;
 }
 /** One page of a remote listing, cursor included and always opaque to the caller. */
 export interface RemoteItemPage {

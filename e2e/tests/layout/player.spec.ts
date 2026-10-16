@@ -52,7 +52,8 @@ test("player keeps its picture stable and its overlay controls reachable", async
   if (fullscreenButton) expect(fullscreenButton.x - settingsButton!.x - settingsButton!.width).toBeLessThanOrEqual(8);
   const viewItems = await overlay.locator(".player-view-controls button").all();
   expect(await viewItems[0].getAttribute("aria-label")).toBe("Vyplnit obrazovku");
-  expect(await viewItems[1].getAttribute("aria-label")).toBe("Nastavení přehrávání");
+  expect(await viewItems[1].getAttribute("aria-label")).toBe("Zdroje");
+  expect(await viewItems[2].getAttribute("aria-label")).toBe("Nastavení přehrávání");
   const viewBoxes = await Promise.all(viewItems.map((button) => button.boundingBox()));
   expect(viewBoxes.map((box) => box!.x)).toEqual(viewBoxes.map((box) => box!.x).sort((a, b) => a - b));
 

@@ -1579,6 +1579,30 @@ test("artwork and match refuse raw fields, paths and tokens before any network w
   }
 });
 
+test("artwork accepts a Thumb at the Primary listing width and still refuses a fourth role", async () => {
+  const captured: string[] = [];
+  const transport = createMediaServerTransport({ baseUrl: "http://media.example", allowLan: false, allowLoopback: false }, {
+    lookupAll: async () => [{ address: "93.184.216.34", family: 4 }],
+    fetch: async (url) => {
+      captured.push(url);
+      return new Response(new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(jpegBytes(40)); controller.close(); } }), { status: 200, headers: { "content-type": "image/jpeg" } });
+    },
+  });
+  try {
+    await (await transport.requestArtwork({ itemId: "i1", imageType: "Thumb", tag: "Ab.c-9_~" }, "tok")).arrayBuffer();
+    const url = new URL(captured[0]!);
+    assert.equal(url.pathname, "/Items/i1/Images/Thumb");
+    assert.equal(url.searchParams.get("MaxWidth"), "640", "a Thumb is the listing width, never the Backdrop's 1920");
+    assert.equal(url.searchParams.get("tag"), "Ab.c-9_~");
+    for (const role of ["Poster", "Logo", "thumb", "Primary,Thumb", "", 3, null]) {
+      await assert.rejects(transport.requestArtwork({ itemId: "i", imageType: role as never }, "tok"), { code: "invalid-input" }, String(role));
+    }
+    assert.equal(captured.length, 1, "a role outside the three never reaches the socket");
+  } finally {
+    await transport.close();
+  }
+});
+
 test("match builds Emby's exact AnyProviderIdEquals and Jellyfin's documented Has-id query", async () => {
   const captured: string[] = [];
   const transport = createMediaServerTransport({ baseUrl: "http://media.example", allowLan: false, allowLoopback: false }, {
@@ -1626,7 +1650,7 @@ test("directory sends ParentIndexNumber and EnableTotalRecordCount only when ask
     assert.equal(query.get("ParentIndexNumber"), "2");
     assert.equal(query.get("EnableTotalRecordCount"), "false");
     assert.equal(query.get("ImageTypeLimit"), "1");
-    assert.equal(query.get("EnableImageTypes"), "Primary,Backdrop");
+    assert.equal(query.get("EnableImageTypes"), "Primary,Backdrop,Thumb");
     assert.equal(query.get("EnableUserData"), "false");
     assert.deepEqual(String(query.get("Fields")).split(","), ["ProviderIds", "ParentId", "SeriesInfo", "ImageTags", "ChildCount"]);
     await transport.requestJson("directory", { userId: "u", parentId: "lib-1", includeItemTypes: "Movie", recursive: false, sortBy: "SortName", sortOrder: "Ascending" }, "tok");

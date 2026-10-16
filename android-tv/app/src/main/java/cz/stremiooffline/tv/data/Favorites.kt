@@ -5,14 +5,15 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 
-/** Which half of the one Favourites list to ask for; `All` is both. */
+/** Which part of the one Favourites list to ask for; `All` is every part of it. */
 enum class FavoriteFilter(val wire: String) {
   All("all"),
   Library("library"),
   Catalog("catalog"),
+  Remote("remote"),
 }
 
-/** One entry of `GET /api/favorites`: a library star or a catalogue star. */
+/** One entry of `GET /api/favorites`: a library star, a catalogue star or a media-server star. */
 @Serializable
 sealed class FavoriteItemDto {
   /** The grid key and the identity a return restores focus by. */
@@ -40,10 +41,29 @@ sealed class FavoriteItemDto {
     val id: String = "",
     val name: String = "",
     val poster: String? = null,
+    val wide: String? = null,
     val year: String? = null,
     val addonKey: String? = null,
   ) : FavoriteItemDto() {
     override val key: String get() = "catalog:$type:$id"
+  }
+
+  /** A star the account holds on a Jellyfin or Emby server: it opens that server's own detail. */
+  @Serializable
+  @SerialName("remote")
+  data class Remote(
+    val libraryId: String = "",
+    val itemId: String = "",
+    val title: String = "",
+    val provider: String = "jellyfin",
+    val libraryName: String = "",
+    val itemType: String = "movie",
+    val poster: String? = null,
+    val wide: String? = null,
+    val season: Int? = null,
+    val episode: Int? = null,
+  ) : FavoriteItemDto() {
+    override val key: String get() = "remote:$libraryId:$itemId"
   }
 }
 
@@ -54,9 +74,16 @@ data class FavoritesPageDto(
   val items: List<JsonObject> = emptyList(),
   val total: Int = 0,
   val pending: Boolean = false,
+  val partial: Boolean = false,
 )
 
-data class FavoritesPage(val items: List<FavoriteItemDto>, val total: Int, val pending: Boolean)
+data class FavoritesPage(
+  val items: List<FavoriteItemDto>,
+  val total: Int,
+  val pending: Boolean,
+  /** A media server that could not be read, with the local stars kept. */
+  val partial: Boolean = false,
+)
 
 /** The favourites JSON with `kind` as the discriminator; an item of an unknown kind drops. */
 val FavoritesJson: Json = Json { classDiscriminator = "kind"; ignoreUnknownKeys = true }

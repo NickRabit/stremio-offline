@@ -51,11 +51,18 @@ test.describe("screenshots", () => {
   });
 
   test("title detail with sources", async ({ page }) => {
+    // A proxy journey leaves the fixture addon serving one WebM stream. Layout CI
+    // never runs those journeys; put the two language streams back before the shot.
+    await page.request.get(`http://127.0.0.1:${process.env.ADDON_PORT ?? "8098"}/proxy-control?mode=video`);
     await openCatalog(page, /Filmy/);
     await page.getByRole("button", { name: /Zkušební film/ }).click();
 
     const detail = page.locator(".detail-panel");
     await expect(detail.getByRole("heading", { name: "Zdroje" })).toBeVisible();
+    // Both language streams, so a partial list or the addon's browser mode cannot be the baseline.
+    // The language menu's label is hidden on a short landscape, so the rows are the check.
+    await expect(detail.getByRole("button", { name: /E2E 1080p/ })).toBeVisible();
+    await expect(detail.getByRole("button", { name: /E2E 720p/ })).toBeVisible();
     await settle(page);
 
     await expect(page).toHaveScreenshot("title-detail.png", {
@@ -82,6 +89,10 @@ test.describe("screenshots", () => {
   });
 
   test("settings", async ({ page }) => {
+    // The clear button is enabled only when this account has a search. A journey
+    // records one; a layout job does not. The shot is the empty history.
+    const cleared = await page.request.delete("/api/search/history");
+    expect(cleared.ok()).toBeTruthy();
     await page.route("**/api/libraries", async (route) => {
       const response = await route.fetch();
       const libraries = await response.json();

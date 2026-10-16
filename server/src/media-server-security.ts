@@ -49,7 +49,7 @@ export interface MediaServerTransport {
  *  method, arbitrary dimension or output format is never caller text. */
 export interface ArtworkRequest {
   itemId: string;
-  imageType: "Primary" | "Backdrop";
+  imageType: "Primary" | "Backdrop" | "Thumb";
   tag?: string;
   /** One of the two fixed widths: the listing tile or the full detail; never an arbitrary
    *  dimension. Absent keeps whatever a role was fetched at before the variants existed. */
@@ -70,7 +70,7 @@ export interface OriginalMediaRequest {
  *  The caller names an item and a fixed image role or subtitle index; a URL, query, header,
  *  method or output format is never part of the request. */
 export type MediaServerAssetRequest =
-  | { kind: "artwork"; itemId: string; imageType: "Primary" | "Backdrop" }
+  | { kind: "artwork"; itemId: string; imageType: "Primary" | "Backdrop" | "Thumb" }
   | { kind: "subtitle"; itemId: string; mediaSourceId: string; index: number };
 
 export interface MediaServerAsset {
@@ -630,7 +630,7 @@ function checkAssetRequest(args: unknown): MediaServerAssetRequest {
   const itemId = pathSegment(record.itemId, "itemId");
   if (kind === "artwork") {
     const imageType = record.imageType;
-    if (imageType !== "Primary" && imageType !== "Backdrop") throw invalid("The media-server image type is not allowed.");
+    if (imageType !== "Primary" && imageType !== "Backdrop" && imageType !== "Thumb") throw invalid("The media-server image type is not allowed.");
     return { kind: "artwork", itemId, imageType };
   }
   const mediaSourceId = pathSegment(record.mediaSourceId, "mediaSourceId");
@@ -669,7 +669,7 @@ function checkArtworkRequest(args: unknown): ArtworkRequest {
   }
   const itemId = pathSegment(record.itemId, "itemId");
   const imageType = record.imageType;
-  if (imageType !== "Primary" && imageType !== "Backdrop") throw invalid("The media-server image type is not allowed.");
+  if (imageType !== "Primary" && imageType !== "Backdrop" && imageType !== "Thumb") throw invalid("The media-server image type is not allowed.");
   const rawSize = record.size;
   if (rawSize !== undefined && rawSize !== "tile" && rawSize !== "detail") throw invalid("The media-server artwork size is not allowed.");
   const size: ArtworkRequest["size"] = rawSize === "tile" || rawSize === "detail" ? rawSize : undefined;
@@ -686,6 +686,8 @@ function checkArtworkRequest(args: unknown): ArtworkRequest {
  *  default -- a Backdrop was always fetched at the detail width, a Primary already at the listing
  *  one -- so a client that predates `tile` is served exactly what it was before. */
 const artworkMaxWidth = (request: ArtworkRequest): string => {
+  // A Thumb is a landscape still the listing already draws small, so it matches the Primary
+  // width; only a Backdrop is fetched full width.
   const width = request.size === "tile" ? 640 : request.size === "detail" ? 1920
     : request.imageType === "Backdrop" ? 1920 : 640;
   return String(width);
@@ -862,7 +864,7 @@ function buildRequest(baseUrl: string, operation: MediaServerOperationName, args
       query.set("Fields", "ProviderIds,ParentId,SeriesInfo,ImageTags,ChildCount");
       query.set("EnableUserData", "false");
       query.set("ImageTypeLimit", "1");
-      query.set("EnableImageTypes", "Primary,Backdrop");
+      query.set("EnableImageTypes", "Primary,Backdrop,Thumb");
       query.set("ParentId", pathSegment(args.parentId, "parentId"));
       query.set("StartIndex", String(boundedIndex(args.startIndex, "startIndex", 1_000_000_000) ?? 0));
       query.set("Limit", String(pageLimit(args.limit)));

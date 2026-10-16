@@ -49,6 +49,9 @@ interface RemoteMediaRecord {
    *  keeps its legacy URL, and a later build clears the flag when the image appears. */
   primaryAbsent?: true;
   backdropAbsent?: true;
+  /** The provider row carried a landscape Thumb, which is what a wide card prefers over its
+   *  Backdrop. Only presence is stored; the URL asks for the current picture. */
+  thumbPresent?: true;
   updatedAt: string;
 }
 
@@ -285,6 +288,7 @@ const validRecord = (value: unknown): RemoteMediaRecord | undefined => {
   if (mediaSourceId !== undefined) stored.mediaSourceId = mediaSourceId;
   if (record.primaryAbsent === true) stored.primaryAbsent = true;
   if (record.backdropAbsent === true) stored.backdropAbsent = true;
+  if (record.thumbPresent === true) stored.thumbPresent = true;
   return stored;
 };
 
@@ -532,6 +536,11 @@ export class MediaServerPersonal {
   }
 
   private cardOf(record: RemoteMediaRecord, library: RemoteLibraryRecord): RemoteHomeCard {
+    // A wide card draws the provider's landscape Thumb when the row reported one, else the
+    // Backdrop it always drew; a role proved absent is left off rather than guessed at.
+    const wide = record.thumbPresent === true
+      ? remoteArtworkPath(library.id, record.itemId, "Thumb")
+      : record.backdropAbsent === true ? undefined : remoteArtworkPath(library.id, record.itemId, "Backdrop");
     return {
       kind: "remote",
       key: record.key,
@@ -545,7 +554,7 @@ export class MediaServerPersonal {
       ...(record.series?.season !== undefined ? { season: record.series.season } : {}),
       ...(record.series?.episode !== undefined ? { episode: record.series.episode } : {}),
       ...(record.primaryAbsent === true ? {} : { poster: remoteArtworkPath(library.id, record.itemId, "Primary") }),
-      ...(record.backdropAbsent === true ? {} : { wide: remoteArtworkPath(library.id, record.itemId, "Backdrop") }),
+      ...(wide === undefined ? {} : { wide }),
       ...(record.duration > 0 ? { progress: { position: record.position, duration: record.duration } } : {}),
       updatedAt: record.updatedAt,
     };
@@ -579,7 +588,8 @@ export class MediaServerPersonal {
 
   private build(previous: RemoteMediaRecord | undefined, resolved: Resolved, patch: Patch, trackProgress: boolean): RemoteMediaRecord {
     // The detail route answers the public projection, so an absent role reads as a missing
-    // path here. Unknown roles keep a path, which leaves the flag unset.
+    // path here. Unknown roles keep a path, which leaves the flag unset. The wide path is the
+    // Thumb when the row had one, which is what tells the two landscape roles apart.
     const shown = resolved.item as PublicRemoteItem;
     const record: RemoteMediaRecord = {
       key: resolved.key,
@@ -597,7 +607,8 @@ export class MediaServerPersonal {
       updatedAt: new Date().toISOString(),
     };
     if (shown.poster === undefined) record.primaryAbsent = true;
-    if (shown.wide === undefined) record.backdropAbsent = true;
+    if (shown.fanart === undefined) record.backdropAbsent = true;
+    if (shown.wide !== undefined && shown.wide !== shown.fanart) record.thumbPresent = true;
     const series = seriesOf(resolved.item);
     if (series) record.series = series;
     if (resolved.playable && previous?.mediaSourceId !== undefined) record.mediaSourceId = previous.mediaSourceId;

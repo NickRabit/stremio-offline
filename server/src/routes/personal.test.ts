@@ -106,6 +106,11 @@ const mount = async (libraries: LibraryRecord[] = []): Promise<Harness> => {
       mutate(users.get(id)!);
     },
     watchlistOf: (data) => data.watchlist as Record<string, WatchlistEntry>,
+    remotePersonal: {
+      cards: async () => ({ items: [], total: 0 }),
+      assertCardsCurrent: () => undefined,
+    } as unknown as PersonalDeps["remotePersonal"],
+    authorityOf: () => ({ actor: { id: ALICE, secret: "unused" }, assertCurrent: () => undefined }),
     wirePath: (key) => key,
   };
   const app = express();

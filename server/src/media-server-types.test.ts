@@ -225,3 +225,34 @@ test("remoteArtworkPath encodes a tag defensively and accepts no library or role
   );
   assert.equal(remoteArtworkPath(libraryId, "i", "Backdrop"), `/api/remote-libraries/${libraryId}/items/i/artwork/Backdrop`);
 });
+
+test("a wide tile draws the Thumb when the row has one and the Backdrop otherwise", () => {
+  const libraryId = "rlib_00000000000000000000000000000000";
+  const both = publicRemoteItem(
+    { id: "i1", name: "Both", type: "movie", providerIds: {}, primaryImageTag: "p1", backdropImageTag: "b1", thumbImageTag: "t1" },
+    libraryId,
+  );
+  assert.equal(both.wide, `/api/remote-libraries/${libraryId}/items/i1/artwork/Thumb?tag=t1`, "the landscape still wins");
+  assert.equal(both.fanart, `/api/remote-libraries/${libraryId}/items/i1/artwork/Backdrop?tag=b1`, "the hero keeps the Backdrop");
+
+  const withoutThumb = publicRemoteItem({ id: "i2", name: "Backdrop", type: "movie", providerIds: {}, backdropImageTag: "b2" }, libraryId);
+  assert.equal(withoutThumb.wide, `/api/remote-libraries/${libraryId}/items/i2/artwork/Backdrop?tag=b2`);
+  assert.equal(withoutThumb.fanart, `/api/remote-libraries/${libraryId}/items/i2/artwork/Backdrop?tag=b2`);
+
+  const neither = publicRemoteItem(
+    { id: "i3", name: "Neither", type: "movie", providerIds: {}, hasThumbImage: false, hasBackdropImage: false },
+    libraryId,
+  );
+  assert.equal("wide" in neither, false, "two proven-absent roles emit no path");
+  assert.equal("fanart" in neither, false);
+
+  const thumbOnly = publicRemoteItem(
+    { id: "i4", name: "Still", type: "movie", providerIds: {}, hasPrimaryImage: false, hasBackdropImage: false, hasThumbImage: true, thumbImageTag: "t4" },
+    libraryId,
+  );
+  assert.equal(thumbOnly.wide, `/api/remote-libraries/${libraryId}/items/i4/artwork/Thumb?tag=t4`);
+  assert.equal("poster" in thumbOnly, false);
+  assert.equal("fanart" in thumbOnly, false, "a proven-absent backdrop emits no hero picture");
+  assert.equal("hasThumbImage" in thumbOnly, false, "the internal thumb facts never reach a client");
+  assert.equal("thumbImageTag" in thumbOnly, false);
+});

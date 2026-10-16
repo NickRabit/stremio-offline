@@ -47,7 +47,7 @@ function evictionFloor(cap: number): number {
 export function remoteImageKey(parts: {
   connectionId: string;
   itemId: string;
-  imageType: "Primary" | "Backdrop";
+  imageType: "Primary" | "Backdrop" | "Thumb";
   size: "" | "tile" | "detail";
   /** The image version the bytes belong to: what the client named, or the proof's tag. */
   tag: string;

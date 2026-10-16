@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useDialogFocus } from "./dialog-focus";
 import { useDialogViewport } from "./dialog-viewport";
-import { Check, ChevronDown, CirclePlay, FolderOpen, HardDrive, Images, ListRestart, RotateCcw, Star, X } from "lucide-react";
+import { Check, ChevronDown, CirclePlay, Download, FolderOpen, HardDrive, Images, ListRestart, RotateCcw, Star, X } from "lucide-react";
 import { DetailHero, LIBRARY_HERO_EMPTY_GRADIENT, LIBRARY_HERO_GRADIENT, useBackdrop } from "./DetailHero";
 import type { GalleryImage } from "./gallery-images";
 import { hideBroken } from "./settings-ui";
@@ -70,6 +70,12 @@ export interface LibraryTitleDetailProps {
   /** Queues a copy of the currently selected version into a local library. Absent where saving
    *  has no meaning, so the action only appears for a source that can be copied. */
   onSaveToLibrary?: (stream: Stream) => void;
+  /** The other half of the save split: the viewer wants to choose the destination themselves.
+   *  Absent keeps the single save button the local detail draws. */
+  onSaveElsewhere?: (stream: Stream) => void;
+  /** Saves the selected version to the device at the keyboard. Absent for a remote original and
+   *  wherever the account may not do it. */
+  onDownloadToDevice?: (stream: Stream) => void;
   /** Whether one row may be copied at all; absent offers the action for every row. */
   saveSupported?: (stream: Stream) => boolean;
   /** A source row's own tag; absent falls back to the library's name. */
@@ -86,7 +92,7 @@ const clock = (value: number) => {
 /** The one detail body a playable title shares, local or remote: the catalogue hero, the synopsis
  *  and the sources with a split Play button. The provider-specific parts arrive as props, so the
  *  two containers cannot drift apart and a future add-on stream joins the same selector. */
-export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backdrops, gallery, onGallery, facts, description, chips, favorite, onToggleFavorite, favoriteDisabled, watched, onToggleWatched, watchedDisabled, watchedLabel, onOpenFolder, sources, defaultSources, sourceGroups, onOpenSources, nativeSourceLabel, preferredLanguage, sourceError, onRetry, progress, onSourceChange, onClearProgress, onPlay, onSaveToLibrary, saveSupported, sourceBadge }: LibraryTitleDetailProps) {
+export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backdrops, gallery, onGallery, facts, description, chips, favorite, onToggleFavorite, favoriteDisabled, watched, onToggleWatched, watchedDisabled, watchedLabel, onOpenFolder, sources, defaultSources, sourceGroups, onOpenSources, nativeSourceLabel, preferredLanguage, sourceError, onRetry, progress, onSourceChange, onClearProgress, onPlay, onSaveToLibrary, onSaveElsewhere, onDownloadToDevice, saveSupported, sourceBadge }: LibraryTitleDetailProps) {
   useI18n();
   const backdrop = useBackdrop(backdrops ?? []);
   const [chosen, setChosen] = useState<{ identity: string; key: string } | null>(null);
@@ -116,6 +122,11 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
   const selected = (chosen?.identity === identityKey
     ? pickable.find((stream) => sourceRowKey(stream) === chosen.key) : undefined) ?? defaultPick;
   const multiple = own.length > 1 || sourceGroups != null;
+  const canSave = selected !== null && (saveSupported?.(selected) ?? true);
+  // A device save is for a file this machine can read: never a remote original or an addon
+  // answer, and never where the source itself says the account may not.
+  const canDownloadToDevice = Boolean(onDownloadToDevice && selected && selected.localPath && !isRemoteStream(selected))
+    && selected?.capabilities?.downloadToDevice !== false;
   // The tag a row wears: the transport the catalogue names it by (HTTP, RD, the provider, the local
   // chip), never the addon's own label, which travels as the row's caption instead. A caller's own
   // badge dresses a row that names no transport itself, and never overrides what the row's own
@@ -229,15 +240,24 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
       <div className="actions library-detail-play">
         {multiple ? <div className="split-button">
           <button ref={playRef} type="button" className="primary" disabled={!selected} onClick={() => selected && onPlay(selected)}><CirclePlay/> {t("player.play")}</button>
-          <button ref={arrowRef} type="button" className="split-button-toggle" aria-haspopup="dialog" aria-expanded={pickerOpen}
+          <button ref={arrowRef} type="button" className="split-button-toggle primary" aria-haspopup="dialog" aria-expanded={pickerOpen}
             aria-label={t("library.chooseSource")} title={t("library.chooseSource")} onClick={() => { onOpenSources?.(); setPickerOpen(true); }}><ChevronDown/></button>
         </div>
           : <button ref={playRef} type="button" className="primary" disabled={!selected} onClick={() => selected && onPlay(selected)}><CirclePlay/> {t("player.play")}</button>}
       </div>
       {savedPosition && <button type="button" className="icon-button library-detail-icon-action" aria-label={t("player.playFromStart")} title={t("player.playFromStart")}
         onClick={() => selected && onPlay(selected, true)}><ListRestart/></button>}
-      {onSaveToLibrary && <button type="button" aria-label={t("save.toLibrary")} title={t("save.toLibrary")} disabled={!selected || !(saveSupported?.(selected) ?? true)}
-        onClick={() => selected && saveSupported?.(selected) !== false && onSaveToLibrary(selected)}><HardDrive/> <span className="library-detail-action-label">{t("save.toLibrary")}</span></button>}
+      {onSaveToLibrary && (onSaveElsewhere
+        ? <div className="split-button">
+          <button type="button" aria-label={t("save.toLibrary")} title={t("save.toLibrary")} disabled={!canSave}
+            onClick={() => selected && canSave && onSaveToLibrary(selected)}><HardDrive/> <span className="library-detail-action-label">{t("save.toLibrary")}</span></button>
+          <button type="button" className="split-button-toggle" aria-haspopup="dialog" aria-label={t("save.toLibraryElsewhere")} title={t("save.toLibraryElsewhere")} disabled={!canSave}
+            onClick={() => selected && canSave && onSaveElsewhere(selected)}><ChevronDown/></button>
+        </div>
+        : <button type="button" aria-label={t("save.toLibrary")} title={t("save.toLibrary")} disabled={!canSave}
+          onClick={() => selected && canSave && onSaveToLibrary(selected)}><HardDrive/> <span className="library-detail-action-label">{t("save.toLibrary")}</span></button>)}
+      {canDownloadToDevice && <button type="button" aria-label={t("library.downloadToDevice")} title={t("library.downloadToDevice")}
+        onClick={() => selected && onDownloadToDevice?.(selected)}><Download/> <span className="library-detail-action-label">{t("library.downloadToDevice")}</span></button>}
       {onToggleWatched && <button type="button" className="icon-button library-detail-icon-action" aria-pressed={watched} disabled={watchedDisabled ?? false}
         aria-label={(watchedLabel ?? t(watched ? "mediaServer.markUnwatched" : "mediaServer.markWatched"))} title={(watchedLabel ?? t(watched ? "mediaServer.markUnwatched" : "mediaServer.markWatched"))}
         onClick={() => onToggleWatched()}>{watched === undefined ? <RotateCcw/> : <Check/>}</button>}

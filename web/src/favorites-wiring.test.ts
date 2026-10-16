@@ -10,8 +10,13 @@ describe("one Favourites section in the shell", () => {
 
   it("puts a Favourites destination in the sidebar and renders its view", () => {
     expect(app).toContain('label={t("nav.favorites")}');
-    expect(app).toMatch(/view === "favorites" && <>\s*<FavoritesView/);
-    expect(app).toContain('<RemotePersonalShelf refreshToken={personalRefresh}');
+    expect(app).toMatch(/view === "favorites" && <FavoritesView/);
+  });
+
+  it("carries the media-server stars in the one grid and never as a second shelf", () => {
+    expect(app).not.toContain("RemotePersonalShelf");
+    expect(app).not.toContain("remote-personal");
+    expect(app).toContain("onOpenRemote=");
   });
 
   it("keeps the compact bar at five slots by folding Favourites into More", () => {

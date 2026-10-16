@@ -1843,4 +1843,10 @@ export const ru: Catalog = {
   "favorites.tabLocal": "Файлы и каталог",
   "favorites.tabServers": "Медиасерверы",
   "mediaServer.personalPartial": "Некоторые элементы не удалось загрузить.",
+  "favorites.filterRemote": "Медиасерверы",
+  "favorites.emptyRemoteTitle": "Нет избранного на медиасерверах",
+  "favorites.emptyRemoteText": "Отметьте тайтл на сервере Jellyfin или Emby — он появится здесь.",
+  "catalog.openDetail": "Открыть подробности",
+  "player.sourcesFailed": "Не удалось загрузить источники.",
+  "player.noOtherSource": "Для этого тайтла нет другого источника.",
 };

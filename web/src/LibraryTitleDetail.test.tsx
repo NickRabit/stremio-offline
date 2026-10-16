@@ -726,3 +726,62 @@ it("shows deduplicated addon notices as messages without turning them into sourc
   expect(pickerRows()).toHaveLength(1);
   expect(chosenRow()!.textContent).toContain("Native version");
 });
+
+describe("LibraryTitleDetail play split", () => {
+  it("gives the arrow the accent as well, so the whole split is one control", () => {
+    render({ sources: [remote("s1", "1080p", 3_000_000_000), remote("s2", "720p", 1)] });
+    const arrow = host.querySelector<HTMLButtonElement>(".library-detail-play button.split-button-toggle")!;
+    expect(arrow.classList.contains("primary")).toBe(true);
+    expect(playButton().classList.contains("primary")).toBe(true);
+  });
+});
+
+describe("LibraryTitleDetail device download", () => {
+  const local: Stream = { sourceId: "l1", kind: "library", playable: true, name: "Heat", localPath: "Films/Heat.mkv" };
+  const deviceButton = () => host.querySelector<HTMLButtonElement>('.library-detail-actions button[aria-label="Save to this device"]');
+  const capabilities = (downloadToDevice: boolean) =>
+    ({ rename: false, move: false, delete: false, identify: false, writeArtwork: false, downloadToLibrary: true, downloadToDevice });
+
+  it("saves the selected file to the device when the caller offers it", () => {
+    const onDownloadToDevice = vi.fn();
+    render({ sources: [local], onDownloadToDevice });
+    expect(deviceButton()).not.toBeNull();
+    click(deviceButton());
+    expect(onDownloadToDevice).toHaveBeenCalledWith(local);
+  });
+
+  it("hides it when the caller passes no device path at all", () => {
+    render({ sources: [local] });
+    expect(deviceButton()).toBeNull();
+  });
+
+  it("hides it for a remote original and for a source the account may not save", () => {
+    const onDownloadToDevice = vi.fn();
+    render({ sources: [remote("s1", "1080p", 1)], onDownloadToDevice });
+    expect(deviceButton()).toBeNull();
+    rerender({ sources: [{ ...local, capabilities: capabilities(false) }], onDownloadToDevice });
+    expect(deviceButton()).toBeNull();
+    rerender({ sources: [{ ...local, capabilities: capabilities(true) }], onDownloadToDevice });
+    expect(deviceButton()).not.toBeNull();
+  });
+});
+
+describe("LibraryTitleDetail save split", () => {
+  it("keeps one save button without an elsewhere action and splits when the caller offers one", () => {
+    const onSaveToLibrary = vi.fn();
+    render({ sources: [remote("s1", "1080p", 1)], onSaveToLibrary });
+    expect(host.querySelector(".library-detail-actions .split-button")).toBeNull();
+    expect(lowerActions().querySelector('button[aria-label="To library"]')).not.toBeNull();
+
+    const onSaveElsewhere = vi.fn();
+    const stream = remote("s1", "1080p", 1);
+    rerender({ sources: [stream], onSaveToLibrary, onSaveElsewhere });
+    const split = lowerActions().querySelector(".split-button")!;
+    const [main, arrow] = [...split.querySelectorAll("button")];
+    click(main!);
+    expect(onSaveToLibrary).toHaveBeenCalled();
+    expect(onSaveElsewhere).not.toHaveBeenCalled();
+    click(arrow!);
+    expect(onSaveElsewhere).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "s1" }));
+  });
+});

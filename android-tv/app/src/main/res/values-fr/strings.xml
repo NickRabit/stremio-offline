@@ -137,9 +137,11 @@
   <string name="favorites_filter_all">Tout</string>
   <string name="favorites_filter_library">Dans la bibliothèque</string>
   <string name="favorites_filter_catalog">Du catalogue</string>
+  <string name="favorites_filter_remote">Serveurs multimédias</string>
   <string name="favorites_empty_all_text">Ajoutez une étoile à un fichier de la bibliothèque ou à un titre du catalogue et il apparaîtra ici.</string>
   <string name="favorites_empty_library_text">Ajoutez une étoile à un fichier ou un dossier de la bibliothèque et il apparaîtra ici.</string>
   <string name="favorites_empty_catalog_text">Ajoutez une étoile à un titre du catalogue et il apparaîtra ici.</string>
+  <string name="favorites_empty_remote_text">Mettez un titre en favori sur un serveur Jellyfin ou Emby et il apparaîtra ici.</string>
   <string name="resume_title">Continuer à regarder</string>
   <string name="resume_filter_all">Tout</string>
   <string name="resume_filter_library">Dans la bibliothèque</string>
@@ -297,8 +299,6 @@
   <string name="resume_filter_remote">Serveurs multimédias</string>
   <string name="resume_empty_remote_title">Aucune progression distante</string>
   <string name="resume_empty_remote_text">Les titres que vous regardez depuis un serveur Jellyfin ou Emby connecté apparaissent ici.</string>
-  <string name="favorites_tab_local">Fichiers et catalogue</string>
-  <string name="favorites_tab_servers">Serveurs multimédia</string>
   <string name="media_server_personal_partial">Certains éléments n\'ont pas pu être chargés.</string>
   <string name="err_media_server_format_unknown">Le serveur multimédia n’a pas fourni de format pris en charge pour le fichier original.</string>
   <string name="sources_load_addons">Sources des modules</string>

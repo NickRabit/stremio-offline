@@ -1900,4 +1900,10 @@ export const en = {
   "favorites.tabLocal": "Files & catalog",
   "favorites.tabServers": "Media servers",
   "mediaServer.personalPartial": "Some items could not be loaded.",
+  "favorites.filterRemote": "Media servers",
+  "favorites.emptyRemoteTitle": "No media-server favourites",
+  "favorites.emptyRemoteText": "Star a title on a Jellyfin or Emby server and it will show up here.",
+  "catalog.openDetail": "Open detail",
+  "player.sourcesFailed": "The sources could not be loaded.",
+  "player.noOtherSource": "No other source is available for this title.",
 };

@@ -23,7 +23,7 @@
     "test:e2e": "playwright test",
     "test:e2e:restricted": "playwright test -c playwright.restricted.config.ts",
     "test:e2e:docker": "npm run build && docker build -t stremio-offline-e2e -f e2e/Dockerfile . && docker run --rm -v \"$PWD\":/work -w /work -e CI=1 stremio-offline-e2e sh -c 'npx playwright test && npx playwright test -c playwright.restricted.config.ts'",
-    "test:e2e:snapshots": "npm run build && docker build -t stremio-offline-e2e -f e2e/Dockerfile . && docker run --rm -v \"$PWD\":/work -w /work -e CI=1 stremio-offline-e2e npx playwright test --update-snapshots",
+    "test:e2e:snapshots": "npm run build && docker build -t stremio-offline-e2e -f e2e/Dockerfile . && docker run --rm -v \"$PWD\":/work -w /work -e CI=1 -e LAYOUT_SEED_ONLY=1 stremio-offline-e2e npx playwright test --update-snapshots",
     "dev:server": "npm run dev -w server",
     "dev:web": "npm run dev -w web",
     "dev:desktop": "npm run dev -w desktop",

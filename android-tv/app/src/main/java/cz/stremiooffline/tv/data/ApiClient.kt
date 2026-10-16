@@ -220,7 +220,7 @@ class ApiClient(
     val query = "?filter=${filter.wire}&limit=$limit&skip=$skip"
     val page = request(Request.Builder().url(address.resolve("/api/favorites$query")).get().build())
       .decode<FavoritesPageDto>() ?: throw ApiError(ApiFailure.Generic)
-    return FavoritesPage(favoriteItems(page), page.total, page.pending)
+    return FavoritesPage(favoriteItems(page), page.total, page.pending, page.partial)
   }
 
   /** One page of the one merged Continue watching list, filtered by card kind. */

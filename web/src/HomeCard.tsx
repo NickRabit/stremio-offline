@@ -49,7 +49,9 @@ export function HomeCard({ card, shape, actions }: { card: HomeCardData; shape: 
   const caption = captionOf(card, localeTag());
   const folder = (card.kind === "favorite" || card.kind === "tonight") && card.itemKind === "folder";
   const poster = card.kind === "confirm" ? card.candidate.poster : card.poster;
-  const wide = card.kind === "confirm" || card.kind === "episode" || card.kind === "favorite-catalogue" ? undefined : card.wide;
+  // Every kind that can carry a background draws it: a wide tile of a suggestion, a new episode
+  // or a starred catalogue title letterboxes only when the card really has no wide picture.
+  const wide = card.wide;
   // A new episode and a suggestion are the whole card: nothing behind an overflow button.
   const menu = card.kind !== "episode" && card.kind !== "discovery" && card.kind !== "confirm" && card.kind !== "favorite-catalogue";
 

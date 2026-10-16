@@ -130,9 +130,11 @@ favorites.title
 favorites.filterAll
 favorites.filterLibrary
 favorites.filterCatalog
+favorites.filterRemote
 favorites.emptyAllText
 favorites.emptyLibraryText
 favorites.emptyCatalogText
+favorites.emptyRemoteText
 resume.title
 resume.filterAll
 resume.filterLibrary
@@ -283,8 +285,6 @@ mediaServer.personalEmpty
 resume.filterRemote
 resume.emptyRemoteTitle
 resume.emptyRemoteText
-favorites.tabLocal
-favorites.tabServers
 mediaServer.personalPartial
 
 err.mediaServerFormatUnknown

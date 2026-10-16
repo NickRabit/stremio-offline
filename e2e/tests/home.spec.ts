@@ -35,7 +35,8 @@ test("a card opens the catalogue title it remembers", async ({ page, request }) 
   await goToView(page, "Domů");
   const shelf = page.locator(".home-row", { has: page.getByRole("heading", { name: "Pokračovat ve sledování" }) });
   await shelf.locator(".browse-item", { hasText: "Zkušební film" }).getByRole("button").first().click();
-  await expect(page.locator(".detail-panel")).toContainText("Zkušební film");
+  // The shared detail the libraries use, over Home: closing it puts Home back.
+  await expect(page.locator(".catalogue-title-detail")).toContainText("Zkušební film");
 });
 
 test.describe("compact navigation", () => {

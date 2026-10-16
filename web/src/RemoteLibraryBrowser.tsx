@@ -1047,7 +1047,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   const enrichment = useTitleEnrichment(catalogue ? { kind: "catalogue", ref: catalogue } : null, catalogue, uiLanguage);
   const detailPreview = remoteDetailArtwork(detail?.poster);
   const detailBackdrops: Array<string | undefined> = detail
-    ? [enrichment.meta?.background, detail.wide, detail.type === "episode" ? series?.wide : undefined, detailPreview]
+    ? [enrichment.meta?.background, detail.fanart, detail.type === "episode" ? series?.fanart : undefined, detailPreview]
     : [];
   // The series draws its own full-detail surface, so the backdrop is probed here; the shared
   // shell probes for a playable title through the same hook.
@@ -1516,6 +1516,9 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
             // version, the copy's own projected destination for another library's, the addon's
             // rule for an answer, and nothing at all for a file that is already here.
             onSaveToLibrary={(stream) => saveDetailStream(stream, detail, detailTitle(detail))}
+            // The arrow is the catalogue's own destination dialog: the same place the viewer
+            // would land if the copy could not be queued straight away.
+            onSaveElsewhere={(stream) => openAddonSave(addonSaveState(stream, detail, detailTitle(detail), addonMediaSubject(detail, series, addonArtwork())))}
             // Only a source the server proved may be copied is offered the action, so a click
             // always reaches a real decision instead of a button that does nothing.
             saveSupported={(stream) => canQueue(stream, realDebridConfigured)}

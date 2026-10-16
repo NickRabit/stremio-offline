@@ -137,9 +137,11 @@
   <string name="favorites_filter_all">All</string>
   <string name="favorites_filter_library">In library</string>
   <string name="favorites_filter_catalog">From catalog</string>
+  <string name="favorites_filter_remote">Media servers</string>
   <string name="favorites_empty_all_text">Star a file in the library or a title in the catalogue and it appears here.</string>
   <string name="favorites_empty_library_text">Star a file or folder in the library and it appears here.</string>
   <string name="favorites_empty_catalog_text">Star a title in the catalogue and it appears here.</string>
+  <string name="favorites_empty_remote_text">Star a title on a Jellyfin or Emby server and it will show up here.</string>
   <string name="resume_title">Continue watching</string>
   <string name="resume_filter_all">All</string>
   <string name="resume_filter_library">In library</string>
@@ -297,8 +299,6 @@
   <string name="resume_filter_remote">Media servers</string>
   <string name="resume_empty_remote_title">No remote progress</string>
   <string name="resume_empty_remote_text">Titles you watch from a connected Jellyfin or Emby server appear here.</string>
-  <string name="favorites_tab_local">Files &amp; catalog</string>
-  <string name="favorites_tab_servers">Media servers</string>
   <string name="media_server_personal_partial">Some items could not be loaded.</string>
   <string name="err_media_server_format_unknown">The media server did not provide a supported original file format.</string>
   <string name="sources_load_addons">Sources from addons</string>

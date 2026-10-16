@@ -1843,4 +1843,10 @@ export const fr: Catalog = {
   "favorites.tabLocal": "Fichiers et catalogue",
   "favorites.tabServers": "Serveurs multimédia",
   "mediaServer.personalPartial": "Certains éléments n'ont pas pu être chargés.",
+  "favorites.filterRemote": "Serveurs multimédias",
+  "favorites.emptyRemoteTitle": "Aucun favori sur les serveurs multimédias",
+  "favorites.emptyRemoteText": "Mettez un titre en favori sur un serveur Jellyfin ou Emby et il apparaîtra ici.",
+  "catalog.openDetail": "Ouvrir la fiche",
+  "player.sourcesFailed": "Impossible de charger les sources.",
+  "player.noOtherSource": "Aucune autre source n'est disponible pour ce titre.",
 };

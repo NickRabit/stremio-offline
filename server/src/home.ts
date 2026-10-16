@@ -153,17 +153,17 @@ export type HomeCard =
   | { kind: "favorite"; key: string; path: string; itemKind: "file" | "folder"; label: string;
       poster?: string; wide?: string }
   | { kind: "favorite-catalogue"; key: string; type: string; id: string; name: string;
-      poster?: string; year?: string }
+      poster?: string; wide?: string; year?: string }
   | { kind: "recent"; key: string; path: string; label: string; poster?: string; wide?: string;
       addedAt: string; libraryId: string; season?: number; episode?: number }
   | { kind: "episode"; key: string; followId: string; type: string; metaId: string; name: string;
-      poster?: string; season: number; episode: number; title?: string; released: string }
+      poster?: string; wide?: string; season: number; episode: number; title?: string; released: string }
   | { kind: "discovery"; key: string; type: string; id: string; name: string; title: string;
       poster?: string; wide?: string; year?: string }
   | { kind: "tonight"; key: string; path: string; itemKind: "file" | "folder"; label: string;
       year?: string; poster?: string; wide?: string; libraryId: string }
   | { kind: "confirm"; key: string; libraryId: string; library: string; label: string;
-      path: string; candidate: { name: string; year?: string; poster?: string } };
+      path: string; candidate: { name: string; year?: string; poster?: string }; wide?: string };
 
 export interface HomeRowError { error: string; code?: string; messageKey?: string }
 

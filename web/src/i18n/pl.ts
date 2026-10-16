@@ -1843,4 +1843,10 @@ export const pl: Catalog = {
   "favorites.tabLocal": "Pliki i katalog",
   "favorites.tabServers": "Serwery multimediów",
   "mediaServer.personalPartial": "Nie udało się wczytać niektórych elementów.",
+  "favorites.filterRemote": "Serwery multimedialne",
+  "favorites.emptyRemoteTitle": "Brak ulubionych na serwerach multimedialnych",
+  "favorites.emptyRemoteText": "Dodaj gwiazdkę przy tytule na serwerze Jellyfin lub Emby, a pojawi się tutaj.",
+  "catalog.openDetail": "Otwórz szczegóły",
+  "player.sourcesFailed": "Nie udało się wczytać źródeł.",
+  "player.noOtherSource": "Dla tego tytułu nie ma innego źródła.",
 };
