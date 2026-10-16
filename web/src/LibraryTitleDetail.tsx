@@ -142,9 +142,10 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
   const selected = picked ?? seeded ?? defaultPick;
   const multiple = own.length > 1 || sourceGroups != null;
   const canSave = selected !== null && (saveSupported?.(selected) ?? true);
-  // A device save is for a file this machine can read: never a remote original or an addon
-  // answer, and never where the source itself says the account may not.
-  const canDownloadToDevice = Boolean(onDownloadToDevice && selected && selected.localPath && !isRemoteStream(selected))
+  // A device save is offered wherever the caller can hand the row to the server: a file of this
+  // machine, a copy of another one, an addon answer. A media server's own original is not one of
+  // them -- the server cannot read it -- so the caller is never asked for it.
+  const canDownloadToDevice = Boolean(onDownloadToDevice && selected && selected.playable && !isRemoteStream(selected))
     && selected?.capabilities?.downloadToDevice !== false;
   // The tag a row wears: the transport the catalogue names it by (HTTP, RD, the provider, the local
   // chip), never the addon's own label, which travels as the row's caption instead. A caller's own
@@ -271,7 +272,7 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
       {savedPosition && <button type="button" className="icon-button library-detail-icon-action" aria-label={t("player.playFromStart")} title={t("player.playFromStart")}
         onClick={() => selected && onPlay(selected, true)}><ListRestart/></button>}
       {onSaveToLibrary && (onSaveElsewhere
-        ? <div className="split-button">
+        ? <div className="split-button library-detail-save">
           <button type="button" aria-label={t("save.toLibrary")} title={t("save.toLibrary")} disabled={!canSave}
             onClick={() => selected && canSave && onSaveToLibrary(selected)}><HardDrive/> <span className="library-detail-action-label">{t("save.toLibrary")}</span></button>
           <button type="button" className="split-button-toggle" aria-haspopup="dialog" aria-label={t("save.toLibraryElsewhere")} title={t("save.toLibraryElsewhere")} disabled={!canSave}

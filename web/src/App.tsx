@@ -1675,6 +1675,24 @@ export function App() {
   }, [localDetail, remoteOpen, view, browsePath, remoteRootsPresent, browse?.path, browseBusy]);
   /** The listing's live row for the open detail, so its favorite and position never go stale. */
   const liveLocalItem = localDetail ? browseItemAt(localDetail.item.path) : null;
+  /** A library file carries no watched flag of its own: the position the store holds is the record,
+   *  which is the same thing the tile menu's "mark unwatched" reads. Marking a file seen writes the
+   *  position the player leaves a film at, and taking that back forgets it. */
+  const localProgress = liveLocalItem?.kind === "file" ? liveLocalItem.progress : undefined;
+  const localWatched = Boolean(localProgress);
+  const toggleLocalWatched = async (itemPath: string, watched: boolean): Promise<boolean> => {
+    try {
+      if (watched) {
+        const label = localDetail?.item.kind === "file" ? localDetail.item.label : localDetail?.item.name ?? "";
+        await api.saveProgress({
+          key: `file:${itemPath}`, position: localProgress?.duration ?? 1, duration: localProgress?.duration ?? 1, title: label,
+        });
+      } else await api.forgetProgress(`file:${itemPath}`);
+      await loadBrowse(browsePath);
+      setResume(await api.progressList());
+      return true;
+    } catch (error) { fail(error); return false; }
+  };
 
   const [previousFile, setPreviousFile] = useState<{ path: string; title: string } | null>(null);
   const [nextFile, setNextFile] = useState<{ path: string; title: string } | null>(null);
@@ -1750,9 +1768,19 @@ export function App() {
   };
   /** Opens the destination dialog for one row a detail offered: the exact copy of a media server
    *  takes the destination its own library projected and the server re-resolves, an addon answer
-   *  the addon's own rule. */
-  const openAlternativeSave = (request: { title: string; kind: "movie" | "series"; stream: Stream; media: Record<string, unknown> }) =>
-    setAlternativeSave(alternativeSaveRequest(request.title, request.stream, request.media, request.kind));
+   *  the addon's own rule. The viewer may ask to name the destination instead, which is the whole
+   *  job of the second half of the save button; a copy whose source projected no destination at all
+   *  asks for one rather than queueing a copy the server would refuse. */
+  const openAlternativeSave = (request: { title: string; kind: "movie" | "series"; stream: Stream; media: Record<string, unknown>; choose?: boolean }) => {
+    const save = alternativeSaveRequest(request.title, request.stream, request.media, request.kind);
+    if (request.choose || (isRemoteStream(request.stream) && sourceTargetRule(request.stream) === undefined)) {
+      setAlternativeSave(save);
+      return;
+    }
+    void api.download(request.title, request.stream, request.media)
+      .then(() => { setScanEpoch((value) => value + 1); notify(t("downloads.queued")); return loadDownloads(); })
+      .catch(fail);
+  };
   const submitAlternativeSave = async (target?: SaveTarget) => {
     const request = alternativeSave;
     if (!request) return false;
@@ -2378,6 +2406,17 @@ export function App() {
     try {
       const filename = await saveToDevice({ path: filePath });
       notify(t("save.started", { filename }));
+      return true;
+    } catch (e) { fail(e); return false; }
+  };
+  /** Hands one row a detail offered to the device at the keyboard: a file of this machine comes
+   *  from its own path, and every other row is fetched by the server on the viewer's behalf. */
+  const downloadAlternativeToDevice = async (stream: Stream): Promise<boolean> => {
+    if (stream.localPath) return downloadLibraryFile(stream.localPath);
+    if (!stream.playable || isRemoteStream(stream)) return false;
+    try {
+      const filename = await saveToDevice({ title: localDetail?.item.kind === "file" ? localDetail.item.label : localDetail?.item.name ?? "", stream });
+      notify(t("save.startedViaServer", { filename }));
       return true;
     } catch (e) { fail(e); return false; }
   };
@@ -3198,6 +3237,10 @@ export function App() {
           {...(liveLocalItem?.kind === "file" && liveLocalItem.progress ? { progress: liveLocalItem.progress } : {})}
           onToggleFavorite={(favorite) => void toggleFavorite(localDetail.item.path, favorite)}
           onResetProgress={(path) => forgetWatched(path)}
+          {...(liveLocalItem?.kind === "file" ? {
+            watched: localWatched,
+            onToggleWatched: () => void toggleLocalWatched(localDetail.item.path, !localWatched),
+          } : {})}
           onOpenFolder={() => { if (localDetail.item.kind === "folder") goLocalFolder(localDetail.item.path); }}
           uiLanguage={settings.uiLanguage} secureMode={settings.secureMode} onTrailer={setTrailerOpen}
           accountScope={session!.username} preferredLanguage={settings.audioLanguage}
@@ -3205,7 +3248,7 @@ export function App() {
           onPlayAlternative={playAlternative}
           realDebridConfigured={settings.realDebridConfigured}
           onSaveAlternative={openAlternativeSave}
-          onDownloadToDevice={(path) => void downloadLibraryFile(path)}
+          onDownloadToDevice={(stream) => void downloadAlternativeToDevice(stream)}
           onPlay={(stream, fromBeginning, catalogue) => {
             // Only the library's own file goes through the library player: a row that arrived from
             // an addon or from another media server is started as the source it really is, and the

@@ -36,7 +36,10 @@ describe("the alternative player's save and close wiring", () => {
   });
 
   it("reuses the one save request helper for the detail rows and the player", () => {
-    expect(appSource).toContain("setAlternativeSave(alternativeSaveRequest(request.title, request.stream, request.media, request.kind))");
+    // The row's own destination is resolved by the server; the helper is what names one when the
+    // viewer asks for the dialog, and the dialog is the only thing that reads it back.
+    expect(appSource).toContain("const save = alternativeSaveRequest(request.title, request.stream, request.media, request.kind);");
+    expect(appSource).toContain("if (request.choose || (isRemoteStream(request.stream) && sourceTargetRule(request.stream) === undefined)) {");
     expect(appSource).toContain("rule={alternativeSave.rule ?? addons.find((addon) => addon.key === alternativeSave.stream.addonKey)?.downloadSettings}");
   });
 });

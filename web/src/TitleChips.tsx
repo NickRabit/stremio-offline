@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Play } from "lucide-react";
 import { t, useI18n } from "./i18n";
 import { trailerAction } from "./trailers";
 import type { SiteLink, Trailer } from "./types";
@@ -38,8 +39,8 @@ export function TitleChips({ kind, trailer, links = [], leading, trailing, onTra
     {leading}
     {kind && <span className="pill">{kind}</span>}
     {action && (action.kind === "external"
-      ? <a className="trailer-action" href={action.href} target="_blank" rel="noopener noreferrer" title={t("trailers.openHint")}>{t("trailers.openOnYouTube")}</a>
-      : <button className="trailer-action" title={t("trailers.openHint")} onClick={() => onTrailer(action.trailer)}>{t("trailers.watch")}</button>)}
+      ? <a className="trailer-action" href={action.href} target="_blank" rel="noopener noreferrer" title={t("trailers.openHint")}><Play/>{t("trailers.openOnYouTube")}</a>
+      : <button className="trailer-action" title={t("trailers.openHint")} aria-label={t("trailers.watch")} onClick={() => onTrailer(action.trailer)}><Play/>{t("trailers.watch")}</button>)}
     {sorted.length > 0 && <div className="title-links">
       {sorted.map((link) => <a key={link.site} href={link.url} target="_blank" rel="noopener noreferrer"
         title={t("links.openOn", { site: SITE_LINKS[link.site] })}>{SITE_LINKS[link.site]}</a>)}

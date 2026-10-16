@@ -14,7 +14,8 @@ import { SaveTargetDialog } from "./SaveTargetDialog";
 import { alternativeSaveRequest } from "./alternative-save";
 import { addonMediaSubject, genericProgressKey, supplementaryIdentity } from "./native-addon-sources";
 import { sourceProgressOwner, type SourceProgressOwner } from "./source-progress";
-import { canQueue, isRemoteStream } from "./streams";
+import { canQueue, isLocalStream, isRemoteStream } from "./streams";
+import { sourceTargetRule } from "./save-target";
 import { DetailHero, LIBRARY_HERO_EMPTY_GRADIENT, LIBRARY_HERO_GRADIENT, useBackdrop } from "./DetailHero";
 import { remoteDetailArtwork } from "./remote-artwork";
 import { RemoteFolderArt, RemoteLibraryArt, RemoteTileArt } from "./remote-mosaic";
@@ -1124,8 +1125,13 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
 
   /** One kind pill, the trailer and the sites, in the same row the catalogue draws: no provider,
    *  library or series-name chip, and an episode's numbering travels under the title instead. */
-  const detailChips = (item: RemoteItem): ReactNode =>
+  const detailChips = (item: RemoteItem, withFavorite = false): ReactNode =>
     <TitleChips
+      // A series opens on this hero alone, and it had no star of its own: the shared shell draws one
+      // for every other detail, so the row carries it here instead of the title being unreachable.
+      leading={withFavorite ? <button type="button" className={`watch-star${state?.favorite ? " on" : ""}`}
+        aria-pressed={state?.favorite ?? false} disabled={!state} aria-label={t(state?.favorite ? "favorite.remove" : "favorite.add")} title={t(state?.favorite ? "favorite.remove" : "favorite.add")}
+        onClick={() => void toggleState({ favorite: !(state?.favorite ?? false) })}><Star/></button> : undefined}
       kind={t(item.type === "movie" ? "catalog.oneMovie" : item.type === "series" ? "catalog.oneSeries" : "episodes.one")}
       trailer={enrichment.trailer} links={enrichment.links} onTrailer={onTrailer} secureMode={secureMode}/>;
   /** The metadata line: what the provider normalized, plus the genres it gave. */
@@ -1233,9 +1239,19 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
 
   /** Opens the destination dialog for the exact addon row that was clicked; a row the existing
    *  capability checks would refuse is never offered a queue. */
-  const openAddonSave = (request: AddonSaveRequest) => {
+  /** Saves one row: the server resolves the destination the row's own source projected, and the
+   *  viewer may ask to name one instead -- which is the whole job of the arrow half of the button.
+   *  A copy whose library projected nothing asks for a destination rather than queueing a copy the
+   *  server would refuse. */
+  const openAddonSave = (request: AddonSaveRequest, choose = false) => {
     if (!canQueue(request.stream, realDebridConfigured)) return;
-    setAddonSave(request);
+    if (choose || (isRemoteStream(request.stream) && sourceTargetRule(request.stream) === undefined)) {
+      setAddonSave(request);
+      return;
+    }
+    void api.download(request.title, request.stream, request.media)
+      .then(() => onDownloadQueued?.())
+      .catch(onError);
   };
 
   /**
@@ -1245,13 +1261,15 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
    * answer takes its addon's rule, and the viewer's own file is never offered. The detail's Save
    * action and the player of an already started row both come through here, so neither can drift.
    */
-  const saveDetailStream = (stream: Stream, item: RemoteItem, title: string, media?: Record<string, unknown>) => {
+  const saveDetailStream = (stream: Stream, item: RemoteItem, title: string, media?: Record<string, unknown>, choose = false) => {
     const library = selectedRef.current;
-    if (isRemoteStream(stream) && library && stream.remoteItem?.libraryId === library.id) {
+    // A version of this library's own is the one row the arrow keeps a dialog of its own for: it
+    // lists the versions already read for the item, and the button queues the row as it stands.
+    if (choose && isRemoteStream(stream) && library && stream.remoteItem?.libraryId === library.id) {
       setSaveRequest({ library: saveLibrary(library), item, series, knownSources: sources, initialSource: stream, artwork: addonArtwork() });
       return;
     }
-    openAddonSave(addonSaveState(stream, item, title, media ?? addonMediaSubject(item, series, addonArtwork())));
+    openAddonSave(addonSaveState(stream, item, title, media ?? addonMediaSubject(item, series, addonArtwork())), choose);
   };
   const submitAddonSave = async (request: AddonSaveRequest, target?: SaveTarget) => {
     await api.download(request.title, request.stream, request.media, target);
@@ -1405,6 +1423,10 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
           <nav className="crumbs" aria-label={t("library.breadcrumbs")}>
             <button className="library-back" aria-label={detail || stack.length ? t("mediaServer.back") : t("mediaServer.backToLibraries")}
               title={detail || stack.length ? t("mediaServer.back") : t("mediaServer.backToLibraries")} onClick={stepBack}><ChevronLeft/></button>
+            {/* The same first step the library's own listing keeps: whichever library is open, the
+                way back to the section is named the same way. */}
+            <button onClick={() => onOpenChange(false)}><HardDrive/> {t("nav.library")}</button>
+            <span><ChevronRight/></span>
             <button onClick={goLibraryRoot} disabled={!detail && !stack.length}><HardDrive/> {selected.name}</button>
             {stack.map((folder, index) => <span key={folder.id}>
               <ChevronRight/>
@@ -1458,7 +1480,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
           {/* The hero is transparent on the shared surface, so the episodes sit on the same wash and
               the gradient's dark bottom keeps them legible. */}
           <DetailHero className="library-detail-hero"
-            chips={detailChips(detail)}
+            chips={detailChips(detail, true)}
             gallery={seriesGallery.length && onGallery ? <button type="button" className={`gallery-open ${seriesGallery[0]!.shape === "wide" ? "wide" : "poster"}`}
               title={t("gallery.openHint")} onClick={() => onGallery(seriesGallery, catalogue)}>
               <img key={seriesGallery[0]!.url} src={seriesGallery[0]!.url} alt="" onError={hideBroken}/><span><Images/> {seriesGallery.length > 1 ? t("gallery.stillCount", { count: seriesGallery.length }) : t("gallery.enlarge")}</span>
@@ -1518,12 +1540,18 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
             // version, the copy's own projected destination for another library's, the addon's
             // rule for an answer, and nothing at all for a file that is already here.
             onSaveToLibrary={(stream) => saveDetailStream(stream, detail, detailTitle(detail))}
-            // The arrow is the catalogue's own destination dialog: the same place the viewer
-            // would land if the copy could not be queued straight away.
-            onSaveElsewhere={(stream) => openAddonSave(addonSaveState(stream, detail, detailTitle(detail), addonMediaSubject(detail, series, addonArtwork())))}
+            // The arrow names the destination: another media server's copy or an addon answer opens
+            // the catalogue's own dialog, and this library's own version opens the one that lists
+            // the versions already read for it.
+            onSaveElsewhere={(stream) => saveDetailStream(stream, detail, detailTitle(detail), undefined, true)}
             // Only a source the server proved may be copied is offered the action, so a click
             // always reaches a real decision instead of a button that does nothing.
             saveSupported={(stream) => canQueue(stream, realDebridConfigured)}
+            // The device at the keyboard: the server fetches the row it plays through its own
+            // proxy, so a copy of this library reaches the device the way an addon answer does.
+            onDownloadToDevice={(stream) => void (isLocalStream(stream) && stream.localPath
+              ? saveLibraryFileToDevice(stream.localPath)
+              : saveAddonToDevice({ stream, media: addonMediaSubject(detail, series, addonArtwork()), title: detailTitle(detail) }))}
             sourceBadge={() => t(providerKey(selected!.provider))}
           />
           {stateError && <div className="remote-error" role="alert">

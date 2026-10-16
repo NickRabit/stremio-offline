@@ -343,6 +343,12 @@ main.view-catalog{padding-top:98px}main.view-catalog .heading{margin-bottom:8px}
      the way the copy's own first line used to, and takes no more of it. */
   .detail-panel .hero.has-chips{row-gap:0;margin:0 0 8px;padding:10px 14px}
   .detail-panel .hero.has-chips>.detail-chips{margin:0 0 3px}
+  /* The trailer is the one chip whose words can go without losing it: the row keeps its shape and
+     the sites beside it fit on a phone, where that label alone pushed them onto a second line. */
+  .title-chips .trailer-action{font-size:0;padding:0 9px}
+  .title-chips .trailer-action svg{width:15px;height:15px}
+  /* A finger still needs the height, not the width: the row spends it on the sites instead. */
+  .detail-panel .title-chips>*,.detail-panel .title-chips .title-links a{padding:0 9px}
   .detail-panel .detail-copy h2{margin:8px 0 3px;font-size:21px;line-height:1.12}
   .detail-panel .detail-copy p{margin:5px 0;font-size:11px}
   .detail-panel .detail-copy>p:last-child{display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:2}
@@ -2060,6 +2066,10 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 .library-detail-play{justify-content:flex-start}
 @media(max-width:700px),(max-height:500px) and (orientation:landscape){
   .library-detail-actions .library-detail-action-label{display:none}
+  /* A phone drops the label of every action; the Play button says its name in text, so it drops
+     its icon instead. A save button's icon *is* its label once the text is gone, so it keeps it --
+     without this the first half of the save split stood empty. */
+  .library-detail-actions>.library-detail-save>button:first-child>svg{display:block}
   .library-detail-actions>button,.library-detail-actions>.split-button>button{min-width:44px;padding:0}
 }
 .library-source-card{width:min(560px,100%)}
