@@ -57,6 +57,7 @@ import { catalogueGalleryImages, mergeGallery, localGalleryImage, type GalleryIm
 import { loadTitleGallery, type CatalogueRef } from "./title-enrichment";
 import { SettingsPage } from "./SettingsPage";
 import { resolveStartView } from "./start-view";
+import { playbackIdentity } from "./playback-identity";
 import type { Addon, BuildInfo, BrowseItem, BrowseLibrary, BrowseResult, DeviceTransfer, DownloadsViewPrefs, FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem, FavoriteRemoteItem, FollowView, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, LibraryViewPrefs, MediaServerProvider, NewEpisode, ProgressEntry, RemoteLibrary, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, Stream, Subtitle, Trailer, Video, SearchState } from "./types";
 
 /** The library choices this browser kept before they moved onto the account. Read once and
@@ -623,8 +624,10 @@ export function App() {
   const [localFromBeginning, setLocalFromBeginning] = useState(false);
   const [localProgressRevision, setLocalProgressRevision] = useState(0);
   /** A row a library detail offered that is not one of its own files: an addon answer or a copy
-   *  another media server holds. It plays on its own terms, never through the library's player. */
-  const [alternative, setAlternative] = useState<{ stream: Stream; title: string; poster?: string; owner: SourceProgressOwner; scope: number; subtitles: Subtitle[]; media: Record<string, unknown>; kind: "movie" | "series"; fromBeginning?: boolean } | null>(null);
+   *  another media server holds. It plays on its own terms, never through the library's player.
+   *  Its catalogue key identifies the other sources of the same title, and `at` is where a row
+   *  the viewer switched to starts. */
+  const [alternative, setAlternative] = useState<{ stream: Stream; title: string; poster?: string; owner: SourceProgressOwner; scope: number; subtitles: Subtitle[]; media: Record<string, unknown>; kind: "movie" | "series"; fromBeginning?: boolean; catalogue: CatalogueRef | null; at?: number } | null>(null);
   const alternativeScope = JSON.stringify([session?.username, view, localDetail?.item.path, remoteOpen, playerOpen]);
   const alternativeScopeRef = useRef({ key: alternativeScope, generation: 0 });
   if (alternativeScopeRef.current.key !== alternativeScope) {
@@ -1638,13 +1641,19 @@ export function App() {
     try { return await playLocal(file.title, file.path, localPoster, localEpisode); }
     finally { nextBusyRef.current = false; setNextBusy(false); }
   };
-  const playLocal = async (title: string, path: string, poster?: string, episode = false, anchor?: PlaybackAnchor, fromBeginning = false) => {
+  const playLocal = async (title: string, path: string, poster?: string, episode = false, anchor?: PlaybackAnchor, fromBeginning = false, identity?: { type: "movie" | "series"; id: string }) => {
     // A file of the library plays as itself: the catalogue identity of whatever was open before
-    // never travels with it.
-    setPlayingCatalogue(null);
+    // never travels with it. A caller that already knows the binding hands it over; otherwise the
+    // one the matcher wrote is read beside the source, and a lookup that fails plays the file with
+    // no identity at all.
+    const binding = identity ? Promise.resolve(identity) : api.libraryIdentity(path).then(playbackIdentity, () => null);
     const returning = capturePlaybackReturn(anchor ?? { kind: "library", key: path });
     try {
-      const source = await api.librarySource(path);
+      const [source, bound] = await Promise.all([api.librarySource(path), binding]);
+      // The identity lands only once the file itself is open. A failed open must not
+      // rename the title that is still on screen.
+      setPlayingCatalogue(bound);
+      setStartAtSeconds(undefined);
       setLocalPoster(poster);
       setLocalTitle(title);
       setLocalEpisode(episode);
@@ -1668,7 +1677,8 @@ export function App() {
     const scope = ++alternativeScopeRef.current.generation;
     setAlternative({
       stream: request.stream, title: request.title, ...(request.poster ? { poster: request.poster } : {}),
-      owner, scope, subtitles: [], media: request.media, kind: request.kind, ...(request.fromBeginning ? { fromBeginning: true } : {}),
+      owner, scope, subtitles: [], media: request.media, kind: request.kind, catalogue: request.catalogue,
+      ...(request.fromBeginning ? { fromBeginning: true } : {}),
     });
     // Only a generic addon answer has subtitles to ask the catalogue for: a copy of another
     // library and a file of the viewer's own are never turned into a catalogue request.
@@ -2250,8 +2260,9 @@ export function App() {
   const startCatalogPlayback = () => {
     if (!selected) return;
     const anchor = { kind: "catalog" as const, key: `${selected.type || "movie"}:${selected.id}` };
-    setPlayingCatalogue(selected.type === "movie" || selected.type === "series" ? { type: selected.type, id: videoId ?? selected.id } : null);
-    if (selectedStream && isLocalStream(selectedStream) && selectedStream.localPath) void playLocal(videoTitle, selectedStream.localPath, selected.poster, Boolean(selectedVideo), anchor);
+    const catalogue: { type: "movie" | "series"; id: string } | null = selected.type === "movie" || selected.type === "series" ? { type: selected.type, id: videoId ?? selected.id } : null;
+    setPlayingCatalogue(catalogue);
+    if (selectedStream && isLocalStream(selectedStream) && selectedStream.localPath) void playLocal(videoTitle, selectedStream.localPath, selected.poster, Boolean(selectedVideo), anchor, false, catalogue ?? undefined);
     else openPlayer(anchor);
   };
   const enqueue = async (target?: SaveTarget) => {
@@ -2409,13 +2420,12 @@ export function App() {
   };
 
   /** The catalogue identity the player is identified by: the title playback started on, and an
-   *  episode the exact video on screen. A library file or a title with no catalogue id has none. */
-  const playbackCatalogueRef = (): { type: "movie" | "series"; id: string } | null => localStream ? null : playingCatalogue;
-  /** Every row the player's list can switch to: the catalogue's own streams, the account's own
+   *  episode the exact video on screen. An identified library file plays under the same identity
+   *  as the catalogue row of its title, so a local row never loses it. */
+  const playbackCatalogueRef = (): { type: "movie" | "series"; id: string } | null => playingCatalogue;
+  /** Every row one title's player can switch to: the catalogue's own streams, the account's own
    *  copies and the other libraries, read at that one intent and never while browsing. */
-  const loadPlaybackSources = async (): Promise<Stream[]> => {
-    const ref = playbackCatalogueRef();
-    if (!ref) return [];
+  const titlePlaybackSources = async (ref: { type: "movie" | "series"; id: string }): Promise<Stream[]> => {
     const [providers, localCopies] = await Promise.all([
       api.streamSources(ref.type, ref.id),
       api.localStreams(ref.type, ref.id).catch(() => [] as Stream[]),
@@ -2429,6 +2439,11 @@ export function App() {
       .filter((stream) => stream.playable && stream.sourceId.trim().length > 0
         && !seen.has(stream.sourceId) && (seen.add(stream.sourceId), true));
   };
+  /** A title with no catalogue identity has no other sources to offer. */
+  const loadPlaybackSources = async (): Promise<Stream[]> => {
+    const ref = playbackCatalogueRef();
+    return ref ? titlePlaybackSources(ref) : [];
+  };
   /** Handing the player another source of the same title: it starts through the ordinary play
    *  path at the position it was chosen at, and the title's own progress is left untouched. */
   const switchPlaybackSource = async (stream: Stream, positionSeconds: number): Promise<void> => {
@@ -2436,8 +2451,41 @@ export function App() {
     if (!ref) throw new Error(t("player.noOtherSource"));
     playbackReturn.current = capturePlaybackReturn({ kind: "catalog", key: `${ref.type}:${ref.id}` });
     pickedRef.current = true;
-    setSelectedStream(stream);
     setStartAtSeconds(positionSeconds);
+    // A row of the viewer's own files replaces the file on screen and keeps playing under the same
+    // identity; every other row leaves that file behind, so it can never stay on screen.
+    if (isLocalStream(stream) && stream.localPath) {
+      // The header follows localTitle while a file is on screen. A switch from a catalogue
+      // row has never set it, so copy the title the player is already showing.
+      if (!localStream) {
+        setLocalTitle(videoTitle);
+        setLocalPoster(selected?.poster);
+        setLocalEpisode(Boolean(selectedVideo));
+      }
+      setLocalStream(stream);
+      setSubtitles([]);
+      return;
+    }
+    setLocalStream(null);
+    setSelectedStream(stream);
+    void api.subtitles(ref.type, ref.id).then(setSubtitles, () => setSubtitles([]));
+  };
+  /** The same switch for the second player, which is opened on one row of a title and replaces
+   *  that row alone: the library player on screen behind it is never touched. */
+  const loadAlternativeSources = async (): Promise<Stream[]> => {
+    const ref = alternative?.catalogue;
+    return ref ? titlePlaybackSources(ref) : [];
+  };
+  const switchAlternativeSource = (stream: Stream, positionSeconds: number): void => {
+    if (!alternative?.catalogue) throw new Error(t("player.noOtherSource"));
+    const catalogue = alternative.catalogue;
+    const local = isLocalStream(stream) && Boolean(stream.localPath);
+    setAlternative((value) => value ? { ...value, stream, at: positionSeconds, ...(local ? { subtitles: [] } : {}) } : value);
+    if (local) return;
+    void api.subtitles(catalogue.type, catalogue.id).then(
+      (found) => setAlternative((value) => value && value.stream.sourceId === stream.sourceId ? { ...value, subtitles: found } : value),
+      () => setAlternative((value) => value && value.stream.sourceId === stream.sourceId ? { ...value, subtitles: [] } : value),
+    );
   };
   const refreshPersonal = () => {
     home.refresh(["resume", "favorites"]);
@@ -2521,7 +2569,7 @@ export function App() {
             onPlay={(stream, fromBeginning) => {
               // The chosen row plays exactly as the catalogue panel plays it, with its own identity.
               const anchor = { kind: "catalog" as const, key: `${catalogueDetail.type}:${catalogueDetail.id}` };
-              if (isLocalStream(stream) && stream.localPath) void playLocal(catalogueDetail.name, stream.localPath, catalogueDetail.poster, catalogueDetail.season != null, anchor, fromBeginning);
+              if (isLocalStream(stream) && stream.localPath) void playLocal(catalogueDetail.name, stream.localPath, catalogueDetail.poster, catalogueDetail.season != null, anchor, fromBeginning, { type: catalogueDetail.type, id: catalogueStreamId(catalogueDetail) });
               else {
                 setPlayingCatalogue({ type: catalogueDetail.type, id: catalogueStreamId(catalogueDetail) });
                 setSelectedStream(stream);
@@ -2855,14 +2903,15 @@ export function App() {
           realDebridConfigured={settings.realDebridConfigured}
           onSaveAlternative={openAlternativeSave}
           onDownloadToDevice={(path) => void downloadLibraryFile(path)}
-          onPlay={(stream, fromBeginning) => {
+          onPlay={(stream, fromBeginning, catalogue) => {
             // Only the library's own file goes through the library player: a row that arrived from
             // an addon or from another media server is started as the source it really is, and the
             // clicked folder's path must never stand in for a copy that lives somewhere else.
             if (!stream.localPath) return;
             const clicked = localDetail.item;
             void playLocal(clicked.kind === "file" ? clicked.label : clicked.name, stream.localPath, clicked.poster,
-              clicked.kind === "file" && clicked.season != null, { kind: "library", key: clicked.path }, fromBeginning);
+              clicked.kind === "file" && clicked.season != null, { kind: "library", key: clicked.path }, fromBeginning,
+              catalogue ?? undefined);
           }}/> : <>
         {!browsePath && !scanHintDismissed && !libraryScan?.finishedAt && (browse?.total ?? 0) >= 10 && <div className="library-scan-hint" role="status">
           <span>{t("library.scanHint")}</span>
@@ -2985,16 +3034,16 @@ export function App() {
       </>}
     </main>
     <TrailerPlayer trailer={trailerOpen} onClose={() => setTrailerOpen(null)}/>
-    <Player nextTitle={localStream ? nextFile?.title : nextCatalogEpisode ? episodeLabel(nextCatalogEpisode) : undefined} nextBusy={nextBusy} onNext={localStream ? nextFile ? () => playAdjacent(nextFile) : undefined : nextCatalogEpisode ? playNextCatalogEpisode : undefined} autoNext={localStream ? localEpisode : Boolean(nextCatalogEpisode)} previousTitle={previousFile?.title} onPrevious={previousFile ? () => playAdjacent(previousFile) : undefined} open={playerOpen} title={localStream ? localTitle : videoTitle} stream={localStream ?? selectedStream} subtitles={localStream ? [] : subtitles} subtitleLanguage={settings.subtitleLanguage} audioLanguage={settings.audioLanguage} onPreferences={setPlaybackPreferences}
+    <Player nextTitle={localStream ? nextFile?.title : nextCatalogEpisode ? episodeLabel(nextCatalogEpisode) : undefined} nextBusy={nextBusy} onNext={localStream ? nextFile ? () => playAdjacent(nextFile) : undefined : nextCatalogEpisode ? playNextCatalogEpisode : undefined} autoNext={localStream ? localEpisode : Boolean(nextCatalogEpisode)} previousTitle={previousFile?.title} onPrevious={previousFile ? () => playAdjacent(previousFile) : undefined} open={playerOpen} title={localStream ? localTitle : selected ? videoTitle : localTitle} stream={localStream ?? selectedStream} subtitles={localStream ? [] : subtitles} subtitleLanguage={settings.subtitleLanguage} audioLanguage={settings.audioLanguage} onPreferences={setPlaybackPreferences}
       progressKey={localStream?.localPath ? `file:${localStream.localPath}` : (videoId ? `${selected?.type ?? "movie"}:${videoId}` : undefined)}
-      progressPoster={localStream ? localPoster : selected?.poster}
+      progressPoster={localStream ? localPoster : selected?.poster ?? localPoster}
       progressAddonKey={localStream ? undefined : currentCatalog?.addonKey}
       favorite={localStream?.localPath ? libraryFavorites.includes(localStream.localPath) : inWatchlist(selected?.type, selected?.id)}
       fromBeginning={localStream ? localFromBeginning : undefined}
       onToggleFavorite={localStream?.localPath || selected ? () => void togglePlayerFavorite() : undefined}
       onDownload={enqueue}
       onDeviceDownload={() => localStream?.localPath ? downloadLibraryFile(localStream.localPath) : downloadStreamToDevice()}
-      {...(!localStream && playingCatalogue ? {
+      {...(playingCatalogue ? {
         loadSources: loadPlaybackSources,
         onSwitchSource: switchPlaybackSource,
         ...(startAtSeconds !== undefined ? { startAtSeconds } : {}),
@@ -3005,6 +3054,11 @@ export function App() {
       {...(alternative.owner.kind === "remote" ? {} : { progressKey: alternative.owner.progressKey })}
       progressPoster={alternative.poster}
       {...(alternative.fromBeginning ? { fromBeginning: true } : {})} nextBusy={false}
+      {...(alternative.catalogue ? {
+        loadSources: loadAlternativeSources,
+        onSwitchSource: switchAlternativeSource,
+        ...(alternative.at !== undefined ? { startAtSeconds: alternative.at } : {}),
+      } : {})}
       onDownload={async () => {
         // The exact row that is playing is the row that is saved, through the same dialog and the
         // same destination the detail would use; a copy of another media server keeps its own

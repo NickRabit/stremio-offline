@@ -35,7 +35,9 @@ interface Props {
   onToggleFavorite: (favorite: boolean) => void;
   /** Forgets one file's saved position; true once the owner's write and refresh succeeded. */
   onResetProgress: (path: string) => Promise<boolean>;
-  onPlay: (stream: Stream, fromBeginning?: boolean) => void;
+  /** Plays one of this library's own files. The identity the detail already resolved travels with
+   *  it, so the player can offer the title's other sources without resolving it a second time. */
+  onPlay: (stream: Stream, fromBeginning: boolean | undefined, catalogue: CatalogueRef | null) => void;
   onOpenFolder?: () => void;
   /** The reader's interface language, so the catalogue is asked in it. */
   uiLanguage: string;
@@ -276,7 +278,7 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
     onPlay={(stream, fromBeginning) => {
       // The library's own file plays through the library player; a row that belongs to an addon or
       // to another media server is handed on as the source it really is, with its own identity.
-      if (isLocalStream(stream) || stream.localPath) { onPlay(stream, fromBeginning); return; }
+      if (isLocalStream(stream) || stream.localPath) { onPlay(stream, fromBeginning, catalogue); return; }
       onPlayAlternative?.({
         stream, title, ...(item.poster ? { poster: item.poster } : {}), catalogue, media: alternativeMedia(),
         kind: identity?.bound?.type === "series" ? "series" : "movie", ...(fromBeginning ? { fromBeginning: true } : {}),
