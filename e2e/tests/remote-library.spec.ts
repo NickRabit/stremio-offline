@@ -71,7 +71,8 @@ async function remoteLibraries(page: Page, options: { folders?: number; items?: 
     await route.fulfill({ json: body });
   });
   await page.goto("/");
-  await page.getByRole("button", { name: "Knihovna", exact: true }).click();
+  // The section's own entry in the sidebar, not the crumb the trail now starts with.
+  await page.locator(".sidebar").getByRole("button", { name: "Knihovna", exact: true }).click();
   return { requests, sources: () => sources };
 }
 
@@ -323,7 +324,8 @@ test("the sidebar returns to the libraries and the next remote open starts fresh
   await expect(panel.locator('.browse-item[data-remote-id="clip-79"]')).toBeVisible();
   expect(await panel.locator(".browse-scroll").evaluate(node => node.scrollTop)).toBeGreaterThan(100);
   const reads = remote.requests.length;
-  await page.getByRole("button", { name: "Knihovna", exact: true }).click();
+  // The section's own entry in the sidebar, not the crumb the trail now starts with.
+  await page.locator(".sidebar").getByRole("button", { name: "Knihovna", exact: true }).click();
   await expect(page.locator(".remote-libraries .browse-item.library")).toHaveCount(8);
   await expect(panel).toHaveCount(0);
   await openLibrary();
@@ -670,9 +672,9 @@ for (const [width, height] of [[1440, 900], [390, 844], [844, 390]]) {
       await expect(player.getByRole("button", { name: "Uložit do knihovny na serveru", exact: true })).toBeVisible();
       await expect(player.getByRole("button", { name: "Uložit do tohoto zařízení", exact: true })).toHaveCount(0);
       await player.getByRole("button", { name: "Uložit do knihovny na serveru", exact: true }).click();
-      const playerSave = page.locator('.identify-overlay[role="dialog"]').filter({ has: page.locator(".save-target-card") });
-      await playerSave.getByRole("button", { name: "Do knihovny", exact: true }).click();
-      await expect(playerSave).toHaveCount(0);
+      // The player has one save button and it saves: the row on screen goes through the destination
+      // its own source projects, with no dialog in the way.
+      await expect(page.locator('.identify-overlay[role="dialog"]').filter({ has: page.locator(".save-target-card") })).toHaveCount(0);
       expect(copies).toHaveLength(3);
       expect(copies[2]).toMatchObject({ sourceId: "foreign-copy", media: { id: "tt1234567", kind: "movie" } });
       await player.dispatchEvent("pointermove");
