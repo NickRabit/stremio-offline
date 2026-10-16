@@ -205,6 +205,8 @@ const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number
     watchlistOf: (data) => data.watchlist as Record<string, WatchlistEntry>,
     // The remote half is a card projection here; the media-server read itself has its own suite.
     remotePersonal: {
+      clearTitleFavorites: () => undefined,
+      forgetTitlePositions: async () => undefined,
       cards: async (_authority: unknown, options: { filter: string; skip?: number; limit?: number; onHome?: boolean }) => {
         state.remoteCalls.push({ filter: options.filter, skip: options.skip ?? 0, limit: options.limit ?? 60, onHome: options.onHome === true });
         if (state.remoteThrows) throw new Error("the media server is unavailable");

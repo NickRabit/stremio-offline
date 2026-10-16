@@ -104,4 +104,9 @@ describe("one click rule in the shell", () => {
   it("opens the catalogue detail a Home favourite is bound to", () => {
     expect(app).toMatch(/card\.kind === "favorite"\) \{[\s\S]{0,120}?if \(!card\.title\) return;[\s\S]{0,200}?openCatalogueDetail\(\{ type: card\.title\.type, id: card\.title\.id, name: card\.label/);
   });
+
+  it("forgets a merged media-server card on both sides of the merge", () => {
+    expect(app).toMatch(/const forgetResume = \(card: HomeCard\) => \{[\s\S]{0,400}?api\.saveRemoteState\(card\.libraryId, card\.itemId, \{ position: 0, duration: 0 \}\)/);
+    expect(app).toMatch(/card\.forgetKeys\?\.length \? api\.forgetManyProgress\(card\.forgetKeys\)/);
+  });
 });

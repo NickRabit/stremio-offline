@@ -138,6 +138,9 @@ export interface PersonalApi {
   libraryResumeItems(req: express.Request, options?: ResumeRowOptions): Promise<ResumePage>;
   favoritesPage(req: express.Request, options?: FavoritesOptions): Promise<FavoritesPage>;
   pathVisible(key: string, viewer: Viewer, libraries: LibraryRecord[]): boolean;
+  /** The catalogue keys the account starred: a media-server record of one of them is that title,
+   *  so a caller that draws the title itself leaves the record out. */
+  watchlistKeys(req: express.Request): string[];
 }
 
 const LOOKUP_TIMEOUT = Symbol("home-lookup-timeout");
@@ -194,6 +197,8 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
       else delete all[key];
       data.watchlist = all;
       if (starredPaths.size) data.favorites = data.favorites.filter((path) => !starredPaths.has(path));
+      // The title's star is one: clearing it clears the media-server records that stand for it.
+      if (!wanted) remotePersonal.clearTitleFavorites(data, key);
     });
     res.json({ key, favorite: wanted });
   }));
@@ -290,6 +295,11 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     const library = store.remoteLibraries().find((candidate) => candidate.id === writer.libraryId);
     return Boolean(library) && remoteLibraryVisibleTo(store.mediaConnections(), library!, user);
   };
+  /** The title keys among the stored keys a write touches: forgetting one also forgets the
+   *  media-server version's own position of that title. A `file:` key already resolved to its
+   *  title key by then. */
+  const forgottenTitles = (keys: Iterable<string>): Set<string> =>
+    new Set([...keys].filter((key) => key.startsWith("movie:") || key.startsWith("series:")));
   /** Every legacy `file:` key in `all` whose file resolves to `titleKey`. The stored progress
    *  map is bounded at 60 rows, so the scan behind it is bounded too. */
   const legacyKeysFor = (all: Record<string, StoredProgress>, titleKey: string, records: Record<string, LibraryMetaRecord>, units: TitleUnit[]): string[] =>
@@ -513,6 +523,8 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
       data.progress = all;
       data.watchedSeries = markers;
     });
+    const titles = forgottenTitles(keys);
+    if (titles.size) await remotePersonal.forgetTitlePositions(currentUser(req)?.id, titles);
     res.status(204).end();
   }));
   /** Forgetting a merged Home card forgets every key it stands for, and the marker of any
@@ -540,6 +552,8 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
       data.progress = stored;
       data.watchedSeries = markers;
     });
+    const titles = forgottenTitles(keys);
+    if (titles.size) await remotePersonal.forgetTitlePositions(currentUser(req)?.id, titles);
     res.status(204).end();
   }));
 
@@ -698,11 +712,15 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
   /** The stars a media server holds. A library that cannot be confirmed, or a projection that
    *  no longer stands, leaves the answer partial instead of failing it or blocking the local
    *  stars, so the one list is never emptied by a server that is slow or down. */
-  const remoteFavorites = async (req: express.Request, skip: number, limit: number, onHome: boolean):
+  const remoteFavorites = async (req: express.Request, skip: number, limit: number, onHome: boolean, excludeTitles?: ReadonlySet<string>):
     Promise<{ items: FavoriteRemoteItem[]; total: number; partial: boolean } | undefined> => {
     try {
       const authority = authorityOf(req);
-      const cards = await remotePersonal.cards(authority, { filter: "favorites", skip, limit, ...(onHome ? { onHome: true } : {}) });
+      const cards = await remotePersonal.cards(authority, {
+        filter: "favorites", skip, limit,
+        ...(onHome ? { onHome: true } : {}),
+        ...(excludeTitles?.size ? { excludeTitles } : {}),
+      });
       remotePersonal.assertCardsCurrent(authority, cards);
       return { items: cards.items.map(favoriteRemoteItem), total: cards.total, partial: cards.partial === true };
     } catch { return undefined; }
@@ -712,8 +730,11 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     const filter = options.filter ?? "all";
     const skip = Math.max(0, options.skip ?? 0);
     const limit = Math.max(1, Math.min(120, options.limit ?? 60));
+    // The titles the account starred: the local half draws them, so a media-server record of one
+    // of them is not drawn a second time.
+    const starredTitles = new Set(Object.keys(watchlistOf(dataOf(req))));
     if (filter === "remote") {
-      const remote = await remoteFavorites(req, skip, limit, options.onHome === true);
+      const remote = await remoteFavorites(req, skip, limit, options.onHome === true, starredTitles);
       return remote
         ? { items: remote.items, total: remote.total, pending: false, ...(remote.partial ? { partial: true } : {}) }
         : { items: [], total: 0, pending: false, partial: true };
@@ -725,7 +746,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
       const entries = await favoritesEntries(req, options);
       const local = await Promise.all(entries.map((entry) => describeFavorite(req, entry)));
       const described = local.filter((item): item is FavoriteItem => item !== undefined);
-      const remote = await remoteFavorites(req, 0, REMOTE_FAVORITE_LIMIT, options.onHome === true);
+      const remote = await remoteFavorites(req, 0, REMOTE_FAVORITE_LIMIT, options.onHome === true, starredTitles);
       const remoteItems = (remote?.items ?? []).filter((item) =>
         wanted === "movie" ? item.itemType === "movie" : item.itemType === "series" || item.itemType === "episode");
       const merged = [...described, ...remoteItems];
@@ -751,7 +772,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     // never repeats a card or drops the local tail; a page the local half already fills asks
     // the server for one row alone, which is enough for `total`.
     const page = local.slice(skip, skip + limit);
-    const remote = await remoteFavorites(req, Math.max(0, skip - local.length), page.length < limit ? limit : 1, options.onHome === true);
+    const remote = await remoteFavorites(req, Math.max(0, skip - local.length), page.length < limit ? limit : 1, options.onHome === true, starredTitles);
     if (!remote) return { items: page, total: local.length, pending: pendingIn(page), partial: true };
     const items = [...page, ...remote.items.slice(0, Math.max(0, limit - page.length))];
     return { items, total: local.length + remote.total, pending: pendingIn(items), ...(remote.partial ? { partial: true } : {}) };
@@ -868,5 +889,5 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     res.json({ path: ":favorites", items: page.map(({ backfill: _backfill, ...item }) => item), total: ordered.length, pending: page.some((item) => !item.poster || !item.wide || item.backfill) });
   }));
 
-  return { progressRows, libraryResumeItems, favoritesPage, pathVisible };
+  return { progressRows, libraryResumeItems, favoritesPage, pathVisible, watchlistKeys: (req) => Object.keys(watchlistOf(dataOf(req))) };
 }

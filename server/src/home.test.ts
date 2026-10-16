@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { HOME_ROWS, HOME_ROW_LIMIT, boundCards, homeCatalogRowId, homeRowOrder, mergeResume, parseHomeCatalogRowId, parseResumeFilter, resumePage, type HomeCard, type ResumeCatalogueItem, type ResumeFileItem } from "./home.js";
+import { HOME_ROWS, HOME_ROW_LIMIT, boundCards, homeCatalogRowId, homeRowOrder, mergeResume, parseHomeCatalogRowId, parseResumeFilter, resumePage, type HomeCard, type RemoteHomeCard, type ResumeCatalogueItem, type ResumeFileItem, type ResumeFilter } from "./home.js";
 
 const at = (day: number) => `2024-01-${String(day).padStart(2, "0")}T00:00:00.000Z`;
 
@@ -13,6 +13,11 @@ const file = (over: Partial<ResumeFileItem> & { key: string }): ResumeFileItem =
 
 const catalogue = (over: Partial<ResumeCatalogueItem> & { key: string }): ResumeCatalogueItem => ({
   updatedAt: at(1), title: "Catalogue", type: "series", id: "tt1", name: "Show", ...over,
+});
+
+const remoteCard = (over: Partial<RemoteHomeCard> & { key: string }): RemoteHomeCard => ({
+  kind: "remote", title: "Remote", provider: "jellyfin", libraryId: "rlib_a", libraryName: "Server",
+  itemId: "i1", itemType: "movie", updatedAt: at(1), ...over,
 });
 
 test("two cards with the same verified series id merge into one", () => {
@@ -243,6 +248,70 @@ test("a card with only one source answers only its own filter", () => {
   assert.deepEqual(resumePage(local, { filter: "catalog" }).items, []);
   assert.deepEqual(resumePage(remote, { filter: "library" }).items, []);
   assert.deepEqual(resumePage(remote, { filter: "catalog" }).items.map((item) => item.key), ["movie:tt1"]);
+});
+
+test("a media-server card of a named title merges with the same title's local rows", () => {
+  const identity = { type: "movie" as const, id: "tt1" };
+  const newer = { files: [], catalogue: [catalogue({ key: "movie:tt1", type: "movie", id: "tt1", identity, updatedAt: at(3) })], remote: [remoteCard({ key: "remote:a", identity, updatedAt: at(1) })] };
+  const merged = mergeResume(newer);
+  assert.equal(merged.items.length, 1, "one card for the title");
+  assert.equal(merged.items[0]!.kind, "resume-catalogue", "the newest row speaks for it");
+
+  const remoteWins = { ...newer, remote: [remoteCard({ key: "remote:a", identity, updatedAt: at(9) })] };
+  const card = mergeResume(remoteWins).items[0]!;
+  assert.equal(card.kind, "remote");
+  assert.deepEqual(card.kind === "remote" ? card.forgetKeys : undefined, ["movie:tt1"], "the media-server card carries the local keys it stands for");
+});
+
+test("a media-server card of a show merges by the show's own id", () => {
+  const identity = { type: "series" as const, id: "tt5" };
+  const sources = {
+    files: [file({ key: "file:a", identity, season: 1, episode: 2, updatedAt: at(1) })],
+    catalogue: [catalogue({ key: "series:tt5:1:2", identity, season: 1, episode: 2, updatedAt: at(2) })],
+    remote: [remoteCard({ key: "remote:a", identity, itemType: "episode", season: 1, episode: 2, updatedAt: at(4) })],
+  };
+  const card = mergeResume(sources).items[0]!;
+  assert.equal(card.kind, "remote", "the newest episode is the media server's");
+  assert.deepEqual(card.kind === "remote" ? card.forgetKeys : undefined, ["file:a", "series:tt5:1:2"], "and it forgets the rows behind it");
+});
+
+test("within one title a tie goes to the library file, then the catalogue, then the media server", () => {
+  const identity = { type: "movie" as const, id: "tt1" };
+  const remote = remoteCard({ key: "remote:a", identity, updatedAt: at(2) });
+  const catalogued = catalogue({ key: "movie:tt1", type: "movie", id: "tt1", identity, updatedAt: at(2) });
+  const local = file({ key: "file:a", identity, updatedAt: at(2) });
+  const kind = (sources: Parameters<typeof mergeResume>[0]) => mergeResume(sources).items[0]!.kind;
+
+  assert.equal(kind({ files: [local], catalogue: [catalogued], remote: [remote] }), "resume-file");
+  assert.equal(kind({ files: [], catalogue: [catalogued], remote: [remote] }), "resume-catalogue");
+  assert.equal(kind({ files: [], catalogue: [], remote: [remote] }), "remote");
+});
+
+test("a media-server card nothing can name stays its own card and forgets nothing else", () => {
+  const sources = {
+    files: [],
+    catalogue: [catalogue({ key: "movie:tt1", type: "movie", id: "tt1", updatedAt: at(1) })],
+    remote: [remoteCard({ key: "remote:a", updatedAt: at(9) })],
+  };
+  const cards = mergeResume(sources).items;
+  assert.deepEqual(cards.map((card) => card.kind).sort(), ["remote", "resume-catalogue"]);
+  const card = cards.find((item) => item.kind === "remote")!;
+  assert.equal(card.kind === "remote" ? card.forgetKeys : undefined, undefined);
+});
+
+test("a merged group answers each filter by the members it holds", () => {
+  const identity = { type: "movie" as const, id: "tt1" };
+  const sources = {
+    files: [file({ key: "file:a", identity, updatedAt: at(1) })],
+    catalogue: [],
+    remote: [remoteCard({ key: "remote:a", identity, updatedAt: at(9) })],
+  };
+  const keys = (filter: ResumeFilter) => resumePage(sources, { filter }).items.map((item) => item.key);
+
+  assert.equal(resumePage(sources, {}).items[0]!.kind, "remote", "the newer media-server card is the card");
+  assert.deepEqual(keys("library"), ["remote:a"], "the group still answers the library filter");
+  assert.deepEqual(keys("remote"), ["remote:a"]);
+  assert.deepEqual(keys("movies"), ["remote:a"]);
 });
 
 test("paging walks one stable, de-duplicated order past the Home bound", () => {

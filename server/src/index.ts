@@ -130,7 +130,11 @@ const remoteImages = new RemoteImageCache(path.join(DATA_DIR, "remote-images"));
 const fileSnaps = new FileSnapCache();
 const mediaServers = new MediaServerManager(store, mediaServerVault, { remoteImages });
 const mediaServerSources = new MediaServerSources(store, mediaServers, mediaResources);
-const mediaServerPersonal = new MediaServerPersonal(store, mediaServers);
+const mediaServerPersonal = new MediaServerPersonal(store, mediaServers, async () => {
+  const records = metaStore.qualifiedMeta();
+  const units = await libraryUnits();
+  return (path) => { const title = titleOfPath(path, records, units); return title ? `${title.type}:${title.id}` : undefined; };
+});
 let markServerReady!: () => void;
 const serverReady = new Promise<void>((resolve) => { markServerReady = resolve; });
 await store.load();
@@ -1856,7 +1860,11 @@ const setLibraryFavorite = async (relative: string, wanted: boolean, userId: str
       if (!watchlist[identity]) {
         watchlist[identity] = { type: title.type, id: title.id, name: title.name ?? posixBase(resolved.key), addedAt: new Date().toISOString() };
       }
-    } else delete watchlist[identity];
+    } else {
+      delete watchlist[identity];
+      // The title's star is one: clearing it clears the media-server records that stand for it.
+      mediaServerPersonal.clearTitleFavorites(data, identity);
+    }
     data.watchlist = watchlist;
   });
 };

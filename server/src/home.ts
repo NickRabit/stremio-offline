@@ -136,6 +136,12 @@ export interface RemoteHomeCard {
   poster?: string;
   wide?: string;
   progress?: HomeProgress;
+  /** The catalogue title the item stands for, when the provider named one: the card merges with
+   *  the same title's library and catalogue rows in the one Continue watching list. */
+  identity?: ResumeIdentity;
+  /** The local keys this card stands for, when it won a merged group: forgetting the card has to
+   *  forget the library files and catalogue rows behind it too. */
+  forgetKeys?: string[];
   updatedAt: string;
 }
 
@@ -255,20 +261,31 @@ export function boundCards<T>(items: T[], limit: number = HOME_ROW_LIMIT): { ite
 
 type ResumeCandidate =
   | { source: "file"; identity?: string; item: ResumeFileItem }
-  | { source: "catalogue"; identity?: string; item: ResumeCatalogueItem };
+  | { source: "catalogue"; identity?: string; item: ResumeCatalogueItem }
+  | { source: "remote"; identity?: string; item: RemoteHomeCard };
 
 const isPending = (candidate: ResumeCandidate) => candidate.source === "catalogue" && candidate.item.pending === true;
 
-/** Newest marker first; a tie goes to the library file because it is playable right now. */
+/** Which card speaks for a group when the times tie: the library file first, because it is
+ *  playable right now, then the catalogue row, then the media server's own version. */
+const sourceRank = (candidate: ResumeCandidate) =>
+  candidate.source === "file" ? 0 : candidate.source === "catalogue" ? 1 : 2;
+
+/** Newest marker first, and the rank above when they tie. */
 const compareCandidates = (left: ResumeCandidate, right: ResumeCandidate) =>
   right.item.updatedAt.localeCompare(left.item.updatedAt)
-  || (left.source === right.source ? 0 : left.source === "file" ? -1 : 1)
+  || sourceRank(left) - sourceRank(right)
   || left.item.key.localeCompare(right.item.key);
 
-function cardFor(candidates: ResumeCandidate[]): Extract<HomeCard, { kind: "resume-file" | "resume-catalogue" | "remote" }> {
-  const forgetKeys = [...new Set(candidates.map((candidate) => candidate.item.key))].sort();
+function cardFor(candidates: ResumeCandidate[]): ResumeCard {
+  // What the card itself stands for: the library files and catalogue rows of the group. A remote
+  // version is forgotten through its own state, so it never joins these keys.
+  const forgetKeys = [...new Set(candidates.filter((candidate) => candidate.source !== "remote").map((candidate) => candidate.item.key))].sort();
   const playable = candidates.filter((candidate) => !isPending(candidate));
   const winner = [...(playable.length ? playable : candidates)].sort(compareCandidates)[0]!;
+  if (winner.source === "remote") {
+    return { ...winner.item, ...(forgetKeys.length ? { forgetKeys } : {}) };
+  }
   if (winner.source === "file") {
     const item = winner.item;
     return {
@@ -304,6 +321,8 @@ function resumeGroups(sources: ResumeSources): ResumeGroup[] {
   const candidates: ResumeCandidate[] = [
     ...sources.files.map((item): ResumeCandidate => ({ source: "file", identity: item.identity ? `${item.identity.type}:${item.identity.id}` : undefined, item })),
     ...sources.catalogue.map((item): ResumeCandidate => ({ source: "catalogue", identity: item.identity ? `${item.identity.type}:${item.identity.id}` : undefined, item })),
+    // A media-server card joins the title it stands for; one nothing can name stays its own card.
+    ...(sources.remote ?? []).map((card): ResumeCandidate => ({ source: "remote", identity: card.identity ? `${card.identity.type}:${card.identity.id}` : undefined, item: card })),
   ];
   const groups = new Map<string, ResumeCandidate[]>();
   const singles: ResumeCandidate[] = [];
@@ -317,8 +336,8 @@ function resumeGroups(sources: ResumeSources): ResumeGroup[] {
       card: cardFor(bucket),
       file: bucket.some((candidate) => candidate.source === "file"),
       catalogue: bucket.some((candidate) => candidate.source === "catalogue"),
+      remote: bucket.some((candidate) => candidate.source === "remote"),
     }))
-    .concat((sources.remote ?? []).map((card) => ({ card, file: false, catalogue: false })))
     .sort((a, b) => b.card.updatedAt.localeCompare(a.card.updatedAt) || a.card.key.localeCompare(b.card.key));
 }
 
@@ -336,7 +355,7 @@ export const parseResumeFilter = (value: unknown): ResumeFilter =>
 
 /** One merged card and the sources it stands for. A folded title that kept a local copy
  *  counts under both filters, whichever kind won the card. */
-interface ResumeGroup { card: ResumeCard; file: boolean; catalogue: boolean }
+interface ResumeGroup { card: ResumeCard; file: boolean; catalogue: boolean; remote: boolean }
 
 export type ResumeCard = Extract<HomeCard, { kind: "resume-file" | "resume-catalogue" | "remote" }>;
 
@@ -349,7 +368,7 @@ export function resumePage(sources: ResumeSources, options: { filter?: ResumeFil
     if (filter === "all") return true;
     if (filter === "library") return group.file;
     if (filter === "catalog") return group.catalogue;
-    if (filter === "remote") return group.card.kind === "remote";
+    if (filter === "remote") return group.remote;
     return cardWantedByTitle(group.card, filter === "movies" ? "movie" : "series");
   });
   const cards = kept.map((group) => group.card);

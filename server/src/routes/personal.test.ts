@@ -47,6 +47,9 @@ interface Harness {
   /** The media-server stars the card projection hands out, and every page it was asked for. */
   remoteCards: RemoteHomeCard[];
   remoteCalls: Array<{ filter: string; skip: number; limit: number }>;
+  /** Every media-server star the account cleared, and every title whose position was forgotten. */
+  clearedTitles: string[];
+  forgottenTitles: string[][];
   /** How many writes reached `updateData`, so a single-operation forget can be counted. */
   updates: number;
   data(user: string): UserData;
@@ -70,6 +73,8 @@ const mount = async (libraries: LibraryRecord[] = []): Promise<Harness> => {
   const remoteLibraries: Array<Record<string, unknown>> = [];
   const remoteCards: RemoteHomeCard[] = [];
   const remoteCalls: Harness["remoteCalls"] = [];
+  const clearedTitles: string[] = [];
+  const forgottenTitles: string[][] = [];
   let updates = 0;
   const userOf = (req?: express.Request) => {
     const id = req?.header("x-user");
@@ -138,6 +143,8 @@ const mount = async (libraries: LibraryRecord[] = []): Promise<Harness> => {
     },
     watchlistOf: (data) => data.watchlist as Record<string, WatchlistEntry>,
     remotePersonal: {
+      clearTitleFavorites: (_data: unknown, typeId: string) => { clearedTitles.push(typeId); },
+      forgetTitlePositions: async (_userId: string | undefined, keys: ReadonlySet<string>) => { forgottenTitles.push([...keys]); },
       cards: async (_authority: unknown, options: { filter: string; skip?: number; limit?: number }) => {
         remoteCalls.push({ filter: options.filter, skip: options.skip ?? 0, limit: options.limit ?? 60 });
         const skip = options.skip ?? 0;
@@ -174,6 +181,8 @@ const mount = async (libraries: LibraryRecord[] = []): Promise<Harness> => {
     remoteLibraries,
     remoteCards,
     remoteCalls,
+    clearedTitles,
+    forgottenTitles,
     get updates() { return updates; },
     data: (user) => users.get(user)!,
     close: async () => {
@@ -584,6 +593,26 @@ test("unstarring a title through the watchlist clears the library paths that sta
   assert.equal(response.status, 200);
   assert.deepEqual(harness.data(ALICE).watchlist, {});
   assert.deepEqual(harness.data(ALICE).favorites, ["lib_00000001/Films/Loose.mkv"], "every copy of the film goes, the unbound star stays");
+  assert.deepEqual(harness.clearedTitles, ["movie:tt9"], "and a media-server record of the title loses its star with it");
+});
+
+test("forgetting a title also forgets the media-server position of it", async (t) => {
+  const harness = await mount([filmLibrary]);
+  t.after(harness.close);
+
+  harness.data(ALICE).progress = { "movie:tt9": { position: 60, duration: 600, title: "One", updatedAt: "2024-01-01T00:00:00.000Z" } };
+  assert.equal((await api(harness.base, `/api/progress/${encodeURIComponent("movie:tt9")}`, { method: "DELETE", user: ALICE })).status, 204);
+  assert.deepEqual(harness.forgottenTitles, [["movie:tt9"]]);
+
+  harness.data(ALICE).progress = { "series:tt5:1:2": { position: 30, duration: 600, title: "Show", series: { id: "tt5", name: "Show", season: 1, episode: 2 }, updatedAt: "2024-01-01T00:00:00.000Z" } };
+  assert.equal((await api(harness.base, "/api/progress/forget", { method: "POST", user: ALICE, body: { keys: ["series:tt5:1:2"] } })).status, 204);
+  assert.deepEqual(harness.forgottenTitles[1], ["series:tt5:1:2"]);
+
+  // A file key stands for its title once it is bound: forgetting the file forgets the title too.
+  bindFilm(harness);
+  harness.data(ALICE).progress = { [`file:${FILM_FILE}`]: { position: 30, duration: 600, title: "Heat", path: FILM_FILE, updatedAt: "2024-01-01T00:00:00.000Z" } };
+  assert.equal((await api(harness.base, `/api/progress/${encodeURIComponent(`file:${FILM_FILE}`)}`, { method: "DELETE", user: ALICE })).status, 204);
+  assert.deepEqual(harness.forgottenTitles[2], ["movie:tt9"], "the file key resolved to its title's key");
 });
 
 test("a starred episode stands for its show in every title read", async (t) => {

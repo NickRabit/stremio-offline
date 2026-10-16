@@ -2846,8 +2846,10 @@ export function App() {
   const forgetResume = (card: HomeCard) => {
     if (card.kind === "remote") {
       if (!window.confirm(t("home.forgetConfirm", { title: card.title }))) return;
-      // Only the position is cleared; the remote favourite and watched flags are kept.
+      // Only the position is cleared; the remote favourite and watched flags are kept. A card that
+      // won a merged group forgets the library files and catalogue rows behind it with it.
       void api.saveRemoteState(card.libraryId, card.itemId, { position: 0, duration: 0 })
+        .then(() => (card.forgetKeys?.length ? api.forgetManyProgress(card.forgetKeys) : Promise.resolve()))
         .then(() => { void loadResume(resumeFilter, 0); home.refresh(["resume"]); refreshPersonal(); }, fail);
       return;
     }

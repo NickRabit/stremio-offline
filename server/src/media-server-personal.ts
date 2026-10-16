@@ -14,7 +14,7 @@ import {
 } from "./media-server-types.js";
 import { ResourceError } from "./media-resources.js";
 import type { Store } from "./store.js";
-import { emptyUserData, findUserById, type UserRecord } from "./users.js";
+import { emptyUserData, findUserById, type UserData, type UserRecord } from "./users.js";
 
 /** What one account sees for one verified remote item. Never carries a URL, token, seal or
  *  owner stamp. */
@@ -30,6 +30,9 @@ export interface RemoteItemState {
 
 interface RemoteSeries { id?: string; name?: string; season?: number; episode?: number }
 
+/** The catalogue title a remote item stands for, when the provider named one. */
+export interface RemoteTitle { type: "movie" | "series"; id: string }
+
 interface RemoteMediaRecord {
   key: string;
   provider: MediaServerKind;
@@ -40,6 +43,8 @@ interface RemoteMediaRecord {
   type: ProviderItemType;
   name: string;
   series?: RemoteSeries;
+  /** The title the item stands for: an episode answers with its show's own ids. */
+  title?: RemoteTitle;
   position: number;
   duration: number;
   favorite: boolean;
@@ -73,6 +78,9 @@ export interface RemoteCardsOptions {
   onHome?: boolean;
   skip?: number;
   limit?: number;
+  /** Catalogue keys the caller draws elsewhere: a record of one of those titles is left out, so
+   *  no title is listed twice. `movie:<id>` and `series:<id>` forms, as the watchlist stores them. */
+  excludeTitles?: ReadonlySet<string>;
 }
 
 export interface RemoteCards {
@@ -248,6 +256,50 @@ const readPatch = (body: unknown): Patch => {
 const safeString = (value: unknown, max: number): string | undefined =>
   typeof value === "string" && value.length > 0 && value.length <= max ? value : undefined;
 
+/** The catalogue id forms this state accepts: the same two the interface's own identity reads,
+ *  and nothing else. */
+const REMOTE_TITLE_ID = /^(tt[0-9]+|tmdb:[0-9]+)$/;
+const REMOTE_TITLE_ID_MAX = 64;
+/** How long the show a series id names is remembered, so one episode page costs one parent read. */
+const SERIES_TITLE_TTL_MS = 60 * 60_000;
+
+const validTitle = (value: unknown): RemoteTitle | undefined => {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const type = record.type;
+  const id = record.id;
+  if (type !== "movie" && type !== "series") return undefined;
+  if (typeof id !== "string" || id.length > REMOTE_TITLE_ID_MAX || !REMOTE_TITLE_ID.test(id)) return undefined;
+  return { type, id };
+};
+
+/** The catalogue title a provider row names, read the way the interface's own identity reads it:
+ *  an IMDb id wins, a numeric TMDb id becomes the `tmdb:` form, anything else is no title. */
+export function remoteTitleOf(type: "movie" | "series", ids: ProviderItem["providerIds"] | undefined): RemoteTitle | undefined {
+  const imdb = ids?.imdb;
+  if (imdb && imdb.length <= REMOTE_TITLE_ID_MAX && /^tt[0-9]+$/.test(imdb)) return { type, id: imdb };
+  const tmdb = ids?.tmdb;
+  if (tmdb && `tmdb:${tmdb}`.length <= REMOTE_TITLE_ID_MAX && /^[0-9]+$/.test(tmdb)) return { type, id: `tmdb:${tmdb}` };
+  return undefined;
+}
+
+/** The catalogue key a title is starred and forgotten under, as the personal store writes it. */
+const titleKeyOf = (title: RemoteTitle): string => `${title.type}:${title.id}`;
+
+/** Whether one forgotten key names this record's own title: a film by its key, an episode by the
+ *  exact episode of the show, so forgetting one episode leaves the other ones' positions alone. */
+const titleKeyForgotten = (record: RemoteMediaRecord, keys: ReadonlySet<string>): boolean => {
+  if (!record.title) return false;
+  if (record.title.type === "movie") return keys.has(titleKeyOf(record.title));
+  const series = record.series;
+  if (record.type !== "episode" || series?.season === undefined || series.episode === undefined) return false;
+  return keys.has(`${titleKeyOf(record.title)}:${series.season}:${series.episode}`);
+};
+
+/** The catalogue stars of one account, as the personal routes keep them. */
+const watchlistOf = (data: UserData | undefined): Record<string, unknown> =>
+  (data?.watchlist as Record<string, unknown> | undefined) ?? {};
+
 const validSeries = (value: unknown): RemoteSeries | undefined => {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
@@ -285,6 +337,8 @@ const validRecord = (value: unknown): RemoteMediaRecord | undefined => {
   };
   const series = validSeries(record.series);
   if (series) stored.series = series;
+  const title = validTitle(record.title);
+  if (title) stored.title = title;
   const mediaSourceId = safeString(record.mediaSourceId, MEDIA_SERVER_LIMITS.upstreamId);
   if (mediaSourceId !== undefined) stored.mediaSourceId = mediaSourceId;
   if (record.primaryAbsent === true) stored.primaryAbsent = true;
@@ -302,11 +356,13 @@ const projectableRecord = (mapKey: string, value: unknown): RemoteMediaRecord | 
   return record;
 };
 
-const stateOf = (record: RemoteMediaRecord): RemoteItemState => ({
+/** One record as the caller reads it. The star is the title's: a record of a starred title reads
+ *  starred even when this very version was never starred itself. */
+const stateOf = (record: RemoteMediaRecord, watchlist: Record<string, unknown> = {}): RemoteItemState => ({
   key: record.key,
   position: record.position,
   duration: record.duration,
-  favorite: record.favorite,
+  favorite: record.favorite || (record.title !== undefined && watchlist[titleKeyOf(record.title)] !== undefined),
   watched: record.watched,
   ...(record.mediaSourceId === undefined ? {} : { mediaSourceId: record.mediaSourceId }),
   ...(record.updatedAt ? { updatedAt: record.updatedAt } : {}),
@@ -328,7 +384,14 @@ const seriesOf = (item: ProviderItem): RemoteSeries | undefined => {
  *  progress map, and every write re-proves the account, the grant and the connection against
  *  the state the write lands on. */
 export class MediaServerPersonal {
-  constructor(private readonly store: Store, private readonly manager: MediaServerManager) {}
+  /** The show each series id names, kept for an hour so one episode page costs one parent read. */
+  private readonly seriesTitles = new Map<string, { title: RemoteTitle; name?: string; at: number }>();
+
+  /** `titleOfPath`, when given, reads which title a starred library path stands for, so clearing a
+   *  remote title's star clears the library copies' stars of that title too. It is read before a
+   *  write, because the reading waits on the library's units. */
+  constructor(private readonly store: Store, private readonly manager: MediaServerManager,
+    private readonly titleOfPath?: () => Promise<(path: string) => string | undefined>) {}
 
   private currentActor(authority: MediaServerAuthority): UserRecord {
     authority.assertCurrent();
@@ -365,7 +428,25 @@ export class MediaServerPersonal {
     const resolved = await this.resolve(authority, libraryId, itemId, signal);
     const record = validRecord(this.mapOf(resolved.userId)[resolved.key]);
     authority.assertCurrent();
-    return record ? stateOf(record) : { key: resolved.key, position: 0, duration: 0, favorite: false, watched: false };
+    const watchlist = watchlistOf(this.store.userData(resolved.userId));
+    return record ? stateOf(record, watchlist) : { key: resolved.key, position: 0, duration: 0, favorite: false, watched: false };
+  }
+
+  /** The catalogue title one write stands for, resolved from the provider's own ids. An episode
+   *  answers with its show's ids, which costs one parent read per show; a failed or empty read
+   *  answers nothing, so the write keeps whatever title the record already had. */
+  private async titleOfWrite(authority: MediaServerAuthority, resolved: Resolved, signal?: AbortSignal): Promise<{ title?: RemoteTitle; name?: string }> {
+    const item = resolved.item;
+    if (item.type === "movie" || item.type === "series") return { title: remoteTitleOf(item.type, item.providerIds), name: item.name };
+    if (item.type !== "episode" || item.seriesId === undefined) return {};
+    const cacheKey = `${resolved.library.id}\u0000${item.seriesId}`;
+    const held = this.seriesTitles.get(cacheKey);
+    if (held && held.at > Date.now() - SERIES_TITLE_TTL_MS) return { title: held.title, name: held.name };
+    const parent = await this.manager.itemDetail(authority, resolved.library.id, item.seriesId, signal).catch(() => undefined);
+    const title = parent ? remoteTitleOf("series", parent.item.providerIds) : undefined;
+    if (!title) return {};
+    this.seriesTitles.set(cacheKey, { title, name: parent!.item.name, at: Date.now() });
+    return { title, name: parent!.item.name };
   }
 
   async patch(authority: MediaServerAuthority, libraryId: unknown, itemId: unknown, body: unknown, signal?: AbortSignal): Promise<RemoteItemState> {
@@ -380,16 +461,43 @@ export class MediaServerPersonal {
       authority.assertCurrent();
       if (!versions.versions.some((version) => version.id === patch.mediaSourceId)) throw notFound("That media-server source is no longer available.");
     }
+    // The title the write stands for, resolved before the state mutator: an episode needs one
+    // parent read, which is the only thing here that waits.
+    const written = await this.titleOfWrite(authority, resolved, signal);
+    const pathTitle = patch.favorite === false ? await this.titleOfPath?.() : undefined;
+    authority.assertCurrent();
     let state!: RemoteItemState;
     await this.store.update((next) => {
       this.assertWrite(next, authority, resolved);
       const previous = validRecord(this.mapOf(resolved.userId, next)[resolved.key]);
-      const record = this.build(previous, resolved, patch, this.trackProgressOf(next, resolved.userId));
+      const record = this.build(previous, resolved, patch, this.trackProgressOf(next, resolved.userId), written.title);
       const map: Record<string, unknown> = { ...this.mapOf(resolved.userId, next), [resolved.key]: record };
       this.enforceBound(map, resolved.key);
       const data = next.userData?.[resolved.userId] ?? emptyUserData();
-      next.userData = { ...(next.userData ?? {}), [resolved.userId]: { ...data, remoteMedia: map } };
-      state = stateOf(record);
+      // One star per title: starring a remote item stars its title, and clearing the star clears
+      // every remote record of that title with it.
+      const watchlist = { ...watchlistOf(data) };
+      let favorites: string[] = Array.isArray(data.favorites) ? [...data.favorites] : [];
+      if (patch.favorite !== undefined && record.title) {
+        const titleKey = titleKeyOf(record.title);
+        if (patch.favorite) {
+          if (watchlist[titleKey] === undefined) {
+            watchlist[titleKey] = {
+              type: record.title.type, id: record.title.id,
+              name: written.name ?? record.name, addedAt: new Date().toISOString(),
+            };
+          }
+        } else {
+          delete watchlist[titleKey];
+          for (const [key, value] of Object.entries(map)) {
+            const other = validRecord(value);
+            if (other?.title && other.favorite && titleKeyOf(other.title) === titleKey) map[key] = { ...other, favorite: false };
+          }
+          if (pathTitle) favorites = favorites.filter((path) => pathTitle(path) !== titleKey);
+        }
+      }
+      next.userData = { ...(next.userData ?? {}), [resolved.userId]: { ...data, remoteMedia: map, watchlist, favorites } };
+      state = stateOf(validRecord(map[resolved.key]) ?? record, watchlist);
     });
     authority.assertCurrent();
     return state;
@@ -401,6 +509,7 @@ export class MediaServerPersonal {
     const user = this.currentActor(authority);
     const connections = this.store.mediaConnections();
     const libraries = this.store.remoteLibraries();
+    const watchlist = watchlistOf(this.store.userData(user.id));
     const out: RemoteItemState[] = [];
     for (const value of Object.values(this.mapOf(user.id))) {
       const record = validRecord(value);
@@ -408,7 +517,7 @@ export class MediaServerPersonal {
       const connection = connections.find((candidate) => candidate.enabled && candidate.provider === record.provider && candidate.serverId === record.serverId && candidate.accountId === record.accountId);
       const library = connection ? libraries.find((candidate) => candidate.connectionId === connection.id && candidate.remoteId === record.remoteLibraryId) : undefined;
       if (!library || !remoteLibraryVisibleTo(connections, library, user)) continue;
-      out.push(stateOf(record));
+      out.push(stateOf(record, watchlist));
     }
     if (signal?.aborted) throw new ResourceError(401, "AUTH_REQUIRED");
     authority.assertCurrent();
@@ -426,6 +535,7 @@ export class MediaServerPersonal {
     const onHome = options.onHome === true;
     const skip = boundedCount(options.skip, 0, CARD_SKIP_MAX);
     const limit = boundedCount(options.limit, CARD_LIMIT_DEFAULT, CARD_LIMIT_MAX);
+    const excluded = options.excludeTitles;
     const user = this.currentActor(authority);
     const connections = this.store.mediaConnections();
     const libraries = this.store.remoteLibraries();
@@ -442,6 +552,9 @@ export class MediaServerPersonal {
     for (const [key, value] of Object.entries(this.mapOf(user.id))) {
       const record = projectableRecord(key, value);
       if (!record || !this.cardWanted(filter, record)) continue;
+      // A title the caller draws elsewhere -- its own watchlist entry, or the library copy it is
+      // folded onto -- is left out before anything is paged or counted.
+      if (record.title && excluded?.has(titleKeyOf(record.title))) continue;
       const attachment = attachments.find((entry) => entry.library.remoteId === record.remoteLibraryId
         && entry.connection.provider === record.provider && entry.connection.serverId === record.serverId && entry.connection.accountId === record.accountId);
       if (!attachment) continue;
@@ -498,6 +611,41 @@ export class MediaServerPersonal {
     cardProofs.set(result, proof);
     this.assertCardsCurrent(authority, result);
     return result;
+  }
+
+  /** Clears the star of one title's remote records, inside a write the caller already has open:
+   *  the title's own star is the one the catalogues and the library keep. */
+  clearTitleFavorites(data: UserData, typeId: string): void {
+    const map = { ...(data.remoteMedia ?? {}) };
+    let touched = false;
+    for (const [key, value] of Object.entries(map)) {
+      const record = validRecord(value);
+      if (!record?.favorite || !record.title || titleKeyOf(record.title) !== typeId) continue;
+      map[key] = { ...record, favorite: false };
+      touched = true;
+    }
+    if (touched) data.remoteMedia = map;
+  }
+
+  /** Zeroes the position of every remote record the given title keys stand for, and nothing else:
+   *  a series key names one episode, so only that episode's record loses its place. The favourite
+   *  and watched flags stay. */
+  async forgetTitlePositions(userId: string | undefined, keys: ReadonlySet<string>): Promise<void> {
+    if (!userId || !keys.size) return;
+    await this.store.update((next) => {
+      const data = next.userData?.[userId];
+      if (!data) return;
+      const map = { ...(data.remoteMedia ?? {}) };
+      let touched = false;
+      for (const [key, value] of Object.entries(map)) {
+        const record = validRecord(value);
+        if (!record?.title || !titleKeyForgotten(record, keys)) continue;
+        if (record.position === 0 && record.duration === 0) continue;
+        map[key] = { ...record, position: 0, duration: 0 };
+        touched = true;
+      }
+      if (touched) next.userData = { ...(next.userData ?? {}), [userId]: { ...data, remoteMedia: map } };
+    });
   }
 
   /** Re-proves a card projection before its JSON leaves. It reads the private proof, so a
@@ -557,6 +705,9 @@ export class MediaServerPersonal {
       ...(record.primaryAbsent === true ? {} : { poster: remoteArtworkPath(library.id, record.itemId, "Primary") }),
       ...(wide === undefined ? {} : { wide }),
       ...(record.duration > 0 ? { progress: { position: record.position, duration: record.duration } } : {}),
+      // The catalogue title this item stands for, when the provider named one: the merged
+      // Continue watching card it belongs to.
+      ...(record.title ? { identity: { type: record.title.type, id: record.title.id } } : {}),
       updatedAt: record.updatedAt,
     };
   }
@@ -587,7 +738,7 @@ export class MediaServerPersonal {
     return prefs?.trackProgress === undefined ? true : prefs.trackProgress === true;
   }
 
-  private build(previous: RemoteMediaRecord | undefined, resolved: Resolved, patch: Patch, trackProgress: boolean): RemoteMediaRecord {
+  private build(previous: RemoteMediaRecord | undefined, resolved: Resolved, patch: Patch, trackProgress: boolean, title?: RemoteTitle): RemoteMediaRecord {
     // The detail route answers the public projection, so an absent role reads as a missing
     // path here. Unknown roles keep a path, which leaves the flag unset. The wide path is the
     // Thumb when the row had one, which is what tells the two landscape roles apart.
@@ -624,6 +775,8 @@ export class MediaServerPersonal {
       if (patch.duration !== undefined) record.duration = patch.duration;
       if (patch.mediaSourceId !== undefined) record.mediaSourceId = patch.mediaSourceId;
     }
+    if (title) record.title = title;
+    else if (previous?.title) record.title = previous.title;
     if (patch.favorite !== undefined) record.favorite = patch.favorite;
     if (patch.watched !== undefined) record.watched = patch.watched;
     return record;

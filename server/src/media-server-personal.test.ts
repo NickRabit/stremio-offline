@@ -7,7 +7,7 @@ import { test } from "node:test";
 import { MediaResources, ResourceError } from "./media-resources.js";
 import { MediaServerIndex } from "./media-server-index.js";
 import { MediaServerManager, type MediaServerAuthority } from "./media-server-manager.js";
-import { MediaServerPersonal } from "./media-server-personal.js";
+import { MediaServerPersonal, remoteTitleOf } from "./media-server-personal.js";
 import type { MediaServerProvider, ProviderItem, RemoteAccountPolicy } from "./media-server-provider.js";
 import { MediaServerSecrets } from "./media-server-secrets.js";
 import type { MediaServerTransport } from "./media-server-security.js";
@@ -33,8 +33,20 @@ class FakeServer {
   accountId = "account-1";
   policy: RemoteAccountPolicy = { disabled: false, mediaPlayback: true, allFolders: true, folderIds: [], hasAdditionalRestrictions: false };
   libraries = [{ id: "remote-1", name: "Films", type: "movie" as const }];
-  detailOf: Record<string, ProviderItem> = { m1: movie("m1", "Alien"), s1: { id: "s1", name: "Show", type: "series", providerIds: {} } };
-  ancestorsOf: Record<string, string[]> = { m1: ["remote-1"], s1: ["remote-1"] };
+  detailOf: Record<string, ProviderItem> = {
+    m1: movie("m1", "Alien"),
+    s1: { id: "s1", name: "Show", type: "series", providerIds: {} },
+    // Rows whose provider names a title the catalogue knows, and two episodes of one show.
+    tm: { id: "tm", name: "Alien", type: "movie", providerIds: { imdb: "tt0078748" } },
+    tm2: { id: "tm2", name: "Another film", type: "movie", providerIds: { tmdb: "348" } },
+    ts: { id: "ts", name: "Show", type: "series", providerIds: { imdb: "tt0903747" } },
+    te1: { id: "te1", name: "Show · One", type: "episode", seriesId: "ts", season: 1, episode: 1, providerIds: {} },
+    te2: { id: "te2", name: "Show · Two", type: "episode", seriesId: "ts", season: 1, episode: 2, providerIds: {} },
+  };
+  ancestorsOf: Record<string, string[]> = {
+    m1: ["remote-1"], s1: ["remote-1"], tm: ["remote-1"], tm2: ["remote-1"], ts: ["remote-1"],
+    te1: ["remote-1", "ts"], te2: ["remote-1", "ts"],
+  };
   versionsOf: Record<string, Array<{ id: string; name?: string }>> = { m1: [{ id: "v1", name: "1080p" }, { id: "v2", name: "720p" }] };
   /** Every provider operation that ran, for the assertions about the shared window. */
   calls: string[] = [];
@@ -70,6 +82,8 @@ interface Harness {
   personal: MediaServerPersonal;
   server: FakeServer;
   libraryId: string;
+  /** The same library attached over the other provider, so one rule can be read twice. */
+  embyLibraryId: string;
   connectionId: string;
   admin: MediaServerAuthority;
   bob: MediaServerAuthority;
@@ -114,9 +128,14 @@ const mount = async (): Promise<Harness> => {
     username: "reader", password: "reader-password",
   });
   const library = await manager.attachLibrary(adminAuthority, connection.id, { remoteId: "remote-1" });
+  const embyConnection = await manager.createConnection(adminAuthority, {
+    provider: "emby", name: "Home Emby", baseUrl: "http://emby.example", allowLan: false, allowLoopback: false,
+    username: "reader", password: "reader-password",
+  });
+  const embyLibrary = await manager.attachLibrary(adminAuthority, embyConnection.id, { remoteId: "remote-1" });
   const personal = new MediaServerPersonal(store, manager);
   return {
-    dir, store, manager, personal, server, libraryId: library.id, connectionId: connection.id,
+    dir, store, manager, personal, server, libraryId: library.id, embyLibraryId: embyLibrary.id, connectionId: connection.id,
     admin: adminAuthority, bob: authority(bob),
     loseAccess: () => { revoked = true; },
     injectBeforeUpdate: (mutate) => {
@@ -137,10 +156,178 @@ const forgetSession = (h: Harness): void => {
 const providerCalls = (h: Harness, operation: string): number =>
   h.server.calls.filter((call) => call === operation).length;
 
+/** Forget the manager's own short metadata window, so the next read really goes upstream. */
+const forgetMetadata = (h: Harness): void => {
+  (h.manager as unknown as { metadata: Map<string, unknown> }).metadata.clear();
+};
+
+/** How many times the manager was asked for a row, which is what the show cache short-circuits. */
+const countDetails = (h: Harness): (() => number) => {
+  const real = h.manager.itemDetail.bind(h.manager);
+  let reads = 0;
+  (h.manager as unknown as { itemDetail: typeof real }).itemDetail = (...args) => { reads += 1; return real(...args); };
+  return () => reads;
+};
+
+/** The stored record of one item, as the state holds it. */
+const recordOf = (h: Harness, itemId: string, userId = ADA): Record<string, unknown> | undefined =>
+  Object.values((h.store.userData(userId).remoteMedia ?? {}) as Record<string, Record<string, unknown>>)
+    .find((row) => row.itemId === itemId);
+
 const withHarness = async (run: (harness: Harness) => Promise<void>) => {
   const harness = await mount();
   try { await run(harness); } finally { await harness.close(); }
 };
+
+test("the title a provider row names reads like the catalogue's own identity", () => {
+  assert.deepEqual(remoteTitleOf("movie", { imdb: "tt0078748", tmdb: "348" }), { type: "movie", id: "tt0078748" }, "an IMDb id wins");
+  assert.deepEqual(remoteTitleOf("series", { tmdb: "1399" }), { type: "series", id: "tmdb:1399" }, "a numeric TMDb id becomes the tmdb form");
+  assert.deepEqual(remoteTitleOf("movie", { imdb: "tt0078748".padEnd(80, "0") }), undefined, "an id beyond the stored bound is no title");
+  assert.equal(remoteTitleOf("movie", { tvdb: "12345" }), undefined, "a TVDb id alone is not one");
+  assert.equal(remoteTitleOf("movie", { imdb: "nope", tmdb: "12a" }), undefined);
+  assert.equal(remoteTitleOf("series", {}), undefined);
+});
+
+/** The same rule over both providers the one code path serves. */
+const providers = ["jellyfin", "emby"] as const;
+
+test("a movie write stores the title its provider ids name", async () => {
+  for (const provider of providers) {
+    await withHarness(async (harness) => {
+      const libraryId = provider === "jellyfin" ? harness.libraryId : harness.embyLibraryId;
+      await harness.personal.patch(harness.admin, libraryId, "tm", { favorite: true });
+      assert.deepEqual(recordOf(harness, "tm")?.title, { type: "movie", id: "tt0078748" }, provider);
+      await harness.personal.patch(harness.admin, libraryId, "tm2", { favorite: true });
+      assert.deepEqual(recordOf(harness, "tm2")?.title, { type: "movie", id: "tmdb:348" });
+      // The card the lists draw carries the identity, so it merges with the same title's rows.
+      const cards = await harness.personal.cards(harness.admin, { filter: "favorites" });
+      assert.deepEqual(cards.items.find((card) => card.itemId === "tm")?.identity, { type: "movie", id: "tt0078748" }, provider);
+    });
+  }
+});
+
+test("an episode write stores its show's title, one parent read for the whole show", async () => {
+  for (const provider of providers) {
+    await withHarness(async (harness) => {
+      const libraryId = provider === "jellyfin" ? harness.libraryId : harness.embyLibraryId;
+      const reads = countDetails(harness);
+      await harness.personal.patch(harness.admin, libraryId, "te1", { position: 10, duration: 100 });
+      assert.deepEqual(recordOf(harness, "te1")?.title, { type: "series", id: "tt0903747" }, provider);
+      const afterFirst = reads();
+      assert.equal(afterFirst, 2, "the episode's own row and its show's");
+
+      await harness.personal.patch(harness.admin, libraryId, "te2", { position: 10, duration: 100 });
+      assert.deepEqual(recordOf(harness, "te2")?.title, { type: "series", id: "tt0903747" });
+      assert.equal(reads(), afterFirst + 1, "the show was remembered, so only the second episode's own row was read");
+    });
+  }
+});
+
+test("a failing parent read keeps the previous title and the write still lands", async () => {
+  await withHarness(async (harness) => {
+    await harness.personal.patch(harness.admin, harness.libraryId, "te1", { position: 10, duration: 100 });
+    assert.deepEqual(recordOf(harness, "te1")?.title, { type: "series", id: "tt0903747" });
+
+    delete harness.server.detailOf.ts;
+    forgetMetadata(harness);
+    const patched = await harness.personal.patch(harness.admin, harness.libraryId, "te1", { position: 20, duration: 100 });
+
+    assert.equal(patched.position, 20, "the position landed");
+    assert.deepEqual(recordOf(harness, "te1")?.title, { type: "series", id: "tt0903747" }, "and the title it already had stayed");
+  });
+});
+
+test("a malformed title is dropped, so it stands for nothing", async () => {
+  await withHarness(async (harness) => {
+    const state = await harness.personal.patch(harness.admin, harness.libraryId, "tm", { favorite: true });
+    for (const junk of [{ type: "movie", id: "tvdb:1" }, { type: "channel", id: "tt123" }, { type: "movie" }, "tt123", null]) {
+      await harness.store.update((data) => {
+        const map = data.userData![ADA]!.remoteMedia as Record<string, Record<string, unknown>>;
+        map[state.key]!.title = junk;
+        map[state.key]!.favorite = false;
+      });
+      assert.equal((await harness.personal.read(harness.admin, harness.libraryId, "tm")).favorite, false, JSON.stringify(junk));
+    }
+  });
+});
+
+test("a remote star is the title's star, and the title's star reads on every record of it", async () => {
+  for (const provider of providers) {
+    await withHarness(async (harness) => {
+      const libraryId = provider === "jellyfin" ? harness.libraryId : harness.embyLibraryId;
+      await harness.personal.patch(harness.admin, libraryId, "te1", { favorite: true, position: 10, duration: 100 });
+      const watchlist = harness.store.userData(ADA).watchlist as Record<string, { type: string; id: string; name: string }>;
+      assert.deepEqual(Object.keys(watchlist), ["series:tt0903747"], provider);
+      assert.deepEqual(
+        { type: watchlist["series:tt0903747"]!.type, id: watchlist["series:tt0903747"]!.id, name: watchlist["series:tt0903747"]!.name },
+        { type: "series", id: "tt0903747", name: "Show" },
+        "the entry is the show's own, named by the parent row",
+      );
+      // The other episode of the same show is the same star, without a second entry.
+      await harness.personal.patch(harness.admin, libraryId, "te2", { favorite: true, position: 10, duration: 100 });
+      assert.deepEqual(Object.keys(harness.store.userData(ADA).watchlist!), ["series:tt0903747"]);
+      assert.equal((await harness.personal.read(harness.admin, libraryId, "te2")).favorite, true);
+
+      // Unstarring one version is unstarring the title: every record of it loses the flag.
+      await harness.personal.patch(harness.admin, libraryId, "te1", { favorite: false });
+      assert.deepEqual(Object.keys(harness.store.userData(ADA).watchlist!), []);
+      assert.equal(recordOf(harness, "te2")?.favorite, false, "the other episode's own flag cleared with it");
+      assert.equal((await harness.personal.read(harness.admin, libraryId, "te2")).favorite, false);
+    });
+  }
+});
+
+test("unstarring a remote title clears the library copies starred for it, and nothing else", async () => {
+  await withHarness(async (harness) => {
+    const titled = new MediaServerPersonal(harness.store, harness.manager, async () =>
+      (path) => path === "lib_00000001/Show" ? "series:tt0903747" : path === "lib_00000001/Other" ? "movie:tt1" : undefined);
+    await titled.patch(harness.admin, harness.libraryId, "te1", { favorite: true, position: 10, duration: 100 });
+    await harness.store.update((state) => {
+      const data = state.userData![ADA]! as { favorites?: string[] };
+      data.favorites = ["lib_00000001/Show", "lib_00000001/Other", "lib_00000001/Loose.mkv"];
+    });
+
+    await titled.patch(harness.admin, harness.libraryId, "te1", { favorite: false });
+    assert.deepEqual(harness.store.userData(ADA).favorites, ["lib_00000001/Other", "lib_00000001/Loose.mkv"]);
+    assert.deepEqual(Object.keys(harness.store.userData(ADA).watchlist!), []);
+  });
+});
+
+test("a starred title is left out of the favourite cards before they are paged", async () => {
+  await withHarness(async (harness) => {
+    await harness.personal.patch(harness.admin, harness.libraryId, "tm", { favorite: true });
+    await harness.personal.patch(harness.admin, harness.libraryId, "tm2", { favorite: true });
+
+    const all = await harness.personal.cards(harness.admin, { filter: "favorites", limit: 1 });
+    assert.equal(all.total, 2, "both stars are cards of their own until the title is drawn elsewhere");
+    const filtered = await harness.personal.cards(harness.admin, { filter: "favorites", excludeTitles: new Set(["movie:tt0078748"]) });
+    assert.deepEqual(filtered.items.map((card) => card.itemId), ["tm2"]);
+    assert.equal(filtered.total, 1, "and the count is the filtered one");
+  });
+});
+
+test("forgetting a title zeroes only the positions that stand for it", async () => {
+  await withHarness(async (harness) => {
+    await harness.personal.patch(harness.admin, harness.libraryId, "tm", { position: 30, duration: 100, favorite: true, watched: true });
+    await harness.personal.patch(harness.admin, harness.libraryId, "te1", { position: 10, duration: 100 });
+    await harness.personal.patch(harness.admin, harness.libraryId, "te2", { position: 20, duration: 100 });
+
+    await harness.personal.forgetTitlePositions(ADA, new Set(["movie:tt0078748"]));
+    assert.equal(recordOf(harness, "tm")?.position, 0, "the film's own position went");
+    assert.equal(recordOf(harness, "tm")?.favorite, true, "its star stayed");
+    assert.equal(recordOf(harness, "tm")?.watched, true, "and so did its watched flag");
+    assert.equal(recordOf(harness, "te1")?.position, 10, "another title is untouched");
+
+    await harness.personal.forgetTitlePositions(ADA, new Set(["series:tt0903747:1:2"]));
+    assert.equal(recordOf(harness, "te2")?.position, 0, "the exact episode went");
+    assert.equal(recordOf(harness, "te1")?.position, 10, "and the other episode of the show kept its place");
+    // A title that is not stored at all, and an empty set, are both no-ops.
+    await harness.personal.forgetTitlePositions(ADA, new Set(["movie:tt0000000"]));
+    await harness.personal.forgetTitlePositions(ADA, new Set());
+    assert.equal(recordOf(harness, "tm2"), undefined);
+    assert.equal(recordOf(harness, "te1")?.position, 10);
+  });
+});
 
 test("an unseen remote item reads as the default row with its derived key", async () => {
   await withHarness(async (harness) => {

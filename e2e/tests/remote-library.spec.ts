@@ -757,3 +757,29 @@ test("a media-server film shows the title's own position", async ({ page, reques
     await request.delete(`/api/progress/${encodeURIComponent(key)}`);
   }
 });
+
+/** One star per title, media server included: starring a film from its own detail stars
+ *  `movie:<id>`, and clearing that from the catalogue clears the detail's star again.
+ *
+ *  Skipped: `remoteLibraries` answers every `/api/remote-libraries**` request itself, so the star
+ *  PATCH never reaches the server's own state and `/api/watchlist` cannot be read back here. The
+ *  rule is covered by `server/src/media-server-personal.test.ts`. */
+test.skip("a media-server film's star is its title's star", async ({ page, request }) => {
+  const imdb = "tt9900002";
+  await remoteLibraries(page, {
+    items: () => [{ id: "starred-film", name: "Starred film", type: "movie", providerIds: { imdb } }],
+    sources: [{ sourceId: "native-1", kind: "remote", playable: true, name: "Native 1080p", provider: "emby", libraryId,
+      remoteItem: { libraryId, itemId: "starred-film", mediaSourceId: "v1", progressKey: "remote:native" } }],
+  });
+  await page.locator(".remote-libraries .browse-item.library").filter({ hasText: "Remote clips" }).getByRole("button").click();
+  await page.locator(".remote-browse-panel .browse-item").filter({ hasText: "Starred film" }).locator(".library-open").click();
+  const detail = page.locator(".remote-browse-panel .library-title-detail");
+
+  await detail.getByRole("button", { name: "Přidat do oblíbených", exact: true }).click();
+  await expect.poll(async () => ((await (await request.get("/api/watchlist")).json()) as Array<{ key: string }>).map((entry) => entry.key))
+    .toContain(`movie:${imdb}`);
+
+  await request.post("/api/watchlist", { data: { type: "movie", id: imdb, favorite: false } });
+  await page.reload();
+  await expect(detail.getByRole("button", { name: "Přidat do oblíbených", exact: true })).toHaveAttribute("aria-pressed", "false");
+});

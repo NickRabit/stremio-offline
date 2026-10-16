@@ -323,7 +323,13 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
       ...(item.year ? { year: item.year } : {}),
     });
     const authority = authorityOf(req);
-    const remote = await remotePersonal.cards(authority, { filter: "favorites", onHome: true, limit: HOME_ROW_LIMIT }).catch(() => undefined);
+    // The local half draws a starred title once; a media-server record of the same title is left
+    // out, so the shelf never shows it twice.
+    const starredTitles = personal.watchlistKeys(req);
+    const remote = await remotePersonal.cards(authority, {
+      filter: "favorites", onHome: true, limit: HOME_ROW_LIMIT,
+      ...(starredTitles.length ? { excludeTitles: new Set(starredTitles) } : {}),
+    }).catch(() => undefined);
     if (remote) proofs.push({ authority, cards: remote });
     const cards = fairFavorites(local, remote?.items ?? []);
     const total = page.total + (remote?.total ?? 0);
