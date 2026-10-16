@@ -15,7 +15,7 @@ import type { MetaItem, AddonRecord } from "../types.js";
 import { registerPersonalRoutes, type PersonalDeps } from "./personal.js";
 
 type WatchlistEntry = { type: string; id: string; name: string; poster?: string; addedAt: string };
-type StoredProgress = { position: number; duration: number; title: string; path?: string; poster?: string; addonKey?: string; series?: { id: string; name: string; season: number; episode: number }; remote?: { libraryId: string; itemId: string; mediaSourceId: string }; updatedAt: string };
+type StoredProgress = { position: number; duration: number; title: string; path?: string; poster?: string; addonKey?: string; series?: { id: string; name: string; season: number; episode: number }; remote?: { libraryId: string; itemId: string; mediaSourceId: string }; stableKey?: string; updatedAt: string };
 type WatchedMarker = { name: string; poster?: string; addonKey?: string; season: number; episode: number; updatedAt: string };
 
 const ALICE = "usr_00000001";
@@ -236,6 +236,74 @@ test("POST /api/progress writes the position through updateData", async (t) => {
   assert.equal(stored.poster, "heat.jpg");
   assert.equal(typeof stored.updatedAt, "string");
   assert.deepEqual(harness.data(BOB).progress, {}, "the position is the caller's own");
+});
+
+const SOURCE_KEY = "t:0123456789abcdef01234567";
+
+test("POST /api/progress keeps the source the position was played from, and every read hands it back", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/progress", {
+    method: "POST", user: ALICE,
+    body: { key: FILM_KEY, position: 120, duration: 3600, title: "Heat", stableKey: SOURCE_KEY },
+  });
+
+  assert.equal(response.status, 204);
+  assert.equal((harness.data(ALICE).progress[FILM_KEY] as StoredProgress).stableKey, SOURCE_KEY);
+
+  const read = await api(harness.base, `/api/progress/${encodeURIComponent(FILM_KEY)}`, { user: ALICE });
+  assert.equal(read.status, 200);
+  assert.equal(((await read.json()) as StoredProgress).stableKey, SOURCE_KEY);
+  const listed = await (await api(harness.base, "/api/progress", { user: ALICE })).json() as StoredProgress[];
+  assert.equal(listed[0]!.stableKey, SOURCE_KEY);
+});
+
+test("a write that names another source stops claiming the file the title used to play from", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.data(ALICE).progress = {
+    [FILM_KEY]: {
+      position: 60, duration: 3600, title: "Heat", path: FILM_FILE,
+      stableKey: `f:${"a".repeat(24)}`, updatedAt: "2024-01-01T00:00:00.000Z",
+    },
+  };
+
+  const response = await api(harness.base, "/api/progress", {
+    method: "POST", user: ALICE,
+    body: { key: FILM_KEY, position: 120, duration: 3600, title: "Heat", stableKey: SOURCE_KEY },
+  });
+
+  assert.equal(response.status, 204);
+  const stored = harness.data(ALICE).progress[FILM_KEY] as StoredProgress;
+  assert.equal(stored.stableKey, SOURCE_KEY, "the row now names the source it is played from");
+  assert.equal(stored.path, undefined, "and no longer claims the library file it came from");
+});
+
+test("an invalid stable key stores none and leaves the write as it was", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.data(ALICE).progress = {
+    [FILM_KEY]: {
+      position: 60, duration: 3600, title: "Heat", path: FILM_FILE,
+      stableKey: SOURCE_KEY, updatedAt: "2024-01-01T00:00:00.000Z",
+    },
+  };
+
+  await api(harness.base, "/api/progress", {
+    method: "POST", user: ALICE,
+    body: { key: FILM_KEY, position: 120, duration: 3600, title: "Heat", stableKey: `x:${"a".repeat(24)}` },
+  });
+  const kept = harness.data(ALICE).progress[FILM_KEY] as StoredProgress;
+  assert.equal(kept.stableKey, SOURCE_KEY, "the source the row already named is kept");
+  assert.equal(kept.path, FILM_FILE, "and the path it held stays, exactly as before");
+
+  await api(harness.base, "/api/progress", {
+    method: "POST", user: ALICE,
+    body: { key: "movie:tt10", position: 120, duration: 3600, title: "Ronin", stableKey: "not-a-handle" },
+  });
+  const fresh = harness.data(ALICE).progress["movie:tt10"] as StoredProgress;
+  assert.equal("stableKey" in fresh, false, "a malformed handle is never stored");
 });
 
 test("POST /api/progress is refused without a user, the way dataOf refuses", async (t) => {

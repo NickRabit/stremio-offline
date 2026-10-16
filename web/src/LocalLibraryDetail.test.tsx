@@ -321,6 +321,19 @@ describe("LocalLibraryDetail saved position", () => {
     expect(savedText()).toBe("1:30 of 10:00");
   });
 
+  it("opens on the source the stored record names rather than on the largest version", async () => {
+    identityHandler = boundMovie;
+    const smaller = { ...copy("Heat/Heat.mkv", "Heat.mkv", 2_000_000_000), stableKey: `f:${"a".repeat(24)}` };
+    const largest = { ...copy("Heat/Heat.1080p.mkv", "Heat.1080p.mkv", 6_000_000_000), stableKey: `f:${"b".repeat(24)}` };
+    copies = () => json([smaller, largest]);
+    // The record the selected row is read through names the smaller copy: that is the source the
+    // title was last played from, so the detail opens on it instead of on its own default.
+    progressOf = (url) => json({ ...savedEntry(progressKey(url), 600, 3600), stableKey: smaller.stableKey });
+    const { onPlay } = await render(folder());
+    await click(host.querySelector(".library-detail-play button.primary"));
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ localPath: "Heat/Heat.mkv" }), undefined, expect.anything());
+  });
+
   it("drops a saved position that lands after the viewer left the file", async () => {
     const held = deferred<Response>();
     progressOf = (url) => progressKey(url).includes("A.mkv") ? held.promise : json(savedEntry(progressKey(url), 60, 600));

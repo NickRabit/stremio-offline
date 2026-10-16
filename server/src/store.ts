@@ -23,7 +23,7 @@ export const SCHEMA_VERSION = 3;
 export type WatchlistEntry = { type: string; id: string; name: string; poster?: string; addedAt: string };
 /** The media-server version a title's position was played from, so the detail can name it. */
 export type RemoteProgressWriter = { libraryId: string; itemId: string; mediaSourceId: string };
-export type StoredProgress = { position: number; duration: number; title: string; path?: string; poster?: string; addonKey?: string; series?: ProgressSeries; remote?: RemoteProgressWriter; updatedAt: string };
+export type StoredProgress = { position: number; duration: number; title: string; path?: string; poster?: string; addonKey?: string; series?: ProgressSeries; remote?: RemoteProgressWriter; stableKey?: string; updatedAt: string };
 export type WatchedMarker = { name: string; poster?: string; addonKey?: string; season: number; episode: number; updatedAt: string };
 
 

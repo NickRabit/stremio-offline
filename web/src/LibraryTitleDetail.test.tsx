@@ -795,6 +795,50 @@ const local = (path: string, name: string, bytes?: number): Stream => ({
   behaviorHints: { filename: name, ...(bytes === undefined ? {} : { videoSize: bytes }) },
 });
 
+describe("LibraryTitleDetail stored source", () => {
+  /** A row as the server hands it over: its own label and the handle a position is stored by. */
+  const stored = (id: string, name: string, size: number, seed: string): Stream =>
+    ({ ...addon(id, name, size), stableKey: `${seed}:${seed.repeat(24)}` });
+  const group = (streams: Stream[]): LibrarySourceGroup =>
+    ({ key: "addon:torrentio", kind: "addon", name: "Torrentio", status: "loaded", streams, error: "" });
+
+  it("opens on the source the stored position names, not on the largest one", () => {
+    const row = stored("stored-row", "Torrent", 10, "a");
+    const { onPlay } = render({
+      sources: [stored("big", "Remux 4K", 9_000_000_000, "b"), row],
+      resumeStableKey: row.stableKey,
+    });
+    click(playButton());
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "stored-row" }));
+  });
+
+  it("opens on a row a supplementary group answered", () => {
+    const row = stored("group-row", "Torrent 4K", 4_000_000_000, "c");
+    const { onPlay } = render({
+      sources: [remote("s1", "1080p", 3_000_000_000)],
+      sourceGroups: { groups: [group([row])], retry: vi.fn() },
+      resumeStableKey: row.stableKey,
+    });
+    click(playButton());
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "group-row" }));
+  });
+
+  it("keeps its own default while the named source is not among the rows it holds", () => {
+    const { onPlay } = render({ sources: [addon("big", "Remux 4K", 9_000_000_000)], resumeStableKey: `d:${"d".repeat(24)}` });
+    click(playButton());
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "big" }));
+  });
+
+  it("lets the viewer's own pick win over the stored source", () => {
+    const row = stored("stored-row", "Torrent", 10, "a");
+    const { onPlay } = render({ sources: [stored("big", "Remux 4K", 9_000_000_000, "b"), row], resumeStableKey: row.stableKey });
+    click(host.querySelector(".split-button-toggle"));
+    click(pickerRows()[0]!);
+    click(playButton());
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "big" }));
+  });
+});
+
 describe("LibraryTitleDetail initial source", () => {
   it("opens on the local file the caller picked, listed once beside the addon answer", () => {
     const picked = local("Films/Heat.mkv", "Heat.mkv", 500);

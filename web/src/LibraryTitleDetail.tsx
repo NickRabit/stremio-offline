@@ -49,6 +49,9 @@ export interface LibraryTitleDetailProps {
   /** The row the caller opened this detail on. It is selected as soon as the listing holds it,
    *  a row that arrives later never replaces it, and a row the viewer picks still wins. */
   initialSource?: Stream;
+  /** The source the title's stored position was last played from: the detail opens on that row
+   *  wherever the title still offers it, unless the viewer picked one themselves. */
+  resumeStableKey?: string;
   /** The native rows alone, when `sources` merges them with loaded addon rows: the default
    *  version is then drawn from these, so a larger addon answer never replaces it. */
   defaultSources?: Stream[] | null;
@@ -102,7 +105,7 @@ const clock = (value: number) => {
 /** The one detail body a playable title shares, local or remote: the catalogue hero, the synopsis
  *  and the sources with a split Play button. The provider-specific parts arrive as props, so the
  *  two containers cannot drift apart and a future add-on stream joins the same selector. */
-export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backdrops, gallery, onGallery, facts, description, chips, favorite, onToggleFavorite, favoriteDisabled, watched, onToggleWatched, watchedDisabled, watchedLabel, onOpenFolder, sources, initialSource, defaultSources, sourceGroups, onOpenSources, nativeSourceLabel, preferredLanguage, sourceError, onRetry, placeholder, episodes, progress, onSourceChange, onClearProgress, onPlay, onSaveToLibrary, onSaveElsewhere, onDownloadToDevice, saveSupported, sourceBadge }: LibraryTitleDetailProps) {
+export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backdrops, gallery, onGallery, facts, description, chips, favorite, onToggleFavorite, favoriteDisabled, watched, onToggleWatched, watchedDisabled, watchedLabel, onOpenFolder, sources, initialSource, resumeStableKey, defaultSources, sourceGroups, onOpenSources, nativeSourceLabel, preferredLanguage, sourceError, onRetry, placeholder, episodes, progress, onSourceChange, onClearProgress, onPlay, onSaveToLibrary, onSaveElsewhere, onDownloadToDevice, saveSupported, sourceBadge }: LibraryTitleDetailProps) {
   useI18n();
   const backdrop = useBackdrop(backdrops ?? []);
   const [chosen, setChosen] = useState<{ identity: string; key: string } | null>(null);
@@ -141,7 +144,11 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
   // arrivals keep it, and while it is still on its way the default stands in for it.
   const seeded = initialSource && initialSource.playable
     ? pickable.find((stream) => sourceRowKey(stream) === sourceRowKey(initialSource)) : undefined;
-  const selected = picked ?? seeded ?? defaultPick;
+  // The row the title's own stored position names, once the detail holds it: a switch is what
+  // makes the next open land on the source it moved to. A row that is not here yet is simply not
+  // a candidate, so a group still to load can never be selected for it.
+  const stored = resumeStableKey ? pickable.find((row) => row.stableKey === resumeStableKey) : undefined;
+  const selected = picked ?? seeded ?? stored ?? defaultPick;
   const multiple = own.length > 1 || sourceGroups != null;
   const canSave = selected !== null && (saveSupported?.(selected) ?? true);
   // A device save is offered wherever the caller can hand the row to the server: a file of this

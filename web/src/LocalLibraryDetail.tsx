@@ -83,6 +83,8 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
   const [chooserOpen, setChooserOpen] = useState(false);
   const [selected, setSelected] = useState<Stream | null>(null);
   const [saved, setSaved] = useState<{ sourceKey: string; position: number; duration: number } | null>(null);
+  /** The source the title's stored position names, as the read of it answered. */
+  const [resumeStableKey, setResumeStableKey] = useState<string | undefined>(undefined);
   const epoch = useRef(0);
   const progressEpoch = useRef(0);
   const isFile = item.kind === "file";
@@ -177,7 +179,7 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
   // the position before the title held it. A failed read keeps only what already belonged to this
   // same version, so nothing of another one can flash over it.
   useEffect(() => {
-    if (!selectedKey || !ownerKey || !owner) { setSaved(null); return; }
+    if (!selectedKey || !ownerKey || !owner) { setSaved(null); setResumeStableKey(undefined); return; }
     const controller = new AbortController();
     const mine = ++progressEpoch.current;
     const live = () => mine === progressEpoch.current && !controller.signal.aborted;
@@ -190,6 +192,9 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
         if (!live()) return;
         const own = entry && entry.position > 0 ? entry : { position: 0, duration: 0 };
         setSaved({ sourceKey: selectedKey, position: own.position, duration: own.duration });
+        // The record the row was read through names the source it was played from, which the
+        // detail uses to open on that source rather than on its own default.
+        setResumeStableKey(entry?.stableKey);
       })
       .catch(() => undefined);
     return () => { controller.abort(); if (progressEpoch.current === mine) progressEpoch.current += 1; };
@@ -262,6 +267,7 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
     onToggleFavorite={onToggleFavorite}
     {...(!isFile && onOpenFolder ? { onOpenFolder } : {})}
     sources={sources}
+    {...(resumeStableKey ? { resumeStableKey } : {})}
     {...(error ? { sourceError: error } : {})}
     onRetry={() => setNonce((value) => value + 1)}
     onSourceChange={setSelected}

@@ -116,6 +116,9 @@ export interface PublicRemoteItem { libraryId: string; itemId: string; mediaSour
 
 export interface PublicStream {
   sourceId: string;
+  /** The same source's handle in every session and for every account: a short hash of what the
+   *  source is, never an address. A position stored with it resumes from that source again. */
+  stableKey: string;
   kind: "remote" | "library" | "torrent" | "unsupported";
   playable: boolean;
   name?: string; title?: string; description?: string;

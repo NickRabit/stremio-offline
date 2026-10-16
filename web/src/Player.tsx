@@ -1,6 +1,6 @@
 import { enterPlayerFullscreen, exitPlayerFullscreen, playerIsFullscreen, supportsPlayerFullscreen } from "./player-fullscreen";
 import Hls from "hls.js";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AudioLines, Captions, CaptionsOff, Check, Download, HardDrive, ListVideo, Star, Gauge, Maximize, Minimize, Pause, Play, RectangleHorizontal, RotateCcw, RotateCw, Settings, SlidersHorizontal, SkipBack, SkipForward, Volume2, X } from "lucide-react";
 import { ApiError, api, describeError, subtitleUrl } from "./api";
 import { watchSidecar } from "./player-sidecar";
@@ -11,6 +11,7 @@ import { clampVolume, readVolume, writeVolume } from "./player-volume";
 import { PlaybackWakeLock, screenWakeLock } from "./playback-wake-lock";
 import { initialPlaybackPosition, progressToSave } from "./player-progress";
 import { remoteVersionKey, versionSavedRow } from "./source-progress";
+import { SourceRows } from "./source-rows";
 import { detectCapabilities } from "./capabilities";
 import { t, useI18n, type Key } from "./i18n";
 import type { Capabilities, PlaybackMode, PlaybackSession, Stream, Subtitle, Track } from "./types";
@@ -225,6 +226,10 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioPreferenceRef = useRef(audioLanguage);
   const subtitlePreferenceRef = useRef<string | null>(subtitleLanguage);
+  /** The row on screen, for the writes that outlive the render they were started in: a switch
+   *  replaces the source while the progress ticker keeps its own tick. */
+  const streamRef = useRef(stream);
+  streamRef.current = stream;
   const [upNext, setUpNext] = useState(false);
   const [upNextSeconds, setUpNextSeconds] = useState(5);
   const advancingRef = useRef(false);
@@ -880,11 +885,14 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   // reports it from `pagehide` with a request that outlives the page.
   useEffect(() => {
     if (!open || !progressKey) return;
+    // The row on screen, read live: a switch replaces it while this ticker keeps its own tick, and
+    // the position belongs to the source that is really playing.
     const payload = () => progressToSave(reportRef.current, {
       key: progressKey, title,
-      path: stream?.localPath,
+      path: streamRef.current?.localPath,
       poster: progressPoster,
       addonKey: progressAddonKey,
+      ...(streamRef.current?.stableKey ? { stableKey: streamRef.current.stableKey } : {}),
       // The row says which media-server version it was played from, so the detail can name it.
       ...(remoteItem ? { remote: { libraryId: remoteItem.libraryId, itemId: remoteItem.itemId, mediaSourceId: remoteItem.mediaSourceId } } : {}),
     });
@@ -1080,6 +1088,17 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
 
   /** The list belongs to the source playing when it was read: another source reloads it. */
   const playingSourceId = stream?.sourceId ?? "";
+  // A row of the viewer's own library is marked by the file it points at: the row and the session
+  // can be minted apart, so their ids are not the same handle for one file.
+  const isPlayingRow = (row: Stream) => row.sourceId === playingSourceId || (Boolean(row.localPath) && row.localPath === stream?.localPath);
+  /** The row on screen leads the list it was read from, and every other row keeps the order the
+   *  answer gave. */
+  const sourceRows = useMemo(() => {
+    const rows = sourceList?.streams ?? [];
+    const playing = rows.find(isPlayingRow);
+    return playing ? [playing, ...rows.filter((row) => row !== playing)] : rows;
+  }, [sourceList, playingSourceId, stream?.localPath]);
+  const playingRow = sourceRows.find(isPlayingRow) ?? null;
   const openSources = () => {
     if (!loadSources) return;
     setSourceFailure("");
@@ -1088,7 +1107,10 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   // Opening the list reads it once. Nothing here runs while the title is merely playing: the
   // request waits for the viewer to ask for it, and a second open reuses what that answer held.
   useEffect(() => {
-    if (!open || !sourcesOpen || !loadSources || sourceList?.key === playingSourceId) return;
+    if (!open || !sourcesOpen || !loadSources) return;
+    // The list is already the one this source was read for: nothing is out, and nothing is read
+    // twice. The answer itself arrived a render earlier, so the reader is done either way.
+    if (sourceList?.key === playingSourceId) { setSourceLoading(false); return; }
     let live = true;
     setSourceLoading(true);
     setSourceFailure("");
@@ -1102,7 +1124,8 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   /** Hands the chosen row to the parent, which starts it through the ordinary play path. A
    *  refusal leaves the source on screen playing and says so in the list it came from. */
   const chooseSource = async (next: Stream) => {
-    if (!onSwitchSource) return;
+    // One switch at a time, and the row already on screen is not a switch at all.
+    if (!onSwitchSource || sourceBusy !== null || isPlayingRow(next)) return;
     const at = duration > 0 && timeRef.current > duration ? 0 : timeRef.current;
     setSourceBusy(next.sourceId);
     setSourceFailure("");
@@ -1300,15 +1323,11 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       {sourceLoading && <p className="identify-hint" role="status">{t("common.loading")}</p>}
       {sourceFailure && <p className="notice" role="alert">{sourceFailure}</p>}
       {!sourceLoading && !sourceFailure && !sourceList?.streams.length && <p className="identify-hint">{t("player.noOtherSource")}</p>}
-      {(sourceList?.streams ?? []).map((row) => {
-        // A row of the viewer's own library is marked by the file it points at: the row and the
-        // session can be minted apart, so their ids are not the same handle for one file.
-        const playing = row.sourceId === playingSourceId || (Boolean(row.localPath) && row.localPath === stream?.localPath);
-        return <div className="track-picker" key={row.sourceId}>
-          <button type="button" className={playing ? "selected" : undefined} aria-pressed={playing} disabled={playing || sourceBusy !== null}
-            onClick={() => void chooseSource(row)}>{playing ? <Check/> : <ListVideo/>}<span>{row.name || row.title || row.behaviorHints?.filename || t("sources.heading")}</span></button>
-        </div>;
-      })}
+      {/* The row on screen first and marked, every row drawn exactly as the detail's own chooser
+          draws it: the same badge, label, provider, size and languages. */}
+      {sourceRows.length > 0 && <div className="player-source-scroll">
+        <SourceRows className="stream-list player-source-list" rows={sourceRows} selected={playingRow} onSelect={(row) => void chooseSource(row)}/>
+      </div>}
     </div>}
     {settingsOpen && <div id="player-settings" className="player-settings" role="region" aria-label={t("player.settings")}>
       <div className="player-settings-head"><strong>{t("player.settings")}</strong><button aria-label={t("player.closeSettings")} onClick={() => setSettingsOpen(false)}><X /></button></div>

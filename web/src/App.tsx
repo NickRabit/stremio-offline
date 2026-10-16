@@ -2576,6 +2576,11 @@ export function App() {
     const entry = resume.find((candidate) => candidate.key === `${detailRead.target.type}:${catalogueStreamId(detailRead.target)}`);
     return entry ? { position: entry.position, duration: entry.duration, sourceKey: sourceIdentity(detailSource) } : undefined;
   }, [detailRead, detailSource, resume]);
+  /** The source the shared detail's title was last played from, so its row is preselected. */
+  const detailResumeStableKey = useMemo(() => {
+    if (!detailRead) return undefined;
+    return resume.find((candidate) => candidate.key === `${detailRead.target.type}:${catalogueStreamId(detailRead.target)}`)?.stableKey;
+  }, [detailRead, resume]);
   /** Starts over: the saved position of the title the shared detail holds is cleared. */
   const clearDetailProgress = async (): Promise<boolean> => {
     if (!detailRead) return false;
@@ -2953,6 +2958,7 @@ export function App() {
             {...(detailChips ? { chips: detailChips } : {})}
             onSourceChange={setDetailSource}
             {...(detailProgress ? { progress: detailProgress } : {})}
+            {...(detailResumeStableKey ? { resumeStableKey: detailResumeStableKey } : {})}
             onClearProgress={() => clearDetailProgress()}
             // The same pair a library detail draws: the position it holds for the episode on screen,
             // and the way to say that episode is seen -- which is that position going away.

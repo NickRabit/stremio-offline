@@ -52,6 +52,8 @@ export interface CatalogueTitleDetailProps {
   onRead?: (state: { meta: Meta | null; target: CatalogueDetailTarget; pending: boolean; playable: boolean }) => void;
   /** The saved position of the source this detail has selected, keyed by its identity. */
   progress?: { position: number; duration: number; sourceKey: string };
+  /** The stable key of the source the title was last played from, preselected when listed. */
+  resumeStableKey?: string;
   /** Told whenever the selected version changes, so the caller can read that version's own state. */
   onSourceChange?: (stream: Stream | null) => void;
   /** Clears the saved position of the title this detail holds; true once the write succeeded. */
@@ -82,7 +84,7 @@ const dedupe = (streams: Stream[]): Stream[] => {
 };
 
 export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
-  const { target, initialSources, onGallery, chips, preferredLanguage, onRead, progress, onSourceChange, onClearProgress, watched, watchedLabel, onToggleWatched, onPlay, onSaveToLibrary, onSaveElsewhere, saveSupported, onDownloadToDevice } = props;
+  const { target, initialSources, onGallery, chips, preferredLanguage, onRead, progress, resumeStableKey, onSourceChange, onClearProgress, watched, watchedLabel, onToggleWatched, onPlay, onSaveToLibrary, onSaveElsewhere, saveSupported, onDownloadToDevice } = props;
   const { locale } = useI18n();
   const { type, id, name } = target;
   const incomingId = catalogueStreamId(target);
@@ -254,6 +256,7 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
     </div>}
     <LibraryTitleDetail
       identityKey={`${type}:${streamId}`}
+      {...(resumeStableKey ? { resumeStableKey } : {})}
       title={name}
       {...(episode && episode.season != null && episode.episode != null
         ? { subtitle: t("mediaServer.episodeLabel", { season: episode.season, episode: episode.episode }) } : {})}
