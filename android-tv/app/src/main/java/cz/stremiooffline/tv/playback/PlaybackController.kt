@@ -53,6 +53,8 @@ interface PlaybackApi {
     path: String?,
     poster: String? = null,
     addonKey: String? = null,
+    /** The media-server version the row was written by, for a title-owned play. */
+    remote: RemoteItemContext? = null,
   )
 }
 
@@ -148,8 +150,8 @@ class PlaybackController(
   private var path: String? = null
   private var poster: String? = null
   private var addonKey: String? = null
-  /** Set only for a native remote play: the identity whose position is stored on the local
-   *  remote-state endpoint rather than through the generic progress route. */
+  /** Set only for a native remote play: the identity whose position the title's own key holds, or
+   *  whose own remote-state endpoint holds it when nothing can name the title. */
   private var remote: RemoteItemContext? = null
 
   private data class StartPlan(
@@ -355,16 +357,24 @@ class PlaybackController(
     }
   }
 
-  /** Where a resume begins. A native remote play reads the local remote-state store; everything
-   *  else reads the generic progress route it always did. A stored position is used only for the
-   *  same version: no proof of cross-version compatibility exists, so another version starts at 0. */
+  /**
+   * Where a resume begins. A native remote play reads the title's own row when its key names one,
+   * and otherwise the local remote-state store; everything else reads the generic progress route it
+   * always did. A stored position from the item's own store is used only for the same version: no
+   * proof of cross-version compatibility exists, so another version starts at 0.
+   */
   private suspend fun storedResumeTime(next: StartPlan): Double {
     val context = next.remote
     if (context == null) {
       val stored = readProgress(next.key) ?: return 0.0
       return Progress.resumePosition(stored.position, stored.duration) ?: 0.0
     }
-    val state = readRemoteState(context) ?: return 0.0
+    val state = VersionProgress.savedState(
+      next.key.takeIf { VersionProgress.titleOwned(it, context) },
+      context,
+      ::readProgress,
+      { libraryId, itemId -> remoteApi().remoteItemState(libraryId, itemId) },
+    ) ?: return 0.0
     // An item marked watched has no position to resume: like the web, it starts from the beginning.
     if (state.watched) return 0.0
     if (state.mediaSourceId == null || state.mediaSourceId != context.mediaSourceId) return 0.0
@@ -373,14 +383,6 @@ class PlaybackController(
 
   private suspend fun readProgress(key: String): ProgressDto? = try {
     api.progress(key)
-  } catch (cancelled: CancellationException) {
-    throw cancelled
-  } catch (_: ApiError) {
-    null
-  }
-
-  private suspend fun readRemoteState(context: RemoteItemContext): RemoteItemStateDto? = try {
-    remoteApi().remoteItemState(context.libraryId, context.itemId)
   } catch (cancelled: CancellationException) {
     throw cancelled
   } catch (_: ApiError) {
@@ -665,11 +667,14 @@ class PlaybackController(
     api as? RemoteLibraryApi
       ?: throw ApiError(ApiFailure.Generic)
 
-  /** A native remote play stores its position and preference through the local remote-state
-   *  endpoint, never the generic progress route. Anything else keeps the existing behaviour. */
+  /**
+   * A native remote play of a title the catalogue can name stores its position on the title's own
+   * key, naming the version that wrote it. A version nothing can name keeps the local remote-state
+   * endpoint, and everything else keeps the generic progress route it always had.
+   */
   private suspend fun save(payload: SavePayload) {
     val context = payload.remote
-    if (context != null) {
+    if (context != null && !VersionProgress.titleOwned(payload.key, context)) {
       remoteApi().patchRemoteItemState(
         context.libraryId,
         context.itemId,
@@ -677,7 +682,7 @@ class PlaybackController(
       )
       return
     }
-    api.saveProgress(payload.key, payload.position, payload.duration, payload.title, payload.path, payload.poster, payload.addonKey)
+    api.saveProgress(payload.key, payload.position, payload.duration, payload.title, payload.path, payload.poster, payload.addonKey, remote = context)
   }
 
   private fun startLoops() {

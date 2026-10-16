@@ -11,16 +11,26 @@ class SourceSwitchIdentityTest {
 
   @Test
   fun `equal raw version ids from different libraries never share a timestamp`() {
-    assertEquals(0.0, sourceSwitchPosition(origin, origin.copy(libraryId = "library-b"), 83.0), 0.0)
-    assertEquals(0.0, sourceSwitchPosition(origin, origin.copy(itemId = "movie-b"), 83.0), 0.0)
-    assertEquals(0.0, sourceSwitchPosition(origin, origin.copy(mediaSourceId = "v2"), 83.0), 0.0)
-    assertEquals(83.0, sourceSwitchPosition(origin, origin.copy(), 83.0), 0.0)
+    assertEquals(0.0, sourceSwitchPosition(origin, origin.copy(libraryId = "library-b"), origin.progressKey, 83.0), 0.0)
+    assertEquals(0.0, sourceSwitchPosition(origin, origin.copy(itemId = "movie-b"), origin.progressKey, 83.0), 0.0)
+    assertEquals(0.0, sourceSwitchPosition(origin, origin.copy(mediaSourceId = "v2"), origin.progressKey, 83.0), 0.0)
+    assertEquals(83.0, sourceSwitchPosition(origin, origin.copy(), origin.progressKey, 83.0), 0.0)
   }
 
   @Test
   fun `entering remote playback from a nonremote source starts that version independently`() {
-    assertEquals(0.0, sourceSwitchPosition(null, origin, 83.0), 0.0)
-    assertEquals(83.0, sourceSwitchPosition(origin, null, 83.0), 0.0)
+    assertEquals(0.0, sourceSwitchPosition(null, origin, origin.progressKey, 83.0), 0.0)
+    assertEquals(83.0, sourceSwitchPosition(origin, null, origin.progressKey, 83.0), 0.0)
+  }
+
+  @Test
+  fun `two versions of one named title carry the position between them`() {
+    val other = RemoteItemContext("library-b", "movie-b", "v2", "remote:b")
+    // One title, one position: the key the switch is being made under, not the two items' ids,
+    // is what decides it.
+    assertEquals(83.0, sourceSwitchPosition(origin, other, "movie:tt0133093", 83.0), 0.0)
+    // A key that names an item keeps today's rule, so another item's version starts at the top.
+    assertEquals(0.0, sourceSwitchPosition(origin, other, "remote:library-a:movie-a", 83.0), 0.0)
   }
 
   @Test

@@ -29,10 +29,12 @@ import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.DownloadTargetSettingsDto
 import cz.stremiooffline.tv.data.LibraryDto
+import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.RemoteCapabilitiesDto
 import cz.stremiooffline.tv.data.RemoteItemContext
 import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.RemoteItemStateDto
+import cz.stremiooffline.tv.data.RemoteProviderIdsDto
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.ui.catalog.nativeQueueLibraryTag
 import cz.stremiooffline.tv.ui.catalog.nativeQueueVersionTag
@@ -42,6 +44,7 @@ import kotlinx.coroutines.CompletableDeferred
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -72,12 +75,91 @@ class RemoteDetailTest {
     scenario.close()
   }
 
-  private fun data() = RemoteDetailData(
+  private fun data(ids: RemoteProviderIdsDto = RemoteProviderIdsDto()) = RemoteDetailData(
     libraryId = "rlibA",
     libraryName = "Filmy",
     provider = "jellyfin",
-    item = RemoteItemDto(id = "iA", name = "Heat", type = "movie"),
+    item = RemoteItemDto(id = "iA", name = "Heat", type = "movie", providerIds = ids),
   )
+
+  @Test
+  fun `a title row the catalogue can name offers Resume and plays the title's key`() {
+    val api = FakeTvApi()
+    api.remoteSourcesValue = listOf(version("a1"))
+    api.remoteStateValue = RemoteItemStateDto()
+    api.progressValues["movie:tt1"] = ProgressDto(position = 1200.0, duration = 3600.0)
+    val named = data(RemoteProviderIdsDto(imdb = "tt1"))
+    scenario.onActivity { activity ->
+      activity.setContent {
+        RemoteDetailScreen(
+          api = api,
+          data = named,
+          onPlay = { played += it },
+          onBack = {},
+          titleProgress = api::progress,
+        )
+      }
+    }
+    compose.waitForIdle()
+
+    // The item's own state holds nothing; the title's row is what offers the resume.
+    compose.onNodeWithTag(TagRemoteDetailPlay).assertTextContains("Resume")
+    activate(TagRemoteDetailPlay)
+
+    assertEquals(1, played.size)
+    assertEquals("movie:tt1", played.single().key)
+    assertTrue(played.single().resume)
+    assertEquals("a1", played.single().remoteItem?.mediaSourceId)
+  }
+
+  private fun mountNamed(api: FakeTvApi) {
+    scenario.onActivity { activity ->
+      activity.setContent {
+        RemoteDetailScreen(
+          api = api,
+          data = data(RemoteProviderIdsDto(imdb = "tt1")),
+          onPlay = { played += it },
+          onBack = {},
+          titleProgress = api::progress,
+          forgetTitle = { key -> api.forgetProgress(listOf(key)) },
+        )
+      }
+    }
+    compose.waitForIdle()
+  }
+
+  @Test
+  fun `forget on a named title clears the title's row beside the item's own state`() {
+    val api = FakeTvApi()
+    api.remoteSourcesValue = listOf(version("a1"))
+    api.remoteStateValue = RemoteItemStateDto(position = 300.0, duration = 3600.0, mediaSourceId = "a1")
+    api.progressValues["movie:tt1"] = ProgressDto(position = 1200.0, duration = 3600.0)
+    mountNamed(api)
+
+    focusByLabel("Forget progress")
+    press(Key.DirectionCenter)
+
+    // Clearing only the item's row would leave the title's position offering Resume again.
+    assertEquals(listOf(listOf("movie:tt1")), api.forgetCalls)
+    assertEquals(0.0, api.remoteStatePatches.single().position ?: -1.0, 0.0)
+    compose.onNodeWithTag(TagRemoteDetailWatched).assertDoesNotExist()
+    compose.onNodeWithContentDescription("Forget progress").assertDoesNotExist()
+  }
+
+  @Test
+  fun `marking a named title watched forgets the title's row`() {
+    val api = FakeTvApi()
+    api.remoteSourcesValue = listOf(version("a1"))
+    api.remoteStateValue = RemoteItemStateDto()
+    api.progressValues["movie:tt1"] = ProgressDto(position = 1200.0, duration = 3600.0)
+    mountNamed(api)
+
+    focusByLabel("Mark watched")
+    press(Key.DirectionCenter)
+
+    assertEquals(listOf(listOf("movie:tt1")), api.forgetCalls)
+    assertTrue(api.remoteStatePatches.single().watched == true)
+  }
 
   private fun version(sourceId: String) = StreamDto(
     sourceId = sourceId,

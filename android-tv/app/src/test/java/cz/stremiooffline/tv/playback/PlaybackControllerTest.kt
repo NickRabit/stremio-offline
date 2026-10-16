@@ -5,6 +5,7 @@ import cz.stremiooffline.tv.data.CopyDto
 import cz.stremiooffline.tv.data.AddonSubtitleDto
 import cz.stremiooffline.tv.data.PlaybackDescriptorDto
 import cz.stremiooffline.tv.data.ProgressDto
+import cz.stremiooffline.tv.data.RemoteItemContext
 import cz.stremiooffline.tv.data.TrackChange
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
@@ -107,6 +108,7 @@ class PlaybackControllerTest {
       path: String?,
       poster: String?,
       addonKey: String?,
+      remote: RemoteItemContext?,
     ) {
       if (failSave) throw IllegalStateException("the server said no")
       calls += "save"

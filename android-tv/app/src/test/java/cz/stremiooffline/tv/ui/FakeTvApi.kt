@@ -34,6 +34,7 @@ import cz.stremiooffline.tv.data.ProgressEntryDto
 import cz.stremiooffline.tv.data.ResumeFilter
 import cz.stremiooffline.tv.data.ResumePage
 import cz.stremiooffline.tv.data.RecentSearchDto
+import cz.stremiooffline.tv.data.RemoteItemContext
 import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.RemoteItemStateDto
 import cz.stremiooffline.tv.data.RemoteItemStatePatch
@@ -738,6 +739,7 @@ open class FakeTvApi : TvApi {
     path: String?,
     poster: String?,
     addonKey: String?,
+    remote: RemoteItemContext?,
   ) {}
 }
 

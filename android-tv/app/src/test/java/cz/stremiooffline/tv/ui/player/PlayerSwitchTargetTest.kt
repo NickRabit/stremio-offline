@@ -78,20 +78,41 @@ class PlayerSwitchTargetTest {
   }
 
   @Test
-  fun `a switch to another media library keeps that item's own identity`() {
+  fun `a switch to another media library takes the title's key and that item's own versions`() {
     val foreignItem = RemoteItemContext("rlibB", "iB", "ms9", "remote:rlibB:iB")
     val foreign = nativeVersion("ms9", foreignItem)
     val snapshot = listOf(nativeVersion("ms1"), foreign, addonRow)
 
     val target = switchedTarget(nativePlay(snapshot), foreign)
 
-    assertEquals("remote:rlibB:iB", target.key)
+    // The catalogue names the running title, so its key owns the position of every one of its
+    // versions, this item's included.
+    assertEquals("movie:tt1", target.key)
     assertEquals("rlibB", target.remoteItem?.libraryId)
     assertEquals("iB", target.remoteItem?.itemId)
     assertEquals("ms9", target.sourceId)
     // Only that item's own versions: the native item's list is never lent to it.
     assertEquals(listOf("ms9"), target.remoteSources.map { it.sourceId })
     assertEquals(snapshot, target.initialSources)
+  }
+
+  @Test
+  fun `a switch to a version nothing can name keeps the item's own key`() {
+    // The play knows no title identity, which is what a media-server play the catalogue never
+    // named looks like: the incoming item's own key is what the position is stored under.
+    val fromRemote = PlayTarget(
+      key = "remote:rlibA:iA",
+      title = "A file",
+      resume = false,
+      sourceId = "ms1",
+      remoteItem = nativeItem,
+      remoteSources = listOf(nativeVersion("ms1")),
+    )
+    val foreignItem = RemoteItemContext("rlibB", "iB", "ms9", "remote:rlibB:iB")
+    val target = switchedTarget(fromRemote, nativeVersion("ms9", foreignItem))
+
+    assertEquals("remote:rlibB:iB", target.key)
+    assertEquals("rlibB", target.remoteItem?.libraryId)
   }
 
   @Test

@@ -415,6 +415,10 @@ fun Shell(
       // The screen's own RemoteLibraryApi stays exactly that; the addon discovery needs the
       // catalogue surface, which the shell's real api already implements.
       catalogueApi = api,
+      // The title's own row outranks the item's remote state, so the TV reads the same key the
+      // web does for a version the catalogue can name.
+      titleProgress = api::progress,
+      forgetTitle = { key -> api.forgetProgress(listOf(key)) },
     )
   }
 

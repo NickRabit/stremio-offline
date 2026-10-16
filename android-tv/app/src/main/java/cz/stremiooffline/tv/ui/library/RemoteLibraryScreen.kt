@@ -57,6 +57,7 @@ import cz.stremiooffline.tv.data.CatalogApi
 import cz.stremiooffline.tv.data.DownloadTargetDto
 import cz.stremiooffline.tv.data.LibraryDto
 import cz.stremiooffline.tv.data.MediaDto
+import cz.stremiooffline.tv.data.ProgressDto
 import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.RemoteLibraryApi
 import cz.stremiooffline.tv.data.RemoteLibraryDto
@@ -338,6 +339,10 @@ internal fun RemoteSeriesScreen(
   onQueue: (suspend (title: String, sourceId: String, media: MediaDto, target: DownloadTargetDto?) -> Unit)? = null,
   /** The catalogue port the supplementary source groups need, forwarded to an episode's detail. */
   catalogueApi: CatalogApi? = null,
+  /** The title's own stored row, forwarded to an episode's detail: the episode's position is the
+   *  show's, exactly as it is for the same episode opened from the catalogue. */
+  titleProgress: (suspend (String) -> ProgressDto?)? = null,
+  forgetTitle: (suspend (String) -> Unit)? = null,
 ) {
   val viewModel = viewModel<RemoteLibraryViewModel>(
     key = "remote-series:${data.libraryId}:${data.item.id}",
@@ -527,6 +532,8 @@ internal fun RemoteSeriesScreen(
         loadDestinations = loadDestinations,
         onQueue = onQueue,
         catalogueApi = catalogueApi,
+        titleProgress = titleProgress,
+        forgetTitle = forgetTitle,
       )
     }
 
