@@ -14,6 +14,7 @@ import { CARD_LIMIT_MAX as REMOTE_FAVORITE_LIMIT, type MediaServerPersonal } fro
 import { HOME_FORGET_LIMIT, HOME_RESUME_FILE_LIMIT, type ResumeIdentity } from "../home.js";
 import { images } from "../images.js";
 import { remoteArtworkPath } from "../media-server-types.js";
+import { stableKeyOfFile, stableKeyOfRemote } from "../media-resources.js";
 import { knownTitleEntry, type LibraryMetaRecord, type TitleUnit } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { isVideo, sortFiles, type BrowseItem, type BrowseMeta, type LibraryFile } from "../library.js";
@@ -423,7 +424,10 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
         const remote = value.remote && remoteWriterVisible(value.remote, req) ? value.remote : undefined;
         // A row a media-server version wrote without a poster takes that item's own picture.
         const poster = images.proxied(value.poster) ?? (remote ? remoteArtworkPath(remote.libraryId, remote.itemId, "Primary") : undefined);
-        return { ...value, key: wireProgressKey(value.key), path: value.path ? wirePath(value.path) : value.path, poster, remote };
+        // A row stored before every write named its source can claim a file it was not last
+        // played from: the source key wins, and the stale file is not offered as the way back.
+        const path = value.path && !(value.stableKey && value.stableKey !== stableKeyOfFile(value.path)) ? wirePath(value.path) : undefined;
+        return { ...value, key: wireProgressKey(value.key), path, poster, remote };
       });
     return { items, partial };
   };
@@ -442,7 +446,8 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
       .map((key): [string, StoredProgress] => [key, all[key]!]);
     const found = newestProgress(rows, resolved.key)?.[1];
     const visible = !found?.path || pathVisible(found.path, viewerOf(currentUser(req)), store.libraries());
-    const answer = found && visible ? { ...found, poster: images.proxied(found.poster) } : null;
+    const stalePath = Boolean(found?.path && found.stableKey && found.stableKey !== stableKeyOfFile(found.path));
+    const answer = found && visible ? { ...found, poster: images.proxied(found.poster), ...(stalePath ? { path: undefined } : {}) } : null;
     res.json(answer && answer.remote && !remoteWriterVisible(answer.remote, req) ? { ...answer, remote: undefined } : answer);
   }));
   app.post("/api/progress", asyncRoute(async (req, res) => {
@@ -480,19 +485,22 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
       // The writer is read from this body alone: a write that names no version stores none, so a
       // row a catalogue play overwrote never keeps claiming a media-server version.
       const writer = reportedRemote(req.body.remote);
+      const filePath = req.body.path ? libraryKey(String(req.body.path)) : resolved.title ? resolved.file : undefined;
+      // The source this position was played from: the one the player named, else the file or the
+      // media-server version the write names. A write that names its source never inherits the
+      // previous one, so a switch is always the row's new source, whichever client wrote it.
+      const source = stableKey ?? (filePath ? stableKeyOfFile(filePath) : writer ? stableKeyOfRemote(writer) : undefined);
       const record: StoredProgress = {
         position, duration,
         title,
         // A write that names its source takes the path from this body alone, so a row that moved
         // to an addon answer stops claiming the library file it used to be played from.
-        path: stableKey
-          ? (req.body.path ? libraryKey(String(req.body.path)) : resolved.title ? resolved.file : undefined)
-          : (req.body.path ? libraryKey(String(req.body.path)) : resolved.title ? resolved.file : previous?.path),
+        path: source ? filePath : previous?.path,
         poster: posterOf(req.body.poster) ?? previous?.poster,
         addonKey: typeof req.body.addonKey === "string" ? req.body.addonKey : previous?.addonKey,
         series: reportedSeries(key, title, req.body.series) ?? boundSeries,
         ...(writer ? { remote: writer } : {}),
-        ...(stableKey ? { stableKey } : previous?.stableKey ? { stableKey: previous.stableKey } : {}),
+        ...(source ? { stableKey: source } : previous?.stableKey ? { stableKey: previous.stableKey } : {}),
         updatedAt: new Date().toISOString(),
       };
       const series = seriesOf(key, record);

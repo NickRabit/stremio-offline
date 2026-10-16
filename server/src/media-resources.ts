@@ -125,6 +125,13 @@ export function stableSourceKey(stream: StreamItem, kind: PublicStream["kind"]):
   return `u:${h(stream.addonKey ?? "", stream.url ?? stream.externalUrl ?? "")}`;
 }
 
+/** The stable key a library file plays under, from its stored (qualified) library key. */
+export const stableKeyOfFile = (key: string): string => stableSourceKey({ url: `file://${key}` }, "library");
+
+/** The stable key a media-server version plays under, from the writer a position names. */
+export const stableKeyOfRemote = (writer: { libraryId: string; itemId: string; mediaSourceId: string }): string =>
+  `m:${createHash("sha256").update([writer.libraryId, writer.itemId, writer.mediaSourceId].join("\n")).digest("hex").slice(0, 24)}`;
+
 function normalizedStream(input: StreamItem): StreamItem {
   if (isRemoteMediaStream(input) && !openRemoteContent(input.url)) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
   const headers = new Headers(input.behaviorHints?.proxyHeaders?.request);
