@@ -635,6 +635,35 @@ test("a library file and a stored catalogue row for one show merge into a single
   assert.deepEqual(rows.resume!.items[0]!.forgetKeys, ["file:Shows/01.mkv", "series:tt1:1:2"]);
 });
 
+test("a library film and a stored catalogue row for it merge into a single card", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  harness.records["lib_00000001/Films/Film"] = { type: "movie", id: "tt9", name: "Film" };
+  harness.data(ALICE).progress = {
+    "file:lib_00000001/Films/Film/Film.mkv": { position: 60, duration: 600, title: "Film", path: "lib_00000001/Films/Film/Film.mkv", updatedAt: "2024-01-02T00:00:00.000Z" },
+    "movie:tt9": { position: 10, duration: 600, title: "Film", updatedAt: "2024-01-01T00:00:00.000Z" },
+  };
+
+  const rows = await allRows(harness, ALICE);
+  assert.equal(rows.resume!.items.length, 1);
+  assert.equal(rows.resume!.items[0]!.kind, "resume-file");
+  assert.deepEqual(rows.resume!.items[0]!.forgetKeys, ["file:Films/Film/Film.mkv", "movie:tt9"]);
+});
+
+test("a bound film file with no catalogue row is still one card", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  harness.records["lib_00000001/Films/Film"] = { type: "movie", id: "tt9", name: "Film" };
+  harness.data(ALICE).progress = {
+    "file:lib_00000001/Films/Film/Film.mkv": { position: 60, duration: 600, title: "Film", path: "lib_00000001/Films/Film/Film.mkv", updatedAt: "2024-01-02T00:00:00.000Z" },
+  };
+
+  const rows = await allRows(harness, ALICE);
+  assert.equal(rows.resume!.items.length, 1);
+  assert.equal(rows.resume!.items[0]!.kind, "resume-file");
+  assert.deepEqual(rows.resume!.items[0]!.forgetKeys, ["file:Films/Film/Film.mkv"]);
+});
+
 test("a catalogue row of an addon whose Continue watching switch is off does not reach Home", async (t) => {
   const harness = await mount();
   t.after(harness.close);
@@ -807,6 +836,41 @@ test("forgetting a card's keys removes it from GET /api/resume", async (t) => {
   });
   assert.equal(forgotten.status, 204);
   assert.deepEqual(Object.keys(harness.data(ALICE).progress), [], "both halves of the show are forgotten in one write");
+  assert.equal((await resumePageOf(harness)).items.length, 0);
+});
+
+test("GET /api/resume draws one item for a film watched from its file and from the catalogue", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  harness.records["lib_00000001/Films/Film"] = { type: "movie", id: "tt9", name: "Film" };
+  harness.data(ALICE).progress = {
+    "file:lib_00000001/Films/Film/Film.mkv": { position: 60, duration: 600, title: "Film", path: "lib_00000001/Films/Film/Film.mkv", updatedAt: "2024-01-02T00:00:00.000Z" },
+    "movie:tt9": { position: 10, duration: 600, title: "Film", updatedAt: "2024-01-01T00:00:00.000Z" },
+  };
+
+  const page = await resumePageOf(harness);
+  assert.equal(page.items.length, 1);
+  assert.equal(page.total, 1);
+  assert.deepEqual(page.items[0]!.forgetKeys, ["file:Films/Film/Film.mkv", "movie:tt9"]);
+});
+
+test("forgetting a merged film's card forgets both of its stored keys", async (t) => {
+  const harness = await mount({ libraries: [library({ id: "lib_00000001", root: "/media", visibleTo: [ALICE] })] });
+  t.after(harness.close);
+  harness.records["lib_00000001/Films/Film"] = { type: "movie", id: "tt9", name: "Film" };
+  harness.data(ALICE).progress = {
+    "file:lib_00000001/Films/Film/Film.mkv": { position: 60, duration: 600, title: "Film", path: "lib_00000001/Films/Film/Film.mkv", updatedAt: "2024-01-02T00:00:00.000Z" },
+    "movie:tt9": { position: 10, duration: 600, title: "Film", updatedAt: "2024-01-01T00:00:00.000Z" },
+  };
+
+  const before = await resumePageOf(harness);
+  assert.equal(before.items.length, 1);
+  const forgotten = await fetch(`${harness.base}/api/progress/forget`, {
+    method: "POST", headers: { "content-type": "application/json", "x-user": ALICE },
+    body: JSON.stringify({ keys: before.items[0]!.forgetKeys }),
+  });
+  assert.equal(forgotten.status, 204);
+  assert.deepEqual(Object.keys(harness.data(ALICE).progress), [], "both halves of the film are forgotten in one write");
   assert.equal((await resumePageOf(harness)).items.length, 0);
 });
 

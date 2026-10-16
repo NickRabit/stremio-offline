@@ -194,8 +194,13 @@ export interface HomeLayoutEntry {
 
 export interface HomeLayoutResponse { rows: HomeLayoutEntry[]; layout: HomeLayout }
 
+/** The catalogue title a Continue watching candidate belongs to. The type is part of the
+ *  identity, so a film and a series that share an id never merge. */
+export interface ResumeIdentity { type: "movie" | "series"; id: string }
+
 /** One library file with a stored position, already filtered by permission and shaped by
- *  the caller of the builder. `seriesId` is the catalogue title the folder is bound to. */
+ *  the caller of the builder. `identity` is the catalogue title the file or folder is
+ *  bound to. */
 export interface ResumeFileItem {
   key: string;
   updatedAt: string;
@@ -207,8 +212,7 @@ export interface ResumeFileItem {
   progress: HomeProgress;
   season?: number;
   episode?: number;
-  seriesId?: string;
-  seriesType?: string;
+  identity?: ResumeIdentity;
 }
 
 /** One catalogue progress row, stored or the pending next episode a finished one left. */
@@ -226,8 +230,7 @@ export interface ResumeCatalogueItem {
   progress?: HomeProgress;
   pending?: true;
   addonKey?: string;
-  seriesId?: string;
-  seriesType?: string;
+  identity?: ResumeIdentity;
 }
 
 /** One input per source, already permission-filtered by the caller of the builder. */
@@ -284,12 +287,12 @@ function cardFor(candidates: ResumeCandidate[]): Extract<HomeCard, { kind: "resu
   };
 }
 
-/** Merge the two Continue watching sources into one card per verified show. Only equal,
- *  non-empty series ids merge; an unknown identity stays its own card. */
+/** Merge the two Continue watching sources into one card per title. Only equal identities
+ *  merge; an unknown identity stays its own card. */
 function resumeGroups(sources: ResumeSources): ResumeGroup[] {
   const candidates: ResumeCandidate[] = [
-    ...sources.files.map((item): ResumeCandidate => ({ source: "file", identity: item.seriesId || undefined, item })),
-    ...sources.catalogue.map((item): ResumeCandidate => ({ source: "catalogue", identity: item.seriesId || undefined, item })),
+    ...sources.files.map((item): ResumeCandidate => ({ source: "file", identity: item.identity ? `${item.identity.type}:${item.identity.id}` : undefined, item })),
+    ...sources.catalogue.map((item): ResumeCandidate => ({ source: "catalogue", identity: item.identity ? `${item.identity.type}:${item.identity.id}` : undefined, item })),
   ];
   const groups = new Map<string, ResumeCandidate[]>();
   const singles: ResumeCandidate[] = [];
@@ -308,7 +311,7 @@ function resumeGroups(sources: ResumeSources): ResumeGroup[] {
     .sort((a, b) => b.card.updatedAt.localeCompare(a.card.updatedAt) || a.card.key.localeCompare(b.card.key));
 }
 
-/** Merge the two Continue watching sources into one card per verified show, cut to the row. */
+/** Merge the two Continue watching sources into one card per title, cut to the row. */
 export function mergeResume(sources: ResumeSources, limit: number = HOME_ROW_LIMIT): { items: HomeCard[]; hasMore: boolean } {
   return boundCards(resumeGroups(sources).map((group) => group.card), limit);
 }
@@ -319,7 +322,7 @@ export type ResumeFilter = "all" | "library" | "catalog" | "remote";
 export const parseResumeFilter = (value: unknown): ResumeFilter =>
   value === "library" || value === "catalog" || value === "remote" ? value : "all";
 
-/** One merged card and the sources it stands for. A folded show that kept a local copy
+/** One merged card and the sources it stands for. A folded title that kept a local copy
  *  counts under both filters, whichever kind won the card. */
 interface ResumeGroup { card: ResumeCard; file: boolean; catalogue: boolean }
 

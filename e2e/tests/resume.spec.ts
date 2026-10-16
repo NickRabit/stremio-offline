@@ -162,3 +162,43 @@ test("a card can be forgotten from the Continue watching section", async ({ page
     await request.delete(`/api/progress/${encodeURIComponent(key)}`);
   }
 });
+
+/** A film the account keeps in its library and also has in the catalogue is one title: one
+ *  card, drawn once, and one action that forgets both halves of it. */
+test("a film watched from its library file and from the catalogue is one card", async ({ page, request }) => {
+  const directory = path.resolve("e2e/.tmp/downloads/resume-film");
+  const fileRelative = "resume-film/film.mp4";
+  const fileKey = `file:${fileRelative}`;
+  const catalogueKey = "movie:tt-e2e-movie";
+  const title = "Zkušební film";
+  await rm(directory, { recursive: true, force: true });
+  await mkdir(directory, { recursive: true });
+  await writeFile(path.join(directory, "film.mp4"), "fixture");
+  const card = () => page.locator(".section-grid .browse-item", { hasText: title });
+  try {
+    expect((await request.post("/api/library/match", { data: { path: "resume-film", type: "movie", id: "tt-e2e-movie" } })).ok()).toBe(true);
+    expect((await request.post("/api/progress", { data: { key: fileKey, path: fileRelative, title, position: 120, duration: 2400 } })).ok()).toBe(true);
+    expect((await request.post("/api/progress", { data: { key: catalogueKey, title, position: 60, duration: 2400 } })).ok()).toBe(true);
+
+    const items = ((await (await request.get("/api/resume?limit=60")).json()).items as Array<{ key: string; forgetKeys?: string[] }>)
+      .filter((item) => item.forgetKeys?.some((key) => key === fileKey || key === catalogueKey));
+    expect(items, "the file and the catalogue row are one card").toHaveLength(1);
+    expect(items[0]!.forgetKeys).toEqual(expect.arrayContaining([fileKey, catalogueKey]));
+
+    await page.goto("/");
+    await goToView(page, "Pokračovat ve sledování");
+    await expect(card()).toHaveCount(1);
+
+    page.once("dialog", (dialog) => dialog.accept());
+    await card().getByRole("button", { name: /Akce pro/ }).click();
+    await page.getByRole("button", { name: "Zapomenout postup" }).click();
+    await expect(card()).toHaveCount(0);
+    expect(await (await request.get(`/api/progress/${encodeURIComponent(fileKey)}`)).json()).toBeNull();
+    expect(await (await request.get(`/api/progress/${encodeURIComponent(catalogueKey)}`)).json()).toBeNull();
+  } finally {
+    await request.delete(`/api/progress/${encodeURIComponent(fileKey)}`);
+    await request.delete(`/api/progress/${encodeURIComponent(catalogueKey)}`);
+    await request.post("/api/library/match", { data: { path: "resume-film", id: "", type: "movie" } });
+    await rm(directory, { recursive: true, force: true });
+  }
+});

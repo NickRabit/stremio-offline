@@ -10,7 +10,7 @@ import {
 import type { RemoteHomeCard } from "../home.js";
 import type { MediaServerAuthority } from "../media-server-manager.js";
 import type { MediaServerPersonal } from "../media-server-personal.js";
-import { HOME_FORGET_LIMIT, HOME_RESUME_FILE_LIMIT } from "../home.js";
+import { HOME_FORGET_LIMIT, HOME_RESUME_FILE_LIMIT, type ResumeIdentity } from "../home.js";
 import { images } from "../images.js";
 import { knownEntryForUnit, knownTitleEntry, unitFor, type LibraryMetaRecord, type TitleUnit } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
@@ -96,7 +96,7 @@ export interface ResumeRowOptions {
   limit?: number;
 }
 
-/** One row of `GET /api/library/resume` as the handler serialises it, plus the series
+/** One row of `GET /api/library/resume` as the handler serialises it, plus the title
  *  identity Home needs -- the handler strips it, exactly as it strips the show key today. */
 export type ResumePageItem = LibraryFile & BrowseMeta & {
   kind: "file";
@@ -105,8 +105,7 @@ export type ResumePageItem = LibraryFile & BrowseMeta & {
   poster?: string;
   wide?: string;
   seriesKey?: string;
-  seriesId?: string;
-  seriesType?: string;
+  identity?: ResumeIdentity;
   backfill?: boolean;
 };
 export interface ResumePage { items: ResumePageItem[]; total: number; pending: boolean }
@@ -673,10 +672,14 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
       // same key and the grouping below turns them into a single tile.
       const bound = knownTitleEntry(libraryKey(key), records);
       const series = bound?.record.type === "series" ? { key: bound.key, id: bound.record.id, name: bound.record.name } : undefined;
+      // A film gets no series key: that grouping would fold two films sharing a folder into one.
+      const identity: ResumeIdentity | undefined = series
+        ? { type: "series", id: series.id }
+        : bound?.record.type === "movie" ? { type: "movie", id: bound.record.id } : undefined;
       return [{ ...item, path: wirePath(key), label: entry.title || item.label, modified: entry.updatedAt,
         progress: { position: entry.position, duration: entry.duration }, favorite: favorites.has(key),
         seriesKey: series?.key,
-        seriesId: series?.id, seriesType: series ? "series" : undefined,
+        ...(identity ? { identity } : {}),
         ...(series?.name ? { series: { name: series.name } } : {}) }];
     }));
     // One tile per show before the filters, the sort and the slice, so `total` and the paging
@@ -705,7 +708,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
   };
   app.get("/api/library/resume", asyncRoute(async (req, res) => {
     const result = await libraryResumeItems(req);
-    res.json({ path: ":resume", items: result.items.map(({ backfill: _backfill, seriesKey: _seriesKey, seriesId: _seriesId, seriesType: _seriesType, ...item }) => item), total: result.total, pending: result.pending });
+    res.json({ path: ":resume", items: result.items.map(({ backfill: _backfill, seriesKey: _seriesKey, identity: _identity, ...item }) => item), total: result.total, pending: result.pending });
   }));
 
   app.get("/api/library/favorites", asyncRoute(async (req, res) => {

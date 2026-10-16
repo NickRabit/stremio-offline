@@ -11,7 +11,7 @@ import {
   arrangeHomeRows, boundCards, homeCatalogRowId, homeFeedSelectionKey, homeRowOrder, mergeResume, parseHomeLayout,
   parseResumeFilter, resumePage,
   type HomeCard, type HomeLayout, type HomeLayoutEntry, type HomeLayoutResponse, type HomeResponse, type HomeRow, type HomeRowError, type HomeRowId,
-  type BuiltinHomeRowId, type RemoteHomeCard, type ResumeCatalogueItem, type ResumeFileItem, type ResumeSources,
+  type BuiltinHomeRowId, type RemoteHomeCard, type ResumeCatalogueItem, type ResumeFileItem, type ResumeIdentity, type ResumeSources,
 } from "../home.js";
 import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, showsInFavorites, showsOnHome, type LibraryRecord, type Viewer } from "../libraries.js";
 import { isPathWithin, type BrowseItem } from "../library.js";
@@ -214,6 +214,9 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
         const colon = row.key.indexOf(":");
         const type = series ? "series" : colon > 0 ? row.key.slice(0, colon) : "movie";
         const id = series ? series.id : colon > 0 ? row.key.slice(colon + 1) : row.key;
+        const identity: ResumeIdentity | undefined = series
+          ? { type: "series", id: series.id }
+          : type === "movie" && id ? { type: "movie", id } : undefined;
         return {
           key: row.key, updatedAt: row.updatedAt, title: row.title,
           ...(row.poster ? { poster: row.poster } : {}),
@@ -222,7 +225,7 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
           ...(series?.episode !== undefined ? { episode: series.episode } : {}),
           ...(row.pending ? { pending: true as const } : { progress: { position: row.position, duration: row.duration } }),
           ...(row.addonKey ? { addonKey: row.addonKey } : {}),
-          ...(series ? { seriesId: series.id, seriesType: "series" } : {}),
+          ...(identity ? { identity } : {}),
         };
       });
     const files: ResumeFileItem[] = resume.items.map((item) => ({
@@ -234,7 +237,7 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
       path: item.path, progress: item.progress,
       ...(typeof item.season === "number" ? { season: item.season } : {}),
       ...(typeof item.episode === "number" ? { episode: item.episode } : {}),
-      ...(item.seriesId ? { seriesId: item.seriesId, seriesType: item.seriesType } : {}),
+      ...(item.identity ? { identity: item.identity } : {}),
     }));
     return {
       sources: { catalogue, files, ...(remote ? { remote: remote.items } : {}) },

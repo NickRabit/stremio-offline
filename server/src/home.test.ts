@@ -17,8 +17,8 @@ const catalogue = (over: Partial<ResumeCatalogueItem> & { key: string }): Resume
 
 test("two cards with the same verified series id merge into one", () => {
   const { items } = mergeResume({
-    files: [file({ key: "file:a", seriesId: "tt1", updatedAt: at(2) })],
-    catalogue: [catalogue({ key: "series:tt1:1:2", seriesId: "tt1", updatedAt: at(1) })],
+    files: [file({ key: "file:a", identity: { type: "series", id: "tt1" }, updatedAt: at(2) })],
+    catalogue: [catalogue({ key: "series:tt1:1:2", identity: { type: "series", id: "tt1" }, updatedAt: at(1) })],
   });
   assert.equal(items.length, 1);
   assert.equal(items[0]!.kind, "resume-file");
@@ -27,8 +27,8 @@ test("two cards with the same verified series id merge into one", () => {
 
 test("unequal series ids stay as two cards", () => {
   const { items } = mergeResume({
-    files: [file({ key: "file:a", seriesId: "tt1" })],
-    catalogue: [catalogue({ key: "series:tt2:1:1", seriesId: "tt2" })],
+    files: [file({ key: "file:a", identity: { type: "series", id: "tt1" } })],
+    catalogue: [catalogue({ key: "series:tt2:1:1", identity: { type: "series", id: "tt2" } })],
   });
   assert.equal(items.length, 2);
   assert.deepEqual(items.map((item) => item.key).sort(), ["file:a", "series:tt2:1:1"]);
@@ -47,42 +47,108 @@ test("a card without a series id never merges", () => {
 
 test("when the times tie the library file wins, because it is playable now", () => {
   const { items } = mergeResume({
-    files: [file({ key: "file:a", seriesId: "tt1", updatedAt: at(2) })],
-    catalogue: [catalogue({ key: "series:tt1:1:2", seriesId: "tt1", updatedAt: at(2) })],
+    files: [file({ key: "file:a", identity: { type: "series", id: "tt1" }, updatedAt: at(2) })],
+    catalogue: [catalogue({ key: "series:tt1:1:2", identity: { type: "series", id: "tt1" }, updatedAt: at(2) })],
   });
   assert.equal(items[0]!.kind, "resume-file");
 });
 
 test("the newest candidate wins over the library file", () => {
   const { items } = mergeResume({
-    files: [file({ key: "file:a", seriesId: "tt1", updatedAt: at(1) })],
-    catalogue: [catalogue({ key: "series:tt1:1:2", seriesId: "tt1", updatedAt: at(3) })],
+    files: [file({ key: "file:a", identity: { type: "series", id: "tt1" }, updatedAt: at(1) })],
+    catalogue: [catalogue({ key: "series:tt1:1:2", identity: { type: "series", id: "tt1" }, updatedAt: at(3) })],
   });
   assert.equal(items[0]!.kind, "resume-catalogue");
 });
 
 test("a pending next episode is chosen only when the show has no playable candidate", () => {
-  const alone = mergeResume({ files: [], catalogue: [catalogue({ key: "series:tt1:1:3", seriesId: "tt1", pending: true, updatedAt: at(5) })] });
+  const alone = mergeResume({ files: [], catalogue: [catalogue({ key: "series:tt1:1:3", identity: { type: "series", id: "tt1" }, pending: true, updatedAt: at(5) })] });
   assert.equal(alone.items[0]!.kind, "resume-catalogue");
   assert.deepEqual((alone.items[0] as { pending?: true }).pending, true);
   assert.equal("progress" in alone.items[0]!, false, "a pending row carries no invented progress bar");
 
   const together = mergeResume({
-    files: [file({ key: "file:a", seriesId: "tt1", updatedAt: at(1) })],
-    catalogue: [catalogue({ key: "series:tt1:1:3", seriesId: "tt1", pending: true, updatedAt: at(5) })],
+    files: [file({ key: "file:a", identity: { type: "series", id: "tt1" }, updatedAt: at(1) })],
+    catalogue: [catalogue({ key: "series:tt1:1:3", identity: { type: "series", id: "tt1" }, pending: true, updatedAt: at(5) })],
   });
   assert.equal(together.items[0]!.kind, "resume-file", "unfinished playback beats a later marker");
 });
 
 test("the winning card forgets every key the show stands for", () => {
   const { items } = mergeResume({
-    files: [file({ key: "file:a", seriesId: "tt1", updatedAt: at(3) })],
+    files: [file({ key: "file:a", identity: { type: "series", id: "tt1" }, updatedAt: at(3) })],
     catalogue: [
-      catalogue({ key: "series:tt1:1:2", seriesId: "tt1", updatedAt: at(1) }),
-      catalogue({ key: "series:tt1:1:3", seriesId: "tt1", pending: true, updatedAt: at(2) }),
+      catalogue({ key: "series:tt1:1:2", identity: { type: "series", id: "tt1" }, updatedAt: at(1) }),
+      catalogue({ key: "series:tt1:1:3", identity: { type: "series", id: "tt1" }, pending: true, updatedAt: at(2) }),
     ],
   });
   assert.deepEqual(forgetKeys(items[0]!), ["file:a", "series:tt1:1:2", "series:tt1:1:3"]);
+});
+
+test("a library film and its catalogue row merge into one card, whichever half is newer", () => {
+  const fileHalf = file({ key: "file:a", identity: { type: "movie", id: "tt9" }, updatedAt: at(2) });
+  const catalogueHalf = catalogue({ key: "movie:tt9", type: "movie", id: "tt9", identity: { type: "movie", id: "tt9" }, updatedAt: at(1) });
+
+  const { items } = mergeResume({ files: [fileHalf], catalogue: [catalogueHalf] });
+  assert.equal(items.length, 1);
+  assert.equal(items[0]!.kind, "resume-file", "the playable file wins when it is the newer half");
+  assert.deepEqual(forgetKeys(items[0]!), ["file:a", "movie:tt9"]);
+
+  const newer = mergeResume({ files: [fileHalf], catalogue: [{ ...catalogueHalf, updatedAt: at(3) }] });
+  assert.equal(newer.items.length, 1);
+  assert.equal(newer.items[0]!.kind, "resume-catalogue");
+  assert.deepEqual(forgetKeys(newer.items[0]!), ["file:a", "movie:tt9"]);
+
+  const tie = mergeResume({ files: [fileHalf], catalogue: [{ ...catalogueHalf, updatedAt: at(2) }] });
+  assert.equal(tie.items.length, 1);
+  assert.equal(tie.items[0]!.kind, "resume-file");
+});
+
+test("a film and a series that share an id never merge, because the identity is typed", () => {
+  const { items } = mergeResume({
+    files: [],
+    catalogue: [
+      catalogue({ key: "movie:tt1", type: "movie", id: "tt1", identity: { type: "movie", id: "tt1" }, updatedAt: at(2) }),
+      catalogue({ key: "series:tt1:1:1", identity: { type: "series", id: "tt1" }, updatedAt: at(1) }),
+    ],
+  });
+  assert.equal(items.length, 2);
+  assert.deepEqual(items.map((item) => item.key).sort(), ["movie:tt1", "series:tt1:1:1"]);
+});
+
+test("two library files bound to the same film merge into one card", () => {
+  const { items } = mergeResume({
+    files: [
+      file({ key: "file:a", identity: { type: "movie", id: "tt9" }, updatedAt: at(1) }),
+      file({ key: "file:b", identity: { type: "movie", id: "tt9" }, updatedAt: at(2) }),
+    ],
+    catalogue: [],
+  });
+  assert.equal(items.length, 1);
+  assert.equal(items[0]!.key, "file:b");
+  assert.deepEqual(forgetKeys(items[0]!), ["file:a", "file:b"]);
+});
+
+test("an unbound file and a catalogue row of another title stay their own cards", () => {
+  const { items } = mergeResume({
+    files: [file({ key: "file:a", updatedAt: at(2) })],
+    catalogue: [catalogue({ key: "movie:tt9", type: "movie", id: "tt9", identity: { type: "movie", id: "tt9" }, updatedAt: at(1) })],
+  });
+  assert.equal(items.length, 2);
+  assert.deepEqual(items.map((item) => item.key).sort(), ["file:a", "movie:tt9"]);
+});
+
+test("a merged film answers both the library and the catalogue filter", () => {
+  const sources = {
+    files: [file({ key: "file:a", identity: { type: "movie", id: "tt9" }, updatedAt: at(1) })],
+    // The newer marker wins the card; the film still has a local copy behind it.
+    catalogue: [catalogue({ key: "movie:tt9", type: "movie", id: "tt9", identity: { type: "movie", id: "tt9" }, updatedAt: at(3) })],
+  };
+  assert.equal(resumePage(sources, {}).items[0]!.kind, "resume-catalogue");
+  assert.deepEqual(resumePage(sources, { filter: "library" }).items.map((item) => item.key), ["movie:tt9"]);
+  assert.equal(resumePage(sources, { filter: "library" }).total, 1);
+  assert.deepEqual(resumePage(sources, { filter: "catalog" }).items.map((item) => item.key), ["movie:tt9"]);
+  assert.equal(resumePage(sources, { filter: "catalog" }).total, 1);
 });
 
 test("cards are ordered newest first, cut to the row limit, and report hasMore", () => {
@@ -102,8 +168,8 @@ test("exactly the limit is not reported as more", () => {
 
 test("the winner of a merged show does not depend on the input order", () => {
   const sources = {
-    files: [file({ key: "file:a", seriesId: "tt1", updatedAt: at(2) })],
-    catalogue: [catalogue({ key: "series:tt1:1:2", seriesId: "tt1", updatedAt: at(3) })],
+    files: [file({ key: "file:a", identity: { type: "series", id: "tt1" }, updatedAt: at(2) })],
+    catalogue: [catalogue({ key: "series:tt1:1:2", identity: { type: "series", id: "tt1" }, updatedAt: at(3) })],
   };
   const forward = mergeResume(sources);
   const reversed = mergeResume({ files: [...sources.files].reverse(), catalogue: [...sources.catalogue].reverse() });
@@ -120,10 +186,10 @@ test("parseResumeFilter keeps the two card kinds and folds anything else into al
 
 test("the first page of resumePage is exactly Home's row", () => {
   const sources = {
-    files: [file({ key: "file:a", seriesId: "tt1", updatedAt: at(1) })],
+    files: [file({ key: "file:a", identity: { type: "series", id: "tt1" }, updatedAt: at(1) })],
     catalogue: [
       catalogue({ key: "movie:tt2", type: "movie", id: "tt2", updatedAt: at(3) }),
-      catalogue({ key: "series:tt1:1:2", seriesId: "tt1", updatedAt: at(2) }),
+      catalogue({ key: "series:tt1:1:2", identity: { type: "series", id: "tt1" }, updatedAt: at(2) }),
     ],
   };
   const row = mergeResume(sources);
@@ -134,9 +200,9 @@ test("the first page of resumePage is exactly Home's row", () => {
 
 test("a folded show that kept a local copy answers both filters, whichever card won", () => {
   const sources = {
-    files: [file({ key: "file:a", seriesId: "tt1", updatedAt: at(1) })],
+    files: [file({ key: "file:a", identity: { type: "series", id: "tt1" }, updatedAt: at(1) })],
     // The newer marker wins the card, but the show still has a local copy behind it.
-    catalogue: [catalogue({ key: "series:tt1:1:2", seriesId: "tt1", updatedAt: at(3) })],
+    catalogue: [catalogue({ key: "series:tt1:1:2", identity: { type: "series", id: "tt1" }, updatedAt: at(3) })],
   };
   assert.equal(resumePage(sources, {}).items[0]!.kind, "resume-catalogue");
   assert.deepEqual(resumePage(sources, { filter: "library" }).items.map((item) => item.key), ["series:tt1:1:2"]);
