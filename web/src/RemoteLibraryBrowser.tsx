@@ -1131,12 +1131,13 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   /** The metadata line: what the provider normalized, plus the genres it gave. */
   const detailFacts = (item: RemoteItem): string =>
     [itemFacts(item), (item.genres ?? []).join(" · ")].filter(Boolean).join(" · ");
-  /** The hero block a series shares with the catalogue: the chips, its name, the facts and the
-   *  provider's overview. A playable title reads the same through the shared shell instead. */
+  /** The hero block a series shares with the catalogue: its name, the facts and the provider's
+   *  overview. Its chips are the hero's own row, drawn above this block like every other detail's,
+   *  so the corner art beside that row cannot narrow it. A playable title reads the same through
+   *  the shared shell instead. */
   const seriesHeroCopy = (item: RemoteItem): ReactNode => {
     const facts = detailFacts(item);
     return <>
-      {detailChips(item)}
       <h2>{item.name}</h2>
       {facts && <p className="meta-line">{facts}</p>}
       <p className="library-detail-synopsis">{item.overview || t("catalog.noDescription")}</p>
@@ -1457,6 +1458,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
           {/* The hero is transparent on the shared surface, so the episodes sit on the same wash and
               the gradient's dark bottom keeps them legible. */}
           <DetailHero className="library-detail-hero"
+            chips={detailChips(detail)}
             gallery={seriesGallery.length && onGallery ? <button type="button" className={`gallery-open ${seriesGallery[0]!.shape === "wide" ? "wide" : "poster"}`}
               title={t("gallery.openHint")} onClick={() => onGallery(seriesGallery, catalogue)}>
               <img key={seriesGallery[0]!.url} src={seriesGallery[0]!.url} alt="" onError={hideBroken}/><span><Images/> {seriesGallery.length > 1 ? t("gallery.stillCount", { count: seriesGallery.length }) : t("gallery.enlarge")}</span>

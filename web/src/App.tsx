@@ -1,5 +1,5 @@
 import { FormEvent, ReactNode, TouchEvent as ReactTouchEvent, UIEvent, WheelEvent as ReactWheelEvent, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, BarChart3, Bell, BellRing, History, ArrowUp, Check, RectangleHorizontal, RectangleVertical, Copy, FolderInput, FolderOpen, Home as HomeIcon, ImageOff, Images, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldQuestion, SlidersHorizontal, Sparkles, Star, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, Film, FolderCog, HardDrive, Library, PackagePlus, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, X } from "lucide-react";
+import { ArrowDown, BarChart3, Bell, BellRing, History, ArrowUp, Check, RectangleHorizontal, RectangleVertical, Copy, FolderInput, FolderOpen, Home as HomeIcon, ImageOff, Images, Info, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldQuestion, SlidersHorizontal, Sparkles, Star, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, Film, FolderCog, HardDrive, Library, PackagePlus, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, X } from "lucide-react";
 import { preloadLibraryPosters, scheduleIdle } from "./library-preload";
 import { api, ApiError, describeError, saveToDevice } from "./api";
 import { LoginScreen, PasswordChangeRequired } from "./Login";
@@ -34,6 +34,7 @@ import { addonNotices, canQueue, catalogSourceRows, filmHasNoSource, isLocalStre
 import { providerLabel, SourceFilters, SourceRows } from "./source-rows";
 import { alternativeProgressSaved, sourceProgressOwner, type SourceProgressOwner } from "./source-progress";
 import { alternativeSaveRequest } from "./alternative-save";
+import { sourceIdentity } from "./library-detail-sources";
 import { parseSearchScope } from "./search-scope";
 import { createLiveSearch, type LiveSearch, type LiveSearchState } from "./live-search";
 import { rankByTitle } from "./title-match";
@@ -43,7 +44,7 @@ import { resumeVideo, type ResumeTarget } from "./resume-target";
 import { emptyViews, prefsFor, scopeOf, withDownloads, withExtra, withLibrary } from "./views";
 import { Empty, Nav, Onboarding } from "./app-chrome";
 import { FavoritesView } from "./FavoritesView";
-import { CatalogueTitleDetail, catalogueStreamId } from "./CatalogueTitleDetail";
+import { CatalogueTitleDetail, catalogueStreamId, type CatalogueDetailTarget } from "./CatalogueTitleDetail";
 import { Downloads } from "./DownloadsPage";
 import { Home } from "./Home";
 import type { HomeCardActions } from "./HomeCard";
@@ -109,9 +110,20 @@ const episodeLabel = (video: Video) => video.title || video.name
     ? `${String(video.season ?? 0).padStart(2, "0")}×${String(video.episode ?? 0).padStart(2, "0")}`
     : t("episodes.one"));
 
+/** What the player names a shared detail's title: its name, and for an episode its numbering
+ *  beside it, so the row on screen is never the wrong episode of the right show. */
+const detailPlaybackTitle = (target: CatalogueDetailTarget) => target.season != null && target.episode != null
+  ? `${target.name} · ${String(target.season).padStart(2, "0")}×${String(target.episode).padStart(2, "0")}`
+  : target.name;
+
 
 /** Two bars, because the preview reserves a two-line box. */
 const skeletonLines = <><span className="skeleton-line"/><span className="skeleton-line"/></>;
+/** One show's episodes in the order it plays them: specials last, then by season and number. */
+const orderedVideos = (videos: Video[]) => videos.map((video, index) => ({ video, index })).sort((a, b) => {
+  const season = (value: Video) => value.season === 0 ? Number.MAX_SAFE_INTEGER : value.season ?? Number.MAX_SAFE_INTEGER - 1;
+  return season(a.video) - season(b.video) || (a.video.episode ?? a.index) - (b.video.episode ?? b.index) || a.index - b.index;
+}).map(({ video }) => video);
 /** The IMDb score the catalogue addon carries, as it writes it. Absent for a title nobody
  *  has rated, and never TMDB's own average, which is a different number. */
 const imdbRating = (item: Meta | null): string | null => {
@@ -192,6 +204,8 @@ export function App() {
   const [selectedCatalog, setSelectedCatalog] = useState(""); const [search, setSearch] = useState(""); const [items, setItems] = useState<Meta[]>([]); const [selected, setSelected] = useState<Meta | null>(null); const [selectedSummary, setSelectedSummary] = useState<Meta | null>(null); const [selectedDownloadTitle, setSelectedDownloadTitle] = useState("");
   const [selectedVideo, setSelectedVideo] = useState<Video | null>(null); const [streams, setStreams] = useState<Stream[]>([]); const [localStreams, setLocalStreams] = useState<Stream[]>([]); const [localLoading, setLocalLoading] = useState(false); const [selectedStream, setSelectedStream] = useState<Stream | null>(null); const [subtitles, setSubtitles] = useState<Subtitle[]>([]); const [localEpisode, setLocalEpisode] = useState(false); const [playbackPreferences, setPlaybackPreferences] = useState<{ audioLanguage?: string; subtitleLanguage?: string | null }>({});
   const nextEpisodePrefetchRef = useRef<{ id: string; promise: Promise<{ streams: Stream[]; subtitles: Subtitle[] }> } | null>(null);
+  /** The next episode of what the shared detail is playing, read while this one runs. */
+  const detailNextPrefetchRef = useRef<{ id: string; promise: Promise<{ streams: Stream[]; subtitles: Subtitle[] }> } | null>(null);
   const [remoteGroups, setRemoteGroups] = useState<RemoteGroup[]>([]);
   const [remoteLoading, setRemoteLoading] = useState(0);
   const [remoteDiscoveryError, setRemoteDiscoveryError] = useState("");
@@ -210,7 +224,7 @@ export function App() {
   const remoteNextPrefetchRef = useRef<{ id: string; libraryId: string; controller: AbortController; promise: Promise<Stream[]> } | null>(null);
   const remoteTargetNonce = useRef(0);
   useEffect(() => () => { remoteAbortRef.current?.abort(); remoteNextPrefetchRef.current?.controller.abort(); }, []);
-  const [sourcesLoaded, setSourcesLoaded] = useState(false); const [metaLoading, setMetaLoading] = useState(false);
+  const [sourcesLoaded, setSourcesLoaded] = useState(false); const [sourcesComplete, setSourcesComplete] = useState(false); const [metaLoading, setMetaLoading] = useState(false);
   const [titleLinks, setTitleLinks] = useState<SiteLink[]>([]);
   const [libraryLinks, setLibraryLinks] = useState<Record<string, SiteLink[]>>({});
   const [titleTrailer, setTitleTrailer] = useState<Trailer | null>(null);
@@ -258,8 +272,9 @@ export function App() {
   const [identifyPath, setIdentifyPath] = useState<string | null>(null);
   const [movePath, setMovePath] = useState<{ path: string; label: string; type?: "movie" | "series"; paths?: string[]; copy?: boolean } | null>(null);
   const [saveTargetOpen, setSaveTargetOpen] = useState(false);
-  /** The shared title detail, hosted over whichever page opened it. */
-  const [catalogueDetail, setCatalogueDetail] = useState<{ type: "movie" | "series"; id: string; name: string; poster?: string; season?: number; episode?: number } | null>(null);
+  /** The shared title detail, hosted over whichever page opened it, with the rows the catalogue
+   *  panel already read for the selection it was opened on. */
+  const [catalogueDetail, setCatalogueDetail] = useState<(CatalogueDetailTarget & { initialSources?: Stream[] }) | null>(null);
   /** The destination dialog the shared detail's save arrow opens, with the row it was clicked for. */
   const [catalogueSave, setCatalogueSave] = useState<{ title: string; kind: "movie" | "series"; stream: Stream; media: Record<string, unknown>; season?: number; rule?: AddonDownloadSettings; ruleUnavailable?: boolean } | null>(null);
   /** Where a freshly switched source starts; the player hands the position over. */
@@ -268,6 +283,24 @@ export function App() {
   const [playingCatalogue, setPlayingCatalogue] = useState<{ type: "movie" | "series"; id: string } | null>(null);
   /** What the player plays under, read by its header, star and progress store. */
   const [playerSubject, setPlayerSubject] = useState<PlayerSubject | null>(null);
+  /** Playback the shared catalogue detail started. It is not the browse panel, so its title,
+   *  episode and row travel here: the panel's own selection stays exactly as it was left. */
+  const [detailPlaying, setDetailPlaying] = useState<{ target: CatalogueDetailTarget; stream: Stream; title: string; subtitles: Subtitle[]; fromBeginning?: boolean } | null>(null);
+  const detailPlaybackId = detailPlaying ? catalogueStreamId(detailPlaying.target) : null;
+  // A play the shared detail started reads its own subtitles: the panel's list belongs to whatever
+  // it has selected, and an episode of another show never answers for this one.
+  useEffect(() => {
+    if (!detailPlaying) return;
+    let live = true;
+    const { stream, target } = detailPlaying;
+    setDetailPlaying((current) => current ? { ...current, subtitles: [] } : null);
+    if (!isLocalStream(stream) && !isRemoteStream(stream)) {
+      void api.subtitles(target.type, catalogueStreamId(target)).then((found) => {
+        if (live) setDetailPlaying((current) => current ? { ...current, subtitles: found } : null);
+      }).catch(() => undefined);
+    }
+    return () => { live = false; };
+  }, [detailPlaybackId, detailPlaying?.target.type, detailPlaying?.stream.sourceId]);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(() => new Set());
   const [libraryOps, setLibraryOps] = useState<LibraryOpsState[]>([]);
@@ -418,6 +451,12 @@ export function App() {
         setLibraryFavorites((current) => wanted ? [...current, path] : current.filter((item) => item !== path));
         notify(t(wanted ? "favorite.added" : "favorite.removed"));
       } catch (error) { fail(error); }
+      return;
+    }
+    // A detail playback is its own title, not whatever the browse panel happens to hold.
+    if (detailPlaying) {
+      const { target } = detailPlaying;
+      await toggleWatchlist({ type: target.type, id: target.id, name: target.name, ...(target.poster ? { poster: target.poster } : {}) });
       return;
     }
     if (selected) await toggleWatchlist(selected);
@@ -1084,7 +1123,7 @@ export function App() {
     setView("catalog");
     setSearch(""); setSubmittedQuery(""); setSearchScopeValue(""); setTypeFilter(""); setGenre(""); setSort("default"); setSearchSort("default");
     setSelectedCatalog(firstCatalog ? `${firstCatalog.addonKey}:${firstCatalog.type}:${firstCatalog.id}` : "");
-    setSelected(null); setSelectedVideo(null); setStreams([]); setLocalStreams([]); setLocalLoading(false); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false);
+    setSelected(null); setSelectedVideo(null); setStreams([]); setLocalStreams([]); setLocalLoading(false); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false); setSourcesComplete(false);
     setGalleryIndex(null);
     setStreamAddon(""); setStreamLanguage(""); setStreamSort(settings.streamSort as StreamSort);
     setEpisodesOpen(true); setSeason(null); setCatalogReset((value) => value + 1);
@@ -1106,6 +1145,12 @@ export function App() {
    * and the page position are restored. */
   const openView = (target: View) => {
     navigated.current = true;
+    // A shared detail is drawn over the section that opened it, and the menu is a way out of it:
+    // the entry naming that very section only puts the section back, filters and position intact.
+    if (catalogueDetail) {
+      closeCatalogueDetail();
+      if (target === view) return;
+    }
     // Leaving the Library drops the one-shot remote target, so coming back shows the list.
     if (target !== "library") setRemoteTarget(null);
     // The Library entry is the way back to the root from anywhere, another view, a folder or a
@@ -1655,6 +1700,8 @@ export function App() {
     // one the matcher wrote is read beside the source, and a lookup that fails plays the file with
     // no identity at all.
     const binding = identity ? Promise.resolve(identity) : api.libraryIdentity(path).then(playbackIdentity, () => null);
+    // A file of the library is never what the shared detail was playing.
+    setDetailPlaying(null);
     const returning = capturePlaybackReturn(anchor ?? { kind: "library", key: path });
     try {
       const [source, bound] = await Promise.all([api.librarySource(path), binding]);
@@ -2058,7 +2105,7 @@ export function App() {
     const request = ++sourcesRequestRef.current;
     const stale = () => request !== sourcesRequestRef.current;
     cancelRemoteWork();
-    setSelectedVideo(video ?? null); setSourcesLoaded(false); setBusy(true);
+    setSelectedVideo(video ?? null); setSourcesLoaded(false); setSourcesComplete(false); setBusy(true);
     setStreams([]); setLocalStreams([]); setLocalLoading(false); setSelectedStream(null); setSubtitles([]); setPendingSources(0);
     pickedRef.current = false;
     // Remote libraries are asked separately: an addon or subtitle failure cannot hide them.
@@ -2079,6 +2126,8 @@ export function App() {
         if (!stale() && part.length) setStreams((previous) => [...previous, ...part]);
         if (!stale()) setPendingSources((count) => count - 1);
       }));
+      // Every provider has answered: the shared detail may take these rows instead of asking again.
+      if (!stale()) setSourcesComplete(true);
     } catch (e) { if (!stale()) { fail(e); setSourcesLoaded(true); } }
     finally { if (!stale()) setBusy(false); }
   };
@@ -2089,7 +2138,7 @@ export function App() {
     setMetaLoading(true);
     // The row the grid drew from, kept beside the merged detail: its pictures are the ones on
     // screen, and they are what a download has to carry into the library.
-    setSelected(item); setSelectedSummary(item); setSelectedDownloadTitle(item.name); setSelectedVideo(null); setEpisodesOpen(true); setSeason(null); setStreams([]); setLocalStreams([]); setLocalLoading(false); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false); setGalleryIndex(null); setDetailCompact(false); setTitleLinks([]); setTitleTrailer(null);
+    setSelected(item); setSelectedSummary(item); setSelectedDownloadTitle(item.name); setSelectedVideo(null); setEpisodesOpen(true); setSeason(null); setStreams([]); setLocalStreams([]); setLocalLoading(false); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false); setSourcesComplete(false); setGalleryIndex(null); setDetailCompact(false); setTitleLinks([]); setTitleTrailer(null);
     requestAnimationFrame(() => detailRef.current?.scrollTo({ top: 0 }));
     const type = item.type || currentCatalog?.type || "movie";
     let detail = item;
@@ -2118,7 +2167,7 @@ export function App() {
     cancelRemoteWork();
     linksRequestRef.current += 1;
     trailerRequestRef.current += 1;
-    setSelected(null); setSelectedSummary(null); setSelectedDownloadTitle(""); setSelectedVideo(null); setStreams([]); setLocalStreams([]); setLocalLoading(false); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false); setGalleryIndex(null); setDetailCompact(false); setTitleLinks([]); setTitleTrailer(null);
+    setSelected(null); setSelectedSummary(null); setSelectedDownloadTitle(""); setSelectedVideo(null); setStreams([]); setLocalStreams([]); setLocalLoading(false); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false); setSourcesComplete(false); setGalleryIndex(null); setDetailCompact(false); setTitleLinks([]); setTitleTrailer(null);
   };
   const loadSources = async (video?: Video) => {
     if (!selected) return; await fetchSources(selected.type || currentCatalog?.type || "movie", video?.id || selected.id, video, selected.name);
@@ -2141,7 +2190,9 @@ export function App() {
    *  episode list, so another detail's play never offers an episode of a title nobody plays. */
   const catalogueNext = playerSubject?.panel ? nextCatalogEpisode : null;
   useEffect(() => {
-    if (!playerOpen || localStream || !selected || !catalogueNext?.id) return;
+    // A detail playback is its own title and episode, with a next episode of its own: the panel's
+    // list belongs to another title and never answers for it.
+    if (!playerOpen || localStream || detailPlaying || !selected || !catalogueNext?.id) return;
     const id = catalogueNext.id;
     const type = selected.type || currentCatalog?.type || "series";
     const current = selectedStreamRef.current;
@@ -2159,8 +2210,8 @@ export function App() {
     // The viewer may never ask for this one, and nobody would be waiting to hear it failed.
     void promise.catch(() => undefined);
     nextEpisodePrefetchRef.current = { id, promise };
-  }, [playerOpen, localStream, selected?.id, selected?.type, catalogueNext?.id, currentCatalog?.type]);
-  const stopPlayback = () => { setPlayerOpen(false); setLocalStream(null); setLocalEpisode(false); setLocalFromBeginning(false); setStartAtSeconds(undefined); setPlayingCatalogue(null); setPlayerSubject(null); setPlaybackPreferences({}); };
+  }, [playerOpen, localStream, detailPlaying, selected?.id, selected?.type, catalogueNext?.id, currentCatalog?.type]);
+  const stopPlayback = () => { setPlayerOpen(false); setLocalStream(null); setLocalEpisode(false); setLocalFromBeginning(false); setStartAtSeconds(undefined); setPlayingCatalogue(null); setPlayerSubject(null); setDetailPlaying(null); setPlaybackPreferences({}); };
   /** The next episode is a new subject for the player on screen: the header names it, the
    *  progress store takes its key and the source list asks for its own sources, never the
    *  episode's that just ended. */
@@ -2288,6 +2339,8 @@ export function App() {
     // shows it and the progress is written under it for as long as the player stays open.
     const key = `${selected.type ?? "movie"}:${videoId}`;
     const subject: PlayerSubject = { title: videoTitle, ...(selected.poster ? { poster: selected.poster } : {}), episode: Boolean(selectedVideo), key, panel: true };
+    // The panel's own play is never the shared detail's.
+    setDetailPlaying(null);
     setPlayingCatalogue(catalogue);
     if (selectedStream && isLocalStream(selectedStream) && selectedStream.localPath) void playLocal(videoTitle, selectedStream.localPath, selected.poster, Boolean(selectedVideo), anchor, false, catalogue ?? undefined, { key, panel: true });
     else openPlayer(anchor, subject);
@@ -2399,21 +2452,129 @@ export function App() {
     setRemoteTarget({ libraryId: card.libraryId, itemId: card.itemId, nonce: remoteTargetNonce.current });
     setView("library");
   };
-  /** The one shared detail a catalogue title opens: the body the libraries use, over this page. */
-  const openCatalogueDetail = (target: { type: string; id: string; name: string; poster?: string; season?: number; episode?: number }) => {
+  /** The one shared detail a catalogue title opens: the body the libraries use, over this page.
+   *  Rows the catalogue already read for the very selection being opened are handed over, so the
+   *  providers are not asked the same question twice. */
+  /** Where the section under the shared detail stood when it was opened, and which of its two
+   *  scrollers held it: the page itself for Home, a folder or a queue, a box of its own for the
+   *  catalogue's grid. The section is unmounted for as long as the detail is up, so this is the
+   *  only record of it. */
+  const detailReturn = useRef<{ view: View; windowY: number; pane: "catalog" | null; paneY: number } | null>(null);
+  /** The chips the shared detail draws, read for the title it holds rather than for whatever the
+   *  panel has selected: a Home card or a favourite opens a title the catalogue never listed. */
+  const [detailLinks, setDetailLinks] = useState<SiteLink[]>([]);
+  const [detailTrailer, setDetailTrailer] = useState<Trailer | null>(null);
+  /** What the shared detail holds: the metadata it drew, the episode it is on, and whether any of
+   *  its rows can play. The panel's own selection is another title and never answers for it. */
+  const [detailRead, setDetailRead] = useState<{ meta: Meta | null; target: CatalogueDetailTarget; pending: boolean; playable: boolean } | null>(null);
+  const [detailSource, setDetailSource] = useState<Stream | null>(null);
+  const [catalogueFollow, setCatalogueFollow] = useState<FollowView | null>(null);
+  const [detailFollowOpen, setDetailFollowOpen] = useState(false);
+  const detailType = catalogueDetail?.type;
+  const detailId = catalogueDetail?.id;
+  useEffect(() => {
+    if (!detailType || !detailId) { setDetailLinks([]); setDetailTrailer(null); return; }
+    let live = true;
+    void api.links(detailType, detailId, settings.uiLanguage)
+      .then((answer) => { if (live) setDetailLinks(answer.links); })
+      .catch(() => { if (live) setDetailLinks([]); });
+    void api.trailer(detailType, detailId, settings.uiLanguage)
+      .then((answer) => { if (live) setDetailTrailer(answer.trailer); })
+      .catch(() => { if (live) setDetailTrailer(null); });
+    return () => { live = false; };
+  }, [detailType, detailId, settings.uiLanguage]);
+  // The follow belongs to the title the shared detail holds, read while it is open. The rest of
+  // the detail's own state is dropped where the title changes, in `openCatalogueDetail`: an effect
+  // here would run after the detail's first report and throw that report away.
+  useEffect(() => {
+    if (!catalogueDetail) return;
+    const { type, id } = catalogueDetail;
+    let live = true;
+    api.followByMeta(type, id).then((follow) => { if (live) setCatalogueFollow(follow); }).catch(() => undefined);
+    return () => { live = false; };
+  }, [detailType, detailId]);
+  /** The saved position of the episode the shared detail is on, shown for the row it has chosen. */
+  const detailProgress = useMemo(() => {
+    if (!detailRead || !detailSource) return undefined;
+    const entry = resume.find((candidate) => candidate.key === `${detailRead.target.type}:${catalogueStreamId(detailRead.target)}`);
+    return entry ? { position: entry.position, duration: entry.duration, sourceKey: sourceIdentity(detailSource) } : undefined;
+  }, [detailRead, detailSource, resume]);
+  /** Starts over: the saved position of the title the shared detail holds is cleared. */
+  const clearDetailProgress = async (): Promise<boolean> => {
+    if (!detailRead) return false;
+    try {
+      await api.forgetProgress(`${detailRead.target.type}:${catalogueStreamId(detailRead.target)}`);
+      setResume(await api.progressList());
+      return true;
+    } catch { return false; }
+  };
+  const openCatalogueDetail = (target: Omit<CatalogueDetailTarget, "type"> & { type: string }, initialSources?: Stream[]) => {
     if (target.type !== "movie" && target.type !== "series") return;
     navigated.current = true;
-    setCatalogueDetail({ type: target.type, id: target.id, name: target.name,
-      ...(target.poster ? { poster: target.poster } : {}),
-      ...(target.season != null ? { season: target.season } : {}),
-      ...(target.episode != null ? { episode: target.episode } : {}) });
+    if (!catalogueDetail) detailReturn.current = { view, windowY: window.scrollY, pane: view === "catalog" ? "catalog" : null, paneY: gridRef.current?.scrollTop ?? 0 };
+    // Nothing the previous title read survives the next one: the episode it was on, the source it
+    // selected, the follow it carried and the saved position drawn beside it all belong to it.
+    setDetailRead(null); setDetailSource(null); setCatalogueFollow(null); setDetailFollowOpen(false);
+    setCatalogueDetail({ ...target, type: target.type, ...(initialSources ? { initialSources } : {}) });
   };
-  /** The subject a catalogue queue call is proved against, built the way the panel builds it. */
-  const catalogueMedia = (detail: { type: "movie" | "series"; id: string; name: string; season?: number; episode?: number }): Record<string, unknown> =>
-    detail.season != null && detail.episode != null
-      ? { kind: "episode", title: detail.name, id: detail.id, metaType: detail.type, season: detail.season, episode: detail.episode }
-      : { kind: "movie", title: detail.name, id: detail.id, metaType: detail.type };
-  const queueCatalogueStream = async (detail: NonNullable<typeof catalogueDetail>, stream: Stream, target?: SaveTarget) => {
+  /** The one way out of the shared detail: the breadcrumb's Back, the menu, and anything else
+   *  that asks for the page the detail was drawn over. */
+  const closeCatalogueDetail = () => {
+    setCatalogueDetail(null);
+    setDetailSource(null); setDetailFollowOpen(false);
+  };
+  // Back on the section the detail covered, its position is given back. The listing is read again
+  // as the section mounts, so the offset is chased for as long as it may still be filling.
+  useEffect(() => {
+    if (catalogueDetail) return;
+    const saved = detailReturn.current;
+    if (!saved) return;
+    detailReturn.current = null;
+    // The menu asked for another section: that one restores its own position, or starts at the top.
+    if (saved.view !== view) return;
+    restoringScroll.current = true;
+    const deadline = performance.now() + 1500;
+    let handle = 0;
+    const apply = () => {
+      const pane = saved.pane === "catalog" ? gridRef.current : null;
+      if (saved.pane && pane) pane.scrollTop = saved.paneY;
+      window.scrollTo(0, saved.windowY);
+      const settled = (!saved.pane || (pane !== null && Math.abs(pane.scrollTop - saved.paneY) <= 1)) && Math.abs(window.scrollY - saved.windowY) <= 1;
+      if (!settled && performance.now() < deadline) { handle = requestAnimationFrame(apply); return; }
+      restoringScroll.current = false;
+    };
+    handle = requestAnimationFrame(apply);
+    const stop = () => { cancelAnimationFrame(handle); restoringScroll.current = false; };
+    for (const event of ["wheel", "touchstart", "keydown"]) window.addEventListener(event, stop, { passive: true, once: true });
+    return () => {
+      stop();
+      for (const event of ["wheel", "touchstart", "keydown"]) window.removeEventListener(event, stop);
+    };
+  }, [catalogueDetail, view]);
+  /** The way into the full detail for whatever the panel holds: its title, the episode it is on,
+   *  the row it picked and, once the panel has read them, its own metadata and rows. */
+  const openSelectedDetail = () => {
+    if (!selected || (selected.type !== "movie" && selected.type !== "series")) return;
+    openCatalogueDetail({
+      type: selected.type, id: selected.id, name: selected.name,
+      ...(selected.poster ? { poster: selected.poster } : {}),
+      ...(selectedVideo?.season != null ? { season: selectedVideo.season } : {}),
+      ...(selectedVideo?.episode != null ? { episode: selectedVideo.episode } : {}),
+      ...(selectedVideo?.id != null ? { videoId: String(selectedVideo.id) } : {}),
+      ...(selectedStream ? { initialSource: selectedStream } : {}),
+      // The panel's own read is handed over only once it has landed: before that the shared
+      // detail reads the metadata itself rather than opening half empty.
+      ...(metaLoading ? {} : { initialMeta: selected }),
+    }, sourcesComplete ? streams : undefined);
+  };
+  /** The subject a catalogue queue call is proved against, built the way the panel builds it. An
+   *  episode's numbering has to travel with its own video: a series is never queued as a film. */
+  const catalogueMedia = (detail: CatalogueDetailTarget): Record<string, unknown> =>
+    detail.type === "movie"
+      ? { kind: "movie", title: detail.name, id: detail.id, metaType: detail.type }
+      : { kind: "episode", title: detail.name, id: detail.id, metaType: detail.type,
+        ...(detail.season != null ? { season: detail.season } : {}), ...(detail.episode != null ? { episode: detail.episode } : {}) };
+  const queueCatalogueStream = async (detail: CatalogueDetailTarget, stream: Stream, target?: SaveTarget) => {
     if (!canQueue(stream, settings.realDebridConfigured)) return false;
     try {
       const job = await api.download(detail.name, stream, catalogueMedia(detail), target);
@@ -2434,7 +2595,7 @@ export function App() {
     } catch (error) { fail(error); return false; }
   };
   /** A title the account owns is saved from its own path; anything else is the source itself. */
-  const downloadCatalogueStream = async (detail: NonNullable<typeof catalogueDetail>, stream: Stream) => {
+  const downloadCatalogueStream = async (detail: CatalogueDetailTarget, stream: Stream) => {
     if (!stream.playable || isRemoteStream(stream)) return false;
     try {
       if (stream.localPath) {
@@ -2446,6 +2607,82 @@ export function App() {
       notify(t("save.startedViaServer", { filename }));
       return true;
     } catch (error) { fail(error); return false; }
+  };
+  /** Plays the row the shared detail selected: a file the account owns plays as itself, and every
+   *  other row travels under the detail's own title and episode. The browse panel's selection --
+   *  the title it shows, the episode and source it picked -- is never moved by it. */
+  const playCatalogueDetail = (stream: Stream, target: CatalogueDetailTarget, fromBeginning: boolean) => {
+    const anchor = { kind: "catalog" as const, key: `${target.type}:${target.id}` };
+    if (isLocalStream(stream) && stream.localPath) {
+      setDetailPlaying(null);
+      void playLocal(detailPlaybackTitle(target), stream.localPath, target.poster, target.season != null, anchor, fromBeginning);
+      return;
+    }
+    // A library file of the previous playback is not what is playing now, and its title, poster
+    // and next-file context have no business in this player.
+    setLocalStream(null); setLocalTitle(""); setLocalEpisode(false); setLocalFromBeginning(false); setLocalPoster(undefined);
+    setPlayingCatalogue(null);
+    setStartAtSeconds(undefined);
+    setDetailPlaying({ target, stream, subtitles: [], title: detailPlaybackTitle(target), ...(fromBeginning ? { fromBeginning: true } : {}) });
+    // The detail is the subject of the play: the header names its own title and episode, the star
+    // and the progress store read its own identity, and the source list offers its own rows.
+    openPlayer(anchor, { title: detailPlaybackTitle(target), ...(target.poster ? { poster: target.poster } : {}), episode: target.season != null, key: `${target.type}:${catalogueStreamId(target)}` });
+  };
+  /** The episode after the one the shared detail is playing, from the detail's own read: the
+   *  panel's list belongs to whatever it has selected and never answers for another title. */
+  const nextDetailEpisode = useMemo(() => {
+    const videos = detailRead?.meta?.videos;
+    if (!detailPlaying || !videos?.length) return null;
+    const target = detailPlaying.target;
+    const ordered = orderedVideos(videos);
+    const index = ordered.findIndex((video) => (target.videoId && String(video.id) === String(target.videoId))
+      || (target.season != null && target.episode != null && video.season === target.season && video.episode === target.episode));
+    return index >= 0 ? ordered[index + 1] ?? null : null;
+  }, [detailPlaying, detailRead?.meta?.videos]);
+  const detailEpisodeTarget = (episode: Video): CatalogueDetailTarget => ({
+    type: detailPlaying!.target.type, id: detailPlaying!.target.id, name: detailPlaying!.target.name,
+    ...(detailPlaying!.target.poster ? { poster: detailPlaying!.target.poster } : {}),
+    ...(episode.season != null ? { season: episode.season } : {}),
+    ...(episode.episode != null ? { episode: episode.episode } : {}),
+    ...(episode.id != null ? { videoId: String(episode.id) } : {}),
+  });
+  // The next episode's rows are read while this one plays, so the countdown meets a list already
+  // there. A local file or a media server answers for its own episode, and asks for nothing here.
+  useEffect(() => {
+    if (!playerOpen || !detailPlaying || !nextDetailEpisode?.id) return;
+    if (isLocalStream(detailPlaying.stream) || isRemoteStream(detailPlaying.stream)) return;
+    const target = detailEpisodeTarget(nextDetailEpisode);
+    const id = catalogueStreamId(target);
+    const promise = fetchEpisodeSources(target.type, id);
+    void promise.catch(() => undefined);
+    detailNextPrefetchRef.current = { id, promise };
+  }, [playerOpen, detailPlaying?.target.videoId, detailPlaying?.target.season, detailPlaying?.target.episode, detailPlaying?.stream.sourceId, nextDetailEpisode?.id]);
+  /** Plays on from the shared detail: the next episode's own sources are read, and the row that is
+   *  playing is picked again where that episode has it too. */
+  const playNextDetailEpisode = async () => {
+    const playing = detailPlaying;
+    const episode = nextDetailEpisode;
+    if (!playing || !episode?.id || nextBusyRef.current) return false;
+    nextBusyRef.current = true; setNextBusy(true);
+    const target = detailEpisodeTarget(episode);
+    const id = catalogueStreamId(target);
+    try {
+      const current = playing.stream;
+      const libraryId = isRemoteStream(current) ? current.remoteItem?.libraryId : undefined;
+      const prefetched = detailNextPrefetchRef.current;
+      const answer = libraryId
+        ? { streams: await api.remoteLibraryStreams(libraryId, target.type, id, undefined, target.name) }
+        : prefetched?.id === id ? await prefetched.promise : await fetchEpisodeSources(target.type, id);
+      // The viewer keeps the provider and the language they were watching where the next episode
+      // has them; only a show whose row is gone moves to the best version there is.
+      const preferred = playbackPreferences.audioLanguage ?? (current ? streamLanguages(current, metaLanguage)[0] : undefined) ?? settings.audioLanguage;
+      const nextStream = pickNextEpisodeStream(answer.streams, current, preferred, addonPriority, metaLanguage)
+        ?? answer.streams.find((stream) => stream.playable);
+      if (!nextStream?.playable) return false;
+      playCatalogueDetail(nextStream, target, false);
+      return true;
+    } catch { return false; }
+    finally { nextBusyRef.current = false; setNextBusy(false); }
   };
 
   /** The catalogue identity the player is identified by: the title playback started on, and an
@@ -2482,6 +2719,20 @@ export function App() {
     playbackReturn.current = capturePlaybackReturn({ kind: "catalog", key: `${ref.type}:${ref.id}` });
     pickedRef.current = true;
     setStartAtSeconds(positionSeconds);
+    // The shared detail's player keeps its own title, episode and progress key: only the row
+    // changes, and the browse panel's selection is never moved by it. A local row still replaces
+    // the file on screen through the shared branch below.
+    if (detailPlaying) {
+      setDetailPlaying((current) => current ? { ...current, stream, subtitles: [] } : current);
+      if (isLocalStream(stream) && stream.localPath) {
+        setLocalTitle(stream.behaviorHints?.filename || localTitle);
+        setLocalStream(stream);
+        setSubtitles([]);
+      } else {
+        setLocalStream(null);
+      }
+      return;
+    }
     // A row of the viewer's own files replaces the file on screen and keeps playing under the same
     // identity; every other row leaves that file behind, so it can never stay on screen.
     if (isLocalStream(stream) && stream.localPath) {
@@ -2541,6 +2792,20 @@ export function App() {
     ? activeLibraryOp.bytesTotal > 0 ? activeLibraryOp.bytes / activeLibraryOp.bytesTotal : (activeLibraryOp.done + activeLibraryOp.failed) / Math.max(1, activeLibraryOp.total)
     : 0;
 
+  /** The chips the shared detail draws: the watchlist star, and the follow chip for a show the
+   *  account can follow. A film is only worth following while no source of it can play. */
+  const detailWatchlisted = inWatchlist(catalogueDetail?.type, catalogueDetail?.id);
+  const detailChips = catalogueDetail ? <TitleChips
+    kind={t(catalogueDetail.type === "series" ? "catalog.oneSeries" : "catalog.oneMovie")}
+    trailer={detailTrailer} links={detailLinks} onTrailer={setTrailerOpen} secureMode={settings.secureMode}
+    leading={<>
+      <button className={`watch-star ${detailWatchlisted ? "on" : ""}`} title={t(detailWatchlisted ? "watchlist.remove" : "watchlist.add")}
+        onClick={() => void toggleWatchlist({ type: catalogueDetail.type, id: catalogueDetail.id, name: catalogueDetail.name, ...(catalogueDetail.poster ? { poster: catalogueDetail.poster } : {}) })}><Star/></button>
+      {(catalogueDetail.type === "series" || (detailRead !== null && !detailRead.pending && !detailRead.playable)) && (catalogueFollow
+        ? <button className="follow-chip on" onClick={() => setDetailFollowOpen(true)}><BellRing/>{t("follow.following")}{catalogueFollow.autoDownload && <span className="follow-chip-download" aria-hidden="true" title={t("follow.autoOnHint")}><Download/></span>}</button>
+        : <button className="follow-chip" onClick={() => setFollowStart({ type: catalogueDetail.type, id: catalogueDetail.id, name: catalogueDetail.name, ...(catalogueDetail.poster ? { poster: catalogueDetail.poster } : {}), ...(detailRead?.meta?.videos ? { videos: detailRead.meta.videos } : {}) })}><Bell/>{t("follow.follow")}</button>)}
+    </>}/> : undefined;
+
   if (session === undefined) return <div className="login-screen"><div className="loading">{t("common.loading")}</div></div>;
   if (!ready) return <LoginScreen setup={setupNeeded} onSession={(next) => { setSetupNeeded(false); setSession(next); }}/>;
   // Signed in, but on a password an administrator chose: the server allows this form, reading
@@ -2585,38 +2850,37 @@ export function App() {
       {session!.role === "admin" && <Nav secondary icon={<BarChart3/>} label={t("nav.stats")} active={view === "stats"} onClick={() => openView("stats")}/>}
       <MoreMenu items={moreItems} badge={followingBadge} active={moreActive} onSignOut={signOut}/>
     </nav><div className="sidebar-bottom"><button className="sidebar-toggle" onClick={toggleSidebar} title={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")} aria-label={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}>{sidebarCollapsed ? <PanelLeftOpen/> : <PanelLeftClose/>}<span>{t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}</span></button><div className="addon-status"><small>{t("app.activeAddons")}</small><strong>{addons.filter((a) => a.enabled).length}</strong><span>{t("app.catalogsAndSources")}</span></div></div></aside>
-    <main className={`view-${view}`}>
+    <main className={`view-${view}${catalogueDetail ? " view-title-detail" : ""}`}>
       {/* The shared catalogue detail is hosted over the page that opened it, so closing it simply
-          puts that page back: Home is never turned into an unfiltered catalogue on the way. */}
+          puts that page back: Home is never turned into an unfiltered catalogue on the way. Its
+          browse bar holds its place while the body inside the panel is the only thing that
+          scrolls, so the way back is reachable wherever the viewer has read to. */}
       {catalogueDetail ? <section className="panel browse-panel" aria-label={catalogueDetail.name}>
+        <div className="browse-head"><div className="browse-bar">
+          <nav className="crumbs" aria-label={t("library.breadcrumbs")}>
+            <button type="button" className="library-back" aria-label={t("mediaServer.back")} title={t("mediaServer.back")} onClick={() => setCatalogueDetail(null)}><ChevronLeft/></button>
+            <button type="button" disabled>{catalogueDetail.name}</button>
+          </nav>
+        </div></div>
         <div className="browse-scroll">
           <CatalogueTitleDetail
-            type={catalogueDetail.type} id={catalogueDetail.id} name={catalogueDetail.name}
-            {...(catalogueDetail.poster ? { poster: catalogueDetail.poster } : {})}
-            {...(catalogueDetail.season != null ? { season: catalogueDetail.season } : {})}
-            {...(catalogueDetail.episode != null ? { episode: catalogueDetail.episode } : {})}
-            onPlay={(stream, fromBeginning) => {
-              // The chosen row plays exactly as the catalogue panel plays it, with its own identity.
-              const anchor = { kind: "catalog" as const, key: `${catalogueDetail.type}:${catalogueDetail.id}` };
-              // This detail is the subject of the play whether or not the catalogue panel behind it
-              // holds one of its own, so the header never borrows the panel's title.
-              const key = `${catalogueDetail.type}:${catalogueStreamId(catalogueDetail)}`;
-              if (isLocalStream(stream) && stream.localPath) void playLocal(catalogueDetail.name, stream.localPath, catalogueDetail.poster, catalogueDetail.season != null, anchor, fromBeginning, { type: catalogueDetail.type, id: catalogueStreamId(catalogueDetail) }, { key });
-              else {
-                setPlayingCatalogue({ type: catalogueDetail.type, id: catalogueStreamId(catalogueDetail) });
-                setSelectedStream(stream);
-                setStartAtSeconds(undefined);
-                openPlayer(anchor, { title: catalogueDetail.name, ...(catalogueDetail.poster ? { poster: catalogueDetail.poster } : {}), episode: catalogueDetail.season != null, key });
-              }
-            }}
-            onSaveToLibrary={(stream) => void queueCatalogueStream(catalogueDetail, stream)}
-            onSaveElsewhere={(stream) => setCatalogueSave({
-              ...(catalogueDetail.season != null ? { season: catalogueDetail.season } : {}),
-              ...alternativeSaveRequest(catalogueDetail.name, stream, catalogueMedia(catalogueDetail), catalogueDetail.type === "series" ? "series" : "movie"),
+            target={catalogueDetail}
+            {...(catalogueDetail.initialSources ? { initialSources: catalogueDetail.initialSources } : {})}
+            onGallery={(images, effective) => presentGallery(images, { type: effective.type, id: effective.id })}
+            preferredLanguage={settings.audioLanguage}
+            onRead={setDetailRead}
+            {...(detailChips ? { chips: detailChips } : {})}
+            onSourceChange={setDetailSource}
+            {...(detailProgress ? { progress: detailProgress } : {})}
+            onClearProgress={() => clearDetailProgress()}
+            onPlay={playCatalogueDetail}
+            onSaveToLibrary={(stream, effective) => void queueCatalogueStream(effective, stream)}
+            onSaveElsewhere={(stream, effective) => setCatalogueSave({
+              ...(effective.season != null ? { season: effective.season } : {}),
+              ...alternativeSaveRequest(effective.name, stream, catalogueMedia(effective), effective.type === "series" ? "series" : "movie"),
             })}
             saveSupported={(stream) => canQueue(stream, settings.realDebridConfigured)}
-            onDownloadToDevice={(stream) => void downloadCatalogueStream(catalogueDetail, stream)}
-            onClose={() => setCatalogueDetail(null)}/>
+            onDownloadToDevice={(stream, effective) => void downloadCatalogueStream(effective, stream)}/>
         </div>
       </section> : <>
       {view === "home" && !restricted && <Home jobs={downloads} addons={addons} libraries={libraries} onShowDownloads={() => openView("downloads")} onAction={homeAction} admin={admin}
@@ -2745,11 +3009,18 @@ export function App() {
               text={submittedQuery ? t("catalog.emptySearchText", { count: sourceCount }) : t(searchRequired ? "catalog.needQueryText" : "catalog.emptyText")}/>}
             {busy && <div className="loading">{t("common.loading")}</div>}
           </section><section ref={detailRef} className={`panel detail-panel ${selected ? "mobile-open" : ""} ${selected?.videos?.length && episodesOpen ? "series-episodes-layout" : ""} ${sourcesLoaded && (selected?.videos?.length ? selectedVideo && !episodesOpen : true) ? "series-sources-layout" : ""} ${detailCompact ? "hero-compact" : ""}`}>{selected ? <>
-            <div className="mobile-detail-head"><button onClick={selected.videos?.length && selectedVideo && !episodesOpen ? () => setEpisodesOpen(true) : closeMeta}><ChevronLeft/> {t(selected.videos?.length && selectedVideo && !episodesOpen ? "episodes.heading" : "catalog.results")}</button><strong>{selected.name}</strong></div>
+            <div className="mobile-detail-head catalog-detail-head"><button onClick={selected.videos?.length && selectedVideo && !episodesOpen ? () => setEpisodesOpen(true) : closeMeta}><ChevronLeft/> {t(selected.videos?.length && selectedVideo && !episodesOpen ? "episodes.heading" : "catalog.results")}</button><strong>{selected.name}</strong>
+              {/* A phone has no room for one more chip in the row, and the head is where that
+                  layout keeps its chrome: the same control, in the corner its own spacer held. */}
+              {(selected.type === "movie" || selected.type === "series") && <button type="button" className="detail-info detail-info-head" aria-label={t("catalog.openDetail")} title={t("catalog.openDetail")} onClick={openSelectedDetail}><Info/></button>}
+            </div>
             <div className="detail-primary"><DetailHero className={selected.videos?.length ? "series-hero" : ""} background={selected.background}
               gallery={galleryImages.length > 0 ? <button className={`gallery-open ${galleryImages[0].shape}`} onClick={() => presentGallery(galleryImages, selected.type === "movie" || selected.type === "series" ? { type: selected.type, id: selected.id } : null)} title={t("gallery.openHint")}><img src={galleryImages[0].url} alt="" onError={hideBroken}/><span><Images/> {galleryImages.length > 1 ? t("gallery.stillCount", { count: galleryImages.length }) : t("gallery.enlarge")}</span></button> : undefined}
-              copy={<><TitleChips leading={<><button className={`watch-star ${inWatchlist(selected.type, selected.id) ? "on" : ""}`} title={t(inWatchlist(selected.type, selected.id) ? "watchlist.remove" : "watchlist.add")}
-                onClick={() => void toggleWatchlist(selected)}><Star/></button>{(selected.type === "series" || selected.type === "movie" || Boolean(selected.videos?.length)) && (detailFollow ? <button className="follow-chip on" onClick={() => setFollowDialogOpen(true)}><BellRing/>{t("follow.following")}{detailFollow.autoDownload && <span className="follow-chip-download" aria-hidden="true" title={t("follow.autoOnHint")}><Download/></span>}</button> : (selected.type !== "movie" || movieHasNoSource) && <button className="follow-chip" onClick={() => setFollowStart(selected)}><Bell/>{t("follow.follow")}</button>)}</>} kind={t(selected.type === "series" ? "catalog.oneSeries" : "catalog.oneMovie")} trailer={titleTrailer} links={titleLinks} onTrailer={setTrailerOpen} secureMode={settings.secureMode}/><h2>{selected.name}</h2><p className="meta-line">{imdbRating(selected) && <b className="imdb-rating" title={t("catalog.imdbRating", { rating: imdbRating(selected)! })}><Star/>{imdbRating(selected)}</b>}{imdbRating(selected) && [selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).length ? " · " : ""}{[selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).join(" · ")}</p><DetailDescription text={selected.description} loading={metaLoading} identityKey={selected.id} skeleton={skeletonLines}/>{(selected.type === "movie" || selected.type === "series") && <p className="meta-line catalog-open-detail"><button type="button" className="link-button" onClick={() => openCatalogueDetail({ type: selected.type as "movie" | "series", id: selected.id, name: selected.name, ...(selected.poster ? { poster: selected.poster } : {}) })}>{t("catalog.openDetail")}</button></p>}</>}/></div>
+              chips={<TitleChips leading={<><button className={`watch-star ${inWatchlist(selected.type, selected.id) ? "on" : ""}`} title={t(inWatchlist(selected.type, selected.id) ? "watchlist.remove" : "watchlist.add")}
+                onClick={() => void toggleWatchlist(selected)}><Star/></button>{(selected.type === "series" || selected.type === "movie" || Boolean(selected.videos?.length)) && (detailFollow ? <button className="follow-chip on" onClick={() => setFollowDialogOpen(true)}><BellRing/>{t("follow.following")}{detailFollow.autoDownload && <span className="follow-chip-download" aria-hidden="true" title={t("follow.autoOnHint")}><Download/></span>}</button> : (selected.type !== "movie" || movieHasNoSource) && <button className="follow-chip" onClick={() => setFollowStart(selected)}><Bell/>{t("follow.follow")}</button>)}</>} kind={t(selected.type === "series" ? "catalog.oneSeries" : "catalog.oneMovie")} trailer={titleTrailer} links={titleLinks} onTrailer={setTrailerOpen} secureMode={settings.secureMode}
+                {...(selected.type === "movie" || selected.type === "series" ? { trailing: <button type="button" className="detail-info" aria-label={t("catalog.openDetail")} title={t("catalog.openDetail")} onClick={openSelectedDetail}><Info/></button> } : {})}/>}
+              copy={<><h2>{selected.name}</h2><p className="meta-line">{imdbRating(selected) && <b className="imdb-rating" title={t("catalog.imdbRating", { rating: imdbRating(selected)! })}><Star/>{imdbRating(selected)}</b>}{imdbRating(selected) && [selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).length ? " · " : ""}{[selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).join(" · ")}</p><DetailDescription text={selected.description} loading={metaLoading} identityKey={selected.id} skeleton={skeletonLines}/></>}/></div>
+
             <div className="detail-workflow">
             {selected.videos?.length ? !(chosenEpisode && sourcesLoaded) && <div className={`episodes ${chosenEpisode ? "collapsed" : ""}`}>{chosenEpisode ?? <><div className="subhead episode-head"><h3>{t("episodes.heading")}</h3><div className="episode-tools">{seasons.length > 1 && <select className="season-select" aria-label={t("episodes.season")} value={activeSeason ?? ""} onChange={(event) => setSeason(Number(event.target.value))}>{seasons.map((value) => <option key={value} value={value}>{value === 0 ? t("episodes.specials") : t("episodes.seasonNumber", { season: value })}</option>)}</select>}{activeSeason != null && !remoteFilterId(streamAddon) && !(selectedStream && isRemoteStream(selectedStream)) && <button title={activeSeason === 0 ? t("episodes.downloadSpecials") : t("episodes.downloadSeason", { season: activeSeason })} onClick={() => void enqueueEpisodes("season")}><Download/> {activeSeason === 0 ? t("episodes.specials") : t("episodes.seasonShort", { season: activeSeason })}</button>}{!remoteFilterId(streamAddon) && !(selectedStream && isRemoteStream(selectedStream)) && <button title={t("episodes.downloadShow")} onClick={() => void enqueueEpisodes("series")}><Download/> {t("episodes.wholeShow")}</button>}{selectedVideo ? <button onClick={() => setEpisodesOpen(false)}>{t("common.collapse")}</button> : <span>{visibleEpisodes.length}</span>}</div></div><div className="episode-list" onScroll={(event) => compactOnScroll(event, detailCompact, setDetailCompact, true)}>{visibleEpisodes.map((video, index) => <button key={video.id || index} className={selectedVideo?.id === video.id ? "selected" : ""} onClick={() => { setEpisodesOpen(false); void loadSources(video); }}><b>{video.season != null ? `${String(video.season).padStart(2,"0")}×${String(video.episode || 0).padStart(2,"0")}` : index + 1}</b><span>{video.title || video.name || t("episodes.one")}</span><ChevronRight/></button>)}</div></>}</div> : !sourcesLoaded && <button className="primary wide" onClick={() => loadSources()} disabled={busy}>{t("sources.load")}</button>}
             {sourcesLoaded && (!selected.videos?.length || !episodesOpen) && <div className="sources"><div className={`subhead ${chosenEpisode ? "sources-episode" : ""}`}>{chosenEpisode ?? <h3>{t("sources.heading")}</h3>}<span>{sourceRows.length === sourceTotal ? sourceTotal : t("sources.ofTotal", { shown: sourceRows.length, total: sourceTotal })}{pendingSources > 0 ? ` · ${t("sources.loadingFrom", { count: pendingSources })}` : ""}</span></div>
@@ -3066,15 +3337,15 @@ export function App() {
       </>}
     </main>
     <TrailerPlayer trailer={trailerOpen} onClose={() => setTrailerOpen(null)}/>
-    <Player nextTitle={localStream ? nextFile?.title : catalogueNext ? episodeLabel(catalogueNext) : undefined} nextBusy={nextBusy} onNext={localStream ? nextFile ? () => playAdjacent(nextFile) : undefined : catalogueNext ? playNextCatalogEpisode : undefined} autoNext={localStream ? localEpisode : Boolean(catalogueNext)} previousTitle={previousFile?.title} onPrevious={previousFile ? () => playAdjacent(previousFile) : undefined} open={playerOpen} title={localStream ? localTitle : playerSubject?.title || localTitle} stream={localStream ?? selectedStream} subtitles={localStream ? [] : subtitles} subtitleLanguage={settings.subtitleLanguage} audioLanguage={settings.audioLanguage} onPreferences={setPlaybackPreferences}
-      progressKey={localStream?.localPath ? `file:${localStream.localPath}` : playerSubject?.key ?? (playingCatalogue ? `${playingCatalogue.type}:${playingCatalogue.id}` : undefined)}
-      progressPoster={localStream ? localPoster : playerSubject?.poster ?? localPoster}
-      progressAddonKey={localStream ? undefined : playerSubject?.panel ? currentCatalog?.addonKey : selectedStream?.addonKey}
-      favorite={localStream?.localPath ? libraryFavorites.includes(localStream.localPath) : playerSubject?.panel && selected ? inWatchlist(selected.type, selected.id) : false}
-      fromBeginning={localStream ? localFromBeginning : undefined}
-      onToggleFavorite={localStream?.localPath || (playerSubject?.panel && selected) ? () => void togglePlayerFavorite() : undefined}
-      onDownload={enqueue}
-      onDeviceDownload={() => localStream?.localPath ? downloadLibraryFile(localStream.localPath) : downloadStreamToDevice()}
+    <Player nextTitle={localStream ? nextFile?.title : detailPlaying ? (nextDetailEpisode ? episodeLabel(nextDetailEpisode) : undefined) : catalogueNext ? episodeLabel(catalogueNext) : undefined} nextBusy={nextBusy} onNext={localStream ? nextFile ? () => playAdjacent(nextFile) : undefined : detailPlaying ? (nextDetailEpisode ? playNextDetailEpisode : undefined) : catalogueNext ? playNextCatalogEpisode : undefined} autoNext={localStream ? localEpisode : detailPlaying ? Boolean(nextDetailEpisode) : Boolean(catalogueNext)} previousTitle={previousFile?.title} onPrevious={previousFile ? () => playAdjacent(previousFile) : undefined} open={playerOpen} title={localStream ? localTitle : detailPlaying ? detailPlaying.title : playerSubject?.title || localTitle} stream={localStream ?? detailPlaying?.stream ?? selectedStream} subtitles={localStream ? [] : detailPlaying ? detailPlaying.subtitles : subtitles} subtitleLanguage={settings.subtitleLanguage} audioLanguage={settings.audioLanguage} onPreferences={setPlaybackPreferences}
+      progressKey={localStream?.localPath ? `file:${localStream.localPath}` : detailPlaying ? `${detailPlaying.target.type}:${catalogueStreamId(detailPlaying.target)}` : playerSubject?.key ?? (playingCatalogue ? `${playingCatalogue.type}:${playingCatalogue.id}` : undefined)}
+      progressPoster={localStream ? localPoster : detailPlaying ? detailPlaying.target.poster : playerSubject?.poster ?? localPoster}
+      progressAddonKey={localStream ? undefined : detailPlaying ? detailPlaying.stream.addonKey : playerSubject?.panel ? currentCatalog?.addonKey : selectedStream?.addonKey}
+      favorite={localStream?.localPath ? libraryFavorites.includes(localStream.localPath) : detailPlaying ? inWatchlist(detailPlaying.target.type, detailPlaying.target.id) : playerSubject?.panel && selected ? inWatchlist(selected.type, selected.id) : false}
+      fromBeginning={localStream ? localFromBeginning : detailPlaying?.fromBeginning}
+      onToggleFavorite={localStream?.localPath || detailPlaying || (playerSubject?.panel && selected) ? () => void togglePlayerFavorite() : undefined}
+      onDownload={detailPlaying ? () => queueCatalogueStream(detailPlaying.target, detailPlaying.stream) : enqueue}
+      onDeviceDownload={() => localStream?.localPath ? downloadLibraryFile(localStream.localPath) : detailPlaying ? downloadCatalogueStream(detailPlaying.target, detailPlaying.stream) : downloadStreamToDevice()}
       {...(playingCatalogue ? {
         loadSources: loadPlaybackSources,
         onSwitchSource: switchPlaybackSource,

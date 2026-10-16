@@ -50,20 +50,25 @@ interface DetailHeroProps {
   emptyGradient?: string;
   /** The title block: chips, the heading, its facts and the description. */
   copy: ReactNode;
+  /** A chip row of its own above that block. Drawn across the whole band, so the corner art
+   *  below it cannot narrow it -- on a phone that narrowing wrapped the chips onto a second
+   *  line. The catalogue's own panel puts its way into the full detail at the end of this row. */
+  chips?: ReactNode;
   /** The corner art slot; a remote poster or the catalogue's gallery shortcut. */
   gallery?: ReactNode;
 }
 
 /** The one detail header: the gradient band with its title block and corner art, shared by the
  *  catalogue and a remote title so the two cannot drift apart. */
-export function DetailHero({ className, background, gradient, emptyGradient, copy, gallery }: DetailHeroProps) {
+export function DetailHero({ className, background, gradient, emptyGradient, copy, chips, gallery }: DetailHeroProps) {
   const style = background
     ? { backgroundImage: `${gradient ?? DEFAULT_GRADIENT},url(${background})` }
     : emptyGradient ? { backgroundImage: emptyGradient } : undefined;
   return <div
-    className={`hero${className ? ` ${className}` : ""}${gallery ? " has-gallery" : ""}`}
+    className={`hero${className ? ` ${className}` : ""}${gallery ? " has-gallery" : ""}${chips ? " has-chips" : ""}`}
     style={style}
   >
+    {chips && <div className="detail-chips">{chips}</div>}
     <div className="detail-copy">{copy}</div>
     {gallery}
   </div>;

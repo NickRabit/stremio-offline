@@ -785,3 +785,67 @@ describe("LibraryTitleDetail save split", () => {
     expect(onSaveElsewhere).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "s1" }));
   });
 });
+
+/** A file the viewer's own library holds: named by its path, and by a name that may match
+ *  another copy of the same film. */
+const local = (path: string, name: string, bytes?: number): Stream => ({
+  sourceId: `lib:${path}`, kind: "library", playable: true, localPath: path, libraryName: "Films", name,
+  behaviorHints: { filename: name, ...(bytes === undefined ? {} : { videoSize: bytes }) },
+});
+
+describe("LibraryTitleDetail initial source", () => {
+  it("opens on the local file the caller picked, listed once beside the addon answer", () => {
+    const picked = local("Films/Heat.mkv", "Heat.mkv", 500);
+    const { onPlay } = render({ sources: [local("Films/Heat.mkv", "Heat.mkv", 500), remote("s2", "1080p", 3_000_000_000)], initialSource: picked });
+    click(playButton());
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ localPath: "Films/Heat.mkv" }));
+    click(host.querySelector(".split-button-toggle"));
+    expect(pickerRows().filter((row) => row.textContent?.includes("Heat.mkv"))).toHaveLength(1);
+    expect(chosenRow()!.textContent).toContain("Heat.mkv");
+  });
+
+  it("opens on a remote version the caller picked, even one the listing does not hold", () => {
+    const { onPlay } = render({ sources: [remote("s1", "1080p", 3_000_000_000)], initialSource: remote("s9", "Another copy", 10) });
+    click(playButton());
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "s9" }));
+  });
+
+  it("opens on an addon answer the caller picked", () => {
+    const { onPlay } = render({ sources: [addon("a2", "1080p", 1_000)], initialSource: addon("picked-row", "Torrent 4K", 4_000_000_000) });
+    click(playButton());
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "picked-row" }));
+  });
+
+  it("lets the viewer take another row over the one the detail opened on", () => {
+    const { onPlay } = render({ sources: [addon("a2", "1080p", 1_000)], initialSource: addon("picked-row", "Torrent 4K", 4_000_000_000) });
+    click(host.querySelector(".split-button-toggle"));
+    click(pickerRows()[1]!);
+    click(playButton());
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "a2" }));
+  });
+
+  it("keeps the opened row when the listing arrives after it, and never prefers a larger one", () => {
+    const picked = addon("picked-row", "Torrent", 10);
+    render({ sources: null, initialSource: picked });
+    expect(playButton().disabled).toBe(false);
+    const onPlay = rerender({ sources: [addon("big", "Remux 4K", 9_000_000_000), addon("picked-row", "Torrent", 10)], initialSource: picked });
+    click(host.querySelector(".split-button-toggle"));
+    expect(chosenRow()!.textContent).toContain("Torrent");
+    click(playButton());
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "picked-row" }));
+  });
+
+  it("opens another title on its own default rather than the previous title's row", () => {
+    const picked = addon("picked-row", "Torrent", 10);
+    render({ sources: [addon("big", "Remux 4K", 9_000_000_000)], initialSource: picked });
+    const onPlay = rerender({ identityKey: "t2", sources: [addon("big", "Remux 4K", 9_000_000_000)] });
+    click(playButton());
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "big" }));
+  });
+
+  it("keeps its own default when no row is named", () => {
+    const { onPlay } = render({ sources: [addon("small", "720p", 10), addon("big", "1080p", 2_000_000_000)] });
+    click(playButton());
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "big" }));
+  });
+});

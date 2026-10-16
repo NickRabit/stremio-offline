@@ -337,6 +337,12 @@ main.view-catalog{padding-top:98px}main.view-catalog .heading{margin-bottom:8px}
   .mobile-detail-head strong{overflow:hidden;text-align:center;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
   .detail-panel .hero{min-height:132px;margin:0 0 10px;padding:14px;background-position:center}
   .detail-panel .hero.has-gallery .detail-copy{max-width:calc(100% - 72px)}
+  /* The corner art stands in a column of its own here, so it narrows nothing. */
+  .detail-panel .hero.has-chips .detail-copy{max-width:none}
+  /* A phone's panel is a fixed column with no room to spare: the row sits right above the copy,
+     the way the copy's own first line used to, and takes no more of it. */
+  .detail-panel .hero.has-chips{row-gap:0;margin:0 0 8px;padding:10px 14px}
+  .detail-panel .hero.has-chips>.detail-chips{margin:0 0 3px}
   .detail-panel .detail-copy h2{margin:8px 0 3px;font-size:21px;line-height:1.12}
   .detail-panel .detail-copy p{margin:5px 0;font-size:11px}
   .detail-panel .detail-copy>p:last-child{display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:2}
@@ -928,7 +934,11 @@ img.broken{visibility:hidden}
 @media(min-width:701px) and (min-height:501px) and (max-height:900px),(min-width:981px) and (max-width:1400px) and (max-height:1050px){
   main.view-catalog>.catalog-view:has(.catalog-layout)>.heading{display:none}
   .detail-panel.series-sources-layout .hero{height:auto;min-height:0;padding:10px 16px}
-  .detail-panel.series-sources-layout .series-hero .detail-copy>:is(.title-chips,.catalog-description){display:none}
+  /* Expanded, a series on a short screen spends its height on the sources: the chips go with the
+     description. Below a wide window the panel's head carries the way into the full detail; a wide
+     one keeps it in the row, which the rule further down hands back to it. */
+  .detail-panel.series-sources-layout .series-hero>.detail-chips{display:none}
+  .detail-panel.series-sources-layout .series-hero .detail-copy>.catalog-description{display:none}
   .detail-panel.series-sources-layout .source-footer{margin-top:6px;padding-top:8px;padding-bottom:12px}
   /* The trailing two cells keep their captions: a fractional column a pixel short cuts the
      label, and the local row's "Show in library" needs a few more than "To library" does. */
@@ -951,10 +961,9 @@ img.broken{visibility:hidden}
 @media(prefers-reduced-motion:reduce){.skeleton-line{animation:none}.fold,.fold>*{transition:none}}
 @media(max-width:700px) and (orientation:portrait){
   main.view-catalog>.catalog-view>.heading,main.view-library>.library-page>.heading{display:none}
-  .detail-panel .catalog-description summary{min-height:44px;display:flex;align-items:center;padding-right:8.5em}
+  /* Nothing overlaps the copy on the right any more, so the disclosure needs no reserved corner. */
+  .detail-panel .catalog-description summary{min-height:44px;display:flex;align-items:center}
   .detail-panel .detail-copy{position:relative}
-  /* The detail link sits on the summary row. A new line here pushes the source actions into the tab bar. */
-  .detail-panel .catalog-open-detail{position:absolute;right:0;bottom:0;z-index:1;margin:0;min-height:44px;display:flex;align-items:center}
   .detail-panel .catalog-description summary:before{content:"▸";margin-right:6px}
   .detail-panel .catalog-description details[open] summary:before{content:"▾"}
   .detail-panel .catalog-description p{max-height:100px}
@@ -1456,9 +1465,17 @@ img.broken{visibility:hidden}
 /* Once the source list has been scrolled the hero has done its job: it shrinks to a title bar so
    the list gets the height. A pull back towards the top restores it (see compactOnScroll). */
 @media(min-width:981px){
-  .detail-panel.hero-compact .hero{height:auto;min-height:0;max-height:none;margin-bottom:8px;padding:9px 16px;background-image:none!important}
-  .detail-panel.hero-compact .hero>:not(.detail-copy),.detail-panel.hero-compact .hero .detail-copy>:not(h2){display:none}
-  .detail-panel.hero-compact .hero .detail-copy{max-width:none}
+  .detail-panel.hero-compact .hero{display:flex;align-items:center;gap:10px;height:auto;min-height:0;max-height:none;margin-bottom:8px;padding:9px 16px;background-image:none!important}
+  .detail-panel.hero-compact .hero>:not(.detail-copy):not(.detail-chips),.detail-panel.hero-compact .hero .detail-copy>:not(h2){display:none}
+  .detail-panel.hero-compact .hero .detail-copy{flex:1 1 auto;min-width:0;max-width:none}
+  /* Folded, the chips row is the way into the full detail and nothing else. */
+  .detail-panel.hero-compact .hero>.detail-chips{flex:0 0 auto;order:2}
+  .detail-panel.hero-compact .hero .title-chips{flex-wrap:nowrap;margin:0}
+  .detail-panel.hero-compact .hero .title-chips>*:not(.detail-info){display:none}
+  /* A wide window has no head to carry the way into the full detail, so a squeezed series keeps
+     that one chip: the row the chips gave up is the row the control keeps to itself. */
+  .detail-panel.series-sources-layout .series-hero>.detail-chips{display:flex;justify-content:flex-end}
+  .detail-panel.series-sources-layout .series-hero>.detail-chips .title-chips>*:not(.detail-info){display:none}
   .detail-panel.hero-compact .hero h2{margin:0;overflow:hidden;font-size:17px;text-overflow:ellipsis;white-space:nowrap}
   /* The source list is what the column is for: filters share one row and the footer takes two
      lines, not four. */
@@ -2017,7 +2034,9 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 .library-detail-hero .detail-copy h2{font-size:30px;margin:10px 0 5px;line-height:1.14}
 .library-detail-hero .detail-copy p{margin:6px 0}
 .library-detail-synopsis{margin:9px 0 0;max-width:680px;font-size:13px;line-height:1.6;color:#dce3ed}
-.library-title-detail>.remote-error,.library-title-detail>.loading,.library-title-detail>.identify-hint,.library-title-detail>.library-detail-progress,.library-title-detail>.library-detail-actions,.library-title-detail>.remote-episodes-head,.library-title-detail>.remote-season-group,.library-title-detail>.load-more,.library-title-detail>.remote-season-group .browse-grid,.library-title-detail>.remote-season-group .browse-rows{position:relative;z-index:1}
+/* Everything drawn on that wash stands above it. The episode picker the catalogue brings is one of
+   those: left out of this list it was painted under the gradient, which read as greyed out. */
+.library-title-detail>.remote-error,.library-title-detail>.loading,.library-title-detail>.identify-hint,.library-title-detail>.library-detail-progress,.library-title-detail>.library-detail-actions,.library-title-detail>.catalogue-episodes,.library-title-detail>.remote-episodes-head,.library-title-detail>.remote-season-group,.library-title-detail>.load-more,.library-title-detail>.remote-season-group .browse-grid,.library-title-detail>.remote-season-group .browse-rows{position:relative;z-index:1}
 .library-detail-progress{display:flex;flex-wrap:wrap;align-items:center;gap:10px;max-width:680px;margin-top:2px}
 .library-detail-progress .progress{flex:1 1 80px;max-width:280px;margin:0}
 .library-detail-progress>span{font-size:11px;color:var(--muted);white-space:nowrap}
@@ -2062,3 +2081,63 @@ main.view-library>.library-remote-roots>.browse-panel{flex:none;min-height:240px
    the backdrop is the whole surface and the copy starts at the very top of it. */
 .library-title-detail .hero.library-detail-hero{background:none;min-height:0;max-height:none;height:auto;margin:0;padding:0;overflow:visible}
 @media(max-width:700px){.library-title-detail .gallery-open{top:0;right:0}}
+
+/* The way into the full title detail rides at the end of the hero's own chip row, and the corner
+   art drops to the line under it. The art used to share the chips' line and narrow it -- on a
+   phone that alone wrapped the chips onto a second row. */
+.hero.has-chips{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;row-gap:8px;column-gap:10px}
+.hero.has-chips>.detail-chips{grid-column:1/-1;min-width:0}
+.hero.has-chips>.detail-copy{grid-column:1;min-width:0;max-width:min(580px,100%)}
+.hero.has-chips.has-gallery>.gallery-open{grid-column:2;grid-row:2;position:static;justify-self:end}
+.detail-chips>.library-detail-chips{margin:0}
+.detail-chips>.title-chips{margin:0}
+.title-chips>.detail-info{width:34px;min-width:34px;padding:0;margin-left:auto}
+/* A phone has no room for one more chip: the row it would end is already wrapping, and the head
+   is where that layout keeps its chrome. There the control takes the corner the spacer held, so
+   the title above it stays centred, and it is on screen with the folded hero as well. */
+.detail-panel .hero .detail-info{display:none}
+.mobile-detail-head .detail-info-head{grid-column:3;grid-row:1;z-index:1;justify-self:end;align-self:center;width:44px;min-width:44px;height:34px;padding:0}
+.catalog-detail-head:after{grid-column:3;grid-row:1}
+@media(min-width:981px){
+  .detail-panel .hero .detail-info{display:inline-flex}
+}
+@media(max-width:980px) and (max-height:500px) and (orientation:landscape){
+  /* Landscape gives the hero a narrow column of its own: the chips row and the corner art keep
+     the plain block they had there. */
+  .detail-panel .hero.has-chips{display:block}
+  .detail-panel .hero.has-chips>.detail-chips{margin:0 0 6px}
+  .detail-panel .hero.has-chips>.detail-copy{max-width:calc(100% - 70px)}
+  .detail-panel .hero.has-chips.has-gallery>.gallery-open{position:absolute;top:6px;right:6px;grid-column:auto;grid-row:auto}
+  .detail-panel.series-sources-layout .hero.has-chips.has-gallery>.gallery-open{position:static;top:auto;right:auto}
+}
+
+/* The shared catalogue detail is a page of its own: the browse bar holds its place, the body
+   inside the panel is the only scroller, and its copy keeps clear of the tab bar and the safe
+   areas at every orientation. */
+main.view-title-detail{height:100dvh;overflow:hidden;display:flex;flex-direction:column;padding-bottom:22px}
+main.view-title-detail>.browse-panel{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;overflow:hidden;padding:0}
+main.view-title-detail .browse-head{flex:0 0 auto}
+main.view-title-detail .browse-scroll{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:16px 16px calc(16px + env(safe-area-inset-bottom, 0px))}
+main.view-title-detail .catalogue-title-detail{display:flex;flex-direction:column;gap:10px;min-height:0}
+
+/* The episode a series was opened on, and the way to another one: the picker the catalogue panel
+   draws, so choosing an episode reads the same on both. */
+.catalogue-episodes{margin-top:2px}
+.catalogue-episodes .episode-list{max-height:clamp(220px,40vh,420px)}
+.catalogue-episodes .episode-current{grid-template-columns:auto auto minmax(0,1fr) auto;gap:9px;padding:8px 10px}
+.catalogue-episodes .episode-current small{color:var(--muted);font-size:9px}
+.catalogue-episodes .episode-current button{padding:5px 9px;color:var(--accent2);background:transparent;font-size:9px}
+@media(max-width:700px){
+  body:has(main.view-title-detail){padding-bottom:0}
+  main.view-title-detail{height:calc(100dvh - 68px - env(safe-area-inset-bottom, 0px));padding-bottom:10px}
+  main.view-title-detail .browse-scroll{padding:12px 12px calc(12px + env(safe-area-inset-bottom, 0px))}
+  .catalogue-episodes .episode-current{grid-template-columns:auto 1fr auto}
+  .catalogue-episodes .episode-current small{grid-column:1/-1}
+  .catalogue-episodes .episode-current button{grid-column:3;grid-row:2}
+}
+@media(max-width:980px) and (max-height:500px) and (orientation:landscape){
+  main.view-title-detail{height:100dvh;padding-bottom:max(8px, env(safe-area-inset-bottom, 0px))}
+  main.view-catalog .detail-panel.mobile-open{grid-template-rows:50px minmax(0,1fr)}
+  .detail-panel .catalog-detail-head{grid-row:1}
+  .detail-panel .detail-primary,.detail-panel .detail-workflow{grid-row:2}
+}
