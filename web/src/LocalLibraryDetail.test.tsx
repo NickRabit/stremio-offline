@@ -14,7 +14,9 @@ const folder = (over: Partial<Extract<LocalDetailItem, { kind: "folder" }>> = {}
   ({ kind: "folder", path: "Heat", name: "Heat", fileCount: 2, size: 4_000_000_000, match: "matched", titleType: "movie", ...over });
 const identity = (over: Partial<IdentityPreview> = {}): IdentityPreview => ({
   path: "Films/Heat.mkv", key: "Films/Heat.mkv", kind: "movie", file: true, label: "Heat.mkv",
-  parsed: { title: "Heat", query: "Heat" }, match: "unmatched", ...over,
+  // A row the server reports a binding for is one the matcher confirmed: it never sends `bound`
+  // with another verdict, and the player refuses an identity a proposal only suggested.
+  parsed: { title: "Heat", query: "Heat" }, match: over.bound ? "matched" : "unmatched", ...over,
 });
 const copy = (localPath: string, filename: string, bytes: number, libraryName = "Films"): Stream =>
   ({ sourceId: `lib:${localPath}`, kind: "library", playable: true, localPath, libraryName, behaviorHints: { filename, videoSize: bytes } });
@@ -121,7 +123,7 @@ describe("LocalLibraryDetail discovery", () => {
     expect(host.querySelector(".library-title-detail h2")!.textContent).toBe("Heat.mkv");
     expect([...host.querySelectorAll(".library-detail-hero .meta-line")].map((node) => node.textContent)).toContain("2.0 GB");
     await click(host.querySelector(".library-detail-play button.primary"));
-    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ localPath: "Films/Heat.mkv" }), undefined);
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ localPath: "Films/Heat.mkv" }), undefined, null);
   });
 
   it("keeps the playable file when the identity lookup fails", async () => {
@@ -423,7 +425,7 @@ describe("LocalLibraryDetail extra sources", () => {
     const { onPlay } = await render(file());
     expect(host.querySelector(".split-button-toggle")).toBeNull();
     await click(host.querySelector(".library-detail-play button.primary"));
-    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ localPath: "Films/Heat.mkv" }), undefined);
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ localPath: "Films/Heat.mkv" }), undefined, null);
     expect(calls.providers).toHaveLength(0);
     expect(calls.addon).toHaveLength(0);
     expect(calls.remote).toHaveLength(0);
@@ -432,10 +434,14 @@ describe("LocalLibraryDetail extra sources", () => {
   it("asks an episode about its parent series with its own numbering", async () => {
     identityHandler = () => json(identity({ path: "Show/S01E02.mkv", kind: "series", bound: { type: "series", id: "tt9", name: "Show" }, parsed: { title: "Show", query: "Show", season: 1, episode: 2 } }));
     copies = () => json([]);
-    await render(file({ path: "Show/S01E02.mkv", label: "S01E02.mkv", season: 1, episode: 2 }));
+    const { onPlay } = await render(file({ path: "Show/S01E02.mkv", label: "S01E02.mkv", season: 1, episode: 2 }));
     await openPicker();
     expect(calls.providers.map((url) => url.pathname)).toEqual(["/api/stream-sources/series/tt9%3A1%3A2"]);
     expect(calls.localStreams.map((url) => url.pathname)).toEqual(["/api/local-streams/series/tt9%3A1%3A2"]);
+    // The detail already knows which episode the file holds, so the player is handed the identity
+    // rather than resolving the file a second time.
+    await click(host.querySelector(".library-detail-play button.primary"));
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ localPath: "Show/S01E02.mkv" }), undefined, { type: "series", id: "tt9:1:2" });
   });
 
   it("hands an addon row to the alternative playback with the title's own catalogue key", async () => {

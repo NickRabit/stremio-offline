@@ -7,7 +7,7 @@ const source = (relative: string) => readFileSync(new URL(relative, import.meta.
 
 const appSource = source("./App.tsx");
 /** The alternative player's own opening tag and its callbacks. */
-const alternativePlayer = appSource.slice(appSource.indexOf("{alternative && <Player open title={alternative.title}"));
+const alternativePlayer = appSource.slice(appSource.indexOf("{alternative && <Player open "));
 const alternativeBlock = alternativePlayer.slice(0, alternativePlayer.indexOf("{libraryManagerOpen &&"));
 
 describe("the alternative player's save and close wiring", () => {
