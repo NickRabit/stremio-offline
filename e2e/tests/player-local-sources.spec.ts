@@ -70,7 +70,7 @@ test.describe("the player's sources for a library file", () => {
   };
 
   const playerTitle = (page: Page) => page.locator(".player-head strong");
-  const sources = (page: Page) => page.locator("#player-sources .track-picker button");
+  const sources = (page: Page) => page.locator("#player-sources .player-source-list button");
   /** Rows of one kind. Another journey may leave its own copy of the same film in the library,
    *  and the addon may answer through more than one install, so nothing is counted exactly. */
   const addonRows = (page: Page) => sources(page).filter({ hasText: "E2E" });
@@ -126,9 +126,12 @@ test.describe("the player's sources for a library file", () => {
     await expect(page.locator(".player-overlay")).toBeVisible();
     await expect(playerTitle(page)).toHaveText("Zkušební film");
 
-    // The catalogue play reaches the viewer's own copy, and back to the addon row it started on.
+    // The row that plays leads the list; the catalogue play reaches the viewer's own copy, and
+    // back to the addon row it started on.
     await openSources(page);
-    await expect(sources(page).first()).toContainText(filmFile);
+    await expect(sources(page).first()).toHaveAttribute("aria-pressed", "true");
+    await expect(sources(page).first()).toContainText("E2E");
+    await expect(ownRows(page, filmFile)).not.toHaveCount(0);
     await ownRows(page, filmFile).first().click();
     await expect(playerTitle(page)).toHaveText("Zkušební film");
     await openSources(page);
