@@ -68,7 +68,7 @@ test("source filters start a fresh generation and drop old cards", async ({ page
   await page.getByRole("button", { name: "Vzdálené", exact: true }).click();
   const body = (await remoteRequest).postDataJSON();
   expect(body.query).toBe("Zkušební");
-  await expect(page.locator(".search-card")).toHaveCount(0);
+  await expect(page.locator("[data-search-card]")).toHaveCount(0);
 
   const localRequest = page.waitForRequest((request) =>
     request.method() === "POST"
@@ -76,7 +76,7 @@ test("source filters start a fresh generation and drop old cards", async ({ page
     && request.postDataJSON()?.sources?.[0] === "local");
   await page.getByRole("button", { name: "Místní", exact: true }).click();
   expect((await localRequest).postDataJSON().sources).toEqual(["local"]);
-  await expect(page.locator(".search-card")).toHaveCount(0);
+  await expect(page.locator("[data-search-card]")).toHaveCount(0);
 
   const catalogRequest = page.waitForRequest((request) =>
     request.method() === "POST"
@@ -88,22 +88,20 @@ test("source filters start a fresh generation and drop old cards", async ({ page
   await expect(page.getByRole("button", { name: /Zkušební film/ })).toHaveCount(1);
 });
 
-test("a member opens the catalogue detail and Back restores the same Search", async ({ page }) => {
+test("a card opens the title page and Back restores the same Search", async ({ page }) => {
   await page.goto("/");
   await search(page);
-  const card = page.locator(".search-card", { hasText: "Zkušební film" });
+  const card = page.locator("[data-search-card]", { hasText: "Zkušební film" });
   await expect(card).toBeVisible();
+  // One copy from one addon needs no question: the card opens its title page directly.
   await card.click();
-
-  const chooser = page.getByRole("dialog", { name: "Kde otevřít Zkušební film" });
-  await expect(chooser).toBeVisible();
-  await chooser.getByRole("button", { name: "Otevřít", exact: true }).first().click();
+  await expect(page.getByRole("dialog", { name: "Kde otevřít Zkušební film" })).toHaveCount(0);
   await expect(page.locator(".catalogue-title-detail")).toContainText("Zkušební film");
 
   await page.locator(".browse-head .library-back").click();
   await expect(page.locator("main.view-search")).toBeVisible();
   await expect(page.getByRole("searchbox", { name: placeholder })).toHaveValue("Zkušební");
-  await expect(page.locator(".search-card", { hasText: "Zkušební film" })).toBeVisible();
+  await expect(page.locator("[data-search-card]", { hasText: "Zkušební film" })).toBeVisible();
 });
 
 test("Search keeps the query out of the URL and browser storage", async ({ page }) => {

@@ -335,7 +335,7 @@ export function SearchEverywhere({ search, shape, onToggleShape, onOpenMember, o
     </div>
     {search.error && <p className="search-error" role="alert">{search.error}</p>}
     {search.previousQuery && <p className="search-previous-label">{t("searchAll.previousQuery")}</p>}
-    <div className={`browse-grid search-results tile-shape-${shape}${search.previousQuery ? " previous-query" : ""}`} aria-busy={busy || undefined}>
+    <div className={`browse-grid section-grid search-results tile-shape-${shape}${search.previousQuery ? " previous-query" : ""}`} aria-busy={busy || undefined}>
       {mainCards.map((cluster) => <SearchCard key={cluster.key} cluster={cluster} shape={shape}
         onOpen={(button) => void openCluster(button, cluster)}/>)}
       {search.snapshot && !busy && !mainCards.length && !unidentifiedCards.length && <p className="search-empty">{t("searchAll.empty")}</p>}
@@ -344,7 +344,7 @@ export function SearchEverywhere({ search, shape, onToggleShape, onOpenMember, o
     {search.snapshot?.limitReached && <p className="search-limit">{t("searchAll.limitReached")}</p>}
     {unidentifiedCards.length > 0 && <details className="search-unidentified">
       <summary>{t("searchAll.unidentified", { count: unidentifiedCards.length })}</summary>
-      <div className={`browse-grid search-results tile-shape-${shape}`}>
+      <div className={`browse-grid section-grid search-results tile-shape-${shape}`}>
         {unidentifiedCards.map((cluster) => <SearchCard key={cluster.key} cluster={cluster} shape={shape}
           onOpen={(button) => void openCluster(button, cluster)}/>)}
       </div>

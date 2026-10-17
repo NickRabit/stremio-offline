@@ -2218,25 +2218,11 @@ main.view-title-detail .catalogue-title-detail{display:flex;flex-direction:colum
 .search-source-error{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .search-error{margin:0 0 14px;padding:10px 12px;border:1px solid #5a2a32;border-radius:8px;background:#29191d;color:var(--red);font-size:11px}
 .search-previous-label{margin:0 0 10px;color:#e7b867;font-size:11px}
-.search-results{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:11px}
 .search-results.previous-query{opacity:.5}
-.search-card{display:grid;grid-template-columns:76px minmax(0,1fr);align-items:stretch;gap:11px;min-width:0;padding:8px;text-align:left;border-color:var(--line);background:var(--panel)}
-.search-card:hover,.search-card:focus-visible{border-color:var(--accent)}
-.search-card-art{display:block;min-height:112px;overflow:hidden;border-radius:7px;background:#252d39}
-.search-card-art img{display:block;width:100%;height:100%;min-height:112px;object-fit:cover}
-.search-card-art img.broken{display:none}
-.search-card-placeholder{display:grid;width:100%;height:100%;min-height:112px;place-items:center;color:var(--muted)}
-.search-card-placeholder svg{width:24px;height:24px}
-.search-card-copy{display:flex;min-width:0;flex-direction:column;align-items:flex-start;gap:5px;padding:4px 3px}
-.search-card-copy>strong{display:-webkit-box;overflow:hidden;font-size:13px;line-height:1.25;-webkit-box-orient:vertical;-webkit-line-clamp:2}
-.search-card-meta,.search-card-episodes{color:var(--muted);font-size:10px}
-.search-card-badges{display:flex;flex-wrap:wrap;gap:4px;margin-top:auto}
-.search-card-badges i{padding:2px 6px;border:1px solid #ff5b3840;border-radius:99px;background:#ff5b3812;color:var(--accent2);font-size:8px;font-style:normal;font-weight:700}
 .search-empty{margin:20px 0;color:var(--muted);font-size:12px}
 .search-limit{margin:4px 0 14px;color:#e7b867;font-size:11px}
 .search-unidentified{margin-top:20px;padding:13px;border:1px solid var(--line);border-radius:11px;background:#10151d99}
 .search-unidentified>summary{cursor:pointer;font-size:12px;font-weight:700}
-.search-unidentified>.search-results{margin-top:12px}
 .search-chooser{width:min(640px,100%)}
 .search-member-list{display:grid;gap:8px}
 .search-member-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:12px;padding:11px;border:1px solid var(--line);border-radius:9px;background:#0d111788}
@@ -2264,5 +2250,4 @@ main.view-title-detail .catalogue-title-detail{display:flex;flex-direction:colum
   .search-source-strip summary{text-align:left}
   .search-source-state{grid-template-columns:minmax(100px,1fr) auto auto}
   .search-source-state small{grid-column:1/-1}
-  .search-results{grid-template-columns:1fr}
 }
