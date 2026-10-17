@@ -112,6 +112,15 @@ describe("SourceChooser", () => {
     ]);
   });
 
+  it("draws the bare row the player leads with from the fuller copy the own-copies group knows", () => {
+    const playing: Stream = { sourceId: "play-1", kind: "library", playable: true, name: "One", localPath: "Films/One.mkv" };
+    render({ lead: [playing], selected: playing, groups: [ownCopies([file("local-1", "One", 1_073_741_824)])] });
+    expect(rows()).toHaveLength(1);
+    expect(rows()[0]!.textContent).toContain("1.1 GB");
+    expect(rows()[0]!.textContent).toContain("Films");
+    expect(rows()[0]!.getAttribute("aria-pressed")).toBe("true");
+  });
+
   it("names an addon row the lead holds by its addon once the addon's group answers", () => {
     const row = addon("a1", "4K");
     render({ lead: [row], leadLabel: "Sources", groups: [addonGroup([row, addon("a2", "1080p")])] });

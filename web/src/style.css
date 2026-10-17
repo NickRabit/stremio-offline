@@ -833,6 +833,12 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .player-sources .stream-filters select{width:100%;max-width:none}
 .player-source-list{max-height:min(52vh,380px);overflow-y:auto;overscroll-behavior:contain}
 .player-sources .stream-list button{display:grid;justify-content:initial;min-height:44px;padding:9px 11px;background:var(--panel)}
+/* A phone gets the sheet the detail's chooser is there: the whole screen, the menus side by side
+   and the list scrolling under them, instead of a box floating over the controls. */
+@media(max-width:700px){
+  .player-settings.player-sources{inset:0;width:100%;max-height:none;border:0;border-radius:0;overflow:hidden;padding:calc(12px + env(safe-area-inset-top,0px)) max(16px,env(safe-area-inset-right,0px)) max(16px,env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px))}
+  .player-sources .player-source-list{flex:1 1 auto;min-height:0;max-height:none}
+}
 .player-overlay .player-resumed{top:85px}
 .player-overlay .player-hint{bottom:calc(var(--player-bottom-height,120px) + 12px)}
 .player-up-next{position:absolute;z-index:14;left:50%;top:50%;width:min(360px,calc(100% - 32px));transform:translate(-50%,-50%);display:flex;flex-direction:column;gap:8px;padding:20px;border:1px solid var(--line);border-radius:14px;background:#141922f5;box-shadow:0 12px 42px #000b;text-align:center}.player-up-next small{color:var(--accent);font-size:10px;font-weight:800;letter-spacing:1.2px}.player-up-next strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.player-up-next span{color:var(--muted);font-size:12px}.player-up-next>div{display:flex;justify-content:center;gap:8px;margin-top:4px}.player-up-next button{min-height:40px}

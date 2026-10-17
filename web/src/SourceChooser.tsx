@@ -55,10 +55,15 @@ export function SourceChooser({ lead, leadLabel, groups: read, panel, selected, 
   // A lead of addon or media-server rows that a loaded group also answers is listed under that
   // group, by its own name: one source is one row in one class, never "Sources" and the addon both.
   const shownLead = useMemo(() => {
-    if (lead.every(isLocalStream)) return lead;
+    // The player leads with the bare row it plays; the own-copies group knows the same file with
+    // its size and library, so the lead is drawn from that fuller row.
+    if (lead.every(isLocalStream)) {
+      const known = new Map(read.filter((group) => group.kind === "local").flatMap((group) => group.streams).map((stream) => [sourceRowKey(stream), stream]));
+      return lead.map((row) => known.get(sourceRowKey(row)) ?? row);
+    }
     const answered = new Set(groups.filter((group) => group.status === "loaded").flatMap((group) => group.streams.filter((stream) => stream.playable).map(sourceRowKey)));
     return lead.filter((row) => !answered.has(sourceRowKey(row)));
-  }, [lead, groups]);
+  }, [lead, groups, read]);
   const entries = useMemo(() => librarySourceEntries(shownLead, leadLabel, groups, labelOf), [shownLead, leadLabel, groups]);
   const choices = useMemo(() => librarySourceChoices(entries, filter, language), [entries, filter, language]);
   // The row the place holds leads the classes the list orders itself -- the recommended and
