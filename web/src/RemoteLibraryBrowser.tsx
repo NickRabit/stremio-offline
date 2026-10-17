@@ -7,7 +7,7 @@ import { LibraryItem, LibraryItemMenu } from "./library-item";
 import { LibraryTile } from "./library-tile";
 import { LibraryTitleDetail } from "./LibraryTitleDetail";
 import { NativeLibrarySaveDialog, type NativeSaveLibrary } from "./NativeLibrarySaveDialog";
-import { sourceIdentity } from "./library-detail-sources";
+import { defaultSource, sourceIdentity } from "./library-detail-sources";
 import { useLibrarySources } from "./library-sources";
 import { Player } from "./Player";
 import { streamGroupLabel } from "./source-rows";
@@ -47,7 +47,9 @@ interface Props {
   compact: boolean;
   onCompactChange: (value: boolean) => void;
   /** The item this browser should open once its libraries are known; a new nonce opens it again. */
-  initialTarget?: { libraryId: string; itemId: string; nonce: number };
+  /** An item to open; `play` starts the version the detail selects as soon as it can play, the way
+   *  a Continue watching card plays whatever wrote it. */
+  initialTarget?: { libraryId: string; itemId: string; nonce: number; play?: boolean };
   /** A favourite, a watched flag or a position changed here, so Home and the shelf re-read. */
   onPersonalChange?: () => void;
   /** The reader's interface language, so the catalogue is asked in it. */
@@ -254,6 +256,8 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   const [playing, setPlaying] = useState<Playing | null>(null);
   /** The source the title's stored position names, read for the row the detail has selected. */
   const [resumeStableKey, setResumeStableKey] = useState<string | undefined>(undefined);
+  /** The item a Continue watching card asked to play, until its detail can. */
+  const autoPlay = useRef<string | null>(null);
   const [nextBusy, setNextBusy] = useState(false);
   const [targetError, setTargetError] = useState("");
   const [targetAttempt, setTargetAttempt] = useState(0);
@@ -678,6 +682,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     const library = libraries.find((row) => row.id === target.libraryId);
     if (!library) { setTargetError(t("mediaServer.itemUnavailable")); return; }
     setTargetError("");
+    autoPlay.current = target.play ? `${target.libraryId}\u0000${target.itemId}` : null;
     const epoch = ++targetEpoch.current;
     const controller = new AbortController();
     openLibrary(library);
@@ -696,6 +701,16 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
       .catch((value) => { if (epoch === targetEpoch.current && !aborted(value)) setTargetError(t("mediaServer.itemUnavailable")); });
     return () => controller.abort();
   }, [initialTarget?.libraryId, initialTarget?.itemId, initialTarget?.nonce, targetAttempt, libraries]);
+  // A card that asked to play presses Play once, the first time the item it named is on screen and
+  // its detail has selected a row; an item without a playable version stays on its detail.
+  useEffect(() => {
+    if (!autoPlay.current || !selected || !detail || `${selected.id}\u0000${detail.id}` !== autoPlay.current || sources === null) return;
+    autoPlay.current = null;
+    // The row the detail holds when it is one of this item's versions, else the default it offers:
+    // a selection left over from the previous item is never what plays.
+    const held = detailStream && sources.some((stream) => stream.sourceId === detailStream.sourceId) ? detailStream : defaultSource(sources);
+    if (held?.playable) playDetailStream(held);
+  });
 
   useEffect(() => {
     const current = playingRef.current;

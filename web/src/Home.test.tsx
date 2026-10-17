@@ -232,18 +232,19 @@ describe("Home", () => {
     expect(onReveal).toHaveBeenCalledWith(card.path);
   });
 
-  it("opens a catalogue card on the remembered episode", async () => {
+  it("resumes a catalogue card on the remembered episode, whatever source wrote it", async () => {
     const card = catalogue();
-    const { onOpenCatalogue } = await render({ rows: allEmpty({ resume: rowState({ items: [card] }) }) });
-    expect(row("resume")!.textContent).toContain("Open episode");
+    const { onPlay, onOpenCatalogue } = await render({ rows: allEmpty({ resume: rowState({ items: [card] }) }) });
+    expect(row("resume")!.textContent).toContain("Resume");
     expect(row("resume")!.textContent).toContain("S02E04");
     await click(primary("resume"));
-    expect(onOpenCatalogue).toHaveBeenCalledWith(card);
+    expect(onPlay).toHaveBeenCalledWith(card);
+    expect(onOpenCatalogue).not.toHaveBeenCalled();
   });
 
-  it("labels a film Open title and a pending next episode without a progress bar", async () => {
+  it("labels a film Resume and a pending next episode without a progress bar", async () => {
     await render({ rows: allEmpty({ resume: rowState({ items: [catalogue({ type: "movie", id: "tt9", key: "movie:tt9", name: "Film" })] }) }) });
-    expect(row("resume")!.textContent).toContain("Open title");
+    expect(row("resume")!.textContent).toContain("Resume");
     await render({ rows: allEmpty({ resume: rowState({ items: [catalogue({ pending: true, progress: undefined, episode: 5, key: "series:tt2:2:5" })] }) }) });
     expect(row("resume")!.textContent).toContain("Next episode");
     expect(row("resume")!.textContent).toContain("S02E05");

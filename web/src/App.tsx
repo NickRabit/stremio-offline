@@ -217,7 +217,7 @@ export function App() {
   const [remoteOpen, setRemoteOpen] = useState(false);
   const [remoteCompact, setRemoteCompact] = useState(false);
   const [remoteRootsPresent, setRemoteRootsPresent] = useState(false);
-  const [remoteTarget, setRemoteTarget] = useState<{ libraryId: string; itemId: string; nonce: number } | null>(null);
+  const [remoteTarget, setRemoteTarget] = useState<{ libraryId: string; itemId: string; nonce: number; play?: boolean } | null>(null);
   const remoteAbortRef = useRef<AbortController | null>(null);
   const remoteEpochRef = useRef(0);
   /** The title a remote-source load was opened for, with the resolved name hint so a retry sends
@@ -2492,16 +2492,21 @@ export function App() {
    *  episode the way a catalogue Continue-watching tile does, a favourite or Tonight folder opens
    *  itself, a new episode opens its show the way the Library's row does, and a suggestion opens
    *  the dialog the library page opens. */
+  // Continue watching plays at once, whatever wrote the card, and the title's detail stands behind
+  // the player: closing it always lands on the detail, never back on Home for one kind and on the
+  // detail for another.
   const homePlay = (card: HomeCard) => {
-    if (card.kind === "remote") { openRemoteCard(card); return; }
+    if (card.kind === "remote") { openRemoteCard(card, true); return; }
     if (card.kind === "episode" || card.kind === "discovery" || card.kind === "confirm" || card.kind === "favorite-catalogue") return;
     // A catalogue card written from a library file plays that file; without one it has nothing to
     // play and opens its detail instead.
     if (card.kind === "resume-catalogue") {
+      // The detail starts the stored source itself once it lists it; a library file plays now.
+      homeOpen(card);
       if (card.path) void playLocal(card.title, card.path, card.poster, card.season != null);
-      else homeOpen(card);
       return;
     }
+    if (card.kind === "resume-file" && card.identity) homeOpen(card);
     const title = card.kind === "favorite" || card.kind === "recent" || card.kind === "tonight" ? card.label : card.title;
     void playLocal(title, card.path, card.poster, (card.kind === "resume-file" || card.kind === "completed" || card.kind === "recent") && card.season != null);
   };
@@ -2530,7 +2535,7 @@ export function App() {
     if (card.kind === "confirm") { setSuggestionsOpen(true); return; }
     if (card.kind === "favorite-catalogue") { openCatalogueDetail({ type: card.type, id: card.id, name: card.name, ...(card.poster ? { poster: card.poster } : {}) }); return; }
     if (card.kind !== "resume-catalogue") return;
-    openCatalogueDetail({ type: card.type, id: card.id, name: card.name, ...(card.poster ? { poster: card.poster } : {}), resume: true,
+    openCatalogueDetail({ type: card.type, id: card.id, name: card.name, ...(card.poster ? { poster: card.poster } : {}), ...(card.path ? {} : { resume: true }),
       ...(card.season != null && card.episode != null ? { season: card.season, episode: card.episode } : {}) });
   };
   const homeShowAll = (target: ShowAllTarget) => {
@@ -2543,10 +2548,10 @@ export function App() {
     else if (target === "confirm") setSuggestionsOpen(true);
   };
   /** Opens a remote card's item in the Library's native browser. */
-  const openRemoteCard = (card: Extract<HomeCard, { kind: "remote" }>) => {
+  const openRemoteCard = (card: Extract<HomeCard, { kind: "remote" }>, play = false) => {
     navigated.current = true;
     remoteTargetNonce.current += 1;
-    setRemoteTarget({ libraryId: card.libraryId, itemId: card.itemId, nonce: remoteTargetNonce.current });
+    setRemoteTarget({ libraryId: card.libraryId, itemId: card.itemId, nonce: remoteTargetNonce.current, ...(play ? { play: true } : {}) });
     setView("library");
   };
   /** The one shared detail a catalogue title opens: the body the libraries use, over this page.

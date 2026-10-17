@@ -1269,6 +1269,19 @@ describe("RemoteLibraryBrowser addon sources", () => {
     HTMLMediaElement.prototype.load = () => undefined;
   });
 
+  it("plays the version at once when Continue watching asks, and only opens it otherwise", async () => {
+    item = () => json({ item: movie("m1", "One"), capabilities });
+    browse = () => json(page([]));
+    sources = () => json({ streams: [{ sourceId: "ms1", kind: "remote", playable: true, name: "1080p", provider: "jellyfin",
+      remoteItem: { libraryId: "rlib_a", itemId: "m1", mediaSourceId: "ms1", progressKey: "k" } }] });
+    await render({ initialTarget: { libraryId: "rlib_a", itemId: "m1", nonce: 1 } });
+    expect(host.querySelector(".player-overlay")).toBeNull();
+    await render({ initialTarget: { libraryId: "rlib_a", itemId: "m1", nonce: 2, play: true } });
+    await flush();
+    expect(host.querySelector(".player-overlay")).not.toBeNull();
+  });
+
+
   const saveView = (over: Partial<LibraryView> = {}): LibraryView => ({
     id: "lib_1", name: "Films", type: "mixed", enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z",
     writeArtwork: false, autoScanMetadata: false, unreachable: false, readOnly: false, writable: true,

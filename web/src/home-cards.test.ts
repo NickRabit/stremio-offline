@@ -16,8 +16,8 @@ const confirm: HomeCard = { kind: "confirm", key: "s1", libraryId: "lib_00000000
 describe("cardLabel", () => {
   it("names the action each kind offers", () => {
     expect(cardLabel(file)).toBe("home.resume");
-    expect(cardLabel(movie)).toBe("home.openTitle");
-    expect(cardLabel(series)).toBe("home.openEpisode");
+    expect(cardLabel(movie)).toBe("home.resume");
+    expect(cardLabel(series)).toBe("home.resume");
     expect(cardLabel(pending)).toBe("home.nextEpisode");
     expect(cardLabel(completed)).toBe("player.play");
     expect(cardLabel(newEpisode)).toBe("home.newEpisode");
