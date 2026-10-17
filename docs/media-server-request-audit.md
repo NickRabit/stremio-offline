@@ -70,7 +70,7 @@ the subtitle. Repeated subtitle timing variants can repeat that work.
 | Session facts | 30 seconds; identity, account policy and library Views; concurrent misses coalesce. |
 | Membership proof | 5 minutes, maximum 8192 entries; actor/library/connection/generation/secret/item scoped. Contains membership and artwork facts, not reusable full metadata. |
 | Original proof | 30 seconds, maximum 256 entries; exact media-source identity included. Explicit revalidation bypasses it, and its fresh Detail and PlaybackInfo also fill the 30-second metadata window and its Ancestors the membership proof. |
-| Original read-ahead | Remote originals are read in 1 MiB blocks, at most two per client request before the rest continues as one ordinary transfer (after a 50 ms grace that drops a reader who only jumped); 64 MiB in total, 10 minutes, keyed by the owner-sealed source, with the owner guard re-run on every held block. |
+| Read-ahead blocks | Media-server originals and ranged addon sources are read in 1 MiB blocks, at most two per client request before the rest continues as one ordinary transfer (after a 50 ms grace that drops a reader who only jumped); 64 MiB in total, 10 minutes, keyed by the owner-sealed source (an addon source by its resource, dropped with it), with the owner guard re-run on every held original block. |
 | Preview pages | 5 minutes, maximum 128; library/type, parent, own-versus-children preference, connection/generation/secret-reference scoped. |
 | Image bytes | Default 512 MiB disk and 128 MiB memory, maximum 5 MiB per image; tag/role/size keys and shared in-flight reads. No time TTL. |
 | Browser image cache | Private one-year max-age; URLs matching the current membership image tag are immutable; older/nonmatching tags retain max-age. Local ETag support. |
@@ -90,7 +90,7 @@ measured the same way after a container restart, so its inspection cache was col
 | Step | 0.5.92 | 0.5.93 |
 | --- | --- | --- |
 | Playback start, original byte requests | 252 in ~5 s | **9** |
-| Playback start, metadata | 2 Detail + 1 Ancestors + 1 PlaybackInfo (inspection cached) | 3 Detail + 3 Ancestors + 3 PlaybackInfo + 1 Info (cold inspection: the unchanged fresh checks around inspect and start) |
+| Playback start, metadata | 2 Detail + 1 Ancestors + 1 PlaybackInfo (inspection cached; a cold inspection runs four fresh checks) | **0** when started from the detail, whose open cost 1 Detail + 1 PlaybackInfo; **1 Detail + 1 PlaybackInfo + 1 Info** from a Home card with nothing read in the last 30 seconds (both with a cold inspection) |
 | Steady playback, per minute | 3 Detail + 4 Ancestors + 4 PlaybackInfo + 3 Info/User/Views | **2 Detail + 2 Ancestors + 2 PlaybackInfo + 2 Info/User/Views**, with four remote-state progress saves in the same minute |
 | One remote-state progress save | 1–2 Detail + PlaybackInfo when outside the 30-second window | **0** while the playback guard keeps the window warm |
 | Library detail open | 1 Detail + 1 PlaybackInfo | 1 Detail + 1 PlaybackInfo (kept) |
@@ -102,6 +102,19 @@ of the file. Every seek closed the HTTP read and opened a new one: 126 requests 
 probe (reproduced with ffprobe against a plain range server), and the conversion
 repeated them. The proxy now reads remote originals in bounded blocks, so the jumps
 are served from memory and the conversion reuses what the probe read.
+
+**Why the start asked for metadata four times.** Inspect and start each checked the
+original before and after, every check a fresh Detail, Ancestors and PlaybackInfo.
+They now read the same 30-second row and versions the detail and sources share, and
+the ancestry of the membership proof; the playback guard and download admission
+still read fresh.
+
+**Addon sources** had the same jumps: the range cache keys on the exact range, so
+the first probe of an AVI with its index at the end (or an MP4 without faststart)
+still reached the host once per jump. Ranged addon reads now use the same blocks; a
+playlist, or a host that ignores ranges, keeps the ordinary transfer. Two ffprobe
+passes over the same Gladiator.avi served by a range-logging host, through the real
+`/api/media` route: **209 requests and 1.23 GB on 0.5.91, 6 requests and 5 MB on 0.5.93**.
 
 **What remains in steady playback** is the playback guard alone: every 30 seconds it
 re-proves the live resource with fresh Detail, Ancestors and PlaybackInfo plus the
