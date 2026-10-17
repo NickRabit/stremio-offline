@@ -1630,6 +1630,7 @@ export class MediaServerManager {
     try {
       const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId, download: options?.download === true }, request);
       this.recheckRef(authority, request, ref);
+      const runtime = this.liveRuntime(connection);
       const item = await this.upstream(connection, request, () => session.provider.detail(session.token, connection.accountId, ref.itemId, request));
       this.recheckRef(authority, request, ref);
       if (item.id !== ref.itemId) throw new MediaServerError("invalid-response", "The media-server item identity changed.");
@@ -1640,8 +1641,10 @@ export class MediaServerManager {
       const versions = await this.upstream(connection, request, () => session.provider.versions(session.token, connection.accountId, item.id, request));
       this.recheckRef(authority, request, ref);
       if (!versions.some((version) => version.id === ref.mediaSourceId)) throw notFound("That media-server source is no longer available.");
+      this.shareFreshOriginal(user, library, connection, runtime, item, versions);
     } catch (error) {
       this.deleteOriginalProof(user.id, library.id, connection.id, connection.generation, connection.secretRef, ref.itemId, ref.mediaSourceId);
+      this.forgetFreshOriginal(user, library, connection, ref.itemId);
       throw error;
     }
     this.putOriginalProof({
@@ -1674,6 +1677,7 @@ export class MediaServerManager {
     this.recheckRef(authority, request, ref);
     const user = this.currentActor(authority, request);
     if (!this.originalProofFor(user, library, connection, ref.itemId, ref.mediaSourceId)) {
+      const runtime = this.liveRuntime(connection);
       const item = await this.upstream(connection, request, () => session.provider.detail(session.token, connection.accountId, ref.itemId, request));
       this.recheckRef(authority, request, ref);
       if (item.id !== ref.itemId) throw new MediaServerError("invalid-response", "The media-server item identity changed.");
@@ -1683,6 +1687,7 @@ export class MediaServerManager {
       const versions = await this.upstream(connection, request, () => session.provider.versions(session.token, connection.accountId, item.id, request));
       this.recheckRef(authority, request, ref);
       if (!versions.some((version) => version.id === ref.mediaSourceId)) throw notFound("That media-server source is no longer available.");
+      if (item.type === "movie" || item.type === "episode") this.shareFreshOriginal(user, library, connection, runtime, item, versions);
       this.putOriginalProof({
         actorId: user.id,
         libraryId: library.id,
@@ -2040,6 +2045,22 @@ export class MediaServerManager {
       if (oldest === undefined) break;
       this.forgetMetadata(oldest);
     }
+  }
+
+  /** A fresh original check reads the same row, ancestry and versions an ordinary reader asks
+   *  for, so its answer is kept for the ordinary window and its ancestry as a membership proof:
+   *  a progress save or a detail open right after the playback guard asks the provider nothing.
+   *  Only an answer read under the runtime still installed for the connection is kept. */
+  private shareFreshOriginal(user: UserRecord, library: RemoteLibraryRecord, connection: MediaConnectionRecord, runtime: CachedRuntime | undefined, item: ProviderItem, versions: unknown): void {
+    if (!runtime || this.liveRuntime(connection) !== runtime) return;
+    this.rememberMetadata(this.metadataKey("detail", user, library, connection, item.id), connection.id, item);
+    this.rememberMetadata(this.metadataKey("versions", user, library, connection, item.id), connection.id, versions);
+    this.putProof(this.proofOf(user, library, connection, item));
+  }
+
+  private forgetFreshOriginal(user: UserRecord, library: RemoteLibraryRecord, connection: MediaConnectionRecord, itemId: string): void {
+    this.forgetMetadata(this.metadataKey("detail", user, library, connection, itemId));
+    this.forgetMetadata(this.metadataKey("versions", user, library, connection, itemId));
   }
 
   private forgetMetadata(key: string): void {

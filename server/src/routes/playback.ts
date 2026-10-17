@@ -21,6 +21,7 @@ import { readMediaText, rewritePlaylist } from "../media-playlist.js";
 import { clientCapabilities } from "../playback.js";
 import type { PlaybackManager, PlaybackOptions } from "../playback.js";
 import type { RangeCache } from "../range-cache.js";
+import { RangeNotSatisfiable, UnexpectedAnswer, type OpenRange, type RemoteReadAhead } from "../remote-read-ahead.js";
 import { redirectedHeaders, safeFetch, validateRemoteUrl } from "../security.js";
 import type { StatsLog, TrafficMeta } from "../stats.js";
 import type { UserPrefs } from "../store.js";
@@ -48,6 +49,7 @@ export interface PlaybackDeps extends RouteContext {
   prefsOf(req?: express.Request): UserPrefs;
   quietSources: Map<string, number>;
   rangeCache: RangeCache;
+  remoteReadAhead: RemoteReadAhead;
   safeInspection(info: Awaited<ReturnType<PlaybackManager["inspect"]>>, stream: StreamItem): {
     duration: number | undefined;
     video: { codec: string | undefined; width: number | undefined; height: number | undefined } | undefined;
@@ -67,9 +69,12 @@ export interface PlaybackDeps extends RouteContext {
 }
 
 const openTransfers = new Map<string, number>();
+/** How many bounded blocks one media-server read is served from before the rest of it is taken as
+ *  one ordinary transfer: a probe's jump fits in them, a conversion reading the film does not. */
+const READ_AHEAD_BLOCKS = 2;
 
 export function registerPlaybackRoutes(app: express.Application, deps: PlaybackDeps): void {
-  const { airplayAccess, airplayRequest, answerHeaders, countBytes, currentSession, currentUser, httpSourceOf, internalMediaRequest, libraryTarget, mediaSources, noteSourceQuiet, ownerOf, playback, playbackMeta, playbackOwners, playbackResponse, prefsOf, quietSources, rangeCache, requireAccess, safeInspection, sleep, sourceIsQuiet, stats, subtitleDelay, trackMedia, SOURCE_ATTEMPTS, SOURCE_RETRY_MS, SOURCE_RESUMES, SOURCE_HEADER_MS, SOURCE_QUIET_HEADER_MS } = deps;
+  const { airplayAccess, airplayRequest, answerHeaders, countBytes, currentSession, currentUser, httpSourceOf, internalMediaRequest, libraryTarget, mediaSources, noteSourceQuiet, ownerOf, playback, playbackMeta, playbackOwners, playbackResponse, prefsOf, quietSources, rangeCache, remoteReadAhead, requireAccess, safeInspection, sleep, sourceIsQuiet, stats, subtitleDelay, trackMedia, SOURCE_ATTEMPTS, SOURCE_RETRY_MS, SOURCE_RESUMES, SOURCE_HEADER_MS, SOURCE_QUIET_HEADER_MS } = deps;
 
   /** The synchronous local guard on a playback session's own resource: a remote original whose
    *  owner proof is no longer current is refused before any body is written. */
@@ -318,13 +323,8 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       res.on("close", () => { if (!res.writableEnded) controller.abort(); });
       // The body is cancelled without waiting: a source may never settle the cancel promise.
       const discard = (body: ReadableStream<Uint8Array> | null) => { try { void body?.cancel().catch(() => undefined); } catch { /* already disturbed */ } };
-      let upstream: Response;
-      try {
-        upstream = await mediaSources.open(resource.stream, owner, {
-          method: req.method === "HEAD" ? "HEAD" : "GET",
-          ...(req.headers.range ? { range: String(req.headers.range) } : {}),
-        }, controller.signal);
-      } catch (error) {
+      /** Rethrows a failed open as the sentence the viewer sees; a viewer who already left gets nothing. */
+      const openFailed = (error: unknown): void => {
         if (error instanceof ResourceError || error instanceof AppError) throw error;
         // The controller is aborted only when the response closes, and by then `res.destroyed`
         // is already true, so the signal clause repeats that fact.
@@ -335,6 +335,67 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
           throw http;
         }
         throw new AppError("The media server is unavailable.", "err.mediaServerUnavailable", 502);
+      };
+      const wanted = req.method === "GET" ? /^bytes=(\d+)-(\d*)$/.exec(String(req.headers.range ?? "")) : null;
+      if (wanted && (!wanted[2] || Number(wanted[2]) >= Number(wanted[1]))) {
+        const key = resource.stream.url!;
+        const open: OpenRange = (range, signal) => mediaSources.open(resource.stream, owner, { method: "GET", range }, signal);
+        let position = Number(wanted[1]);
+        const asked = wanted[2] ? Number(wanted[2]) : undefined;
+        let first = remoteReadAhead.find(key, position);
+        let ordinary = false;
+        try {
+          if (first) mediaSources.assertCurrent(resource.stream, owner);
+          else first = await remoteReadAhead.fill(key, position, open);
+        } catch (error) {
+          if (error instanceof RangeNotSatisfiable) {
+            if (error.contentRange && /^bytes \*\/\d+$/.test(error.contentRange)) res.setHeader("content-range", error.contentRange);
+            return void res.status(416).end();
+          }
+          if (!(error instanceof UnexpectedAnswer)) return openFailed(error);
+          ordinary = true;
+        }
+        if (!ordinary && first) {
+          if (res.destroyed || res.writableEnded || controller.signal.aborted) return;
+          const last = Math.min(asked ?? first.size - 1, first.size - 1);
+          if (position > last) {
+            res.setHeader("content-range", `bytes */${first.size}`);
+            return void res.status(416).end();
+          }
+          res.status(206);
+          if (first.contentType) res.setHeader("content-type", first.contentType);
+          res.setHeader("accept-ranges", "bytes");
+          res.setHeader("content-range", `bytes ${position}-${last}/${first.size}`);
+          res.setHeader("content-length", String(last - position + 1));
+          try {
+            for (let blocks = 0; position <= last && blocks < READ_AHEAD_BLOCKS; blocks += 1) {
+              const block = remoteReadAhead.find(key, position) ?? await remoteReadAhead.fill(key, position, open);
+              for await (const piece of remoteReadAhead.read(block, position, last + 1)) {
+                if (res.destroyed) return;
+                position += piece.length;
+                if (!res.write(piece)) await once(res, "drain", { signal: controller.signal });
+              }
+            }
+            if (res.destroyed) return;
+            if (position > last) return void res.end();
+            // The rest is the film itself, taken as one ordinary transfer from where the blocks end.
+            const rest = await open(`bytes=${position}-${asked ?? ""}`, controller.signal);
+            const from = /^bytes (\d+)-/.exec(rest.headers.get("content-range") ?? "");
+            if (rest.status !== 206 || Number(from?.[1]) !== position || !rest.body) { discard(rest.body); res.destroy(); return; }
+            res.setMaxListeners(res.getMaxListeners() + 1);
+            await pipeline(Readable.fromWeb(rest.body as never), res, { signal: controller.signal });
+          } catch { if (!res.writableEnded) res.destroy(); }
+          return;
+        }
+      }
+      let upstream: Response;
+      try {
+        upstream = await mediaSources.open(resource.stream, owner, {
+          method: req.method === "HEAD" ? "HEAD" : "GET",
+          ...(req.headers.range ? { range: String(req.headers.range) } : {}),
+        }, controller.signal);
+      } catch (error) {
+        return openFailed(error);
       }
       if (res.destroyed || res.writableEnded || controller.signal.aborted) { discard(upstream.body); return; }
       try { mediaSources.assertCurrent(resource.stream, owner); }

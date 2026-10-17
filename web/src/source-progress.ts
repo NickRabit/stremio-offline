@@ -57,13 +57,14 @@ export async function versionSavedRow(
   progressKey: string | null | undefined,
   remote: RemoteStreamContext | null | undefined,
   signal?: AbortSignal,
+  readRemote: (remote: RemoteStreamContext, signal?: AbortSignal) => Promise<SavedVersionProgress | null> = (context, inner) => api.remoteState(context.libraryId, context.itemId, inner),
 ): Promise<SavedVersionProgress | null> {
   if (progressKey) {
     const title = await api.progressOf(progressKey, signal).catch(() => null);
     if (title) return title;
   }
   if (!remote) return null;
-  const own = await api.remoteState(remote.libraryId, remote.itemId, signal).catch(() => null);
+  const own = await readRemote(remote, signal).catch(() => null);
   return own && own.mediaSourceId === remote.mediaSourceId ? own : null;
 }
 

@@ -27,7 +27,7 @@ import { createCompactOnScroll } from "./scroll-fold";
 import { bytes, hideBroken } from "./settings-ui";
 import { catalogueRef, useTitleEnrichment, type CatalogueRef } from "./title-enrichment";
 import type { SaveTarget } from "./save-target";
-import type { Addon, AddonDownloadSettings, LibraryType, LibraryView, LibraryViewPrefs, MediaServerProvider, RemoteBrowseMode, RemoteItem, RemoteItemState, RemoteItemType, RemoteLibrary, Stream, Subtitle, TileShape, Trailer, UserViews } from "./types";
+import type { Addon, AddonDownloadSettings, LibraryType, LibraryView, LibraryViewPrefs, MediaServerProvider, RemoteBrowseMode, RemoteItem, RemoteItemState, RemoteItemType, RemoteLibrary, RemoteStreamContext, Stream, Subtitle, TileShape, Trailer, UserViews } from "./types";
 
 interface Props {
   onRootPresenceChange?: (visible: boolean) => void;
@@ -284,6 +284,8 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   const listEpoch = useRef(0);
   const episodeEpoch = useRef(0);
   const detailEpoch = useRef(0);
+  /** The state read the open detail started, for the selected version's fallback to share. */
+  const detailStateRead = useRef<{ libraryId: string; itemId: string; read: Promise<RemoteItemState> } | null>(null);
   const handoffEpoch = useRef(0);
   const targetEpoch = useRef(0);
   const librariesEpoch = useRef(0);
@@ -585,7 +587,9 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
           setSourceError(describeError(error));
         });
     }
-    void api.remoteState(library.id, itemId, controller.signal)
+    const read = api.remoteState(library.id, itemId, controller.signal);
+    detailStateRead.current = { libraryId: library.id, itemId, read };
+    void read
       .then((value) => {
         if (!live()) return;
         setState(value);
@@ -1099,7 +1103,9 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   const detailOwner = detailStream ? sourceProgressOwner(detailStream, addonIdentity) : null;
   // The row is one of this item's own versions only when it carries this item's own context.
   const ownVersion = Boolean(detailOwner?.kind === "remote" && detailOwner.item.libraryId === selected?.id && detailOwner.item.itemId === detail?.id);
-  const alternativeSelected = Boolean(detailStream && detailOwner && !ownVersion);
+  // Only while a detail is open: the row it selected outlives it for a moment, and a read for a
+  // detail that is already gone would be thrown away.
+  const alternativeSelected = Boolean(detail && detailStream && detailOwner && !ownVersion);
   const detailProgress = detailStreamKey
     ? ownVersion
       ? (detailOwner?.kind === "remote" && state && state.mediaSourceId === detailOwner.item.mediaSourceId
@@ -1142,7 +1148,11 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     const mine = ++addonProgressEpoch.current;
     const scope = titleScope;
     const controller = new AbortController();
-    void versionSavedRow(ownerProgressKey || undefined, ownerRemote, controller.signal)
+    // The item on screen had its own state read as the detail opened; that answer is the fallback.
+    const shared = detailStateRead.current;
+    const readRemote = (remote: RemoteStreamContext, signal?: AbortSignal) =>
+      shared && shared.libraryId === remote.libraryId && shared.itemId === remote.itemId ? shared.read : api.remoteState(remote.libraryId, remote.itemId, signal);
+    void versionSavedRow(ownerProgressKey || undefined, ownerRemote, controller.signal, readRemote)
       .then((entry) => {
         if (mine !== addonProgressEpoch.current || titleScopeRef.current !== scope || controller.signal.aborted) return;
         setAlternativeProgress(entry && entry.position > 0

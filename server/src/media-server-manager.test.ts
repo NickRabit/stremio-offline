@@ -1377,6 +1377,39 @@ test("original proof: revalidation is never served from the proof", async () => 
   });
 });
 
+test("original proof: a progress save right after the playback guard re-reads nothing upstream", async () => {
+  let now = 1_000_000;
+  await withHarness(async (harness) => {
+    const { connection, library } = await seedPlayable(harness);
+    const ref = refFor(harness, connection.id, library.id, "m1", "v1");
+    await harness.manager.revalidateOriginal(harness.admin, ref);
+    const count = (name: string) => harness.server.calls.filter((call) => call === name).length;
+    assert.deepEqual([count("detail"), count("ancestors"), count("versions")], [1, 1, 1]);
+
+    now += 20_000;
+    await harness.manager.itemDetail(harness.admin, library.id, "m1");
+    const versions = await harness.manager.itemVersions(harness.admin, library.id, "m1");
+    assert.deepEqual(versions.versions.map((version) => version.id), ["v1"]);
+    assert.deepEqual([count("detail"), count("ancestors"), count("versions")], [1, 1, 1], "the save is served from what the guard just proved");
+
+    now += 15_000;
+    await harness.manager.itemVersions(harness.admin, library.id, "m1");
+    assert.deepEqual([count("detail"), count("ancestors"), count("versions")], [2, 1, 2], "past the window the row is read again, the ancestry stays proved");
+  }, { clock: () => now });
+});
+
+test("original proof: a failed revalidation leaves no row for the next save to reuse", async () => {
+  await withHarness(async (harness) => {
+    const { connection, library } = await seedPlayable(harness);
+    const ref = refFor(harness, connection.id, library.id, "m1", "v1");
+    await harness.manager.revalidateOriginal(harness.admin, ref);
+    harness.server.versionsOf["m1"] = [{ id: "v2" }];
+    await assert.rejects(harness.manager.revalidateOriginal(harness.admin, ref), { code: "not-found" });
+    const versions = await harness.manager.itemVersions(harness.admin, library.id, "m1");
+    assert.deepEqual(versions.versions.map((version) => version.id), ["v2"]);
+  });
+});
+
 test("original proof: a disabled connection is not served from a leftover proof", async () => {
   await withHarness(async (harness) => {
     const { connection, library } = await seedPlayable(harness);
