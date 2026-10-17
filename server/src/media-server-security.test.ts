@@ -203,7 +203,7 @@ test("items carries only the fixed allow-listed query and drops raw path fields"
     assert.equal(query.get("Limit"), "25");
     assert.equal(query.get("SearchTerm"), "a b");
     assert.equal(fixture.requests[0].headers["x-emby-token"], "tok");
-    assert.equal(fixture.requests[0].headers.authorization, 'MediaBrowser Client="Stremio Offline", Device="Server", DeviceId="stremio-offline-server", Version="1.0.0", Token="tok"');
+    assert.equal(fixture.requests[0].headers.authorization, 'MediaBrowser Client="Stremio Offline", Device="Desktop", DeviceId="stremio-offline-server", Version="1.0.0", Token="tok"');
     await transport.close();
   } finally {
     await fixture?.close();

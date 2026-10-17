@@ -149,7 +149,7 @@ export const MEDIA_SERVER_IMAGE_LIMITS = Object.freeze({
   maxBytes: IMAGE_MAX_BYTES,
 });
 const CLIENT = "Stremio Offline";
-const DEVICE = "Server";
+const DEVICE = "Desktop";
 const DEVICE_ID = "stremio-offline-server";
 const CLIENT_VERSION = "1.0.0";
 const ITEM_TYPES = new Set(["Movie", "Series", "Season", "Episode", "MusicVideo"]);
