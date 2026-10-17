@@ -71,6 +71,9 @@ const yearOf = (meta: MetaItem): number | undefined => {
   return firstFourDigits(meta.releaseInfo);
 };
 
+/** A catalogue that searches a file host answers with file names, not titles. */
+const FILE_NAME = /\.(?:avi|mkv|mp4|m4v|mov|wmv|mpg|mpeg|ts|m2ts|webm|flv|iso)$/i;
+
 const hostnameOf = (manifestUrl: string): string => {
   try {
     return new URL(manifestUrl).hostname;
@@ -127,18 +130,22 @@ const catalogSource = (
       for (const meta of metas) {
         if (meta.type !== "movie" && meta.type !== "series") continue;
         const id = String(meta.id);
-        const ids = strongIdsFromStremioId(id);
+        const name = typeof meta.name === "string" ? meta.name : "";
+        // The same file comes back from a movie and a series catalogue of one addon; as a file
+        // it is one item, kept apart from titles and never joined to anything else.
+        const file = FILE_NAME.test(name.trim());
+        const ids = file ? {} : strongIdsFromStremioId(id);
         const rewritten = deps.rewriteMeta(meta);
         const year = yearOf(meta);
         records.push({
-          itemKey: `${meta.type}:${id}`,
-          kind: meta.type,
-          title: typeof meta.name === "string" ? meta.name : "",
+          itemKey: file ? `file:${id}` : `${meta.type}:${id}`,
+          kind: file ? "file" : meta.type,
+          title: name,
           ...(year === undefined ? {} : { year }),
           ...(typeof meta.description === "string" ? { description: meta.description } : {}),
           ...(typeof rewritten.poster === "string" ? { poster: rewritten.poster } : {}),
           ...(typeof rewritten.background === "string" ? { background: rewritten.background } : {}),
-          ...(hasIds(ids) ? { ids } : { opaque: `addon:${addon.key}:${meta.type}:${id}` }),
+          ...(hasIds(ids) ? { ids } : { opaque: `addon:${addon.key}:${file ? "file" : meta.type}:${id}` }),
           locator: {
             kind: "catalog",
             addonKey: addon.key,

@@ -68,13 +68,13 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
     const {
       uiLanguage, audioLanguage, subtitleLanguage, downloadTitleLanguage,
       mergeByName, streamSort, trackProgress, showResumeRow,
-      tileSize, catalogTileShape, libraryTileShape, favoritesTileShape, resumeTileShape, followingTileShape, homeTileShape, startView, libraryShelf,
+      tileSize, catalogTileShape, libraryTileShape, favoritesTileShape, resumeTileShape, followingTileShape, homeTileShape, searchTileShape, startView, libraryShelf,
       homeLayout,
       ...instance
     } = flat;
     return {
       instance,
-      prefs: { uiLanguage, audioLanguage, subtitleLanguage, downloadTitleLanguage, mergeByName, streamSort, trackProgress, showResumeRow, tileSize, catalogTileShape, libraryTileShape, favoritesTileShape, resumeTileShape, followingTileShape, homeTileShape, startView, libraryShelf, ...(homeLayout ? { homeLayout } : {}) },
+      prefs: { uiLanguage, audioLanguage, subtitleLanguage, downloadTitleLanguage, mergeByName, streamSort, trackProgress, showResumeRow, tileSize, catalogTileShape, libraryTileShape, favoritesTileShape, resumeTileShape, followingTileShape, homeTileShape, searchTileShape, startView, libraryShelf, ...(homeLayout ? { homeLayout } : {}) },
     };
   };
 
@@ -256,7 +256,7 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       if (req.body.libraryTileShape !== undefined) {
         prefs.libraryTileShape = String(req.body.libraryTileShape) === "wide" ? "wide" : "poster";
       }
-      for (const key of ["favoritesTileShape", "resumeTileShape", "followingTileShape"] as const) {
+      for (const key of ["favoritesTileShape", "resumeTileShape", "followingTileShape", "searchTileShape"] as const) {
         if (req.body[key] !== undefined) prefs[key] = String(req.body[key]) === "wide" ? "wide" : "poster";
       }
       if (req.body.homeTileShape !== undefined) {

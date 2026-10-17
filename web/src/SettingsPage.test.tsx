@@ -15,7 +15,7 @@ const settings = (over: Partial<AppSettings> = {}): AppSettings => ({
   mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true,
   libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24,
   tileSize: "medium",
-  catalogTileShape: "poster", libraryTileShape: "poster", favoritesTileShape: "poster", resumeTileShape: "poster", followingTileShape: "poster", homeTileShape: "wide",
+  catalogTileShape: "poster", libraryTileShape: "poster", favoritesTileShape: "poster", resumeTileShape: "poster", followingTileShape: "poster", homeTileShape: "wide", searchTileShape: "poster",
   startView: "catalog", libraryShelf: "resume", realDebridConfigured: false, tmdbConfigured: false, ...over,
 });
 

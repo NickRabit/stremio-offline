@@ -227,6 +227,22 @@ test("catalog rows map strong ids, opaque ids, years and rewritten artwork", asy
   });
 });
 
+test("a file-search catalog row is a file, one per addon whatever catalogue type listed it", async (t) => {
+  allowPrivateAddons(t);
+  setFetchTransport(async () => jsonResponse({
+    metas: [{ id: "webshare:abc", type: "series", name: "Peppa.Pig.s01e07.SD.TV.avi" }, { id: "tt5", type: "movie", name: "Film.2020.mkv" }],
+  }));
+  t.after(() => setFetchTransport());
+
+  const page = await (await catalogSource({ addons: [addon("alpha")] })).next(undefined, signal());
+  assert.deepEqual(page.records.map((record) => [record.kind, record.itemKey, record.opaque]), [
+    ["file", "file:webshare:abc", "addon:alpha:file:webshare:abc"],
+    ["file", "file:tt5", "addon:alpha:file:tt5"],
+  ]);
+  assert.equal(page.records[1]!.ids, undefined, "a file name never lends its row a title id");
+  assert.equal(page.records[0]!.locator.kind === "catalog" && page.records[0]!.locator.type, "series");
+});
+
 test("catalog paging keeps the raw skip and an unsupported continuation ends after one page", async (t) => {
   allowPrivateAddons(t);
   const skips: string[] = [];

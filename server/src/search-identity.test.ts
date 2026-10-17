@@ -208,3 +208,13 @@ test("cluster keys survive merges, split into a new key, and retire aliases on r
   assert.deepEqual(split.keys, ["c1", "c5"]);
   assert.deepEqual(split.aliases, [{ retired: "c2", current: "c1" }]);
 });
+
+test("files join only the same file from the same addon, never through a title id", () => {
+  const groups = clusterIdentities([
+    record("a", 1, {}, { kind: "file", opaque: "addon:x:file:1" }),
+    record("b", 2, {}, { kind: "file", opaque: "addon:x:file:1" }),
+    record("c", 3, { imdb: "tt1" }, { kind: "file", opaque: "addon:x:file:2" }),
+    record("d", 4, { imdb: "tt1" }, { kind: "file", opaque: "addon:x:file:3" }),
+  ]).map((group) => group.memberKeys);
+  assert.deepEqual(groups, [["a", "b"], ["c"], ["d"]]);
+});

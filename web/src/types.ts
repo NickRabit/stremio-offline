@@ -350,7 +350,7 @@ export interface Settings {
   addonRefreshHours: number;
   tileSize: TileSize;
   catalogTileShape: TileShape; libraryTileShape: TileShape; favoritesTileShape: TileShape;
-  resumeTileShape: TileShape; followingTileShape: TileShape; homeTileShape: TileShape;
+  resumeTileShape: TileShape; followingTileShape: TileShape; homeTileShape: TileShape; searchTileShape: TileShape;
   startView: StartView;
   libraryShelf: LibraryShelf;
   /** This account's own Home arrangement. Absent means it has never arranged one. */

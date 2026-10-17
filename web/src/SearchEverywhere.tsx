@@ -1,17 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { createPortal } from "react-dom";
-import { Film, Search, X } from "lucide-react";
+import { Film, FolderOpen, HardDrive, Search, X } from "lucide-react";
 import { describeError } from "./api";
+import { ShapeToggle } from "./app-chrome";
+import { TileArt } from "./TileArt";
 import { useDialogFocus } from "./dialog-focus";
 import { useDialogViewport } from "./dialog-viewport";
 import { t, type Key } from "./i18n";
-import { hideBroken, Heading } from "./settings-ui";
+import { Heading } from "./settings-ui";
 import type {
   SearchClusterView,
   SearchMember,
   SearchMemberPage,
   SearchSourceClass,
   SearchSourceState,
+  TileShape,
 } from "./types";
 import type { SearchEverywhereController } from "./useSearchEverywhere";
 
@@ -51,29 +54,40 @@ const episodeText = (member: SearchMember): string | null => {
   return t("searchAll.episodeLabel", { season: member.season, episode: member.episode });
 };
 
-function SearchCard({ cluster, onOpen }: { cluster: SearchClusterView; onOpen: (button: HTMLButtonElement) => void }) {
-  const more = Math.max(0, cluster.sourceLabels.length - 2);
-  return <button type="button" className="search-card" data-search-card data-primary-member={cluster.primaryMemberKey}
+/** One title, the way every other grid draws one: its picture, its name and a caption. A list is
+ *  about titles, not about sources, so no card names the addon or library it came from; a copy
+ *  that is already in a library only earns a small mark. */
+function SearchCard({ cluster, shape, onOpen }: { cluster: SearchClusterView; shape: TileShape; onOpen: (button: HTMLButtonElement) => void }) {
+  const caption = [
+    cluster.year,
+    kindLabel(cluster.kind),
+    cluster.episodeCount ? t("searchAll.episodes", { count: cluster.episodeCount }) : undefined,
+  ].filter(Boolean).join(" · ");
+  const folder = cluster.kind === "folder";
+  return <button type="button" className="browse-item" title={cluster.title} data-search-card data-primary-member={cluster.primaryMemberKey}
     data-member-keys={cluster.memberKeys.join(" ")} onClick={(event) => onOpen(event.currentTarget)}>
-    <span className="search-card-art">
-      {cluster.poster
-        ? <img src={cluster.poster} alt="" loading="lazy" onError={hideBroken}/>
-        : <span className="search-card-placeholder"><Film/></span>}
+    <span className="browse-art">
+      <TileArt shape={shape} poster={cluster.poster} wide={cluster.background} fallback={folder ? <FolderOpen/> : <Film/>}/>
+      {cluster.hasLocal && <i className="fav-mark" title={t("searchAll.badgeLocal")} aria-label={t("searchAll.badgeLocal")}><HardDrive/></i>}
     </span>
-    <span className="search-card-copy">
-      <strong>{cluster.title}</strong>
-      <span className="search-card-meta">{[cluster.year, kindLabel(cluster.kind)].filter(Boolean).join(" · ")}</span>
-      {cluster.episodeCount != null && cluster.episodeCount > 0
-        && <span className="search-card-episodes">{t("searchAll.episodes", { count: cluster.episodeCount })}</span>}
-      <span className="search-card-badges">
-        {cluster.hasLocal && <i>{t("searchAll.badgeLocal")}</i>}
-        {cluster.hasRemote && <i>{t("searchAll.badgeRemote")}</i>}
-        {cluster.sourceLabels.slice(0, 2).map((label) => <i key={label}>{label}</i>)}
-        {more > 0 && <i>{t("searchAll.moreSources", { count: more })}</i>}
-      </span>
-    </span>
+    <strong>{cluster.title}</strong>
+    <small>{caption}</small>
   </button>;
 }
+
+/** One addon answers the same title from several of its catalogues; the chooser lists it once. */
+const distinctMembers = (members: SearchMember[]): SearchMember[] => {
+  const seen = new Set<string>();
+  return members.filter((member) => {
+    if (member.locator.kind !== "catalog") return true;
+    const key = `${member.locator.addonKey}|${member.locator.type}|${member.locator.id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+const addonLabel = (member: SearchMember): string =>
+  member.locator.kind === "catalog" ? member.sourceLabel.split(" · ")[0]! : member.sourceLabel;
 
 function MemberChooser({ cluster, members, anchorKey, onOpenMember, onOpenCanonical, onClose }: {
   cluster: SearchClusterView;
@@ -172,13 +186,13 @@ function MemberChooser({ cluster, members, anchorKey, onOpenMember, onOpenCanoni
         {loadError && <p className="login-error" role="alert">{loadError}</p>}
         {loading && !page && <p className="search-chooser-note">{t("common.loading")}</p>}
         {page && <div className="search-member-list">
-          {page.members.map((member) => {
+          {distinctMembers(page.members).map((member) => {
             const episode = episodeText(member);
             return <div className="search-member-row" key={member.memberKey}>
               <div className="search-member-copy">
                 <strong>{member.title}</strong>
                 <span>{[member.year, episode].filter((value) => value != null).join(" · ")}</span>
-                <small>{member.sourceLabel}</small>
+                <small>{addonLabel(member)}</small>
                 {member.conflict && <em>{t("searchAll.conflict")}</em>}
                 {rowErrors[member.memberKey] && <p className="login-error" role="alert">{rowErrors[member.memberKey]}</p>}
               </div>
@@ -201,8 +215,10 @@ function MemberChooser({ cluster, members, anchorKey, onOpenMember, onOpenCanoni
   </div>, document.body);
 }
 
-export function SearchEverywhere({ search, onOpenMember, onOpenCanonical }: {
+export function SearchEverywhere({ search, shape, onToggleShape, onOpenMember, onOpenCanonical }: {
   search: SearchEverywhereController;
+  shape: TileShape;
+  onToggleShape: () => void;
   onOpenMember: (member: SearchMember, anchorKey: string) => Promise<void> | void;
   onOpenCanonical: (canonical: NonNullable<SearchMemberPage["canonical"]>, anchorKey: string) => Promise<void> | void;
 }) {
@@ -217,11 +233,11 @@ export function SearchEverywhere({ search, onOpenMember, onOpenCanonical }: {
   const unidentified = useMemo(() => new Map((search.snapshot?.unidentified ?? []).map((cluster) => [cluster.key, cluster])), [search.snapshot]);
   const mainCards = search.order.flatMap((key) => {
     const cluster = clusters.get(key);
-    return cluster && (!search.availableLocally || cluster.hasLocal) ? [cluster] : [];
+    return cluster ? [cluster] : [];
   });
   const unidentifiedCards = search.unidentifiedOrder.flatMap((key) => {
     const cluster = unidentified.get(key);
-    return cluster && (!search.availableLocally || cluster.hasLocal) ? [cluster] : [];
+    return cluster ? [cluster] : [];
   });
   const waiting = search.committed
     ? search.snapshot?.sources.filter((source) => source.state === "queued" || source.state === "loading" || source.state === "indexing").length
@@ -254,8 +270,17 @@ export function SearchEverywhere({ search, onOpenMember, onOpenCanonical }: {
     if (!composing.current) search.submit();
   };
 
-  const openChooser = (button: HTMLButtonElement, cluster: SearchClusterView) => {
+  /** A title with an id every source shares opens its one title page, which lists the library
+   *  copies and the addon rows and picks among them by the usual rules. Only a title without such
+   *  an id, gathered from several places, asks where to open it. */
+  const openCluster = async (button: HTMLButtonElement, cluster: SearchClusterView) => {
     previousPosition.current = [...(root.current?.querySelectorAll<HTMLElement>("[data-search-card]") ?? [])].indexOf(button);
+    try {
+      const page = await members(cluster.primaryMemberKey);
+      if (page.canonical) { await onOpenCanonical(page.canonical, cluster.primaryMemberKey); return; }
+      const distinct = distinctMembers(page.members);
+      if (distinct.length === 1 && page.nextFrom == null) { await onOpenMember(distinct[0]!, distinct[0]!.memberKey); return; }
+    } catch { /* the chooser reports what failed */ }
     setChooser(cluster);
   };
 
@@ -273,26 +298,23 @@ export function SearchEverywhere({ search, onOpenMember, onOpenCanonical }: {
       <button className="primary" type="submit"><Search/> {t("searchAll.submit")}</button>
       {search.committed && <button type="button" onClick={search.clear}><X/> {t("common.cancel")}</button>}
     </form>
-    <div className="search-filters">
-      <div className="search-segments" role="group" aria-label={t("searchAll.sourcesToggle")}>
+    <div className="filterbar section-filter search-filters">
+      <div className="library-shelf-segments" role="group" aria-label={t("searchAll.sourcesToggle")}>
         {SOURCE_OPTIONS.map((option) => {
           const active = option.value === "all" ? search.sources.length === 0 : search.sources.length === 1 && search.sources[0] === option.value;
-          return <button key={option.value} type="button" aria-pressed={active}
+          return <button key={option.value} type="button" className={active ? "active" : ""} aria-pressed={active}
             onClick={() => search.setSources(option.value === "all" ? [] : [option.value])}>{t(option.label)}</button>;
         })}
       </div>
-      <div className="search-segments" role="group" aria-label={t("catalog.type")}>
+      <div className="library-shelf-segments" role="group" aria-label={t("catalog.type")}>
         {([
           ["all", "searchAll.kindAll"],
           ["movie", "searchAll.kindMovies"],
           ["series", "searchAll.kindSeries"],
-        ] as const).map(([value, key]) => <button key={value} type="button" aria-pressed={search.kind === value}
+        ] as const).map(([value, key]) => <button key={value} type="button" className={search.kind === value ? "active" : ""} aria-pressed={search.kind === value}
           onClick={() => search.setKind(value)}>{t(key)}</button>)}
       </div>
-      <label className="search-local-filter">
-        <input type="checkbox" checked={search.availableLocally} onChange={(event) => search.setAvailableLocally(event.target.checked)}/>
-        <span>{t("searchAll.availableLocally")}</span>
-      </label>
+      <ShapeToggle shape={shape} onToggle={onToggleShape}/>
     </div>
     <div className="search-source-strip">
       <div className="search-source-summary" aria-live="polite" role="status">
@@ -313,18 +335,18 @@ export function SearchEverywhere({ search, onOpenMember, onOpenCanonical }: {
     </div>
     {search.error && <p className="search-error" role="alert">{search.error}</p>}
     {search.previousQuery && <p className="search-previous-label">{t("searchAll.previousQuery")}</p>}
-    <div className={`search-results${search.previousQuery ? " previous-query" : ""}`} aria-busy={busy || undefined}>
-      {mainCards.map((cluster) => <SearchCard key={cluster.key} cluster={cluster}
-        onOpen={(button) => openChooser(button, cluster)}/>)}
+    <div className={`browse-grid search-results tile-shape-${shape}${search.previousQuery ? " previous-query" : ""}`} aria-busy={busy || undefined}>
+      {mainCards.map((cluster) => <SearchCard key={cluster.key} cluster={cluster} shape={shape}
+        onOpen={(button) => void openCluster(button, cluster)}/>)}
       {search.snapshot && !busy && !mainCards.length && !unidentifiedCards.length && <p className="search-empty">{t("searchAll.empty")}</p>}
     </div>
     {canLoadMore && <div className="load-more"><button type="button" onClick={search.loadMore}>{t("searchAll.loadMore")}</button></div>}
     {search.snapshot?.limitReached && <p className="search-limit">{t("searchAll.limitReached")}</p>}
     {unidentifiedCards.length > 0 && <details className="search-unidentified">
       <summary>{t("searchAll.unidentified", { count: unidentifiedCards.length })}</summary>
-      <div className="search-results">
-        {unidentifiedCards.map((cluster) => <SearchCard key={cluster.key} cluster={cluster}
-          onOpen={(button) => openChooser(button, cluster)}/>)}
+      <div className={`browse-grid search-results tile-shape-${shape}`}>
+        {unidentifiedCards.map((cluster) => <SearchCard key={cluster.key} cluster={cluster} shape={shape}
+          onOpen={(button) => void openCluster(button, cluster)}/>)}
       </div>
     </details>}
     {chooser && <MemberChooser cluster={chooser} members={members} anchorKey={search.focusAnchor ?? chooser.primaryMemberKey}

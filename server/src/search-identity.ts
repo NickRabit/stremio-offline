@@ -54,11 +54,14 @@ export interface IdentityGroup {
 }
 
 const NAMESPACES = ["imdb", "tmdb", "tvdb"] as const;
-const SOLO_KINDS = new Set<SearchKind>(["folder", "file", "season"]);
+const SOLO_KINDS = new Set<SearchKind>(["folder", "season"]);
+/** A file joins only the same file from the same addon: an id it might carry names a title. */
+const OPAQUE_ONLY_KINDS = new Set<SearchKind>(["file"]);
 const compareText = (left: string, right: string): number => left < right ? -1 : left > right ? 1 : 0;
 
 const edge = (left: IdentityInput, right: IdentityInput): boolean => {
   if (left.kind !== right.kind || SOLO_KINDS.has(left.kind)) return false;
+  if (OPAQUE_ONLY_KINDS.has(left.kind)) return typeof left.opaque === "string" && left.opaque !== "" && left.opaque === right.opaque;
   for (const namespace of NAMESPACES) {
     if (left.ids[namespace] !== undefined && right.ids[namespace] !== undefined && left.ids[namespace] !== right.ids[namespace]) {
       return false;
@@ -95,7 +98,7 @@ export function clusterIdentities(records: IdentityInput[]): IdentityGroup[] {
   const sharing = new Map<string, number[]>();
   ordered.forEach((record, index) => {
     if (SOLO_KINDS.has(record.kind)) return;
-    const values = NAMESPACES.flatMap((namespace) => record.ids[namespace] === undefined ? [] : [`${namespace}:${record.ids[namespace]}`]);
+    const values = OPAQUE_ONLY_KINDS.has(record.kind) ? [] : NAMESPACES.flatMap((namespace) => record.ids[namespace] === undefined ? [] : [`${namespace}:${record.ids[namespace]}`]);
     if (typeof record.opaque === "string" && record.opaque !== "") values.push(`opaque:${record.opaque}`);
     for (const value of values) {
       const key = `${record.kind}|${value}`;

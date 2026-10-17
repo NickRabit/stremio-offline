@@ -66,7 +66,6 @@ export function useSearchEverywhere(options: { active: boolean; covered: boolean
   const [committed, setCommittedState] = useState("");
   const [sources, setSourcesState] = useState<SearchSourceClass[]>([]);
   const [kind, setKindState] = useState<SearchKindFilter>("all");
-  const [availableLocally, setAvailableLocally] = useState(false);
   const [snapshot, setSnapshotState] = useState<SearchSnapshot | null>(null);
   const [previousQuery, setPreviousQuery] = useState(false);
   const [order, setOrderState] = useState<string[]>([]);
@@ -423,8 +422,6 @@ export function useSearchEverywhere(options: { active: boolean; covered: boolean
     setSources,
     kind,
     setKind,
-    availableLocally,
-    setAvailableLocally,
     snapshot,
     previousQuery,
     order,

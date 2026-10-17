@@ -58,8 +58,6 @@ const controller = (over: Partial<SearchEverywhereController> = {}): SearchEvery
   setSources: vi.fn(),
   kind: "all",
   setKind: vi.fn(),
-  availableLocally: false,
-  setAvailableLocally: vi.fn(),
   snapshot: snapshot(),
   previousQuery: false,
   order: [],
@@ -94,9 +92,22 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const render = async (search: SearchEverywhereController) => {
+const render = async (search: SearchEverywhereController, handlers: {
+  onOpenMember?: (member: SearchMember, anchorKey: string) => void;
+  onOpenCanonical?: (canonical: NonNullable<SearchMemberPage["canonical"]>, anchorKey: string) => void;
+} = {}) => {
   await act(async () => {
-    root.render(<SearchEverywhere search={search} onOpenMember={vi.fn()} onOpenCanonical={vi.fn()}/>);
+    root.render(<SearchEverywhere search={search} shape="poster" onToggleShape={vi.fn()}
+      onOpenMember={handlers.onOpenMember ?? vi.fn()} onOpenCanonical={handlers.onOpenCanonical ?? vi.fn()}/>);
+  });
+};
+
+const clickCard = async () => {
+  const card = host.querySelector<HTMLButtonElement>("[data-search-card]")!;
+  await act(async () => {
+    card.click();
+    await Promise.resolve();
+    await Promise.resolve();
   });
 };
 
@@ -125,28 +136,6 @@ describe("SearchEverywhere", () => {
     expect(host.querySelector(".search-source-state button")?.textContent).toBe("Retry");
   });
 
-  it("hides remote-only and catalog-only cards in both lists when Available locally is on", async () => {
-    const local = cluster("local", { title: "Local title", hasLocal: true });
-    const catalog = cluster("catalog", { title: "Catalog title" });
-    const remote = cluster("remote", { title: "Remote title", hasRemote: true });
-    const localFile = cluster("local-file", { title: "Local file", hasLocal: true, kind: "file" });
-    const remoteFile = cluster("remote-file", { title: "Remote file", hasRemote: true, kind: "file" });
-    const search = controller({
-      availableLocally: true,
-      snapshot: snapshot({ clusters: [local, catalog], unidentified: [localFile, remoteFile, remote] }),
-      order: ["local", "catalog"],
-      unidentifiedOrder: ["local-file", "remote-file", "remote"],
-    });
-    await render(search);
-
-    expect(host.textContent).toContain("Local title");
-    expect(host.textContent).not.toContain("Catalog title");
-    expect(host.querySelector(".search-unidentified summary")?.textContent).toContain("(1)");
-    expect(host.textContent).toContain("Local file");
-    expect(host.textContent).not.toContain("Remote file");
-    expect(host.textContent).not.toContain("Remote title");
-  });
-
   it("labels cards that still belong to the previous query", async () => {
     const item = cluster("old", { title: "Old result" });
     await render(controller({ previousQuery: true, snapshot: snapshot({ clusters: [item] }), order: ["old"] }));
@@ -155,51 +144,59 @@ describe("SearchEverywhere", () => {
     expect(host.querySelector(".search-results")?.classList.contains("previous-query")).toBe(true);
   });
 
-  it("lists every member with episode ranges, conflicts and an optional title page", async () => {
+  it("opens the one title page when the title has an id every source shares", async () => {
     const item = cluster("show", { title: "A show", primaryMemberKey: "member-show", memberKeys: ["member-show"] });
-    const page: SearchMemberPage = {
+    const canonical = { type: "series" as const, id: "tt-show", name: "A show" };
+    const members = vi.fn(async (): Promise<SearchMemberPage> => ({
+      clusterKey: "show",
+      members: [member({ memberKey: "member-show" }), member({ memberKey: "member-local", sourceClass: "local", locator: { kind: "local", key: "lib/show", libraryId: "lib", itemKind: "folder" } })],
+      truncated: false,
+      canonical,
+    }));
+    const onOpenCanonical = vi.fn();
+    await render(controller({ snapshot: snapshot({ clusters: [item] }), order: ["show"], members }), { onOpenCanonical });
+
+    await clickCard();
+
+    expect(onOpenCanonical).toHaveBeenCalledWith(canonical, "member-show");
+    expect(document.body.textContent).not.toContain("Where to open A show");
+  });
+
+  it("asks where to open a title without a shared id, with episode ranges and conflicts", async () => {
+    const item = cluster("show", { title: "A show", primaryMemberKey: "member-show", memberKeys: ["member-show"] });
+    const members = vi.fn(async (): Promise<SearchMemberPage> => ({
       clusterKey: "show",
       members: [
         member({ memberKey: "member-show", conflict: true }),
         member({ memberKey: "member-second", sourceLabel: "Second source", sourceClass: "local", locator: { kind: "local", key: "lib/show.mkv", libraryId: "lib", itemKind: "file" } }),
       ],
       truncated: false,
-      canonical: { type: "series", id: "tt-show", name: "A show" },
-    };
-    const members = vi.fn(async () => page);
-    await render(controller({
-      snapshot: snapshot({ clusters: [item] }),
-      order: ["show"],
-      members,
     }));
+    await render(controller({ snapshot: snapshot({ clusters: [item] }), order: ["show"], members }));
 
-    const card = host.querySelector<HTMLButtonElement>(".search-card")!;
-    await act(async () => {
-      card.click();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+    await clickCard();
 
     expect(document.body.textContent).toContain("Where to open A show");
     expect(document.body.textContent).toContain("S1E2–E3");
     expect(document.body.textContent).toContain("Conflicting ids");
-    expect([...document.body.querySelectorAll("button")].some((button) => button.textContent === "Open title page")).toBe(true);
-
-    await act(async () => {
-      [...document.body.querySelectorAll<HTMLButtonElement>(".identify-head button")][0]!.click();
-    });
-    const withoutCanonical = vi.fn(async () => ({ ...page, canonical: undefined }));
-    await render(controller({
-      snapshot: snapshot({ clusters: [item] }),
-      order: ["show"],
-      members: withoutCanonical,
-    }));
-    const nextCard = host.querySelector<HTMLButtonElement>(".search-card")!;
-    await act(async () => {
-      nextCard.click();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
     expect([...document.body.querySelectorAll("button")].some((button) => button.textContent === "Open title page")).toBe(false);
+  });
+
+  it("treats several catalogues of one addon as one copy and opens it directly", async () => {
+    const item = cluster("film", { title: "A film", primaryMemberKey: "member-a", memberKeys: ["member-a", "member-b"] });
+    const locator = { kind: "catalog" as const, addonKey: "addon", type: "movie", id: "addon:film" };
+    const first = member({ memberKey: "member-a", sourceLabel: "Addon · Movies", locator: { ...locator, catalogId: "movies" } });
+    const members = vi.fn(async (): Promise<SearchMemberPage> => ({
+      clusterKey: "film",
+      members: [first, member({ memberKey: "member-b", sourceLabel: "Addon · Netflix", locator: { ...locator, catalogId: "netflix" } })],
+      truncated: false,
+    }));
+    const onOpenMember = vi.fn();
+    await render(controller({ snapshot: snapshot({ clusters: [item] }), order: ["film"], members }), { onOpenMember });
+
+    await clickCard();
+
+    expect(onOpenMember).toHaveBeenCalledWith(first, "member-a");
+    expect(document.body.textContent).not.toContain("Where to open A film");
   });
 });

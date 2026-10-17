@@ -64,7 +64,7 @@ export interface UserPrefs {
   mergeByName: boolean; streamSort: string; trackProgress: boolean; showResumeRow: boolean;
   tileSize: TileSize;
   catalogTileShape: TileShape; libraryTileShape: TileShape; favoritesTileShape: TileShape;
-  resumeTileShape: TileShape; followingTileShape: TileShape; homeTileShape: TileShape;
+  resumeTileShape: TileShape; followingTileShape: TileShape; homeTileShape: TileShape; searchTileShape: TileShape;
   /** The view the app opens on; the catalogue unless the person chose otherwise. */
   startView: StartView;
   /** The segment the library root's one shelf shows; Continue unless the person chose otherwise. */
@@ -129,7 +129,7 @@ export interface State { schemaVersion?: number;
    *  only: it never leaves the process except as a store write, and never names a token. */
   mediaSecretCleanup?: string[] }
 const baseInstanceSettings: InstanceSettings = { concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, defaultMovieLibrary: "", defaultSeriesLibrary: "", realDebridToken: "", tmdbApiKey: "" };
-const basePrefs: UserPrefs = { uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, tileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", favoritesTileShape: "poster", resumeTileShape: "poster", followingTileShape: "poster", homeTileShape: "wide", startView: "home", libraryShelf: "resume" };
+const basePrefs: UserPrefs = { uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, tileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", favoritesTileShape: "poster", resumeTileShape: "poster", followingTileShape: "poster", homeTileShape: "wide", searchTileShape: "poster", startView: "home", libraryShelf: "resume" };
 
 /** A fresh install starts with the one library the download directory has always been,
  *  so it never runs the migration an upgrade needs. */
