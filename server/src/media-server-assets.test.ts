@@ -68,7 +68,7 @@ test("requestAsset builds the fixed artwork and subtitle paths, auth and headers
   assert.equal(headers.range, undefined);
   assert.equal(
     headers.authorization,
-    'MediaBrowser Client="Stremio Offline", Device="Server", DeviceId="mconn_asset-identity", Version="1.0.0", Token="tok"',
+    'MediaBrowser Client="Stremio Offline", Device="Desktop", DeviceId="mconn_asset-identity", Version="1.0.0", Token="tok"',
   );
   assert.equal(request.abortedAtCall, false, "the fetch is handed a live abort signal");
   assert.equal(typeof (request.init.signal as AbortSignal).addEventListener, "function");

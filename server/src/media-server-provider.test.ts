@@ -345,6 +345,20 @@ test("currentAccount records the wider restriction fields and refuses malformed 
   await rejects({ RemoteClientBitrateLimit: "500" });
 });
 
+test("versions restore the file name Emby cut down to a stump after the folder name", async () => {
+  const { provider } = fixture(() => ({
+    MediaSources: [
+      { Id: "emby", Protocol: "File", Name: ".2009.720p.DVDSCR.x264.AC3", Path: "/volume1/video/Filmy/Avatar/Avatar.2009.720p.DVDSCR.x264.AC3.mkv" },
+      { Id: "windows", Protocol: "File", Name: " - 1080p", Path: "D:\\Filmy\\Avatar\\Avatar - 1080p.mkv" },
+      { Id: "kept", Protocol: "File", Name: "Avatar.2009.720p", Path: "/media/Avatar/Avatar.2009.720p.mkv" },
+      { Id: "foreign", Protocol: "File", Name: ".unrelated", Path: "/media/Avatar/Avatar.2009.mkv" },
+      { Id: "no-path", Protocol: "File", Name: ".2009" },
+    ],
+  }));
+  const names = (await provider.versions("tok", "user-1", "item-1")).map((version) => version.name);
+  assert.deepEqual(names, ["Avatar.2009.720p.DVDSCR.x264.AC3", "Avatar - 1080p", "Avatar.2009.720p", ".unrelated", ".2009"]);
+});
+
 test("listLibraries and versions refuse an unbounded response array", async () => {
   const manyLibraries = fixture(() => ({
     Items: Array.from({ length: 1025 }, (_, index) => ({ Type: "CollectionFolder", CollectionType: "movies", Id: `l${index}`, Name: `L${index}` })),
