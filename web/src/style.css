@@ -2096,6 +2096,10 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
      without this the first half of the save split stood empty. */
   .library-detail-actions>.library-detail-save>button:first-child>svg{display:block}
   .library-detail-actions>button,.library-detail-actions>.split-button>button{min-width:44px;padding:0}
+  /* Play beside five icon actions is wider than a phone, and the last one fell onto a line of its
+     own. Play takes the first line whole and the secondary actions share the second. */
+  .library-detail-actions>.library-detail-play{display:flex;flex:1 0 100%}
+  .library-detail-play>.split-button,.library-detail-play>button{flex:1 1 auto}
 }
 .library-source-card{width:min(560px,100%)}
 .library-source-list{max-height:none}
