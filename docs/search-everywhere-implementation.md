@@ -577,6 +577,7 @@ Initial budgets:
 | Active local jobs per session | 1 |
 | Active remote jobs per session | 8 |
 | Active jobs per remote connection | 2 |
+| Active source jobs server-wide | 32 |
 | Search targets per session | 60 |
 | Retained source records per session | 1,200 |
 | Records accepted from one source page | 20 |
@@ -608,6 +609,12 @@ starting another page for that source. The 12-second execution budget begins
 when a job is admitted, not while it waits in a local queue or in the outbound
 host queue. A queued source keeps state `queued`; it does not become `timedOut`
 merely because another host request is slow.
+
+The per-session pools are additionally capped by one server-wide scheduler
+budget. No session may consume the whole instance: queued work is selected
+round-robin across sessions, then by source class, host/connection and target
+order. Logout, session replacement and shutdown release only that session's
+global slots; a cancelled waiter must never leak a global token.
 
 Remote adapters request at most 20 rows per page. An addon chooses its own page
 size, so the catalog source keeps two server-only values: the raw `skip` offset
@@ -1206,8 +1213,8 @@ but search result mappings do not.
 - Deterministic primary member, cluster key retirement and member-key focus
   after merge/split.
 - Per-class scheduler fairness, queued-work cancellation, execution-time source
-  timeout, retry cursor preservation, duplicate-only pages and retained-record
-  fairness.
+  timeout, retry cursor preservation, duplicate-only pages, retained-record
+  fairness and server-wide slot release on every cancellation path.
 - Catalog raw-offset/buffer accounting, rejected rows, undeclared `skip`,
   ignored `skip`, three-page stall and retry from the unchanged offset.
 - Session owner binding, revision notifications, expiry, logout and permission
@@ -1240,6 +1247,8 @@ but search result mappings do not.
   snapshot and member-detail byte bounds; crossing a bound sets
   `limitReached` rather than hiding already loaded results.
 - A queued request is removed when its session is deleted or replaced.
+- The server-wide job cap prevents one busy account from starving another and
+  no cancelled or expired session retains a scheduler slot.
 - A revocation between source fetch and snapshot delivery removes source,
   cluster members, counts and badges.
 - Ordinary and restricted accounts can use the feature; another session cannot
