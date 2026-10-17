@@ -121,8 +121,6 @@
   <string name="home_row_failed">Nie udało się wczytać tego rzędu.</string>
   <string name="home_next_episode">Następny odcinek</string>
   <string name="home_resume">Kontynuuj</string>
-  <string name="home_open_episode">Otwórz odcinek</string>
-  <string name="home_open_title">Otwórz tytuł</string>
   <string name="home_new_episode">Nowy odcinek</string>
   <string name="home_empty_title">Jeszcze nic tu nie ma</string>
   <string name="home_empty_text">Pobierz coś albo zacznij oglądać, a pojawi się to tutaj.</string>

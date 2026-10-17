@@ -103,6 +103,62 @@ class CatalogPendingPlayTest {
   }
 
   @Test
+  fun `autoPlay plays the merged default once the sources answer, without a key press`() {
+    val api = FakeTvApi()
+    val (alpha, beta) = twoSlowAddons(api)
+    mount(api, movieArgs().copy(autoPlay = true))
+    compose.waitUntil(5_000) { api.streamsRequests.size == 2 }
+    compose.waitForIdle()
+    compose.waitUntil(5_000) { hasText("Starting when sources are ready…") }
+    assertTrue(played.isEmpty())
+
+    alpha.complete(Unit)
+    compose.waitUntil(5_000) { api.streamsCompleted.contains("movie:tt1|alpha") }
+    compose.waitForIdle()
+    assertTrue(played.isEmpty())
+
+    beta.complete(Unit)
+    compose.waitUntil(5_000) { api.streamsCompleted.contains("movie:tt1|beta") }
+    compose.waitUntil(5_000) { played.isNotEmpty() }
+    compose.waitForIdle()
+    assertEquals(listOf("srcB"), played.map { it.sourceId })
+  }
+
+  @Test
+  fun `without autoPlay the answered sources play nothing`() {
+    val api = FakeTvApi()
+    val (alpha, beta) = twoSlowAddons(api)
+    mount(api)
+    compose.waitUntil(5_000) { api.streamsRequests.size == 2 }
+
+    alpha.complete(Unit)
+    beta.complete(Unit)
+    compose.waitUntil(5_000) { api.streamsCompleted.contains("movie:tt1|beta") }
+    compose.waitForIdle()
+
+    assertTrue(played.isEmpty())
+  }
+
+  @Test
+  fun `autoPlay on a series waits for the remembered episode's sources`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    val first = VideoDto(id = "tt1:1:1", title = "One", season = 1, episode = 1)
+    api.metaValues["series:tt1"] = MetaDto(id = "tt1", type = "series", name = "Show", videos = listOf(first))
+    api.streamsValues["series:tt1:1:1"] = listOf(stream("s1", "One's source", "Alpha"))
+    val metaGate = CompletableDeferred<Unit>()
+    api.metaGates["series:tt1"] = metaGate
+    mount(api, CatalogDetailArgs(MetaDto(id = "tt1", type = "series", name = "Show"), "Cinemeta", "series").copy(autoPlay = true))
+    compose.waitForIdle()
+
+    metaGate.complete(Unit)
+    compose.waitUntil(5_000) { api.streamsCompleted.contains("series:tt1:1:1") }
+    compose.waitForIdle()
+
+    assertEquals(listOf("s1"), played.map { it.sourceId })
+  }
+
+  @Test
   fun `a playable stream plays at the deadline while the slow addon never answers`() {
     val api = FakeTvApi()
     val (alpha, beta) = twoSlowAddons(api)

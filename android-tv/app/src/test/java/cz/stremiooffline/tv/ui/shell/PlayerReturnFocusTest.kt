@@ -202,9 +202,13 @@ class PlayerReturnFocusTest {
     compose.waitForIdle()
     compose.onNodeWithTag(homeCardTag(card.key)).assertIsFocused()
     press(Key.DirectionCenter)
-    compose.waitUntil(5_000) { runCatching { compose.onNodeWithTag(TagRemoteDetailPlay).assertIsFocused() }.isSuccess }
+    val playerHasRemote = {
+      listOf(TAG_OVERLAY_ROOT, TAG_OSD_PLAY).any { tag ->
+        runCatching { compose.onNodeWithTag(tag).assertIsFocused() }.isSuccess
+      }
+    }
+    compose.waitUntil(5_000) { playerHasRemote() }
     val homeRequests = api.homeRequests.size
-    press(Key.DirectionCenter)
     compose.waitUntil(5_000) { compose.onAllNodes(androidx.compose.ui.test.hasTestTag(TAG_OVERLAY_ROOT)).fetchSemanticsNodes().isNotEmpty() }
     repeat(3) {
       if (compose.onAllNodes(androidx.compose.ui.test.hasTestTag(TAG_OVERLAY_ROOT)).fetchSemanticsNodes().isNotEmpty()) back()

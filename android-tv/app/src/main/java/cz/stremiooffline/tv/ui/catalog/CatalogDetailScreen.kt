@@ -166,7 +166,7 @@ fun CatalogDetailScreen(
   onShowInLibrary: (String) -> Unit = {},
 ) {
   // An OK while the sources load waits for them; Back or a second OK drops the wait.
-  var pendingPlay by remember { mutableStateOf(false) }
+  var pendingPlay by remember { mutableStateOf(args.autoPlay) }
   var playTimeoutReached by remember { mutableStateOf(false) }
   fun cancelPendingPlay() {
     pendingPlay = false
@@ -878,6 +878,9 @@ fun CatalogDetailScreen(
   // Resolves the armed play once every addon answered, or at the deadline with something playable.
   LaunchedEffect(pendingPlay, anyAsking, preferredStream, playTimeoutReached) {
     if (!pendingPlay) return@LaunchedEffect
+    // A series opened to play has asked for nothing until its episode is chosen: the wait holds
+    // until that episode's own sources answer. Read inside the effect, so the screen grows no local.
+    if (args.autoPlay && isSeries && pick.selectedVideo == null) return@LaunchedEffect
     val playable = preferredStream?.playable == true
     if (anyAsking && !(playTimeoutReached && playable)) return@LaunchedEffect
     resolvePendingPlay()

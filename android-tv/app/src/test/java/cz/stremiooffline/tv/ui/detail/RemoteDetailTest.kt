@@ -118,6 +118,36 @@ class RemoteDetailTest {
     assertEquals("a1", played.single().remoteItem?.mediaSourceId)
   }
 
+  @Test
+  fun `autoPlay plays the primary version once, even after recomposition`() {
+    val api = FakeTvApi()
+    api.remoteSourcesValue = listOf(version("a1"))
+    api.remoteStateValue = RemoteItemStateDto(position = 900.0, duration = 1800.0, mediaSourceId = "a1")
+    val shown = mutableStateOf(data().copy(autoPlay = true))
+    scenario.onActivity { activity ->
+      activity.setContent {
+        RemoteDetailScreen(api = api, data = shown.value, onPlay = { played += it }, onBack = {})
+      }
+    }
+    compose.waitUntil(5_000) { played.size == 1 }
+
+    assertEquals("a1", played.single().remoteItem?.mediaSourceId)
+    assertTrue(played.single().resume)
+    compose.runOnIdle { shown.value = data().copy(autoPlay = true, libraryName = "Filmy again") }
+    compose.waitForIdle()
+    assertEquals(1, played.size)
+  }
+
+  @Test
+  fun `without autoPlay the primary version waits for Play`() {
+    val api = FakeTvApi()
+    api.remoteSourcesValue = listOf(version("a1"))
+    api.remoteStateValue = RemoteItemStateDto(position = 900.0, duration = 1800.0, mediaSourceId = "a1")
+    mount(api)
+
+    assertTrue(played.isEmpty())
+  }
+
   private fun mountNamed(api: FakeTvApi) {
     scenario.onActivity { activity ->
       activity.setContent {

@@ -170,7 +170,7 @@ class ResumeScreenTest {
   }
 
   @Test
-  fun `ok on a catalogue card that names its file plays that file`() {
+  fun `ok on a catalogue card that names its file opens its detail and plays at once`() {
     val api = FakeTvApi()
     val card = catalogueCard(path = "browse/A.mkv", title = "Which file")
     api.resumeValue = ResumePage(listOf(card), 1, false)
@@ -181,12 +181,13 @@ class ResumeScreenTest {
     compose.onNodeWithTag(resumeCardTag(card.key)).assertIsFocused()
     press(Key.DirectionCenter)
 
-    assertEquals(listOf((actionFor(card) as HomeAction.Play).target), played)
-    assertEquals(0, opened.size)
+    assertTrue(played.isEmpty())
+    assertEquals(1, opened.size)
+    assertEquals(true, opened[0].autoPlay)
   }
 
   @Test
-  fun `ok on a catalogue card opens the catalogue detail at the episode`() {
+  fun `ok on a catalogue card opens the catalogue detail at the episode and plays at once`() {
     val api = FakeTvApi()
     api.resumeValue = ResumePage(listOf(catalogueCard()), 1, false)
     val opened = mutableListOf<CatalogDetailArgs>()
@@ -201,6 +202,7 @@ class ResumeScreenTest {
     assertEquals(1, opened[0].episode?.season)
     assertEquals(2, opened[0].episode?.number)
     assertEquals(listOf("series:tt1:1:2"), opened[0].forgetKeys)
+    assertEquals(true, opened[0].autoPlay)
   }
 
   @Test

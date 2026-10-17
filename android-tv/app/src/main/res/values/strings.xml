@@ -117,8 +117,6 @@
   <string name="home_row_failed">This row could not load.</string>
   <string name="home_next_episode">Next episode</string>
   <string name="home_resume">Resume</string>
-  <string name="home_open_episode">Open episode</string>
-  <string name="home_open_title">Open title</string>
   <string name="home_new_episode">New episode</string>
   <string name="home_empty_title">Nothing here yet</string>
   <string name="home_empty_text">Download something or start watching, and it will show up here.</string>

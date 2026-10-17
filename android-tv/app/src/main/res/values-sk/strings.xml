@@ -121,8 +121,6 @@
   <string name="home_row_failed">Tento riadok sa nepodarilo načítať.</string>
   <string name="home_next_episode">Ďalšia epizóda</string>
   <string name="home_resume">Pokračovať</string>
-  <string name="home_open_episode">Otvoriť epizódu</string>
-  <string name="home_open_title">Otvoriť titul</string>
   <string name="home_new_episode">Nová epizóda</string>
   <string name="home_empty_title">Zatiaľ tu nič nie je</string>
   <string name="home_empty_text">Niečo si stiahnite alebo začnite sledovať a objaví sa to tu.</string>

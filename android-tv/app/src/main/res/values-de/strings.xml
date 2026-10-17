@@ -117,8 +117,6 @@
   <string name="home_row_failed">Diese Reihe konnte nicht geladen werden.</string>
   <string name="home_next_episode">Nächste Episode</string>
   <string name="home_resume">Fortsetzen</string>
-  <string name="home_open_episode">Episode öffnen</string>
-  <string name="home_open_title">Titel öffnen</string>
   <string name="home_new_episode">Neue Folge</string>
   <string name="home_empty_title">Hier ist noch nichts</string>
   <string name="home_empty_text">Laden Sie etwas herunter oder beginnen Sie zu schauen – es erscheint dann hier.</string>
