@@ -128,6 +128,15 @@ describe("SourceChooser", () => {
     expect([...selects()[0]!.options].map((option) => option.textContent)).toEqual(["All sources (2)", "Torrentio (2)"]);
   });
 
+  it("lists a lead row once when a group lists the same source under a new id", () => {
+    // Every listing mints its own source ids; the stored key is what names one source.
+    const read = { ...addon("first-id", "4K"), stableKey: "a:same" };
+    const again = { ...addon("second-id", "4K"), stableKey: "a:same" };
+    render({ lead: [read], leadLabel: "Sources", selected: read, groups: [addonGroup([again, addon("a2", "1080p")])] });
+    expect(rows()).toHaveLength(2);
+    expect(rows()[0]!.getAttribute("aria-pressed")).toBe("true");
+  });
+
   it("keeps a copy of the title the lead does not hold in the own-copies group", () => {
     const mine = file("local-1", "One");
     const other = file("local-2", "Two");

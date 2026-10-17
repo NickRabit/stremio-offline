@@ -2993,6 +2993,7 @@ export function App() {
             {...(catalogueDetail.initialSources ? { initialSources: catalogueDetail.initialSources } : {})}
             onGallery={(images, effective) => presentGallery(images, { type: effective.type, id: effective.id })}
             preferredLanguage={settings.audioLanguage}
+            addonPriority={addonPriority} showTorrents={settings.realDebridConfigured}
             onRead={setDetailRead}
             {...(detailChips ? { chips: detailChips } : {})}
             onSourceChange={setDetailSource}

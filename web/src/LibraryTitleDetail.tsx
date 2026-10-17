@@ -53,6 +53,11 @@ export interface LibraryTitleDetailProps {
   /** The source the title's stored position was last played from: the detail opens on that row
    *  wherever the title still offers it, unless the viewer picked one themselves. */
   resumeStableKey?: string;
+  /** The caller already ordered `sources` (the catalogue's own order): they are listed as given,
+   *  not largest first. */
+  keepOrder?: boolean;
+  /** The viewer's addon order, which the source chooser ranks addon rows by. */
+  addonPriority?: Map<string, number>;
   /** The native rows alone, when `sources` merges them with loaded addon rows: the default
    *  version is then drawn from these, so a larger addon answer never replaces it. */
   defaultSources?: Stream[] | null;
@@ -109,7 +114,7 @@ const clock = (value: number) => {
 /** The one detail body a playable title shares, local or remote: the catalogue hero, the synopsis
  *  and the sources with a split Play button. The provider-specific parts arrive as props, so the
  *  two containers cannot drift apart and a future add-on stream joins the same selector. */
-export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backdrops, gallery, onGallery, facts, description, chips, favorite, onToggleFavorite, favoriteDisabled, watched, onToggleWatched, watchedDisabled, watchedLabel, onOpenFolder, sources, initialSource, resumeStableKey, defaultSources, sourceGroups, onOpenSources, nativeSourceLabel, preferredLanguage, sourceError, onRetry, placeholder, descriptionLoading, episodes, progress, onSourceChange, onClearProgress, onPlay, onSaveToLibrary, onSaveElsewhere, onDownloadToDevice, saveSupported, sourceBadge }: LibraryTitleDetailProps) {
+export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backdrops, gallery, onGallery, facts, description, chips, favorite, onToggleFavorite, favoriteDisabled, watched, onToggleWatched, watchedDisabled, watchedLabel, onOpenFolder, sources, initialSource, resumeStableKey, keepOrder, addonPriority, defaultSources, sourceGroups, onOpenSources, nativeSourceLabel, preferredLanguage, sourceError, onRetry, placeholder, descriptionLoading, episodes, progress, onSourceChange, onClearProgress, onPlay, onSaveToLibrary, onSaveElsewhere, onDownloadToDevice, saveSupported, sourceBadge }: LibraryTitleDetailProps) {
   useI18n();
   const backdrop = useBackdrop(backdrops ?? []);
   const [chosen, setChosen] = useState<{ identity: string; key: string } | null>(null);
@@ -134,11 +139,12 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
   // The row the caller opened on leads the title's own versions when the listing does not hold it
   // yet, matched by row identity so two names for one file are never listed twice.
   const own = useMemo(() => {
-    const rows = orderSources(playableSources(sources ?? []));
+    const order = keepOrder ? (streams: Stream[]) => streams : orderSources;
+    const rows = order(playableSources(sources ?? []));
     if (!initialSource?.playable) return rows;
     const key = sourceRowKey(initialSource);
-    return rows.some((stream) => sourceRowKey(stream) === key) ? rows : orderSources([initialSource, ...rows]);
-  }, [sources, initialSource]);
+    return rows.some((stream) => sourceRowKey(stream) === key) ? rows : order([initialSource, ...rows]);
+  }, [sources, initialSource, keepOrder]);
   const groups = sourceGroups?.groups ?? [];
   const pickable = useMemo(() => librarySourceRows(
     librarySourceEntries(own, nativeSourceLabel ?? t("sources.localFilter"), groups, () => ""), "", "", "recommended", preferredLanguage ?? ""), [own, groups, nativeSourceLabel, preferredLanguage]);
@@ -315,7 +321,7 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
         onClick={() => selected && onDownloadToDevice?.(selected)}><Download/> <span className="library-detail-action-label">{t("library.downloadToDevice")}</span></button>}
       {onOpenFolder && <button type="button" aria-label={t("library.openFolder")} title={t("library.openFolder")} onClick={onOpenFolder}><FolderOpen/> <span className="library-detail-action-label">{t("library.openFolder")}</span></button>}
     </div>
-    {pickerOpen && <SourcePicker own={own} groups={groups} panel={sourceGroups} selected={selected} badgeOf={badgeOf}
+    {pickerOpen && <SourcePicker own={own} groups={groups} panel={sourceGroups} selected={selected} badgeOf={badgeOf} {...(addonPriority ? { priority: addonPriority } : {})}
       nativeLabel={nativeSourceLabel ?? t("sources.localFilter")} preferredLanguage={preferredLanguage ?? ""}
       onSelect={choose} onClose={() => setPickerOpen(false)}/>}
   </div>;
@@ -324,7 +330,8 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
 /** The destination picker beside Play: the same dialog shell as Save to…, one row per playable
  *  source with the catalogue's own filters and rows. Clicking a row chooses it and closes; Escape
  *  returns to the arrow. */
-function SourcePicker({ own, groups, panel, selected, badgeOf, nativeLabel, preferredLanguage, onSelect, onClose }: {
+function SourcePicker({ own, groups, panel, selected, badgeOf, nativeLabel, preferredLanguage, priority, onSelect, onClose }: {
+  priority?: Map<string, number>;
   own: Stream[];
   groups: LibrarySourceGroup[];
   panel?: LibrarySourcePanel;
@@ -359,7 +366,7 @@ function SourcePicker({ own, groups, panel, selected, badgeOf, nativeLabel, pref
       <div className="dialog-body">
         <p className="identify-hint">{t("mediaServer.versionsHint")}</p>
         <SourceChooser lead={own} leadLabel={nativeLabel} groups={groups} {...(panel ? { panel } : {})}
-          selected={selected} onSelect={onSelect} preferredLanguage={preferredLanguage} badgeOf={badgeOf}
+          selected={selected} onSelect={onSelect} preferredLanguage={preferredLanguage} badgeOf={badgeOf} {...(priority ? { priority } : {})}
           listClassName="stream-list remote-streams library-source-list"/>
       </div>
       <footer className="dialog-foot">
