@@ -191,7 +191,9 @@ test("converted generations retain playback ownership", async ({ request, playwr
   const changed = await request.post(`/api/playback/${playback.id}/track`, { data: { quality: 480, time: 0 } });
   expect(changed.status(), await changed.text()).toBe(200);
   const converted = await changed.json();
-  expect(converted.mode).toBe("transcode");
+  // A file that already fits the quality is copied rather than transcoded; either way it is a
+  // converted generation served from the playback folder, which is what ownership is about here.
+  expect(["remux", "transcode"]).toContain(converted.mode);
   expect(converted.url).toMatch(/^\/api\/playback\//);
   const master = await request.get(converted.url);
   expect(master.status()).toBe(200);

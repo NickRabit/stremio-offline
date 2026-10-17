@@ -7,7 +7,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { DOLBY_VISION_UNITS_FILTER, PlaybackManager, SOURCE_UNREACHABLE, SerialOperations, clientCapabilities, describeFailure, hlsCanStart, hlsPlaylistFiles, isPlaylistSource, sourceReachable, nvencBusy } from "./playback.js";
+import { DOLBY_VISION_UNITS_FILTER, PlaybackManager, fitsQuality, SOURCE_UNREACHABLE, SerialOperations, clientCapabilities, describeFailure, hlsCanStart, hlsPlaylistFiles, isPlaylistSource, sourceReachable, nvencBusy } from "./playback.js";
 import { mediaResources as registry, type ResourceOwner } from "./media-resources.js";
 import { setFetchTransport } from "./security.js";
 
@@ -1396,6 +1396,36 @@ const stubSpawn = (manager: any, session: Record<string, any>, spawned: number[]
   };
   return spawned;
 };
+
+test("a chosen quality the file already fits is copied, not transcoded", () => {
+  const manager = new PlaybackManager(tmp("test-quality-fits")) as any;
+  const info = (height: number, bitrate?: number) => ({
+    container: "matroska,webm", bitrate, video: { codec: "h264", height }, audio: { codec: "aac" },
+    audioTracks: [{ index: 0, codec: "aac" }], subtitleTracks: [],
+  });
+  const session = remuxSession(manager, { quality: 1080, info: info(720, 2_500_000) });
+
+  assert.equal(manager.plan(session).copyVideo, true, "a 720p file at 2.5 Mb/s already is 1080p quality");
+  const args = manager.args(session, 0, tmp("output-fits"), false) as string[];
+  assert.equal(args[args.indexOf("-c:v") + 1], "copy");
+  assert.equal(args.some((arg) => arg.startsWith("scale")), false, "nothing is rescaled");
+
+  session.info = info(1080, 2_500_000); session.quality = 720;
+  assert.equal(manager.plan(session).copyVideo, false, "a taller picture is scaled down");
+  session.info = info(720, 9_000_000); session.quality = 1080;
+  assert.equal(manager.plan(session).copyVideo, false, "a bitrate over the cap is brought down");
+  session.info = info(720); session.quality = 1080;
+  assert.equal(manager.plan(session).copyVideo, false, "an unknown bitrate is not taken on trust");
+});
+
+test("fitsQuality wants an average well under the cap, read in bits per second", () => {
+  const info = (height: number, bitrate: number) => ({ container: "mp4", bitrate, video: { codec: "h264", height }, audioTracks: [], subtitleTracks: [] });
+  assert.equal(fitsQuality(info(480, 1_125_000), 480), true, "three quarters of 1500k");
+  assert.equal(fitsQuality(info(480, 1_125_001), 480), false);
+  assert.equal(fitsQuality(info(1080, 4_500_000), 1080), true, "three quarters of 6M");
+  assert.equal(fitsQuality(info(1080, 5_900_000), 1080), false, "an average just under the cap leaves its peaks above it");
+  assert.equal(fitsQuality(undefined, 1080), false);
+});
 
 test("a copy the browser refused is transcoded instead, video and audio both", () => {
   const manager = new PlaybackManager(tmp("test-playback")) as any;
