@@ -391,7 +391,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
         }
         throw new AppError("The media server is unavailable.", "err.mediaServerUnavailable", 502);
       };
-      const wanted = req.method === "GET" ? /^bytes=(\d+)-(\d*)$/.exec(String(req.headers.range ?? "")) : null;
+      const wanted = internal && req.method === "GET" ? /^bytes=(\d+)-(\d*)$/.exec(String(req.headers.range ?? "")) : null;
       if (wanted && (!wanted[2] || Number(wanted[2]) >= Number(wanted[1]))) {
         const key = resource.stream.url!;
         const open: OpenRange = (range, signal) => mediaSources.open(resource.stream, owner, { method: "GET", range }, signal);
@@ -504,13 +504,13 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     const cacheKey = `${resource.parent ?? resource.id}:${typeof req.params.signed === "string" ? req.params.signed : ""}`;
     const askedRange = String(req.headers.range ?? "");
     let alreadySent = 0;
-    // A ranged read is served from bounded blocks, as a media-server original is: a demuxer
-    // jumping between a film's header and an index at its end asks the host for each block once,
-    // not once per jump. A playlist, or a host that answers a bounded read with anything but that
-    // part of the file, keeps the ordinary transfer below.
+    // An internal ranged read is served from bounded blocks: a demuxer jumping between a film's
+    // header and an index at its end asks the host for each block once, not once per jump. A
+    // playlist, or a host that answers a bounded read with anything but that part of the file,
+    // keeps the ordinary transfer below.
     // A host that has gone quiet is left to the ordinary transfer, which asks it once with the
     // short header wait.
-    const wanted = req.method === "GET" && !unblockable.has(cacheKey) && !sourceIsQuiet(resource.parent ?? resource.id)
+    const wanted = internal && req.method === "GET" && !unblockable.has(cacheKey) && !sourceIsQuiet(resource.parent ?? resource.id)
       && !/\.(m3u8|mpd)$/i.test(new URL(raw).pathname)
       ? /^bytes=(\d+)-(\d*)$/.exec(askedRange) : null;
     if (wanted && (!wanted[2] || Number(wanted[2]) >= Number(wanted[1]))) {
