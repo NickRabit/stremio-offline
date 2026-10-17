@@ -4,6 +4,10 @@ Status: implementation design after two reviews. No application code ships
 in this PR. The first review and the second pass, which adopted one shared
 search engine, are in
 [search-everywhere-implementation-review.md](search-everywhere-implementation-review.md).
+The implementation brief in
+[search-everywhere-agent-task.md](search-everywhere-agent-task.md) overrides
+four points of this plan (Catalog migration, artwork, local index, delivery)
+and splits the work into slices.
 
 This document turns the decisions in
 [search-everywhere-review.md](search-everywhere-review.md) into a concrete
