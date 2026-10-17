@@ -150,10 +150,11 @@ starting a page. The manager never accepts a user id from the request body.
 | `web/src/types.ts` | Add public search DTOs. |
 | `web/src/App.tsx` | Add the Search view, top-bar entry and existing-detail callbacks. Do not change Catalog search or browsing code. |
 | `web/src/Home.tsx` | Add an entry action that opens Search. Do not add live result rows. |
-| `web/src/i18n/en.ts`, `web/src/i18n/cs.ts` | Add every label, status and fixed error message in both catalogues. |
+| `web/src/i18n/*.ts` | Add every label, status and fixed error message to all ten shipped web catalogues; `en.ts` and `cs.ts` are not sufficient on their own. |
 | `web/src/style.css` | Add the responsive Search layout using the existing global controls and five-slot navigation. |
 | `android-tv/.../ApiClient.kt`, `TvApi.kt`, `CatalogDtos.kt` | Add the new contract. |
 | `android-tv/.../GlobalSearchViewModel.kt`, `GlobalSearchScreen.kt`, `Shell.kt` | Add the separate rail-owned screen without changing Catalog-origin search. |
+| `android-tv/app/src/main/res/values*/strings.xml` | Add the global-screen labels and statuses to every shipped Android TV locale and keep `strings.keys` in sync. |
 | `docs/configuration.md` | Document the default-off feature flag and its rollback behavior. |
 
 ## HTTP contract
@@ -1224,6 +1225,8 @@ but search result mappings do not.
   two builds run at most concurrently, an invalidation during a build discards
   the old result, and an in-flight search source becomes ready after the new
   generation publishes.
+- Web i18n key parity across all ten catalogues and Android TV string parity via
+  the existing `android-strings` check.
 
 ### Server integration tests
 
