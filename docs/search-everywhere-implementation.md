@@ -1,35 +1,42 @@
 # Search everywhere: implementation proposal
 
-Status: implementation design after independent review. No application code
-ships in this PR. The review and resolved findings are in
+Status: implementation design after two reviews. No application code ships
+in this PR. The first review and the second pass, which adopted one shared
+search engine, are in
 [search-everywhere-implementation-review.md](search-everywhere-implementation-review.md).
 
 This document turns the decisions in
 [search-everywhere-review.md](search-everywhere-review.md) into a concrete
-implementation plan. It is intentionally narrower than the full review:
-the first release adds a separate Search everywhere surface and does not move,
-rewrite or change the behavior of Catalog search or browsing. Catalog performance
-migration remains a separately approved follow-up.
+implementation plan. The first release adds Search everywhere and puts Catalog
+addon search on the same engine. Catalog browsing, controls, history, scopes,
+sort and `mergeByName` stay. The one Catalog search change is arrival: a fast
+catalog can paint before a slow one finishes. `GET /api/search` keeps its
+JSON shape for IdentifyDialog, library identification and older clients.
 
-The implementation must preserve the current `/api/search` response and every
-Catalog control. New server routes and new client state are additive.
+Where this document and the earlier review disagree about Catalog migration,
+this document wins. The original brief remains historical.
 
 ## Decisions
 
 1. Search everywhere is a dedicated web view and a global mode of the existing
    Android TV Search rail entry.
-2. Catalog search and browsing remain unchanged. Its code and tests stay in
-   place; a short catalog-scoped search from Catalog keeps its current behavior.
-3. The new search uses a server-owned, in-memory search session. Sources are
-   started in the background and the client receives bounded JSON snapshots by
+2. One shared search engine serves both surfaces. Catalog browsing stays on
+   `GET /api/catalog`. Catalog search keeps its controls, history, scopes, sort
+   and `mergeByName`, and reads a catalog-only session so ready catalogs paint
+   before the slowest addon. `GET /api/search` stays a one-shot compatibility
+   response.
+3. Search everywhere uses a server-owned, in-memory search session. Sources
+   start in the background and the client receives bounded JSON snapshots by
    polling. SSE is not part of the first release.
 4. Source pages are delivered independently. A slow addon, indexing library or
    media server never blocks a ready source.
-5. Display results are merged by conservative strong identity, not by title and
-   year. Every original source record remains available in the cluster detail.
-6. `globalSearch: false` is enforced in every all-addon scope, including retries,
-   continuations and cache paths. An explicitly selected addon is outside this
-   first release.
+5. Search everywhere merges by conservative strong identity, not by title and
+   year. Catalog keeps today's `type:id` merge and does not use that clustering.
+   Every original source record remains available in the cluster detail.
+6. `globalSearch: false` is enforced for every all-addon scope on both
+   surfaces, including retries, continuations and cache paths. An explicit
+   addon or catalog scope exists only in Catalog in this release. Search
+   everywhere has no per-addon picker, so those addons do not appear there.
 7. Search queries for the new surface never use persisted Catalog history,
    browser storage, route URLs or disk-backed Android state.
 8. The first release is not complete until web and TV can read the same server
@@ -37,9 +44,13 @@ Catalog control. New server routes and new client state are additive.
 
 ## Non-goals
 
-- Do not migrate the existing Catalog UI to incremental results in this release.
-- Do not change `GET /api/search`, `searchAll`, Catalog controls, Catalog history
-  or Catalog sorting.
+- Do not change Catalog controls, Catalog history, Catalog sorting, `mergeByName`
+  or catalog browsing.
+- Do not change the `GET /api/search` JSON shape, query-string contract, or the
+  `SearchResult` returned to IdentifyDialog and `LibraryCandidates`.
+- Do not put local or remote library hits on `GET /api/search`.
+- Do not apply Search everywhere clustering, append-only rank, or the stalled
+  continuation rule to Catalog.
 - Do not add a sixth item to the compact mobile bottom navigation.
 - Do not merge by normalized title, release year or filename alone.
 - Do not resolve missing external IDs through TMDB, Wikidata or addon metadata
@@ -70,6 +81,55 @@ Android TV ──────┼─ POST /api/search/everywhere
 The session owns the query, source targets, paging cursors, retained records,
 cluster result and revision counter. Clients never receive an upstream URL,
 provider credential, raw provider cursor or absolute local filesystem path.
+
+### Shared engine, two projectors
+
+Addon search has one transport. `catalog()` and `catalogWithExtras()` remain
+the single-catalog browse helpers behind `GET /api/catalog`, including a
+browse URL that happens to carry `search`. They are not the multi-catalog
+search engine. `searchAll` stops being that engine.
+
+The shared adapter discovers targets with `searchableCatalogs` and fetches one
+raw catalog page. A raw page is the decoded metas, the target key, the target
+order, and the next raw `skip`. It does not apply a 20-row acceptance cap, an
+overflow buffer, a field allowlist, a merge, or a cursor encoding. Those belong
+to the projector. The adapter does own host fairness, the abortable queue, the
+12-second budget measured from outbound admission through the bounded body
+read, and failure as a fixed code (`timeout`, `abort`, `network`, `http-503`,
+`invalid-json`). A caller abort is `cancelled` and is not an addon outage.
+Neither projector logs `reasonOf` or any upstream body.
+
+Two projectors sit on that raw page:
+
+| | Catalog projector | Everywhere projector |
+| --- | --- | --- |
+| Callers | Catalog web `loadPage`, TV `SearchViewModel.load`, and `searchAll` | Search everywhere session |
+| Rows kept | Every meta on the raw page, same fields `searchAll` spreads today | At most 20 accepted rows; overflow stays in the session buffer |
+| Merge | `type:id` across addons, folded in target order | Strong identity, plus a scoped opaque id only as defined below |
+| Cursor | One base64url object of per-catalog offsets; `-1` means that catalog is exhausted | Server-side only; the client never sends it |
+| Failure | That catalog's offset becomes `-1`, as `searchAll` does today | `failed` or `timedOut`, cursor unchanged, retryable |
+| Empty page | Exhausted for that catalog | Three no-progress pages become `stalled`, not exhausted |
+| History | Unchanged `recordSearch` path | Never |
+
+`searchAll` becomes a waiter over the Catalog projector. It still returns
+`SearchResult` `{ items, cursor, hasMore, sources }`, still folds settled
+catalogs in target order rather than completion order, and still marks a
+rejected catalog `-1`. `GET /api/search` stays that one-shot response.
+`IdentifyDialog` and `LibraryCandidates.searchCinemetaOf` keep calling it.
+`searchCinemetaOf` still passes the Cinemeta addon and
+`respectGlobalSearch: false`.
+
+The Catalog page and TV Catalog-origin search stop waiting on that one-shot
+for their own grid. They open a catalog-only session (`sources: ["catalog"]`,
+plus the existing scope of all addons, one addon, or one catalog) and paint
+metas as each target completes. Insertion follows target order, so the first
+target still wins `type:id` metadata when two catalogs share an id. Controls,
+history, sort and `mergeByName` stay in the clients. A page that adds no new
+`type:id` still ends Catalog continuation, which is the current
+`gainedNothing` behavior in `App.tsx` and `SearchViewModel.load`. Search
+everywhere must not copy that stop.
+
+Local and remote adapters are Everywhere-only. They never feed `GET /api/search`.
 
 ### New server modules
 
@@ -135,7 +195,7 @@ starting a page. The manager never accepts a user id from the request body.
 
 | File | Additive change |
 | --- | --- |
-| `server/src/addons.ts` | Add an optional `AbortSignal` and bounded JSON reader to the catalog helpers. Existing `catalog`/`searchAll` call sites and behavior remain unchanged. |
+| `server/src/addons.ts` | Add the raw catalog adapter and make `searchAll` a Catalog-projector waiter. `catalog` / `catalogWithExtras` stay the browse helpers. `searchAll`'s `SearchResult` and target-order fold stay. Failures log a fixed code. |
 | `server/src/library.ts` | Add optional abort/deadline checks to the single-library recursive walk used by the snapshot store. Existing callers that pass no signal keep their behavior. |
 | `server/src/outbound.ts` | Remove an aborted waiter from a host queue and settle it once, add an optional session fairness key, and hold the host slot through a bounded JSON body read for search. Replace raw failure messages in breaker diagnostics with fixed categories so an addon URL carrying the query cannot reach the log. The legacy fetch path keeps its current behavior. |
 | `server/src/media-server-manager.ts` | Add a root-scoped search method that reuses the existing authority, connection-generation and post-await checks. This is separate from the user's current browse folder. |
@@ -279,12 +339,16 @@ successful page.
 
 ### Member and cluster detail
 
-`GET /api/search/everywhere/:id/members/:memberKey`
+`GET /api/search/everywhere/:id/members/:memberKey?from=0`
 
-Resolves the current cluster containing `memberKey`, then returns the full
-member records and typed locators for it. A member key is stable while a cluster
-key may be retired by a merge or split, so it is the correct focus anchor and
-detail address. The route revalidates the session, every visible source, addon
+Resolves the current cluster containing `memberKey`, then returns one page of
+member records and typed locators. `from` is a non-negative offset into the
+cluster's `memberKeys`, which stay in full on the snapshot. One page holds at
+most 100 members and must stay under 512 KiB. The response includes `nextFrom`
+when further members remain, and `truncated: true` in that case. A single
+response does not claim to hold every member of a large cluster. A member key
+is stable while a cluster key may be retired by a merge or split, so it is the
+correct focus anchor and detail address. The route revalidates the session, every visible source, addon
 grant, library grant and connection generation at delivery time. It never
 resolves a missing provider parent or makes a metadata request merely to build
 the detail. For each local member it may use the existing
@@ -462,23 +526,25 @@ type, catalog id and target order. It is created only when the addon is enabled,
 the user is granted access, the catalog declares a usable `search` extra and the
 addon is not excluded by `globalSearch`.
 
-The adapter calls the addon's catalog endpoint with:
+The raw adapter calls the addon's catalog endpoint with:
 
 - `search=query`,
 - `skip=source cursor`,
 - the same timeout and user agent as the existing helpers,
-- an abort signal owned by the session.
+- an abort signal owned by the caller.
 
-The response is read with a byte ceiling and projected through an allowlist. A
-row keeps only its type, id, title, original title, year/release year, bounded
-description, artwork and source order. Unknown provider fields are never copied
-into a session record. Catalog artwork is registered with the memory-only
+The response is read with a byte ceiling. The raw page keeps the metas the
+addon returned. The Everywhere projector then projects an allowlist: type, id,
+title, original title, year/release year, bounded description, artwork and
+source order. Unknown provider fields never enter a Search everywhere session
+record. The Catalog projector keeps the fields `searchAll` already returns.
+Catalog artwork for Search everywhere is registered with the memory-only
 session artwork store; a configured addon URL or token on an artwork address
-must not reach the client.
+must not reach that client. Catalog's own grid keeps using `images.proxied()`
+as it does today.
 
-`searchAll` is deliberately not used for this path: it waits for every catalog
-and loses independent source progress. Existing `searchAll` behavior remains
-for Catalog until a separate migration is approved.
+`searchAll` is the one-shot Catalog waiter described above. Search everywhere
+does not call it. `GET /api/catalog` does not call it either.
 
 The abort path is end-to-end. `jsonFetch` combines the session signal with its
 existing deadline (`AbortSignal.any` or the tested equivalent).
@@ -506,7 +572,11 @@ so a session with many catalogs on one host cannot place all of its waiters
 ahead of another session. Within a session, the catalog scheduler round-robins
 targets by host before addon order, so a fast target on a different host starts
 even when many targets share a slow one. Remote admission is likewise fair by
-connection. Existing `/api/search` keeps its prior timeout and guard behavior.
+connection. `GET /api/search` uses this same adapter and the same admission
+deadline. It still waits until every target has settled, then writes one JSON
+response. Its fairness key is the authenticated session id, because that call
+has no Search everywhere session. `GET /api/catalog` keeps the browse helper's
+current timeout and does not take a search fairness key.
 
 ### Local sources
 
@@ -541,6 +611,10 @@ maps the kind filter to one recursive provider query:
 | `movie` | `Movie` |
 | `series` | `Series,Episode` |
 | `all` | `Movie,Series,Episode` |
+
+`MusicVideo` stays in ordinary title browse (`DIRECTORY_TITLE_TYPES`) and is
+absent here. Search everywhere v1 does not search music videos. `All` does not
+mean music-video coverage.
 
 It always uses the library root, `Recursive=true`, the provider's search term and
 the existing name ordering. It never inherits the selected folder, browse mode
@@ -598,8 +672,18 @@ The record and byte ceilings are enforced while accepting records, not by
 silently trimming the final cluster list. Reaching either ceiling stops further
 pages, sets `limitReached: true` and leaves the source rows that did load
 visible. The UI says the query is too broad and asks the user to narrow it; it
-must not claim that the result set is complete. A member detail response is
-bounded to 512 KiB; with the 60-source limit its member list is still complete.
+must not claim that the result set is complete. Member detail is paged, as
+specified on that route. The 512 KiB ceiling is per page, not a promise that
+one response lists every member.
+
+A third session for the same authenticated session returns `429` with
+`search-session-limit`. The 51st session on the server returns `503` with
+`search-capacity-limit`. Replacing the caller's own slot does not take a new
+seat: the old session is cancelled before the new one is counted. Neither
+error includes the query. The client shows a fixed message and waits for the
+next explicit submit. A retry sooner than one second after the previous retry
+of that source returns `429` with `search-retry-limited` and does not change
+the source.
 
 The three classes have independent pools. A catalog backlog must not occupy the
 only local slot or either remote slot. Catalog sources are seeded round-robin by
@@ -617,13 +701,15 @@ order. Logout, session replacement and shutdown release only that session's
 global slots; a cancelled waiter must never leak a global token.
 
 Remote adapters request at most 20 rows per page. An addon chooses its own page
-size, so the catalog source keeps two server-only values: the raw `skip` offset
-sent to the addon and a bounded buffer of raw rows not yet accepted into the
-session. A page accepts at most 20 rows; the next `Load more` drains that buffer
-before another upstream request. The raw offset advances by rows the addon
-actually returned, not by rows that survived projection. Invalid rows therefore
-cannot make a page repeat forever, and valid rows cannot be skipped merely to
-keep a page small.
+size. Only the Everywhere projector keeps two server-only values for a catalog
+source: the raw `skip` offset sent to the addon and a bounded buffer of raw
+rows not yet accepted into the session. That projector accepts at most 20 rows;
+the next Load more drains the buffer before another upstream request. The raw
+offset advances by rows the addon actually returned, not by rows that survived
+projection. Invalid rows therefore cannot make a page repeat forever, and valid
+rows cannot be skipped merely to keep a page small. The Catalog projector does
+not use this buffer. It accepts the whole raw page and advances the stateless
+offset by that page's length, which is what `searchAll` does today.
 
 Catalog `skip` support is read from the manifest's catalog extras. A catalog
 that does not declare it contributes its first page with
@@ -696,7 +782,8 @@ The sources expose IDs differently:
 An opaque addon id is not a cross-addon identity. It is scoped to
 `(addonKey, type, id)`. The same id from two unrelated addons does not merge.
 Opaque ids from different catalogs of the same addon may be merged only when the
-type and id are exactly equal.
+type and id are exactly equal. That scoped key is clustering evidence of its
+own, not a strong external id. It never bridges two different strong ids.
 
 An opaque local binding is scoped to `(libraryId, bindingKey, type, id)`.
 `LibraryMetaRecord` does not retain which addon issued an opaque id, so two
@@ -714,36 +801,49 @@ when clusters are rebuilt.
 ### Conservative cluster algorithm
 
 Do not use a naive transitive union and do not make the final grouping depend on
-which source happened to answer first. Each rebuild works on retained records:
+which source happened to answer first. Each rebuild works on retained records
+of one kind. Arrival order is irrelevant. `memberKey` order must not change
+which records share a cluster either.
 
-1. Each record is a hyperedge between its normalized IDs of one kind.
-2. `imdb`, `tmdb` and `tvdb` co-occurrence edges connect a candidate evidence
-   component. A missing namespace is compatible with any value; two different
-   values in the same namespace are a contradiction.
-3. A component with no same-namespace contradiction becomes one title cluster.
-4. A contradicted component is marked `ambiguous` and repartitioned
-   deterministically: sort its records by stable `memberKey`, then place each
-   record in the first existing partition with which it shares a strong ID and
-   has no contradictory namespace. Otherwise start a new partition. This is a
-   conservative partition, not a claim that one bridge is correct.
-5. The whole component is recomputed whenever any of its records is added,
-   replaced or removed. No availability badge crosses partitions.
+An edge exists between two records only when they share one strong id, or the
+same scoped opaque identity, and no namespace disagrees. A missing namespace is
+compatible with any value. Two different values in one namespace are not an
+edge, even when another namespace matches.
 
-Because the partition uses sorted member keys rather than arrival sequence, the
-same retained evidence produces the same clusters after any page order. Records
-that never share a strong ID are never joined.
+1. Build that pairwise graph.
+2. Take its connected components.
+3. A component whose union has one value per namespace is one cluster. A true
+   bridge survives here: `{imdb:tt1}`, `{tmdb:10}` and `{imdb:tt1, tmdb:10}`
+   are one cluster, because the bridge agrees with both and the union is
+   `{imdb:tt1, tmdb:10}`.
+4. A component whose union disagrees in any namespace is contradicted. Do not
+   keep it. Place each record alone. While a merge remains legal, merge the
+   legal pair whose joined `memberKey`s are smallest in lexicographic order.
+   A merge is legal when the graph has an edge across the two partitions and
+   the union still has one value per namespace. This does not depend on page
+   arrival or on which record is considered first.
+5. Recompute a component whenever any of its records is added, replaced or
+   removed. No availability badge crosses partitions.
 
-This makes the example below safe:
+Records that share neither a strong id nor the same scoped opaque identity are
+never joined. A scoped opaque id does not connect two conflicting strong ids.
+
+The contradicted example is:
 
 - A `{imdb:tt1, tmdb:10}`
 - B `{imdb:tt2, tmdb:20}`
 - C `{imdb:tt1, tmdb:20}`
-- D `{imdb:tt2, tmdb:20}`, arriving before or after C
+- D `{imdb:tt2, tmdb:20}`
 
-C shares IMDb with A and TMDB with B, but conflicts with both. The component is
-ambiguous. Sorted recomputation keeps a compatible grouping such as `{A, C}`
-and `{B, D}` if D later adds `{imdb:tt2, tmdb:20}`. It never turns the
-conflicting bridges into one availability cluster, regardless of arrival order.
+A and C share an IMDb id and disagree on TMDB, so they have no edge. B and C
+share a TMDB id and disagree on IMDb, so they have no edge. B and D agree on
+both. The only cluster is `{B, D}`. A is alone. C is alone. `{A, C}` is not a
+legal grouping.
+
+A hub can connect pairwise-compatible records into one contradicted component:
+`X {imdb:tt1}`, `Y {imdb:tt1, tmdb:10}`, `Z {imdb:tt1, tmdb:20}`. X-Y and X-Z
+are edges; Y-Z is not. Step 4 merges X with whichever of Y or Z has the lower
+`memberKey` and leaves the other record alone. It never puts Y and Z together.
 
 When records are replaced by a retry or a later page, rebuild the affected
 evidence components from the retained records. At the 1,200-record cap this is
@@ -768,12 +868,18 @@ unrequested title.
 
 Episodes are not clustered as series IDs. An episode member carries its own
 kind, parent relationship, season, episode and optional provider-verified
-`episodeEnd`. A remote `seriesId` is resolved only inside the same remote
-library and connection generation. A local episode binding uses its parent's
-verified strong ID plus one explicit season/episode coordinate. A filename that
-states a multi-episode range without a verified binding remains a file or an
-unidentified entry; it must never become one episode silently. Parent arrival
-after a child updates the parent relationship in place.
+`episodeEnd`. Episode clustering uses a synthetic identity, not `parentMemberKey`:
+verified parent strong ids plus season, episode and `episodeEnd` when present.
+Two copies merge when that synthetic identity agrees, including a local file
+and a remote episode whose parents resolved to the same strong id. A remote
+`seriesId` is resolved only inside the same remote library and connection
+generation, and only to find that parent's strong ids. It is not itself an
+identity across libraries. A local episode binding uses its parent's verified
+strong id plus one explicit season/episode coordinate. A filename that states
+a multi-episode range without a verified binding remains a file or an
+unidentified entry; it must never become one episode silently. An episode with
+no verified parent strong id stays its own card. Parent arrival after a child
+updates the parent relationship in place and may then merge the episode.
 
 ### Display metadata
 
@@ -911,7 +1017,12 @@ while a detail opened from Search is covering it. The hook owns:
 
 The hook reads only `GET /api/search/preferences`, a new read-only projection of
 `liveSearch` with no `recent` entries. It must not call
-`GET /api/search/state`. When search-while-typing is on, reuse the existing
+`GET /api/search/state` or display `recent`. Today `App.tsx` loads search state
+whenever the session becomes ready, for every view. Move that load to the
+Catalog view and the settings surface, so opening Search everywhere does not
+fetch history. A language-preference change while a search is open starts the
+next generation for the same committed query. The server stamps the session
+with the UI language it read at start. When search-while-typing is on, reuse the existing
 `live-search.ts` 500 ms, three-code-point, IME-aware commit policy for the web
 field; when it is off, only Enter submits. Enter always submits any non-empty
 query immediately.
@@ -923,7 +1034,9 @@ An expired session (`410`) is restarted once for the same committed query,
 without recording it anywhere. Repeated expiry shows a retry state.
 `Available locally` is a client-side membership predicate over the current
 snapshot because `hasLocal` is already present; toggling it does not create a
-new session.
+new session. It applies to the main list and to the unidentified list. A local
+file stays. A remote-only or catalog-only card, including an unidentified one,
+hides.
 
 The new surface does not call `api.searchState`, `api.recordSearch` or any
 Catalog history endpoint. The preferences read is the only existing Search-area
@@ -1064,8 +1177,12 @@ The view shows the same source-status strip, source/kind filters, merged poster
 grid, unidentified disclosure and retry actions. It gets a new search-result grid
 rather than reusing `PosterGrid` unchanged: `PosterGrid` keys by `type:id`,
 auto-pages on focus and owns focus requesters, none of which is stable across a
-cluster merge. The new grid keys by `clusterKey`, tracks a member-key focus
-anchor and requests the aggregate page only near the end. Polling is serialized
+cluster merge. The new grid's Compose item key is the anchor `memberKey`: the
+focused member when this card contains it, otherwise the oldest `memberKey` in
+the card. `clusterKey` is not a Compose key, because a merge retires one.
+After a merge or split the screen finds the card that contains the focused
+member and requests focus on that item again. The grid requests the aggregate
+page only near the end. Polling is serialized
 and stopped when the screen is not active. A page of partial results never steals
 D-pad focus. Retry rows are focusable and every source error is reachable without
 leaving the screen.
@@ -1082,9 +1199,10 @@ library/provider/id. The screen hydrates any missing `RemoteItemDto` through the
 existing item route before constructing `RemoteDetailData`; it does not invent a
 partial detail model.
 
-Catalog-origin TV search remains catalog-only and retains its current contracts
-until a separately approved Catalog migration. Global search must not call
-`searchState`, `recordSearch` or expose Catalog history.
+Catalog-origin TV search stays catalog-only. It uses the catalog-only session
+from phase 3, keeps history, scope and its Back destination, and does not show
+local or remote hits. Global search must not call `searchState`, `recordSearch`
+or expose Catalog history.
 
 The existing `SearchScreen.kt` tests continue to guard the catalog-origin path.
 The new screen reuses extracted presentation pieces only where they do not
@@ -1196,7 +1314,11 @@ but search result mappings do not.
 | Source returns only duplicates | Continue up to three no-progress pages, then `stalled`; never call it exhausted. |
 | Cluster IDs conflict | Records stay separate; no availability badge is invented. |
 | More than 60 sources are discovered | Refuse the start with `search-too-broad`; never search a silent subset. |
+| This account already has two sessions and the new start is not a slot replacement | `429 search-session-limit`. The existing sessions stay. |
+| The server already holds 50 sessions | `503 search-capacity-limit`. Nothing is evicted. |
+| Retry arrives within one second | `429 search-retry-limited`. The source is unchanged. |
 | Volume crosses 1,200 records | Stop paging, show `limitReached`, and ask the user to refine the query. |
+| A cluster has more members than one detail page | Return 100 members and `nextFrom`. Do not claim the page is the whole cluster. |
 
 ## Tests and release gates
 
@@ -1206,10 +1328,13 @@ but search result mappings do not.
   empty query, 200/201-code-point boundaries and the 256-UTF-16-unit ceiling.
 - Stable ID validation for IMDb, TMDB and TVDB, including type separation,
   exact addon/local ID extraction, prefixed opaque IDs and conflicting bridges.
-- Cluster tests for direct IDs, bridges, conflicting bridges, extra IDs,
-  opaque-ID collisions, late bridge contradictions, missing parent IDs, parent
-  arriving after child, specials, provider episode ranges and multi-episode
-  files in multiple arrival orders.
+- Cluster tests for direct IDs, a true three-record bridge, the A/B/C/D
+  contradiction (`{B,D}` only), the X/Y/Z hub, opaque ids from one addon,
+  opaque ids from two addons, late contradictions, episode synthetic identity
+  across a local file and a remote copy, missing parent IDs, parent arriving
+  after child, specials, provider episode ranges and multi-episode files.
+  The same retained records must cluster the same way under reversed
+  `memberKey` order.
 - Deterministic primary member, cluster key retirement and member-key focus
   after merge/split.
 - Per-class scheduler fairness, queued-work cancellation, execution-time source
@@ -1322,40 +1447,51 @@ themselves answer `404` when off; hiding a button is not rollback.
 
 - Add DTO parsing, session manager, scheduler and identity modules.
 - Add the per-library snapshot store and adapt browse caches to compose from it.
-- Implement fake catalog/local/remote adapters with deterministic delays.
+  The store warms with or without the feature flag.
+- Implement fake raw catalog pages plus local and remote adapters with
+  deterministic delays.
 - Add route allowlists, real middleware lifecycle tests, the feature gate and
   contract tests.
 - Prove fast-source delivery, lost-start replacement, cancellation, expiry,
   shutdown and permission revocation.
 
-No UI and no Catalog changes ship in this phase.
+No UI ships in this phase. `GET /api/search` still has its old body.
 
-### Phase 1: all three server adapters and member actions
+### Phase 1: shared catalog adapter and Everywhere server adapters
 
-- Finish catalog, local and remote adapters, bounded pagination and member
-  detail hydration.
-- Finish session artwork, session/account/content invalidation and 410
-  tombstones.
-- Prove both clients can receive the full contract; still ship no entry points.
+- Finish the raw catalog adapter, the Catalog projector, and the `searchAll`
+  waiter. IdentifyDialog and library-candidate tests still see today's
+  `SearchResult`.
+- Finish local and remote adapters, Everywhere paging, paged member detail,
+  session artwork, invalidation and 410 tombstones.
+- Prove the contract with server fixtures that speak both projectors. Real web
+  and TV clients are not in this phase.
 
-### Phase 2: web Search everywhere
+### Phase 2: web Search everywhere and Catalog arrival
 
 - Add the web view, top-bar/Home entry, session hook and member chooser.
+- Point Catalog `loadPage` at the catalog-only session. Keep history, sort,
+  scope, `mergeByName` and the `gainedNothing` stop.
+- Move the shell's `loadSearchState()` off the global ready effect and onto
+  Catalog and settings.
 - Keep the server flag off in production until the web functional, privacy,
   viewport and detail-return gates pass.
 
-### Phase 3: TV global mode and enablement
+### Phase 3: TV global mode, Catalog arrival, and enablement
 
-- Add the separate global ViewModel and screen.
-- Preserve Catalog-origin search unchanged.
-- Verify D-pad focus, partial results, voice, Cancellable OkHttp calls and Back.
+- Add the separate global ViewModel and screen. Key the grid by anchor
+  `memberKey`.
+- Point TV Catalog-origin search at the same catalog-only session. Keep its
+  history, scope and Back destination.
+- Verify D-pad focus across merge and split, partial results, voice,
+  cancellable OkHttp calls and Back.
 - Enable the feature flag only after both clients pass the shared contract.
 
 ### Phase 4: optional follow-ups
 
-- Add a separately approved Catalog incremental migration.
 - Consider cache/coalescing only after correctness and measured load.
-- Defer Home recent-query chips, fuzzy matching and streaming.
+- Defer Home recent-query chips, fuzzy matching, streaming, a Search everywhere
+  addon picker, and music-video search.
 
 ## Rollout and rollback
 
@@ -1363,8 +1499,15 @@ The feature is additive and is disabled by the default-off server flag in every
 phase before enablement, not merely by hiding entry points. Server sessions are
 memory-only, so rollback drops active searches without a migration or persistent
 data cleanup. No session data is included in settings backups.
-When the flag is off, search routes are not registered and the local search index
-does not warm, so rollback costs no extra disk work.
+When the flag is off, the new search routes are not registered and
+`LocalSearchIndex` does not warm. `LibrarySnapshotStore` is library
+infrastructure: browse caches compose from it, and it keeps warming the way
+`warmLibraryCaches()` does today, whether or not Search everywhere exists.
+Rollback of the flag does not stop library browse and does not skip a library
+walk the browser still needs. A hung library blocks only its own build. The
+store runs at most two builds at once, which is the deliberate change from
+today's one serial walk of every library. Existing readers that wait for a
+current walk of one library keep waiting for that library.
 
 The implementation is ready for review when a fake 100 ms source is visible
 before a 10-second source, a revoked source disappears from a later snapshot,
@@ -1387,10 +1530,11 @@ streaming delivery remain deferred product decisions.
 ## Review status
 
 This proposal follows the review in
-[search-everywhere-review.md](search-everywhere-review.md). The review's
-Catalog migration proposal is recorded as a later, separately approved phase;
-the implementation described here keeps Catalog behavior and code paths
-unchanged. The original brief remains in
+[search-everywhere-review.md](search-everywhere-review.md), including the
+second-pass decision that Catalog and Search everywhere share one addon
+engine. Catalog controls, history, sort, scopes, browsing and `mergeByName`
+stay. Catalog search arrival is incremental. `GET /api/search` stays one-shot.
+The original brief remains in
 [search-everywhere-review-task.md](search-everywhere-review-task.md).
-The independent implementation review and its resolutions are recorded in
+Both review passes are recorded in
 [search-everywhere-implementation-review.md](search-everywhere-implementation-review.md).

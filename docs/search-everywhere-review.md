@@ -2,15 +2,16 @@
 
 Reviewed on 2026-10-17 against `main` at
 `e31351afecc62b72bd794a8970bb3c2a0dc4a1c4` and the original brief in PR #449.
-File/line references below refer to that revision. This is a design decision
-record, not an implemented feature or a performance measurement.
+A second pass the same day, against `main` at `ca4608fb`, put Catalog and
+Search everywhere on one addon engine. File/line references below refer to the
+first revision unless the implementation proposal names a symbol. This is a
+design decision record, not an implemented feature or a performance measurement.
 The concrete module, API, state, test and delivery plan is in
 [search-everywhere-implementation.md](search-everywhere-implementation.md).
-Its independent review and resolved corrections are recorded in
+Where that proposal disagrees with this file about Catalog migration, the
+proposal wins. Both review passes are recorded in
 [search-everywhere-implementation-review.md](search-everywhere-implementation-review.md).
-That later document is normative for code-level mechanics where its second
-review corrected this review's original paging, queue-time and remote-type
-assumptions. This file remains the product decision record.
+This file remains the product decision record.
 
 ## Verdict
 
@@ -38,15 +39,15 @@ Android references in this document are under
 
 ## Catalog optimization and excluded addons
 
-The full review recommends including Catalog search in the performance work.
-The [implementation proposal](search-everywhere-implementation.md) deliberately
-defers that migration to a later, separately approved phase: the first release
-keeps Catalog controls, search and browsing behavior unchanged and delivers the
-incremental runner only through Search everywhere. If Catalog is migrated later,
-preserve its entry points, controls, browsing, scopes, history preference and
-selected sort; use the same bounded source runner with a separate Catalog
-adapter. Keep the legacy `/api/search` response compatible for older clients
-until that migration is complete.
+Catalog search shares the addon engine in the first release. The
+[implementation proposal](search-everywhere-implementation.md) is normative for
+that split. Catalog keeps its entry points, controls, browsing, scopes, history
+preference, selected sort and `mergeByName`. Its grid reads a catalog-only
+session and paints a catalog when that catalog finishes. `GET /api/search`
+stays a one-shot `SearchResult` for IdentifyDialog, library identification and
+older clients. Local and remote hits stay off that route. Search everywhere
+does not use Catalog's `type:id` merge, and Catalog does not use strong-id
+clustering.
 
 Deliver fast catalogs first, cancel superseded work through the queue, retry only
 failed pages and preserve per-source pagination. Cache/coalesce successful pages
@@ -281,16 +282,15 @@ use fixed error codes, duration and counts, never raw errors or payloads.
 
 ## Delivery and acceptance
 
-1. Build the bounded incremental runner and cancellation path with fake sources.
-   Preserve `/api/search`'s legacy response contract and keep web Catalog and
-   TV Catalog-origin search on it in the first release. Include the addon
-   exclusion policy above. A separate later phase may migrate Catalog to the
-   incremental catalog-scoped contract; existing controls, browsing, history and
-   sorting remain covered by regression tests until then.
-2. Add global Catalog search on web and TV against the new contract, including
-   partial states, retries, stable card keys and no persisted history.
-3. Add per-library local snapshots and remote adapters, conservative clustering
-   and the source chooser. Ship only once both clients handle all three classes.
+1. Build the shared raw catalog adapter, the Catalog projector and the
+   Everywhere session. `GET /api/search` keeps its JSON contract.
+   `searchAll` becomes the one-shot waiter. Include the addon exclusion policy.
+2. Point web and TV Catalog search at the catalog-only session. Keep controls,
+   browsing, history, scopes, sort and `mergeByName`. Fast catalogs paint
+   before slow ones. Fold `type:id` in target order.
+3. Add Search everywhere on both clients, with local snapshots, remote search,
+   conservative clustering and the member chooser. Ship the flag only once
+   both clients handle all three classes.
 4. Add cache/coalescing only after correctness and measured load justify them.
    Defer Home history chips, fuzzy matching and streaming until then.
 

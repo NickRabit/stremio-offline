@@ -8,8 +8,9 @@ entry point, privacy scope, conflicting identities and incremental delivery.
 The review also includes Catalog performance optimization and the existing
 all-addon search exclusion policy (`globalSearch`).
 The concrete module, API, state and test plan is in
-[the implementation proposal](search-everywhere-implementation.md); it keeps
-the Catalog migration as a later, separately approved phase.
+[the implementation proposal](search-everywhere-implementation.md). A later
+pass put Catalog addon search on that same engine. This file still records
+the original brief, including the request that Catalog's controls stay put.
 The implementation proposal's independent review is recorded in
 [search-everywhere-implementation-review.md](search-everywhere-implementation-review.md).
 This file retains the original brief. Product constraints and decisions come

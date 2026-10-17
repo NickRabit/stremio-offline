@@ -95,8 +95,10 @@ members.
 
 ## Already sound
 
-- The new surface is additive and leaves `/api/search`, `searchAll`, Catalog
-  browsing and Catalog history creation unchanged.
+- The new surface is additive. Catalog browsing and Catalog history creation
+  stay. `GET /api/search` keeps its JSON shape. The second pass below changes
+  the earlier claim that `searchAll` itself stays untouched: it becomes a
+  waiter, and the Catalog grid stops using that one-shot response.
 - One catalog source per searchable catalog is the right pagination and failure
   granularity.
 - `globalSearch` remains a server-side source-selection rule.
@@ -106,8 +108,9 @@ members.
   testable and fit both clients better than browser-side fan-out or SSE in the
   first release.
 - Home is an entry point, not a second result page.
-- Cache/coalescing and Catalog's internal incremental migration are correctly
-  deferred until the runner is correct.
+- Cache/coalescing stays deferred until the runner is correct. Catalog's
+  incremental arrival is no longer deferred; the second pass puts it on the
+  shared engine.
 
 ## Recommended first implementation slice
 
@@ -135,3 +138,53 @@ No user-facing entry point should be enabled in that slice.
 - The earlier local timing measurements were not repeated against this checkout.
 - Large or stalled network library cost, low-end TV memory/focus behavior and
   third-party query/voice retention remain runtime questions.
+
+## Second pass
+
+On 2026-10-17 the owner asked for one shared search, and a read-only DeepSeek
+pass checked this plan against `searchAll`, `GET /api/search`,
+`GET /api/catalog`, `IdentifyDialog`, `LibraryCandidates.searchCinemetaOf`,
+`ImageCache.proxied`, `videoCache`, `remoteIdsMatch`, the role allowlists, and
+both Catalog clients' `gainedNothing` stop. The normative plan now includes
+the corrections. Findings that were not adopted are named here so they are not
+silently "fixed" later.
+
+Adopted:
+
+- The shared piece is a raw per-catalog fetch. The 20-row buffer, field
+  allowlist, merge and cursor encoding stay in the projector that needs them.
+  `searchAll` can therefore keep returning every meta and a stateless offset
+  cursor. Search everywhere can keep its session buffer.
+- Catalog web and TV read a catalog-only session and fold results in target
+  order. `GET /api/search` stays one-shot for IdentifyDialog and
+  `LibraryCandidates`. `GET /api/catalog` stays browse and is not the shared
+  engine.
+- Clustering no longer calls `{A, C}` compatible when their TMDB ids disagree.
+  A true bridge of three consistent records stays one cluster. A contradicted
+  hub is partitioned without putting two values of one namespace together.
+  The partition does not depend on iteration order. A tie uses the lower
+  `memberKey`, so the same records always produce the same clusters.
+- Scoped opaque ids are clustering evidence. Records with neither a strong id
+  nor the same scoped opaque id still do not merge.
+- Episode identity is the parent's verified strong ids plus season, episode
+  and range. `parentMemberKey` and a remote `seriesId` are not cross-library
+  identities.
+- `LibrarySnapshotStore` warms even when the feature flag is off.
+  `LocalSearchIndex` and the new routes do not.
+- Session caps return `search-session-limit` and `search-capacity-limit`.
+  Replacing one's own slot is not a new seat. Nothing is evicted.
+- Member detail is paged. One response does not claim to list every member.
+- The TV grid's Compose key is the anchor `memberKey`.
+- `Available locally` applies to both result lists. Music videos are out of
+  search v1. Explicit addon scope stays Catalog-only.
+- Search everywhere does not fetch `/api/search/state`. The shell stops
+  loading that state for every view.
+- Adapter failures, including the `searchAll` path, log a fixed code.
+
+Left as they are, on purpose:
+
+- Catalog clients still stop continuation when a page adds no new `type:id`.
+  That is current Catalog behavior. Search everywhere uses the three-page
+  stall instead and must not copy the Catalog stop.
+- Phase 1 proves the contract with server fixtures. Web and TV proof stays in
+  phases 2 and 3.
