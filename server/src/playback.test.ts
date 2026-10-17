@@ -1030,6 +1030,17 @@ const nativeCaps = {
   subtitles: ["subrip", "hdmv_pgs_subtitle"],
 };
 
+test("hlsCanStart waits for the segments asked for unless the playlist has ended", () => {
+  const head = "#EXTM3U\n#EXT-X-MAP:URI=\"init.mp4\"\n";
+  const one = `${head}#EXTINF:2.000,\nseg-0-000000.m4s\n`;
+  const two = `${one}#EXTINF:2.000,\nseg-0-000001.m4s\n`;
+  assert.equal(hlsCanStart(one, 2), false);
+  assert.equal(hlsCanStart(two, 2), true);
+  // A clip shorter than two segments ends with one; waiting for a second would never end.
+  assert.equal(hlsCanStart(`${one}#EXT-X-ENDLIST\n`, 2), true);
+  assert.equal(hlsCanStart(`#EXTM3U\n#EXTINF:2.000,\nseg-0-000000.m4s\n#EXTINF:2.000,\nseg-0-000001.m4s\n`, 2), false, "the init must still be named");
+});
+
 test("hlsCanStart accepts one segment or a finished playlist", () => {
   assert.equal(hlsCanStart("#EXTM3U\n#EXT-X-VERSION:7\n"), false);
   // A segment without EXT-X-MAP is the race that hands Safari a truncated init.mp4.
@@ -2052,6 +2063,54 @@ test("a timed-out hardware pass is dead before the retry purges its directory", 
   assert.equal(seen[0].playlist, true, "the failed pass's playlist is in the directory to begin with");
   assert.equal(seen[1].playlist, false, "the retry purged it before the software pass started");
 });
+
+for (const copy of [false, true]) {
+  const kind = copy ? "remux" : "transcode";
+  // The fake FFmpeg is a node script run through its shebang, which Windows cannot execute; the
+  // handover itself is the same on every platform and hlsCanStart's own test runs there.
+  const skip = process.platform === "win32" ? "Windows cannot run a script as the FFmpeg binary" : false;
+  test(`a ${kind} is handed to the player once ${copy ? "one segment is" : "two segments are"} listed`, { timeout: 20_000, skip }, async (t) => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "playback-handover-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    // Publishes one 2 s segment at once and the second only later, the way FFmpeg's first
+    // segments land a moment apart; then keeps running like a live conversion.
+    const fake = path.join(directory, "ffmpeg");
+    const head = '#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:2\n#EXT-X-MAP:URI="init.mp4"\n';
+    await writeFile(fake, `#!/usr/bin/env node
+const fs = require("fs"), path = require("path");
+const out = path.dirname(process.argv[process.argv.length - 1]);
+const head = ${JSON.stringify(head)};
+const seg = (n) => "#EXTINF:2.000,\\nseg-0-00000" + n + ".m4s\\n";
+fs.writeFileSync(path.join(out, "init.mp4"), "init");
+fs.writeFileSync(path.join(out, "seg-0-000000.m4s"), "zero");
+fs.writeFileSync(path.join(out, "index-0.m3u8"), head + seg(0));
+setTimeout(() => {
+  fs.writeFileSync(path.join(out, "seg-0-000001.m4s"), "one");
+  fs.writeFileSync(path.join(out, "index-0.m3u8"), head + seg(0) + seg(1));
+}, 600);
+setInterval(() => {}, 1000);
+`);
+    await chmod(fake, 0o755);
+    const originalBinary = process.env.FFMPEG_PATH;
+    process.env.FFMPEG_PATH = fake;
+    t.after(() => { if (originalBinary === undefined) delete process.env.FFMPEG_PATH; else process.env.FFMPEG_PATH = originalBinary; });
+
+    const root = await mkdtemp(path.join(os.tmpdir(), "playback-handover-root-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const manager = new PlaybackManager(root) as any;
+    manager.vaapiDevice = undefined;
+    manager.softwareEncoder = true;
+    const session = remuxSession(manager, { id: `handover-${kind}`, mode: kind, generation: 0, copyRejected: !copy });
+    t.after(() => { try { session.process?.kill("SIGKILL"); } catch { /* already gone */ } });
+
+    assert.ok(await manager.spawnAt(session, 0));
+    assert.equal(session.mode, kind);
+    const second = existsSync(path.join(session.directory, "seg-0-000001.m4s"));
+    assert.equal(second, !copy, copy
+      ? "a remux starts on its first segment"
+      : "a transcode waits for the second segment, so hls.js's first 2 s reload finds more to play");
+  });
+}
 
 for (const scenario of ["dead fallback", "decode recovery"] as const) {
   test(`a failed restart does not report a recoverable seek for ${scenario}`, async (t) => {

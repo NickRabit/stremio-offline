@@ -13,9 +13,12 @@ const rights = (over: Partial<RemoteCapabilities> = {}): RemoteCapabilities => (
   rename: false, move: false, delete: false, identify: false, writeArtwork: false,
   downloadToLibrary: false, downloadToDevice: false, ...over,
 });
+/** What the next `/api/playback` start answers beyond the defaults. */
+let sessionShape: Record<string, unknown> = {};
 const session = () => ({
   id: "sess1", mode: "direct", url: "/api/stream/sess1", offset: 0, duration: 3600, hardware: false,
   acceleration: false, audioTracks: [], subtitleTracks: [], audioTrack: 0, subtitleTrack: null, quality: null,
+  ...sessionShape,
 });
 
 /** A version a media server owns: its own provider, its own incoming context, its own rights. */
@@ -74,6 +77,7 @@ beforeEach(() => {
   remoteAnswers = {};
   playbackPosts = [];
   heldWrite = null;
+  sessionShape = {};
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
@@ -420,5 +424,84 @@ describe("Player progress reporting", () => {
     await act(async () => { video.currentTime = 120; video.dispatchEvent(new Event("timeupdate", { bubbles: true })); });
     await rerender({ stream: file, progressKey: "movie:tt5000", open: false });
     expect(progressPosts).toEqual([expect.objectContaining({ stableKey: file.stableKey, path: "Films/One.mkv" })]);
+  });
+});
+
+describe("Player stall advice", () => {
+  /** Three `waiting` events at one position of the current stream, as Chrome raises them. */
+  const stallAt = async (seconds: number) => {
+    const video = host.querySelector("video")!;
+    Object.defineProperty(video, "currentTime", { configurable: true, get: () => seconds, set: () => undefined });
+    for (let i = 0; i < 3; i += 1) await act(async () => { video.dispatchEvent(new Event("waiting")); });
+    await flush();
+  };
+  const hint = () => [...host.querySelectorAll(".player-hint button")].find((node) => node.textContent?.startsWith("Drop to")) ?? null;
+  // jsdom plays no HLS; a browser that plays it natively takes the playlist as the video's source.
+  beforeEach(() => {
+    const native = HTMLMediaElement.prototype.canPlayType;
+    HTMLMediaElement.prototype.canPlayType = (type: string) => /mpegurl/i.test(type) ? "maybe" : "";
+    return () => { HTMLMediaElement.prototype.canPlayType = native; };
+  });
+
+  it("does not offer a lower quality for hiccups inside a conversion's first two segments", async () => {
+    sessionShape = { mode: "transcode", url: "/api/playback/sess1/1/master.m3u8", acceleration: true };
+    await render();
+    await stallAt(1.9);
+    expect(hint()).toBeNull();
+  });
+
+  /** One stall at `seconds` that either resumes before the grace is over or never does. */
+  const earlyStall = async (seconds: number, resumes: boolean) => {
+    const video = host.querySelector("video")!;
+    Object.defineProperty(video, "currentTime", { configurable: true, get: () => seconds, set: () => undefined });
+    await act(async () => { video.dispatchEvent(new Event("waiting")); });
+    if (resumes) await act(async () => { vi.advanceTimersByTime(800); video.dispatchEvent(new Event("playing")); });
+    await act(async () => { vi.advanceTimersByTime(2_500); });
+  };
+
+  it("counts an early stall that does not resume, so a link that cannot deliver is still advised", async () => {
+    sessionShape = { mode: "transcode", url: "/api/playback/sess1/1/master.m3u8", acceleration: true };
+    await render();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      for (let i = 0; i < 3; i += 1) await earlyStall(1.9, false);
+      expect(hint()).not.toBeNull();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("does not count early stalls that resume within the grace", async () => {
+    sessionShape = { mode: "transcode", url: "/api/playback/sess1/1/master.m3u8", acceleration: true };
+    await render();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      for (let i = 0; i < 3; i += 1) await earlyStall(1.9, true);
+      expect(hint()).toBeNull();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("drops an early stall still in its grace when the viewer seeks away", async () => {
+    sessionShape = { mode: "transcode", url: "/api/playback/sess1/1/master.m3u8", acceleration: true };
+    await render();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      for (let i = 0; i < 3; i += 1) {
+        const video = host.querySelector("video")!;
+        Object.defineProperty(video, "currentTime", { configurable: true, get: () => 1.9, set: () => undefined });
+        // Converted well ahead, so the seek lands inside it and needs no restart.
+        Object.defineProperty(video, "seekable", { configurable: true, get: () => ({ length: 1, start: () => 0, end: () => 120 }) });
+        await act(async () => { video.dispatchEvent(new Event("waiting")); });
+        await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })); });
+        await act(async () => { vi.advanceTimersByTime(2_500); });
+      }
+      expect(host.querySelector(".player-error")).toBeNull();
+      expect(hint()).toBeNull();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("still offers it when a conversion keeps stalling later on", async () => {
+    sessionShape = { mode: "transcode", url: "/api/playback/sess1/1/master.m3u8", acceleration: true };
+    await render();
+    await stallAt(12);
+    expect(hint()).not.toBeNull();
   });
 });
