@@ -335,6 +335,21 @@ export const describeFailure = (stderr: string, code: number | null) => {
 
 export const DOLBY_VISION_UNITS_FILTER = "filter_units=remove_types=62|63";
 
+interface CancelableInspectionSubscriber {
+  stream: StreamItem;
+  signal: AbortSignal;
+  resolve(info: MediaInfo | undefined): void;
+  reject(reason: unknown): void;
+  onAbort(): void;
+}
+
+interface CancelableInspection {
+  controller: AbortController;
+  subscribers: Set<CancelableInspectionSubscriber>;
+  used: Set<CancelableInspectionSubscriber>;
+  source?: CancelableInspectionSubscriber;
+}
+
 export class PlaybackManager {
   private previews = new PlayerPreviews();
   private sessions = new Map<string, Session>();
@@ -343,10 +358,7 @@ export class PlaybackManager {
   private readonly abandoned = new WeakSet<ChildProcess>();
   private inspected = new Map<string, { info?: MediaInfo; at: number }>();
   private inspecting = new Map<string, Promise<MediaInfo | undefined>>();
-  /** Cancelable in-flight probes, per caller signal. A route binds its own private media resource
-   *  per request, so an aborted request that released that resource must not be shared with -- or
-   *  tear down -- another request's probe of the same logical source. */
-  private readonly cancelableInspecting = new WeakMap<AbortSignal, Map<string, Promise<MediaInfo | undefined>>>();
+  private readonly cancelableInspecting = new Map<string, CancelableInspection>();
   private sidecars = new PlayerSidecars(undefined, (id, error) => {
     const reason = error instanceof Error ? error.message : String(error);
     log("WARN", "Embedded subtitles could not be extracted as a sidecar", { id, reason: reason.slice(0, 200) });
@@ -442,31 +454,85 @@ export class PlaybackManager {
     }
   }
 
-  /** Reads the source tracks without starting playback; the result is held for a while so the source is left alone.
-   *  A cancelable caller is served from the shared metadata cache like anyone else, but its cold miss
-   *  runs on its own resource-bound entry so one request's abort cannot stop another one's probe. */
+  /** Reads the source tracks without starting playback; the result is held for a while so the source is left alone. */
   async inspect(stream: StreamItem, signal?: AbortSignal): Promise<MediaInfo | undefined> {
     if (!stream.url) throw new AppError("This source has no direct address to play.", "err.noPlayableAddress");
     signal?.throwIfAborted();
     const key = this.inspectionKey(stream);
     const cached = this.inspected.get(key);
     if (cached && Date.now() - cached.at < 10 * 60_000) return cached.info;
-    const map = signal ? this.cancelableMap(signal) : this.inspecting;
-    const inflightKey = signal ? `${key}:${this.proxyPath(stream)}` : key;
-    const inflight = map.get(inflightKey);
+    if (signal) return this.inspectCancelable(stream, key, signal);
+    const inflight = this.inspecting.get(key);
     if (inflight) return inflight;
-    const pending = this.loadInspection(stream, signal);
-    map.set(inflightKey, pending);
+    const pending = this.loadInspection(stream);
+    this.inspecting.set(key, pending);
     // Cleanup belongs here, and only for the entry this call created: a completion that replaced
     // an older one must not delete the newer work.
-    void pending.finally(() => { if (map.get(inflightKey) === pending) map.delete(inflightKey); }).catch(() => undefined);
+    void pending.finally(() => { if (this.inspecting.get(key) === pending) this.inspecting.delete(key); }).catch(() => undefined);
     return pending;
   }
 
-  private cancelableMap(signal: AbortSignal) {
-    let map = this.cancelableInspecting.get(signal);
-    if (!map) { map = new Map(); this.cancelableInspecting.set(signal, map); }
-    return map;
+  private inspectCancelable(stream: StreamItem, key: string, signal: AbortSignal): Promise<MediaInfo | undefined> {
+    let entry = this.cancelableInspecting.get(key);
+    if (!entry) {
+      entry = { controller: new AbortController(), subscribers: new Set(), used: new Set() };
+      this.cancelableInspecting.set(key, entry);
+    }
+    return new Promise((resolve, reject) => {
+      const subscriber: CancelableInspectionSubscriber = {
+        stream, signal, resolve, reject,
+        onAbort: () => { this.leaveCancelableInspection(key, entry, subscriber); },
+      };
+      entry.subscribers.add(subscriber);
+      signal.addEventListener("abort", subscriber.onAbort, { once: true });
+      if (signal.aborted) return subscriber.onAbort();
+      if (!entry.source) this.startCancelableInspection(key, entry, subscriber);
+    });
+  }
+
+  private startCancelableInspection(key: string, entry: CancelableInspection, subscriber: CancelableInspectionSubscriber) {
+    const controller = new AbortController();
+    entry.controller = controller;
+    entry.source = subscriber;
+    entry.used.add(subscriber);
+    const pending = this.loadInspection(subscriber.stream, controller.signal);
+    void pending.then(
+      (info) => {
+        if (entry.controller !== controller || controller.signal.aborted) return;
+        this.finishCancelableInspection(key, entry, (caller) => caller.resolve(info));
+      },
+      (error) => {
+        if (entry.controller !== controller || controller.signal.aborted) return;
+        this.finishCancelableInspection(key, entry, (caller) => caller.reject(error));
+      },
+    );
+  }
+
+  private finishCancelableInspection(key: string, entry: CancelableInspection, settle: (subscriber: CancelableInspectionSubscriber) => void) {
+    if (this.cancelableInspecting.get(key) === entry) this.cancelableInspecting.delete(key);
+    entry.source = undefined;
+    for (const subscriber of [...entry.subscribers]) {
+      entry.subscribers.delete(subscriber);
+      subscriber.signal.removeEventListener("abort", subscriber.onAbort);
+      settle(subscriber);
+    }
+  }
+
+  private leaveCancelableInspection(key: string, entry: CancelableInspection, subscriber: CancelableInspectionSubscriber) {
+    if (!entry.subscribers.delete(subscriber)) return;
+    subscriber.signal.removeEventListener("abort", subscriber.onAbort);
+    subscriber.reject(subscriber.signal.reason);
+    if (!entry.subscribers.size) {
+      if (this.cancelableInspecting.get(key) === entry) this.cancelableInspecting.delete(key);
+      entry.source = undefined;
+      entry.controller.abort();
+      return;
+    }
+    if (entry.source !== subscriber) return;
+    const next = [...entry.subscribers].find((caller) => !entry.used.has(caller));
+    if (!next) return;
+    entry.controller.abort();
+    this.startCancelableInspection(key, entry, next);
   }
 
   private inspectionKey(stream: StreamItem) {
