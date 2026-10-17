@@ -82,6 +82,16 @@ interface CatalogApi {
   ): BulkDownloadResult
 }
 
+interface GlobalSearchApi {
+  suspend fun searchEverywhereEnabled(): Boolean
+  suspend fun startGlobalSearch(body: GlobalSearchStartDto): GlobalSearchStartResultDto
+  suspend fun pollGlobalSearch(id: String, revision: Int): GlobalSearchPollDto
+  suspend fun pageGlobalSearch(id: String)
+  suspend fun retryGlobalSearchSource(id: String, sourceId: String)
+  suspend fun globalSearchMembers(id: String, memberKey: String, from: Int): GlobalSearchMemberPageDto
+  suspend fun deleteGlobalSearch(id: String)
+}
+
 /** The Home rows, asked by name so a retry touches only the row it names. */
 interface HomeApi {
   suspend fun home(rows: List<String>): HomeResponseDto
@@ -171,7 +181,7 @@ interface RemoteLibraryApi {
 }
 
 /** Everything a signed-in screen does: library, detail, catalogue, Home, images and playback. */
-interface TvApi : LibraryApi, FavoritesApi, ResumeApi, DetailApi, PlaybackApi, CatalogApi, HomeApi, DownloadsApi, RemoteLibraryApi {
+interface TvApi : LibraryApi, FavoritesApi, ResumeApi, DetailApi, PlaybackApi, CatalogApi, GlobalSearchApi, HomeApi, DownloadsApi, RemoteLibraryApi {
   val http: OkHttpClient
   /** The address as the user typed it, shown on the Settings screen. */
   val serverAddress: String

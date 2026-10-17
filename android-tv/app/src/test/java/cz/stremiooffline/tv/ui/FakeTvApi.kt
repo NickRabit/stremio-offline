@@ -22,6 +22,11 @@ import cz.stremiooffline.tv.data.FavoritesPage
 import cz.stremiooffline.tv.data.HomeResponseDto
 import cz.stremiooffline.tv.data.HomeLayoutDto
 import cz.stremiooffline.tv.data.HomeLayoutResponseDto
+import cz.stremiooffline.tv.data.GlobalSearchMemberPageDto
+import cz.stremiooffline.tv.data.GlobalSearchPollDto
+import cz.stremiooffline.tv.data.GlobalSearchSnapshotDto
+import cz.stremiooffline.tv.data.GlobalSearchStartDto
+import cz.stremiooffline.tv.data.GlobalSearchStartResultDto
 import cz.stremiooffline.tv.data.LanguageDto
 import cz.stremiooffline.tv.data.LibraryDto
 import cz.stremiooffline.tv.data.LibraryTitleDto
@@ -36,6 +41,7 @@ import cz.stremiooffline.tv.data.ResumePage
 import cz.stremiooffline.tv.data.RecentSearchDto
 import cz.stremiooffline.tv.data.RemoteItemContext
 import cz.stremiooffline.tv.data.RemoteItemDto
+import cz.stremiooffline.tv.data.RemoteItemDetailDto
 import cz.stremiooffline.tv.data.RemoteItemStateDto
 import cz.stremiooffline.tv.data.RemoteItemStatePatch
 import cz.stremiooffline.tv.data.RemoteItemsPageDto
@@ -180,6 +186,30 @@ open class FakeTvApi : TvApi {
   val forgottenSearches: MutableList<String> = mutableListOf()
   var clearHistoryCalls = 0
 
+  var globalSearchEnabled = false
+  var globalSearchEnabledCalls = 0
+  var globalStartHandler: suspend (GlobalSearchStartDto) -> GlobalSearchStartResultDto = { request ->
+    GlobalSearchStartResultDto(
+      id = "gs_${request.generation}",
+      snapshot = GlobalSearchSnapshotDto(revision = 1, state = "complete"),
+    )
+  }
+  var globalPollHandler: suspend (String, Int) -> GlobalSearchPollDto = { _, revision ->
+    GlobalSearchPollDto(changed = false, revision = revision)
+  }
+  var globalPageHandler: suspend (String) -> Unit = {}
+  var globalRetryHandler: suspend (String, String) -> Unit = { _, _ -> }
+  var globalMembersHandler: suspend (String, String, Int) -> GlobalSearchMemberPageDto = { _, _, _ ->
+    GlobalSearchMemberPageDto()
+  }
+  var globalDeleteHandler: suspend (String) -> Unit = {}
+  val globalStartCalls: MutableList<GlobalSearchStartDto> = mutableListOf()
+  val globalPollCalls: MutableList<Pair<String, Int>> = mutableListOf()
+  val globalPageCalls: MutableList<String> = mutableListOf()
+  val globalRetryCalls: MutableList<Pair<String, String>> = mutableListOf()
+  val globalMembersCalls: MutableList<Triple<String, String, Int>> = mutableListOf()
+  val globalDeletedIds: MutableList<String> = mutableListOf()
+
   var homeHandler: (List<String>) -> HomeResponseDto = { HomeResponseDto() }
   var homeRequests: MutableList<List<String>> = mutableListOf()
   var failHome = false
@@ -226,6 +256,9 @@ open class FakeTvApi : TvApi {
   val remoteSourcesRequests: MutableList<Pair<String, String>> = mutableListOf()
   var remoteStateValue: RemoteItemStateDto = RemoteItemStateDto()
   var remoteStateFailure: ApiError? = null
+  var remoteItemValues: MutableMap<String, RemoteItemDetailDto> = mutableMapOf()
+  var remoteItemFailure: ApiError? = null
+  val remoteItemRequests: MutableList<Pair<String, String>> = mutableListOf()
   /** One answer per `libraryId|type|id`; a key in [remoteMatchFailures] refuses instead. */
   val remoteMatchValues: MutableMap<String, List<StreamDto>> = mutableMapOf()
   val remoteMatchFailures: MutableSet<String> = mutableSetOf()
@@ -330,6 +363,41 @@ open class FakeTvApi : TvApi {
   override suspend fun searchable(): List<SearchableCatalogDto> {
     searchableCalls += 1
     return searchableValue
+  }
+
+  override suspend fun searchEverywhereEnabled(): Boolean {
+    globalSearchEnabledCalls += 1
+    return globalSearchEnabled
+  }
+
+  override suspend fun startGlobalSearch(body: GlobalSearchStartDto): GlobalSearchStartResultDto {
+    globalStartCalls += body
+    return globalStartHandler(body)
+  }
+
+  override suspend fun pollGlobalSearch(id: String, revision: Int): GlobalSearchPollDto {
+    globalPollCalls += id to revision
+    return globalPollHandler(id, revision)
+  }
+
+  override suspend fun pageGlobalSearch(id: String) {
+    globalPageCalls += id
+    globalPageHandler(id)
+  }
+
+  override suspend fun retryGlobalSearchSource(id: String, sourceId: String) {
+    globalRetryCalls += id to sourceId
+    globalRetryHandler(id, sourceId)
+  }
+
+  override suspend fun globalSearchMembers(id: String, memberKey: String, from: Int): GlobalSearchMemberPageDto {
+    globalMembersCalls += Triple(id, memberKey, from)
+    return globalMembersHandler(id, memberKey, from)
+  }
+
+  override suspend fun deleteGlobalSearch(id: String) {
+    globalDeletedIds += id
+    globalDeleteHandler(id)
   }
 
   override suspend fun search(query: String, cursor: String?, scope: SearchScope): SearchResultDto {
@@ -536,6 +604,12 @@ open class FakeTvApi : TvApi {
     remoteItemsRequests += libraryId to cursor
     remoteItemsFailure?.let { throw it }
     return remoteItemsPages["$libraryId|${cursor ?: ""}"] ?: RemoteItemsPageDto()
+  }
+
+  override suspend fun remoteItem(libraryId: String, itemId: String): RemoteItemDetailDto {
+    remoteItemRequests += libraryId to itemId
+    remoteItemFailure?.let { throw it }
+    return remoteItemValues["$libraryId:$itemId"] ?: throw ApiError(ApiFailure.NotFound)
   }
 
   override suspend fun remoteBrowse(

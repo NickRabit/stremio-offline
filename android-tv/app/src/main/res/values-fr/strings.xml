@@ -297,4 +297,47 @@
   <string name="sources_load_addons">Sources des modules</string>
   <string name="sources_load_provider">Charger les sources</string>
   <string name="sources_no_addon_providers">Aucun module complémentaire ne propose de sources pour ce titre.</string>
+  <string name="tv_global_search_title">Rechercher partout</string>
+  <string name="tv_global_search_hint">Recherchez dans les catalogues et les bibliothèques. Appuyez sur OK pour lancer la recherche.</string>
+  <string name="tv_global_search_source_all">Tous</string>
+  <string name="tv_global_search_source_catalog">Catalogue</string>
+  <string name="tv_global_search_source_local">Local</string>
+  <string name="tv_global_search_source_remote">Distant</string>
+  <string name="tv_global_search_kind_all">Tous</string>
+  <string name="tv_global_search_kind_movies">Films</string>
+  <string name="tv_global_search_kind_series">Séries</string>
+  <plurals name="tv_global_search_status_loading">
+    <item quantity="one">Recherche dans 1 source…</item>
+    <item quantity="other">Recherche dans %1$s sources…</item>
+  </plurals>
+  <string name="tv_global_search_status_done">Toutes les sources ont répondu</string>
+  <string name="tv_global_search_retry">Réessayer</string>
+  <string name="tv_global_search_state_queued">En attente</string>
+  <string name="tv_global_search_state_loading">Recherche…</string>
+  <string name="tv_global_search_state_ready">Terminé</string>
+  <string name="tv_global_search_state_exhausted">Terminé</string>
+  <string name="tv_global_search_state_stalled">Aucun nouveau résultat</string>
+  <string name="tv_global_search_state_failed">Échec</string>
+  <string name="tv_global_search_state_timed_out">Délai dépassé</string>
+  <string name="tv_global_search_state_indexing">Indexation…</string>
+  <string name="tv_global_search_state_unavailable">Indisponible</string>
+  <string name="tv_global_search_unidentified">Fichiers et éléments non identifiés (%1$s)</string>
+  <string name="tv_global_search_badge_local">Local</string>
+  <string name="tv_global_search_badge_remote">Distant</string>
+  <plurals name="tv_global_search_episodes">
+    <item quantity="one">%1$s épisode</item>
+    <item quantity="other">%1$s épisodes</item>
+  </plurals>
+  <string name="tv_global_search_previous_query">Résultats de la recherche précédente</string>
+  <string name="tv_global_search_empty">Aucun résultat.</string>
+  <string name="tv_global_search_limit_reached">Trop de résultats. Affinez la recherche.</string>
+  <string name="tv_global_search_chooser_title">Où ouvrir %1$s</string>
+  <string name="tv_global_search_open_title_page">Ouvrir la page du titre</string>
+  <string name="tv_global_search_conflict">Identifiants contradictoires</string>
+  <string name="tv_global_search_restart_failed">La recherche a expiré. Relancez la recherche.</string>
+  <string name="tv_global_search_open_failed">Cette copie n’a pas pu être ouverte.</string>
+  <string name="tv_global_search_load_more">Charger plus</string>
+  <string name="tv_global_search_member_label">%1$s : %2$s</string>
+  <string name="tv_global_search_episode_label">S%1$sE%2$s</string>
+  <string name="tv_global_search_episode_range">S%1$sE%2$s–E%3$s</string>
 </resources>
