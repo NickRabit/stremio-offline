@@ -204,6 +204,11 @@ const SHORTCUT_KEYS = new Set([" ", "k", "ArrowLeft", "ArrowRight", "c", "t", "f
 
 /** Target transcode qualities; the values must match QUALITY_BITRATE on the server. */
 const QUALITIES = [1080, 720, 480];
+/** Seconds into a conversion's playlist that the server hands over: two 2 s segments. */
+const CONVERSION_SETTLE_S = 4;
+/** How long a stall in that stretch may last before it counts after all: a handover hiccup is
+ *  over within about a second, a link that cannot deliver is not. */
+const EARLY_STALL_GRACE_MS = 2_000;
 const lowerQuality = (current: number | null) => current === null || current === 1080 ? 720 : current === 720 ? 480 : null;
 
 const CHANNELS: Record<number, string> = { 1: "mono", 2: "stereo", 6: "5.1", 8: "7.1" };
@@ -343,6 +348,8 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const [error, setError] = useState("");
   const stallsRef = useRef<number[]>([]);
   const bufferTimerRef = useRef<number | undefined>(undefined);
+  /** A stall inside a conversion's first two segments, waiting to see whether playback resumes. */
+  const earlyStallRef = useRef<number | undefined>(undefined);
   const [qualityHint, setQualityHint] = useState<number | null>(null);
   const [downloadState, setDownloadState] = useState<"idle" | "busy" | "done">("idle");
   const [deviceDownloadBusy, setDeviceDownloadBusy] = useState(false);
@@ -664,6 +671,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     return () => {
       disposed = true; detach();
       if (bufferTimerRef.current !== undefined) { clearTimeout(bufferTimerRef.current); bufferTimerRef.current = undefined; }
+      cancelEarlyStall();
       if (seekEpochRef.current === epoch) { seekEpochRef.current += 1; pendingSeekRef.current = null; seekingRef.current = false; seekInFlightRef.current = false; }
       video.pause(); video.removeAttribute("src"); video.load();
       const id = sessionRef.current; sessionRef.current = null;
@@ -691,6 +699,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   /** Inside the produced part we seek at once; otherwise the conversion restarts at the new position. */
   const seekTo = async (target: number, forceRestart = false) => {
     const video = videoRef.current; if (!video) return;
+    cancelEarlyStall();
     const bounded = Math.max(0, duration ? Math.min(target, duration - 1) : target);
     setScrub(null); showTime(bounded);
     // A forced restart may be an escalation away from direct play, so it must reach the server.
@@ -809,6 +818,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     const id = sessionRef.current; if (!id) return;
     const at = timeRef.current;
     const video = videoRef.current;
+    cancelEarlyStall();
     seekInFlightRef.current = true; seekingRef.current = true; setBuffering(true); setError(""); setPlaybackFailed(false);
     video?.pause();
     try {
@@ -840,6 +850,12 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     void changeTrack({ quality: value });
   };
 
+  /** A stall waiting out its grace belongs to the stream it happened on: a seek, a track or
+   *  quality change and a new stream all drop it, so it never counts against the next one. */
+  function cancelEarlyStall() {
+    if (earlyStallRef.current !== undefined) { clearTimeout(earlyStallRef.current); earlyStallRef.current = undefined; }
+  }
+
   /** A micro-stall under 400 ms never lights the notice up; it would blink on every buffer top-up. */
   const showBufferSoon = () => {
     if (bufferTimerRef.current !== undefined) return;
@@ -847,14 +863,29 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   };
   const clearBuffering = () => {
     if (bufferTimerRef.current !== undefined) { clearTimeout(bufferTimerRef.current); bufferTimerRef.current = undefined; }
+    cancelEarlyStall();
     setBuffering(false);
   };
 
-  /** Repeated stalls outside a seek signal a weak link; offer a lower quality. */
+  /** Repeated stalls outside a seek signal a weak link; offer a lower quality. A hiccup inside a
+   *  conversion's first two segments is the handover -- hls.js learns of the third only on its
+   *  first playlist reload -- so it counts only when playback has not resumed a while later. */
   const noteStall = () => {
     showBufferSoon();
     const video = videoRef.current;
-    if (!video || video.seeking || seekingRef.current || video.currentTime < 1) return;
+    if (!video || video.seeking || seekingRef.current) return;
+    if (modeRef.current === "direct" ? video.currentTime < 1 : video.currentTime < CONVERSION_SETTLE_S) {
+      if (modeRef.current === "direct" || earlyStallRef.current !== undefined) return;
+      earlyStallRef.current = window.setTimeout(() => {
+        earlyStallRef.current = undefined;
+        if (!seekingRef.current) countStall();
+      }, EARLY_STALL_GRACE_MS);
+      return;
+    }
+    countStall();
+  };
+
+  const countStall = () => {
     const now = Date.now();
     stallsRef.current = [...stallsRef.current.filter((at) => now - at < 60_000), now];
     if (stallsRef.current.length < 3) return;

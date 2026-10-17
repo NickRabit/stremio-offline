@@ -240,14 +240,23 @@ const WEBM_VIDEO = new Set(["vp8", "vp9", "av1"]);
 const WEBM_AUDIO = new Set(["opus", "vorbis"]);
 const COPYABLE_AUDIO: Record<string, keyof ClientCapabilities> = { aac: "aac", mp3: "mp3", opus: "opus", ac3: "ac3", eac3: "eac3", flac: "flac" };
 
-/** True when the client can start: one media segment whose init is named, or a finished short playlist.
+/** True when the client can start: `segments` media segments whose init is named, or a finished
+ *  playlist with whatever it has.
  *  fMP4 lists the first segment while the decoder config is still being written. On a slow NAS that
  *  window is long enough for Safari to fetch a truncated init.mp4 and refuse the stream (code 3),
  *  and for Chrome to report bufferAddCodecError. EXT-X-MAP means the muxer finished the init. */
-export const hlsCanStart = (playlist: string) => {
-  if (playlist.includes("#EXT-X-ENDLIST") && !(playlist.match(/#EXTINF/g) ?? []).length) return true;
-  return (playlist.match(/#EXTINF/g) ?? []).length >= 1 && /#EXT-X-MAP:URI="[^"]+"/i.test(playlist);
+export const hlsCanStart = (playlist: string, segments = 1) => {
+  const listed = (playlist.match(/#EXTINF/g) ?? []).length;
+  const ended = playlist.includes("#EXT-X-ENDLIST");
+  if (ended && !listed) return true;
+  return listed >= (ended ? 1 : segments) && /#EXT-X-MAP:URI="[^"]+"/i.test(playlist);
 };
+
+/** A transcode's segments are exactly 2 s and hls.js reloads a live playlist only once per segment
+ *  length, so a player handed a single segment runs dry just before it learns of the next one and
+ *  stalls -- though FFmpeg is far ahead by then. Two segments cover that first reload. A remux cuts
+ *  at the source's keyframes, usually longer, and starts on one. */
+export const handoverSegments = (mode: PlaybackMode) => mode === "transcode" ? 2 : 1;
 
 /** Init and segment files the playlist already names. All of them must exist before we hand the URL over. */
 export const hlsPlaylistFiles = (playlist: string) => {
@@ -261,12 +270,12 @@ export const hlsPlaylistFiles = (playlist: string) => {
   return files;
 };
 
-export async function waitForHlsOutput(directory: string, finished: () => boolean, cancelled: () => boolean, timeoutMs = 40_000): Promise<string | undefined> {
+export async function waitForHlsOutput(directory: string, finished: () => boolean, cancelled: () => boolean, timeoutMs = 40_000, segments = 1): Promise<string | undefined> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline && !cancelled()) {
     try {
       const playlist = await readFile(path.join(directory, "index-0.m3u8"), "utf8");
-      if (hlsCanStart(playlist)) {
+      if (hlsCanStart(playlist, segments)) {
         const files = await Promise.all(hlsPlaylistFiles(playlist).map((name) => stat(path.join(directory, name)).then((value) => value.size > 0, () => false)));
         if (files.every(Boolean)) return playlist;
       }
@@ -1287,7 +1296,7 @@ export class PlaybackManager {
       if (finished || session.stopped) return;
       log("WARN", "The new position is still not open", { id: session.id, generation, offset: Math.round(offset), ms: Date.now() - startedAt, stderr: redact(stderr).slice(-400) });
     }, 10_000);
-    const output = await waitForHlsOutput(directory, () => finished, () => session.stopped).finally(() => clearTimeout(slow));
+    const output = await waitForHlsOutput(directory, () => finished, () => session.stopped, undefined, handoverSegments(session.mode)).finally(() => clearTimeout(slow));
     if (session.stopped) {
       child.kill("SIGTERM");
       log("DEBUG", "Conversion abandoned, the session is gone", { id: session.id, generation: session.generation, ms: Date.now() - startedAt });
