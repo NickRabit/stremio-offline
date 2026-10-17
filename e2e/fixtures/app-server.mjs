@@ -48,6 +48,7 @@ const child = spawn(process.execPath, [path.join(appDir, "server", "dist", "inde
     // The fake addon is the only manifest here; a background refresh round would be
     // a needless request in the middle of a run.
     ADDON_AUTO_REFRESH: "0",
+    SEARCH_EVERYWHERE_ENABLED: "1",
   },
 });
 

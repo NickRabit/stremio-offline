@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { ChevronRight, Download as DownloadIcon, Pause, Play, RectangleHorizontal, RectangleVertical, RefreshCw } from "lucide-react";
+import { ChevronRight, Download as DownloadIcon, Pause, Play, RectangleHorizontal, RectangleVertical, RefreshCw, Search } from "lucide-react";
 import { api } from "./api";
 import { Empty } from "./app-chrome";
 import { bytes, speed, statusLabel } from "./download-format";
@@ -35,7 +35,7 @@ function metaOf(job: Download): string {
 
 const percentOf = (job: Download) => job.total != null && job.total > 0 ? Math.min(100, (job.received / job.total) * 100) : null;
 
-export function Home({ jobs, addons, admin, onShowDownloads, onAction, rows, order, shape, onToggleShape, onRetry, onShowAll, onPlay, onOpenCatalogue, onShuffle, onVisible, onOpenCatalog, onReveal, onForgotten, onError }: {
+export function Home({ jobs, addons, admin, onShowDownloads, onAction, rows, order, shape, onToggleShape, onRetry, onShowAll, onPlay, onOpenCatalogue, onShuffle, onVisible, onOpenCatalog, onReveal, onForgotten, onError, onOpenSearch }: {
   jobs: Download[];
   libraries: LibraryView[];
   addons: import("./types").Addon[];
@@ -60,6 +60,7 @@ export function Home({ jobs, addons, admin, onShowDownloads, onAction, rows, ord
   onReveal: (path: string) => void;
   onForgotten: () => void;
   onError: (error: unknown) => void;
+  onOpenSearch?: () => void;
 }) {
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
   const shuffleCount = useRef<Record<string, number>>({});
@@ -81,6 +82,7 @@ export function Home({ jobs, addons, admin, onShowDownloads, onAction, rows, ord
     <div className="home-heading-copy"><small>{t("home.eyebrow")}</small><h2>{t("home.title")}</h2></div>
     <div className="home-heading-actions">
       {confirm?.status === "ok" && (confirm.total ?? 0) > 0 && <button className="home-confirm-chip" onClick={() => onShowAll("confirm")}>{t("home.confirmChip", { count: confirm.total ?? 0 })}</button>}
+      {onOpenSearch && <button type="button" className="home-search-action" onClick={onOpenSearch}><Search/> {t("searchAll.homeAction")}</button>}
       <button className="shape-toggle" title={t(shape === "wide" ? "home.shapePoster" : "home.shapeWide")} aria-pressed={shape === "wide"} onClick={onToggleShape}>{shape === "wide" ? <RectangleVertical/> : <RectangleHorizontal/>}</button>
     </div>
   </div>;
