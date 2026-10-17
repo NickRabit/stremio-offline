@@ -4,6 +4,13 @@ Reviewed on 2026-10-17 against `main` at
 `e31351afecc62b72bd794a8970bb3c2a0dc4a1c4` and the original brief in PR #449.
 File/line references below refer to that revision. This is a design decision
 record, not an implemented feature or a performance measurement.
+The concrete module, API, state, test and delivery plan is in
+[search-everywhere-implementation.md](search-everywhere-implementation.md).
+Its independent review and resolved corrections are recorded in
+[search-everywhere-implementation-review.md](search-everywhere-implementation-review.md).
+That later document is normative for code-level mechanics where its second
+review corrected this review's original paging, queue-time and remote-type
+assumptions. This file remains the product decision record.
 
 ## Verdict
 
@@ -23,7 +30,7 @@ The proposal needs the following corrections before implementation.
 | P1 | `server/src/routes/catalog.ts:101` checks addon visibility before awaiting search, unlike the post-await checks in remote browse at `server/src/media-server-manager.ts:1301`. | Reauthorize every delivered page and every cache hit; do not rely on initial target discovery. |
 | P2 | `server/src/outbound.ts:162` queues resolver callbacks without a cancellation signal; `server/src/addons.ts:16` supplies only a timeout. | Cancellation must remove queued work as well as abort active upstream fetches. |
 | P2 | `server/src/walk-cache.ts:24` waits for a refresh on a cold or invalidated cache. | A maintained walk is not yet a ready, nonblocking search index. Report indexing/unavailable instead of waiting on a disk walk in search. |
-| P2 | `server/src/media-server-manager.ts:1274` defaults to the library's browse mode; `server/src/media-server-provider.ts:677` recurses only in titles mode. | Global remote search explicitly uses the library root and `mode: titles`; never inherit the open folder or browse preference. |
+| P2 | `server/src/media-server-manager.ts:1274` defaults to the library's browse mode; `server/src/media-server-provider.ts:677` recurses only in titles mode and title types omit episodes. | Add a dedicated root-scoped recursive search operation with an explicit movie/series/episode type set; never inherit the open folder or ordinary browse mode. |
 | P2 | `SearchViewModel.kt:174` stops pagination when a page adds no distinct items. | Duplicate-only pages must not hide later unique results. Follow source continuation, with bounded work and an explicit Load more action. |
 
 Android references in this document are under
@@ -31,16 +38,15 @@ Android references in this document are under
 
 ## Catalog optimization and excluded addons
 
-Catalog search is explicitly included in the performance work. Preserve its
-entry points, controls, browsing, scopes, history preference and selected sort;
-changing delivery from one final batch to incremental results is intentional.
-Use the same bounded source runner for Catalog and Search everywhere, with
-separate client adapters and privacy policies. Keep the legacy `/api/search`
-response compatible for older clients; migrate the web Catalog and TV
-Catalog-origin search to an incremental catalog-scoped contract rather than
-returning partial results under an old response that implies completion.
-The new contract may reuse the session protocol below, with an explicit
-catalog-only scope, addon/catalog selectors and no local or remote fan-out.
+The full review recommends including Catalog search in the performance work.
+The [implementation proposal](search-everywhere-implementation.md) deliberately
+defers that migration to a later, separately approved phase: the first release
+keeps Catalog controls, search and browsing behavior unchanged and delivers the
+incremental runner only through Search everywhere. If Catalog is migrated later,
+preserve its entry points, controls, browsing, scopes, history preference and
+selected sort; use the same bounded source runner with a separate Catalog
+adapter. Keep the legacy `/api/search` response compatible for older clients
+until that migration is complete.
 
 Deliver fast catalogs first, cancel superseded work through the queue, retry only
 failed pages and preserve per-source pagination. Cache/coalesce successful pages
@@ -180,48 +186,54 @@ identity and pagination identical for web and TV. Streaming can replace delivery
 later without changing source semantics. The following routes are proposed,
 not existing APIs:
 
-1. `POST /api/search/everywhere` accepts bounded query text, filters and language.
-   It returns an opaque session ID and a first snapshot within a 300 ms soft
-   delivery budget, even if all sources remain pending. This budget does not
-   cancel upstream work or mark it exhausted.
+1. `POST /api/search/everywhere` accepts bounded query text, filters and a
+   client slot/generation. It returns an opaque session ID and a first snapshot
+   within a 300 ms soft delivery budget, even if all sources remain pending.
+   This budget does not cancel upstream work or mark it exhausted.
 2. `POST /api/search/everywhere/:id/poll` takes the last revision and waits at
    most 500 ms for a change. Return a bounded current snapshot on change, with
    cluster upserts/removals if deltas are introduced later. Serialize polls;
-   after a no-change response back off to one second. Hidden clients stop polling.
-3. `POST /api/search/everywhere/:id/sources/:sourceId/page` advances one source;
-   `/retry` retries its failed page. Repeated commands share the same page job.
-   The client cannot supply upstream URLs, provider credentials or arbitrary
-   provider cursor contents.
+   back off to 250 ms while sources load and reduce polling when idle. Hidden
+   clients stop polling.
+3. `POST /api/search/everywhere/:id/page` advances every ready source once;
+   `/sources/:sourceId/retry` retries one failed source. Repeated commands share
+   the same page job. The client cannot supply upstream URLs, provider
+   credentials or arbitrary provider cursor contents.
 4. `DELETE /api/search/everywhere/:id` cancels work and releases memory. Expiry,
    logout and revocation also clean it up; do not depend on DELETE arriving.
 
 All responses are `private, no-store`. Route registration must include the
 ordinary-account and restricted-mode allowlists, authentication and the existing
 mutation protections. Bind session IDs to the authenticated session, account,
-query, filters, language and source configuration. Another session cannot read,
-cancel or page them. Expiry returns an explicit restart-required response.
+query, filters, the viewer's language configuration and source configuration.
+Another session cannot read, cancel or page them. Expiry returns an explicit
+restart-required response.
 
 Each source is one searchable addon catalog, one local library or one attached
-remote library. Track `queued`, `loading`, `ready`, `exhausted`, `failed`,
-`timedOut`, `indexing` and `unavailable`, plus a cursor and result revision.
+remote library. Track `queued`, `loading`, `ready`, `stalled`, `exhausted`,
+`failed`, `timedOut`, `indexing` and `unavailable`, plus a cursor and result
+revision.
 Partial is an aggregate state, not an error. Only a successful end-of-source
 response exhausts a source. No new merged cards is not end-of-source. Retrying
 preserves successful records and deduplicates by source record key.
 
-Start with configurable implementation limits: four active tasks per search,
-two per remote connection, 50 items per source page, 500 retained source records
-per search, two sessions per authenticated session, 60-second idle expiry and
-a server-wide session/byte cap. Stop requesting pages at the retained-result cap
-and show a limit/refine-query state; never silently truncate then say complete.
+Start with configurable implementation limits: independent pools of eight
+catalog and eight remote jobs, two remote jobs per connection, 20 rows per source
+page, 1,200 retained source records, 60 targets, two sessions per authenticated
+session, five-minute idle expiry and server-wide session/byte caps. Stop
+requesting pages at the retained-result cap and show a limit/refine-query state;
+never silently truncate then say complete.
 Cap provider body size and text fields before retaining them. Fairly schedule
 source classes so addon backlog cannot starve local or remote work. These are
 initial engineering budgets to validate, not measured optimal values.
 
-Use a 12-second hard source budget including queue time initially. Plumb abort
-through catalog helpers and the outbound queue. A soft delivery deadline is not
-a hard source timeout. Disconnecting a poll does not cancel the search; explicit
-replacement, session expiry or logout does. Shared in-flight work is reference
-counted: one cancelled subscriber cannot cancel another's request.
+Use a 12-second source execution budget from outbound admission, not including
+host-queue waiting. The deadline covers the body read. Plumb abort through
+catalog helpers and the outbound queue, and keep the host slot until bounded JSON
+parsing finishes. A soft delivery deadline is not a hard source timeout.
+Disconnecting a poll does not cancel the search; explicit replacement, session
+expiry or logout does. Shared in-flight work is reference counted: one cancelled
+subscriber cannot cancel another's request.
 
 Local search needs a per-library searchable snapshot derived from maintained
 walks and bindings. Building it runs outside the request; a cold library reports
@@ -232,7 +244,8 @@ text for display. Never recurse through disks on a keystroke. A warm snapshot
 can be stale for display, but stale visibility can never authorize a result.
 
 Remote work reuses the manager's scoped transport and post-await checks. Search
-the attached root in titles mode; keep provider pagination per library. Existing
+the attached root in a dedicated recursive title/episode search mode; keep
+provider pagination per library. Existing
 `publicRemoteItem` retains provider IDs (`server/src/media-server-types.ts:256`),
 so identity does not require a detail request. Do not load every remote page or
 run the existing playback source-discovery flow for every search card.
@@ -269,11 +282,11 @@ use fixed error codes, duration and counts, never raw errors or payloads.
 ## Delivery and acceptance
 
 1. Build the bounded incremental runner and cancellation path with fake sources.
-   Preserve `/api/search`'s legacy response contract, then migrate web Catalog
-   and TV Catalog-origin search to the incremental catalog-scoped contract.
-   Include the addon exclusion policy above. Existing controls, browsing,
-   history and sorting remain covered by regression tests; a faster all-settled
-   endpoint alone does not satisfy incremental display.
+   Preserve `/api/search`'s legacy response contract and keep web Catalog and
+   TV Catalog-origin search on it in the first release. Include the addon
+   exclusion policy above. A separate later phase may migrate Catalog to the
+   incremental catalog-scoped contract; existing controls, browsing, history and
+   sorting remain covered by regression tests until then.
 2. Add global Catalog search on web and TV against the new contract, including
    partial states, retries, stable card keys and no persisted history.
 3. Add per-library local snapshots and remote adapters, conservative clustering

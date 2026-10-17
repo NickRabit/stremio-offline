@@ -7,8 +7,15 @@ before implementation. It resolves the open questions below, including the TV
 entry point, privacy scope, conflicting identities and incremental delivery.
 The review also includes Catalog performance optimization and the existing
 all-addon search exclusion policy (`globalSearch`).
-This file retains the original brief; where proposals differ, the review's
-recommendations take precedence. No search implementation ships in this PR.
+The concrete module, API, state and test plan is in
+[the implementation proposal](search-everywhere-implementation.md); it keeps
+the Catalog migration as a later, separately approved phase.
+The implementation proposal's independent review is recorded in
+[search-everywhere-implementation-review.md](search-everywhere-implementation-review.md).
+This file retains the original brief. Product constraints and decisions come
+from the brief and review; code-level mechanics, routes, limits and pagination
+come from the later implementation proposal after its code audit. No search
+implementation ships in this PR.
 
 ## Role
 
