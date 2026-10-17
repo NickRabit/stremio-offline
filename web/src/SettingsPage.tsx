@@ -88,16 +88,17 @@ const refreshIntervalLabel = (hours: number) =>
   : hours === 168 ? t("settings.addonRefreshWeekly")
   : t("settings.addonRefreshHoursOption", { count: hours });
 
-const SETTINGS_TABS = ["libraries", "playback", "downloads", "home", "account"] as const;
+const SETTINGS_TABS = ["libraries", "home", "playback", "downloads", "services", "account"] as const;
 type SettingsTab = (typeof SETTINGS_TABS)[number];
 /** One panel is rendered at a time, so the tab strip and the panel share a single id pair. */
 const SETTINGS_PANEL_ID = "settings-panel";
 const SETTINGS_TAB_KEY = "stremio-offline-settings-tab";
 const SETTINGS_TAB_LABEL: Record<SettingsTab, Key> = {
   libraries: "settings.tab.libraries",
+  home: "settings.tab.home",
   playback: "settings.tab.playback",
   downloads: "settings.tab.downloads",
-  home: "settings.tab.home",
+  services: "settings.tab.services",
   account: "settings.tab.account",
 };
 const isSettingsTab = (value: string | null): value is SettingsTab => SETTINGS_TABS.includes(value as SettingsTab);
@@ -110,12 +111,17 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
   // from an administrator too. The server is what enforces either; this is the interface
   // agreeing with it.
   const admin = session.role === "admin";
-  // Every account keeps all five tabs: the same-titles control in Libraries is not
-  // administrator-only, and the other four hold the account's own preferences. A stored tab
-  // that is not one of them falls back to the first.
+  // An administrator keeps all six tabs; an ordinary account keeps the five that hold its own
+  // preferences. The Services tab configures the instance, and a stored tab the account cannot
+  // see falls back to the first visible one.
+  const visibleTabs = SETTINGS_TABS.filter((id) => id !== "services" || admin);
   const [tab, setTab] = useState<SettingsTab>(() => {
-    try { const stored = sessionStorage.getItem(SETTINGS_TAB_KEY); return isSettingsTab(stored) ? stored : SETTINGS_TABS[0]; }
-    catch { return SETTINGS_TABS[0]; }
+    const fallback = visibleTabs[0] ?? SETTINGS_TABS[0];
+    try {
+      const stored = sessionStorage.getItem(SETTINGS_TAB_KEY);
+      return isSettingsTab(stored) && visibleTabs.includes(stored) ? stored : fallback;
+    }
+    catch { return fallback; }
   });
   const selectTab = (next: SettingsTab) => {
     setTab(next);
@@ -163,14 +169,14 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
     {restricted && <p className="notice">{t("restricted.notice")}</p>}
     <div className="filterbar section-filter">
       <div className="library-shelf-segments" role="tablist" aria-label={t("settings.title")}>
-        {SETTINGS_TABS.map((id) => <button key={id} type="button" role="tab" id={`settings-tab-${id}`} aria-selected={id === tab}
+        {visibleTabs.map((id) => <button key={id} type="button" role="tab" id={`settings-tab-${id}`} aria-selected={id === tab}
           aria-controls={SETTINGS_PANEL_ID} className={id === tab ? "active" : undefined}
           onClick={() => selectTab(id)}>{t(SETTINGS_TAB_LABEL[id])}</button>)}
       </div>
     </div>
     <div className="settings-grid" id={SETTINGS_PANEL_ID} role="tabpanel" aria-labelledby={`settings-tab-${tab}`}>
       {tab === "libraries" && <>
-      {admin && <section className="panel settings-section library-manager-section"><SettingsSectionHead icon={<Library/>} title={t("library.libraries")} text={t("library.librariesHint")}/><LibraryManager restricted={restricted || !admin} onChanged={onLibrariesChanged} onError={onError} onNotify={onNotify}/></section>}
+      {admin && <section className="panel settings-section library-manager-section"><SettingsSectionHead icon={<Library/>} title={t("settings.localLibrariesTitle")} text={t("library.librariesHint")}/><LibraryManager restricted={restricted || !admin} onChanged={onLibrariesChanged} onError={onError} onNotify={onNotify}/></section>}
       {admin && !restricted && <section className="panel settings-section media-server-section"><SettingsSectionHead icon={<Server/>} title={t("mediaServer.title")} text={t("mediaServer.hint")}/><MediaServerManager onError={onError} onChanged={onLibrariesChanged} localLibraries={libraries}/></section>}
       <section className="panel settings-section"><SettingsSectionHead icon={<Library/>} title={t("nav.library")} /><SettingControl title={t("settings.sameTitles")} text={t("settings.sameTitlesHint")}><select aria-label={t("settings.sameTitles")} disabled={restricted} value={settings.mergeByName ? "1" : "0"} onChange={(event) => void onSave({ mergeByName: event.target.value === "1" })}><option value="1">{t("settings.merge")}</option><option value="0">{t("settings.showSeparately")}</option></select></SettingControl>
         {admin && <SettingControl title={t("settings.autoScan")} text={t("settings.autoScanHint")}>
@@ -185,12 +191,6 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
       {admin && <section className="panel settings-section storage-section"><SettingsSectionHead icon={<HardDrive/>} title={t("settings.storageTitle")} text={t("settings.storageText")}/><p>{t("settings.artworkMoved")}</p><div className="storage-path"><span>{t("settings.dockerPath")}</span><code>{libraryRoot}</code></div><p>{t("settings.storageNoteBefore")} <code>DOWNLOAD_PATH</code> {t("settings.storageNoteAfter")}</p></section>}
       </>}
       {tab === "downloads" && <>
-      {admin && <section className="panel settings-section"><SettingsSectionHead icon={<PackagePlus/>} title={t("settings.addonsTitle")} text={t("settings.addonsText")}/>
-        <SettingControl title={t("settings.addonRefresh")} text={t("settings.addonRefreshHint")}>
-          <select aria-label={t("settings.addonRefreshLabel")} disabled={restricted} value={settings.addonRefreshHours ?? 24} onChange={(event) => void onSave({ addonRefreshHours: Number(event.target.value) })}>
-            {REFRESH_HOURS.map((hours) => <option key={hours} value={hours}>{refreshIntervalLabel(hours)}</option>)}
-          </select></SettingControl>
-      </section>}
       <section className="panel settings-section"><SettingsSectionHead icon={<Download/>} title={t("nav.downloads")} text={t("settings.downloadsText")}/>
         <SettingControl title={t("settings.downloadTitleLanguage")} text={t("settings.downloadTitleLanguageHint")}>
           <select aria-label={t("settings.downloadTitleLanguage")} disabled={restricted} value={settings.downloadTitleLanguage} onChange={(event) => void onSave({ downloadTitleLanguage: event.target.value })}>
@@ -208,8 +208,16 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
           <select aria-label={t("settings.segments")} disabled={restricted || !admin} value={settings.downloadSegments ?? 1} onChange={(event) => void onSave({ downloadSegments: Number(event.target.value) })}>
             {[1,2,3,4,6,8].map((value) => <option key={value} value={value}>{value}</option>)}
           </select></SettingControl>}</section>
+      </>}
+      {tab === "services" && <>
       {admin && <TmdbSettings configured={settings.tmdbConfigured} onSave={onSave} onError={onError} restricted={restricted || !admin}/>}
       {admin && <RealDebridSettings configured={settings.realDebridConfigured} onSave={onSave} onError={onError} restricted={restricted || !admin}/>}
+      {admin && <section className="panel settings-section"><SettingsSectionHead icon={<PackagePlus/>} title={t("settings.addonsTitle")} text={t("settings.addonsText")}/>
+        <SettingControl title={t("settings.addonRefresh")} text={t("settings.addonRefreshHint")}>
+          <select aria-label={t("settings.addonRefreshLabel")} disabled={restricted} value={settings.addonRefreshHours ?? 24} onChange={(event) => void onSave({ addonRefreshHours: Number(event.target.value) })}>
+            {REFRESH_HOURS.map((hours) => <option key={hours} value={hours}>{refreshIntervalLabel(hours)}</option>)}
+          </select></SettingControl>
+      </section>}
       </>}
       {tab === "playback" && <>
       <section className="panel settings-section playback-section"><SettingsSectionHead icon={<CirclePlay/>} title={t("settings.playbackTitle")} text={t("settings.playbackText")}/><div className="playback-settings"><SettingControl title={t("settings.audioLanguage")} text={t("settings.audioLanguageHint")}><select aria-label={t("settings.audioLanguageLabel")} disabled={restricted} value={settings.audioLanguage} onChange={(event) => void onSave({ audioLanguage: event.target.value })}>{languageOptions}</select></SettingControl><SettingControl title={t("settings.subtitleLanguage")} text={t("settings.subtitleLanguageHint")}><select aria-label={t("settings.subtitleLanguageLabel")} disabled={restricted} value={settings.subtitleLanguage} onChange={(event) => void onSave({ subtitleLanguage: event.target.value })}>{languageOptions}</select></SettingControl></div><SettingControl title={t("settings.streamSort")} text={t("settings.streamSortHint")}><select aria-label={t("settings.streamSort")} disabled={restricted} value={settings.streamSort} onChange={(event) => void onSave({ streamSort: event.target.value })}><option value="recommended">{t("sources.sortRecommended")}</option><option value="size-desc">{t("sources.sortLargest")}</option><option value="size-asc">{t("sources.sortSmallest")}</option><option value="addon">{t("sources.sortAddon")}</option></select></SettingControl><SettingControl title={t("settings.trackProgress")} text={t("settings.trackProgressHint")}>
@@ -222,7 +230,6 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
           }}><Trash2/> {t("settings.clearHistory")}</button></SettingControl>}</section>
       </>}
       {tab === "home" && <>
-      <SearchSettings state={search} onState={onSearch} onNotify={onNotify} onError={onError}/>
       <HomeLayoutSettings disabled={restricted} onError={onError}/>
       <section className="panel settings-section language-section"><SettingsSectionHead icon={<Languages/>} title={t("settings.appearanceTitle")}/>
         <SettingControl title={t("settings.uiLanguage")} text={t("settings.uiLanguageHint")}>
@@ -238,6 +245,7 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
           </select>
         </SettingControl>
         <SettingControl title={t("settings.tileSize")} text={t("settings.tileSizeHint")}><select aria-label={t("settings.tileSize")} disabled={restricted} value={settings.tileSize} onChange={(event) => void onSave({ tileSize: event.target.value as AppSettings["tileSize"] })}>{tileSizes.map((size) => <option key={size.value} value={size.value}>{t(size.key)}</option>)}</select></SettingControl><SettingControl title={t("settings.catalogShape")} text={t("settings.catalogShapeHint")}><select aria-label={t("settings.catalogShape")} disabled={restricted} value={settings.catalogTileShape} onChange={(event) => void onSave({ catalogTileShape: event.target.value as AppSettings["catalogTileShape"] })}>{tileShapes.map((shape) => <option key={shape.value} value={shape.value}>{t(shape.key)}</option>)}</select></SettingControl><SettingControl title={t("settings.libraryShape")} text={t("settings.libraryShapeHint")}><select aria-label={t("settings.libraryShape")} disabled={restricted} value={settings.libraryTileShape} onChange={(event) => void onSave({ libraryTileShape: event.target.value as AppSettings["libraryTileShape"] })}>{tileShapes.map((shape) => <option key={shape.value} value={shape.value}>{t(shape.key)}</option>)}</select></SettingControl></section>
+      <SearchSettings state={search} onState={onSearch} onNotify={onNotify} onError={onError}/>
       </>}
       {tab === "account" && <>
       {admin && <section className="panel settings-section user-manager-section"><SettingsSectionHead icon={<Users/>} title={t("users.title")} text={t("users.hint")}/><UserManager session={session} restricted={restricted} onChanged={onLibrariesChanged} onNotify={onNotify} onError={onError}/></section>}

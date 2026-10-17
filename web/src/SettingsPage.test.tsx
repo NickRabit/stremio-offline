@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { SettingsPage } from "./SettingsPage";
 import { setLocale } from "./i18n";
+import { en } from "./i18n/en";
 import type { Session, Settings as AppSettings } from "./types";
 
 const json = (body: unknown, status = 200) =>
@@ -67,6 +68,41 @@ const selectTab = async (name: string) => {
 const startView = () => host.querySelector<HTMLSelectElement>('select[aria-label="Start page"]')!;
 
 describe("SettingsPage tabs", () => {
+  it("shows an administrator six tabs and keeps the instance services out of Downloads", async () => {
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/media-servers/libraries")) return Promise.resolve(json({ libraries: [] }));
+      if (url.includes("/api/media-servers")) return Promise.resolve(json({ connections: [], keyConfigured: true }));
+      if (url.includes("/api/libraries")) return Promise.resolve(json([]));
+      return Promise.resolve(json({}));
+    }));
+
+    await render({}, false, "admin");
+    expect([...host.querySelectorAll('.section-filter [role="tab"]')].map((candidate) => candidate.textContent))
+      .toEqual(["Libraries", "Home", "Playback", "Downloads", "Services", "Account"]);
+
+    await selectTab("Downloads");
+    expect(host.querySelectorAll(".credentials-section")).toHaveLength(0);
+    expect(host.querySelector(`select[aria-label="${en["settings.addonRefreshLabel"]}"]`)).toBeNull();
+
+    await selectTab("Services");
+    expect(host.querySelectorAll(".credentials-section")).toHaveLength(2);
+    expect(host.querySelector(`select[aria-label="${en["settings.addonRefreshLabel"]}"]`)).not.toBeNull();
+  });
+
+  it("shows an ordinary account five tabs without Services", async () => {
+    await render();
+    expect([...host.querySelectorAll('.section-filter [role="tab"]')].map((candidate) => candidate.textContent))
+      .toEqual(["Libraries", "Home", "Playback", "Downloads", "Account"]);
+    expect([...host.querySelectorAll('.section-filter [role="tab"]')].some((candidate) => candidate.textContent === "Services")).toBe(false);
+  });
+
+  it("opens a stored Services tab on Libraries for an ordinary account", async () => {
+    sessionStorage.setItem("stremio-offline-settings-tab", "services");
+    await render();
+    expect(host.querySelector('.section-filter [role="tab"][aria-selected="true"]')?.textContent).toBe("Libraries");
+  });
+
   it("moves the start page onto the Home tab and saves the choice", async () => {
     const { onSave } = await render();
     expect(startView(), "the start page is not on the tab the page opens on").toBeNull();
@@ -116,6 +152,16 @@ describe("SettingsPage Home tab", () => {
     await render();
     await selectTab("Home");
     expect(host.querySelector(".home-layout-section")).not.toBeNull();
+  });
+
+  it("orders the Home rows before Appearance and Search", async () => {
+    await render();
+    await selectTab("Home");
+    const sections = [...host.querySelectorAll("section")];
+    expect(sections.indexOf(host.querySelector(".home-layout-section")!))
+      .toBeLessThan(sections.indexOf(host.querySelector(".language-section")!));
+    expect(sections.indexOf(host.querySelector(".language-section")!))
+      .toBeLessThan(sections.indexOf(host.querySelector(".search-settings")!));
   });
 });
 

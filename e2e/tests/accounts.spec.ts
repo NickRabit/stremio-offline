@@ -144,7 +144,7 @@ test.describe("accounts", () => {
       const panel = (title: string) => guestPage.locator(`.settings-section .settings-section-head strong:text-is("${title}")`);
       // Knihovny: the same-titles control is the account's own, the libraries are not.
       await guestPage.getByRole("tab", { name: "Knihovny", exact: true }).click();
-      for (const instanceOnly of ["Knihovny", "Úložiště"]) {
+      for (const instanceOnly of ["Místní knihovny", "Úložiště"]) {
         await expect(panel(instanceOnly), `${instanceOnly} configures the instance, so an ordinary account is not shown it`).toHaveCount(0);
       }
       await expect(panel("Knihovna"), `Knihovna is the account's own setting and stays`).toHaveCount(1);
@@ -155,13 +155,11 @@ test.describe("accounts", () => {
       await guestPage.getByRole("tab", { name: "Přehrávání", exact: true }).click();
       await expect(panel("Přehrávání"), `Přehrávání is the account's own setting and stays`).toHaveCount(1);
 
-      // Stahování: the title language is personal, the queue and the providers are not.
+      // Stahování: the title language is personal, the queue is not.
       await guestPage.getByRole("tab", { name: "Stahování", exact: true }).click();
-      for (const instanceOnly of ["Doplňky", "Metadata z TMDB", "Real-Debrid"]) {
-        await expect(panel(instanceOnly), `${instanceOnly} configures the instance, so an ordinary account is not shown it`).toHaveCount(0);
-      }
       await expect(panel("Stahování"), `Stahování is the account's own setting and stays`).toHaveCount(1);
       await expect(guestPage.getByLabel("Souběžná stahování")).toHaveCount(0);
+      await expect(guestPage.getByRole("tab", { name: "Služby" }), "an ordinary account cannot see the instance services").toHaveCount(0);
 
       // Domů: the appearance choices are personal.
       await guestPage.getByRole("tab", { name: "Domů", exact: true }).click();
