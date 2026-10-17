@@ -805,6 +805,8 @@ export const pl: Catalog = {
   "library.showOnHome": "Pokaż na stronie głównej",
   "library.showInFavorites": "Pokaż w Ulubionych",
   "library.showInFavoritesHint": "Oznaczone tytuły z tej biblioteki pojawiają się na stronie głównej i na półce Ulubione biblioteki. Wyłączenie ukrywa je tam, a gwiazdki pozostają.",
+  "library.showInSearch": "Pokaż w wyszukiwaniu",
+  "library.showInSearchHint": "Po wyłączeniu ta biblioteka nie jest przeszukiwana w Szukaj wszędzie; przeglądanie działa dalej.",
   "library.mosaicHide": "Trzymaj się z daleka od mozaiki",
   "library.mosaicShow": "Pokaż na mozaice",
   "library.mosaicHidden": "Jest trzymany z dala od mozaiki.",

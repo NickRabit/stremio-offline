@@ -805,6 +805,8 @@ export const ru: Catalog = {
   "library.showOnHome": "Показывать на главной",
   "library.showInFavorites": "Показывать в избранном",
   "library.showInFavoritesHint": "Отмеченные звёздочкой тайтлы из этой библиотеки появляются на главной и на полке «Избранное» библиотеки. При выключении они там скрываются, а звёздочки остаются.",
+  "library.showInSearch": "Показывать в поиске",
+  "library.showInSearchHint": "Если выключено, библиотека не участвует в поиске везде; просматривать её можно как раньше.",
   "library.mosaicHide": "Держитесь подальше от мозаики",
   "library.mosaicShow": "Показать в мозаике",
   "library.mosaicHidden": "Он хранится вне мозаики.",

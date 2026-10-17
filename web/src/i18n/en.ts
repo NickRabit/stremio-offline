@@ -844,6 +844,8 @@ export const en = {
   "library.showOnHome": "Show on Home",
   "library.showInFavorites": "Show in Favourites",
   "library.showInFavoritesHint": "Starred titles from this library appear on Home and in the library Favourites shelf. Turning this off hides them there and leaves the stars in place.",
+  "library.showInSearch": "Show in Search",
+  "library.showInSearchHint": "Off keeps this library out of Search everywhere; browsing it is unchanged.",
   "library.mosaicHide": "Keep out of the mosaic",
   "library.mosaicShow": "Show in the mosaic",
   "library.mosaicHidden": "It is kept out of the mosaic.",

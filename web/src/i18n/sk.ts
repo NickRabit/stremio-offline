@@ -805,6 +805,8 @@ export const sk: Catalog = {
   "library.showOnHome": "Zobrazovať na domovskej stránke",
   "library.showInFavorites": "Zobrazovať v obľúbených",
   "library.showInFavoritesHint": "Označené tituly z tejto knižnice sa zobrazia na domovskej stránke aj v polici Obľúbené. Vypnutie ich tam skryje a hviezdičky nechá na mieste.",
+  "library.showInSearch": "Zobrazovať vo vyhľadávaní",
+  "library.showInSearchHint": "Po vypnutí sa knižnica neprehľadáva v Hľadať všade; prechádzať ju možno ďalej.",
   "library.mosaicHide": "Držte sa mimo mozaiky",
   "library.mosaicShow": "Zobraziť v mozaike",
   "library.mosaicHidden": "Uchováva sa mimo mozaiky.",

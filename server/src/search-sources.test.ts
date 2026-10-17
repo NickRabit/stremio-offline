@@ -91,6 +91,7 @@ const remoteLibrary = (id: string, connectionId: string): PublicRemoteLibrary =>
   browseMode: "folders",
   mosaic: true,
   showInFavorites: true,
+  showInSearch: true,
   capabilities: {
     rename: false,
     move: false,
@@ -580,4 +581,26 @@ test("discovery only contacts the source classes the request names", async () =>
   );
   assert.equal(remoteCalls, 0);
   assert.deepEqual(sources.map((source) => source.sourceClass), ["local"]);
+});
+
+test("a library switched out of search is never a source, and switching it off drops a running one", async () => {
+  let libraries = [localLibrary("lib_00000001", "Films"), { ...localLibrary("lib_00000002", "Private"), showInSearch: false }];
+  const sources = await discoverSources(
+    deps({
+      libraries: () => libraries,
+      remote: {
+        visibleLibraries: async () => [remoteLibrary("rlib_00000001", "conn_00000001"), { ...remoteLibrary("rlib_00000002", "conn_00000001"), showInSearch: false }],
+        searchLibrary: async () => ({ items: [] }),
+        canSearchLibrary: () => true,
+        libraryGeneration: () => 1,
+      },
+    }),
+    authority(),
+    request({ sources: ["local", "remote"] }),
+    "ss_test",
+  );
+  assert.deepEqual(sources.map((source) => source.label), ["Films", "Remote rlib_00000001"]);
+  assert.equal(sources[0]!.stillAllowed(), true);
+  libraries = [{ ...localLibrary("lib_00000001", "Films"), showInSearch: false }];
+  assert.equal(sources[0]!.stillAllowed(), false);
 });

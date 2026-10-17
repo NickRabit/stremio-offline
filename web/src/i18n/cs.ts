@@ -839,6 +839,8 @@ export const cs: Catalog = {
   "library.showOnHome": "Zobrazovat na domovské stránce",
   "library.showInFavorites": "Zobrazovat v oblíbených",
   "library.showInFavoritesHint": "Označené tituly z této knihovny se ukážou na Home i v polici Oblíbené. Vypnutí je tam skryje a hvězdičky nechá na místě.",
+  "library.showInSearch": "Zobrazovat ve vyhledávání",
+  "library.showInSearchHint": "Po vypnutí se knihovna neprohledává v Hledat všude; procházet ji jde dál.",
   "library.mosaicHide": "Nezobrazovat v mozaice",
   "library.mosaicShow": "Zobrazovat v mozaice",
   "library.mosaicHidden": "V mozaice se už neobjeví.",

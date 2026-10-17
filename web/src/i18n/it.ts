@@ -805,6 +805,8 @@ export const it: Catalog = {
   "library.showOnHome": "Mostra nella Home",
   "library.showInFavorites": "Mostra nei preferiti",
   "library.showInFavoritesHint": "I titoli contrassegnati di questa libreria compaiono nella Home e nello scaffale Preferiti della libreria. Disattivandolo vengono nascosti lì e le stelle restano.",
+  "library.showInSearch": "Mostra nella ricerca",
+  "library.showInSearchHint": "Se disattivata, questa libreria resta fuori da Cerca ovunque; si può ancora sfogliare.",
   "library.mosaicHide": "Tenetevi fuori dal mosaico",
   "library.mosaicShow": "Mostra nel mosaico",
   "library.mosaicHidden": "È tenuto fuori dal mosaico.",

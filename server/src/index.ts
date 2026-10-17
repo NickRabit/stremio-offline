@@ -1498,6 +1498,7 @@ const libraryView = (library: LibraryRecord, health: LibraryHealth, stats: { tit
   showInContinueWatching: library.showInContinueWatching !== false,
   showOnHome: library.showOnHome !== false,
   showInFavorites: library.showInFavorites !== false,
+  showInSearch: library.showInSearch !== false,
   autoScanMetadata: automaticMetadataEnabled(library),
   visibleTo: library.visibleTo ?? [],
   unreachable: health.unreachable, readOnly: health.readOnly,

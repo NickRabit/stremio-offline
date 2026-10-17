@@ -3676,6 +3676,11 @@ test("canSearchLibrary follows the grant and the connection generation", async (
     const generation = harness.manager.searchLibraryGeneration(library.id);
     assert.equal(generation, connection.generation);
     assert.equal(harness.manager.canSearchLibrary(ADA, library.id, generation!), true);
+    await harness.manager.patchLibrary(harness.admin, library.id, { showInSearch: false });
+    assert.equal(harness.store.remoteLibraries()[0]!.showInSearch, false);
+    assert.equal(harness.manager.canSearchLibrary(ADA, library.id, harness.manager.searchLibraryGeneration(library.id)!), false, "a library out of search closes the source");
+    await harness.manager.patchLibrary(harness.admin, library.id, { showInSearch: true });
+    assert.equal(harness.manager.canSearchLibrary(ADA, library.id, harness.manager.searchLibraryGeneration(library.id)!), true);
 
     await harness.manager.patchLibrary(harness.admin, library.id, { allowedUsers: [BOB] });
     const bobGeneration = harness.manager.searchLibraryGeneration(library.id)!;

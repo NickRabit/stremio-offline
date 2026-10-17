@@ -60,6 +60,7 @@ import {
   adminRemoteLibrary,
   effectiveBrowseMode,
   effectiveMosaic,
+  effectiveShowInSearch,
   newConnectionId,
   newRemoteLibraryId,
   publicRemoteItem,
@@ -197,8 +198,8 @@ const IF_NONE_MATCH_MAX = 1024;
 const SEARCH_MAX = 256;
 const ITEM_TYPES: readonly ProviderItemType[] = ["movie", "series", "season", "episode"];
 const CREATE_KEYS = ["provider", "name", "baseUrl", "allowLan", "allowLoopback", "username", "password"];
-const ATTACH_KEYS = ["remoteId", "name", "order", "showOnHome", "showInContinueWatching", "browseMode", "mosaic", "showInFavorites"];
-const LIBRARY_PATCH_KEYS = ["name", "enabled", "order", "showOnHome", "showInContinueWatching", "allowedUsers", "browseMode", "mosaic", "showInFavorites", "downloadLibraryId", "downloadSettings"];
+const ATTACH_KEYS = ["remoteId", "name", "order", "showOnHome", "showInContinueWatching", "browseMode", "mosaic", "showInFavorites", "showInSearch"];
+const LIBRARY_PATCH_KEYS = ["name", "enabled", "order", "showOnHome", "showInContinueWatching", "allowedUsers", "browseMode", "mosaic", "showInFavorites", "showInSearch", "downloadLibraryId", "downloadSettings"];
 const CONNECTION_PATCH_KEYS = ["name", "enabled"];
 const BROWSE_QUERY_KEYS = ["limit", "cursor", "search", "type"];
 const EPISODE_QUERY_KEYS = ["limit", "cursor"];
@@ -991,6 +992,7 @@ export class MediaServerManager {
     const browseMode = parseBrowseMode(record.browseMode as string | undefined);
     const mosaic = record.mosaic === undefined ? undefined : bool(record.mosaic, "mosaic");
     const showInFavorites = record.showInFavorites === undefined ? undefined : bool(record.showInFavorites, "showInFavorites");
+    const showInSearch = record.showInSearch === undefined ? undefined : bool(record.showInSearch, "showInSearch");
     return this.adminMutation(async () => {
       // A library the administrator is attaching may have appeared after the cache was filled,
       // so the view list is proved afresh before the attachment is verified against it.
@@ -1016,6 +1018,7 @@ export class MediaServerManager {
           ...(browseMode === undefined ? {} : { browseMode }),
           ...(mosaic === undefined ? {} : { mosaic }),
           ...(showInFavorites === undefined ? {} : { showInFavorites }),
+          ...(showInSearch === undefined ? {} : { showInSearch }),
         };
         state.remoteLibraries = [...libraries, installed];
       });
@@ -1037,6 +1040,7 @@ export class MediaServerManager {
     const browseMode = parseBrowseMode(record.browseMode as string | undefined);
     const mosaic = record.mosaic === undefined ? undefined : bool(record.mosaic, "mosaic");
     const showInFavorites = record.showInFavorites === undefined ? undefined : bool(record.showInFavorites, "showInFavorites");
+    const showInSearch = record.showInSearch === undefined ? undefined : bool(record.showInSearch, "showInSearch");
     const downloadLibraryId = readDownloadLibrary(record.downloadLibraryId);
     // `null` clears the new rules; a payload has to be one of the two, so the storage a patch
     // means is unambiguous. An old client that only knows the legacy handle keeps working as long
@@ -1076,6 +1080,7 @@ export class MediaServerManager {
         if (browseMode !== undefined) next.browseMode = browseMode;
         if (mosaic !== undefined) next.mosaic = mosaic;
         if (showInFavorites !== undefined) next.showInFavorites = showInFavorites;
+        if (showInSearch !== undefined) next.showInSearch = showInSearch;
         // A shared copy destination: it is validated against the state this write lands on, so a
         // library removed or made read-only meanwhile is refused rather than stored. The setting
         // never bumps the generation and never revokes content; a copy already running keeps the
@@ -1382,7 +1387,7 @@ export class MediaServerManager {
     const user = findUserById(this.store.users(), userId);
     if (!user || user.disabled) return false;
     const library = this.visibleFor(user).find((candidate) => candidate.id === libraryId);
-    if (!library) return false;
+    if (!library || !effectiveShowInSearch(library)) return false;
     const connection = this.store.mediaConnections().find((candidate) => candidate.id === library.connectionId);
     return connection !== undefined && connection.enabled && connection.generation === generation;
   }

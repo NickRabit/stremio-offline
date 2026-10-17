@@ -52,6 +52,7 @@ export interface ExportedRemoteLibrary {
   browseMode?: RemoteBrowseMode;
   mosaic?: boolean;
   showInFavorites?: boolean;
+  showInSearch?: boolean;
   /** The configured copy destination. Kept verbatim: a handle that names no library here is
    *  stored as it came and refused at the door, never redirected to some other library. */
   downloadLibraryId?: string;
@@ -80,9 +81,9 @@ const nextGeneration = (generation: number): number => {
 };
 
 export const CONNECTION_KEYS = ["provider", "name", "baseUrl", "allowLan", "allowLoopback", "serverId", "accountId", "enabled"];
-export const LIBRARY_KEYS = ["remoteId", "name", "type", "enabled", "order", "showOnHome", "showInContinueWatching", "browseMode", "mosaic", "showInFavorites", "downloadSettings"];
+export const LIBRARY_KEYS = ["remoteId", "name", "type", "enabled", "order", "showOnHome", "showInContinueWatching", "browseMode", "mosaic", "showInFavorites", "showInSearch", "downloadSettings"];
 export const EXPORT_CONNECTION_KEYS = ["id", "provider", "name", "baseUrl", "allowLan", "allowLoopback", "serverId", "accountId"];
-export const EXPORT_LIBRARY_KEYS = ["id", "connectionId", "remoteId", "name", "type", "order", "showOnHome", "showInContinueWatching", "browseMode", "mosaic", "showInFavorites", "downloadLibraryId", "downloadSettings"];
+export const EXPORT_LIBRARY_KEYS = ["id", "connectionId", "remoteId", "name", "type", "order", "showOnHome", "showInContinueWatching", "browseMode", "mosaic", "showInFavorites", "showInSearch", "downloadLibraryId", "downloadSettings"];
 const DOWNLOAD_SETTINGS_KEYS = ["movie", "series"];
 const DOWNLOAD_TARGET_KEYS = ["subfolder", "layout", "libraryId"];
 export const LIBRARY_TYPES: readonly RemoteLibraryType[] = ["movie", "series", "mixed"];
@@ -137,6 +138,7 @@ export function readLibraryFields(record: Record<string, unknown>) {
   const mode = record.browseMode === undefined ? undefined : browseMode(record.browseMode);
   const mosaic = record.mosaic === undefined ? undefined : bool(record.mosaic, "mosaic");
   const showInFavorites = record.showInFavorites === undefined ? undefined : bool(record.showInFavorites, "showInFavorites");
+  const showInSearch = record.showInSearch === undefined ? undefined : bool(record.showInSearch, "showInSearch");
   const downloadLibraryId = record.downloadLibraryId === undefined ? undefined : libraryHandle(record.downloadLibraryId);
   const downloadSettings = record.downloadSettings === undefined ? undefined : readDownloadSettings(record.downloadSettings);
   return {
@@ -149,6 +151,7 @@ export function readLibraryFields(record: Record<string, unknown>) {
     ...(mode === undefined ? {} : { browseMode: mode }),
     ...(mosaic === undefined ? {} : { mosaic }),
     ...(showInFavorites === undefined ? {} : { showInFavorites }),
+    ...(showInSearch === undefined ? {} : { showInSearch }),
     ...(downloadLibraryId === undefined ? {} : { downloadLibraryId }),
     ...(downloadSettings === undefined ? {} : { downloadSettings }),
   };
@@ -351,6 +354,7 @@ export class MediaServerConfiguration {
         ...(library.browseMode === undefined ? {} : { browseMode: library.browseMode }),
         ...(library.mosaic === undefined ? {} : { mosaic: library.mosaic }),
         ...(library.showInFavorites === undefined ? {} : { showInFavorites: library.showInFavorites }),
+        ...(library.showInSearch === undefined ? {} : { showInSearch: library.showInSearch }),
         ...(library.downloadLibraryId === undefined ? {} : { downloadLibraryId: library.downloadLibraryId }),
         ...(library.downloadSettings === undefined ? {} : { downloadSettings: structuredClone(library.downloadSettings) }),
       })),

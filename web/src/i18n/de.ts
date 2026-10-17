@@ -805,6 +805,8 @@ export const de: Catalog = {
   "library.showOnHome": "Auf der Startseite anzeigen",
   "library.showInFavorites": "In Favoriten anzeigen",
   "library.showInFavoritesHint": "Markierte Titel aus dieser Bibliothek erscheinen auf der Startseite und im Favoriten-Regal der Bibliothek. Wenn du dies ausschaltest, werden sie dort ausgeblendet und die Sterne bleiben erhalten.",
+  "library.showInSearch": "In der Suche anzeigen",
+  "library.showInSearchHint": "Ausgeschaltet bleibt diese Bibliothek aus Überall suchen heraus; Durchsuchen bleibt möglich.",
   "library.mosaicHide": "Halten Sie sich aus dem Mosaik heraus",
   "library.mosaicShow": "Im Mosaik anzeigen",
   "library.mosaicHidden": "Es wird aus dem Mosaik herausgehalten.",

@@ -185,7 +185,7 @@ export interface AdminRemoteLibrary {
   connectionName?: string;
   /** Display-only settings. Absent means the effective default: mixed libraries browse
    *  folders, movie/series libraries browse titles, and both mosaic and Favourites are on. */
-  browseMode?: RemoteBrowseMode; mosaic?: boolean; showInFavorites?: boolean;
+  browseMode?: RemoteBrowseMode; mosaic?: boolean; showInFavorites?: boolean; showInSearch?: boolean;
   /** The local library this remote library's copies are saved into. Absent means the default for
    *  the kind; a stored handle that is no longer usable stays stored. */
   downloadLibraryId?: string;
@@ -204,7 +204,7 @@ export interface RemoteLibrary {
   provider: MediaServerProvider; capabilities: RemoteCapabilities;
   /** Effective display settings as the member projection answers them; absent on records
    *  written before these existed, so the client keeps the defaults. */
-  browseMode?: RemoteBrowseMode; mosaic?: boolean; showInFavorites?: boolean;
+  browseMode?: RemoteBrowseMode; mosaic?: boolean; showInFavorites?: boolean; showInSearch?: boolean;
   /** The stored copy destination, when one is configured. */
   downloadLibraryId?: string;
   /** The stored storage rules for automatic copies, when this library has its own. */
@@ -466,7 +466,7 @@ export interface BrowseLibrary {
 /** One library in `GET /api/libraries`. `root` is absent in restricted mode. */
 export interface LibraryView {
   id: string; name: string; type: LibraryType; root?: string; enabled: boolean; order: number;
-  addedAt: string; writeArtwork: boolean; autoScanMetadata: boolean; mosaic?: boolean; showInContinueWatching?: boolean; showOnHome?: boolean; showInFavorites?: boolean; unreachable: boolean; readOnly: boolean;
+  addedAt: string; writeArtwork: boolean; autoScanMetadata: boolean; mosaic?: boolean; showInContinueWatching?: boolean; showOnHome?: boolean; showInFavorites?: boolean; showInSearch?: boolean; unreachable: boolean; readOnly: boolean;
   /** Whether this account may save a download here: visible, switched on, writable and reachable. */
   writable: boolean;
   defaultMovie: boolean; defaultSeries: boolean; titles: number; files: number; bytes: number;

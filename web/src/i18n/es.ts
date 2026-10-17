@@ -805,6 +805,8 @@ export const es: Catalog = {
   "library.showOnHome": "Mostrar en Inicio",
   "library.showInFavorites": "Mostrar en Favoritos",
   "library.showInFavoritesHint": "Los títulos marcados de esta biblioteca aparecen en Inicio y en el estante de Favoritos de la biblioteca. Si lo desactivas, se ocultan allí y las estrellas se mantienen.",
+  "library.showInSearch": "Mostrar en la búsqueda",
+  "library.showInSearchHint": "Desactivada, esta biblioteca queda fuera de Buscar en todo; se puede seguir explorando.",
   "library.mosaicHide": "Manténgase fuera del mosaico",
   "library.mosaicShow": "Mostrar en el mosaico",
   "library.mosaicHidden": "Se mantiene fuera del mosaico.",

@@ -449,13 +449,13 @@ const sameSettings = (left: AddonDownloadSettings, right: AddonDownloadSettings)
 function RemoteLibraryDialog({ library, serverName, localLibraries, users, usersError, busy, error, onRetryUsers, onClose, onSave, onRequestRemove }: {
   library: AdminRemoteLibrary; serverName: string; localLibraries: LibraryView[]; users: UserAccount[] | null; usersError: string; busy: boolean; error: string;
   onRetryUsers: () => void; onClose: () => void;
-  onSave: (patch: { name: string; enabled: boolean; showOnHome: boolean; showInContinueWatching: boolean; allowedUsers: string[]; browseMode: RemoteBrowseMode; mosaic: boolean; showInFavorites: boolean; downloadLibraryId?: string | null; downloadSettings?: AddonDownloadSettings | null }) => Promise<boolean>;
+  onSave: (patch: { name: string; enabled: boolean; showOnHome: boolean; showInContinueWatching: boolean; allowedUsers: string[]; browseMode: RemoteBrowseMode; mosaic: boolean; showInFavorites: boolean; showInSearch: boolean; downloadLibraryId?: string | null; downloadSettings?: AddonDownloadSettings | null }) => Promise<boolean>;
   onRequestRemove: () => void;
 }) {
   const [draft, setDraft] = useState(() => ({
     name: library.name, enabled: library.enabled,
     showOnHome: library.showOnHome, showInContinueWatching: library.showInContinueWatching,
-    mosaic: library.mosaic !== false, showInFavorites: library.showInFavorites !== false,
+    mosaic: library.mosaic !== false, showInFavorites: library.showInFavorites !== false, showInSearch: library.showInSearch !== false,
     browseMode: library.browseMode ?? (library.type === "mixed" ? "folders" : "titles") as RemoteBrowseMode,
     allowedUsers: new Set(library.allowedUsers),
     downloadSettings: initialRemoteDownloadSettings(library),
@@ -478,6 +478,7 @@ function RemoteLibraryDialog({ library, serverName, localLibraries, users, users
   const dirty = draft.name.trim() !== library.name || draft.enabled !== library.enabled
     || draft.showOnHome !== library.showOnHome || draft.showInContinueWatching !== library.showInContinueWatching
     || draft.mosaic !== (library.mosaic !== false) || draft.showInFavorites !== (library.showInFavorites !== false)
+    || draft.showInSearch !== (library.showInSearch !== false)
     || draft.browseMode !== (library.browseMode ?? (library.type === "mixed" ? "folders" : "titles"))
     || storageChanged
     || [...draft.allowedUsers].sort().join(",") !== [...library.allowedUsers].sort().join(",");
@@ -495,7 +496,7 @@ function RemoteLibraryDialog({ library, serverName, localLibraries, users, users
         onClick={() => void onSave({
           name: draft.name.trim(), enabled: draft.enabled,
           showOnHome: draft.showOnHome, showInContinueWatching: draft.showInContinueWatching,
-          mosaic: draft.mosaic, showInFavorites: draft.showInFavorites, browseMode: draft.browseMode,
+          mosaic: draft.mosaic, showInFavorites: draft.showInFavorites, showInSearch: draft.showInSearch, browseMode: draft.browseMode,
           allowedUsers: [...draft.allowedUsers],
           // Only a real storage edit is sent, so an unrelated change never validates -- and never
           // rewrites -- a rule that names a library that has since become unavailable. A storage
@@ -551,6 +552,8 @@ function RemoteLibraryDialog({ library, serverName, localLibraries, users, users
         <Checkbox checked={draft.showOnHome} disabled={busy} onChange={(value) => setDraft((current) => ({ ...current, showOnHome: value }))}>{t("library.showOnHome")}</Checkbox>
         <Checkbox checked={draft.showInFavorites} disabled={busy} onChange={(value) => setDraft((current) => ({ ...current, showInFavorites: value }))}>{t("library.showInFavorites")}</Checkbox>
         <p className="identify-hint">{t("library.showInFavoritesHint")}</p>
+        <Checkbox checked={draft.showInSearch} disabled={busy} onChange={(value) => setDraft((current) => ({ ...current, showInSearch: value }))}>{t("library.showInSearch")}</Checkbox>
+        <p className="identify-hint">{t("library.showInSearchHint")}</p>
       </div>
     </section>
     <section className="library-edit-section">

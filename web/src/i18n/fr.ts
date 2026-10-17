@@ -805,6 +805,8 @@ export const fr: Catalog = {
   "library.showOnHome": "Afficher sur l'accueil",
   "library.showInFavorites": "Afficher dans les favoris",
   "library.showInFavoritesHint": "Les titres marqués de cette bibliothèque apparaissent sur l'accueil et dans le rayon Favoris de la bibliothèque. La désactivation les masque à ces endroits et conserve les étoiles.",
+  "library.showInSearch": "Afficher dans la recherche",
+  "library.showInSearchHint": "Désactivée, cette bibliothèque est exclue de Rechercher partout ; la parcourir reste possible.",
   "library.mosaicHide": "Restez en dehors de la mosaïque",
   "library.mosaicShow": "Montrer dans la mosaïque",
   "library.mosaicHidden": "Il est tenu à l'écart de la mosaïque.",

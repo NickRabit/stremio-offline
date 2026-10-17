@@ -805,6 +805,8 @@ export const ptBR: Catalog = {
   "library.showOnHome": "Mostrar na página inicial",
   "library.showInFavorites": "Mostrar em Favoritos",
   "library.showInFavoritesHint": "Os títulos marcados desta biblioteca aparecem na página inicial e na prateleira Favoritos da biblioteca. Desativar isso os oculta ali e mantém as estrelas.",
+  "library.showInSearch": "Mostrar na busca",
+  "library.showInSearchHint": "Desativada, esta biblioteca fica fora de Buscar em tudo; navegar por ela continua possível.",
   "library.mosaicHide": "Fique fora do mosaico",
   "library.mosaicShow": "Mostrar no mosaico",
   "library.mosaicHidden": "É mantido fora do mosaico.",

@@ -259,7 +259,7 @@ const localSource = (
     stillAllowed(): boolean {
       const user = deps.user(context.userId);
       if (!user || user.disabled) return false;
-      return visibleLibraries(deps.libraries(), viewerOf(user)).some((library) => library.id === libraryId);
+      return visibleLibraries(deps.libraries(), viewerOf(user)).some((library) => library.id === libraryId && library.showInSearch !== false);
     },
     onReady(listener): () => void {
       return deps.localIndex.onReady(listener);
@@ -364,14 +364,16 @@ export async function discoverSources(
   const sources: Array<Omit<SearchSource, "id">> = [];
 
   if (request.sources.includes("local")) {
-    for (const library of visibleLibraries(deps.libraries(), viewer)) {
+    // A library switched out of search is left out of every search scope, like an addon kept out
+    // of all-addon search; browsing it is unaffected.
+    for (const library of visibleLibraries(deps.libraries(), viewer).filter((candidate) => candidate.showInSearch !== false)) {
       sources.push(localSource(deps, context, library.id, library.name));
     }
   }
 
   if (request.sources.includes("remote")) {
     const libraries = await deps.remote.visibleLibraries(deps.mediaAuthority(authority.userId));
-    for (const library of libraries) {
+    for (const library of libraries.filter((candidate) => candidate.showInSearch !== false)) {
       const generation = deps.remote.libraryGeneration(library.id);
       if (generation === undefined) continue;
       sources.push(remoteSource(deps, context, library, generation));
