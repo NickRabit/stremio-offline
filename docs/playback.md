@@ -20,14 +20,16 @@ the picture through.
 The current mode is shown in the player header; the real source codecs appear
 in playback settings.
 
-Quality other than **Original** transcodes a file that is taller than the chosen
-quality or heavier than its bitrate, because shrinking the picture cannot be done
-by copying. A file that already fits — no taller than the quality, and its overall
-bitrate under three quarters of the quality's cap (1080p 6 Mb/s, 720p 3 Mb/s,
-480p 1.5 Mb/s), leaving room for peaks above the average — is copied instead,
-which costs the CPU next to nothing. When the probe found no height or bitrate,
-the file is transcoded. On a NAS without QuickSync, stay on original quality —
-the mode label then reads *remuxed* and the CPU stays idle. See
+Quality other than **Original** transcodes the picture when the file is taller than
+the chosen quality or heavier than it allows, because neither can be reduced by
+copying. A file that already fits is copied instead, which costs the CPU next to
+nothing: no taller than the quality, an overall bitrate of at most three quarters
+of the quality's cap (1080p 6 Mb/s, 720p 3 Mb/s, 480p 1.5 Mb/s) so its peaks above
+the average stay under it, and a picture codec the player can take as it is.
+When the probe found no height or bitrate, or the player refused a copy, the
+picture is transcoded; the sound is converted whenever the player cannot take it
+as it is. On a NAS without QuickSync, stay on original quality — the mode label
+then reads *Direct Stream* and the CPU stays idle. See
 [Hardware acceleration](hardware-acceleration.md).
 
 When playback stalls repeatedly, the player offers a lower quality; a smaller
