@@ -686,6 +686,71 @@ test("an addon address that redirects to a manifest keeps the ordinary transfer"
   assert.match(await response.text(), /\/api\/media\//, "the segment is proxied, not handed out raw");
 });
 
+test("a media-server hand-over that runs past the range is cancelled at the source once the range is sent", async (t) => {
+  const harness = await mount(new RemoteReadAhead(64));
+  t.after(harness.close);
+  const file = filmBytes(256);
+  let cancelled = false;
+  const sources = harness.mediaSources as unknown as {
+    open(stream: StreamItem, owner: ResourceOwner, args: { method: string; range?: string }, signal?: AbortSignal): Promise<Response>;
+    assertCurrent(): void;
+  };
+  sources.assertCurrent = () => undefined;
+  sources.open = async (_stream, _owner, args) => {
+    const part = partOf(file, args.range ?? "");
+    if (part.start < 128) return new Response(file.subarray(part.start, part.end + 1), { status: 206, headers: { "content-range": `bytes ${part.start}-${part.end}/${file.length}` } });
+    // A source that keeps sending past the range it was asked for.
+    const endless = new ReadableStream<Uint8Array>({
+      pull(controller) { controller.enqueue(new Uint8Array(file.subarray(128, 256))); },
+      cancel() { cancelled = true; },
+    }, { highWaterMark: 0 });
+    return new Response(endless, { status: 206, headers: { "content-range": `bytes 128-255/${file.length}` } });
+  };
+  const resourceId = harness.seedRemote();
+
+  const response = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: "bytes=0-191" } });
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()), file.subarray(0, 192));
+  await waitFor(() => cancelled);
+});
+
+test("an ordinary addon transfer resumed with the wrong part of the file is cut, never spliced", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const file = filmBytes(256);
+  const host = await scriptedHost(t, (_req, res, index) => {
+    res.writeHead(200, { "content-type": "video/x-msvideo", "content-length": file.length });
+    if (index === 0) { res.write(file.subarray(0, 100)); setTimeout(() => res.destroy(), 10); return; }
+    // The resume is answered with the whole file again, from its first byte.
+    res.end(file);
+  });
+  const resourceId = registry.mediaStream({ url: `${host.base}/film.avi` } as StreamItem, ADA).resourceId;
+
+  const response = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada" } });
+  const got = await bodyOf(response);
+  assert.equal(host.ranges[1], "bytes=100-", "the transfer was picked up where it stopped");
+  assert.deepEqual(got, file.subarray(0, got!.length), "every byte sent is the byte promised at its place");
+});
+
+test("a refused hand-over closes the viewer's response even when the source never settles its cancel", async (t) => {
+  const harness = await mount(new RemoteReadAhead(64));
+  t.after(harness.close);
+  const file = filmBytes(256);
+  const host = await scriptedHost(t, (req, res, index) => {
+    const part = partOf(file, String(req.headers.range));
+    if (index === 0) { res.writeHead(206, part.headers); res.write(file.subarray(0, 40)); setTimeout(() => res.destroy(), 10); return; }
+    // The hand-over answers the wrong part and then never finishes.
+    res.writeHead(200, { "content-type": "video/x-msvideo", "content-length": file.length });
+    res.write(file.subarray(0, 10));
+  });
+  const resourceId = registry.mediaStream({ url: `${host.base}/film.avi` } as StreamItem, ADA).resourceId;
+
+  const outcome = await Promise.race([
+    fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: "bytes=0-127" } }).then((response) => bodyOf(response)).then(() => "closed"),
+    new Promise((resolve) => setTimeout(() => resolve("open"), 2_000)),
+  ]);
+  assert.equal(outcome, "closed");
+});
+
 test("an addon playlist keeps the ordinary transfer and is still rewritten", async (t) => {
   const harness = await mount();
   t.after(harness.close);

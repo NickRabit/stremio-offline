@@ -2,7 +2,7 @@ import type express from "express";
 import { once } from "node:events";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { Readable, Transform } from "node:stream";
+import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { AirPlayAccess } from "../airplay-access.js";
 import { INTERNAL_TOKEN } from "../auth.js";
@@ -103,20 +103,23 @@ async function writeBlocks(
   return position;
 }
 
-/** Passes on at most `bytes` and ends there. */
-const limited = (bytes: number) => {
-  let ended = false;
-  return new Transform({
-    transform(chunk: Buffer, _encoding, done) {
-      if (ended) return done();
-      const piece = chunk.subarray(0, bytes);
+/** Writes exactly `bytes` of `body` and ends the response there; the source is cancelled the
+ *  moment they are written, so a host sending past the range is not read on. */
+async function sendExactly(body: ReadableStream<Uint8Array>, res: express.Response, bytes: number, signal: AbortSignal): Promise<void> {
+  const reader = body.getReader();
+  try {
+    while (bytes > 0) {
+      const { done, value } = await reader.read();
+      if (done) throw new Error("The source ended before the promised range.");
+      const piece = value.subarray(0, bytes);
       bytes -= piece.length;
-      if (piece.length) this.push(piece);
-      if (bytes <= 0) { ended = true; this.push(null); }
-      done();
-    },
-  });
-};
+      if (!res.write(piece)) await once(res, "drain", { signal });
+    }
+  } finally {
+    void reader.cancel().catch(() => undefined);
+  }
+  res.end();
+}
 
 /** A demuxer that only jumped somewhere has hung up by the end of this, though the blocks it
  *  was sent still sat in the socket; only a reader that keeps going is handed the rest. */
@@ -431,8 +434,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
             // not sent.
             const answered = /^bytes (\d+)-(\d+)\//.exec(rest.headers.get("content-range") ?? "");
             if (rest.status !== 206 || Number(answered?.[1]) !== position || Number(answered?.[2]) < last || !rest.body) { discard(rest.body); res.destroy(); return; }
-            res.setMaxListeners(res.getMaxListeners() + 1);
-            await pipeline(Readable.fromWeb(rest.body as never), limited(last - position + 1), res, { signal: controller.signal });
+            await sendExactly(rest.body, res, last - position + 1, controller.signal);
           } catch { if (!res.writableEnded) res.destroy(); }
           return;
         }
@@ -702,7 +704,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       const promised = /^bytes \d+-(\d+)\//.exec(String(res.getHeader("content-range") ?? ""));
       const answered = /^bytes (\d+)-(\d+)\//.exec(upstream.headers.get("content-range") ?? "");
       if (upstream.status !== 206 || !promised || !answered || Number(answered[1]) !== from || Number(answered[2]) < Number(promised[1])) {
-        await upstream.body.cancel().catch(() => undefined);
+        try { void upstream.body.cancel().catch(() => undefined); } catch { /* already disturbed */ }
         log("WARN", "The source handed on the wrong part of the file", { req: req.id, url: raw, status: upstream.status, range: headers.range, answered: upstream.headers.get("content-range") });
         return void res.destroy();
       }
@@ -764,8 +766,10 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       await sleep(SOURCE_RETRY_MS * resumed);
       const resumeRange = `bytes=${from + delivered}-${until !== undefined ? until : ""}`;
       const next = await safeFetch(raw, { headers: { ...headers, range: resumeRange }, signal: controller.signal }).catch(() => undefined);
-      if (!next || ![200, 206].includes(next.status) || !next.body) {
-        await next?.body?.cancel().catch(() => undefined);
+      // Only the very next bytes, reaching the end already promised, may be spliced in.
+      const resumed206 = /^bytes (\d+)-(\d+)\//.exec(next?.headers.get("content-range") ?? "");
+      if (!next || next.status !== 206 || !next.body || !resumed206 || Number(resumed206[1]) !== from + delivered || Number(resumed206[2]) < from + expected - 1) {
+        try { void next?.body?.cancel().catch(() => undefined); } catch { /* already disturbed */ }
         noteSourceQuiet(resource.parent ?? resource.id);
         log("WARN", "The source would not pick the transfer up", { req: req.id, url: raw, at: from + delivered, status: next?.status });
         throw broke ?? new Error("The source ended the transfer early.");
