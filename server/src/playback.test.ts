@@ -857,9 +857,9 @@ const later = () => Date.now() + 3_600_000;
 
 /** A probe that honours the caller's signal the way the real one does, so a cancel lands promptly. */
 const cancelableProbe = (manager: any) => {
-  const started: string[] = [];
+  const started: Array<{ url: string; path: string; signal?: AbortSignal }> = [];
   manager.probeSource = (stream: { url: string }, signal?: AbortSignal) => new Promise((resolve, reject) => {
-    started.push(stream.url);
+    started.push({ url: stream.url, path: manager.proxyPath(stream), signal });
     const timer = setTimeout(() => resolve(cancelableInfo), 60);
     signal?.addEventListener("abort", () => { clearTimeout(timer); reject(signal.reason); }, { once: true });
   });
@@ -889,7 +889,7 @@ test("an inspection whose caller already aborted reaches neither the source nor 
   assert.equal(asked, 0);
 });
 
-test("one request's abort leaves another request's inspection of the same source alone", async (t) => {
+test("two requests inspecting the same source at once share one probe", async (t) => {
   const manager = new PlaybackManager(tmp("test-cancelable-inspect")) as any;
   const started = cancelableProbe(manager);
   const url = "https://cdn.example/shared.mkv";
@@ -903,13 +903,83 @@ test("one request's abort leaves another request's inspection of the same source
   const second = new AbortController();
   const canceled = manager.inspect(one.stream, first.signal);
   const kept = manager.inspect(two.stream, second.signal);
-  assert.equal(started.length, 2, "a cold miss is independent per private resource");
+  assert.equal(started.length, 1, "both requests joined the same cold probe");
+
+  const [firstResult, secondResult] = await Promise.all([canceled, kept]);
+  assert.equal(firstResult?.duration, 120);
+  assert.equal(secondResult?.duration, 120);
+});
+
+test("the probe outlives the request it started through", async (t) => {
+  const manager = new PlaybackManager(tmp("test-cancelable-restart")) as any;
+  const started = cancelableProbe(manager);
+  const url = "https://cdn.example/restart.mkv";
+  const owner = (sid: string): ResourceOwner => ({ userId: "usr_00000001", sid, expiresAt: later() });
+  const one = registry.mediaStream({ url }, owner("sid-one"));
+  const two = registry.mediaStream({ url }, owner("sid-two"));
+  t.after(() => { registry.remove(one.resourceId); registry.remove(two.resourceId); });
+
+  const first = new AbortController();
+  const second = new AbortController();
+  const canceled = manager.inspect(one.stream, first.signal);
+  const kept = manager.inspect(two.stream, second.signal);
+  assert.equal(started.length, 1);
+  assert.equal(started[0].path, manager.proxyPath(one.stream), "the first request started the probe");
 
   first.abort();
   await assert.rejects(canceled, aborted);
-  assert.equal((await kept)?.duration, 120, "the other request finished untouched");
-  assert.equal(started.length, 2, "it was neither restarted nor cancelled");
-  assert.equal(manager.cancelableInspecting.get(first.signal)?.size, 0, "the cancelled request kept no entry");
+  assert.equal(started.length, 2, "the probe restarted through the remaining request");
+  assert.equal(started[1].path, manager.proxyPath(two.stream), "the restart used the second request's path");
+  assert.equal((await kept)?.duration, 120);
+});
+
+test("the probe stops when every request has left", async (t) => {
+  const manager = new PlaybackManager(tmp("test-cancelable-empty")) as any;
+  const started = cancelableProbe(manager);
+  const url = "https://cdn.example/empty.mkv";
+  const owner = (sid: string): ResourceOwner => ({ userId: "usr_00000001", sid, expiresAt: later() });
+  const one = registry.mediaStream({ url }, owner("sid-one"));
+  const two = registry.mediaStream({ url }, owner("sid-two"));
+  t.after(() => { registry.remove(one.resourceId); registry.remove(two.resourceId); });
+
+  const first = new AbortController();
+  const second = new AbortController();
+  const canceled = manager.inspect(one.stream, first.signal);
+  const kept = manager.inspect(two.stream, second.signal);
+  first.abort();
+  await assert.rejects(canceled, aborted);
+  second.abort();
+  await assert.rejects(kept, aborted);
+
+  assert.equal(started.at(-1)?.signal?.aborted, true, "the running probe was cancelled");
+  assert.equal(manager.cancelableInspecting.size, 0, "the empty entry was removed");
+  assert.equal(manager.inspected.has(manager.inspectionKey(one.stream)), false, "the aborted probe cached nothing");
+
+  const retry = manager.inspect(one.stream, new AbortController().signal);
+  assert.equal((await retry)?.duration, 120);
+  assert.equal(started.length, 3, "the later request probed again");
+});
+
+test("a request that left is not answered later", async (t) => {
+  const manager = new PlaybackManager(tmp("test-cancelable-left")) as any;
+  const started = cancelableProbe(manager);
+  const url = "https://cdn.example/left.mkv";
+  const owner = (sid: string): ResourceOwner => ({ userId: "usr_00000001", sid, expiresAt: later() });
+  const one = registry.mediaStream({ url }, owner("sid-one"));
+  const two = registry.mediaStream({ url }, owner("sid-two"));
+  t.after(() => { registry.remove(one.resourceId); registry.remove(two.resourceId); });
+
+  const first = new AbortController();
+  const second = new AbortController();
+  const kept = manager.inspect(one.stream, first.signal);
+  let answered = false;
+  const canceled = manager.inspect(two.stream, second.signal).then((info: typeof cancelableInfo | undefined) => { answered = true; return info; });
+  assert.equal(started.length, 1);
+
+  second.abort();
+  await assert.rejects(canceled, aborted);
+  assert.equal((await kept)?.duration, 120);
+  assert.equal(answered, false, "the shared completion did not answer the request that left");
 });
 
 test("a cancelled inspection caches nothing and a retry really probes", async () => {
@@ -920,7 +990,7 @@ test("a cancelled inspection caches nothing and a retry really probes", async ()
   const canceled = manager.inspect(stream, first.signal);
   first.abort();
   await assert.rejects(canceled, aborted);
-  assert.equal(manager.cancelableInspecting.get(first.signal)?.size ?? 0, 0, "the aborted entry was dropped");
+  assert.equal(manager.cancelableInspecting.size, 0, "the aborted entry was dropped");
 
   const retry = new AbortController();
   assert.equal((await manager.inspect(stream, retry.signal))?.duration, 120, "the retry probed for real");
