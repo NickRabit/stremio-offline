@@ -869,10 +869,10 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .settings-page .support-link span{display:grid;gap:3px}
 .settings-page .support-link small{color:var(--muted)}
 .settings-page .support-link:hover{border-color:var(--accent)}
-/* The tab strip wraps instead of scrolling. At phone width each tab takes its own row. */
+/* The tab strip wraps instead of scrolling. At phone width the tabs sit two to a row. */
 .settings-page .section-filter .library-shelf-segments{flex:0 1 auto;flex-wrap:wrap;justify-content:flex-start}
 .settings-page .section-filter .library-shelf-segments button{flex:0 0 auto;padding:0 14px;overflow:visible;text-overflow:clip}
-@media(max-width:700px){.settings-page .section-filter .library-shelf-segments button{flex:1 1 100%}}
+@media(max-width:700px){.settings-page .section-filter .library-shelf-segments button{flex:1 1 calc(50% - 3px);min-width:0;padding:4px 10px;white-space:normal;line-height:1.2;overflow-wrap:anywhere}}
 .settings-page .settings-grid{grid-template-columns:minmax(0,1fr);gap:18px}
 .settings-page .settings-section{grid-column:1;padding:22px 24px}
 .settings-page .settings-section-head{margin-bottom:16px}

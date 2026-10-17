@@ -9,7 +9,7 @@ empty button never sits there looking broken.
 
 1. **Cinemeta**, always asked first.
 2. **TMDB**, only when Cinemeta has no usable trailer *and* a TMDB API key is
-   saved in **Settings → TMDB metadata**.
+   saved in **Settings → Services → TMDB metadata**.
 
 TMDB is the same optional key that supplies titles, descriptions and posters in
 the language of the interface. Without it the catalogue addons answer alone and

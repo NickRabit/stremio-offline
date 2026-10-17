@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MediaServerManager } from "./MediaServerManager";
 import { setLocale } from "./i18n";
+import { en } from "./i18n/en";
 import type { AdminRemoteLibrary, LibraryView, MediaServerConnection, UserAccount } from "./types";
 
 const json = (body: unknown, status = 200) =>
@@ -112,9 +113,24 @@ const ruleBlock = (dialog: Element, index = 0) => dialog.querySelectorAll<HTMLEl
 const ruleLibrary = (dialog: Element, index = 0) => ruleBlock(dialog, index).querySelectorAll<HTMLSelectElement>("select")[0]!;
 const ruleSubfolder = (dialog: Element, index = 0) => ruleBlock(dialog, index).querySelector<HTMLInputElement>("input")!;
 const ruleLayout = (dialog: Element, index = 0) => ruleBlock(dialog, index).querySelectorAll<HTMLSelectElement>("select")[1]!;
-const saveButton = () => byText(".dialog-foot button", "Save")!;
+const saveButton = () => byText(".dialog-foot button", "Save changes")!;
 
 describe("RemoteLibraryDialog", () => {
+  it("uses the local editor's title, sections and server row", async () => {
+    const dialog = await render();
+    expect(document.querySelector('[role="dialog"]')?.getAttribute("aria-label")).toBe(en["library.editLibrary"]);
+    expect(dialog.querySelector(".library-edit-body")).not.toBeNull();
+    expect(dialog.querySelector(".library-edit-folder")?.textContent).toContain(connection().name);
+    expect([...dialog.querySelectorAll(".library-picker-section-head h3")].map((heading) => heading.textContent)).toEqual([
+      en["library.detailsHeading"],
+      en["mediaServer.availabilityHeading"],
+      en["mediaServer.grantsHeading"],
+      en["library.presentationHeading"],
+      en["save.toLibrary"],
+      en["library.actionsHeading"],
+    ]);
+  });
+
   it("saves the shared display settings and the browse mode", async () => {
     const dialog = await render();
     await click(byText(".library-check", "Show a mosaic of covers")!);
@@ -123,7 +139,7 @@ describe("RemoteLibraryDialog", () => {
       mode.value = "titles";
       mode.dispatchEvent(new Event("change", { bubbles: true }));
     });
-    await click(byText(".dialog-foot button", "Save")!);
+    await click(saveButton());
     expect(patches).toHaveLength(1);
     expect(patches[0]!.url).toBe("/api/remote-libraries/rlib_a");
     expect(patches[0]!.body).toMatchObject({ browseMode: "titles", mosaic: false, showInFavorites: true });
