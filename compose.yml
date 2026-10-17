@@ -35,6 +35,8 @@ services:
       ALLOW_PRIVATE_ADDONS: "${ALLOW_PRIVATE_ADDONS:-0}"
       ALLOW_ADDON_HOSTS: "${ALLOW_ADDON_HOSTS:-}"
       RESTRICTED_MODE: "${RESTRICTED_MODE:-0}"
+      # Search everywhere: one search over catalogs and libraries. See docs/configuration.md.
+      SEARCH_EVERYWHERE_ENABLED: "${SEARCH_EVERYWHERE_ENABLED:-0}"
       # Optional path of a key you manage yourself. Empty lets the server create
       # /data/media-server.key on first start and reuse it. See
       # docs/media-server-management.md.
