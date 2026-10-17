@@ -450,6 +450,35 @@ describe("Player stall advice", () => {
     expect(hint()).toBeNull();
   });
 
+  /** One stall at `seconds` that either resumes before the grace is over or never does. */
+  const earlyStall = async (seconds: number, resumes: boolean) => {
+    const video = host.querySelector("video")!;
+    Object.defineProperty(video, "currentTime", { configurable: true, get: () => seconds, set: () => undefined });
+    await act(async () => { video.dispatchEvent(new Event("waiting")); });
+    if (resumes) await act(async () => { vi.advanceTimersByTime(800); video.dispatchEvent(new Event("playing")); });
+    await act(async () => { vi.advanceTimersByTime(2_500); });
+  };
+
+  it("counts an early stall that does not resume, so a link that cannot deliver is still advised", async () => {
+    sessionShape = { mode: "transcode", url: "/api/playback/sess1/1/master.m3u8", acceleration: true };
+    await render();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      for (let i = 0; i < 3; i += 1) await earlyStall(1.9, false);
+      expect(hint()).not.toBeNull();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("does not count early stalls that resume within the grace", async () => {
+    sessionShape = { mode: "transcode", url: "/api/playback/sess1/1/master.m3u8", acceleration: true };
+    await render();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      for (let i = 0; i < 3; i += 1) await earlyStall(1.9, true);
+      expect(hint()).toBeNull();
+    } finally { vi.useRealTimers(); }
+  });
+
   it("still offers it when a conversion keeps stalling later on", async () => {
     sessionShape = { mode: "transcode", url: "/api/playback/sess1/1/master.m3u8", acceleration: true };
     await render();

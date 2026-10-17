@@ -206,6 +206,9 @@ const SHORTCUT_KEYS = new Set([" ", "k", "ArrowLeft", "ArrowRight", "c", "t", "f
 const QUALITIES = [1080, 720, 480];
 /** Seconds into a conversion's playlist that the server hands over: two 2 s segments. */
 const CONVERSION_SETTLE_S = 4;
+/** How long a stall in that stretch may last before it counts after all: a handover hiccup is
+ *  over within about a second, a link that cannot deliver is not. */
+const EARLY_STALL_GRACE_MS = 2_000;
 const lowerQuality = (current: number | null) => current === null || current === 1080 ? 720 : current === 720 ? 480 : null;
 
 const CHANNELS: Record<number, string> = { 1: "mono", 2: "stereo", 6: "5.1", 8: "7.1" };
@@ -345,6 +348,8 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const [error, setError] = useState("");
   const stallsRef = useRef<number[]>([]);
   const bufferTimerRef = useRef<number | undefined>(undefined);
+  /** A stall inside a conversion's first two segments, waiting to see whether playback resumes. */
+  const earlyStallRef = useRef<number | undefined>(undefined);
   const [qualityHint, setQualityHint] = useState<number | null>(null);
   const [downloadState, setDownloadState] = useState<"idle" | "busy" | "done">("idle");
   const [deviceDownloadBusy, setDeviceDownloadBusy] = useState(false);
@@ -666,6 +671,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     return () => {
       disposed = true; detach();
       if (bufferTimerRef.current !== undefined) { clearTimeout(bufferTimerRef.current); bufferTimerRef.current = undefined; }
+      if (earlyStallRef.current !== undefined) { clearTimeout(earlyStallRef.current); earlyStallRef.current = undefined; }
       if (seekEpochRef.current === epoch) { seekEpochRef.current += 1; pendingSeekRef.current = null; seekingRef.current = false; seekInFlightRef.current = false; }
       video.pause(); video.removeAttribute("src"); video.load();
       const id = sessionRef.current; sessionRef.current = null;
@@ -849,17 +855,26 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   };
   const clearBuffering = () => {
     if (bufferTimerRef.current !== undefined) { clearTimeout(bufferTimerRef.current); bufferTimerRef.current = undefined; }
+    if (earlyStallRef.current !== undefined) { clearTimeout(earlyStallRef.current); earlyStallRef.current = undefined; }
     setBuffering(false);
   };
 
-  /** Repeated stalls outside a seek signal a weak link; offer a lower quality. A conversion's
-   *  first two segments do not count: hls.js learns of the third only on its first playlist
-   *  reload, so a hiccup there is the handover, not the network. */
+  /** Repeated stalls outside a seek signal a weak link; offer a lower quality. A hiccup inside a
+   *  conversion's first two segments is the handover -- hls.js learns of the third only on its
+   *  first playlist reload -- so it counts only when playback has not resumed a while later. */
   const noteStall = () => {
     showBufferSoon();
     const video = videoRef.current;
-    const settling = modeRef.current === "direct" ? 1 : CONVERSION_SETTLE_S;
-    if (!video || video.seeking || seekingRef.current || video.currentTime < settling) return;
+    if (!video || video.seeking || seekingRef.current) return;
+    if (modeRef.current === "direct" ? video.currentTime < 1 : video.currentTime < CONVERSION_SETTLE_S) {
+      if (modeRef.current === "direct" || earlyStallRef.current !== undefined) return;
+      earlyStallRef.current = window.setTimeout(() => { earlyStallRef.current = undefined; countStall(); }, EARLY_STALL_GRACE_MS);
+      return;
+    }
+    countStall();
+  };
+
+  const countStall = () => {
     const now = Date.now();
     stallsRef.current = [...stallsRef.current.filter((at) => now - at < 60_000), now];
     if (stallsRef.current.length < 3) return;
