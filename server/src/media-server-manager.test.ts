@@ -1398,6 +1398,37 @@ test("original proof: a progress save right after the playback guard re-reads no
   }, { clock: () => now });
 });
 
+test("original proof: a playback preparation right after the detail asks the provider nothing more", async () => {
+  await withHarness(async (harness) => {
+    const { connection, library } = await seedPlayable(harness);
+    const ref = refFor(harness, connection.id, library.id, "m1", "v1");
+    await harness.manager.itemDetail(harness.admin, library.id, "m1");
+    await harness.manager.itemVersions(harness.admin, library.id, "m1");
+    const count = (name: string) => harness.server.calls.filter((call) => call === name).length;
+    const opened = [count("detail"), count("ancestors"), count("versions")];
+    for (let check = 0; check < 4; check += 1) await harness.manager.revalidateOriginal(harness.admin, ref, undefined, { shared: true });
+    assert.deepEqual([count("detail"), count("ancestors"), count("versions")], opened);
+    harness.server.versionsOf["m1"] = [{ id: "v2" }];
+    await assert.rejects(harness.manager.revalidateOriginal(harness.admin, ref), { code: "not-found" });
+    await assert.rejects(harness.manager.revalidateOriginal(harness.admin, ref, undefined, { shared: true }), { code: "not-found" }, "a fresh check that saw the version go leaves nothing for the next shared one to reuse");
+  });
+});
+
+test("original proof: a cold playback preparation costs one Detail and one PlaybackInfo when membership is already proved", async () => {
+  let now = 1_000_000;
+  await withHarness(async (harness) => {
+    const { connection, library } = await seedPlayable(harness);
+    const ref = refFor(harness, connection.id, library.id, "m1", "v1");
+    await harness.manager.itemDetail(harness.admin, library.id, "m1");
+    now += 60_000;
+    const count = (name: string) => harness.server.calls.filter((call) => call === name).length;
+    const before = [count("detail"), count("ancestors"), count("versions")];
+    await harness.manager.revalidateOriginal(harness.admin, ref, undefined, { shared: true });
+    await harness.manager.revalidateOriginal(harness.admin, ref, undefined, { shared: true });
+    assert.deepEqual([count("detail") - before[0]!, count("ancestors") - before[1]!, count("versions") - before[2]!], [1, 0, 1]);
+  }, { clock: () => now });
+});
+
 test("original proof: a failed revalidation leaves no row for the next save to reuse", async () => {
   await withHarness(async (harness) => {
     const { connection, library } = await seedPlayable(harness);

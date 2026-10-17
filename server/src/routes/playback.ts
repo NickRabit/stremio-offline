@@ -93,7 +93,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     const controller = new AbortController();
     res.once("close", () => { if (!res.writableEnded) controller.abort(); });
     const need = contentOf(stream);
-    if (remote) await mediaSources.authorize(stream, owner, controller.signal);
+    if (remote) await mediaSources.authorize(stream, owner, controller.signal, { shared: true });
     requireAccess(req, need);
     // A remote original is probed through the owner-bound resource proxy: the internal address
     // is never handed to FFprobe, and an unbound remote source is never resolved internally.
@@ -104,7 +104,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       requireAccess(req, need);
       if (remote) {
         mediaSources.assertCurrent(stream, owner);
-        await mediaSources.authorize(stream, owner, controller.signal);
+        await mediaSources.authorize(stream, owner, controller.signal, { shared: true });
         controller.signal.throwIfAborted();
       }
       if (res.destroyed || res.writableEnded) return;
@@ -136,7 +136,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     // The resource is minted in one step with the check: everything the request awaited --
     // the source lookup included -- happened before it.
     const need = contentOf(stream);
-    if (remote) await mediaSources.authorize(stream, owner, controller.signal);
+    if (remote) await mediaSources.authorize(stream, owner, controller.signal, { shared: true });
     requireAccess(req, need);
     const prepared = mediaResources.mediaStream(stream, owner);
     let started;
@@ -155,7 +155,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       requireAccess(req, need);
       if (remote) {
         mediaSources.assertCurrent(stream, owner);
-        await mediaSources.authorize(stream, owner, controller.signal);
+        await mediaSources.authorize(stream, owner, controller.signal, { shared: true });
         controller.signal.throwIfAborted();
       }
       playbackOwners.set(started.id, { owner, resourceId: prepared.resourceId });

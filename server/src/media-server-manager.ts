@@ -1619,9 +1619,10 @@ export class MediaServerManager {
 
   /** Proves a sealed reference still names a live, permitted original: the actor owns it, the
    *  records still match, and the named version is still an ordinary file. Reads no bytes and
-   *  writes no upstream history. It always contacts the provider, and a success stores or
-   *  refreshes the original proof a later open reuses; a failure past the local check drops it. */
-  async revalidateOriginal(authority: MediaServerAuthority, ref: RemoteContentRef, signal?: AbortSignal, options?: { download?: boolean }): Promise<void> {
+   *  writes no upstream history. It contacts the provider unless `shared` lets a playback
+   *  preparation reuse the item's short-window reads, and a success stores or refreshes the
+   *  original proof a later open reuses; a failure past the local check drops it. */
+  async revalidateOriginal(authority: MediaServerAuthority, ref: RemoteContentRef, signal?: AbortSignal, options?: { download?: boolean; shared?: boolean }): Promise<void> {
     const request = this.requestSignal(signal);
     if (!isRemoteContentRef(ref)) throw notFound("That media-server item does not exist.");
     if (ref.subtitleIndex !== undefined) throw notFound("That media-server item does not exist.");
@@ -1630,6 +1631,19 @@ export class MediaServerManager {
     try {
       const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId, download: options?.download === true }, request);
       this.recheckRef(authority, request, ref);
+      if (options?.shared) {
+        // One playback preparation reads the item the way the detail and the sources did a
+        // moment before: the shared row and versions of the short window, and the ancestry of a
+        // membership proof. The playback guard and download admission never take this path.
+        const found = await this.versionsUnder(authority, request, library, connection, session, ref.itemId, "cached");
+        this.recheckRef(authority, request, ref);
+        if (!found.versions.some((version) => version.id === ref.mediaSourceId)) throw notFound("That media-server source is no longer available.");
+        this.putOriginalProof({
+          actorId: user.id, libraryId: library.id, connectionId: connection.id, generation: connection.generation,
+          secretRef: connection.secretRef, itemId: ref.itemId, mediaSourceId: ref.mediaSourceId, at: this.clock(),
+        });
+        return;
+      }
       const runtime = this.liveRuntime(connection);
       const item = await this.upstream(connection, request, () => session.provider.detail(session.token, connection.accountId, ref.itemId, request));
       this.recheckRef(authority, request, ref);
