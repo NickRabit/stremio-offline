@@ -1,5 +1,13 @@
 # Design review: Search everywhere
 
+## Review status
+
+Reviewed on 2026-10-17. Read [the review and recommended design](search-everywhere-review.md)
+before implementation. It resolves the open questions below, including the TV
+entry point, privacy scope, conflicting identities and incremental delivery.
+This file retains the original brief; where proposals differ, the review's
+recommendations take precedence. No search implementation ships in this PR.
+
 ## Role
 
 You are an independent product/UX and frontend/backend architecture reviewer.
