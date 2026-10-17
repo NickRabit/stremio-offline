@@ -117,8 +117,6 @@
   <string name="home_row_failed">No se pudo cargar esta fila.</string>
   <string name="home_next_episode">Siguiente episodio</string>
   <string name="home_resume">Continuar</string>
-  <string name="home_open_episode">Abrir episodio</string>
-  <string name="home_open_title">Abrir título</string>
   <string name="home_new_episode">Nuevo episodio</string>
   <string name="home_empty_title">Aquí todavía no hay nada</string>
   <string name="home_empty_text">Descarga algo o empieza a ver algo y aparecerá aquí.</string>

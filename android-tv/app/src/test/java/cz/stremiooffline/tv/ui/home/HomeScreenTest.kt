@@ -534,6 +534,7 @@ class HomeScreenTest {
     assertEquals("series", action.args.type)
     assertEquals("tt1", action.args.meta.id)
     assertEquals(ResumeEpisode("series:x:1:2", 1, 2), action.args.episode)
+    assertEquals(true, action.args.autoPlay)
   }
 
   @Test

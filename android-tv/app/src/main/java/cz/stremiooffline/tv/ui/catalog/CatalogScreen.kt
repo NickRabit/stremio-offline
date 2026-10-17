@@ -56,6 +56,8 @@ data class CatalogDetailArgs(
   val addonKey: String? = null,
   /** Every stored key this title stands for when it was opened from a Continue watching card. */
   val forgetKeys: List<String> = emptyList(),
+  /** Opened from Continue watching: Play is pressed as soon as the sources allow. */
+  val autoPlay: Boolean = false,
 )
 
 private enum class CatalogPanel { Catalogs, Genres }

@@ -69,7 +69,7 @@ class RemoteHomeCardTest {
   }
 
   @Test
-  fun `OK on a remote card opens its native detail with opaque identity only`() {
+  fun `OK on a remote card opens its native detail with opaque identity and plays at once`() {
     val remote = decode(movie) as HomeCard.Remote
     val action = actionFor(remote)
     assertTrue(action is HomeAction.OpenRemote)
@@ -80,5 +80,6 @@ class RemoteHomeCardTest {
     assertEquals("iA", data.item.id)
     assertEquals("movie", data.item.type)
     assertEquals("/img/p", data.item.poster)
+    assertEquals(true, data.autoPlay)
   }
 }

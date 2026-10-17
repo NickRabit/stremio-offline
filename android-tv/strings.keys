@@ -110,8 +110,6 @@ home.retry
 home.rowFailed
 home.nextEpisode
 home.resume
-home.openEpisode
-home.openTitle
 home.newEpisode
 home.emptyTitle
 home.emptyText

@@ -44,11 +44,7 @@ fun cardLabel(card: HomeCard): Int? = when (card) {
   is HomeCard.ResumeFile -> R.string.home_resume
   is HomeCard.Completed -> R.string.player_play
   is HomeCard.Episode -> R.string.home_new_episode
-  is HomeCard.ResumeCatalogue -> when {
-    card.pending -> R.string.home_next_episode
-    card.type == "series" -> R.string.home_open_episode
-    else -> R.string.home_open_title
-  }
+  is HomeCard.ResumeCatalogue -> if (card.pending) R.string.home_next_episode else R.string.home_resume
   else -> null
 }
 
@@ -116,9 +112,9 @@ fun heroDescription(card: HomeCard, meta: MetaDto?): String? =
     (card as? HomeCard.ResumeFile)?.subtitle?.takeIf { it.isNotBlank() }
   }
 
-/** Where OK on a card goes, for Home and for Continue watching alike: the version the card was
- *  written from when it names one, the title's own detail when it is bound to a title, else the
- *  player, the library folder or the catalogue detail the kind has always opened. */
+/** Where OK on a card goes, for Home and for Continue watching alike: a remembered title opens
+ *  its detail and plays at once, a pending next episode opens its detail without playing, and the
+ *  other kinds keep the player, library folder or catalogue detail they have always opened. */
 fun actionFor(card: HomeCard): HomeAction = when (card) {
   is HomeCard.ResumeFile -> play(card.path, card.title)
   is HomeCard.Completed -> play(card.path, card.title)
@@ -133,20 +129,16 @@ fun actionFor(card: HomeCard): HomeAction = when (card) {
     card.itemKind == "folder" -> HomeAction.OpenLibrary(card.path)
     else -> play(card.path, card.label)
   }
-  // A catalogue row written from a library file is that file: it plays where the file plays.
-  is HomeCard.ResumeCatalogue -> if (card.path != null) {
-    play(card.path, card.title)
-  } else {
-    HomeAction.OpenCatalog(
-      CatalogDetailArgs(
-        meta = MetaDto(id = card.id, type = card.type, name = card.name, poster = card.poster),
-        addonName = "",
-        type = card.type,
-        episode = card.episode?.let { episode -> card.season?.let { season -> ResumeEpisode(card.key, season, episode) } },
-        forgetKeys = card.forgetKeys,
-      ),
-    )
-  }
+  is HomeCard.ResumeCatalogue -> HomeAction.OpenCatalog(
+    CatalogDetailArgs(
+      meta = MetaDto(id = card.id, type = card.type, name = card.name, poster = card.poster),
+      addonName = "",
+      type = card.type,
+      episode = card.episode?.let { episode -> card.season?.let { season -> ResumeEpisode(card.key, season, episode) } },
+      forgetKeys = card.forgetKeys,
+      autoPlay = !card.pending,
+    ),
+  )
   is HomeCard.Episode -> HomeAction.OpenCatalog(
     CatalogDetailArgs(
       meta = MetaDto(id = card.metaId, type = card.type, name = card.name, poster = card.poster),
@@ -169,7 +161,7 @@ fun actionFor(card: HomeCard): HomeAction = when (card) {
       type = card.type,
     ),
   )
-  is HomeCard.Remote -> HomeAction.OpenRemote(remoteDetailOf(card))
+  is HomeCard.Remote -> HomeAction.OpenRemote(remoteDetailOf(card).copy(autoPlay = true))
 }
 
 private fun play(path: String, title: String): HomeAction.Play =

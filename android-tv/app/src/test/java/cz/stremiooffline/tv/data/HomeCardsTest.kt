@@ -1,7 +1,9 @@
 package cz.stremiooffline.tv.data
 
+import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.ui.home.HomeAction
 import cz.stremiooffline.tv.ui.home.actionFor
+import cz.stremiooffline.tv.ui.home.cardLabel
 import cz.stremiooffline.tv.ui.home.heroMetaRef
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
@@ -91,6 +93,21 @@ class HomeCardsTest {
 
     assertEquals(1, decoded.items.size)
     assertTrue(decoded.items.single() is HomeCard.ResumeFile)
+  }
+
+  @Test
+  fun `a remembered film or series resumes, a pending next episode does not`() {
+    fun card(type: String, pending: Boolean = false) = HomeCard.ResumeCatalogue(
+      key = "$type:tt1",
+      type = type,
+      id = "tt1",
+      name = "Title",
+      pending = pending,
+    )
+
+    assertEquals(R.string.home_resume, cardLabel(card("movie")))
+    assertEquals(R.string.home_resume, cardLabel(card("series")))
+    assertEquals(R.string.home_next_episode, cardLabel(card("series", pending = true)))
   }
 
   @Test

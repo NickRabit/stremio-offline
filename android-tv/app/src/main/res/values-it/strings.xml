@@ -117,8 +117,6 @@
   <string name="home_row_failed">Impossibile caricare questa riga.</string>
   <string name="home_next_episode">Episodio successivo</string>
   <string name="home_resume">Riprendi</string>
-  <string name="home_open_episode">Apri episodio</string>
-  <string name="home_open_title">Apri titolo</string>
   <string name="home_new_episode">Nuovo episodio</string>
   <string name="home_empty_title">Qui non c\'è ancora niente</string>
   <string name="home_empty_text">Scarica qualcosa o inizia a guardare e comparirà qui.</string>

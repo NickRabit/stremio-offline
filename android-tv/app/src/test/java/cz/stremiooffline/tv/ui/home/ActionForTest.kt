@@ -9,8 +9,8 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** The one click rule every list reads: OK plays the version a card was written from, opens the
- *  title a copy is bound to, and keeps the kinds that stand for nothing else. */
+/** The one click rule every list reads: OK plays a remembered title at once, opens a pending next
+ *  episode's detail, and keeps the kinds that stand for nothing else. */
 class ActionForTest {
 
   private fun file(path: String = "browse/A.mkv", title: String = "A") = HomeCard.ResumeFile(
@@ -21,7 +21,7 @@ class ActionForTest {
     forgetKeys = listOf(Progress.libraryKey(path)),
   )
 
-  private fun catalogue(path: String? = null) = HomeCard.ResumeCatalogue(
+  private fun catalogue(path: String? = null, pending: Boolean = false) = HomeCard.ResumeCatalogue(
     key = "series:tt1:1:2",
     title = "Show · Two",
     type = "series",
@@ -30,6 +30,7 @@ class ActionForTest {
     season = 1,
     episode = 2,
     path = path,
+    pending = pending,
     forgetKeys = listOf("series:tt1:1:2"),
   )
 
@@ -53,18 +54,17 @@ class ActionForTest {
   }
 
   @Test
-  fun `a catalogue card that names its file plays that file`() {
+  fun `a catalogue card that names its file opens its detail and plays at once`() {
     val action = actionFor(catalogue(path = "browse/A.mkv"))
 
-    assertTrue(action is HomeAction.Play)
-    val target = (action as HomeAction.Play).target
-    assertEquals(Progress.libraryKey("browse/A.mkv"), target.key)
-    assertEquals("browse/A.mkv", target.path)
-    assertTrue(target.resume)
+    assertTrue(action is HomeAction.OpenCatalog)
+    val args = (action as HomeAction.OpenCatalog).args
+    assertEquals("tt1", args.meta.id)
+    assertEquals(true, args.autoPlay)
   }
 
   @Test
-  fun `a catalogue card without a file opens the episode it remembers`() {
+  fun `a catalogue card without a file opens its detail and plays at once`() {
     val action = actionFor(catalogue())
 
     assertTrue(action is HomeAction.OpenCatalog)
@@ -74,6 +74,15 @@ class ActionForTest {
     assertEquals(1, args.episode?.season)
     assertEquals(2, args.episode?.number)
     assertEquals(listOf("series:tt1:1:2"), args.forgetKeys)
+    assertEquals(true, args.autoPlay)
+  }
+
+  @Test
+  fun `a pending next episode opens its detail without playing`() {
+    val action = actionFor(catalogue(pending = true))
+
+    assertTrue(action is HomeAction.OpenCatalog)
+    assertEquals(false, (action as HomeAction.OpenCatalog).args.autoPlay)
   }
 
   @Test
@@ -101,9 +110,11 @@ class ActionForTest {
   }
 
   @Test
-  fun `a remote card keeps opening its own playable detail`() {
+  fun `a remote card opens its own detail and plays at once`() {
     val card = HomeCard.Remote(key = "remote:1", title = "Heat", libraryId = "rlibA", itemId = "iA", itemType = "movie")
 
-    assertTrue(actionFor(card) is HomeAction.OpenRemote)
+    val action = actionFor(card)
+    assertTrue(action is HomeAction.OpenRemote)
+    assertEquals(true, (action as HomeAction.OpenRemote).data.autoPlay)
   }
 }

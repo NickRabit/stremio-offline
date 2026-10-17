@@ -109,6 +109,8 @@ data class RemoteDetailData(
   /** The parent series' external ids, when the caller already holds them, so an episode's copy
    *  carries the series' catalogue id without reading the parent again. */
   val seriesIds: RemoteProviderIdsDto? = null,
+  /** Opened from Continue watching: Play is pressed once the item and a version have loaded. */
+  val autoPlay: Boolean = false,
 ) {
   val isEpisode: Boolean get() = item.type == "episode"
 }
@@ -376,6 +378,14 @@ fun RemoteDetailScreen(
     // for that exact version.
     if (playPicked(resume = true)) return
     play(primary, resume = resuming)
+  }
+
+  var autoPlayed by remember { mutableStateOf(false) }
+  LaunchedEffect(stateLoaded, primary) {
+    if (data.autoPlay && stateLoaded && primary != null && !autoPlayed) {
+      playPressed()
+      autoPlayed = true
+    }
   }
 
   fun startOverPressed() {
