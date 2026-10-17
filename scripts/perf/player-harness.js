@@ -66,11 +66,21 @@
       Object.assign(this.video.style, { position: "fixed", right: "8px", bottom: "8px", width: "320px", zIndex: 99999, background: "#000" });
       document.body.append(this.video);
       this.stalls = 0; this.stallMs = 0;
-      this.video.addEventListener("waiting", () => { this.waitingAt = performance.now(); });
+      this.timeline = [];
+      this.video.addEventListener("waiting", () => { this.waitingAt = performance.now(); this.trace("waiting"); });
       this.video.addEventListener("playing", () => {
         if (this.waitingAt !== undefined && this.counting) { this.stalls += 1; this.stallMs += performance.now() - this.waitingAt; }
         this.waitingAt = undefined;
+        this.trace("playing");
       });
+    }
+    /** One line of the stall timeline: what happened, when, and where playback and the buffer stood. */
+    trace(kind, extra = {}) {
+      if (this.timeline.length >= 400) return;
+      const video = this.video;
+      const end = video.buffered.length ? video.buffered.end(video.buffered.length - 1) : 0;
+      this.timeline.push({ t: Math.round(performance.now() - this.t0), wall: Date.now(), phase: this.phase, kind,
+        current: Number(video.currentTime.toFixed(2)), buffered: Number(end.toFixed(2)), ...extra });
     }
     mark(name) { this.marks[name] = Math.round(performance.now() - this.t0); this.marks[`${name}Wall`] = Date.now(); }
 
@@ -79,16 +89,38 @@
       this.session = session;
       const video = this.video;
       if (session.playlist !== false && session.mode !== "direct") {
-        const hls = new window.Hls({ ...HLS_PLAYER_CONFIG });
+        const hls = new window.Hls({ ...HLS_PLAYER_CONFIG, ...(this.options.hlsConfig ?? {}) });
+        const { Events } = window.Hls;
+        hls.on(Events.LEVEL_LOADED, (_e, data) => this.trace("playlist", { segments: data.details.fragments.length, live: data.details.live, end: Number(data.details.totalduration.toFixed(2)) }));
+        hls.on(Events.FRAG_LOADING, (_e, data) => this.trace("fragLoading", { sn: data.frag.sn, start: Number(data.frag.start.toFixed(2)), duration: Number(data.frag.duration.toFixed(2)) }));
+        hls.on(Events.FRAG_LOADED, (_e, data) => this.trace("fragLoaded", { sn: data.frag.sn }));
+        hls.on(Events.FRAG_BUFFERED, (_e, data) => this.trace("fragBuffered", { sn: data.frag.sn }));
         this.hls = hls;
         hls.on(window.Hls.Events.MANIFEST_PARSED, () => { this.mark(`${this.phase}Manifest`); void video.play().catch(() => undefined); });
         hls.on(window.Hls.Events.FRAG_LOADED, (_e, data) => { if (!this.marks[`${this.phase}Frag`]) this.mark(`${this.phase}Frag`); this.fragBytes = (this.fragBytes ?? 0) + (data.frag?.stats?.total ?? 0); });
-        hls.on(window.Hls.Events.ERROR, (_e, data) => this.events.push({ at: Math.round(performance.now() - this.t0), details: data.details, fatal: data.fatal }));
+        hls.on(window.Hls.Events.ERROR, (_e, data) => { this.events.push({ at: Math.round(performance.now() - this.t0), details: data.details, fatal: data.fatal }); this.trace("error", { details: data.details }); });
         hls.loadSource(session.url); hls.attachMedia(video);
       } else {
         video.src = session.url;
         if (startAt) video.addEventListener("loadedmetadata", () => { video.currentTime = startAt; }, { once: true });
         void video.play().catch(() => undefined);
+      }
+    }
+
+    /** Experiment: hand the stream to hls.js only once its playlist lists `attachAfterSegments` segments. */
+    async segmentsReady(session) {
+      const wanted = this.options.attachAfterSegments;
+      if (!wanted || session.mode === "direct") return;
+      const playlist = session.url.replace(/master\.m3u8$/, "index-0.m3u8");
+      const began = performance.now();
+      for (;;) {
+        const text = await fetch(playlist, { cache: "no-store" }).then((response) => (response.ok ? response.text() : ""), () => "");
+        const count = (text.match(/#EXTINF/g) ?? []).length;
+        if (count >= wanted || text.includes("#EXT-X-ENDLIST") || performance.now() - began > 20_000) {
+          this.trace("segmentsReady", { count, waited: Math.round(performance.now() - began) });
+          return;
+        }
+        await sleep(50);
       }
     }
 
@@ -120,6 +152,7 @@
       const next = await json(`/api/playback/${this.session.id}/seek`, { method: "POST", body: JSON.stringify({ time: target }) });
       this.mark(`${name}Answer`);
       this.marks[`${name}Offset`] = Math.round(next.offset);
+      await this.segmentsReady(next);
       this.attach(next);
       await nextFrame(video, 60_000, begun);
       await this.untilPlaying(60_000);
@@ -161,6 +194,7 @@
         this.marks.mode = session.mode; this.marks.copy = session.copy; this.marks.hardware = session.hardware;
         this.duration ??= session.duration;
         const playClick = performance.now();
+        await this.segmentsReady(session);
         this.attach(session);
         await nextFrame(this.video, 90_000, playClick);
         this.mark("firstFrame");
@@ -184,6 +218,7 @@
         this.marks.stalls = this.stalls; this.marks.stallMs = Math.round(this.stallMs);
         this.marks.hlsFragBytes = this.fragBytes;
         this.marks.events = this.events.slice(0, 10);
+        this.marks.timeline = this.timeline;
         this.marks.wallEnd = Date.now();
       }
       return { label: this.options.label, ...this.marks };

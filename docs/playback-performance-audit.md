@@ -5,26 +5,39 @@ question was what makes a film slow to start, slow to seek, heavy on the CPU or
 heavy on the source, and what to fix next. No product code changed; the tools are in
 `scripts/perf/`.
 
-Three builds were measured:
+Two builds are compared:
 
-| Build | What it is |
+| Label | What it is |
 | --- | --- |
-| **main** | `65a80211`, 0.5.91, before the request-volume work |
-| **#448** | `bd21361a`, the head of [#448](https://github.com/NickRabit/stremio-offline/pull/448) (bounded 1 MiB blocks for media-server and addon reads, one playback preparation reusing the item's short-window reads) |
-| **merged** | `ca4608fb`, main after #448 merged, with two more range commits; spot-checked on 12 cells |
+| **0.5.91** | `65a80211`, main before the request-volume work |
+| **0.5.93** | main now, with [#448](https://github.com/NickRabit/stremio-offline/pull/448) merged (bounded 1 MiB blocks for media-server and addon reads, one playback preparation reusing the item's short-window reads). This is the **baseline** for what to fix next. |
 
-#448 merged during the audit, so the **#448** and **merged** columns describe main
-as it is now. The **main** column shows what #448 removed.
+The 0.5.93 matrix was measured on #448's head (`bd21361a`). The release (`ca4608fb`)
+adds two range commits on top. A 12-cell spot check on the release matched it within
+noise (see [0.5.93 release, spot check](#0593-release-spot-check)); the transcode-stall
+runs used the release itself.
 
 ## Summary
 
-- **#448 removed the worst problems.** A remote AVI (two thirds of the files on the
+- **Transcode stalls (the owner's priority).** Most software transcodes (43 of 56
+  cells) stall 1–3 times, right after the start or a seek, never in steady playback.
+  It happens on every source type, before and after #448.
+  - Most last 20–60 ms; a few last about 1 s.
+  - Cause: the server hands over a transcode with a single 2 s segment, and hls.js
+    re-reads the live playlist only every 2 s. The buffer runs out just as the
+    reload arrives, although FFmpeg is already 7–11× ahead.
+  - Fix, measured: handing over at two segments removed every stall in four cells.
+    A start or seek took up to 0.3 s longer (median +0.08 s). The player should also stop counting
+    these stalls toward its "lower quality" offer.
+  - Details in [Transcode stalls](#transcode-stalls).
+
+- **0.5.93 (#448) removed the worst problems.** A remote AVI (two thirds of the files on the
   owner's NAS are AVI) took 5.4–6.0 s from Play to the first frame from Jellyfin or
-  Emby, and 29.6 s from an addon host that answers 100 ms late. On #448 it takes
+  Emby, and 29.6 s from an addon host that answers 100 ms late. On 0.5.93 it takes
   0.8 s and 1.1 s. Seeks inside it went from 2.4 s (14.3 s behind the slow host) to
   0.5–0.8 s. Media-server reads per run fell from 632 to 14 and from 4.4 GB to 82 MB.
 - **A media-server Play is now as fast as a local one once the probe has answered:**
-  on #448 the warm start answer takes 8 ms, where main took 0.74–0.78 s for direct play.
+  on 0.5.93 the warm start answer takes 8 ms, where 0.5.91 took 0.74–0.78 s for direct play.
 - **What remains is small and specific:**
   - Cold Play runs two probes of the same file.
   - The detail's source list still waits ~0.6 s on paced media-server reads.
@@ -32,13 +45,205 @@ as it is now. The **main** column shows what #448 removed.
     a seek back to where the viewer already was.
   - A chosen quality forces a software transcode even when the file already fits.
   - Two rare 7–8 s seeks were caused by hls.js, not by the server.
-- **One regression in #448:** the block reading with its 50 ms grace also serves the
+- **One regression in 0.5.93:** the block reading with its 50 ms grace also serves the
   browser's own direct-play reads, which never jump. Addon MP4 direct play went from
   0.26 s to 0.65 s to the first frame, in two runs. Behind a slow host an MP4 probe
   is ~0.25 s slower, because the moov comes in sequential 1 MiB blocks.
 - **CPU:** direct play and MP4 remux cost almost nothing (≤ 2 % of a core). An MKV
   remux costs 11–15 % for AC-3 → AAC. A software transcode costs 0.35–0.55 cores for
   SD, 1.0–1.45 for 720p, and 2.2–2.4 for 1080p while FFmpeg runs ahead of playback.
+
+## Transcode stalls
+
+Most transcodes stall 1–3 times: 43 of 56 transcode cells, on every source type.
+Remux and direct play had no counted stalls.
+
+**Cause:** the server hands the player a transcode when FFmpeg has published a
+single 2 s segment, and hls.js asks for the playlist again only once per segment
+length (2 s). Until then the player knows of 2 s of video, although FFmpeg has
+long since written ten more segments. It is a handover race, not a lack of CPU,
+encoder speed or bandwidth.
+
+**Fix:** handing over only once two segments are listed removed every stall in the
+cells tried.
+
+### Where the stalls happen
+
+Every stall the harness recorded, across all transcode runs:
+
+| When | Stall events | Notes |
+| --- | --- | --- |
+| Within 3 s of the first frame | 25 | Usually right before the 2 s mark |
+| Within 3 s of the seek to 50 % | 27 | Every seek is a new FFmpeg generation |
+| Within 3 s of the seek back to 0:30 | 27 | Same |
+| Steady playback (the 20 s window, 3 s or more after a start or seek) | **0** | |
+
+Totals: 79 events in 56 transcode cells; 0 counted stalls in 39 remux cells.
+
+How long a stall lasts, across the 91 counted stalls of the matrix runs:
+
+| | Duration |
+| --- | --- |
+| Median | 35 ms |
+| 90th percentile | 62 ms |
+| Over 400 ms | 3, at about 1 s each |
+
+The player shows its buffering notice only after 400 ms, so most of these are a
+hiccup the eye may catch and the notice never shows. The ~1 s ones are visible.
+Three came in the matrix runs, and the instrumented runs below caught a fourth:
+
+- Emby AVI on #448's head: 1,111 ms over 3 stalls
+- Jellyfin and addon AVI on the release: 1,065 ms and 1,042 ms
+- local AVI, instrumented: 1,046 ms
+
+The builds do not differ in any way that matters: 41 stalls in 28 transcode cells on
+0.5.91, 50 in 28 on 0.5.93. #448 changed reads, not the handover.
+
+### What the player sees
+
+Local 1080p MKV with quality 1080, on the 0.5.93 release. Times are from pressing Play.
+
+| ms | Event |
+| --- | --- |
+| 494 | FFmpeg publishes segment 0 (2.0 s). The server answers the start: one segment is enough for `waitForHlsOutput`. |
+| 576 | hls.js loads the playlist: 1 segment, live, ends at 2.0 s |
+| 617 | Segment 0 buffered: 1.95 s ahead |
+| 698 | FFmpeg publishes segment 1, then 2–8 by 2,479 (2 s of video every 150–250 ms) |
+| 918 | Playback starts. Chrome held the first frame ~300 ms with a single segment buffered and raised `bufferStalledError`. |
+| 2,577 | hls.js reloads the playlist, **2.0 s after the first load**: 9 segments. Playback is at 1.62 s of 1.95 s. |
+| 2,589–2,722 | Segments 1–8 loaded and buffered: 17.9 s ahead. From here nothing stalls. |
+
+That run started late, so it made it with 0.3 s to spare. When playback starts
+promptly, it reaches the end of segment 0 just before the 2 s reload.
+
+The seek to 50 % in the same run lost that race:
+
+| ms after the seek | Event |
+| --- | --- |
+| 590 | FFmpeg's new generation publishes segment 0 |
+| 652 | The server answers the seek |
+| 699 | hls.js loads the new playlist: 1 segment, 2.0 s |
+| 845–2,627 | FFmpeg publishes segments 1–11 |
+| 2,677 | `waiting`: playback at 1.90 s, buffered to 1.95 s |
+| 2,706 | hls.js reloads the playlist (2.0 s after the last load): 12 segments |
+| 2,723 | `playing` again: a 46 ms stall |
+
+The ~1 s variant is the same race, ended sooner by Chrome. In the local AVI run:
+
+- Chrome stopped at 0.90 s, with 1.95 s buffered and fourteen segments on disk.
+- It waited for its own lookahead until hls.js's 2 s reload appended segment 1.
+- That took 1.05 s.
+
+Chrome stops wherever its lookahead runs short. With a single segment buffered,
+that can be anywhere in the second half of the segment, so the stall lasts from a
+few milliseconds to a second.
+
+### Segment production against playback
+
+From the segment watcher (when each `seg-*.m4s` appeared on disk) and the CPU
+sampler, on the 0.5.93 release:
+
+| Cell | First segment after Play | Segments at handover | FFmpeg pace, first 3 s | Pace, 3–20 s | FFmpeg cores, first 3 s | Cores, 3–20 s | First segment after a seek |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Local MKV 1080p transcode | 494 ms | 1 | 7.3× | 2.0× | 7.2 | 1.8 | 590 ms |
+| Local MP4 720p transcode | 486 ms | 1 | 10.0× | 1.5× | 4.5 | 0.8 | 609 ms |
+| Local MP4 720×360 transcode | 414 ms | 2 | 10.7× | 1.5× | 1.6 | 0.4 | 259 ms |
+| Local AVI transcode | 706 ms | 1 | 10.0× | 1.5× | 1.2 | 0.4 | 401 ms |
+| Jellyfin MKV 1080p transcode | 674 ms | 1 | 8.0× | 1.9× | 7.0 | 1.6 | 688 ms |
+| Addon AVI transcode | 599 ms | 2 | 10.0× | 1.5× | 1.2 | 0.4 | 314 ms |
+| Local MKV remux | 307 ms | 3 | 12.5× | 2.9× | 0.3 | 0.1 | 259 ms |
+| Jellyfin MKV remux | 303 ms | 1 | 12.5× | 2.9× | 0.3 | 0.1 | 250 ms |
+
+The "segments at handover" column comes from a 50 ms file poll, so it is
+approximate. The server log is exact: it records how many segments the playlist
+listed when each start or seek was answered, across every run of this audit.
+
+| | 1 segment | 2 | 3 | more |
+| --- | --- | --- | --- | --- |
+| Transcode start (69) | **53** | 8 | 8 | 0 |
+| Transcode seek (134) | **92** | 29 | 13 | 0 |
+| Remux start (46) | 8 | 4 | 19 | 15 |
+| Remux seek (88) | 17 | 25 | 19 | 27 |
+
+What this shows:
+
+- **FFmpeg is never behind.** It writes 2 s of video every 150–250 ms during the 30 s
+  initial burst. Every conversion log says "keeping up".
+- **CPU is not the limit here.** 1080p takes 7 cores in the burst and 1.6–1.8 after
+  it. On a NAS without QuickSync, 1080p would also be CPU-bound, but that would show
+  as stalls in steady playback, which never happened here.
+- **Remux escapes the race:**
+  - Its segments are cut at the source's keyframes, 1–10 s long; this MKV's segment
+    3 is 8.2 s and segment 4 is 10 s.
+  - Copying runs at 12× and usually lists three segments by the time the server
+    answers.
+  - Even a remux handed over with one segment has a first segment of 2.3–2.9 s and
+    longer ones queued behind it, so the 2 s reload comes with time to spare.
+
+### Why the handover leaves 2 s
+
+Three settings meet:
+
+1. **The handover:** `waitForHlsOutput` (`server/src/playback.ts`) answers as soon as
+   the playlist names one segment and its files exist (`hlsCanStart`: one `#EXTINF`
+   and the init file). Start and seek use it alike.
+2. **Segment length:** a transcode forces a keyframe every 2 s
+   (`-force_key_frames expr:gte(t,n_forced*2)`) with `-hls_time 2`, so every segment
+   is exactly 2.0 s.
+3. **The reload interval:** the playlist is an EVENT playlist without
+   `#EXT-X-ENDLIST` while FFmpeg runs, so hls.js treats it as live. It reloads a live
+   playlist one target duration (2 s) after the previous load. The player's
+   `HLS_PLAYER_CONFIG` does not change that.
+
+The first reload therefore comes when the buffered video is used up, or nearly.
+
+### Side effects
+
+- **The lower-quality offer:** the web player's `noteStall` (`web/src/Player.tsx`)
+  counts every `waiting` outside a seek once playback is past 1 s. These stalls
+  happen at ~1–1.9 s, after the seek has finished, so they count.
+  - Three within a minute, for example a start and two seeks, log "Playback keeps
+    stalling".
+  - With hardware acceleration the player then offers a lower quality, which means
+    more transcoding, for a problem that is not the network.
+- **A slower first frame:** with a single segment buffered, Chrome held the first
+  frame ~300 ms in the run above (`bufferStalledError` at 50 ms, playing 300 ms
+  later). With two segments buffered, playback started 35 ms after the playlist.
+
+### Experiment: hand over at two segments
+
+The harness can wait until the generation's playlist lists two segments before
+giving it to hls.js (`attachAfterSegments: 2`). That stands in for the server
+waiting longer; no product code was changed.
+
+| Cell (0.5.93 release) | Stalls, 1 segment | Stalls, 2 segments | First frame, 1 → 2 | Seek to 50 %, 1 → 2 | Seek back, 1 → 2 |
+| --- | --- | --- | --- | --- | --- |
+| Local MKV 1080p | 2 (84 ms) | **0** | 930 → 852 ms | 762 → 774 ms | 621 → 790 ms |
+| Local MP4 720p | 2 (38 ms) | **0** | 654 → 964 ms | 725 → 649 ms | 552 → 508 ms |
+| Local AVI | 1 (1,046 ms) | **0** | 743 → 884 ms | 489 → 490 ms | 492 → 605 ms |
+| Jellyfin MKV 1080p | 3 (110 ms) | **0** | 789 → 829 ms | 893 → 1,049 ms | 662 → 832 ms |
+
+Eight stalls became none.
+
+**The cost:** the second segment arrives 150–250 ms after the first, so a start or
+seek waits about that much longer. Across these twelve measurements the median
+change was +0.08 s and the range −0.08 to +0.31 s. Part of it comes back: Chrome
+starts at once instead of holding the first frame with one segment.
+
+One run per cell, so the latency figures are indicative. The stall result is not:
+8 → 0 in four cells, against stalls in 43 of 56 transcode cells in the matrix runs.
+
+### Options
+
+| Option | Effect | Cost |
+| --- | --- | --- |
+| **A. Answer a transcode start or seek once two segments (≥ 4 s) are listed.** Make the `hlsCanStart` threshold depend on the mode; remux keeps one. | Measured above: stalls gone; a start or seek takes up to 0.3 s longer (median +0.08 s). | S, server only; the TV client benefits as well |
+| **B. Stop `noteStall` counting `waiting` in the first few seconds after a start or seek.** | The lower-quality offer is kept for real network trouble. | S, web player |
+| C. Re-read the playlist sooner in the client. hls.js has no option for the live reload interval, so the player would have to trigger a reload itself, or the server would have to advertise a shorter `#EXT-X-TARGETDURATION`. | Would avoid A's extra wait. | M, fights hls.js; not tried |
+| D. Shorter segments (`-hls_time 1`) | None: the reload interval shrinks with them, and the race stays. | – |
+
+A and B together cover it. A removes the stalls and B keeps any that remain away
+from the quality advice.
 
 ## Setup
 
@@ -103,13 +308,13 @@ also carries container warm-up: local MP4 direct took 508 ms there and 111 ms in
 trial run. Read single differences under ~150 ms as noise. `scripts/perf/analyze.mjs`
 joins the logs and `scripts/perf/report.mjs` prints the tables below.
 
-#448 does not change how a local file is read, so local cells were not rerun on it.
+#448 does not change how a local file is read, so local cells were measured on 0.5.91 only.
 
 ## Results
 
 ### Play to first frame (ms)
 
-| Source | Container | Path | Mode | main cold | #448 cold | main warm | #448 warm |
+| Source | Container | Path | Mode | 0.5.91 cold | 0.5.93 cold | 0.5.91 warm | 0.5.93 warm |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Local library | MP4 faststart | direct | direct | 508 | – | 288 | 290 |
 | Local library | MP4 faststart | remux | remux (va) | 364 | – | – | – |
@@ -152,7 +357,7 @@ The mode column notes what was copied: `va` video and audio, `v-` video only, `-
 
 ### Probe and start answer (ms)
 
-| Source | Container | Path | probe main | probe #448 | start main | start #448 | start main warm | start #448 warm |
+| Source | Container | Path | probe 0.5.91 | probe 0.5.93 | start 0.5.91 | start 0.5.93 | start 0.5.91 warm | start 0.5.93 warm |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Local library | MP4 faststart | direct | 185 | – | 195 | – | 6 | 5 |
 | Local library | MP4 faststart | remux | 164 | – | 281 | – | – | – |
@@ -196,7 +401,7 @@ arrived while it was still running.
 
 ### Seek to 50 % and back to 0:30 (ms)
 
-| Source | Container | Path | how | to 50 % main | to 50 % #448 | back main | back #448 |
+| Source | Container | Path | how | to 50 % 0.5.91 | to 50 % 0.5.93 | back 0.5.91 | back 0.5.93 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Local library | MP4 faststart | direct | browser | 64 | – | 57 | – |
 | Local library | MP4 faststart | remux | restart | 285 | – | 291 | – |
@@ -244,7 +449,7 @@ already produced.
 
 A run is: probe, start, 20 s of play and two seeks.
 
-| Source | Container | Path | media reads main | media reads #448 | probe / start / seek main | probe / start / seek #448 | metadata main | metadata #448 | MB main | MB #448 |
+| Source | Container | Path | media reads 0.5.91 | media reads 0.5.93 | probe / start / seek 0.5.91 | probe / start / seek 0.5.93 | metadata 0.5.91 | metadata 0.5.93 | MB 0.5.91 | MB 0.5.93 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Addon HTTP | MP4 faststart | direct | 13 | 23 | 8 / 11 / 1 | 14 / 17 / 2 | 1 | 1 | 152 | 128 |
 | Addon HTTP | MP4 faststart | remux | 16 | 24 | 8 / 10 / 3 | 14 / 16 / 4 | 1 | 1 | 244 | 193 |
@@ -277,15 +482,15 @@ A run is: probe, start, 20 s of play and two seeks.
 Per-phase counts are requests started in that phase. In the cold runs the probe
 and start overlap, so they share requests. The provider counters agree:
 
-- **main**, per run: 6 Detail + 6 Ancestors + 6 PlaybackInfo + Info/User/Views, plus
+- **0.5.91**, per run: 6 Detail + 6 Ancestors + 6 PlaybackInfo + Info/User/Views, plus
   632 original reads for the AVI.
-- **#448**, per run: 2 + 2 + 2 + Info/User/Views, plus 13–14 original reads for the AVI.
+- **0.5.93**, per run: 2 + 2 + 2 + Info/User/Views, plus 13–14 original reads for the AVI.
 
-The 4.4 GB for one Jellyfin AVI run on main is not file content. Each of the 632
+The 4.4 GB for one Jellyfin AVI run on 0.5.91 is not file content. Each of the 632
 reads was an open-ended range, and Jellyfin (on the same machine) pushed several
 megabytes into it before FFmpeg hung up. Emby over the LAN pushed less: 510 MB.
 
-### FFmpeg CPU (main build)
+### FFmpeg CPU (0.5.91)
 
 | Source | Container | Path | CPU-s until first frame | steady % of one core | container steady % |
 | --- | --- | --- | --- | --- | --- |
@@ -326,7 +531,7 @@ megabytes into it before FFmpeg hung up. Emby over the LAN pushed less: 510 MB.
 | Emby | MKV H.264 | transcode | 6.8 | 219 | 223 |
 | Emby | AVI idx1 at end | transcode | 3.1 | 41 | 46 |
 
-#448 changes only reads, so CPU on #448 matched within a few percent (MKV
+#448 changes only reads, so CPU on 0.5.93 matched within a few percent (MKV
 transcode 218–242 %, MP4 720p transcode 120–145 %).
 
 How to read the transcode figures:
@@ -342,7 +547,7 @@ How to read the transcode figures:
 
 ### Addon behind a host that answers 100 ms late
 
-| Container | Path | first frame main | first frame #448 | to 50 % main | to 50 % #448 | back main | back #448 | media reads main | media reads #448 | MB main | MB #448 |
+| Container | Path | first frame 0.5.91 | first frame 0.5.93 | to 50 % 0.5.91 | to 50 % 0.5.93 | back 0.5.91 | back 0.5.93 | media reads 0.5.91 | media reads 0.5.93 | MB 0.5.91 | MB 0.5.93 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | MP4 faststart | direct | 1.2 s | 1.5 s | 183 | 199 | 57 | 114 | 13 | 23 | 147 | 143 |
 | MP4 faststart | remux | 1.1 s | 1.5 s | 628 | 634 | 626 | 823 | 16 | 26 | 262 | 211 |
@@ -355,14 +560,14 @@ How to read the transcode figures:
 | AVI idx1 at end | transcode | 29.6 s | 1.1 s | 14.3 s | 595 | 14.3 s | 652 | 634 | 23 | 4661 | 92 |
 
 This is the closest stand-in here for a debrid or CDN source over the internet. Bandwidth was not limited, so
-the main build's 4.6 GB for the AVI would, on a real connection, also have cost
+0.5.91's 4.6 GB for the AVI would, on a real connection, also have cost
 transfer time on top of the 634 round trips.
 
-### Merged main, spot check
+### 0.5.93 release, spot check
 
-Twelve cells on `ca4608fb`, the main with #448 and its last two range commits:
+Twelve cells on `ca4608fb`, the release with #448 and its last two range commits:
 
-| Source | Container | Path | first frame main | first frame #448 | first frame merged | to 50 % merged | back merged | media reads merged | metadata merged | MB merged |
+| Source | Container | Path | first frame 0.5.91 | first frame 0.5.93 | first frame 0.5.93 release | to 50 % 0.5.93 release | back 0.5.93 release | media reads 0.5.93 release | metadata 0.5.93 release | MB 0.5.93 release |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Addon HTTP | MP4 faststart | direct | 262 | 654 | 646 | 112 | 106 | 23 | 1 | 129 |
 | Addon HTTP | MKV H.264 | remux | 446 | 406 | 376 | 459 | 453 | 16 | 1 | 137 |
@@ -377,12 +582,12 @@ Twelve cells on `ca4608fb`, the main with #448 and its last two range commits:
 | Addon HTTP, 100 ms | MKV H.264 | remux | 1.1 s | 949 | 860 | 784 | 732 | 19 | 1 | 145 |
 | Addon HTTP, 100 ms | AVI idx1 at end | transcode | 29.6 s | 1.1 s | 1.2 s | 489 | 634 | 23 | 1 | 90 |
 
-The merged main behaves like #448, within the noise of single runs.
+The release behaves like #448's head, within the noise of single runs.
 
-- **Slow-host MP4:** the first frame is back to main's 1.2 s, but its probe still
-  takes 0.89 s against main's 0.65 s.
-- **Fast-host addon MP4 direct:** 0.65 s on both #448 and merged, against 0.26 s on
-  main. Two runs agree; finding 7 explains it.
+- **Slow-host MP4:** the first frame is back to 0.5.91's 1.2 s, but its probe still
+  takes 0.89 s against 0.5.91's 0.65 s.
+- **Fast-host addon MP4 direct:** 0.65 s on both #448's head and the release, against
+  0.26 s on 0.5.91. Two runs agree; finding 7 explains it.
 - **Emby AVI back-seek:** 1.4 s is a single outlier; its 50 % seek took 0.7 s.
 
 ## Findings
@@ -401,7 +606,7 @@ second ffprobe runs.
 
 - The proxy log shows each probe range twice, a few milliseconds apart. Main Jellyfin
   MP4: `bytes=0-`, the tail and `bytes=3771143-`, each twice.
-- On #448 the same pairs appear as 1 MiB block reads, so the duplicate survives the
+- On 0.5.93 the same pairs appear as 1 MiB block reads, so the duplicate survives the
   block cache: the two requests hold different media resources.
 
 **Cost:** twice the probe's reads and ffprobe work on every cold Play; on the slow
@@ -414,21 +619,21 @@ a cold Play waits for in any case.
 **Where:** every media-server request waits for `NETWORK_START_INTERVAL_MS`
 (`server/src/media-server-manager.ts`).
 
-**On main:** a Play made 18 such reads (inspect and start each authorized twice:
+**On 0.5.91:** a Play made 18 such reads (inspect and start each authorized twice:
 Detail, then Ancestors, then PlaybackInfo). The log shows them 125–130 ms apart
 while each one took only 3–30 ms. So 0.75 s of a *warm* direct start was waiting,
-which is why main took 737–784 ms to answer a warm media-server start and local took
+which is why 0.5.91 took 737–784 ms to answer a warm media-server start and local took
 4–6 ms. #448 removed this from the start: its warm start answers in 8 ms.
 
 **What remains:** listing an item's sources still reads Info, User, Views, Detail,
-Ancestors and PlaybackInfo in sequence, about 0.6 s at the pacing. In the cold #448
+Ancestors and PlaybackInfo in sequence, about 0.6 s at the pacing. In the cold 0.5.93
 runs these reads all happen before Play (the detail's work). A Continue-watching card
 that plays straight away pays them as part of the start.
 
 ### 3. Every converted seek restarts FFmpeg, even back into what was already converted
 
 **Measured:** remux seeks took 0.3–0.6 s and transcode seeks 0.4–1.0 s, on every
-source (#448).
+source (0.5.93).
 
 **Why the seek back also restarts:** the seek to 0:30 lands inside what the first
 generation produced, yet it restarts too. The client only knows the current
@@ -467,9 +672,8 @@ libx264 `veryfast`, CRF 23:
 The start burst runs at 2.2–2.9× real time. Measured on an M4 Pro, with no hardware
 encoder in the container.
 
-**Stalls:** every transcode showed one 30–40 ms hls.js `bufferStalledError` right
-after the start and after each seek. These are cosmetic micro-stalls. The conversion
-log reports "keeping up" for every run.
+**Stalls:** see [Transcode stalls](#transcode-stalls). They come from the handover,
+not from CPU: the conversion log reports "keeping up" for every run.
 
 ### 6. Rare long seeks come from the player, not the server
 
@@ -486,7 +690,7 @@ The segment existed when the server answered. This looks like hls.js holding bac
 its start position on a live (EVENT) playlist with a single segment
 (`liveSyncDurationCount: 3`). Not reproduced on a fast host.
 
-### 7. #448's blocks slow an addon MP4 down
+### 7. 0.5.93's blocks slow an addon MP4 down
 
 **Why:** since #448 an addon or media-server read first takes cached or fresh 1 MiB
 blocks, then waits `READ_AHEAD_GRACE_MS` (50 ms) before it opens the host for the rest
@@ -494,20 +698,20 @@ blocks, then waits `READ_AHEAD_GRACE_MS` (50 ms) before it opens the host for th
 inside the grace, and the jumps of an AVI cost no new transfer. Two kinds of read do
 not jump, and they now pay for it.
 
-**The browser's own direct-play reads.** On main, the `<video>` element read
-`bytes=0-` once and painted 70 ms after the start answer. On the merged main the same
+**The browser's own direct-play reads.** On 0.5.91, the `<video>` element read
+`bytes=0-` once and painted 70 ms after the start answer. On 0.5.93 the same
 start makes three reads before the first frame, each served from blocks, then the
 grace, then a fresh upstream transfer: `bytes=2097152-`, the tail, `bytes=5868295-`.
 The first frame came 400 ms after the start answer.
 
-| Addon MP4 direct, fast host | main | #448 | merged |
+| Addon MP4 direct, fast host | 0.5.91 | #448 head | 0.5.93 release |
 | --- | --- | --- | --- |
 | Play → first frame | 0.26 s | 0.65 s | 0.65 s |
 
 **A faststart MP4's moov behind a slow host.** The 3.7 MB moov is now fetched as
 sequential 1 MiB blocks, where the old open-ended read took one round trip.
 
-| Addon MP4 behind the 100 ms host | main | #448 | merged |
+| Addon MP4 behind the 100 ms host | 0.5.91 | #448 head | 0.5.93 release |
 | --- | --- | --- | --- |
 | Probe | 0.63–0.82 s | 0.79–0.98 s | 0.89 s |
 | Play → first frame | 1.0–1.3 s | 1.1–1.5 s | 1.2 s |
@@ -517,7 +721,7 @@ sequential 1 MiB blocks, where the old open-ended read took one round trip.
 
 ### 8. Remote byte latency now dominates the remaining remote start
 
-On #448 a cold remote probe takes 0.2–1.0 s, against 0.15–0.4 s locally.
+On 0.5.93 a cold remote probe takes 0.2–1.0 s, against 0.15–0.4 s locally.
 
 **Biggest single cost:** the Synology Emby answers a tail read or an open-ended range
 in 0.4–0.5 s, against 10–30 ms for its other reads.
@@ -527,30 +731,33 @@ another. The probe could ask for the head and tail blocks in parallel from the s
 
 ### Not a problem
 
-- **Direct play on any source:** 0.1–0.3 s warm on #448, seeks 35–250 ms.
+- **Direct play on any source:** 0.1–0.3 s warm on 0.5.93, seeks 35–250 ms.
 - **MP4 remux:** costs 2 % of a core.
 - **MKV remux:** 11–15 %, all of it AC-3 → AAC; the picture is copied.
 - **Local library:** starts in 0.23–0.76 s on every path with no upstream at all.
 
 ## Ranked fixes
 
-Benefit is measured on this setup unless it says *estimate*. Effort: S = a day or less, M = a few days,
+Benefit is measured on 0.5.93 on this setup unless it says *estimate*. Effort: S = a day or less, M = a few days,
 L = a project.
 
 | # | Fix | Benefit | Effort | Risk and notes |
 | --- | --- | --- | --- | --- |
-| 1 | **Keep #448's block-and-grace reading for FFmpeg only** (#448 follow-up). Give the browser's and a native client's direct-play reads the plain ranged transfer they had before. For FFmpeg, fetch the next 4 MiB or the open-ended rest in one request once a reader continues past a block. | Gives back ~0.4 s on addon MP4 direct play (measured), likely the same on media-server direct play (same read path, not isolated), and ~0.25 s of a slow host's MP4 probe. Keeps #448's AVI gains. | S | Keep the per-read bound that #448 introduced so a host cannot push a whole film. |
-| 2 | **Share one probe between `/api/inspect` and `/api/playback`.** Key the in-flight probe by source identity, not by request signal. Count subscribers so one request's abort never stops another's, and stop ffprobe when the last subscriber leaves. | Half the probe reads and ffprobe CPU on every cold Play. The latency gain is unmeasured: expected small on a fast host, up to a probe's round trips on a slow one. | S | The abort semantics are the whole job and already have tests to extend. Applies to every source type. |
-| 3 | **Fix the hls.js first-fragment wait after a restart seek.** Attach the new generation with an explicit `startPosition: 0`, or load the first fragment without waiting for the live edge. | Removes the rare 7–8 s seeks. | S | Reproduce first. Run the D-pad/UI seek tests that already cover the player. |
-| 4 | **Copy instead of transcode when the file already fits the chosen quality** (height, bitrate cap, copyable codecs). | Removes a software transcode, 0.4–2.4 cores, for those sessions. 2 % CPU instead. | S | The quality menu must still say what is happening. A source over the bitrate cap must still transcode. |
-| 5 | **Let interactive single-item media-server reads go out without the 125 ms spacing.** A burst of about four for one Detail + Ancestors + PlaybackInfo, with Ancestors and PlaybackInfo in parallel once Detail answers. Keep bulk directory work paced. | *Estimate:* ~0.4–0.5 s off opening a media-server detail, and off a Continue-watching card that plays at once. Six reads now wait 125 ms each. | S–M | Pacing protects small servers. Bound the burst per connection and keep the queue limits. |
-| 6 | **Read the head and tail blocks of a remote original in parallel when a probe starts.** | *Estimate:* 0.1–0.4 s off a remote probe, the measured tail-read latency (most on Emby/Synology). | S–M | Only for remote originals with a known size. Wasted if the probe never reads the tail (rare). |
-| 7 | **Keep finished conversion generations and seek into them natively.** Bounded by disk or RAM, designed together with [bounded playback storage](playback-buffer-spec.md). | *Estimate:* back-seeks and rewinds at the measured native-seek speed (~0.05–0.1 s) instead of 0.3–1.0 s. Fewer source re-opens on hosts that count connections. | M–L | Retention and eviction, and the client needs to know more than one generation. |
-| 8 | **Size the software transcode for a NAS.** For example `superfast` for ≥1080p when no hardware encoder is found, or a smaller initial burst for transcodes. Measure on the DS920+ first. | *Not measured:* less CPU for 1080p software transcodes on hardware that has no encoder. | S | Picture quality at the same CRF drops. Only worth it where hardware is missing. |
+| 1 | **Hand over a transcode at two segments** ([Transcode stalls](#transcode-stalls), option A). Keep one segment for remux. | Removes the 1–3 stalls of every software transcode (8 → 0 in four cells), including the rare ~1 s ones. | S | A start or seek takes up to 0.3 s longer (median +0.08 s). A server change, so the TV client benefits too. |
+| 2 | **Keep post-start and post-seek stalls out of the player's stall count** (option B). | The lower-quality offer is kept for real network trouble, not for a handover race. | S | Web player only. Worth doing even after item 1. |
+| 3 | **Keep #448's block-and-grace reading for FFmpeg only** (#448 follow-up). Give the browser's and a native client's direct-play reads the plain ranged transfer they had before. For FFmpeg, fetch the next 4 MiB or the open-ended rest in one request once a reader continues past a block. | Gives back ~0.4 s on addon MP4 direct play (measured), likely the same on media-server direct play (same read path, not isolated), and ~0.25 s of a slow host's MP4 probe. Keeps #448's AVI gains. | S | Keep the per-read bound that #448 introduced so a host cannot push a whole film. |
+| 4 | **Share one probe between `/api/inspect` and `/api/playback`.** Key the in-flight probe by source identity, not by request signal. Count subscribers so one request's abort never stops another's, and stop ffprobe when the last subscriber leaves. | Half the probe reads and ffprobe CPU on every cold Play. The latency gain is unmeasured: expected small on a fast host, up to a probe's round trips on a slow one. | S | The abort semantics are the whole job and already have tests to extend. Applies to every source type. |
+| 5 | **Fix the hls.js first-fragment wait after a restart seek.** Attach the new generation with an explicit `startPosition: 0`, or load the first fragment without waiting for the live edge. | Removes the rare 7–8 s seeks. | S | Reproduce first. Run the D-pad/UI seek tests that already cover the player. |
+| 6 | **Copy instead of transcode when the file already fits the chosen quality** (height, bitrate cap, copyable codecs). | Removes a software transcode, 0.4–2.4 cores, for those sessions. 2 % CPU instead. | S | The quality menu must still say what is happening. A source over the bitrate cap must still transcode. |
+| 7 | **Let interactive single-item media-server reads go out without the 125 ms spacing.** A burst of about four for one Detail + Ancestors + PlaybackInfo, with Ancestors and PlaybackInfo in parallel once Detail answers. Keep bulk directory work paced. | *Estimate:* ~0.4–0.5 s off opening a media-server detail, and off a Continue-watching card that plays at once. Six reads now wait 125 ms each. | S–M | Pacing protects small servers. Bound the burst per connection and keep the queue limits. |
+| 8 | **Read the head and tail blocks of a remote original in parallel when a probe starts.** | *Estimate:* 0.1–0.4 s off a remote probe, the measured tail-read latency (most on Emby/Synology). | S–M | Only for remote originals with a known size. Wasted if the probe never reads the tail (rare). |
+| 9 | **Keep finished conversion generations and seek into them natively.** Bounded by disk or RAM, designed together with [bounded playback storage](playback-buffer-spec.md). | *Estimate:* back-seeks and rewinds at the measured native-seek speed (~0.05–0.1 s) instead of 0.3–1.0 s. Fewer source re-opens on hosts that count connections. | M–L | Retention and eviction, and the client needs to know more than one generation. |
+| 10 | **Size the software transcode for a NAS.** For example `superfast` for ≥1080p when no hardware encoder is found, or a smaller initial burst for transcodes. Measure on the DS920+ first. | *Not measured:* less CPU for 1080p software transcodes on hardware that has no encoder. | S | Picture quality at the same CRF drops. Only worth it where hardware is missing. |
 
-Items 1–4 are small, independent and each ship on their own. Item 1 corrects a side
-effect of #448 and belongs with its read-ahead code. Item 7 is the only large one and
-should wait for the playback-buffer decision.
+Items 1 and 2 answer the owner's priority and ship together. Items 3–6 are small,
+independent and each ship on their own. Item 3 corrects a side effect of #448 and
+belongs with its read-ahead code. Item 9 is the only large one and should wait for
+the playback-buffer decision.
 
 ## Reproducing
 
@@ -575,6 +782,10 @@ docker start stremio-offline-perf
 node scripts/perf/cells.mjs <work>/sources.json > <work>/cells.json
 node scripts/perf/run-matrix.mjs <work> <work>/cells.json <work>/results.jsonl
 node scripts/perf/analyze.mjs <results.json> <work>/logs/upstream.jsonl <cpu.jsonl> <work>/logs/provider-snapshots.jsonl
+
+# Stall timeline: segment publication beside the run; each result carries a `timeline`
+node scripts/perf/segment-watch.mjs <work>/data/playback <work>/logs/segments.jsonl &
+node scripts/perf/run-matrix.mjs <work> <cells with "attachAfterSegments": 2 or without> <results.jsonl>
 ```
 
 `<work>/test-user.json` holds a generated username and password for the copy only
