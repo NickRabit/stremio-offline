@@ -772,6 +772,16 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
     return response.map((raw) => requiredString(asObject(raw, "The ancestor entry").Id, MEDIA_SERVER_LIMITS.upstreamId, "item id"));
   }
 
+  /** Emby names a version by the file name with its folder's name cut off the front, so
+   *  `Avatar/Avatar.2009.720p.mkv` arrives as `.2009.720p`. Such a stump gets the whole file name back. */
+  function versionName(name: string | undefined, sourcePath: unknown): string | undefined {
+    if (name === undefined || /^[\p{L}\p{N}]/u.test(name) || typeof sourcePath !== "string") return name;
+    const file = sourcePath.split(/[\\/]/).pop() ?? "";
+    const dot = file.lastIndexOf(".");
+    const stem = dot > 0 ? file.slice(0, dot) : file;
+    return stem.length > name.length && stem.endsWith(name) && stem.length <= MEDIA_SERVER_LIMITS.name ? stem : name;
+  }
+
   async function versions(token: string, accountId: string, itemId: string, signal?: AbortSignal): Promise<ProviderVersion[]> {
     const response = asObject(await transport.requestJson("versions", { itemId, userId: accountId }, token, signal), "The version response");
     if (!Array.isArray(response.MediaSources)) throw invalidResponse("The version response has no media-source array.");
@@ -784,7 +794,7 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
       if (!isPlainFile(source)) continue;
       if (source.LiveStreamId !== undefined && source.LiveStreamId !== null && source.LiveStreamId !== "") continue;
       const version: ProviderVersion = { id: requiredString(source.Id, MEDIA_SERVER_LIMITS.upstreamId, "version id") };
-      const name = optionalString(source.Name, MEDIA_SERVER_LIMITS.name);
+      const name = versionName(optionalString(source.Name, MEDIA_SERVER_LIMITS.name), source.Path);
       if (name !== undefined) version.name = name;
       const container = optionalString(source.Container, 64);
       if (container !== undefined) version.container = container;
