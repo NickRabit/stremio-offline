@@ -2,7 +2,7 @@ import type express from "express";
 import { once } from "node:events";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { AirPlayAccess } from "../airplay-access.js";
 import { INTERNAL_TOKEN } from "../auth.js";
@@ -102,6 +102,21 @@ async function writeBlocks(
   }
   return position;
 }
+
+/** Passes on at most `bytes` and ends there. */
+const limited = (bytes: number) => {
+  let ended = false;
+  return new Transform({
+    transform(chunk: Buffer, _encoding, done) {
+      if (ended) return done();
+      const piece = chunk.subarray(0, bytes);
+      bytes -= piece.length;
+      if (piece.length) this.push(piece);
+      if (bytes <= 0) { ended = true; this.push(null); }
+      done();
+    },
+  });
+};
 
 /** A demuxer that only jumped somewhere has hung up by the end of this, though the blocks it
  *  was sent still sat in the socket; only a reader that keeps going is handed the rest. */
@@ -412,10 +427,12 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
             // The rest is the film itself, as one ordinary transfer from where the blocks end.
             if (!broke && !await stillReading(res)) return;
             const rest = await open(`bytes=${position}-${asked ?? ""}`, controller.signal);
-            const from = /^bytes (\d+)-/.exec(rest.headers.get("content-range") ?? "");
-            if (rest.status !== 206 || Number(from?.[1]) !== position || !rest.body) { discard(rest.body); res.destroy(); return; }
+            // The rest must start at the next byte and reach the promised end; anything past it is
+            // not sent.
+            const answered = /^bytes (\d+)-(\d+)\//.exec(rest.headers.get("content-range") ?? "");
+            if (rest.status !== 206 || Number(answered?.[1]) !== position || Number(answered?.[2]) < last || !rest.body) { discard(rest.body); res.destroy(); return; }
             res.setMaxListeners(res.getMaxListeners() + 1);
-            await pipeline(Readable.fromWeb(rest.body as never), res, { signal: controller.signal });
+            await pipeline(Readable.fromWeb(rest.body as never), limited(last - position + 1), res, { signal: controller.signal });
           } catch { if (!res.writableEnded) res.destroy(); }
           return;
         }
@@ -498,6 +515,11 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       const key = `addon:${cacheKey}`;
       const proxyHeaders = stream.behaviorHints?.proxyHeaders?.request ?? {};
       let silent = false;
+      const quietNow = (error: unknown): unknown => {
+        noteSourceQuiet(resource.parent ?? resource.id);
+        log("WARN", "The source did not respond", { req: req.id, url: raw, range: askedRange, reason: `no response within ${SOURCE_HEADER_MS / 1000} s`, attempts: 1 });
+        return error;
+      };
       // The same header wait as the ordinary transfer: a host that never answers is given up on
       // once, and marked quiet, rather than waited out here and then again below.
       const open: OpenRange = async (range, signal) => {
@@ -511,7 +533,8 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       let first: ReadAheadBlock | undefined;
       try {
         first = await remoteReadAhead.take(key, start, open);
-        if (first.contentType && PLAYLIST_TYPE.test(first.contentType)) throw new UnexpectedAnswer();
+        // Judged on where the host really answered from: a redirect may lead to a manifest.
+        if ((first.contentType && PLAYLIST_TYPE.test(first.contentType)) || /\.(m3u8|mpd)$/i.test(new URL(first.url || raw).pathname)) throw new UnexpectedAnswer();
       } catch (error) {
         if (error instanceof RangeNotSatisfiable) {
           if (error.contentRange && /^bytes \*\/\d+$/.test(error.contentRange)) res.setHeader("content-range", error.contentRange);
@@ -522,11 +545,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
           unblockable.add(cacheKey);
           remoteReadAhead.forget(key);
         }
-        if (silent) {
-          noteSourceQuiet(resource.parent ?? resource.id);
-          log("WARN", "The source did not respond", { req: req.id, url: raw, range: askedRange, reason: `no response within ${SOURCE_HEADER_MS / 1000} s`, attempts: 1 });
-          throw error;
-        }
+        if (silent) throw quietNow(error);
         // Anything else -- a dropped connection, a refused read -- is left to the ordinary
         // transfer and its retries.
         first = undefined;
@@ -545,7 +564,15 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
         try { await writeBlocks(res, remoteReadAhead, key, first, start, last, open, closed.signal, progress); }
         // A block the host cut short is picked up below, from the byte it stopped at, by the
         // ordinary transfer and its resumes.
-        catch { broke = true; }
+        catch (error) {
+          // A later block the host never answered is the same silence as a first one: one wait.
+          if (silent) {
+            quietNow(error);
+            if (res.headersSent) return void res.destroy();
+            throw error;
+          }
+          broke = true;
+        }
         if (res.destroyed) return;
         if (!broke && progress.position > last) return void res.end();
         if (!broke && !await stillReading(res)) return;
@@ -668,7 +695,19 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     const asked = /bytes=(\d*)-(\d*)/.exec(req.headers.range ?? "");
     const from = Number(asked?.[1] || 0) + alreadySent;
     const until = asked?.[2] ? Number(asked[2]) : undefined;
-    const expected = Number(upstream.headers.get("content-length") ?? "") || undefined;
+    let expected = Number(upstream.headers.get("content-length") ?? "") || undefined;
+    if (alreadySent) {
+      // The head already promised a range; what the source hands on must be the very bytes that
+      // come next, and no more of them than were promised.
+      const promised = /^bytes \d+-(\d+)\//.exec(String(res.getHeader("content-range") ?? ""));
+      const answered = /^bytes (\d+)-(\d+)\//.exec(upstream.headers.get("content-range") ?? "");
+      if (upstream.status !== 206 || !promised || !answered || Number(answered[1]) !== from || Number(answered[2]) < Number(promised[1])) {
+        await upstream.body.cancel().catch(() => undefined);
+        log("WARN", "The source handed on the wrong part of the file", { req: req.id, url: raw, status: upstream.status, range: headers.range, answered: upstream.headers.get("content-range") });
+        return void res.destroy();
+      }
+      expected = Number(promised[1]) - from + 1;
+    }
     let delivered = 0;
     // Worth keeping only while it is still short: a longer read is the picture going by.
     let keep: Buffer[] | undefined = req.method === "GET" ? [] : undefined;

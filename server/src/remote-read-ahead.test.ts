@@ -96,7 +96,7 @@ test("a forgotten block stops its read and leaves nothing counted", async () => 
   const reader = new RemoteReadAhead(16, 1024);
   let push!: (bytes: Uint8Array) => void;
   let cancelled = false;
-  const body = new ReadableStream<Uint8Array>({ start(controller) { push = (bytes) => controller.enqueue(bytes); }, cancel() { cancelled = true; } });
+  const body = new ReadableStream<Uint8Array>({ start(controller) { push = (bytes) => { try { controller.enqueue(bytes); } catch { /* cancelled */ } }; }, cancel() { cancelled = true; } });
   await reader.fill("film:", 0, async () => new Response(body, { status: 206, headers: { "content-range": "bytes 0-15/64" } }));
   push(new Uint8Array(file.subarray(0, 4)));
   await new Promise((resolve) => setTimeout(resolve, 5));
@@ -125,4 +125,18 @@ test("reads still under way are bounded by the budget too", async () => {
   await reader.fill("film", 16, hanging);
   await assert.rejects(reader.fill("film", 32, hanging), ReadAheadFull);
   reader.forget("film");
+});
+
+test("a reader waiting on a block that is dropped is told, even when its host ignores the cancel", async () => {
+  const reader = new RemoteReadAhead(16, 1024);
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) { controller.enqueue(new Uint8Array(file.subarray(0, 4))); },
+    cancel() { return new Promise<void>(() => undefined); },
+  });
+  const block = await reader.fill("film", 0, async () => new Response(body, { status: 206, headers: { "content-range": "bytes 0-15/64" } }));
+  const reading = (async () => { for await (const _piece of reader.read(block, 0, 16)) { /* waiting for the rest */ } })();
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  reader.forget("film");
+  const outcome = await Promise.race([reading.then(() => "ended", () => "failed"), new Promise((resolve) => setTimeout(() => resolve("hung"), 200))]);
+  assert.equal(outcome, "failed");
 });

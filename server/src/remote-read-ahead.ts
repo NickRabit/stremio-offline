@@ -36,6 +36,9 @@ export interface ReadAheadBlock {
   stop: AbortController;
   /** Whether the block is still held here and its bytes still counted. */
   held: boolean;
+  /** Where the host really answered from, after any redirect. */
+  url: string;
+  reader?: ReadableStreamDefaultReader<Uint8Array>;
 }
 
 const CONTENT_RANGE = /^bytes (\d+)-(\d+)\/(\d+)$/;
@@ -93,7 +96,7 @@ export class RemoteReadAhead {
       start: offset, end: offset + this.blockBytes, size: 0, contentType: undefined,
       chunks: [], filled: 0, done: false, at: this.now(), wake: new Set(),
       ready: new Promise<void>((resolve, reject) => { answered = resolve; refused = reject; }),
-      stop: controller, held: true,
+      stop: controller, held: true, url: "",
     };
     block.ready.catch(() => undefined);
     const list = this.blocks.get(key) ?? [];
@@ -117,6 +120,7 @@ export class RemoteReadAhead {
     block.end = Math.min(Number(range[2]) + 1, offset + this.blockBytes);
     block.size = Number(range[3]);
     block.contentType = response.headers.get("content-type") ?? undefined;
+    block.url = response.url;
     answered();
     void this.pour(key, block, response.body, controller.signal).finally(() => clearTimeout(timer));
     return block;
@@ -124,6 +128,7 @@ export class RemoteReadAhead {
 
   private async pour(key: string, block: ReadAheadBlock, body: ReadableStream<Uint8Array>, signal: AbortSignal): Promise<void> {
     const reader = body.getReader();
+    block.reader = reader;
     const want = block.end - block.start;
     try {
       while (block.filled < want) {
@@ -163,6 +168,7 @@ export class RemoteReadAhead {
       }
       if (block.failed !== undefined) throw block.failed;
       if (block.done) return;
+      if (!block.held) throw new Error("The block was dropped before it was read.");
       await new Promise<void>((resolve) => { block.wake.add(resolve); });
     }
   }
@@ -205,7 +211,11 @@ export class RemoteReadAhead {
     if (!block.held) return;
     block.held = false;
     this.held -= block.filled;
-    if (!block.done) block.stop.abort();
+    if (block.done) return;
+    // A host may ignore the abort; the read is cancelled and its waiting readers told directly.
+    block.stop.abort();
+    void block.reader?.cancel().catch(() => undefined);
+    this.notify(block);
   }
 
   private pending(): number {
