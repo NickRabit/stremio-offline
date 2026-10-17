@@ -2066,7 +2066,10 @@ test("a timed-out hardware pass is dead before the retry purges its directory", 
 
 for (const copy of [false, true]) {
   const kind = copy ? "remux" : "transcode";
-  test(`a ${kind} is handed to the player once ${copy ? "one segment is" : "two segments are"} listed`, { timeout: 20_000 }, async (t) => {
+  // The fake FFmpeg is a node script run through its shebang, which Windows cannot execute; the
+  // handover itself is the same on every platform and hlsCanStart's own test runs there.
+  const skip = process.platform === "win32" ? "Windows cannot run a script as the FFmpeg binary" : false;
+  test(`a ${kind} is handed to the player once ${copy ? "one segment is" : "two segments are"} listed`, { timeout: 20_000, skip }, async (t) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "playback-handover-"));
     t.after(() => rm(directory, { recursive: true, force: true }));
     // Publishes one 2 s segment at once and the second only later, the way FFmpeg's first
