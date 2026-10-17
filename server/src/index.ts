@@ -276,7 +276,7 @@ const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () =
     // leave the connection to the source reading on.
     for (const active of activeMedia) if (active.resourceId === owned.resourceId) active.res.destroy();
   }
-  if (owned) rangeCache.forget(owned.resourceId);
+  if (owned) { rangeCache.forget(owned.resourceId); remoteReadAhead.forget(`addon:${owned.resourceId}`); }
   playbackOwners.delete(id);
   airplayAccess.remove(id);
   throughput.forget(id);

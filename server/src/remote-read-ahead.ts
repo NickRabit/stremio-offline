@@ -153,8 +153,12 @@ export class RemoteReadAhead {
     }
   }
 
+  /** Drops what one source holds; `key` also covers the child reads named `key:…`. */
   forget(key: string): void {
-    for (const block of this.blocks.get(key) ?? []) this.drop(key, block);
+    for (const [held, list] of [...this.blocks]) {
+      if (held !== key && !held.startsWith(`${key}:`)) continue;
+      for (const block of [...list]) this.drop(held, block);
+    }
   }
 
   get size(): number { return this.held; }

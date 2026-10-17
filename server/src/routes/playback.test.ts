@@ -17,7 +17,7 @@ import { sealRemoteContent } from "../media-server-reference.js";
 import { MediaServerSources } from "../media-server-sources.js";
 import { MediaServerError } from "../media-server-types.js";
 import type { PlaybackManager } from "../playback.js";
-import type { RangeCache } from "../range-cache.js";
+import { RangeCache } from "../range-cache.js";
 import { RemoteReadAhead } from "../remote-read-ahead.js";
 import type { StatsLog } from "../stats.js";
 import { defaultPrefs, type Store } from "../store.js";
@@ -116,7 +116,7 @@ const mount = async (remoteReadAhead = new RemoteReadAhead()): Promise<Harness> 
     playbackResponse: (value) => value,
     prefsOf: () => defaultPrefs(),
     quietSources: new Map(),
-    rangeCache: {} as unknown as RangeCache,
+    rangeCache: new RangeCache(),
     remoteReadAhead,
     safeInspection: () => ({ duration: undefined, video: undefined, audioTracks: [], subtitleTracks: [] }),
     sleep: async () => undefined,
@@ -413,6 +413,83 @@ test("a held block is still refused to an owner whose access was withdrawn", asy
   const denied = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: "bytes=200-" } });
   assert.equal(denied.status, 404);
   assert.equal(opens.length, 1);
+});
+
+/** An addon host on this machine that answers ranges, counting every request it is asked. */
+const addonHost = async (t: { after(fn: () => unknown): unknown }, body: Buffer, contentType = "video/x-msvideo") => {
+  process.env.ALLOW_PRIVATE_ADDONS = "1";
+  const ranges: string[] = [];
+  const server = http.createServer((req, res) => {
+    ranges.push(String(req.headers.range ?? ""));
+    const match = /^bytes=(\d+)-(\d*)$/.exec(String(req.headers.range ?? ""));
+    if (!match) { res.writeHead(200, { "content-type": contentType, "content-length": body.length }); return void res.end(body); }
+    const start = Number(match[1]);
+    const end = Math.min(match[2] ? Number(match[2]) : body.length - 1, body.length - 1);
+    res.writeHead(206, { "content-type": contentType, "content-length": end - start + 1, "content-range": `bytes ${start}-${end}/${body.length}`, "accept-ranges": "bytes" });
+    res.end(body.subarray(start, end + 1));
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(() => { delete process.env.ALLOW_PRIVATE_ADDONS; server.closeAllConnections(); server.close(); });
+  return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/film.avi`, ranges };
+};
+
+const filmBytes = (size: number) => {
+  const file = Buffer.alloc(size);
+  for (let index = 0; index < size; index += 1) file[index] = (index * 31 + (index >> 8)) & 0xff;
+  return file;
+};
+
+test("an addon film probed by jumping between its header and its index asks the host a few times, not once per jump", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const size = 6 * 1024 * 1024;
+  const file = filmBytes(size);
+  const host = await addonHost(t, file);
+  const resourceId = registry.mediaStream({ url: host.url } as StreamItem, ADA).resourceId;
+  const indexAt = size - 3 * 1024 * 1024;
+
+  assert.deepEqual(await readSome(harness.base, resourceId, 0, 4096), file.subarray(0, 4096));
+  for (let entry = 0; entry < 40; entry += 1) {
+    const header = 260 + entry * 16;
+    assert.deepEqual(await readSome(harness.base, resourceId, header, 16), file.subarray(header, header + 16));
+    const chunk = indexAt + entry * 65_536;
+    assert.deepEqual(await readSome(harness.base, resourceId, chunk, 32_768), file.subarray(chunk, chunk + 32_768));
+  }
+
+  assert.ok(host.ranges.length <= 5, `80 jumps asked the host ${host.ranges.length} times: ${host.ranges.join(", ")}`);
+  assert.ok(host.ranges.every((range) => /^bytes=\d+-\d+$/.test(range)), `a reader that hung up was handed the rest of the film: ${host.ranges.join(", ")}`);
+});
+
+test("an addon read longer than the blocks is handed on to the host from where they end", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const size = 5 * 1024 * 1024 + 123;
+  const file = filmBytes(size);
+  const host = await addonHost(t, file);
+  const resourceId = registry.mediaStream({ url: host.url } as StreamItem, ADA).resourceId;
+
+  const response = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: "bytes=1000-" } });
+  assert.equal(response.status, 206);
+  assert.equal(response.headers.get("content-range"), `bytes 1000-${size - 1}/${size}`);
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()), file.subarray(1000));
+  assert.deepEqual(host.ranges, ["bytes=1000-1049575", "bytes=1049576-2098151", "bytes=2098152-"]);
+});
+
+test("an addon playlist keeps the ordinary transfer and is still rewritten", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const host = await addonHost(t, Buffer.from("#EXTM3U\n#EXTINF:4,\nsegment-1.ts\n"), "application/vnd.apple.mpegurl");
+  const resourceId = registry.mediaStream({ url: host.url } as StreamItem, ADA).resourceId;
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const response = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: "bytes=0-" } });
+    assert.equal(response.status, 206);
+    assert.match(response.headers.get("content-type") ?? "", /mpegurl/);
+    const text = await response.text();
+    assert.match(text, /\/api\/media\//, "the segment is proxied, not handed out as the host's address");
+  }
+  assert.equal(host.ranges.filter((range) => /^bytes=\d+-\d+$/.test(range)).length, 1, "the bounded read is tried once, then the source keeps the ordinary path");
 });
 
 test("the remote media proxy maps a media-server failure to its fixed sentence", async (t) => {
