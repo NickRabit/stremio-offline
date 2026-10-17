@@ -827,10 +827,9 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
    (inline-flex, centred, fixed width) would flatten it, so the row is restored to its grid and
    carries the panel's dark surface. The list scrolls inside the panel, which keeps its heading. */
 .player-sources{width:min(520px,calc(100% - 32px))}
-/* The detail's own menus over the player's list: name above the menu, the three side by side. */
-.player-sources .stream-filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin:0}
-.player-sources .stream-filters label{flex-direction:column;align-items:stretch;gap:4px}
-.player-sources .stream-filters select{width:100%;max-width:none}
+/* The menus are the detail's own grid (two equal columns on a phone, the order across the whole
+   width); the panel only drops their margin. */
+.player-sources .stream-filters{margin:0}
 .player-source-list{max-height:min(52vh,380px);overflow-y:auto;overscroll-behavior:contain}
 .player-sources .stream-list button{display:grid;justify-content:initial;min-height:44px;padding:9px 11px;background:var(--panel)}
 /* A phone gets the sheet the detail's chooser is there: the whole screen, the menus side by side
