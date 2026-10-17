@@ -29,6 +29,52 @@ The proposal needs the following corrections before implementation.
 Android references in this document are under
 `android-tv/app/src/main/java/cz/stremiooffline/tv/ui/catalog/`, unless noted.
 
+## Catalog optimization and excluded addons
+
+Catalog search is explicitly included in the performance work. Preserve its
+entry points, controls, browsing, scopes, history preference and selected sort;
+changing delivery from one final batch to incremental results is intentional.
+Use the same bounded source runner for Catalog and Search everywhere, with
+separate client adapters and privacy policies. Keep the legacy `/api/search`
+response compatible for older clients; migrate the web Catalog and TV
+Catalog-origin search to an incremental catalog-scoped contract rather than
+returning partial results under an old response that implies completion.
+The new contract may reuse the session protocol below, with an explicit
+catalog-only scope, addon/catalog selectors and no local or remote fan-out.
+
+Deliver fast catalogs first, cancel superseded work through the queue, retry only
+failed pages and preserve per-source pagination. Cache/coalesce successful pages
+under the same authorization and configuration rules described below. Catalog
+keeps its existing sort semantics as batches arrive; preserve scroll/focus by
+stable identity, especially on TV. Do not apply the global page's append-only
+ranking policy or disable Catalog history as a side effect of sharing the runner.
+
+The existing `globalSearch` switch is mandatory source-selection policy, not an
+optimization hint. `server/src/addons.ts:144` already implements the distinction,
+and `server/src/routes/catalog.ts:105` enables it for an unscoped search:
+
+| Search scope | Addon with `globalSearch: false` |
+| --- | --- |
+| Catalog: search all addons | Excluded |
+| Search everywhere: All | Excluded from the catalog portion |
+| Search everywhere: Catalog source-class filter | Excluded; this filter does not explicitly select an addon |
+| Explicitly selected addon or one of its catalogs | Searchable if enabled and authorized |
+
+An addon excluded from all-addon search stays available in the explicit scope
+picker. This flag is separate from enablement, user grants and Show on Home;
+explicit selection never bypasses enablement or authorization. Discover targets
+server-side using `searchableCatalogs` after grants and user order are applied.
+No fallback, retry, pagination, cache hit or coalesced request may broaden that
+scope. Local and remote-library searches are unaffected by this addon flag.
+
+Bind each search to its selection policy and addon configuration generation.
+If the flag changes during an all-addon search, cancel that source and discard
+its late/cached records before the next delivery; remove its badges and counts
+from existing clusters. An explicitly scoped search can continue if the addon
+remains enabled and authorized. Re-enabling all-addon participation takes effect
+on a fresh search. Cached pages from an explicit scope must never make an
+excluded addon visible to an all-addon search.
+
 ## Identity and result contract
 
 Keep source records separate from title clusters. A source record contains a
@@ -223,9 +269,11 @@ use fixed error codes, duration and counts, never raw errors or payloads.
 ## Delivery and acceptance
 
 1. Build the bounded incremental runner and cancellation path with fake sources.
-   Preserve `/api/search`'s response contract and Catalog UX. Any shared helper
-   change needs existing Catalog regression coverage; merely accelerating the
-   old all-settled endpoint does not satisfy incremental display.
+   Preserve `/api/search`'s legacy response contract, then migrate web Catalog
+   and TV Catalog-origin search to the incremental catalog-scoped contract.
+   Include the addon exclusion policy above. Existing controls, browsing,
+   history and sorting remain covered by regression tests; a faster all-settled
+   endpoint alone does not satisfy incremental display.
 2. Add global Catalog search on web and TV against the new contract, including
    partial states, retries, stable card keys and no persisted history.
 3. Add per-library local snapshots and remote adapters, conservative clustering
@@ -244,6 +292,12 @@ Required tests and release gates:
   delivery removes titles, counts and badges; ordinary/restricted accounts work;
   cross-session access fails; cold local index does not walk inline; stale
   cursors restart safely; remote folder mode cannot narrow global search.
+- Scope regression matrix on server, web and TV: an excluded addon receives
+  zero upstream calls for Catalog All, global All and global Catalog; explicit
+  addon/catalog search still works when authorized. Disabled/ungranted addons
+  receive zero calls even when explicitly selected. Repeat with cached pages,
+  retries, continuations and a mid-flight `globalSearch` toggle; verify source
+  picker visibility, counts and badges as well as returned cards.
 - Privacy: distinctive query text never reaches stored user data, emitted logs,
   persisted cursors or client saved state, including timeout and malformed
   upstream response paths. Catalog history still behaves as before.
