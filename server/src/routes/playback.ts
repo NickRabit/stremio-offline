@@ -21,7 +21,7 @@ import { readMediaText, rewritePlaylist } from "../media-playlist.js";
 import { clientCapabilities } from "../playback.js";
 import type { PlaybackManager, PlaybackOptions } from "../playback.js";
 import type { RangeCache } from "../range-cache.js";
-import { RangeNotSatisfiable, UnexpectedAnswer, type OpenRange, type ReadAheadBlock, type RemoteReadAhead } from "../remote-read-ahead.js";
+import { RangeNotSatisfiable, ReadAheadFull, UnexpectedAnswer, type OpenRange, type ReadAheadBlock, type RemoteReadAhead } from "../remote-read-ahead.js";
 import { redirectedHeaders, safeFetch, validateRemoteUrl } from "../security.js";
 import type { StatsLog, TrafficMeta } from "../stats.js";
 import type { UserPrefs } from "../store.js";
@@ -390,7 +390,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
             if (error.contentRange && /^bytes \*\/\d+$/.test(error.contentRange)) res.setHeader("content-range", error.contentRange);
             return void res.status(416).end();
           }
-          if (!(error instanceof UnexpectedAnswer)) return openFailed(error);
+          if (!(error instanceof UnexpectedAnswer) && !(error instanceof ReadAheadFull)) return openFailed(error);
           ordinary = true;
         }
         if (!ordinary && first) {
@@ -401,11 +401,16 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
             return void res.status(416).end();
           }
           try {
-            position = await writeBlocks(res, remoteReadAhead, key, first, position, last, open, controller.signal);
+            const progress = { position };
+            let broke = false;
+            // A block that broke off is picked up from the byte it reached by the transfer below.
+            try { await writeBlocks(res, remoteReadAhead, key, first, position, last, open, controller.signal, progress); }
+            catch { broke = true; }
+            position = progress.position;
             if (res.destroyed) return;
-            if (position > last) return void res.end();
+            if (!broke && position > last) return void res.end();
             // The rest is the film itself, as one ordinary transfer from where the blocks end.
-            if (!await stillReading(res)) return;
+            if (!broke && !await stillReading(res)) return;
             const rest = await open(`bytes=${position}-${asked ?? ""}`, controller.signal);
             const from = /^bytes (\d+)-/.exec(rest.headers.get("content-range") ?? "");
             if (rest.status !== 206 || Number(from?.[1]) !== position || !rest.body) { discard(rest.body); res.destroy(); return; }
@@ -487,6 +492,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     // A host that has gone quiet is left to the ordinary transfer, which asks it once with the
     // short header wait.
     const wanted = req.method === "GET" && !unblockable.has(cacheKey) && !sourceIsQuiet(resource.parent ?? resource.id)
+      && !/\.(m3u8|mpd)$/i.test(new URL(raw).pathname)
       ? /^bytes=(\d+)-(\d*)$/.exec(askedRange) : null;
     if (wanted && (!wanted[2] || Number(wanted[2]) >= Number(wanted[1]))) {
       const key = `addon:${cacheKey}`;

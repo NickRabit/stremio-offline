@@ -15,6 +15,9 @@ export class RangeNotSatisfiable extends Error {
  *  for; the route falls back to an ordinary transfer. */
 export class UnexpectedAnswer extends Error {}
 
+/** The blocks already being read take the whole budget; the caller reads this one directly. */
+export class ReadAheadFull extends Error {}
+
 export interface ReadAheadBlock {
   readonly start: number;
   /** Exclusive end of the bytes this block will hold once its read completes. */
@@ -29,6 +32,10 @@ export interface ReadAheadBlock {
   wake: Set<() => void>;
   /** Settles once the media server has answered the block's read; rejects when it refused it. */
   ready: Promise<void>;
+  /** Stops the block's read; a block that is dropped is never read further. */
+  stop: AbortController;
+  /** Whether the block is still held here and its bytes still counted. */
+  held: boolean;
 }
 
 const CONTENT_RANGE = /^bytes (\d+)-(\d+)\/(\d+)$/;
@@ -73,6 +80,10 @@ export class RemoteReadAhead {
    *  block after that; the read belongs to the block, not to any one listener, so a reader that
    *  leaves does not cut it. */
   async fill(key: string, offset: number, open: OpenRange): Promise<ReadAheadBlock> {
+    // A read under way is counted at its full size: it cannot be evicted before it ends.
+    const reserve = (this.pending() + 1) * this.blockBytes;
+    this.evict(reserve);
+    if (this.held + reserve > this.total) throw new ReadAheadFull();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.fillTimeoutMs);
     timer.unref?.();
@@ -82,6 +93,7 @@ export class RemoteReadAhead {
       start: offset, end: offset + this.blockBytes, size: 0, contentType: undefined,
       chunks: [], filled: 0, done: false, at: this.now(), wake: new Set(),
       ready: new Promise<void>((resolve, reject) => { answered = resolve; refused = reject; }),
+      stop: controller, held: true,
     };
     block.ready.catch(() => undefined);
     const list = this.blocks.get(key) ?? [];
@@ -101,7 +113,8 @@ export class RemoteReadAhead {
     if (response.status === 416) { cancel(); return fail(new RangeNotSatisfiable(response.headers.get("content-range") ?? undefined)); }
     const range = CONTENT_RANGE.exec(response.headers.get("content-range") ?? "");
     if (response.status !== 206 || !range || Number(range[1]) !== offset || !response.body) { cancel(); return fail(new UnexpectedAnswer()); }
-    block.end = Number(range[2]) + 1;
+    // A host that answers with the rest of the file is read only as far as the block reaches.
+    block.end = Math.min(Number(range[2]) + 1, offset + this.blockBytes);
     block.size = Number(range[3]);
     block.contentType = response.headers.get("content-type") ?? undefined;
     answered();
@@ -118,6 +131,7 @@ export class RemoteReadAhead {
         const { done, value } = await reader.read();
         if (done) break;
         const piece = Buffer.from(value.subarray(0, want - block.filled));
+        if (!block.held) throw new Error("The block was dropped.");
         block.chunks.push(piece);
         block.filled += piece.length;
         this.held += piece.length;
@@ -184,15 +198,29 @@ export class RemoteReadAhead {
   private drop(key: string, block: ReadAheadBlock): void {
     const list = this.blocks.get(key);
     const index = list?.indexOf(block) ?? -1;
-    if (!list || index < 0) return;
-    list.splice(index, 1);
-    if (!list.length) this.blocks.delete(key);
+    if (index >= 0) {
+      list!.splice(index, 1);
+      if (!list!.length) this.blocks.delete(key);
+    }
+    if (!block.held) return;
+    block.held = false;
     this.held -= block.filled;
+    if (!block.done) block.stop.abort();
   }
 
-  /** The least recently read finished blocks go first; a block still being read is never cut. */
-  private evict(): void {
-    while (this.held > this.total) {
+  private pending(): number {
+    let count = 0;
+    for (const list of this.blocks.values()) for (const block of list) if (!block.done) count += 1;
+    return count;
+  }
+
+  /** Expired blocks go first, then the least recently read finished ones until the budget
+   *  holds; a block still being read is never cut. */
+  private evict(reserve = 0): void {
+    for (const [key, list] of [...this.blocks]) {
+      for (const block of [...list]) if (block.done && this.now() - block.at > this.ttlMs) this.drop(key, block);
+    }
+    while (this.held + reserve > this.total) {
       let oldest: { key: string; block: ReadAheadBlock } | undefined;
       for (const [key, list] of this.blocks) {
         for (const block of list) if (block.done && (!oldest || block.at < oldest.block.at)) oldest = { key, block };

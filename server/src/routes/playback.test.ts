@@ -534,6 +534,44 @@ test("an addon block the host cuts short is picked up where it stopped", async (
   assert.deepEqual(Buffer.from(await response.arrayBuffer()), file.subarray(0, 10_000), "the range comes back whole, not truncated");
 });
 
+test("a media-server block that breaks off is picked up where it stopped", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const file = filmBytes(3 * 1024 * 1024);
+  const opens: string[] = [];
+  const sources = harness.mediaSources as unknown as {
+    open(stream: StreamItem, owner: ResourceOwner, args: { method: string; range?: string }, signal?: AbortSignal): Promise<Response>;
+    assertCurrent(): void;
+  };
+  sources.assertCurrent = () => undefined;
+  sources.open = async (_stream, _owner, args) => {
+    opens.push(args.range ?? "");
+    const match = /^bytes=(\d+)-(\d*)$/.exec(args.range ?? "")!;
+    const start = Number(match[1]);
+    const end = Math.min(match[2] ? Number(match[2]) : file.length - 1, file.length - 1);
+    const headers = { "content-range": `bytes ${start}-${end}/${file.length}`, "content-type": "video/x-msvideo" };
+    if (opens.length > 1) return new Response(file.subarray(start, end + 1), { status: 206, headers });
+    const cut = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new Uint8Array(file.subarray(start, start + 5000))); controller.error(new Error("reset")); } });
+    return new Response(cut, { status: 206, headers });
+  };
+  const resourceId = harness.seedRemote();
+
+  const response = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: "bytes=0-9999" } });
+  assert.equal(response.status, 206);
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()), file.subarray(0, 10_000), "the range comes back whole, not truncated");
+});
+
+test("an addon manifest named by its address keeps the ordinary transfer whatever type it is served as", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const host = await addonHost(t, Buffer.from("#EXTM3U\n#EXTINF:4,\nsegment-1.ts\n"), "application/octet-stream");
+  const resourceId = registry.mediaStream({ url: host.url.replace("film.avi", "index.m3u8") } as StreamItem, ADA).resourceId;
+
+  const response = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: "bytes=0-" } });
+  assert.match(await response.text(), /\/api\/media\//, "the segment is proxied, not handed out raw");
+  assert.ok(host.ranges.every((range) => !/^bytes=\d+-\d+$/.test(range)), `the manifest was read as a block: ${host.ranges.join(", ")}`);
+});
+
 test("an addon playlist keeps the ordinary transfer and is still rewritten", async (t) => {
   const harness = await mount();
   t.after(harness.close);
