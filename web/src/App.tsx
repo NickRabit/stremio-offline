@@ -2499,6 +2499,7 @@ export function App() {
     // play and opens its detail instead.
     if (card.kind === "resume-catalogue") {
       if (card.path) void playLocal(card.title, card.path, card.poster, card.season != null);
+      else homeOpen(card);
       return;
     }
     const title = card.kind === "favorite" || card.kind === "recent" || card.kind === "tonight" ? card.label : card.title;
@@ -2529,7 +2530,7 @@ export function App() {
     if (card.kind === "confirm") { setSuggestionsOpen(true); return; }
     if (card.kind === "favorite-catalogue") { openCatalogueDetail({ type: card.type, id: card.id, name: card.name, ...(card.poster ? { poster: card.poster } : {}) }); return; }
     if (card.kind !== "resume-catalogue") return;
-    openCatalogueDetail({ type: card.type, id: card.id, name: card.name, ...(card.poster ? { poster: card.poster } : {}),
+    openCatalogueDetail({ type: card.type, id: card.id, name: card.name, ...(card.poster ? { poster: card.poster } : {}), resume: true,
       ...(card.season != null && card.episode != null ? { season: card.season, episode: card.episode } : {}) });
   };
   const homeShowAll = (target: ShowAllTarget) => {

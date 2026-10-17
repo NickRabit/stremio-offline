@@ -210,6 +210,31 @@ describe("CatalogueTitleDetail sources", () => {
   });
 });
 
+describe("CatalogueTitleDetail resume", () => {
+  it("plays the source Continue watching stored, once, as soon as the rows list it", async () => {
+    const stored = { ...addon("a2", "4K", 4_000), stableKey: "u:stored" };
+    streamReply = () => json([addon("a1", "1080p", 1_000), stored]);
+    const target: CatalogueDetailTarget = { type: "movie", id: "tt-film", name: "A film", initialMeta: film(), resume: true };
+    const { onPlay } = await render({ target });
+    // The key arrives from the caller's progress read, after the rows.
+    expect(onPlay).not.toHaveBeenCalled();
+    await rerender({ target, resumeStableKey: "u:stored", onPlay });
+    expect(onPlay).toHaveBeenCalledTimes(1);
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "a2" }), expect.objectContaining({ id: "tt-film" }), false);
+    await rerender({ target, resumeStableKey: "u:stored", onPlay });
+    expect(onPlay).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays on the detail when the stored source is no longer offered, and never plays outside resume", async () => {
+    const target: CatalogueDetailTarget = { type: "movie", id: "tt-film", name: "A film", initialMeta: film(), resume: true };
+    const gone = await render({ target, resumeStableKey: "u:gone" });
+    expect(gone.onPlay).not.toHaveBeenCalled();
+    streamReply = () => json([{ ...addon("a1", "1080p", 1_000), stableKey: "u:kept" }]);
+    const plain = await render({ target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film() }, resumeStableKey: "u:kept" });
+    expect(plain.onPlay).not.toHaveBeenCalled();
+  });
+});
+
 describe("CatalogueTitleDetail series", () => {
   const videos = [episode("tt-series:1:1", 1, 1, "The first one"), episode("tt-series:1:2", 1, 2, "The second one")];
 

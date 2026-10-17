@@ -24,6 +24,10 @@ export interface CatalogueDetailTarget {
   initialSource?: Stream;
   /** The catalogue's own metadata, which this detail never reads again. */
   initialMeta?: Meta;
+  /** Opened from Continue watching: the source the title was last played from starts as soon as
+   *  this detail lists it, the way a card written from a library file plays at once. A source no
+   *  longer offered leaves the detail on screen to choose another. */
+  resume?: boolean;
 }
 
 /** The catalogue id a detail asks its own rows by: the exact video the catalogue lists wins, then
@@ -98,6 +102,7 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
   const [sourceError, setSourceError] = useState("");
   const [nonce, setNonce] = useState(0);
   const [chooserOpen, setChooserOpen] = useState(false);
+  const resumed = useRef(false);
 
   // The catalogue's snapshot is already the answer; a title that only Home or a favourite knows
   // reads its metadata here, and a failure says so with a retry instead of an empty detail.
@@ -114,6 +119,7 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
   // Another title opens here: nothing of the first one's own choice survives it.
   useEffect(() => {
     setPickedEpisode(null); setPickerOpen(false); setPickerSeason(null); setSourceError("");
+    resumed.current = false;
   }, [type, id]);
 
   const videos = snapshot?.videos ?? [];
@@ -209,6 +215,15 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
     const read = latest.current;
     report.current?.({ meta: read.snapshot, target: read.effective, pending: read.rows === null, playable: (read.rows ?? []).some((stream) => stream.playable) });
   }, [episodeKey, snapshot, rows]);
+
+  // Continue watching plays the stored source once, the first time both the rows and the key the
+  // title was last played from are known; a key no row answers settles it without playing.
+  useEffect(() => {
+    if (!target.resume || resumed.current || rows === null || !resumeStableKey) return;
+    resumed.current = true;
+    const stored = rows.find((stream) => stream.playable && stream.stableKey === resumeStableKey);
+    if (stored) onPlay(stored, latest.current.effective, false);
+  }, [target.resume, rows, resumeStableKey, onPlay]);
 
   const gallery = useMemo(() => catalogueGalleryImages(snapshot), [snapshot]);
   const backdrops = useMemo(() => [snapshot?.background, snapshot?.poster, target.poster], [snapshot, target.poster]);
