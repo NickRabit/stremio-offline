@@ -479,6 +479,25 @@ describe("Player stall advice", () => {
     } finally { vi.useRealTimers(); }
   });
 
+  it("drops an early stall still in its grace when the viewer seeks away", async () => {
+    sessionShape = { mode: "transcode", url: "/api/playback/sess1/1/master.m3u8", acceleration: true };
+    await render();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      for (let i = 0; i < 3; i += 1) {
+        const video = host.querySelector("video")!;
+        Object.defineProperty(video, "currentTime", { configurable: true, get: () => 1.9, set: () => undefined });
+        // Converted well ahead, so the seek lands inside it and needs no restart.
+        Object.defineProperty(video, "seekable", { configurable: true, get: () => ({ length: 1, start: () => 0, end: () => 120 }) });
+        await act(async () => { video.dispatchEvent(new Event("waiting")); });
+        await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })); });
+        await act(async () => { vi.advanceTimersByTime(2_500); });
+      }
+      expect(host.querySelector(".player-error")).toBeNull();
+      expect(hint()).toBeNull();
+    } finally { vi.useRealTimers(); }
+  });
+
   it("still offers it when a conversion keeps stalling later on", async () => {
     sessionShape = { mode: "transcode", url: "/api/playback/sess1/1/master.m3u8", acceleration: true };
     await render();

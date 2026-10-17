@@ -671,7 +671,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     return () => {
       disposed = true; detach();
       if (bufferTimerRef.current !== undefined) { clearTimeout(bufferTimerRef.current); bufferTimerRef.current = undefined; }
-      if (earlyStallRef.current !== undefined) { clearTimeout(earlyStallRef.current); earlyStallRef.current = undefined; }
+      cancelEarlyStall();
       if (seekEpochRef.current === epoch) { seekEpochRef.current += 1; pendingSeekRef.current = null; seekingRef.current = false; seekInFlightRef.current = false; }
       video.pause(); video.removeAttribute("src"); video.load();
       const id = sessionRef.current; sessionRef.current = null;
@@ -699,6 +699,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   /** Inside the produced part we seek at once; otherwise the conversion restarts at the new position. */
   const seekTo = async (target: number, forceRestart = false) => {
     const video = videoRef.current; if (!video) return;
+    cancelEarlyStall();
     const bounded = Math.max(0, duration ? Math.min(target, duration - 1) : target);
     setScrub(null); showTime(bounded);
     // A forced restart may be an escalation away from direct play, so it must reach the server.
@@ -817,6 +818,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     const id = sessionRef.current; if (!id) return;
     const at = timeRef.current;
     const video = videoRef.current;
+    cancelEarlyStall();
     seekInFlightRef.current = true; seekingRef.current = true; setBuffering(true); setError(""); setPlaybackFailed(false);
     video?.pause();
     try {
@@ -848,6 +850,12 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     void changeTrack({ quality: value });
   };
 
+  /** A stall waiting out its grace belongs to the stream it happened on: a seek, a track or
+   *  quality change and a new stream all drop it, so it never counts against the next one. */
+  function cancelEarlyStall() {
+    if (earlyStallRef.current !== undefined) { clearTimeout(earlyStallRef.current); earlyStallRef.current = undefined; }
+  }
+
   /** A micro-stall under 400 ms never lights the notice up; it would blink on every buffer top-up. */
   const showBufferSoon = () => {
     if (bufferTimerRef.current !== undefined) return;
@@ -855,7 +863,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   };
   const clearBuffering = () => {
     if (bufferTimerRef.current !== undefined) { clearTimeout(bufferTimerRef.current); bufferTimerRef.current = undefined; }
-    if (earlyStallRef.current !== undefined) { clearTimeout(earlyStallRef.current); earlyStallRef.current = undefined; }
+    cancelEarlyStall();
     setBuffering(false);
   };
 
@@ -868,7 +876,10 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     if (!video || video.seeking || seekingRef.current) return;
     if (modeRef.current === "direct" ? video.currentTime < 1 : video.currentTime < CONVERSION_SETTLE_S) {
       if (modeRef.current === "direct" || earlyStallRef.current !== undefined) return;
-      earlyStallRef.current = window.setTimeout(() => { earlyStallRef.current = undefined; countStall(); }, EARLY_STALL_GRACE_MS);
+      earlyStallRef.current = window.setTimeout(() => {
+        earlyStallRef.current = undefined;
+        if (!seekingRef.current) countStall();
+      }, EARLY_STALL_GRACE_MS);
       return;
     }
     countStall();
