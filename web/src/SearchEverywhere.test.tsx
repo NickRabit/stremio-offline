@@ -199,4 +199,17 @@ describe("SearchEverywhere", () => {
     expect(onOpenMember).toHaveBeenCalledWith(first, "member-a");
     expect(document.body.textContent).not.toContain("Where to open A film");
   });
+  it("asks for the next page by itself near the end, never while a source still loads", async () => {
+    const source = (state: "ready" | "loading") => ({ id: "s0", sourceClass: "catalog" as const, label: "Catalog", state, loaded: 20, hasMore: state === "ready", continuation: "supported" as const, retryable: false });
+    const item = cluster("one", { title: "One" });
+    const idle = controller({ snapshot: snapshot({ sources: [source("ready")], clusters: [item] }), order: ["one"], loadMore: vi.fn() });
+    await render(idle);
+    expect(idle.loadMore).toHaveBeenCalledTimes(1);
+    expect([...host.querySelectorAll("button")].some((button) => button.textContent === "Load more")).toBe(false);
+
+    const busy = controller({ snapshot: snapshot({ sources: [source("loading")], clusters: [item] }), order: ["one"], loadMore: vi.fn() });
+    await render(busy);
+    await act(async () => { window.dispatchEvent(new Event("scroll")); });
+    expect(busy.loadMore).not.toHaveBeenCalled();
+  });
 });

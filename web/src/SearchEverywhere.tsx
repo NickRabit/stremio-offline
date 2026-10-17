@@ -246,6 +246,30 @@ export function SearchEverywhere({ search, shape, onToggleShape, onOpenMember, o
   const canLoadMore = search.snapshot?.sources.some((source) => source.hasMore) ?? false;
   const busy = Boolean(search.committed) && (!search.snapshot || search.previousQuery);
 
+  // Further pages arrive as the viewer nears the end, the way every other grid fills. The page
+  // itself scrolls here, so the window's position decides; a source already loading is not asked
+  // again, which keeps one scroll from stacking requests.
+  const tail = useRef<HTMLDivElement>(null);
+  const loadMoreRef = useRef(search.loadMore);
+  loadMoreRef.current = search.loadMore;
+  const ready = canLoadMore && waiting === 0 && !search.previousQuery;
+  useEffect(() => {
+    if (!ready) return;
+    const check = () => {
+      const element = tail.current;
+      if (!element) return;
+      const margin = Math.min(600, window.innerHeight);
+      if (element.getBoundingClientRect().top <= window.innerHeight + margin) loadMoreRef.current();
+    };
+    check();
+    window.addEventListener("scroll", check, { passive: true });
+    window.addEventListener("resize", check);
+    return () => {
+      window.removeEventListener("scroll", check);
+      window.removeEventListener("resize", check);
+    };
+  }, [ready, search.snapshot?.revision]);
+
   useEffect(() => {
     const onScroll = () => search.setScrollTop(window.scrollY);
     window.addEventListener("scroll", onScroll, { passive: true });
@@ -340,7 +364,9 @@ export function SearchEverywhere({ search, shape, onToggleShape, onOpenMember, o
         onOpen={(button) => void openCluster(button, cluster)}/>)}
       {search.snapshot && !busy && !mainCards.length && !unidentifiedCards.length && <p className="search-empty">{t("searchAll.empty")}</p>}
     </div>
-    {canLoadMore && <div className="load-more"><button type="button" onClick={search.loadMore}>{t("searchAll.loadMore")}</button></div>}
+    {(canLoadMore || waiting > 0) && search.snapshot && <div ref={tail} className="load-more" aria-hidden="true">
+      {waiting > 0 && <span>{t("common.loadingMore")}</span>}
+    </div>}
     {search.snapshot?.limitReached && <p className="search-limit">{t("searchAll.limitReached")}</p>}
     {unidentifiedCards.length > 0 && <details className="search-unidentified">
       <summary>{t("searchAll.unidentified", { count: unidentifiedCards.length })}</summary>
