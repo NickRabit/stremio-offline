@@ -53,7 +53,7 @@ interface Harness {
 
 /** The routes take every collaborator from the deps, so the app here is a real express
  *  instance over a playback manager that records what it was asked to do. */
-const mount = async (): Promise<Harness> => {
+const mount = async (remoteReadAhead = new RemoteReadAhead()): Promise<Harness> => {
   const attended: string[] = [];
   const errors: unknown[] = [];
   const stopped: string[] = [];
@@ -117,7 +117,7 @@ const mount = async (): Promise<Harness> => {
     prefsOf: () => defaultPrefs(),
     quietSources: new Map(),
     rangeCache: {} as unknown as RangeCache,
-    remoteReadAhead: new RemoteReadAhead(),
+    remoteReadAhead,
     safeInspection: () => ({ duration: undefined, video: undefined, audioTracks: [], subtitleTracks: [] }),
     sleep: async () => undefined,
     sourceIsQuiet: () => false,
@@ -357,6 +357,7 @@ test("an OpenDML probe jumping between the super index and the index chunks cost
   }
 
   assert.ok(opens.length <= 5, `80 jumps asked the media server ${opens.length} times: ${opens.join(", ")}`);
+  assert.ok(opens.every((range) => /^bytes=\d+-\d+$/.test(range)), `a reader that hung up was handed the rest of the film: ${opens.join(", ")}`);
   // A conversion opening the same film again reads what the probe already holds.
   const before = opens.length;
   assert.deepEqual(await readSome(harness.base, resourceId, 0, 4096), file.subarray(0, 4096));
@@ -376,6 +377,29 @@ test("a read longer than the blocks continues as one ordinary transfer and retur
   assert.equal(response.headers.get("content-length"), String(size - 1000));
   assert.deepEqual(Buffer.from(await response.arrayBuffer()), file.subarray(1000));
   assert.deepEqual(opens, ["bytes=1000-1049575", "bytes=1049576-2098151", "bytes=2098152-"]);
+});
+
+test("a reader that hangs up after a jump is not handed the rest of the film", async (t) => {
+  // Small blocks fit in the socket's buffer the way a megabyte does on a container's loopback,
+  // so both are written out before the server can see the reader has gone.
+  const harness = await mount(new RemoteReadAhead(4096));
+  t.after(harness.close);
+  const { opens } = rangedOriginal(harness, 64 * 1024);
+  const resourceId = harness.seedRemote();
+  const url = new URL(harness.base);
+  await new Promise<void>((resolve, reject) => {
+    const request = http.request({ host: url.hostname, port: url.port, path: `/api/media/${resourceId}`, headers: { "x-user": "ada", range: "bytes=100-" } }, (response) => {
+      response.once("data", () => {
+        response.pause();
+        setTimeout(() => { request.destroy(); resolve(); }, 15);
+      });
+    });
+    request.on("error", () => undefined);
+    request.on("close", () => resolve());
+    request.end();
+  });
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.deepEqual(opens, ["bytes=100-4195", "bytes=4196-8291"]);
 });
 
 test("a held block is still refused to an owner whose access was withdrawn", async (t) => {

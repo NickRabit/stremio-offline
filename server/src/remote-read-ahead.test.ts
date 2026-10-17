@@ -74,3 +74,12 @@ test("a read that breaks off fails its readers and leaves nothing behind", async
   assert.equal(reader.find("film", 0), undefined);
   assert.equal(reader.size, 0);
 });
+
+test("two readers arriving at one offset share a single read", async () => {
+  const opens: string[] = [];
+  const reader = new RemoteReadAhead(16, 1024);
+  const open = ranged(opens);
+  const [one, two] = await Promise.all([reader.take("film", 4, open), reader.take("film", 10, open)]);
+  assert.equal(one, two);
+  assert.deepEqual(opens, ["bytes=4-19"]);
+});

@@ -27,6 +27,8 @@ export interface ReadAheadBlock {
   failed?: unknown;
   at: number;
   wake: Set<() => void>;
+  /** Settles once the media server has answered the block's read; rejects when it refused it. */
+  ready: Promise<void>;
 }
 
 const CONTENT_RANGE = /^bytes (\d+)-(\d+)\/(\d+)$/;
@@ -56,28 +58,53 @@ export class RemoteReadAhead {
     return undefined;
   }
 
+  /** The block holding `offset` once its answer has arrived, joining a read already under way
+   *  or starting one. */
+  async take(key: string, offset: number, open: OpenRange): Promise<ReadAheadBlock> {
+    const held = this.find(key, offset);
+    if (!held) return this.fill(key, offset, open);
+    await held.ready;
+    return held;
+  }
+
   /** Starts one bounded read at `offset` and resolves once the media server has answered with
-   *  the partial content asked for. The body keeps arriving into the block after that; the read
-   *  belongs to the block, not to any one listener, so a reader that leaves does not cut it. */
+   *  the partial content asked for. The block is registered before that answer, so a reader
+   *  arriving meanwhile joins it rather than asking again. The body keeps arriving into the
+   *  block after that; the read belongs to the block, not to any one listener, so a reader that
+   *  leaves does not cut it. */
   async fill(key: string, offset: number, open: OpenRange): Promise<ReadAheadBlock> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.fillTimeoutMs);
     timer.unref?.();
-    let response: Response;
-    try { response = await open(`bytes=${offset}-${offset + this.blockBytes - 1}`, controller.signal); }
-    catch (error) { clearTimeout(timer); throw error; }
-    const cancel = () => { clearTimeout(timer); void response.body?.cancel().catch(() => undefined); };
-    if (response.status === 416) { cancel(); throw new RangeNotSatisfiable(response.headers.get("content-range") ?? undefined); }
-    const range = CONTENT_RANGE.exec(response.headers.get("content-range") ?? "");
-    if (response.status !== 206 || !range || Number(range[1]) !== offset || !response.body) { cancel(); throw new UnexpectedAnswer(); }
+    let answered!: () => void;
+    let refused!: (error: unknown) => void;
     const block: ReadAheadBlock = {
-      start: offset, end: Number(range[2]) + 1, size: Number(range[3]),
-      contentType: response.headers.get("content-type") ?? undefined,
+      start: offset, end: offset + this.blockBytes, size: 0, contentType: undefined,
       chunks: [], filled: 0, done: false, at: this.now(), wake: new Set(),
+      ready: new Promise<void>((resolve, reject) => { answered = resolve; refused = reject; }),
     };
+    block.ready.catch(() => undefined);
     const list = this.blocks.get(key) ?? [];
     list.push(block);
     this.blocks.set(key, list);
+    const fail = (error: unknown): never => {
+      clearTimeout(timer);
+      block.failed = error;
+      this.drop(key, block);
+      refused(error);
+      throw error;
+    };
+    let response: Response;
+    try { response = await open(`bytes=${offset}-${offset + this.blockBytes - 1}`, controller.signal); }
+    catch (error) { return fail(error); }
+    const cancel = () => { void response.body?.cancel().catch(() => undefined); };
+    if (response.status === 416) { cancel(); return fail(new RangeNotSatisfiable(response.headers.get("content-range") ?? undefined)); }
+    const range = CONTENT_RANGE.exec(response.headers.get("content-range") ?? "");
+    if (response.status !== 206 || !range || Number(range[1]) !== offset || !response.body) { cancel(); return fail(new UnexpectedAnswer()); }
+    block.end = Number(range[2]) + 1;
+    block.size = Number(range[3]);
+    block.contentType = response.headers.get("content-type") ?? undefined;
+    answered();
     void this.pour(key, block, response.body, controller.signal).finally(() => clearTimeout(timer));
     return block;
   }

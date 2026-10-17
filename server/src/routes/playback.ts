@@ -21,7 +21,7 @@ import { readMediaText, rewritePlaylist } from "../media-playlist.js";
 import { clientCapabilities } from "../playback.js";
 import type { PlaybackManager, PlaybackOptions } from "../playback.js";
 import type { RangeCache } from "../range-cache.js";
-import { RangeNotSatisfiable, UnexpectedAnswer, type OpenRange, type RemoteReadAhead } from "../remote-read-ahead.js";
+import { RangeNotSatisfiable, UnexpectedAnswer, type OpenRange, type ReadAheadBlock, type RemoteReadAhead } from "../remote-read-ahead.js";
 import { redirectedHeaders, safeFetch, validateRemoteUrl } from "../security.js";
 import type { StatsLog, TrafficMeta } from "../stats.js";
 import type { UserPrefs } from "../store.js";
@@ -72,6 +72,7 @@ const openTransfers = new Map<string, number>();
 /** How many bounded blocks one media-server read is served from before the rest of it is taken as
  *  one ordinary transfer: a probe's jump fits in them, a conversion reading the film does not. */
 const READ_AHEAD_BLOCKS = 2;
+const READ_AHEAD_GRACE_MS = 50;
 
 export function registerPlaybackRoutes(app: express.Application, deps: PlaybackDeps): void {
   const { airplayAccess, airplayRequest, answerHeaders, countBytes, currentSession, currentUser, httpSourceOf, internalMediaRequest, libraryTarget, mediaSources, noteSourceQuiet, ownerOf, playback, playbackMeta, playbackOwners, playbackResponse, prefsOf, quietSources, rangeCache, remoteReadAhead, requireAccess, safeInspection, sleep, sourceIsQuiet, stats, subtitleDelay, trackMedia, SOURCE_ATTEMPTS, SOURCE_RETRY_MS, SOURCE_RESUMES, SOURCE_HEADER_MS, SOURCE_QUIET_HEADER_MS } = deps;
@@ -342,11 +343,12 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
         const open: OpenRange = (range, signal) => mediaSources.open(resource.stream, owner, { method: "GET", range }, signal);
         let position = Number(wanted[1]);
         const asked = wanted[2] ? Number(wanted[2]) : undefined;
-        let first = remoteReadAhead.find(key, position);
+        let first: ReadAheadBlock | undefined;
         let ordinary = false;
         try {
-          if (first) mediaSources.assertCurrent(resource.stream, owner);
-          else first = await remoteReadAhead.fill(key, position, open);
+          // A block already held was read under an earlier open; the owner is checked again here.
+          if (remoteReadAhead.find(key, position)) mediaSources.assertCurrent(resource.stream, owner);
+          first = await remoteReadAhead.take(key, position, open);
         } catch (error) {
           if (error instanceof RangeNotSatisfiable) {
             if (error.contentRange && /^bytes \*\/\d+$/.test(error.contentRange)) res.setHeader("content-range", error.contentRange);
@@ -369,7 +371,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
           res.setHeader("content-length", String(last - position + 1));
           try {
             for (let blocks = 0; position <= last && blocks < READ_AHEAD_BLOCKS; blocks += 1) {
-              const block = remoteReadAhead.find(key, position) ?? await remoteReadAhead.fill(key, position, open);
+              const block = await remoteReadAhead.take(key, position, open);
               for await (const piece of remoteReadAhead.read(block, position, last + 1)) {
                 if (res.destroyed) return;
                 position += piece.length;
@@ -378,7 +380,11 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
             }
             if (res.destroyed) return;
             if (position > last) return void res.end();
-            // The rest is the film itself, taken as one ordinary transfer from where the blocks end.
+            // A demuxer that only jumped here has hung up by now, though the blocks it was sent
+            // still sat in the socket; only a reader that keeps going is handed the rest of the
+            // film, as one ordinary transfer from where the blocks end.
+            await new Promise((resolve) => setTimeout(resolve, READ_AHEAD_GRACE_MS));
+            if (res.destroyed) return;
             const rest = await open(`bytes=${position}-${asked ?? ""}`, controller.signal);
             const from = /^bytes (\d+)-/.exec(rest.headers.get("content-range") ?? "");
             if (rest.status !== 206 || Number(from?.[1]) !== position || !rest.body) { discard(rest.body); res.destroy(); return; }
