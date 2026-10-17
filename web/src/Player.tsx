@@ -204,6 +204,8 @@ const SHORTCUT_KEYS = new Set([" ", "k", "ArrowLeft", "ArrowRight", "c", "t", "f
 
 /** Target transcode qualities; the values must match QUALITY_BITRATE on the server. */
 const QUALITIES = [1080, 720, 480];
+/** Seconds into a conversion's playlist that the server hands over: two 2 s segments. */
+const CONVERSION_SETTLE_S = 4;
 const lowerQuality = (current: number | null) => current === null || current === 1080 ? 720 : current === 720 ? 480 : null;
 
 const CHANNELS: Record<number, string> = { 1: "mono", 2: "stereo", 6: "5.1", 8: "7.1" };
@@ -850,11 +852,14 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     setBuffering(false);
   };
 
-  /** Repeated stalls outside a seek signal a weak link; offer a lower quality. */
+  /** Repeated stalls outside a seek signal a weak link; offer a lower quality. A conversion's
+   *  first two segments do not count: hls.js learns of the third only on its first playlist
+   *  reload, so a hiccup there is the handover, not the network. */
   const noteStall = () => {
     showBufferSoon();
     const video = videoRef.current;
-    if (!video || video.seeking || seekingRef.current || video.currentTime < 1) return;
+    const settling = modeRef.current === "direct" ? 1 : CONVERSION_SETTLE_S;
+    if (!video || video.seeking || seekingRef.current || video.currentTime < settling) return;
     const now = Date.now();
     stallsRef.current = [...stallsRef.current.filter((at) => now - at < 60_000), now];
     if (stallsRef.current.length < 3) return;
