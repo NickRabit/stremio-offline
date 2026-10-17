@@ -715,14 +715,6 @@ private fun GlobalSearchCard(
       cardTag = globalSearchCardTag(anchor),
       modifier = modifier.onFocusChanged { if (it.isFocused) onFocus() },
     )
-    Text(
-      cluster.title,
-      color = Tokens.Text,
-      fontSize = 11.sp,
-      fontWeight = FontWeight.Bold,
-      maxLines = 1,
-      overflow = TextOverflow.Ellipsis,
-    )
     Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
       cluster.year?.let { Text(it.toString(), color = Tokens.Muted, fontSize = 10.sp) }
     }
