@@ -53,7 +53,7 @@ interface Harness {
 
 /** The routes take every collaborator from the deps, so the app here is a real express
  *  instance over a playback manager that records what it was asked to do. */
-const mount = async (remoteReadAhead = new RemoteReadAhead()): Promise<Harness> => {
+const mount = async (remoteReadAhead = new RemoteReadAhead(), over: Partial<PlaybackDeps> = {}): Promise<Harness> => {
   const attended: string[] = [];
   const errors: unknown[] = [];
   const stopped: string[] = [];
@@ -129,6 +129,7 @@ const mount = async (remoteReadAhead = new RemoteReadAhead()): Promise<Harness> 
     SOURCE_RESUMES: 5,
     SOURCE_HEADER_MS: 30_000,
     SOURCE_QUIET_HEADER_MS: 6_000,
+    ...over,
   };
 
   const app = express();
@@ -477,6 +478,60 @@ test("an addon read longer than the blocks is handed on to the host from where t
   assert.equal(response.headers.get("content-range"), `bytes 1000-${size - 1}/${size}`);
   assert.deepEqual(Buffer.from(await response.arrayBuffer()), file.subarray(1000));
   assert.deepEqual(host.ranges, ["bytes=1000-1049575", "bytes=1049576-2098151", "bytes=2098152-"]);
+});
+
+test("an addon host that has gone quiet is given up on after one header wait, and the next read waits less", async (t) => {
+  const quiet = new Map<string, number>();
+  const harness = await mount(new RemoteReadAhead(), {
+    SOURCE_HEADER_MS: 400, SOURCE_QUIET_HEADER_MS: 100,
+    noteSourceQuiet: (key: string) => { quiet.set(key, Date.now()); },
+    sourceIsQuiet: (key: string) => quiet.has(key),
+  });
+  t.after(harness.close);
+  process.env.ALLOW_PRIVATE_ADDONS = "1";
+  const asked: string[] = [];
+  const hung = http.createServer((req) => { asked.push(String(req.headers.range ?? "")); });
+  hung.listen(0, "127.0.0.1");
+  await once(hung, "listening");
+  t.after(() => { delete process.env.ALLOW_PRIVATE_ADDONS; hung.closeAllConnections(); hung.close(); });
+  const resourceId = registry.mediaStream({ url: `http://127.0.0.1:${(hung.address() as AddressInfo).port}/film.avi` } as StreamItem, ADA).resourceId;
+
+  const first = Date.now();
+  const one = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: "bytes=2048-2079" } });
+  const waited = Date.now() - first;
+  assert.ok(one.status >= 400);
+  assert.ok(waited < 1_000, `the first read waited ${waited} ms, more than one header timeout`);
+  const second = Date.now();
+  const two = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: "bytes=2080-2111" } });
+  const again = Date.now() - second;
+  assert.ok(two.status >= 400);
+  assert.ok(again < 300, `the next read waited ${again} ms though the host was known to be quiet`);
+});
+
+test("an addon block the host cuts short is picked up where it stopped", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  process.env.ALLOW_PRIVATE_ADDONS = "1";
+  const file = filmBytes(3 * 1024 * 1024);
+  const asked: string[] = [];
+  const host = http.createServer((req, res) => {
+    asked.push(String(req.headers.range ?? ""));
+    const match = /^bytes=(\d+)-(\d*)$/.exec(String(req.headers.range ?? ""))!;
+    const start = Number(match[1]);
+    const end = Math.min(match[2] ? Number(match[2]) : file.length - 1, file.length - 1);
+    res.writeHead(206, { "content-type": "video/x-msvideo", "content-length": end - start + 1, "content-range": `bytes ${start}-${end}/${file.length}` });
+    // The first read is cut a little way in, as these hosts do on a large file.
+    if (asked.length === 1) { res.write(file.subarray(start, start + 5000)); setTimeout(() => res.destroy(), 20); return; }
+    res.end(file.subarray(start, end + 1));
+  });
+  host.listen(0, "127.0.0.1");
+  await once(host, "listening");
+  t.after(() => { delete process.env.ALLOW_PRIVATE_ADDONS; host.closeAllConnections(); host.close(); });
+  const resourceId = registry.mediaStream({ url: `http://127.0.0.1:${(host.address() as AddressInfo).port}/film.avi` } as StreamItem, ADA).resourceId;
+
+  const response = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: "bytes=0-9999" } });
+  assert.equal(response.status, 206);
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()), file.subarray(0, 10_000), "the range comes back whole, not truncated");
 });
 
 test("an addon playlist keeps the ordinary transfer and is still rewritten", async (t) => {

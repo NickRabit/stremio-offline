@@ -80,10 +80,11 @@ const PLAYLIST_TYPE = /mpegurl|dash\+xml/i;
 
 /** Writes the 206 head for `position`..`last` and then the bytes the read-ahead holds for them,
  *  reading at most READ_AHEAD_BLOCKS blocks. Returns where it stopped; whatever is left is the
- *  caller's to hand on. */
+ *  caller's to hand on. `progress` follows along, so a caller whose block broke off knows the
+ *  byte it reached. */
 async function writeBlocks(
   res: express.Response, readAhead: RemoteReadAhead, key: string, first: ReadAheadBlock,
-  position: number, last: number, open: OpenRange, signal: AbortSignal,
+  position: number, last: number, open: OpenRange, signal: AbortSignal, progress = { position },
 ): Promise<number> {
   res.status(206);
   if (first.contentType) res.setHeader("content-type", first.contentType);
@@ -95,6 +96,7 @@ async function writeBlocks(
     for await (const piece of readAhead.read(block, position, last + 1)) {
       if (res.destroyed) return position;
       position += piece.length;
+      progress.position = position;
       if (!res.write(piece)) await once(res, "drain", { signal });
     }
   }
@@ -482,11 +484,22 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     // jumping between a film's header and an index at its end asks the host for each block once,
     // not once per jump. A playlist, or a host that answers a bounded read with anything but that
     // part of the file, keeps the ordinary transfer below.
-    const wanted = req.method === "GET" && !unblockable.has(cacheKey) ? /^bytes=(\d+)-(\d*)$/.exec(askedRange) : null;
+    // A host that has gone quiet is left to the ordinary transfer, which asks it once with the
+    // short header wait.
+    const wanted = req.method === "GET" && !unblockable.has(cacheKey) && !sourceIsQuiet(resource.parent ?? resource.id)
+      ? /^bytes=(\d+)-(\d*)$/.exec(askedRange) : null;
     if (wanted && (!wanted[2] || Number(wanted[2]) >= Number(wanted[1]))) {
       const key = `addon:${cacheKey}`;
       const proxyHeaders = stream.behaviorHints?.proxyHeaders?.request ?? {};
-      const open: OpenRange = (range, signal) => safeFetch(raw, { method: "GET", headers: { ...proxyHeaders, range }, signal });
+      let silent = false;
+      // The same header wait as the ordinary transfer: a host that never answers is given up on
+      // once, and marked quiet, rather than waited out here and then again below.
+      const open: OpenRange = async (range, signal) => {
+        const waiting = new AbortController();
+        const timer = setTimeout(() => { silent = true; waiting.abort(); }, SOURCE_HEADER_MS);
+        try { return await safeFetch(raw, { method: "GET", headers: { ...proxyHeaders, range }, signal: AbortSignal.any([signal, waiting.signal]) }); }
+        finally { clearTimeout(timer); }
+      };
       const start = Number(wanted[1]);
       const asked = wanted[2] ? Number(wanted[2]) : undefined;
       let first: ReadAheadBlock | undefined;
@@ -503,8 +516,13 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
           unblockable.add(cacheKey);
           remoteReadAhead.forget(key);
         }
-        // Anything else -- a dropped connection, a slow host -- is left to the ordinary transfer
-        // and its retries.
+        if (silent) {
+          noteSourceQuiet(resource.parent ?? resource.id);
+          log("WARN", "The source did not respond", { req: req.id, url: raw, range: askedRange, reason: `no response within ${SOURCE_HEADER_MS / 1000} s`, attempts: 1 });
+          throw error;
+        }
+        // Anything else -- a dropped connection, a refused read -- is left to the ordinary
+        // transfer and its retries.
         first = undefined;
       }
       if (first) {
@@ -516,13 +534,16 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
         }
         const closed = new AbortController();
         res.once("close", () => closed.abort());
-        let position = start;
-        try { position = await writeBlocks(res, remoteReadAhead, key, first, start, last, open, closed.signal); }
-        catch { if (!res.writableEnded) res.destroy(); return; }
+        const progress = { position: start };
+        let broke = false;
+        try { await writeBlocks(res, remoteReadAhead, key, first, start, last, open, closed.signal, progress); }
+        // A block the host cut short is picked up below, from the byte it stopped at, by the
+        // ordinary transfer and its resumes.
+        catch { broke = true; }
         if (res.destroyed) return;
-        if (position > last) return void res.end();
-        if (!await stillReading(res)) return;
-        alreadySent = position - start;
+        if (!broke && progress.position > last) return void res.end();
+        if (!broke && !await stillReading(res)) return;
+        alreadySent = progress.position - start;
       }
     }
     const held = req.method === "HEAD" || alreadySent ? undefined : rangeCache.get(cacheKey, askedRange);
