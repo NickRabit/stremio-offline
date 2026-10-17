@@ -21,6 +21,7 @@ import { readMediaText, rewritePlaylist } from "../media-playlist.js";
 import { clientCapabilities } from "../playback.js";
 import type { PlaybackManager, PlaybackOptions } from "../playback.js";
 import type { RangeCache } from "../range-cache.js";
+import { RangeNotSatisfiable, ReadAheadFull, UnexpectedAnswer, type OpenRange, type ReadAheadBlock, type RemoteReadAhead } from "../remote-read-ahead.js";
 import { redirectedHeaders, safeFetch, validateRemoteUrl } from "../security.js";
 import type { StatsLog, TrafficMeta } from "../stats.js";
 import type { UserPrefs } from "../store.js";
@@ -48,6 +49,7 @@ export interface PlaybackDeps extends RouteContext {
   prefsOf(req?: express.Request): UserPrefs;
   quietSources: Map<string, number>;
   rangeCache: RangeCache;
+  remoteReadAhead: RemoteReadAhead;
   safeInspection(info: Awaited<ReturnType<PlaybackManager["inspect"]>>, stream: StreamItem): {
     duration: number | undefined;
     video: { codec: string | undefined; width: number | undefined; height: number | undefined } | undefined;
@@ -67,9 +69,67 @@ export interface PlaybackDeps extends RouteContext {
 }
 
 const openTransfers = new Map<string, number>();
+/** How many bounded blocks one media-server read is served from before the rest of it is taken as
+ *  one ordinary transfer: a probe's jump fits in them, a conversion reading the film does not. */
+const READ_AHEAD_BLOCKS = 2;
+const READ_AHEAD_GRACE_MS = 50;
+/** Addon sources whose answer to a bounded read was not a plain file part: a playlist, or a host
+ *  that ignores ranges. They keep the ordinary transfer. */
+const unblockable = new Set<string>();
+const PLAYLIST_TYPE = /mpegurl|dash\+xml/i;
+
+/** Writes the 206 head for `position`..`last` and then the bytes the read-ahead holds for them,
+ *  reading at most READ_AHEAD_BLOCKS blocks. Returns where it stopped; whatever is left is the
+ *  caller's to hand on. `progress` follows along, so a caller whose block broke off knows the
+ *  byte it reached. */
+async function writeBlocks(
+  res: express.Response, readAhead: RemoteReadAhead, key: string, first: ReadAheadBlock,
+  position: number, last: number, open: OpenRange, signal: AbortSignal, progress = { position },
+): Promise<number> {
+  res.status(206);
+  if (first.contentType) res.setHeader("content-type", first.contentType);
+  res.setHeader("accept-ranges", "bytes");
+  res.setHeader("content-range", `bytes ${position}-${last}/${first.size}`);
+  res.setHeader("content-length", String(last - position + 1));
+  for (let blocks = 0; position <= last && blocks < READ_AHEAD_BLOCKS; blocks += 1) {
+    const block = blocks === 0 ? first : await readAhead.take(key, position, open);
+    for await (const piece of readAhead.read(block, position, last + 1)) {
+      if (res.destroyed) return position;
+      position += piece.length;
+      progress.position = position;
+      if (!res.write(piece)) await once(res, "drain", { signal });
+    }
+  }
+  return position;
+}
+
+/** Writes exactly `bytes` of `body` and ends the response there; the source is cancelled the
+ *  moment they are written, so a host sending past the range is not read on. */
+async function sendExactly(body: ReadableStream<Uint8Array>, res: express.Response, bytes: number, signal: AbortSignal): Promise<void> {
+  const reader = body.getReader();
+  try {
+    while (bytes > 0) {
+      const { done, value } = await reader.read();
+      if (done) throw new Error("The source ended before the promised range.");
+      const piece = value.subarray(0, bytes);
+      bytes -= piece.length;
+      if (!res.write(piece)) await once(res, "drain", { signal });
+    }
+  } finally {
+    void reader.cancel().catch(() => undefined);
+  }
+  res.end();
+}
+
+/** A demuxer that only jumped somewhere has hung up by the end of this, though the blocks it
+ *  was sent still sat in the socket; only a reader that keeps going is handed the rest. */
+const stillReading = async (res: express.Response): Promise<boolean> => {
+  await new Promise((resolve) => setTimeout(resolve, READ_AHEAD_GRACE_MS));
+  return !res.destroyed;
+};
 
 export function registerPlaybackRoutes(app: express.Application, deps: PlaybackDeps): void {
-  const { airplayAccess, airplayRequest, answerHeaders, countBytes, currentSession, currentUser, httpSourceOf, internalMediaRequest, libraryTarget, mediaSources, noteSourceQuiet, ownerOf, playback, playbackMeta, playbackOwners, playbackResponse, prefsOf, quietSources, rangeCache, requireAccess, safeInspection, sleep, sourceIsQuiet, stats, subtitleDelay, trackMedia, SOURCE_ATTEMPTS, SOURCE_RETRY_MS, SOURCE_RESUMES, SOURCE_HEADER_MS, SOURCE_QUIET_HEADER_MS } = deps;
+  const { airplayAccess, airplayRequest, answerHeaders, countBytes, currentSession, currentUser, httpSourceOf, internalMediaRequest, libraryTarget, mediaSources, noteSourceQuiet, ownerOf, playback, playbackMeta, playbackOwners, playbackResponse, prefsOf, quietSources, rangeCache, remoteReadAhead, requireAccess, safeInspection, sleep, sourceIsQuiet, stats, subtitleDelay, trackMedia, SOURCE_ATTEMPTS, SOURCE_RETRY_MS, SOURCE_RESUMES, SOURCE_HEADER_MS, SOURCE_QUIET_HEADER_MS } = deps;
 
   /** The synchronous local guard on a playback session's own resource: a remote original whose
    *  owner proof is no longer current is refused before any body is written. */
@@ -87,7 +147,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     const controller = new AbortController();
     res.once("close", () => { if (!res.writableEnded) controller.abort(); });
     const need = contentOf(stream);
-    if (remote) await mediaSources.authorize(stream, owner, controller.signal);
+    if (remote) await mediaSources.authorize(stream, owner, controller.signal, { shared: true });
     requireAccess(req, need);
     // A remote original is probed through the owner-bound resource proxy: the internal address
     // is never handed to FFprobe, and an unbound remote source is never resolved internally.
@@ -98,7 +158,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       requireAccess(req, need);
       if (remote) {
         mediaSources.assertCurrent(stream, owner);
-        await mediaSources.authorize(stream, owner, controller.signal);
+        await mediaSources.authorize(stream, owner, controller.signal, { shared: true });
         controller.signal.throwIfAborted();
       }
       if (res.destroyed || res.writableEnded) return;
@@ -130,7 +190,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     // The resource is minted in one step with the check: everything the request awaited --
     // the source lookup included -- happened before it.
     const need = contentOf(stream);
-    if (remote) await mediaSources.authorize(stream, owner, controller.signal);
+    if (remote) await mediaSources.authorize(stream, owner, controller.signal, { shared: true });
     requireAccess(req, need);
     const prepared = mediaResources.mediaStream(stream, owner);
     let started;
@@ -149,7 +209,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       requireAccess(req, need);
       if (remote) {
         mediaSources.assertCurrent(stream, owner);
-        await mediaSources.authorize(stream, owner, controller.signal);
+        await mediaSources.authorize(stream, owner, controller.signal, { shared: true });
         controller.signal.throwIfAborted();
       }
       playbackOwners.set(started.id, { owner, resourceId: prepared.resourceId });
@@ -318,13 +378,8 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       res.on("close", () => { if (!res.writableEnded) controller.abort(); });
       // The body is cancelled without waiting: a source may never settle the cancel promise.
       const discard = (body: ReadableStream<Uint8Array> | null) => { try { void body?.cancel().catch(() => undefined); } catch { /* already disturbed */ } };
-      let upstream: Response;
-      try {
-        upstream = await mediaSources.open(resource.stream, owner, {
-          method: req.method === "HEAD" ? "HEAD" : "GET",
-          ...(req.headers.range ? { range: String(req.headers.range) } : {}),
-        }, controller.signal);
-      } catch (error) {
+      /** Rethrows a failed open as the sentence the viewer sees; a viewer who already left gets nothing. */
+      const openFailed = (error: unknown): void => {
         if (error instanceof ResourceError || error instanceof AppError) throw error;
         // The controller is aborted only when the response closes, and by then `res.destroyed`
         // is already true, so the signal clause repeats that fact.
@@ -335,6 +390,63 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
           throw http;
         }
         throw new AppError("The media server is unavailable.", "err.mediaServerUnavailable", 502);
+      };
+      const wanted = req.method === "GET" ? /^bytes=(\d+)-(\d*)$/.exec(String(req.headers.range ?? "")) : null;
+      if (wanted && (!wanted[2] || Number(wanted[2]) >= Number(wanted[1]))) {
+        const key = resource.stream.url!;
+        const open: OpenRange = (range, signal) => mediaSources.open(resource.stream, owner, { method: "GET", range }, signal);
+        let position = Number(wanted[1]);
+        const asked = wanted[2] ? Number(wanted[2]) : undefined;
+        let first: ReadAheadBlock | undefined;
+        let ordinary = false;
+        try {
+          // A block already held was read under an earlier open; the owner is checked again here.
+          if (remoteReadAhead.find(key, position)) mediaSources.assertCurrent(resource.stream, owner);
+          first = await remoteReadAhead.take(key, position, open);
+        } catch (error) {
+          if (error instanceof RangeNotSatisfiable) {
+            if (error.contentRange && /^bytes \*\/\d+$/.test(error.contentRange)) res.setHeader("content-range", error.contentRange);
+            return void res.status(416).end();
+          }
+          if (!(error instanceof UnexpectedAnswer) && !(error instanceof ReadAheadFull)) return openFailed(error);
+          ordinary = true;
+        }
+        if (!ordinary && first) {
+          if (res.destroyed || res.writableEnded || controller.signal.aborted) return;
+          const last = Math.min(asked ?? first.size - 1, first.size - 1);
+          if (position > last) {
+            res.setHeader("content-range", `bytes */${first.size}`);
+            return void res.status(416).end();
+          }
+          try {
+            const progress = { position };
+            let broke = false;
+            // A block that broke off is picked up from the byte it reached by the transfer below.
+            try { await writeBlocks(res, remoteReadAhead, key, first, position, last, open, controller.signal, progress); }
+            catch { broke = true; }
+            position = progress.position;
+            if (res.destroyed) return;
+            if (!broke && position > last) return void res.end();
+            // The rest is the film itself, as one ordinary transfer from where the blocks end.
+            if (!broke && !await stillReading(res)) return;
+            const rest = await open(`bytes=${position}-${asked ?? ""}`, controller.signal);
+            // The rest must start at the next byte and reach the promised end; anything past it is
+            // not sent.
+            const answered = /^bytes (\d+)-(\d+)\//.exec(rest.headers.get("content-range") ?? "");
+            if (rest.status !== 206 || Number(answered?.[1]) !== position || Number(answered?.[2]) < last || !rest.body) { discard(rest.body); res.destroy(); return; }
+            await sendExactly(rest.body, res, last - position + 1, controller.signal);
+          } catch { if (!res.writableEnded) res.destroy(); }
+          return;
+        }
+      }
+      let upstream: Response;
+      try {
+        upstream = await mediaSources.open(resource.stream, owner, {
+          method: req.method === "HEAD" ? "HEAD" : "GET",
+          ...(req.headers.range ? { range: String(req.headers.range) } : {}),
+        }, controller.signal);
+      } catch (error) {
+        return openFailed(error);
       }
       if (res.destroyed || res.writableEnded || controller.signal.aborted) { discard(upstream.body); return; }
       try { mediaSources.assertCurrent(resource.stream, owner); }
@@ -391,8 +503,85 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     countBytes(res, playbackMeta(stream), ownerNow);
     const cacheKey = `${resource.parent ?? resource.id}:${typeof req.params.signed === "string" ? req.params.signed : ""}`;
     const askedRange = String(req.headers.range ?? "");
-    const held = req.method === "HEAD" ? undefined : rangeCache.get(cacheKey, askedRange);
     let alreadySent = 0;
+    // A ranged read is served from bounded blocks, as a media-server original is: a demuxer
+    // jumping between a film's header and an index at its end asks the host for each block once,
+    // not once per jump. A playlist, or a host that answers a bounded read with anything but that
+    // part of the file, keeps the ordinary transfer below.
+    // A host that has gone quiet is left to the ordinary transfer, which asks it once with the
+    // short header wait.
+    const wanted = req.method === "GET" && !unblockable.has(cacheKey) && !sourceIsQuiet(resource.parent ?? resource.id)
+      && !/\.(m3u8|mpd)$/i.test(new URL(raw).pathname)
+      ? /^bytes=(\d+)-(\d*)$/.exec(askedRange) : null;
+    if (wanted && (!wanted[2] || Number(wanted[2]) >= Number(wanted[1]))) {
+      const key = `addon:${cacheKey}`;
+      const proxyHeaders = stream.behaviorHints?.proxyHeaders?.request ?? {};
+      let silent = false;
+      const quietNow = (error: unknown): unknown => {
+        noteSourceQuiet(resource.parent ?? resource.id);
+        log("WARN", "The source did not respond", { req: req.id, url: raw, range: askedRange, reason: `no response within ${SOURCE_HEADER_MS / 1000} s`, attempts: 1 });
+        return error;
+      };
+      // The same header wait as the ordinary transfer: a host that never answers is given up on
+      // once, and marked quiet, rather than waited out here and then again below.
+      const open: OpenRange = async (range, signal) => {
+        const waiting = new AbortController();
+        const timer = setTimeout(() => { silent = true; waiting.abort(); }, SOURCE_HEADER_MS);
+        try { return await safeFetch(raw, { method: "GET", headers: { ...proxyHeaders, range }, signal: AbortSignal.any([signal, waiting.signal]) }); }
+        finally { clearTimeout(timer); }
+      };
+      const start = Number(wanted[1]);
+      const asked = wanted[2] ? Number(wanted[2]) : undefined;
+      let first: ReadAheadBlock | undefined;
+      try {
+        first = await remoteReadAhead.take(key, start, open);
+        // Judged on where the host really answered from: a redirect may lead to a manifest.
+        if ((first.contentType && PLAYLIST_TYPE.test(first.contentType)) || /\.(m3u8|mpd)$/i.test(new URL(first.url || raw).pathname)) throw new UnexpectedAnswer();
+      } catch (error) {
+        if (error instanceof RangeNotSatisfiable) {
+          if (error.contentRange && /^bytes \*\/\d+$/.test(error.contentRange)) res.setHeader("content-range", error.contentRange);
+          return void res.status(416).end();
+        }
+        if (error instanceof UnexpectedAnswer) {
+          if (unblockable.size >= 1024) unblockable.clear();
+          unblockable.add(cacheKey);
+          remoteReadAhead.forget(key);
+        }
+        if (silent) throw quietNow(error);
+        // Anything else -- a dropped connection, a refused read -- is left to the ordinary
+        // transfer and its retries.
+        first = undefined;
+      }
+      if (first) {
+        if (res.destroyed || res.writableEnded) return;
+        const last = Math.min(asked ?? first.size - 1, first.size - 1);
+        if (start > last) {
+          res.setHeader("content-range", `bytes */${first.size}`);
+          return void res.status(416).end();
+        }
+        const closed = new AbortController();
+        res.once("close", () => closed.abort());
+        const progress = { position: start };
+        let broke = false;
+        try { await writeBlocks(res, remoteReadAhead, key, first, start, last, open, closed.signal, progress); }
+        // A block the host cut short is picked up below, from the byte it stopped at, by the
+        // ordinary transfer and its resumes.
+        catch (error) {
+          // A later block the host never answered is the same silence as a first one: one wait.
+          if (silent) {
+            quietNow(error);
+            if (res.headersSent) return void res.destroy();
+            throw error;
+          }
+          broke = true;
+        }
+        if (res.destroyed) return;
+        if (!broke && progress.position > last) return void res.end();
+        if (!broke && !await stillReading(res)) return;
+        alreadySent = progress.position - start;
+      }
+    }
+    const held = req.method === "HEAD" || alreadySent ? undefined : rangeCache.get(cacheKey, askedRange);
     if (held) {
       // A reader that opens a film reads its header and stops; what it needs is here, and the
       // source hears nothing. Only a reader that keeps going is handed on to it, from where this
@@ -508,7 +697,19 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     const asked = /bytes=(\d*)-(\d*)/.exec(req.headers.range ?? "");
     const from = Number(asked?.[1] || 0) + alreadySent;
     const until = asked?.[2] ? Number(asked[2]) : undefined;
-    const expected = Number(upstream.headers.get("content-length") ?? "") || undefined;
+    let expected = Number(upstream.headers.get("content-length") ?? "") || undefined;
+    if (alreadySent) {
+      // The head already promised a range; what the source hands on must be the very bytes that
+      // come next, and no more of them than were promised.
+      const promised = /^bytes \d+-(\d+)\//.exec(String(res.getHeader("content-range") ?? ""));
+      const answered = /^bytes (\d+)-(\d+)\//.exec(upstream.headers.get("content-range") ?? "");
+      if (upstream.status !== 206 || !promised || !answered || Number(answered[1]) !== from || Number(answered[2]) < Number(promised[1])) {
+        try { void upstream.body.cancel().catch(() => undefined); } catch { /* already disturbed */ }
+        log("WARN", "The source handed on the wrong part of the file", { req: req.id, url: raw, status: upstream.status, range: headers.range, answered: upstream.headers.get("content-range") });
+        return void res.destroy();
+      }
+      expected = Number(promised[1]) - from + 1;
+    }
     let delivered = 0;
     // Worth keeping only while it is still short: a longer read is the picture going by.
     let keep: Buffer[] | undefined = req.method === "GET" ? [] : undefined;
@@ -565,8 +766,10 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       await sleep(SOURCE_RETRY_MS * resumed);
       const resumeRange = `bytes=${from + delivered}-${until !== undefined ? until : ""}`;
       const next = await safeFetch(raw, { headers: { ...headers, range: resumeRange }, signal: controller.signal }).catch(() => undefined);
-      if (!next || ![200, 206].includes(next.status) || !next.body) {
-        await next?.body?.cancel().catch(() => undefined);
+      // Only the very next bytes, reaching the end already promised, may be spliced in.
+      const resumed206 = /^bytes (\d+)-(\d+)\//.exec(next?.headers.get("content-range") ?? "");
+      if (!next || next.status !== 206 || !next.body || !resumed206 || Number(resumed206[1]) !== from + delivered || Number(resumed206[2]) < from + expected - 1) {
+        try { void next?.body?.cancel().catch(() => undefined); } catch { /* already disturbed */ }
         noteSourceQuiet(resource.parent ?? resource.id);
         log("WARN", "The source would not pick the transfer up", { req: req.id, url: raw, at: from + delivered, status: next?.status });
         throw broke ?? new Error("The source ended the transfer early.");

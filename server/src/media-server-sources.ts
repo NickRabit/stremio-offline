@@ -195,8 +195,9 @@ export class MediaServerSources {
 
   /** Re-proves a remote source against the live remote policy before it is used. `download`
    *  asks the manager to enforce the account's native download permission as well, so a copy
-   *  is never authorized by a playable source alone. */
-  async authorize(stream: StreamItem, owner: ResourceOwner, signal?: AbortSignal, options?: { download?: boolean }): Promise<void> {
+   *  is never authorized by a playable source alone. `shared` lets one playback preparation
+   *  reuse the item's short-window reads instead of asking the provider again. */
+  async authorize(stream: StreamItem, owner: ResourceOwner, signal?: AbortSignal, options?: { download?: boolean; shared?: boolean }): Promise<void> {
     this.assertCurrent(stream, owner);
     if (!isRemoteMediaStream(stream)) return;
     const ref = openRemoteContent(stream.url);

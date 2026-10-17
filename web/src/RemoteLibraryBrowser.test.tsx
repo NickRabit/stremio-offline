@@ -678,6 +678,38 @@ describe("RemoteLibraryBrowser preferences and detail", () => {
     expect(rows[0]!.textContent).toContain("1080p");
   });
 
+  it("reads a film's own state once as its detail opens and not again once the reader leaves", async () => {
+    const unnamed: RemoteItem = { ...movie("m1", "One"), providerIds: {} };
+    browse = () => json(page([unnamed]));
+    item = () => json({ item: unnamed, capabilities });
+    sources = () => json({ streams: [
+      { sourceId: "s1", kind: "remote", playable: true, name: "1080p", provider: "jellyfin", remoteItem: { libraryId: "rlib_a", itemId: "m1", mediaSourceId: "v1" } },
+    ] });
+    await openRootLibrary();
+    await click(tileButtons()[0]!);
+    await flush();
+    expect(calls.stateUrls).toEqual(["/api/remote-libraries/rlib_a/items/m1/state"]);
+    await click(host.querySelector(".library-back")!);
+    await flush();
+    expect(calls.stateUrls).toHaveLength(1);
+  });
+
+  it("shares the detail's state read with the selected version's own fallback", async () => {
+    const named: RemoteItem = { ...movie("m1", "One"), providerIds: { imdb: "tt5000" } };
+    browse = () => json(page([named]));
+    item = () => json({ item: named, capabilities });
+    sources = () => json({ streams: [
+      { sourceId: "s1", kind: "remote", playable: true, name: "1080p", provider: "jellyfin", remoteItem: { libraryId: "rlib_a", itemId: "m1", mediaSourceId: "v1" } },
+    ] });
+    state = () => json({ key: "k", position: 120, duration: 3600, favorite: false, watched: false, mediaSourceId: "v1" });
+    await openRootLibrary();
+    await click(tileButtons()[0]!);
+    await flush();
+    await flush();
+    expect(addonCalls.progress.filter((call) => call.path === "/api/progress/movie%3Att5000").length).toBeGreaterThan(0);
+    expect(calls.stateUrls).toEqual(["/api/remote-libraries/rlib_a/items/m1/state"]);
+  });
+
   it("asks the catalogue nothing until a title's own detail is opened", async () => {
     const identified: RemoteItem = { ...movie("m1", "One"), providerIds: { imdb: "tt5000" } };
     browse = () => json(page([identified]));

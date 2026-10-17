@@ -1,5 +1,6 @@
 import express from "express";
 import { RangeCache } from "./range-cache.js";
+import { RemoteReadAhead } from "./remote-read-ahead.js";
 import { isInternalMediaPath, mediaResources, ResourceError, safeSourceText, type DeviceDownloadTicket, type ResourceOwner } from "./media-resources.js";
 import { AirPlayAccess } from "./airplay-access.js";
 import path from "node:path";
@@ -275,7 +276,7 @@ const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () =
     // leave the connection to the source reading on.
     for (const active of activeMedia) if (active.resourceId === owned.resourceId) active.res.destroy();
   }
-  if (owned) rangeCache.forget(owned.resourceId);
+  if (owned) { rangeCache.forget(owned.resourceId); remoteReadAhead.forget(`addon:${owned.resourceId}`); }
   playbackOwners.delete(id);
   airplayAccess.remove(id);
   throughput.forget(id);
@@ -840,6 +841,8 @@ const answerHeaders = (upstream: Response) => Object.fromEntries(
 
 /** The header and the index of a film, kept so the next FFmpeg does not fetch them again. */
 const rangeCache = new RangeCache();
+/** A media-server original read in bounded blocks, so FFmpeg jumping around its index costs a few requests. */
+const remoteReadAhead = new RemoteReadAhead();
 const quietSources = new Map<string, number>();
 const sourceIsQuiet = (key: string) => (quietSources.get(key) ?? 0) > Date.now() - SOURCE_QUIET_MS;
 const noteSourceQuiet = (key: string) => {
@@ -2453,7 +2456,7 @@ const freeSpace = async (target: string) => {
 registerDiagnosticsRoutes(app, { ...routeContext, stats, imageStats, providerStats, playback, throughput, queue, libraryScan, playbackMeta, freeSpace, clientLogs, dataDir: DATA_DIR });
 registerSettingsRoutes(app, { ...routeContext, STREAM_SORTS, accountIdOf, invalidateLibrary, mediaServers, metaCache, metaStore, mutateData, prefsOf, queue, streamCache });
 registerMediaServerRoutes(app, { ...routeContext, mediaServers, mosaics, mediaSources: mediaServerSources, remotePersonal: mediaServerPersonal, ownerOf });
-registerPlaybackRoutes(app, { ...routeContext, mediaSources: mediaServerSources, mediaServerGuard, airplayAccess, airplayRequest, answerHeaders, countBytes, httpSourceOf, internalMediaRequest, libraryTarget, noteSourceQuiet, ownerOf, playback, playbackMeta, playbackOwners, playbackResponse, prefsOf, quietSources, rangeCache, safeInspection, sleep, sourceIsQuiet, stats, subtitleDelay, trackMedia, SOURCE_ATTEMPTS, SOURCE_RETRY_MS, SOURCE_RESUMES, SOURCE_HEADER_MS, SOURCE_QUIET_HEADER_MS });
+registerPlaybackRoutes(app, { ...routeContext, mediaSources: mediaServerSources, mediaServerGuard, airplayAccess, airplayRequest, answerHeaders, countBytes, httpSourceOf, internalMediaRequest, libraryTarget, noteSourceQuiet, ownerOf, playback, playbackMeta, playbackOwners, playbackResponse, prefsOf, quietSources, rangeCache, remoteReadAhead, safeInspection, sleep, sourceIsQuiet, stats, subtitleDelay, trackMedia, SOURCE_ATTEMPTS, SOURCE_RETRY_MS, SOURCE_RESUMES, SOURCE_HEADER_MS, SOURCE_QUIET_HEADER_MS });
 
 app.all(["/api/proxy", "/api/subtitle", "/api/library/file"], (_req, res) => {
   res.status(410).setHeader("cache-control", "private, no-store").json({ error: "This media API has been retired.", code: "UNSAFE_SOURCE_INPUT" });
