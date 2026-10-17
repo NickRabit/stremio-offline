@@ -31,8 +31,8 @@ const statusClass = (status: MediaServerStatus) => status === "available" ? "" :
 type Removal = { kind: "connection"; connection: MediaServerConnection } | { kind: "library"; library: AdminRemoteLibrary };
 
 /** The standard dialog shell: head with an X, a scrolling body, a footer of buttons. */
-function Dialog({ title, cardClass, footerClass, onClose, children, footer, busy }: {
-  title: string; cardClass?: string; footerClass?: string; onClose: () => void; children: ReactNode; footer?: ReactNode; busy?: boolean;
+function Dialog({ title, cardClass, bodyClass, footerClass, onClose, children, footer, busy }: {
+  title: string; cardClass?: string; bodyClass?: string; footerClass?: string; onClose: () => void; children: ReactNode; footer?: ReactNode; busy?: boolean;
 }) {
   const overlay = useRef<HTMLDivElement>(null);
   useDialogFocus(overlay);
@@ -49,7 +49,7 @@ function Dialog({ title, cardClass, footerClass, onClose, children, footer, busy
         <h2>{title}</h2>
         <button type="button" className="icon-button" aria-label={t("common.close")} disabled={busy} onClick={onClose}><X/></button>
       </div>
-      <div className="dialog-body">{children}</div>
+      <div className={`dialog-body${bodyClass ? ` ${bodyClass}` : ""}`}>{children}</div>
       {footer && <footer className={`dialog-foot${footerClass ? ` ${footerClass}` : ""}`}>{footer}</footer>}
     </div>
   </div>, document.body);
@@ -269,7 +269,7 @@ export function MediaServerManager({ onError, onChanged, localLibraries = [] }: 
         </label>
       </>}
     </FormDialog>}
-    {editing && <RemoteLibraryDialog library={editing} localLibraries={localLibraries} users={users} usersError={usersError} busy={busy} error={dialogError}
+    {editing && <RemoteLibraryDialog library={editing} serverName={providerOf(editing.connectionId)?.name ?? ""} localLibraries={localLibraries} users={users} usersError={usersError} busy={busy} error={dialogError}
       onRetryUsers={() => void loadUsers()} onClose={() => setEditing(null)}
       onSave={(patch) => runDialog(async () => { await api.updateRemoteLibrary(editing.id, patch); await load(); onChanged?.(); })}
       onRequestRemove={() => requestRemoveLibrary(editing)}/>}
@@ -446,8 +446,8 @@ const sameTarget = (left: DownloadTargetSettings, right: DownloadTargetSettings)
 const sameSettings = (left: AddonDownloadSettings, right: AddonDownloadSettings): boolean =>
   sameTarget(left.movie, right.movie) && sameTarget(left.series, right.series);
 
-function RemoteLibraryDialog({ library, localLibraries, users, usersError, busy, error, onRetryUsers, onClose, onSave, onRequestRemove }: {
-  library: AdminRemoteLibrary; localLibraries: LibraryView[]; users: UserAccount[] | null; usersError: string; busy: boolean; error: string;
+function RemoteLibraryDialog({ library, serverName, localLibraries, users, usersError, busy, error, onRetryUsers, onClose, onSave, onRequestRemove }: {
+  library: AdminRemoteLibrary; serverName: string; localLibraries: LibraryView[]; users: UserAccount[] | null; usersError: string; busy: boolean; error: string;
   onRetryUsers: () => void; onClose: () => void;
   onSave: (patch: { name: string; enabled: boolean; showOnHome: boolean; showInContinueWatching: boolean; allowedUsers: string[]; browseMode: RemoteBrowseMode; mosaic: boolean; showInFavorites: boolean; downloadLibraryId?: string | null; downloadSettings?: AddonDownloadSettings | null }) => Promise<boolean>;
   onRequestRemove: () => void;
@@ -487,7 +487,7 @@ function RemoteLibraryDialog({ library, localLibraries, users, usersError, busy,
     if (on) next.add(id); else next.delete(id);
     return { ...current, allowedUsers: next };
   });
-  return <Dialog title={t("mediaServer.libraryEditTitle")} cardClass="library-edit-card" footerClass="library-edit-footer" busy={busy} onClose={onClose}
+  return <Dialog title={t("library.editLibrary")} cardClass="library-edit-card" bodyClass="library-edit-body" footerClass="library-edit-footer" busy={busy} onClose={onClose}
     footer={<>
       {error && <p className="login-error" role="alert">{error}</p>}
       <button type="button" disabled={busy} onClick={onClose}>{t("common.cancel")}</button>
@@ -501,38 +501,20 @@ function RemoteLibraryDialog({ library, localLibraries, users, usersError, busy,
           // rewrites -- a rule that names a library that has since become unavailable. A storage
           // edit saves the new rules and clears the legacy handle in the same patch.
           ...(storageChanged ? { downloadSettings: draft.downloadSettings, downloadLibraryId: null } : {}),
-        }).then((done) => { if (done) onClose(); })}>{t("common.save")}</button>
+        }).then((done) => { if (done) onClose(); })}>{t("library.saveChanges")}</button>
     </>}>
     <section className="library-edit-section">
+      <div className="library-picker-section-head"><h3>{t("library.detailsHeading")}</h3></div>
+      <div className="library-picker-fields">
+        <label><span>{t("library.libraryName")}</span><input value={draft.name} autoComplete="off" aria-label={t("library.libraryName")} disabled={busy} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}/></label>
+      </div>
+      <div className="library-edit-folder"><span>{t("mediaServer.serverHeading")}</span><strong>{serverName}</strong></div>
+    </section>
+    <section className="library-edit-section">
       <div className="library-picker-section-head"><h3>{t("mediaServer.availabilityHeading")}</h3></div>
-      <label className="media-server-field"><span>{t("mediaServer.libraryName")}</span>
-        <input value={draft.name} autoComplete="off" aria-label={t("mediaServer.libraryName")} disabled={busy} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}/>
-      </label>
       <div className="library-edit-controls">
         <Checkbox checked={draft.enabled} disabled={busy} onChange={(value) => setDraft((current) => ({ ...current, enabled: value }))}>{t("library.enabled")}</Checkbox>
       </div>
-    </section>
-    <section className="library-edit-section">
-      <div className="library-picker-section-head"><h3>{t("mediaServer.presentationHeading")}</h3></div>
-      <label className="media-server-field"><span>{t("mediaServer.browseMode")}</span>
-        <select value={draft.browseMode} aria-label={t("mediaServer.browseMode")} disabled={busy} onChange={(event) => setDraft((current) => ({ ...current, browseMode: event.target.value as RemoteBrowseMode }))}>
-          <option value="folders">{t("mediaServer.browseMode.folders")}</option>
-          <option value="titles">{t("mediaServer.browseMode.titles")}</option>
-        </select>
-      </label>
-      <div className="library-edit-controls">
-        <Checkbox checked={draft.showOnHome} disabled={busy} onChange={(value) => setDraft((current) => ({ ...current, showOnHome: value }))}>{t("library.showOnHome")}</Checkbox>
-        <Checkbox checked={draft.showInContinueWatching} disabled={busy} onChange={(value) => setDraft((current) => ({ ...current, showInContinueWatching: value }))}>{t("library.showInContinueWatching")}</Checkbox>
-        <Checkbox checked={draft.mosaic} disabled={busy} onChange={(value) => setDraft((current) => ({ ...current, mosaic: value }))}>{t("library.mosaic")}</Checkbox>
-        <Checkbox checked={draft.showInFavorites} disabled={busy} onChange={(value) => setDraft((current) => ({ ...current, showInFavorites: value }))}>{t("library.showInFavorites")}</Checkbox>
-        <p className="identify-hint">{t("library.showInFavoritesHint")}</p>
-      </div>
-    </section>
-    <section className="library-edit-section">
-      <div className="library-picker-section-head"><h3>{t("save.toLibrary")}</h3></div>
-      <DownloadRuleEditor settings={draft.downloadSettings} libraries={localLibraries} disabled={busy}
-        kinds={kinds} {...(defaultLibraryIds ? { defaultLibraryIds } : {})} onChange={changeRule}/>
-      <p className="identify-hint">{t("mediaServer.downloadLibraryHint")}</p>
     </section>
     <section className="library-edit-section">
       <div className="library-picker-section-head"><h3>{t("mediaServer.grantsHeading")}</h3></div>
@@ -556,8 +538,33 @@ function RemoteLibraryDialog({ library, localLibraries, users, usersError, busy,
       </>}
     </section>
     <section className="library-edit-section">
+      <div className="library-picker-section-head"><h3>{t("library.presentationHeading")}</h3></div>
+      <div className="library-picker-fields"><label><span>{t("mediaServer.browseMode")}</span>
+        <select value={draft.browseMode} aria-label={t("mediaServer.browseMode")} disabled={busy} onChange={(event) => setDraft((current) => ({ ...current, browseMode: event.target.value as RemoteBrowseMode }))}>
+          <option value="folders">{t("mediaServer.browseMode.folders")}</option>
+          <option value="titles">{t("mediaServer.browseMode.titles")}</option>
+        </select>
+      </label></div>
+      <div className="library-edit-controls">
+        <Checkbox checked={draft.mosaic} disabled={busy} onChange={(value) => setDraft((current) => ({ ...current, mosaic: value }))}>{t("library.mosaic")}</Checkbox>
+        <Checkbox checked={draft.showInContinueWatching} disabled={busy} onChange={(value) => setDraft((current) => ({ ...current, showInContinueWatching: value }))}>{t("library.showInContinueWatching")}</Checkbox>
+        <Checkbox checked={draft.showOnHome} disabled={busy} onChange={(value) => setDraft((current) => ({ ...current, showOnHome: value }))}>{t("library.showOnHome")}</Checkbox>
+        <Checkbox checked={draft.showInFavorites} disabled={busy} onChange={(value) => setDraft((current) => ({ ...current, showInFavorites: value }))}>{t("library.showInFavorites")}</Checkbox>
+        <p className="identify-hint">{t("library.showInFavoritesHint")}</p>
+      </div>
+    </section>
+    <section className="library-edit-section">
+      <div className="library-picker-section-head"><h3>{t("save.toLibrary")}</h3></div>
+      <DownloadRuleEditor settings={draft.downloadSettings} libraries={localLibraries} disabled={busy}
+        kinds={kinds} {...(defaultLibraryIds ? { defaultLibraryIds } : {})} onChange={changeRule}/>
+      <p className="identify-hint">{t("mediaServer.downloadLibraryHint")}</p>
+    </section>
+    <section className="library-edit-section">
       <div className="library-picker-section-head"><h3>{t("library.actionsHeading")}</h3></div>
-      <button type="button" className="danger" disabled={busy} onClick={onRequestRemove}><Trash2/> {t("mediaServer.removeLibrary")}</button>
+      <details className="library-admin-danger">
+        <summary><Trash2/> {t("library.removeOptions")}</summary>
+        <div><button type="button" className="danger" disabled={busy} onClick={onRequestRemove}><Trash2/> {t("mediaServer.removeLibrary")}</button></div>
+      </details>
     </section>
   </Dialog>;
 }

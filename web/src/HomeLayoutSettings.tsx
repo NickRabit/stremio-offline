@@ -113,6 +113,7 @@ export function HomeLayoutSettings({ disabled = false, onError }: { disabled?: b
         const movable = row.id !== "confirm";
         return <li key={row.id} className={`home-layout-row${shownOf(row.id) ? "" : " hidden"}`}>
           <span className="home-layout-label">{labelOf(row)}</span>
+          <span className="home-layout-controls">
           {movable && <button type="button" className="icon" disabled={disabled || index === 0}
             aria-label={t("settings.homeMoveUp", { row: labelOf(row) })} title={t("settings.homeMoveUp", { row: labelOf(row) })}
             onClick={() => move(row.id, -1)}><ChevronUp/></button>}
@@ -124,6 +125,7 @@ export function HomeLayoutSettings({ disabled = false, onError }: { disabled?: b
           {row.kind === "feed" && personal.has(feedKeyOf(row.id) ?? "") && <button type="button" className="danger icon"
             disabled={disabled} aria-label={t("settings.homeRemove", { row: labelOf(row) })} title={t("settings.homeRemove", { row: labelOf(row) })}
             onClick={() => remove(row.id)}><Trash2/></button>}
+          </span>
         </li>;
       })}
     </ul>

@@ -67,6 +67,36 @@ test.describe("layout invariants", () => {
     });
   }
 
+  // A media server names its carousels after the server and the library, so a real Home
+  // arrangement holds labels far longer than the fixture addon's. One row of each kind --
+  // arranged and offered -- carries such a label.
+  test("the Home row settings fit the screen", async ({ page }) => {
+    const label = "Jellyfin obývák · Nedávno přidané filmy a seriály ze sdílené knihovny";
+    await page.route("**/api/home/layout", async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      const row = (id: string, added: boolean) => ({ id: `catalog:e2e-long:movie:${id}`, kind: "feed", label, shown: true, position: body.rows.length, added });
+      return route.fulfill({ response, json: { ...body, rows: [...body.rows, row("arranged", true), row("offered", false)] } });
+    });
+    await openView(page, "Nastavení");
+    await page.getByRole("tab", { name: "Domů", exact: true }).click();
+    const list = page.locator(".home-layout-list");
+    await expect(list.getByText(label)).toBeVisible();
+    await expect(page.locator(".home-layout-add").getByText(label)).toBeVisible();
+
+    const { scrollWidth, clientWidth, offenders } = await horizontalOverflow(page);
+    expect(offenders, "elements past the right edge of the Home settings").toEqual([]);
+    expect(scrollWidth, "the Home settings overflow horizontally").toBeLessThanOrEqual(clientWidth + 1);
+    // Every control of a row stays inside its own row, not merely inside the page.
+    const escaped = await list.locator(".home-layout-row").evaluateAll((rows) => rows.flatMap((row) => {
+      const box = row.getBoundingClientRect();
+      return [...row.querySelectorAll<HTMLElement>("button, .switch")]
+        .filter((control) => { const own = control.getBoundingClientRect(); return own.left < box.left - 1 || own.right > box.right + 1; })
+        .map((control) => control.getAttribute("aria-label") ?? control.className);
+    }));
+    expect(escaped, "row controls outside their row").toEqual([]);
+  });
+
   test("navigation follows the 700px breakpoint", async ({ page }, testInfo) => {
     await openView(page, "Katalog");
     const width = page.viewportSize()!.width;

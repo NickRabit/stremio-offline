@@ -869,10 +869,10 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .settings-page .support-link span{display:grid;gap:3px}
 .settings-page .support-link small{color:var(--muted)}
 .settings-page .support-link:hover{border-color:var(--accent)}
-/* The tab strip wraps instead of scrolling. At phone width each tab takes its own row. */
+/* The tab strip wraps instead of scrolling. At phone width the tabs sit two to a row. */
 .settings-page .section-filter .library-shelf-segments{flex:0 1 auto;flex-wrap:wrap;justify-content:flex-start}
 .settings-page .section-filter .library-shelf-segments button{flex:0 0 auto;padding:0 14px;overflow:visible;text-overflow:clip}
-@media(max-width:700px){.settings-page .section-filter .library-shelf-segments button{flex:1 1 100%}}
+@media(max-width:700px){.settings-page .section-filter .library-shelf-segments button{flex:1 1 calc(50% - 3px);min-width:0;padding:4px 10px;white-space:normal;line-height:1.2;overflow-wrap:anywhere}}
 .settings-page .settings-grid{grid-template-columns:minmax(0,1fr);gap:18px}
 .settings-page .settings-section{grid-column:1;padding:22px 24px}
 .settings-page .settings-section-head{margin-bottom:16px}
@@ -891,21 +891,24 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .settings-page .credentials-row .setting-actions{border:0;padding:0;flex-shrink:0}
 .settings-page .setting-actions button{min-height:42px;font-size:12px}
 .settings-page .diagnostics-section .settings-section-head{margin:0}
-.home-layout-list{display:grid;gap:8px;margin:22px 0 0;padding:0;list-style:none}
-.home-layout-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto auto auto;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--line);border-radius:9px;background:#0d1117}
+.home-layout-list{display:grid;grid-template-columns:minmax(0,1fr);gap:8px;margin:22px 0 0;padding:0;list-style:none}
+.home-layout-row{display:flex;align-items:center;gap:8px;min-width:0;padding:8px 10px;border:1px solid var(--line);border-radius:9px;background:#0d1117}
 .home-layout-row.hidden .home-layout-label{color:var(--muted)}
-.home-layout-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+.home-layout-label{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+.home-layout-controls{display:flex;align-items:center;gap:8px;flex:none}
 .home-layout-row .icon{width:38px;height:38px;padding:0;display:grid;place-items:center}
 .home-layout-row .icon svg{width:16px;height:16px}
-.home-layout-add{display:grid;gap:8px;margin-top:18px;padding-top:15px;border-top:1px solid var(--line)}
+.home-layout-add{display:grid;grid-template-columns:minmax(0,1fr);gap:8px;margin-top:18px;padding-top:15px;border-top:1px solid var(--line)}
 .home-layout-add>small{color:var(--muted);font-size:10px;line-height:1.5}
-.home-layout-add ul{display:grid;gap:8px;margin:0;padding:0;list-style:none}
-.home-layout-add li{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:12px}
+.home-layout-add ul{display:grid;grid-template-columns:minmax(0,1fr);gap:8px;margin:0;padding:0;list-style:none}
+.home-layout-add li{display:flex;align-items:center;justify-content:space-between;gap:12px;min-width:0;font-size:12px}
 .home-layout-add li span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .home-layout-add button{display:inline-flex;align-items:center;gap:6px;flex:none}
 .home-layout-add button svg{width:14px;height:14px}
 .home-layout-section .setting-actions{margin-top:18px}
-@media(max-width:700px){.home-layout-row{grid-template-columns:minmax(0,1fr) auto auto;row-gap:6px}.home-layout-row .home-layout-label{grid-column:1/-1}}
+/* A phone wraps a long carousel name instead of cutting it, and moves the controls under a
+   name that leaves them no room. */
+@media(max-width:700px){.home-layout-row{flex-wrap:wrap;row-gap:6px}.home-layout-row .home-layout-label{flex:1 1 9em;white-space:normal;overflow-wrap:anywhere}.home-layout-controls{margin-left:auto}.home-layout-add li span{white-space:normal;overflow-wrap:anywhere}}
 @container(max-width:560px){
   .settings-page .settings-section{padding:18px 16px}
   .settings-page .setting-control{grid-template-columns:minmax(0,1fr);gap:10px}
