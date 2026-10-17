@@ -2199,6 +2199,7 @@ main.view-title-detail .catalogue-title-detail{display:flex;flex-direction:colum
 .topbar-search{padding:8px 12px;font-size:11px}
 .topbar-search svg{width:16px;height:16px}
 .search-everywhere-form{display:grid;grid-template-columns:minmax(180px,1fr) auto auto;gap:10px;margin-bottom:13px}
+.search-everywhere-form>.search-input{grid-column:auto}
 .search-filters{flex-wrap:wrap;gap:10px 12px;margin-bottom:13px}
 .search-filters .library-shelf-segments{flex:0 1 auto}
 .search-filters .shape-toggle{margin-left:auto}
