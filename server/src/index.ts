@@ -92,6 +92,7 @@ import { HomeCatalogCache, homeCatalogTargets } from "./home-catalogs.js";
 import { registerPlaybackRoutes } from "./routes/playback.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerUsersRoutes } from "./routes/users.js";
+import { registerSearchEverywhereRoutes, searchEverywhereEnabled } from "./routes/search-everywhere.js";
 import { MediaServerManager, type MediaServerAuthority } from "./media-server-manager.js";
 import { remoteDownloadAccessible } from "./media-server-download.js";
 import { MediaServerPersonal } from "./media-server-personal.js";
@@ -101,6 +102,12 @@ import { MediaServerSources } from "./media-server-sources.js";
 import { MediaServerSecrets } from "./media-server-secrets.js";
 import { isMediaServerError } from "./media-server-types.js";
 import { prepareContainerMediaKey } from "./prepare-media-key.js";
+import { parseSearchState } from "./search-state.js";
+import { LocalSearchIndex } from "./search-local-index.js";
+import { discoverSources, type DiscoverDeps } from "./search-sources.js";
+import { SearchScheduler } from "./search-scheduler.js";
+import { SearchSessionManager, type SearchAuthority } from "./search-session.js";
+import { SearchError } from "./search-contracts.js";
 
 const STREAM_SORTS = new Set(["recommended", "size-desc", "size-asc", "addon"]);
 const DATA_DIR = process.env.DATA_DIR ?? "/data";
@@ -131,6 +138,10 @@ const remoteImages = new RemoteImageCache(path.join(DATA_DIR, "remote-images"));
 const fileSnaps = new FileSnapCache();
 const mediaServers = new MediaServerManager(store, mediaServerVault, { remoteImages });
 const mediaServerSources = new MediaServerSources(store, mediaServers, mediaResources);
+/** Both stay absent while the feature flag is off; every hook below goes through the
+ *  optional chain so the disabled feature constructs nothing. */
+let localSearchIndex: LocalSearchIndex | undefined;
+let searchSessions: SearchSessionManager | undefined;
 const mediaServerPersonal = new MediaServerPersonal(store, mediaServers, async () => {
   const records = metaStore.qualifiedMeta();
   const units = await libraryUnits();
@@ -462,6 +473,34 @@ const authorityOf = (req: express.Request): MediaServerAuthority => {
   if (!user) throw new ResourceError(401, "AUTH_REQUIRED");
   return { actor: { id: user.id, secret: user.secret }, assertCurrent: () => requireAccess(req) };
 };
+/** The session-bound authority a search session keeps. The claim is the one this request
+ *  captured at its start, and the password flag is read live on every check. */
+const searchAuthorityOf = (req: express.Request): SearchAuthority => {
+  const session = currentSession(req);
+  if (!session) throw new ResourceError(401, "AUTH_REQUIRED");
+  const claim = accessClaims.get(req);
+  return {
+    userId: session.userId,
+    sid: session.sid,
+    isCurrent: () => !accessLost(store, claim) && !findUserById(store.users(), session.userId)?.mustChangePassword,
+  };
+};
+/** Background media-server work speaks for the account as it stands now; the secret this
+ *  capture saw is compared on every authority check. */
+const searchMediaAuthority = (userId: string): MediaServerAuthority => {
+  const user = findUserById(store.users(), userId);
+  if (!user) throw new ResourceError(401, "AUTH_REQUIRED");
+  const secret = user.secret;
+  return {
+    actor: { id: user.id, secret },
+    assertCurrent: () => {
+      const fresh = findUserById(store.users(), user.id);
+      if (!fresh || fresh.disabled || fresh.secret !== secret) {
+        throw new ResourceError(401, "AUTH_REQUIRED");
+      }
+    },
+  };
+};
 const sourceOf = (req: express.Request): StreamItem => {
   if (["stream", "url", "headers", "path"].some((key) => key in (req.body ?? {}))) throw new ResourceError(400, "UNSAFE_SOURCE_INPUT");
   return mediaResources.get(String(req.body?.sourceId ?? ""), ownerOf(req).sid, "source").stream;
@@ -546,24 +585,42 @@ const revocations = new Revocations({
   follows: followStore,
 });
 /** One session: what signing out one device drops. */
-const stopOwnedPlayback = (sid: string) => revocations.stopSession(sid);
+const stopOwnedPlayback = (sid: string) => {
+  searchSessions?.dropSession(sid);
+  return revocations.stopSession(sid);
+};
 /** Everything one account holds, across all its devices. */
 /** A sign-out or a password change reaches only what the account is holding open. Its
  *  queued downloads are owner-bound, not session-bound, and must outlive both. */
-const stopUserSessions = (userId: string) => revocations.stopUserSessions(userId);
+const stopUserSessions = (userId: string) => {
+  searchSessions?.dropUser(userId);
+  return revocations.stopUserSessions(userId);
+};
 /** An account that is gone: what it holds open, its unfinished queue work and the partial
  *  files behind it. A finished file is library content and never leaves with the account. */
-const deleteUserAccess = (userId: string) => revocations.deleteUser(userId);
+const deleteUserAccess = (userId: string) => {
+  searchSessions?.dropUser(userId);
+  return revocations.deleteUser(userId);
+};
 /** What an edit took away from one account: switching it off goes entirely, losing the
  *  right to queue pauses the queue behind it and touches nothing else. */
-const permissionsChanged = (before: UserRecord, after: UserRecord) => revocations.permissionsChanged(before, after);
+const permissionsChanged = (before: UserRecord, after: UserRecord) => {
+  searchSessions?.invalidateContent();
+  return revocations.permissionsChanged(before, after);
+};
 /** One account's hold on one library or addon. Passing no user sweeps everybody,
  *  which is what a global disable needs. */
-const stopContentAccess = (opts: StopContentOptions) => revocations.stopContent(opts);
+const stopContentAccess = (opts: StopContentOptions) => {
+  searchSessions?.invalidateContent();
+  return revocations.stopContent(opts);
+};
 
 // Wired only now that the revocation sweeps exist: a media-server change reaches them through
 // the scope this callback carries, never through a manager-internal list of live resources.
-mediaServers.setContentInvalidator((scope) => revocations.stopContent(scope));
+mediaServers.setContentInvalidator((scope) => {
+  searchSessions?.invalidateContent();
+  return revocations.stopContent(scope);
+});
 
 /** Re-authorizes live remote resources on a timer, because an upstream server enforces a
  *  policy change unreliably; a failure or a timeout stops the resource through the revocations. */
@@ -764,7 +821,13 @@ const withProxiedLogo = <T extends { manifest: { logo?: string } }>(view: T): T 
 const publicAddonView = (addon: AddonRecord) =>
   (restrictedMode() ? withProxiedLogo(publicAddonRestricted(addon)) : withProxiedLogo(publicAddon(addon)));
 
-app.get("/api/status", (_req, res) => res.json({ status: "ok", ...build, restricted: restrictedMode(), secure: secureMode() }));
+app.get("/api/status", (_req, res) => res.json({
+  status: "ok",
+  ...build,
+  restricted: restrictedMode(),
+  secure: secureMode(),
+  searchEverywhere: searchEverywhereEnabled(),
+}));
 // A manifest is a snapshot from the moment the addon was added: its catalogues,
 // resources and id prefixes decide what the addon is asked for, so a stale copy
 // quietly hides catalogues and skips sources. Refreshing rewrites the manifest and
@@ -1062,7 +1125,13 @@ const libraryCache = new WalkCache<LibraryEntry[]>(async () => {
  *  event, a reroot -- bumps this, so a thumbnail sweep that raced one knows its `valid` set
  *  may predate the change and stops. */
 let libraryEpoch = 0;
-const invalidateLibrary = () => { libraryEpoch += 1; videoCache.invalidate(); unitCache.invalidate(); libraryCache.invalidate(); };
+const invalidateLibrary = () => {
+  libraryEpoch += 1;
+  videoCache.invalidate();
+  unitCache.invalidate();
+  libraryCache.invalidate();
+  localSearchIndex?.markDirty();
+};
 
 const rootReadable = async (root: string) => { try { await access(root, constants.R_OK); return true; } catch { return false; } };
 
@@ -1146,6 +1215,32 @@ const libraryFiles = (read?: WalkRead) => videoCache.get(read);
 const libraryFilesIn = async (library: LibraryRecord) => filesOf(await libraryFiles(), library);
 const libraryUnits = (read?: WalkRead) => unitCache.get(read);
 const libraryEntries = (read?: WalkRead) => libraryCache.get(read);
+
+if (searchEverywhereEnabled()) {
+  const index = new LocalSearchIndex({ entries: () => libraryEntries({ stale: true }) });
+  localSearchIndex = index;
+  const discoverDeps: DiscoverDeps = {
+    user: (id) => findUserById(store.users(), id),
+    addons: () => store.addons(),
+    addonOrder: (id) => store.userData(id).addonOrder,
+    libraries: () => store.libraries(),
+    localIndex: index,
+    remote: {
+      visibleLibraries: (authority) => mediaServers.visibleLibraries(authority),
+      searchLibrary: (authority, libraryId, query, signal) =>
+        mediaServers.searchLibrary(authority, libraryId, query, signal),
+      canSearchLibrary: (userId, libraryId, generation) =>
+        mediaServers.canSearchLibrary(userId, libraryId, generation),
+      libraryGeneration: (libraryId) => mediaServers.searchLibraryGeneration(libraryId),
+    },
+    mediaAuthority: searchMediaAuthority,
+    rewriteMeta: (meta) => images.rewriteMeta(meta),
+  };
+  searchSessions = new SearchSessionManager({
+    scheduler: new SearchScheduler(),
+    discover: (authority, request, sessionId) => discoverSources(discoverDeps, authority, request, sessionId),
+  });
+}
 
 /** The address of a thumbnail never changes, so without a stamp the browser keeps
  *  showing the frame it loaded before the title was matched. */
@@ -2457,6 +2552,19 @@ registerDiagnosticsRoutes(app, { ...routeContext, stats, imageStats, providerSta
 registerSettingsRoutes(app, { ...routeContext, STREAM_SORTS, accountIdOf, invalidateLibrary, mediaServers, metaCache, metaStore, mutateData, prefsOf, queue, streamCache });
 registerMediaServerRoutes(app, { ...routeContext, mediaServers, mosaics, mediaSources: mediaServerSources, remotePersonal: mediaServerPersonal, ownerOf });
 registerPlaybackRoutes(app, { ...routeContext, mediaSources: mediaServerSources, mediaServerGuard, airplayAccess, airplayRequest, answerHeaders, countBytes, httpSourceOf, internalMediaRequest, libraryTarget, noteSourceQuiet, ownerOf, playback, playbackMeta, playbackOwners, playbackResponse, prefsOf, quietSources, rangeCache, remoteReadAhead, safeInspection, sleep, sourceIsQuiet, stats, subtitleDelay, trackMedia, SOURCE_ATTEMPTS, SOURCE_RETRY_MS, SOURCE_RESUMES, SOURCE_HEADER_MS, SOURCE_QUIET_HEADER_MS });
+if (searchSessions !== undefined) {
+  registerSearchEverywhereRoutes(app, {
+    manager: searchSessions,
+    authorityOf: searchAuthorityOf,
+    liveSearchOf: (req) => parseSearchState(dataOf(req).search).liveSearch,
+  });
+} else {
+  const absent = (_req: express.Request, res: express.Response) => {
+    res.status(404).setHeader("Cache-Control", "private, no-store").end();
+  };
+  app.use("/api/search/everywhere", absent);
+  app.get("/api/search/preferences", absent);
+}
 
 app.all(["/api/proxy", "/api/subtitle", "/api/library/file"], (_req, res) => {
   res.status(410).setHeader("cache-control", "private, no-store").json({ error: "This media API has been retired.", code: "UNSAFE_SOURCE_INPUT" });
@@ -2490,6 +2598,9 @@ app.use((error: unknown, req: express.Request, res: express.Response, _next: exp
     // A player that has just been closed is still reading the ranges it had open. The
     // session is gone, the answer is correct, and it is not a fault worth an ERROR.
     log("DEBUG", "A closed session was still being read", { req: req.id, path: req.path, user: currentUser(req)?.username });
+  } else if (error instanceof SearchError && (error.status ?? 400) < 500) {
+    // An expired or replaced search session is routine for a client that polls it.
+    log("DEBUG", "A search request was refused", { req: req.id, path: req.path, status, key: error.messageKey });
   } else {
     const cause = (error as { cause?: unknown }).cause;
     log("ERROR", "Request failed", {
@@ -2535,6 +2646,7 @@ const listenTarget = resolveListenTarget();
 try {
   const bound = await startServer({ app, ...listenTarget });
   markServerReady();
+  localSearchIndex?.start();
   // Scheduled without a wait: the first pass fills the caches after the server is already up.
   maintenance.start();
   log("INFO", "Stremio Offline is listening", { port: bound.port, address: bound.address });
@@ -2575,4 +2687,8 @@ const shutdown = createShutdown({
   now: () => Date.now(),
   setTimer: (callback, ms) => setTimeout(callback, ms),
 });
-installSignalHandlers(shutdown);
+installSignalHandlers(async (signal) => {
+  searchSessions?.close();
+  localSearchIndex?.close();
+  await shutdown(signal);
+});

@@ -78,7 +78,11 @@ interface SessionTimerApi {
 
 export interface SessionDeps {
   scheduler: SearchScheduler;
-  discover(authority: SearchAuthority, request: SearchStartRequest): SearchSource[];
+  discover(
+    authority: SearchAuthority,
+    request: SearchStartRequest,
+    sessionId: string,
+  ): SearchSource[] | Promise<SearchSource[]>;
   now?: () => number;
   randomId?: () => string;
   timers?: SessionTimerApi;
@@ -319,7 +323,12 @@ export class SearchSessionManager {
     }
     if (!authority.isCurrent()) throw new SearchError("search-restart-required", 410);
 
-    const sources = this.discover(authority, request);
+    let id: string;
+    do {
+      id = `ss_${this.randomId()}`;
+    } while (this.sessions.has(id));
+    const discovered = this.discover(authority, request, id);
+    const sources = Array.isArray(discovered) ? discovered : await discovered;
     if (sources.length > this.limits.targetsPerSession) {
       const counts: Record<string, number> = { catalog: 0, local: 0, remote: 0 };
       for (const source of sources) counts[source.sourceClass] = (counts[source.sourceClass] ?? 0) + 1;
@@ -337,10 +346,6 @@ export class SearchSessionManager {
       throw new SearchError("search-capacity-limit", 503);
     }
 
-    let id: string;
-    do {
-      id = `ss_${this.randomId()}`;
-    } while (this.sessions.has(id));
     const session: ManagedSession = {
       id,
       userId: authority.userId,

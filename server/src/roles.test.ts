@@ -29,10 +29,17 @@ const ALLOWED: Array<[string, string]> = [
   ["GET", "/views"],
   ["PATCH", "/views"],
   ["GET", "/search/state"],
+  ["GET", "/search/preferences"],
   ["PATCH", "/search/preferences"],
   ["POST", "/search/history"],
   ["POST", "/search/history/forget"],
   ["DELETE", "/search/history"],
+  ["POST", "/search/everywhere"],
+  ["POST", "/search/everywhere/ss_abc/poll"],
+  ["POST", "/search/everywhere/ss_abc/page"],
+  ["POST", "/search/everywhere/ss_abc/sources/s0/retry"],
+  ["GET", "/search/everywhere/ss_abc/members/member_1"],
+  ["DELETE", "/search/everywhere/ss_abc"],
   ["GET", "/follows"],
   ["POST", "/follows"],
   ["GET", "/follows/defaults"],
@@ -211,6 +218,17 @@ test("a path nobody has classified is refused for an ordinary user", () => {
   assert.ok(error instanceof ForbiddenError);
   assert.equal(error.status, 403);
   assert.equal(error.messageKey, "err.notAllowed");
+});
+
+test("the search everywhere routes match exact parameter counts only", () => {
+  assert.equal(isUserAllowed("GET", "/search/preferences"), true);
+  assert.equal(isUserAllowed("PATCH", "/search/preferences"), true, "the existing preference write stays");
+  assert.equal(isUserAllowed("GET", "/search/state"), true);
+  assert.equal(isUserAllowed("POST", "/search/history"), true);
+  assert.equal(isUserAllowed("GET", "/search/everywhere/x/y/z"), false);
+  assert.equal(isUserAllowed("POST", "/search/everywhere/x/y/z"), false);
+  assert.equal(isUserAllowed("POST", "/search/everywhere/x/poll/extra"), false);
+  assert.equal(isUserAllowed("GET", "/search/everywhere/x/members/y/extra"), false);
 });
 
 test("an open path, an internal read and a request with no role pass through", () => {
