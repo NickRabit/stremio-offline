@@ -20,6 +20,8 @@ export interface SourceChooserProps {
   badgeOf?: (stream: Stream) => string;
   /** Optional class for the list, so the dialog and the player can size it. */
   listClassName?: string;
+  /** The viewer's addon order, when the place knows it; else the order the groups arrived in. */
+  priority?: Map<string, number>;
 }
 
 /** The row of `rows` the place holds: the very object, or the row that names the same source --
@@ -29,13 +31,19 @@ const rowOf = (rows: Stream[], selected: Stream | null) => selected
   ? rows.find((row) => row === selected)
     ?? rows.find((row) => (selected.sourceId.length > 0 && row.sourceId === selected.sourceId)
       || (Boolean(selected.localPath) && row.localPath === selected.localPath))
+    ?? (selected.stableKey ? rows.find((row) => row.stableKey === selected.stableKey) : undefined)
     ?? null
   : null;
+
+/** One source across two listings: the server mints a fresh source id for every listing, so a row
+ *  the place read itself and the same row a group read later meet by the key the source is stored
+ *  under, not by their ids. */
+const sameSource = (stream: Stream) => stream.remoteItem || stream.localPath ? sourceRowKey(stream) : stream.stableKey ?? sourceRowKey(stream);
 
 /** The one chooser body every place draws: the classes a title offers, the source, language and
  *  order menus over them, and the notices that go with them. The detail's dialog and the
  *  player's panel both render it, so one title reads the same wherever it is offered. */
-export function SourceChooser({ lead, leadLabel, groups: read, panel, selected, onSelect, preferredLanguage, badgeOf, listClassName }: SourceChooserProps) {
+export function SourceChooser({ lead, leadLabel, groups: read, panel, selected, onSelect, preferredLanguage, badgeOf, listClassName, priority }: SourceChooserProps) {
   useI18n();
   const [filter, setFilter] = useState("");
   const [language, setLanguage] = useState("");
@@ -61,8 +69,8 @@ export function SourceChooser({ lead, leadLabel, groups: read, panel, selected, 
       const known = new Map(read.filter((group) => group.kind === "local").flatMap((group) => group.streams).map((stream) => [sourceRowKey(stream), stream]));
       return lead.map((row) => known.get(sourceRowKey(row)) ?? row);
     }
-    const answered = new Set(groups.filter((group) => group.status === "loaded").flatMap((group) => group.streams.filter((stream) => stream.playable).map(sourceRowKey)));
-    return lead.filter((row) => !answered.has(sourceRowKey(row)));
+    const answered = new Set(groups.filter((group) => group.status === "loaded").flatMap((group) => group.streams.filter((stream) => stream.playable).map(sameSource)));
+    return lead.filter((row) => !answered.has(sameSource(row)));
   }, [lead, groups, read]);
   const entries = useMemo(() => librarySourceEntries(shownLead, leadLabel, groups, labelOf), [shownLead, leadLabel, groups]);
   const choices = useMemo(() => librarySourceChoices(entries, filter, language), [entries, filter, language]);
@@ -70,10 +78,10 @@ export function SourceChooser({ lead, leadLabel, groups: read, panel, selected, 
   // addon-priority orders, the way every player drew the source that was playing. A named size
   // sort ranks it with every other row: the viewer asked for the sizes, not for the row.
   const rows = useMemo(() => {
-    const listed = librarySourceRows(entries, filter, language, sort, preferredLanguage);
+    const listed = librarySourceRows(entries, filter, language, sort, preferredLanguage, undefined, priority);
     const first = sort === "recommended" || sort === "addon" ? rowOf(listed, selected) : null;
     return first ? [first, ...listed.filter((row) => row !== first)] : listed;
-  }, [entries, filter, language, sort, preferredLanguage, selected]);
+  }, [entries, filter, language, sort, preferredLanguage, selected, priority]);
   const chosen = rowOf(rows, selected);
   /** A discovery or a group still out: the list is not empty yet, it is still arriving. */
   const pending = groups.some((group) => group.status === "idle" || group.status === "loading");

@@ -37,6 +37,7 @@ type Handler = (url: URL) => Response | Promise<Response>;
 let metaReply: Handler;
 let providerReply: Handler;
 let streamReply: Handler;
+let localReply: Handler;
 const calls = { meta: [] as URL[], providers: [] as URL[], streams: [] as URL[] };
 
 let root: Root;
@@ -49,12 +50,14 @@ beforeEach(() => {
   metaReply = () => json(film());
   providerReply = () => json([{ key: "torrentio", name: "Torrentio" }]);
   streamReply = () => json([addon("a1", "1080p", 1_000)]);
+  localReply = () => json([]);
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
     const url = new URL(String(input), "http://localhost");
     const path = url.pathname;
     if (path.startsWith("/api/meta/")) { calls.meta.push(url); return Promise.resolve(metaReply(url)); }
     if (path.startsWith("/api/stream-sources/")) { calls.providers.push(url); return Promise.resolve(providerReply(url)); }
     if (path.startsWith("/api/streams/")) { calls.streams.push(url); return Promise.resolve(streamReply(url)); }
+    if (path.startsWith("/api/local-streams/")) return Promise.resolve(localReply(url));
     return Promise.resolve(new Response(null, { status: 404 }));
   }));
   host = document.createElement("div");
@@ -207,6 +210,36 @@ describe("CatalogueTitleDetail sources", () => {
     expect(pickerArrow()).not.toBeNull();
     await click(pickerArrow());
     expect(pickerRows().some((row) => row.textContent?.includes("1080p"))).toBe(true);
+  });
+});
+
+describe("CatalogueTitleDetail order", () => {
+  const named = (id: string, name: string, addonName: string, size: number, description = ""): Stream =>
+    ({ ...addon(id, name, size), addonName, addonKey: addonName, description });
+
+  it("orders its rows the catalogue's way and offers the catalogue's first row to Play", async () => {
+    // Largest first would pick the huge English row; the catalogue leads with the viewer's own
+    // copy, then the viewer's language, then the addon order, then the size.
+    streamReply = () => json([
+      named("big", "4K UHD", "Elf", 100_000_000_000),
+      named("cz-small", "HD", "Cine", 5_000_000_000, "CZ audio"),
+      named("cz-large", "4K", "Cine", 19_000_000_000, "CZ audio"),
+      named("cz-elf", "4K", "Elf", 50_000_000_000, "CZ audio"),
+    ]);
+    localReply = () => json([local("Films/Film.mkv", "Film.mkv", 19_000_000_000)]);
+    const priority = new Map([["Cine", 0], ["Elf", 1]]);
+    const { onPlay } = await render({ target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film() }, preferredLanguage: "cs", addonPriority: priority });
+    await click(playButton());
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ localPath: "Films/Film.mkv" }), expect.anything(), false);
+    await click(pickerArrow());
+    expect(pickerRows().map((row) => row.querySelector("strong")!.textContent)).toEqual(["Film.mkv", "4K", "HD", "4K", "4K UHD"]);
+  });
+
+  it("hides torrent rows where no debrid service plays them, like the catalogue", async () => {
+    streamReply = () => json([addon("h1", "HTTP", 1_000), { ...addon("t1", "Torrent", 9_000), kind: "torrent", playable: false }]);
+    await render({ target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film() }, showTorrents: false });
+    await click(pickerArrow());
+    expect(pickerRows().map((row) => row.querySelector("strong")!.textContent)).toEqual(["HTTP"]);
   });
 });
 
