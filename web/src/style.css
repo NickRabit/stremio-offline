@@ -2054,6 +2054,9 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 .library-title-detail>.hero{position:relative;z-index:1;background:none;margin:0;padding:0;min-height:0;flex:0 1 auto}
 .library-detail-hero .detail-copy{max-width:760px}
 .library-detail-hero .detail-copy h2{font-size:30px;margin:10px 0 5px;line-height:1.14}
+/* A title, a file name or a release tag without spaces must never push a phone's detail sideways:
+   every line of it may break inside a word. */
+.library-title-detail{overflow-wrap:anywhere}
 .library-detail-hero .detail-copy p{margin:6px 0}
 .library-detail-synopsis{margin:9px 0 0;max-width:680px;font-size:13px;line-height:1.6;color:#dce3ed}
 /* Everything drawn on that wash stands above it. The episode picker the catalogue brings is one of
@@ -2075,7 +2078,9 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 @media(prefers-reduced-motion:reduce){.detail-skeleton>i{animation:none}}
 .library-detail-source>i{font-style:normal;font-size:9px;font-weight:800;color:var(--green);text-transform:uppercase}
 .library-detail-source>i.remote{color:var(--accent2)}
-.library-detail-source>strong{min-width:0;max-width:min(100%,420px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);font-size:12px}
+/* A file name has no spaces to break at: kept on one line it widened the whole detail past a phone's
+   edge. It breaks anywhere and stops at two lines instead. */
+.library-detail-source>strong{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;min-width:0;max-width:min(100%,420px);overflow:hidden;overflow-wrap:anywhere;color:var(--text);font-size:12px}
 .library-detail-source>b{color:var(--text)}
 .library-detail-source>small{display:inline-flex;align-items:center;gap:4px;min-width:0;max-width:min(100%,320px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .library-title-detail>.library-detail-actions{margin-top:4px}
