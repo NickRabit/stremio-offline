@@ -280,6 +280,51 @@ test("a write that names another source stops claiming the file the title used t
   assert.equal(stored.path, undefined, "and no longer claims the library file it came from");
 });
 
+test("a file played without a source key names the file, never the source it was played from before", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.data(ALICE).progress = {
+    [FILM_KEY]: { position: 60, duration: 3600, title: "Heat", stableKey: SOURCE_KEY, updatedAt: "2024-01-01T00:00:00.000Z" },
+  };
+  // A client that plays the file names it by its path alone, as a Continue card on the TV does.
+  await api(harness.base, "/api/progress", {
+    method: "POST", user: ALICE, body: { key: FILM_KEY, position: 120, duration: 3600, title: "Heat", path: FILM_FILE },
+  });
+  const stored = harness.data(ALICE).progress[FILM_KEY] as StoredProgress;
+  assert.match(stored.stableKey ?? "", /^f:[0-9a-f]{24}$/, "the row names the file as its source");
+  assert.notEqual(stored.stableKey, SOURCE_KEY);
+  assert.ok(stored.path, "and keeps the file to return to");
+});
+
+test("a media-server version written without a source key names that version", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.data(ALICE).progress = {
+    [FILM_KEY]: { position: 60, duration: 3600, title: "Heat", path: FILM_FILE, stableKey: SOURCE_KEY, updatedAt: "2024-01-01T00:00:00.000Z" },
+  };
+  await api(harness.base, "/api/progress", {
+    method: "POST", user: ALICE,
+    body: { key: FILM_KEY, position: 120, duration: 3600, title: "Heat", remote: { libraryId: "rlib_a", itemId: "1", mediaSourceId: "ms1" } },
+  });
+  const stored = harness.data(ALICE).progress[FILM_KEY] as StoredProgress;
+  assert.match(stored.stableKey ?? "", /^m:[0-9a-f]{24}$/);
+  assert.equal(stored.path, undefined, "the library file is no longer the way back");
+});
+
+test("a row that names another source than the file it holds is read without that file", async (t) => {
+  const harness = await mount([filmLibrary]);
+  t.after(harness.close);
+  // Stored before every write named its source: the file and an addon answer disagree.
+  harness.data(ALICE).progress = {
+    [FILM_KEY]: { position: 60, duration: 3600, title: "Heat", path: FILM_FILE, stableKey: SOURCE_KEY, updatedAt: "2024-01-01T00:00:00.000Z" },
+  };
+  const listed = await (await api(harness.base, "/api/progress", { user: ALICE })).json() as StoredProgress[];
+  assert.equal(listed[0]!.path, undefined);
+  assert.equal(listed[0]!.stableKey, SOURCE_KEY);
+  const read = await (await api(harness.base, `/api/progress/${encodeURIComponent(FILM_KEY)}`, { user: ALICE })).json() as StoredProgress;
+  assert.equal(read.path, undefined);
+});
+
 test("an invalid stable key stores none and leaves the write as it was", async (t) => {
   const harness = await mount();
   t.after(harness.close);

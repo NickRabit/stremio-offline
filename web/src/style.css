@@ -827,13 +827,17 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
    (inline-flex, centred, fixed width) would flatten it, so the row is restored to its grid and
    carries the panel's dark surface. The list scrolls inside the panel, which keeps its heading. */
 .player-sources{width:min(520px,calc(100% - 32px))}
-/* The detail's own menus over the player's list: name above the menu, the three side by side. */
-.player-sources .stream-filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin:0}
-.player-sources .stream-filters label{flex-direction:column;align-items:stretch;gap:4px}
-.player-sources .stream-filters select{width:100%;max-width:none}
-.player-source-scroll{max-height:min(52vh,380px);overflow-y:auto;overscroll-behavior:contain}
-.player-source-list{max-height:none}
+/* The menus are the detail's own grid (two equal columns on a phone, the order across the whole
+   width); the panel only drops their margin. */
+.player-sources .stream-filters{margin:0}
+.player-source-list{max-height:min(52vh,380px);overflow-y:auto;overscroll-behavior:contain}
 .player-sources .stream-list button{display:grid;justify-content:initial;min-height:44px;padding:9px 11px;background:var(--panel)}
+/* A phone gets the sheet the detail's chooser is there: the whole screen, the menus side by side
+   and the list scrolling under them, instead of a box floating over the controls. */
+@media(max-width:700px){
+  .player-settings.player-sources{inset:0;width:100%;max-height:none;border:0;border-radius:0;overflow:hidden;padding:calc(12px + env(safe-area-inset-top,0px)) max(16px,env(safe-area-inset-right,0px)) max(16px,env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px))}
+  .player-sources .player-source-list{flex:1 1 auto;min-height:0;max-height:none}
+}
 .player-overlay .player-resumed{top:85px}
 .player-overlay .player-hint{bottom:calc(var(--player-bottom-height,120px) + 12px)}
 .player-up-next{position:absolute;z-index:14;left:50%;top:50%;width:min(360px,calc(100% - 32px));transform:translate(-50%,-50%);display:flex;flex-direction:column;gap:8px;padding:20px;border:1px solid var(--line);border-radius:14px;background:#141922f5;box-shadow:0 12px 42px #000b;text-align:center}.player-up-next small{color:var(--accent);font-size:10px;font-weight:800;letter-spacing:1.2px}.player-up-next strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.player-up-next span{color:var(--muted);font-size:12px}.player-up-next>div{display:flex;justify-content:center;gap:8px;margin-top:4px}.player-up-next button{min-height:40px}
@@ -2050,6 +2054,9 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 .library-title-detail>.hero{position:relative;z-index:1;background:none;margin:0;padding:0;min-height:0;flex:0 1 auto}
 .library-detail-hero .detail-copy{max-width:760px}
 .library-detail-hero .detail-copy h2{font-size:30px;margin:10px 0 5px;line-height:1.14}
+/* A title, a file name or a release tag without spaces must never push a phone's detail sideways:
+   every line of it may break inside a word. */
+.library-title-detail{overflow-wrap:anywhere}
 .library-detail-hero .detail-copy p{margin:6px 0}
 .library-detail-synopsis{margin:9px 0 0;max-width:680px;font-size:13px;line-height:1.6;color:#dce3ed}
 /* Everything drawn on that wash stands above it. The episode picker the catalogue brings is one of
@@ -2071,7 +2078,9 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 @media(prefers-reduced-motion:reduce){.detail-skeleton>i{animation:none}}
 .library-detail-source>i{font-style:normal;font-size:9px;font-weight:800;color:var(--green);text-transform:uppercase}
 .library-detail-source>i.remote{color:var(--accent2)}
-.library-detail-source>strong{min-width:0;max-width:min(100%,420px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);font-size:12px}
+/* A file name has no spaces to break at: kept on one line it widened the whole detail past a phone's
+   edge. It breaks anywhere and stops at two lines instead. */
+.library-detail-source>strong{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;min-width:0;max-width:min(100%,420px);overflow:hidden;overflow-wrap:anywhere;color:var(--text);font-size:12px}
 .library-detail-source>b{color:var(--text)}
 .library-detail-source>small{display:inline-flex;align-items:center;gap:4px;min-width:0;max-width:min(100%,320px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .library-title-detail>.library-detail-actions{margin-top:4px}
@@ -2097,6 +2106,10 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
      without this the first half of the save split stood empty. */
   .library-detail-actions>.library-detail-save>button:first-child>svg{display:block}
   .library-detail-actions>button,.library-detail-actions>.split-button>button{min-width:44px;padding:0}
+  /* Play beside five icon actions is wider than a phone, and the last one fell onto a line of its
+     own. Play takes the first line whole and the secondary actions share the second. */
+  .library-detail-actions>.library-detail-play{display:flex;flex:1 0 100%}
+  .library-detail-play>.split-button,.library-detail-play>button{flex:1 1 auto}
 }
 .library-source-card{width:min(560px,100%)}
 .library-source-list{max-height:none}

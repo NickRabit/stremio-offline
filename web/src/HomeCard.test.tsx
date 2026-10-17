@@ -82,18 +82,18 @@ describe("HomeCard wide tiles", () => {
     expect(actions.open).toHaveBeenCalledWith(card);
   });
 
-  it("plays a catalogue card that names the library file it was written from", () => {
+  it("plays a catalogue card whether a library file or another source wrote it", () => {
     const withFile = resumeCatalogue({ path: "Films/Heat.mkv" });
     const actions = render(withFile);
     host.querySelector<HTMLButtonElement>(".browse-open")!.click();
     expect(actions.play).toHaveBeenCalledWith(withFile);
 
-    // A row with no file behind it has nothing to play and opens its detail instead.
+    // A row an addon source wrote plays too: its detail starts the stored source.
     const without = resumeCatalogue();
     const other = render(without);
     host.querySelector<HTMLButtonElement>(".browse-open")!.click();
-    expect(other.play).not.toHaveBeenCalled();
-    expect(other.open).toHaveBeenCalledWith(without);
+    expect(other.play).toHaveBeenCalledWith(without);
+    expect(other.open).not.toHaveBeenCalled();
   });
 
   it("offers the detail of a bound file and of every catalogue card", () => {

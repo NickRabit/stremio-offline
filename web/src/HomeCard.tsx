@@ -53,9 +53,9 @@ export function HomeCard({ card, shape, actions }: { card: HomeCardData; shape: 
   const menu = card.kind !== "episode" && card.kind !== "discovery" && card.kind !== "confirm" && card.kind !== "favorite-catalogue";
 
   const primary = () => {
-    if (card.kind === "remote" || card.kind === "episode" || card.kind === "discovery" || card.kind === "confirm" || card.kind === "favorite-catalogue") { actions.open(card); return; }
-    // A catalogue card written from a library file is that file: it plays where the file plays.
-    if (card.kind === "resume-catalogue") { if (card.path) actions.play(card); else actions.open(card); return; }
+    // Continue watching plays whatever wrote it: a media-server version, an addon source or a file.
+    if (card.kind === "remote" || card.kind === "resume-catalogue") { actions.play(card); return; }
+    if (card.kind === "episode" || card.kind === "discovery" || card.kind === "confirm" || card.kind === "favorite-catalogue") { actions.open(card); return; }
     // A favourite bound to a title is that title, whatever kind of copy it is.
     if (card.kind === "favorite" && card.title) { actions.open(card); return; }
     // A Tonight card the libraries bound to a title opens that title instead of its folder.

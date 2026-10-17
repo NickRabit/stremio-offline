@@ -7,10 +7,10 @@ import { LibraryItem, LibraryItemMenu } from "./library-item";
 import { LibraryTile } from "./library-tile";
 import { LibraryTitleDetail } from "./LibraryTitleDetail";
 import { NativeLibrarySaveDialog, type NativeSaveLibrary } from "./NativeLibrarySaveDialog";
-import { sourceIdentity, sourceRowKey } from "./library-detail-sources";
+import { defaultSource, sourceIdentity } from "./library-detail-sources";
 import { useLibrarySources } from "./library-sources";
 import { Player } from "./Player";
-import { titlePlaybackSources } from "./title-sources";
+import { streamGroupLabel } from "./source-rows";
 import { SaveTargetDialog } from "./SaveTargetDialog";
 import { alternativeSaveRequest } from "./alternative-save";
 import { addonMediaSubject, genericProgressKey, supplementaryIdentity } from "./native-addon-sources";
@@ -47,7 +47,9 @@ interface Props {
   compact: boolean;
   onCompactChange: (value: boolean) => void;
   /** The item this browser should open once its libraries are known; a new nonce opens it again. */
-  initialTarget?: { libraryId: string; itemId: string; nonce: number };
+  /** An item to open; `play` starts the version the detail selects as soon as it can play, the way
+   *  a Continue watching card plays whatever wrote it. */
+  initialTarget?: { libraryId: string; itemId: string; nonce: number; play?: boolean };
   /** A favourite, a watched flag or a position changed here, so Home and the shelf re-read. */
   onPersonalChange?: () => void;
   /** The reader's interface language, so the catalogue is asked in it. */
@@ -254,6 +256,8 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   const [playing, setPlaying] = useState<Playing | null>(null);
   /** The source the title's stored position names, read for the row the detail has selected. */
   const [resumeStableKey, setResumeStableKey] = useState<string | undefined>(undefined);
+  /** The item a Continue watching card asked to play, until its detail can. */
+  const autoPlay = useRef<string | null>(null);
   const [nextBusy, setNextBusy] = useState(false);
   const [targetError, setTargetError] = useState("");
   const [targetAttempt, setTargetAttempt] = useState(0);
@@ -275,6 +279,8 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   const [alternativeProgress, setAlternativeProgress] = useState<{ sourceKey: string; position: number; duration: number } | null>(null);
   /** Whether the source chooser is open: the one intent that reads every extra source group. */
   const [chooserOpen, setChooserOpen] = useState(false);
+  /** Whether the player's own Sources panel is open: the same intent, from the play on screen. */
+  const [playerSourcesOpen, setPlayerSourcesOpen] = useState(false);
   const listEpoch = useRef(0);
   const episodeEpoch = useRef(0);
   const detailEpoch = useRef(0);
@@ -567,6 +573,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     setDetailStream(null);
     setAlternativeProgress(null);
     setChooserOpen(false);
+    setPlayerSourcesOpen(false);
     if (!handoff) {
       void api.remoteSources(library.id, itemId, controller.signal)
         .then((found) => {
@@ -675,6 +682,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     const library = libraries.find((row) => row.id === target.libraryId);
     if (!library) { setTargetError(t("mediaServer.itemUnavailable")); return; }
     setTargetError("");
+    autoPlay.current = target.play ? `${target.libraryId}\u0000${target.itemId}` : null;
     const epoch = ++targetEpoch.current;
     const controller = new AbortController();
     openLibrary(library);
@@ -693,6 +701,16 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
       .catch((value) => { if (epoch === targetEpoch.current && !aborted(value)) setTargetError(t("mediaServer.itemUnavailable")); });
     return () => controller.abort();
   }, [initialTarget?.libraryId, initialTarget?.itemId, initialTarget?.nonce, targetAttempt, libraries]);
+  // A card that asked to play presses Play once, the first time the item it named is on screen and
+  // its detail has selected a row; an item without a playable version stays on its detail.
+  useEffect(() => {
+    if (!autoPlay.current || !selected || !detail || `${selected.id}\u0000${detail.id}` !== autoPlay.current || sources === null) return;
+    autoPlay.current = null;
+    // The row the detail holds when it is one of this item's versions, else the default it offers:
+    // a selection left over from the previous item is never what plays.
+    const held = detailStream && sources.some((stream) => stream.sourceId === detailStream.sourceId) ? detailStream : defaultSource(sources);
+    if (held?.playable) playDetailStream(held);
+  });
 
   useEffect(() => {
     const current = playingRef.current;
@@ -1104,24 +1122,17 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   const titleScope = `${accountScope}\u0000${selected?.id ?? ""}\u0000${detail?.id ?? ""}\u0000${addonKey}`;
   const titleScopeRef = useRef(titleScope);
   titleScopeRef.current = titleScope;
+  // What this item's own versions are called, in the detail's menu and above the rows the player
+  // leads with: the provider and the library they belong to.
+  const ownLabel = selected ? `${t(providerKey(selected.provider))} · ${selected.name}` : "";
   // Opening the chooser is the one intent that reads every group: the addons that offer this
   // title, the viewer's own copies of it, and every other library the account may browse. The
   // library the detail already came from is never asked again.
   const extra = useLibrarySources({
-    scope: titleScope, open: chooserOpen, catalogue: addonIdentity,
+    scope: titleScope, open: chooserOpen || playerSourcesOpen, catalogue: addonIdentity,
     ...(series?.name ? { nameHint: series.name } : {}),
     libraries, localCopies: true, ...(selected ? { originLibraryId: selected.id } : {}),
   });
-  /** The rows the player's own source list is handed: the versions this detail holds, then every
-   *  group that has answered, one row per source. */
-  const loadPlayerSources = useCallback(async (): Promise<Stream[]> => {
-    const seen = new Set<string>();
-    // A title the catalogue can name offers everything the title has, read now even when the
-    // detail's own chooser was never opened; one it cannot name offers this item's versions.
-    const title = addonIdentity ? await titlePlaybackSources(addonIdentity).catch(() => [] as Stream[]) : [];
-    return [...(sources ?? []), ...extra.groups.flatMap((group) => group.streams), ...title]
-      .filter((stream) => !seen.has(sourceRowKey(stream)) && (seen.add(sourceRowKey(stream)), true));
-  }, [sources, extra.groups, addonIdentity]);
   // The selected row's saved position: the title's own key for every version of a title the
   // catalogue can name, the viewer's own file under its path, and a media-server version's own
   // store only while no title names it -- or as the fallback for a position kept there before the
@@ -1567,7 +1578,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
             {...(addonIdentity ? {
               sourceGroups: { groups: extra.groups, retry: extra.retry },
               onOpenSources: () => setChooserOpen(true),
-              nativeSourceLabel: `${t(providerKey(selected!.provider))} · ${selected!.name}`,
+              nativeSourceLabel: ownLabel,
               preferredLanguage: audioLanguage,
             } : {})}
             {...(sourceError ? { sourceError } : {})}
@@ -1657,13 +1668,18 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
         onProgressSaved={(key) => {
           if (key === playing.owner.key && !playingRef.current) void refreshPlayedProgress(playing);
         }}
-        // Every media-server play offers the Sources control, as every other play does: the list is
-        // the title's whole set when the catalogue names it, this item's versions otherwise.
-        {...(sources && sources.length > 0
-          ? { loadSources: loadPlayerSources, onSwitchSource: switchDetailSource } : {})}
+        // Every media-server play offers the Sources control, as every other play does: this
+        // item's own versions lead, and the title's other groups follow once the panel asks for
+        // them. Nothing is read before that: the panel is the hook's own `open`.
+        sources={{
+          lead: sources ?? [], leadLabel: ownLabel, groups: extra.groups,
+          panel: { groups: extra.groups, retry: extra.retry },
+          onOpen: () => setPlayerSourcesOpen(true),
+          onSwitch: switchDetailSource,
+        }}
         {...(playing.at !== undefined ? { startAtSeconds: playing.at } : {})}
         onClose={() => {
-          cancelHandoff(); addonSubtitleAbort.current?.abort(); setPlaying(null);
+          cancelHandoff(); addonSubtitleAbort.current?.abort(); setPlayerSourcesOpen(false); setPlaying(null);
         }}/>;
     })()}
     {addonSave && <SaveTargetDialog

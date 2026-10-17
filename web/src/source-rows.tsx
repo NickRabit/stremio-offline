@@ -20,6 +20,13 @@ export const streamLabel = (stream: Stream): string =>
 export const providerLabel = (provider: MediaServerProvider): string =>
   t(provider === "emby" ? "mediaServer.provider.emby" : "mediaServer.provider.jellyfin");
 
+/** The class a lone row belongs to, named the way `useLibrarySources` names its groups: a place
+ *  that leads a chooser with one row labels it as the group that row would have joined. */
+export const streamGroupLabel = (stream: Stream): string =>
+  isLocalStream(stream) ? t("sources.localFilter")
+    : isRemoteStream(stream) ? [stream.provider ? providerLabel(stream.provider) : "", stream.libraryName].filter(Boolean).join(" · ")
+      : stream.addonName ?? t("sources.heading");
+
 /** One filter menu: the value it holds, what "no filter" says and the options beside it. */
 export interface SourceFilterField {
   value: string;

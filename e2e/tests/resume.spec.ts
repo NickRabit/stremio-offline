@@ -205,8 +205,8 @@ test("a film watched from its library file and from the catalogue is one card", 
   }
 });
 
-/** A catalogue card written from a bound library file names that file, so a click plays it the way
- *  a library card plays its own -- the detail is what the menu is for. */
+/** A catalogue card written from a bound library file names that file, so a click plays it at once,
+ *  with the title's detail behind the player the way every Continue watching card leaves it. */
 test("a catalogue card written from a library file plays on click", async ({ page, request }) => {
   const directory = path.resolve("e2e/.tmp/downloads/resume-click");
   const fileRelative = "resume-click/film.mp4";
@@ -232,9 +232,9 @@ test("a catalogue card written from a library file plays on click", async ({ pag
     await expect(card()).toBeVisible();
     await card().locator(".browse-open").click();
 
-    // Played, not opened: the player covers the page and the title's detail stays away.
+    // Played at once: the player covers the page, and closing it lands on the title's detail.
     await expect(page.locator(".player-overlay")).toBeVisible();
-    await expect(page.locator("main.view-title-detail")).toHaveCount(0);
+    await expect(page.locator("main.view-title-detail")).toHaveCount(1);
   } finally {
     await request.delete(`/api/progress/${encodeURIComponent(fileKey)}`);
     await request.delete(`/api/progress/${encodeURIComponent(titleKey)}`);

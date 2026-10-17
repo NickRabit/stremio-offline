@@ -246,9 +246,11 @@ describe("LibraryTitleDetail source picker", () => {
   it("focuses the chosen version when the picker reopens", () => {
     render({ sources: [remote("s1", "Large", 30), remote("s2", "Small", 1)] });
     click(host.querySelector(".split-button-toggle"));
-    click(pickerRows()[1]!);
+    click(pickerRows().find((row) => row.textContent?.includes("Small"))!);
     click(host.querySelector(".split-button-toggle"));
-    expect(document.activeElement).toBe(pickerRows()[1]);
+    // The chosen version now leads the list it is drawn in, and keeps the focus it was left on.
+    expect(pickerRows()[0]!.textContent).toContain("Small");
+    expect(document.activeElement).toBe(pickerRows()[0]);
   });
 
   it("closes on Escape and returns focus to the arrow", () => {
@@ -842,7 +844,8 @@ describe("LibraryTitleDetail stored source", () => {
     const row = stored("stored-row", "Torrent", 10, "a");
     const { onPlay } = render({ sources: [stored("big", "Remux 4K", 9_000_000_000, "b"), row], resumeStableKey: row.stableKey });
     click(host.querySelector(".split-button-toggle"));
-    click(pickerRows()[0]!);
+    // The stored row leads the list; the viewer takes the other one.
+    click(pickerRows().find((node) => node.textContent?.includes("Remux 4K"))!);
     click(playButton());
     expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "big" }));
   });

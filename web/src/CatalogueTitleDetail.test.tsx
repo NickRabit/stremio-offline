@@ -210,6 +210,31 @@ describe("CatalogueTitleDetail sources", () => {
   });
 });
 
+describe("CatalogueTitleDetail resume", () => {
+  it("plays the source Continue watching stored, once, as soon as the rows list it", async () => {
+    const stored = { ...addon("a2", "4K", 4_000), stableKey: "u:stored" };
+    streamReply = () => json([addon("a1", "1080p", 1_000), stored]);
+    const target: CatalogueDetailTarget = { type: "movie", id: "tt-film", name: "A film", initialMeta: film(), resume: { stableKey: "u:stored" } };
+    const { onPlay } = await render({ target });
+    expect(onPlay).toHaveBeenCalledTimes(1);
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "a2" }), expect.objectContaining({ id: "tt-film" }), false);
+    await rerender({ target, onPlay });
+    expect(onPlay).toHaveBeenCalledTimes(1);
+  });
+
+  it("plays the row Play offers when the addon no longer answers with the stored one", async () => {
+    // An addon that renamed or resized its row mints another key: the card still plays.
+    streamReply = () => json([{ ...addon("a1", "1080p", 1_000), stableKey: "a:renamed" }]);
+    const { onPlay } = await render({ target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film(), resume: { stableKey: "a:gone" } } });
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "a1" }), expect.anything(), false);
+  });
+
+  it("never plays a detail that was only opened", async () => {
+    const { onPlay } = await render({ target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film() }, resumeStableKey: "u:x" });
+    expect(onPlay).not.toHaveBeenCalled();
+  });
+});
+
 describe("CatalogueTitleDetail series", () => {
   const videos = [episode("tt-series:1:1", 1, 1, "The first one"), episode("tt-series:1:2", 1, 2, "The second one")];
 

@@ -8,11 +8,12 @@ import type { GalleryImage } from "./gallery-images";
 import { hideBroken } from "./settings-ui";
 import { t, useI18n } from "./i18n";
 import { defaultSource, orderSources, playableSources, sourceIdentity, sourceRowKey } from "./library-detail-sources";
-import { librarySourceChoices, librarySourceEntries, librarySourceRows, type LibrarySourceGroup, type LibrarySourcePanel } from "./library-sources";
-import { providerLabel, SourceFilters, SourceRows, streamLabel } from "./source-rows";
-import { addonNotices, isLocalStream, isRemoteStream, noticeText, streamBadge, streamLanguages, streamSize, type StreamSort } from "./streams";
+import { librarySourceEntries, librarySourceRows, type LibrarySourceGroup, type LibrarySourcePanel } from "./library-sources";
+import { providerLabel, streamLabel } from "./source-rows";
+import { isLocalStream, isRemoteStream, streamBadge, streamLanguages, streamSize } from "./streams";
 import { label } from "./languages";
 import { bytes } from "./settings-ui";
+import { SourceChooser } from "./SourceChooser";
 import type { Stream } from "./types";
 
 export interface LibraryTitleDetailProps {
@@ -335,27 +336,9 @@ function SourcePicker({ own, groups, panel, selected, badgeOf, nativeLabel, pref
   onClose: () => void;
 }) {
   useI18n();
-  const [filter, setFilter] = useState("");
-  const [language, setLanguage] = useState("");
-  const [sort, setSort] = useState<StreamSort>("recommended");
-  const listRef = useRef<HTMLDivElement | null>(null);
   const overlayRef = useRef<HTMLDivElement | null>(null);
   useDialogFocus(overlayRef);
   useDialogViewport(overlayRef);
-  const labelOf = (group: LibrarySourceGroup) =>
-    group.kind === "discovery" ? group.name
-      : group.kind === "addon" ? group.name
-        : group.provider ? `${providerLabel(group.provider)} · ${group.name}` : t("sources.localFilter");
-  const entries = useMemo(() => librarySourceEntries(own, nativeLabel, groups, labelOf), [own, groups, nativeLabel]);
-  const choices = useMemo(() => librarySourceChoices(entries, filter, language), [entries, filter, language]);
-  const rows = useMemo(() => librarySourceRows(entries, filter, language, sort, preferredLanguage), [entries, filter, language, sort, preferredLanguage]);
-  /** A discovery or a group still out: the list is not empty yet, it is still arriving. */
-  const pending = groups.some((group) => group.status === "idle" || group.status === "loading");
-  const notices = addonNotices(groups.filter((group) => group.kind === "addon" && group.status === "loaded").flatMap((group) => group.streams));
-  useEffect(() => {
-    const node = listRef.current?.querySelector<HTMLButtonElement>("button.selected") ?? listRef.current?.querySelector<HTMLButtonElement>("button");
-    node?.focus();
-  }, []);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
@@ -375,29 +358,9 @@ function SourcePicker({ own, groups, panel, selected, badgeOf, nativeLabel, pref
       </div>
       <div className="dialog-body">
         <p className="identify-hint">{t("mediaServer.versionsHint")}</p>
-        <SourceFilters visible={groups.length > 0 || own.length > 1} addon={{
-          value: filter, onChange: setFilter, all: { label: t("sources.allSources"), count: choices.total }, options: choices.options,
-        }} {...(choices.languages.length ? { language: {
-          value: language, onChange: setLanguage, all: { label: t("sources.anyLanguage"), count: choices.languageTotal }, options: choices.languages,
-        } } : {})} sort={{ value: sort, onChange: setSort }}/>
-        {notices.map((notice) => <p className="notice" key={notice.sourceId}><b>{notice.addonName}</b> {noticeText(notice)}</p>)}
-        <SourceRows className="stream-list remote-streams library-source-list" rows={rows} selected={selected} onSelect={onSelect}
-          badgeOf={badgeOf} listRef={listRef}/>
-        {pending && <p className="identify-hint" role="status">{t("sources.askingOthers")}</p>}
-        {/* One line for the whole list, never one per silent library: seven libraries that found
-            nothing are one fact, and the per-group failures below keep their own retry. */}
-        {!rows.length && !pending && <p className="identify-hint" role="status">{filter || language
-          ? t("sources.noneMatchFilter", { count: filter ? entries.find((entry) => entry.key === filter)?.streams.length ?? 0 : choices.total })
-          : t("sources.none")}</p>}
-        {/* The filters emptied a list that is not empty: the way back is the one the catalogue
-            offers, clearing both menus at once. */}
-        {!rows.length && !pending && Boolean(filter || language) && <p className="identify-hint">
-          <button type="button" className="link-button" onClick={() => { setFilter(""); setLanguage(""); }}>{t("sources.clearFilters")}</button>
-        </p>}
-        {groups.filter((group) => group.status === "error").map((group) => <p className="notice" role="alert" key={group.key}>
-          <b>{labelOf(group)}</b> {group.error}
-          {panel && <button type="button" className="link-button" onClick={() => panel.retry(group.key)}>{t("home.retry")}</button>}
-        </p>)}
+        <SourceChooser lead={own} leadLabel={nativeLabel} groups={groups} {...(panel ? { panel } : {})}
+          selected={selected} onSelect={onSelect} preferredLanguage={preferredLanguage} badgeOf={badgeOf}
+          listClassName="stream-list remote-streams library-source-list"/>
       </div>
       <footer className="dialog-foot">
         <button type="button" onClick={onClose}>{t("common.close")}</button>

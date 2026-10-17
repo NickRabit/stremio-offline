@@ -4,6 +4,7 @@ import { api, describeError } from "./api";
 import { catalogueGalleryImages, type GalleryImage } from "./gallery-images";
 import { t, useI18n } from "./i18n";
 import { LibraryTitleDetail } from "./LibraryTitleDetail";
+import { defaultSource } from "./library-detail-sources";
 import { useLibrarySources } from "./library-sources";
 import type { Meta, Stream, Video } from "./types";
 
@@ -24,6 +25,10 @@ export interface CatalogueDetailTarget {
   initialSource?: Stream;
   /** The catalogue's own metadata, which this detail never reads again. */
   initialMeta?: Meta;
+  /** Opened from Continue watching: Play is pressed as soon as the rows arrive, on the row the
+   *  title was last played from (`stableKey`) when it is still offered, else on the row Play
+   *  offers. A title with nothing playable stays on screen. */
+  resume?: { stableKey?: string };
 }
 
 /** The catalogue id a detail asks its own rows by: the exact video the catalogue lists wins, then
@@ -98,6 +103,7 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
   const [sourceError, setSourceError] = useState("");
   const [nonce, setNonce] = useState(0);
   const [chooserOpen, setChooserOpen] = useState(false);
+  const resumed = useRef(false);
 
   // The catalogue's snapshot is already the answer; a title that only Home or a favourite knows
   // reads its metadata here, and a failure says so with a retry instead of an empty detail.
@@ -114,6 +120,7 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
   // Another title opens here: nothing of the first one's own choice survives it.
   useEffect(() => {
     setPickedEpisode(null); setPickerOpen(false); setPickerSeason(null); setSourceError("");
+    resumed.current = false;
   }, [type, id]);
 
   const videos = snapshot?.videos ?? [];
@@ -209,6 +216,16 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
     const read = latest.current;
     report.current?.({ meta: read.snapshot, target: read.effective, pending: read.rows === null, playable: (read.rows ?? []).some((stream) => stream.playable) });
   }, [episodeKey, snapshot, rows]);
+
+  // Continue watching plays once, the first time the rows are known: an addon that renames or
+  // resizes the row it answered with must not leave the card that asked to play doing nothing.
+  useEffect(() => {
+    if (!target.resume || resumed.current || rows === null) return;
+    resumed.current = true;
+    const key = target.resume.stableKey;
+    const pick = (key ? rows.find((stream) => stream.playable && stream.stableKey === key) : undefined) ?? defaultSource(rows);
+    if (pick) onPlay(pick, latest.current.effective, false);
+  }, [target.resume, rows, onPlay]);
 
   const gallery = useMemo(() => catalogueGalleryImages(snapshot), [snapshot]);
   const backdrops = useMemo(() => [snapshot?.background, snapshot?.poster, target.poster], [snapshot, target.poster]);
