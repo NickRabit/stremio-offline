@@ -20,6 +20,8 @@ export interface Track {
 export interface MediaInfo {
   container: string;
   duration?: number;
+  /** The whole file's bitrate in bits per second, picture and sound together. */
+  bitrate?: number;
   video?: { codec: string; width?: number; height?: number; profile?: string; pixelFormat?: string; dolbyVisionProfile?: number; dolbyVisionEnhancementLayer?: boolean };
   audio?: { codec: string; channels?: number };
   audioTracks: Track[];
@@ -160,7 +162,7 @@ async function inspect(input: string, limits: string[], timeout: number, stage: 
       ...limits,
       "-show_format", "-show_streams", input,
     ], { timeout, maxBuffer: 8 * 1024 * 1024, signal });
-    const data = JSON.parse(stdout) as { format?: { format_name?: string; duration?: string }; streams?: ProbeStream[] };
+    const data = JSON.parse(stdout) as { format?: { format_name?: string; duration?: string; bit_rate?: string }; streams?: ProbeStream[] };
     const streams = data.streams ?? [];
     const variant = pickVariant(streams);
     const video = variant?.video ?? streams.find((item) => item.codec_type === "video" && !item.disposition?.attached_pic);
@@ -170,11 +172,13 @@ async function inspect(input: string, limits: string[], timeout: number, stage: 
       .filter((track) => !BITMAP_SUBTITLES.has(track.codec));
     const audio = variant ? variant.audio : streams.find((item) => item.codec_type === "audio");
     const duration = Number(data.format?.duration);
+    const bitrate = Number(data.format?.bit_rate);
     return {
       unreachable: false,
       info: {
         container: data.format?.format_name ?? "",
         duration: Number.isFinite(duration) && duration > 0 ? duration : undefined,
+        bitrate: Number.isFinite(bitrate) && bitrate > 0 ? bitrate : undefined,
         video: video?.codec_name ? {
           codec: video.codec_name,
           width: video.width,

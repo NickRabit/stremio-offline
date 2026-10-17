@@ -151,6 +151,17 @@ export function conversionAttempts(copyVideo: boolean, hardware: boolean, softwa
 }
 
 export const QUALITY_BITRATE: Record<number, string> = { 1080: "6M", 720: "3M", 480: "1500k" };
+const bitsPerSecond = (rate: string) => Number.parseFloat(rate) * (rate.endsWith("M") ? 1_000_000 : rate.endsWith("k") ? 1_000 : 1);
+
+/** The probe reports a file's average bitrate, while the quality's bitrate is a ceiling; a file
+ *  this far under it leaves room for its peaks. */
+const AVERAGE_HEADROOM = 0.75;
+
+/** A file no taller than the chosen quality and well under its bitrate already is that quality,
+ *  so a copy delivers what the viewer asked for. An unknown height or bitrate is not taken on trust. */
+export const fitsQuality = (info: MediaInfo | undefined, quality: number) =>
+  Boolean(info?.video?.height && info.video.height <= quality
+    && info.bitrate && info.bitrate <= bitsPerSecond(QUALITY_BITRATE[quality]) * AVERAGE_HEADROOM);
 
 /** One session as the statistics see it. The stream comes along whole, so the caller can
  * name the source the same way it names the traffic it counts. */
@@ -1200,10 +1211,12 @@ export class PlaybackManager {
     const caps = session.capabilities;
     const video = session.info?.video?.codec ?? "";
     const audio = session.info?.audioTracks?.[session.audioTrack]?.codec ?? session.info?.audio?.codec ?? "";
-    // A lower chosen quality forces a real transcode; a copy would carry the original resolution.
+    // A lower chosen quality forces a real transcode, unless the file already fits it; a copy of a
+    // larger one would carry the original resolution.
     // A refused copy says the probe and the capability list disagreed with the real decoder.
     // Which stream was to blame is unknowable from here, so both go through the encoder.
-    const copyVideo = !session.copyRejected && session.quality === null && (native(caps)
+    const fits = session.quality === null || fitsQuality(session.info, session.quality);
+    const copyVideo = !session.copyRejected && fits && (native(caps)
       ? (video === "h264" || video === "hevc") && nativeVideoPlayable(session.info?.video, caps)
       : (video === "h264" && caps.h264 !== false) || (video === "hevc" && hevcPlayable(session.info?.video, caps)));
     const audioCapability = COPYABLE_AUDIO[audio];

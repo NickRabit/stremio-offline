@@ -889,7 +889,8 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     const now = Date.now();
     stallsRef.current = [...stallsRef.current.filter((at) => now - at < 60_000), now];
     if (stallsRef.current.length < 3) return;
-    // A lower quality cuts the bitrate, so it really does fix stalling caused by the network.
+    // A lower quality usually cuts the bitrate, which fixes stalling caused by the network; a file
+    // that already fits a quality is copied at its own bitrate, so for one the offer helps less.
     // It also means transcoding, which a weak CPU cannot keep up with unaided -- the advice
     // would then hurt more than it helps. So we ask the server whether it has acceleration;
     // the hardware flag does not answer that, being always false while remuxing, where VAAPI
