@@ -4,6 +4,7 @@ import { api, describeError } from "./api";
 import { catalogueGalleryImages, type GalleryImage } from "./gallery-images";
 import { t, useI18n } from "./i18n";
 import { LibraryTitleDetail } from "./LibraryTitleDetail";
+import { defaultSource } from "./library-detail-sources";
 import { useLibrarySources } from "./library-sources";
 import type { Meta, Stream, Video } from "./types";
 
@@ -24,10 +25,10 @@ export interface CatalogueDetailTarget {
   initialSource?: Stream;
   /** The catalogue's own metadata, which this detail never reads again. */
   initialMeta?: Meta;
-  /** Opened from Continue watching: the source the title was last played from starts as soon as
-   *  this detail lists it, the way a card written from a library file plays at once. A source no
-   *  longer offered leaves the detail on screen to choose another. */
-  resume?: boolean;
+  /** Opened from Continue watching: Play is pressed as soon as the rows arrive, on the row the
+   *  title was last played from (`stableKey`) when it is still offered, else on the row Play
+   *  offers. A title with nothing playable stays on screen. */
+  resume?: { stableKey?: string };
 }
 
 /** The catalogue id a detail asks its own rows by: the exact video the catalogue lists wins, then
@@ -216,14 +217,15 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
     report.current?.({ meta: read.snapshot, target: read.effective, pending: read.rows === null, playable: (read.rows ?? []).some((stream) => stream.playable) });
   }, [episodeKey, snapshot, rows]);
 
-  // Continue watching plays the stored source once, the first time both the rows and the key the
-  // title was last played from are known; a key no row answers settles it without playing.
+  // Continue watching plays once, the first time the rows are known: an addon that renames or
+  // resizes the row it answered with must not leave the card that asked to play doing nothing.
   useEffect(() => {
-    if (!target.resume || resumed.current || rows === null || !resumeStableKey) return;
+    if (!target.resume || resumed.current || rows === null) return;
     resumed.current = true;
-    const stored = rows.find((stream) => stream.playable && stream.stableKey === resumeStableKey);
-    if (stored) onPlay(stored, latest.current.effective, false);
-  }, [target.resume, rows, resumeStableKey, onPlay]);
+    const key = target.resume.stableKey;
+    const pick = (key ? rows.find((stream) => stream.playable && stream.stableKey === key) : undefined) ?? defaultSource(rows);
+    if (pick) onPlay(pick, latest.current.effective, false);
+  }, [target.resume, rows, onPlay]);
 
   const gallery = useMemo(() => catalogueGalleryImages(snapshot), [snapshot]);
   const backdrops = useMemo(() => [snapshot?.background, snapshot?.poster, target.poster], [snapshot, target.poster]);

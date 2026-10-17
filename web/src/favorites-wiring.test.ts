@@ -93,8 +93,9 @@ describe("one star per title in the shell", () => {
 describe("one click rule in the shell", () => {
   const app = source("./App.tsx");
 
-  it("plays the file a catalogue card was written from, and opens the detail without one", () => {
-    expect(app).toMatch(/card\.kind === "resume-catalogue"\) \{[\s\S]{0,200}?if \(card\.path\) void playLocal\(card\.title, card\.path, card\.poster, card\.season != null\)/);
+  it("plays a catalogue card by what wrote it: a media-server version, a file, or the detail's own row", () => {
+    expect(app).toMatch(/card\.kind === "resume-catalogue"\) \{[\s\S]{0,600}?entry\?\.remote[\s\S]{0,200}?openRemoteCard\(entry\.remote, true\)[\s\S]{0,200}?if \(card\.path\) void playLocal\(card\.title, card\.path, card\.poster, card\.season != null\)/);
+    expect(app).toMatch(/resume: \{ \.\.\.\(resumeKeyOf\(card\.key\)/);
   });
 
   it("opens the catalogue detail a resume file is bound to, at its episode", () => {

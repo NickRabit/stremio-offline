@@ -2501,7 +2501,13 @@ export function App() {
     // A catalogue card written from a library file plays that file; without one it has nothing to
     // play and opens its detail instead.
     if (card.kind === "resume-catalogue") {
-      // The detail starts the stored source itself once it lists it; a library file plays now.
+      // The row names what wrote it: a media-server version plays in its own browser, a library
+      // file plays now over the title's detail, and an addon row is pressed by the detail itself.
+      const entry = resume.find((candidate) => candidate.key === card.key);
+      if (entry?.remote && !card.path && (!entry.stableKey || entry.stableKey.startsWith("m:"))) {
+        openRemoteCard(entry.remote, true);
+        return;
+      }
       homeOpen(card);
       if (card.path) void playLocal(card.title, card.path, card.poster, card.season != null);
       return;
@@ -2510,6 +2516,8 @@ export function App() {
     const title = card.kind === "favorite" || card.kind === "recent" || card.kind === "tonight" ? card.label : card.title;
     void playLocal(title, card.path, card.poster, (card.kind === "resume-file" || card.kind === "completed" || card.kind === "recent") && card.season != null);
   };
+  /** The source a Continue watching row was last played from, as the progress list names it. */
+  const resumeKeyOf = (key: string) => resume.find((candidate) => candidate.key === key)?.stableKey;
   const homeOpen = (card: HomeCard) => {
     if (card.kind === "remote") { openRemoteCard(card); return; }
     // A catalogue card opens the shared detail: the same body the libraries use, over this page.
@@ -2535,7 +2543,7 @@ export function App() {
     if (card.kind === "confirm") { setSuggestionsOpen(true); return; }
     if (card.kind === "favorite-catalogue") { openCatalogueDetail({ type: card.type, id: card.id, name: card.name, ...(card.poster ? { poster: card.poster } : {}) }); return; }
     if (card.kind !== "resume-catalogue") return;
-    openCatalogueDetail({ type: card.type, id: card.id, name: card.name, ...(card.poster ? { poster: card.poster } : {}), ...(card.path ? {} : { resume: true }),
+    openCatalogueDetail({ type: card.type, id: card.id, name: card.name, ...(card.poster ? { poster: card.poster } : {}), ...(card.path || card.pending ? {} : { resume: { ...(resumeKeyOf(card.key) ? { stableKey: resumeKeyOf(card.key)! } : {}) } }),
       ...(card.season != null && card.episode != null ? { season: card.season, episode: card.episode } : {}) });
   };
   const homeShowAll = (target: ShowAllTarget) => {
@@ -2548,7 +2556,7 @@ export function App() {
     else if (target === "confirm") setSuggestionsOpen(true);
   };
   /** Opens a remote card's item in the Library's native browser. */
-  const openRemoteCard = (card: Extract<HomeCard, { kind: "remote" }>, play = false) => {
+  const openRemoteCard = (card: { libraryId: string; itemId: string }, play = false) => {
     navigated.current = true;
     remoteTargetNonce.current += 1;
     setRemoteTarget({ libraryId: card.libraryId, itemId: card.itemId, nonce: remoteTargetNonce.current, ...(play ? { play: true } : {}) });
@@ -3437,11 +3445,7 @@ export function App() {
         items={favorites} busy={favoritesBusy} shape={settings.favoritesTileShape} onToggleShape={() => void toggleShape("favoritesTileShape")}
         onPlay={openFavorite} onOpenFolder={openFavorite} onOpenTitle={openFavoriteTitle}
         onOpenCatalog={(item: FavoriteCatalogItem) => openCatalogueDetail({ type: item.type, id: item.id, name: item.name, ...(item.poster ? { poster: item.poster } : {}) })}
-        onOpenRemote={(item: FavoriteRemoteItem) => openRemoteCard({ kind: "remote", key: `remote:${item.libraryId}:${item.itemId}`, title: item.title,
-          provider: item.provider, libraryId: item.libraryId, libraryName: item.libraryName, itemId: item.itemId, itemType: item.itemType,
-          ...(item.poster ? { poster: item.poster } : {}), ...(item.wide ? { wide: item.wide } : {}),
-          ...(item.season !== undefined ? { season: item.season } : {}), ...(item.episode !== undefined ? { episode: item.episode } : {}),
-          updatedAt: "" })}
+        onOpenRemote={(item: FavoriteRemoteItem) => openRemoteCard(item)}
         hasMore={favorites.length < favoritesTotal} loadingMore={favoritesLoadingMore}
         onLoadMore={() => void loadFavorites(favoritesFilter, favorites.length)}/>}
       {view === "downloads" && <Downloads jobs={downloads} deviceTransfers={deviceTransfers} libraries={libraries} halt={queueHalt} admin={session!.role === "admin"} refresh={loadDownloads} onError={fail} onReveal={revealInLibrary} prefs={views.downloads} onPrefs={persistDownloadPrefs}/>}
