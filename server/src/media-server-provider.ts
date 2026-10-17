@@ -689,12 +689,14 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
     }
     const filteredTypes = type === "movie" ? "Movie,MusicVideo" : type === "series" && mode === "folders"
       ? "Series,Season,Episode" : type === undefined ? undefined : DIRECTORY_ITEM_TYPE_NAMES.get(type);
+    // A music video is listed as a film the way title browse lists it: a library of clips that
+    // carry no film metadata must still answer a search for their names.
     const includeItemTypes = searchTypes === "movie"
-      ? "Movie"
+      ? "Movie,MusicVideo"
       : searchTypes === "series"
         ? "Series,Episode"
         : searchTypes === "all"
-          ? "Movie,Series,Episode"
+          ? "Movie,MusicVideo,Series,Episode"
           : filteredTypes === undefined
             ? mode === "folders" ? DIRECTORY_FOLDER_TYPES : DIRECTORY_TITLE_TYPES
             : mode === "folders" ? `Folder,${filteredTypes}` : filteredTypes;
