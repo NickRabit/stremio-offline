@@ -408,11 +408,14 @@ test("a held block is still refused to an owner whose access was withdrawn", asy
   const { opens, sources } = rangedOriginal(harness, 2 * 1024 * 1024);
   const resourceId = harness.seedRemote();
   await readSome(harness.base, resourceId, 0, 100);
+  // The first reader may already have started the next block before it hung up.
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const before = opens.length;
   sources.assertCurrent = () => { throw new ResourceError(404, "RESOURCE_NOT_FOUND"); };
 
   const denied = await fetch(`${harness.base}/api/media/${resourceId}`, { headers: { "x-user": "ada", range: "bytes=200-" } });
   assert.equal(denied.status, 404);
-  assert.equal(opens.length, 1);
+  assert.equal(opens.length, before, "the denied read reached nothing upstream");
 });
 
 /** An addon host on this machine that answers ranges, counting every request it is asked. */
