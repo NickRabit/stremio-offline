@@ -153,11 +153,15 @@ export function conversionAttempts(copyVideo: boolean, hardware: boolean, softwa
 export const QUALITY_BITRATE: Record<number, string> = { 1080: "6M", 720: "3M", 480: "1500k" };
 const bitsPerSecond = (rate: string) => Number.parseFloat(rate) * (rate.endsWith("M") ? 1_000_000 : rate.endsWith("k") ? 1_000 : 1);
 
-/** A file no taller than the chosen quality and under its bitrate already is that quality, so a
- *  copy delivers what the viewer asked for. An unknown height or bitrate is not taken on trust. */
+/** The probe reports a file's average bitrate, while the quality's bitrate is a ceiling; a file
+ *  this far under it leaves room for its peaks. */
+const AVERAGE_HEADROOM = 0.75;
+
+/** A file no taller than the chosen quality and well under its bitrate already is that quality,
+ *  so a copy delivers what the viewer asked for. An unknown height or bitrate is not taken on trust. */
 export const fitsQuality = (info: MediaInfo | undefined, quality: number) =>
   Boolean(info?.video?.height && info.video.height <= quality
-    && info.bitrate && info.bitrate <= bitsPerSecond(QUALITY_BITRATE[quality]));
+    && info.bitrate && info.bitrate <= bitsPerSecond(QUALITY_BITRATE[quality]) * AVERAGE_HEADROOM);
 
 /** One session as the statistics see it. The stream comes along whole, so the caller can
  * name the source the same way it names the traffic it counts. */

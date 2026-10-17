@@ -1418,11 +1418,12 @@ test("a chosen quality the file already fits is copied, not transcoded", () => {
   assert.equal(manager.plan(session).copyVideo, false, "an unknown bitrate is not taken on trust");
 });
 
-test("fitsQuality reads the caps in bits per second", () => {
+test("fitsQuality wants an average well under the cap, read in bits per second", () => {
   const info = (height: number, bitrate: number) => ({ container: "mp4", bitrate, video: { codec: "h264", height }, audioTracks: [], subtitleTracks: [] });
-  assert.equal(fitsQuality(info(480, 1_500_000), 480), true);
-  assert.equal(fitsQuality(info(480, 1_500_001), 480), false);
-  assert.equal(fitsQuality(info(1080, 6_000_000), 1080), true);
+  assert.equal(fitsQuality(info(480, 1_125_000), 480), true, "three quarters of 1500k");
+  assert.equal(fitsQuality(info(480, 1_125_001), 480), false);
+  assert.equal(fitsQuality(info(1080, 4_500_000), 1080), true, "three quarters of 6M");
+  assert.equal(fitsQuality(info(1080, 5_900_000), 1080), false, "an average just under the cap leaves its peaks above it");
   assert.equal(fitsQuality(undefined, 1080), false);
 });
 
