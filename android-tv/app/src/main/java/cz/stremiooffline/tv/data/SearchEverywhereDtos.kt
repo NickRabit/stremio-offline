@@ -70,6 +70,7 @@ data class GlobalSearchClusterDto(
   val score: Double = 0.0,
   val rating: Double? = null,
   val episodeCount: Int? = null,
+  val itemCount: Int? = null,
 )
 
 @Serializable

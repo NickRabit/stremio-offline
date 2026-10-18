@@ -14,7 +14,7 @@ import {
   type SearchStartRequest,
   type StrongIds,
 } from "./search-contracts.js";
-import { enoughMatched, relevance, type Relevance } from "./search-relevance.js";
+import { enoughMatched, relevance, titleAnswersAll, type Relevance } from "./search-relevance.js";
 import {
   ClusterKeyTracker,
   clusterIdentities,
@@ -1204,11 +1204,23 @@ export class SearchSessionManager {
     session.childrenByParent = attached;
     session.groupByMember = groupByMember;
 
+    const answers = (group: RawGroup): boolean => group.members.some((member) =>
+      titleAnswersAll(session.request.query, member.record.title, member.record.originalTitle));
+    // A folder named for the query is a collection worth a card of its own. A file is usually one
+    // more copy of a title, so it joins the cards only when no title answers the query at all.
+    const titleAnswered = rawGroups.some((group) =>
+      (group.kind === "movie" || group.kind === "series" || group.kind === "episode") && answers(group));
     const main = rawGroups.filter((group) =>
-      group.kind !== "folder" && group.kind !== "file" && group.kind !== "season" && !attachedKeys.has(group.key),
+      group.kind !== "season"
+      && !attachedKeys.has(group.key)
+      && (group.kind === "folder" ? answers(group)
+        : group.kind === "file" ? !titleAnswered && answers(group)
+        : true),
     );
+    const mainKeys = new Set(main.map((group) => group.key));
     const unidentified = rawGroups.filter((group) =>
-      group.kind === "folder" || group.kind === "file" || group.kind === "season",
+      (group.kind === "folder" || group.kind === "file" || group.kind === "season")
+      && !mainKeys.has(group.key),
     );
     session.mainOrder = this.orderGroups(main);
     session.unidentifiedOrder = this.orderGroups(unidentified);
@@ -1273,6 +1285,12 @@ export class SearchSessionManager {
       score: Math.max(...members.map((member) => this.memberScore(member))),
       ...(ratings.length === 0 ? {} : { rating: Math.max(...ratings) }),
     };
+    if (kind === "folder") {
+      const counts = members.flatMap((member) =>
+        member.record.itemCount === undefined ? [] : [member.record.itemCount],
+      );
+      if (counts.length > 0) view.itemCount = Math.max(...counts);
+    }
     return {
       key,
       conflict: identity.conflict,

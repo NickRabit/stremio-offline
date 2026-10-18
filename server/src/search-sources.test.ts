@@ -393,6 +393,7 @@ test("local rows map identified titles and unnamed files or folders", async () =
       files: [
         { path: "Collection/a.mkv", label: "a", season: null, episode: null, size: 1, modified: "" },
         { path: "Collection/b.mkv", label: "b", season: null, episode: null, size: 1, modified: "" },
+        { path: "Collection/notes.txt", label: "notes", season: null, episode: null, size: 1, modified: "" },
       ],
     }),
   ];
@@ -417,6 +418,7 @@ test("local rows map identified titles and unnamed files or folders", async () =
   });
   assert.equal(page.records[1]!.locator.kind === "local" && page.records[1]!.locator.itemKind, "file");
   assert.equal(page.records[2]!.locator.kind === "local" && page.records[2]!.locator.itemKind, "folder");
+  assert.equal(page.records[2]!.itemCount, 2, "only video files count");
 });
 
 test("a local single-file entry carries its folder name and relative path as search text", async () => {
@@ -494,7 +496,7 @@ test("remote rows map titles, episode ranges, the cursor and the library provide
           id: "e1", name: "Pilot", type: "episode", seriesId: "s1",
           season: 1, episode: 2, episodeEnd: 3, overview: "An episode",
         }),
-        remoteItem({ id: "f1", name: "Folder", type: "folder" }),
+        remoteItem({ id: "f1", name: "Folder", type: "folder", childCount: 818 }),
       ],
     };
   };
@@ -532,6 +534,7 @@ test("remote rows map titles, episode ranges, the cursor and the library provide
   assert.deepEqual(page.records[3]!.locator, {
     kind: "remote", libraryId: "rlib_00000001", itemId: "f1", itemType: "folder", provider: "jellyfin",
   });
+  assert.equal(page.records[3]!.itemCount, 818);
 
   assert.equal(source.stillAllowed(), true);
 });

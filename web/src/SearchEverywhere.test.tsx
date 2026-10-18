@@ -181,6 +181,21 @@ describe("SearchEverywhere", () => {
     expect(host.querySelector(".search-results")?.classList.contains("previous-query")).toBe(true);
   });
 
+  it("a folder card says how much it holds and the summary names what is left", async () => {
+    const folder = cluster("folder", { kind: "folder", title: "GirlsDoPorn", itemCount: 3 });
+    const file = cluster("file", { kind: "file", title: "818" });
+    await render(controller({
+      snapshot: snapshot({ clusters: [folder], unidentified: [file] }),
+      order: ["folder"],
+      unidentifiedOrder: ["file"],
+    }));
+
+    const caption = host.querySelector("[data-search-card] small")?.textContent ?? "";
+    expect(caption).toContain("Folder");
+    expect(caption).toContain("3");
+    expect(host.querySelector(".search-unidentified summary")?.textContent).toBe("More files and folders (1)");
+  });
+
   it("opens the one title page when the title has an id every source shares", async () => {
     const item = cluster("show", { title: "A show", primaryMemberKey: "member-show", memberKeys: ["member-show"] });
     const canonical = { type: "series" as const, id: "tt-show", name: "A show" };

@@ -205,3 +205,9 @@ export function enoughMatched(result: Relevance): boolean {
   if (result.total === 0) return false;
   return result.total <= 2 ? result.matched === result.total : result.matched >= result.total - 1;
 }
+
+/** Whether a row's own name answers the whole query; a parent title or path never counts. */
+export function titleAnswersAll(query: string, title: string, originalTitle?: string): boolean {
+  const result = relevance(query, { title, ...(originalTitle === undefined ? {} : { originalTitle }) });
+  return result.total > 0 && result.matched === result.total;
+}

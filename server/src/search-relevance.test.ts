@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { enoughMatched, relevance, searchTokens } from "./search-relevance.js";
+import { enoughMatched, relevance, searchTokens, titleAnswersAll } from "./search-relevance.js";
 
 test("a whole phrase beats a one-word loose match", () => {
   const whole = relevance("yes minister", { title: "Yes Minister S1E1 (Open government)" });
@@ -67,4 +67,11 @@ test("season and episode markers are ignored", () => {
 
 test("ampersands become the word and articles stay in the query", () => {
   assert.deepEqual(searchTokens("Rizzoli & Isles The"), ["rizzoli", "and", "isles", "the"]);
+});
+
+test("a title answers the whole query only when every word meets its own name", () => {
+  assert.equal(titleAnswersAll("girlsdoporn", "GirlsDoPorn"), true);
+  assert.equal(titleAnswersAll("girlsdoporn", "Girlsdopor"), true, "a typo follows relevance");
+  assert.equal(titleAnswersAll("girls do porn", "Girls"), false);
+  assert.equal(titleAnswersAll("", "GirlsDoPorn"), false);
 });
