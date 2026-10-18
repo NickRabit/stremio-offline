@@ -152,6 +152,72 @@ test("opaque identity merges only inside the same scope and kind", () => {
   ]), [["movie"], ["series"]]);
 });
 
+test("an id-less title joins its one exact name and year match", () => {
+  const groups = clusterIdentities([
+    record("idless", 1, {}, { opaque: "sosac:matrix", title: "Matrix", year: 1999 }),
+    record("imdb", 2, { imdb: "tt0133093" }, { title: "The Matrix", year: 1999 }),
+  ]);
+  assert.deepEqual(groups, [{ memberKeys: ["idless", "imdb"], conflict: false }]);
+});
+
+test("an id-less title can match a candidate by original title", () => {
+  assert.deepEqual(groupsOf([
+    record("idless", 1, {}, { title: "Matrix", originalTitle: "The Matrix", year: 1999 }),
+    record("candidate", 2, { imdb: "tt0133093" }, { title: "Matrix", year: 1999 }),
+  ]), [["idless", "candidate"]]);
+});
+
+test("an id-less title stays alone when its name and year have two candidates", () => {
+  assert.deepEqual(groupsOf([
+    record("idless", 1, {}, { title: "Matrix", year: 1999 }),
+    record("first", 2, { imdb: "tt1" }, { title: "Matrix", year: 1999 }),
+    record("second", 3, { imdb: "tt2" }, { title: "Matrix", year: 1999 }),
+  ]), [["idless"], ["first"], ["second"]]);
+});
+
+test("an id-less title needs the same year and kind", () => {
+  assert.deepEqual(groupsOf([
+    record("idless", 1, {}, { title: "Matrix", year: 1999 }),
+    record("candidate", 2, { imdb: "tt1" }, { title: "Matrix", year: 1998 }),
+  ]), [["idless"], ["candidate"]]);
+  assert.deepEqual(groupsOf([
+    record("idless", 1, {}, { title: "Matrix" }),
+    record("candidate", 2, { imdb: "tt1" }, { title: "Matrix", year: 1999 }),
+  ]), [["idless"], ["candidate"]]);
+  assert.deepEqual(groupsOf([
+    record("idless", 1, {}, { title: "Matrix", year: 1999 }),
+    record("candidate", 2, { imdb: "tt1" }, { title: "Matrix" }),
+  ]), [["idless"], ["candidate"]]);
+  assert.deepEqual(groupsOf([
+    record("idless", 1, {}, { title: "Matrix", year: 1999 }),
+    record("candidate", 2, { imdb: "tt1" }, { title: "Matrix", year: 1999, kind: "series" }),
+  ]), [["idless"], ["candidate"]]);
+});
+
+test("id-less groups never join each other", () => {
+  assert.deepEqual(groupsOf([
+    record("one", 1, {}, { title: "Matrix", year: 1999 }),
+    record("two", 2, {}, { title: "Matrix", year: 1999 }),
+  ]), [["one"], ["two"]]);
+});
+
+test("a conflicting candidate group is not used", () => {
+  assert.deepEqual(groupsOf([
+    record("idless", 1, {}, { title: "Matrix", year: 1999 }),
+    record("first", 2, { imdb: "tt1", tmdb: "10" }, { title: "Matrix", year: 1999 }),
+    record("second", 3, { imdb: "tt1", tmdb: "10" }, { title: "Matrix", year: 1999 }),
+    record("third", 4, { imdb: "tt1", tmdb: "20" }, { title: "Matrix", year: 1999 }),
+  ]), [["idless"], ["first", "second"], ["third"]]);
+});
+
+test("an id-less group linked by one opaque id joins as a whole", () => {
+  assert.deepEqual(groupsOf([
+    record("first", 1, {}, { opaque: "sosac:matrix:1999", title: "Matrix", year: 1999 }),
+    record("second", 2, {}, { opaque: "sosac:matrix:1999", title: "Matrix", year: 1999 }),
+    record("candidate", 3, { imdb: "tt0133093" }, { title: "The Matrix", year: 1999 }),
+  ]), [["first", "second", "candidate"]]);
+});
+
 test("episodes use synthetic parent identity", () => {
   assert.deepEqual(episodeIdentity({ imdb: "tt1", tmdb: "10" }, 1, 2), {
     imdb: "tt1#1#2#",

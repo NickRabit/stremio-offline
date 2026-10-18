@@ -46,6 +46,9 @@ export interface IdentityInput {
   kind: SearchKind;
   ids: StrongIds;
   opaque?: string;
+  title?: string;
+  originalTitle?: string;
+  year?: number;
 }
 
 export interface IdentityGroup {
@@ -88,11 +91,25 @@ const sortedKeys = (records: IdentityInput[], sequenceOf: Map<string, number>): 
     .map((record) => record.memberKey)
     .sort((left, right) => (sequenceOf.get(left)! - sequenceOf.get(right)!) || compareText(left, right));
 
+const hasStrongId = (record: IdentityInput): boolean =>
+  NAMESPACES.some((namespace) => record.ids[namespace] !== undefined);
+
+const nameKeys = (record: IdentityInput): string[] => {
+  if (record.year === undefined) return [];
+  const keys: string[] = [];
+  for (const title of [record.title, record.originalTitle]) {
+    const normalized = normalizeTitle(title);
+    if (normalized !== "") keys.push(`${normalized}|${record.year}`);
+  }
+  return keys;
+};
+
 export function clusterIdentities(records: IdentityInput[]): IdentityGroup[] {
   const ordered = [...records].sort(
     (left, right) => left.sequence - right.sequence || compareText(left.memberKey, right.memberKey),
   );
   const sequenceOf = new Map(ordered.map((record) => [record.memberKey, record.sequence]));
+  const recordByKey = new Map(ordered.map((record) => [record.memberKey, record]));
   const edges = Array.from({ length: ordered.length }, () => [] as number[]);
   // Only records that share a value can have an edge, so pairs come from that index.
   const sharing = new Map<string, number[]>();
@@ -177,7 +194,54 @@ export function clusterIdentities(records: IdentityInput[]): IdentityGroup[] {
     }
   }
 
-  return groups.sort((left, right) =>
+  const candidatesByKey = new Map<string, Set<number>>();
+  groups.forEach((group, index) => {
+    if (group.conflict) return;
+    const members = group.memberKeys.map((memberKey) => recordByKey.get(memberKey)!);
+    const kind = members[0]!.kind;
+    if ((kind !== "movie" && kind !== "series") || !members.some(hasStrongId)) return;
+    for (const key of new Set(members.flatMap(nameKeys))) {
+      const bucket = `${kind}\0${key}`;
+      const candidates = candidatesByKey.get(bucket);
+      if (candidates === undefined) candidatesByKey.set(bucket, new Set([index]));
+      else candidates.add(index);
+    }
+  });
+
+  const targetOf = new Map<number, number>();
+  groups.forEach((group, index) => {
+    if (group.conflict) return;
+    const members = group.memberKeys.map((memberKey) => recordByKey.get(memberKey)!);
+    const kind = members[0]!.kind;
+    if ((kind !== "movie" && kind !== "series") || members.some(hasStrongId)) return;
+    const candidates = new Set<number>();
+    for (const key of new Set(members.flatMap(nameKeys))) {
+      for (const candidate of candidatesByKey.get(`${kind}\0${key}`) ?? []) candidates.add(candidate);
+    }
+    if (candidates.size === 1) targetOf.set(index, [...candidates][0]!);
+  });
+
+  const joined = new Map<number, string[]>();
+  for (const [source, target] of targetOf) {
+    const memberKeys = joined.get(target) ?? [];
+    memberKeys.push(...groups[source]!.memberKeys);
+    joined.set(target, memberKeys);
+  }
+  const merged = groups.flatMap((group, index) => {
+    if (targetOf.has(index)) return [];
+    const memberKeys = joined.get(index);
+    return [memberKeys === undefined
+      ? group
+      : {
+        memberKeys: sortedKeys(
+          [...group.memberKeys, ...memberKeys].map((memberKey) => recordByKey.get(memberKey)!),
+          sequenceOf,
+        ),
+        conflict: false,
+      }];
+  });
+
+  return merged.sort((left, right) =>
     sequenceOf.get(left.memberKeys[0]!)! - sequenceOf.get(right.memberKeys[0]!)!
     || compareText(left.memberKeys[0]!, right.memberKeys[0]!),
   );
