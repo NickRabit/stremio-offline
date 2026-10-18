@@ -107,6 +107,19 @@ test.describe("the player's sources for a library file", () => {
     await expect(ownRows(page, filmFile).first()).toHaveAttribute("aria-pressed", "true");
   });
 
+  test("a matched file offers the addon subtitles of its title", async ({ page }) => {
+    const asked: string[] = [];
+    await page.route("**/api/subtitles/**", (route) => {
+      asked.push(new URL(route.request().url()).pathname);
+      return route.fulfill({ json: [{ subtitleId: "e2e-subtitle", lang: "cs", addonName: "Titulky E2E" }] });
+    });
+    await openLibraryRow(page, filmFolder);
+    await play(page);
+    await expect.poll(() => asked).toContain("/api/subtitles/movie/tt-e2e-movie");
+    await page.locator(".player-overlay").dispatchEvent("pointermove");
+    await expect(page.locator(".player-overlay").getByRole("button", { name: "Skrýt titulky" })).toBeVisible();
+  });
+
   test("a file nothing binds plays as itself, offering its own row and nothing else", async ({ page }) => {
     await openLibraryRow(page, looseFile.replace(/\.webm$/, ""));
     await play(page);

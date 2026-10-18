@@ -298,13 +298,14 @@ export function App() {
   const [detailPlaying, setDetailPlaying] = useState<{ target: CatalogueDetailTarget; stream: Stream; title: string; subtitles: Subtitle[]; fromBeginning?: boolean } | null>(null);
   const detailPlaybackId = detailPlaying ? catalogueStreamId(detailPlaying.target) : null;
   // A play the shared detail started reads its own subtitles: the panel's list belongs to whatever
-  // it has selected, and an episode of another show never answers for this one.
+  // it has selected, and an episode of another show never answers for this one. A file reads the
+  // subtitles of the title it is bound to below.
   useEffect(() => {
     if (!detailPlaying) return;
     let live = true;
     const { stream, target } = detailPlaying;
     setDetailPlaying((current) => current ? { ...current, subtitles: [] } : null);
-    if (!isLocalStream(stream) && !isRemoteStream(stream)) {
+    if (!isLocalStream(stream)) {
       void api.subtitles(target.type, catalogueStreamId(target)).then((found) => {
         if (live) setDetailPlaying((current) => current ? { ...current, subtitles: found } : null);
       }).catch(() => undefined);
@@ -1787,6 +1788,18 @@ export function App() {
     try { return await playLocal(file.title, file.path, localPoster, localEpisode); }
     finally { nextBusyRef.current = false; setNextBusy(false); }
   };
+  /** Addon subtitles of the catalogue title the file on screen is bound to. */
+  const [fileSubtitles, setFileSubtitles] = useState<Subtitle[]>([]);
+  const fileSubtitleKey = localStream && playingCatalogue ? `${localStream.sourceId}|${playingCatalogue.type}:${playingCatalogue.id}` : "";
+  useEffect(() => {
+    setFileSubtitles([]);
+    if (!localStream || !playingCatalogue) return;
+    const controller = new AbortController();
+    void api.subtitles(playingCatalogue.type, playingCatalogue.id, controller.signal)
+      .then((found) => { if (!controller.signal.aborted) setFileSubtitles(found); })
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [fileSubtitleKey]);
   const playLocal = async (title: string, path: string, poster?: string, episode = false, anchor?: PlaybackAnchor, fromBeginning = false, identity?: { type: "movie" | "series"; id: string }, session?: { key: string; panel?: boolean }) => {
     // A file of the library plays as itself: the catalogue identity of whatever was open before
     // never travels with it. A caller that already knows the binding hands it over; otherwise the
@@ -1833,9 +1846,8 @@ export function App() {
       owner, scope, subtitles: [], media: request.media, kind: request.kind, catalogue: request.catalogue,
       ...(request.fromBeginning ? { fromBeginning: true } : {}),
     });
-    // Only a generic addon answer has subtitles to ask the catalogue for: a copy of another
-    // library and a file of the viewer's own are never turned into a catalogue request.
-    if (owner.kind !== "catalogue" || !request.catalogue) return;
+    // Any row of a catalogue title takes the subtitles the subtitle addons have for that title.
+    if (!request.catalogue) return;
     const addon = request.catalogue;
     // The subtitles belong to one playback: another row started in the meantime never receives them.
     const key = owner.key;
@@ -3064,9 +3076,7 @@ export function App() {
   const switchAlternativeSource = (stream: Stream, positionSeconds: number): void => {
     if (!alternative?.catalogue) throw new Error(t("player.noOtherSource"));
     const catalogue = alternative.catalogue;
-    const local = isLocalStream(stream) && Boolean(stream.localPath);
-    setAlternative((value) => value ? { ...value, stream, at: positionSeconds, ...(local ? { subtitles: [] } : {}) } : value);
-    if (local) return;
+    setAlternative((value) => value ? { ...value, stream, at: positionSeconds } : value);
     void api.subtitles(catalogue.type, catalogue.id).then(
       (found) => setAlternative((value) => value && value.stream.sourceId === stream.sourceId ? { ...value, subtitles: found } : value),
       () => setAlternative((value) => value && value.stream.sourceId === stream.sourceId ? { ...value, subtitles: [] } : value),
@@ -3652,7 +3662,7 @@ export function App() {
       </>}
     </main>
     <TrailerPlayer trailer={trailerOpen} onClose={() => setTrailerOpen(null)}/>
-    <Player nextTitle={localStream ? nextFile?.title : detailPlaying ? (nextDetailEpisode ? episodeLabel(nextDetailEpisode) : undefined) : catalogueNext ? episodeLabel(catalogueNext) : undefined} nextBusy={nextBusy} onNext={localStream ? nextFile ? () => playAdjacent(nextFile) : undefined : detailPlaying ? (nextDetailEpisode ? playNextDetailEpisode : undefined) : catalogueNext ? playNextCatalogEpisode : undefined} autoNext={localStream ? localEpisode : detailPlaying ? Boolean(nextDetailEpisode) : Boolean(catalogueNext)} previousTitle={previousFile?.title} onPrevious={previousFile ? () => playAdjacent(previousFile) : undefined} open={playerOpen} title={localStream ? localTitle : detailPlaying ? detailPlaying.title : playerSubject?.title || localTitle} stream={localStream ?? detailPlaying?.stream ?? selectedStream} subtitles={localStream ? [] : detailPlaying ? detailPlaying.subtitles : subtitles} subtitleLanguage={settings.subtitleLanguage} audioLanguage={settings.audioLanguage} onPreferences={setPlaybackPreferences}
+    <Player nextTitle={localStream ? nextFile?.title : detailPlaying ? (nextDetailEpisode ? episodeLabel(nextDetailEpisode) : undefined) : catalogueNext ? episodeLabel(catalogueNext) : undefined} nextBusy={nextBusy} onNext={localStream ? nextFile ? () => playAdjacent(nextFile) : undefined : detailPlaying ? (nextDetailEpisode ? playNextDetailEpisode : undefined) : catalogueNext ? playNextCatalogEpisode : undefined} autoNext={localStream ? localEpisode : detailPlaying ? Boolean(nextDetailEpisode) : Boolean(catalogueNext)} previousTitle={previousFile?.title} onPrevious={previousFile ? () => playAdjacent(previousFile) : undefined} open={playerOpen} title={localStream ? localTitle : detailPlaying ? detailPlaying.title : playerSubject?.title || localTitle} stream={localStream ?? detailPlaying?.stream ?? selectedStream} subtitles={localStream ? fileSubtitles : detailPlaying ? detailPlaying.subtitles : subtitles} subtitleLanguage={settings.subtitleLanguage} audioLanguage={settings.audioLanguage} onPreferences={setPlaybackPreferences}
       progressKey={localStream?.localPath ? `file:${localStream.localPath}` : detailPlaying ? `${detailPlaying.target.type}:${catalogueStreamId(detailPlaying.target)}` : playerSubject?.key ?? (playingCatalogue ? `${playingCatalogue.type}:${playingCatalogue.id}` : undefined)}
       progressPoster={localStream ? localPoster : detailPlaying ? detailPlaying.target.poster : playerSubject?.poster ?? localPoster}
       progressAddonKey={localStream ? undefined : detailPlaying ? detailPlaying.stream.addonKey : playerSubject?.panel ? currentCatalog?.addonKey : selectedStream?.addonKey}

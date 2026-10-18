@@ -1392,7 +1392,18 @@ describe("RemoteLibraryBrowser addon sources", () => {
     await click(playButton());
     await flush();
     expect(playbackCalls[0]!.sourceId).toBe("src-ms1");
-    expect(addonCalls.subtitles).toHaveLength(0);
+    expect(addonCalls.subtitles).toHaveLength(1);
+  });
+
+  it("offers the addon subtitles of the matched title for the library's own version", async () => {
+    addonSubtitles = () => json([{ subtitleId: "sub1", lang: "cs", addonName: "OpenSubtitles v3" }]);
+    await openDetail();
+    await click(playButton());
+    await flush();
+    expect(playbackCalls[0]!.sourceId).toBe("src-ms1");
+    expect(addonCalls.subtitles.map((url) => url.pathname)).toEqual(["/api/subtitles/movie/tt5000"]);
+    // The player offers subtitles only once it has some: the toggle is the sign they arrived.
+    expect(host.querySelector('.player-overlay button[aria-label="Hide subtitles"]')).not.toBeNull();
   });
 
   it("reads every group the moment the chooser opens, and clears addon progress without a native patch", async () => {
@@ -1817,10 +1828,10 @@ describe("RemoteLibraryBrowser addon sources", () => {
     await click(playButton());
     await flush();
     expect(playbackCalls[0]!.sourceId).toBe("local-1");
-    // Nothing about the file is asked of the catalogue, not even the subtitles of an addon answer.
+    // Nothing about the file is asked of the catalogue but the subtitles of the title it is a copy of.
     expect(addonCalls.sources).toHaveLength(requested.sources);
     expect(addonCalls.streams).toHaveLength(requested.streams);
-    expect(addonCalls.subtitles).toHaveLength(0);
+    expect(addonCalls.subtitles.map((url) => url.pathname)).toEqual(["/api/subtitles/movie/tt5000"]);
     const video = host.querySelector<HTMLVideoElement>(".player-overlay video")!;
     await act(async () => { video.currentTime = 120; video.dispatchEvent(new Event("timeupdate", { bubbles: true })); });
     const reads = addonCalls.progress.filter((call) => call.method === "GET").length;
