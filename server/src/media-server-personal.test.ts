@@ -57,6 +57,7 @@ const provider = (server: FakeServer): MediaServerProvider => {
   return {
     verifyIdentity: async () => { await run("info"); return { serverId: server.serverId, version: "1" }; },
     authenticate: async () => { await run("login"); return { serverId: server.serverId, accountId: server.accountId, token: "token-1" }; },
+    logout: async () => { await run("logout"); },
     currentAccount: async () => { await run("user"); return { accountId: server.accountId, policy: structuredClone(server.policy) }; },
     listLibraries: async () => { await run("views"); return structuredClone(server.libraries); },
     pageItems: async () => { throw new MediaServerError("not-found", "unused"); },

@@ -65,6 +65,7 @@ const clone = <T>(value: T): T => structuredClone(value);
 const stubProvider = (server: FakeServer): MediaServerProvider => ({
   verifyIdentity: async () => { await server.run(); return { serverId: server.serverId, version: "1.0.0" }; },
   authenticate: async () => { await server.run(); return { serverId: server.serverId, accountId: server.accountId, token: server.token }; },
+  logout: async () => { await server.run(); },
   currentAccount: async () => { await server.run(); return { accountId: server.accountId, policy: clone(server.policy) }; },
   listLibraries: async () => { await server.run(); return clone(server.libraries); },
   pageItems: async (_token, _account, libraryId) => { await server.run(); return { items: clone(server.items[libraryId] ?? []), total: (server.items[libraryId] ?? []).length }; },

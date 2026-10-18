@@ -266,6 +266,30 @@ test("playback reports send the exact Jellyfin and Emby session request", async 
   }
 });
 
+test("logout posts to the session logout endpoint with the token and no body", async () => {
+  let fixture: Fixture | undefined;
+  try {
+    fixture = await startServer((_req, res) => { res.writeHead(204); res.end(); });
+    const transport = createMediaServerTransport({
+      baseUrl: `${fixture.origin}/emby`, allowLan: false, allowLoopback: true, deviceId: "mconn_logout-device",
+    });
+    assert.equal(await transport.requestJson("logout", {}, "tok"), null);
+    const request = fixture.requests[0]!;
+    assert.equal(request.method, "POST");
+    assert.equal(request.url, "/emby/Sessions/Logout");
+    assert.equal(request.body, "");
+    assert.equal(request.headers["content-type"], undefined);
+    assert.match(request.headers.authorization ?? "", /Token="tok"/);
+    assert.equal(request.headers["x-emby-token"], "tok");
+    await assert.rejects(transport.requestJson("logout", { token: "leak" } as never, "tok"), { code: "invalid-input" });
+    assert.equal(fixture.requests.length, 1, "refused arguments never leave the process");
+    await assert.rejects(transport.requestJson("logout", {}), { code: "authentication-required" });
+    await transport.close();
+  } finally {
+    await fixture?.close();
+  }
+});
+
 test("playback info sends only its admitted fields", async () => {
   let fixture: Fixture | undefined;
   try {
@@ -1975,6 +1999,26 @@ test("all playback session reports share the playback provider-call kind", async
     }, "tok");
     assert.equal(stats.summary(1).playback, 3);
     assert.equal(stats.summary(1).original, 0);
+  } finally {
+    useProviderStats(undefined);
+    await transport.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("logout is counted under its own provider-call kind", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "stremio-provider-logout-"));
+  const stats = new ProviderStats(path.join(dir, "provider-stats.json"), () => Date.now());
+  await stats.load();
+  useProviderStats(stats);
+  const transport = createMediaServerTransport({ baseUrl: "http://media.example", allowLan: false, allowLoopback: false }, {
+    lookupAll: async () => [{ address: "93.184.216.34", family: 4 }],
+    fetch: async () => new Response(null, { status: 204 }),
+  });
+  try {
+    await transport.requestJson("logout", {}, "tok");
+    assert.equal(stats.summary(1).logout, 1);
+    assert.equal(stats.summary(1).playback, 0);
   } finally {
     useProviderStats(undefined);
     await transport.close();

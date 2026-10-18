@@ -143,6 +143,7 @@ export interface ProviderPlaybackReport {
 export interface MediaServerProvider {
   verifyIdentity(signal?: AbortSignal): Promise<{ serverId: string; version: string }>;
   authenticate(username: string, password: string, signal?: AbortSignal): Promise<{ serverId: string; accountId: string; token: string }>;
+  logout(token: string, signal?: AbortSignal): Promise<void>;
   currentAccount(token: string, accountId: string, signal?: AbortSignal): Promise<{ accountId: string; policy: RemoteAccountPolicy }>;
   listLibraries(token: string, accountId: string, signal?: AbortSignal): Promise<ProviderLibrary[]>;
   pageItems(token: string, accountId: string, libraryId: string, options?: { cursor?: string; limit?: number; search?: string }, signal?: AbortSignal): Promise<ProviderPage>;
@@ -619,6 +620,10 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
     return { serverId: identity.serverId, accountId, token: validateMediaServerToken(result.AccessToken) };
   }
 
+  async function logout(token: string, signal?: AbortSignal): Promise<void> {
+    await transport.requestJson("logout", {}, token, signal);
+  }
+
   async function currentAccount(token: string, accountId: string, signal?: AbortSignal): Promise<{ accountId: string; policy: RemoteAccountPolicy }> {
     const user = asObject(await transport.requestJson("user", { userId: accountId }, token, signal), "The account response");
     if (user.Id !== accountId) throw invalidResponse("The account response is for another user.");
@@ -978,5 +983,5 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
     }, token, signal);
   }
 
-  return { verifyIdentity, authenticate, currentAccount, listLibraries, pageItems, pageDirectory, detail, findByProviderIds, ancestors, versions, playbackInfo, reportPlayback };
+  return { verifyIdentity, authenticate, logout, currentAccount, listLibraries, pageItems, pageDirectory, detail, findByProviderIds, ancestors, versions, playbackInfo, reportPlayback };
 }
