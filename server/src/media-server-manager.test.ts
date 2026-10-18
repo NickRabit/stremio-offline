@@ -10,7 +10,7 @@ import { MediaServerIndex } from "./media-server-index.js";
 import { remoteIdsMatch } from "./media-server-match.js";
 import { MediaServerManager, type MediaServerAuthority } from "./media-server-manager.js";
 import { canonicalRemoteDownloadReference, type RemoteDownloadReference } from "./media-server-download.js";
-import type { MediaServerProvider, ProviderItem, ProviderLibrary, ProviderVersion, RemoteAccountPolicy } from "./media-server-provider.js";
+import type { MediaServerProvider, ProviderItem, ProviderLibrary, ProviderPlaybackReport, ProviderVersion, RemoteAccountPolicy } from "./media-server-provider.js";
 import { openRemoteContent, remoteSecretStamp, sealRemoteContent, type RemoteContentRef } from "./media-server-reference.js";
 import { MediaServerSecrets } from "./media-server-secrets.js";
 import type { MediaServerTransport } from "./media-server-security.js";
@@ -82,6 +82,7 @@ class FakeServer {
   /** The wall-clock time of each provider operation start, for the pacing assertions. */
   startTimes: number[] = [];
   errors: Record<string, MediaServerError> = {};
+  playbackReports: Array<{ token: string; itemId: string; report: ProviderPlaybackReport }> = [];
   nudge: Nudge | undefined;
   pageOverride: ((options: { cursor?: string; limit?: number }) => FakePage) | undefined;
   closed = 0;
@@ -157,6 +158,10 @@ const stubProvider = (server: FakeServer): MediaServerProvider => ({
   },
   ancestors: async (_token, _account, itemId) => { await server.run("ancestors"); return [...(server.ancestorsOf[itemId] ?? [])]; },
   versions: async (_token, _account, itemId) => { await server.run("versions"); return clone(server.versionsOf[itemId] ?? []); },
+  reportPlayback: async (token, itemId, report) => {
+    await server.run(`report-${report.kind}`);
+    server.playbackReports.push({ token, itemId, report: clone(report) });
+  },
 });
 
 const stubTransport = (server: FakeServer): MediaServerTransport => ({
@@ -1221,6 +1226,69 @@ test("itemVersions rejects a non-playable item and an item from a sibling librar
     harness.server.detailOf["sibling"] = { id: "sibling", name: "Elsewhere", type: "movie", providerIds: {} };
     harness.server.ancestorsOf["sibling"] = ["lib-other"];
     await assert.rejects(harness.manager.itemVersions(harness.admin, library.id, "sibling"), { code: "not-found" });
+  });
+});
+
+test("reportPlayback sends a visible library's report through the provider", async () => {
+  await withHarness(async (harness) => {
+    const { library } = await seedPlayable(harness);
+    await harness.manager.reportPlayback(harness.admin, library.id, "m1", {
+      kind: "playing",
+      mediaSourceId: "v1",
+      playSessionId: "a".repeat(32),
+      positionTicks: 12_345_678,
+      isPaused: false,
+    });
+    assert.deepEqual(harness.server.playbackReports, [{
+      token: harness.server.token,
+      itemId: "m1",
+      report: {
+        kind: "playing",
+        mediaSourceId: "v1",
+        playSessionId: "a".repeat(32),
+        positionTicks: 12_345_678,
+        isPaused: false,
+      },
+    }]);
+  });
+});
+
+test("reportPlayback refuses a stale playing source and an invisible library without a provider report", async () => {
+  await withHarness(async (harness) => {
+    const { library } = await seedPlayable(harness);
+    await assert.rejects(harness.manager.reportPlayback(harness.admin, library.id, "m1", {
+      kind: "playing",
+      mediaSourceId: "missing",
+      playSessionId: "a".repeat(32),
+      positionTicks: 0,
+      isPaused: false,
+    }), { code: "not-found" });
+    await assert.rejects(harness.manager.reportPlayback(harness.bob, library.id, "m1", {
+      kind: "progress",
+      mediaSourceId: "v1",
+      playSessionId: "a".repeat(32),
+      positionTicks: 1,
+      isPaused: false,
+      eventName: "TimeUpdate",
+    }), { code: "not-found" });
+    assert.deepEqual(harness.server.playbackReports, []);
+  });
+});
+
+test("progress reports do not read the version list", async () => {
+  await withHarness(async (harness) => {
+    const { library } = await seedPlayable(harness);
+    const before = providerCalls(harness, "versions");
+    await harness.manager.reportPlayback(harness.admin, library.id, "m1", {
+      kind: "progress",
+      mediaSourceId: "v1",
+      playSessionId: "a".repeat(32),
+      positionTicks: 1,
+      isPaused: true,
+      eventName: "Pause",
+    });
+    assert.equal(providerCalls(harness, "versions"), before);
+    assert.equal(harness.server.playbackReports[0]!.report.kind, "progress");
   });
 });
 

@@ -145,6 +145,7 @@ export const cs: Catalog = {
   "stats.provider.artwork": "Obrázky",
   "stats.provider.subtitle": "Titulky",
   "stats.provider.original": "Bajty přehrávání",
+  "stats.provider.playback": "Hlášení přehrávání",
   "stats.provider.views": "Seznam knihoven",
   "stats.provider.user": "Účet",
   "stats.provider.info": "Informace o serveru",

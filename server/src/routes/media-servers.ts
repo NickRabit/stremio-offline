@@ -8,6 +8,7 @@ import { MEDIA_SERVER_LIMITS, MediaServerError, isMediaServerError } from "../me
 import { IMAGE_CACHE_CONTROL, IMAGE_IMMUTABLE_CACHE_CONTROL, type MediaServerAuthority, type MediaServerManager } from "../media-server-manager.js";
 import { composeMosaic, MosaicCache, mosaicShape } from "../mosaic.js";
 import type { MediaServerPersonal, RemoteCards } from "../media-server-personal.js";
+import { readPlaybackReport, type MediaServerPlaybackReporter } from "../media-server-playing.js";
 import type { MediaServerSources } from "../media-server-sources.js";
 import type { ResourceOwner } from "../media-resources.js";
 import { asyncRoute, type RouteContext } from "./context.js";
@@ -18,6 +19,7 @@ export interface MediaServersDeps extends RouteContext {
   mosaics: MosaicCache;
   mediaSources: MediaServerSources;
   remotePersonal: MediaServerPersonal;
+  playbackReports: MediaServerPlaybackReporter;
   ownerOf(req: express.Request): ResourceOwner;
 }
 
@@ -196,7 +198,7 @@ const streamName = (req: express.Request): string | undefined => {
 };
 
 export function registerMediaServerRoutes(app: express.Application, deps: MediaServersDeps): void {
-  const { mediaServers, mosaics, mediaSources, remotePersonal, ownerOf, currentUser, requireAccess } = deps;
+  const { mediaServers, mosaics, mediaSources, remotePersonal, playbackReports, ownerOf, currentUser, requireAccess } = deps;
 
   /** The one request guard: the acting account, the captured library and connection, the abort
    *  wiring, and every re-check the response boundary repeats before a byte or a JSON value
@@ -489,6 +491,11 @@ export function registerMediaServerRoutes(app: express.Application, deps: MediaS
   }, 200, true));
   app.patch("/api/remote-libraries/:id/items/:itemId/state", handle(async (req, authority, signal) =>
     remotePersonal.patch(authority, req.params.id, req.params.itemId, body(req), signal), 200, true));
+  app.post("/api/remote-libraries/:id/items/:itemId/playing", handle(async (req, authority) => {
+    assertNoQuery(req.query);
+    const report = readPlaybackReport(body(req));
+    await playbackReports.report(authority, String(req.params.id), String(req.params.itemId), report);
+  }, 204, true));
   app.get("/api/remote-libraries/:id/items/:itemId", handle(async (req, authority, signal) => {
     assertNoBody(req);
     assertNoQuery(req.query);

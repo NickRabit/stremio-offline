@@ -29,6 +29,7 @@ import {
   type ProviderItem,
   type ProviderItemType,
   type ProviderLibrary,
+  type ProviderPlaybackReport,
   type ProviderSort,
   type ProviderVersion,
   type RemoteAccountPolicy,
@@ -1451,6 +1452,29 @@ export class MediaServerManager {
     const requested = requestItemId(itemId);
     const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId }, request);
     return this.versionsUnder(authority, request, library, connection, session, requested, "cached");
+  }
+
+  async reportPlayback(
+    authority: MediaServerAuthority,
+    libraryId: unknown,
+    itemId: unknown,
+    report: ProviderPlaybackReport,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const request = this.requestSignal(signal);
+    const user = this.currentActor(authority, request);
+    const library = this.requireVisibleLibrary(user, libraryId);
+    const connection = this.requireConnection(library.connectionId);
+    const requested = requestItemId(itemId);
+    const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId }, request);
+    if (report.kind === "playing") {
+      const answer = await this.versionsUnder(authority, request, library, connection, session, requested, "cached");
+      if (!answer.versions.some((version) => version.id === report.mediaSourceId)) {
+        throw notFound("That media-server source is no longer available.");
+      }
+    }
+    this.recheckContent(authority, request, library.id, connection);
+    await this.upstream(connection, request, () => session.provider.reportPlayback(session.token, requested, report, request));
   }
 
   /** Proves the acting account may still reach one attached library: the current actor, a

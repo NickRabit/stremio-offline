@@ -37,6 +37,7 @@ let root: Root;
 let host: HTMLDivElement;
 let progressPosts: Array<Record<string, unknown>>;
 let remotePosts: Array<Record<string, unknown>>;
+let playbackReports: Array<Record<string, unknown>>;
 /** Every generic key the player read, and what each one holds. */
 let progressReads: string[];
 let progressAnswers: Record<string, unknown>;
@@ -71,6 +72,7 @@ beforeEach(() => {
   HTMLMediaElement.prototype.load = () => undefined;
   progressPosts = [];
   remotePosts = [];
+  playbackReports = [];
   progressReads = [];
   progressAnswers = {};
   remoteReads = [];
@@ -106,6 +108,10 @@ beforeEach(() => {
         return Promise.resolve(new Response(null, { status: 204 }));
       }
       return Promise.resolve(json(remoteAnswers[path] ?? null));
+    }
+    if (/^\/api\/remote-libraries\/[^/]+\/items\/[^/]+\/playing$/.test(path) && init?.method === "POST") {
+      playbackReports.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+      return Promise.resolve(new Response(null, { status: 204 }));
     }
     if (path.startsWith("/api/progress")) return Promise.resolve(json(null));
     return Promise.resolve(json(null));
@@ -332,6 +338,26 @@ describe("Player track preferences across a switch", () => {
 });
 
 describe("Player progress reporting", () => {
+  it("reports a remote original's start, pause and close to the media server", async () => {
+    await render({ stream: remoteVersion() });
+    expect(playbackReports).toEqual([expect.objectContaining({ mediaSourceId: "ms1", paused: true, event: "start" })]);
+    const video = host.querySelector<HTMLVideoElement>(".player-overlay video")!;
+    await act(async () => { video.dispatchEvent(new Event("play", { bubbles: true })); });
+    await flush();
+    await act(async () => { video.dispatchEvent(new Event("pause", { bubbles: true })); });
+    await flush();
+    expect(playbackReports.at(-1)).toEqual(expect.objectContaining({ mediaSourceId: "ms1", paused: true, event: "progress" }));
+    await rerender({ stream: remoteVersion(), open: false });
+    expect(playbackReports.at(-1)).toEqual(expect.objectContaining({ mediaSourceId: "ms1", event: "stop" }));
+  });
+
+  it("sends no media-server playback reports without a remote item", async () => {
+    await render({ stream: addonRow(), progressKey: "movie:tt5000" });
+    expect(playbackReports).toEqual([]);
+    await rerender({ stream: addonRow(), progressKey: "movie:tt5000", open: false });
+    expect(playbackReports).toEqual([]);
+  });
+
   it("names the played row only once its final write landed, never while it is still out", async () => {
     let release!: (response: Response) => void;
     heldWrite = new Promise<Response>((resolve) => { release = resolve; });

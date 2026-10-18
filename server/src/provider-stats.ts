@@ -6,16 +6,16 @@ import { renameWithRetry } from "./fs-retry.js";
  *  the operation, so a count is a call that left this process: what it answered from its own
  *  cache, or refused before the request was built, is not counted. `detail`/`ancestors`/`versions`
  *  are the reads behind an opened title, `directory` and `items` are listings, `artwork` is one
- *  picture. */
+ *  picture, and `playback` is one playback-session report. */
 export type ProviderCallKind =
   | "info" | "login" | "user" | "views" | "items" | "directory" | "match"
   | "detail" | "ancestors" | "versions"
-  | "artwork" | "subtitle" | "original";
+  | "artwork" | "subtitle" | "original" | "playback";
 
 export const PROVIDER_CALL_KINDS: readonly ProviderCallKind[] = [
   "info", "login", "user", "views", "items", "directory", "match",
   "detail", "ancestors", "versions",
-  "artwork", "subtitle", "original",
+  "artwork", "subtitle", "original", "playback",
 ];
 
 export type ProviderCallSummary = Record<ProviderCallKind, number>;

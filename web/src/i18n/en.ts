@@ -149,6 +149,7 @@ export const en = {
   "stats.provider.artwork": "Pictures",
   "stats.provider.subtitle": "Subtitles",
   "stats.provider.original": "Playback bytes",
+  "stats.provider.playback": "Playback reports",
   "stats.provider.views": "Library list",
   "stats.provider.user": "Account",
   "stats.provider.info": "Server info",

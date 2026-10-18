@@ -139,6 +139,7 @@ export const de: Catalog = {
   "stats.provider.artwork": "Bilder",
   "stats.provider.subtitle": "Untertitel",
   "stats.provider.original": "Wiedergabe-Bytes",
+  "stats.provider.playback": "Wiedergabemeldungen",
   "stats.provider.views": "Bibliotheksliste",
   "stats.provider.user": "Konto",
   "stats.provider.info": "Serverinfo",
