@@ -374,11 +374,14 @@ const remoteSource = (
     // A server matches episodes by their series name without returning the series itself (it
     // may spell the name with diacritics the query lacks). The episodes name it, so the series is
     // added from them and they gather under it instead of standing alone.
+    // The series go first: a page accepts a bounded number of rows, and an episode only joins a
+    // series that is already there.
     const present = new Set(records.map((record) => record.itemKey));
+    const derivedSeries: RawSearchRecord[] = [];
     for (const item of page.items) {
       if (item.type !== "episode" || item.seriesId === undefined || item.seriesName === undefined || present.has(item.seriesId)) continue;
       present.add(item.seriesId);
-      records.push({
+      derivedSeries.push({
         itemKey: item.seriesId,
         kind: "series",
         title: item.seriesName,
@@ -388,7 +391,7 @@ const remoteSource = (
       });
     }
     return {
-      records,
+      records: [...derivedSeries, ...records],
       ...(page.cursor === undefined ? {} : { cursor: page.cursor }),
       exhausted: page.cursor === undefined,
     };

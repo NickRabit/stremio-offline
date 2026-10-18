@@ -581,12 +581,12 @@ test("episodes name their series, and a series the server did not return is adde
   );
   const page = await sources[0]!.next(undefined, signal());
   assert.deepEqual(page.records.map((record) => [record.kind, record.itemKey, record.derived ?? false]), [
+    ["series", "s9", true],
     ["episode", "e1", false],
     ["episode", "e2", false],
-    ["series", "s9", true],
-  ]);
-  assert.deepEqual(page.records[0]!.searchText, { parentTitle: "Jiste pane ministře" });
-  assert.equal(page.records[2]!.title, "Jiste pane ministře");
+  ], "the series leads the page so a full page of episodes cannot push it out");
+  assert.deepEqual(page.records[1]!.searchText, { parentTitle: "Jiste pane ministře" });
+  assert.equal(page.records[0]!.title, "Jiste pane ministře");
 });
 
 test("remote expansion asks matchingItems by IMDb and maps the returned rows", async () => {
