@@ -265,18 +265,18 @@ test("catalogue session routes answer 404 when the feature is off", async () => 
   }
 });
 
-test("the feature flag is true only for the character 1", (t) => {
+test("the feature flag is on unless it is the character 0", (t) => {
   const previous = process.env.SEARCH_EVERYWHERE_ENABLED;
   t.after(() => {
     if (previous === undefined) delete process.env.SEARCH_EVERYWHERE_ENABLED;
     else process.env.SEARCH_EVERYWHERE_ENABLED = previous;
   });
   delete process.env.SEARCH_EVERYWHERE_ENABLED;
-  assert.equal(searchEverywhereEnabled(), false);
-  for (const value of ["0", "", "true", "yes", "on"] as const) {
-    process.env.SEARCH_EVERYWHERE_ENABLED = value;
-    assert.equal(searchEverywhereEnabled(), false, value);
-  }
-  process.env.SEARCH_EVERYWHERE_ENABLED = "1";
   assert.equal(searchEverywhereEnabled(), true);
+  for (const value of ["1", "", "true", "yes", "on"] as const) {
+    process.env.SEARCH_EVERYWHERE_ENABLED = value;
+    assert.equal(searchEverywhereEnabled(), true, value);
+  }
+  process.env.SEARCH_EVERYWHERE_ENABLED = "0";
+  assert.equal(searchEverywhereEnabled(), false);
 });

@@ -12,8 +12,9 @@ import {
 import type { SearchAuthority, SearchSessionManager } from "../search-session.js";
 import { asyncRoute } from "./context.js";
 
+/** On unless the variable is exactly `0`, so an installation can still switch it off. */
 export const searchEverywhereEnabled = (): boolean =>
-  process.env.SEARCH_EVERYWHERE_ENABLED === "1";
+  process.env.SEARCH_EVERYWHERE_ENABLED !== "0";
 
 export interface SearchEverywhereRouteDeps {
   manager: SearchSessionManager;

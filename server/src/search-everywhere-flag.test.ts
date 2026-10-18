@@ -5,9 +5,9 @@ import path from "node:path";
 import { test } from "node:test";
 import { spawnServer } from "./test-server.js";
 
-test("/api/status reports the search feature as off when the variable is unset", async (t) => {
+test("/api/status reports the search feature as off when the variable is 0", async (t) => {
   const previous = process.env.SEARCH_EVERYWHERE_ENABLED;
-  delete process.env.SEARCH_EVERYWHERE_ENABLED;
+  process.env.SEARCH_EVERYWHERE_ENABLED = "0";
   t.after(() => {
     if (previous === undefined) delete process.env.SEARCH_EVERYWHERE_ENABLED;
     else process.env.SEARCH_EVERYWHERE_ENABLED = previous;
