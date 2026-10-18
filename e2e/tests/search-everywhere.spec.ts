@@ -70,13 +70,28 @@ test("source filters start a fresh generation and drop old cards", async ({ page
   expect(body.query).toBe("Zkušební");
   await expect(page.locator("[data-search-card]")).toHaveCount(0);
 
+  // The library may already hold titles from earlier specs, so the local answer is not assumed to
+  // be empty: every card on screen has to come from the local search's own answers.
+  const localMembers = new Set<string>();
+  let localSession = "";
+  page.on("response", async (response) => {
+    if (response.request().method() !== "POST" || !/\/api\/search\/everywhere(\/[^/]+\/poll)?$/.test(new URL(response.url()).pathname)) return;
+    const answer = await response.json().catch(() => null) as { id?: string; snapshot?: { clusters: Array<{ memberKeys: string[] }>; unidentified: Array<{ memberKeys: string[] }> } } | null;
+    if (answer?.id) localSession = answer.id;
+    if (!localSession || !response.url().includes(localSession) && !answer?.id) return;
+    for (const cluster of [...(answer?.snapshot?.clusters ?? []), ...(answer?.snapshot?.unidentified ?? [])]) {
+      for (const key of cluster.memberKeys) localMembers.add(key);
+    }
+  });
   const localRequest = page.waitForRequest((request) =>
     request.method() === "POST"
     && request.url().endsWith("/api/search/everywhere")
     && request.postDataJSON()?.sources?.[0] === "local");
   await page.getByRole("button", { name: "Místní", exact: true }).click();
   expect((await localRequest).postDataJSON().sources).toEqual(["local"]);
-  await expect(page.locator("[data-search-card]")).toHaveCount(0);
+  await expect(page.locator(".search-source-summary")).toHaveText("Všechny zdroje odpověděly");
+  const shown = await page.locator("[data-search-card]").evaluateAll((cards) => cards.map((card) => (card as HTMLElement).dataset.primaryMember ?? ""));
+  for (const key of shown) expect(localMembers.has(key), `card ${key} is not from the local search`).toBe(true);
 
   const catalogRequest = page.waitForRequest((request) =>
     request.method() === "POST"
