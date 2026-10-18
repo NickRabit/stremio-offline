@@ -939,49 +939,44 @@ export class MediaServerManager {
     return this.adminMutation(async () => {
       const connection = this.store.mediaConnections().find((candidate) => candidate.id === connectionId);
       if (!connection) throw notFound("That media-server connection does not exist.");
-      const previousToken = await this.storedToken(connection);
       const transport = this.transportFactory({ baseUrl: connection.baseUrl, allowLan: connection.allowLan, allowLoopback: connection.allowLoopback, deviceId: connection.id });
       let cached = false;
-      let installed = false;
-      let provider: MediaServerProvider | undefined;
-      let result: { serverId: string; accountId: string; token: string } | undefined;
-      let ref: string | undefined;
-      let updated!: MediaConnectionRecord;
       this.loginTransports.add(transport);
       try {
-        provider = this.providerFactory(connection.provider, transport);
-        result = await this.net(undefined, request, () => provider!.authenticate(username, password, request));
-        const authenticated = result;
+        const provider = this.providerFactory(connection.provider, transport);
+        const result = await this.net(undefined, request, () => provider.authenticate(username, password, request));
         this.checkLive(request);
         this.requireAdmin(authority, request);
-        if (authenticated.serverId !== connection.serverId || authenticated.accountId !== connection.accountId) {
+        if (result.serverId !== connection.serverId || result.accountId !== connection.accountId) {
           this.markIdentityChanged(connection);
           throw identityChanged();
         }
         const binding = { connectionId, provider: connection.provider, serverId: connection.serverId, accountId: connection.accountId };
-        ref = await this.serializedCredential(() => {
+        const ref = await this.serializedCredential(() => {
           this.assertWriteAuthority({ users: this.store.users() }, authority, request);
-          return this.vault.put(binding, authenticated.token);
+          return this.vault.put(binding, result.token);
         });
-        await this.store.update((state) => {
-          this.assertWriteAuthority(state, authority, request);
-          const current = (state.mediaConnections ?? []).find((candidate) => candidate.id === connectionId);
-          if (!current || current.generation !== connection.generation || current.provider !== connection.provider
-            || current.serverId !== connection.serverId || current.accountId !== connection.accountId
-            || current.baseUrl !== connection.baseUrl || current.secretRef !== connection.secretRef) {
-            throw stale();
-          }
-          const previous = current.secretRef;
-          current.secretRef = ref as string;
-          current.generation = bumpGeneration(current.generation);
-          state.mediaSecretCleanup = this.appendCleanup(state.mediaSecretCleanup, previous && previous !== ref ? [previous] : []);
-          updated = structuredClone(current);
-        });
-        installed = true;
-        this.invalidateRuntime(connectionId);
-        if (previousToken !== undefined) {
-          await this.logoutTokens([{ connection, token: previousToken, quietUnauthorized: true }]);
+        let updated!: MediaConnectionRecord;
+        try {
+          await this.store.update((state) => {
+            this.assertWriteAuthority(state, authority, request);
+            const current = (state.mediaConnections ?? []).find((candidate) => candidate.id === connectionId);
+            if (!current || current.generation !== connection.generation || current.provider !== connection.provider
+              || current.serverId !== connection.serverId || current.accountId !== connection.accountId
+              || current.baseUrl !== connection.baseUrl || current.secretRef !== connection.secretRef) {
+              throw stale();
+            }
+            const previous = current.secretRef;
+            current.secretRef = ref;
+            current.generation = bumpGeneration(current.generation);
+            state.mediaSecretCleanup = this.appendCleanup(state.mediaSecretCleanup, previous && previous !== ref ? [previous] : []);
+            updated = structuredClone(current);
+          });
+        } catch (error) {
+          await this.rollbackSecret(ref);
+          throw error;
         }
+        this.invalidateRuntime(connectionId);
         await this.invalidateContent({ connectionId });
         await this.drainCleanup();
         this.cacheRuntime(connectionId, newRuntime(updated.generation, updated.secretRef, transport, provider));
@@ -989,12 +984,6 @@ export class MediaServerManager {
         this.markAvailable(updated);
         log("INFO", "Media-server connection re-authenticated", { actor: actor.username, connectionId });
         return this.adminConnectionView(updated);
-      } catch (error) {
-        if (!installed && result && provider) {
-          if (ref !== undefined) await this.rollbackSecret(ref);
-          await this.logoutTokens([{ connection, token: result.token, transport, provider }]);
-        }
-        throw error;
       } finally {
         this.loginTransports.delete(transport);
         if (!cached) await transport.close().catch(() => undefined);
@@ -3321,7 +3310,6 @@ export class MediaServerManager {
     token: string;
     transport?: MediaServerTransport;
     provider?: MediaServerProvider;
-    quietUnauthorized?: boolean;
   }>): Promise<void> {
     const logout = async (entry: (typeof entries)[number]): Promise<void> => {
       const ownsTransport = entry.transport === undefined;
@@ -3344,12 +3332,10 @@ export class MediaServerManager {
           Promise.resolve().then(() => provider.logout(entry.token, controller.signal)).then(resolve, reject);
         });
       } catch (error) {
-        if (!(entry.quietUnauthorized && error instanceof MediaServerError && error.code === "authentication-required")) {
-          log("WARN", "A media-server token could not be logged out", {
-            connectionId: entry.connection.id,
-            reason: error instanceof MediaServerError ? error.code : "unavailable",
-          });
-        }
+        log("WARN", "A media-server token could not be logged out", {
+          connectionId: entry.connection.id,
+          reason: error instanceof MediaServerError ? error.code : "unavailable",
+        });
       } finally {
         if (timer) clearTimeout(timer);
         if (ownsTransport && transport) await transport.close().catch(() => undefined);

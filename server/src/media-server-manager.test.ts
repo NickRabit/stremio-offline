@@ -779,12 +779,12 @@ test("a removal that never lands logs out nothing", async () => {
   });
 });
 
-test("a successful reauthentication logs out the previous token only", async () => {
+test("a successful reauthentication logs out nothing: the server replaces the same device's session", async () => {
   await withHarness(async (harness) => {
     const connection = await connect(harness);
     harness.server.token = "token-value-2";
     await harness.manager.reauthenticate(harness.admin, connection.id, { username: "reader", password: "new" });
-    assert.deepEqual(harness.server.logoutCalls, ["token-value-1"]);
+    assert.deepEqual(harness.server.logoutCalls, []);
     const stored = harness.store.mediaConnections()[0]!;
     const token = await harness.vault.get({
       connectionId: stored.id, provider: stored.provider, serverId: stored.serverId, accountId: stored.accountId,
@@ -793,7 +793,7 @@ test("a successful reauthentication logs out the previous token only", async () 
   });
 });
 
-test("a stale reauthentication logs out the new token and keeps the old one", async () => {
+test("a stale reauthentication logs out nothing and keeps the old token", async () => {
   await withHarness(async (harness) => {
     const connection = await connect(harness);
     harness.server.token = "token-value-2";
@@ -808,7 +808,7 @@ test("a stale reauthentication logs out the new token and keeps the old one", as
     held.resolve();
     harness.server.nudge = undefined;
     await assert.rejects(pending, { code: "stale-generation" });
-    assert.deepEqual(harness.server.logoutCalls, ["token-value-2"]);
+    assert.deepEqual(harness.server.logoutCalls, []);
     const stored = harness.store.mediaConnections()[0]!;
     const token = await harness.vault.get({
       connectionId: stored.id, provider: stored.provider, serverId: stored.serverId, accountId: stored.accountId,
@@ -885,26 +885,6 @@ test("a failed logout is best effort and never logs the token", async () => {
       const logs = await readLog();
       assert.ok(logs.includes("A media-server token could not be logged out"));
       assert.equal(logs.includes("token-value-1"), false);
-    });
-  } finally {
-    await rm(logDir, { recursive: true, force: true });
-  }
-});
-
-test("a 401 from logging out an old token stays quiet and leaves the connection available", async () => {
-  const logDir = await mkdtemp(path.join(tmpdir(), "media-manager-logout-"));
-  await initLogger(logDir);
-  try {
-    await withHarness(async (harness) => {
-      const connection = await connect(harness);
-      harness.server.token = "token-value-2";
-      harness.server.logoutErrorFor = () => new MediaServerError("authentication-required", "The media-server request needs a token.");
-      await harness.manager.reauthenticate(harness.admin, connection.id, { username: "reader", password: "new" });
-      const [view] = (await harness.manager.listConnections(harness.admin)).connections;
-      assert.equal(view!.status, "available");
-      await flushLog();
-      const logs = await readLog();
-      assert.equal(logs.includes("A media-server token could not be logged out"), false);
     });
   } finally {
     await rm(logDir, { recursive: true, force: true });
@@ -2317,9 +2297,8 @@ test("a runtime installed by a concurrent read during a reauthentication is clos
     gate.resolve();
     await read;
     await reauth;
-    // The old runtime was closed by the generation change, the concurrent one by the replacement,
-    // and the isolated logout transport after revoking the previous token.
-    assert.equal(harness.server.closed, 3, "every replaced runtime and the logout transport were closed");
+    // The old runtime was closed by the generation change, the concurrent one by the replacement.
+    assert.equal(harness.server.closed, 2, "the runtime a concurrent read installed was closed");
     assert.equal((await harness.vault.references()).length, 1, "the secret vault was not disturbed");
   });
 });
