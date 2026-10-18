@@ -180,7 +180,7 @@ Details in [Troubleshooting](troubleshooting.md#when-an-addon-stops-answering).
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `SEARCH_EVERYWHERE_ENABLED` | `0` | `1` enables the Search everywhere routes and builds the local search index in the background. Off means the routes are not registered, the index is not built and existing search is unchanged. Sessions are memory-only, so turning it off and restarting needs no cleanup. |
+| `SEARCH_EVERYWHERE_ENABLED` | `1` | Search everywhere is on: its routes are registered and the local search index is built in the background. `0` switches it off: then the routes are not registered, the index is not built and existing search is unchanged. Sessions are memory-only, so turning it off and restarting needs no cleanup. |
 
 ## Wikidata guard
 
