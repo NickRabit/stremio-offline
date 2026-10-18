@@ -410,6 +410,14 @@ export function useSearchEverywhere(options: { active: boolean; covered: boolean
     deleteSession();
   }, []);
 
+  // Closing or reloading the page ends its search on the way out instead of leaving the session
+  // to expire; the delete is a keepalive request, so it still leaves while the page goes.
+  useEffect(() => {
+    const onPageHide = () => deleteSession();
+    window.addEventListener("pagehide", onPageHide);
+    return () => window.removeEventListener("pagehide", onPageHide);
+  }, []);
+
   return {
     draft,
     setDraft,

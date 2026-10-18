@@ -336,12 +336,13 @@ export class SearchSessionManager {
     }
 
     if (existing !== undefined) this.destroy(existing);
-    const owned = [...this.sessions.values()].filter((session) =>
-      session.userId === authority.userId && session.sid === authority.sid,
-    ).length;
-    if (owned >= this.limits.sessionsPerBrowserSession) {
-      throw new SearchError("search-session-limit", 429);
-    }
+    // A page that was reloaded or closed leaves its session behind until it expires. The same
+    // browser session asking again gives up its own least recently used seat rather than being
+    // refused; nobody else's search is ever touched.
+    const owned = [...this.sessions.values()]
+      .filter((session) => session.userId === authority.userId && session.sid === authority.sid)
+      .sort((left, right) => left.lastActivity - right.lastActivity);
+    while (owned.length >= this.limits.sessionsPerBrowserSession) this.destroy(owned.shift()!);
     if (this.sessions.size >= this.limits.sessionsServerWide) {
       throw new SearchError("search-capacity-limit", 503);
     }

@@ -310,7 +310,7 @@ test("a discovery refusal leaves the current session usable", async () => {
   manager.close();
 });
 
-test("browser and server seat limits refuse only new seats", async () => {
+test("a browser session at its seat limit gives up its own oldest search; the server limit refuses", async () => {
   let current!: FakeSource;
   const { manager } = build(() => [], {
     limits: { sessionsPerBrowserSession: 1, sessionsServerWide: 1 },
@@ -323,18 +323,18 @@ test("browser and server seat limits refuse only new seats", async () => {
   const firstStart = manager.start(auth, request("one", 0, "slot_12345"));
   current.respond(page([]));
   const first = await firstStart;
-  await assert.rejects(manager.start(auth, request("two", 0, "slot_67890")), (error: unknown) =>
-    error instanceof SearchError && error.code === "search-session-limit" && error.status === 429,
+  const reloadStart = manager.start(auth, request("two", 0, "slot_67890"));
+  current.respond(page([]));
+  const reload = await reloadStart;
+  assert.notEqual(first.id, reload.id);
+  assert.equal(manager.size(), 1, "the reloaded page took the seat of the abandoned one");
+  await assert.rejects(manager.poll(auth, first.id, 0), (error: unknown) =>
+    error instanceof SearchError && error.code === "search-restart-required",
   );
   await assert.rejects(manager.start(authority("other", "browser"), request()), (error: unknown) =>
     error instanceof SearchError && error.code === "search-capacity-limit" && error.status === 503,
   );
-  const replacementStart = manager.start(auth, request("two", 1));
-  current.respond(page([]));
-  const replacement = await replacementStart;
-  assert.notEqual(first.id, replacement.id);
-  assert.equal(manager.size(), 1);
-  assert.ok(first.id);
+  assert.equal(manager.size(), 1, "another account never evicts this one");
   manager.close();
 });
 

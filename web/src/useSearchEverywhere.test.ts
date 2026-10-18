@@ -274,6 +274,19 @@ describe("useSearchEverywhere", () => {
     expect(current.unidentifiedOrder).toEqual(["q", "y"]);
   });
 
+  it("ends the session when the page is closed or reloaded", async () => {
+    vi.spyOn(api, "searchEverywhereStart").mockResolvedValue({
+      id: "session-pagehide",
+      snapshot: snapshot({ revision: 1 }),
+    });
+
+    await render();
+    await submit("alpha");
+    window.dispatchEvent(new Event("pagehide"));
+
+    expect(api.searchEverywhereDelete).toHaveBeenCalledWith("session-pagehide");
+  });
+
   it("deletes the session and clears the query when Search is left", async () => {
     vi.spyOn(api, "searchEverywhereStart").mockResolvedValue({
       id: "session-leave",
