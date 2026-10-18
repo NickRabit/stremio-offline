@@ -17,6 +17,8 @@ import cz.stremiooffline.tv.data.GlobalSearchClusterDto
 import cz.stremiooffline.tv.data.GlobalSearchMemberPageDto
 import cz.stremiooffline.tv.data.GlobalSearchSnapshotDto
 import cz.stremiooffline.tv.data.GlobalSearchStartDto
+import cz.stremiooffline.tv.data.SearchScope
+import cz.stremiooffline.tv.data.SearchableCatalogDto
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -41,6 +43,8 @@ enum class KindFilter(val wire: String) {
 data class GlobalSearchState(
   val committed: String = "",
   val sources: Set<SourceClass> = emptySet(),
+  val scope: SearchScope = SearchScope(),
+  val searchable: List<SearchableCatalogDto> = emptyList(),
   val kind: KindFilter = KindFilter.All,
   val snapshot: GlobalSearchSnapshotDto? = null,
   val order: List<String> = emptyList(),
@@ -128,6 +132,7 @@ class GlobalSearchViewModel(
   private var restartDepth = 0
   private var active = false
   private var interacted = false
+  private var searchableLoaded = false
   private var startJob: Job? = null
   private var pollJob: Job? = null
   private var actionJob: Job? = null
@@ -141,7 +146,32 @@ class GlobalSearchViewModel(
 
   fun setSources(sources: Set<SourceClass>) {
     if (sources == state.sources) return
-    state = state.copy(sources = sources)
+    state = state.copy(
+      sources = sources,
+      scope = state.scope.takeIf { sources == setOf(SourceClass.Catalog) } ?: SearchScope(),
+    )
+    if (state.committed.isNotEmpty()) startSearch(state.committed, freshLayout = true)
+  }
+
+  fun loadSearchable() {
+    if (searchableLoaded) return
+    searchableLoaded = true
+    viewModelScope.launch {
+      val list = try {
+        api.searchable()
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (_: ApiError) {
+        return@launch
+      }
+      state = state.copy(searchable = list)
+    }
+  }
+
+  fun setScope(scope: SearchScope) {
+    val scopedSources = setOf(SourceClass.Catalog)
+    if (state.scope == scope && state.sources == scopedSources) return
+    state = state.copy(sources = scopedSources, scope = scope)
     if (state.committed.isNotEmpty()) startSearch(state.committed, freshLayout = true)
   }
 
@@ -217,6 +247,7 @@ class GlobalSearchViewModel(
     revision = 0
     restartDepth = 0
     state = GlobalSearchState()
+    searchableLoaded = false
     if (id != null) viewModelScope.launch { api.deleteGlobalSearch(id) }
   }
 
@@ -255,6 +286,9 @@ class GlobalSearchViewModel(
             sources = requestSources.sortedBy { it.ordinal }.map { it.wire },
             slotId = slotId,
             generation = currentGeneration,
+            scope = state.scope.takeIf {
+              requestSources == setOf(SourceClass.Catalog) && !it.addonKey.isNullOrEmpty()
+            },
           ),
         )
         if (currentGeneration != generation) return@launch

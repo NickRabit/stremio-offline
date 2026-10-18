@@ -90,6 +90,7 @@ interface CatalogApi {
 
 interface GlobalSearchApi {
   suspend fun searchEverywhereEnabled(): Boolean
+  suspend fun searchable(): List<SearchableCatalogDto>
   suspend fun startGlobalSearch(body: GlobalSearchStartDto): GlobalSearchStartResultDto
   suspend fun pollGlobalSearch(id: String, revision: Int): GlobalSearchPollDto
   suspend fun pageGlobalSearch(id: String)
