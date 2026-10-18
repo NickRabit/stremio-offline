@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { CatalogueTitleDetail, catalogueStreamId, type CatalogueDetailTarget, type CatalogueTitleDetailProps } from "./CatalogueTitleDetail";
 import { setLocale } from "./i18n";
-import type { Meta, Stream, Video } from "./types";
+import type { Meta, RemoteLibrary, Stream, Video } from "./types";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -17,6 +17,18 @@ const local = (path: string, name: string, size?: number): Stream => ({
   sourceId: `lib:${path}`, kind: "library", playable: true, localPath: path, libraryName: "Films", name,
   behaviorHints: { filename: name, ...(size === undefined ? {} : { videoSize: size }) },
 });
+
+const remote = (id: string, name: string, size?: number): Stream => ({
+  sourceId: `remote:${id}`, kind: "remote", playable: true, name, provider: "emby", libraryId: "rlib_a", libraryName: "Emby",
+  remoteItem: { libraryId: "rlib_a", itemId: "emby-film", mediaSourceId: id, progressKey: `emby:${id}` },
+  ...(size === undefined ? {} : { behaviorHints: { videoSize: size } }),
+});
+
+const remoteLibrary: RemoteLibrary = {
+  id: "rlib_a", connectionId: "conn", remoteId: "remote", name: "Emby", type: "movie",
+  enabled: true, order: 0, showOnHome: true, showInContinueWatching: true, provider: "emby",
+  capabilities: { rename: false, move: false, delete: false, identify: false, writeArtwork: false, downloadToLibrary: false, downloadToDevice: false },
+};
 
 const episode = (id: string, season: number, number: number, title?: string): Video =>
   ({ id, season, episode: number, ...(title ? { title } : {}) });
@@ -38,7 +50,11 @@ let metaReply: Handler;
 let providerReply: Handler;
 let streamReply: Handler;
 let localReply: Handler;
-const calls = { meta: [] as URL[], providers: [] as URL[], streams: [] as URL[] };
+let remoteReply: Handler;
+const calls = {
+  meta: [] as URL[], providers: [] as URL[], streams: [] as URL[],
+  libraries: [] as URL[], remoteStreams: [] as URL[],
+};
 
 let root: Root;
 let host: HTMLDivElement;
@@ -46,11 +62,12 @@ let host: HTMLDivElement;
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   setLocale("en");
-  calls.meta = []; calls.providers = []; calls.streams = [];
+  calls.meta = []; calls.providers = []; calls.streams = []; calls.libraries = []; calls.remoteStreams = [];
   metaReply = () => json(film());
   providerReply = () => json([{ key: "torrentio", name: "Torrentio" }]);
   streamReply = () => json([addon("a1", "1080p", 1_000)]);
   localReply = () => json([]);
+  remoteReply = () => json({ streams: [] });
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
     const url = new URL(String(input), "http://localhost");
     const path = url.pathname;
@@ -58,6 +75,11 @@ beforeEach(() => {
     if (path.startsWith("/api/stream-sources/")) { calls.providers.push(url); return Promise.resolve(providerReply(url)); }
     if (path.startsWith("/api/streams/")) { calls.streams.push(url); return Promise.resolve(streamReply(url)); }
     if (path.startsWith("/api/local-streams/")) return Promise.resolve(localReply(url));
+    if (path === "/api/remote-libraries") { calls.libraries.push(url); return Promise.resolve(json({ libraries: [remoteLibrary] })); }
+    if (/^\/api\/remote-libraries\/[^/]+\/streams\/[^/]+\/[^/]+$/.test(path)) {
+      calls.remoteStreams.push(url);
+      return Promise.resolve(remoteReply(url));
+    }
     return Promise.resolve(new Response(null, { status: 404 }));
   }));
   host = document.createElement("div");
@@ -156,6 +178,49 @@ describe("CatalogueTitleDetail metadata", () => {
 });
 
 describe("CatalogueTitleDetail sources", () => {
+  it("loads other libraries with a library-first title and lets their row lead Play", async () => {
+    const remoteRows = deferred<Response>();
+    remoteReply = () => remoteRows.promise;
+    const { onPlay } = await render({
+      target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film() },
+      libraryFirst: true,
+    });
+    expect(calls.remoteStreams).toHaveLength(1);
+    await click(playButton());
+    expect(onPlay).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: "a1" }), expect.anything(), false);
+
+    await act(async () => { remoteRows.resolve(json({ streams: [remote("ms1", "Emby copy", 500)] })); });
+    await flush();
+    await click(playButton());
+    expect(onPlay).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: "remote:ms1" }), expect.anything(), false);
+    await click(pickerArrow());
+    expect(pickerRows().filter((row) => row.textContent?.includes("Emby copy"))).toHaveLength(1);
+  });
+
+  it("keeps other libraries behind the chooser without libraryFirst", async () => {
+    await render({ target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film() } });
+    expect(calls.remoteStreams).toHaveLength(0);
+    await click(pickerArrow());
+    expect(calls.remoteStreams).toHaveLength(1);
+  });
+
+  it("keeps a row the viewer picked by hand when a library row arrives later", async () => {
+    const remoteRows = deferred<Response>();
+    remoteReply = () => remoteRows.promise;
+    streamReply = () => json([addon("a1", "1080p", 1_000), addon("a2", "720p", 500)]);
+    const { onPlay } = await render({
+      target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film() },
+      libraryFirst: true,
+    });
+    await click(pickerArrow());
+    const picked = pickerRows().find((row) => row.textContent?.includes("720p"))!;
+    await click(picked);
+    await act(async () => { remoteRows.resolve(json({ streams: [remote("ms1", "Emby copy", 500)] })); });
+    await flush();
+    await click(playButton());
+    expect(onPlay).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: "a2" }), expect.anything(), false);
+  });
+
   it("reuses the rows the catalogue read and plays the row it was opened on", async () => {
     const picked = addon("picked-row", "Torrent 4K", 4_000_000_000);
     const { onPlay, onSaveToLibrary, onDownloadToDevice } = await render({

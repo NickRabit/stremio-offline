@@ -17,6 +17,7 @@ const cluster = (key: string, over: Partial<SearchClusterView> = {}): SearchClus
   primaryMemberKey: `member-${key}`,
   memberKeys: [`member-${key}`],
   rank: 1,
+  score: 1,
   ...over,
 });
 
@@ -267,11 +268,92 @@ describe("useSearchEverywhere", () => {
     await submit("alpha");
     expect(current.order).toEqual(["a", "b", "c"]);
     expect(current.unidentifiedOrder).toEqual(["x", "y"]);
+    current.markInteracted();
     await advance(0);
     await flush();
 
     expect(current.order).toEqual(["a", "z", "d"]);
     expect(current.unidentifiedOrder).toEqual(["q", "y"]);
+  });
+
+  it("adopts each server order until interaction, then keeps cards stable", async () => {
+    vi.spyOn(api, "searchEverywhereStart").mockResolvedValue({
+      id: "session-one",
+      snapshot: snapshot({ revision: 1, clusters: [cluster("a"), cluster("b")] }),
+    });
+    vi.spyOn(api, "searchEverywherePoll")
+      .mockResolvedValueOnce({
+        changed: true,
+        snapshot: snapshot({ revision: 2, clusters: [cluster("b"), cluster("a")] }),
+      })
+      .mockResolvedValueOnce({
+        changed: true,
+        snapshot: snapshot({ revision: 3, clusters: [cluster("c"), cluster("b"), cluster("a")] }),
+      });
+
+    await render();
+    await submit("alpha");
+    expect(current.order).toEqual(["a", "b"]);
+    await advance(0);
+    await flush();
+    expect(current.order).toEqual(["b", "a"]);
+
+    current.markInteracted();
+    await advance(250);
+    await flush();
+    expect(current.order).toEqual(["b", "a", "c"]);
+  });
+
+  it("resets relevance adoption for a new query", async () => {
+    vi.spyOn(api, "searchEverywhereStart")
+      .mockResolvedValueOnce({
+        id: "session-one",
+        snapshot: snapshot({ revision: 1, clusters: [cluster("a"), cluster("b")] }),
+      })
+      .mockResolvedValueOnce({
+        id: "session-two",
+        snapshot: snapshot({ revision: 1, clusters: [cluster("d"), cluster("c")] }),
+      });
+    vi.spyOn(api, "searchEverywherePoll").mockResolvedValue({ changed: false, revision: 1 });
+
+    await render();
+    await submit("alpha");
+    current.markInteracted();
+    await submit("beta");
+    expect(current.order).toEqual(["d", "c"]);
+  });
+
+  it("sends a Catalog scope and clears it when the source filter leaves Catalog", async () => {
+    vi.spyOn(api, "searchEverywhereStart").mockResolvedValue({
+      id: "session-one",
+      snapshot: snapshot({ revision: 1 }),
+    });
+    await render();
+    await submit("alpha");
+    await act(async () => {
+      current.setSources(["catalog"]);
+      await Promise.resolve();
+    });
+    await flush();
+    await act(async () => {
+      current.setScope({ addonKey: "local-addon", catalogType: "movie", catalogId: "films" });
+      await Promise.resolve();
+    });
+    await flush();
+
+    expect(startBodies().at(-1)).toMatchObject({
+      sources: ["catalog"],
+      scope: { addonKey: "local-addon", catalogType: "movie", catalogId: "films" },
+    });
+
+    await act(async () => {
+      current.setSources(["local"]);
+      await Promise.resolve();
+    });
+    await flush();
+    expect(startBodies().at(-1)?.sources).toEqual(["local"]);
+    expect(startBodies().at(-1)).not.toHaveProperty("scope");
+    expect(current.scope).toBeNull();
   });
 
   it("ends the session when the page is closed or reloaded", async () => {

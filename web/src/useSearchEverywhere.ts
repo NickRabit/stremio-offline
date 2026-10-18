@@ -8,6 +8,7 @@ import type {
   SearchMemberPage,
   SearchSnapshot,
   SearchSourceClass,
+  SearchStartBody,
 } from "./types";
 
 const ALL_SOURCES: SearchSourceClass[] = ["catalog", "local", "remote"];
@@ -65,6 +66,7 @@ export function useSearchEverywhere(options: { active: boolean; covered: boolean
   const [draft, setDraftState] = useState("");
   const [committed, setCommittedState] = useState("");
   const [sources, setSourcesState] = useState<SearchSourceClass[]>([]);
+  const [scope, setScopeState] = useState<SearchStartBody["scope"] | null>(null);
   const [kind, setKindState] = useState<SearchKindFilter>("all");
   const [snapshot, setSnapshotState] = useState<SearchSnapshot | null>(null);
   const [previousQuery, setPreviousQuery] = useState(false);
@@ -87,7 +89,9 @@ export function useSearchEverywhere(options: { active: boolean; covered: boolean
   const committedRef = useRef("");
   const draftRef = useRef("");
   const sourcesRef = useRef<SearchSourceClass[]>([]);
+  const scopeRef = useRef<SearchStartBody["scope"] | null>(null);
   const kindRef = useRef<SearchKindFilter>("all");
+  const interactedRef = useRef(false);
   const activeRef = useRef(options.active);
   const coveredRef = useRef(options.covered);
   const liveSearchRef = useRef(false);
@@ -134,8 +138,9 @@ export function useSearchEverywhere(options: { active: boolean; covered: boolean
   };
 
   const applySnapshot = (next: SearchSnapshot, freshLayout: boolean) => {
-    const main = freshLayout ? next.clusters.map((cluster) => cluster.key) : mergeOrder(orderRef.current, next.clusters, next.aliases);
-    const unidentified = freshLayout
+    const adoptServerOrder = freshLayout || !interactedRef.current;
+    const main = adoptServerOrder ? next.clusters.map((cluster) => cluster.key) : mergeOrder(orderRef.current, next.clusters, next.aliases);
+    const unidentified = adoptServerOrder
       ? next.unidentified.map((cluster) => cluster.key)
       : mergeOrder(unidentifiedOrderRef.current, next.unidentified, next.aliases);
     orderRef.current = main;
@@ -245,6 +250,9 @@ export function useSearchEverywhere(options: { active: boolean; covered: boolean
     restartDepthRef.current = 0;
     setCommittedState("");
     setDraftState("");
+    scopeRef.current = null;
+    interactedRef.current = false;
+    setScopeState(null);
     setSnapshotState(null);
     setOrderState([]);
     setUnidentifiedOrderState([]);
@@ -260,7 +268,10 @@ export function useSearchEverywhere(options: { active: boolean; covered: boolean
       resetSession();
       return;
     }
-    if (freshLayout) restartDepthRef.current = 0;
+    if (freshLayout) {
+      restartDepthRef.current = 0;
+      interactedRef.current = false;
+    }
     const generation = ++generationRef.current;
     const requestSources = sourcesRef.current.length ? sourcesRef.current : ALL_SOURCES;
     abortRequests();
@@ -278,6 +289,7 @@ export function useSearchEverywhere(options: { active: boolean; covered: boolean
       sources: [...requestSources],
       slotId: slotRef.current!,
       generation,
+      ...(scopeRef.current ? { scope: { ...scopeRef.current } } : {}),
     }, controller.signal).then((answer) => {
       if (generation !== generationRef.current || controller.signal.aborted) return;
       sessionIdRef.current = answer.id;
@@ -318,9 +330,25 @@ export function useSearchEverywhere(options: { active: boolean; covered: boolean
 
   const setSources = (value: SearchSourceClass[]) => {
     const next = [...new Set(value)];
+    if (!(next.length === 1 && next[0] === "catalog")) {
+      scopeRef.current = null;
+      setScopeState(null);
+    }
     if (JSON.stringify(next) === JSON.stringify(sourcesRef.current)) return;
     sourcesRef.current = next;
     setSourcesState(next);
+    if (committedRef.current) startSearch(committedRef.current, true);
+  };
+
+  const setScope = (value: SearchStartBody["scope"] | null) => {
+    const next = value?.addonKey ? value : null;
+    if (JSON.stringify(next) === JSON.stringify(scopeRef.current)) return;
+    scopeRef.current = next;
+    setScopeState(next);
+    if (next && !(sourcesRef.current.length === 1 && sourcesRef.current[0] === "catalog")) {
+      sourcesRef.current = ["catalog"];
+      setSourcesState(["catalog"]);
+    }
     if (committedRef.current) startSearch(committedRef.current, true);
   };
 
@@ -360,6 +388,10 @@ export function useSearchEverywhere(options: { active: boolean; covered: boolean
 
   const setFocusAnchor = (memberKey: string | null) => {
     setFocusAnchorState(memberKey);
+  };
+
+  const markInteracted = () => {
+    interactedRef.current = true;
   };
 
   const setScrollTop = (value: number) => {
@@ -428,6 +460,8 @@ export function useSearchEverywhere(options: { active: boolean; covered: boolean
     clear,
     sources,
     setSources,
+    scope,
+    setScope,
     kind,
     setKind,
     snapshot,
@@ -441,6 +475,7 @@ export function useSearchEverywhere(options: { active: boolean; covered: boolean
     error,
     focusAnchor,
     setFocusAnchor,
+    markInteracted,
     scrollTop,
     setScrollTop,
   };

@@ -7,11 +7,14 @@ import { TileArt } from "./TileArt";
 import { useDialogFocus } from "./dialog-focus";
 import { useDialogViewport } from "./dialog-viewport";
 import { t, type Key } from "./i18n";
+import { parseSearchScope } from "./search-scope";
+import { SearchScopeOptions } from "./SearchScopeOptions";
 import { Heading } from "./settings-ui";
 import type {
   SearchClusterView,
   SearchMember,
   SearchMemberPage,
+  SearchableCatalog,
   SearchSourceClass,
   SearchSourceState,
   TileShape,
@@ -57,7 +60,12 @@ const episodeText = (member: SearchMember): string | null => {
 /** One title, the way every other grid draws one: its picture, its name and a caption. A list is
  *  about titles, not about sources, so no card names the addon or library it came from; a copy
  *  that is already in a library only earns a small mark. */
-function SearchCard({ cluster, shape, onOpen }: { cluster: SearchClusterView; shape: TileShape; onOpen: (button: HTMLButtonElement) => void }) {
+function SearchCard({ cluster, shape, onInteract, onOpen }: {
+  cluster: SearchClusterView;
+  shape: TileShape;
+  onInteract: () => void;
+  onOpen: (button: HTMLButtonElement) => void;
+}) {
   const caption = [
     cluster.year,
     kindLabel(cluster.kind),
@@ -65,7 +73,8 @@ function SearchCard({ cluster, shape, onOpen }: { cluster: SearchClusterView; sh
   ].filter(Boolean).join(" · ");
   const folder = cluster.kind === "folder";
   return <button type="button" className="browse-item" title={cluster.title} data-search-card data-primary-member={cluster.primaryMemberKey}
-    data-member-keys={cluster.memberKeys.join(" ")} onClick={(event) => onOpen(event.currentTarget)}>
+    data-member-keys={cluster.memberKeys.join(" ")} onFocus={onInteract}
+    onClick={(event) => { onInteract(); onOpen(event.currentTarget); }}>
     <span className="browse-art">
       <TileArt shape={shape} poster={cluster.poster} wide={cluster.background} fallback={folder ? <FolderOpen/> : <Film/>}/>
       {cluster.hasLocal && <i className="fav-mark" title={t("searchAll.badgeLocal")} aria-label={t("searchAll.badgeLocal")}><HardDrive/></i>}
@@ -93,8 +102,8 @@ function MemberChooser({ cluster, members, anchorKey, onOpenMember, onOpenCanoni
   cluster: SearchClusterView;
   members: SearchEverywhereController["members"];
   anchorKey: string;
-  onOpenMember: (member: SearchMember, anchorKey: string) => Promise<void> | void;
-  onOpenCanonical: (canonical: NonNullable<SearchMemberPage["canonical"]>, anchorKey: string) => Promise<void> | void;
+  onOpenMember: (member: SearchMember, anchorKey: string, libraryFirst?: boolean) => Promise<void> | void;
+  onOpenCanonical: (canonical: NonNullable<SearchMemberPage["canonical"]>, anchorKey: string, libraryFirst?: boolean) => Promise<void> | void;
   onClose: () => void;
 }) {
   const overlay = useRef<HTMLDivElement>(null);
@@ -153,7 +162,9 @@ function MemberChooser({ cluster, members, anchorKey, onOpenMember, onOpenCanoni
       return next;
     });
     try {
-      await onOpenMember(member, member.memberKey);
+      const libraryFirst = cluster.hasLocal || cluster.hasRemote;
+      if (libraryFirst) await onOpenMember(member, member.memberKey, true);
+      else await onOpenMember(member, member.memberKey);
     } catch (error) {
       setRowErrors((current) => ({ ...current, [member.memberKey]: describeError(error) }));
     } finally {
@@ -166,7 +177,9 @@ function MemberChooser({ cluster, members, anchorKey, onOpenMember, onOpenCanoni
     setBusy("canonical");
     setCanonicalError(null);
     try {
-      await onOpenCanonical(page.canonical, anchorKey);
+      const libraryFirst = cluster.hasLocal || cluster.hasRemote;
+      if (libraryFirst) await onOpenCanonical(page.canonical, anchorKey, true);
+      else await onOpenCanonical(page.canonical, anchorKey);
     } catch (error) {
       setCanonicalError(describeError(error));
     } finally {
@@ -215,12 +228,13 @@ function MemberChooser({ cluster, members, anchorKey, onOpenMember, onOpenCanoni
   </div>, document.body);
 }
 
-export function SearchEverywhere({ search, shape, onToggleShape, onOpenMember, onOpenCanonical }: {
+export function SearchEverywhere({ search, shape, onToggleShape, searchable, onOpenMember, onOpenCanonical }: {
   search: SearchEverywhereController;
   shape: TileShape;
   onToggleShape: () => void;
-  onOpenMember: (member: SearchMember, anchorKey: string) => Promise<void> | void;
-  onOpenCanonical: (canonical: NonNullable<SearchMemberPage["canonical"]>, anchorKey: string) => Promise<void> | void;
+  searchable: SearchableCatalog[];
+  onOpenMember: (member: SearchMember, anchorKey: string, libraryFirst?: boolean) => Promise<void> | void;
+  onOpenCanonical: (canonical: NonNullable<SearchMemberPage["canonical"]>, anchorKey: string, libraryFirst?: boolean) => Promise<void> | void;
 }) {
   const root = useRef<HTMLElement>(null);
   const previousPosition = useRef(0);
@@ -252,26 +266,36 @@ export function SearchEverywhere({ search, shape, onToggleShape, onOpenMember, o
   const tail = useRef<HTMLDivElement>(null);
   const loadMoreRef = useRef(search.loadMore);
   loadMoreRef.current = search.loadMore;
+  const markInteractedRef = useRef(search.markInteracted);
+  markInteractedRef.current = search.markInteracted;
   const ready = canLoadMore && waiting === 0 && !search.previousQuery;
   useEffect(() => {
     if (!ready) return;
-    const check = () => {
+    const check = (byScroll: boolean) => {
       const element = tail.current;
       if (!element) return;
       const margin = Math.min(600, window.innerHeight);
-      if (element.getBoundingClientRect().top <= window.innerHeight + margin) loadMoreRef.current();
+      if (element.getBoundingClientRect().top <= window.innerHeight + margin) {
+        if (byScroll) markInteractedRef.current();
+        loadMoreRef.current();
+      }
     };
-    check();
-    window.addEventListener("scroll", check, { passive: true });
-    window.addEventListener("resize", check);
+    check(false);
+    const onScroll = () => check(true);
+    const onResize = () => check(false);
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onResize);
     return () => {
-      window.removeEventListener("scroll", check);
-      window.removeEventListener("resize", check);
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onResize);
     };
   }, [ready, search.snapshot?.revision]);
 
   useEffect(() => {
-    const onScroll = () => search.setScrollTop(window.scrollY);
+    const onScroll = () => {
+      search.setScrollTop(window.scrollY);
+      if (window.scrollY > 200) search.markInteracted();
+    };
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, [search.setScrollTop]);
@@ -299,13 +323,36 @@ export function SearchEverywhere({ search, shape, onToggleShape, onOpenMember, o
    *  an id, gathered from several places, asks where to open it. */
   const openCluster = async (button: HTMLButtonElement, cluster: SearchClusterView) => {
     previousPosition.current = [...(root.current?.querySelectorAll<HTMLElement>("[data-search-card]") ?? [])].indexOf(button);
+    const libraryFirst = cluster.hasLocal || cluster.hasRemote;
     try {
       const page = await members(cluster.primaryMemberKey);
-      if (page.canonical) { await onOpenCanonical(page.canonical, cluster.primaryMemberKey); return; }
+      if (page.canonical) {
+        if (libraryFirst) await onOpenCanonical(page.canonical, cluster.primaryMemberKey, true);
+        else await onOpenCanonical(page.canonical, cluster.primaryMemberKey);
+        return;
+      }
       const distinct = distinctMembers(page.members);
-      if (distinct.length === 1 && page.nextFrom == null) { await onOpenMember(distinct[0]!, distinct[0]!.memberKey); return; }
+      if (distinct.length === 1 && page.nextFrom == null) {
+        if (libraryFirst) await onOpenMember(distinct[0]!, distinct[0]!.memberKey, true);
+        else await onOpenMember(distinct[0]!, distinct[0]!.memberKey);
+        return;
+      }
     } catch { /* the chooser reports what failed */ }
+    search.markInteracted();
     setChooser(cluster);
+  };
+
+  const catalogOnly = search.sources.length === 1 && search.sources[0] === "catalog";
+  const scopeValue = search.scope?.catalogId && search.scope.catalogType
+    ? `catalog:${search.scope.addonKey}:${search.scope.catalogType}:${search.scope.catalogId}`
+    : search.scope?.addonKey ? `addon:${search.scope.addonKey}` : "";
+  const chooseScope = (value: string) => {
+    const next = parseSearchScope(value);
+    search.setScope(next.addonKey ? {
+      addonKey: next.addonKey,
+      ...(next.catalogType ? { catalogType: next.catalogType } : {}),
+      ...(next.catalogId ? { catalogId: next.catalogId } : {}),
+    } : null);
   };
 
   return <section className="search-everywhere" ref={root}>
@@ -330,6 +377,11 @@ export function SearchEverywhere({ search, shape, onToggleShape, onOpenMember, o
             onClick={() => search.setSources(option.value === "all" ? [] : [option.value])}>{t(option.label)}</button>;
         })}
       </div>
+      {catalogOnly && <label><span>{t("catalog.searchScope")}</span>
+        <select aria-label={t("catalog.searchScope")} value={scopeValue} onChange={(event) => chooseScope(event.target.value)}>
+          <SearchScopeOptions searchable={searchable}/>
+        </select>
+      </label>}
       <div className="library-shelf-segments" role="group" aria-label={t("catalog.type")}>
         {([
           ["all", "searchAll.kindAll"],
@@ -361,7 +413,7 @@ export function SearchEverywhere({ search, shape, onToggleShape, onOpenMember, o
     {search.previousQuery && <p className="search-previous-label">{t("searchAll.previousQuery")}</p>}
     <div className={`browse-grid section-grid search-results tile-shape-${shape}${search.previousQuery ? " previous-query" : ""}`} aria-busy={busy || undefined}>
       {mainCards.map((cluster) => <SearchCard key={cluster.key} cluster={cluster} shape={shape}
-        onOpen={(button) => void openCluster(button, cluster)}/>)}
+        onInteract={search.markInteracted} onOpen={(button) => void openCluster(button, cluster)}/>)}
       {search.snapshot && !busy && !mainCards.length && !unidentifiedCards.length && <p className="search-empty">{t("searchAll.empty")}</p>}
     </div>
     {(canLoadMore || waiting > 0) && search.snapshot && <div ref={tail} className="load-more" aria-hidden="true">
@@ -372,7 +424,7 @@ export function SearchEverywhere({ search, shape, onToggleShape, onOpenMember, o
       <summary>{t("searchAll.unidentified", { count: unidentifiedCards.length })}</summary>
       <div className={`browse-grid section-grid search-results tile-shape-${shape}`}>
         {unidentifiedCards.map((cluster) => <SearchCard key={cluster.key} cluster={cluster} shape={shape}
-          onOpen={(button) => void openCluster(button, cluster)}/>)}
+          onInteract={search.markInteracted} onOpen={(button) => void openCluster(button, cluster)}/>)}
       </div>
     </details>}
     {chooser && <MemberChooser cluster={chooser} members={members} anchorKey={search.focusAnchor ?? chooser.primaryMemberKey}

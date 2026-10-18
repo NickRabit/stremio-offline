@@ -155,6 +155,53 @@ class GlobalSearchViewModelTest {
   }
 
   @Test
+  fun `server relevance order is adopted until focus and a new filter resets it`() = runTest(dispatcher) {
+    val api = FakeTvApi()
+    api.globalStartHandler = { request ->
+      GlobalSearchStartResultDto(
+        id = "gs_${request.generation}",
+        snapshot = GlobalSearchSnapshotDto(
+          revision = 1,
+          state = "complete",
+          clusters = if (request.generation == 1) {
+            listOf(cluster("b", "m2"), cluster("a", "m1"))
+          } else {
+            listOf(cluster("d", "m4"), cluster("c", "m3"))
+          },
+        ),
+      )
+    }
+    var reorder = true
+    api.globalPollHandler = { _, revision ->
+      if (reorder) {
+        reorder = false
+        GlobalSearchPollDto(
+          changed = true,
+          snapshot = GlobalSearchSnapshotDto(
+            revision = revision + 1,
+            state = "partial",
+            clusters = listOf(cluster("c", "m3"), cluster("b", "m2"), cluster("a", "m1")),
+          ),
+        )
+      } else {
+        GlobalSearchPollDto(changed = false, revision = revision)
+      }
+    }
+    val viewModel = viewModel(api)
+    viewModel.setActive(true)
+
+    viewModel.submit("matrix")
+    runCurrent()
+    assertEquals(listOf("c", "b", "a"), viewModel.state.order)
+
+    viewModel.setFocusAnchor("m2")
+    viewModel.setSources(setOf(SourceClass.Local))
+    runCurrent()
+    assertEquals(listOf("d", "c"), viewModel.state.order)
+    viewModel.setActive(false)
+  }
+
+  @Test
   fun `leaving deletes the session and clears every field`() = runTest(dispatcher) {
     val api = FakeTvApi()
     val viewModel = viewModel(api)

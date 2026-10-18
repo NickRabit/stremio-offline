@@ -66,6 +66,8 @@ data class GlobalSearchClusterDto(
   val primaryMemberKey: String = "",
   val memberKeys: List<String> = emptyList(),
   val rank: Int = 0,
+  val score: Double = 0.0,
+  val rating: Double? = null,
   val episodeCount: Int? = null,
 )
 
