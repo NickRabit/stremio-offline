@@ -229,12 +229,21 @@ The transport exposes only a typed operation union with fixed arguments:
 | `detail` | `GET /Users/{userId}/Items/{itemId}` |
 | `ancestors` | `GET /Items/{itemId}/Ancestors?UserId=...` |
 | `versions` | `GET /Items/{itemId}/PlaybackInfo?UserId=...` |
+| `playbackInfo` | `POST /Items/{itemId}/PlaybackInfo?UserId=...` with optional `MediaSourceId` and `MaxStreamingBitrate`, fixed direct-play flags, and the admitted `IsPlayback` value (`true` for a stream, `false` for a download) |
 | `playing` | `POST /Sessions/Playing` |
 | `playingProgress` | `POST /Sessions/Playing/Progress` |
 | `playingStopped` | `POST /Sessions/Playing/Stopped` |
 
-The transport sends the three standard playback-session reports listed above as
-best effort; there is no stream, preparation or logout call here.
+`versions` remains the browse, metadata and subtitle-membership read. The
+separate `playbackInfo` admission runs only when an original stream or download
+is prepared. Its response may supply a validated `PlaySessionId`; the fixed
+original request appends it as the optional `PlaySessionId` query value, and the
+three session reports use it when one was supplied. The transport sends those
+reports as best effort and has no logout call. The request deliberately carries
+no codec-limited `DeviceProfile`: the backend proxies an original and converts
+locally, and a synthetic profile made Jellyfin report direct play as unavailable
+for a file it previously served. The provider's own `SupportsDirectPlay` answer
+is still required before an original is opened.
 Every request carries fixed MediaBrowser client/device/version identity, including
 login without a token. Authenticated requests append `Token="..."` with
 fixed client/device/version values and also `X-Emby-Token`; authentication never
@@ -362,14 +371,20 @@ walks covered identity, login, current policy, three libraries, five bounded
 pages, four item details and source lists, and ancestors. Token encryption and
 reopening the vault, configuration attachment/removal and secret cleanup were
 verified in the same walk. The reader's remote `UserData` was identical before
-and after each walk. These checks cover metadata and persistence; playback
-integration remains a later stage.
+and after each walk. These checks cover metadata and persistence; the current
+playback integration is documented in
+[media-server-management.md](media-server-management.md).
 
 Critically, both servers kept serving previously known static URLs after remote
 policy revocation, and `GET PlaybackInfo` still answered on Emby. **A successful
-stream or `PlaybackInfo` response is never authorization proof.** Any future
-playback path must independently revalidate current account playback policy,
-account-visible library membership and item ancestry.
+stream or `PlaybackInfo` response is never authorization proof.** Every playback
+path independently revalidates current account playback policy, account-visible
+library membership and item ancestry. A `POST PlaybackInfo` `NotAllowed` refuses
+the source as `403 err.mediaServerPlaybackNotAllowed`; `NoCompatibleStream`
+refuses it as `422 err.mediaServerNoCompatibleStream`; `RateLimitExceeded` maps
+to the existing `429 err.mediaServerBusy` and arms the transport cooldown. An
+unknown error code or malformed response is `invalid-response`, never permission
+to open a static original.
 
 ## Limits
 

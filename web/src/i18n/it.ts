@@ -1297,6 +1297,8 @@ export const it: Catalog = {
   "err.mediaServerIdentity": "L'identità del server multimediale è cambiata. Ricrea la connessione.",
   "err.mediaServerFormatUnknown": "Il server multimediale non ha fornito un formato supportato per il file originale.",
   "err.mediaServerRestricted": "Questo account del server multimediale ha restrizioni non supportate.",
+  "err.mediaServerPlaybackNotAllowed": "Questo account del server multimediale non è autorizzato a riprodurre questo elemento.",
+  "err.mediaServerNoCompatibleStream": "Il server multimediale non offre un flusso compatibile con la riproduzione diretta per questo elemento.",
   "err.mediaServerBitrateLimit": "Questo file supera il limite di bitrate per lo streaming dell'account del server multimediale. Scaricalo invece.",
   "err.notAllowed": "Questo account potrebbe non farlo.",
   "err.homeLayoutShape": "Un layout della Home deve indicare un ordine, le righe nascoste e i feed.",

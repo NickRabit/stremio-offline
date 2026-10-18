@@ -94,6 +94,17 @@ const provider = (server: FakeServer): MediaServerProvider => ({
   detail: async (_token, _account, itemId) => { await server.run("detail"); const item = server.detailOf[itemId]; if (!item) throw new MediaServerError("not-found", "missing"); return structuredClone(item); },
   ancestors: async (_token, _account, itemId) => { await server.run("ancestors"); return [...(server.ancestorsOf[itemId] ?? [])]; },
   versions: async (_token, _account, itemId) => { await server.run("versions"); return structuredClone(server.versionsOf[itemId] ?? []); },
+  playbackInfo: async (_token, _account, itemId) => {
+    await server.run("playbackInfo");
+    return {
+      mediaSources: (server.versionsOf[itemId] ?? []).map((version) => ({
+        id: version.id,
+        supportsDirectPlay: true,
+        supportsDirectStream: false,
+        supportsTranscoding: false,
+      })),
+    };
+  },
   reportPlayback: async () => { throw new Error("unused"); },
 });
 
@@ -107,6 +118,7 @@ const transportFor = (server: FakeServer): MediaServerTransport => ({
     return new Response(spec.bytes, { status: 200, headers: { "content-type": spec.contentType } });
   },
   requestOriginal: async () => { throw new Error("unused"); },
+  noteRateLimit: () => undefined,
   close: async () => undefined,
 });
 
@@ -463,6 +475,8 @@ test("every internal failure maps to a fixed status and key, and its internal te
       [new MediaServerError("stale-generation", sentinel), 409, "err.mediaServerStale"],
       [new MediaServerError("identity-changed", sentinel), 409, "err.mediaServerIdentity"],
       [new MediaServerError("unsupported-policy", sentinel), 403, "err.mediaServerRestricted"],
+      [new MediaServerError("playback-not-allowed", sentinel), 403, "err.mediaServerPlaybackNotAllowed"],
+      [new MediaServerError("no-compatible-stream", sentinel), 422, "err.mediaServerNoCompatibleStream"],
       [new MediaServerError("bitrate-limit", sentinel), 403, "err.mediaServerBitrateLimit"],
       // An unknown code falls through to the safe default rather than leaking a raw status.
       [new MediaServerError("mystery" as MediaServerError["code"], sentinel), 502, "err.mediaServerUnavailable"],

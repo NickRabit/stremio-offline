@@ -1297,6 +1297,8 @@ export const es: Catalog = {
   "err.mediaServerIdentity": "La identidad del servidor multimedia ha cambiado. Vuelve a crear la conexión.",
   "err.mediaServerFormatUnknown": "El servidor multimedia no proporcionó un formato compatible para el archivo original.",
   "err.mediaServerRestricted": "Esta cuenta del servidor multimedia tiene restricciones no compatibles.",
+  "err.mediaServerPlaybackNotAllowed": "Esta cuenta del servidor multimedia no tiene permiso para reproducir este elemento.",
+  "err.mediaServerNoCompatibleStream": "El servidor multimedia no ofrece un flujo compatible con reproducción directa para este elemento.",
   "err.mediaServerBitrateLimit": "Este archivo supera el límite de tasa de bits de streaming de la cuenta del servidor multimedia. Descárgalo en su lugar.",
   "err.notAllowed": "Es posible que esta cuenta no haga eso.",
   "err.homeLayoutShape": "El diseño de Inicio debe indicar un orden, las filas ocultas y las fuentes.",

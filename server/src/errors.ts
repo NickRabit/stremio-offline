@@ -137,6 +137,8 @@ const TABLE: Record<string, ErrorClassification> = {
   "err.mediaServerStale": { category: "configuration", retry: "action" },
   "err.mediaServerIdentity": { category: "configuration", retry: "action" },
   "err.mediaServerRestricted": { category: "configuration", retry: "action" },
+  "err.mediaServerPlaybackNotAllowed": { category: "configuration", retry: "action" },
+  "err.mediaServerNoCompatibleStream": { category: "source", retry: "permanent" },
   "err.mediaServerBitrateLimit": { category: "configuration", retry: "permanent" },
 };
 

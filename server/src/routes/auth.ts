@@ -144,6 +144,7 @@ export function registerAuthRoutes(app: express.Application, ctx: RouteContext):
       await ctx.stopOwnedPlayback(info.sid);
       log("INFO", "Sign-out", { username: findUserById(ctx.store.users(), info.userId)?.username });
     }
+    ctx.forgetMediaPlayback?.(info.userId);
     res.status(204).end();
   }));
   app.patch("/api/auth/password", asyncRoute(async (req, res) => {

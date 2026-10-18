@@ -27,15 +27,15 @@ interface Call {
 
 const fakeManager = () => {
   const calls: Call[] = [];
-  let handler: (call: Call) => Promise<void> = async () => undefined;
+  let handler: (call: Call) => Promise<string | undefined> = async () => undefined;
   return {
     calls,
-    onReport: (next: (call: Call) => Promise<void>) => { handler = next; },
+    onReport: (next: (call: Call) => Promise<string | undefined>) => { handler = next; },
     manager: {
       reportPlayback: async (current: MediaServerAuthority, libraryId: unknown, itemId: unknown, value: ProviderPlaybackReport) => {
         const call = { authority: current, libraryId: String(libraryId), itemId: String(itemId), report: value };
         calls.push(call);
-        await handler(call);
+        return handler(call);
       },
     },
   };
@@ -62,6 +62,25 @@ test("start, progress and stop carry the lifecycle kinds and one session id", as
   assert.deepEqual(fake.calls.map((call) => call.report.playSessionId), ["a".repeat(32), "a".repeat(32), "a".repeat(32)]);
   assert.equal(fake.calls[0]!.report.positionTicks, 10_000_000);
   assert.equal(fake.calls[2]!.report.positionTicks, 30_000_000);
+});
+
+test("a provider-issued session id replaces the local fallback after the start report", async () => {
+  const fake = fakeManager();
+  const providerId = "b".repeat(32);
+  fake.onReport(async (call) => call.report.kind === "playing" ? providerId : undefined);
+  const reporter = new MediaServerPlaybackReporter(fake.manager, () => authority(), {
+    newSessionId: () => "a".repeat(32),
+  });
+  const actor = authority();
+  await reporter.report(actor, "rlib_1", "item-1", report("start"));
+  await reporter.report(actor, "rlib_1", "item-1", report("progress", { position: 2 }));
+  await reporter.report(actor, "rlib_1", "item-1", report("stop", { position: 3 }));
+  assert.deepEqual(fake.calls.map((call) => call.report.kind), ["playing", "progress", "stopped"]);
+  assert.deepEqual(fake.calls.map((call) => call.report.playSessionId), [
+    "a".repeat(32),
+    providerId,
+    providerId,
+  ]);
 });
 
 test("progress derives Pause, Unpause and TimeUpdate from the previous pause state", async () => {
@@ -95,6 +114,7 @@ test("reports for one key cannot overtake each other", async () => {
       entered.resolve();
       await release.promise;
     }
+    return undefined;
   });
   const reporter = new MediaServerPlaybackReporter(fake.manager, () => authority());
   const first = reporter.report(authority(), "rlib_1", "item-1", report("start"));
@@ -115,6 +135,7 @@ test("a failed start forgets its session and a later progress starts a new one",
       fail = false;
       throw new MediaServerError("not-found", "gone");
     }
+    return undefined;
   });
   let next = 0;
   const reporter = new MediaServerPlaybackReporter(fake.manager, () => authority(), {
@@ -123,6 +144,28 @@ test("a failed start forgets its session and a later progress starts a new one",
   await reporter.report(authority(), "rlib_1", "item-1", report("start"));
   await reporter.report(authority(), "rlib_1", "item-1", report("progress"));
   assert.deepEqual(fake.calls.map((call) => call.report.playSessionId), ["a".repeat(32), "b".repeat(32)]);
+});
+
+test("a refused start suppresses progress until an explicit start after stop", async () => {
+  const fake = fakeManager();
+  let refused = true;
+  fake.onReport(async (call) => {
+    if (call.report.kind === "playing" && refused) {
+      refused = false;
+      throw new MediaServerError("no-compatible-stream", "refused");
+    }
+    return undefined;
+  });
+  const reporter = new MediaServerPlaybackReporter(fake.manager, () => authority());
+  const actor = authority();
+
+  await reporter.report(actor, "rlib_1", "item-1", report("start"));
+  await reporter.report(actor, "rlib_1", "item-1", report("progress"));
+  await reporter.report(actor, "rlib_1", "item-1", report("stop"));
+  assert.deepEqual(fake.calls.map((call) => call.report.kind), ["playing"]);
+
+  await reporter.report(actor, "rlib_1", "item-1", report("start"));
+  assert.deepEqual(fake.calls.map((call) => call.report.kind), ["playing", "playing"]);
 });
 
 test("the idle sweep stops through a rebuilt authority and uses the last position", async () => {

@@ -18,6 +18,7 @@ interface Harness {
   store: Store;
   stopped: Array<string | undefined>;
   stoppedUsers: string[];
+  forgottenUsers: string[];
   /** Which sweep ran, so a test can tell a session teardown from a whole-account one. */
   sweeps: string[];
   close(): Promise<void>;
@@ -34,6 +35,7 @@ const mount = async (state?: unknown): Promise<Harness> => {
   const stopped: Array<string | undefined> = [];
   const stoppedUsers: string[] = [];
   const sweeps: string[] = [];
+  const forgottenUsers: string[] = [];
   const currentSession = (req: express.Request): SessionInfo | undefined => {
     const token = parseCookies(req.headers.cookie)[SESSION_COOKIE];
     const id = sessionUserId(token);
@@ -54,6 +56,7 @@ const mount = async (state?: unknown): Promise<Harness> => {
     isSecure: (req) => req.headers["x-forwarded-proto"] === "https" || req.protocol === "https",
     stopOwnedPlayback: async (sid) => { stopped.push(sid); },
     stopUserSessions: async (userId) => { stoppedUsers.push(userId); sweeps.push(`sessions:${userId}`); },
+    forgetMediaPlayback: (userId) => { forgottenUsers.push(userId); },
     requireAccess: () => undefined,
     stopContentAccess: async () => undefined,
   };
@@ -74,7 +77,7 @@ const mount = async (state?: unknown): Promise<Harness> => {
     base: `http://127.0.0.1:${port}`,
     store,
     stopped,
-    stoppedUsers, sweeps,
+    stoppedUsers, sweeps, forgottenUsers,
     close: async () => {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -395,6 +398,7 @@ test("POST /api/auth/logout with everywhere rotates only that account's secret",
   // Every device of that one account is swept, and nobody else's: "sign out everywhere"
   // stops the streams the other devices left running, not the whole instance's.
   assert.deepEqual(harness.stoppedUsers, [owner.id]);
+  assert.deepEqual(harness.forgottenUsers, [owner.id]);
   assert.deepEqual(harness.stopped, []);
 });
 
@@ -425,6 +429,7 @@ test("POST /api/auth/logout without everywhere records the session id in revoked
   assert.equal(findUserById(harness.store.users(), owner.id)?.secret, "old-secret");
   assert.equal(findUserById(harness.store.users(), owner.id)?.revoked?.["sid-single"], expiresAt);
   assert.deepEqual(harness.stopped, ["sid-single"]);
+  assert.deepEqual(harness.forgottenUsers, [owner.id]);
 });
 
 test("PATCH /api/auth/password refuses a wrong current password and a short new one", async (t) => {

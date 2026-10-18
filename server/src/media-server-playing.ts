@@ -24,6 +24,10 @@ export interface PlaybackReporterSeams {
 const invalid = (message: string): MediaServerError => new MediaServerError("invalid-input", message);
 const REPORT_KEYS = ["mediaSourceId", "position", "paused", "event"];
 const PLAYBACK_EVENTS = new Set<PlaybackEvent>(["start", "progress", "stop"]);
+const PLAYBACK_REFUSAL_CODES = new Set([
+  "playback-not-allowed", "no-compatible-stream", "rate-limited", "bitrate-limit",
+  "unsupported-policy", "forbidden",
+]);
 const MEDIA_SOURCE_ID_MAX = 256;
 const POSITION_MAX = 10_000_000;
 const TICKS_PER_SECOND = 10_000_000;
@@ -69,6 +73,7 @@ interface LivePlayback {
   itemId: string;
   mediaSourceId: string;
   playSessionId: string;
+  providerPlaySessionId?: string;
   position: number;
   paused: boolean;
   lastSeen: number;
@@ -84,6 +89,7 @@ export class MediaServerPlaybackReporter {
   private readonly maxSessions: number;
   private readonly newSessionId: () => string;
   private readonly live = new Map<string, LivePlayback>();
+  private readonly refused = new Map<string, true>();
   private readonly tails = new Map<string, Promise<void>>();
   private timer: ReturnType<typeof setInterval> | undefined;
   private closing: Promise<void> | undefined;
@@ -108,6 +114,7 @@ export class MediaServerPlaybackReporter {
       const current = this.live.get(key);
       if (report.event === "stop") {
         if (!current) return;
+        this.clearRefusal(key);
         current.position = report.position;
         current.paused = report.paused;
         this.live.delete(key);
@@ -116,6 +123,8 @@ export class MediaServerPlaybackReporter {
       }
 
       if (!current) {
+        if (this.refused.has(key) && report.event !== "start") return;
+        if (report.event === "start") this.clearRefusal(key);
         if (this.live.size >= this.maxSessions) this.evictOldest();
         const created: LivePlayback = {
           key,
@@ -193,15 +202,22 @@ export class MediaServerPlaybackReporter {
       const report: ProviderPlaybackReport = {
         kind,
         mediaSourceId: entry.mediaSourceId,
-        playSessionId: entry.playSessionId,
+        playSessionId: entry.providerPlaySessionId ?? entry.playSessionId,
         positionTicks: Math.round(entry.position * TICKS_PER_SECOND),
         isPaused: entry.paused,
         ...(kind === "progress" && eventName !== undefined ? { eventName } : {}),
       };
       try {
-        await this.manager.reportPlayback(authority, entry.libraryId, entry.itemId, report);
+        const providerPlaySessionId = await this.manager.reportPlayback(authority, entry.libraryId, entry.itemId, report);
+        if (kind === "playing" && providerPlaySessionId !== undefined && this.live.get(entry.key) === entry) {
+          entry.providerPlaySessionId = providerPlaySessionId;
+        }
+        if (kind === "playing") this.clearRefusal(entry.key);
       } catch (error) {
-        if (kind === "playing" && this.live.get(entry.key) === entry) this.live.delete(entry.key);
+        if (kind === "playing" && this.live.get(entry.key) === entry) {
+          this.live.delete(entry.key);
+          if (isMediaServerError(error) && PLAYBACK_REFUSAL_CODES.has(error.code)) this.rememberRefusal(entry.key);
+        }
         log("DEBUG", "Media-server playback report failed", {
           kind,
           code: isMediaServerError(error) ? error.code : undefined,
@@ -230,5 +246,19 @@ export class MediaServerPlaybackReporter {
       if (!oldest || entry.lastSeen < oldest.lastSeen) oldest = entry;
     }
     if (oldest) void this.stopIdle(oldest);
+  }
+
+  private rememberRefusal(key: string): void {
+    this.refused.delete(key);
+    this.refused.set(key, true);
+    while (this.refused.size > this.maxSessions) {
+      const oldest = this.refused.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.refused.delete(oldest);
+    }
+  }
+
+  private clearRefusal(key: string): void {
+    this.refused.delete(key);
   }
 }
