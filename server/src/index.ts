@@ -717,7 +717,11 @@ setInterval(() => {
   }
 }, 1000).unref();
 
-const routeContext: RouteContext = { store, needsSetup, currentSession, currentUser, isSecure, stopOwnedPlayback, stopUserSessions, requireAccess, stopContentAccess };
+const routeContext: RouteContext = {
+  store, needsSetup, currentSession, currentUser, isSecure, stopOwnedPlayback, stopUserSessions,
+  forgetMediaPlayback: (userId) => mediaServers.forgetPlaybackAdmissions(userId),
+  requireAccess, stopContentAccess,
+};
 registerAuthRoutes(app, routeContext);
 registerUsersRoutes(app, { ...routeContext, deleteUserAccess, permissionsChanged });
 

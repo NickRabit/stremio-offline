@@ -117,6 +117,20 @@ export interface ProviderVersion {
   externalSubtitles?: Array<{ index: number; language?: string; title?: string }>;
 }
 
+export interface ProviderPlaybackSource {
+  id: string;
+  bitrate?: number;
+  supportsDirectPlay: boolean;
+  supportsDirectStream: boolean;
+  supportsTranscoding: boolean;
+}
+
+export interface ProviderPlaybackInfo {
+  mediaSources: ProviderPlaybackSource[];
+  playSessionId?: string;
+  errorCode?: "NotAllowed" | "NoCompatibleStream" | "RateLimitExceeded";
+}
+
 export interface ProviderPlaybackReport {
   kind: "playing" | "progress" | "stopped";
   mediaSourceId: string;
@@ -138,6 +152,17 @@ export interface MediaServerProvider {
   detail(token: string, accountId: string, itemId: string, signal?: AbortSignal): Promise<ProviderItem>;
   ancestors(token: string, accountId: string, itemId: string, signal?: AbortSignal): Promise<string[]>;
   versions(token: string, accountId: string, itemId: string, signal?: AbortSignal): Promise<ProviderVersion[]>;
+  playbackInfo(
+    token: string,
+    accountId: string,
+    itemId: string,
+    options: {
+      mediaSourceId?: string;
+      maxStreamingBitrate?: number;
+      isPlayback: boolean;
+    },
+    signal?: AbortSignal,
+  ): Promise<ProviderPlaybackInfo>;
   reportPlayback(token: string, itemId: string, report: ProviderPlaybackReport, signal?: AbortSignal): Promise<void>;
   /** Resolve a catalogue id to the one library item that carries it: exactly one bounded list
    *  query, with every returned row re-checked locally for the exact provider id. Emby answers
@@ -159,6 +184,8 @@ const VERSIONS_MAX = 200;
 const EXTERNAL_SUBTITLES_MAX = 64;
 const SUBTITLE_INDEX_MAX = 1023;
 const SUBTITLE_TEXT_CODECS = new Set(["subrip", "srt"]);
+const PLAY_SESSION_ID = /^[0-9a-f]{32}$/;
+const PLAYBACK_ERROR_CODES = new Set<NonNullable<ProviderPlaybackInfo["errorCode"]>>(["NotAllowed", "NoCompatibleStream", "RateLimitExceeded"]);
 const PROVIDER_ID_MAX = 512;
 const CURSOR_MAX = 8192;
 const CURSOR_JSON_BYTES_MAX = 6144;
@@ -538,6 +565,36 @@ function isPlainFile(source: Record<string, unknown>): boolean {
 const isHlsOrSegmented = (source: Record<string, unknown>): boolean =>
   [source.Protocol, source.Container, source.Path].some((value) => typeof value === "string" && /hls|m3u8/i.test(value));
 
+function playbackInfoSource(raw: unknown): ProviderPlaybackSource | undefined {
+  const source = asObject(raw, "The playback media-source entry");
+  const id = requiredString(source.Id, MEDIA_SERVER_LIMITS.upstreamId, "media-source id");
+  const support = (field: "SupportsDirectPlay" | "SupportsDirectStream" | "SupportsTranscoding"): boolean => {
+    const value = source[field];
+    if (value === undefined) return false;
+    if (typeof value !== "boolean") throw invalidResponse(`The media-server ${field} field is not a boolean.`);
+    return value;
+  };
+  const supportsDirectPlay = support("SupportsDirectPlay");
+  const supportsDirectStream = support("SupportsDirectStream");
+  const supportsTranscoding = support("SupportsTranscoding");
+  let bitrate: number | undefined;
+  if (source.Bitrate !== undefined) {
+    if (typeof source.Bitrate !== "number" || !Number.isSafeInteger(source.Bitrate) || source.Bitrate < 0) {
+      throw invalidResponse("The media-server media-source bitrate is malformed.");
+    }
+    if (source.Bitrate > 0) bitrate = source.Bitrate;
+  }
+  if (source.Protocol !== "File" || isHlsOrSegmented(source) || !isPlainFile(source)) return undefined;
+  if (source.LiveStreamId !== undefined && source.LiveStreamId !== null && source.LiveStreamId !== "") return undefined;
+  return {
+    id,
+    ...(bitrate === undefined ? {} : { bitrate }),
+    supportsDirectPlay,
+    supportsDirectStream,
+    supportsTranscoding,
+  };
+}
+
 export function createMediaServerProvider(kind: MediaServerKind, transport: MediaServerTransport): MediaServerProvider {
   if (!MEDIA_SERVER_KINDS.includes(kind)) throw invalid("The media-server provider kind is not supported.");
 
@@ -842,6 +899,55 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
     return versions;
   }
 
+  async function playbackInfo(
+    token: string,
+    accountId: string,
+    itemId: string,
+    options: {
+      mediaSourceId?: string;
+      maxStreamingBitrate?: number;
+      isPlayback: boolean;
+    },
+    signal?: AbortSignal,
+  ): Promise<ProviderPlaybackInfo> {
+    const response = asObject(await transport.requestJson("playbackInfo", {
+      userId: accountId,
+      itemId,
+      ...(options.mediaSourceId === undefined ? {} : { mediaSourceId: options.mediaSourceId }),
+      ...(options.maxStreamingBitrate === undefined ? {} : { maxStreamingBitrate: options.maxStreamingBitrate }),
+      isPlayback: options.isPlayback,
+    }, token, signal), "The playback-info response");
+    const rawError = response.ErrorCode;
+    if (rawError !== undefined) {
+      if (typeof rawError !== "string" || !PLAYBACK_ERROR_CODES.has(rawError as NonNullable<ProviderPlaybackInfo["errorCode"]>)) {
+        throw invalidResponse("The media-server playback error code is not supported.");
+      }
+      const errorCode = rawError as NonNullable<ProviderPlaybackInfo["errorCode"]>;
+      if (errorCode === "RateLimitExceeded") transport.noteRateLimit();
+      return { mediaSources: [], errorCode };
+    }
+    let playSessionId: string | undefined;
+    if (response.PlaySessionId !== undefined) {
+      if (typeof response.PlaySessionId !== "string" || !PLAY_SESSION_ID.test(response.PlaySessionId)) {
+        throw invalidResponse("The media-server playback session id is malformed.");
+      }
+      playSessionId = response.PlaySessionId;
+    }
+    let mediaSources: ProviderPlaybackSource[] = [];
+    if (response.MediaSources !== undefined) {
+      if (!Array.isArray(response.MediaSources)) throw invalidResponse("The playback-info response has no media-source array.");
+      if (response.MediaSources.length > VERSIONS_MAX) throw invalidResponse("The playback-info response has too many media sources.");
+      mediaSources = response.MediaSources.flatMap((source) => {
+        const parsed = playbackInfoSource(source);
+        return parsed === undefined ? [] : [parsed];
+      });
+    }
+    return {
+      mediaSources,
+      ...(playSessionId === undefined ? {} : { playSessionId }),
+    };
+  }
+
   async function reportPlayback(token: string, itemId: string, report: ProviderPlaybackReport, signal?: AbortSignal): Promise<void> {
     if (report.kind === "playing") {
       await transport.requestJson("playing", {
@@ -872,5 +978,5 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
     }, token, signal);
   }
 
-  return { verifyIdentity, authenticate, currentAccount, listLibraries, pageItems, pageDirectory, detail, findByProviderIds, ancestors, versions, reportPlayback };
+  return { verifyIdentity, authenticate, currentAccount, listLibraries, pageItems, pageDirectory, detail, findByProviderIds, ancestors, versions, playbackInfo, reportPlayback };
 }

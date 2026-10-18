@@ -35,6 +35,8 @@ const TEXTS = Object.freeze({
   stale: "The media-server configuration changed. Try again.",
   identity: "The media-server identity changed. Recreate the connection.",
   restricted: "This media-server account has unsupported restrictions.",
+  playbackNotAllowed: "The media-server account is not allowed to play this item.",
+  noCompatibleStream: "The media server has no compatible direct-play stream for this item.",
   bitrateLimit: "This file is above the streaming bitrate limit of the media-server account. Download it instead.",
 });
 
@@ -67,6 +69,10 @@ export const toHttpError = (error: MediaServerError): AppError => {
       return new AppError(TEXTS.identity, "err.mediaServerIdentity", 409);
     case "unsupported-policy":
       return new AppError(TEXTS.restricted, "err.mediaServerRestricted", 403);
+    case "playback-not-allowed":
+      return new AppError(TEXTS.playbackNotAllowed, "err.mediaServerPlaybackNotAllowed", 403);
+    case "no-compatible-stream":
+      return new AppError(TEXTS.noCompatibleStream, "err.mediaServerNoCompatibleStream", 422);
     case "bitrate-limit":
       return new AppError(TEXTS.bitrateLimit, "err.mediaServerBitrateLimit", 403);
     case "authentication-required":

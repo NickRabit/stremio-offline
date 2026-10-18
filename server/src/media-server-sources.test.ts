@@ -81,6 +81,18 @@ const stubProvider = (server: FakeServer): MediaServerProvider => ({
   },
   ancestors: async (_token, _account, itemId) => { await server.run(); return [...(server.ancestorsOf[itemId] ?? [])]; },
   versions: async (_token, _account, itemId) => { await server.run(); return clone(server.versionsOf[itemId] ?? []); },
+  playbackInfo: async (_token, _account, itemId) => {
+    await server.run();
+    return {
+      mediaSources: (server.versionsOf[itemId] ?? []).map((version) => ({
+        id: version.id,
+        ...(version.bitrate === undefined ? {} : { bitrate: version.bitrate }),
+        supportsDirectPlay: true,
+        supportsDirectStream: false,
+        supportsTranscoding: false,
+      })),
+    };
+  },
   reportPlayback: async () => { throw new Error("the stub provider does not report playback"); },
 });
 
@@ -98,6 +110,7 @@ const stubTransport = (server: FakeServer): MediaServerTransport => ({
     await server.onOriginal?.();
     return new Response(new ReadableStream<Uint8Array>({ cancel: () => { server.originalCancels += 1; } }), { status: 200, headers: { "content-range": "bytes 0-0/1" } });
   },
+  noteRateLimit: () => undefined,
   close: async () => undefined,
 });
 

@@ -1297,6 +1297,8 @@ export const de: Catalog = {
   "err.mediaServerIdentity": "Die Identität des Medienservers hat sich geändert. Erstelle die Verbindung neu.",
   "err.mediaServerFormatUnknown": "Der Medienserver hat kein unterstütztes Format der Originaldatei angegeben.",
   "err.mediaServerRestricted": "Dieses Medienserver-Konto hat nicht unterstützte Einschränkungen.",
+  "err.mediaServerPlaybackNotAllowed": "Diesem Medienserver-Konto ist die Wiedergabe dieses Elements nicht erlaubt.",
+  "err.mediaServerNoCompatibleStream": "Der Medienserver bietet für dieses Element keinen kompatiblen Stream für die direkte Wiedergabe.",
   "err.mediaServerBitrateLimit": "Diese Datei überschreitet das Streaming-Bitratenlimit des Medienserver-Kontos. Laden Sie sie stattdessen herunter.",
   "err.notAllowed": "Mit diesem Konto ist das möglicherweise nicht möglich.",
   "err.homeLayoutShape": "Ein Startseiten-Layout muss eine Reihenfolge, die ausgeblendeten Reihen und die Feeds angeben.",

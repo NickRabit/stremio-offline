@@ -209,6 +209,29 @@ test("both playback preparation routes map a bitrate refusal for both authorizat
   }
 });
 
+test("playback preparation maps policy refusals without forwarding provider text", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.useSource({ url: sealedRemote() } as StreamItem);
+  const sources = harness.mediaSources as unknown as { assertCurrent(): void; authorize(): Promise<void> };
+  sources.assertCurrent = () => undefined;
+
+  const sentinel = "SENTINEL-PROVIDER-TEXT";
+  for (const path of ["/api/inspect", "/api/playback"]) {
+    for (const [error, status, key] of [
+      [new MediaServerError("playback-not-allowed", sentinel), 403, "err.mediaServerPlaybackNotAllowed"],
+      [new MediaServerError("no-compatible-stream", sentinel), 422, "err.mediaServerNoCompatibleStream"],
+    ] as const) {
+      sources.authorize = async () => { throw error; };
+      const response = await api(harness.base, path, { method: "POST", user: "ada", body: {} });
+      assert.equal(response.status, status, `${path} ${error.code}`);
+      const body = await response.text();
+      assert.equal((JSON.parse(body) as { messageKey?: string }).messageKey, key);
+      assert.equal(body.includes(sentinel), false, "provider text never reaches the response");
+    }
+  }
+});
+
 test("the ownership guard answers somebody else's session with a bare 404", async (t) => {
   const harness = await mount();
   t.after(harness.close);
