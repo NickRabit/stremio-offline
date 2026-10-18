@@ -14,6 +14,7 @@ import {
   type SearchStartRequest,
   type StrongIds,
 } from "./search-contracts.js";
+import { enoughMatched, relevance, type Relevance } from "./search-relevance.js";
 import {
   ClusterKeyTracker,
   clusterIdentities,
@@ -60,6 +61,7 @@ export interface SearchSource {
   continuation: "supported" | "unsupported";
   next(cursor: unknown, signal: AbortSignal): Promise<SourcePage>;
   stillAllowed(): boolean;
+  expand?(ids: StrongIds, kind: SearchKind, signal: AbortSignal): Promise<RawSearchRecord[]>;
   onReady?(listener: () => void): () => void;
 }
 
@@ -95,6 +97,7 @@ interface StoredRecord {
   record: RawSearchRecord;
   source: SourceState;
   serializedLength: number;
+  relevance: Relevance;
 }
 
 interface SourceState {
@@ -104,6 +107,7 @@ interface SourceState {
   stateBeforePage: SearchSourceState;
   records: Map<string, StoredRecord>;
   buffer: RawSearchRecord[];
+  pendingParentRecords: RawSearchRecord[];
   cursor: unknown;
   exhausted: boolean;
   stale: boolean;
@@ -118,6 +122,10 @@ interface SourceState {
   jobFailure?: unknown;
   readyUnsubscribe?: () => void;
   lastRetryAt?: number;
+  expansionRunning: boolean;
+  expansionToken: number;
+  expansionCancel?: () => void;
+  pendingExpansions: Map<string, { ids: StrongIds; kind: SearchKind; groupScore: number }>;
 }
 
 interface WaitingPoll {
@@ -158,8 +166,9 @@ interface ManagedSession {
   childrenByParent: Map<string, RawGroup[]>;
   mainOrder: string[];
   unidentifiedOrder: string[];
-  previousVisibleMembers: Map<string, Set<string>>;
   aliases: { retired: string; current: string }[];
+  expandedGroups: Set<string>;
+  expandedSourceRequests: Set<string>;
   waitingPoll?: WaitingPoll;
   initialResolve?: () => void;
   initialTimer?: unknown;
@@ -356,6 +365,7 @@ export class SearchSessionManager {
       request: {
         ...request,
         sources: [...request.sources],
+        ...(request.scope === undefined ? {} : { scope: { ...request.scope } }),
       },
       revision: 1,
       sources: [],
@@ -370,8 +380,9 @@ export class SearchSessionManager {
       childrenByParent: new Map(),
       mainOrder: [],
       unidentifiedOrder: [],
-      previousVisibleMembers: new Map(),
       aliases: [],
+      expandedGroups: new Set(),
+      expandedSourceRequests: new Set(),
       destroyed: false,
       recordsDirty: false,
     };
@@ -383,6 +394,7 @@ export class SearchSessionManager {
         stateBeforePage: "queued",
         records: new Map(),
         buffer: [],
+        pendingParentRecords: [],
         cursor: undefined,
         exhausted: false,
         stale: false,
@@ -392,6 +404,9 @@ export class SearchSessionManager {
         firstSettled: false,
         jobRunning: false,
         jobToken: 0,
+        expansionRunning: false,
+        expansionToken: 0,
+        pendingExpansions: new Map(),
       });
     }
     this.sessions.set(id, session);
@@ -662,6 +677,11 @@ export class SearchSessionManager {
     source.jobRunning = false;
     source.jobCancel?.();
     source.jobCancel = undefined;
+    source.expansionToken += 1;
+    source.expansionRunning = false;
+    source.expansionCancel?.();
+    source.expansionCancel = undefined;
+    source.pendingExpansions.clear();
     source.readyUnsubscribe?.();
     source.readyUnsubscribe = undefined;
     for (const item of source.records.values()) {
@@ -673,6 +693,7 @@ export class SearchSessionManager {
     if (source.records.size) session.recordsDirty = true;
     source.records.clear();
     source.buffer = [];
+    source.pendingParentRecords = [];
     if (allFirstPagesSettled(session)) this.finishInitialWait(session);
   }
 
@@ -811,9 +832,56 @@ export class SearchSessionManager {
     token: number,
   ): void {
     if (source.jobToken !== token || session.destroyed) return;
-    let gained = false;
+    const parentTitles = new Map<string, string>();
+    for (const stored of source.records.values()) {
+      if (stored.record.kind === "series") parentTitles.set(stored.record.itemKey, stored.record.title);
+    }
     for (const record of records) {
+      if (record.kind === "series") parentTitles.set(record.itemKey, record.title);
+    }
+    const waiting = source.pendingParentRecords.filter((record) =>
+      record.parentRef !== undefined && parentTitles.has(record.parentRef),
+    );
+    source.pendingParentRecords = source.pendingParentRecords.filter((record) =>
+      record.parentRef === undefined || !parentTitles.has(record.parentRef),
+    );
+    const work = [...waiting, ...records];
+    for (const record of work) {
+      if (record.kind === "series") parentTitles.set(record.itemKey, record.title);
+    }
+    let gained = false;
+    for (const record of work) {
       if (session.limitReached) break;
+      const searchText = record.searchText;
+      const score = relevance(session.request.query, {
+        title: record.title,
+        ...(record.originalTitle === undefined ? {} : { originalTitle: record.originalTitle }),
+        ...(searchText?.parentTitle === undefined
+          ? record.kind === "episode" && record.parentRef !== undefined
+            ? { parentTitle: parentTitles.get(record.parentRef) ?? "" }
+            : {}
+          : { parentTitle: searchText.parentTitle }),
+        ...(searchText?.path === undefined ? {} : { path: searchText.path }),
+      });
+      if (
+        source.source.sourceClass !== "catalog"
+        && !enoughMatched(score)
+      ) {
+        if (
+          record.kind === "episode"
+          && record.searchText?.parentTitle === undefined
+          && record.parentRef !== undefined
+          && !parentTitles.has(record.parentRef)
+        ) {
+          const alreadyWaiting = source.pendingParentRecords.some((candidate) =>
+            candidate.itemKey === record.itemKey && candidate.kind === record.kind,
+          );
+          if (!alreadyWaiting) source.pendingParentRecords.push(record);
+          continue;
+        }
+        source.dropped += 1;
+        continue;
+      }
       const memberKey = memberKeyFor(source.source.id, record.itemKey, record.kind);
       const existing = session.records.get(memberKey);
       const serializedLength = JSON.stringify(record).length;
@@ -830,6 +898,7 @@ export class SearchSessionManager {
           record,
           source,
           serializedLength,
+          relevance: score,
         };
         session.records.set(memberKey, stored);
         source.records.set(memberKey, stored);
@@ -840,6 +909,7 @@ export class SearchSessionManager {
         session.recordBytes = session.recordBytes - existing.serializedLength + serializedLength;
         existing.record = record;
         existing.serializedLength = serializedLength;
+        existing.relevance = score;
         session.recordsDirty = true;
         source.records.set(memberKey, existing);
       }
@@ -998,6 +1068,23 @@ export class SearchSessionManager {
       left.sequence - right.sequence || compareText(left.memberKey, right.memberKey),
     );
     const byItem = new Map(records.map((stored) => [`${stored.source.source.id}\0${stored.record.itemKey}`, stored]));
+    for (const stored of records) {
+      if (
+        stored.record.kind !== "episode"
+        || stored.record.parentRef === undefined
+        || stored.record.searchText?.parentTitle !== undefined
+      ) {
+        continue;
+      }
+      const parent = byItem.get(`${stored.source.source.id}\0${stored.record.parentRef}`);
+      if (parent === undefined) continue;
+      stored.relevance = relevance(session.request.query, {
+        title: stored.record.title,
+        ...(stored.record.originalTitle === undefined ? {} : { originalTitle: stored.record.originalTitle }),
+        parentTitle: parent.record.title,
+        ...(stored.record.searchText?.path === undefined ? {} : { path: stored.record.searchText.path }),
+      });
+    }
     const resolvedParents = new Map<string, StrongIds>();
     const identityIds = new Map<string, StrongIds>();
     for (const stored of records) {
@@ -1043,6 +1130,10 @@ export class SearchSessionManager {
     const rawGroups = identities.map((identity, index) =>
       this.rawGroup(session, identity, assigned.keys[index]!, stores, resolvedParents),
     );
+    const groupByMember = new Map<string, RawGroup>();
+    for (const group of rawGroups) {
+      for (const member of group.members) groupByMember.set(member.memberKey, group);
+    }
 
     const attached = new Map<string, RawGroup[]>();
     const attachedKeys = new Set<string>();
@@ -1059,6 +1150,42 @@ export class SearchSessionManager {
       attached.set(series.key, children);
       attachedKeys.add(group.key);
     }
+    for (const group of rawGroups) {
+      if (
+        group.kind !== "episode"
+        || attachedKeys.has(group.key)
+        || group.members.length === 0
+      ) {
+        continue;
+      }
+      const parents = new Set<RawGroup>();
+      let complete = true;
+      for (const member of group.members) {
+        const parentRef = member.record.parentRef;
+        if (parentRef === undefined) {
+          complete = false;
+          break;
+        }
+        const parentRecord = byItem.get(`${member.source.source.id}\0${parentRef}`);
+        const parentGroup = parentRecord === undefined ? undefined : groupByMember.get(parentRecord.memberKey);
+        if (
+          parentGroup === undefined
+          || parentGroup.kind !== "series"
+          || parentGroup.conflict
+          || !parentGroup.parentsCompatible
+        ) {
+          complete = false;
+          break;
+        }
+        parents.add(parentGroup);
+      }
+      if (!complete || parents.size !== 1) continue;
+      const series = [...parents][0]!;
+      const children = attached.get(series.key) ?? [];
+      children.push(group);
+      attached.set(series.key, children);
+      attachedKeys.add(group.key);
+    }
     for (const [seriesKey, children] of attached) {
       const series = rawGroups.find((group) => group.key === seriesKey);
       if (series !== undefined) series.view.episodeCount = children.length;
@@ -1066,10 +1193,7 @@ export class SearchSessionManager {
 
     session.groups = rawGroups;
     session.childrenByParent = attached;
-    session.groupByMember = new Map();
-    for (const group of rawGroups) {
-      for (const member of group.members) session.groupByMember.set(member.memberKey, group);
-    }
+    session.groupByMember = groupByMember;
 
     const main = rawGroups.filter((group) =>
       group.kind !== "folder" && group.kind !== "file" && group.kind !== "season" && !attachedKeys.has(group.key),
@@ -1077,11 +1201,9 @@ export class SearchSessionManager {
     const unidentified = rawGroups.filter((group) =>
       group.kind === "folder" || group.kind === "file" || group.kind === "season",
     );
-    session.mainOrder = this.orderGroups(main, session.mainOrder, session.previousVisibleMembers);
-    session.unidentifiedOrder = this.orderGroups(unidentified, session.unidentifiedOrder, session.previousVisibleMembers);
-    session.previousVisibleMembers = new Map(
-      [...main, ...unidentified].map((group) => [group.key, new Set(group.members.map((member) => member.memberKey))]),
-    );
+    session.mainOrder = this.orderGroups(main);
+    session.unidentifiedOrder = this.orderGroups(unidentified);
+    this.scheduleExpansions(session);
   }
 
   private rawGroup(
@@ -1106,6 +1228,7 @@ export class SearchSessionManager {
       ...(member.record.background === undefined ? {} : { background: member.record.background }),
       ...(member.record.description === undefined ? {} : { description: member.record.description }),
       hasStrongId: idsHaveValue(parentIds.get(member.memberKey) ?? validStrongIds(member.record.ids)),
+      score: member.relevance.score,
     }));
     const primary = pickPrimary(session.request.query, candidates);
     let year = primary.year;
@@ -1122,6 +1245,7 @@ export class SearchSessionManager {
       const label = cut(member.source.source.label, this.limits.labelMaxCodePoints);
       if (!sourceLabels.includes(label)) sourceLabels.push(label);
     }
+    const ratings = members.flatMap((member) => member.record.rating === undefined ? [] : [member.record.rating]);
     const view: SearchClusterView = {
       key,
       kind,
@@ -1137,6 +1261,8 @@ export class SearchSessionManager {
       primaryMemberKey: primary.memberKey,
       memberKeys: members.map((member) => member.memberKey),
       rank: titleRank(session.request.query, primary.title, primary.originalTitle),
+      score: Math.max(...members.map((member) => this.memberScore(member))),
+      ...(ratings.length === 0 ? {} : { rating: Math.max(...ratings) }),
     };
     return {
       key,
@@ -1149,50 +1275,201 @@ export class SearchSessionManager {
     };
   }
 
-  private orderGroups(
-    groups: RawGroup[],
-    previousOrder: string[],
-    previousMembers: Map<string, Set<string>>,
-  ): string[] {
-    const byKey = new Map(groups.map((group) => [group.key, group]));
-    const result = previousOrder.filter((key) => byKey.has(key));
-    const survivors = new Set(result);
-    const insertions = new Map<string, RawGroup[]>();
-    const fresh: RawGroup[] = [];
-    for (const group of [...groups].sort((left, right) => this.compareGroups(left, right))) {
-      if (survivors.has(group.key)) continue;
-      const memberKeys = new Set(group.members.map((member) => member.memberKey));
-      let anchor: string | undefined;
-      for (const previousKey of previousOrder) {
-        if (!survivors.has(previousKey)) continue;
-        const previous = previousMembers.get(previousKey);
-        if (previous === undefined) continue;
-        if (![...memberKeys].some((memberKey) => previous.has(memberKey))) continue;
-        anchor = previousKey;
-        break;
-      }
-      if (anchor === undefined) {
-        fresh.push(group);
-      } else {
-        const children = insertions.get(anchor) ?? [];
-        children.push(group);
-        insertions.set(anchor, children);
-      }
-    }
-    const ordered: string[] = [];
-    for (const key of result) {
-      ordered.push(key);
-      for (const child of insertions.get(key) ?? []) ordered.push(child.key);
-    }
-    for (const group of fresh) ordered.push(group.key);
-    return ordered;
+  private orderGroups(groups: RawGroup[]): string[] {
+    return [...groups]
+      .sort((left, right) => this.compareGroups(left, right))
+      .map((group) => group.key);
   }
 
   private compareGroups(left: RawGroup, right: RawGroup): number {
-    return left.view.rank - right.view.rank
-      || Number(right.view.hasLocal) - Number(left.view.hasLocal)
-      || left.members[0]!.sequence - right.members[0]!.sequence
+    return right.view.score - left.view.score
+      || Number(right.view.hasLocal || right.view.hasRemote) - Number(left.view.hasLocal || left.view.hasRemote)
+      || (right.view.rating ?? -1) - (left.view.rating ?? -1)
+      || Math.min(...left.members.map((member) => member.sequence))
+        - Math.min(...right.members.map((member) => member.sequence))
       || compareText(left.key, right.key);
+  }
+
+  private memberScore(member: StoredRecord): number {
+    if (
+      member.source.source.sourceClass === "catalog"
+      && member.relevance.matched === 0
+    ) {
+      return 500_000 - Math.min(member.record.sourcePosition ?? 99, 99) * 1_000;
+    }
+    return member.relevance.score;
+  }
+
+  private scheduleExpansions(session: ManagedSession): void {
+    if (session.destroyed || session.limitReached) return;
+    const byKey = new Map(session.groups.map((group) => [group.key, group]));
+    const groups = session.mainOrder
+      .flatMap((key) => {
+        const group = byKey.get(key);
+        return group === undefined ? [] : [group];
+      })
+      .filter((group) => idsHaveValue(group.ids) && !session.expandedGroups.has(group.key))
+      .slice(0, 5);
+    if (groups.length === 0) return;
+
+    for (const group of groups) {
+      session.expandedGroups.add(group.key);
+      for (const source of session.sources) {
+        if (
+          (source.source.sourceClass !== "local" && source.source.sourceClass !== "remote")
+          || source.source.expand === undefined
+        ) {
+          continue;
+        }
+        const requestKey = `${source.source.id}\0${NAMESPACES
+          .map((namespace) => `${namespace}:${group.ids[namespace] ?? ""}`)
+          .join("|")}`;
+        if (session.expandedSourceRequests.has(requestKey)) continue;
+        session.expandedSourceRequests.add(requestKey);
+        source.pendingExpansions.set(requestKey, {
+          ids: { ...group.ids },
+          kind: group.kind,
+          groupScore: group.view.score,
+        });
+      }
+    }
+    for (const source of session.sources) this.scheduleExpansionJob(session, source);
+  }
+
+  private scheduleExpansionJob(session: ManagedSession, source: SourceState): void {
+    if (
+      session.destroyed
+      || session.limitReached
+      || source.expansionRunning
+      || source.pendingExpansions.size === 0
+      || source.source.expand === undefined
+      || !session.sources.includes(source)
+    ) {
+      return;
+    }
+    const batch = [...source.pendingExpansions.values()];
+    source.pendingExpansions.clear();
+    source.expansionRunning = true;
+    const token = ++source.expansionToken;
+    const expanded: Array<{ records: RawSearchRecord[]; groupScore: number }> = [];
+    const job: SchedulerJob = {
+      sessionId: session.id,
+      sourceClass: source.source.sourceClass,
+      poolKey: source.source.poolKey,
+      order: source.order,
+      run: async (signal) => {
+        if (
+          session.destroyed
+          || session.limitReached
+          || source.expansionToken !== token
+          || !session.sources.includes(source)
+        ) {
+          throw new SourceFailure("cancelled");
+        }
+        if (!session.authority.isCurrent()) {
+          this.destroy(session);
+          throw new SourceFailure("cancelled");
+        }
+        for (const request of batch) {
+          if (signal.aborted || session.limitReached) return;
+          try {
+            const records = await source.source.expand!(request.ids, request.kind, signal);
+            expanded.push({ records, groupScore: request.groupScore });
+          } catch {
+            if (signal.aborted) return;
+          }
+        }
+      },
+    };
+    const task = this.scheduler.enqueue(job);
+    source.expansionCancel = task.cancel;
+    void task.done.then((result) => {
+      if (
+        session.destroyed
+        || source.expansionToken !== token
+        || !session.sources.includes(source)
+      ) {
+        return;
+      }
+      source.expansionRunning = false;
+      source.expansionCancel = undefined;
+      if (result === "ok" && !session.limitReached) {
+        let changed = false;
+        for (const entry of expanded) {
+          changed = this.applyExpansionRecords(session, source, entry.records, entry.groupScore) || changed;
+        }
+        if (changed) this.changed(session);
+      }
+      this.scheduleExpansionJob(session, source);
+    });
+  }
+
+  private applyExpansionRecords(
+    session: ManagedSession,
+    source: SourceState,
+    rawRecords: RawSearchRecord[],
+    groupScore: number,
+  ): boolean {
+    const records = rawRecords.flatMap((raw) => {
+      const projected = projectRecord(raw);
+      return projected === undefined || !matchesKind(projected, session.request.kind) ? [] : [projected];
+    });
+    if (records.length === 0) return false;
+    const parentTitles = new Map<string, string>();
+    for (const stored of source.records.values()) {
+      if (stored.record.kind === "series") parentTitles.set(stored.record.itemKey, stored.record.title);
+    }
+    for (const record of records) {
+      if (record.kind === "series") parentTitles.set(record.itemKey, record.title);
+    }
+
+    let changed = false;
+    for (const record of records) {
+      if (session.limitReached) break;
+      const memberKey = memberKeyFor(source.source.id, record.itemKey, record.kind);
+      const existing = session.records.get(memberKey);
+      const serializedLength = JSON.stringify(record).length;
+      const nextCount = session.records.size + (existing === undefined ? 1 : 0);
+      const nextBytes = session.recordBytes - (existing?.serializedLength ?? 0) + serializedLength;
+      if (nextCount > this.limits.recordsPerSession || nextBytes > this.limits.recordBytesPerSession) {
+        session.limitReached = true;
+        changed = true;
+        break;
+      }
+      const measured = relevance(session.request.query, {
+        title: record.title,
+        ...(record.originalTitle === undefined ? {} : { originalTitle: record.originalTitle }),
+        ...(record.searchText?.parentTitle === undefined
+          ? record.kind === "episode" && record.parentRef !== undefined
+            ? { parentTitle: parentTitles.get(record.parentRef) ?? "" }
+            : {}
+          : { parentTitle: record.searchText.parentTitle }),
+        ...(record.searchText?.path === undefined ? {} : { path: record.searchText.path }),
+      });
+      measured.score = Math.max(measured.score, groupScore - 1);
+      if (existing === undefined) {
+        const stored: StoredRecord = {
+          memberKey,
+          sequence: ++session.sequence,
+          record,
+          source,
+          serializedLength,
+          relevance: measured,
+        };
+        session.records.set(memberKey, stored);
+        source.records.set(memberKey, stored);
+        session.recordBytes += serializedLength;
+      } else {
+        session.recordBytes = session.recordBytes - existing.serializedLength + serializedLength;
+        existing.record = record;
+        existing.serializedLength = serializedLength;
+        existing.relevance = measured;
+        source.records.set(memberKey, existing);
+      }
+      session.recordsDirty = true;
+      changed = true;
+    }
+    return changed;
   }
 
   private memberView(stored: StoredRecord, conflict: boolean): SearchMember {
@@ -1226,6 +1503,14 @@ export class SearchSessionManager {
     group: RawGroup,
   ): { type: "movie" | "series"; id: string; name: string; poster?: string } | undefined {
     if ((group.kind !== "movie" && group.kind !== "series") || group.conflict) return undefined;
+    if (group.ids.imdb !== undefined) {
+      return {
+        type: group.kind,
+        id: group.ids.imdb,
+        name: group.view.title,
+        ...(group.view.poster === undefined ? {} : { poster: group.view.poster }),
+      };
+    }
     const catalog = [...group.members].sort((left, right) =>
       left.source.order - right.source.order || left.sequence - right.sequence,
     ).find((member) => member.record.locator.kind === "catalog");
@@ -1242,8 +1527,7 @@ export class SearchSessionManager {
     }
     const type = group.kind;
     let id: string | undefined;
-    if (group.ids.imdb !== undefined) id = group.ids.imdb;
-    else if (group.ids.tmdb !== undefined) id = `tmdb:${group.ids.tmdb}`;
+    if (group.ids.tmdb !== undefined) id = `tmdb:${group.ids.tmdb}`;
     else if (group.ids.tvdb !== undefined) id = `tvdb:${group.ids.tvdb}`;
     if (id === undefined) return undefined;
     return {
@@ -1263,6 +1547,8 @@ export class SearchSessionManager {
     for (const source of session.sources) {
       source.jobToken += 1;
       source.jobCancel?.();
+      source.expansionToken += 1;
+      source.expansionCancel?.();
       source.readyUnsubscribe?.();
     }
     const waiter = session.waitingPoll;
@@ -1304,7 +1590,10 @@ const sameRequest = (left: SearchStartRequest, right: SearchStartRequest): boole
   left.query === right.query
   && left.kind === right.kind
   && left.sources.length === right.sources.length
-  && left.sources.every((source, index) => source === right.sources[index]);
+  && left.sources.every((source, index) => source === right.sources[index])
+  && left.scope?.addonKey === right.scope?.addonKey
+  && left.scope?.catalogType === right.scope?.catalogType
+  && left.scope?.catalogId === right.scope?.catalogId;
 
 const matchesKind = (record: RawSearchRecord, filter: SearchStartRequest["kind"]): boolean => {
   if (record.kind === "folder" || record.kind === "file") return true;

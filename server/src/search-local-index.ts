@@ -1,8 +1,8 @@
 import { setImmediate as nextImmediate } from "node:timers";
-import { normalizeTitle } from "./library-match.js";
 import type { LibraryEntry } from "./library.js";
-import { parseLibraryPath, posixBase } from "./libraries.js";
-import { SEARCH_LIMITS, type SearchKindFilter } from "./search-contracts.js";
+import { parseLibraryPath } from "./libraries.js";
+import { SEARCH_LIMITS, type SearchKindFilter, type StrongIds } from "./search-contracts.js";
+import { enoughMatched, normalizeSearchText, relevance } from "./search-relevance.js";
 import { SourceFailure } from "./search-session.js";
 
 interface TimerApi {
@@ -29,7 +29,7 @@ interface IndexedEntry {
   entry: LibraryEntry;
   libraryId: string;
   titles: string[];
-  name: string;
+  pathSegments: string[];
 }
 
 const CHUNK_SIZE = 5_000;
@@ -98,10 +98,9 @@ export class LocalSearchIndex {
     signal?: AbortSignal,
   ): Promise<{ generation: number; entries: LibraryEntry[] }> {
     if (signal?.aborted) throw new SourceFailure("cancelled");
-    const normalizedQuery = normalizeTitle(query);
     const indexed = this.indexed;
     const generation = this.generation;
-    if (normalizedQuery === "") return { generation, entries: [] };
+    if (normalizeSearchText(query) === "") return { generation, entries: [] };
 
     const matches: Array<{ entry: LibraryEntry; score: number }> = [];
     for (let start = 0; start < indexed.length; start += CHUNK_SIZE) {
@@ -112,7 +111,7 @@ export class LocalSearchIndex {
         if (item.libraryId !== libraryId) continue;
         const type = item.entry.meta?.type;
         if (kind !== "all" && (type === "movie" || type === "series") && type !== kind) continue;
-        const score = this.score(item, normalizedQuery);
+        const score = this.score(item, query);
         if (score !== undefined) matches.push({ entry: item.entry, score });
       }
       if (end < indexed.length) {
@@ -121,12 +120,30 @@ export class LocalSearchIndex {
     }
     if (signal?.aborted) throw new SourceFailure("cancelled");
     matches.sort((left, right) =>
-      left.score - right.score || (left.entry.key < right.entry.key ? -1 : left.entry.key > right.entry.key ? 1 : 0),
+      right.score - left.score || (left.entry.key < right.entry.key ? -1 : left.entry.key > right.entry.key ? 1 : 0),
     );
     return {
       generation,
       entries: matches.slice(0, SEARCH_LIMITS.recordsPerSession).map((match) => match.entry),
     };
+  }
+
+  byIds(libraryId: string, ids: StrongIds, kind: "movie" | "series"): LibraryEntry[] {
+    const targets = [
+      ids.imdb === undefined ? undefined : ids.imdb.toLowerCase(),
+      ids.tmdb === undefined ? undefined : `tmdb:${ids.tmdb}`,
+      ids.tvdb === undefined ? undefined : `tvdb:${ids.tvdb}`,
+    ].filter((value): value is string => value !== undefined);
+    if (targets.length === 0) return [];
+    const found: LibraryEntry[] = [];
+    for (const item of this.indexed) {
+      if (item.libraryId !== libraryId || item.entry.meta?.type !== kind) continue;
+      const id = item.entry.meta.id.toLowerCase();
+      if (!targets.includes(id)) continue;
+      found.push(item.entry);
+      if (found.length === 20) break;
+    }
+    return found;
   }
 
   onReady(listener: () => void): () => void {
@@ -147,14 +164,13 @@ export class LocalSearchIndex {
   }
 
   private score(entry: IndexedEntry, query: string): number | undefined {
-    let best: number | undefined;
-    for (const title of entry.titles) {
-      if (title === query) return 0;
-      if (title.startsWith(query)) best = best === undefined ? 1 : Math.min(best, 1);
-      else if (title.includes(query)) best = best === undefined ? 2 : Math.min(best, 2);
-    }
-    if (best !== undefined) return best;
-    return entry.name.includes(query) ? 3 : undefined;
+    const [title = "", originalTitle] = entry.titles;
+    const result = relevance(query, {
+      title,
+      ...(originalTitle === undefined ? {} : { originalTitle }),
+      path: entry.pathSegments.join(" "),
+    });
+    return enoughMatched(result) ? result.score : undefined;
   }
 
   private async build(): Promise<void> {
@@ -199,13 +215,14 @@ export class LocalSearchIndex {
     for (const entry of entries) {
       const parsed = parseLibraryPath(entry.key);
       if (!parsed) continue;
-      const titles = [normalizeTitle(entry.meta?.name), normalizeTitle(entry.title)]
-        .filter((title) => title !== "");
       prepared.push({
         entry,
         libraryId: parsed.libraryId,
-        titles,
-        name: normalizeTitle(posixBase(entry.key)),
+        titles: [...new Set([entry.meta?.name, entry.title].filter((title): title is string => title !== undefined && title.trim() !== ""))],
+        pathSegments: parsed.relative
+          .split("/")
+          .map(normalizeSearchText)
+          .filter((segment) => segment !== ""),
       });
     }
     return prepared;

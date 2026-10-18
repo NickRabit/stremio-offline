@@ -53,6 +53,11 @@ export interface SearchStartRequest {
   sources: SearchSourceClass[];
   slotId: string;
   generation: number;
+  scope?: {
+    addonKey: string;
+    catalogType?: string;
+    catalogId?: string;
+  };
 }
 
 export type SearchLocator =
@@ -76,6 +81,12 @@ export interface RawSearchRecord {
   season?: number;
   episode?: number;
   episodeEnd?: number;
+  searchText?: {
+    parentTitle?: string;
+    path?: string;
+  };
+  rating?: number;
+  sourcePosition?: number;
   locator: SearchLocator;
 }
 
@@ -108,6 +119,8 @@ export interface SearchClusterView {
   primaryMemberKey: string;
   memberKeys: string[];
   rank: number;
+  score: number;
+  rating?: number;
   episodeCount?: number;
 }
 
@@ -235,7 +248,15 @@ const invalidRequest = (): never => {
 };
 
 export function parseStartRequest(body: unknown): SearchStartRequest {
-  if (!isPlainObject(body) || !hasExactKeys(body, ["query", "kind", "sources", "slotId", "generation"])) {
+  if (
+    !isPlainObject(body)
+    || !hasExactKeys(
+      body,
+      body.scope === undefined
+        ? ["query", "kind", "sources", "slotId", "generation"]
+        : ["query", "kind", "sources", "slotId", "generation", "scope"],
+    )
+  ) {
     return invalidRequest();
   }
   if (typeof body.query !== "string") return invalidRequest();
@@ -267,13 +288,48 @@ export function parseStartRequest(body: unknown): SearchStartRequest {
   if (new Set(sources).size !== sources.length) return invalidRequest();
   if (typeof body.slotId !== "string" || !/^[A-Za-z0-9_-]{8,64}$(?![\s\S])/.test(body.slotId)) return invalidRequest();
   if (!Number.isSafeInteger(body.generation) || (body.generation as number) < 0) return invalidRequest();
-  return {
+  const result: SearchStartRequest = {
     query,
     kind: body.kind,
     sources: sources as SearchSourceClass[],
     slotId: body.slotId,
     generation: body.generation as number,
   };
+  if (body.scope !== undefined) {
+    if (!isPlainObject(body.scope)) return invalidRequest();
+    const hasCatalog = body.scope.catalogType !== undefined || body.scope.catalogId !== undefined;
+    if (
+      !hasExactKeys(
+        body.scope,
+        hasCatalog
+          ? ["addonKey", "catalogType", "catalogId"]
+          : ["addonKey"],
+      )
+    ) {
+      return invalidRequest();
+    }
+    const addonKey = typeof body.scope.addonKey === "string" ? body.scope.addonKey.trim() : "";
+    if (!/^[A-Za-z0-9_.:-]{1,100}$(?![\s\S])/.test(addonKey)) return invalidRequest();
+    if (hasCatalog) {
+      if (typeof body.scope.catalogType !== "string" || typeof body.scope.catalogId !== "string") {
+        return invalidRequest();
+      }
+      const catalogType = body.scope.catalogType.trim();
+      const catalogId = body.scope.catalogId.trim();
+      if (
+        catalogType === ""
+        || catalogId === ""
+        || Array.from(catalogType).length > 200
+        || Array.from(catalogId).length > 200
+      ) {
+        return invalidRequest();
+      }
+      result.scope = { addonKey, catalogType, catalogId };
+    } else {
+      result.scope = { addonKey };
+    }
+  }
+  return result;
 }
 
 export function parseRevision(body: unknown): number {
@@ -359,6 +415,17 @@ const projectLocator = (locator: SearchLocator): SearchLocator | undefined => {
 const nonNegativeInteger = (value: unknown): number | undefined =>
   Number.isInteger(value) && (value as number) >= 0 ? value as number : undefined;
 
+const projectSearchText = (value: unknown): RawSearchRecord["searchText"] | undefined => {
+  if (!isPlainObject(value)) return undefined;
+  const parentTitle = optionalCut(value.parentTitle, SEARCH_LIMITS.titleMaxCodePoints);
+  const path = optionalCut(value.path, 2048);
+  if (parentTitle === undefined && path === undefined) return undefined;
+  return {
+    ...(parentTitle === undefined ? {} : { parentTitle }),
+    ...(path === undefined ? {} : { path }),
+  };
+};
+
 export function projectRecord(raw: RawSearchRecord): RawSearchRecord | undefined {
   if (!isPlainObject(raw)) return undefined;
   const itemKey = bounded(raw.itemKey);
@@ -398,6 +465,14 @@ export function projectRecord(raw: RawSearchRecord): RawSearchRecord | undefined
   if (ids !== undefined) result.ids = ids;
   const parentIds = projectIds(raw.parentIds);
   if (parentIds !== undefined) result.parentIds = parentIds;
+  const searchText = projectSearchText(raw.searchText);
+  if (searchText !== undefined) result.searchText = searchText;
+  if (typeof raw.rating === "number" && Number.isFinite(raw.rating) && raw.rating >= 0 && raw.rating <= 10) {
+    result.rating = raw.rating;
+  }
+  if (Number.isSafeInteger(raw.sourcePosition) && (raw.sourcePosition as number) >= 0) {
+    result.sourcePosition = raw.sourcePosition as number;
+  }
 
   const season = nonNegativeInteger(raw.season);
   const episode = nonNegativeInteger(raw.episode);

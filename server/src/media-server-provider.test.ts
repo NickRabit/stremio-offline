@@ -880,7 +880,7 @@ test("searchTypes pins the recursive type set, ordering and mode", async () => {
     for (const [searchTypes, expected] of [
       ["movie", "Movie,MusicVideo"],
       ["series", "Series,Episode"],
-      ["all", "Movie,MusicVideo,Series,Episode"],
+      ["all", "Movie,MusicVideo,Series,Episode,Folder"],
     ] as const) {
       await provider.pageDirectory("tok", "user-1", "library-1", {
         mode: "titles", search: "alien", searchTypes,

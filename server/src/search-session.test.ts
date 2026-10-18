@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   SEARCH_LIMITS,
   SearchError,
+  parseStartRequest,
   type RawSearchRecord,
   type SearchKind,
   type SearchSourceClass,
@@ -89,6 +90,7 @@ class FakeSource implements SearchSource {
   readonly pending: Deferred<SourcePage>[] = [];
   allowed = true;
   private readonly readyListeners = new Set<() => void>();
+  expand?: SearchSource["expand"];
 
   constructor(
     readonly id: string,
@@ -627,6 +629,191 @@ test("episodes attach to a series and the member page lists both", async () => {
   assert.equal(started.snapshot.clusters.filter((cluster) => cluster.kind === "episode").length, 0);
   const members = manager.members(auth, started.id, series.primaryMemberKey, 0);
   assert.deepEqual(members.members.map((member) => member.kind), ["series", "episode"]);
+  manager.close();
+});
+
+test("local and remote noise is dropped while a catalog record is always accepted", async () => {
+  const remote = new FakeSource("remote", "remote");
+  const catalog = new FakeSource("catalog", "catalog");
+  const { manager } = build(() => [remote, catalog]);
+  const auth = authority();
+  const starting = manager.start(auth, request("matrix"));
+  remote.respond(page([{
+    ...catalogRecord("remote:noise", "Unrelated", { imdb: "tt9" }),
+    locator: { kind: "remote", libraryId: "lib", itemId: "remote:noise", itemType: "movie" },
+  }]));
+  catalog.respond(page([catalogRecord("catalog:translated", "Unrelated", { imdb: "tt1" })]));
+  const started = await starting;
+  const remoteView = started.snapshot.sources.find((source) => source.id === "remote");
+  assert.equal(remoteView?.loaded, 0);
+  assert.equal(remoteView?.dropped, 1);
+  assert.deepEqual(started.snapshot.clusters.map((cluster) => cluster.title), ["Unrelated"]);
+  manager.close();
+});
+
+test("clusters are reordered by score instead of first arrival", async () => {
+  const catalog = new FakeSource("catalog", "catalog");
+  const { manager } = build(() => [catalog]);
+  const auth = authority();
+  const starting = manager.start(auth, request("yes minister"));
+  catalog.respond(page([
+    catalogRecord("weak", "Yessica Bunny", { imdb: "tt1" }, { sourcePosition: 0 }),
+    catalogRecord("strong", "Yes Minister", { imdb: "tt2" }, { sourcePosition: 1 }),
+  ]));
+  const started = await starting;
+  assert.deepEqual(started.snapshot.clusters.map((cluster) => cluster.title), ["Yes Minister", "Yessica Bunny"]);
+  assert.ok(started.snapshot.clusters[0]!.score > started.snapshot.clusters[1]!.score);
+  manager.close();
+});
+
+test("episodes with a parentRef attach to a series that has no provider ids", async () => {
+  const catalog = new FakeSource("catalog", "catalog");
+  const { manager } = build(() => [catalog]);
+  const auth = authority();
+  const starting = manager.start(auth, request("simpsonovi"));
+  const seriesRecord: RawSearchRecord = {
+    itemKey: "series",
+    kind: "series",
+    title: "Simpsonovi",
+    locator: { kind: "catalog", addonKey: "addon", type: "series", id: "series" },
+  };
+  const episode = (index: number): RawSearchRecord => ({
+    itemKey: `episode-${index}`,
+    kind: "episode",
+    title: `Homerland ${index}`,
+    parentRef: "series",
+    season: 25,
+    episode: index,
+    locator: { kind: "catalog", addonKey: "addon", type: "series", id: `episode-${index}` },
+  });
+  catalog.respond(page([seriesRecord, episode(1), episode(2), episode(3)]));
+  const started = await starting;
+  assert.equal(started.snapshot.clusters.length, 1);
+  const series = started.snapshot.clusters[0]!;
+  assert.equal(series.kind, "series");
+  assert.equal(series.episodeCount, 3);
+  assert.deepEqual(
+    manager.members(auth, started.id, series.primaryMemberKey, 0).members.map((member) => member.kind),
+    ["series", "episode", "episode", "episode"],
+  );
+  manager.close();
+});
+
+test("an episode waits for its parent when the series arrives on a later page", async () => {
+  const remote = new FakeSource("remote", "remote");
+  const { manager } = build(() => [remote]);
+  const auth = authority();
+  const starting = manager.start(auth, request("simpsonovi"));
+  remote.respond(page([{
+    itemKey: "episode",
+    kind: "episode",
+    title: "Homerland",
+    parentRef: "series",
+    season: 25,
+    episode: 1,
+    locator: { kind: "remote", libraryId: "lib", itemId: "episode", itemType: "episode" },
+  }], false, "next"));
+  const started = await starting;
+  assert.equal(started.snapshot.clusters.length, 0);
+  manager.pageAll(auth, started.id);
+  remote.respond(page([{
+    itemKey: "series",
+    kind: "series",
+    title: "Simpsonovi",
+    locator: { kind: "remote", libraryId: "lib", itemId: "series", itemType: "series" },
+  }]));
+  await flush();
+  const snapshot = await manager.poll(auth, started.id, 0);
+  assert.equal(snapshot.changed && snapshot.snapshot.clusters[0]?.episodeCount, 1);
+  assert.equal(snapshot.changed && snapshot.snapshot.sources[0]?.dropped, undefined);
+  manager.close();
+});
+
+test("canonical prefers an IMDb id carried by a remote member", async () => {
+  const catalog = new FakeSource("catalog", "catalog");
+  const remote = new FakeSource("remote", "remote");
+  const { manager } = build(() => [catalog, remote]);
+  const auth = authority();
+  const starting = manager.start(auth, request("jistě, pane ministře"));
+  catalog.respond(page([
+    catalogRecord("catalog", "Jistě, pane ministře", { tmdb: "4549" }),
+  ]));
+  remote.respond(page([{
+    ...catalogRecord("remote", "Jistě, pane ministře", { imdb: "tt0080306", tmdb: "4549" }),
+    locator: { kind: "remote", libraryId: "lib", itemId: "remote", itemType: "movie" },
+  }]));
+  const started = await starting;
+  const cluster = started.snapshot.clusters[0]!;
+  assert.equal(cluster.memberCount, 2);
+  assert.equal(manager.members(auth, started.id, cluster.primaryMemberKey, 0).canonical?.id, "tt0080306");
+  manager.close();
+});
+
+test("top clusters expand local copies once and merge them by id", async () => {
+  const local = new FakeSource("local", "local");
+  const catalog = new FakeSource("catalog", "catalog");
+  let expansions = 0;
+  local.expand = async (ids) => {
+    expansions += 1;
+    assert.deepEqual(ids, { imdb: "tt1" });
+    return [{
+      itemKey: "local-yes-minister",
+      kind: "movie",
+      title: "Yes Minister",
+      ids: { imdb: "tt1" },
+      locator: { kind: "local", key: "lib_00000001/Yes Minister", libraryId: "lib_00000001", itemKind: "folder" },
+    }];
+  };
+  const { manager } = build(() => [local, catalog]);
+  const auth = authority();
+  const starting = manager.start(auth, request("jistě, pane ministře"));
+  local.respond(page([]));
+  catalog.respond(page([
+    catalogRecord("catalog", "Jistě, pane ministře", { imdb: "tt1" }),
+  ], false, "next"));
+  const started = await starting;
+  await flush();
+  let snapshot = await manager.poll(auth, started.id, 0);
+  assert.equal(snapshot.changed, true);
+  snapshot = await manager.poll(auth, started.id, 0);
+  assert.equal(snapshot.changed, true);
+  if (!snapshot.changed) return;
+  assert.equal(snapshot.snapshot.clusters[0]?.memberCount, 2);
+  assert.equal(expansions, 1);
+
+  manager.pageAll(auth, started.id);
+  catalog.respond(page([
+    catalogRecord("catalog", "Jistě, pane ministře", { imdb: "tt1" }),
+  ]));
+  await flush();
+  await manager.poll(auth, started.id, 0);
+  assert.equal(expansions, 1);
+  manager.close();
+});
+
+test("scope round-trips through start parsing and participates in idempotency", async () => {
+  const catalog = new FakeSource("catalog", "catalog");
+  const { manager } = build(() => [catalog]);
+  const parsed = parseStartRequest({
+    ...request("matrix"),
+    scope: { addonKey: "alpha", catalogType: "movie", catalogId: "top" },
+  });
+  const auth = authority();
+  const starting = manager.start(auth, parsed);
+  catalog.respond(page([]));
+  const started = await starting;
+  const duplicate = await manager.start(auth, parseStartRequest({
+    ...request("matrix"),
+    scope: { addonKey: "alpha", catalogType: "movie", catalogId: "top" },
+  }));
+  assert.equal(duplicate.id, started.id);
+  await assert.rejects(
+    manager.start(auth, parseStartRequest({
+      ...request("matrix"),
+      scope: { addonKey: "beta", catalogType: "movie", catalogId: "top" },
+    })),
+    (error: unknown) => error instanceof SearchError && error.code === "search-generation-conflict",
+  );
   manager.close();
 });
 

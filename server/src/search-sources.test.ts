@@ -149,6 +149,7 @@ const deps = (over: Partial<DiscoverDeps> & { index?: LocalSearchIndex } = {}): 
   remote: {
     visibleLibraries: async () => [],
     searchLibrary: async () => ({ items: [] }),
+    matchingItems: async () => [],
     canSearchLibrary: () => true,
     libraryGeneration: () => 0,
     ...(over.remote ?? {}),
@@ -199,7 +200,7 @@ test("catalog rows map strong ids, opaque ids, years and rewritten artwork", asy
     seen.push(url);
     return jsonResponse({
       metas: [
-        { id: "tt1", type: "movie", name: "Alien", year: 1979, description: "A crew", poster: "https://img/alien.jpg", background: "https://img/wide.jpg" },
+        { id: "tt1", type: "movie", name: "Alien", year: 1979, description: "A crew", poster: "https://img/alien.jpg", background: "https://img/wide.jpg", imdbRating: "8.5" },
         { id: "tmdb:2", type: "series", name: "Show", releaseInfo: "2015–2016" },
         { id: "custom", type: "movie", name: "Custom" },
         { id: "skipped", type: "channel", name: "Not a title" },
@@ -220,6 +221,9 @@ test("catalog rows map strong ids, opaque ids, years and rewritten artwork", asy
   assert.deepEqual(page.records.map((record) => record.kind), ["movie", "series", "movie"]);
   assert.deepEqual(page.records[0]!.ids, { imdb: "tt1" });
   assert.equal(page.records[0]!.year, 1979);
+  assert.equal(page.records[0]!.rating, 8.5);
+  assert.equal(page.records[0]!.sourcePosition, 0);
+  assert.equal(page.records[1]!.sourcePosition, 1);
   assert.equal(page.records[0]!.poster, "/proxy?url=https%3A%2F%2Fimg%2Falien.jpg");
   assert.equal(page.records[1]!.year, 2015, "releaseInfo supplies the year");
   assert.equal(page.records[2]!.opaque, "addon:alpha:movie:custom");
@@ -320,6 +324,20 @@ test("globalSearch false, disabled and ungranted addons are never catalog target
   assert.deepEqual(sources.map((source) => source.label), ["NORMAL · movies catalog"]);
 });
 
+test("an explicit catalog scope includes an addon kept out of global search", async () => {
+  const hidden = addon("no-global", [catalog("movies")], { globalSearch: false });
+  const sources = await discoverSources(
+    deps({ addons: () => [hidden] }),
+    authority(),
+    request({
+      scope: { addonKey: "no-global", catalogType: "movie", catalogId: "movies" },
+    }),
+    "ss_test",
+  );
+  assert.deepEqual(sources.map((source) => source.label), ["NO-GLOBAL · movies catalog"]);
+  assert.equal(sources[0]!.stillAllowed(), true);
+});
+
 test("a catalog source stops being allowed when its addon is disabled, hidden or moved", async () => {
   const record = addon("alpha");
   const sources = await discoverSources(deps({ addons: () => [record] }), authority(), request(), "ss_test");
@@ -393,11 +411,28 @@ test("local rows map identified titles and unnamed files or folders", async () =
   assert.equal(page.records[0]!.year, 1979);
   assert.deepEqual(page.records[0]!.ids, { imdb: "tt1" });
   assert.equal(page.records[0]!.poster, "/proxy?url=library-poster", "the library picture wins over metadata");
+  assert.deepEqual(page.records[0]!.searchText, { path: "Alien" });
   assert.deepEqual(page.records[0]!.locator, {
     kind: "local", key: "lib_00000001/Alien", libraryId: "lib_00000001", itemKind: "file",
   });
   assert.equal(page.records[1]!.locator.kind === "local" && page.records[1]!.locator.itemKind, "file");
   assert.equal(page.records[2]!.locator.kind === "local" && page.records[2]!.locator.itemKind, "folder");
+});
+
+test("a local single-file entry carries its folder name and relative path as search text", async () => {
+  const entry = libraryEntry("lib_00000001/Jistě pane ministře/S01E03.mkv", "S01E03");
+  const index = fakeIndex({ search: async () => ({ generation: 1, entries: [entry] }) });
+  const sources = await discoverSources(
+    deps({ libraries: () => [localLibrary("lib_00000001", "Films")], index }),
+    authority(),
+    request({ sources: ["local"] }),
+    "ss_test",
+  );
+  const page = await sources[0]!.next(undefined, signal());
+  assert.deepEqual(page.records[0]!.searchText, {
+    parentTitle: "Jistě pane ministře",
+    path: "Jistě pane ministře/S01E03.mkv",
+  });
 });
 
 test("a local source reports indexing until the index is ready", async () => {
@@ -468,6 +503,7 @@ test("remote rows map titles, episode ranges, the cursor and the library provide
       remote: {
         visibleLibraries: async () => [library],
         searchLibrary,
+        matchingItems: async () => [],
         canSearchLibrary: () => true,
         libraryGeneration: () => 7,
       },
@@ -482,15 +518,19 @@ test("remote rows map titles, episode ranges, the cursor and the library provide
   assert.deepEqual(seen, { libraryId: "rlib_00000001", query: { search: "alien", kind: "all", cursor: "cursor-1" } });
   assert.equal(page.cursor, "provider-next");
   assert.equal(page.exhausted, false);
-  assert.deepEqual(page.records.map((record) => record.kind), ["movie", "series", "episode"]);
+  assert.deepEqual(page.records.map((record) => record.kind), ["movie", "series", "episode", "folder"]);
   assert.deepEqual(page.records[0]!.ids, { imdb: "tt1" });
   assert.equal(page.records[0]!.poster, "/poster/m1");
   assert.equal(page.records[2]!.parentRef, "s1");
   assert.equal(page.records[2]!.season, 1);
   assert.equal(page.records[2]!.episode, 2);
   assert.equal(page.records[2]!.episodeEnd, 3);
+  assert.equal(page.records[2]!.searchText, undefined, "the public provider item carries no series name");
   assert.deepEqual(page.records[0]!.locator, {
     kind: "remote", libraryId: "rlib_00000001", itemId: "m1", itemType: "movie", provider: "jellyfin",
+  });
+  assert.deepEqual(page.records[3]!.locator, {
+    kind: "remote", libraryId: "rlib_00000001", itemId: "f1", itemType: "folder", provider: "jellyfin",
   });
 
   assert.equal(source.stillAllowed(), true);
@@ -504,6 +544,7 @@ test("a remote source disappears when its grant or generation is revoked", async
       remote: {
         visibleLibraries: async () => [library],
         searchLibrary: async () => ({ items: [] }),
+        matchingItems: async () => [],
         canSearchLibrary: () => allowed,
         libraryGeneration: () => 3,
       },
@@ -517,6 +558,36 @@ test("a remote source disappears when its grant or generation is revoked", async
   assert.equal(sources[0]!.stillAllowed(), false);
 });
 
+test("remote expansion asks matchingItems by IMDb and maps the returned rows", async () => {
+  const library = remoteLibrary("rlib_00000001", "conn_00000001");
+  let seen: unknown[] | undefined;
+  const sources = await discoverSources(
+    deps({
+      remote: {
+        visibleLibraries: async () => [library],
+        searchLibrary: async () => ({ items: [] }),
+        matchingItems: async (...args) => {
+          seen = args;
+          return [{ id: "m1", name: "Yes Minister", type: "movie", providerIds: { imdb: "tt0080306" } }];
+        },
+        canSearchLibrary: () => true,
+        libraryGeneration: () => 1,
+      },
+    }),
+    authority(),
+    request({ sources: ["remote"] }),
+    "ss_test",
+  );
+  assert.ok(sources[0]!.expand);
+  const records = await sources[0]!.expand({ imdb: "tt0080306", tmdb: "4549" }, "movie", signal());
+  assert.deepEqual(records.map((record) => [record.title, record.ids]), [
+    ["Yes Minister", { imdb: "tt0080306" }],
+  ]);
+  assert.equal(seen?.[1], "rlib_00000001");
+  assert.equal(seen?.[2], "movie");
+  assert.equal(seen?.[3], "tt0080306");
+});
+
 test("a remote failure is unavailable when the library or generation is gone", async () => {
   const library = remoteLibrary("rlib_00000001", "conn_00000001");
   let allowed = true;
@@ -525,6 +596,7 @@ test("a remote failure is unavailable when the library or generation is gone", a
       remote: {
         visibleLibraries: async () => [library],
         searchLibrary: async () => { throw new MediaServerError("invalid-response", "bad page"); },
+        matchingItems: async () => [],
         canSearchLibrary: () => allowed,
         libraryGeneration: () => 3,
       },
@@ -550,6 +622,7 @@ test("discovery orders local, remote then catalog and numbers the sources", asyn
       remote: {
         visibleLibraries: async () => [remoteLibrary("rlib_00000001", "conn_00000001")],
         searchLibrary: async () => ({ items: [] }),
+        matchingItems: async () => [],
         canSearchLibrary: () => true,
         libraryGeneration: () => 1,
       },
@@ -571,6 +644,7 @@ test("discovery only contacts the source classes the request names", async () =>
       remote: {
         visibleLibraries: async () => { remoteCalls += 1; return []; },
         searchLibrary: async () => ({ items: [] }),
+        matchingItems: async () => [],
         canSearchLibrary: () => true,
         libraryGeneration: () => 1,
       },
@@ -591,6 +665,7 @@ test("a library switched out of search is never a source, and switching it off d
       remote: {
         visibleLibraries: async () => [remoteLibrary("rlib_00000001", "conn_00000001"), { ...remoteLibrary("rlib_00000002", "conn_00000001"), showInSearch: false }],
         searchLibrary: async () => ({ items: [] }),
+        matchingItems: async () => [],
         canSearchLibrary: () => true,
         libraryGeneration: () => 1,
       },

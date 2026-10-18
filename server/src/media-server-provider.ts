@@ -785,7 +785,7 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
       : searchTypes === "series"
         ? "Series,Episode"
         : searchTypes === "all"
-          ? "Movie,MusicVideo,Series,Episode"
+          ? "Movie,MusicVideo,Series,Episode,Folder"
           : filteredTypes === undefined
             ? mode === "folders" ? DIRECTORY_FOLDER_TYPES : DIRECTORY_TITLE_TYPES
             : mode === "folders" ? `Folder,${filteredTypes}` : filteredTypes;

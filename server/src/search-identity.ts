@@ -210,6 +210,7 @@ export interface DisplayCandidate {
   background?: string;
   description?: string;
   hasStrongId: boolean;
+  score: number;
 }
 
 const classOrder: Record<SearchSourceClass, number> = { local: 0, remote: 1, catalog: 2 };
@@ -220,9 +221,9 @@ const metadataCount = (candidate: DisplayCandidate): number =>
   + (candidate.year === undefined ? 0 : 1)
   + (candidate.description ? 1 : 0);
 
-export function pickPrimary(query: string, members: DisplayCandidate[]): DisplayCandidate {
+export function pickPrimary(_query: string, members: DisplayCandidate[]): DisplayCandidate {
   return [...members].sort((left, right) =>
-    titleRank(query, left.title, left.originalTitle) - titleRank(query, right.title, right.originalTitle)
+    right.score - left.score
     || Number(right.hasStrongId) - Number(left.hasStrongId)
     || metadataCount(right) - metadataCount(left)
     || classOrder[left.sourceClass] - classOrder[right.sourceClass]

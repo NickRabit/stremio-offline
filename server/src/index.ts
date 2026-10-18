@@ -1243,6 +1243,8 @@ if (searchEverywhereEnabled()) {
       visibleLibraries: (authority) => mediaServers.visibleLibraries(authority),
       searchLibrary: (authority, libraryId, query, signal) =>
         mediaServers.searchLibrary(authority, libraryId, query, signal),
+      matchingItems: (authority, libraryId, type, catalogId, signal) =>
+        mediaServers.matchingItems(authority, libraryId, type, catalogId, signal),
       canSearchLibrary: (userId, libraryId, generation) =>
         mediaServers.canSearchLibrary(userId, libraryId, generation),
       libraryGeneration: (libraryId) => mediaServers.searchLibraryGeneration(libraryId),
