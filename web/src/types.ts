@@ -112,6 +112,7 @@ export interface SearchClusterView {
   score: number;
   rating?: number;
   episodeCount?: number;
+  itemCount?: number;
 }
 export interface SearchSnapshot {
   revision: number;

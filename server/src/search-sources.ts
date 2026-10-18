@@ -248,6 +248,9 @@ const localRecord = (entry: LibraryEntry, libraryId: string, deps: DiscoverDeps)
     title: entry.title,
     ...(poster === undefined ? {} : { poster }),
     ...(Object.keys(searchText).length === 0 ? {} : { searchText }),
+    ...(singleFile
+      ? {}
+      : { itemCount: entry.files.filter((file) => isVideo(posixBase(file.path))).length }),
     locator: { kind: "local", key: entry.key, libraryId, itemKind: singleFile ? "file" : "folder" },
   };
 };
@@ -312,6 +315,7 @@ const remoteRecord = (
     ...(item.overview === undefined ? {} : { description: item.overview }),
     ...(item.poster === undefined ? {} : { poster: item.poster }),
     ids: validStrongIds(item.providerIds),
+    ...(item.type === "folder" && item.childCount !== undefined ? { itemCount: item.childCount } : {}),
     ...(item.type !== "episode" ? {} : {
       ...(item.seriesName === undefined ? {} : { searchText: { parentTitle: item.seriesName } }),
       ...(item.seriesId === undefined ? {} : { parentRef: item.seriesId }),

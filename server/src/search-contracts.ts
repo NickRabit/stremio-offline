@@ -87,6 +87,7 @@ export interface RawSearchRecord {
   };
   rating?: number;
   sourcePosition?: number;
+  itemCount?: number;
   /** Built from another row (a series named by its episodes); never replaces a real row. */
   derived?: boolean;
   locator: SearchLocator;
@@ -124,6 +125,7 @@ export interface SearchClusterView {
   score: number;
   rating?: number;
   episodeCount?: number;
+  itemCount?: number;
 }
 
 export interface SearchSnapshot {
@@ -475,6 +477,9 @@ export function projectRecord(raw: RawSearchRecord): RawSearchRecord | undefined
   if (raw.derived === true) result.derived = true;
   if (Number.isSafeInteger(raw.sourcePosition) && (raw.sourcePosition as number) >= 0) {
     result.sourcePosition = raw.sourcePosition as number;
+  }
+  if (Number.isSafeInteger(raw.itemCount) && (raw.itemCount as number) >= 0) {
+    result.itemCount = raw.itemCount as number;
   }
 
   const season = nonNegativeInteger(raw.season);

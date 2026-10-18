@@ -70,6 +70,7 @@ function SearchCard({ cluster, shape, onInteract, onOpen }: {
     cluster.year,
     kindLabel(cluster.kind),
     cluster.episodeCount ? t("searchAll.episodes", { count: cluster.episodeCount }) : undefined,
+    cluster.kind === "folder" && cluster.itemCount ? t("searchAll.folderItems", { count: cluster.itemCount }) : undefined,
   ].filter(Boolean).join(" · ");
   const folder = cluster.kind === "folder";
   return <button type="button" className="browse-item" title={cluster.title} data-search-card data-primary-member={cluster.primaryMemberKey}

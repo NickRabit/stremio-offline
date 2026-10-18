@@ -333,7 +333,7 @@
   <string name="tv_global_search_state_timed_out">Przekroczono czas</string>
   <string name="tv_global_search_state_indexing">Indeksowanie…</string>
   <string name="tv_global_search_state_unavailable">Niedostępne</string>
-  <string name="tv_global_search_unidentified">Pliki i nieznane elementy (%1$s)</string>
+  <string name="tv_global_search_unidentified">Więcej plików i folderów (%1$s)</string>
   <string name="tv_global_search_badge_local">Lokalne</string>
   <string name="tv_global_search_badge_remote">Zdalne</string>
   <plurals name="tv_global_search_episodes">
@@ -341,6 +341,12 @@
     <item quantity="few">%1$s odcinki</item>
     <item quantity="many">%1$s odcinków</item>
     <item quantity="other">%1$s odcinka</item>
+  </plurals>
+  <plurals name="tv_global_search_folder_items">
+    <item quantity="one">%1$s element</item>
+    <item quantity="few">%1$s elementy</item>
+    <item quantity="many">%1$s elementów</item>
+    <item quantity="other">%1$s elementu</item>
   </plurals>
   <string name="tv_global_search_previous_query">Wyniki poprzedniego wyszukiwania</string>
   <string name="tv_global_search_empty">Nic nie znaleziono.</string>

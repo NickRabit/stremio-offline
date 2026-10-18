@@ -49,16 +49,16 @@ test("a fast catalog paints while a delayed one is still searching", async ({ pa
   await page.goto("/");
   await search(page);
 
-  await expect(page.getByRole("button", { name: /Zkušební film/ })).toBeVisible({ timeout: 2_000 });
+  await expect(page.locator("[data-search-card][title=\"Zkušební film\"]").filter({ hasText: "· Film" })).toBeVisible({ timeout: 2_000 });
   await expect(page.locator(".search-source-summary")).toHaveText("Stále se hledá 1 zdroj");
-  await expect(page.getByRole("button", { name: /Zkušební seriál/ })).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator("[data-search-card][title=\"Zkušební seriál\"]").filter({ hasText: "· Seriál" })).toBeVisible({ timeout: 15_000 });
 });
 
 test("source filters start a fresh generation and drop old cards", async ({ page }) => {
   await page.goto("/");
   await search(page);
-  await expect(page.getByRole("button", { name: /Zkušební film/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: /Zkušební seriál/ })).toBeVisible();
+  await expect(page.locator("[data-search-card][title=\"Zkušební film\"]").filter({ hasText: "· Film" })).toBeVisible();
+  await expect(page.locator("[data-search-card][title=\"Zkušební seriál\"]").filter({ hasText: "· Seriál" })).toBeVisible();
 
   const remoteRequest = page.waitForRequest((request) =>
     request.method() === "POST"

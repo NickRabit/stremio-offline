@@ -333,7 +333,7 @@
   <string name="tv_global_search_state_timed_out">Časový limit vypršal</string>
   <string name="tv_global_search_state_indexing">Indexuje sa…</string>
   <string name="tv_global_search_state_unavailable">Nedostupné</string>
-  <string name="tv_global_search_unidentified">Súbory a neidentifikované položky (%1$s)</string>
+  <string name="tv_global_search_unidentified">Ďalšie súbory a priečinky (%1$s)</string>
   <string name="tv_global_search_badge_local">Miestne</string>
   <string name="tv_global_search_badge_remote">Vzdialené</string>
   <plurals name="tv_global_search_episodes">
@@ -341,6 +341,12 @@
     <item quantity="few">%1$s epizódy</item>
     <item quantity="many">%1$s epizódy</item>
     <item quantity="other">%1$s epizód</item>
+  </plurals>
+  <plurals name="tv_global_search_folder_items">
+    <item quantity="one">%1$s položka</item>
+    <item quantity="few">%1$s položky</item>
+    <item quantity="many">%1$s položky</item>
+    <item quantity="other">%1$s položiek</item>
   </plurals>
   <string name="tv_global_search_previous_query">Výsledky predchádzajúceho vyhľadávania</string>
   <string name="tv_global_search_empty">Nič sa nenašlo.</string>

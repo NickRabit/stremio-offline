@@ -947,3 +947,84 @@ test("an id-less Matrix joins the one exact name and year match", async () => {
   manager.close();
 });
 
+test("a folder whose own name answers the query stands with the titles", async () => {
+  const remote = new FakeSource("remote", "remote");
+  const catalog = new FakeSource("catalog", "catalog");
+  const { manager } = build(() => [remote, catalog]);
+  const auth = authority();
+  const starting = manager.start(auth, request("girlsdoporn"));
+  remote.respond(page([
+    {
+      itemKey: "folder-1",
+      kind: "folder",
+      title: "GirlsDoPorn",
+      itemCount: 818,
+      locator: { kind: "remote", libraryId: "lib", itemId: "folder-1", itemType: "folder" },
+    },
+    {
+      itemKey: "file-1",
+      kind: "file",
+      title: "818",
+      searchText: { parentTitle: "GirlsDoPorn" },
+      locator: { kind: "remote", libraryId: "lib", itemId: "file-1", itemType: "file" },
+    },
+  ]));
+  catalog.respond(page([
+    catalogRecord("cinemeta", "Nice Girls Don't Get the Corner Office", { imdb: "tt2" }),
+  ]));
+  const started = await starting;
+  assert.equal(started.snapshot.clusters[0]?.title, "GirlsDoPorn");
+  assert.equal(started.snapshot.clusters[0]?.itemCount, 818);
+  assert.equal(started.snapshot.clusters[1]?.title, "Nice Girls Don't Get the Corner Office");
+  assert.deepEqual(started.snapshot.unidentified.map((cluster) => cluster.title), ["818"]);
+  manager.close();
+});
+
+test("a file joins the cards only when no title answers the query", async () => {
+  const run = async (query: string, withTitle: boolean) => {
+    const remote = new FakeSource("remote", "remote");
+    const catalog = new FakeSource("catalog", "catalog");
+    const { manager } = build(() => [remote, catalog]);
+    const starting = manager.start(authority(), request(query));
+    remote.respond(page([
+      {
+        itemKey: "file-1",
+        kind: "file",
+        title: "Vratne.Lahve.avi",
+        locator: { kind: "remote", libraryId: "lib", itemId: "file-1", itemType: "file" },
+      },
+      {
+        itemKey: "file-2",
+        kind: "file",
+        title: "2020-01-03-marcus-mora-mia-thomas",
+        locator: { kind: "remote", libraryId: "lib", itemId: "file-2", itemType: "file" },
+      },
+    ]));
+    catalog.respond(page(withTitle ? [catalogRecord("cinemeta", "Vratné lahve", { imdb: "tt0828154" })] : []));
+    const started = await starting;
+    manager.close();
+    return {
+      clusters: started.snapshot.clusters.map((cluster) => cluster.title),
+      unidentified: started.snapshot.unidentified.map((cluster) => cluster.title),
+    };
+  };
+  assert.deepEqual(await run("vratne lahve", true), { clusters: ["Vratné lahve"], unidentified: ["Vratne.Lahve.avi"] });
+  assert.deepEqual(await run("marcus mora mia thomas", false), { clusters: ["2020-01-03-marcus-mora-mia-thomas"], unidentified: [] });
+});
+
+test("a folder that answers only part of the query stays unidentified", async () => {
+  const remote = new FakeSource("remote", "remote");
+  const { manager } = build(() => [remote]);
+  const starting = manager.start(authority(), request("girls do porn"));
+  remote.respond(page([{
+    itemKey: "folder-1",
+    kind: "folder",
+    title: "Girls Do",
+    locator: { kind: "remote", libraryId: "lib", itemId: "folder-1", itemType: "folder" },
+  }]));
+  const started = await starting;
+  assert.deepEqual(started.snapshot.clusters, []);
+  assert.deepEqual(started.snapshot.unidentified.map((cluster) => cluster.title), ["Girls Do"]);
+  manager.close();
+});
+

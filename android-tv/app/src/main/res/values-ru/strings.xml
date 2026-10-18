@@ -333,7 +333,7 @@
   <string name="tv_global_search_state_timed_out">Время истекло</string>
   <string name="tv_global_search_state_indexing">Индексация…</string>
   <string name="tv_global_search_state_unavailable">Недоступно</string>
-  <string name="tv_global_search_unidentified">Файлы и неопознанные элементы (%1$s)</string>
+  <string name="tv_global_search_unidentified">Больше файлов и папок (%1$s)</string>
   <string name="tv_global_search_badge_local">Локальный</string>
   <string name="tv_global_search_badge_remote">Удалённый</string>
   <plurals name="tv_global_search_episodes">
@@ -341,6 +341,12 @@
     <item quantity="few">%1$s эпизода</item>
     <item quantity="many">%1$s эпизодов</item>
     <item quantity="other">%1$s эпизода</item>
+  </plurals>
+  <plurals name="tv_global_search_folder_items">
+    <item quantity="one">%1$s элемент</item>
+    <item quantity="few">%1$s элемента</item>
+    <item quantity="many">%1$s элементов</item>
+    <item quantity="other">%1$s элемента</item>
   </plurals>
   <string name="tv_global_search_previous_query">Результаты предыдущего поиска</string>
   <string name="tv_global_search_empty">Ничего не найдено.</string>

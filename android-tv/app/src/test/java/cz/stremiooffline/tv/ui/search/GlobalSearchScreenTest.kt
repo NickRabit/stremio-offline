@@ -9,6 +9,7 @@ import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performKeyInput
@@ -352,6 +353,37 @@ class GlobalSearchScreenTest {
     compose.waitForIdle()
 
     compose.onNodeWithTag(globalSearchCardTag("m1")).assertIsFocused()
+  }
+
+  @Test
+  fun `a folder card counts its items and the toggle names what is left`() {
+    val api = FakeTvApi()
+    val folder = GlobalSearchClusterDto(
+      key = "folder",
+      kind = "folder",
+      title = "GirlsDoPorn",
+      memberCount = 1,
+      primaryMemberKey = "m1",
+      memberKeys = listOf("m1"),
+      itemCount = 5,
+    )
+    val file = GlobalSearchClusterDto(
+      key = "file",
+      kind = "file",
+      title = "818",
+      memberCount = 1,
+      primaryMemberKey = "m2",
+      memberKeys = listOf("m2"),
+    )
+    api.globalStartHandler = {
+      GlobalSearchStartResultDto(id = "gs", snapshot = snapshot(1, listOf(folder), unidentified = listOf(file)))
+    }
+    mount(api)
+    search()
+
+    compose.onNodeWithText("5 items").assertExists()
+    compose.onNodeWithTag(TagGlobalSearchUnidentified)
+      .assertTextContains("More files and folders", substring = true)
   }
 
   @Test

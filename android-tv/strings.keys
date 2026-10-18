@@ -312,6 +312,7 @@ tv.globalSearch.unidentified
 tv.globalSearch.badgeLocal
 tv.globalSearch.badgeRemote
 tv.globalSearch.episodes
+tv.globalSearch.folderItems
 tv.globalSearch.previousQuery
 tv.globalSearch.empty
 tv.globalSearch.limitReached

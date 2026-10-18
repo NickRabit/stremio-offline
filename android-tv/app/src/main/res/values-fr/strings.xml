@@ -321,12 +321,16 @@
   <string name="tv_global_search_state_timed_out">Délai dépassé</string>
   <string name="tv_global_search_state_indexing">Indexation…</string>
   <string name="tv_global_search_state_unavailable">Indisponible</string>
-  <string name="tv_global_search_unidentified">Fichiers et éléments non identifiés (%1$s)</string>
+  <string name="tv_global_search_unidentified">Autres fichiers et dossiers (%1$s)</string>
   <string name="tv_global_search_badge_local">Local</string>
   <string name="tv_global_search_badge_remote">Distant</string>
   <plurals name="tv_global_search_episodes">
     <item quantity="one">%1$s épisode</item>
     <item quantity="other">%1$s épisodes</item>
+  </plurals>
+  <plurals name="tv_global_search_folder_items">
+    <item quantity="one">%1$s élément</item>
+    <item quantity="other">%1$s éléments</item>
   </plurals>
   <string name="tv_global_search_previous_query">Résultats de la recherche précédente</string>
   <string name="tv_global_search_empty">Aucun résultat.</string>

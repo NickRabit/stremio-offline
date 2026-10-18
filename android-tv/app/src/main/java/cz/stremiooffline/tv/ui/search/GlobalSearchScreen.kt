@@ -821,6 +821,14 @@ private fun GlobalSearchCard(
         maxLines = 1,
       )
     }
+    cluster.itemCount?.takeIf { it > 0 }?.let {
+      Text(
+        pluralStringResource(R.plurals.tv_global_search_folder_items, it, it),
+        color = Tokens.Muted,
+        fontSize = 9.sp,
+        maxLines = 1,
+      )
+    }
   }
 }
 

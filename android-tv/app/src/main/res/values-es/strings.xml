@@ -321,12 +321,16 @@
   <string name="tv_global_search_state_timed_out">Tiempo agotado</string>
   <string name="tv_global_search_state_indexing">Indexando…</string>
   <string name="tv_global_search_state_unavailable">No disponible</string>
-  <string name="tv_global_search_unidentified">Archivos y elementos sin identificar (%1$s)</string>
+  <string name="tv_global_search_unidentified">Más archivos y carpetas (%1$s)</string>
   <string name="tv_global_search_badge_local">Local</string>
   <string name="tv_global_search_badge_remote">Remoto</string>
   <plurals name="tv_global_search_episodes">
     <item quantity="one">%1$s episodio</item>
     <item quantity="other">%1$s episodios</item>
+  </plurals>
+  <plurals name="tv_global_search_folder_items">
+    <item quantity="one">%1$s elemento</item>
+    <item quantity="other">%1$s elementos</item>
   </plurals>
   <string name="tv_global_search_previous_query">Resultados de la búsqueda anterior</string>
   <string name="tv_global_search_empty">No se encontró nada.</string>

@@ -2233,7 +2233,8 @@ main.view-title-detail .catalogue-title-detail{display:flex;flex-direction:colum
 .search-chooser-note{color:var(--muted);font-size:11px}
 .search-title-page{display:grid;gap:8px;margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
 .search-title-page button{justify-self:start}
-.search-return{margin-bottom:10px;padding:7px 10px;font-size:10px}
+.search-return{display:inline-flex;align-items:center;gap:4px;justify-self:start;align-self:flex-start;width:auto;margin-bottom:10px;padding:6px 12px 6px 8px;border-radius:99px;font-size:12px}
+.search-return svg{width:15px;height:15px}
 .home-search-action{padding:6px 10px;font-size:10px}
 .home-search-action svg{width:15px;height:15px}
 @media(max-width:700px){
