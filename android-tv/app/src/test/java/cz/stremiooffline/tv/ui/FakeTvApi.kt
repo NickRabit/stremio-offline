@@ -40,6 +40,7 @@ import cz.stremiooffline.tv.data.RemoteItemStateDto
 import cz.stremiooffline.tv.data.RemoteItemStatePatch
 import cz.stremiooffline.tv.data.RemoteItemsPageDto
 import cz.stremiooffline.tv.data.RemoteLibraryDto
+import cz.stremiooffline.tv.data.RemotePlaybackReport
 import cz.stremiooffline.tv.data.RemotePreviewDto
 import cz.stremiooffline.tv.data.SearchStateDto
 import cz.stremiooffline.tv.data.SearchResultDto
@@ -602,6 +603,12 @@ open class FakeTvApi : TvApi {
   /** Every state PATCH in order, so a test can name the fields the screen wrote. */
   var remoteStatePatches: MutableList<RemoteItemStatePatch> = mutableListOf()
   var remoteStatePatchFailure: ApiError? = null
+
+  val remotePlaybackReports: MutableList<Triple<String, String, RemotePlaybackReport>> = mutableListOf()
+
+  override suspend fun reportRemotePlayback(libraryId: String, itemId: String, report: RemotePlaybackReport) {
+    remotePlaybackReports += Triple(libraryId, itemId, report)
+  }
 
   override suspend fun patchRemoteItemState(
     libraryId: String,

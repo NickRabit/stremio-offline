@@ -152,6 +152,16 @@ data class RemoteItemStatePatch(
   val mediaSourceId: String? = null,
 )
 
+/** One `POST /api/remote-libraries/:libraryId/items/:itemId/playing` body: the media server is told
+ *  this client is playing, has moved, or has stopped. Every field always travels. */
+@Serializable
+data class RemotePlaybackReport(
+  val mediaSourceId: String,
+  val position: Long,
+  val paused: Boolean,
+  val event: String,
+)
+
 /** The raw `GET /api/remote-libraries/personal` answer: the same card shapes Home draws, kept
  *  unparsed so one unknown kind cannot fail the whole page. */
 @Serializable
