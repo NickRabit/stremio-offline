@@ -95,6 +95,14 @@ const distinctMembers = (members: SearchMember[]): SearchMember[] => {
     return true;
   });
 };
+/** What a card can open: a series card opens the series, never one of the episodes under it. */
+const openableMembers = (cluster: SearchClusterView, members: SearchMember[]): SearchMember[] => {
+  const distinct = distinctMembers(members);
+  if (cluster.kind !== "series") return distinct;
+  const series = distinct.filter((member) => member.kind !== "episode");
+  return series.length > 0 ? series : distinct;
+};
+
 const addonLabel = (member: SearchMember): string =>
   member.locator.kind === "catalog" ? member.sourceLabel.split(" · ")[0]! : member.sourceLabel;
 
@@ -199,7 +207,7 @@ function MemberChooser({ cluster, members, anchorKey, onOpenMember, onOpenCanoni
         {loadError && <p className="login-error" role="alert">{loadError}</p>}
         {loading && !page && <p className="search-chooser-note">{t("common.loading")}</p>}
         {page && <div className="search-member-list">
-          {distinctMembers(page.members).map((member) => {
+          {openableMembers(cluster, page.members).map((member) => {
             const episode = episodeText(member);
             return <div className="search-member-row" key={member.memberKey}>
               <div className="search-member-copy">
@@ -331,8 +339,8 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, onO
         else await onOpenCanonical(page.canonical, cluster.primaryMemberKey);
         return;
       }
-      const distinct = distinctMembers(page.members);
-      if (distinct.length === 1 && page.nextFrom == null) {
+      const distinct = openableMembers(cluster, page.members);
+      if (distinct.length === 1 && (page.nextFrom == null || cluster.kind === "series")) {
         if (libraryFirst) await onOpenMember(distinct[0]!, distinct[0]!.memberKey, true);
         else await onOpenMember(distinct[0]!, distinct[0]!.memberKey);
         return;

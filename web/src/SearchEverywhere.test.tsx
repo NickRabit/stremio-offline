@@ -219,6 +219,20 @@ describe("SearchEverywhere", () => {
     expect([...document.body.querySelectorAll("button")].some((button) => button.textContent === "Open title page")).toBe(false);
   });
 
+  it("opens the series itself from a series card, not one of its episodes", async () => {
+    const item = cluster("show", { title: "Jiste pane ministře", kind: "series", hasRemote: true, primaryMemberKey: "series", memberKeys: ["series"] });
+    const series = member({ memberKey: "series", kind: "series", sourceClass: "remote", sourceLabel: "Seriály", locator: { kind: "remote", libraryId: "lib", itemId: "s9", itemType: "series" } });
+    const episode = (index: number) => member({ memberKey: `e${index}`, kind: "episode", sourceClass: "remote", season: 1, episode: index, locator: { kind: "remote", libraryId: "lib", itemId: `e${index}`, itemType: "episode" } });
+    const members = vi.fn(async (): Promise<SearchMemberPage> => ({ clusterKey: "show", members: [series, episode(1), episode(2)], truncated: false }));
+    const onOpenMember = vi.fn();
+    await render(controller({ snapshot: snapshot({ clusters: [item] }), order: ["show"], members }), { onOpenMember });
+
+    await clickCard();
+
+    expect(onOpenMember).toHaveBeenCalledWith(series, "series", true);
+    expect(document.body.textContent).not.toContain("Where to open Jiste pane ministře");
+  });
+
   it("treats several catalogues of one addon as one copy and opens it directly", async () => {
     const item = cluster("film", { title: "A film", primaryMemberKey: "member-a", memberKeys: ["member-a", "member-b"] });
     const locator = { kind: "catalog" as const, addonKey: "addon", type: "movie", id: "addon:film" };

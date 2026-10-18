@@ -408,6 +408,25 @@ class GlobalSearchScreenTest {
   }
 
   @Test
+  fun `a series card opens the series itself, not one of its episodes`() {
+    val api = FakeTvApi()
+    start(api, listOf(cluster("c1", "m1", title = "Jiste pane ministře").copy(kind = "series")))
+    val series = member("m1", locator = GlobalSearchLocatorDto(kind = "remote", libraryId = "lib", itemId = "s9", itemType = "series", provider = "jellyfin")).copy(kind = "series")
+    val episode = member("e1", locator = GlobalSearchLocatorDto(kind = "remote", libraryId = "lib", itemId = "e1", itemType = "episode", provider = "jellyfin")).copy(kind = "episode", season = 1, episode = 1)
+    api.globalMembersHandler = { _, _, _ -> GlobalSearchMemberPageDto(clusterKey = "c1", members = listOf(series, episode)) }
+    api.remoteItemValues["lib:s9"] = RemoteItemDetailDto(RemoteItemDto(id = "s9", name = "Jiste pane ministře", type = "series"))
+    mount(api)
+    search()
+    focus(globalSearchCardTag("m1"))
+    press(Key.DirectionCenter)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagGlobalSearchChooser).assertDoesNotExist()
+    assertEquals(listOf("lib" to "s9"), api.remoteItemRequests)
+    assertEquals("s9", remoteOpened?.item?.id)
+  }
+
+  @Test
   fun `several catalogues of one addon are one copy that opens directly`() {
     val api = FakeTvApi()
     start(api, listOf(cluster("c1", "m1", title = "One")))
