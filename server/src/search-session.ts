@@ -1124,6 +1124,9 @@ export class SearchSessionManager {
       kind: stored.record.kind,
       ids: identityIds.get(stored.memberKey) ?? this.withKnownIds(validStrongIds(stored.record.ids), stored.record.kind),
       ...(stored.record.opaque === undefined ? {} : { opaque: stored.record.opaque }),
+      title: stored.record.title,
+      ...(stored.record.originalTitle === undefined ? {} : { originalTitle: stored.record.originalTitle }),
+      ...(stored.record.year === undefined ? {} : { year: stored.record.year }),
     }));
     const identities = clusterIdentities(inputs);
     const assigned = session.tracker.assign(

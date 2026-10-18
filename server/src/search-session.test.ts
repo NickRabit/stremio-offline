@@ -928,3 +928,22 @@ test("an IMDb title and a TMDB-only title meet through ids already known locally
   assert.equal(await run((ids) => (ids.imdb === "tt0133093" ? { tmdb: "603" } : {})), 1);
 });
 
+test("an id-less Matrix joins the one exact name and year match", async () => {
+  const imdb = new FakeSource("imdb", "catalog");
+  const other = new FakeSource("other", "catalog");
+  const { manager } = build(() => [imdb, other]);
+  const starting = manager.start(authority(), request("matrix"));
+  imdb.respond(page([
+    catalogRecord("imdb-1999", "Matrix", { imdb: "tt0133093" }, { year: 1999 }),
+  ]));
+  other.respond(page([
+    catalogRecord("idless-1999", "Matrix", {}, { year: 1999, opaque: "sosac:matrix:1999" }),
+    catalogRecord("tmdb-1998", "Matrix", { tmdb: "12345" }, { year: 1998 }),
+  ]));
+  const started = await starting;
+  assert.equal(started.snapshot.clusters.length, 2);
+  assert.equal(started.snapshot.clusters.find((cluster) => cluster.year === 1999)?.memberCount, 2);
+  assert.deepEqual(started.snapshot.unidentified, []);
+  manager.close();
+});
+
