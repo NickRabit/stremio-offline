@@ -102,6 +102,8 @@ type Playing = {
   /** The title/library/account scope the playback belongs to, so a late answer cannot land on
    *  another title that happens to reuse the same source id. */
   scope: string;
+  /** Addon subtitles of the catalogue title a library copy or a file stands for. */
+  subtitles?: Subtitle[];
 };
 /** The addon save the viewer opened: the exact stream, subject and labels captured at the click,
  *  so no later state change can alter what is submitted. `title` labels the episode, while
@@ -1172,6 +1174,23 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     return () => { controller.abort(); if (addonProgressEpoch.current === mine) addonProgressEpoch.current += 1; };
   }, [alternativeSelected, detailStreamKey, detailNonce, titleScope, selected?.id, ownerKind, ownerLibrary, ownerItemId, ownerSourceId, ownerProgressKey]);
 
+  // A library copy or a file plays as itself, but the subtitle addons still know the catalogue
+  // title it is matched to; an addon row reads its own above.
+  const playingIdentity = playing && !playing.addon ? supplementaryIdentity(playing.item, series) : null;
+  const playingIdentityKey = playingIdentity ? `${playingIdentity.type}:${playingIdentity.id}` : "";
+  useEffect(() => {
+    if (!playing || playing.addon || !playingIdentity) return;
+    const controller = new AbortController();
+    const { sourceId } = playing.stream;
+    void api.subtitles(playingIdentity.type, playingIdentity.id, controller.signal)
+      .then((found) => {
+        if (controller.signal.aborted) return;
+        setPlaying((value) => value && !value.addon && value.stream.sourceId === sourceId ? { ...value, subtitles: found } : value);
+      })
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [playing?.stream.sourceId, playingIdentityKey]);
+
   if (!librariesError && !targetError && (libraries === null || !libraries.length)) return null;
 
   const grouped = groupEpisodes(episodes.items);
@@ -1650,7 +1669,7 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
         open
         title={playing.title}
         stream={playing.stream}
-        subtitles={addon?.subtitles ?? []}
+        subtitles={addon?.subtitles ?? playing.subtitles ?? []}
         subtitleLanguage={subtitleLanguage}
         audioLanguage={audioLanguage}
         previousTitle={away ? undefined : playPrevious ? episodeTitle(playPrevious) : undefined}

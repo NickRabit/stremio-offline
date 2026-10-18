@@ -91,6 +91,7 @@ import cz.stremiooffline.tv.playback.sidecarAdvanced
 import cz.stremiooffline.tv.playback.sidecarPollDelay
 import cz.stremiooffline.tv.playback.sidecarRefresh
 import cz.stremiooffline.tv.ui.catalog.SourcesPanel
+import cz.stremiooffline.tv.ui.catalog.libraryAddonIdentity
 import cz.stremiooffline.tv.ui.catalog.RemoteSourcesFailure
 import cz.stremiooffline.tv.ui.detail.PlayTarget
 import kotlinx.coroutines.CoroutineScope
@@ -302,22 +303,48 @@ fun PlayerScreen(
     cues = emptyList()
   }
 
+  /** The catalogue title each library file played here is bound to, null for an unbound file. */
+  val fileIdentities = remember { mutableMapOf<String, Pair<String, String>?>() }
+  suspend fun askSubtitles(identity: Pair<String, String>): List<AddonSubtitleDto> =
+    runCatching { api.subtitles(identity.first, identity.second) }.getOrDefault(emptyList())
+
+  /** Asks the subtitle addons about [from] beside its session and hands their answer to it. */
+  fun offerLater(from: PlayTarget, own: List<AddonSubtitleDto>, identity: suspend () -> Pair<String, String>?) {
+    scope.launch {
+      val found = identity()?.let { askSubtitles(it) }.orEmpty()
+      if (found.isEmpty() || currentTarget.key != from.key) return@launch
+      addonSubtitles = own + found
+      controller.offerSubtitles(from.key, found)
+    }
+  }
+
   /** The account's languages and the addon subtitles, read fresh before every start. */
   suspend fun readAccount(from: PlayTarget = currentTarget) {
     addonFetched = true
     settings = runCatching { api.settings() }.getOrDefault(SettingsResponse())
-    // A remote version's external subtitles belong to the version the viewer chose; the catalogue's
-    // addons are never asked, even for a matched title.
-    if (from.remoteItem != null) {
-      addonSubtitles = remoteSelectedSubtitles(from, sources)
+    // A remote version's own external subtitles come first; the subtitle addons are then asked
+    // about the title the play, a library file or a media-server copy alike, is bound to.
+    val own = remoteSelectedSubtitles(from, sources)
+    val carried = carriedSubtitleIdentity(from)
+    val path = from.path
+    // A catalogue play waits for its subtitles as it always has; a media-server copy and a file
+    // take the addon ones beside the session, so Play never waits on them.
+    if (carried != null && (from.remoteItem != null || path != null)) {
+      addonSubtitles = own
+      offerLater(from, own) { carried }
       return
     }
-    // A play of an actual file on disk mints its source from a path and takes no catalogue addon
-    // subtitles: the identity a native detail carries on such a target is there for the generic
-    // row a switch may land on later, not for the file itself.
-    val type = from.subtitleType.takeIf { from.path == null }
-    val id = from.subtitleTarget
-    addonSubtitles = if (type != null && id != null) runCatching { api.subtitles(type, id) }.getOrDefault(emptyList()) else emptyList()
+    if (path == null) {
+      addonSubtitles = own + carried?.let { askSubtitles(it) }.orEmpty()
+      return
+    }
+    addonSubtitles = own
+    // The title a file is bound to is looked up beside the session, so Play never waits for it;
+    // a binding read once is not asked again for a restart or a switch back to the file.
+    offerLater(from, own) {
+      if (fileIdentities.containsKey(path)) fileIdentities[path]
+      else libraryAddonIdentity(runCatching { api.libraryTitle(path) }.getOrNull()).also { fileIdentities[path] = it }
+    }
   }
 
   // The sources the caller offers in its own order; an addon's notice is not a source. A play the
@@ -976,6 +1003,14 @@ private fun genericKeyOf(target: PlayTarget): String? {
  * found by its id in the target's own versions or in the caller's offered ones. A remote stream
  * never borrows the catalogue's addon subtitles, matched or not.
  */
+/** The catalogue title whose addon subtitles [target] takes when the target names it itself; a
+ *  library file that names none is asked about the title the server bound it to. */
+internal fun carriedSubtitleIdentity(target: PlayTarget): Pair<String, String>? {
+  val type = target.subtitleType?.takeIf { it.isNotBlank() } ?: return null
+  val id = target.subtitleTarget?.takeIf { it.isNotBlank() } ?: return null
+  return type to id
+}
+
 internal fun remoteSelectedSubtitles(target: PlayTarget, offered: List<StreamDto>): List<AddonSubtitleDto> {
   if (target.remoteItem == null) return emptyList()
   val selected = (target.remoteSources + offered).firstOrNull { it.sourceId.isNotBlank() && it.sourceId == target.sourceId }

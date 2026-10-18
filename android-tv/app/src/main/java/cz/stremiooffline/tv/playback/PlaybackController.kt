@@ -323,6 +323,35 @@ class PlaybackController(
     begin(startPlan(sourceId, key, title, path, at, resume, poster, addonKey, subtitles, audioPreference, subtitlePreference, trackChoice = trackChoice, stableKey = stableKey, mint = mint, remote = remoteItem))
   }
 
+  /**
+   * Addon subtitles that answered after the start of [key] was asked for: a library file's title is
+   * looked up beside the session, never before it. They join the offer, and a session showing no
+   * subtitle takes one in the account's language, the way a start that had them would have.
+   */
+  fun offerSubtitles(key: String, subtitles: List<AddonSubtitleDto>) {
+    val current = plan ?: return
+    if (released || subtitles.isEmpty() || current.key != key) return
+    val known = current.subtitles.mapTo(HashSet()) { it.subtitleId }
+    val merged = current.subtitles + subtitles.filter { it.subtitleId !in known }
+    plan = current.copy(subtitles = merged)
+    val snapshot = _state.value
+    if (!snapshot.started) return
+    val fill = if (subtitle == SubtitleChoice.Off && snapshot.sidecarUrl == null && current.trackChoice?.subtitleOff != true) {
+      current.subtitlePreference?.let { preferred ->
+        val spoken = audioTracks.getOrNull(snapshot.audioTrackIndex)?.language
+        Languages.pickAddonSubtitle(merged, preferred, spoken, current.audioPreference)
+      }
+    } else null
+    if (fill != null) subtitle = SubtitleChoice.Addon(fill.subtitleId)
+    _state.update {
+      it.copy(
+        addonSubtitles = merged,
+        subtitle = subtitle,
+        trackRevision = if (fill != null) it.trackRevision + 1 else it.trackRevision,
+      )
+    }
+  }
+
   /** Starts the next library file: the old session is saved and deleted before the new start. */
   fun playNext(
     key: String,
@@ -905,7 +934,10 @@ class PlaybackController(
     }
     recovered = false
     lastPosition = target - offset
-    val addons = plan?.subtitles ?: _state.value.addonSubtitles
+    // Subtitles offered while the start was under way are on the current plan, not on the copy
+    // the start began with.
+    val addons = plan?.let { started -> this.plan?.takeIf { it == started.copy(subtitles = it.subtitles) } ?: started }?.subtitles
+      ?: _state.value.addonSubtitles
     val defaultAddon = if (!subtitleChange && addon == null && carried == null && descriptor.subtitleTrack == null && descriptor.sidecarUrl == null) {
       plan?.let { defaultAddon(it, descriptor, addons) }
     } else null

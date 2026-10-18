@@ -7,7 +7,7 @@ import cz.stremiooffline.tv.ui.detail.PlayTarget
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
-/** A remote play takes only the selected version's own subtitles, never the catalogue's addons. */
+/** The subtitles a remote version carries itself: the selected one's, never another version's. */
 class RemoteSubtitlesTest {
 
   private fun stream(sourceId: String, vararg subtitles: AddonSubtitleDto) = StreamDto(

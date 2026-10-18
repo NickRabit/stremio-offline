@@ -7,6 +7,7 @@ import { GuardRejection, OutboundError, guardedFetch, guardedJson } from "./outb
 import { defaultDownloadSettings } from "./naming.js";
 import { log } from "./logger.js";
 import { normalizeLanguage } from "./language.js";
+import { imdbOf } from "./external-ids.js";
 
 const reasonOf = (error: unknown) => error instanceof Error ? error.message : String(error);
 
@@ -320,8 +321,48 @@ export async function streams(addons: AddonRecord[], type: string, id: string, a
   return results.flatMap((result) => result.status === "fulfilled" ? result.value : []);
 }
 
+const IMDB_TARGET_TTL_MS = 6 * 60 * 60_000;
+const imdbTargets = new Map<string, { imdb: string | null; at: number }>();
+
+/** Test seam only: forgets the IMDb ids read from metadata. */
+export function resetImdbTargets() { imdbTargets.clear(); }
+
+/** The IMDb id a title of an addon with its own ids stands for: carried in the id itself
+ *  (`mpa:webshare-index:tt2709692`) or named by the addon's metadata as `imdb_id`. */
+async function imdbTitle(addons: AddonRecord[], type: string, id: string, interactive: boolean): Promise<string | null> {
+  const carried = imdbOf(id);
+  if (carried) return carried;
+  const key = `${type}:${id}`;
+  const cached = imdbTargets.get(key);
+  if (cached && Date.now() - cached.at < IMDB_TARGET_TTL_MS) return cached.imdb;
+  let imdb: string | null = null;
+  for (const addon of addons.filter((a) => a.enabled && a.role !== "source" && supports(a, "meta", type, id))) {
+    try {
+      const meta = await addonMetadata(addon, type, id, interactive);
+      const named = [meta?.imdb_id, meta?.id].find((value): value is string => typeof value === "string" && /^tt\d+$/.test(value));
+      if (named) { imdb = named; break; }
+    } catch { /* the next metadata addon may know it */ }
+  }
+  imdbTargets.set(key, { imdb, at: Date.now() });
+  return imdb;
+}
+
+/** Subtitle addons such as OpenSubtitles accept IMDb ids only, so a title whose id they do not
+ *  take is asked under its IMDb id instead, an episode keeping its season and episode. */
+async function subtitleTarget(addons: AddonRecord[], type: string, id: string, interactive: boolean): Promise<string | null> {
+  const episode = type === "series" ? /^(.+):(\d+):(\d+)$/.exec(id) : null;
+  const title = episode ? episode[1]! : id;
+  const imdb = await imdbTitle(addons, type, title, interactive);
+  return imdb ? (episode ? `${imdb}:${episode[2]}:${episode[3]}` : imdb) : null;
+}
+
 export async function subtitles(addons: AddonRecord[], type: string, id: string, interactive = false): Promise<SubtitleItem[]> {
-  const candidates = addons.filter((a) => a.enabled && supports(a, "subtitles", type, id));
+  const offered = addons.filter((a) => a.enabled && supports(a, "subtitles", type));
+  let candidates = offered.filter((a) => supports(a, "subtitles", type, id));
+  if (!candidates.length && offered.length) {
+    const target = await subtitleTarget(addons, type, id, interactive);
+    if (target) { id = target; candidates = offered.filter((a) => supports(a, "subtitles", type, id)); }
+  }
   const results = await Promise.allSettled(candidates.map(async (addon) => {
     const response = await jsonFetch<{ subtitles?: SubtitleItem[] }>(resourceUrl(addon, "subtitles", type, id), TIMEOUT_MS, interactive);
     // The key as well as the name, the way a stream carries it: the name is for the person

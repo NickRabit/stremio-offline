@@ -3,7 +3,7 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { addonAllowed, addonMetadataLanguage, allowedAddons, fetchCatalogPage, metadata, orderedForUser, searchAll, searchableCatalogs, streamCandidates, supportsSkip } from "./addons.js";
+import { addonAllowed, addonMetadataLanguage, allowedAddons, fetchCatalogPage, metadata, orderedForUser, searchAll, searchableCatalogs, streamCandidates, subtitles, supportsSkip } from "./addons.js";
 import { flushLog, initLogger } from "./logger.js";
 import type { Viewer } from "./libraries.js";
 import { defaultDownloadSettings } from "./naming.js";
@@ -332,4 +332,68 @@ test("supportsSkip reads both spellings of catalog extras", () => {
   assert.equal(supportsSkip({ type: "movie", id: "top", extra: [{ name: "skip" }] }), true);
   assert.equal(supportsSkip({ type: "movie", id: "top", extraSupported: ["skip"] }), true);
   assert.equal(supportsSkip({ type: "movie", id: "top" }), false);
+});
+
+const subtitleAddon = (): AddonRecord => ({
+  ...metaAddon("subs"),
+  manifest: { id: "subs", name: "Subs", version: "1", resources: ["subtitles"], types: ["movie", "series"], idPrefixes: ["tt"] },
+});
+
+const prefixedMetaAddon = (): AddonRecord => ({
+  ...metaAddon("sosac"),
+  manifest: { id: "sosac", name: "Sosac", version: "1", resources: ["catalog", { name: "meta", types: ["movie", "series"], idPrefixes: ["mpa:"] }], idPrefixes: ["mpa:"] },
+});
+
+/** The subtitle addon answers for the id it was asked, so the test reads which one reached it. */
+const subtitleStub = (calls: string[], imdb: Record<string, string>) => (url: string) => {
+  calls.push(url);
+  const meta = /\/meta\/(movie|series)\/(.+)\.json$/.exec(url);
+  if (meta) {
+    const id = decodeURIComponent(meta[2]!);
+    return json({ meta: { id, type: meta[1], name: id, ...(imdb[id] ? { imdb_id: imdb[id] } : {}) } });
+  }
+  const asked = /\/subtitles\/(?:movie|series)\/(.+)\.json$/.exec(url);
+  return json({ subtitles: asked ? [{ id: "s1", url: "https://subs.example/1.srt", lang: decodeURIComponent(asked[1]!) }] : [] });
+};
+
+test("a title of an addon with its own ids asks the subtitle addons under its IMDb id", async () => {
+  const calls: string[] = [];
+  await withStubbedAddons(subtitleStub(calls, { "mpa:sosac:abc": "tt0241527" }), async () => {
+    const found = await subtitles([prefixedMetaAddon(), subtitleAddon()], "movie", "mpa:sosac:abc");
+    assert.deepEqual(found.map((item) => item.lang), ["tt0241527"]);
+  });
+});
+
+test("an episode of such an addon keeps its season and episode on the show's IMDb id", async () => {
+  const calls: string[] = [];
+  await withStubbedAddons(subtitleStub(calls, { "mpa:sosac-series:141": "tt0096697" }), async () => {
+    const found = await subtitles([prefixedMetaAddon(), subtitleAddon()], "series", "mpa:sosac-series:141:3:7");
+    assert.deepEqual(found.map((item) => item.lang), ["tt0096697:3:7"]);
+  });
+});
+
+test("an IMDb id carried in the id itself needs no metadata request", async () => {
+  const calls: string[] = [];
+  await withStubbedAddons(subtitleStub(calls, {}), async () => {
+    const found = await subtitles([prefixedMetaAddon(), subtitleAddon()], "series", "mpa:webshare-index:tt2709692:1:2");
+    assert.deepEqual(found.map((item) => item.lang), ["tt2709692:1:2"]);
+  });
+  assert.ok(calls.every((url) => !url.includes("/meta/")), "no metadata request");
+});
+
+test("an id the subtitle addons already accept is asked as it is", async () => {
+  const calls: string[] = [];
+  await withStubbedAddons(subtitleStub(calls, {}), async () => {
+    const found = await subtitles([prefixedMetaAddon(), subtitleAddon()], "series", "tt0096697:1:1");
+    assert.deepEqual(found.map((item) => item.lang), ["tt0096697:1:1"]);
+  });
+  assert.equal(calls.length, 1);
+});
+
+test("a title whose metadata names no IMDb id asks no subtitle addon", async () => {
+  const calls: string[] = [];
+  await withStubbedAddons(subtitleStub(calls, {}), async () => {
+    assert.deepEqual(await subtitles([prefixedMetaAddon(), subtitleAddon()], "movie", "mpa:sosac:none"), []);
+  });
+  assert.ok(calls.every((url) => !url.includes("/subtitles/")));
 });
