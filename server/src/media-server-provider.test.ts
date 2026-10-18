@@ -431,6 +431,12 @@ test("reportPlayback maps each report kind to its fixed transport operation", as
   assert.ok(calls.every((call) => call.token === "tok"));
 });
 
+test("logout uses the fixed logout transport operation", async () => {
+  const { calls, provider } = fixture(() => null);
+  await provider.logout("tok");
+  assert.deepEqual(calls, [{ operation: "logout", args: {}, token: "tok" }]);
+});
+
 test("ancestors accepts only a bounded bare array, never an invented wrapper", async () => {
   const bare = fixture(() => [{ Id: "root" }, { Id: "series" }]);
   assert.deepEqual(await bare.provider.ancestors("tok", "user-1", "ep"), ["root", "series"]);

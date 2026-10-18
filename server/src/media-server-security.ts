@@ -33,6 +33,7 @@ export interface MediaServerOperationArgs {
   playing: PlaybackOperationArgs;
   playingProgress: PlaybackOperationArgs;
   playingStopped: { itemId: string; mediaSourceId: string; playSessionId: string; positionTicks: number };
+  logout: Record<string, never>;
 }
 export type MediaServerOperationName = keyof MediaServerOperationArgs;
 
@@ -827,6 +828,7 @@ const ARGUMENT_KEYS: Record<MediaServerOperationName, readonly string[]> = {
   playing: ["itemId", "mediaSourceId", "playSessionId", "positionTicks", "isPaused"],
   playingProgress: ["itemId", "mediaSourceId", "playSessionId", "positionTicks", "isPaused", "eventName"],
   playingStopped: ["itemId", "mediaSourceId", "playSessionId", "positionTicks"],
+  logout: [],
 };
 
 const REQUIRED_KEYS: Record<MediaServerOperationName, readonly string[]> = {
@@ -844,6 +846,7 @@ const REQUIRED_KEYS: Record<MediaServerOperationName, readonly string[]> = {
   playing: ["itemId", "mediaSourceId", "playSessionId", "positionTicks", "isPaused"],
   playingProgress: ["itemId", "mediaSourceId", "playSessionId", "positionTicks", "isPaused"],
   playingStopped: ["itemId", "mediaSourceId", "playSessionId", "positionTicks"],
+  logout: [],
 };
 
 interface BuiltRequest {
@@ -1082,6 +1085,8 @@ function buildRequest(baseUrl: string, operation: MediaServerOperationName, args
       if (Buffer.byteLength(body, "utf8") > MEDIA_SERVER_LIMITS.requestBody) throw invalid("The media-server playback report is too large.");
       return { method: "POST", url: `${baseUrl}/Sessions/Playing/Stopped`, body };
     }
+    case "logout":
+      return { method: "POST", url: `${baseUrl}/Sessions/Logout` };
   }
 }
 
@@ -1357,7 +1362,7 @@ export function createMediaServerTransport(
         void response.body?.cancel().catch(() => undefined);
         throw statusFailure(response.status, new Headers(response.headers));
       }
-      if (operation === "playing" || operation === "playingProgress" || operation === "playingStopped") {
+      if (operation === "playing" || operation === "playingProgress" || operation === "playingStopped" || operation === "logout") {
         void response.body?.cancel().catch(() => undefined);
         return null;
       }

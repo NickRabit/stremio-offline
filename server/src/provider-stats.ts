@@ -11,12 +11,12 @@ import { renameWithRetry } from "./fs-retry.js";
 export type ProviderCallKind =
   | "info" | "login" | "user" | "views" | "items" | "directory" | "match"
   | "detail" | "ancestors" | "versions" | "playbackInfo"
-  | "artwork" | "subtitle" | "original" | "playback";
+  | "artwork" | "subtitle" | "original" | "playback" | "logout";
 
 export const PROVIDER_CALL_KINDS: readonly ProviderCallKind[] = [
   "info", "login", "user", "views", "items", "directory", "match",
   "detail", "ancestors", "versions", "playbackInfo",
-  "artwork", "subtitle", "original", "playback",
+  "artwork", "subtitle", "original", "playback", "logout",
 ];
 
 export type ProviderCallSummary = Record<ProviderCallKind, number>;

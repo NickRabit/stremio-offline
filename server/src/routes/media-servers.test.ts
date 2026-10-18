@@ -72,6 +72,7 @@ class FakeServer {
 const provider = (server: FakeServer): MediaServerProvider => ({
   verifyIdentity: async () => { await server.run("info"); return { serverId: server.serverId, version: "1" }; },
   authenticate: async () => { await server.run("login"); return { serverId: server.serverId, accountId: server.accountId, token: "token-1" }; },
+  logout: async () => { await server.run("logout"); },
   currentAccount: async () => { await server.run("user"); return { accountId: server.accountId, policy: structuredClone(server.policy) }; },
   listLibraries: async () => { await server.run("views"); return structuredClone(server.libraries); },
   pageItems: async (_token, _account, libraryId) => { await server.run("items"); return { items: structuredClone(server.items[libraryId] ?? []), total: (server.items[libraryId] ?? []).length }; },

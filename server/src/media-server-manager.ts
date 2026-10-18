@@ -159,12 +159,16 @@ export interface MediaServerManagerSeams {
   remoteImages?: RemoteImageCache;
   quotaClock?: () => number;
   quotaSleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+  /** The hard cap on one best-effort upstream session logout. */
+  logoutTimeoutMs?: number;
 }
 
 const USERNAME_MAX = 256;
 const PASSWORD_MAX = 1024;
 const RUNTIME_MAX = 128;
 const CLEANUP_INTERVAL_MS = 60_000;
+const LOGOUT_TIMEOUT_MS = 5_000;
+const LOGOUT_CONCURRENCY = 4;
 const MATCH_CANDIDATE_MAX = 40;
 const MATCH_STREAM_MAX = 200;
 /** A page asked for one season's episodes: the one parent-scoped page an episode match reads. */
@@ -670,6 +674,7 @@ export class MediaServerManager {
   private readonly networkStartIntervalMs: number;
   private readonly coalesceReads: boolean;
   private readonly cleanupIntervalMs: number;
+  private readonly logoutTimeoutMs: number;
   private readonly lifetime = new AbortController();
   private readonly loginTransports = new Set<MediaServerTransport>();
   private credentialChain: Promise<unknown> = Promise.resolve();
@@ -700,6 +705,7 @@ export class MediaServerManager {
     this.networkStartIntervalMs = seams.networkStartIntervalMs ?? NETWORK_START_INTERVAL_MS;
     this.coalesceReads = seams.coalesceReads ?? true;
     this.cleanupIntervalMs = seams.cleanupIntervalMs ?? CLEANUP_INTERVAL_MS;
+    this.logoutTimeoutMs = seams.logoutTimeoutMs ?? LOGOUT_TIMEOUT_MS;
     this.configuration = new MediaServerConfiguration(this.store);
     this.remoteImages = seams.remoteImages;
   }
@@ -795,18 +801,22 @@ export class MediaServerManager {
       const id = newConnectionId();
       const transport = this.transportFactory({ baseUrl, allowLan, allowLoopback, deviceId: id });
       let cached = false;
+      let installed = false;
+      let provider: MediaServerProvider | undefined;
+      let result: { serverId: string; accountId: string; token: string } | undefined;
       this.loginTransports.add(transport);
       try {
-        const provider = this.providerFactory(kind as MediaServerKind, transport);
-        const result = await this.net(undefined, request, () => provider.authenticate(username, password, request));
+        provider = this.providerFactory(kind as MediaServerKind, transport);
+        result = await this.net(undefined, request, () => provider!.authenticate(username, password, request));
+        const authenticated = result;
         this.checkLive(request);
         this.requireAdmin(authority, request);
-        const binding = { connectionId: id, provider: kind as MediaServerKind, serverId: result.serverId, accountId: result.accountId };
+        const binding = { connectionId: id, provider: kind as MediaServerKind, serverId: authenticated.serverId, accountId: authenticated.accountId };
         const ref = await this.serializedCredential(() => {
           this.assertWriteAuthority({ users: this.store.users() }, authority, request);
-          return this.vault.put(binding, result.token);
+          return this.vault.put(binding, authenticated.token);
         });
-        let installed!: MediaConnectionRecord;
+        let created!: MediaConnectionRecord;
         try {
           await this.store.update((state) => {
             this.assertWriteAuthority(state, authority, request);
@@ -815,22 +825,33 @@ export class MediaServerManager {
             if (list.some((candidate) => verifiedKey(candidate.provider, candidate.serverId, candidate.accountId) === verifiedKey(binding.provider, binding.serverId, binding.accountId))) {
               throw invalid("That remote account is already connected.");
             }
-            installed = {
+            created = {
               id, provider: binding.provider, name, baseUrl, allowLan, allowLoopback,
               serverId: binding.serverId, accountId: binding.accountId, enabled: true, generation: 0,
               secretRef: ref, addedAt: new Date().toISOString(),
             };
-            state.mediaConnections = [...list, installed];
+            state.mediaConnections = [...list, created];
           });
         } catch (error) {
           await this.rollbackSecret(ref);
           throw error;
         }
-        this.cacheRuntime(id, newRuntime(installed.generation, installed.secretRef, transport, provider));
+        installed = true;
+        this.cacheRuntime(id, newRuntime(created.generation, created.secretRef, transport, provider));
         cached = true;
-        this.markAvailable(installed);
-        log("INFO", "Media-server connection created", { actor: actor.username, connectionId: id, provider: installed.provider });
-        return this.adminConnectionView(installed);
+        this.markAvailable(created);
+        log("INFO", "Media-server connection created", { actor: actor.username, connectionId: id, provider: created.provider });
+        return this.adminConnectionView(created);
+      } catch (error) {
+        if (!installed && result && provider) {
+          await this.logoutTokens([{
+            connection: { id, provider: kind as MediaServerKind, baseUrl, allowLan, allowLoopback },
+            token: result.token,
+            transport,
+            provider,
+          }]);
+        }
+        throw error;
       } finally {
         this.loginTransports.delete(transport);
         if (!cached) await transport.close().catch(() => undefined);
@@ -884,21 +905,24 @@ export class MediaServerManager {
     const connectionId = this.requireConnectionId(id);
     const forget = readForgetOption(options);
     await this.adminMutation(async () => {
+      const connection = this.store.mediaConnections().find((candidate) => candidate.id === connectionId);
+      const token = connection ? await this.storedToken(connection) : undefined;
       await this.store.update((state) => {
         this.assertWriteAuthority(state, authority, request);
-        const connection = (state.mediaConnections ?? []).find((candidate) => candidate.id === connectionId);
-        if (!connection) throw notFound("That media-server connection does not exist.");
-        const scope = connectionScope(connection);
+        const current = (state.mediaConnections ?? []).find((candidate) => candidate.id === connectionId);
+        if (!current) throw notFound("That media-server connection does not exist.");
+        const scope = connectionScope(current);
         if (forget) forgetRemovedHistory(state, scope);
         else markRemovedHistory(state, scope, this.clock(), { connectionIds: [connectionId] });
         const removed = (state.remoteLibraries ?? []).filter((library) => library.connectionId === connectionId);
         const affected = this.granteeIds(state.users, removed);
         state.mediaConnections = (state.mediaConnections ?? []).filter((candidate) => candidate.id !== connectionId);
         state.remoteLibraries = (state.remoteLibraries ?? []).filter((library) => library.connectionId !== connectionId);
-        state.mediaSecretCleanup = this.appendCleanup(state.mediaSecretCleanup, connection.secretRef ? [connection.secretRef] : []);
+        state.mediaSecretCleanup = this.appendCleanup(state.mediaSecretCleanup, current.secretRef ? [current.secretRef] : []);
         if (affected.length) state.users = bumpPermissions(state.users ?? [], affected);
       });
       this.invalidateRuntime(connectionId);
+      if (connection && token !== undefined) await this.logoutTokens([{ connection, token }]);
       await this.invalidateContent({ connectionId });
       await this.drainCleanup();
       log("INFO", "Media-server connection removed", { actor: actor.username, connectionId });
@@ -1226,13 +1250,20 @@ export class MediaServerManager {
     const prepared = prepareMediaServerConfiguration(metadata);
     await this.adminMutation(async () => {
       const replaced: string[] = [];
+      const storedTokens = new Map<string, string>();
+      for (const connection of this.store.mediaConnections()) {
+        const token = await this.storedToken(connection);
+        if (token !== undefined && connection.secretRef !== undefined) storedTokens.set(`${connection.id}\u0000${connection.secretRef}`, token);
+      }
+      let previousConnections: MediaConnectionRecord[] = [];
       await this.store.update((state) => {
         this.assertWriteAuthority(state, authority, request);
         mutateSettings(state);
         this.assertWriteAuthority(state, authority, request);
-        const previousConnections = state.mediaConnections ?? [];
+        const currentConnections = state.mediaConnections ?? [];
+        previousConnections = currentConnections.map((connection) => structuredClone(connection));
         const previousLibraries = state.remoteLibraries ?? [];
-        replaced.push(...previousConnections.map((connection) => connection.id));
+        replaced.push(...currentConnections.map((connection) => connection.id));
         state.mediaConnections = prepared.connections;
         state.remoteLibraries = prepared.libraries;
         const now = this.clock();
@@ -1244,11 +1275,16 @@ export class MediaServerManager {
         markDetachedHistory(state, now);
         state.mediaSecretCleanup = this.appendCleanup(
           state.mediaSecretCleanup,
-          previousConnections.map((connection) => connection.secretRef).filter((ref): ref is string => ref !== undefined),
+          currentConnections.map((connection) => connection.secretRef).filter((ref): ref is string => ref !== undefined),
         );
         const affected = this.granteeIds(state.users, previousLibraries);
         if (affected.length) state.users = bumpPermissions(state.users ?? [], affected);
       });
+      const logoutEntries = previousConnections.flatMap((connection) => {
+        const token = connection.secretRef === undefined ? undefined : storedTokens.get(`${connection.id}\u0000${connection.secretRef}`);
+        return token === undefined ? [] : [{ connection, token }];
+      });
+      await this.logoutTokens(logoutEntries);
       for (const connectionId of replaced) {
         this.invalidateRuntime(connectionId);
         await this.invalidateContent({ connectionId });
@@ -2974,6 +3010,16 @@ export class MediaServerManager {
     return runtime;
   }
 
+  private async storedToken(connection: MediaConnectionRecord): Promise<string | undefined> {
+    if (!connection.secretRef) return undefined;
+    const binding = { connectionId: connection.id, provider: connection.provider, serverId: connection.serverId, accountId: connection.accountId };
+    try {
+      return await this.serializedCredential(() => this.vault.get(binding, connection.secretRef as string));
+    } catch {
+      return undefined;
+    }
+  }
+
   /** The live permission check every read repeats: the credential is re-read from the vault, so
    *  a removed or changed key still fails closed, and the remote identity, account policy and
    *  view list are proved. Those three facts are cached for a short window per runtime; the
@@ -3257,6 +3303,49 @@ export class MediaServerManager {
     } catch {
       log("WARN", "A media-server secret could not be cleaned up; startup reconciliation will retry");
     }
+  }
+
+  private async logoutTokens(entries: Array<{
+    connection: Pick<MediaConnectionRecord, "id" | "provider" | "baseUrl" | "allowLan" | "allowLoopback">;
+    token: string;
+    transport?: MediaServerTransport;
+    provider?: MediaServerProvider;
+  }>): Promise<void> {
+    const logout = async (entry: (typeof entries)[number]): Promise<void> => {
+      const ownsTransport = entry.transport === undefined;
+      let transport = entry.transport;
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        transport ??= this.transportFactory({
+          baseUrl: entry.connection.baseUrl,
+          allowLan: entry.connection.allowLan,
+          allowLoopback: entry.connection.allowLoopback,
+          deviceId: entry.connection.id,
+        });
+        const provider = entry.provider ?? this.providerFactory(entry.connection.provider, transport);
+        const controller = new AbortController();
+        await new Promise<void>((resolve, reject) => {
+          timer = setTimeout(() => {
+            controller.abort();
+            reject(new MediaServerError("timeout", "The media-server logout timed out."));
+          }, this.logoutTimeoutMs);
+          Promise.resolve().then(() => provider.logout(entry.token, controller.signal)).then(resolve, reject);
+        });
+      } catch (error) {
+        log("WARN", "A media-server token could not be logged out", {
+          connectionId: entry.connection.id,
+          reason: error instanceof MediaServerError ? error.code : "unavailable",
+        });
+      } finally {
+        if (timer) clearTimeout(timer);
+        if (ownsTransport && transport) await transport.close().catch(() => undefined);
+      }
+    };
+    const queue = [...entries];
+    const workers = Array.from({ length: Math.min(LOGOUT_CONCURRENCY, queue.length) }, async () => {
+      for (let entry = queue.shift(); entry !== undefined; entry = queue.shift()) await logout(entry);
+    });
+    await Promise.all(workers);
   }
 
   /** The periodic work: the secret-cleanup drain and the history sweep, coalesced so a pass
