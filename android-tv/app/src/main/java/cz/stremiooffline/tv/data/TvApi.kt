@@ -157,6 +157,12 @@ interface RemoteLibraryApi {
     patch: RemoteItemStatePatch,
   ): RemoteItemStateDto = throw ApiError(ApiFailure.Generic)
 
+  suspend fun reportRemotePlayback(
+    libraryId: String,
+    itemId: String,
+    report: RemotePlaybackReport,
+  ): Unit = throw ApiError(ApiFailure.Generic)
+
   /**
    * The remote versions of one catalogue title or episode, matched by external id only.
    * [nameHint] is the resolved catalogue title of the title being opened -- a series name for an

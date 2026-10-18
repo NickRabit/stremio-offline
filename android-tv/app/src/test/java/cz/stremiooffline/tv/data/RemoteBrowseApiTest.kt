@@ -5,6 +5,7 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** The lazy browse and preview routes: the client names the request exactly, encodes every opaque
@@ -103,6 +104,32 @@ class RemoteBrowseApiTest {
     api(start()).remoteMatchedStreams("lib/1", "series", "tt5:1:2")
 
     assertEquals("/api/remote-libraries/lib%2F1/streams/series/tt5%3A1%3A2", server.takeRequest().path)
+  }
+
+  @Test
+  fun `playback reports post the encoded route and every field`() = runTest {
+    server.enqueue(MockResponse().setResponseCode(204))
+
+    api(start()).reportRemotePlayback("lib A", "item/1", RemotePlaybackReport("ms1", 12, false, "progress"))
+
+    val request = server.takeRequest()
+    assertEquals("POST", request.method)
+    assertEquals("/api/remote-libraries/lib%20A/items/item%2F1/playing", request.path)
+    assertEquals(
+      """{"mediaSourceId":"ms1","position":12,"paused":false,"event":"progress"}""",
+      request.body.readUtf8(),
+    )
+  }
+
+  @Test
+  fun `a refused playback report surfaces as an api error`() = runTest {
+    server.enqueue(MockResponse().setResponseCode(500).setBody("""{"error":"no"}"""))
+
+    val error = runCatching {
+      api(start()).reportRemotePlayback("lib1", "item1", RemotePlaybackReport("ms1", 12, true, "stop"))
+    }.exceptionOrNull()
+
+    assertTrue(error is ApiError)
   }
 
   private class Memory : SessionPersistence {
