@@ -7,8 +7,7 @@ client and obey the answer, before attempting to open an original stream.
 
 The change should:
 
-1. obtain playback information with a truthful device profile and the effective
-   bitrate limit,
+1. obtain playback information with the effective bitrate limit,
 2. understand `ErrorCode` instead of treating an empty response as a generic
    failure,
 3. use the server-issued `PlaySessionId` for the stream and playback reports,
@@ -139,11 +138,11 @@ task. Do not request a server-side conversion that the client cannot consume.
 
 The profile must at minimum express:
 
-- video direct-play containers and codecs the backend can consume unchanged;
-- no audio/video conversion requirement unless the server explicitly chooses
-  a supported direct-play source;
-- max streaming bitrate equal to `min(account bitrateLimit, application
-  ceiling)` when either exists;
+- no synthetic `DeviceProfile`; the backend proxies originals and converts
+  locally, and live Jellyfin testing showed a synthetic profile made direct play
+  unavailable for a file the server otherwise serves directly;
+- `MaxStreamingBitrate` from the account policy when present;
+- direct-play, direct-stream and transcode flags fixed by the backend contract;
 - no unbounded arrays or provider-controlled values.
 
 Keep the profile in a versioned function with unit tests. Do not copy Nuvio's

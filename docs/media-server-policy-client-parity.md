@@ -18,6 +18,7 @@ bypassing the server owner's policy.
 | [#456](https://github.com/NickRabit/stremio-offline/pull/456) | Merged | Reads account bitrate and stream/session limits, refuses or paces originals above the limit, and maps rate-limit/busy responses. |
 | [#457](https://github.com/NickRabit/stremio-offline/pull/457) | Merged | Reports playback start/progress/stop from the web player as a normal media-server session. |
 | [#458](https://github.com/NickRabit/stremio-offline/pull/458) | Draft | Adds the same session reporting to the Android TV player; needs rebasing after #457 landed. |
+| [#460](https://github.com/NickRabit/stremio-offline/pull/460) | Open | Implements the PlaybackInfo admission, fixed error codes, provider PlaySessionId and playback/download admission separation described in this document. |
 
 The event ordering in #457/#458 matters: a progress report must not arrive
 after its stop and recreate a ghost session. The 60-second reporter sweep is a
@@ -166,6 +167,11 @@ playback attempts.
 
 This is the highest-value next change. The requested task is in
 [media-server-policy-client-parity-task.md](media-server-policy-client-parity-task.md).
+The implementation in #460 also established a compatibility correction during
+live testing: sending a synthetic codec `DeviceProfile` made Jellyfin report
+direct play as unavailable for a file it served as direct play without that
+profile. The implementation therefore sends the bitrate/flags and requires the
+server's `SupportsDirectPlay` answer, without a codec-limited device profile.
 
 ### P1: Device approval, remote access and schedules
 
