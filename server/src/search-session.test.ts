@@ -699,6 +699,26 @@ test("episodes with a parentRef attach to a series that has no provider ids", as
   manager.close();
 });
 
+test("a series derived from its episodes never replaces the real series row", async () => {
+  const catalog = new FakeSource("catalog", "catalog");
+  const { manager } = build(() => [catalog]);
+  const auth = authority();
+  const starting = manager.start(auth, request("simpsonovi"));
+  const real: RawSearchRecord = {
+    itemKey: "series",
+    kind: "series",
+    title: "Simpsonovi",
+    ids: { imdb: "tt0096697" },
+    locator: { kind: "catalog", addonKey: "addon", type: "series", id: "tt0096697" },
+  };
+  const derived: RawSearchRecord = { ...real, ids: {}, derived: true };
+  catalog.respond(page([real, derived]));
+  const started = await starting;
+  const member = manager.members(auth, started.id, started.snapshot.clusters[0]!.primaryMemberKey, 0);
+  assert.equal(member.canonical?.id, "tt0096697", "the real row and its id are kept");
+  manager.close();
+});
+
 test("an episode waits for its parent when the series arrives on a later page", async () => {
   const remote = new FakeSource("remote", "remote");
   const { manager } = build(() => [remote]);

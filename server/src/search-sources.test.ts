@@ -525,7 +525,7 @@ test("remote rows map titles, episode ranges, the cursor and the library provide
   assert.equal(page.records[2]!.season, 1);
   assert.equal(page.records[2]!.episode, 2);
   assert.equal(page.records[2]!.episodeEnd, 3);
-  assert.equal(page.records[2]!.searchText, undefined, "the public provider item carries no series name");
+  assert.equal(page.records[2]!.searchText, undefined, "an episode without a series name has no parent text");
   assert.deepEqual(page.records[0]!.locator, {
     kind: "remote", libraryId: "rlib_00000001", itemId: "m1", itemType: "movie", provider: "jellyfin",
   });
@@ -556,6 +556,37 @@ test("a remote source disappears when its grant or generation is revoked", async
   assert.equal(sources[0]!.stillAllowed(), true);
   allowed = false;
   assert.equal(sources[0]!.stillAllowed(), false);
+});
+
+test("episodes name their series, and a series the server did not return is added from them once", async () => {
+  const library = remoteLibrary("rlib_00000001", "conn_00000001");
+  const sources = await discoverSources(
+    deps({
+      remote: {
+        visibleLibraries: async () => [library],
+        searchLibrary: async () => ({
+          items: [
+            remoteItem({ id: "e1", name: "jiste.pane.ministre.1x01", type: "episode", seriesId: "s9", seriesName: "Jiste pane ministře", season: 1, episode: 1 }),
+            remoteItem({ id: "e2", name: "jiste.pane.ministre.1x02", type: "episode", seriesId: "s9", seriesName: "Jiste pane ministře", season: 1, episode: 2 }),
+          ],
+        }),
+        matchingItems: async () => [],
+        canSearchLibrary: () => true,
+        libraryGeneration: () => 1,
+      },
+    }),
+    authority(),
+    request({ sources: ["remote"] }),
+    "ss_test",
+  );
+  const page = await sources[0]!.next(undefined, signal());
+  assert.deepEqual(page.records.map((record) => [record.kind, record.itemKey, record.derived ?? false]), [
+    ["episode", "e1", false],
+    ["episode", "e2", false],
+    ["series", "s9", true],
+  ]);
+  assert.deepEqual(page.records[0]!.searchText, { parentTitle: "Jiste pane ministře" });
+  assert.equal(page.records[2]!.title, "Jiste pane ministře");
 });
 
 test("remote expansion asks matchingItems by IMDb and maps the returned rows", async () => {

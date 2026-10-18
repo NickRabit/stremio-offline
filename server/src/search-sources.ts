@@ -313,6 +313,7 @@ const remoteRecord = (
     ...(item.poster === undefined ? {} : { poster: item.poster }),
     ids: validStrongIds(item.providerIds),
     ...(item.type !== "episode" ? {} : {
+      ...(item.seriesName === undefined ? {} : { searchText: { parentTitle: item.seriesName } }),
       ...(item.seriesId === undefined ? {} : { parentRef: item.seriesId }),
       ...(item.season === undefined ? {} : { season: item.season }),
       ...(item.episode === undefined ? {} : { episode: item.episode }),
@@ -370,6 +371,22 @@ const remoteSource = (
       const record = remoteRecord(item, library.id, library.provider);
       return record === undefined ? [] : [record];
     });
+    // A server matches episodes by their series name without returning the series itself (it
+    // may spell the name with diacritics the query lacks). The episodes name it, so the series is
+    // added from them and they gather under it instead of standing alone.
+    const present = new Set(records.map((record) => record.itemKey));
+    for (const item of page.items) {
+      if (item.type !== "episode" || item.seriesId === undefined || item.seriesName === undefined || present.has(item.seriesId)) continue;
+      present.add(item.seriesId);
+      records.push({
+        itemKey: item.seriesId,
+        kind: "series",
+        title: item.seriesName,
+        ids: {},
+        derived: true,
+        locator: { kind: "remote", libraryId: library.id, itemId: item.seriesId, itemType: "series", ...(library.provider === undefined ? {} : { provider: library.provider }) },
+      });
+    }
     return {
       records,
       ...(page.cursor === undefined ? {} : { cursor: page.cursor }),

@@ -256,10 +256,11 @@ test("detail returns a projected item with no path or user data", async () => {
 });
 
 test("episodes carry series ancestry and numbering", async () => {
-  const { provider } = fixture(() => ({ Id: "ep-1", Name: "Pilot", Type: "Episode", SeriesId: "s1", ParentIndexNumber: 1, IndexNumber: 2 }));
+  const { provider } = fixture(() => ({ Id: "ep-1", Name: "Pilot", Type: "Episode", SeriesId: "s1", SeriesName: "Jistě, pane ministře", ParentIndexNumber: 1, IndexNumber: 2 }));
   const detail = await provider.detail("tok", "user-1", "ep-1");
   assert.equal(detail.type, "episode");
   assert.equal(detail.seriesId, "s1");
+  assert.equal(detail.seriesName, "Jistě, pane ministře");
   assert.equal(detail.season, 1);
   assert.equal(detail.episode, 2);
   const unknown = fixture(() => ({ Id: "x", Name: "y", Type: "Book" }));

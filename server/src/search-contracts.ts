@@ -87,6 +87,8 @@ export interface RawSearchRecord {
   };
   rating?: number;
   sourcePosition?: number;
+  /** Built from another row (a series named by its episodes); never replaces a real row. */
+  derived?: boolean;
   locator: SearchLocator;
 }
 
@@ -470,6 +472,7 @@ export function projectRecord(raw: RawSearchRecord): RawSearchRecord | undefined
   if (typeof raw.rating === "number" && Number.isFinite(raw.rating) && raw.rating >= 0 && raw.rating <= 10) {
     result.rating = raw.rating;
   }
+  if (raw.derived === true) result.derived = true;
   if (Number.isSafeInteger(raw.sourcePosition) && (raw.sourcePosition as number) >= 0) {
     result.sourcePosition = raw.sourcePosition as number;
   }

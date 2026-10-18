@@ -884,6 +884,7 @@ export class SearchSessionManager {
       }
       const memberKey = memberKeyFor(source.source.id, record.itemKey, record.kind);
       const existing = session.records.get(memberKey);
+      if (existing !== undefined && record.derived === true) continue;
       const serializedLength = JSON.stringify(record).length;
       const nextCount = session.records.size + (existing === undefined ? 1 : 0);
       const nextBytes = session.recordBytes - (existing?.serializedLength ?? 0) + serializedLength;
@@ -1428,6 +1429,7 @@ export class SearchSessionManager {
       if (session.limitReached) break;
       const memberKey = memberKeyFor(source.source.id, record.itemKey, record.kind);
       const existing = session.records.get(memberKey);
+      if (existing !== undefined && record.derived === true) continue;
       const serializedLength = JSON.stringify(record).length;
       const nextCount = session.records.size + (existing === undefined ? 1 : 0);
       const nextBytes = session.recordBytes - (existing?.serializedLength ?? 0) + serializedLength;
