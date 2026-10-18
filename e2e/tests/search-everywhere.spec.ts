@@ -91,7 +91,7 @@ test("source filters start a fresh generation and drop old cards", async ({ page
 test("a card opens the title page and Back restores the same Search", async ({ page }) => {
   await page.goto("/");
   await search(page);
-  const card = page.locator("[data-search-card]", { hasText: "Zkušební film" });
+  const card = page.locator("[data-search-card][title=\"Zkušební film\"]");
   await expect(card).toBeVisible();
   // One copy from one addon needs no question: the card opens its title page directly.
   await card.click();
@@ -101,13 +101,13 @@ test("a card opens the title page and Back restores the same Search", async ({ p
   await page.locator(".browse-head .library-back").click();
   await expect(page.locator("main.view-search")).toBeVisible();
   await expect(page.getByRole("searchbox", { name: placeholder })).toHaveValue("Zkušební");
-  await expect(page.locator("[data-search-card]", { hasText: "Zkušební film" })).toBeVisible();
+  await expect(page.locator("[data-search-card][title=\"Zkušební film\"]")).toBeVisible();
 });
 
 test("Search keeps the query out of the URL and browser storage", async ({ page }) => {
   await page.goto("/");
   await search(page);
-  await expect(page.getByRole("button", { name: /Zkušební film/ })).toBeVisible();
+  await expect(page.locator("[data-search-card][title=\"Zkušební film\"]")).toBeVisible();
 
   expect(page.url()).not.toContain("Zkušební");
   const stored = await page.evaluate(() => JSON.stringify({
