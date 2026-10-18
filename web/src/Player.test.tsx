@@ -341,14 +341,29 @@ describe("Player progress reporting", () => {
   it("reports a remote original's start, pause and close to the media server", async () => {
     await render({ stream: remoteVersion() });
     expect(playbackReports).toEqual([expect.objectContaining({ mediaSourceId: "ms1", paused: true, event: "start" })]);
+    const playId = playbackReports[0]!.playId;
+    expect(playId).toMatch(/^[0-9a-f]{32}$/);
     const video = host.querySelector<HTMLVideoElement>(".player-overlay video")!;
     await act(async () => { video.dispatchEvent(new Event("play", { bubbles: true })); });
     await flush();
     await act(async () => { video.dispatchEvent(new Event("pause", { bubbles: true })); });
     await flush();
-    expect(playbackReports.at(-1)).toEqual(expect.objectContaining({ mediaSourceId: "ms1", paused: true, event: "progress" }));
+    expect(playbackReports.at(-1)).toEqual(expect.objectContaining({ mediaSourceId: "ms1", paused: true, event: "progress", playId }));
     await rerender({ stream: remoteVersion(), open: false });
-    expect(playbackReports.at(-1)).toEqual(expect.objectContaining({ mediaSourceId: "ms1", event: "stop" }));
+    expect(playbackReports.at(-1)).toEqual(expect.objectContaining({ mediaSourceId: "ms1", event: "stop", playId }));
+  });
+
+  it("gives a reopened remote play a new id and stops the old play with the old id", async () => {
+    await render({ stream: remoteVersion() });
+    const oldPlayId = playbackReports[0]!.playId;
+    await rerender({ stream: remoteVersion(), open: false });
+    const oldStop = playbackReports.at(-1)!;
+    expect(oldStop).toEqual(expect.objectContaining({ event: "stop", playId: oldPlayId }));
+
+    await rerender({ stream: remoteVersion(), open: true });
+    const reopened = [...playbackReports].reverse().find((entry) => entry.event === "start")!;
+    expect(reopened.playId).toMatch(/^[0-9a-f]{32}$/);
+    expect(reopened.playId).not.toBe(oldPlayId);
   });
 
   it("sends no media-server playback reports without a remote item", async () => {

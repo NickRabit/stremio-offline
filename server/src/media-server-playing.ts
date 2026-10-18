@@ -11,6 +11,7 @@ export interface PlaybackReport {
   position: number;
   paused: boolean;
   event: PlaybackEvent;
+  playId?: string;
 }
 
 export interface PlaybackReporterSeams {
@@ -26,6 +27,8 @@ export interface PlaybackReporterSeams {
 
 const invalid = (message: string): MediaServerError => new MediaServerError("invalid-input", message);
 const REPORT_KEYS = ["mediaSourceId", "position", "paused", "event"];
+const OPTIONAL_REPORT_KEYS = ["playId"];
+const PLAY_ID = /^[A-Za-z0-9_-]{8,64}$/;
 const PLAYBACK_EVENTS = new Set<PlaybackEvent>(["start", "progress", "stop"]);
 const PLAYBACK_REFUSAL_CODES = new Set([
   "playback-not-allowed", "no-compatible-stream", "rate-limited", "bitrate-limit",
@@ -49,7 +52,7 @@ export function readPlaybackReport(body: unknown): PlaybackReport {
   }
   const record = body as Record<string, unknown>;
   for (const key of Object.keys(record)) {
-    if (!REPORT_KEYS.includes(key)) throw invalid("The playback report has an unknown field.");
+    if (!REPORT_KEYS.includes(key) && !OPTIONAL_REPORT_KEYS.includes(key)) throw invalid("The playback report has an unknown field.");
   }
   for (const key of REPORT_KEYS) {
     if (!Object.hasOwn(record, key)) throw invalid(`The playback report is missing ${key}.`);
@@ -67,7 +70,18 @@ export function readPlaybackReport(body: unknown): PlaybackReport {
   if (typeof record.event !== "string" || !PLAYBACK_EVENTS.has(record.event as PlaybackEvent)) {
     throw invalid("The playback event is not allowed.");
   }
-  return { mediaSourceId, position, paused: record.paused, event: record.event as PlaybackEvent };
+  let playId: string | undefined;
+  if (Object.hasOwn(record, "playId")) {
+    if (typeof record.playId !== "string" || !PLAY_ID.test(record.playId)) throw invalid("The playback id is malformed.");
+    playId = record.playId;
+  }
+  return {
+    mediaSourceId,
+    position,
+    paused: record.paused,
+    event: record.event as PlaybackEvent,
+    ...(playId === undefined ? {} : { playId }),
+  };
 }
 
 interface LivePlayback {
@@ -84,8 +98,8 @@ interface LivePlayback {
   quietUntil?: number;
 }
 
-const playbackKey = (actorId: string, libraryId: string, itemId: string, mediaSourceId: string): string =>
-  [actorId, libraryId, itemId, mediaSourceId].join("\u0000");
+const playbackKey = (actorId: string, libraryId: string, itemId: string, mediaSourceId: string, playId?: string): string =>
+  [actorId, libraryId, itemId, mediaSourceId, ...(playId === undefined ? [] : [playId])].join("\u0000");
 
 export class MediaServerPlaybackReporter {
   private readonly clock: () => number;
@@ -123,7 +137,7 @@ export class MediaServerPlaybackReporter {
   async report(authority: MediaServerAuthority, libraryId: string, itemId: string, report: PlaybackReport): Promise<void> {
     try {
       if (this.closed) return;
-      const key = playbackKey(authority.actor.id, libraryId, itemId, report.mediaSourceId);
+      const key = playbackKey(authority.actor.id, libraryId, itemId, report.mediaSourceId, report.playId);
       const current = this.live.get(key);
       if (report.event === "stop") {
         this.rememberStop(key);
@@ -169,6 +183,7 @@ export class MediaServerPlaybackReporter {
       current.lastSeen = this.clock();
       if (report.event === "start") {
         this.stopped.delete(key);
+        delete current.quietUntil;
         await this.send(current, authority, "playing");
         return;
       }
@@ -247,7 +262,9 @@ export class MediaServerPlaybackReporter {
         }
         if (kind === "playing" && this.live.get(entry.key) === entry) {
           this.live.delete(entry.key);
-          if (isMediaServerError(error) && PLAYBACK_REFUSAL_CODES.has(error.code)) this.rememberRefusal(entry.key);
+          if (isMediaServerError(error) && error.code !== "rate-limited" && PLAYBACK_REFUSAL_CODES.has(error.code)) {
+            this.rememberRefusal(entry.key);
+          }
         } else if (kind === "progress" && this.live.get(entry.key) === entry && isMediaServerError(error)) {
           if (error.code === "rate-limited") {
             entry.quietUntil = this.clock() + (error.retryAfterMs ?? 60_000);

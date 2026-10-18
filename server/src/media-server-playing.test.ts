@@ -146,6 +146,45 @@ test("a failed start forgets its session and a later progress starts a new one",
   assert.deepEqual(fake.calls.map((call) => call.report.playSessionId), ["a".repeat(32), "b".repeat(32)]);
 });
 
+test("a rate-limited start is retried by the next progress", async () => {
+  const fake = fakeManager();
+  let fail = true;
+  fake.onReport(async (call) => {
+    if (call.report.kind === "playing" && fail) {
+      fail = false;
+      throw new MediaServerError("rate-limited", "slow", 429, 30_000);
+    }
+    return undefined;
+  });
+  const reporter = new MediaServerPlaybackReporter(fake.manager, () => authority());
+  const actor = authority();
+
+  await reporter.report(actor, "rlib_1", "item-1", report("start"));
+  await reporter.report(actor, "rlib_1", "item-1", report("progress"));
+  await reporter.report(actor, "rlib_1", "item-1", report("progress"));
+  assert.deepEqual(fake.calls.map((call) => call.report.kind), ["playing", "playing", "progress"]);
+});
+
+test("a new start clears an active quiet window", async () => {
+  const fake = fakeManager();
+  let fail = true;
+  fake.onReport(async (call) => {
+    if (call.report.kind === "progress" && fail) {
+      fail = false;
+      throw new MediaServerError("rate-limited", "slow", 429, 30_000);
+    }
+    return undefined;
+  });
+  const reporter = new MediaServerPlaybackReporter(fake.manager, () => authority());
+  const actor = authority();
+
+  await reporter.report(actor, "rlib_1", "item-1", report("start"));
+  await reporter.report(actor, "rlib_1", "item-1", report("progress"));
+  await reporter.report(actor, "rlib_1", "item-1", report("start"));
+  await reporter.report(actor, "rlib_1", "item-1", report("progress"));
+  assert.deepEqual(fake.calls.map((call) => call.report.kind), ["playing", "progress", "playing", "progress"]);
+});
+
 test("a refused start suppresses progress until an explicit start after stop", async () => {
   const fake = fakeManager();
   let refused = true;
@@ -246,6 +285,34 @@ test("a progress after an explicit stop does not create a ghost session", async 
   await reporter.report(actor, "rlib_1", "item-1", report("stop"));
   await reporter.report(actor, "rlib_1", "item-1", report("start"));
   assert.deepEqual(fake.calls.map((call) => call.report.kind), ["playing", "stopped", "playing", "stopped", "playing"]);
+});
+
+test("play ids separate sessions and keep old reports away from a new play", async () => {
+  const fake = fakeManager();
+  let next = 0;
+  const reporter = new MediaServerPlaybackReporter(fake.manager, () => authority(), {
+    newSessionId: () => (next++ === 0 ? "a" : "b").repeat(32),
+  });
+  const actor = authority();
+  const oldPlay = "old-play-1";
+  const newPlay = "new-play-2";
+
+  await reporter.report(actor, "rlib_1", "item-1", report("start", { playId: oldPlay }));
+  await reporter.report(actor, "rlib_1", "item-1", report("start", { playId: newPlay }));
+  assert.deepEqual(fake.calls.map((call) => call.report.kind), ["playing", "playing"]);
+  assert.notEqual(fake.calls[0]!.report.playSessionId, fake.calls[1]!.report.playSessionId);
+
+  await reporter.report(actor, "rlib_1", "item-1", report("stop", { playId: oldPlay }));
+  assert.equal(fake.calls.at(-1)!.report.kind, "stopped");
+  assert.equal(fake.calls.at(-1)!.report.playSessionId, "a".repeat(32));
+
+  await reporter.report(actor, "rlib_1", "item-1", report("progress", { playId: newPlay }));
+  assert.equal(fake.calls.at(-1)!.report.kind, "progress");
+  assert.equal(fake.calls.at(-1)!.report.playSessionId, "b".repeat(32));
+
+  const calls = fake.calls.length;
+  await reporter.report(actor, "rlib_1", "item-1", report("progress", { playId: oldPlay }));
+  assert.equal(fake.calls.length, calls, "the old play's tombstone ignores its late progress");
 });
 
 test("an idle-swept session is resumed by progress", async () => {
@@ -353,9 +420,12 @@ test("close stops every live session and report swallows manager failures", asyn
   assert.deepEqual(stopped, ["item-1", "item-2"], "the failed start left nothing for close to stop");
 });
 
-test("readPlaybackReport accepts exactly the four validated fields", () => {
+test("readPlaybackReport accepts the required fields and an optional valid play id", () => {
   assert.deepEqual(readPlaybackReport({ mediaSourceId: " source-1 ", position: 12.5, paused: true, event: "progress" }), {
     mediaSourceId: "source-1", position: 12.5, paused: true, event: "progress",
+  });
+  assert.deepEqual(readPlaybackReport({ mediaSourceId: "source-1", position: 12.5, paused: true, event: "progress", playId: "AbC_12-3" }), {
+    mediaSourceId: "source-1", position: 12.5, paused: true, event: "progress", playId: "AbC_12-3",
   });
   for (const bad of [
     { mediaSourceId: "v1", position: 1, paused: false, event: "start", extra: 1 },
@@ -366,6 +436,12 @@ test("readPlaybackReport accepts exactly the four validated fields", () => {
     { mediaSourceId: "v1", position: 10_000_001, paused: false, event: "start" },
     { mediaSourceId: "v1", position: 1, paused: "false", event: "start" },
     { mediaSourceId: "v1", position: 1, paused: false, event: "pause" },
+    { mediaSourceId: "v1", position: 1, paused: false, event: "start", playId: "short" },
+    { mediaSourceId: "v1", position: 1, paused: false, event: "start", playId: "a".repeat(65) },
+    { mediaSourceId: "v1", position: 1, paused: false, event: "start", playId: "bad id!" },
+    { mediaSourceId: "v1", position: 1, paused: false, event: "start", playId: 123 },
+    { mediaSourceId: "v1", position: 1, paused: false, event: "start", playId: null },
+    { mediaSourceId: "v1", position: 1, paused: false, event: "start", playId: undefined },
   ]) {
     assert.throws(() => readPlaybackReport(bad), (error) => error instanceof MediaServerError && error.code === "invalid-input");
   }

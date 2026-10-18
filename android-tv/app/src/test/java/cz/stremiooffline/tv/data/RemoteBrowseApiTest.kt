@@ -110,13 +110,17 @@ class RemoteBrowseApiTest {
   fun `playback reports post the encoded route and every field`() = runTest {
     server.enqueue(MockResponse().setResponseCode(204))
 
-    api(start()).reportRemotePlayback("lib A", "item/1", RemotePlaybackReport("ms1", 12, false, "progress"))
+    api(start()).reportRemotePlayback(
+      "lib A",
+      "item/1",
+      RemotePlaybackReport("ms1", 12, false, "progress", playId = "0123456789abcdef0123456789abcdef"),
+    )
 
     val request = server.takeRequest()
     assertEquals("POST", request.method)
     assertEquals("/api/remote-libraries/lib%20A/items/item%2F1/playing", request.path)
     assertEquals(
-      """{"mediaSourceId":"ms1","position":12,"paused":false,"event":"progress"}""",
+      """{"mediaSourceId":"ms1","position":12,"paused":false,"event":"progress","playId":"0123456789abcdef0123456789abcdef"}""",
       request.body.readUtf8(),
     )
   }

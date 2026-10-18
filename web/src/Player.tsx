@@ -43,6 +43,9 @@ interface Props { previousTitle?: string; onPrevious?: () => Promise<boolean>; n
 
 const fmt = (seconds: number) => !Number.isFinite(seconds) ? "0:00" : `${Math.floor(seconds / 3600) ? `${Math.floor(seconds / 3600)}:` : ""}${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
 
+const newRemotePlayId = (): string =>
+  Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, "0")).join("");
+
 /** Native range thumbs are the only draggable part on iOS. A press anywhere on
  *  the track grabs the current position; the finger then nudges it by how far
  *  it moves, instead of jumping to the press point. A tap still seeks there. */
@@ -314,6 +317,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   }, [open, volume]);
   const hlsRef = useRef<Hls | null>(null);
   const sessionRef = useRef<string | null>(null);
+  const remotePlayIdRef = useRef<string | null>(null);
   const modeRef = useRef<PlaybackMode>("transcode");
   const offsetRef = useRef(0);
   const probeDurationRef = useRef(0);
@@ -930,11 +934,14 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   // clients do: started on open, kept current every ten seconds and on pause or seek, stopped on close.
   useEffect(() => {
     if (!open || !remoteItem) return;
+    const playId = newRemotePlayId();
+    remotePlayIdRef.current = playId;
     const body = (event: "start" | "progress" | "stop") => ({
       mediaSourceId: remoteItem.mediaSourceId,
       position: Math.round(reportRef.current.position),
       paused: pausedRef.current,
       event,
+      playId,
     });
     const report = (event: "start" | "progress" | "stop") => {
       void api.reportRemotePlayback(remoteItem.libraryId, remoteItem.itemId, body(event)).catch(() => undefined);
@@ -947,6 +954,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       clearInterval(timer);
       window.removeEventListener("pagehide", leaving);
       report("stop");
+      if (remotePlayIdRef.current === playId) remotePlayIdRef.current = null;
     };
   }, [open, remoteItem]);
 
@@ -957,21 +965,27 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       return;
     }
     if (!open || !remoteItem) return;
+    const playId = remotePlayIdRef.current;
+    if (!playId) return;
     void api.reportRemotePlayback(remoteItem.libraryId, remoteItem.itemId, {
       mediaSourceId: remoteItem.mediaSourceId,
       position: Math.round(reportRef.current.position),
       paused,
       event: "progress",
+      playId,
     }).catch(() => undefined);
   }, [paused]);
 
   const reportSeek = () => {
     if (!open || !remoteItem) return;
+    const playId = remotePlayIdRef.current;
+    if (!playId) return;
     void api.reportRemotePlayback(remoteItem.libraryId, remoteItem.itemId, {
       mediaSourceId: remoteItem.mediaSourceId,
       position: Math.round(reportRef.current.position),
       paused: pausedRef.current,
       event: "progress",
+      playId,
     }).catch(() => undefined);
   };
 
