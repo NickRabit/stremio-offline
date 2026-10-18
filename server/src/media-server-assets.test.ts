@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { build } from "./build.js";
 import { createMediaServerTransport, type MediaServerFetch } from "./media-server-security.js";
 import { MediaServerError } from "./media-server-types.js";
 
@@ -68,7 +69,7 @@ test("requestAsset builds the fixed artwork and subtitle paths, auth and headers
   assert.equal(headers.range, undefined);
   assert.equal(
     headers.authorization,
-    'MediaBrowser Client="Stremio Offline", Device="Desktop", DeviceId="mconn_asset-identity", Version="1.0.0", Token="tok"',
+    `MediaBrowser Client="Stremio Offline", Device="Desktop", DeviceId="mconn_asset-identity", Version="${build.version}", Token="tok"`,
   );
   assert.equal(request.abortedAtCall, false, "the fetch is handed a live abort signal");
   assert.equal(typeof (request.init.signal as AbortSignal).addEventListener, "function");

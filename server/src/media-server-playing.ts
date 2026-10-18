@@ -18,6 +18,9 @@ export interface PlaybackReporterSeams {
   idleMs?: number;
   sweepMs?: number;
   maxSessions?: number;
+  tombstoneMs?: number;
+  stopRetryMs?: number;
+  sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
   newSessionId?: () => string;
 }
 
@@ -28,6 +31,7 @@ const PLAYBACK_REFUSAL_CODES = new Set([
   "playback-not-allowed", "no-compatible-stream", "rate-limited", "bitrate-limit",
   "unsupported-policy", "forbidden",
 ]);
+const STOP_RETRY_CODES = new Set(["timeout", "unavailable", "busy", "rate-limited"]);
 const MEDIA_SOURCE_ID_MAX = 256;
 const POSITION_MAX = 10_000_000;
 const TICKS_PER_SECOND = 10_000_000;
@@ -77,6 +81,7 @@ interface LivePlayback {
   position: number;
   paused: boolean;
   lastSeen: number;
+  quietUntil?: number;
 }
 
 const playbackKey = (actorId: string, libraryId: string, itemId: string, mediaSourceId: string): string =>
@@ -87,10 +92,15 @@ export class MediaServerPlaybackReporter {
   private readonly idleMs: number;
   private readonly sweepMs: number;
   private readonly maxSessions: number;
+  private readonly tombstoneMs: number;
+  private readonly stopRetryMs: number;
+  private readonly sleep: (ms: number, signal: AbortSignal) => Promise<void>;
   private readonly newSessionId: () => string;
   private readonly live = new Map<string, LivePlayback>();
   private readonly refused = new Map<string, true>();
+  private readonly stopped = new Map<string, number>();
   private readonly tails = new Map<string, Promise<void>>();
+  private readonly lifetime = new AbortController();
   private timer: ReturnType<typeof setInterval> | undefined;
   private closing: Promise<void> | undefined;
   private closed = false;
@@ -104,6 +114,9 @@ export class MediaServerPlaybackReporter {
     this.idleMs = seams.idleMs ?? 60_000;
     this.sweepMs = seams.sweepMs ?? 15_000;
     this.maxSessions = seams.maxSessions ?? 32;
+    this.tombstoneMs = seams.tombstoneMs ?? 60_000;
+    this.stopRetryMs = seams.stopRetryMs ?? 2_000;
+    this.sleep = seams.sleep ?? sleep;
     this.newSessionId = seams.newSessionId ?? (() => randomUUID().replaceAll("-", ""));
   }
 
@@ -113,6 +126,7 @@ export class MediaServerPlaybackReporter {
       const key = playbackKey(authority.actor.id, libraryId, itemId, report.mediaSourceId);
       const current = this.live.get(key);
       if (report.event === "stop") {
+        this.rememberStop(key);
         if (!current) return;
         this.clearRefusal(key);
         current.position = report.position;
@@ -124,7 +138,14 @@ export class MediaServerPlaybackReporter {
 
       if (!current) {
         if (this.refused.has(key) && report.event !== "start") return;
-        if (report.event === "start") this.clearRefusal(key);
+        if (report.event === "start") {
+          this.clearRefusal(key);
+          this.stopped.delete(key);
+        } else {
+          const stoppedAt = this.stopped.get(key);
+          if (stoppedAt !== undefined && this.clock() - stoppedAt < this.tombstoneMs) return;
+          if (stoppedAt !== undefined) this.stopped.delete(key);
+        }
         if (this.live.size >= this.maxSessions) this.evictOldest();
         const created: LivePlayback = {
           key,
@@ -147,8 +168,13 @@ export class MediaServerPlaybackReporter {
       current.paused = report.paused;
       current.lastSeen = this.clock();
       if (report.event === "start") {
+        this.stopped.delete(key);
         await this.send(current, authority, "playing");
         return;
+      }
+      if (current.quietUntil !== undefined) {
+        if (this.clock() < current.quietUntil) return;
+        delete current.quietUntil;
       }
       const eventName = report.paused && !wasPaused ? "Pause" : !report.paused && wasPaused ? "Unpause" : "TimeUpdate";
       await this.send(current, authority, "progress", eventName);
@@ -176,6 +202,7 @@ export class MediaServerPlaybackReporter {
   close(): Promise<void> {
     if (this.closing) return this.closing;
     this.closed = true;
+    this.lifetime.abort();
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = undefined;
@@ -208,20 +235,29 @@ export class MediaServerPlaybackReporter {
         ...(kind === "progress" && eventName !== undefined ? { eventName } : {}),
       };
       try {
-        const providerPlaySessionId = await this.manager.reportPlayback(authority, entry.libraryId, entry.itemId, report);
-        if (kind === "playing" && providerPlaySessionId !== undefined && this.live.get(entry.key) === entry) {
-          entry.providerPlaySessionId = providerPlaySessionId;
-        }
-        if (kind === "playing") this.clearRefusal(entry.key);
+        await this.deliver(entry, authority, report);
       } catch (error) {
+        if (kind === "stopped" && isMediaServerError(error) && STOP_RETRY_CODES.has(error.code)) {
+          await this.sleep(this.stopRetryMs, this.lifetime.signal);
+          if (!this.closed) {
+            try { await this.deliver(entry, authority, report); }
+            catch (retryError) { logFailure("stopped", retryError); }
+          }
+          return;
+        }
         if (kind === "playing" && this.live.get(entry.key) === entry) {
           this.live.delete(entry.key);
           if (isMediaServerError(error) && PLAYBACK_REFUSAL_CODES.has(error.code)) this.rememberRefusal(entry.key);
+        } else if (kind === "progress" && this.live.get(entry.key) === entry && isMediaServerError(error)) {
+          if (error.code === "rate-limited") {
+            entry.quietUntil = this.clock() + (error.retryAfterMs ?? 60_000);
+          } else if (error.code === "authentication-required" || error.code === "identity-changed"
+            || PLAYBACK_REFUSAL_CODES.has(error.code)) {
+            this.live.delete(entry.key);
+            this.rememberRefusal(entry.key);
+          }
         }
-        log("DEBUG", "Media-server playback report failed", {
-          kind,
-          code: isMediaServerError(error) ? error.code : undefined,
-        });
+        logFailure(kind, error);
       }
     };
     const previous = this.tails.get(entry.key) ?? Promise.resolve();
@@ -231,6 +267,14 @@ export class MediaServerPlaybackReporter {
       if (this.tails.get(entry.key) === next) this.tails.delete(entry.key);
     });
     await next;
+  }
+
+  private async deliver(entry: LivePlayback, authority: MediaServerAuthority, report: ProviderPlaybackReport): Promise<void> {
+    const providerPlaySessionId = await this.manager.reportPlayback(authority, entry.libraryId, entry.itemId, report);
+    if (report.kind === "playing" && providerPlaySessionId !== undefined && this.live.get(entry.key) === entry) {
+      entry.providerPlaySessionId = providerPlaySessionId;
+    }
+    if (report.kind === "playing") this.clearRefusal(entry.key);
   }
 
   private async stopIdle(entry: LivePlayback): Promise<void> {
@@ -261,4 +305,35 @@ export class MediaServerPlaybackReporter {
   private clearRefusal(key: string): void {
     this.refused.delete(key);
   }
+
+  private rememberStop(key: string): void {
+    this.stopped.delete(key);
+    this.stopped.set(key, this.clock());
+    while (this.stopped.size > this.maxSessions) {
+      const oldest = this.stopped.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.stopped.delete(oldest);
+    }
+  }
 }
+
+const logFailure = (kind: ProviderPlaybackReport["kind"], error: unknown): void => {
+  log("DEBUG", "Media-server playback report failed", {
+    kind,
+    code: isMediaServerError(error) ? error.code : undefined,
+  });
+};
+
+const sleep = (ms: number, signal: AbortSignal): Promise<void> => {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const finish = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    timer.unref?.();
+    signal.addEventListener("abort", finish, { once: true });
+  });
+};

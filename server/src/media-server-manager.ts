@@ -146,6 +146,7 @@ export interface MediaServerManagerSeams {
   transportFactory?: (config: MediaServerTransportConfig) => MediaServerTransport;
   providerFactory?: (kind: MediaServerKind, transport: MediaServerTransport) => MediaServerProvider;
   clock?: () => number;
+  deadSessionProbeMs?: number;
   index?: MediaServerIndex;
   cleanupIntervalMs?: number;
   networkMax?: number;
@@ -169,6 +170,7 @@ const USERNAME_MAX = 256;
 const PASSWORD_MAX = 1024;
 const RUNTIME_MAX = 128;
 const CLEANUP_INTERVAL_MS = 60_000;
+const DEAD_SESSION_PROBE_MS = 5 * 60_000;
 const LOGOUT_TIMEOUT_MS = 5_000;
 const LOGOUT_CONCURRENCY = 4;
 const MATCH_CANDIDATE_MAX = 40;
@@ -668,6 +670,7 @@ interface StatusRecord {
   generation: number;
   secretRef: string | undefined;
   status: MediaServerConnectionStatus;
+  at: number;
 }
 
 /** One operation waiting for a network slot. `settled` distinguishes an entry still in the
@@ -717,6 +720,7 @@ export class MediaServerManager {
   private readonly configuration: MediaServerConfiguration;
   private readonly index: MediaServerIndex;
   private readonly clock: () => number;
+  private readonly deadSessionProbeMs: number;
   private readonly providerFactory: (kind: MediaServerKind, transport: MediaServerTransport) => MediaServerProvider;
   private readonly transportFactory: (config: MediaServerTransportConfig) => MediaServerTransport;
   private readonly networkMax: number;
@@ -743,6 +747,7 @@ export class MediaServerManager {
     seams: MediaServerManagerSeams = {},
   ) {
     this.clock = seams.clock ?? (() => Date.now());
+    this.deadSessionProbeMs = seams.deadSessionProbeMs ?? DEAD_SESSION_PROBE_MS;
     this.quota = new OriginalQuota({
       clock: seams.quotaClock ?? this.clock,
       ...(seams.quotaSleep === undefined ? {} : { sleep: seams.quotaSleep }),
@@ -3035,18 +3040,18 @@ export class MediaServerManager {
   }
 
   private markAvailable(connection: MediaConnectionRecord): void {
-    this.statuses.set(connection.id, { generation: connection.generation, secretRef: connection.secretRef, status: "available" });
+    this.statuses.set(connection.id, { generation: connection.generation, secretRef: connection.secretRef, status: "available", at: this.clock() });
   }
 
   private markReauthentication(connection: MediaConnectionRecord): void {
     this.dropRuntime(connection.id);
-    this.statuses.set(connection.id, { generation: connection.generation, secretRef: connection.secretRef, status: "reauthentication-required" });
+    this.statuses.set(connection.id, { generation: connection.generation, secretRef: connection.secretRef, status: "reauthentication-required", at: this.clock() });
     this.notifyContent({ connectionId: connection.id });
   }
 
   private markIdentityChanged(connection: MediaConnectionRecord): void {
     this.dropRuntime(connection.id);
-    this.statuses.set(connection.id, { generation: connection.generation, secretRef: connection.secretRef, status: "identity-changed" });
+    this.statuses.set(connection.id, { generation: connection.generation, secretRef: connection.secretRef, status: "identity-changed", at: this.clock() });
     this.notifyContent({ connectionId: connection.id });
   }
 
@@ -3155,6 +3160,16 @@ export class MediaServerManager {
     signal: AbortSignal,
   ): Promise<LiveSession> {
     this.checkLive(signal);
+    const status = this.statusOf(connection);
+    if (status === "reauthentication-required" || status === "identity-changed") {
+      const record = this.statuses.get(connection.id);
+      const now = this.clock();
+      if (record && now - record.at < this.deadSessionProbeMs) {
+        if (status === "identity-changed") throw identityChanged();
+        throw new MediaServerError("authentication-required", "The media server refused the credentials.");
+      }
+      if (record) record.at = now;
+    }
     if (!connection.secretRef) throw new MediaServerError("secret-unavailable", "That media-server connection has no stored credential.");
     const binding = { connectionId: connection.id, provider: connection.provider, serverId: connection.serverId, accountId: connection.accountId };
     const runtime = this.providerFor(connection);
