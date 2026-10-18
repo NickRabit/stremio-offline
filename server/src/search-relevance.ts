@@ -9,6 +9,9 @@ export interface Relevance {
   score: number;
   matched: number;
   total: number;
+  typos: number;
+  /** The whole query is a title, leading article aside: "terminator" is "Terminátor". */
+  exact: boolean;
 }
 
 interface Match {
@@ -162,7 +165,7 @@ export function relevance(query: string, fields: RelevanceFields): Relevance {
 export function relevancePrepared(query: PreparedQuery, fields: PreparedFields): Relevance {
   const queryTokens = query.tokens;
   const total = queryTokens.length;
-  if (total === 0) return { score: 0, matched: 0, total: 0 };
+  if (total === 0) return { score: 0, matched: 0, total: 0, typos: 0, exact: false };
 
   const fieldTokens = fields.tokens;
   const matchedTokens: string[] = [];
@@ -177,7 +180,7 @@ export function relevancePrepared(query: PreparedQuery, fields: PreparedFields):
     if (match.attribute < attribute) attribute = match.attribute;
     matchedTokens.push(token);
   }
-  if (matched === 0) return { score: 0, matched: 0, total };
+  if (matched === 0) return { score: 0, matched: 0, total, typos, exact: false };
 
   // A leading article is not part of what people type: "matrix" is "The Matrix" exactly.
   let exactness = 0;
@@ -196,7 +199,7 @@ export function relevancePrepared(query: PreparedQuery, fields: PreparedFields):
     + proximity * 1_000
     + exactness * 100
     + brevity * 10;
-  return { score, matched, total };
+  return { score, matched, total, typos, exact: exactness === 2 };
 }
 
 /** Whether a library row answers the query at all: every word of a short query, all but one of a

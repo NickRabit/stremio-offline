@@ -146,6 +146,7 @@ interface RawGroup {
   members: StoredRecord[];
   ids: StrongIds;
   parentsCompatible: boolean;
+  rank: { matched: number; typoFree: boolean; exact: boolean; support: number };
   view: SearchClusterView;
 }
 
@@ -280,6 +281,11 @@ const shareAndCompatible = (left: StrongIds, right: StrongIds): boolean => {
   }
   return shared;
 };
+
+/** Whether several catalogs list a title. Among titles that are, the exact name comes first, so
+ *  the 1984 "Terminátor" stays ahead of a sequel one more catalog happens to carry; a title only
+ *  one catalog knows never jumps ahead of them on its name alone. */
+const listedWidely = (support: number): number => support >= 2 ? 2 : support;
 
 export class SearchSessionManager {
   private readonly scheduler: SearchScheduler;
@@ -1266,7 +1272,12 @@ export class SearchSessionManager {
       const label = cut(member.source.source.label, this.limits.labelMaxCodePoints);
       if (!sourceLabels.includes(label)) sourceLabels.push(label);
     }
-    const ratings = members.flatMap((member) => member.record.rating === undefined ? [] : [member.record.rating]);
+    const identityIdsOf = (member: StoredRecord): StrongIds =>
+      parentIds.get(member.memberKey) ?? validStrongIds(member.record.ids);
+    const ratings = members.flatMap((member) =>
+      member.record.rating === undefined || !idsHaveValue(identityIdsOf(member))
+        ? []
+        : [member.record.rating]);
     const view: SearchClusterView = {
       key,
       kind,
@@ -1291,6 +1302,21 @@ export class SearchSessionManager {
       );
       if (counts.length > 0) view.itemCount = Math.max(...counts);
     }
+    let best = members[0]!;
+    let bestScore = this.memberScore(best);
+    for (const member of members.slice(1)) {
+      const score = this.memberScore(member);
+      if (score > bestScore) {
+        best = member;
+        bestScore = score;
+      }
+    }
+    const support = new Set(members.flatMap((member) =>
+      member.source.source.sourceClass === "catalog"
+        && idsHaveValue(validStrongIds(member.record.ids))
+        ? [member.source.source.id]
+        : [],
+    )).size;
     return {
       key,
       conflict: identity.conflict,
@@ -1298,6 +1324,7 @@ export class SearchSessionManager {
       members,
       ids: merged.ids,
       parentsCompatible: merged.compatible,
+      rank: { matched: best.relevance.matched, typoFree: best.relevance.typos === 0, exact: best.relevance.exact, support },
       view,
     };
   }
@@ -1309,9 +1336,14 @@ export class SearchSessionManager {
   }
 
   private compareGroups(left: RawGroup, right: RawGroup): number {
-    return right.view.score - left.view.score
-      || Number(right.view.hasLocal || right.view.hasRemote) - Number(left.view.hasLocal || left.view.hasRemote)
+    return right.rank.matched - left.rank.matched
+      || Number(right.rank.typoFree) - Number(left.rank.typoFree)
+      || listedWidely(right.rank.support) - listedWidely(left.rank.support)
+      || Number(right.rank.exact) - Number(left.rank.exact)
+      || right.rank.support - left.rank.support
+      || right.view.score - left.view.score
       || (right.view.rating ?? -1) - (left.view.rating ?? -1)
+      || Number(right.view.hasLocal || right.view.hasRemote) - Number(left.view.hasLocal || left.view.hasRemote)
       || Math.min(...left.members.map((member) => member.sequence))
         - Math.min(...right.members.map((member) => member.sequence))
       || compareText(left.key, right.key);
