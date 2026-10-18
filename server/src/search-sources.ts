@@ -154,10 +154,12 @@ const catalogSource = (
         const rewritten = deps.rewriteMeta(meta);
         const year = yearOf(meta);
         const rating = ratingOf(meta);
+        const originalTitle = typeof meta.originalTitle === "string" ? meta.originalTitle.trim() : "";
         records.push({
           itemKey: file ? `file:${id}` : `${meta.type}:${id}`,
           kind: file ? "file" : meta.type,
           title: name,
+          ...(originalTitle === "" || originalTitle === name.trim() ? {} : { originalTitle }),
           ...(year === undefined ? {} : { year }),
           ...(typeof meta.description === "string" ? { description: meta.description } : {}),
           ...(typeof rewritten.poster === "string" ? { poster: rewritten.poster } : {}),

@@ -910,7 +910,7 @@ test("close leaves queued and active scheduler work empty", async () => {
   assert.deepEqual(scheduler.stats(), { active: 0, queued: 0 });
 });
 
-test("an IMDb title and a TMDB-only title meet through ids already known locally", async () => {
+test("an IMDb title and a TMDB-only title meet by name with or without a local mapping", async () => {
   const matrix = (itemKey: string, ids: RawSearchRecord["ids"], id: string): RawSearchRecord => ({
     itemKey, kind: "movie", title: "Matrix", year: 1999, ids,
     locator: { kind: "catalog", addonKey: itemKey, type: "movie", id },
@@ -924,7 +924,7 @@ test("an IMDb title and a TMDB-only title meet through ids already known locally
     manager.close();
     return started.snapshot.clusters.length;
   };
-  assert.equal(await run(), 2, "without a local mapping the two stay apart");
+  assert.equal(await run(), 1);
   assert.equal(await run((ids) => (ids.imdb === "tt0133093" ? { tmdb: "603" } : {})), 1);
 });
 
@@ -944,6 +944,135 @@ test("an id-less Matrix joins the one exact name and year match", async () => {
   assert.equal(started.snapshot.clusters.length, 2);
   assert.equal(started.snapshot.clusters.find((cluster) => cluster.year === 1999)?.memberCount, 2);
   assert.deepEqual(started.snapshot.unidentified, []);
+  manager.close();
+});
+
+test("tenkrát v ranks the broadly listed title first and ignores opaque ratings", async () => {
+  const names = [
+    "cinemeta", "czdabing", "hbo", "netflix", "search", "sosac",
+  ];
+  const sources = names.map((name) => new FakeSource(name, "catalog", name));
+  const { manager } = build(() => sources);
+  const starting = manager.start(authority(), request("tenkrát v"));
+  const byName = (name: string) => sources.find((source) => source.id === name)!;
+  byName("cinemeta").respond(page([
+    catalogRecord("cinemeta:hollywood", "Tenkrát v Hollywoodu", { imdb: "tt7131622" }, { year: 2019, rating: 7.6 }),
+  ]));
+  byName("czdabing").respond(page([
+    catalogRecord("czdabing:hollywood", "Tenkrát v Hollywoodu", { imdb: "tt7131622" }, { year: 2019 }),
+  ]));
+  byName("hbo").respond(page([
+    catalogRecord("hbo:hollywood", "Tenkrát v Hollywoodu", { imdb: "tt7131622" }, { year: 2019 }),
+  ]));
+  byName("netflix").respond(page([
+    catalogRecord("netflix:hollywood", "Tenkrát v Hollywoodu", { imdb: "tt7131622" }, { year: 2019 }),
+  ]));
+  byName("search").respond(page([
+    catalogRecord("search:hollywood", "Tenkrát v Hollywoodu", { tmdb: "466272" }, { year: 2019 }),
+    catalogRecord("search:americe", "Tenkrát v Americe", { tmdb: "311" }, { year: 1984 }),
+    catalogRecord("search:kalifornii", "Tenkrát v Kalifornii", { tmdb: "345915" }, { year: 2017 }),
+    catalogRecord("search:cine", "Tenkrát v Číně", { tmdb: "10617" }, { year: 1991 }),
+  ]));
+  byName("sosac").respond(page([
+    catalogRecord("sosac:hollywood", "Tenkrát v Hollywoodu", {}, {
+      opaque: "sosac:hollywood", year: 2019, rating: 6,
+    }),
+    catalogRecord("sosac:americe", "Tenkrát v Americe", {}, {
+      opaque: "sosac:americe", year: 1984, rating: 10,
+    }),
+    catalogRecord("sosac:kalifornii", "Tenkrát v Kalifornii", {}, {
+      opaque: "sosac:kalifornii", year: 2017, rating: 8,
+    }),
+    catalogRecord("sosac:cine", "Tenkrát v Číně", {}, {
+      opaque: "sosac:cine", year: 1991, rating: 2,
+    }),
+    catalogRecord("sosac:baskicku", "Tenkrát v Baskicku", {}, {
+      opaque: "sosac:baskicku", year: 2021,
+    }),
+    catalogRecord("sosac:deadwoodu", "Tenkrát v Deadwoodu", {}, {
+      opaque: "sosac:deadwoodu", year: 2019,
+    }),
+  ]));
+
+  const started = await starting;
+  assert.deepEqual(started.snapshot.clusters.map((cluster) => cluster.title), [
+    "Tenkrát v Hollywoodu",
+    "Tenkrát v Americe",
+    "Tenkrát v Kalifornii",
+    "Tenkrát v Číně",
+    "Tenkrát v Baskicku",
+    "Tenkrát v Deadwoodu",
+  ]);
+  const hollywood = started.snapshot.clusters[0]!;
+  assert.equal(hollywood.memberCount, 6);
+  assert.equal(hollywood.rating, 7.6);
+  assert.equal(started.snapshot.clusters[1]!.rating, undefined);
+  manager.close();
+});
+
+test("pán prstenů puts a broadly listed trilogy film before the exact single-source title", async () => {
+  const catalogs = Array.from({ length: 6 }, (_, index) =>
+    new FakeSource(`catalog-${index}`, "catalog", `catalog-${index}`));
+  const sosac = new FakeSource("sosac", "catalog", "sosac");
+  const { manager } = build(() => [...catalogs, sosac]);
+  const starting = manager.start(authority(), request("pán prstenů"));
+  for (const [index, source] of catalogs.entries()) {
+    source.respond(page([
+      catalogRecord(`fellowship-${index}`, "Pán prstenů: Společenstvo prstenu", { imdb: "tt0120737" }, {
+        year: 2001,
+        rating: 8.9,
+      }),
+    ]));
+  }
+  sosac.respond(page([
+    catalogRecord("original", "Pán prstenů", {}, {
+      opaque: "sosac:original", year: 1978, rating: 10,
+    }),
+  ]));
+
+  const started = await starting;
+  assert.deepEqual(started.snapshot.clusters.map((cluster) => cluster.title), [
+    "Pán prstenů: Společenstvo prstenu",
+    "Pán prstenů",
+  ]);
+  assert.equal(started.snapshot.clusters[1]!.rating, undefined);
+  manager.close();
+});
+
+test("among widely listed titles the exact name comes before a sequel on more catalogs", async () => {
+  const catalogs = Array.from({ length: 5 }, (_, index) =>
+    new FakeSource(`catalog-${index}`, "catalog", `catalog-${index}`));
+  const { manager } = build(() => catalogs);
+  const starting = manager.start(authority(), request("terminator"));
+  for (const [index, source] of catalogs.entries()) {
+    source.respond(page([
+      catalogRecord(`dark-${index}`, "Terminator: Dark Fate", { imdb: "tt6450804" }, { year: 2019 }),
+      ...(index < 3 ? [catalogRecord(`first-${index}`, "Terminator", { imdb: "tt0088247" }, { year: 1984 })] : []),
+    ]));
+  }
+  const started = await starting;
+  assert.deepEqual(started.snapshot.clusters.map((cluster) => cluster.title), ["Terminator", "Terminator: Dark Fate"]);
+  manager.close();
+});
+
+test("a typo-free word match beats a typo match listed by more catalogs", async () => {
+  const exact = new FakeSource("exact", "catalog", "exact");
+  const typo = Array.from({ length: 4 }, (_, index) =>
+    new FakeSource(`typo-${index}`, "catalog", `typo-${index}`));
+  const { manager } = build(() => [exact, ...typo]);
+  const starting = manager.start(authority(), request("simpsonovi"));
+  exact.respond(page([catalogRecord("exact:one", "Simpsonovi", { imdb: "tt1" })]));
+  for (const [index, source] of typo.entries()) {
+    source.respond(page([
+      catalogRecord(`typo:${index}`, "Simpsnovi", { imdb: "tt2" }),
+    ]));
+  }
+
+  const started = await starting;
+  assert.deepEqual(started.snapshot.clusters.map((cluster) => cluster.title), [
+    "Simpsonovi",
+    "Simpsnovi",
+  ]);
   manager.close();
 });
 

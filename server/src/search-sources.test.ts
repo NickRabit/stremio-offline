@@ -200,7 +200,7 @@ test("catalog rows map strong ids, opaque ids, years and rewritten artwork", asy
     seen.push(url);
     return jsonResponse({
       metas: [
-        { id: "tt1", type: "movie", name: "Alien", year: 1979, description: "A crew", poster: "https://img/alien.jpg", background: "https://img/wide.jpg", imdbRating: "8.5" },
+        { id: "tt1", type: "movie", name: "Alien", originalTitle: "Alien: The Eighth Passenger", year: 1979, description: "A crew", poster: "https://img/alien.jpg", background: "https://img/wide.jpg", imdbRating: "8.5" },
         { id: "tmdb:2", type: "series", name: "Show", releaseInfo: "2015–2016" },
         { id: "custom", type: "movie", name: "Custom" },
         { id: "skipped", type: "channel", name: "Not a title" },
@@ -220,6 +220,7 @@ test("catalog rows map strong ids, opaque ids, years and rewritten artwork", asy
   assert.match(decodeURIComponent(seen[0]!.pathname), /search=alien/);
   assert.deepEqual(page.records.map((record) => record.kind), ["movie", "series", "movie"]);
   assert.deepEqual(page.records[0]!.ids, { imdb: "tt1" });
+  assert.equal(page.records[0]!.originalTitle, "Alien: The Eighth Passenger");
   assert.equal(page.records[0]!.year, 1979);
   assert.equal(page.records[0]!.rating, 8.5);
   assert.equal(page.records[0]!.sourcePosition, 0);

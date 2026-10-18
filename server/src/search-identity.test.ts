@@ -218,6 +218,52 @@ test("an id-less group linked by one opaque id joins as a whole", () => {
   ]), [["first", "second", "candidate"]]);
 });
 
+test("unique IMDb and TMDB names join before an id-less copy", () => {
+  assert.deepEqual(groupsOf([
+    record("imdb", 1, { imdb: "tt7131622" }, { title: "Tenkrát v Hollywoodu", year: 2019 }),
+    record("tmdb", 2, { tmdb: "466272" }, { title: "Tenkrát v Hollywoodu", year: 2019 }),
+    record("idless", 3, {}, {
+      opaque: "sosac:tenkrat-v-hollywoodu",
+      title: "Tenkrát v Hollywoodu",
+      year: 2019,
+    }),
+  ]), [["imdb", "tmdb", "idless"]]);
+});
+
+test("cross-namespace name matching keeps a film and a series apart", () => {
+  assert.deepEqual(groupsOf([
+    record("imdb", 1, { imdb: "tt1" }, { title: "Batman", year: 1966 }),
+    record("tmdb", 2, { tmdb: "10" }, { title: "Batman", year: 1966, kind: "series" }),
+  ]), [["imdb"], ["tmdb"]]);
+});
+
+test("two groups in one namespace prevent a cross-namespace merge", () => {
+  assert.deepEqual(groupsOf([
+    record("imdb-one", 1, { imdb: "tt1" }, { title: "Matrix", year: 1999 }),
+    record("imdb-two", 2, { imdb: "tt2" }, { title: "Matrix", year: 1999 }),
+    record("tmdb", 3, { tmdb: "10" }, { title: "Matrix", year: 1999 }),
+  ]), [["imdb-one"], ["imdb-two"], ["tmdb"]]);
+});
+
+test("a cross-namespace group never takes two counterparts", () => {
+  assert.deepEqual(groupsOf([
+    record("tmdb", 1, { tmdb: "10" }, {
+      title: "Matrix",
+      originalTitle: "The Matrix",
+      year: 1999,
+    }),
+    record("imdb-title", 2, { imdb: "tt1" }, { title: "Matrix", year: 1999 }),
+    record("imdb-original", 3, { imdb: "tt2" }, { title: "The Matrix", year: 1999 }),
+  ]), [["tmdb"], ["imdb-title"], ["imdb-original"]]);
+});
+
+test("a group carrying both namespaces is not a cross-namespace candidate", () => {
+  assert.deepEqual(groupsOf([
+    record("both", 1, { imdb: "tt1", tmdb: "10" }, { title: "Matrix", year: 1999 }),
+    record("imdb", 2, { imdb: "tt2" }, { title: "Matrix", year: 1999 }),
+  ]), [["both"], ["imdb"]]);
+});
+
 test("episodes use synthetic parent identity", () => {
   assert.deepEqual(episodeIdentity({ imdb: "tt1", tmdb: "10" }, 1, 2), {
     imdb: "tt1#1#2#",

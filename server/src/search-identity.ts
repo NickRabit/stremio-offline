@@ -104,6 +104,102 @@ const nameKeys = (record: IdentityInput): string[] => {
   return keys;
 };
 
+const groupNamespace = (
+  group: IdentityGroup,
+  recordByKey: Map<string, IdentityInput>,
+): (typeof NAMESPACES)[number] | undefined => {
+  let namespace: (typeof NAMESPACES)[number] | undefined;
+  for (const memberKey of group.memberKeys) {
+    const ids = recordByKey.get(memberKey)!.ids;
+    for (const candidate of NAMESPACES) {
+      if (ids[candidate] === undefined) continue;
+      if (namespace !== undefined && namespace !== candidate) return undefined;
+      namespace = candidate;
+    }
+  }
+  return namespace;
+};
+
+const mergeCrossNamespaceNames = (
+  groups: IdentityGroup[],
+  recordByKey: Map<string, IdentityInput>,
+  sequenceOf: Map<string, number>,
+): IdentityGroup[] => {
+  const candidates = new Map<number, (typeof NAMESPACES)[number]>();
+  groups.forEach((group, index) => {
+    if (group.conflict) return;
+    const members = group.memberKeys.map((memberKey) => recordByKey.get(memberKey)!);
+    if (members[0]!.kind !== "movie" && members[0]!.kind !== "series") return;
+    const namespace = groupNamespace(group, recordByKey);
+    if (namespace === "imdb" || namespace === "tmdb") candidates.set(index, namespace);
+  });
+
+  const buckets = new Map<string, { imdb: Set<number>; tmdb: Set<number> }>();
+  for (const index of candidates.keys()) {
+    const members = groups[index]!.memberKeys.map((memberKey) => recordByKey.get(memberKey)!);
+    const kind = members[0]!.kind;
+    for (const key of new Set(members.flatMap(nameKeys))) {
+      const bucket = `${kind}\0${key}`;
+      const entry = buckets.get(bucket) ?? { imdb: new Set(), tmdb: new Set() };
+      if (candidates.get(index) === "imdb") entry.imdb.add(index);
+      else entry.tmdb.add(index);
+      buckets.set(bucket, entry);
+    }
+  }
+
+  const pairs = new Map<string, { imdb: number; tmdb: number; shared: string[] }>();
+  for (const [bucket, entry] of buckets) {
+    for (const imdb of entry.imdb) {
+      for (const tmdb of entry.tmdb) {
+        const key = `${imdb}:${tmdb}`;
+        const pair = pairs.get(key) ?? { imdb, tmdb, shared: [] };
+        pair.shared.push(bucket);
+        pairs.set(key, pair);
+      }
+    }
+  }
+
+  const counterparts = new Map<number, Set<number>>();
+  const valid: Array<[number, number]> = [];
+  for (const pair of pairs.values()) {
+    if (pair.shared.some((bucket) => {
+      const entry = buckets.get(bucket)!;
+      return entry.imdb.size !== 1 || entry.tmdb.size !== 1;
+    })) continue;
+    valid.push([pair.imdb, pair.tmdb]);
+    const imdb = counterparts.get(pair.imdb) ?? new Set<number>();
+    imdb.add(pair.tmdb);
+    counterparts.set(pair.imdb, imdb);
+    const tmdb = counterparts.get(pair.tmdb) ?? new Set<number>();
+    tmdb.add(pair.imdb);
+    counterparts.set(pair.tmdb, tmdb);
+  }
+
+  const mergeWith = new Map<number, number>();
+  for (const [imdb, tmdb] of valid) {
+    if (counterparts.get(imdb)?.size !== 1 || counterparts.get(tmdb)?.size !== 1) continue;
+    const root = Math.min(imdb, tmdb);
+    const partner = Math.max(imdb, tmdb);
+    mergeWith.set(root, partner);
+  }
+  if (mergeWith.size === 0) return groups;
+
+  return groups.flatMap((group, index) => {
+    const partner = mergeWith.get(index);
+    if (partner !== undefined) return [];
+    const root = [...mergeWith].find(([, counterpart]) => counterpart === index)?.[0];
+    if (root === undefined) return [group];
+    return [{
+      memberKeys: sortedKeys(
+        [...groups[root]!.memberKeys, ...group.memberKeys]
+          .map((memberKey) => recordByKey.get(memberKey)!),
+        sequenceOf,
+      ),
+      conflict: false,
+    }];
+  });
+};
+
 export function clusterIdentities(records: IdentityInput[]): IdentityGroup[] {
   const ordered = [...records].sort(
     (left, right) => left.sequence - right.sequence || compareText(left.memberKey, right.memberKey),
@@ -194,8 +290,9 @@ export function clusterIdentities(records: IdentityInput[]): IdentityGroup[] {
     }
   }
 
+  const identityGroups = mergeCrossNamespaceNames(groups, recordByKey, sequenceOf);
   const candidatesByKey = new Map<string, Set<number>>();
-  groups.forEach((group, index) => {
+  identityGroups.forEach((group, index) => {
     if (group.conflict) return;
     const members = group.memberKeys.map((memberKey) => recordByKey.get(memberKey)!);
     const kind = members[0]!.kind;
@@ -209,7 +306,7 @@ export function clusterIdentities(records: IdentityInput[]): IdentityGroup[] {
   });
 
   const targetOf = new Map<number, number>();
-  groups.forEach((group, index) => {
+  identityGroups.forEach((group, index) => {
     if (group.conflict) return;
     const members = group.memberKeys.map((memberKey) => recordByKey.get(memberKey)!);
     const kind = members[0]!.kind;
@@ -224,10 +321,10 @@ export function clusterIdentities(records: IdentityInput[]): IdentityGroup[] {
   const joined = new Map<number, string[]>();
   for (const [source, target] of targetOf) {
     const memberKeys = joined.get(target) ?? [];
-    memberKeys.push(...groups[source]!.memberKeys);
+    memberKeys.push(...identityGroups[source]!.memberKeys);
     joined.set(target, memberKeys);
   }
-  const merged = groups.flatMap((group, index) => {
+  const merged = identityGroups.flatMap((group, index) => {
     if (targetOf.has(index)) return [];
     const memberKeys = joined.get(index);
     return [memberKeys === undefined
