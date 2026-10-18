@@ -317,7 +317,7 @@
   <string name="tv_global_search_kind_movies">Filmy</string>
   <string name="tv_global_search_kind_series">Seriale</string>
   <plurals name="tv_global_search_status_loading">
-    <item quantity="one">Wyszukiwanie w 1 źródle…</item>
+    <item quantity="one">Wyszukiwanie w %1$s źródle…</item>
     <item quantity="few">Wyszukiwanie w %1$s źródłach…</item>
     <item quantity="many">Wyszukiwanie w %1$s źródłach…</item>
     <item quantity="other">Wyszukiwanie w %1$s źródła…</item>

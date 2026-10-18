@@ -1968,7 +1968,7 @@ export const en = {
   "tv.globalSearch.kindAll": "All",
   "tv.globalSearch.kindMovies": "Movies",
   "tv.globalSearch.kindSeries": "Series",
-  "tv.globalSearch.statusLoading": { one: "Searching 1 source…", other: "Searching {count} sources…" },
+  "tv.globalSearch.statusLoading": { one: "Searching {count} source…", other: "Searching {count} sources…" },
   "tv.globalSearch.statusDone": "All sources answered",
   "tv.globalSearch.retry": "Retry",
   "tv.globalSearch.stateQueued": "Waiting",

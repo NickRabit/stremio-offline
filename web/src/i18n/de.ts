@@ -1910,7 +1910,7 @@ export const de: Catalog = {
   "tv.globalSearch.kindAll": "Alle",
   "tv.globalSearch.kindMovies": "Filme",
   "tv.globalSearch.kindSeries": "Serien",
-  "tv.globalSearch.statusLoading": { one: "1 Quelle wird durchsucht…", other: "{count} Quellen werden durchsucht…" },
+  "tv.globalSearch.statusLoading": { one: "{count} Quelle wird durchsucht…", other: "{count} Quellen werden durchsucht…" },
   "tv.globalSearch.statusDone": "Alle Quellen haben geantwortet",
   "tv.globalSearch.retry": "Erneut versuchen",
   "tv.globalSearch.stateQueued": "Wartet",

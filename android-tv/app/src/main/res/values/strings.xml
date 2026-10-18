@@ -307,7 +307,7 @@
   <string name="tv_global_search_kind_movies">Movies</string>
   <string name="tv_global_search_kind_series">Series</string>
   <plurals name="tv_global_search_status_loading">
-    <item quantity="one">Searching 1 source…</item>
+    <item quantity="one">Searching %1$s source…</item>
     <item quantity="other">Searching %1$s sources…</item>
   </plurals>
   <string name="tv_global_search_status_done">All sources answered</string>

@@ -1910,7 +1910,7 @@ export const ptBR: Catalog = {
   "tv.globalSearch.kindAll": "Todos",
   "tv.globalSearch.kindMovies": "Filmes",
   "tv.globalSearch.kindSeries": "Séries",
-  "tv.globalSearch.statusLoading": { one: "Pesquisando em 1 fonte…", other: "Pesquisando em {count} fontes…" },
+  "tv.globalSearch.statusLoading": { one: "Pesquisando em {count} fonte…", other: "Pesquisando em {count} fontes…" },
   "tv.globalSearch.statusDone": "Todas as fontes responderam",
   "tv.globalSearch.retry": "Tentar novamente",
   "tv.globalSearch.stateQueued": "Aguardando",

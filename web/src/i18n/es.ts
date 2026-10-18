@@ -1910,7 +1910,7 @@ export const es: Catalog = {
   "tv.globalSearch.kindAll": "Todo",
   "tv.globalSearch.kindMovies": "Películas",
   "tv.globalSearch.kindSeries": "Series",
-  "tv.globalSearch.statusLoading": { one: "Buscando en 1 fuente…", other: "Buscando en {count} fuentes…" },
+  "tv.globalSearch.statusLoading": { one: "Buscando en {count} fuente…", other: "Buscando en {count} fuentes…" },
   "tv.globalSearch.statusDone": "Todas las fuentes han respondido",
   "tv.globalSearch.retry": "Reintentar",
   "tv.globalSearch.stateQueued": "En espera",

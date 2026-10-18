@@ -317,7 +317,7 @@
   <string name="tv_global_search_kind_movies">Фильмы</string>
   <string name="tv_global_search_kind_series">Сериалы</string>
   <plurals name="tv_global_search_status_loading">
-    <item quantity="one">Идёт поиск в 1 источнике…</item>
+    <item quantity="one">Идёт поиск в %1$s источнике…</item>
     <item quantity="few">Идёт поиск в %1$s источниках…</item>
     <item quantity="many">Идёт поиск в %1$s источниках…</item>
     <item quantity="other">Идёт поиск в %1$s источниках…</item>

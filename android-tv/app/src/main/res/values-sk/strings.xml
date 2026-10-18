@@ -317,8 +317,9 @@
   <string name="tv_global_search_kind_movies">Filmy</string>
   <string name="tv_global_search_kind_series">Seriály</string>
   <plurals name="tv_global_search_status_loading">
-    <item quantity="one">Hľadá sa v 1 zdroji…</item>
+    <item quantity="one">Hľadá sa v %1$s zdroji…</item>
     <item quantity="few">Hľadá sa v %1$s zdrojoch…</item>
+    <item quantity="many">Hľadá sa v %1$s zdroja…</item>
     <item quantity="other">Hľadá sa v %1$s zdrojoch…</item>
   </plurals>
   <string name="tv_global_search_status_done">Všetky zdroje odpovedali</string>
@@ -338,6 +339,7 @@
   <plurals name="tv_global_search_episodes">
     <item quantity="one">%1$s epizóda</item>
     <item quantity="few">%1$s epizódy</item>
+    <item quantity="many">%1$s epizódy</item>
     <item quantity="other">%1$s epizód</item>
   </plurals>
   <string name="tv_global_search_previous_query">Výsledky predchádzajúceho vyhľadávania</string>
