@@ -81,6 +81,7 @@ const stubProvider = (server: FakeServer): MediaServerProvider => ({
   },
   ancestors: async (_token, _account, itemId) => { await server.run(); return [...(server.ancestorsOf[itemId] ?? [])]; },
   versions: async (_token, _account, itemId) => { await server.run(); return clone(server.versionsOf[itemId] ?? []); },
+  reportPlayback: async () => { throw new Error("the stub provider does not report playback"); },
 });
 
 const stubTransport = (server: FakeServer): MediaServerTransport => ({

@@ -139,6 +139,7 @@ export const pl: Catalog = {
   "stats.provider.artwork": "Obrazy",
   "stats.provider.subtitle": "Napisy",
   "stats.provider.original": "Bajty odtwarzania",
+  "stats.provider.playback": "Raporty odtwarzania",
   "stats.provider.views": "Lista bibliotek",
   "stats.provider.user": "Konto",
   "stats.provider.info": "Informacje o serwerze",

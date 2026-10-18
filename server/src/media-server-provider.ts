@@ -117,6 +117,15 @@ export interface ProviderVersion {
   externalSubtitles?: Array<{ index: number; language?: string; title?: string }>;
 }
 
+export interface ProviderPlaybackReport {
+  kind: "playing" | "progress" | "stopped";
+  mediaSourceId: string;
+  playSessionId: string;
+  positionTicks: number;
+  isPaused: boolean;
+  eventName?: "TimeUpdate" | "Pause" | "Unpause";
+}
+
 export interface MediaServerProvider {
   verifyIdentity(signal?: AbortSignal): Promise<{ serverId: string; version: string }>;
   authenticate(username: string, password: string, signal?: AbortSignal): Promise<{ serverId: string; accountId: string; token: string }>;
@@ -129,6 +138,7 @@ export interface MediaServerProvider {
   detail(token: string, accountId: string, itemId: string, signal?: AbortSignal): Promise<ProviderItem>;
   ancestors(token: string, accountId: string, itemId: string, signal?: AbortSignal): Promise<string[]>;
   versions(token: string, accountId: string, itemId: string, signal?: AbortSignal): Promise<ProviderVersion[]>;
+  reportPlayback(token: string, itemId: string, report: ProviderPlaybackReport, signal?: AbortSignal): Promise<void>;
   /** Resolve a catalogue id to the one library item that carries it: exactly one bounded list
    *  query, with every returned row re-checked locally for the exact provider id. Emby answers
    *  `AnyProviderIdEquals`; Jellyfin answers a `Has<Name>Id` page narrowed by the caller's title. */
@@ -832,5 +842,35 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
     return versions;
   }
 
-  return { verifyIdentity, authenticate, currentAccount, listLibraries, pageItems, pageDirectory, detail, findByProviderIds, ancestors, versions };
+  async function reportPlayback(token: string, itemId: string, report: ProviderPlaybackReport, signal?: AbortSignal): Promise<void> {
+    if (report.kind === "playing") {
+      await transport.requestJson("playing", {
+        itemId,
+        mediaSourceId: report.mediaSourceId,
+        playSessionId: report.playSessionId,
+        positionTicks: report.positionTicks,
+        isPaused: report.isPaused,
+      }, token, signal);
+      return;
+    }
+    if (report.kind === "progress") {
+      await transport.requestJson("playingProgress", {
+        itemId,
+        mediaSourceId: report.mediaSourceId,
+        playSessionId: report.playSessionId,
+        positionTicks: report.positionTicks,
+        isPaused: report.isPaused,
+        ...(report.eventName === undefined ? {} : { eventName: report.eventName }),
+      }, token, signal);
+      return;
+    }
+    await transport.requestJson("playingStopped", {
+      itemId,
+      mediaSourceId: report.mediaSourceId,
+      playSessionId: report.playSessionId,
+      positionTicks: report.positionTicks,
+    }, token, signal);
+  }
+
+  return { verifyIdentity, authenticate, currentAccount, listLibraries, pageItems, pageDirectory, detail, findByProviderIds, ancestors, versions, reportPlayback };
 }

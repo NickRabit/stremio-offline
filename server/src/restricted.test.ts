@@ -96,6 +96,7 @@ test("ALLOWED_MUTATIONS covers the demo writes and omits configuration", () => {
   assert.equal(isAllowedMutation("POST", "/progress"), true);
   assert.equal(isAllowedMutation("POST", "/progress/forget"), true);
   assert.equal(isAllowedMutation("DELETE", "/progress/movie:tt1"), true);
+  assert.equal(isAllowedMutation("POST", "/remote-libraries/rlib_00000000000000000000000000000001/items/item-1/playing"), true);
   assert.equal(isAllowedMutation("POST", "/library/favorite"), true);
   assert.equal(isAllowedMutation("POST", "/library/source"), true);
   assert.equal(isAllowedMutation("POST", "/library/rename"), true);

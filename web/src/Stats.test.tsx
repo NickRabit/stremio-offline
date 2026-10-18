@@ -71,7 +71,7 @@ const render = async () => {
 it("counts the calls that reached the media server, in total and by kind", async () => {
   const withProvider: StatsSummary = { ...data, provider: {
     info: 1, login: 1, user: 1, views: 2, items: 0, directory: 4, match: 0,
-    detail: 3, ancestors: 1, versions: 2, artwork: 12, subtitle: 0, original: 0,
+    detail: 3, ancestors: 1, versions: 2, artwork: 12, subtitle: 0, original: 0, playback: 0,
   } };
   fetchMock.mockImplementation((input: RequestInfo | URL) => Promise.resolve(json(
     String(input).includes("/api/stats/activity") ? { items: [], users: [], total: 0 }

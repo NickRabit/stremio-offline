@@ -23,8 +23,20 @@ export interface MediaServerOperationArgs {
   detail: { userId: string; itemId: string };
   ancestors: { itemId: string; userId: string };
   versions: { itemId: string; userId: string };
+  playing: PlaybackOperationArgs;
+  playingProgress: PlaybackOperationArgs;
+  playingStopped: { itemId: string; mediaSourceId: string; playSessionId: string; positionTicks: number };
 }
 export type MediaServerOperationName = keyof MediaServerOperationArgs;
+
+export interface PlaybackOperationArgs {
+  itemId: string;
+  mediaSourceId: string;
+  playSessionId: string;
+  positionTicks: number;
+  isPaused: boolean;
+  eventName?: "TimeUpdate" | "Pause" | "Unpause";
+}
 
 export interface MediaServerAddressPolicy {
   allowLan: boolean;
@@ -795,6 +807,9 @@ const ARGUMENT_KEYS: Record<MediaServerOperationName, readonly string[]> = {
   detail: ["userId", "itemId"],
   ancestors: ["itemId", "userId"],
   versions: ["itemId", "userId"],
+  playing: ["itemId", "mediaSourceId", "playSessionId", "positionTicks", "isPaused"],
+  playingProgress: ["itemId", "mediaSourceId", "playSessionId", "positionTicks", "isPaused", "eventName"],
+  playingStopped: ["itemId", "mediaSourceId", "playSessionId", "positionTicks"],
 };
 
 const REQUIRED_KEYS: Record<MediaServerOperationName, readonly string[]> = {
@@ -808,6 +823,9 @@ const REQUIRED_KEYS: Record<MediaServerOperationName, readonly string[]> = {
   detail: ["userId", "itemId"],
   ancestors: ["itemId", "userId"],
   versions: ["itemId", "userId"],
+  playing: ["itemId", "mediaSourceId", "playSessionId", "positionTicks", "isPaused"],
+  playingProgress: ["itemId", "mediaSourceId", "playSessionId", "positionTicks", "isPaused"],
+  playingStopped: ["itemId", "mediaSourceId", "playSessionId", "positionTicks"],
 };
 
 interface BuiltRequest {
@@ -815,6 +833,35 @@ interface BuiltRequest {
   url: string;
   token?: string;
   body?: string;
+}
+
+const PLAY_SESSION_ID = /^[0-9a-f]{32}$/;
+const POSITION_TICKS_MAX = 100_000_000_000_000;
+const PLAYBACK_EVENTS = new Set(["TimeUpdate", "Pause", "Unpause"]);
+
+function playbackFields(args: Record<string, unknown>, progress: boolean): Omit<PlaybackOperationArgs, "eventName"> & { eventName?: PlaybackOperationArgs["eventName"] } {
+  const itemId = pathSegment(args.itemId, "itemId");
+  const mediaSourceId = pathSegment(args.mediaSourceId, "mediaSourceId");
+  if (typeof args.playSessionId !== "string" || !PLAY_SESSION_ID.test(args.playSessionId)) {
+    throw invalid("The media-server playback session id is malformed.");
+  }
+  const positionTicks = args.positionTicks;
+  if (typeof positionTicks !== "number" || !Number.isSafeInteger(positionTicks) || positionTicks < 0 || positionTicks > POSITION_TICKS_MAX) {
+    throw invalid("The media-server playback position is out of range.");
+  }
+  if (typeof args.isPaused !== "boolean") throw invalid("The media-server playback pause flag must be a boolean.");
+  const eventName = args.eventName;
+  if (eventName !== undefined && (typeof eventName !== "string" || !PLAYBACK_EVENTS.has(eventName))) {
+    throw invalid("The media-server playback event is not allowed.");
+  }
+  return {
+    itemId,
+    mediaSourceId,
+    playSessionId: args.playSessionId,
+    positionTicks,
+    isPaused: args.isPaused,
+    ...(progress && eventName !== undefined ? { eventName: eventName as PlaybackOperationArgs["eventName"] } : {}),
+  };
 }
 
 /** Turn a validated operation into the exact request line. The URL is assembled from the
@@ -915,6 +962,48 @@ function buildRequest(baseUrl: string, operation: MediaServerOperationName, args
       return { method: "GET", url: `${baseUrl}/Items/${encodeURIComponent(pathSegment(args.itemId, "itemId"))}/Ancestors?UserId=${encodeURIComponent(pathSegment(args.userId, "userId"))}` };
     case "versions":
       return { method: "GET", url: `${baseUrl}/Items/${encodeURIComponent(pathSegment(args.itemId, "itemId"))}/PlaybackInfo?UserId=${encodeURIComponent(pathSegment(args.userId, "userId"))}` };
+    case "playing": {
+      const fields = playbackFields(args, false);
+      const body = JSON.stringify({
+        ItemId: fields.itemId,
+        MediaSourceId: fields.mediaSourceId,
+        PlaySessionId: fields.playSessionId,
+        PositionTicks: fields.positionTicks,
+        IsPaused: fields.isPaused,
+        IsMuted: false,
+        CanSeek: true,
+        PlayMethod: "DirectPlay",
+      });
+      if (Buffer.byteLength(body, "utf8") > MEDIA_SERVER_LIMITS.requestBody) throw invalid("The media-server playback report is too large.");
+      return { method: "POST", url: `${baseUrl}/Sessions/Playing`, body };
+    }
+    case "playingProgress": {
+      const fields = playbackFields(args, true);
+      const body = JSON.stringify({
+        ItemId: fields.itemId,
+        MediaSourceId: fields.mediaSourceId,
+        PlaySessionId: fields.playSessionId,
+        PositionTicks: fields.positionTicks,
+        IsPaused: fields.isPaused,
+        IsMuted: false,
+        CanSeek: true,
+        PlayMethod: "DirectPlay",
+        EventName: fields.eventName ?? "TimeUpdate",
+      });
+      if (Buffer.byteLength(body, "utf8") > MEDIA_SERVER_LIMITS.requestBody) throw invalid("The media-server playback report is too large.");
+      return { method: "POST", url: `${baseUrl}/Sessions/Playing/Progress`, body };
+    }
+    case "playingStopped": {
+      const fields = playbackFields({ ...args, isPaused: false }, false);
+      const body = JSON.stringify({
+        ItemId: fields.itemId,
+        MediaSourceId: fields.mediaSourceId,
+        PlaySessionId: fields.playSessionId,
+        PositionTicks: fields.positionTicks,
+      });
+      if (Buffer.byteLength(body, "utf8") > MEDIA_SERVER_LIMITS.requestBody) throw invalid("The media-server playback report is too large.");
+      return { method: "POST", url: `${baseUrl}/Sessions/Playing/Stopped`, body };
+    }
   }
 }
 
@@ -1170,7 +1259,7 @@ export function createMediaServerTransport(
         // Counted here, not where the call was asked for: past the cooling re-check and about to
         // reach the socket. A request that then fails to connect or answers 404 is still a call
         // that left this process, and the counter is for those.
-        noteProviderCall(operation);
+        noteProviderCall(operation === "playing" || operation === "playingProgress" || operation === "playingStopped" ? "playback" : operation);
         response = await guard(sendFetch(built.url, { ...init, signal: controller.signal }), controller.signal, isTimedOut);
       } catch (error) {
         throw mapTransportError(error, controller.signal, isTimedOut);
@@ -1178,6 +1267,10 @@ export function createMediaServerTransport(
       if (!response.ok) {
         void response.body?.cancel().catch(() => undefined);
         throw statusFailure(response.status, new Headers(response.headers));
+      }
+      if (operation === "playing" || operation === "playingProgress" || operation === "playingStopped") {
+        void response.body?.cancel().catch(() => undefined);
+        return null;
       }
       const text = await readBounded(response, controller.signal, isTimedOut);
       try { return JSON.parse(text); }

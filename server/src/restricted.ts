@@ -65,6 +65,7 @@ export const ALLOWED_MUTATIONS: Rule[] = [
   { method: "POST", pattern: /^\/progress\/forget$/ },
   { method: "DELETE", pattern: /^\/progress\/[^/]+$/ },
   { method: "PATCH", pattern: /^\/remote-libraries\/[^/]+\/items\/[^/]+\/state$/ },
+  { method: "POST", pattern: /^\/remote-libraries\/[^/]+\/items\/[^/]+\/playing$/ },
   { method: "POST", pattern: /^\/library\/favorite$/ },
   { method: "POST", pattern: /^\/library\/folder$/ },
   { method: "POST", pattern: /^\/library\/ops$/ },

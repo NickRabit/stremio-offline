@@ -139,6 +139,7 @@ export const ptBR: Catalog = {
   "stats.provider.artwork": "Imagens",
   "stats.provider.subtitle": "Legendas",
   "stats.provider.original": "Bytes de reprodução",
+  "stats.provider.playback": "Relatórios de reprodução",
   "stats.provider.views": "Lista de bibliotecas",
   "stats.provider.user": "Conta",
   "stats.provider.info": "Informações do servidor",

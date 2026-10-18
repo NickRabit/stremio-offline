@@ -139,6 +139,7 @@ export const sk: Catalog = {
   "stats.provider.artwork": "Obrázky",
   "stats.provider.subtitle": "Titulky",
   "stats.provider.original": "Bajty prehrávania",
+  "stats.provider.playback": "Hlásenia prehrávania",
   "stats.provider.views": "Zoznam knižníc",
   "stats.provider.user": "Účet",
   "stats.provider.info": "Informácie o serveri",

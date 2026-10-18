@@ -295,6 +295,26 @@ test("versions keeps only usable file sources and never selects a remote URL", a
   await assert.rejects(badId.provider.versions("tok", "user-1", "item-1"), { code: "invalid-response" });
 });
 
+test("reportPlayback maps each report kind to its fixed transport operation", async () => {
+  const { calls, provider } = fixture(() => null);
+  const base = { mediaSourceId: "source-1", playSessionId: "a".repeat(32), positionTicks: 123_456 };
+  await provider.reportPlayback("tok", "item-1", { ...base, kind: "playing", isPaused: false });
+  await provider.reportPlayback("tok", "item-1", { ...base, kind: "progress", isPaused: true, eventName: "Pause" });
+  await provider.reportPlayback("tok", "item-1", { ...base, kind: "stopped", isPaused: true, eventName: "Unpause" });
+
+  assert.deepEqual(calls.map((call) => call.operation), ["playing", "playingProgress", "playingStopped"]);
+  assert.deepEqual(calls[0]!.args, {
+    itemId: "item-1", mediaSourceId: "source-1", playSessionId: "a".repeat(32), positionTicks: 123_456, isPaused: false,
+  });
+  assert.deepEqual(calls[1]!.args, {
+    itemId: "item-1", mediaSourceId: "source-1", playSessionId: "a".repeat(32), positionTicks: 123_456, isPaused: true, eventName: "Pause",
+  });
+  assert.deepEqual(calls[2]!.args, {
+    itemId: "item-1", mediaSourceId: "source-1", playSessionId: "a".repeat(32), positionTicks: 123_456,
+  });
+  assert.ok(calls.every((call) => call.token === "tok"));
+});
+
 test("ancestors accepts only a bounded bare array, never an invented wrapper", async () => {
   const bare = fixture(() => [{ Id: "root" }, { Id: "series" }]);
   assert.deepEqual(await bare.provider.ancestors("tok", "user-1", "ep"), ["root", "series"]);

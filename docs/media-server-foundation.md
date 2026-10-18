@@ -229,8 +229,12 @@ The transport exposes only a typed operation union with fixed arguments:
 | `detail` | `GET /Users/{userId}/Items/{itemId}` |
 | `ancestors` | `GET /Items/{itemId}/Ancestors?UserId=...` |
 | `versions` | `GET /Items/{itemId}/PlaybackInfo?UserId=...` |
+| `playing` | `POST /Sessions/Playing` |
+| `playingProgress` | `POST /Sessions/Playing/Progress` |
+| `playingStopped` | `POST /Sessions/Playing/Stopped` |
 
-There is no stream, preparation, logout, session or artwork call here.
+The transport sends the three standard playback-session reports listed above as
+best effort; there is no stream, preparation or logout call here.
 Every request carries fixed MediaBrowser client/device/version identity, including
 login without a token. Authenticated requests append `Token="..."` with
 fixed client/device/version values and also `X-Emby-Token`; authentication never

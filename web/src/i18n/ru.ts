@@ -139,6 +139,7 @@ export const ru: Catalog = {
   "stats.provider.artwork": "Изображения",
   "stats.provider.subtitle": "Субтитры",
   "stats.provider.original": "Байты воспроизведения",
+  "stats.provider.playback": "Отчёты о воспроизведении",
   "stats.provider.views": "Список библиотек",
   "stats.provider.user": "Учётная запись",
   "stats.provider.info": "О сервере",

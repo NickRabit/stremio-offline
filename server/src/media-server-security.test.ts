@@ -229,6 +229,87 @@ test("login sends client identity without a token and the password only in the J
   }
 });
 
+test("playback reports send the exact Jellyfin and Emby session request", async () => {
+  let fixture: Fixture | undefined;
+  try {
+    fixture = await startServer((_req, res) => { res.writeHead(204); res.end(); });
+    const transport = createMediaServerTransport({
+      baseUrl: `${fixture.origin}/prefix`, allowLan: false, allowLoopback: true, deviceId: "mconn_playback-device",
+    });
+    const playSessionId = "a".repeat(32);
+    const fields = { itemId: "item-1", mediaSourceId: "source-1", playSessionId, positionTicks: 12_345_678, isPaused: false };
+    assert.equal(await transport.requestJson("playing", fields, "tok"), null);
+    assert.equal(await transport.requestJson("playingProgress", { ...fields, isPaused: true, eventName: "Pause" }, "tok"), null);
+    assert.equal(await transport.requestJson("playingStopped", {
+      itemId: fields.itemId, mediaSourceId: fields.mediaSourceId, playSessionId, positionTicks: fields.positionTicks,
+    }, "tok"), null);
+
+    const expected = [
+      ["/prefix/Sessions/Playing", { ItemId: "item-1", MediaSourceId: "source-1", PlaySessionId: playSessionId, PositionTicks: 12_345_678, IsPaused: false, IsMuted: false, CanSeek: true, PlayMethod: "DirectPlay" }],
+      ["/prefix/Sessions/Playing/Progress", { ItemId: "item-1", MediaSourceId: "source-1", PlaySessionId: playSessionId, PositionTicks: 12_345_678, IsPaused: true, IsMuted: false, CanSeek: true, PlayMethod: "DirectPlay", EventName: "Pause" }],
+      ["/prefix/Sessions/Playing/Stopped", { ItemId: "item-1", MediaSourceId: "source-1", PlaySessionId: playSessionId, PositionTicks: 12_345_678 }],
+    ] as const;
+    assert.equal(fixture.requests.length, 3);
+    for (const [index, [url, body]] of expected.entries()) {
+      const request: Recorded = fixture.requests[index]!;
+      assert.equal(request.method, "POST");
+      assert.equal(request.url, url);
+      assert.deepEqual(JSON.parse(request.body), body);
+      assert.equal(request.headers["content-type"], "application/json");
+      assert.match(request.headers.authorization ?? "", /Token="tok"/);
+      assert.match(request.headers.authorization ?? "", /DeviceId="mconn_playback-device"/);
+      assert.equal(request.headers["x-emby-token"], "tok");
+    }
+    await transport.close();
+  } finally {
+    await fixture?.close();
+  }
+});
+
+test("playback arguments are refused before the socket when malformed", async () => {
+  let fixture: Fixture | undefined;
+  try {
+    fixture = await startServer((_req, res) => { res.writeHead(204); res.end(); });
+    const transport = open(fixture.origin);
+    const valid = {
+      itemId: "item-1", mediaSourceId: "source-1", playSessionId: "a".repeat(32), positionTicks: 1, isPaused: false,
+    };
+    await assert.rejects(transport.requestJson("playing", { ...valid, extra: true } as never, "tok"), { code: "invalid-input" });
+    await assert.rejects(transport.requestJson("playing", { ...valid, playSessionId: undefined } as never, "tok"), { code: "invalid-input" });
+    await assert.rejects(transport.requestJson("playing", { ...valid, eventName: "Pause" } as never, "tok"), { code: "invalid-input" });
+    for (const playSessionId of ["A".repeat(32), "a".repeat(31), "a".repeat(33), "g".repeat(32)]) {
+      await assert.rejects(transport.requestJson("playing", { ...valid, playSessionId }, "tok"), { code: "invalid-input" });
+    }
+    for (const positionTicks of [-1, 1.5, 100_000_000_000_001, Number.MAX_SAFE_INTEGER + 1]) {
+      await assert.rejects(transport.requestJson("playing", { ...valid, positionTicks }, "tok"), { code: "invalid-input" });
+    }
+    await assert.rejects(transport.requestJson("playing", { ...valid, itemId: "a/b" }, "tok"), { code: "invalid-input" });
+    await assert.rejects(transport.requestJson("playing", valid), { code: "authentication-required" });
+    await assert.rejects(transport.requestJson("unknown" as never, valid as never, "tok"), { code: "invalid-input" });
+    assert.deepEqual(fixture.requests, [], "refused arguments never reach the media server");
+    await transport.close();
+  } finally {
+    await fixture?.close();
+  }
+});
+
+test("playback answers ignore their body and keep the ordinary status mapping", async () => {
+  let fixture: Fixture | undefined;
+  try {
+    fixture = await startServer((req, res) => {
+      if (req.url?.endsWith("/Progress")) json(res, { unexpected: true });
+      else { res.writeHead(500); res.end(); }
+    });
+    const transport = open(fixture.origin);
+    const fields = { itemId: "item-1", mediaSourceId: "source-1", playSessionId: "a".repeat(32), positionTicks: 1, isPaused: false };
+    assert.equal(await transport.requestJson("playingProgress", fields, "tok"), null, "a non-empty body is never parsed");
+    await assert.rejects(transport.requestJson("playing", fields, "tok"), { code: "unavailable", status: 500 });
+    await transport.close();
+  } finally {
+    await fixture?.close();
+  }
+});
+
 test("operations refuse unknown fields, raw paths and missing tokens", async () => {
   let fixture: Fixture | undefined;
   try {
@@ -1725,6 +1806,31 @@ test("a call that reaches the media server is counted once, by its operation", a
     await transport.requestJson("detail", { userId: "u1", itemId: "i1" }, "tok");
     assert.equal(stats.summary(1).detail, 1, "the answer that reached the server is the call");
     assert.equal(stats.summary(1).ancestors, 0, "nothing that was not asked for is counted");
+  } finally {
+    useProviderStats(undefined);
+    await transport.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("all playback session reports share the playback provider-call kind", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "stremio-provider-playback-"));
+  const stats = new ProviderStats(path.join(dir, "provider-stats.json"), () => Date.now());
+  await stats.load();
+  useProviderStats(stats);
+  const transport = createMediaServerTransport({ baseUrl: "http://media.example", allowLan: false, allowLoopback: false }, {
+    lookupAll: async () => [{ address: "93.184.216.34", family: 4 }],
+    fetch: async () => new Response(null, { status: 204 }),
+  });
+  const fields = { itemId: "item-1", mediaSourceId: "source-1", playSessionId: "a".repeat(32), positionTicks: 1, isPaused: false };
+  try {
+    await transport.requestJson("playing", fields, "tok");
+    await transport.requestJson("playingProgress", fields, "tok");
+    await transport.requestJson("playingStopped", {
+      itemId: fields.itemId, mediaSourceId: fields.mediaSourceId, playSessionId: fields.playSessionId, positionTicks: fields.positionTicks,
+    }, "tok");
+    assert.equal(stats.summary(1).playback, 3);
+    assert.equal(stats.summary(1).original, 0);
   } finally {
     useProviderStats(undefined);
     await transport.close();
