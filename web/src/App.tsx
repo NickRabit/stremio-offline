@@ -47,6 +47,8 @@ import { FavoritesView } from "./FavoritesView";
 import { CatalogueTitleDetail, catalogueStreamId, type CatalogueDetailTarget } from "./CatalogueTitleDetail";
 import { Downloads } from "./DownloadsPage";
 import { Home } from "./Home";
+import { SearchEverywhere } from "./SearchEverywhere";
+import { useSearchEverywhere } from "./useSearchEverywhere";
 import type { HomeCardActions } from "./HomeCard";
 import { useHome } from "./useHome";
 import type { ShowAllTarget } from "./home-cards";
@@ -83,7 +85,7 @@ const legacyLibraryView = (): LibraryViewPrefs | null => {
 };
 const forgetLegacy = () => { try { for (const key of LEGACY_KEYS) localStorage.removeItem(`library-${key}`); } catch { /* storage may be unavailable */ } };
 
-type View = "home" | "catalog" | "library" | "resume" | "favorites" | "following" | "downloads" | "stats" | "addons" | "settings";
+type View = "home" | "catalog" | "library" | "search" | "resume" | "favorites" | "following" | "downloads" | "stats" | "addons" | "settings";
 /** One accessible remote library and the sources it reported for the title on screen. */
 type RemoteGroup = { libraryId: string; name: string; provider: MediaServerProvider; order: number; streams: Stream[]; error: string };
 type PlaybackAnchor = { kind: "catalog" | "library"; key: string };
@@ -240,7 +242,7 @@ export function App() {
   const [bulkDownload, setBulkDownload] = useState<{ label: string; title: string; type: string; episodes: Array<{ id: string; season?: number; episode?: number; title?: string }>; media: { id?: string; metaType?: string; poster?: string; background?: string; gallery?: Array<{ url: string; kind: GalleryKind }> } } | null>(null);
   const [downloads, setDownloads] = useState<DownloadJob[]>([]); const [queueHalt, setQueueHalt] = useState<QueueHalt | null>(null); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState(""); const [playerOpen, setPlayerOpen] = useState(false);
   const [deviceTransfers, setDeviceTransfers] = useState<DeviceTransfer[]>([]);
-  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: locale(), audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, tileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", favoritesTileShape: "poster", resumeTileShape: "poster", followingTileShape: "poster", homeTileShape: "wide", startView: "home", libraryShelf: "resume", realDebridConfigured: false, tmdbConfigured: false });
+  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: locale(), audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, tileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", favoritesTileShape: "poster", resumeTileShape: "poster", followingTileShape: "poster", homeTileShape: "wide", searchTileShape: "poster", startView: "home", libraryShelf: "resume", realDebridConfigured: false, tmdbConfigured: false });
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [session, setSession] = useState<Session | null | undefined>(undefined);
@@ -277,6 +279,7 @@ export function App() {
   /** The shared title detail, hosted over whichever page opened it, with the rows the catalogue
    *  panel already read for the selection it was opened on. */
   const [catalogueDetail, setCatalogueDetail] = useState<(CatalogueDetailTarget & { initialSources?: Stream[] }) | null>(null);
+  const [searchReturn, setSearchReturn] = useState(false);
   /** The destination dialog the shared detail's save arrow opens, with the row it was clicked for. */
   const [catalogueSave, setCatalogueSave] = useState<{ title: string; kind: "movie" | "series"; stream: Stream; media: Record<string, unknown>; season?: number; rule?: AddonDownloadSettings; ruleUnavailable?: boolean } | null>(null);
   /** Where a freshly switched source starts; the player hands the position over. */
@@ -1165,6 +1168,7 @@ export function App() {
    * and the page position are restored. */
   const openView = (target: View) => {
     navigated.current = true;
+    setSearchReturn(false);
     // A shared detail is drawn over the section that opened it, and the menu is a way out of it:
     // the entry naming that very section only puts the section back, filters and position intact.
     if (catalogueDetail) {
@@ -1267,6 +1271,25 @@ export function App() {
   const [setupNeeded, setSetupNeeded] = useState(false);
   const [buildInfo, setBuildInfo] = useState<BuildInfo | null>(null);
   const restricted = buildInfo?.restricted === true;
+  const searchEverywhere = useSearchEverywhere({
+    active: view === "search",
+    covered: (view === "library" && searchReturn) || (view === "search" && catalogueDetail !== null),
+  });
+  const focusSearchInput = () => {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        document.querySelector<HTMLInputElement>("[data-search-input]")?.focus();
+      });
+    });
+  };
+  const openSearch = () => {
+    if (view === "search" && !catalogueDetail) {
+      focusSearchInput();
+      return;
+    }
+    openView("search");
+    focusSearchInput();
+  };
   /** The logo leads to the account's own start page: Home or the Library when chosen (a restricted
    *  build has no Home), otherwise a clean catalogue as it always has. */
   const startHome = settings.startView !== "catalog" && !(restricted && settings.startView === "home");
@@ -1278,6 +1301,18 @@ export function App() {
   // read-only shape the demo mode uses: the API refuses those writes either way.
   const admin = session?.role === "admin";
   useEffect(() => { api.status().then(setBuildInfo).catch(() => setBuildInfo(null)); }, []);
+  useEffect(() => {
+    if (!buildInfo?.searchEverywhere) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.isComposing || event.altKey || event.key.toLowerCase() !== "k" || (!event.ctrlKey && !event.metaKey)) return;
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest("input, textarea, select, [contenteditable]")) return;
+      event.preventDefault();
+      openSearch();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [buildInfo?.searchEverywhere, view, catalogueDetail]);
   // The sign-in and setup screens render before anything else, so the stored language
   // rides along on this one call. Only a fresh install falls back to the browser's guess.
   useEffect(() => {
@@ -1345,7 +1380,7 @@ export function App() {
   }, [selectedStream]);
   /** The shape buttons save like any other setting, but without the toast: one per click
    *  while somebody flips back and forth is noise. A refused save puts the grid back. */
-  const toggleShape = async (key: "catalogTileShape" | "libraryTileShape" | "favoritesTileShape" | "resumeTileShape" | "followingTileShape" | "homeTileShape") => {
+  const toggleShape = async (key: "catalogTileShape" | "libraryTileShape" | "favoritesTileShape" | "resumeTileShape" | "followingTileShape" | "homeTileShape" | "searchTileShape") => {
     const before = settings[key];
     const next = before === "wide" ? "poster" : "wide";
     setSettings((current: AppSettings) => ({ ...current, [key]: next }));
@@ -1907,7 +1942,9 @@ export function App() {
   // After Enter or a debounced commit the committed query changes, so the note is recomputed.
   useEffect(() => { if (liveSearchOn) live.update(search, submittedQuery); }, [submittedQuery]);
   useEffect(() => { if (!liveSearchOn) live.cancel(); }, [liveSearchOn]);
-  useEffect(() => { if (ready) void loadSearchState(); }, [ready]);
+  useEffect(() => {
+    if (ready && (view === "catalog" || view === "settings")) void loadSearchState();
+  }, [ready, view]);
   // Grants or addons changed: titles seen under the old set may no longer be offered.
   useEffect(() => { pool.clear(); }, [addons]);
   // Leaving the catalogue drops a pending commit instead of firing it from behind another view.
@@ -2632,6 +2669,55 @@ export function App() {
     setDetailRead(null); setDetailSource(null); setCatalogueFollow(null); setDetailFollowOpen(false);
     setCatalogueDetail({ ...target, type: target.type, ...(initialSources ? { initialSources } : {}) });
   };
+  const openSearchMember = async (member: import("./types").SearchMember, anchorKey: string) => {
+    searchEverywhere.setFocusAnchor(anchorKey);
+    searchEverywhere.setScrollTop(window.scrollY);
+    setSearchReturn(false);
+    if (member.locator.kind === "catalog") {
+      openCatalogueDetail({
+        type: member.locator.type,
+        id: member.locator.id,
+        name: member.title,
+        ...(member.poster ? { poster: member.poster } : {}),
+      });
+      return;
+    }
+    if (member.locator.kind === "remote") {
+      setSearchReturn(true);
+      openRemoteCard({ libraryId: member.locator.libraryId, itemId: member.locator.itemId });
+      return;
+    }
+    setSearchReturn(true);
+    revealInLibrary(member.locator.key);
+  };
+  const openSearchCanonical = async (
+    canonical: NonNullable<import("./types").SearchMemberPage["canonical"]>,
+    anchorKey: string,
+  ) => {
+    searchEverywhere.setFocusAnchor(anchorKey);
+    searchEverywhere.setScrollTop(window.scrollY);
+    setSearchReturn(false);
+    openCatalogueDetail(canonical);
+  };
+  const focusSearchAnchor = () => {
+    const anchor = searchEverywhere.focusAnchor;
+    if (!anchor) return;
+    const card = [...document.querySelectorAll<HTMLElement>("[data-search-card]")]
+      .find((candidate) => (candidate.dataset.memberKeys ?? "").split(" ").includes(anchor));
+    card?.focus({ preventScroll: true });
+  };
+  const returnToSearch = () => {
+    const top = searchEverywhere.scrollTop;
+    setSearchReturn(false);
+    setView("search");
+    window.requestAnimationFrame(() => {
+      window.scrollTo(0, top);
+      window.requestAnimationFrame(() => {
+        window.scrollTo(0, top);
+        focusSearchAnchor();
+      });
+    });
+  };
   /** The one way out of the shared detail: the breadcrumb's Back, the menu, and anything else
    *  that asks for the page the detail was drawn over. */
   const closeCatalogueDetail = () => {
@@ -2953,7 +3039,7 @@ export function App() {
   const playingStream = localStream ?? detailPlaying?.stream ?? selectedStream;
 
   return <div className={`app-shell tile-size-${settings.tileSize} catalog-shape-${settings.catalogTileShape} library-shape-${settings.libraryTileShape} home-shape-${settings.homeTileShape}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
-    <header className="topbar"><button className="brand brand-home" title={t(startHome ? "app.goToStart" : "app.goToCleanCatalog")} aria-label={t(startHome ? "app.goToStart" : "app.goToCleanCatalog")} onClick={goToStart}><div className="brand-mark"><CirclePlay/></div><div><small>{t("auth.brandEyebrow")}</small><h1>Stremio <span>Offline</span></h1></div></button><div className="topbar-right">{restricted && <div className="restricted-chip">{t("restricted.chip")}</div>}<div className="online"><i/> {t("app.serverOnline")}</div>
+    <header className="topbar"><button className="brand brand-home" title={t(startHome ? "app.goToStart" : "app.goToCleanCatalog")} aria-label={t(startHome ? "app.goToStart" : "app.goToCleanCatalog")} onClick={goToStart}><div className="brand-mark"><CirclePlay/></div><div><small>{t("auth.brandEyebrow")}</small><h1>Stremio <span>Offline</span></h1></div></button><div className="topbar-right">{restricted && <div className="restricted-chip">{t("restricted.chip")}</div>}{buildInfo?.searchEverywhere && <button className="topbar-search" aria-label={t("searchAll.open")} title={t("searchAll.open")} onClick={openSearch}><Search/><span>{t("searchAll.open")}</span></button>}<div className="online"><i/> {t("app.serverOnline")}</div>
       <div className="topbar-user"><span className="topbar-user-name">
         <strong title={t("auth.signedInAs", { username: session?.username ?? "" })}>{session?.username}</strong>
         {session?.role === "admin" && <i className="library-badge">{t("users.administrator")}</i>}
@@ -3017,7 +3103,8 @@ export function App() {
         rows={home.rows} order={home.order} shape={settings.homeTileShape} onToggleShape={() => void toggleShape("homeTileShape")}
         onRetry={(row) => home.refresh([row])} onShowAll={homeShowAll} onPlay={homePlay} onOpenCatalogue={homeOpen}
         onShuffle={(row, shuffle) => home.refresh([row], { shuffle })} onVisible={home.reveal} onOpenCatalog={(row) => { const pick = parseHomeCatalogRowId(row); if (pick) resetCatalog(pick); }}
-        onReveal={revealInLibrary} onForgotten={refreshPersonal} onError={fail}/>}
+        onReveal={revealInLibrary} onForgotten={refreshPersonal} onError={fail}
+        {...(buildInfo?.searchEverywhere ? { onOpenSearch: openSearch } : {})}/>}
       {view === "catalog" && <section className={`catalog-view ${catalogCompact ? "catalog-compact" : ""}`} {...chromeGestures(() => gridRef.current)} onFocusCapture={(event) => {
         if ((event.target as HTMLElement).closest(".searchbar,.filterbar")) setCatalogCompact(false);
       }}><Heading eyebrow={t("catalog.eyebrow")} title={t("catalog.title")}/>
@@ -3189,7 +3276,11 @@ export function App() {
           </> : <Empty icon={<Film/>} title={t("catalog.pickTitle")} text={t("catalog.pickText")}/>}</section></div>
         </>}
       </section>}
-      {view === "library" && <section ref={libraryPageRef} className={`library-page${remoteRootsPresent && !remoteOpen && !browsePath && !localDetail ? " library-remote-roots" : ""}${(remoteOpen ? remoteCompact : libraryCompact) ? " library-compact" : ""}`} {...chromeGestures(() => browseScrollRef.current)} onKeyDown={(event) => { if (event.key === "Escape") setMenuFor(null); }} onClick={() => menuFor && setMenuFor(null)}><Heading eyebrow={t("library.eyebrow")} title={t("library.title")}/>
+      {view === "search" && buildInfo?.searchEverywhere && <SearchEverywhere search={searchEverywhere} shape={settings.searchTileShape} onToggleShape={() => void toggleShape("searchTileShape")}
+        onOpenMember={openSearchMember} onOpenCanonical={openSearchCanonical}/>}
+      {view === "library" && <section ref={libraryPageRef} className={`library-page${remoteRootsPresent && !remoteOpen && !browsePath && !localDetail ? " library-remote-roots" : ""}${(remoteOpen ? remoteCompact : libraryCompact) ? " library-compact" : ""}`} {...chromeGestures(() => browseScrollRef.current)} onKeyDown={(event) => { if (event.key === "Escape") setMenuFor(null); }} onClick={() => menuFor && setMenuFor(null)}>
+        {searchReturn && <button type="button" className="search-return" onClick={returnToSearch}><ChevronLeft/> {t("searchAll.backToSearch")}</button>}
+        <Heading eyebrow={t("library.eyebrow")} title={t("library.title")}/>
         <RemoteLibraryBrowser onRootPresenceChange={setRemoteRootsPresent} hideRoots={Boolean(browsePath) || Boolean(localDetail)} audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} onError={fail}
           libraryTileShape={settings.libraryTileShape} onToggleLibraryShape={() => void toggleShape("libraryTileShape")}
           views={views} onPersistPrefs={persistRemotePrefs}

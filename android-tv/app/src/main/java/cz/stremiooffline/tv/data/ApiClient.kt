@@ -7,7 +7,10 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -42,7 +45,7 @@ class ApiError(
   val status: Int? = null,
 ) : Exception(serverMessage ?: failure.name)
 
-data class ServerStatus(val version: String)
+data class ServerStatus(val version: String, val searchEverywhere: Boolean = false)
 
 data class LoginResult(val username: String, val mustChangePassword: Boolean)
 
@@ -105,7 +108,59 @@ class ApiClient(
         AppLog.apiFailure("GET", "/api/status", response.code, System.currentTimeMillis() - started)
         throw ApiError(ApiFailure.Incompatible)
       }
-      return ServerStatus(parsed.version.orEmpty())
+      return ServerStatus(parsed.version.orEmpty(), parsed.searchEverywhere)
+    }
+  }
+
+  override suspend fun searchEverywhereEnabled(): Boolean = status().searchEverywhere
+
+  override suspend fun startGlobalSearch(body: GlobalSearchStartDto): GlobalSearchStartResultDto {
+    val payload = json.encodeToString(GlobalSearchStartDto.serializer(), body)
+    return requestCancellable(
+      Request.Builder().url(address.resolve("/api/search/everywhere")).post(payload.toRequestBody(mediaType)).build(),
+    ).decode() ?: throw ApiError(ApiFailure.Generic)
+  }
+
+  override suspend fun pollGlobalSearch(id: String, revision: Int): GlobalSearchPollDto {
+    val payload = json.encodeToString(PollRequest.serializer(), PollRequest(revision))
+    return requestCancellable(
+      Request.Builder().url(address.resolve("/api/search/everywhere/" + encode(id) + "/poll"))
+        .post(payload.toRequestBody(mediaType))
+        .build(),
+    ).decode() ?: throw ApiError(ApiFailure.Generic)
+  }
+
+  override suspend fun pageGlobalSearch(id: String) {
+    requestCancellable(
+      Request.Builder().url(address.resolve("/api/search/everywhere/" + encode(id) + "/page"))
+        .post("{}".toRequestBody(mediaType))
+        .build(),
+    )
+  }
+
+  override suspend fun retryGlobalSearchSource(id: String, sourceId: String) {
+    requestCancellable(
+      Request.Builder()
+        .url(address.resolve("/api/search/everywhere/" + encode(id) + "/sources/" + encode(sourceId) + "/retry"))
+        .post("{}".toRequestBody(mediaType))
+        .build(),
+    )
+  }
+
+  override suspend fun globalSearchMembers(id: String, memberKey: String, from: Int): GlobalSearchMemberPageDto =
+    requestCancellable(
+      Request.Builder()
+        .url(address.resolve("/api/search/everywhere/" + encode(id) + "/members/" + encode(memberKey) + "?from=$from"))
+        .get()
+        .build(),
+    ).decode() ?: throw ApiError(ApiFailure.Generic)
+
+  override suspend fun deleteGlobalSearch(id: String) {
+    try {
+      requestCancellable(
+        Request.Builder().url(address.resolve("/api/search/everywhere/" + encode(id))).delete().build(),
+      )
+    } catch (_: ApiError) {
     }
   }
 
@@ -647,17 +702,26 @@ class ApiClient(
   private suspend fun request(request: Request, http: OkHttpClient = client): String {
     val started = System.currentTimeMillis()
     return call(request, http).closing { response ->
-      if (response.isSuccessful) return@closing readBody(response)
-      AppLog.apiFailure(request.method, request.url.encodedPath, response.code, System.currentTimeMillis() - started)
-      // A refusal carries the server's own English message plus the catalogue key it renders as;
-      // the interface shows the message when it can explain a failure better than a generic line.
-      val error = readBody(response).decodeOrNull<ErrorBody>()
-      when (response.code) {
-        401 -> throw ApiError(ApiFailure.SessionExpired, serverMessage = error?.error, status = response.code)
-        403 -> throw ApiError(ApiFailure.Forbidden, serverMessage = error?.error, status = response.code)
-        404, 410 -> throw ApiError(ApiFailure.NotFound, serverMessage = error?.error, status = response.code)
-        else -> throw ApiError(ApiFailure.Generic, serverMessage = error?.error, status = response.code)
-      }
+      mappedBody(response, started)
+    }
+  }
+
+  private suspend fun requestCancellable(request: Request): String {
+    val started = System.currentTimeMillis()
+    return callCancellable(request).closing { response -> mappedBody(response, started) }
+  }
+
+  private suspend fun mappedBody(response: Response, started: Long): String {
+    if (response.isSuccessful) return readBody(response)
+    AppLog.apiFailure(response.request.method, response.request.url.encodedPath, response.code, started)
+    // A refusal carries the server's own English message plus the catalogue key it renders as;
+    // the interface shows the message when it can explain a failure better than a generic line.
+    val error = readBody(response).decodeOrNull<ErrorBody>()
+    return when (response.code) {
+      401 -> throw ApiError(ApiFailure.SessionExpired, serverMessage = error?.error, status = response.code)
+      403 -> throw ApiError(ApiFailure.Forbidden, serverMessage = error?.error, status = response.code)
+      404, 410 -> throw ApiError(ApiFailure.NotFound, serverMessage = error?.error, status = response.code)
+      else -> throw ApiError(ApiFailure.Generic, serverMessage = error?.error, status = response.code)
     }
   }
 
@@ -677,6 +741,23 @@ class ApiClient(
       AppLog.apiFailure(request.method, request.url.encodedPath, null, System.currentTimeMillis() - started)
       throw ApiError(ApiFailure.Unreachable)
     }
+  }
+
+  private suspend fun callCancellable(request: Request): Response = suspendCancellableCoroutine { continuation ->
+    val started = System.currentTimeMillis()
+    val call = client.newCall(request)
+    continuation.invokeOnCancellation { call.cancel() }
+    call.enqueue(object : okhttp3.Callback {
+      override fun onFailure(call: okhttp3.Call, error: IOException) {
+        if (!continuation.isActive) return
+        AppLog.apiFailure(request.method, request.url.encodedPath, null, System.currentTimeMillis() - started)
+        continuation.resumeWithException(ApiError(ApiFailure.Unreachable))
+      }
+
+      override fun onResponse(call: okhttp3.Call, response: Response) {
+        if (continuation.isActive) continuation.resume(response) else response.close()
+      }
+    })
   }
 
   /** Like `use`, but the response is closed on the IO dispatcher: closing an unread body drains
@@ -714,6 +795,9 @@ class ApiClient(
 
 @Serializable
 private data class SourceRequest(val path: String)
+
+@Serializable
+private data class PollRequest(val revision: Int)
 
 /** The PATCH body's own shape: `null` clears the arrangement. */
 @Serializable

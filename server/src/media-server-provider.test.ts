@@ -870,6 +870,97 @@ test("findByProviderIds prefers a usable id, queries nothing without one and ref
   await assert.rejects(oversized.provider.findByProviderIds("tok", "u", "lib", { imdb: "tt1" }, "movie"), { code: "invalid-response" });
 });
 
+test("searchTypes pins the recursive type set, ordering and mode", async () => {
+  const seen: Array<Record<string, unknown>> = [];
+  for (const kind of ["jellyfin", "emby"] as const) {
+    const { provider } = fixture((_operation, args) => {
+      seen.push(args);
+      return { Items: [{ Id: "m1", Name: "Alien", Type: "Movie" }], TotalRecordCount: 1 };
+    }, kind);
+    for (const [searchTypes, expected] of [
+      ["movie", "Movie,MusicVideo"],
+      ["series", "Series,Episode"],
+      ["all", "Movie,MusicVideo,Series,Episode"],
+    ] as const) {
+      await provider.pageDirectory("tok", "user-1", "library-1", {
+        mode: "titles", search: "alien", searchTypes,
+      });
+      const args = seen.at(-1)!;
+      assert.equal(args.includeItemTypes, expected, `${kind} ${searchTypes}`);
+      assert.equal(args.recursive, true);
+      assert.equal(args.sortBy, "SortName");
+      assert.equal(args.sortOrder, "Ascending");
+      assert.equal(args.searchTerm, "alien");
+    }
+  }
+});
+
+test("searchTypes cursors bind the type set and refuse browse or another search", async () => {
+  let calls = 0;
+  const { provider } = fixture(() => {
+    calls += 1;
+    return { Items: [{ Id: `m${calls}`, Name: "Alien", Type: "Movie" }], TotalRecordCount: 2 };
+  });
+  const first = await provider.pageDirectory("tok", "user-1", "library-1", {
+    mode: "titles", search: "alien", searchTypes: "movie", limit: 1,
+  });
+  assert.ok(first.cursor);
+  await assert.rejects(
+    provider.pageDirectory("tok", "user-1", "library-1", {
+      mode: "titles", search: "alien", searchTypes: "series", limit: 1, cursor: first.cursor,
+    }),
+    (error: MediaServerError) => {
+      assert.equal(error.code, "invalid-input");
+      assert.equal(error.message, "The media-server paging cursor does not belong to this query.");
+      return true;
+    },
+    "a cursor from another type set is refused",
+  );
+  await assert.rejects(
+    provider.pageDirectory("tok", "user-1", "library-1", {
+      mode: "titles", search: "other", searchTypes: "movie", limit: 1, cursor: first.cursor,
+    }),
+    { code: "invalid-input" },
+    "a cursor from another search is refused",
+  );
+
+  const browse = await provider.pageDirectory("tok", "user-1", "library-1", { mode: "titles", limit: 1 });
+  assert.ok(browse.cursor);
+  await assert.rejects(
+    provider.pageDirectory("tok", "user-1", "library-1", {
+      mode: "titles", search: "alien", searchTypes: "movie", limit: 1, cursor: browse.cursor,
+    }),
+    { code: "invalid-input" },
+    "an ordinary browse cursor cannot be replayed as a search",
+  );
+  await assert.rejects(
+    provider.pageDirectory("tok", "user-1", "library-1", {
+      mode: "folders", search: "alien", searchTypes: "movie",
+    }),
+    { code: "invalid-input" },
+    "a search must stay in titles mode",
+  );
+  await assert.rejects(
+    provider.pageDirectory("tok", "user-1", "library-1", {
+      mode: "titles", type: "movie", searchTypes: "movie",
+    }),
+    { code: "invalid-input" },
+    "a search cannot also name one type",
+  );
+});
+
+test("ordinary browse without searchTypes keeps its current type set", async () => {
+  const seen: Array<Record<string, unknown>> = [];
+  const { provider } = fixture((_operation, args) => {
+    seen.push(args);
+    return { Items: [], TotalRecordCount: 0 };
+  });
+  await provider.pageDirectory("tok", "user-1", "library-1", { mode: "titles" });
+  assert.equal(seen[0]!.includeItemTypes, "Movie,Series,MusicVideo");
+  assert.equal(seen[0]!.recursive, true);
+  assert.equal(seen[0]!.sortBy, "SortName");
+});
+
 for (const kind of ["jellyfin", "emby"] as const) {
   test(`${kind} derives an absent container from the original file extension without exposing its path`, async () => {
     const { provider } = fixture(() => ({ MediaSources: [

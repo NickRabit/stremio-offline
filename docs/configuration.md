@@ -176,6 +176,12 @@ Details in [Troubleshooting](troubleshooting.md#when-an-addon-stops-answering).
 | `ADDON_BREAKER_COOLDOWN_MS` | `30000` | First cooldown; each further outage doubles it. |
 | `ADDON_BREAKER_MAX_COOLDOWN_MS` | `300000` | Ceiling for that doubling. |
 
+## Search everywhere
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `SEARCH_EVERYWHERE_ENABLED` | `0` | `1` enables the Search everywhere routes and builds the local search index in the background. Off means the routes are not registered, the index is not built and existing search is unchanged. Sessions are memory-only, so turning it off and restarting needs no cleanup. |
+
 ## Wikidata guard
 
 Wikidata answers slower than an addon, so it has a guard of its own with wider spacing.

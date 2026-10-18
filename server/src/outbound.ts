@@ -61,9 +61,35 @@ export function metadataConfigFromEnv(env: NodeJS.ProcessEnv = process.env): Gua
 
 export type BreakerState = "closed" | "open" | "half-open";
 
+export type OutboundCode = "timeout" | "abort" | "network" | "invalid-json" | "too-large"
+  | "cancelled" | "queue-full" | `http-${number}`;
+
+export class OutboundError extends Error {
+  constructor(readonly code: OutboundCode) {
+    super(`Outbound request failed: ${code}`);
+    this.name = "OutboundError";
+  }
+}
+
+export function reasonCategory(error: unknown): OutboundCode {
+  if (error instanceof OutboundError) return error.code;
+  if (error instanceof Error && error.name === "TimeoutError") return "timeout";
+  if (error instanceof Error && error.name === "AbortError") return "abort";
+  return "network";
+}
+
+const httpCode = (status: number): OutboundCode => `http-${status}`;
+
+interface QueueWaiter {
+  resolve(): void;
+  reject(error: unknown): void;
+  key: string;
+}
+
 interface HostState {
   active: number;
-  queue: Array<() => void>;
+  queue: QueueWaiter[];
+  lastKey: string;
   lastStartedAt: number;
   touchedAt: number;
   state: BreakerState;
@@ -96,10 +122,27 @@ export function retryAfterMs(header: string | null, now: number): number | undef
 }
 
 const IDLE_MS = 60 * 60_000;
+const QUEUE_FULL = "The request queue for this addon is full.";
 
 /** `AbortSignal.timeout` rejects with TimeoutError; an explicit abort with AbortError. */
 const isOwnTimeout = (error: unknown) =>
   error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+
+const abortReason = (signal: AbortSignal): unknown =>
+  signal.reason ?? Object.assign(new Error("Aborted"), { name: "AbortError" });
+
+const raceAbort = <T>(promise: Promise<T>, signal: AbortSignal): Promise<T> => {
+  if (signal.aborted) return Promise.reject(abortReason(signal));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => { cleanup(); reject(abortReason(signal)); };
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => { cleanup(); resolve(value); },
+      (error) => { cleanup(); reject(error); },
+    );
+  });
+};
 
 export class OutboundGuard {
   private hosts = new Map<string, HostState>();
@@ -114,7 +157,7 @@ export class OutboundGuard {
     let entry = this.hosts.get(host);
     if (!entry) {
       entry = {
-        active: 0, queue: [], lastStartedAt: 0, touchedAt: this.now(),
+        active: 0, queue: [], lastKey: "", lastStartedAt: 0, touchedAt: this.now(),
         state: "closed", failures: 0, openUntil: 0, cooldownMs: this.config.cooldownMs,
         trialInFlight: false, rejected: 0, opened: 0,
       };
@@ -159,24 +202,78 @@ export class OutboundGuard {
     }
   }
 
-  private async acquire(entry: HostState) {
+  private nextWaiter(entry: HostState): QueueWaiter | undefined {
+    if (!entry.queue.length) return undefined;
+    const keys: string[] = [];
+    for (const waiter of entry.queue) if (!keys.includes(waiter.key)) keys.push(waiter.key);
+    const previous = keys.indexOf(entry.lastKey);
+    const key = keys[previous === -1 ? 0 : (previous + 1) % keys.length];
+    const index = entry.queue.findIndex((waiter) => waiter.key === key);
+    const [waiter] = entry.queue.splice(index, 1);
+    entry.lastKey = key;
+    return waiter;
+  }
+
+  private waitForDelay(ms: number, signal?: AbortSignal): Promise<void> {
+    if (!signal) return this.delay(ms);
+    if (signal.aborted) return Promise.reject(new OutboundError("cancelled"));
+    return new Promise<void>((resolve, reject) => {
+      const onAbort = () => { cleanup(); reject(new OutboundError("cancelled")); };
+      const cleanup = () => signal.removeEventListener("abort", onAbort);
+      signal.addEventListener("abort", onAbort, { once: true });
+      this.delay(ms).then(
+        () => { cleanup(); resolve(); },
+        (error) => { cleanup(); reject(error); },
+      );
+    });
+  }
+
+  private waitForTurn(entry: HostState, signal: AbortSignal | undefined, key: string): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const cleanup = () => signal?.removeEventListener("abort", onAbort);
+      const waiter: QueueWaiter = {
+        key,
+        resolve: () => { if (settled) return; settled = true; cleanup(); resolve(); },
+        reject: (error) => { if (settled) return; settled = true; cleanup(); reject(error); },
+      };
+      const onAbort = () => {
+        const index = entry.queue.indexOf(waiter);
+        if (index === -1) return;
+        entry.queue.splice(index, 1);
+        waiter.reject(new OutboundError("cancelled"));
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      entry.queue.push(waiter);
+    });
+  }
+
+  private async acquire(entry: HostState, signal?: AbortSignal, key = "") {
+    if (signal?.aborted) throw new OutboundError("cancelled");
     if (entry.active >= this.config.maxConcurrent) {
-      if (entry.queue.length >= this.config.maxQueue) throw new Error("The request queue for this addon is full.");
-      await new Promise<void>((resolve) => entry.queue.push(resolve));
+      if (entry.queue.length >= this.config.maxQueue) throw new Error(QUEUE_FULL);
+      await this.waitForTurn(entry, signal, key);
     }
     entry.active += 1;
-    if (!this.config.minIntervalMs) return;
+    if (!this.config.minIntervalMs) {
+      entry.lastKey = key;
+      return;
+    }
     // The slot in time is claimed before the wait, otherwise everything released
     // together would compute the same delay and start as one burst anyway.
     const start = Math.max(this.now(), entry.lastStartedAt + this.config.minIntervalMs);
     entry.lastStartedAt = start;
     const wait = start - this.now();
-    if (wait > 0) await this.delay(wait);
+    if (wait > 0) {
+      try { await this.waitForDelay(wait, signal); }
+      catch (error) { this.release(entry); throw error; }
+    }
+    entry.lastKey = key;
   }
 
   private release(entry: HostState) {
     entry.active -= 1;
-    entry.queue.shift()?.();
+    this.nextWaiter(entry)?.resolve();
   }
 
   private succeed(host: string, entry: HostState) {
@@ -187,7 +284,7 @@ export class OutboundGuard {
     entry.cooldownMs = this.config.cooldownMs;
   }
 
-  private fail(host: string, entry: HostState, reason: string, pauseMs?: number) {
+  private fail(host: string, entry: HostState, reason: OutboundCode, pauseMs?: number) {
     entry.failures += 1;
     const trial = entry.state === "half-open";
     entry.trialInFlight = false;
@@ -217,7 +314,7 @@ export class OutboundGuard {
       // Only the provider's own trouble counts. A 404 on metadata is a plain answer,
       // not an outage, and must never take the addon out of service.
       if (response.status === 429 || response.status >= 500) {
-        this.fail(host, entry, `HTTP ${response.status}`, retryAfterMs(response.headers.get("retry-after"), this.now()));
+        this.fail(host, entry, httpCode(response.status), retryAfterMs(response.headers.get("retry-after"), this.now()));
       } else {
         this.succeed(host, entry);
       }
@@ -226,13 +323,130 @@ export class OutboundGuard {
       // A deadline we set ourselves says nothing about the provider. The call still fails
       // and the caller still copes; it just must not count towards opening the breaker.
       if (this.config.countTimeoutsAsFailure || !isOwnTimeout(error)) {
-        this.fail(host, entry, error instanceof Error ? error.message : String(error));
+        this.fail(host, entry, reasonCategory(error));
       } else {
         entry.trialInFlight = false;
       }
       throw error;
     } finally {
       this.release(entry);
+    }
+  }
+
+  async runJson<T>(host: string, task: (signal: AbortSignal) => Promise<Response>, options: {
+    signal?: AbortSignal; deadlineMs: number; maxBytes: number; interactive?: boolean; key?: string;
+  }): Promise<T> {
+    const entry = this.config.enabled ? (this.prune(), this.stateOf(host)) : undefined;
+    if (entry) {
+      this.admit(host, entry, options.interactive ?? false);
+      try {
+        await this.acquire(entry, options.signal, options.key ?? "");
+      } catch (error) {
+        entry.trialInFlight = false;
+        if (error instanceof Error && error.message === QUEUE_FULL) throw new OutboundError("queue-full");
+        throw error;
+      }
+    }
+
+    const signal = options.signal
+      ? AbortSignal.any([options.signal, AbortSignal.timeout(options.deadlineMs)])
+      : AbortSignal.timeout(options.deadlineMs);
+
+    const fail = (reason: OutboundCode, pauseMs?: number) => {
+      if (entry) this.fail(host, entry, reason, pauseMs);
+    };
+    const succeed = () => {
+      if (entry) this.succeed(host, entry);
+    };
+    const failed = (error: unknown): never => {
+      if (options.signal?.aborted) {
+        if (entry) entry.trialInFlight = false;
+        throw new OutboundError("cancelled");
+      }
+      if (signal.aborted) {
+        if (this.config.countTimeoutsAsFailure) fail("timeout");
+        else if (entry) entry.trialInFlight = false;
+        throw new OutboundError("timeout");
+      }
+      const reason = reasonCategory(error);
+      fail(reason);
+      throw new OutboundError(reason);
+    };
+    const readBody = async (response: Response): Promise<Uint8Array> => {
+      const reader = response.body?.getReader();
+      if (!reader) return new Uint8Array(0);
+      const chunks: Uint8Array[] = [];
+      let length = 0;
+      try {
+        for (;;) {
+          const { done, value } = await raceAbort(reader.read(), signal);
+          if (done) break;
+          length += value.byteLength;
+          if (length > options.maxBytes) {
+            void reader.cancel().catch(() => undefined);
+            throw new OutboundError("too-large");
+          }
+          chunks.push(value);
+        }
+      } catch (error) {
+        if (!(error instanceof OutboundError)) void reader.cancel().catch(() => undefined);
+        throw error;
+      }
+      const body = new Uint8Array(length);
+      let offset = 0;
+      for (const chunk of chunks) {
+        body.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      return body;
+    };
+
+    try {
+      let response: Response;
+      try {
+        response = await raceAbort(task(signal), signal);
+      } catch (error) {
+        return failed(error);
+      }
+
+      if (response.status === 429 || response.status >= 500) {
+        const code = httpCode(response.status);
+        fail(code, retryAfterMs(response.headers.get("retry-after"), this.now()));
+        throw new OutboundError(code);
+      }
+      if (response.status < 200 || response.status >= 300) {
+        succeed();
+        throw new OutboundError(httpCode(response.status));
+      }
+
+      const contentType = response.headers.get("content-type") ?? "";
+      if (!contentType.includes("json")) {
+        fail("invalid-json");
+        throw new OutboundError("invalid-json");
+      }
+
+      let body: Uint8Array;
+      try {
+        body = await readBody(response);
+      } catch (error) {
+        if (error instanceof OutboundError && error.code === "too-large") {
+          fail("too-large");
+          throw error;
+        }
+        return failed(error);
+      }
+
+      let parsed: T;
+      try {
+        parsed = JSON.parse(new TextDecoder().decode(body)) as T;
+      } catch {
+        fail("invalid-json");
+        throw new OutboundError("invalid-json");
+      }
+      succeed();
+      return parsed;
+    } finally {
+      if (entry) this.release(entry);
     }
   }
 
@@ -270,6 +484,14 @@ export async function guardedFetch(raw: string, init: RequestInit = {}, interact
   const host = hostOf(raw);
   if (!host) return safeFetch(raw, init);
   return outbound.run(host, () => safeFetch(raw, init), interactive);
+}
+
+export async function guardedJson<T>(raw: string, init: { headers?: HeadersInit }, options: {
+  signal?: AbortSignal; deadlineMs: number; maxBytes: number; interactive?: boolean; key?: string;
+}): Promise<T> {
+  const host = hostOf(raw);
+  if (!host) throw new OutboundError("network");
+  return outbound.runJson(host, (signal) => safeFetch(raw, { ...init, signal }), options);
 }
 
 /** Metadata providers that are legitimately slow. A cold Wikidata SPARQL query runs

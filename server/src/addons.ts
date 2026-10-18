@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { Viewer } from "./libraries.js";
 import type { AddonRecord, AddonRole, CatalogDefinition, MetaItem, StremioManifest, StreamItem, SubtitleItem } from "./types.js";
 import { validateRemoteUrl } from "./security.js";
-import { guardedFetch } from "./outbound.js";
+import { GuardRejection, OutboundError, guardedFetch, guardedJson } from "./outbound.js";
 import { defaultDownloadSettings } from "./naming.js";
 import { log } from "./logger.js";
 import { normalizeLanguage } from "./language.js";
@@ -11,6 +11,8 @@ import { normalizeLanguage } from "./language.js";
 const reasonOf = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 const TIMEOUT_MS = 12_000;
+export const SEARCH_TIMEOUT_MS = 12_000;
+export const CATALOG_MAX_BYTES = 8 * 1024 * 1024;
 const STREAM_TIMEOUT_MS = Number(process.env.STREAM_ADDON_TIMEOUT_MS ?? 60_000);
 
 async function jsonFetch<T>(rawUrl: string, timeoutMs = TIMEOUT_MS, interactive = false): Promise<T> {
@@ -128,6 +130,10 @@ function declaresExtra(definition: CatalogDefinition, name: string): boolean {
   return Array.isArray(definition.extraSupported) && definition.extraSupported.includes(name);
 }
 
+export function supportsSkip(definition: CatalogDefinition): boolean {
+  return declaresExtra(definition, "skip");
+}
+
 function requiredExtras(definition: CatalogDefinition): string[] {
   const fromExtra = (definition.extra ?? []).filter((item) => item.isRequired).map((item) => item.name);
   return [...new Set([...fromExtra, ...(definition.extraRequired ?? [])])];
@@ -157,6 +163,41 @@ export function searchableCatalogs(addons: AddonRecord[], type?: string, scope?:
 
 export interface SearchResult { items: MetaItem[]; cursor: string; hasMore: boolean; sources: number }
 
+export interface CatalogTarget { addon: AddonRecord; definition: CatalogDefinition }
+
+export const catalogTargetKey = (target: CatalogTarget) =>
+  `${target.addon.key}:${target.definition.type}:${target.definition.id}`;
+
+const invalidCatalogUrls = new WeakSet<object>();
+
+export async function fetchCatalogPage(target: CatalogTarget, query: string, skip: number, options?: {
+  signal?: AbortSignal; key?: string; interactive?: boolean;
+}): Promise<MetaItem[]> {
+  const { addon, definition } = target;
+  const extras: Record<string, string | number> = {};
+  if (query) extras.search = query;
+  if (skip > 0) extras.skip = skip;
+  const raw = resourceUrl(addon, "catalog", definition.type, definition.id, extras);
+  let url: URL;
+  try {
+    url = await validateRemoteUrl(raw);
+  } catch (error) {
+    if (typeof error === "object" && error !== null) invalidCatalogUrls.add(error);
+    throw error;
+  }
+  const payload = await guardedJson<{ metas?: MetaItem[] }>(url.toString(), {
+    headers: { accept: "application/json", "user-agent": "StremioOffline/0.3.1" },
+  }, {
+    signal: options?.signal,
+    key: options?.key,
+    interactive: options?.interactive,
+    deadlineMs: SEARCH_TIMEOUT_MS,
+    maxBytes: CATALOG_MAX_BYTES,
+  });
+  const metas = Array.isArray(payload?.metas) ? payload.metas : [];
+  return metas.map((meta) => ({ ...meta, type: meta.type || definition.type }));
+}
+
 /** Every source returns batches of a different size, so each carries its own offset. A shared
  *  number would skip items nobody has seen yet in the smaller catalogues. -1 means exhausted. */
 const decodeCursor = (cursor?: string): Record<string, number> => {
@@ -167,25 +208,32 @@ const decodeCursor = (cursor?: string): Record<string, number> => {
 const encodeCursor = (offsets: Record<string, number>) => Buffer.from(JSON.stringify(offsets)).toString("base64url");
 
 /** Stremio asks every addon at once; one slow or broken addon must not bring the rest down. */
-export async function searchAll(addons: AddonRecord[], query: string, type: string | undefined, cursor?: string, scope?: SearchScope, interactive = false): Promise<SearchResult> {
+export async function searchAll(addons: AddonRecord[], query: string, type: string | undefined, cursor?: string, scope?: SearchScope, interactive = false,
+  options?: { signal?: AbortSignal; key?: string }): Promise<SearchResult> {
   const targets = searchableCatalogs(addons, type, scope);
   const offsets = decodeCursor(cursor);
   const nextOffsets: Record<string, number> = {};
 
-  const settled = await Promise.allSettled(targets.map(async ({ addon, definition }) => {
-    const key = `${addon.key}:${definition.type}:${definition.id}`;
+  const settled = await Promise.allSettled(targets.map(async (target) => {
+    const { addon, definition } = target;
+    const key = catalogTargetKey(target);
     const from = offsets[key] ?? 0;
     if (from < 0) return { key, from, metas: [] as MetaItem[] };
-    const metas = await catalog(addon, definition.type, definition.id, query, from, undefined, interactive);
+    const metas = await fetchCatalogPage(target, query, from, { interactive, signal: options?.signal, key: options?.key });
     return { key, from, metas: metas.map((meta) => ({ ...meta, type: meta.type || definition.type, addonName: addon.manifest.name })) };
   }));
 
   const seen = new Map<string, MetaItem>();
   settled.forEach((result, index) => {
     const { addon, definition } = targets[index];
-    const key = `${addon.key}:${definition.type}:${definition.id}`;
+    const key = catalogTargetKey(targets[index]);
     if (result.status === "rejected") {
-      log("WARN", "Addon request failed", { operation: "search", addon: addon.manifest.name, catalog: definition.id, reason: reasonOf(result.reason) });
+      const reason = result.reason;
+      const code = reason instanceof OutboundError ? reason.code
+        : reason instanceof GuardRejection ? "breaker-open"
+        : typeof reason === "object" && reason !== null && invalidCatalogUrls.has(reason) ? "invalid-url"
+        : "error";
+      log("WARN", "Addon request failed", { operation: "search", addon: addon.manifest.name, catalog: definition.id, reason: code });
       nextOffsets[key] = -1;
       return;
     }

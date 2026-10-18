@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { initLogger } from "./logger.js";
-import { GuardRejection, OutboundGuard, configFromEnv, metadataConfigFromEnv, retryAfterMs } from "./outbound.js";
+import { flushLog, initLogger } from "./logger.js";
+import { GuardRejection, OutboundError, OutboundGuard, configFromEnv, metadataConfigFromEnv, retryAfterMs } from "./outbound.js";
 
 process.env.LOG_STDOUT = "0";
 await initLogger(await mkdtemp(path.join(os.tmpdir(), "stremio-outbound-")));
@@ -23,11 +23,15 @@ function harness(overrides: Partial<ReturnType<typeof configFromEnv>> = {}) {
 
 const reply = (status: number, headers: Record<string, string> = {}) =>
   async () => new Response("{}", { status, headers });
+const jsonReply = (value: unknown = {}) =>
+  new Response(JSON.stringify(value), { headers: { "content-type": "application/json" } });
 const boom = async (): Promise<Response> => { throw new Error("connection refused"); };
 /** What AbortSignal.timeout produces -- our own deadline, not the host's trouble. */
 const ownTimeout = async (): Promise<Response> => {
   throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
 };
+
+const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 test("failures below the threshold keep the host in service", async () => {
   const { guard } = harness();
@@ -286,4 +290,147 @@ test("the metadata guard is slower and does not count our own timeouts", () => {
   assert.equal(defaults.maxCooldownMs, 300_000);
   assert.equal(defaults.countTimeoutsAsFailure, false);
   assert.equal(metadataConfigFromEnv({ WIKIDATA_GUARD: "0" }).enabled, false);
+});
+
+test("aborting a queued runJson removes it and the next waiter takes the slot", async () => {
+  const { guard } = harness({ maxConcurrent: 1, maxQueue: 4 });
+  let releaseFirst = () => {};
+  const first = guard.runJson("queue.test", () => new Promise<Response>((resolve) => {
+    releaseFirst = () => resolve(jsonReply());
+  }), { deadlineMs: 5_000, maxBytes: 1024 });
+  await tick();
+
+  const controller = new AbortController();
+  const aborted = guard.runJson("queue.test", () => Promise.resolve(jsonReply()), {
+    signal: controller.signal, deadlineMs: 5_000, maxBytes: 1024,
+  });
+  let followingCalled = false;
+  const following = guard.runJson("queue.test", () => {
+    followingCalled = true;
+    return Promise.resolve(jsonReply());
+  }, { deadlineMs: 5_000, maxBytes: 1024 });
+  await tick();
+  assert.equal(guard.diagnostics()[0]?.queued, 2);
+
+  controller.abort();
+  await assert.rejects(aborted, (error: unknown) => error instanceof OutboundError && error.code === "cancelled");
+  assert.equal(guard.diagnostics()[0]?.queued, 1);
+  assert.equal(followingCalled, false);
+
+  releaseFirst();
+  await first;
+  await following;
+  assert.equal(followingCalled, true);
+});
+
+test("an abort after admission is cancelled and is not an outage", async () => {
+  const { guard } = harness();
+  const controller = new AbortController();
+  let admitted = false;
+  const request = guard.runJson("abort.test", (signal) => {
+    admitted = true;
+    return new Promise<Response>((_, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    });
+  }, { signal: controller.signal, deadlineMs: 5_000, maxBytes: 1024 });
+  await tick();
+  assert.equal(admitted, true);
+
+  controller.abort();
+  await assert.rejects(request, (error: unknown) => error instanceof OutboundError && error.code === "cancelled");
+  assert.deepEqual(guard.diagnostics(), []);
+});
+
+test("the deadline starts at admission, not while queued", async () => {
+  const { guard } = harness({ maxConcurrent: 1 });
+  let releaseFirst = () => {};
+  const first = guard.runJson("deadline.test", () => new Promise<Response>((resolve) => {
+    releaseFirst = () => resolve(jsonReply());
+  }), { deadlineMs: 5_000, maxBytes: 1024 });
+  await tick();
+
+  const second = guard.runJson("deadline.test", () => Promise.resolve(jsonReply({ value: 2 })), {
+    deadlineMs: 80, maxBytes: 1024,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.equal(guard.diagnostics()[0]?.queued, 1);
+
+  releaseFirst();
+  await first;
+  assert.deepEqual(await second, { value: 2 });
+});
+
+test("the deadline covers reading the body", async () => {
+  const { guard } = harness();
+  const stream = new ReadableStream<Uint8Array>({ start() {} });
+  const request = guard.runJson("body.test", () => Promise.resolve(new Response(stream, {
+    headers: { "content-type": "application/json" },
+  })), { deadlineMs: 40, maxBytes: 1024 });
+  const keepAlive = setTimeout(() => undefined, 200);
+  try {
+    await assert.rejects(request, (error: unknown) => error instanceof OutboundError && error.code === "timeout");
+  } finally {
+    clearTimeout(keepAlive);
+  }
+  assert.equal(guard.diagnostics()[0]?.failures, 1);
+});
+
+test("too-large and invalid JSON answers count as failures", async () => {
+  const tooLarge = harness();
+  await assert.rejects(tooLarge.guard.runJson("large.test", () => Promise.resolve(new Response("x".repeat(20), {
+    headers: { "content-type": "application/json" },
+  })), { deadlineMs: 5_000, maxBytes: 10 }), (error: unknown) => error instanceof OutboundError && error.code === "too-large");
+  assert.equal(tooLarge.guard.diagnostics()[0]?.failures, 1);
+
+  const badJson = harness();
+  await assert.rejects(badJson.guard.runJson("bad-json.test", () => Promise.resolve(new Response("{", {
+    headers: { "content-type": "application/json" },
+  })), { deadlineMs: 5_000, maxBytes: 1024 }), (error: unknown) => error instanceof OutboundError && error.code === "invalid-json");
+  assert.equal(badJson.guard.diagnostics()[0]?.failures, 1);
+
+  const notJson = harness();
+  await assert.rejects(notJson.guard.runJson("not-json.test", () => Promise.resolve(new Response("{}", {
+    headers: { "content-type": "text/plain" },
+  })), { deadlineMs: 5_000, maxBytes: 1024 }), (error: unknown) => error instanceof OutboundError && error.code === "invalid-json");
+  assert.equal(notJson.guard.diagnostics()[0]?.failures, 1);
+});
+
+test("queued keys are served round-robin", async () => {
+  const { guard } = harness({ maxConcurrent: 1, maxQueue: 20 });
+  let releaseFirst = () => {};
+  const first = guard.runJson("fair.test", () => new Promise<Response>((resolve) => {
+    releaseFirst = () => resolve(jsonReply());
+  }), { key: "a", deadlineMs: 5_000, maxBytes: 1024 });
+  await tick();
+
+  const order: string[] = [];
+  const queuedA = Array.from({ length: 10 }, (_, index) => guard.runJson("fair.test", () => {
+    order.push(`a${index}`);
+    return Promise.resolve(jsonReply());
+  }, { key: "a", deadlineMs: 5_000, maxBytes: 1024 }));
+  const queuedB = guard.runJson("fair.test", () => {
+    order.push("b");
+    return Promise.resolve(jsonReply());
+  }, { key: "b", deadlineMs: 5_000, maxBytes: 1024 });
+  await tick();
+  assert.equal(guard.diagnostics()[0]?.queued, 11);
+
+  releaseFirst();
+  await first;
+  await Promise.all([...queuedA, queuedB]);
+  assert.deepEqual(order.slice(0, 2), ["b", "a0"]);
+});
+
+test("the breaker log carries a fixed reason, never the upstream text", async () => {
+  const logDir = await mkdtemp(path.join(os.tmpdir(), "stremio-outbound-log-"));
+  await initLogger(logDir);
+  const { guard } = harness({ failureThreshold: 1 });
+  await assert.rejects(guard.run("addon.test", async () => {
+    throw new Error("fetch failed https://x/catalog/movie/top/search=zz-sentinel.json");
+  }), /zz-sentinel/);
+  await flushLog();
+
+  const lines = await readFile(path.join(logDir, "app.log"), "utf8");
+  assert.equal(lines.includes("zz-sentinel"), false);
+  assert.match(lines, /"reason":"network"/);
 });

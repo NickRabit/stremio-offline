@@ -1,10 +1,18 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
-import { addonAllowed, addonMetadataLanguage, allowedAddons, metadata, orderedForUser, searchableCatalogs, streamCandidates } from "./addons.js";
+import { addonAllowed, addonMetadataLanguage, allowedAddons, fetchCatalogPage, metadata, orderedForUser, searchAll, searchableCatalogs, streamCandidates, supportsSkip } from "./addons.js";
+import { flushLog, initLogger } from "./logger.js";
 import type { Viewer } from "./libraries.js";
 import { defaultDownloadSettings } from "./naming.js";
+import { outbound } from "./outbound.js";
 import { setFetchTransport } from "./security.js";
-import type { AddonRecord } from "./types.js";
+import type { AddonRecord, CatalogDefinition } from "./types.js";
+
+process.env.LOG_STDOUT = "0";
+await initLogger(await mkdtemp(path.join(os.tmpdir(), "stremio-addons-")));
 
 const addon = (key: string, globalSearch = true): AddonRecord => ({
   key,
@@ -109,7 +117,7 @@ const metaAddon = (key: string): AddonRecord => ({
 });
 
 /** Serves the addon requests from a stub instead of the network. */
-async function withStubbedAddons(handler: (url: string) => Response, run: () => Promise<void>) {
+async function withStubbedAddons(handler: (url: string) => Response | Promise<Response>, run: () => Promise<void>) {
   const originalFlag = process.env.ALLOW_PRIVATE_ADDONS;
   process.env.ALLOW_PRIVATE_ADDONS = "1";
   setFetchTransport(async (url) => handler(String(url)));
@@ -198,4 +206,130 @@ test("a disabled addon is refused for an administrator too, where enabled is enf
     assert.equal(await metadata(granted, "movie", "tt1", "en"), null, "and no metadata");
   });
   assert.equal(calls.length, 0, "a disabled addon is never asked");
+});
+
+const searchAddon = (key: string, type = "movie", id = "top"): AddonRecord => ({
+  ...addon(key),
+  manifest: { id: key, name: key.toUpperCase(), version: "1", catalogs: [{ type, id, extra: [{ name: "search" }] }] },
+});
+
+const statusJson = (status: number) =>
+  new Response(JSON.stringify({}), { status, headers: { "content-type": "application/json" } });
+
+test("searchAll folds in target order, merges sources and keeps per-catalog offsets", async () => {
+  const slow = searchAddon("slow");
+  const fast = searchAddon("fast");
+  const down = searchAddon("down");
+  const requested: string[] = [];
+  const cursor = Buffer.from(JSON.stringify({
+    "slow:movie:top": 20, "fast:movie:top": 0, "down:movie:top": 0,
+  })).toString("base64url");
+
+  await withStubbedAddons(async (url) => {
+    requested.push(url);
+    const host = new URL(url).hostname;
+    if (host === "slow.example") {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      return json({ metas: [{ id: "tt1", name: "Slow title" }, { id: "tt2", name: "Second" }] });
+    }
+    if (host === "fast.example") return json({ metas: [{ id: "tt1", name: "Fast title" }] });
+    return statusJson(503);
+  }, async () => {
+    const result = await searchAll([slow, fast, down], "needle", "movie", cursor);
+    assert.deepEqual(result.items, [
+      {
+        id: "tt1", type: "movie", name: "Slow title", addonName: "SLOW", sources: ["SLOW", "FAST"],
+      },
+      {
+        id: "tt2", type: "movie", name: "Second", addonName: "SLOW", sources: ["SLOW"],
+      },
+    ]);
+    assert.equal(result.sources, 3);
+    assert.equal(result.hasMore, true);
+    assert.deepEqual(JSON.parse(Buffer.from(result.cursor, "base64url").toString()), {
+      "slow:movie:top": 22, "fast:movie:top": 1, "down:movie:top": -1,
+    });
+  });
+
+  assert.equal(requested.some((url) => url.includes("skip=20")), true);
+  assert.equal(requested.filter((url) => url.includes("fast.example")).every((url) => !url.includes("skip=")), true);
+});
+
+test("an aborted search resolves with every catalog exhausted and does not touch the breaker", async () => {
+  const addons = [searchAddon("abort-one"), searchAddon("abort-two"), searchAddon("abort-three")];
+  const hosts = ["abort-one.example", "abort-two.example", "abort-three.example"];
+  const controller = new AbortController();
+  controller.abort();
+  let calls = 0;
+
+  await withStubbedAddons(() => { calls += 1; return json({ metas: [] }); }, async () => {
+    const result = await searchAll(addons, "needle", "movie", undefined, undefined, false, { signal: controller.signal });
+    assert.deepEqual(result.items, []);
+    assert.equal(result.sources, 3);
+    assert.equal(result.hasMore, false);
+    assert.deepEqual(JSON.parse(Buffer.from(result.cursor, "base64url").toString()), {
+      "abort-one:movie:top": -1, "abort-two:movie:top": -1, "abort-three:movie:top": -1,
+    });
+  });
+
+  assert.equal(calls, 0);
+  assert.deepEqual(outbound.diagnostics().filter((entry) => hosts.includes(entry.host)), []);
+});
+
+test("a failing search never writes the query to the log", async () => {
+  const logDir = await mkdtemp(path.join(os.tmpdir(), "stremio-addons-log-"));
+  await initLogger(logDir);
+  const network = searchAddon("log-network");
+  const malformed = searchAddon("log-malformed");
+  const unavailable = searchAddon("log-unavailable");
+
+  await withStubbedAddons((url) => {
+    const host = new URL(url).hostname;
+    if (host === "log-network.example") {
+      throw new Error("fetch failed https://log-network.example/catalog/movie/top/search=zz-sentinel-query.json");
+    }
+    if (host === "log-malformed.example") {
+      return new Response("{not json", { headers: { "content-type": "application/json" } });
+    }
+    return statusJson(503);
+  }, async () => {
+    await searchAll([network, malformed, unavailable], "zz-sentinel-query", "movie");
+  });
+  await flushLog();
+
+  const lines = await readFile(path.join(logDir, "app.log"), "utf8");
+  assert.equal(lines.includes("zz-sentinel-query"), false);
+  assert.match(lines, /"reason":"network"/);
+  assert.match(lines, /"reason":"invalid-json"/);
+  assert.match(lines, /"reason":"http-503"/);
+});
+
+test("fetchCatalogPage sends skip only when needed and fills the catalog type", async () => {
+  const definition: CatalogDefinition = { type: "series", id: "top", extra: [{ name: "search" }] };
+  const target = { addon: searchAddon("catalog", "series", "top"), definition };
+  const requested: string[] = [];
+
+  await withStubbedAddons((url) => {
+    requested.push(url);
+    return json({ metas: [{ id: "tt1", name: "One" }, { id: "tt2", type: "movie", name: "Two" }] });
+  }, async () => {
+    assert.deepEqual(await fetchCatalogPage(target, "needle", 0), [
+      { id: "tt1", type: "series", name: "One" },
+      { id: "tt2", type: "movie", name: "Two" },
+    ]);
+    assert.deepEqual(await fetchCatalogPage(target, "needle", 40), [
+      { id: "tt1", type: "series", name: "One" },
+      { id: "tt2", type: "movie", name: "Two" },
+    ]);
+  });
+
+  assert.equal(requested[0]?.includes("search=needle"), true);
+  assert.equal(requested[0]?.includes("skip="), false);
+  assert.equal(requested[1]?.includes("skip=40"), true);
+});
+
+test("supportsSkip reads both spellings of catalog extras", () => {
+  assert.equal(supportsSkip({ type: "movie", id: "top", extra: [{ name: "skip" }] }), true);
+  assert.equal(supportsSkip({ type: "movie", id: "top", extraSupported: ["skip"] }), true);
+  assert.equal(supportsSkip({ type: "movie", id: "top" }), false);
 });

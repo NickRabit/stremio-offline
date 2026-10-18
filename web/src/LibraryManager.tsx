@@ -147,6 +147,7 @@ function LibraryEditDialog({ library, libraryCount, onClose, onSave, onScan, onR
     mosaic: library.mosaic !== false, showInContinueWatching: library.showInContinueWatching !== false,
     showOnHome: library.showOnHome !== false,
     showInFavorites: library.showInFavorites !== false,
+    showInSearch: library.showInSearch !== false,
     defaultMovie: library.defaultMovie, defaultSeries: library.defaultSeries,
   }));
   const [busy, setBusy] = useState(false);
@@ -157,6 +158,7 @@ function LibraryEditDialog({ library, libraryCount, onClose, onSave, onScan, onR
     || draft.showInContinueWatching !== (library.showInContinueWatching !== false)
     || draft.showOnHome !== (library.showOnHome !== false)
     || draft.showInFavorites !== (library.showInFavorites !== false)
+    || draft.showInSearch !== (library.showInSearch !== false)
     || draft.defaultMovie !== library.defaultMovie || draft.defaultSeries !== library.defaultSeries;
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape" && !busy) onClose(); };
@@ -183,11 +185,12 @@ function LibraryEditDialog({ library, libraryCount, onClose, onSave, onScan, onR
     if (draft.showInContinueWatching !== (library.showInContinueWatching !== false)) patch.showInContinueWatching = draft.showInContinueWatching;
     if (draft.showOnHome !== (library.showOnHome !== false)) patch.showOnHome = draft.showOnHome;
     if (draft.showInFavorites !== (library.showInFavorites !== false)) patch.showInFavorites = draft.showInFavorites;
+    if (draft.showInSearch !== (library.showInSearch !== false)) patch.showInSearch = draft.showInSearch;
     if (draft.defaultMovie !== library.defaultMovie) patch.defaultMovie = draft.defaultMovie;
     if (draft.defaultSeries !== library.defaultSeries) patch.defaultSeries = draft.defaultSeries;
     await run(() => onSave(patch));
   };
-  const toggle = (key: "enabled" | "writeArtwork" | "autoScanMetadata" | "mosaic" | "showInContinueWatching" | "showOnHome" | "showInFavorites" | "defaultMovie" | "defaultSeries", label: string, disabled = false, title?: string) =>
+  const toggle = (key: "enabled" | "writeArtwork" | "autoScanMetadata" | "mosaic" | "showInContinueWatching" | "showOnHome" | "showInFavorites" | "showInSearch" | "defaultMovie" | "defaultSeries", label: string, disabled = false, title?: string) =>
     <label className="library-check" title={title}>
       <span className="switch"><input type="checkbox" checked={draft[key]} disabled={busy || disabled}
         onChange={(event) => update({ [key]: event.target.checked } as Partial<typeof draft>)}/><span/></span>
@@ -230,6 +233,8 @@ function LibraryEditDialog({ library, libraryCount, onClose, onSave, onScan, onR
             {toggle("showOnHome", t("library.showOnHome"))}
             {toggle("showInFavorites", t("library.showInFavorites"))}
             <p className="identify-hint">{t("library.showInFavoritesHint")}</p>
+            {toggle("showInSearch", t("library.showInSearch"))}
+            <p className="identify-hint">{t("library.showInSearchHint")}</p>
           </div>
         </section>
         <section className="library-edit-section">

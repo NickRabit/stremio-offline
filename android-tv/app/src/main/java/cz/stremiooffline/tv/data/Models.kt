@@ -3,7 +3,7 @@ package cz.stremiooffline.tv.data
 import kotlinx.serialization.Serializable
 
 @Serializable
-data class StatusResponse(val status: String? = null, val version: String? = null)
+data class StatusResponse(val status: String? = null, val version: String? = null, val searchEverywhere: Boolean = false)
 
 @Serializable
 data class LoginRequest(val username: String, val password: String, val remember: Boolean)

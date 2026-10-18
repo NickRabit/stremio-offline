@@ -104,6 +104,7 @@ let mediaRequests = 0;
 // A test can slow the poster down, so the write a tile waits for lands after the listing that
 // named the picture it replaces.
 let posterDelayMs = 0;
+const catalogDelays = new Map();
 const server = createServer(async (req, res) => {
   const { pathname, searchParams } = new URL(req.url ?? "/", `http://127.0.0.1:${port}`);
   const parts = route(pathname);
@@ -171,6 +172,13 @@ const server = createServer(async (req, res) => {
   }
   if (pathname === "/manifest.json") return json(res, MANIFEST);
   if (pathname === "/poster-delay") { posterDelayMs = Math.max(0, Number(searchParams.get("ms")) || 0); res.writeHead(204); return res.end(); }
+  if (pathname === "/catalog-delay") {
+    const catalog = searchParams.get("catalog") ?? "";
+    const delay = Math.max(0, Number(searchParams.get("ms")) || 0);
+    if (delay) catalogDelays.set(catalog, delay); else catalogDelays.delete(catalog);
+    res.writeHead(204);
+    return res.end();
+  }
   if (pathname === "/poster.svg") {
     if (posterDelayMs) await new Promise((resolve) => setTimeout(resolve, posterDelayMs));
     res.writeHead(200, { "content-type": "image/svg+xml" });
@@ -186,6 +194,8 @@ const server = createServer(async (req, res) => {
   const genre = extra.get("genre") ?? searchParams.get("genre") ?? "";
 
   if (resource === "catalog") {
+    const delay = catalogDelays.get(id) ?? 0;
+    if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
     const metas = [MOVIE, SERIES]
       .filter((meta) => meta.type === type)
       .filter((meta) => !search || meta.name.toLowerCase().includes(search))

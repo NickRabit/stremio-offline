@@ -31,6 +31,7 @@ export interface LibraryRecord {
   /** Off hides this library's starred titles from Home Favourites and the library Favourites
    *  shelf, without deleting the stars. Absent means on. */
   showInFavorites?: boolean;
+  showInSearch?: boolean;
   /** Off keeps this library out of the automatic scans, startup to watch. Absent means on. */
   autoScanMetadata?: boolean;
   /** The root could not be reached at the last check. Metadata and artwork stay. */

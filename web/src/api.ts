@@ -1,6 +1,6 @@
 import { serverText, t } from "./i18n";
 import type { SaveTarget } from "./save-target";
-import type { StatsActivityPage, ActiveStream, ActivityItem, CalendarItem, UndatedCalendarItem, ClientLogBundle, ClientLogSummary, Diagnostics, BuildInfo, AuthStatus, StatsSummary, AdminRemoteLibrary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, FavoriteFilter, FavoriteItem, FollowDefaults, FollowEpisodeRow, FollowPreview, FollowStartMode, FollowView, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryMatchResult, LibraryOp, LibraryOpsState, MediaServerConnection, MediaServerProvider, NewEpisode, ProgressEntry, ProviderLibrary, RemoteBrowseMode, RemoteBrowseOrder, RemoteBrowseSort, RemoteHomeCard, RemoteItem, RemoteItemPage, RemoteItemState, RemoteItemType, RemoteLibrary, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchPreferences, SearchResult, SearchState, SearchableCatalog, SiteLink, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, SettingsView, Stream, Subtitle, Trailer, UserAccount, UserPermissions, UserRole } from "./types";
+import type { StatsActivityPage, ActiveStream, ActivityItem, CalendarItem, UndatedCalendarItem, ClientLogBundle, ClientLogSummary, Diagnostics, BuildInfo, AuthStatus, StatsSummary, AdminRemoteLibrary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, FavoriteFilter, FavoriteItem, FollowDefaults, FollowEpisodeRow, FollowPreview, FollowStartMode, FollowView, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryMatchResult, LibraryOp, LibraryOpsState, MediaServerConnection, MediaServerProvider, NewEpisode, ProgressEntry, ProviderLibrary, RemoteBrowseMode, RemoteBrowseOrder, RemoteBrowseSort, RemoteHomeCard, RemoteItem, RemoteItemPage, RemoteItemState, RemoteItemType, RemoteLibrary, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchMemberPage, SearchPollResult, SearchPreferences, SearchResult, SearchSnapshot, SearchStartBody, SearchState, SearchableCatalog, SiteLink, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, SettingsView, Stream, Subtitle, Trailer, UserAccount, UserPermissions, UserRole } from "./types";
 import type { HomeLayoutResponse, HomeResponse, HomeRowId } from "../../server/src/home";
 
 /** The status code has to reach the top, or a sign-out is indistinguishable from an ordinary error. */
@@ -90,6 +90,20 @@ export const api = {
   search: (query: string, options: { type?: string; cursor?: string; addonKey?: string; catalogType?: string; catalogId?: string; signal?: AbortSignal } = {}) => request<SearchResult>(`/api/search?${q({ query, type: options.type || undefined, cursor: options.cursor || undefined, addon: options.addonKey || undefined, catalogType: options.catalogType || undefined, catalogId: options.catalogId || undefined })}`, { signal: options.signal }),
   searchable: () => request<SearchableCatalog[]>("/api/searchable"),
   searchState: () => request<SearchState>("/api/search/state"),
+  searchPreferences: () => request<{ liveSearch: boolean }>("/api/search/preferences"),
+  searchEverywhereStart: (body: SearchStartBody, signal?: AbortSignal) =>
+    request<{ id: string; snapshot: SearchSnapshot }>("/api/search/everywhere", { method: "POST", body: JSON.stringify(body), signal }),
+  searchEverywherePoll: (id: string, revision: number, signal?: AbortSignal) =>
+    request<SearchPollResult>(`/api/search/everywhere/${encodeURIComponent(id)}/poll`, { method: "POST", body: JSON.stringify({ revision }), signal }),
+  searchEverywherePage: (id: string) =>
+    request<{ revision: number }>(`/api/search/everywhere/${encodeURIComponent(id)}/page`, { method: "POST" }),
+  searchEverywhereRetry: (id: string, sourceId: string) =>
+    request<{ revision: number }>(`/api/search/everywhere/${encodeURIComponent(id)}/sources/${encodeURIComponent(sourceId)}/retry`, { method: "POST" }),
+  searchEverywhereMembers: (id: string, memberKey: string, from = 0) =>
+    request<SearchMemberPage>(`/api/search/everywhere/${encodeURIComponent(id)}/members/${encodeURIComponent(memberKey)}?from=${from}`),
+  searchEverywhereDelete: (id: string) => {
+    void fetch(`/api/search/everywhere/${encodeURIComponent(id)}`, { method: "DELETE", keepalive: true }).catch(() => undefined);
+  },
   updateSearchPreferences: (patch: Partial<SearchPreferences>) => request<SearchState>("/api/search/preferences", { method: "PATCH", body: JSON.stringify(patch) }),
   recordSearch: (query: string) => request<void>("/api/search/history", { method: "POST", body: JSON.stringify({ query }) }),
   clearSearchHistory: () => request<SearchState>("/api/search/history", { method: "DELETE" }),
@@ -245,7 +259,7 @@ export const api = {
   libraries: () => request<LibraryView[]>("/api/libraries"),
   createLibrary: (body: { name: string; type: LibraryType; root: string; create?: boolean; writeArtwork?: boolean; autoScanMetadata?: boolean }) =>
     request<LibraryView>("/api/libraries", { method: "POST", body: JSON.stringify(body) }),
-  updateLibrary: (id: string, patch: { name?: string; type?: LibraryType; enabled?: boolean; order?: number; writeArtwork?: boolean; autoScanMetadata?: boolean; mosaic?: boolean; showInContinueWatching?: boolean; showOnHome?: boolean; showInFavorites?: boolean; defaultMovie?: boolean; defaultSeries?: boolean; visibleTo?: string[]; root?: string; create?: boolean }) =>
+  updateLibrary: (id: string, patch: { name?: string; type?: LibraryType; enabled?: boolean; order?: number; writeArtwork?: boolean; autoScanMetadata?: boolean; mosaic?: boolean; showInContinueWatching?: boolean; showOnHome?: boolean; showInFavorites?: boolean; showInSearch?: boolean; defaultMovie?: boolean; defaultSeries?: boolean; visibleTo?: string[]; root?: string; create?: boolean }) =>
     request<LibraryView>(`/api/libraries/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
   /** Re-rooting that carries the content over. Queued, so it answers with the job id and
    *  the library only follows once every item is across. */
@@ -306,7 +320,7 @@ export const api = {
     request<AdminRemoteLibrary>(`/api/media-servers/${encodeURIComponent(id)}/libraries`, { method: "POST", body: JSON.stringify(body) }),
   /** Every attached library, disabled ones included: what the administrator list works on. */
   adminRemoteLibraries: () => request<{ libraries: AdminRemoteLibrary[] }>("/api/media-servers/libraries").then((answer) => answer.libraries),
-  updateRemoteLibrary: (id: string, patch: { name?: string; enabled?: boolean; order?: number; showOnHome?: boolean; showInContinueWatching?: boolean; allowedUsers?: string[]; browseMode?: RemoteBrowseMode; mosaic?: boolean; showInFavorites?: boolean; downloadLibraryId?: string | null; downloadSettings?: AddonDownloadSettings | null }) =>
+  updateRemoteLibrary: (id: string, patch: { name?: string; enabled?: boolean; order?: number; showOnHome?: boolean; showInContinueWatching?: boolean; allowedUsers?: string[]; browseMode?: RemoteBrowseMode; mosaic?: boolean; showInFavorites?: boolean; showInSearch?: boolean; downloadLibraryId?: string | null; downloadSettings?: AddonDownloadSettings | null }) =>
     request<AdminRemoteLibrary>(`/api/remote-libraries/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
   /** Detaching a library revokes access now; forgetting also drops every account's local
    *  history and favorites for it. */

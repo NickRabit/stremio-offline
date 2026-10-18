@@ -55,6 +55,9 @@ export interface ProviderDirectoryOptions {
   cursor?: string;
   search?: string;
   type?: ProviderItemType;
+  /** A root-scoped recursive title search. When set, `type` must be absent and the mode
+   *  must be `titles`. */
+  searchTypes?: "movie" | "series" | "all";
   sort?: ProviderSort;
   order?: ProviderOrder;
   /** The bounded `ParentIndexNumber` of a season page: one episode page for exactly that season. */
@@ -519,6 +522,8 @@ interface DirectoryCursorBinding {
   s: string;
   r: string;
   i: string;
+  /** The search type set, or "" for an ordinary browse. */
+  y: string;
   n: number;
 }
 
@@ -533,7 +538,7 @@ function decodeDirectoryCursor(cursor: unknown): DirectoryCursorBinding {
   try { parsed = JSON.parse(json.toString("utf8")); }
   catch { throw invalid("The media-server paging cursor is malformed."); }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw invalid("The media-server paging cursor is malformed.");
-  const { o, a, p, m, t, q, s, r, i, n } = parsed as Record<string, unknown>;
+  const { o, a, p, m, t, q, s, r, i, y, n } = parsed as Record<string, unknown>;
   if (typeof o !== "number" || !Number.isSafeInteger(o) || o < 0 || o > CURSOR_OFFSET_MAX
     || !cursorString(a, MEDIA_SERVER_LIMITS.upstreamId, false)
     || !cursorString(p, MEDIA_SERVER_LIMITS.upstreamId, false)
@@ -543,10 +548,11 @@ function decodeDirectoryCursor(cursor: unknown): DirectoryCursorBinding {
     || !cursorString(s, 16, false)
     || !cursorString(r, 16, false)
     || !cursorString(i, 16, true)
+    || !cursorString(y, 16, true)
     || typeof n !== "number" || !Number.isSafeInteger(n) || n < 0 || n > CURSOR_OFFSET_MAX) {
     throw invalid("The media-server paging cursor is malformed.");
   }
-  const decoded: DirectoryCursorBinding = { o, a, p, m, t, q, s, r, i, n };
+  const decoded: DirectoryCursorBinding = { o, a, p, m, t, q, s, r, i, y, n };
   if (encodeDirectoryCursor(decoded) !== cursor) throw invalid("The media-server paging cursor is not canonical.");
   return decoded;
 }
@@ -730,9 +736,24 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
     }
     const type = options.type;
     if (type !== undefined && !DIRECTORY_ITEM_TYPE_NAMES.has(type)) throw invalid("The media-server item type is not supported.");
-    const sort: ProviderSort = options.sort ?? "name";
+    const searchTypes = options.searchTypes;
+    if (
+      searchTypes !== undefined
+      && searchTypes !== "movie"
+      && searchTypes !== "series"
+      && searchTypes !== "all"
+    ) {
+      throw invalid("The media-server search type set is not supported.");
+    }
+    if (searchTypes !== undefined && mode !== "titles") {
+      throw invalid("A media-server search must use titles mode.");
+    }
+    if (searchTypes !== undefined && type !== undefined) {
+      throw invalid("A media-server search cannot also name one item type.");
+    }
+    const sort: ProviderSort = searchTypes === undefined ? (options.sort ?? "name") : "name";
     if (!PROVIDER_SORTS.includes(sort)) throw invalid("The media-server sort is not supported.");
-    const order: ProviderOrder = options.order ?? "asc";
+    const order: ProviderOrder = searchTypes === undefined ? (options.order ?? "asc") : "asc";
     if (!PROVIDER_ORDERS.includes(order)) throw invalid("The media-server order is not supported.");
     const season = options.season;
     if (season !== undefined && (typeof season !== "number" || !Number.isSafeInteger(season) || season < 0 || season > SEASON_MAX)) {
@@ -748,7 +769,8 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
     if (continuation) {
       const decoded = decodeDirectoryCursor(options.cursor);
       if (decoded.a !== accountId || decoded.p !== parentId || decoded.m !== mode || decoded.t !== (type ?? "")
-        || decoded.q !== (search ?? "") || decoded.s !== sort || decoded.r !== order || decoded.i !== seasonKey) {
+        || decoded.q !== (search ?? "") || decoded.s !== sort || decoded.r !== order || decoded.i !== seasonKey
+        || decoded.y !== (searchTypes ?? "")) {
         throw invalid("The media-server paging cursor does not belong to this query.");
       }
       offset = decoded.o;
@@ -756,9 +778,17 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
     }
     const filteredTypes = type === "movie" ? "Movie,MusicVideo" : type === "series" && mode === "folders"
       ? "Series,Season,Episode" : type === undefined ? undefined : DIRECTORY_ITEM_TYPE_NAMES.get(type);
-    const includeItemTypes = filteredTypes === undefined
-      ? mode === "folders" ? DIRECTORY_FOLDER_TYPES : DIRECTORY_TITLE_TYPES
-      : mode === "folders" ? `Folder,${filteredTypes}` : filteredTypes;
+    // A music video is listed as a film the way title browse lists it: a library of clips that
+    // carry no film metadata must still answer a search for their names.
+    const includeItemTypes = searchTypes === "movie"
+      ? "Movie,MusicVideo"
+      : searchTypes === "series"
+        ? "Series,Episode"
+        : searchTypes === "all"
+          ? "Movie,MusicVideo,Series,Episode"
+          : filteredTypes === undefined
+            ? mode === "folders" ? DIRECTORY_FOLDER_TYPES : DIRECTORY_TITLE_TYPES
+            : mode === "folders" ? `Folder,${filteredTypes}` : filteredTypes;
     const args = {
       userId: accountId,
       parentId,
@@ -790,7 +820,7 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
     }
     const page: ProviderPage = { items, total };
     if (items.length > 0 && offset + items.length < total) {
-      page.cursor = encodeDirectoryCursor({ o: offset + items.length, a: accountId, p: parentId, m: mode, t: type ?? "", q: search ?? "", s: sort, r: order, i: seasonKey, n: total });
+      page.cursor = encodeDirectoryCursor({ o: offset + items.length, a: accountId, p: parentId, m: mode, t: type ?? "", q: search ?? "", s: sort, r: order, i: seasonKey, y: searchTypes ?? "", n: total });
     }
     return page;
   }

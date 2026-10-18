@@ -81,6 +81,7 @@ export interface RemoteLibraryRecord {
   browseMode?: RemoteBrowseMode;
   mosaic?: boolean;
   showInFavorites?: boolean;
+  showInSearch?: boolean;
   /** The local library copies of this remote library's originals are saved into. Absent means
    *  the default for the kind; an explicitly stored handle that is gone stays stored and is
    *  refused at the door rather than redirected elsewhere. */
@@ -106,6 +107,8 @@ export const effectiveMosaic = (record: Pick<RemoteLibraryRecord, "mosaic">): bo
 /** Whether the library feeds the favourites destination: only an explicit `false` opts out. */
 export const effectiveShowInFavorites = (record: Pick<RemoteLibraryRecord, "showInFavorites">): boolean =>
   record.showInFavorites !== false;
+export const effectiveShowInSearch = (record: Pick<RemoteLibraryRecord, "showInSearch">): boolean =>
+  record.showInSearch !== false;
 
 export interface RemoteCapabilities {
   rename: false;
@@ -192,6 +195,7 @@ export interface PublicRemoteLibrary {
   browseMode: RemoteBrowseMode;
   mosaic: boolean;
   showInFavorites: boolean;
+  showInSearch: boolean;
   /** The stored copy destination, when one is configured for this library. */
   downloadLibraryId?: string;
   /** The stored storage rules for automatic copies, when this library has its own. */
@@ -214,6 +218,7 @@ export const publicRemoteLibrary = (record: RemoteLibraryRecord, provider?: Medi
   browseMode: effectiveBrowseMode(record),
   mosaic: effectiveMosaic(record),
   showInFavorites: effectiveShowInFavorites(record),
+  showInSearch: effectiveShowInSearch(record),
   ...(record.downloadLibraryId === undefined ? {} : { downloadLibraryId: record.downloadLibraryId }),
   ...(record.downloadSettings === undefined ? {} : { downloadSettings: structuredClone(record.downloadSettings) }),
   capabilities: READ_ONLY_MEDIA_CAPABILITIES,

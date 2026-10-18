@@ -25,6 +25,7 @@ import cz.stremiooffline.tv.ui.catalog.TagCatalogGenreChip
 import cz.stremiooffline.tv.ui.catalog.TagCatalogSearchChip
 import cz.stremiooffline.tv.ui.catalog.TagSearchScopeChip
 import cz.stremiooffline.tv.ui.catalog.TagSearchField
+import cz.stremiooffline.tv.ui.search.TagGlobalSearchField
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
@@ -82,6 +83,44 @@ class ShellSearchTest {
     mount(api(), Section.Search)
 
     compose.onNodeWithTag(TagSearchScopeChip).assertTextContains("all addons", substring = true)
+  }
+
+  @Test
+  fun `rail Search opens global search when the server flag is on`() {
+    val api = api()
+    api.globalSearchEnabled = true
+    mount(api, Section.Search)
+
+    compose.onNodeWithTag(TagGlobalSearchField).assertExists()
+    compose.onNodeWithTag(TagSearchField).assertDoesNotExist()
+  }
+
+  @Test
+  fun `rail Search keeps the catalog search when the flag is off`() {
+    val api = api()
+    api.globalSearchEnabled = false
+    mount(api, Section.Search)
+
+    compose.onNodeWithTag(TagSearchField).assertExists()
+    compose.onNodeWithTag(TagGlobalSearchField).assertDoesNotExist()
+  }
+
+  @Test
+  fun `Catalog Hledat keeps catalog search and Back returns to Catalog when global search is on`() {
+    val api = api()
+    api.globalSearchEnabled = true
+    mount(api, Section.Catalog)
+
+    press(Key.DirectionLeft)
+    compose.onNodeWithTag(TagCatalogSearchChip).assertIsFocused()
+    press(Key.DirectionCenter)
+
+    compose.onNodeWithTag(TagSearchField).assertExists()
+    compose.onNodeWithTag(TagGlobalSearchField).assertDoesNotExist()
+
+    host!!.onBackPressedDispatcher.onBackPressed()
+    compose.waitForIdle()
+    compose.onNodeWithTag(TagCatalogChip).assertIsFocused()
   }
 
   @Test

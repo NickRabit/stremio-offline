@@ -4345,3 +4345,111 @@ test("a match, a revalidation and a download proof read the provider behind the 
     assert.equal((await harness.manager.itemDetail(harness.admin, library.id, "m1")).item.id, "m1", "which is still holding the row it read");
   });
 });
+
+test("searchLibrary reads the library root in titles mode and keeps its own cursor", async () => {
+  await withHarness(async (harness) => {
+    const library = await directoryLibrary(harness, "search-root", "mixed");
+    harness.server.directoryOverride = (_parent, options) => options.cursor === undefined
+      ? { items: [movie("m1")], total: 2, cursor: "provider-1" }
+      : { items: [movie("m2")], total: 2 };
+
+    const first = await harness.manager.searchLibrary(harness.admin, library.id, { search: "alien", kind: "all" });
+    const firstCall = harness.server.directoryCalls.at(-1)!;
+    assert.equal(firstCall.parentId, "search-root", "the root, not a remembered browse folder");
+    assert.deepEqual(firstCall.options, {
+      mode: "titles", limit: 20, search: "alien", searchTypes: "all",
+    });
+    assert.deepEqual(first.items.map((item) => item.id), ["m1"]);
+    assert.ok(first.cursor);
+
+    const second = await harness.manager.searchLibrary(harness.admin, library.id, {
+      search: "alien", kind: "all", cursor: first.cursor,
+    });
+    assert.equal(harness.server.directoryCalls.at(-1)!.options.cursor, "provider-1");
+    assert.deepEqual(second.items.map((item) => item.id), ["m2"]);
+  });
+});
+
+test("searchLibrary refuses a browse cursor and a cursor from another kind", async () => {
+  await withHarness(async (harness) => {
+    const library = await directoryLibrary(harness, "search-root", "mixed");
+    harness.server.directoryOverride = (_parent, options) => options.cursor === undefined
+      ? { items: [movie("m1")], total: 2, cursor: "provider-1" }
+      : { items: [movie("m2")], total: 2 };
+
+    const browse = await harness.manager.browseDirectory(harness.admin, library.id, {});
+    assert.ok(browse.cursor);
+    const before = harness.server.directoryCalls.length;
+    await assert.rejects(
+      harness.manager.searchLibrary(harness.admin, library.id, {
+        search: "alien", kind: "all", cursor: browse.cursor,
+      }),
+      { code: "stale-generation" },
+      "a browse cursor is refused before a provider call",
+    );
+    assert.equal(harness.server.directoryCalls.length, before);
+
+    const movieSearch = await harness.manager.searchLibrary(harness.admin, library.id, {
+      search: "alien", kind: "movie",
+    });
+    assert.ok(movieSearch.cursor);
+    const held = harness.server.directoryCalls.length;
+    await assert.rejects(
+      harness.manager.searchLibrary(harness.admin, library.id, {
+        search: "alien", kind: "series", cursor: movieSearch.cursor,
+      }),
+      { code: "stale-generation" },
+      "a search cursor belongs to one kind",
+    );
+    assert.equal(harness.server.directoryCalls.length, held);
+    await assert.rejects(
+      harness.manager.searchLibrary(harness.admin, library.id, {
+        search: "other", kind: "movie", cursor: movieSearch.cursor,
+      }),
+      { code: "stale-generation" },
+      "and to one query",
+    );
+  });
+});
+
+test("searchLibrary reads the root even after a nested browse", async () => {
+  await withHarness(async (harness) => {
+    const library = await directoryLibrary(harness, "search-root", "mixed");
+    harness.server.directories["search-root"] = [folder("folder-a")];
+    harness.server.detailOf["folder-a"] = folder("folder-a", { parentId: "search-root" });
+    harness.server.ancestorsOf["folder-a"] = ["search-root"];
+    harness.server.directories["folder-a"] = [movie("nested")];
+    await harness.manager.browseDirectory(harness.admin, library.id, { parentId: "folder-a" });
+
+    harness.server.directoryOverride = () => ({ items: [movie("m1")], total: 1 });
+    await harness.manager.searchLibrary(harness.admin, library.id, { search: "alien", kind: "all" });
+    assert.equal(harness.server.directoryCalls.at(-1)!.parentId, "search-root");
+  });
+});
+
+test("canSearchLibrary follows the grant and the connection generation", async () => {
+  await withHarness(async (harness) => {
+    const library = await directoryLibrary(harness, "search-root", "mixed");
+    const connection = harness.store.mediaConnections()[0]!;
+    const generation = harness.manager.searchLibraryGeneration(library.id);
+    assert.equal(generation, connection.generation);
+    assert.equal(harness.manager.canSearchLibrary(ADA, library.id, generation!), true);
+    await harness.manager.patchLibrary(harness.admin, library.id, { showInSearch: false });
+    assert.equal(harness.store.remoteLibraries()[0]!.showInSearch, false);
+    assert.equal(harness.manager.canSearchLibrary(ADA, library.id, harness.manager.searchLibraryGeneration(library.id)!), false, "a library out of search closes the source");
+    await harness.manager.patchLibrary(harness.admin, library.id, { showInSearch: true });
+    assert.equal(harness.manager.canSearchLibrary(ADA, library.id, harness.manager.searchLibraryGeneration(library.id)!), true);
+
+    await harness.manager.patchLibrary(harness.admin, library.id, { allowedUsers: [BOB] });
+    const bobGeneration = harness.manager.searchLibraryGeneration(library.id)!;
+    assert.equal(harness.manager.canSearchLibrary(BOB, library.id, bobGeneration), true);
+    await harness.manager.patchLibrary(harness.admin, library.id, { allowedUsers: [] });
+    const removedGeneration = harness.manager.searchLibraryGeneration(library.id)!;
+    assert.equal(harness.manager.canSearchLibrary(BOB, library.id, removedGeneration), false, "a removed grant closes the source");
+
+    await harness.manager.patchConnection(harness.admin, connection.id, { enabled: false });
+    const changed = harness.manager.searchLibraryGeneration(library.id);
+    assert.notEqual(changed, removedGeneration);
+    assert.equal(harness.manager.canSearchLibrary(ADA, library.id, removedGeneration), false, "an old generation is stale");
+  });
+});

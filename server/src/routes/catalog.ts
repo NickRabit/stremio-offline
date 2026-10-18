@@ -103,7 +103,7 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
       catalogType: addonKey && req.query.catalogType ? String(req.query.catalogType) : undefined,
       catalogId: addonKey && req.query.catalogId ? String(req.query.catalogId) : undefined,
       respectGlobalSearch: !addonKey,
-    }, true);
+    }, true, { key: currentUser(req)?.id ?? "" });
     res.json({ ...found, items: found.items.map((item) => images.rewriteMeta(item)) });
   }));
   app.get("/api/searchable", (req, res) => res.json(searchableCatalogs(inOrder(req)).map(({ addon, definition }) => ({ addonKey: addon.key, addonName: addon.manifest.name, globalSearch: addon.globalSearch, type: definition.type, id: definition.id, name: definition.name ?? definition.id }))));

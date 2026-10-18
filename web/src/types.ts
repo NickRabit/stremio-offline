@@ -37,6 +37,96 @@ export interface Meta {
   addonName?: string; sources?: string[]; [key: string]: unknown;
 }
 export interface SearchResult { items: Meta[]; cursor: string; hasMore: boolean; sources: number }
+export type SearchSourceClass = "catalog" | "local" | "remote";
+export type SearchKind = "movie" | "series" | "episode" | "season" | "folder" | "file";
+export type SearchKindFilter = "all" | "movie" | "series";
+export type SearchSourceState =
+  | "queued"
+  | "loading"
+  | "ready"
+  | "exhausted"
+  | "stalled"
+  | "failed"
+  | "timedOut"
+  | "indexing"
+  | "unavailable";
+export interface SearchStartBody {
+  query: string;
+  kind: SearchKindFilter;
+  sources: SearchSourceClass[];
+  slotId: string;
+  generation: number;
+}
+export type SearchLocator =
+  | { kind: "catalog"; addonKey: string; type: string; id: string; catalogId?: string }
+  | { kind: "local"; key: string; libraryId: string; itemKind: "file" | "folder" }
+  | { kind: "remote"; libraryId: string; itemId: string; itemType: string; provider?: "jellyfin" | "emby" };
+export interface SearchSourceView {
+  id: string;
+  sourceClass: SearchSourceClass;
+  label: string;
+  state: SearchSourceState;
+  loaded: number;
+  hasMore: boolean;
+  continuation: "supported" | "unsupported" | "blocked";
+  stale?: boolean;
+  retryable: boolean;
+  errorCode?: string;
+  dropped?: number;
+}
+export interface SearchClusterView {
+  key: string;
+  kind: SearchKind;
+  title: string;
+  originalTitle?: string;
+  year?: number;
+  poster?: string;
+  background?: string;
+  sourceLabels: string[];
+  hasLocal: boolean;
+  hasRemote: boolean;
+  memberCount: number;
+  primaryMemberKey: string;
+  memberKeys: string[];
+  rank: number;
+  episodeCount?: number;
+}
+export interface SearchSnapshot {
+  revision: number;
+  state: "partial" | "complete" | "failed";
+  sources: SearchSourceView[];
+  clusters: SearchClusterView[];
+  unidentified: SearchClusterView[];
+  aliases: Array<{ retired: string; current: string }>;
+  limitReached: boolean;
+}
+export type SearchPollResult =
+  | { changed: false; revision: number }
+  | { changed: true; snapshot: SearchSnapshot };
+export interface SearchMember {
+  memberKey: string;
+  sourceId: string;
+  sourceClass: SearchSourceClass;
+  sourceLabel: string;
+  kind: SearchKind;
+  title: string;
+  year?: number;
+  poster?: string;
+  description?: string;
+  parentIds?: { imdb?: string; tmdb?: string; tvdb?: string };
+  season?: number;
+  episode?: number;
+  episodeEnd?: number;
+  conflict?: boolean;
+  locator: SearchLocator;
+}
+export interface SearchMemberPage {
+  clusterKey: string;
+  members: SearchMember[];
+  nextFrom?: number;
+  truncated: boolean;
+  canonical?: { type: "movie" | "series"; id: string; name: string; poster?: string };
+}
 export interface Video { id?: string; title?: string; name?: string; season?: number; episode?: number; released?: string; overview?: string; thumbnail?: string; [key: string]: unknown }
 export interface Subtitle { subtitleId: string; lang?: string; addonName?: string }
 /** One site worth checking before watching; the interface draws them in its own fixed order. */
@@ -95,7 +185,7 @@ export interface AdminRemoteLibrary {
   connectionName?: string;
   /** Display-only settings. Absent means the effective default: mixed libraries browse
    *  folders, movie/series libraries browse titles, and both mosaic and Favourites are on. */
-  browseMode?: RemoteBrowseMode; mosaic?: boolean; showInFavorites?: boolean;
+  browseMode?: RemoteBrowseMode; mosaic?: boolean; showInFavorites?: boolean; showInSearch?: boolean;
   /** The local library this remote library's copies are saved into. Absent means the default for
    *  the kind; a stored handle that is no longer usable stays stored. */
   downloadLibraryId?: string;
@@ -114,7 +204,7 @@ export interface RemoteLibrary {
   provider: MediaServerProvider; capabilities: RemoteCapabilities;
   /** Effective display settings as the member projection answers them; absent on records
    *  written before these existed, so the client keeps the defaults. */
-  browseMode?: RemoteBrowseMode; mosaic?: boolean; showInFavorites?: boolean;
+  browseMode?: RemoteBrowseMode; mosaic?: boolean; showInFavorites?: boolean; showInSearch?: boolean;
   /** The stored copy destination, when one is configured. */
   downloadLibraryId?: string;
   /** The stored storage rules for automatic copies, when this library has its own. */
@@ -185,7 +275,7 @@ export type StartView = "catalog" | "home" | "library";
 export type LibraryShelf = "resume" | "episodes" | "favorites";
 export interface Track { index: number; codec: string; language?: string; title?: string; channels?: number; default?: boolean; forced?: boolean }
 export interface Inspection { duration?: number; video?: { codec: string; width?: number; height?: number }; audioTracks: Track[]; subtitleTracks: Track[] }
-export interface BuildInfo { status: string; version: string; builtAt?: string; commit?: string; restricted?: boolean }
+export interface BuildInfo { status: string; version: string; builtAt?: string; commit?: string; restricted?: boolean; searchEverywhere?: boolean }
 export interface DiagnosticsSession {
   id: string; mode: string; hardware: boolean; generation: number; title?: string;
   video?: string; audio?: string; audioTrack: number; subtitleTrack: number | null; quality: number | null;
@@ -260,7 +350,7 @@ export interface Settings {
   addonRefreshHours: number;
   tileSize: TileSize;
   catalogTileShape: TileShape; libraryTileShape: TileShape; favoritesTileShape: TileShape;
-  resumeTileShape: TileShape; followingTileShape: TileShape; homeTileShape: TileShape;
+  resumeTileShape: TileShape; followingTileShape: TileShape; homeTileShape: TileShape; searchTileShape: TileShape;
   startView: StartView;
   libraryShelf: LibraryShelf;
   /** This account's own Home arrangement. Absent means it has never arranged one. */
@@ -376,7 +466,7 @@ export interface BrowseLibrary {
 /** One library in `GET /api/libraries`. `root` is absent in restricted mode. */
 export interface LibraryView {
   id: string; name: string; type: LibraryType; root?: string; enabled: boolean; order: number;
-  addedAt: string; writeArtwork: boolean; autoScanMetadata: boolean; mosaic?: boolean; showInContinueWatching?: boolean; showOnHome?: boolean; showInFavorites?: boolean; unreachable: boolean; readOnly: boolean;
+  addedAt: string; writeArtwork: boolean; autoScanMetadata: boolean; mosaic?: boolean; showInContinueWatching?: boolean; showOnHome?: boolean; showInFavorites?: boolean; showInSearch?: boolean; unreachable: boolean; readOnly: boolean;
   /** Whether this account may save a download here: visible, switched on, writable and reachable. */
   writable: boolean;
   defaultMovie: boolean; defaultSeries: boolean; titles: number; files: number; bytes: number;

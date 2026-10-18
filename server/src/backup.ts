@@ -100,6 +100,7 @@ function parseSettings(value: unknown): Settings {
   const followingTileShape = String(source.followingTileShape ?? "");
   const sharedLibraryShape = TILE_SHAPES.has(libraryTileShape) ? libraryTileShape as Settings["libraryTileShape"] : undefined;
   const homeTileShape = String(source.homeTileShape ?? "");
+  const searchTileShape = String(source.searchTileShape ?? "");
   const startView = String(source.startView ?? "");
   const libraryShelf = String(source.libraryShelf ?? "");
   // A personal Home arrangement rides in the backup like every other personal setting; a
@@ -125,6 +126,7 @@ function parseSettings(value: unknown): Settings {
     resumeTileShape: TILE_SHAPES.has(resumeTileShape) ? resumeTileShape as Settings["resumeTileShape"] : sharedLibraryShape ?? fallback.resumeTileShape,
     followingTileShape: TILE_SHAPES.has(followingTileShape) ? followingTileShape as Settings["followingTileShape"] : sharedLibraryShape ?? fallback.followingTileShape,
     homeTileShape: TILE_SHAPES.has(homeTileShape) ? homeTileShape as Settings["homeTileShape"] : fallback.homeTileShape,
+    searchTileShape: TILE_SHAPES.has(searchTileShape) ? searchTileShape as Settings["searchTileShape"] : fallback.searchTileShape,
     startView: START_VIEWS.has(startView) ? startView as Settings["startView"] : fallback.startView,
     libraryShelf: LIBRARY_SHELVES.has(libraryShelf) ? libraryShelf as Settings["libraryShelf"] : fallback.libraryShelf,
     ...(homeLayout ? { homeLayout } : {}),

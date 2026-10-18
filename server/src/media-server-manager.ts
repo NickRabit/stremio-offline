@@ -70,6 +70,7 @@ import {
   adminRemoteLibrary,
   effectiveBrowseMode,
   effectiveMosaic,
+  effectiveShowInSearch,
   newConnectionId,
   newRemoteLibraryId,
   publicRemoteItem,
@@ -87,6 +88,7 @@ import {
   type RemoteLibraryRecord,
 } from "./media-server-types.js";
 import { ForbiddenError, assertStillAdmin } from "./roles.js";
+import type { SearchKindFilter } from "./search-contracts.js";
 import type { State, Store } from "./store.js";
 import type { AddonDownloadSettings, DownloadTargetSettings } from "./types.js";
 import { bumpPermissions, dormantGrants, findUserById, usersToBump, type UserRecord } from "./users.js";
@@ -215,8 +217,8 @@ const IF_NONE_MATCH_MAX = 1024;
 const SEARCH_MAX = 256;
 const ITEM_TYPES: readonly ProviderItemType[] = ["movie", "series", "season", "episode"];
 const CREATE_KEYS = ["provider", "name", "baseUrl", "allowLan", "allowLoopback", "username", "password"];
-const ATTACH_KEYS = ["remoteId", "name", "order", "showOnHome", "showInContinueWatching", "browseMode", "mosaic", "showInFavorites"];
-const LIBRARY_PATCH_KEYS = ["name", "enabled", "order", "showOnHome", "showInContinueWatching", "allowedUsers", "browseMode", "mosaic", "showInFavorites", "downloadLibraryId", "downloadSettings"];
+const ATTACH_KEYS = ["remoteId", "name", "order", "showOnHome", "showInContinueWatching", "browseMode", "mosaic", "showInFavorites", "showInSearch"];
+const LIBRARY_PATCH_KEYS = ["name", "enabled", "order", "showOnHome", "showInContinueWatching", "allowedUsers", "browseMode", "mosaic", "showInFavorites", "showInSearch", "downloadLibraryId", "downloadSettings"];
 const CONNECTION_PATCH_KEYS = ["name", "enabled"];
 const BROWSE_QUERY_KEYS = ["limit", "cursor", "search", "type"];
 const EPISODE_QUERY_KEYS = ["limit", "cursor"];
@@ -441,6 +443,53 @@ const decodeDirectoryCursor = (value: unknown): DirectoryCursor => {
   // Re-encoding recomputes the tag, so this one canonical check both rejects a non-canonical
   // spelling and refuses any cursor whose signature this process did not produce.
   if (encodeDirectoryCursor(body) !== value) throw invalid("The media-server cursor is not canonical.");
+  return { ...body, h: h as string };
+};
+
+/** A root-scoped search continuation. It binds the operation marker so a browse cursor can
+ *  never be replayed here, and the search kind and query so neither can move under a page. */
+interface SearchCursor {
+  v: 1;
+  o: "search";
+  l: string;
+  g: number;
+  a: string;
+  q: string;
+  k: SearchKindFilter;
+  c: string;
+  h: string;
+}
+
+const searchCursorPayload = (cursor: Omit<SearchCursor, "h">): string =>
+  JSON.stringify([cursor.v, cursor.o, cursor.l, cursor.g, cursor.a, cursor.q, cursor.k, cursor.c]);
+
+const searchCursorTag = (cursor: Omit<SearchCursor, "h">): string =>
+  createHmac("sha256", DIRECTORY_CURSOR_KEY).update(searchCursorPayload(cursor), "utf8").digest("base64url");
+
+const encodeSearchCursor = (cursor: Omit<SearchCursor, "h">): string =>
+  Buffer.from(JSON.stringify({ ...cursor, h: searchCursorTag(cursor) }), "utf8").toString("base64url");
+
+const decodeSearchCursor = (value: unknown): SearchCursor => {
+  if (typeof value !== "string" || value.length === 0 || value.length > CURSOR_MAX) throw invalid("The media-server cursor is malformed.");
+  const json = Buffer.from(value, "base64url");
+  if (json.length === 0 || json.length > CURSOR_JSON_MAX) throw invalid("The media-server cursor is malformed.");
+  let parsed: unknown;
+  try { parsed = JSON.parse(json.toString("utf8")); }
+  catch { throw invalid("The media-server cursor is malformed."); }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw invalid("The media-server cursor is malformed.");
+  const { v, o, l, g, a, q, k, c, h } = parsed as Record<string, unknown>;
+  const bounded = (entry: unknown, max: number, allowEmpty: boolean): boolean =>
+    typeof entry === "string" && (allowEmpty || entry.length > 0) && entry.length <= max;
+  if (v !== 1 || o !== "search" || !bounded(l, MEDIA_SERVER_LIMITS.upstreamId, false)
+    || typeof g !== "number" || !Number.isSafeInteger(g) || g < 0
+    || !bounded(a, MEDIA_SERVER_LIMITS.upstreamId, false)
+    || !bounded(q, SEARCH_MAX, false)
+    || (k !== "all" && k !== "movie" && k !== "series")
+    || !bounded(c, CURSOR_MAX, false) || !bounded(h, 64, false)) {
+    throw invalid("The media-server cursor is malformed.");
+  }
+  const body: Omit<SearchCursor, "h"> = { v: 1, o: "search", l: l as string, g, a: a as string, q: q as string, k, c: c as string };
+  if (encodeSearchCursor(body) !== value) throw invalid("The media-server cursor is not canonical.");
   return { ...body, h: h as string };
 };
 
@@ -1015,6 +1064,7 @@ export class MediaServerManager {
     const browseMode = parseBrowseMode(record.browseMode as string | undefined);
     const mosaic = record.mosaic === undefined ? undefined : bool(record.mosaic, "mosaic");
     const showInFavorites = record.showInFavorites === undefined ? undefined : bool(record.showInFavorites, "showInFavorites");
+    const showInSearch = record.showInSearch === undefined ? undefined : bool(record.showInSearch, "showInSearch");
     return this.adminMutation(async () => {
       // A library the administrator is attaching may have appeared after the cache was filled,
       // so the view list is proved afresh before the attachment is verified against it.
@@ -1040,6 +1090,7 @@ export class MediaServerManager {
           ...(browseMode === undefined ? {} : { browseMode }),
           ...(mosaic === undefined ? {} : { mosaic }),
           ...(showInFavorites === undefined ? {} : { showInFavorites }),
+          ...(showInSearch === undefined ? {} : { showInSearch }),
         };
         state.remoteLibraries = [...libraries, installed];
       });
@@ -1061,6 +1112,7 @@ export class MediaServerManager {
     const browseMode = parseBrowseMode(record.browseMode as string | undefined);
     const mosaic = record.mosaic === undefined ? undefined : bool(record.mosaic, "mosaic");
     const showInFavorites = record.showInFavorites === undefined ? undefined : bool(record.showInFavorites, "showInFavorites");
+    const showInSearch = record.showInSearch === undefined ? undefined : bool(record.showInSearch, "showInSearch");
     const downloadLibraryId = readDownloadLibrary(record.downloadLibraryId);
     // `null` clears the new rules; a payload has to be one of the two, so the storage a patch
     // means is unambiguous. An old client that only knows the legacy handle keeps working as long
@@ -1100,6 +1152,7 @@ export class MediaServerManager {
         if (browseMode !== undefined) next.browseMode = browseMode;
         if (mosaic !== undefined) next.mosaic = mosaic;
         if (showInFavorites !== undefined) next.showInFavorites = showInFavorites;
+        if (showInSearch !== undefined) next.showInSearch = showInSearch;
         // A shared copy destination: it is validated against the state this write lands on, so a
         // library removed or made read-only meanwhile is refused rather than stored. The setting
         // never bumps the generation and never revokes content; a copy already running keeps the
@@ -1399,6 +1452,76 @@ export class MediaServerManager {
         v: 1, l: library.id, g: connection.generation, a: user.id, p: parent, m: mode,
         t: type ?? "", q: search ?? "", s: sort, r: order, c: page.cursor,
         i: cursor !== undefined && !parentProofExpired ? cursor.i : this.clock(),
+      });
+    }
+    return result;
+  }
+
+  /** The connection generation a search should bind at discovery. Reading it separately keeps
+   *  the source's visibility check and the generation it was built under in one place. */
+  searchLibraryGeneration(libraryId: string): number | undefined {
+    const library = this.store.remoteLibraries().find((candidate) => candidate.id === libraryId);
+    if (!library) return undefined;
+    return this.store.mediaConnections().find((candidate) => candidate.id === library.connectionId)?.generation;
+  }
+
+  /** Whether one account may still search one remote library under the generation a source
+   *  was discovered with. Local records only: opening a page proves the live session again. */
+  canSearchLibrary(userId: string, libraryId: string, generation: number): boolean {
+    const user = findUserById(this.store.users(), userId);
+    if (!user || user.disabled) return false;
+    const library = this.visibleFor(user).find((candidate) => candidate.id === libraryId);
+    if (!library || !effectiveShowInSearch(library)) return false;
+    const connection = this.store.mediaConnections().find((candidate) => candidate.id === library.connectionId);
+    return connection !== undefined && connection.enabled && connection.generation === generation;
+  }
+
+  /** One root-scoped recursive search page. It reads no stored browse location, mode or sort:
+   *  parent, type set and ordering belong to the search operation alone. */
+  async searchLibrary(
+    authority: MediaServerAuthority,
+    libraryId: unknown,
+    query: { search: string; kind: SearchKindFilter; cursor?: string },
+    signal?: AbortSignal,
+  ): Promise<{ items: PublicRemoteItem[]; cursor?: string }> {
+    const request = this.requestSignal(signal);
+    const user = this.currentActor(authority, request);
+    const search = parseSearch(query.search);
+    if (search === undefined) throw invalid("The media-server search term is missing.");
+    if (query.kind !== "all" && query.kind !== "movie" && query.kind !== "series") {
+      throw invalid("The media-server search kind is not supported.");
+    }
+    const rawCursor = parseCursor(typeof query.cursor === "string" ? query.cursor : undefined);
+    if (query.cursor !== undefined && typeof query.cursor !== "string") throw invalid("The media-server cursor is malformed.");
+    const library = this.requireVisibleLibrary(user, libraryId);
+    const connection = this.requireConnection(library.connectionId);
+    const parent = library.remoteId;
+    let cursor: SearchCursor | undefined;
+    if (rawCursor !== undefined) {
+      let browseCursor = false;
+      try { decodeDirectoryCursor(rawCursor); browseCursor = true; } catch { browseCursor = false; }
+      if (browseCursor) throw stale();
+      cursor = decodeSearchCursor(rawCursor);
+      if (cursor.l !== library.id || cursor.a !== user.id || cursor.g !== connection.generation
+        || cursor.q !== search || cursor.k !== query.kind) throw stale();
+    }
+    const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId }, request);
+    const page = await this.upstream(connection, request, () => session.provider.pageDirectory(session.token, connection.accountId, parent, {
+      mode: "titles",
+      limit: 20,
+      search,
+      searchTypes: query.kind,
+      ...(cursor === undefined ? {} : { cursor: cursor.c }),
+    }, request));
+    this.recheckContent(authority, request, library.id, connection);
+    for (const item of page.items) this.putProof(this.proofOf(user, library, connection, item));
+    const result: { items: PublicRemoteItem[]; cursor?: string } = {
+      items: page.items.map((item) => publicRemoteItem(structuredClone(item), library.id)),
+    };
+    if (page.cursor !== undefined) {
+      result.cursor = encodeSearchCursor({
+        v: 1, o: "search", l: library.id, g: connection.generation, a: user.id,
+        q: search, k: query.kind, c: page.cursor,
       });
     }
     return result;

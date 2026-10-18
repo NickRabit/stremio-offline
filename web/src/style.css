@@ -2193,3 +2193,59 @@ main.view-title-detail .catalogue-title-detail{display:flex;flex-direction:colum
   .detail-panel .catalog-detail-head{grid-row:1}
   .detail-panel .detail-primary,.detail-panel .detail-workflow{grid-row:2}
 }
+
+/* Search everywhere: one query, one ranked list, and a compact strip that only reports how the
+   individual sources are doing. */
+.topbar-search{padding:8px 12px;font-size:11px}
+.topbar-search svg{width:16px;height:16px}
+.search-everywhere-form{display:grid;grid-template-columns:minmax(180px,1fr) auto auto;gap:10px;margin-bottom:13px}
+.search-everywhere-form>.search-input{grid-column:auto}
+.search-filters{flex-wrap:wrap;gap:10px 12px;margin-bottom:13px}
+.search-filters .library-shelf-segments{flex:0 1 auto}
+.search-filters .shape-toggle{margin-left:auto}
+.search-source-strip{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:10px 18px;margin-bottom:14px;padding:10px 13px;border:1px solid var(--line);border-radius:10px;background:#10151dcc}
+.search-source-summary{font-size:11px;color:var(--muted)}
+.search-source-strip details{min-width:min(520px,55%)}
+.search-source-strip details[open]{flex:1 1 100%;min-width:0}
+.search-source-strip summary{cursor:pointer;text-align:right;font-size:11px;font-weight:700}
+.search-source-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:6px 22px;margin-top:9px}
+.search-source-state{display:grid;grid-template-columns:minmax(120px,1fr) auto auto auto;align-items:center;gap:8px;font-size:10px}
+.search-source-state strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
+.search-source-state>span,.search-source-state small{color:var(--muted)}
+.search-source-state.stale>span{color:#e7b867}
+.search-source-state button{padding:4px 8px;font-size:9px}
+.search-source-error{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.search-error{margin:0 0 14px;padding:10px 12px;border:1px solid #5a2a32;border-radius:8px;background:#29191d;color:var(--red);font-size:11px}
+.search-previous-label{margin:0 0 10px;color:#e7b867;font-size:11px}
+.search-results.previous-query{opacity:.5}
+.search-empty{margin:20px 0;color:var(--muted);font-size:12px}
+.search-limit{margin:4px 0 14px;color:#e7b867;font-size:11px}
+.search-unidentified{margin-top:20px;padding:13px;border:1px solid var(--line);border-radius:11px;background:#10151d99}
+.search-unidentified>summary{cursor:pointer;font-size:12px;font-weight:700}
+.search-chooser{width:min(640px,100%)}
+.search-member-list{display:grid;gap:8px}
+.search-member-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:12px;padding:11px;border:1px solid var(--line);border-radius:9px;background:#0d111788}
+.search-member-copy{display:grid;gap:3px;min-width:0}
+.search-member-copy strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+.search-member-copy span,.search-member-copy small{color:var(--muted);font-size:10px}
+.search-member-copy em{color:#e7b867;font-size:9px;font-style:normal;font-weight:700}
+.search-member-copy .login-error{margin-top:5px}
+.search-chooser-note{color:var(--muted);font-size:11px}
+.search-title-page{display:grid;gap:8px;margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
+.search-title-page button{justify-self:start}
+.search-return{margin-bottom:10px;padding:7px 10px;font-size:10px}
+.home-search-action{padding:6px 10px;font-size:10px}
+.home-search-action svg{width:15px;height:15px}
+@media(max-width:700px){
+  .topbar-search span{display:none}
+  .topbar-search{padding:8px}
+  .search-everywhere-form{grid-template-columns:1fr 1fr}
+  .search-everywhere-form>.search-input,.search-everywhere-form>button:only-of-type{grid-column:1/-1}
+  .search-filters .library-shelf-segments:first-child{flex:1 1 100%}
+  .search-filters .library-shelf-segments+.library-shelf-segments{flex:1 1 0}
+  .search-source-strip{display:grid;gap:8px}
+  .search-source-strip details{min-width:0;width:100%}
+  .search-source-strip summary{text-align:left}
+  .search-source-state{grid-template-columns:minmax(100px,1fr) auto auto}
+  .search-source-state small{grid-column:1/-1}
+}
