@@ -137,22 +137,38 @@ const proximityPoints = (query: string[], matched: string[], fields: string[][])
   return 0;
 };
 
+const bare = (text: string) => normalizeSearchText(text).replace(LEADING_ARTICLE, "");
+
+/** A query read once, for every row it is compared with. */
+export interface PreparedQuery { tokens: string[]; bare: string }
+/** A row's text read once; a local index keeps it beside the entry. */
+export interface PreparedFields { tokens: string[][]; bareTitles: string[]; titleWords: number }
+
+export function prepareQuery(query: string): PreparedQuery {
+  return { tokens: searchTokens(query), bare: bare(query) };
+}
+
+export function prepareFields(fields: RelevanceFields): PreparedFields {
+  const tokens = [fields.title, fields.originalTitle ?? "", fields.parentTitle ?? "", fields.path ?? ""]
+    .map((value) => searchTokens(value));
+  const bareTitles = [bare(fields.title), bare(fields.originalTitle ?? "")];
+  return { tokens, bareTitles, titleWords: bareTitles[0] === "" ? 0 : bareTitles[0]!.split(" ").length };
+}
+
 export function relevance(query: string, fields: RelevanceFields): Relevance {
-  const queryTokens = searchTokens(query);
+  return relevancePrepared(prepareQuery(query), prepareFields(fields));
+}
+
+export function relevancePrepared(query: PreparedQuery, fields: PreparedFields): Relevance {
+  const queryTokens = query.tokens;
   const total = queryTokens.length;
   if (total === 0) return { score: 0, matched: 0, total: 0 };
 
-  const values = [
-    fields.title,
-    fields.originalTitle ?? "",
-    fields.parentTitle ?? "",
-    fields.path ?? "",
-  ];
-  const fieldTokens = values.map((value) => searchTokens(value));
+  const fieldTokens = fields.tokens;
   const matchedTokens: string[] = [];
   let matched = 0;
   let typos = 0;
-  let attribute = values.length;
+  let attribute = fieldTokens.length;
   for (const token of queryTokens) {
     const match = bestMatch(token, fieldTokens);
     if (match === undefined) continue;
@@ -164,19 +180,14 @@ export function relevance(query: string, fields: RelevanceFields): Relevance {
   if (matched === 0) return { score: 0, matched: 0, total };
 
   // A leading article is not part of what people type: "matrix" is "The Matrix" exactly.
-  const bare = (text: string) => normalizeSearchText(text).replace(LEADING_ARTICLE, "");
-  const normalizedQuery = bare(query);
   let exactness = 0;
-  for (const title of [fields.title, fields.originalTitle ?? ""]) {
-    const normalizedTitle = bare(title);
-    if (normalizedTitle === "") continue;
-    if (normalizedTitle === normalizedQuery) exactness = 2;
-    else if (exactness === 0 && normalizedTitle.startsWith(normalizedQuery)) exactness = 1;
+  for (const title of fields.bareTitles) {
+    if (title === "") continue;
+    if (title === query.bare) exactness = 2;
+    else if (exactness === 0 && title.startsWith(query.bare)) exactness = 1;
   }
   // Fewer words beyond the matched ones is the closer title: "Matrix" before "Matrix Reloaded".
-  const bareTitle = bare(fields.title);
-  const extra = Math.max(0, (bareTitle === "" ? 0 : bareTitle.split(" ").length) - matched);
-  const brevity = Math.max(0, 9 - extra);
+  const brevity = Math.max(0, 9 - Math.max(0, fields.titleWords - matched));
 
   const proximity = proximityPoints(queryTokens, matchedTokens, fieldTokens);
   const score = matched * 1_000_000

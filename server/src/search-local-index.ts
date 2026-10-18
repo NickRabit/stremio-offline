@@ -2,7 +2,9 @@ import { setImmediate as nextImmediate } from "node:timers";
 import type { LibraryEntry } from "./library.js";
 import { parseLibraryPath } from "./libraries.js";
 import { SEARCH_LIMITS, type SearchKindFilter, type StrongIds } from "./search-contracts.js";
-import { enoughMatched, normalizeSearchText, relevance } from "./search-relevance.js";
+import { enoughMatched, normalizeSearchText, prepareFields, prepareQuery, relevancePrepared, type PreparedFields } from "./search-relevance.js";
+
+const emptyFields: PreparedFields = { tokens: [], bareTitles: [], titleWords: 0 };
 import { SourceFailure } from "./search-session.js";
 
 interface TimerApi {
@@ -30,6 +32,8 @@ interface IndexedEntry {
   libraryId: string;
   titles: string[];
   pathSegments: string[];
+  /** The entry's text tokenised once at build, so a search only compares. */
+  fields: PreparedFields;
 }
 
 const CHUNK_SIZE = 5_000;
@@ -102,6 +106,7 @@ export class LocalSearchIndex {
     const generation = this.generation;
     if (normalizeSearchText(query) === "") return { generation, entries: [] };
 
+    const prepared = prepareQuery(query);
     const matches: Array<{ entry: LibraryEntry; score: number }> = [];
     for (let start = 0; start < indexed.length; start += CHUNK_SIZE) {
       if (signal?.aborted) throw new SourceFailure("cancelled");
@@ -111,7 +116,8 @@ export class LocalSearchIndex {
         if (item.libraryId !== libraryId) continue;
         const type = item.entry.meta?.type;
         if (kind !== "all" && (type === "movie" || type === "series") && type !== kind) continue;
-        const score = this.score(item, query);
+        const result = relevancePrepared(prepared, item.fields);
+        const score = enoughMatched(result) ? result.score : undefined;
         if (score !== undefined) matches.push({ entry: item.entry, score });
       }
       if (end < indexed.length) {
@@ -163,15 +169,6 @@ export class LocalSearchIndex {
     this.listeners.clear();
   }
 
-  private score(entry: IndexedEntry, query: string): number | undefined {
-    const [title = "", originalTitle] = entry.titles;
-    const result = relevance(query, {
-      title,
-      ...(originalTitle === undefined ? {} : { originalTitle }),
-      path: entry.pathSegments.join(" "),
-    });
-    return enoughMatched(result) ? result.score : undefined;
-  }
 
   private async build(): Promise<void> {
     if (this.closed) return;
@@ -223,6 +220,14 @@ export class LocalSearchIndex {
           .split("/")
           .map(normalizeSearchText)
           .filter((segment) => segment !== ""),
+        fields: emptyFields,
+      });
+      const item = prepared[prepared.length - 1]!;
+      const [title = "", originalTitle] = item.titles;
+      item.fields = prepareFields({
+        title,
+        ...(originalTitle === undefined ? {} : { originalTitle }),
+        path: item.pathSegments.join(" "),
       });
     }
     return prepared;
