@@ -1070,6 +1070,54 @@ test("reauthentication lifts a local refusal immediately", async () => {
   }, { clock: () => 0, deadSessionProbeMs: 5 * 60_000 });
 });
 
+test("a session that started before a 401 cannot clear the refusal it raced", async () => {
+  await withHarness(async (harness) => {
+    const connection = await connect(harness);
+    dropRuntime(harness, connection.id);
+    const held = deferred();
+    const entered = deferred();
+    harness.server.nudge = { op: "views", wait: held.promise, entered: () => entered.resolve() };
+    const older = harness.manager.discoverLibraries(harness.admin, connection.id);
+    await entered.promise;
+    (harness.manager as unknown as { markReauthentication(record: unknown): void }).markReauthentication(harness.store.mediaConnections()[0]);
+    harness.server.nudge = undefined;
+    held.resolve();
+    await older;
+    assert.equal((await harness.manager.listConnections(harness.admin)).connections[0]!.status, "reauthentication-required");
+    const calls = harness.server.calls.length;
+    await assert.rejects(harness.manager.discoverLibraries(harness.admin, connection.id), { code: "authentication-required" });
+    assert.equal(harness.server.calls.length, calls, "the refusal still holds the next read locally");
+  }, { clock: () => 0, deadSessionProbeMs: 5 * 60_000 });
+});
+
+test("a probe abandoned before the server answered hands its window back", async () => {
+  let now = 0;
+  await withHarness(async (harness) => {
+    const connection = await connect(harness);
+    harness.server.errors.user = new MediaServerError("authentication-required", "401", 401);
+    dropRuntime(harness, connection.id);
+    await assert.rejects(harness.manager.discoverLibraries(harness.admin, connection.id), { code: "authentication-required" });
+    delete harness.server.errors.user;
+    now = 5 * 60_000;
+
+    const held = deferred();
+    const entered = deferred();
+    harness.server.nudge = { op: "info", wait: held.promise, entered: () => entered.resolve() };
+    const abort = new AbortController();
+    const abandoned = harness.manager.discoverLibraries(harness.admin, connection.id, abort.signal);
+    await entered.promise;
+    abort.abort();
+    harness.server.nudge = undefined;
+    held.resolve();
+    await assert.rejects(abandoned);
+
+    const info = providerCalls(harness, "info");
+    await harness.manager.discoverLibraries(harness.admin, connection.id);
+    assert.equal(providerCalls(harness, "info"), info + 1, "the next read is the probe, not a local refusal");
+    assert.equal((await harness.manager.listConnections(harness.admin)).connections[0]!.status, "available");
+  }, { clock: () => now, deadSessionProbeMs: 5 * 60_000 });
+});
+
 test("an identity change is refused locally", async () => {
   await withHarness(async (harness) => {
     const connection = await connect(harness);

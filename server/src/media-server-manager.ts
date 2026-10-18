@@ -3160,6 +3160,7 @@ export class MediaServerManager {
     signal: AbortSignal,
   ): Promise<LiveSession> {
     this.checkLive(signal);
+    let probe: { record: StatusRecord; previous: number } | undefined;
     const status = this.statusOf(connection);
     if (status === "reauthentication-required" || status === "identity-changed") {
       const record = this.statuses.get(connection.id);
@@ -3168,8 +3169,26 @@ export class MediaServerManager {
         if (status === "identity-changed") throw identityChanged();
         throw new MediaServerError("authentication-required", "The media server refused the credentials.");
       }
+      if (record) probe = { record, previous: record.at };
       if (record) record.at = now;
     }
+    try {
+      return await this.openLiveSession(authority, connection, options, signal);
+    } catch (error) {
+      // A probe the caller abandoned before the server answered proves nothing, so the window
+      // it reserved is handed back.
+      const abandoned = signal.aborted || (error instanceof MediaServerError && (error.code === "cancelled" || error.code === "closed"));
+      if (probe && abandoned && this.statuses.get(connection.id) === probe.record) probe.record.at = probe.previous;
+      throw error;
+    }
+  }
+
+  private async openLiveSession(
+    authority: MediaServerAuthority,
+    connection: MediaConnectionRecord,
+    options: { libraryRemoteId?: string; refresh?: boolean; download?: boolean },
+    signal: AbortSignal,
+  ): Promise<LiveSession> {
     if (!connection.secretRef) throw new MediaServerError("secret-unavailable", "That media-server connection has no stored credential.");
     const binding = { connectionId: connection.id, provider: connection.provider, serverId: connection.serverId, accountId: connection.accountId };
     const runtime = this.providerFor(connection);
@@ -3193,7 +3212,9 @@ export class MediaServerManager {
       // refused here, and only here, so ordinary playback stays unaffected.
       if (options.download === true && policy.contentDownloading !== true) throw new MediaServerError("forbidden", "The media-server account may not download.");
       if (policy.hasAdditionalRestrictions) throw new MediaServerError("unsupported-policy", "The media-server account has unsupported restrictions.");
-      this.markAvailable(connection);
+      // A session that started before a concurrent read hit a 401 must not clear that refusal:
+      // the refusal dropped the runtime this session still holds.
+      if (this.runtimes.get(connection.id) === runtime) this.markAvailable(connection);
       if (options.libraryRemoteId !== undefined) {
         if (!facts.libraries.some((library) => library.id === options.libraryRemoteId)) throw notFound("That remote library is not visible to the account.");
         if (!policy.allFolders && !policy.folderIds.includes(options.libraryRemoteId)) {
