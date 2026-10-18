@@ -229,8 +229,21 @@ The transport exposes only a typed operation union with fixed arguments:
 | `detail` | `GET /Users/{userId}/Items/{itemId}` |
 | `ancestors` | `GET /Items/{itemId}/Ancestors?UserId=...` |
 | `versions` | `GET /Items/{itemId}/PlaybackInfo?UserId=...` |
+| `playbackInfo` | `POST /Items/{itemId}/PlaybackInfo?UserId=...` with optional `MediaSourceId` and `MaxStreamingBitrate`, fixed direct-play flags, and the admitted `IsPlayback` value (`true` for a stream, `false` for a download) |
+| `playing` | `POST /Sessions/Playing` |
+| `playingProgress` | `POST /Sessions/Playing/Progress` |
+| `playingStopped` | `POST /Sessions/Playing/Stopped` |
 
-There is no stream, preparation, logout, session or artwork call here.
+`versions` remains the browse, metadata and subtitle-membership read. The
+separate `playbackInfo` admission runs only when an original stream or download
+is prepared. Its response may supply a validated `PlaySessionId`; the fixed
+original request appends it as the optional `PlaySessionId` query value, and the
+three session reports use it when one was supplied. The transport sends those
+reports as best effort and has no logout call. The request deliberately carries
+no codec-limited `DeviceProfile`: the backend proxies an original and converts
+locally, and a synthetic profile made Jellyfin report direct play as unavailable
+for a file it previously served. The provider's own `SupportsDirectPlay` answer
+is still required before an original is opened.
 Every request carries fixed MediaBrowser client/device/version identity, including
 login without a token. Authenticated requests append `Token="..."` with
 fixed client/device/version values and also `X-Emby-Token`; authentication never
@@ -267,22 +280,33 @@ accept a trailing `AbortSignal`: `verifyIdentity`, `authenticate`,
   server-private.
 - `currentAccount` requires an exact id match and reads `IsDisabled`,
   `EnableMediaPlayback`, `EnableAllFolders` (booleans) and `EnabledFolders`
-  (string array). `RemoteAccountPolicy` carries only `disabled`,
-  `mediaPlayback`, `allFolders`, `folderIds` and `hasAdditionalRestrictions`.
-  That flag records *known facts* — false `EnableRemoteAccess`/
+  (string array). The policy separates quota facts from restrictions:
+  `RemoteClientBitrateLimit` becomes `bitrateLimit`; `MaxActiveSessions` and
+  `SimultaneousStreamLimit` become the minimum non-zero `streamLimit`. Zero,
+  null and absent limits add no key. That flag records *known content-visibility
+  facts* — false `EnableRemoteAccess`/
   `EnableAllDevices`, non-empty `EnabledDevices`, `ForceRemoteSourceTranscoding`,
   a non-null `MaxParentalRating`, non-empty blocked/allowed tag, folder or
   channel lists (`BlockedTags`, `AllowedTags`, `IncludeTags`,
   `ExcludedSubFolders`, `RestrictedFeatures`, `BlockedMediaFolders`,
-  `EnabledMediaFolders`, …), a non-zero `RemoteClientBitrateLimit`,
-  `SimultaneousStreamLimit` or Jellyfin `MaxActiveSessions`, and any non-empty
-  schedule list. A *known* restriction field with a malformed value (a string
-  where a list or boolean belongs, a negative or non-integer limit) is refused
+  `EnabledMediaFolders`, …), and any non-empty schedule list. A *known*
+  restriction or quota field with a malformed value (a string where a list,
+  boolean or integer belongs, or a negative or non-integer limit) is refused
   with `invalid-response` instead of being read as unrestricted. The flag is
   never exhaustive, and unknown policy fields are not proof of permission. A
   future policy authorizer must fail closed on unsupported schedules, ratings
   and the like; incomplete parental/rating/availability checking is deliberately
   not implemented here.
+- `versions` reads `MediaSource.Bitrate` into an internal optional `bitrate`
+  only when it is a positive safe integer. A streaming open of a version above
+  the live account `bitrateLimit`, or of a version whose bitrate is unknown,
+  fails with `bitrate-limit`; downloading is allowed. Every original body is
+  paced to the limit, with all bodies of one connection, local user and media
+  source sharing a byte budget. A `streamLimit` admits at most that many
+  distinct sources per connection across users, streaming and downloading; an
+  extra source fails fast with `busy`, while another range of an open source is
+  admitted. A limit tightened upstream can take up to 30 seconds to affect new
+  opens because the session facts are cached for that window.
 - `listLibraries` keeps only `CollectionFolder` entries and maps `movies` to
   `movie`, `tvshows` to `series`, and an empty/absent `CollectionType` to
   `mixed`; explicit non-movie collections (music, books, …) are dropped. A
@@ -347,14 +371,20 @@ walks covered identity, login, current policy, three libraries, five bounded
 pages, four item details and source lists, and ancestors. Token encryption and
 reopening the vault, configuration attachment/removal and secret cleanup were
 verified in the same walk. The reader's remote `UserData` was identical before
-and after each walk. These checks cover metadata and persistence; playback
-integration remains a later stage.
+and after each walk. These checks cover metadata and persistence; the current
+playback integration is documented in
+[media-server-management.md](media-server-management.md).
 
 Critically, both servers kept serving previously known static URLs after remote
 policy revocation, and `GET PlaybackInfo` still answered on Emby. **A successful
-stream or `PlaybackInfo` response is never authorization proof.** Any future
-playback path must independently revalidate current account playback policy,
-account-visible library membership and item ancestry.
+stream or `PlaybackInfo` response is never authorization proof.** Every playback
+path independently revalidates current account playback policy, account-visible
+library membership and item ancestry. A `POST PlaybackInfo` `NotAllowed` refuses
+the source as `403 err.mediaServerPlaybackNotAllowed`; `NoCompatibleStream`
+refuses it as `422 err.mediaServerNoCompatibleStream`; `RateLimitExceeded` maps
+to the existing `429 err.mediaServerBusy` and arms the transport cooldown. An
+unknown error code or malformed response is `invalid-response`, never permission
+to open a static original.
 
 ## Limits
 

@@ -78,6 +78,7 @@ const ALLOWED: Array<[string, string]> = [
   ["GET", "/remote-libraries/rlib_00000000000000000000000000000001/streams/movie/tt1254207"],
   ["GET", "/remote-libraries/personal"],
   ["PATCH", "/remote-libraries/rlib_00000000000000000000000000000001/items/item-1/state"],
+  ["POST", "/remote-libraries/rlib_00000000000000000000000000000001/items/item-1/playing"],
   ["GET", "/home"],
   ["GET", "/home/layout"],
   ["GET", "/catalogs"],

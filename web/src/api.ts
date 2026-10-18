@@ -368,6 +368,12 @@ export const api = {
     `/api/remote-libraries/${encodeURIComponent(libraryId)}/items/${encodeURIComponent(itemId)}/state`,
     { method: "PATCH", keepalive: true, headers: { "content-type": "application/json" }, body: JSON.stringify(body) },
   ).catch(() => undefined),
+  reportRemotePlayback: (libraryId: string, itemId: string, body: { mediaSourceId: string; position: number; paused: boolean; event: "start" | "progress" | "stop" }) =>
+    request<void>(`/api/remote-libraries/${encodeURIComponent(libraryId)}/items/${encodeURIComponent(itemId)}/playing`, { method: "POST", body: JSON.stringify(body) }),
+  reportRemotePlaybackOnUnload: (libraryId: string, itemId: string, body: { mediaSourceId: string; position: number; paused: boolean; event: "start" | "progress" | "stop" }) => void fetch(
+    `/api/remote-libraries/${encodeURIComponent(libraryId)}/items/${encodeURIComponent(itemId)}/playing`,
+    { method: "POST", keepalive: true, headers: { "content-type": "application/json" }, body: JSON.stringify(body) },
+  ).catch(() => undefined),
 };
 
 /** Hand the same-origin ticket to the browser so large files never pass through JavaScript memory. */

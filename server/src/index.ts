@@ -96,6 +96,7 @@ import { registerSearchEverywhereRoutes, searchEverywhereEnabled } from "./route
 import { MediaServerManager, type MediaServerAuthority } from "./media-server-manager.js";
 import { remoteDownloadAccessible } from "./media-server-download.js";
 import { MediaServerPersonal } from "./media-server-personal.js";
+import { MediaServerPlaybackReporter } from "./media-server-playing.js";
 import { MediaServerPlaybackGuard, readMediaServerPlaybackConfig } from "./media-server-playback.js";
 import { isRemoteMediaStream } from "./media-server-reference.js";
 import { MediaServerSources } from "./media-server-sources.js";
@@ -228,21 +229,30 @@ const ownerMayUseQueue = (job: DownloadJob): boolean => ownerMayDownload({
   libraries: store.libraries(),
   remoteAccess: remoteDownloadAccess,
 }, job);
+/** The authority behind an account, with the gate re-reading it on every use. */
+const authorityFromUser = (owner: UserRecord): MediaServerAuthority => ({
+  actor: { id: owner.id, secret: owner.secret },
+  assertCurrent: () => {
+    const fresh = findUserById(store.users(), owner.id);
+    if (!fresh || fresh.secret !== owner.secret || fresh.disabled || fresh.mustChangePassword) throw new ResourceError(401, "AUTH_REQUIRED");
+  },
+});
+
 /** The authority a durable remote copy runs on: the account behind the job as it stands now,
- *  never the request that queued it. The secret is held in memory for one call; the gate re-reads
- *  the account, so a password change or a deletion fails closed and a retry picks up the new
- *  secret. Nothing about the session, the token or the device is part of it. */
+ *  never the request that queued it. A password change or deletion fails closed. */
 const jobAuthority = (job: DownloadJob): MediaServerAuthority => {
   const owner = findUserById(store.users(), ownerIdOf(job) ?? "");
   if (!owner) throw new ResourceError(401, "AUTH_REQUIRED");
-  return {
-    actor: { id: owner.id, secret: owner.secret },
-    assertCurrent: () => {
-      const fresh = findUserById(store.users(), owner.id);
-      if (!fresh || fresh.secret !== owner.secret || fresh.disabled || fresh.mustChangePassword) throw new ResourceError(401, "AUTH_REQUIRED");
-    },
-  };
+  return authorityFromUser(owner);
 };
+
+const playbackAuthority = (actorId: string): MediaServerAuthority | undefined => {
+  const owner = findUserById(store.users(), actorId);
+  return owner ? authorityFromUser(owner) : undefined;
+};
+
+const playbackReports = new MediaServerPlaybackReporter(mediaServers, playbackAuthority);
+playbackReports.start();
 /** The only way a queued remote original is opened or re-proved. The reference travels with the
  *  job; the authority is read fresh on every call, and the open is an authenticated transport
  *  request, never a fetch to an upstream address. */
@@ -764,7 +774,11 @@ setInterval(() => {
   }
 }, 1000).unref();
 
-const routeContext: RouteContext = { store, needsSetup, currentSession, currentUser, isSecure, stopOwnedPlayback, stopUserSessions, requireAccess, stopContentAccess };
+const routeContext: RouteContext = {
+  store, needsSetup, currentSession, currentUser, isSecure, stopOwnedPlayback, stopUserSessions,
+  forgetMediaPlayback: (userId) => mediaServers.forgetPlaybackAdmissions(userId),
+  requireAccess, stopContentAccess,
+};
 registerAuthRoutes(app, routeContext);
 registerUsersRoutes(app, { ...routeContext, deleteUserAccess, permissionsChanged });
 
@@ -2551,7 +2565,7 @@ const freeSpace = async (target: string) => {
 };
 registerDiagnosticsRoutes(app, { ...routeContext, stats, imageStats, providerStats, playback, throughput, queue, libraryScan, playbackMeta, freeSpace, clientLogs, dataDir: DATA_DIR });
 registerSettingsRoutes(app, { ...routeContext, STREAM_SORTS, accountIdOf, invalidateLibrary, mediaServers, metaCache, metaStore, mutateData, prefsOf, queue, streamCache });
-registerMediaServerRoutes(app, { ...routeContext, mediaServers, mosaics, mediaSources: mediaServerSources, remotePersonal: mediaServerPersonal, ownerOf });
+registerMediaServerRoutes(app, { ...routeContext, mediaServers, mosaics, mediaSources: mediaServerSources, remotePersonal: mediaServerPersonal, playbackReports, ownerOf });
 registerPlaybackRoutes(app, { ...routeContext, mediaSources: mediaServerSources, mediaServerGuard, airplayAccess, airplayRequest, answerHeaders, countBytes, httpSourceOf, internalMediaRequest, libraryTarget, noteSourceQuiet, ownerOf, playback, playbackMeta, playbackOwners, playbackResponse, prefsOf, quietSources, rangeCache, remoteReadAhead, safeInspection, sleep, sourceIsQuiet, stats, subtitleDelay, trackMedia, SOURCE_ATTEMPTS, SOURCE_RETRY_MS, SOURCE_RESUMES, SOURCE_HEADER_MS, SOURCE_QUIET_HEADER_MS });
 if (searchSessions !== undefined) {
   registerSearchEverywhereRoutes(app, {
@@ -2681,7 +2695,7 @@ const shutdown = createShutdown({
   maintenance,
   followService,
   killRunningMedia,
-  flushes: [() => stats.activity.flush(), () => imageStats.flush(), () => providerStats.flush(), () => images.flush(), () => artworks.flush(), () => metaStore.flush(), () => seen.flush(), () => libraryOps.flush(), () => mediaServerGuard.close(), () => mediaServers.close()],
+  flushes: [() => stats.activity.flush(), () => imageStats.flush(), () => providerStats.flush(), () => images.flush(), () => artworks.flush(), () => metaStore.flush(), () => seen.flush(), () => libraryOps.flush(), () => mediaServerGuard.close(), () => playbackReports.close(), () => mediaServers.close()],
   store,
   flushLog,
   log,

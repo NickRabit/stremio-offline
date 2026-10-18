@@ -22,6 +22,10 @@ export interface RemoteAccountPolicy {
   allFolders: boolean;
   folderIds: string[];
   hasAdditionalRestrictions: boolean;
+  /** Remote bitrate the account may stream at, in bits per second. Absent when unlimited. */
+  bitrateLimit?: number;
+  /** Concurrent streams the account may hold. Absent when unlimited. */
+  streamLimit?: number;
 }
 
 export interface ProviderLibrary {
@@ -111,13 +115,38 @@ export interface ProviderVersion {
   container?: string;
   size?: number;
   durationTicks?: number;
+  bitrate?: number;
   /** External text subtitles the provider offers for this exact file version. */
   externalSubtitles?: Array<{ index: number; language?: string; title?: string }>;
+}
+
+export interface ProviderPlaybackSource {
+  id: string;
+  bitrate?: number;
+  supportsDirectPlay: boolean;
+  supportsDirectStream: boolean;
+  supportsTranscoding: boolean;
+}
+
+export interface ProviderPlaybackInfo {
+  mediaSources: ProviderPlaybackSource[];
+  playSessionId?: string;
+  errorCode?: "NotAllowed" | "NoCompatibleStream" | "RateLimitExceeded";
+}
+
+export interface ProviderPlaybackReport {
+  kind: "playing" | "progress" | "stopped";
+  mediaSourceId: string;
+  playSessionId: string;
+  positionTicks: number;
+  isPaused: boolean;
+  eventName?: "TimeUpdate" | "Pause" | "Unpause";
 }
 
 export interface MediaServerProvider {
   verifyIdentity(signal?: AbortSignal): Promise<{ serverId: string; version: string }>;
   authenticate(username: string, password: string, signal?: AbortSignal): Promise<{ serverId: string; accountId: string; token: string }>;
+  logout(token: string, signal?: AbortSignal): Promise<void>;
   currentAccount(token: string, accountId: string, signal?: AbortSignal): Promise<{ accountId: string; policy: RemoteAccountPolicy }>;
   listLibraries(token: string, accountId: string, signal?: AbortSignal): Promise<ProviderLibrary[]>;
   pageItems(token: string, accountId: string, libraryId: string, options?: { cursor?: string; limit?: number; search?: string }, signal?: AbortSignal): Promise<ProviderPage>;
@@ -127,6 +156,18 @@ export interface MediaServerProvider {
   detail(token: string, accountId: string, itemId: string, signal?: AbortSignal): Promise<ProviderItem>;
   ancestors(token: string, accountId: string, itemId: string, signal?: AbortSignal): Promise<string[]>;
   versions(token: string, accountId: string, itemId: string, signal?: AbortSignal): Promise<ProviderVersion[]>;
+  playbackInfo(
+    token: string,
+    accountId: string,
+    itemId: string,
+    options: {
+      mediaSourceId?: string;
+      maxStreamingBitrate?: number;
+      isPlayback: boolean;
+    },
+    signal?: AbortSignal,
+  ): Promise<ProviderPlaybackInfo>;
+  reportPlayback(token: string, itemId: string, report: ProviderPlaybackReport, signal?: AbortSignal): Promise<void>;
   /** Resolve a catalogue id to the one library item that carries it: exactly one bounded list
    *  query, with every returned row re-checked locally for the exact provider id. Emby answers
    *  `AnyProviderIdEquals`; Jellyfin answers a `Has<Name>Id` page narrowed by the caller's title. */
@@ -147,6 +188,8 @@ const VERSIONS_MAX = 200;
 const EXTERNAL_SUBTITLES_MAX = 64;
 const SUBTITLE_INDEX_MAX = 1023;
 const SUBTITLE_TEXT_CODECS = new Set(["subrip", "srt"]);
+const PLAY_SESSION_ID = /^[0-9a-f]{32}$/;
+const PLAYBACK_ERROR_CODES = new Set<NonNullable<ProviderPlaybackInfo["errorCode"]>>(["NotAllowed", "NoCompatibleStream", "RateLimitExceeded"]);
 const PROVIDER_ID_MAX = 512;
 const CURSOR_MAX = 8192;
 const CURSOR_JSON_BYTES_MAX = 6144;
@@ -374,8 +417,6 @@ const RESTRICTION_LISTS = [
   "BlockedMediaFolders", "EnabledMediaFolders", "ExcludedTags", "AllowedMediaFolders",
   "EnabledDevices", "IncludeTags", "ExcludedSubFolders", "RestrictedFeatures",
 ];
-const RESTRICTION_LIMITS = ["RemoteClientBitrateLimit", "SimultaneousStreamLimit", "MaxActiveSessions"];
-
 /** Record known restriction facts, never a permission. A malformed *known* restriction field
  *  is refused rather than silently read as unrestricted; unknown fields stay unproven. */
 function hasAdditionalRestrictions(policy: Record<string, unknown>): boolean {
@@ -399,14 +440,6 @@ function hasAdditionalRestrictions(policy: Record<string, unknown>): boolean {
     }
     if (value.length > 0) return true;
   }
-  for (const field of RESTRICTION_LIMITS) {
-    const value = policy[field];
-    if (value === undefined || value === null) continue;
-    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
-      throw invalidResponse(`The media-server policy field ${field} is not a non-negative integer.`);
-    }
-    if (value !== 0) return true;
-  }
   const rating = policy.MaxParentalRating;
   if (rating !== undefined && rating !== null) {
     if (typeof rating !== "number" || !Number.isSafeInteger(rating) || rating < 0) {
@@ -418,6 +451,26 @@ function hasAdditionalRestrictions(policy: Record<string, unknown>): boolean {
     if (/schedule/i.test(key) && Array.isArray(value) && value.length > 0) return true;
   }
   return false;
+}
+
+function accountLimits(policy: Record<string, unknown>): { bitrateLimit?: number; streamLimit?: number } {
+  const limit = (field: string): number | undefined => {
+    const value = policy[field];
+    if (value === undefined || value === null) return undefined;
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+      throw invalidResponse(`The media-server policy field ${field} is not a non-negative integer.`);
+    }
+    return value === 0 ? undefined : value;
+  };
+  const bitrateLimit = limit("RemoteClientBitrateLimit");
+  const activeSessions = limit("MaxActiveSessions");
+  const simultaneousStreams = limit("SimultaneousStreamLimit");
+  const streamLimit = [activeSessions, simultaneousStreams].filter((value): value is number => value !== undefined)
+    .reduce<number | undefined>((minimum, value) => minimum === undefined || value < minimum ? value : minimum, undefined);
+  return {
+    ...(bitrateLimit === undefined ? {} : { bitrateLimit }),
+    ...(streamLimit === undefined ? {} : { streamLimit }),
+  };
 }
 
 interface CursorBinding {
@@ -519,6 +572,36 @@ function isPlainFile(source: Record<string, unknown>): boolean {
 const isHlsOrSegmented = (source: Record<string, unknown>): boolean =>
   [source.Protocol, source.Container, source.Path].some((value) => typeof value === "string" && /hls|m3u8/i.test(value));
 
+function playbackInfoSource(raw: unknown): ProviderPlaybackSource | undefined {
+  const source = asObject(raw, "The playback media-source entry");
+  const id = requiredString(source.Id, MEDIA_SERVER_LIMITS.upstreamId, "media-source id");
+  const support = (field: "SupportsDirectPlay" | "SupportsDirectStream" | "SupportsTranscoding"): boolean => {
+    const value = source[field];
+    if (value === undefined) return false;
+    if (typeof value !== "boolean") throw invalidResponse(`The media-server ${field} field is not a boolean.`);
+    return value;
+  };
+  const supportsDirectPlay = support("SupportsDirectPlay");
+  const supportsDirectStream = support("SupportsDirectStream");
+  const supportsTranscoding = support("SupportsTranscoding");
+  let bitrate: number | undefined;
+  if (source.Bitrate !== undefined) {
+    if (typeof source.Bitrate !== "number" || !Number.isSafeInteger(source.Bitrate) || source.Bitrate < 0) {
+      throw invalidResponse("The media-server media-source bitrate is malformed.");
+    }
+    if (source.Bitrate > 0) bitrate = source.Bitrate;
+  }
+  if (source.Protocol !== "File" || isHlsOrSegmented(source) || !isPlainFile(source)) return undefined;
+  if (source.LiveStreamId !== undefined && source.LiveStreamId !== null && source.LiveStreamId !== "") return undefined;
+  return {
+    id,
+    ...(bitrate === undefined ? {} : { bitrate }),
+    supportsDirectPlay,
+    supportsDirectStream,
+    supportsTranscoding,
+  };
+}
+
 export function createMediaServerProvider(kind: MediaServerKind, transport: MediaServerTransport): MediaServerProvider {
   if (!MEDIA_SERVER_KINDS.includes(kind)) throw invalid("The media-server provider kind is not supported.");
 
@@ -543,11 +626,16 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
     return { serverId: identity.serverId, accountId, token: validateMediaServerToken(result.AccessToken) };
   }
 
+  async function logout(token: string, signal?: AbortSignal): Promise<void> {
+    await transport.requestJson("logout", {}, token, signal);
+  }
+
   async function currentAccount(token: string, accountId: string, signal?: AbortSignal): Promise<{ accountId: string; policy: RemoteAccountPolicy }> {
     const user = asObject(await transport.requestJson("user", { userId: accountId }, token, signal), "The account response");
     if (user.Id !== accountId) throw invalidResponse("The account response is for another user.");
     const policy = asObject(user.Policy, "The account policy");
     const contentDownloading = optionalBool(policy.EnableContentDownloading, "EnableContentDownloading");
+    const limits = accountLimits(policy);
     return {
       accountId,
       policy: {
@@ -557,6 +645,7 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
         allFolders: requiredBool(policy.EnableAllFolders, "EnableAllFolders"),
         folderIds: requiredStringArray(policy.EnabledFolders, "EnabledFolders"),
         hasAdditionalRestrictions: hasAdditionalRestrictions(policy),
+        ...limits,
       },
     };
   }
@@ -836,6 +925,8 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
       if (size !== undefined) version.size = size;
       const durationTicks = optionalSafeInt(source.RunTimeTicks);
       if (durationTicks !== undefined) version.durationTicks = durationTicks;
+      const bitrate = optionalSafeInt(source.Bitrate);
+      if (bitrate !== undefined && bitrate > 0) version.bitrate = bitrate;
       const externalSubtitles = readExternalSubtitles(source);
       if (externalSubtitles.length) version.externalSubtitles = externalSubtitles;
       versions.push(version);
@@ -843,5 +934,84 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
     return versions;
   }
 
-  return { verifyIdentity, authenticate, currentAccount, listLibraries, pageItems, pageDirectory, detail, findByProviderIds, ancestors, versions };
+  async function playbackInfo(
+    token: string,
+    accountId: string,
+    itemId: string,
+    options: {
+      mediaSourceId?: string;
+      maxStreamingBitrate?: number;
+      isPlayback: boolean;
+    },
+    signal?: AbortSignal,
+  ): Promise<ProviderPlaybackInfo> {
+    const response = asObject(await transport.requestJson("playbackInfo", {
+      userId: accountId,
+      itemId,
+      ...(options.mediaSourceId === undefined ? {} : { mediaSourceId: options.mediaSourceId }),
+      ...(options.maxStreamingBitrate === undefined ? {} : { maxStreamingBitrate: options.maxStreamingBitrate }),
+      isPlayback: options.isPlayback,
+    }, token, signal), "The playback-info response");
+    const rawError = response.ErrorCode;
+    if (rawError !== undefined) {
+      if (typeof rawError !== "string" || !PLAYBACK_ERROR_CODES.has(rawError as NonNullable<ProviderPlaybackInfo["errorCode"]>)) {
+        throw invalidResponse("The media-server playback error code is not supported.");
+      }
+      const errorCode = rawError as NonNullable<ProviderPlaybackInfo["errorCode"]>;
+      if (errorCode === "RateLimitExceeded") transport.noteRateLimit();
+      return { mediaSources: [], errorCode };
+    }
+    let playSessionId: string | undefined;
+    if (response.PlaySessionId !== undefined) {
+      if (typeof response.PlaySessionId !== "string" || !PLAY_SESSION_ID.test(response.PlaySessionId)) {
+        throw invalidResponse("The media-server playback session id is malformed.");
+      }
+      playSessionId = response.PlaySessionId;
+    }
+    let mediaSources: ProviderPlaybackSource[] = [];
+    if (response.MediaSources !== undefined) {
+      if (!Array.isArray(response.MediaSources)) throw invalidResponse("The playback-info response has no media-source array.");
+      if (response.MediaSources.length > VERSIONS_MAX) throw invalidResponse("The playback-info response has too many media sources.");
+      mediaSources = response.MediaSources.flatMap((source) => {
+        const parsed = playbackInfoSource(source);
+        return parsed === undefined ? [] : [parsed];
+      });
+    }
+    return {
+      mediaSources,
+      ...(playSessionId === undefined ? {} : { playSessionId }),
+    };
+  }
+
+  async function reportPlayback(token: string, itemId: string, report: ProviderPlaybackReport, signal?: AbortSignal): Promise<void> {
+    if (report.kind === "playing") {
+      await transport.requestJson("playing", {
+        itemId,
+        mediaSourceId: report.mediaSourceId,
+        playSessionId: report.playSessionId,
+        positionTicks: report.positionTicks,
+        isPaused: report.isPaused,
+      }, token, signal);
+      return;
+    }
+    if (report.kind === "progress") {
+      await transport.requestJson("playingProgress", {
+        itemId,
+        mediaSourceId: report.mediaSourceId,
+        playSessionId: report.playSessionId,
+        positionTicks: report.positionTicks,
+        isPaused: report.isPaused,
+        ...(report.eventName === undefined ? {} : { eventName: report.eventName }),
+      }, token, signal);
+      return;
+    }
+    await transport.requestJson("playingStopped", {
+      itemId,
+      mediaSourceId: report.mediaSourceId,
+      playSessionId: report.playSessionId,
+      positionTicks: report.positionTicks,
+    }, token, signal);
+  }
+
+  return { verifyIdentity, authenticate, logout, currentAccount, listLibraries, pageItems, pageDirectory, detail, findByProviderIds, ancestors, versions, playbackInfo, reportPlayback };
 }

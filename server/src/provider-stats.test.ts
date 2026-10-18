@@ -47,6 +47,19 @@ test("a damaged file starts the counts empty rather than failing", async () => {
   });
 });
 
+test("a bucket written before playback reports existed loads the missing count as zero", async () => {
+  await withDir(async (dir) => {
+    const file = path.join(dir, "provider-stats.json");
+    await writeFile(file, JSON.stringify([{ at: new Date().toISOString(), detail: 4, original: 2 }]));
+    const stats = new ProviderStats(file);
+    await stats.load();
+    const summary = stats.summary(1);
+    assert.equal(summary.detail, 4);
+    assert.equal(summary.original, 2);
+    assert.equal(summary.playback, 0);
+  });
+});
+
 test("the hop records nothing until a store is installed", async () => {
   useProviderStats(undefined);
   noteProviderCall("detail");

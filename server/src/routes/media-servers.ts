@@ -8,6 +8,7 @@ import { MEDIA_SERVER_LIMITS, MediaServerError, isMediaServerError } from "../me
 import { IMAGE_CACHE_CONTROL, IMAGE_IMMUTABLE_CACHE_CONTROL, type MediaServerAuthority, type MediaServerManager } from "../media-server-manager.js";
 import { composeMosaic, MosaicCache, mosaicShape } from "../mosaic.js";
 import type { MediaServerPersonal, RemoteCards } from "../media-server-personal.js";
+import { readPlaybackReport, type MediaServerPlaybackReporter } from "../media-server-playing.js";
 import type { MediaServerSources } from "../media-server-sources.js";
 import type { ResourceOwner } from "../media-resources.js";
 import { asyncRoute, type RouteContext } from "./context.js";
@@ -18,6 +19,7 @@ export interface MediaServersDeps extends RouteContext {
   mosaics: MosaicCache;
   mediaSources: MediaServerSources;
   remotePersonal: MediaServerPersonal;
+  playbackReports: MediaServerPlaybackReporter;
   ownerOf(req: express.Request): ResourceOwner;
 }
 
@@ -33,6 +35,9 @@ const TEXTS = Object.freeze({
   stale: "The media-server configuration changed. Try again.",
   identity: "The media-server identity changed. Recreate the connection.",
   restricted: "This media-server account has unsupported restrictions.",
+  playbackNotAllowed: "The media-server account is not allowed to play this item.",
+  noCompatibleStream: "The media server has no compatible direct-play stream for this item.",
+  bitrateLimit: "This file is above the streaming bitrate limit of the media-server account. Download it instead.",
 });
 
 /** A bound on how long a client is told to wait. Both ends of the range are clamped so the
@@ -64,6 +69,12 @@ export const toHttpError = (error: MediaServerError): AppError => {
       return new AppError(TEXTS.identity, "err.mediaServerIdentity", 409);
     case "unsupported-policy":
       return new AppError(TEXTS.restricted, "err.mediaServerRestricted", 403);
+    case "playback-not-allowed":
+      return new AppError(TEXTS.playbackNotAllowed, "err.mediaServerPlaybackNotAllowed", 403);
+    case "no-compatible-stream":
+      return new AppError(TEXTS.noCompatibleStream, "err.mediaServerNoCompatibleStream", 422);
+    case "bitrate-limit":
+      return new AppError(TEXTS.bitrateLimit, "err.mediaServerBitrateLimit", 403);
     case "authentication-required":
       return new AppError(TEXTS.login, "err.mediaServerLogin", 502);
     case "secret-key-unavailable":
@@ -193,7 +204,7 @@ const streamName = (req: express.Request): string | undefined => {
 };
 
 export function registerMediaServerRoutes(app: express.Application, deps: MediaServersDeps): void {
-  const { mediaServers, mosaics, mediaSources, remotePersonal, ownerOf, currentUser, requireAccess } = deps;
+  const { mediaServers, mosaics, mediaSources, remotePersonal, playbackReports, ownerOf, currentUser, requireAccess } = deps;
 
   /** The one request guard: the acting account, the captured library and connection, the abort
    *  wiring, and every re-check the response boundary repeats before a byte or a JSON value
@@ -486,6 +497,11 @@ export function registerMediaServerRoutes(app: express.Application, deps: MediaS
   }, 200, true));
   app.patch("/api/remote-libraries/:id/items/:itemId/state", handle(async (req, authority, signal) =>
     remotePersonal.patch(authority, req.params.id, req.params.itemId, body(req), signal), 200, true));
+  app.post("/api/remote-libraries/:id/items/:itemId/playing", handle(async (req, authority) => {
+    assertNoQuery(req.query);
+    const report = readPlaybackReport(body(req));
+    await playbackReports.report(authority, String(req.params.id), String(req.params.itemId), report);
+  }, 204, true));
   app.get("/api/remote-libraries/:id/items/:itemId", handle(async (req, authority, signal) => {
     assertNoBody(req);
     assertNoQuery(req.query);

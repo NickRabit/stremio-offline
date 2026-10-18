@@ -320,7 +320,7 @@ export interface ImageCounts { memory: number; disk: number; upstream: number }
 export type ProviderCallKind =
   | "info" | "login" | "user" | "views" | "items" | "directory" | "match"
   | "detail" | "ancestors" | "versions"
-  | "artwork" | "subtitle" | "original";
+  | "artwork" | "subtitle" | "original" | "playback";
 export interface StatsSummary {
   hour: StatsWindow; day: StatsWindow; week: StatsWindow; month: StatsWindow; total: StatsWindow;
   step: "minute" | "hour" | "day";

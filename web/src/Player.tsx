@@ -339,6 +339,8 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const [addonSubtitle, setAddonSubtitle] = useState<Subtitle | null>(null);
   const [offset, setOffset] = useState(0);
   const [paused, setPaused] = useState(true);
+  const pausedRef = useRef(paused);
+  pausedRef.current = paused;
   const [userPaused, setUserPaused] = useState(false);
   const [playbackFailed, setPlaybackFailed] = useState(false);
   const [time, setTime] = useState(0);
@@ -924,6 +926,55 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     setAddonSubtitle(next);
   };
 
+  // A media-server original is reported to its server as a playback session, the way its own
+  // clients do: started on open, kept current every ten seconds and on pause or seek, stopped on close.
+  useEffect(() => {
+    if (!open || !remoteItem) return;
+    const body = (event: "start" | "progress" | "stop") => ({
+      mediaSourceId: remoteItem.mediaSourceId,
+      position: Math.round(reportRef.current.position),
+      paused: pausedRef.current,
+      event,
+    });
+    const report = (event: "start" | "progress" | "stop") => {
+      void api.reportRemotePlayback(remoteItem.libraryId, remoteItem.itemId, body(event)).catch(() => undefined);
+    };
+    report("start");
+    const timer = setInterval(() => report("progress"), 10_000);
+    const leaving = () => api.reportRemotePlaybackOnUnload(remoteItem.libraryId, remoteItem.itemId, body("stop"));
+    window.addEventListener("pagehide", leaving);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("pagehide", leaving);
+      report("stop");
+    };
+  }, [open, remoteItem]);
+
+  const firstPauseReport = useRef(true);
+  useEffect(() => {
+    if (firstPauseReport.current) {
+      firstPauseReport.current = false;
+      return;
+    }
+    if (!open || !remoteItem) return;
+    void api.reportRemotePlayback(remoteItem.libraryId, remoteItem.itemId, {
+      mediaSourceId: remoteItem.mediaSourceId,
+      position: Math.round(reportRef.current.position),
+      paused,
+      event: "progress",
+    }).catch(() => undefined);
+  }, [paused]);
+
+  const reportSeek = () => {
+    if (!open || !remoteItem) return;
+    void api.reportRemotePlayback(remoteItem.libraryId, remoteItem.itemId, {
+      mediaSourceId: remoteItem.mediaSourceId,
+      position: Math.round(reportRef.current.position),
+      paused: pausedRef.current,
+      event: "progress",
+    }).catch(() => undefined);
+  };
+
   // The position is reported every ten seconds and once more on close, so nothing is lost.
   // Leaving the page unmounts nothing, so a closed tab or a desktop window switching servers
   // reports it from `pagehide` with a request that outlives the page.
@@ -1255,7 +1306,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
           // A failed seek or track change leaves the lock off. Playing again means it recovered.
           setPlaybackFailed(false);
           cancelNext();
-        }} onPause={() => setPaused(true)} onSeeking={cancelNext}
+        }} onPause={() => setPaused(true)} onSeeking={cancelNext} onSeeked={reportSeek}
         onEnded={() => {
           // Nothing follows, so the film is over: the player steps aside and leaves the
           // detail view on screen instead of sitting on the last frame.

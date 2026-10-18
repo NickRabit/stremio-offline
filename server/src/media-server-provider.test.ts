@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { MediaServerTransport } from "./media-server-security.js";
+import { createMediaServerTransport, type MediaServerTransport } from "./media-server-security.js";
 import { MediaServerError, type MediaServerKind } from "./media-server-types.js";
 import { createMediaServerProvider, type MediaServerProvider } from "./media-server-provider.js";
 
@@ -10,8 +10,12 @@ interface Call {
   token?: string;
 }
 
-function fixture(handler: (operation: string, args: Record<string, unknown>) => unknown, kind: MediaServerKind = "jellyfin"): { calls: Call[]; provider: MediaServerProvider } {
+function fixture(
+  handler: (operation: string, args: Record<string, unknown>) => unknown,
+  kind: MediaServerKind = "jellyfin",
+): { calls: Call[]; rateLimits: Array<number | undefined>; provider: MediaServerProvider } {
   const calls: Call[] = [];
+  const rateLimits: Array<number | undefined> = [];
   const transport = {
     requestJson: async (operation: string, args: Record<string, unknown>, token?: string) => {
       calls.push({ operation, args, token });
@@ -19,9 +23,10 @@ function fixture(handler: (operation: string, args: Record<string, unknown>) => 
       if (result instanceof Error) throw result;
       return result;
     },
+    noteRateLimit: (retryAfterMs?: number) => { rateLimits.push(retryAfterMs); },
     close: async () => undefined,
   } as unknown as MediaServerTransport;
-  return { calls, provider: createMediaServerProvider(kind, transport) };
+  return { calls, rateLimits, provider: createMediaServerProvider(kind, transport) };
 }
 
 const policy = (over: Record<string, unknown> = {}) => ({
@@ -111,12 +116,41 @@ test("currentAccount records known restrictions without ever claiming they are e
   assert.equal(await restricted({ EnableAllDevices: false }), true);
   assert.equal(await restricted({ EnabledDevices: ["tv"] }), true);
   assert.equal(await restricted({ MaxParentalRating: 12 }), true);
-  assert.equal(await restricted({ RemoteClientBitrateLimit: 5_000_000 }), true);
   assert.equal(await restricted({ BlockedTags: ["x"] }), true);
   assert.equal(await restricted({ EnabledAccessSchedules: [{ start: 1 }] }), true);
   assert.equal(await restricted({ EnabledDevices: [] }), false);
-  assert.equal(await restricted({ RemoteClientBitrateLimit: 0 }), false);
   assert.equal(await restricted({ MaxParentalRating: null }), false);
+});
+
+test("currentAccount reads quota limits separately from restrictions", async () => {
+  const facts = async (over: Record<string, unknown>) => {
+    const { provider } = fixture(() => ({ Id: "user-1", Policy: policy(over) }));
+    return (await provider.currentAccount("tok", "user-1")).policy;
+  };
+  assert.deepEqual(await facts({ RemoteClientBitrateLimit: 50_000_000, MaxActiveSessions: 10 }), {
+    disabled: false,
+    mediaPlayback: true,
+    allFolders: true,
+    folderIds: [],
+    hasAdditionalRestrictions: false,
+    bitrateLimit: 50_000_000,
+    streamLimit: 10,
+  });
+  assert.equal((await facts({ RemoteClientBitrateLimit: 5_000_000 })).hasAdditionalRestrictions, false);
+  assert.equal((await facts({ MaxActiveSessions: 1 })).hasAdditionalRestrictions, false);
+  assert.equal((await facts({ SimultaneousStreamLimit: 1 })).hasAdditionalRestrictions, false);
+  assert.equal((await facts({ MaxActiveSessions: 7, SimultaneousStreamLimit: 3 })).streamLimit, 3);
+  assert.equal((await facts({ MaxActiveSessions: 0, SimultaneousStreamLimit: 4 })).streamLimit, 4);
+
+  for (const unlimited of [
+    { RemoteClientBitrateLimit: 0, MaxActiveSessions: 0, SimultaneousStreamLimit: 0 },
+    { RemoteClientBitrateLimit: null, MaxActiveSessions: null, SimultaneousStreamLimit: null },
+    {},
+  ]) {
+    const result = await facts(unlimited);
+    assert.equal("bitrateLimit" in result, false);
+    assert.equal("streamLimit" in result, false);
+  }
 });
 
 test("listLibraries maps collection folders and drops everything else", async () => {
@@ -266,6 +300,143 @@ test("versions keeps only usable file sources and never selects a remote URL", a
   await assert.rejects(badId.provider.versions("tok", "user-1", "item-1"), { code: "invalid-response" });
 });
 
+test("playbackInfo parses direct-play sources and drops every address and unknown field", async () => {
+  const { calls, provider } = fixture(() => ({
+    PlaySessionId: "a".repeat(32),
+    MediaSources: [
+      {
+        Id: "v1", Protocol: "File", Bitrate: 8_000_000,
+        SupportsDirectPlay: true, SupportsDirectStream: false, SupportsTranscoding: true,
+        Name: "1080p", Path: "/media/private.mkv", TranscodingUrl: "https://provider.invalid/transcode?token=secret",
+        DirectStreamUrl: "https://provider.invalid/direct", RequiredHttpHeaders: { Authorization: "secret" },
+      },
+      { Id: "hls", Protocol: "File", Container: "HLS", SupportsDirectPlay: true },
+      { Id: "remote", Protocol: "File", IsRemote: true, SupportsDirectPlay: true },
+      { Id: "stream", Protocol: "Http", SupportsDirectPlay: true },
+      { Id: "plain", Protocol: "File" },
+    ],
+  }));
+  const result = await provider.playbackInfo("tok", "user-1", "item-1", {
+    mediaSourceId: "v1", maxStreamingBitrate: 8_000_000, isPlayback: true,
+  });
+  assert.deepEqual(result, {
+    mediaSources: [
+      { id: "v1", bitrate: 8_000_000, supportsDirectPlay: true, supportsDirectStream: false, supportsTranscoding: true },
+      { id: "plain", supportsDirectPlay: false, supportsDirectStream: false, supportsTranscoding: false },
+    ],
+    playSessionId: "a".repeat(32),
+  });
+  assert.deepEqual(calls, [{
+    operation: "playbackInfo",
+    args: { userId: "user-1", itemId: "item-1", mediaSourceId: "v1", maxStreamingBitrate: 8_000_000, isPlayback: true },
+    token: "tok",
+  }]);
+  const serialized = JSON.stringify(result);
+  for (const secret of ["provider.invalid", "private.mkv", "Authorization", "secret", "Name", "Path"]) {
+    assert.equal(serialized.includes(secret), false, secret);
+  }
+});
+
+test("playbackInfo accepts omitted optional fields and requires no media sources", async () => {
+  const empty = fixture(() => ({}));
+  assert.deepEqual(await empty.provider.playbackInfo("tok", "user-1", "item-1", { isPlayback: false }), { mediaSources: [] });
+  assert.deepEqual(empty.calls[0]!.args, { userId: "user-1", itemId: "item-1", isPlayback: false });
+
+  const bare = fixture(() => ({ MediaSources: [{ Id: "v1", Protocol: "File" }] }));
+  assert.deepEqual(await bare.provider.playbackInfo("tok", "user-1", "item-1", { isPlayback: true }), {
+    mediaSources: [{ id: "v1", supportsDirectPlay: false, supportsDirectStream: false, supportsTranscoding: false }],
+  });
+});
+
+test("playbackInfo classifies every documented refusal and never selects their sources", async () => {
+  for (const errorCode of ["NotAllowed", "NoCompatibleStream", "RateLimitExceeded"] as const) {
+    const { rateLimits, provider } = fixture(() => ({
+      ErrorCode: errorCode,
+      MediaSources: [{ Id: "v1", Protocol: "File", SupportsDirectPlay: true }],
+    }));
+    assert.deepEqual(await provider.playbackInfo("tok", "user-1", "item-1", { mediaSourceId: "v1", isPlayback: true }), {
+      mediaSources: [],
+      errorCode,
+    });
+    assert.deepEqual(rateLimits, errorCode === "RateLimitExceeded" ? [undefined] : [], errorCode);
+  }
+  const absentSources = fixture(() => ({ ErrorCode: "NotAllowed" }));
+  assert.deepEqual(await absentSources.provider.playbackInfo("tok", "user-1", "item-1", { isPlayback: true }), {
+    mediaSources: [],
+    errorCode: "NotAllowed",
+  });
+});
+
+test("a playback-info RateLimitExceeded parks the real transport before the next upstream call", async () => {
+  let fetches = 0;
+  const transport = createMediaServerTransport(
+    { baseUrl: "http://media.example", allowLan: false, allowLoopback: false },
+    {
+      lookupAll: async () => [{ address: "93.184.216.34", family: 4 }],
+      fetch: async () => {
+        fetches += 1;
+        return new Response(JSON.stringify({ ErrorCode: "RateLimitExceeded" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    },
+  );
+  const provider = createMediaServerProvider("jellyfin", transport);
+  assert.deepEqual(await provider.playbackInfo("tok", "user-1", "item-1", { isPlayback: true }), {
+    mediaSources: [],
+    errorCode: "RateLimitExceeded",
+  });
+  assert.equal(fetches, 1);
+  await assert.rejects(provider.playbackInfo("tok", "user-1", "item-1", { isPlayback: true }), { code: "rate-limited" });
+  assert.equal(fetches, 1, "the cooling transport makes no second upstream call");
+  await transport.close();
+});
+
+test("playbackInfo refuses unknown codes and malformed or oversized sources", async () => {
+  const tooMany = Array.from({ length: 201 }, (_, index) => ({ Id: `v${index}`, Protocol: "File" }));
+  const cases: Array<[string, unknown]> = [
+    ["unknown error", { ErrorCode: "SomethingElse" }],
+    ["null error", { ErrorCode: null }],
+    ["object sources", { MediaSources: {} }],
+    ["oversized sources", { MediaSources: tooMany }],
+    ["missing source id", { MediaSources: [{ Protocol: "File" }] }],
+    ["bad direct-play flag", { MediaSources: [{ Id: "v1", Protocol: "File", SupportsDirectPlay: "true" }] }],
+    ["bad bitrate", { MediaSources: [{ Id: "v1", Protocol: "File", Bitrate: "8000000" }] }],
+    ["bad session", { PlaySessionId: "A".repeat(32), MediaSources: [] }],
+  ];
+  for (const [label, response] of cases) {
+    const { provider } = fixture(() => response);
+    await assert.rejects(provider.playbackInfo("tok", "user-1", "item-1", { isPlayback: true }), { code: "invalid-response" }, label);
+  }
+});
+
+test("reportPlayback maps each report kind to its fixed transport operation", async () => {
+  const { calls, provider } = fixture(() => null);
+  const base = { mediaSourceId: "source-1", playSessionId: "a".repeat(32), positionTicks: 123_456 };
+  await provider.reportPlayback("tok", "item-1", { ...base, kind: "playing", isPaused: false });
+  await provider.reportPlayback("tok", "item-1", { ...base, kind: "progress", isPaused: true, eventName: "Pause" });
+  await provider.reportPlayback("tok", "item-1", { ...base, kind: "stopped", isPaused: true, eventName: "Unpause" });
+
+  assert.deepEqual(calls.map((call) => call.operation), ["playing", "playingProgress", "playingStopped"]);
+  assert.deepEqual(calls[0]!.args, {
+    itemId: "item-1", mediaSourceId: "source-1", playSessionId: "a".repeat(32), positionTicks: 123_456, isPaused: false,
+  });
+  assert.deepEqual(calls[1]!.args, {
+    itemId: "item-1", mediaSourceId: "source-1", playSessionId: "a".repeat(32), positionTicks: 123_456, isPaused: true, eventName: "Pause",
+  });
+  assert.deepEqual(calls[2]!.args, {
+    itemId: "item-1", mediaSourceId: "source-1", playSessionId: "a".repeat(32), positionTicks: 123_456,
+  });
+  assert.ok(calls.every((call) => call.token === "tok"));
+});
+
+test("logout uses the fixed logout transport operation", async () => {
+  const { calls, provider } = fixture(() => null);
+  await provider.logout("tok");
+  assert.deepEqual(calls, [{ operation: "logout", args: {}, token: "tok" }]);
+});
+
 test("ancestors accepts only a bounded bare array, never an invented wrapper", async () => {
   const bare = fixture(() => [{ Id: "root" }, { Id: "series" }]);
   assert.deepEqual(await bare.provider.ancestors("tok", "user-1", "ep"), ["root", "series"]);
@@ -329,7 +500,6 @@ test("currentAccount records the wider restriction fields and refuses malformed 
   assert.equal(await restricted({ IncludeTags: ["kids"] }), true);
   assert.equal(await restricted({ ExcludedSubFolders: ["shared"] }), true);
   assert.equal(await restricted({ RestrictedFeatures: ["x"] }), true);
-  assert.equal(await restricted({ MaxActiveSessions: 1 }), true);
   assert.equal(await restricted({ MaxActiveSessions: 0 }), false);
 
   const rejects = async (over: Record<string, unknown>) => {
@@ -342,7 +512,24 @@ test("currentAccount records the wider restriction fields and refuses malformed 
   await rejects({ ExcludedSubFolders: {} });
   await rejects({ RestrictedFeatures: [1] });
   await rejects({ MaxActiveSessions: -1 });
+  await rejects({ MaxActiveSessions: 1.5 });
+  await rejects({ SimultaneousStreamLimit: "2" });
   await rejects({ RemoteClientBitrateLimit: "500" });
+});
+
+test("versions reads a positive safe integer bitrate and ignores malformed values", async () => {
+  const { provider } = fixture(() => ({
+    MediaSources: [
+      { Id: "valid", Protocol: "File", Bitrate: 8_000_000 },
+      { Id: "zero", Protocol: "File", Bitrate: 0 },
+      { Id: "negative", Protocol: "File", Bitrate: -1 },
+      { Id: "string", Protocol: "File", Bitrate: "8000000" },
+      { Id: "float", Protocol: "File", Bitrate: 1.5 },
+    ],
+  }));
+  const versions = await provider.versions("tok", "user-1", "item-1");
+  assert.equal(versions[0]!.bitrate, 8_000_000);
+  for (const version of versions.slice(1)) assert.equal("bitrate" in version, false, version.id);
 });
 
 test("versions restore the file name Emby cut down to a stump after the folder name", async () => {

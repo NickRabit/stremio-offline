@@ -23,8 +23,28 @@ export interface MediaServerOperationArgs {
   detail: { userId: string; itemId: string };
   ancestors: { itemId: string; userId: string };
   versions: { itemId: string; userId: string };
+  playbackInfo: {
+    userId: string;
+    itemId: string;
+    mediaSourceId?: string;
+    maxStreamingBitrate?: number;
+    isPlayback: boolean;
+  };
+  playing: PlaybackOperationArgs;
+  playingProgress: PlaybackOperationArgs;
+  playingStopped: { itemId: string; mediaSourceId: string; playSessionId: string; positionTicks: number };
+  logout: Record<string, never>;
 }
 export type MediaServerOperationName = keyof MediaServerOperationArgs;
+
+export interface PlaybackOperationArgs {
+  itemId: string;
+  mediaSourceId: string;
+  playSessionId: string;
+  positionTicks: number;
+  isPaused: boolean;
+  eventName?: "TimeUpdate" | "Pause" | "Unpause";
+}
 
 export interface MediaServerAddressPolicy {
   allowLan: boolean;
@@ -41,6 +61,7 @@ export interface MediaServerTransport {
   requestOriginal(args: OriginalMediaRequest, token: string, signal?: AbortSignal): Promise<Response>;
   requestArtwork(args: ArtworkRequest, token: string, signal?: AbortSignal): Promise<Response>;
   requestAsset(request: MediaServerAssetRequest, token: string, signal?: AbortSignal): Promise<MediaServerAsset>;
+  noteRateLimit(retryAfterMs?: number): void;
   close(): Promise<void>;
 }
 
@@ -64,6 +85,7 @@ export interface OriginalMediaRequest {
   mediaSourceId: string;
   method: "GET" | "HEAD";
   range?: string;
+  playSessionId?: string;
 }
 
 /** The only binary assets the transport can fetch: fixed official artwork and one subtitle track.
@@ -111,7 +133,7 @@ const MAX_CONCURRENCY = 4;
 const DEADLINE_MS = 10_000;
 const MAX_RETRY_AFTER_MS = 300_000;
 /** A 429 without a usable Retry-After still parks the transport for this long. */
-const COOLDOWN_DEFAULT_MS = 30_000;
+export const MEDIA_SERVER_RATE_LIMIT_COOLDOWN_MS = 30_000;
 const ORIGINAL_MAX_CONCURRENCY = 8;
 const ORIGINAL_HEADER_MS = 10_000;
 const ORIGINAL_IDLE_MS = 30_000;
@@ -532,7 +554,7 @@ const directoryRecursive = (value: unknown): "true" | "false" => {
   return value ? "true" : "false";
 };
 
-const ORIGINAL_ARGUMENT_KEYS: readonly string[] = ["itemId", "mediaSourceId", "method", "range"];
+const ORIGINAL_ARGUMENT_KEYS: readonly string[] = ["itemId", "mediaSourceId", "method", "range", "playSessionId"];
 const ORIGINAL_REQUIRED_KEYS: readonly string[] = ["itemId", "mediaSourceId", "method"];
 const CANONICAL_DECIMAL = /^(0|[1-9][0-9]*)$/;
 const BYTE_RANGE = /^bytes=(\d*)-(\d*)$/;
@@ -587,7 +609,14 @@ function checkOriginalRequest(args: unknown): OriginalMediaRequest {
   const mediaSourceId = pathSegment(record.mediaSourceId, "mediaSourceId");
   if (record.method !== "GET" && record.method !== "HEAD") throw invalid("The media-server request method is not allowed.");
   const range = record.range === undefined ? undefined : originalRange(record.range);
-  return { itemId, mediaSourceId, method: record.method, range };
+  const playSessionId = record.playSessionId === undefined ? undefined : playbackSessionId(record.playSessionId);
+  return {
+    itemId,
+    mediaSourceId,
+    method: record.method,
+    ...(range === undefined ? {} : { range }),
+    ...(playSessionId === undefined ? {} : { playSessionId }),
+  };
 }
 
 const ASSET_TYPE_MAX = 256;
@@ -795,6 +824,11 @@ const ARGUMENT_KEYS: Record<MediaServerOperationName, readonly string[]> = {
   detail: ["userId", "itemId"],
   ancestors: ["itemId", "userId"],
   versions: ["itemId", "userId"],
+  playbackInfo: ["userId", "itemId", "mediaSourceId", "maxStreamingBitrate", "isPlayback"],
+  playing: ["itemId", "mediaSourceId", "playSessionId", "positionTicks", "isPaused"],
+  playingProgress: ["itemId", "mediaSourceId", "playSessionId", "positionTicks", "isPaused", "eventName"],
+  playingStopped: ["itemId", "mediaSourceId", "playSessionId", "positionTicks"],
+  logout: [],
 };
 
 const REQUIRED_KEYS: Record<MediaServerOperationName, readonly string[]> = {
@@ -808,6 +842,11 @@ const REQUIRED_KEYS: Record<MediaServerOperationName, readonly string[]> = {
   detail: ["userId", "itemId"],
   ancestors: ["itemId", "userId"],
   versions: ["itemId", "userId"],
+  playbackInfo: ["userId", "itemId", "isPlayback"],
+  playing: ["itemId", "mediaSourceId", "playSessionId", "positionTicks", "isPaused"],
+  playingProgress: ["itemId", "mediaSourceId", "playSessionId", "positionTicks", "isPaused"],
+  playingStopped: ["itemId", "mediaSourceId", "playSessionId", "positionTicks"],
+  logout: [],
 };
 
 interface BuiltRequest {
@@ -815,6 +854,74 @@ interface BuiltRequest {
   url: string;
   token?: string;
   body?: string;
+}
+
+const PLAY_SESSION_ID = /^[0-9a-f]{32}$/;
+const POSITION_TICKS_MAX = 100_000_000_000_000;
+const PLAYBACK_EVENTS = new Set(["TimeUpdate", "Pause", "Unpause"]);
+
+function playbackSessionId(value: unknown): string {
+  if (typeof value !== "string" || !PLAY_SESSION_ID.test(value)) {
+    throw invalid("The media-server playback session id is malformed.");
+  }
+  return value;
+}
+
+function playbackInfoArgs(args: Record<string, unknown>): {
+  userId: string;
+  itemId: string;
+  mediaSourceId?: string;
+  maxStreamingBitrate?: number;
+  isPlayback: boolean;
+} {
+  if (![Object.prototype, null].includes(Object.getPrototypeOf(args))) {
+    throw invalid("The media-server request arguments are malformed.");
+  }
+  for (const key of Reflect.ownKeys(args)) {
+    const descriptor = typeof key === "string" ? Object.getOwnPropertyDescriptor(args, key) : undefined;
+    if (typeof key !== "string" || !descriptor || !("value" in descriptor)) {
+      throw invalid("The media-server request arguments are malformed.");
+    }
+  }
+  const userId = pathSegment(args.userId, "userId");
+  const itemId = pathSegment(args.itemId, "itemId");
+  const mediaSourceId = args.mediaSourceId === undefined ? undefined : pathSegment(args.mediaSourceId, "mediaSourceId");
+  const maxStreamingBitrate = args.maxStreamingBitrate;
+  if (maxStreamingBitrate !== undefined
+    && (typeof maxStreamingBitrate !== "number" || !Number.isSafeInteger(maxStreamingBitrate) || maxStreamingBitrate <= 0)) {
+    throw invalid("The media-server streaming bitrate is malformed.");
+  }
+  if (typeof args.isPlayback !== "boolean") throw invalid("The media-server playback flag must be a boolean.");
+  return {
+    userId,
+    itemId,
+    ...(mediaSourceId === undefined ? {} : { mediaSourceId }),
+    ...(maxStreamingBitrate === undefined ? {} : { maxStreamingBitrate }),
+    isPlayback: args.isPlayback,
+  };
+}
+
+function playbackFields(args: Record<string, unknown>, progress: boolean): Omit<PlaybackOperationArgs, "eventName"> & { eventName?: PlaybackOperationArgs["eventName"] } {
+  const itemId = pathSegment(args.itemId, "itemId");
+  const mediaSourceId = pathSegment(args.mediaSourceId, "mediaSourceId");
+  const playSessionId = playbackSessionId(args.playSessionId);
+  const positionTicks = args.positionTicks;
+  if (typeof positionTicks !== "number" || !Number.isSafeInteger(positionTicks) || positionTicks < 0 || positionTicks > POSITION_TICKS_MAX) {
+    throw invalid("The media-server playback position is out of range.");
+  }
+  if (typeof args.isPaused !== "boolean") throw invalid("The media-server playback pause flag must be a boolean.");
+  const eventName = args.eventName;
+  if (eventName !== undefined && (typeof eventName !== "string" || !PLAYBACK_EVENTS.has(eventName))) {
+    throw invalid("The media-server playback event is not allowed.");
+  }
+  return {
+    itemId,
+    mediaSourceId,
+    playSessionId,
+    positionTicks,
+    isPaused: args.isPaused,
+    ...(progress && eventName !== undefined ? { eventName: eventName as PlaybackOperationArgs["eventName"] } : {}),
+  };
 }
 
 /** Turn a validated operation into the exact request line. The URL is assembled from the
@@ -915,6 +1022,71 @@ function buildRequest(baseUrl: string, operation: MediaServerOperationName, args
       return { method: "GET", url: `${baseUrl}/Items/${encodeURIComponent(pathSegment(args.itemId, "itemId"))}/Ancestors?UserId=${encodeURIComponent(pathSegment(args.userId, "userId"))}` };
     case "versions":
       return { method: "GET", url: `${baseUrl}/Items/${encodeURIComponent(pathSegment(args.itemId, "itemId"))}/PlaybackInfo?UserId=${encodeURIComponent(pathSegment(args.userId, "userId"))}` };
+    case "playbackInfo": {
+      const fields = playbackInfoArgs(args);
+      const body = JSON.stringify({
+        UserId: fields.userId,
+        ...(fields.mediaSourceId === undefined ? {} : { MediaSourceId: fields.mediaSourceId }),
+        ...(fields.maxStreamingBitrate === undefined ? {} : { MaxStreamingBitrate: fields.maxStreamingBitrate }),
+        EnableDirectPlay: true,
+        EnableDirectStream: false,
+        EnableTranscoding: false,
+        AutoOpenLiveStream: false,
+        IsPlayback: fields.isPlayback,
+      });
+      if (Buffer.byteLength(body, "utf8") > MEDIA_SERVER_LIMITS.requestBody) {
+        throw invalid("The media-server playback-info request is too large.");
+      }
+      return {
+        method: "POST",
+        url: `${baseUrl}/Items/${encodeURIComponent(fields.itemId)}/PlaybackInfo?UserId=${encodeURIComponent(fields.userId)}`,
+        body,
+      };
+    }
+    case "playing": {
+      const fields = playbackFields(args, false);
+      const body = JSON.stringify({
+        ItemId: fields.itemId,
+        MediaSourceId: fields.mediaSourceId,
+        PlaySessionId: fields.playSessionId,
+        PositionTicks: fields.positionTicks,
+        IsPaused: fields.isPaused,
+        IsMuted: false,
+        CanSeek: true,
+        PlayMethod: "DirectPlay",
+      });
+      if (Buffer.byteLength(body, "utf8") > MEDIA_SERVER_LIMITS.requestBody) throw invalid("The media-server playback report is too large.");
+      return { method: "POST", url: `${baseUrl}/Sessions/Playing`, body };
+    }
+    case "playingProgress": {
+      const fields = playbackFields(args, true);
+      const body = JSON.stringify({
+        ItemId: fields.itemId,
+        MediaSourceId: fields.mediaSourceId,
+        PlaySessionId: fields.playSessionId,
+        PositionTicks: fields.positionTicks,
+        IsPaused: fields.isPaused,
+        IsMuted: false,
+        CanSeek: true,
+        PlayMethod: "DirectPlay",
+        EventName: fields.eventName ?? "TimeUpdate",
+      });
+      if (Buffer.byteLength(body, "utf8") > MEDIA_SERVER_LIMITS.requestBody) throw invalid("The media-server playback report is too large.");
+      return { method: "POST", url: `${baseUrl}/Sessions/Playing/Progress`, body };
+    }
+    case "playingStopped": {
+      const fields = playbackFields({ ...args, isPaused: false }, false);
+      const body = JSON.stringify({
+        ItemId: fields.itemId,
+        MediaSourceId: fields.mediaSourceId,
+        PlaySessionId: fields.playSessionId,
+        PositionTicks: fields.positionTicks,
+      });
+      if (Buffer.byteLength(body, "utf8") > MEDIA_SERVER_LIMITS.requestBody) throw invalid("The media-server playback report is too large.");
+      return { method: "POST", url: `${baseUrl}/Sessions/Playing/Stopped`, body };
+    }
+    case "logout":
+      return { method: "POST", url: `${baseUrl}/Sessions/Logout` };
   }
 }
 
@@ -977,9 +1149,20 @@ export function createMediaServerTransport(
 
   /** Arm the cooldown from a 429 and report the delay actually applied (bounded by the cap). */
   const enterCooldown = (retryAfterMs: number | undefined): number => {
-    const delay = Math.min(retryAfterMs ?? COOLDOWN_DEFAULT_MS, MAX_RETRY_AFTER_MS);
+    const delay = Math.min(retryAfterMs ?? MEDIA_SERVER_RATE_LIMIT_COOLDOWN_MS, MAX_RETRY_AFTER_MS);
     cooldownUntil = Math.max(cooldownUntil, Date.now() + delay);
     return delay;
+  };
+
+  const noteRateLimit = (retryAfterMs?: number): void => {
+    if (retryAfterMs === undefined) {
+      enterCooldown(undefined);
+      return;
+    }
+    if (typeof retryAfterMs !== "number" || !Number.isFinite(retryAfterMs) || retryAfterMs < 0) {
+      throw invalid("The media-server retry delay is malformed.");
+    }
+    enterCooldown(retryAfterMs);
   };
 
   /** The rejection a request gets while the transport is cooling down, or undefined when the
@@ -1170,7 +1353,7 @@ export function createMediaServerTransport(
         // Counted here, not where the call was asked for: past the cooling re-check and about to
         // reach the socket. A request that then fails to connect or answers 404 is still a call
         // that left this process, and the counter is for those.
-        noteProviderCall(operation);
+        noteProviderCall(operation === "playing" || operation === "playingProgress" || operation === "playingStopped" ? "playback" : operation);
         response = await guard(sendFetch(built.url, { ...init, signal: controller.signal }), controller.signal, isTimedOut);
       } catch (error) {
         throw mapTransportError(error, controller.signal, isTimedOut);
@@ -1178,6 +1361,10 @@ export function createMediaServerTransport(
       if (!response.ok) {
         void response.body?.cancel().catch(() => undefined);
         throw statusFailure(response.status, new Headers(response.headers));
+      }
+      if (operation === "playing" || operation === "playingProgress" || operation === "playingStopped" || operation === "logout") {
+        void response.body?.cancel().catch(() => undefined);
+        return null;
       }
       const text = await readBounded(response, controller.signal, isTimedOut);
       try { return JSON.parse(text); }
@@ -1216,16 +1403,21 @@ export function createMediaServerTransport(
     const bearer = validateMediaServerToken(token);
     if (request.range?.startsWith("bytes=-")) {
       // Emby 4.9 treats suffix ranges as offsets from zero; send an explicit measured span.
-      const head = await requestOriginal({ itemId: request.itemId, mediaSourceId: request.mediaSourceId, method: "HEAD" }, bearer, signal);
+      const head = await requestOriginal({
+        itemId: request.itemId,
+        mediaSourceId: request.mediaSourceId,
+        method: "HEAD",
+        ...(request.playSessionId === undefined ? {} : { playSessionId: request.playSessionId }),
+      }, bearer, signal);
       const rawLength = head.headers.get("content-length");
       if (rawLength === null) throw invalidResponse("The media server did not provide the original length.");
       const length = Number(rawLength);
       if (length === 0) return new Response(null, { status: 416, headers: { "content-range": "bytes */0" } });
       request = { ...request, range: `bytes=${Math.max(0, length - Number(request.range.slice(7)))}-${length - 1}` };
     }
-    // Only the fixed static original-file path is ever built: the normalized base, an encoded
-    // item segment and a fixed `/stream` with fixed Static/MediaSourceId query entries.
-    const url = `${baseUrl}/Videos/${encodeURIComponent(request.itemId)}/stream?Static=true&MediaSourceId=${encodeURIComponent(request.mediaSourceId)}`;
+    const query = new URLSearchParams({ Static: "true", MediaSourceId: request.mediaSourceId });
+    if (request.playSessionId !== undefined) query.set("PlaySessionId", request.playSessionId);
+    const url = `${baseUrl}/Videos/${encodeURIComponent(request.itemId)}/stream?${query.toString()}`;
 
     if (closed) throw new MediaServerError("closed", "The media-server transport is closed.");
     const cooling = coolingError();
@@ -1784,6 +1976,7 @@ export function createMediaServerTransport(
     requestOriginal,
     requestArtwork,
     requestAsset,
+    noteRateLimit,
     async close() {
       closed = true;
       for (const controller of active) controller.abort();

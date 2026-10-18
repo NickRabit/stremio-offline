@@ -57,6 +57,7 @@ const provider = (server: FakeServer): MediaServerProvider => {
   return {
     verifyIdentity: async () => { await run("info"); return { serverId: server.serverId, version: "1" }; },
     authenticate: async () => { await run("login"); return { serverId: server.serverId, accountId: server.accountId, token: "token-1" }; },
+    logout: async () => { await run("logout"); },
     currentAccount: async () => { await run("user"); return { accountId: server.accountId, policy: structuredClone(server.policy) }; },
     listLibraries: async () => { await run("views"); return structuredClone(server.libraries); },
     pageItems: async () => { throw new MediaServerError("not-found", "unused"); },
@@ -65,6 +66,8 @@ const provider = (server: FakeServer): MediaServerProvider => {
     detail: async (_t, _a, itemId) => { await run("detail"); const item = server.detailOf[itemId]; if (!item) throw new MediaServerError("not-found", "missing"); return structuredClone(item); },
     ancestors: async (_t, _a, itemId) => { await run("ancestors"); return [...(server.ancestorsOf[itemId] ?? [])]; },
     versions: async (_t, _a, itemId) => { await run("versions"); return structuredClone(server.versionsOf[itemId] ?? []); },
+    playbackInfo: async () => { throw new MediaServerError("invalid-input", "unused"); },
+    reportPlayback: async () => { throw new MediaServerError("invalid-input", "unused"); },
   };
 };
 const transport: MediaServerTransport = {
@@ -72,6 +75,7 @@ const transport: MediaServerTransport = {
   requestAsset: async () => { throw new Error("unused asset transport"); },
   requestArtwork: async () => { throw new Error("unused artwork transport"); },
   requestOriginal: async () => { throw new Error("unused"); },
+  noteRateLimit: () => undefined,
   close: async () => undefined,
 };
 

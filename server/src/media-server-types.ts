@@ -304,6 +304,9 @@ export type MediaServerErrorCode =
   | "stale-generation"
   | "identity-changed"
   | "unsupported-policy"
+  | "playback-not-allowed"
+  | "no-compatible-stream"
+  | "bitrate-limit"
   | "secret-key-unavailable"
   | "secret-unavailable";
 

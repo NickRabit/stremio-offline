@@ -253,14 +253,14 @@ export class MediaServerSources {
 
   /** Opens the original behind a remote source. The owner guard runs before and after the
    *  manager call; a refusal cancels the body rather than handing it over. */
-  async open(stream: StreamItem, owner: ResourceOwner, args: { method: "GET" | "HEAD"; range?: string }, signal?: AbortSignal): Promise<Response> {
+  async open(stream: StreamItem, owner: ResourceOwner, args: { method: "GET" | "HEAD"; range?: string }, signal?: AbortSignal, options?: { download?: boolean }): Promise<Response> {
     if (!isRemoteMediaStream(stream)) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
     this.assertCurrent(stream, owner);
     const ref = openRemoteContent(stream.url);
     if (ref?.subtitleIndex !== undefined) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
     const authority = this.authorityFor(stream, owner);
     if (!ref || !authority) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
-    const response = await this.manager.openOriginal(authority, ref, args, signal);
+    const response = await this.manager.openOriginal(authority, ref, args, signal, options);
     try {
       this.assertCurrent(stream, owner);
     } catch (error) {

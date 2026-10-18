@@ -649,6 +649,16 @@ class ApiClient(
     ).decode<RemoteItemStateDto>() ?: throw ApiError(ApiFailure.Generic)
   }
 
+  override suspend fun reportRemotePlayback(libraryId: String, itemId: String, report: RemotePlaybackReport) {
+    val payload = json.encodeToString(RemotePlaybackReport.serializer(), report)
+    request(
+      Request.Builder()
+        .url(address.resolve(remoteItemsPath(libraryId) + "/" + encode(itemId) + "/playing"))
+        .post(payload.toRequestBody(mediaType))
+        .build(),
+    )
+  }
+
   private fun remoteItemsPath(libraryId: String): String = "/api/remote-libraries/" + encode(libraryId) + "/items"
 
   private fun remoteStatePath(libraryId: String, itemId: String): String =

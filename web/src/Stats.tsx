@@ -94,7 +94,7 @@ function ProviderCallsPanel({ provider }: { provider: NonNullable<StatsSummary["
   const kinds = [
     "directory", "items", "match",
     "detail", "ancestors", "versions",
-    "artwork", "subtitle", "original",
+    "artwork", "subtitle", "original", "playback",
     "views", "user", "info", "login",
   ] as const;
   const total = kinds.reduce((sum, kind) => sum + provider[kind], 0);

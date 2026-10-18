@@ -30,8 +30,8 @@ the canonical lower-case path without a trailing slash; variants fail closed.
 | `GET /api/media-servers` | `{ connections: [...], keyConfigured }`. Each connection is the admin projection plus a runtime `status` (`disabled`, `available`, `unavailable`, `reauthentication-required`, `identity-changed`). `keyConfigured` only says a key path was supplied, never that it is readable. |
 | `POST /api/media-servers` | Creates a connection from exactly `provider`, `name`, `baseUrl`, `allowLan`, `allowLoopback`, `username`, `password`. Any other field is refused before any network call. |
 | `PATCH /api/media-servers/:id` | Changes only `name` and `enabled`. A rename changes nothing derived, so it neither bumps the generation nor throws away live work; toggling `enabled` bumps the generation, cancels staged scans and moves the permission stamp of every ordinary account granted one of its libraries. |
-| `DELETE /api/media-servers/:id` | Removes the connection and its attached libraries and queues its token file for deletion. Its stored history is kept invisibly for 30 days; `?forget=true` deletes it at once. No remote session is reported or logged out. |
-| `POST /api/media-servers/:id/reauthenticate` | Signs in again with `{ username, password }`; requires the same verified server/account identity. |
+| `DELETE /api/media-servers/:id` | Removes the connection and its attached libraries and queues its token file for deletion. Its stored history is kept invisibly for 30 days; `?forget=true` deletes it at once. Once the removal is saved, its token is logged out upstream (`POST /Sessions/Logout`, best effort, at most 5 s) so the server session stops counting against the account's session limit. |
+| `POST /api/media-servers/:id/reauthenticate` | Signs in again with `{ username, password }`; requires the same verified server/account identity. Nothing is logged out: the login reuses the connection's DeviceId, so the server replaces that device's session itself (Emby would end the new token together with the old one). A failed create and a settings restore log out the tokens they abandon; an additive configuration import abandons none. |
 | `GET /api/media-servers/:id/libraries` | `{ items: ProviderLibrary[] }` — the libraries the stored account can currently see. |
 | `POST /api/media-servers/:id/libraries` | Attaches one remote library from `{ remoteId, name?, order?, showOnHome?, showInContinueWatching?, showInFavorites?, browseMode?, mosaic? }`; the remote name and type come from verified discovery. New libraries are granted to nobody. |
 | `PATCH /api/remote-libraries/:id` | Local configuration only: `name`, `enabled`, `order`, `showOnHome`, `showInContinueWatching`, `showInFavorites`, `browseMode`, `mosaic`, `allowedUsers`, `downloadLibraryId`, `downloadSettings`. `root`, `writeArtwork`, `type`, `remoteId`, `connectionId` and any download flag are refused. |
@@ -334,6 +334,9 @@ place its own text in a response. A rate-limited or busy answer carries a bounde
 | `stale-generation` | 409 | `err.mediaServerStale` |
 | `identity-changed` | 409 | `err.mediaServerIdentity` |
 | `unsupported-policy` | 403 | `err.mediaServerRestricted` |
+| `playback-not-allowed` | 403 | `err.mediaServerPlaybackNotAllowed` |
+| `no-compatible-stream` | 422 | `err.mediaServerNoCompatibleStream` |
+| `bitrate-limit` | 403 | `err.mediaServerBitrateLimit` |
 | `authentication-required` | 502 | `err.mediaServerLogin` |
 | `timeout`, `unavailable`, `invalid-response`, `response-too-large`, `unsafe-address` | 502 | `err.mediaServerUnavailable` |
 | `closed`, `cancelled` | 503 | `err.mediaServerUnavailable` |
@@ -369,6 +372,16 @@ Active remote playback is revalidated every 30 seconds, with a five-second
 verification deadline. Local revocations invalidate resources immediately; an
 upstream policy change is caught by the periodic guard, which stops playback
 when authorization cannot be confirmed.
+Each material original-stream or download admission also sends the provider's
+`POST PlaybackInfo` with the account's effective bitrate limit and direct-play
+flags. It does not claim a synthetic codec device profile; the backend can
+consume any original file and locally convert it, while the provider's
+`SupportsDirectPlay` answer remains authoritative. A provider-issued
+`PlaySessionId` is carried into the static original URL and the
+start/progress/stop reports; when it is omitted, the reporter keeps its local
+id. Stream admissions retain that id in a bounded live map so later byte ranges
+cannot rotate it while the same playback is running; stopping playback,
+invalidating the connection or signing the account out retires the entry.
 
 ## Measured upstream limits
 
@@ -383,14 +396,22 @@ this stage does not claim exhaustive remote parental-policy support.
 
 ## What this feature deliberately does not do
 
-- **No write reaches the media server.** Rename, move, delete, identify, artwork
-  upload, playback reporting and progress reporting all stay out; a remote
-  library and its history are local records only.
+- **No item or library mutation reaches the media server.** Rename, move,
+  delete, identify and artwork upload stay out; a remote library and its history
+  are local records only. The only upstream writes are the bounded playback
+  session reports (`Sessions/Playing`, `Progress`, `Stopped`).
 - **Nothing is transcoded upstream.** An original file is proxied byte-for-byte
   (ranges included) through the scoped transport, and anything that has to be
   converted — a stream the client cannot play directly, an external subtitle
   track — is converted here, on this machine, with the local FFmpeg. No transcode
-  session is asked of Jellyfin or Emby.
+  session is asked of Jellyfin or Emby. `PlaybackInfo` enables direct play only,
+  and a source without a usable direct-play answer is refused instead of opening
+  its static URL.
+- **Device approval, remote-access and schedule diagnostics are not implemented.**
+  A known additional restriction still fails closed as
+  `403 err.mediaServerRestricted`; this task does not add per-condition states,
+  an allowlist UI or local access-schedule enforcement. Parental rating and tag
+  filtering also remain unsupported and fail closed.
 - **Provider subtitles are external SRT only.** External SRT/SubRip tracks are
   read through the scoped proxy and converted to VTT locally. Other provider
   sidecar formats are not offered.
@@ -563,12 +584,13 @@ seconds; each caller still repeats its own current actor, generation and grant
 checks. In a four-artwork fixture burst this reduces the session reads to one
 each.
 
-An upstream `429` puts metadata, images and new stream requests on that
-transport into a shared cooldown: the supplied `Retry-After`, bounded to five
-minutes, or thirty seconds when absent. Calls during cooldown make no DNS or
-HTTP request. There are no automatic retry loops. The upstream client identity
-remains Stremio Offline; request pacing does not imply that an operator who
-allows only the official Jellyfin client permits this application.
+An upstream `429`, or an HTTP 200 `PlaybackInfo` answer with
+`ErrorCode: "RateLimitExceeded"`, puts metadata, images and new stream requests
+on that transport into a shared cooldown: the supplied `Retry-After`, bounded to
+five minutes, or thirty seconds when absent. Calls during cooldown make no DNS
+or HTTP request. There are no automatic retry loops. The upstream client
+identity remains Stremio Offline; request pacing does not imply that an operator
+who allows only the official Jellyfin client permits this application.
 
 
 ## Copying remote originals into local libraries

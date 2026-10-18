@@ -11,6 +11,7 @@ import cz.stremiooffline.tv.data.RemoteItemContext
 import cz.stremiooffline.tv.data.RemoteItemStateDto
 import cz.stremiooffline.tv.data.RemoteItemStatePatch
 import cz.stremiooffline.tv.data.RemoteLibraryApi
+import cz.stremiooffline.tv.data.RemotePlaybackReport
 import cz.stremiooffline.tv.data.TrackChange
 import cz.stremiooffline.tv.diagnostics.AppLog
 import kotlinx.coroutines.CancellationException
@@ -23,6 +24,15 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlin.math.round
+
+private enum class ReportEvent(val wire: String) {
+  Start("start"),
+  Progress("progress"),
+  Stop("stop"),
+}
 
 /** The playback calls of one server, taken straight off [cz.stremiooffline.tv.data.ApiClient]. */
 interface PlaybackApi {
@@ -177,6 +187,11 @@ class PlaybackController(
   /** Set only for a native remote play: the identity whose position the title's own key holds, or
    *  whose own remote-state endpoint holds it when nothing can name the title. */
   private var remote: RemoteItemContext? = null
+  /** The identity a `start` was sent for in this session; null while no start report exists. */
+  private var reported: RemoteItemContext? = null
+  /** Reports leave one at a time, in order: a progress that overtook a stop would reopen the
+   *  media server's session until its idle timeout. */
+  private val reportLock = Mutex()
 
   private data class StartPlan(
     /** The source the start uses; null when [mint] has to produce one. */
@@ -221,6 +236,7 @@ class PlaybackController(
 
   private var pingJob: Job? = null
   private var saveJob: Job? = null
+  private var reportJob: Job? = null
   private var seekJob: Job? = null
   private var trackJob: Job? = null
   private var pendingSeek: Double? = null
@@ -351,6 +367,10 @@ class PlaybackController(
     // The outgoing identity is captured before the new plan replaces it, so a switch between two
     // versions of one remote item still saves under the same stable key.
     val previous = if (previousId != null && hasPosition) SavePayload(key, position, duration, title, path, poster, addonKey, remote, stableKey) else null
+    val outgoingReported = reported
+    val outgoingPosition = position
+    val outgoingPaused = !playing
+    reported = null
     sessionId = null
     plan = next
     sourceId = next.sourceId
@@ -381,6 +401,8 @@ class PlaybackController(
     subtitle = SubtitleChoice.Off
     _state.value = PlaybackState(loading = true, startedAt = clock())
     scope.launch {
+      // The outgoing stop reaches the server before the new start is asked for.
+      if (outgoingReported != null) sendReport(ReportEvent.Stop, outgoingReported, outgoingPosition, outgoingPaused)
       // The outgoing session is closed first, in one coroutine, so the save and the delete are
       // seen before the new start rather than raced with it.
       if (previous != null) runCatching { save(previous) }
@@ -421,6 +443,11 @@ class PlaybackController(
       }
       apply(descriptor, target = resumeTime, plan = next)
       startLoops()
+      val context = next.remote
+      if (context != null && VersionProgress.writer(context) != null) {
+        reported = context
+        report(ReportEvent.Start, context, position, paused = true)
+      }
     }
   }
 
@@ -469,12 +496,16 @@ class PlaybackController(
   }
 
   fun onPlaying() {
+    val changed = !playing
     playing = true
+    if (changed && !stopped) report(ReportEvent.Progress, reported, position, paused = false)
   }
 
   fun onPaused() {
+    val changed = playing
     playing = false
     saveNow()
+    if (changed && !stopped) report(ReportEvent.Progress, reported, position, paused = true)
   }
 
   fun onEnded() {
@@ -489,6 +520,7 @@ class PlaybackController(
       hasPosition = true
       _state.update { it.copy(target = absolute, revision = it.revision + 1) }
       saveNow()
+      report(ReportEvent.Progress, reported, position, paused = !playing)
       return
     }
     pendingSeek = absolute
@@ -514,6 +546,7 @@ class PlaybackController(
       lastPosition = target - offset
       hasPosition = true
       saveNow()
+      report(ReportEvent.Progress, reported, position, paused = !playing)
     }
   }
 
@@ -706,8 +739,12 @@ class PlaybackController(
     generation++
     cancelLoops()
     val id = sessionId
+    val outgoingReported = reported
+    val outgoingPosition = position
+    reported = null
     val payload = if (hasPosition) SavePayload(key, position, duration, title, path, poster, addonKey, remote, stableKey) else null
     sessionId = null
+    if (outgoingReported != null) report(ReportEvent.Stop, outgoingReported, outgoingPosition, paused = !playing)
     if (payload != null || id != null) {
       scope.launch {
         if (payload != null) runCatching { save(payload) }
@@ -773,6 +810,12 @@ class PlaybackController(
         if (playing && hasPosition) runCatching { save(SavePayload(key, position, duration, title, path, poster, addonKey, remote, stableKey)) }
       }
     }
+    reportJob = scope.launch {
+      while (isActive) {
+        delay(REPORT_INTERVAL_MS)
+        report(ReportEvent.Progress, reported, position, paused = !playing)
+      }
+    }
   }
 
   /** The ping loop's session id is only still ours when the generation has not moved on. */
@@ -781,6 +824,7 @@ class PlaybackController(
   private fun cancelLoops() {
     pingJob?.cancel(); pingJob = null
     saveJob?.cancel(); saveJob = null
+    reportJob?.cancel(); reportJob = null
     seekJob?.cancel(); seekJob = null
     trackJob?.cancel(); trackJob = null
     pendingSeek = null
@@ -788,6 +832,34 @@ class PlaybackController(
 
   private fun deleteSession(id: String) {
     scope.launch { runCatching { api.deletePlayback(id) } }
+  }
+
+  /** A report is best-effort: playback never waits for it and never learns that it failed. */
+  private fun report(event: ReportEvent, context: RemoteItemContext?, position: Double, paused: Boolean) {
+    val remote = context ?: return
+    if (VersionProgress.writer(remote) == null) return
+    scope.launch { sendReport(event, remote, position, paused) }
+  }
+
+  private suspend fun sendReport(event: ReportEvent, context: RemoteItemContext, position: Double, paused: Boolean) {
+    val writer = VersionProgress.writer(context) ?: return
+    reportLock.withLock {
+      try {
+        (api as? RemoteLibraryApi)?.reportRemotePlayback(
+          writer.first,
+          writer.second,
+          RemotePlaybackReport(
+            mediaSourceId = writer.third,
+            position = round(position).toLong().coerceAtLeast(0L),
+            paused = paused,
+            event = event.wire,
+          ),
+        )
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (_: Throwable) {
+      }
+    }
   }
 
   private fun apply(
@@ -914,6 +986,7 @@ class PlaybackController(
   companion object {
     const val PING_INTERVAL_MS = 30_000L
     const val SAVE_INTERVAL_MS = 10_000L
+    const val REPORT_INTERVAL_MS = 10_000L
     const val SEEK_DEBOUNCE_MS = 600L
     /** The server refuses a start with more than a hundred subtitle ids. */
     const val MAX_SUBTITLE_IDS = 100

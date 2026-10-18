@@ -14,6 +14,7 @@ import { MediaResources, ResourceError } from "../media-resources.js";
 import { MediaServerManager } from "../media-server-manager.js";
 import { remoteIdsMatch } from "../media-server-match.js";
 import { MediaServerPersonal } from "../media-server-personal.js";
+import type { MediaServerPlaybackReporter, PlaybackReport } from "../media-server-playing.js";
 import type { MediaServerProvider, ProviderItem, ProviderLibrary, RemoteAccountPolicy } from "../media-server-provider.js";
 import { MediaServerSources } from "../media-server-sources.js";
 import { MediaServerSecrets } from "../media-server-secrets.js";
@@ -71,6 +72,7 @@ class FakeServer {
 const provider = (server: FakeServer): MediaServerProvider => ({
   verifyIdentity: async () => { await server.run("info"); return { serverId: server.serverId, version: "1" }; },
   authenticate: async () => { await server.run("login"); return { serverId: server.serverId, accountId: server.accountId, token: "token-1" }; },
+  logout: async () => { await server.run("logout"); },
   currentAccount: async () => { await server.run("user"); return { accountId: server.accountId, policy: structuredClone(server.policy) }; },
   listLibraries: async () => { await server.run("views"); return structuredClone(server.libraries); },
   pageItems: async (_token, _account, libraryId) => { await server.run("items"); return { items: structuredClone(server.items[libraryId] ?? []), total: (server.items[libraryId] ?? []).length }; },
@@ -93,6 +95,18 @@ const provider = (server: FakeServer): MediaServerProvider => ({
   detail: async (_token, _account, itemId) => { await server.run("detail"); const item = server.detailOf[itemId]; if (!item) throw new MediaServerError("not-found", "missing"); return structuredClone(item); },
   ancestors: async (_token, _account, itemId) => { await server.run("ancestors"); return [...(server.ancestorsOf[itemId] ?? [])]; },
   versions: async (_token, _account, itemId) => { await server.run("versions"); return structuredClone(server.versionsOf[itemId] ?? []); },
+  playbackInfo: async (_token, _account, itemId) => {
+    await server.run("playbackInfo");
+    return {
+      mediaSources: (server.versionsOf[itemId] ?? []).map((version) => ({
+        id: version.id,
+        supportsDirectPlay: true,
+        supportsDirectStream: false,
+        supportsTranscoding: false,
+      })),
+    };
+  },
+  reportPlayback: async () => { throw new Error("unused"); },
 });
 
 const transportFor = (server: FakeServer): MediaServerTransport => ({
@@ -105,6 +119,7 @@ const transportFor = (server: FakeServer): MediaServerTransport => ({
     return new Response(spec.bytes, { status: 200, headers: { "content-type": spec.contentType } });
   },
   requestOriginal: async () => { throw new Error("unused"); },
+  noteRateLimit: () => undefined,
   close: async () => undefined,
 });
 
@@ -113,6 +128,7 @@ interface Harness {
   store: Store;
   server: FakeServer;
   manager: MediaServerManager;
+  playbackReports: PlaybackReport[];
   connectionId: string;
   libraryId: string;
   loseAccess(): void;
@@ -167,8 +183,12 @@ const mount = async (): Promise<Harness> => {
   const resources = new MediaResources();
   const mediaSources = new MediaServerSources(store, manager, resources);
   const remotePersonal = new MediaServerPersonal(store, manager);
+  const playbackReports: PlaybackReport[] = [];
+  const playbackReporter = {
+    report: async (_authority: unknown, _libraryId: string, _itemId: string, report: PlaybackReport) => { playbackReports.push(report); },
+  } as unknown as MediaServerPlaybackReporter;
   const ownerOf = (req: express.Request) => ({ userId: currentUser(req)?.id ?? ADA, sid: "routes-sid", expiresAt: Date.now() + 3_600_000 });
-  registerMediaServerRoutes(app, { ...ctx, mediaServers: manager, mosaics: new MosaicCache(path.join(tmpdir(), `mos-${randomBytes(6).toString("hex")}`)), mediaSources, remotePersonal, ownerOf });
+  registerMediaServerRoutes(app, { ...ctx, mediaServers: manager, mosaics: new MosaicCache(path.join(tmpdir(), `mos-${randomBytes(6).toString("hex")}`)), mediaSources, remotePersonal, playbackReports: playbackReporter, ownerOf });
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     const status = typeof (error as { status?: unknown }).status === "number" ? (error as { status: number }).status : 400;
     const retryAfterMs = (error as { retryAfterMs?: unknown }).retryAfterMs;
@@ -187,7 +207,7 @@ const mount = async (): Promise<Harness> => {
   await manager.patchLibrary(authority(admin), library.id, { allowedUsers: [BOB] });
 
   return {
-    base, store, server, manager, connectionId: connection.id, libraryId: library.id,
+    base, store, server, manager, playbackReports, connectionId: connection.id, libraryId: library.id,
     loseAccess: () => { lost = true; },
     close: async () => {
       listener.closeAllConnections();
@@ -456,6 +476,9 @@ test("every internal failure maps to a fixed status and key, and its internal te
       [new MediaServerError("stale-generation", sentinel), 409, "err.mediaServerStale"],
       [new MediaServerError("identity-changed", sentinel), 409, "err.mediaServerIdentity"],
       [new MediaServerError("unsupported-policy", sentinel), 403, "err.mediaServerRestricted"],
+      [new MediaServerError("playback-not-allowed", sentinel), 403, "err.mediaServerPlaybackNotAllowed"],
+      [new MediaServerError("no-compatible-stream", sentinel), 422, "err.mediaServerNoCompatibleStream"],
+      [new MediaServerError("bitrate-limit", sentinel), 403, "err.mediaServerBitrateLimit"],
       // An unknown code falls through to the safe default rather than leaking a raw status.
       [new MediaServerError("mystery" as MediaServerError["code"], sentinel), 502, "err.mediaServerUnavailable"],
     ];
@@ -578,6 +601,23 @@ test("a granted member lists verified sources and their own item state without a
     harness.server.detailOf.s1 = { id: "s1", name: "Series", type: "series", providerIds: {} };
     harness.server.ancestorsOf.s1 = ["lib-1"];
     assert.equal((await api(harness.base, `/api/remote-libraries/${harness.libraryId}/items/s1/state`, { method: "PATCH", user: BOB, body: { position: 3 } })).status, 400);
+  });
+});
+
+test("a member's playback report is validated, accepted with 204 and handed to the reporter", async () => {
+  await withHarness(async (harness) => {
+    const path = `/api/remote-libraries/${harness.libraryId}/items/m1/playing`;
+    const response = await api(harness.base, path, {
+      method: "POST",
+      user: BOB,
+      body: { mediaSourceId: " v1 ", position: 12.5, paused: true, event: "progress" },
+    });
+    assert.equal(response.status, 204);
+    assert.deepEqual(harness.playbackReports, [{ mediaSourceId: "v1", position: 12.5, paused: true, event: "progress" }]);
+    assert.equal((await api(harness.base, path, { method: "POST", user: BOB, body: { mediaSourceId: "v1", position: 1, paused: false } })).status, 400);
+    assert.equal((await api(harness.base, `${path}?unknown=1`, {
+      method: "POST", user: BOB, body: { mediaSourceId: "v1", position: 1, paused: false, event: "stop" },
+    })).status, 400);
   });
 });
 

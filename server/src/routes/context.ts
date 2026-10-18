@@ -22,6 +22,7 @@ export interface RouteContext {
   /** Only what the account holds open, on every device: its media, playback, tickets and
    *  AirPlay grants. A sign-out or a password change must not touch its download queue. */
   stopUserSessions(userId: string): Promise<void>;
+  forgetMediaPlayback?(userId: string): void;
   /** Refuses at the moment a resource is issued or a transfer started: the account, its
    *  session, the secret behind the token, the rights and the content as they stand now. */
   requireAccess(req: express.Request, need?: AccessNeed): void;

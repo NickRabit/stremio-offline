@@ -10,6 +10,7 @@ import { test } from "node:test";
 import express from "express";
 import type { AirPlayAccess } from "../airplay-access.js";
 import type { SessionInfo } from "../auth.js";
+import { messageKeyOf } from "../errors.js";
 import { flushLog, initLogger, readLog, setLevel } from "../logger.js";
 import { mediaResources as registry, MediaResources, ResourceError, type ResourceOwner } from "../media-resources.js";
 import type { MediaServerManager } from "../media-server-manager.js";
@@ -139,7 +140,7 @@ const mount = async (remoteReadAhead = new RemoteReadAhead(), over: Partial<Play
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     errors.push(error);
     const status = typeof (error as { status?: unknown }).status === "number" ? (error as { status: number }).status : 400;
-    res.status(status).json({ error: error instanceof Error ? error.message : String(error) });
+    res.status(status).json({ error: error instanceof Error ? error.message : String(error), messageKey: messageKeyOf(error) });
   });
   const server = app.listen(0, "127.0.0.1");
   await once(server, "listening");
@@ -185,6 +186,51 @@ const rawGet = (base: string, pathname: string, user: "ada" | "bob") =>
     request.on("error", reject);
     request.end();
   });
+
+test("both playback preparation routes map a bitrate refusal for both authorization checks", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.useSource({ url: sealedRemote() } as StreamItem);
+  const sources = harness.mediaSources as unknown as { assertCurrent(): void; authorize(): Promise<void> };
+  sources.assertCurrent = () => undefined;
+
+  for (const path of ["/api/inspect", "/api/playback"]) {
+    for (const failAt of [1, 2]) {
+      let calls = 0;
+      sources.authorize = async () => {
+        calls += 1;
+        if (calls === failAt) throw new MediaServerError("bitrate-limit", "x");
+      };
+      const response = await api(harness.base, path, { method: "POST", user: "ada", body: {} });
+      assert.equal(response.status, 403, `${path} authorization ${failAt}`);
+      assert.equal((await response.json() as { messageKey?: string }).messageKey, "err.mediaServerBitrateLimit");
+      assert.equal(calls, failAt, `${path} reached authorization ${failAt}`);
+    }
+  }
+});
+
+test("playback preparation maps policy refusals without forwarding provider text", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.useSource({ url: sealedRemote() } as StreamItem);
+  const sources = harness.mediaSources as unknown as { assertCurrent(): void; authorize(): Promise<void> };
+  sources.assertCurrent = () => undefined;
+
+  const sentinel = "SENTINEL-PROVIDER-TEXT";
+  for (const path of ["/api/inspect", "/api/playback"]) {
+    for (const [error, status, key] of [
+      [new MediaServerError("playback-not-allowed", sentinel), 403, "err.mediaServerPlaybackNotAllowed"],
+      [new MediaServerError("no-compatible-stream", sentinel), 422, "err.mediaServerNoCompatibleStream"],
+    ] as const) {
+      sources.authorize = async () => { throw error; };
+      const response = await api(harness.base, path, { method: "POST", user: "ada", body: {} });
+      assert.equal(response.status, status, `${path} ${error.code}`);
+      const body = await response.text();
+      assert.equal((JSON.parse(body) as { messageKey?: string }).messageKey, key);
+      assert.equal(body.includes(sentinel), false, "provider text never reaches the response");
+    }
+  }
+});
 
 test("the ownership guard answers somebody else's session with a bare 404", async (t) => {
   const harness = await mount();

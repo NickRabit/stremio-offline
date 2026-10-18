@@ -65,11 +65,14 @@ interface RemoteState {
   statusByAttempt?: Record<string, number>;
   attempts: Record<string, number>;
   openError?: Error;
+  activeOpens: number;
+  maxActiveOpens: number;
 }
 
 const state = (total: number): RemoteState => ({
   allowed: true, ignoreRange: false, body: bytes(total), calls: [], cancelled: 0,
   revalidations: 0, revalidateFailure: "none", attempts: {}, chunkDelayMs: 0,
+  activeOpens: 0, maxActiveOpens: 0,
 });
 
 const chunkStream = (buf: Buffer, start: number, end: number, remote: RemoteState, signal: AbortSignal): ReadableStream<Uint8Array> => {
@@ -88,6 +91,36 @@ const chunkStream = (buf: Buffer, start: number, end: number, remote: RemoteStat
   });
 };
 
+const trackedStream = (source: ReadableStream<Uint8Array>, remote: RemoteState): ReadableStream<Uint8Array> => {
+  const reader = source.getReader();
+  let finished = false;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    remote.activeOpens -= 1;
+  };
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const chunk = await reader.read();
+        if (chunk.done) {
+          finish();
+          controller.close();
+        } else {
+          controller.enqueue(chunk.value);
+        }
+      } catch (error) {
+        finish();
+        controller.error(error);
+      }
+    },
+    async cancel(reason) {
+      finish();
+      await reader.cancel(reason).catch(() => undefined);
+    },
+  });
+};
+
 const remoteBackend = (remote: RemoteState) => {
   const backend: RemoteDownloadBackend = {
     current: () => remote.allowed,
@@ -97,13 +130,15 @@ const remoteBackend = (remote: RemoteState) => {
       if (remote.openError) throw remote.openError;
       const forced = remote.statusByAttempt?.[`${job.id}:${remote.attempts[job.id]}`];
       if (forced) return new Response(null, { status: forced, headers: forced === 429 ? { "retry-after": "1" } : {} });
+      remote.activeOpens += 1;
+      remote.maxActiveOpens = Math.max(remote.maxActiveOpens, remote.activeOpens);
       if (remote.gate) await remote.gate;
       const total = remote.body.length;
       const offset = args.range ? Number(/bytes=(\d+)-/.exec(args.range)?.[1] ?? 0) : 0;
       if (remote.ignoreRange || offset === 0) {
-        return new Response(chunkStream(remote.body, 0, total - 1, remote, signal), { status: 200, headers: { "content-length": String(total) } });
+        return new Response(trackedStream(chunkStream(remote.body, 0, total - 1, remote, signal), remote), { status: 200, headers: { "content-length": String(total) } });
       }
-      return new Response(chunkStream(remote.body, offset, total - 1, remote, signal), {
+      return new Response(trackedStream(chunkStream(remote.body, offset, total - 1, remote, signal), remote), {
         status: 206, headers: { "content-range": `bytes ${offset}-${total - 1}/${total}`, "content-length": String(total - offset) },
       });
     },
@@ -406,6 +441,8 @@ test("two jobs on one provider and server run one at a time, whatever the settin
     await waitFor(h.queue, () => h.queue.list().every((job) => job.status === "completed"));
     // Both opens are sequential and never overlap: the second cannot start before the first ends.
     assert.equal(h.remote.calls.length, 2, "one GET per job, no segments");
+    assert.deepEqual(h.remote.calls.map((call) => call.range), [undefined, undefined], "a remote copy never probes ranges");
+    assert.equal(h.remote.maxActiveOpens, 1, "two jobs on one media server never transfer concurrently");
     assert.deepEqual(h.remote.calls.map((call) => call.id), [h.queue.list()[0]!.id, h.queue.list()[1]!.id]);
   } finally { await close(h); }
 });

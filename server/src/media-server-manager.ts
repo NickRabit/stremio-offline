@@ -19,6 +19,7 @@ import {
 import { remoteIdsMatch, remoteMatchTarget, type RemoteMatchTarget } from "./media-server-match.js";
 import { MediaServerIndex } from "./media-server-index.js";
 import { IMAGE_FROM_HEADER, imageSurface, noteImage } from "./image-stats.js";
+import { OriginalQuota } from "./media-server-quota.js";
 import { RemoteImageCache, remoteImageKey, type RemoteImageBody } from "./remote-image-cache.js";
 import {
   createMediaServerProvider,
@@ -28,13 +29,22 @@ import {
   type ProviderItem,
   type ProviderItemType,
   type ProviderLibrary,
+  type ProviderPlaybackInfo,
+  type ProviderPlaybackReport,
   type ProviderSort,
   type ProviderVersion,
   type RemoteAccountPolicy,
   PROVIDER_ORDERS,
   PROVIDER_SORTS,
 } from "./media-server-provider.js";
-import { createMediaServerTransport, normalizeMediaServerUrl, type MediaServerAsset, type MediaServerTransport, type MediaServerTransportConfig } from "./media-server-security.js";
+import {
+  MEDIA_SERVER_RATE_LIMIT_COOLDOWN_MS,
+  createMediaServerTransport,
+  normalizeMediaServerUrl,
+  type MediaServerAsset,
+  type MediaServerTransport,
+  type MediaServerTransportConfig,
+} from "./media-server-security.js";
 import type { MediaServerSecrets } from "./media-server-secrets.js";
 import {
   MEDIA_SERVER_CONFIGURATION_MAX_BYTES,
@@ -149,12 +159,18 @@ export interface MediaServerManagerSeams {
   /** The disk and memory cache in front of remote posters and backdrops. Absent turns the
    *  cache off: every read streams from the provider the way it always did. */
   remoteImages?: RemoteImageCache;
+  quotaClock?: () => number;
+  quotaSleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+  /** The hard cap on one best-effort upstream session logout. */
+  logoutTimeoutMs?: number;
 }
 
 const USERNAME_MAX = 256;
 const PASSWORD_MAX = 1024;
 const RUNTIME_MAX = 128;
 const CLEANUP_INTERVAL_MS = 60_000;
+const LOGOUT_TIMEOUT_MS = 5_000;
+const LOGOUT_CONCURRENCY = 4;
 const MATCH_CANDIDATE_MAX = 40;
 const MATCH_STREAM_MAX = 200;
 /** A page asked for one season's episodes: the one parent-scoped page an episode match reads. */
@@ -172,6 +188,9 @@ const PREVIEW_TTL_MS = PROOF_TTL_MS;
 const PREVIEW_MAX = 128;
 /** How long one proved original stays usable once it was proved: one playback-guard interval. */
 const ORIGINAL_PROOF_TTL_MS = 30_000;
+/** Long enough to keep one provider session stable across the 30-second original-proof windows. */
+const LIVE_PLAYBACK_TTL_MS = 6 * 60 * 60_000;
+const LIVE_PLAYBACK_MAX = 512;
 /** The most original proofs held at once; the oldest is evicted past this bound. */
 const ORIGINAL_PROOF_MAX = 256;
 /** How long one ordinary raw detail or version list may be re-served once its read completed.
@@ -565,6 +584,26 @@ interface OriginalProof {
   secretRef: string | undefined;
   itemId: string;
   mediaSourceId: string;
+  admissionKind: "playback" | "download";
+  bitrate?: number;
+  playSessionId?: string;
+  at: number;
+}
+
+interface PlaybackAdmission {
+  bitrate?: number;
+  playSessionId?: string;
+}
+
+interface LivePlaybackAdmission extends PlaybackAdmission {
+  actorId: string;
+  actorSecretStamp: string;
+  libraryId: string;
+  connectionId: string;
+  generation: number;
+  secretRef: string | undefined;
+  itemId: string;
+  mediaSourceId: string;
   at: number;
 }
 
@@ -668,6 +707,8 @@ export class MediaServerManager {
    *  source, they never substitute for the local grant and are dropped with an invalidated
    *  connection. */
   private readonly originalProofs = new Map<string, OriginalProof>();
+  private readonly livePlaybackAdmissions = new Map<string, LivePlaybackAdmission>();
+  private readonly quota: OriginalQuota;
   /** Bounded, time-limited raw ordinary metadata: one identity-validated detail or version list
    *  per operation, actor, library, connection identity and item. It is never an authorization
    *  and never carries projected local state; it is dropped with an invalidated connection. */
@@ -682,6 +723,7 @@ export class MediaServerManager {
   private readonly networkStartIntervalMs: number;
   private readonly coalesceReads: boolean;
   private readonly cleanupIntervalMs: number;
+  private readonly logoutTimeoutMs: number;
   private readonly lifetime = new AbortController();
   private readonly loginTransports = new Set<MediaServerTransport>();
   private credentialChain: Promise<unknown> = Promise.resolve();
@@ -701,6 +743,10 @@ export class MediaServerManager {
     seams: MediaServerManagerSeams = {},
   ) {
     this.clock = seams.clock ?? (() => Date.now());
+    this.quota = new OriginalQuota({
+      clock: seams.quotaClock ?? this.clock,
+      ...(seams.quotaSleep === undefined ? {} : { sleep: seams.quotaSleep }),
+    });
     this.index = seams.index ?? new MediaServerIndex({ clock: this.clock });
     this.providerFactory = seams.providerFactory ?? createMediaServerProvider;
     this.transportFactory = seams.transportFactory ?? ((config) => createMediaServerTransport(config));
@@ -708,6 +754,7 @@ export class MediaServerManager {
     this.networkStartIntervalMs = seams.networkStartIntervalMs ?? NETWORK_START_INTERVAL_MS;
     this.coalesceReads = seams.coalesceReads ?? true;
     this.cleanupIntervalMs = seams.cleanupIntervalMs ?? CLEANUP_INTERVAL_MS;
+    this.logoutTimeoutMs = seams.logoutTimeoutMs ?? LOGOUT_TIMEOUT_MS;
     this.configuration = new MediaServerConfiguration(this.store);
     this.remoteImages = seams.remoteImages;
   }
@@ -757,6 +804,7 @@ export class MediaServerManager {
     this.statuses.clear();
     this.proofs.clear();
     this.originalProofs.clear();
+    this.livePlaybackAdmissions.clear();
     this.previews.clear();
     this.metadata.clear();
     this.metadataBytes = 0;
@@ -771,6 +819,12 @@ export class MediaServerManager {
   setContentInvalidator(callback: (scope: MediaServerInvalidationScope) => Promise<void>): void {
     if (this.contentInvalidator) throw new Error("A media-server content invalidator is already registered.");
     this.contentInvalidator = callback;
+  }
+
+  forgetPlaybackAdmissions(actorId: string): void {
+    for (const [key, admission] of [...this.livePlaybackAdmissions]) {
+      if (admission.actorId === actorId) this.livePlaybackAdmissions.delete(key);
+    }
   }
 
   async listConnections(authority: MediaServerAuthority): Promise<{ connections: AdminConnectionView[]; keyConfigured: boolean }> {
@@ -796,18 +850,22 @@ export class MediaServerManager {
       const id = newConnectionId();
       const transport = this.transportFactory({ baseUrl, allowLan, allowLoopback, deviceId: id });
       let cached = false;
+      let installed = false;
+      let provider: MediaServerProvider | undefined;
+      let result: { serverId: string; accountId: string; token: string } | undefined;
       this.loginTransports.add(transport);
       try {
-        const provider = this.providerFactory(kind as MediaServerKind, transport);
-        const result = await this.net(undefined, request, () => provider.authenticate(username, password, request));
+        provider = this.providerFactory(kind as MediaServerKind, transport);
+        result = await this.net(undefined, request, () => provider!.authenticate(username, password, request));
+        const authenticated = result;
         this.checkLive(request);
         this.requireAdmin(authority, request);
-        const binding = { connectionId: id, provider: kind as MediaServerKind, serverId: result.serverId, accountId: result.accountId };
+        const binding = { connectionId: id, provider: kind as MediaServerKind, serverId: authenticated.serverId, accountId: authenticated.accountId };
         const ref = await this.serializedCredential(() => {
           this.assertWriteAuthority({ users: this.store.users() }, authority, request);
-          return this.vault.put(binding, result.token);
+          return this.vault.put(binding, authenticated.token);
         });
-        let installed!: MediaConnectionRecord;
+        let created!: MediaConnectionRecord;
         try {
           await this.store.update((state) => {
             this.assertWriteAuthority(state, authority, request);
@@ -816,22 +874,33 @@ export class MediaServerManager {
             if (list.some((candidate) => verifiedKey(candidate.provider, candidate.serverId, candidate.accountId) === verifiedKey(binding.provider, binding.serverId, binding.accountId))) {
               throw invalid("That remote account is already connected.");
             }
-            installed = {
+            created = {
               id, provider: binding.provider, name, baseUrl, allowLan, allowLoopback,
               serverId: binding.serverId, accountId: binding.accountId, enabled: true, generation: 0,
               secretRef: ref, addedAt: new Date().toISOString(),
             };
-            state.mediaConnections = [...list, installed];
+            state.mediaConnections = [...list, created];
           });
         } catch (error) {
           await this.rollbackSecret(ref);
           throw error;
         }
-        this.cacheRuntime(id, newRuntime(installed.generation, installed.secretRef, transport, provider));
+        installed = true;
+        this.cacheRuntime(id, newRuntime(created.generation, created.secretRef, transport, provider));
         cached = true;
-        this.markAvailable(installed);
-        log("INFO", "Media-server connection created", { actor: actor.username, connectionId: id, provider: installed.provider });
-        return this.adminConnectionView(installed);
+        this.markAvailable(created);
+        log("INFO", "Media-server connection created", { actor: actor.username, connectionId: id, provider: created.provider });
+        return this.adminConnectionView(created);
+      } catch (error) {
+        if (!installed && result && provider) {
+          await this.logoutTokens([{
+            connection: { id, provider: kind as MediaServerKind, baseUrl, allowLan, allowLoopback },
+            token: result.token,
+            transport,
+            provider,
+          }]);
+        }
+        throw error;
       } finally {
         this.loginTransports.delete(transport);
         if (!cached) await transport.close().catch(() => undefined);
@@ -885,21 +954,24 @@ export class MediaServerManager {
     const connectionId = this.requireConnectionId(id);
     const forget = readForgetOption(options);
     await this.adminMutation(async () => {
+      const connection = this.store.mediaConnections().find((candidate) => candidate.id === connectionId);
+      const token = connection ? await this.storedToken(connection) : undefined;
       await this.store.update((state) => {
         this.assertWriteAuthority(state, authority, request);
-        const connection = (state.mediaConnections ?? []).find((candidate) => candidate.id === connectionId);
-        if (!connection) throw notFound("That media-server connection does not exist.");
-        const scope = connectionScope(connection);
+        const current = (state.mediaConnections ?? []).find((candidate) => candidate.id === connectionId);
+        if (!current) throw notFound("That media-server connection does not exist.");
+        const scope = connectionScope(current);
         if (forget) forgetRemovedHistory(state, scope);
         else markRemovedHistory(state, scope, this.clock(), { connectionIds: [connectionId] });
         const removed = (state.remoteLibraries ?? []).filter((library) => library.connectionId === connectionId);
         const affected = this.granteeIds(state.users, removed);
         state.mediaConnections = (state.mediaConnections ?? []).filter((candidate) => candidate.id !== connectionId);
         state.remoteLibraries = (state.remoteLibraries ?? []).filter((library) => library.connectionId !== connectionId);
-        state.mediaSecretCleanup = this.appendCleanup(state.mediaSecretCleanup, connection.secretRef ? [connection.secretRef] : []);
+        state.mediaSecretCleanup = this.appendCleanup(state.mediaSecretCleanup, current.secretRef ? [current.secretRef] : []);
         if (affected.length) state.users = bumpPermissions(state.users ?? [], affected);
       });
       this.invalidateRuntime(connectionId);
+      if (connection && token !== undefined) await this.logoutTokens([{ connection, token }]);
       await this.invalidateContent({ connectionId });
       await this.drainCleanup();
       log("INFO", "Media-server connection removed", { actor: actor.username, connectionId });
@@ -1231,13 +1303,20 @@ export class MediaServerManager {
     const prepared = prepareMediaServerConfiguration(metadata);
     await this.adminMutation(async () => {
       const replaced: string[] = [];
+      const storedTokens = new Map<string, string>();
+      for (const connection of this.store.mediaConnections()) {
+        const token = await this.storedToken(connection);
+        if (token !== undefined && connection.secretRef !== undefined) storedTokens.set(`${connection.id}\u0000${connection.secretRef}`, token);
+      }
+      let previousConnections: MediaConnectionRecord[] = [];
       await this.store.update((state) => {
         this.assertWriteAuthority(state, authority, request);
         mutateSettings(state);
         this.assertWriteAuthority(state, authority, request);
-        const previousConnections = state.mediaConnections ?? [];
+        const currentConnections = state.mediaConnections ?? [];
+        previousConnections = currentConnections.map((connection) => structuredClone(connection));
         const previousLibraries = state.remoteLibraries ?? [];
-        replaced.push(...previousConnections.map((connection) => connection.id));
+        replaced.push(...currentConnections.map((connection) => connection.id));
         state.mediaConnections = prepared.connections;
         state.remoteLibraries = prepared.libraries;
         const now = this.clock();
@@ -1249,11 +1328,16 @@ export class MediaServerManager {
         markDetachedHistory(state, now);
         state.mediaSecretCleanup = this.appendCleanup(
           state.mediaSecretCleanup,
-          previousConnections.map((connection) => connection.secretRef).filter((ref): ref is string => ref !== undefined),
+          currentConnections.map((connection) => connection.secretRef).filter((ref): ref is string => ref !== undefined),
         );
         const affected = this.granteeIds(state.users, previousLibraries);
         if (affected.length) state.users = bumpPermissions(state.users ?? [], affected);
       });
+      const logoutEntries = previousConnections.flatMap((connection) => {
+        const token = connection.secretRef === undefined ? undefined : storedTokens.get(`${connection.id}\u0000${connection.secretRef}`);
+        return token === undefined ? [] : [{ connection, token }];
+      });
+      await this.logoutTokens(logoutEntries);
       for (const connectionId of replaced) {
         this.invalidateRuntime(connectionId);
         await this.invalidateContent({ connectionId });
@@ -1567,6 +1651,56 @@ export class MediaServerManager {
     return this.versionsUnder(authority, request, library, connection, session, requested, "cached");
   }
 
+  async reportPlayback(
+    authority: MediaServerAuthority,
+    libraryId: unknown,
+    itemId: unknown,
+    report: ProviderPlaybackReport,
+    signal?: AbortSignal,
+  ): Promise<string | undefined> {
+    const request = this.requestSignal(signal);
+    const user = this.currentActor(authority, request);
+    const library = this.requireVisibleLibrary(user, libraryId);
+    const connection = this.requireConnection(library.connectionId);
+    const requested = requestItemId(itemId);
+    try {
+      const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId }, request);
+      if (report.kind === "playing") {
+        const answer = await this.versionsUnder(authority, request, library, connection, session, requested, "cached");
+        if (!answer.versions.some((version) => version.id === report.mediaSourceId)) {
+          throw notFound("That media-server source is no longer available.");
+        }
+        const stored = this.originalProofFor(user, library, connection, requested, report.mediaSourceId);
+        const proof = stored?.admissionKind === "playback" ? stored : undefined;
+        const live = this.livePlaybackAdmissionFor(user, library, connection, requested, report.mediaSourceId);
+        let bitrate = proof?.bitrate ?? live?.bitrate;
+        let playSessionId = proof?.playSessionId ?? live?.playSessionId;
+        if (!proof && !live) {
+          const admission = await this.admitPlaybackSource(
+            authority, request, library, connection, session, requested, report.mediaSourceId, true, true,
+          );
+          bitrate = admission.bitrate;
+          playSessionId = admission.playSessionId;
+        }
+        this.assertStreamBitrate(session.policy, bitrate);
+        this.recheckContent(authority, request, library.id, connection);
+        await this.upstream(connection, request, () => session.provider.reportPlayback(session.token, requested, {
+          ...report,
+          playSessionId: playSessionId ?? report.playSessionId,
+        }, request));
+        return playSessionId;
+      }
+      this.recheckContent(authority, request, library.id, connection);
+      await this.upstream(connection, request, () => session.provider.reportPlayback(session.token, requested, report, request));
+      return undefined;
+    } finally {
+      if (report.kind === "stopped") {
+        this.deleteOriginalProof(user.id, library.id, connection.id, connection.generation, connection.secretRef, requested, report.mediaSourceId);
+        this.deleteLivePlaybackAdmission(user, library.id, connection.id, connection.generation, connection.secretRef, requested, report.mediaSourceId);
+      }
+    }
+  }
+
   /** Proves the acting account may still reach one attached library: the current actor, a
    *  visible library and its captured connection, then a live session that re-reads the
    *  identity, the account policy and the view list, and a content re-check afterwards. It
@@ -1751,6 +1885,7 @@ export class MediaServerManager {
     if (ref.subtitleIndex !== undefined) throw notFound("That media-server item does not exist.");
     const { library, connection } = this.recheckRef(authority, request, ref);
     const user = this.currentActor(authority, request);
+    let admission: PlaybackAdmission | undefined;
     try {
       const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId, download: options?.download === true }, request);
       this.recheckRef(authority, request, ref);
@@ -1760,10 +1895,24 @@ export class MediaServerManager {
         // membership proof. The playback guard and download admission never take this path.
         const found = await this.versionsUnder(authority, request, library, connection, session, ref.itemId, "cached");
         this.recheckRef(authority, request, ref);
-        if (!found.versions.some((version) => version.id === ref.mediaSourceId)) throw notFound("That media-server source is no longer available.");
+        const version = found.versions.find((candidate) => candidate.id === ref.mediaSourceId);
+        if (!version) throw notFound("That media-server source is no longer available.");
+        const isPlayback = options.download !== true;
+        const live = isPlayback
+          ? this.livePlaybackAdmissionFor(user, library, connection, ref.itemId, ref.mediaSourceId)
+          : undefined;
+        admission = live
+          ? this.playbackAdmissionValue(live)
+          : await this.admitPlaybackSource(
+            authority, request, library, connection, session, ref.itemId, ref.mediaSourceId, isPlayback, isPlayback,
+          );
         this.putOriginalProof({
           actorId: user.id, libraryId: library.id, connectionId: connection.id, generation: connection.generation,
-          secretRef: connection.secretRef, itemId: ref.itemId, mediaSourceId: ref.mediaSourceId, at: this.clock(),
+          secretRef: connection.secretRef, itemId: ref.itemId, mediaSourceId: ref.mediaSourceId,
+          admissionKind: isPlayback ? "playback" : "download",
+          bitrate: admission.bitrate,
+          ...(admission.playSessionId === undefined ? {} : { playSessionId: admission.playSessionId }),
+          at: this.clock(),
         });
         return;
       }
@@ -1777,13 +1926,27 @@ export class MediaServerManager {
       if (item.type !== "movie" && item.type !== "episode") throw invalid("That item has no playable media.");
       const versions = await this.upstream(connection, request, () => session.provider.versions(session.token, connection.accountId, item.id, request));
       this.recheckRef(authority, request, ref);
-      if (!versions.some((version) => version.id === ref.mediaSourceId)) throw notFound("That media-server source is no longer available.");
+      const version = versions.find((candidate) => candidate.id === ref.mediaSourceId);
+      if (!version) throw notFound("That media-server source is no longer available.");
+      const isPlayback = options?.download !== true;
+      const live = isPlayback
+        ? this.livePlaybackAdmissionFor(user, library, connection, ref.itemId, ref.mediaSourceId)
+        : undefined;
+      admission = live
+        ? this.playbackAdmissionValue(live)
+        : await this.admitPlaybackSource(
+          authority, request, library, connection, session, ref.itemId, ref.mediaSourceId, isPlayback, isPlayback,
+        );
       this.shareFreshOriginal(user, library, connection, runtime, item, versions);
     } catch (error) {
       this.deleteOriginalProof(user.id, library.id, connection.id, connection.generation, connection.secretRef, ref.itemId, ref.mediaSourceId);
+      if (options?.download !== true) {
+        this.deleteLivePlaybackAdmission(user, library.id, connection.id, connection.generation, connection.secretRef, ref.itemId, ref.mediaSourceId);
+      }
       this.forgetFreshOriginal(user, library, connection, ref.itemId);
       throw error;
     }
+    if (!admission) throw new MediaServerError("invalid-response", "The media-server playback admission was lost.");
     this.putOriginalProof({
       actorId: user.id,
       libraryId: library.id,
@@ -1792,6 +1955,9 @@ export class MediaServerManager {
       secretRef: connection.secretRef,
       itemId: ref.itemId,
       mediaSourceId: ref.mediaSourceId,
+      admissionKind: options?.download === true ? "download" : "playback",
+      bitrate: admission.bitrate,
+      ...(admission.playSessionId === undefined ? {} : { playSessionId: admission.playSessionId }),
       at: this.clock(),
     });
   }
@@ -1803,17 +1969,20 @@ export class MediaServerManager {
    *  re-checked before any body leaves the manager; a stale or denied result has its body
    *  cancelled. The request shares the manager lifetime, so a shutdown or a connection change
    *  aborts it. */
-  async openOriginal(authority: MediaServerAuthority, ref: RemoteContentRef, args: { method: "GET" | "HEAD"; range?: string }, signal?: AbortSignal): Promise<Response> {
+  async openOriginal(authority: MediaServerAuthority, ref: RemoteContentRef, args: { method: "GET" | "HEAD"; range?: string }, signal?: AbortSignal, options?: { download?: boolean }): Promise<Response> {
     const request = this.requestSignal(signal);
     if (!isRemoteContentRef(ref)) throw notFound("That media-server item does not exist.");
     if (ref.subtitleIndex !== undefined) throw notFound("That media-server item does not exist.");
     if (!args || (args.method !== "GET" && args.method !== "HEAD")) throw invalid("The media-server request method is not supported.");
     if (args.range !== undefined && (typeof args.range !== "string" || args.range.length > 128)) throw invalid("The media-server byte range is malformed.");
     const { library, connection } = this.recheckRef(authority, request, ref);
-    const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId }, request);
+    const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId, download: options?.download === true }, request);
     this.recheckRef(authority, request, ref);
     const user = this.currentActor(authority, request);
-    if (!this.originalProofFor(user, library, connection, ref.itemId, ref.mediaSourceId)) {
+    const wantedKind = options?.download === true ? "download" : "playback";
+    let proof = this.originalProofFor(user, library, connection, ref.itemId, ref.mediaSourceId);
+    if (proof?.admissionKind !== wantedKind) proof = undefined;
+    if (!proof) {
       const runtime = this.liveRuntime(connection);
       const item = await this.upstream(connection, request, () => session.provider.detail(session.token, connection.accountId, ref.itemId, request));
       this.recheckRef(authority, request, ref);
@@ -1823,9 +1992,19 @@ export class MediaServerManager {
       this.recheckRef(authority, request, ref);
       const versions = await this.upstream(connection, request, () => session.provider.versions(session.token, connection.accountId, item.id, request));
       this.recheckRef(authority, request, ref);
-      if (!versions.some((version) => version.id === ref.mediaSourceId)) throw notFound("That media-server source is no longer available.");
+      const version = versions.find((candidate) => candidate.id === ref.mediaSourceId);
+      if (!version) throw notFound("That media-server source is no longer available.");
+      const isPlayback = options?.download !== true;
+      const live = isPlayback
+        ? this.livePlaybackAdmissionFor(user, library, connection, ref.itemId, ref.mediaSourceId)
+        : undefined;
+      const admission = live
+        ? this.playbackAdmissionValue(live)
+        : await this.admitPlaybackSource(
+          authority, request, library, connection, session, ref.itemId, ref.mediaSourceId, isPlayback, isPlayback,
+        );
       if (item.type === "movie" || item.type === "episode") this.shareFreshOriginal(user, library, connection, runtime, item, versions);
-      this.putOriginalProof({
+      proof = {
         actorId: user.id,
         libraryId: library.id,
         connectionId: connection.id,
@@ -1833,28 +2012,54 @@ export class MediaServerManager {
         secretRef: connection.secretRef,
         itemId: ref.itemId,
         mediaSourceId: ref.mediaSourceId,
+        admissionKind: isPlayback ? "playback" : "download",
+        bitrate: admission.bitrate,
+        ...(admission.playSessionId === undefined ? {} : { playSessionId: admission.playSessionId }),
         at: this.clock(),
-      });
+      };
+      this.putOriginalProof(proof);
     }
-    const response = await this.originalUpstream(connection, request, () => session.transport.requestOriginal(
-      { itemId: ref.itemId, mediaSourceId: ref.mediaSourceId, method: args.method, ...(args.range === undefined ? {} : { range: args.range }) },
-      session.token,
-      request,
-    ));
+    if (options?.download !== true) this.assertStreamBitrate(session.policy, proof.bitrate);
+    const slot = this.quota.reserve(connection.id, `${user.id}:${ref.itemId}:${ref.mediaSourceId}`, session.policy);
+    let response: Response;
+    try {
+      response = await this.originalUpstream(connection, request, () => session.transport.requestOriginal(
+        {
+          itemId: ref.itemId,
+          mediaSourceId: ref.mediaSourceId,
+          method: args.method,
+          ...(args.range === undefined ? {} : { range: args.range }),
+          ...(proof.playSessionId === undefined ? {} : { playSessionId: proof.playSessionId }),
+        },
+        session.token,
+        request,
+      ));
+    } catch (error) {
+      slot.release();
+      throw error;
+    }
     const abortBody = () => { void response.body?.cancel().catch(() => undefined); };
     try {
       this.recheckRef(authority, request, ref);
       this.checkLive(request);
     } catch (error) {
       abortBody();
+      slot.release();
       throw error;
     }
     if (request.aborted) {
       abortBody();
+      slot.release();
       throw cancelled();
     }
     request.addEventListener("abort", abortBody, { once: true });
-    return response;
+    try {
+      return slot.wrap(response, request);
+    } catch (error) {
+      abortBody();
+      slot.release();
+      throw error;
+    }
   }
 
   /** Re-reads the records a durable download reference names and refuses when any moved: the
@@ -1887,7 +2092,7 @@ export class MediaServerManager {
     connection: MediaConnectionRecord,
     session: LiveSession,
     user: UserRecord,
-  ): Promise<void> {
+  ): Promise<OriginalProof> {
     const item = await this.upstream(connection, signal, () => session.provider.detail(session.token, connection.accountId, reference.itemId, signal));
     this.recheckDownloadRef(authority, signal, reference);
     if (item.id !== reference.itemId) throw new MediaServerError("invalid-response", "The media-server item identity changed.");
@@ -1897,8 +2102,12 @@ export class MediaServerManager {
     if (item.type !== "movie" && item.type !== "episode") throw invalid("That item has no playable media.");
     const versions = await this.upstream(connection, signal, () => session.provider.versions(session.token, connection.accountId, item.id, signal));
     this.recheckDownloadRef(authority, signal, reference);
-    if (!versions.some((version) => version.id === reference.mediaSourceId)) throw notFound("That media-server source is no longer available.");
-    this.putOriginalProof({
+    const version = versions.find((candidate) => candidate.id === reference.mediaSourceId);
+    if (!version) throw notFound("That media-server source is no longer available.");
+    const admission = await this.admitPlaybackSource(
+      authority, signal, library, connection, session, item.id, reference.mediaSourceId, false, false,
+    );
+    const proof: OriginalProof = {
       actorId: user.id,
       libraryId: library.id,
       connectionId: connection.id,
@@ -1906,8 +2115,13 @@ export class MediaServerManager {
       secretRef: connection.secretRef,
       itemId: reference.itemId,
       mediaSourceId: reference.mediaSourceId,
+      admissionKind: "download",
+      bitrate: admission.bitrate,
+      ...(admission.playSessionId === undefined ? {} : { playSessionId: admission.playSessionId }),
       at: this.clock(),
-    });
+    };
+    this.putOriginalProof(proof);
+    return proof;
   }
 
   /** Proves a durable download reference still names a live, permitted original, with no session
@@ -1941,28 +2155,50 @@ export class MediaServerManager {
     const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId, download: true }, request);
     this.recheckDownloadRef(authority, request, reference);
     const user = this.currentActor(authority, request);
-    if (!this.originalProofFor(user, library, connection, reference.itemId, reference.mediaSourceId)) {
-      await this.proveDownloadOriginal(authority, request, reference, library, connection, session, user);
+    const stored = this.originalProofFor(user, library, connection, reference.itemId, reference.mediaSourceId);
+    const proof = stored?.admissionKind === "download"
+      ? stored
+      : await this.proveDownloadOriginal(authority, request, reference, library, connection, session, user);
+    const slot = this.quota.reserve(connection.id, `${user.id}:${reference.itemId}:${reference.mediaSourceId}`, session.policy);
+    let response: Response;
+    try {
+      response = await this.originalUpstream(connection, request, () => session.transport.requestOriginal(
+        {
+          itemId: reference.itemId,
+          mediaSourceId: reference.mediaSourceId,
+          method: args.method,
+          ...(args.range === undefined ? {} : { range: args.range }),
+          ...(proof.playSessionId === undefined ? {} : { playSessionId: proof.playSessionId }),
+        },
+        session.token,
+        request,
+      ));
+    } catch (error) {
+      slot.release();
+      throw error;
     }
-    const response = await this.originalUpstream(connection, request, () => session.transport.requestOriginal(
-      { itemId: reference.itemId, mediaSourceId: reference.mediaSourceId, method: args.method, ...(args.range === undefined ? {} : { range: args.range }) },
-      session.token,
-      request,
-    ));
     const abortBody = () => { void response.body?.cancel().catch(() => undefined); };
     try {
       this.recheckDownloadRef(authority, request, reference);
       this.checkLive(request);
     } catch (error) {
       abortBody();
+      slot.release();
       throw error;
     }
     if (request.aborted) {
       abortBody();
+      slot.release();
       throw cancelled();
     }
     request.addEventListener("abort", abortBody, { once: true });
-    return response;
+    try {
+      return slot.wrap(response, request);
+    } catch (error) {
+      abortBody();
+      slot.release();
+      throw error;
+    }
   }
 
   private requestSignal(signal?: AbortSignal): AbortSignal {
@@ -1972,6 +2208,78 @@ export class MediaServerManager {
   private checkLive(signal: AbortSignal): void {
     if (this.closed) throw closedError();
     if (signal.aborted) throw cancelled();
+  }
+
+  private async admitPlaybackSource(
+    authority: MediaServerAuthority,
+    signal: AbortSignal,
+    library: RemoteLibraryRecord,
+    connection: MediaConnectionRecord,
+    session: LiveSession,
+    itemId: string,
+    mediaSourceId: string,
+    isPlayback: boolean,
+    enforceBitrate: boolean,
+  ): Promise<PlaybackAdmission> {
+    const info: ProviderPlaybackInfo = await this.upstream(connection, signal, () =>
+      session.provider.playbackInfo(session.token, connection.accountId, itemId, {
+        mediaSourceId,
+        ...(session.policy.bitrateLimit === undefined ? {} : { maxStreamingBitrate: session.policy.bitrateLimit }),
+        isPlayback,
+      }, signal));
+    this.recheckContent(authority, signal, library.id, connection);
+    if (info.errorCode === "NotAllowed") {
+      throw new MediaServerError("playback-not-allowed", "The media server does not allow playback of this item.");
+    }
+    if (info.errorCode === "NoCompatibleStream") {
+      throw new MediaServerError("no-compatible-stream", "The media server offered no compatible direct-play stream for this item.");
+    }
+    if (info.errorCode === "RateLimitExceeded") {
+      throw new MediaServerError(
+        "rate-limited",
+        "The media server is rate limiting requests.",
+        429,
+        MEDIA_SERVER_RATE_LIMIT_COOLDOWN_MS,
+      );
+    }
+    const source = info.mediaSources.find((candidate) => candidate.id === mediaSourceId);
+    if (!source) {
+      if (info.mediaSources.length === 0) {
+        throw new MediaServerError("no-compatible-stream", "The media server offered no compatible direct-play stream for this item.");
+      }
+      throw notFound("That media-server source is no longer available.");
+    }
+    if (source.supportsDirectPlay !== true) {
+      throw new MediaServerError("no-compatible-stream", "The media server offered no compatible direct-play stream for this item.");
+    }
+    if (enforceBitrate) this.assertStreamBitrate(session.policy, source.bitrate);
+    const admission: PlaybackAdmission = {
+      ...(source.bitrate === undefined ? {} : { bitrate: source.bitrate }),
+      ...(!isPlayback || info.playSessionId === undefined ? {} : { playSessionId: info.playSessionId }),
+    };
+    if (isPlayback) {
+      this.putLivePlaybackAdmission({
+        actorId: authority.actor.id,
+        actorSecretStamp: remoteSecretStamp(authority.actor.secret),
+        libraryId: library.id,
+        connectionId: connection.id,
+        generation: connection.generation,
+        secretRef: connection.secretRef,
+        itemId,
+        mediaSourceId,
+        ...(admission.bitrate === undefined ? {} : { bitrate: admission.bitrate }),
+        ...(admission.playSessionId === undefined ? {} : { playSessionId: admission.playSessionId }),
+        at: this.clock(),
+      });
+    }
+    return admission;
+  }
+
+  private assertStreamBitrate(policy: RemoteAccountPolicy, bitrate: number | undefined): void {
+    if (policy.bitrateLimit === undefined) return;
+    if (bitrate === undefined || bitrate > policy.bitrateLimit) {
+      throw new MediaServerError("bitrate-limit", "The media-server source is above the account's bitrate limit.");
+    }
   }
 
   /** The current account behind a request, read afresh from the state. Fails closed after a
@@ -2079,6 +2387,57 @@ export class MediaServerManager {
     this.originalProofs.delete(this.originalProofKey(actorId, libraryId, connectionId, generation, secretRef, itemId, mediaSourceId));
   }
 
+  private livePlaybackAdmissionFor(
+    user: UserRecord,
+    library: RemoteLibraryRecord,
+    connection: MediaConnectionRecord,
+    itemId: string,
+    mediaSourceId: string,
+  ): LivePlaybackAdmission | undefined {
+    const key = this.livePlaybackAdmissionKey(
+      user.id, remoteSecretStamp(user.secret), library.id, connection.id, connection.generation,
+      connection.secretRef, itemId, mediaSourceId,
+    );
+    const admission = this.livePlaybackAdmissions.get(key);
+    if (!admission) return undefined;
+    if (this.clock() - admission.at > LIVE_PLAYBACK_TTL_MS) {
+      this.livePlaybackAdmissions.delete(key);
+      return undefined;
+    }
+    return admission;
+  }
+
+  private playbackAdmissionValue(admission: LivePlaybackAdmission): PlaybackAdmission {
+    return {
+      ...(admission.bitrate === undefined ? {} : { bitrate: admission.bitrate }),
+      ...(admission.playSessionId === undefined ? {} : { playSessionId: admission.playSessionId }),
+    };
+  }
+
+  private putLivePlaybackAdmission(admission: LivePlaybackAdmission): void {
+    const key = this.livePlaybackAdmissionKey(
+      admission.actorId, admission.actorSecretStamp, admission.libraryId, admission.connectionId, admission.generation,
+      admission.secretRef, admission.itemId, admission.mediaSourceId,
+    );
+    this.livePlaybackAdmissions.delete(key);
+    this.livePlaybackAdmissions.set(key, admission);
+    while (this.livePlaybackAdmissions.size > LIVE_PLAYBACK_MAX) {
+      const oldest = this.livePlaybackAdmissions.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.livePlaybackAdmissions.delete(oldest);
+    }
+  }
+
+  private livePlaybackAdmissionKey(actorId: string, actorSecretStamp: string, libraryId: string, connectionId: string, generation: number, secretRef: string | undefined, itemId: string, mediaSourceId: string): string {
+    return [actorId, actorSecretStamp, libraryId, connectionId, String(generation), secretRef ?? "", itemId, mediaSourceId].join("\u0000");
+  }
+
+  private deleteLivePlaybackAdmission(user: UserRecord, libraryId: string, connectionId: string, generation: number, secretRef: string | undefined, itemId: string, mediaSourceId: string): void {
+    this.livePlaybackAdmissions.delete(this.livePlaybackAdmissionKey(
+      user.id, remoteSecretStamp(user.secret), libraryId, connectionId, generation, secretRef, itemId, mediaSourceId,
+    ));
+  }
+
   /** One proved member of a granted library, as a proof record. */
   private proofOf(user: UserRecord, library: RemoteLibraryRecord, connection: MediaConnectionRecord, item: ProviderItem): MembershipProof {
     return {
@@ -2106,6 +2465,10 @@ export class MediaServerManager {
     for (const [key, proof] of [...this.originalProofs]) {
       if (proof.connectionId === connectionId) this.originalProofs.delete(key);
     }
+    for (const [key, admission] of [...this.livePlaybackAdmissions]) {
+      if (admission.connectionId === connectionId) this.livePlaybackAdmissions.delete(key);
+    }
+    this.quota.forget(connectionId);
   }
 
   /** The mosaic cache key: the folder and what was asked of it, bound to the connection
@@ -2770,6 +3133,16 @@ export class MediaServerManager {
     return runtime;
   }
 
+  private async storedToken(connection: MediaConnectionRecord): Promise<string | undefined> {
+    if (!connection.secretRef) return undefined;
+    const binding = { connectionId: connection.id, provider: connection.provider, serverId: connection.serverId, accountId: connection.accountId };
+    try {
+      return await this.serializedCredential(() => this.vault.get(binding, connection.secretRef as string));
+    } catch {
+      return undefined;
+    }
+  }
+
   /** The live permission check every read repeats: the credential is re-read from the vault, so
    *  a removed or changed key still fails closed, and the remote identity, account policy and
    *  view list are proved. Those three facts are cached for a short window per runtime; the
@@ -3053,6 +3426,49 @@ export class MediaServerManager {
     } catch {
       log("WARN", "A media-server secret could not be cleaned up; startup reconciliation will retry");
     }
+  }
+
+  private async logoutTokens(entries: Array<{
+    connection: Pick<MediaConnectionRecord, "id" | "provider" | "baseUrl" | "allowLan" | "allowLoopback">;
+    token: string;
+    transport?: MediaServerTransport;
+    provider?: MediaServerProvider;
+  }>): Promise<void> {
+    const logout = async (entry: (typeof entries)[number]): Promise<void> => {
+      const ownsTransport = entry.transport === undefined;
+      let transport = entry.transport;
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        transport ??= this.transportFactory({
+          baseUrl: entry.connection.baseUrl,
+          allowLan: entry.connection.allowLan,
+          allowLoopback: entry.connection.allowLoopback,
+          deviceId: entry.connection.id,
+        });
+        const provider = entry.provider ?? this.providerFactory(entry.connection.provider, transport);
+        const controller = new AbortController();
+        await new Promise<void>((resolve, reject) => {
+          timer = setTimeout(() => {
+            controller.abort();
+            reject(new MediaServerError("timeout", "The media-server logout timed out."));
+          }, this.logoutTimeoutMs);
+          Promise.resolve().then(() => provider.logout(entry.token, controller.signal)).then(resolve, reject);
+        });
+      } catch (error) {
+        log("WARN", "A media-server token could not be logged out", {
+          connectionId: entry.connection.id,
+          reason: error instanceof MediaServerError ? error.code : "unavailable",
+        });
+      } finally {
+        if (timer) clearTimeout(timer);
+        if (ownsTransport && transport) await transport.close().catch(() => undefined);
+      }
+    };
+    const queue = [...entries];
+    const workers = Array.from({ length: Math.min(LOGOUT_CONCURRENCY, queue.length) }, async () => {
+      for (let entry = queue.shift(); entry !== undefined; entry = queue.shift()) await logout(entry);
+    });
+    await Promise.all(workers);
   }
 
   /** The periodic work: the secret-cleanup drain and the history sweep, coalesced so a pass

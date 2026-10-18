@@ -90,6 +90,7 @@ export const USER_ALLOWED: Rule[] = [
   { method: "GET", pattern: /^\/remote-libraries\/[^/]+\/items\/[^/]+\/state$/ },
   // The account's own position and favourite for a verified remote item: personal, not management.
   { method: "PATCH", pattern: /^\/remote-libraries\/[^/]+\/items\/[^/]+\/state$/ },
+  { method: "POST", pattern: /^\/remote-libraries\/[^/]+\/items\/[^/]+\/playing$/ },
   { method: "GET", pattern: /^\/home$/ },
   { method: "GET", pattern: /^\/home\/layout$/ },
   { method: "GET", pattern: /^\/catalogs$/ },
