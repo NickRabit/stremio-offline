@@ -24,10 +24,16 @@ The single set of rules for any coding agent working in this repository.
   titles and descriptions, and comments on issues or pull requests. Chat replies
   to the user stay in the language the user writes in.
 - For every task, create a branch off `main`.
-- Commit only into that branch. Never merge it into `main` and never push
-  directly to `main`.
+- Commit only into that branch. Never push directly to `main`.
 - After committing, push the task branch and open a pull request targeting
-  `main`. Leave the merge to the user.
+  `main`.
+- Merge the pull request only after explicit authorization. The user may authorize
+  it in advance as part of the task, or the agent may ask once the pull request
+  is ready. If neither has happened, leave the merge to the user. Authorization
+  never permits merging with failing or pending required checks, an unresolved
+  conflict, or a branch that has not been rebased on current `main`. Once
+  authorized and all gates are green, merge the pull request and delete the task
+  branch.
 - Keep the pull request mergeable without the user's help. Before opening it,
   and again whenever another branch lands on `main`, `git fetch origin main`,
   rebase the task branch onto it and resolve every conflict yourself. Never
