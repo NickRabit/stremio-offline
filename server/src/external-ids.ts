@@ -80,6 +80,12 @@ export class ExternalIdStore {
     }
   }
 
+  /** Only what is already on disk, never a request: search may read it while it runs. */
+  cachedIds(imdbId: string): ExternalIds | undefined {
+    const cached = IMDB_ID.test(imdbId) ? this.entries[imdbId] : undefined;
+    return cached ? withoutEmpty(cached) : undefined;
+  }
+
   /** Cached, otherwise one Wikidata query. Returns an empty object when Wikidata knows
    *  nothing, null when the lookup itself failed. */
   async ids(imdbId: string): Promise<ExternalIds | null> {

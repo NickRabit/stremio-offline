@@ -1,4 +1,8 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { addonManifest } from "../../playwright.config";
+
+const delayCatalog = (request: APIRequestContext, catalog: string, ms: number) =>
+  request.get(new URL(`/catalog-delay?catalog=${encodeURIComponent(catalog)}&ms=${ms}`, addonManifest).href);
 
 const openCatalog = async (page: Page, label: RegExp) => {
   await page.goto("/");
@@ -16,6 +20,11 @@ const optionLabel = async (page: Page, pattern: RegExp) => {
 };
 
 test.describe("catalog", () => {
+  test.afterEach(async ({ request }) => {
+    await delayCatalog(request, "e2e-movies", 0);
+    await delayCatalog(request, "e2e-series", 0);
+  });
+
   test("browses a catalog and opens a movie detail", async ({ page }) => {
     await openCatalog(page, /Filmy/);
 
@@ -36,6 +45,16 @@ test.describe("catalog", () => {
 
     await expect(page.getByRole("button", { name: /Zkušební seriál/ })).toBeVisible();
     await expect(page.getByRole("button", { name: /Zkušební film/ })).toHaveCount(0);
+  });
+
+  test("a fast catalogue paints before a slow one answers", async ({ page, request }) => {
+    await delayCatalog(request, "e2e-series", 8_000);
+    await page.goto("/");
+    await page.getByPlaceholder("Hledat ve všech doplňcích naráz…").fill("Zkušební");
+    await page.getByRole("button", { name: "Vyhledat" }).click();
+
+    await expect(page.getByRole("button", { name: /Zkušební film/ })).toBeVisible({ timeout: 2_000 });
+    await expect(page.getByRole("button", { name: /Zkušební seriál/ })).toBeVisible({ timeout: 15_000 });
   });
 
   // The debounce fires on its own; nothing is clicked, so this also guards that the timer

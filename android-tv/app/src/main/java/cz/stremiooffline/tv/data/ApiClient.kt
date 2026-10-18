@@ -62,6 +62,7 @@ class ApiClient(
 ) : TvApi {
 
   private val json = Json { ignoreUnknownKeys = true }
+  private val catalogSearchJson = Json { ignoreUnknownKeys = true; explicitNulls = false; encodeDefaults = false }
   /** A track change that also turns the server's own subtitle off sends the explicit null. */
   private val trackJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
   /** The download body drops null media fields instead of sending them as `null`. */
@@ -432,6 +433,40 @@ class ApiClient(
       ?: throw ApiError(ApiFailure.Generic)
   }
 
+  override suspend fun startCatalogSearch(body: CatalogSearchStartDto): CatalogSearchStartResultDto {
+    val payload = catalogSearchJson.encodeToString(CatalogSearchStartDto.serializer(), body)
+    return requestCancellable(
+      Request.Builder().url(address.resolve("/api/search/catalog")).post(payload.toRequestBody(mediaType)).build(),
+    ).decode() ?: throw ApiError(ApiFailure.Generic)
+  }
+
+  override suspend fun pollCatalogSearch(id: String, revision: Int): CatalogSearchPollDto {
+    val payload = json.encodeToString(PollRequest.serializer(), PollRequest(revision))
+    return requestCancellable(
+      Request.Builder().url(address.resolve("/api/search/catalog/" + encode(id) + "/poll"))
+        .post(payload.toRequestBody(mediaType))
+        .build(),
+    ).decode() ?: throw ApiError(ApiFailure.Generic)
+  }
+
+  override suspend fun pageCatalogSearch(id: String): Int {
+    val body = requestCancellable(
+      Request.Builder().url(address.resolve("/api/search/catalog/" + encode(id) + "/page"))
+        .post("{}".toRequestBody(mediaType))
+        .build(),
+    )
+    return body.decode<PageRevision>()?.revision ?: throw ApiError(ApiFailure.Generic)
+  }
+
+  override suspend fun deleteCatalogSearch(id: String) {
+    try {
+      requestCancellable(
+        Request.Builder().url(address.resolve("/api/search/catalog/" + encode(id))).delete().build(),
+      )
+    } catch (_: ApiError) {
+    }
+  }
+
   /** The account's search preferences and recent queries, shared with the web. */
   override suspend fun searchState(): SearchStateDto =
     request(Request.Builder().url(address.resolve("/api/search/state")).get().build())
@@ -798,6 +833,9 @@ private data class SourceRequest(val path: String)
 
 @Serializable
 private data class PollRequest(val revision: Int)
+
+@Serializable
+private data class PageRevision(val revision: Int = 0)
 
 /** The PATCH body's own shape: `null` clears the arrangement. */
 @Serializable

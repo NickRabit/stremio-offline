@@ -99,6 +99,11 @@ test("ALLOWED_MUTATIONS covers the demo writes and omits configuration", () => {
   assert.equal(isAllowedMutation("POST", "/search/everywhere/ss_abc/sources/s0/retry"), true);
   assert.equal(isAllowedMutation("DELETE", "/search/everywhere/ss_abc"), true);
   assert.equal(isAllowedMutation("DELETE", "/search/everywhere/ss_abc/poll"), false);
+  assert.equal(isAllowedMutation("POST", "/search/catalog"), true);
+  assert.equal(isAllowedMutation("POST", "/search/catalog/cs_abc/poll"), true);
+  assert.equal(isAllowedMutation("POST", "/search/catalog/cs_abc/page"), true);
+  assert.equal(isAllowedMutation("DELETE", "/search/catalog/cs_abc"), true);
+  assert.equal(isAllowedMutation("DELETE", "/search/catalog/cs_abc/poll"), false);
   assert.equal(isAllowedMutation("POST", "/progress"), true);
   assert.equal(isAllowedMutation("POST", "/progress/forget"), true);
   assert.equal(isAllowedMutation("DELETE", "/progress/movie:tt1"), true);

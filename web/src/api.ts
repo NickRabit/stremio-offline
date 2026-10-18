@@ -1,6 +1,6 @@
 import { serverText, t } from "./i18n";
 import type { SaveTarget } from "./save-target";
-import type { StatsActivityPage, ActiveStream, ActivityItem, CalendarItem, UndatedCalendarItem, ClientLogBundle, ClientLogSummary, Diagnostics, BuildInfo, AuthStatus, StatsSummary, AdminRemoteLibrary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, FavoriteFilter, FavoriteItem, FollowDefaults, FollowEpisodeRow, FollowPreview, FollowStartMode, FollowView, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryMatchResult, LibraryOp, LibraryOpsState, MediaServerConnection, MediaServerProvider, NewEpisode, ProgressEntry, ProviderLibrary, RemoteBrowseMode, RemoteBrowseOrder, RemoteBrowseSort, RemoteHomeCard, RemoteItem, RemoteItemPage, RemoteItemState, RemoteItemType, RemoteLibrary, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchMemberPage, SearchPollResult, SearchPreferences, SearchResult, SearchSnapshot, SearchStartBody, SearchState, SearchableCatalog, SiteLink, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, SettingsView, Stream, Subtitle, Trailer, UserAccount, UserPermissions, UserRole } from "./types";
+import type { StatsActivityPage, ActiveStream, ActivityItem, CalendarItem, UndatedCalendarItem, ClientLogBundle, ClientLogSummary, Diagnostics, BuildInfo, AuthStatus, StatsSummary, AdminRemoteLibrary, Addon, AddonDownloadSettings, Capabilities, Catalog, CatalogSearchPollResult, CatalogSearchRequest, CatalogSearchSnapshot, Download, DownloadSelection, DownloadSnapshot, FavoriteFilter, FavoriteItem, FollowDefaults, FollowEpisodeRow, FollowPreview, FollowStartMode, FollowView, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryMatchResult, LibraryOp, LibraryOpsState, MediaServerConnection, MediaServerProvider, NewEpisode, ProgressEntry, ProviderLibrary, RemoteBrowseMode, RemoteBrowseOrder, RemoteBrowseSort, RemoteHomeCard, RemoteItem, RemoteItemPage, RemoteItemState, RemoteItemType, RemoteLibrary, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, GrantBrowse, LibraryEstimate, LibraryGrant, LibrarySummary, LibraryType, LibraryView, Meta, PlaybackSession, ScanState, SearchMemberPage, SearchPollResult, SearchPreferences, SearchResult, SearchSnapshot, SearchStartBody, SearchState, SearchableCatalog, SiteLink, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, SettingsView, Stream, Subtitle, Trailer, UserAccount, UserPermissions, UserRole } from "./types";
 import type { HomeLayoutResponse, HomeResponse, HomeRowId } from "../../server/src/home";
 
 /** The status code has to reach the top, or a sign-out is indistinguishable from an ordinary error. */
@@ -103,6 +103,15 @@ export const api = {
     request<SearchMemberPage>(`/api/search/everywhere/${encodeURIComponent(id)}/members/${encodeURIComponent(memberKey)}?from=${from}`),
   searchEverywhereDelete: (id: string) => {
     void fetch(`/api/search/everywhere/${encodeURIComponent(id)}`, { method: "DELETE", keepalive: true }).catch(() => undefined);
+  },
+  startCatalogSearch: (body: CatalogSearchRequest, signal?: AbortSignal) =>
+    request<{ id: string; snapshot: CatalogSearchSnapshot }>("/api/search/catalog", { method: "POST", body: JSON.stringify(body), signal }),
+  pollCatalogSearch: (id: string, revision: number, signal?: AbortSignal) =>
+    request<CatalogSearchPollResult>(`/api/search/catalog/${encodeURIComponent(id)}/poll`, { method: "POST", body: JSON.stringify({ revision }), signal }),
+  pageCatalogSearch: (id: string) =>
+    request<{ revision: number }>(`/api/search/catalog/${encodeURIComponent(id)}/page`, { method: "POST" }),
+  deleteCatalogSearch: (id: string) => {
+    void fetch(`/api/search/catalog/${encodeURIComponent(id)}`, { method: "DELETE", keepalive: true }).catch(() => undefined);
   },
   updateSearchPreferences: (patch: Partial<SearchPreferences>) => request<SearchState>("/api/search/preferences", { method: "PATCH", body: JSON.stringify(patch) }),
   recordSearch: (query: string) => request<void>("/api/search/history", { method: "POST", body: JSON.stringify({ query }) }),

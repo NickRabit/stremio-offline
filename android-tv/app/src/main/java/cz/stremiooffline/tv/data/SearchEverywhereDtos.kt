@@ -9,6 +9,7 @@ data class GlobalSearchStartDto(
   val sources: List<String>,
   val slotId: String,
   val generation: Int,
+  val scope: SearchScope? = null,
 )
 
 @Serializable

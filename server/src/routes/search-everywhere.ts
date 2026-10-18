@@ -5,6 +5,10 @@ import {
   parseStartRequest,
   SearchError,
 } from "../search-contracts.js";
+import {
+  parseCatalogSearchRequest,
+  type CatalogSearchManager,
+} from "../search-catalog-session.js";
 import type { SearchAuthority, SearchSessionManager } from "../search-session.js";
 import { asyncRoute } from "./context.js";
 
@@ -13,6 +17,7 @@ export const searchEverywhereEnabled = (): boolean =>
 
 export interface SearchEverywhereRouteDeps {
   manager: SearchSessionManager;
+  catalogManager: CatalogSearchManager;
   authorityOf(req: express.Request): SearchAuthority;
   liveSearchOf(req: express.Request): boolean;
 }
@@ -100,6 +105,49 @@ export function registerSearchEverywhereRoutes(
     noStore(res);
     const id = opaque(req.params.id);
     await deps.manager.delete(deps.authorityOf(req), id);
+    res.status(204).end();
+  }));
+
+  app.post("/api/search/catalog", asyncRoute(async (req, res) => {
+    noStore(res);
+    const authority = deps.authorityOf(req);
+    const request = parseCatalogSearchRequest(req.body);
+    res.json(await deps.catalogManager.start(authority, request));
+  }));
+
+  app.post("/api/search/catalog/:id/poll", asyncRoute(async (req, res) => {
+    noStore(res);
+    const id = opaque(req.params.id);
+    const authority = deps.authorityOf(req);
+    const revision = parseRevision(req.body);
+    const controller = new AbortController();
+    const abort = () => {
+      if (!res.writableEnded) controller.abort();
+    };
+    const onRequestClose = () => {
+      if (!req.complete) abort();
+    };
+    req.once("close", onRequestClose);
+    res.once("close", abort);
+    try {
+      const answer = await deps.catalogManager.poll(authority, id, revision, controller.signal);
+      if (!res.destroyed) res.json(answer);
+    } finally {
+      req.off("close", onRequestClose);
+      res.off("close", abort);
+    }
+  }));
+
+  app.post("/api/search/catalog/:id/page", asyncRoute(async (req, res) => {
+    noStore(res);
+    const id = opaque(req.params.id);
+    res.status(202).json(deps.catalogManager.page(deps.authorityOf(req), id));
+  }));
+
+  app.delete("/api/search/catalog/:id", asyncRoute(async (req, res) => {
+    noStore(res);
+    const id = opaque(req.params.id);
+    deps.catalogManager.delete(deps.authorityOf(req), id);
     res.status(204).end();
   }));
 }

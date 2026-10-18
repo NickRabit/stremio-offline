@@ -47,6 +47,43 @@ class GlobalSearchApiTest {
   }
 
   @Test
+  fun `start sends a catalog scope only when the panel picked one`() = runTest {
+    server.enqueue(MockResponse().setBody("""{"id":"ss_1","snapshot":{"revision":1,"state":"complete"}}"""))
+
+    client(start()).startGlobalSearch(
+      GlobalSearchStartDto(
+        "matrix",
+        "movie",
+        listOf("catalog"),
+        "slot",
+        3,
+        SearchScope("a", "movie", "top"),
+      ),
+    )
+
+    assertEquals(
+      """{"query":"matrix","kind":"movie","sources":["catalog"],"slotId":"slot","generation":3,""" +
+        """"scope":{"addonKey":"a","catalogType":"movie","catalogId":"top"}}""",
+      server.takeRequest().body.readUtf8(),
+    )
+  }
+
+  @Test
+  fun `an addon-only scope omits the catalog fields`() = runTest {
+    server.enqueue(MockResponse().setBody("""{"id":"ss_1","snapshot":{"revision":1,"state":"complete"}}"""))
+
+    client(start()).startGlobalSearch(
+      GlobalSearchStartDto("matrix", "all", listOf("catalog"), "slot", 4, SearchScope(addonKey = "a")),
+    )
+
+    assertEquals(
+      """{"query":"matrix","kind":"all","sources":["catalog"],"slotId":"slot","generation":4,""" +
+        """"scope":{"addonKey":"a"}}""",
+      server.takeRequest().body.readUtf8(),
+    )
+  }
+
+  @Test
   fun `poll posts the revision and maps an expired session to 410`() = runTest {
     server.enqueue(MockResponse().setResponseCode(410).setBody("""{"error":"expired","messageKey":"err.searchRestartRequired"}"""))
 

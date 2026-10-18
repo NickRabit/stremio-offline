@@ -48,6 +48,10 @@ export const USER_ALLOWED: Rule[] = [
   { method: "POST", pattern: /^\/search\/everywhere\/[^/]+\/sources\/[^/]+\/retry$/ },
   { method: "GET", pattern: /^\/search\/everywhere\/[^/]+\/members\/[^/]+$/ },
   { method: "DELETE", pattern: /^\/search\/everywhere\/[^/]+$/ },
+  { method: "POST", pattern: /^\/search\/catalog$/ },
+  { method: "POST", pattern: /^\/search\/catalog\/[^/]+\/poll$/ },
+  { method: "POST", pattern: /^\/search\/catalog\/[^/]+\/page$/ },
+  { method: "DELETE", pattern: /^\/search\/catalog\/[^/]+$/ },
   // The series they follow, and the new episodes those turn up.
   { method: "GET", pattern: /^\/follows$/ },
   { method: "POST", pattern: /^\/follows$/ },

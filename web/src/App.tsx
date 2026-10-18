@@ -50,6 +50,7 @@ import { Downloads } from "./DownloadsPage";
 import { Home } from "./Home";
 import { SearchEverywhere } from "./SearchEverywhere";
 import { useSearchEverywhere } from "./useSearchEverywhere";
+import { CatalogSearchStartNotFound, catalogSearchHasMore, catalogSearchSession, newCatalogSearchSlot, runCatalogSearch, type CatalogSearchCursor } from "./catalog-search-session";
 import type { HomeCardActions } from "./HomeCard";
 import { useHome } from "./useHome";
 import type { ShowAllTarget } from "./home-cards";
@@ -762,6 +763,11 @@ export function App() {
   const linksRequestRef = useRef(0); const trailerRequestRef = useRef(0); const askedLibraryLinks = useRef(new Set<string>()); const askedLibraryTrailers = useRef(new Set<string>());
   const loadingRef = useRef(false); const requestRef = useRef(0); const itemsRef = useRef<Meta[]>([]); const gridRef = useRef<HTMLDivElement>(null); const browseScrollRef = useRef<HTMLDivElement | null>(null); const libraryPageRef = useRef<HTMLElement | null>(null); const detailRef = useRef<HTMLElement>(null);
   const searchAbortRef = useRef<AbortController | null>(null);
+  const catalogSearchSlotRef = useRef<string | null>(null);
+  if (catalogSearchSlotRef.current === null) catalogSearchSlotRef.current = newCatalogSearchSlot();
+  const catalogSearchGenerationRef = useRef(0);
+  const catalogSearchSessionRef = useRef<CatalogSearchCursor>({ id: null, revision: 0 });
+  const catalogSessionUnsupportedRef = useRef(false);
   const loadedSearchRef = useRef<{ query: string; scope: string; type: string; genre: string; catalog: string; reset: number } | null>(null);
   const playerOpenRef = useRef(false); const playbackReturn = useRef<PlaybackReturn | null>(null);
   const viewAnchor = useRef<ViewAnchor | null>(null); const anchorFrozen = useRef(false); const anchorFrame = useRef(0);
@@ -1897,6 +1903,12 @@ export function App() {
     return [...previous, ...incoming.filter((item) => !seen.has(`${item.type}:${item.id}`))];
   };
 
+  const deleteCatalogSearchSession = () => {
+    const id = catalogSearchSessionRef.current.id;
+    catalogSearchSessionRef.current = { id: null, revision: 0 };
+    if (id !== null) catalogSearchSession.delete(id);
+  };
+
   const loadPage = async (reset: boolean) => {
     if (!submittedQuery && !currentCatalog) return;
     // Paging may be dropped, a new query may not -- that one has to override the run before it.
@@ -1908,23 +1920,86 @@ export function App() {
     if (reset) {
       searchAbortRef.current?.abort();
       searchAbortRef.current = null;
+      deleteCatalogSearchSession();
+      catalogSearchGenerationRef.current += 1;
       setBusy(true); setSelected(null); setStreams([]); setLocalStreams([]); setLocalLoading(false);
     } else setLoadingMore(true);
     try {
       if (submittedQuery) {
         const controller = new AbortController();
         searchAbortRef.current = controller;
-        const result = await api.search(submittedQuery, { ...searchScope, type: effectiveTypeFilter, cursor: reset ? "" : cursor, signal: controller.signal });
-        if (stale()) return;
-        const next = reset ? result.items : merge(itemsRef.current, result.items);
-        // An addon may keep returning the same thing; without this guard paging would never end.
-        const gainedNothing = !reset && next.length === itemsRef.current.length;
-        itemsRef.current = next; setItems(next);
-        setSourceCount(result.sources); setCursor(result.cursor); setHasMore(result.hasMore && !gainedNothing);
-        pool.add(result.items, searchScope.addonKey);
-        if (reset) {
-          firstPageOk.current = submittedQuery;
-          if (recordIntent.current === submittedQuery) { recordIntent.current = null; recordSearch(submittedQuery); }
+        const loadCurrentSearch = async () => {
+          const result = await api.search(submittedQuery, { ...searchScope, type: effectiveTypeFilter, cursor: reset ? "" : cursor, signal: controller.signal });
+          if (stale()) return;
+          const next = reset ? result.items : merge(itemsRef.current, result.items);
+          // An addon may keep returning the same thing; without this guard paging would never end.
+          const gainedNothing = !reset && next.length === itemsRef.current.length;
+          itemsRef.current = next; setItems(next);
+          setSourceCount(result.sources); setCursor(result.cursor); setHasMore(result.hasMore && !gainedNothing);
+          pool.add(result.items, searchScope.addonKey);
+          if (reset) {
+            firstPageOk.current = submittedQuery;
+            if (recordIntent.current === submittedQuery) { recordIntent.current = null; recordSearch(submittedQuery); }
+          }
+        };
+
+        if (!buildInfo?.searchEverywhere || catalogSessionUnsupportedRef.current) {
+          await loadCurrentSearch();
+        } else {
+          const before = new Set(itemsRef.current.map((item) => `${item.type}:${item.id}`));
+          let gained = false;
+          try {
+            await runCatalogSearch({
+              reset,
+              request: {
+                query: submittedQuery,
+                ...(effectiveTypeFilter === "movie" || effectiveTypeFilter === "series"
+                  ? { type: effectiveTypeFilter }
+                  : {}),
+                ...(searchScope.addonKey === undefined
+                  ? {}
+                  : {
+                    scope: {
+                      addonKey: searchScope.addonKey,
+                      ...(searchScope.catalogType === undefined ? {} : { catalogType: searchScope.catalogType }),
+                      ...(searchScope.catalogId === undefined ? {} : { catalogId: searchScope.catalogId }),
+                    },
+                  }),
+                slotId: catalogSearchSlotRef.current!,
+                generation: catalogSearchGenerationRef.current,
+              },
+              cursor: catalogSearchSessionRef.current,
+              signal: controller.signal,
+              onSnapshot: (snapshot) => {
+                if (stale()) return;
+                const next = snapshot.items;
+                for (const item of next) {
+                  if (!before.has(`${item.type}:${item.id}`)) {
+                    gained = true;
+                    break;
+                  }
+                }
+                itemsRef.current = next;
+                setItems(next);
+                setCursor("");
+                setSourceCount(snapshot.sources);
+                setHasMore(catalogSearchHasMore(snapshot, reset, gained));
+                pool.add(next, searchScope.addonKey);
+                if (next.length > 0 || snapshot.state === "complete") setBusy(false);
+              },
+              onFirstSnapshot: () => {
+                if (reset) {
+                  firstPageOk.current = submittedQuery;
+                  if (recordIntent.current === submittedQuery) { recordIntent.current = null; recordSearch(submittedQuery); }
+                }
+              },
+            });
+          } catch (error) {
+            if (!(error instanceof CatalogSearchStartNotFound)) throw error;
+            catalogSessionUnsupportedRef.current = true;
+            deleteCatalogSearchSession();
+            await loadCurrentSearch();
+          }
         }
       } else {
         const metas = await api.catalog(currentCatalog!, "", from, activeGenre);
@@ -1942,6 +2017,17 @@ export function App() {
     }
     finally { if (!stale()) { loadingRef.current = false; setBusy(false); setLoadingMore(false); } }
   };
+
+  useEffect(() => {
+    if (view !== "catalog") {
+      searchAbortRef.current?.abort();
+      deleteCatalogSearchSession();
+    }
+  }, [view]);
+  useEffect(() => () => {
+    searchAbortRef.current?.abort();
+    deleteCatalogSearchSession();
+  }, []);
 
   // After Enter or a debounced commit the committed query changes, so the note is recomputed.
   useEffect(() => { if (liveSearchOn) live.update(search, submittedQuery); }, [submittedQuery]);

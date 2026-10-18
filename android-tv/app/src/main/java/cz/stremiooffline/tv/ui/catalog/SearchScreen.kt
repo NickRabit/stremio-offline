@@ -89,12 +89,14 @@ fun SearchScreen(
   modifier: Modifier = Modifier,
   /** Back to the catalogue when Search was opened from its Hledat chip. */
   onBackToCatalog: (() -> Unit)? = null,
+  /** Read once by the shell from `/api/status`; turns on incremental catalogue sessions. */
+  catalogSessions: Boolean = false,
   /** Whether a recognizer answers here; the mic button and the remote's mic key follow it. */
   voiceAvailable: Boolean = voiceSearchAvailable(),
   /** Test seam: answers a mic press without a device. Null asks the platform recognizer. */
   voiceLauncher: VoiceLauncher? = null,
 ) {
-  val viewModel = viewModel<SearchViewModel>(factory = SearchViewModel.factory(api))
+  val viewModel = viewModel<SearchViewModel>(factory = SearchViewModel.factory(api, catalogSessions))
   val state = viewModel.state
   var text by rememberSaveable { mutableStateOf("") }
   val fieldFocus = remember { FocusRequester() }
@@ -368,7 +370,7 @@ private fun RecentSearchRow(
 
 /** One catalogue chip label: every addon, one addon's name, or its catalogue with its type. */
 @Composable
-private fun scopeLabel(scope: SearchScope, searchable: List<SearchableCatalogDto>): String {
+internal fun scopeLabel(scope: SearchScope, searchable: List<SearchableCatalogDto>): String {
   if (scope.addonKey.isNullOrEmpty()) return stringResource(R.string.catalog_all_addons)
   val addonName = searchable.firstOrNull { it.addonKey == scope.addonKey }?.addonName ?: scope.addonKey
   if (scope.catalogId.isNullOrEmpty()) return addonName
@@ -388,7 +390,7 @@ private fun typeTag(type: String): String = when (type) {
 /** The catalogues of an addon sit under its header, indented so the groups read at a glance. */
 private val ScopeIndent = 22.dp
 
-private sealed interface ScopeRow {
+internal sealed interface ScopeRow {
   val selected: Boolean
 
   data class AllAddons(override val selected: Boolean) : ScopeRow
@@ -408,7 +410,7 @@ private sealed interface ScopeRow {
 
 /** The web's `<optgroup>` tree flattened for a TV list: every addon, then its "All catalogs"
  *  row and its catalogues. */
-private fun scopeRows(searchable: List<SearchableCatalogDto>, scope: SearchScope): List<ScopeRow> {
+internal fun scopeRows(searchable: List<SearchableCatalogDto>, scope: SearchScope): List<ScopeRow> {
   val rows = mutableListOf<ScopeRow>(ScopeRow.AllAddons(scope.addonKey.isNullOrEmpty()))
   val groups = LinkedHashMap<String, MutableList<SearchableCatalogDto>>()
   for (item in searchable) groups.getOrPut(item.addonKey) { mutableListOf() } += item
@@ -438,7 +440,7 @@ private fun scopeRowKey(row: ScopeRow): String = when (row) {
 }
 
 @Composable
-private fun SearchScopePanel(
+internal fun SearchScopePanel(
   rows: List<ScopeRow>,
   focusIndex: Int,
   onPick: (SearchScope) -> Unit,
