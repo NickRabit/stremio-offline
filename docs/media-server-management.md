@@ -334,6 +334,7 @@ place its own text in a response. A rate-limited or busy answer carries a bounde
 | `stale-generation` | 409 | `err.mediaServerStale` |
 | `identity-changed` | 409 | `err.mediaServerIdentity` |
 | `unsupported-policy` | 403 | `err.mediaServerRestricted` |
+| `bitrate-limit` | 403 | `err.mediaServerBitrateLimit` |
 | `authentication-required` | 502 | `err.mediaServerLogin` |
 | `timeout`, `unavailable`, `invalid-response`, `response-too-large`, `unsafe-address` | 502 | `err.mediaServerUnavailable` |
 | `closed`, `cancelled` | 503 | `err.mediaServerUnavailable` |

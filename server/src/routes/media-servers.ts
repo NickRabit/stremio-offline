@@ -33,6 +33,7 @@ const TEXTS = Object.freeze({
   stale: "The media-server configuration changed. Try again.",
   identity: "The media-server identity changed. Recreate the connection.",
   restricted: "This media-server account has unsupported restrictions.",
+  bitrateLimit: "This file is above the streaming bitrate limit of the media-server account. Download it instead.",
 });
 
 /** A bound on how long a client is told to wait. Both ends of the range are clamped so the
@@ -64,6 +65,8 @@ export const toHttpError = (error: MediaServerError): AppError => {
       return new AppError(TEXTS.identity, "err.mediaServerIdentity", 409);
     case "unsupported-policy":
       return new AppError(TEXTS.restricted, "err.mediaServerRestricted", 403);
+    case "bitrate-limit":
+      return new AppError(TEXTS.bitrateLimit, "err.mediaServerBitrateLimit", 403);
     case "authentication-required":
       return new AppError(TEXTS.login, "err.mediaServerLogin", 502);
     case "secret-key-unavailable":

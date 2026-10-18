@@ -1296,6 +1296,7 @@ export const de: Catalog = {
   "err.mediaServerIdentity": "Die Identität des Medienservers hat sich geändert. Erstelle die Verbindung neu.",
   "err.mediaServerFormatUnknown": "Der Medienserver hat kein unterstütztes Format der Originaldatei angegeben.",
   "err.mediaServerRestricted": "Dieses Medienserver-Konto hat nicht unterstützte Einschränkungen.",
+  "err.mediaServerBitrateLimit": "Diese Datei überschreitet das Streaming-Bitratenlimit des Medienserver-Kontos. Laden Sie sie stattdessen herunter.",
   "err.notAllowed": "Mit diesem Konto ist das möglicherweise nicht möglich.",
   "err.homeLayoutShape": "Ein Startseiten-Layout muss eine Reihenfolge, die ausgeblendeten Reihen und die Feeds angeben.",
   "err.lastAdmin": "Der letzte Administrator kann nicht entfernt werden.",

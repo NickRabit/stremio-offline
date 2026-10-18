@@ -1296,6 +1296,7 @@ export const fr: Catalog = {
   "err.mediaServerIdentity": "L'identité du serveur multimédia a changé. Recréez la connexion.",
   "err.mediaServerFormatUnknown": "Le serveur multimédia n’a pas fourni de format pris en charge pour le fichier original.",
   "err.mediaServerRestricted": "Ce compte du serveur multimédia présente des restrictions non prises en charge.",
+  "err.mediaServerBitrateLimit": "Ce fichier dépasse la limite de débit de streaming du compte du serveur multimédia. Téléchargez-le plutôt.",
   "err.notAllowed": "Ce compte ne peut pas faire cela.",
   "err.homeLayoutShape": "Une disposition de l'Accueil doit indiquer un ordre, les rangées masquées et les flux.",
   "err.lastAdmin": "Le dernier administrateur ne peut pas être supprimé.",

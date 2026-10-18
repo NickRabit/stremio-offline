@@ -267,22 +267,33 @@ accept a trailing `AbortSignal`: `verifyIdentity`, `authenticate`,
   server-private.
 - `currentAccount` requires an exact id match and reads `IsDisabled`,
   `EnableMediaPlayback`, `EnableAllFolders` (booleans) and `EnabledFolders`
-  (string array). `RemoteAccountPolicy` carries only `disabled`,
-  `mediaPlayback`, `allFolders`, `folderIds` and `hasAdditionalRestrictions`.
-  That flag records *known facts* — false `EnableRemoteAccess`/
+  (string array). The policy separates quota facts from restrictions:
+  `RemoteClientBitrateLimit` becomes `bitrateLimit`; `MaxActiveSessions` and
+  `SimultaneousStreamLimit` become the minimum non-zero `streamLimit`. Zero,
+  null and absent limits add no key. That flag records *known content-visibility
+  facts* — false `EnableRemoteAccess`/
   `EnableAllDevices`, non-empty `EnabledDevices`, `ForceRemoteSourceTranscoding`,
   a non-null `MaxParentalRating`, non-empty blocked/allowed tag, folder or
   channel lists (`BlockedTags`, `AllowedTags`, `IncludeTags`,
   `ExcludedSubFolders`, `RestrictedFeatures`, `BlockedMediaFolders`,
-  `EnabledMediaFolders`, …), a non-zero `RemoteClientBitrateLimit`,
-  `SimultaneousStreamLimit` or Jellyfin `MaxActiveSessions`, and any non-empty
-  schedule list. A *known* restriction field with a malformed value (a string
-  where a list or boolean belongs, a negative or non-integer limit) is refused
+  `EnabledMediaFolders`, …), and any non-empty schedule list. A *known*
+  restriction or quota field with a malformed value (a string where a list,
+  boolean or integer belongs, or a negative or non-integer limit) is refused
   with `invalid-response` instead of being read as unrestricted. The flag is
   never exhaustive, and unknown policy fields are not proof of permission. A
   future policy authorizer must fail closed on unsupported schedules, ratings
   and the like; incomplete parental/rating/availability checking is deliberately
   not implemented here.
+- `versions` reads `MediaSource.Bitrate` into an internal optional `bitrate`
+  only when it is a positive safe integer. A streaming open of a version above
+  the live account `bitrateLimit`, or of a version whose bitrate is unknown,
+  fails with `bitrate-limit`; downloading is allowed. Every original body is
+  paced to the limit, with all bodies of one connection, local user and media
+  source sharing a byte budget. A `streamLimit` admits at most that many
+  distinct sources per connection across users, streaming and downloading; an
+  extra source fails fast with `busy`, while another range of an open source is
+  admitted. A limit tightened upstream can take up to 30 seconds to affect new
+  opens because the session facts are cached for that window.
 - `listLibraries` keeps only `CollectionFolder` entries and maps `movies` to
   `movie`, `tvshows` to `series`, and an empty/absent `CollectionType` to
   `mixed`; explicit non-movie collections (music, books, …) are dropped. A

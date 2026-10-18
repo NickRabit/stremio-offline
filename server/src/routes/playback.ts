@@ -140,6 +140,17 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     mediaSources.assertCurrent(stream, owned.owner);
   };
 
+  const authorizeShared = async (stream: StreamItem, owner: ResourceOwner, signal: AbortSignal): Promise<void> => {
+    try {
+      await mediaSources.authorize(stream, owner, signal, { shared: true });
+    } catch (error) {
+      if (!isMediaServerError(error)) throw error;
+      const http = toHttpError(error);
+      http.cause = error;
+      throw http;
+    }
+  };
+
   app.post("/api/inspect", asyncRoute(async (req, res) => {
     const owner = ownerOf(req);
     const stream = await httpSourceOf(req);
@@ -147,7 +158,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     const controller = new AbortController();
     res.once("close", () => { if (!res.writableEnded) controller.abort(); });
     const need = contentOf(stream);
-    if (remote) await mediaSources.authorize(stream, owner, controller.signal, { shared: true });
+    if (remote) await authorizeShared(stream, owner, controller.signal);
     requireAccess(req, need);
     // A remote original is probed through the owner-bound resource proxy: the internal address
     // is never handed to FFprobe, and an unbound remote source is never resolved internally.
@@ -158,7 +169,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       requireAccess(req, need);
       if (remote) {
         mediaSources.assertCurrent(stream, owner);
-        await mediaSources.authorize(stream, owner, controller.signal, { shared: true });
+        await authorizeShared(stream, owner, controller.signal);
         controller.signal.throwIfAborted();
       }
       if (res.destroyed || res.writableEnded) return;
@@ -190,7 +201,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     // The resource is minted in one step with the check: everything the request awaited --
     // the source lookup included -- happened before it.
     const need = contentOf(stream);
-    if (remote) await mediaSources.authorize(stream, owner, controller.signal, { shared: true });
+    if (remote) await authorizeShared(stream, owner, controller.signal);
     requireAccess(req, need);
     const prepared = mediaResources.mediaStream(stream, owner);
     let started;
@@ -209,7 +220,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
       requireAccess(req, need);
       if (remote) {
         mediaSources.assertCurrent(stream, owner);
-        await mediaSources.authorize(stream, owner, controller.signal, { shared: true });
+        await authorizeShared(stream, owner, controller.signal);
         controller.signal.throwIfAborted();
       }
       playbackOwners.set(started.id, { owner, resourceId: prepared.resourceId });

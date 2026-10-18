@@ -22,6 +22,10 @@ export interface RemoteAccountPolicy {
   allFolders: boolean;
   folderIds: string[];
   hasAdditionalRestrictions: boolean;
+  /** Remote bitrate the account may stream at, in bits per second. Absent when unlimited. */
+  bitrateLimit?: number;
+  /** Concurrent streams the account may hold. Absent when unlimited. */
+  streamLimit?: number;
 }
 
 export interface ProviderLibrary {
@@ -108,6 +112,7 @@ export interface ProviderVersion {
   container?: string;
   size?: number;
   durationTicks?: number;
+  bitrate?: number;
   /** External text subtitles the provider offers for this exact file version. */
   externalSubtitles?: Array<{ index: number; language?: string; title?: string }>;
 }
@@ -371,8 +376,6 @@ const RESTRICTION_LISTS = [
   "BlockedMediaFolders", "EnabledMediaFolders", "ExcludedTags", "AllowedMediaFolders",
   "EnabledDevices", "IncludeTags", "ExcludedSubFolders", "RestrictedFeatures",
 ];
-const RESTRICTION_LIMITS = ["RemoteClientBitrateLimit", "SimultaneousStreamLimit", "MaxActiveSessions"];
-
 /** Record known restriction facts, never a permission. A malformed *known* restriction field
  *  is refused rather than silently read as unrestricted; unknown fields stay unproven. */
 function hasAdditionalRestrictions(policy: Record<string, unknown>): boolean {
@@ -396,14 +399,6 @@ function hasAdditionalRestrictions(policy: Record<string, unknown>): boolean {
     }
     if (value.length > 0) return true;
   }
-  for (const field of RESTRICTION_LIMITS) {
-    const value = policy[field];
-    if (value === undefined || value === null) continue;
-    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
-      throw invalidResponse(`The media-server policy field ${field} is not a non-negative integer.`);
-    }
-    if (value !== 0) return true;
-  }
   const rating = policy.MaxParentalRating;
   if (rating !== undefined && rating !== null) {
     if (typeof rating !== "number" || !Number.isSafeInteger(rating) || rating < 0) {
@@ -415,6 +410,26 @@ function hasAdditionalRestrictions(policy: Record<string, unknown>): boolean {
     if (/schedule/i.test(key) && Array.isArray(value) && value.length > 0) return true;
   }
   return false;
+}
+
+function accountLimits(policy: Record<string, unknown>): { bitrateLimit?: number; streamLimit?: number } {
+  const limit = (field: string): number | undefined => {
+    const value = policy[field];
+    if (value === undefined || value === null) return undefined;
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+      throw invalidResponse(`The media-server policy field ${field} is not a non-negative integer.`);
+    }
+    return value === 0 ? undefined : value;
+  };
+  const bitrateLimit = limit("RemoteClientBitrateLimit");
+  const activeSessions = limit("MaxActiveSessions");
+  const simultaneousStreams = limit("SimultaneousStreamLimit");
+  const streamLimit = [activeSessions, simultaneousStreams].filter((value): value is number => value !== undefined)
+    .reduce<number | undefined>((minimum, value) => minimum === undefined || value < minimum ? value : minimum, undefined);
+  return {
+    ...(bitrateLimit === undefined ? {} : { bitrateLimit }),
+    ...(streamLimit === undefined ? {} : { streamLimit }),
+  };
 }
 
 interface CursorBinding {
@@ -542,6 +557,7 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
     if (user.Id !== accountId) throw invalidResponse("The account response is for another user.");
     const policy = asObject(user.Policy, "The account policy");
     const contentDownloading = optionalBool(policy.EnableContentDownloading, "EnableContentDownloading");
+    const limits = accountLimits(policy);
     return {
       accountId,
       policy: {
@@ -551,6 +567,7 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
         allFolders: requiredBool(policy.EnableAllFolders, "EnableAllFolders"),
         folderIds: requiredStringArray(policy.EnabledFolders, "EnabledFolders"),
         hasAdditionalRestrictions: hasAdditionalRestrictions(policy),
+        ...limits,
       },
     };
   }
@@ -806,6 +823,8 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
       if (size !== undefined) version.size = size;
       const durationTicks = optionalSafeInt(source.RunTimeTicks);
       if (durationTicks !== undefined) version.durationTicks = durationTicks;
+      const bitrate = optionalSafeInt(source.Bitrate);
+      if (bitrate !== undefined && bitrate > 0) version.bitrate = bitrate;
       const externalSubtitles = readExternalSubtitles(source);
       if (externalSubtitles.length) version.externalSubtitles = externalSubtitles;
       versions.push(version);

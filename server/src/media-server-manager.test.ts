@@ -9,6 +9,7 @@ import { ResourceError } from "./media-resources.js";
 import { MediaServerIndex } from "./media-server-index.js";
 import { remoteIdsMatch } from "./media-server-match.js";
 import { MediaServerManager, type MediaServerAuthority } from "./media-server-manager.js";
+import { canonicalRemoteDownloadReference, type RemoteDownloadReference } from "./media-server-download.js";
 import type { MediaServerProvider, ProviderItem, ProviderLibrary, ProviderVersion, RemoteAccountPolicy } from "./media-server-provider.js";
 import { openRemoteContent, remoteSecretStamp, sealRemoteContent, type RemoteContentRef } from "./media-server-reference.js";
 import { MediaServerSecrets } from "./media-server-secrets.js";
@@ -794,6 +795,10 @@ test("account policy gates the read: disabled, no playback and unsupported restr
     assert.equal(page.total, 1);
     harness.server.policy.allFolders = true;
     harness.server.policy.folderIds = [];
+    harness.server.policy.bitrateLimit = 50_000_000;
+    harness.server.policy.streamLimit = 10;
+    dropRuntime(harness, connection.id);
+    assert.equal((await harness.manager.browseItems(harness.admin, library.id, {})).total, 1);
   });
 });
 
@@ -1165,14 +1170,30 @@ const seedPlayable = async (harness: Harness, itemId = "m1") => {
   return { connection, library };
 };
 
-const refFor = (harness: Harness, connectionId: string, libraryId: string, itemId: string, mediaSourceId: string): RemoteContentRef => {
+const refFor = (harness: Harness, connectionId: string, libraryId: string, itemId: string, mediaSourceId: string, user: UserRecord = admin): RemoteContentRef => {
   const connection = harness.store.mediaConnections().find((candidate) => candidate.id === connectionId)!;
   const sealed = sealRemoteContent({
     provider: connection.provider, serverId: connection.serverId, accountId: connection.accountId,
     itemId, connectionId: connection.id, libraryId, generation: connection.generation, mediaSourceId,
-    owner: { userId: admin.id, sid: "admin-sid", expiresAt: Date.now() + 3_600_000, secretStamp: remoteSecretStamp(admin.secret) },
+    owner: { userId: user.id, sid: `${user.id}-sid`, expiresAt: Date.now() + 3_600_000, secretStamp: remoteSecretStamp(user.secret) },
   });
   return openRemoteContent(sealed)!;
+};
+
+const downloadRefFor = (harness: Harness, connectionId: string, libraryId: string, itemId: string, mediaSourceId: string, user: UserRecord = admin): RemoteDownloadReference => {
+  const connection = harness.store.mediaConnections().find((candidate) => candidate.id === connectionId)!;
+  return canonicalRemoteDownloadReference({
+    schemaVersion: 1,
+    ownerUserId: user.id,
+    connectionId: connection.id,
+    libraryId,
+    generation: connection.generation,
+    provider: connection.provider,
+    serverId: connection.serverId,
+    accountId: connection.accountId,
+    itemId,
+    mediaSourceId,
+  });
 };
 
 test("itemVersions returns ordinary file versions with the verified identity and no address", async () => {
@@ -1223,6 +1244,132 @@ test("openOriginal returns the original response only while everything is curren
     const response = await harness.manager.openOriginal(harness.admin, ref, { method: "GET", range: "bytes=0-1" });
     assert.equal(response.status, 206);
     assert.equal(harness.server.originalCalls, 1);
+  });
+});
+
+test("stream opens refuse unknown and above-limit bitrates but allow the limit itself", async () => {
+  await withHarness(async (harness) => {
+    const { connection, library } = await seedPlayable(harness);
+    for (const [itemId, bitrate] of [["m2", 7_000_000], ["m3", 9_000_000], ["m4", undefined]] as const) {
+      harness.server.detailOf[itemId] = movie(itemId);
+      harness.server.ancestorsOf[itemId] = ["lib-1"];
+      harness.server.versionsOf[itemId] = bitrate === undefined
+        ? [{ id: `v-${itemId}` }]
+        : [{ id: `v-${itemId}`, bitrate }];
+    }
+    harness.server.versionsOf["m1"] = [{ id: "v1", bitrate: 8_000_000 }];
+    harness.server.policy.bitrateLimit = 8_000_000;
+    harness.server.original = { status: 200 };
+    dropRuntime(harness, connection.id);
+
+    for (const [itemId, sourceId] of [["m1", "v1"], ["m2", "v-m2"]] as const) {
+      const allowed = await harness.manager.openOriginal(harness.admin, refFor(harness, connection.id, library.id, itemId, sourceId), { method: "GET" });
+      await allowed.body?.cancel();
+    }
+
+    const before = harness.server.originalCalls;
+    for (const [itemId, sourceId] of [["m3", "v-m3"], ["m4", "v-m4"]] as const) {
+      await assert.rejects(
+        harness.manager.openOriginal(harness.admin, refFor(harness, connection.id, library.id, itemId, sourceId), { method: "GET" }),
+        { code: "bitrate-limit" },
+      );
+    }
+    assert.equal(harness.server.originalCalls, before, "a refused stream never reaches the byte transport");
+  });
+});
+
+test("download paths allow above-limit originals and their proofs never satisfy a stream", async () => {
+  await withHarness(async (harness) => {
+    const { connection, library } = await seedPlayable(harness);
+    for (const itemId of ["m1", "m2"]) {
+      harness.server.detailOf[itemId] = movie(itemId);
+      harness.server.ancestorsOf[itemId] = ["lib-1"];
+      harness.server.versionsOf[itemId] = [{ id: `v-${itemId}`, bitrate: 9_000_000 }];
+    }
+    harness.server.policy.bitrateLimit = 8_000_000;
+    harness.server.policy.contentDownloading = true;
+    harness.server.original = { status: 200 };
+    dropRuntime(harness, connection.id);
+
+    const firstRef = refFor(harness, connection.id, library.id, "m1", "v-m1");
+    const firstDownload = downloadRefFor(harness, connection.id, library.id, "m1", "v-m1");
+    await harness.manager.revalidateDownloadOriginal(harness.admin, firstDownload);
+    await assert.rejects(harness.manager.openOriginal(harness.admin, firstRef, { method: "GET" }), { code: "bitrate-limit" });
+    const downloaded = await harness.manager.openOriginal(harness.admin, firstRef, { method: "GET" }, undefined, { download: true });
+    await downloaded.body?.cancel();
+    const opened = await harness.manager.openDownloadOriginal(harness.admin, firstDownload, { method: "GET" });
+    await opened.body?.cancel();
+
+    const secondRef = refFor(harness, connection.id, library.id, "m2", "v-m2");
+    await harness.manager.revalidateOriginal(harness.admin, secondRef, undefined, { download: true });
+    await assert.rejects(harness.manager.openOriginal(harness.admin, secondRef, { method: "GET" }), { code: "bitrate-limit" });
+  });
+});
+
+test("shared playback preparation applies the live stream bitrate limit", async () => {
+  await withHarness(async (harness) => {
+    const { connection, library } = await seedPlayable(harness);
+    harness.server.versionsOf["m1"] = [{ id: "v1", bitrate: 9_000_000 }];
+    harness.server.policy.bitrateLimit = 8_000_000;
+    dropRuntime(harness, connection.id);
+    const ref = refFor(harness, connection.id, library.id, "m1", "v1");
+    await harness.manager.itemVersions(harness.admin, library.id, "m1");
+    await assert.rejects(
+      harness.manager.revalidateOriginal(harness.admin, ref, undefined, { shared: true }),
+      { code: "bitrate-limit" },
+    );
+    await assert.rejects(
+      harness.manager.openOriginal(harness.admin, ref, { method: "GET" }),
+      { code: "bitrate-limit" },
+    );
+  });
+});
+
+test("a stream limit refuses a second source before its byte request and admits it after release", async () => {
+  await withHarness(async (harness) => {
+    const { connection, library } = await seedPlayable(harness);
+    harness.server.detailOf["m2"] = movie("m2");
+    harness.server.ancestorsOf["m2"] = ["lib-1"];
+    harness.server.versionsOf["m2"] = [{ id: "v2" }];
+    harness.server.policy.streamLimit = 1;
+    harness.server.original = { status: 200 };
+    dropRuntime(harness, connection.id);
+
+    const first = await harness.manager.openOriginal(harness.admin, refFor(harness, connection.id, library.id, "m1", "v1"), { method: "GET" });
+    const bytes = harness.server.originalCalls;
+    await assert.rejects(
+      harness.manager.openOriginal(harness.admin, refFor(harness, connection.id, library.id, "m2", "v2"), { method: "GET" }),
+      { code: "busy" },
+    );
+    assert.equal(harness.server.originalCalls, bytes);
+    await first.body!.cancel();
+    const second = await harness.manager.openOriginal(harness.admin, refFor(harness, connection.id, library.id, "m2", "v2"), { method: "GET" });
+    await second.body!.cancel();
+  });
+});
+
+test("stream slots count users separately and downloads against the same connection limit", async () => {
+  await withHarness(async (harness) => {
+    const { connection, library } = await seedPlayable(harness);
+    await harness.manager.patchLibrary(harness.admin, library.id, { allowedUsers: [BOB] });
+    harness.server.detailOf["m2"] = movie("m2");
+    harness.server.ancestorsOf["m2"] = ["lib-1"];
+    harness.server.versionsOf["m2"] = [{ id: "v2" }];
+    harness.server.policy.streamLimit = 2;
+    harness.server.policy.contentDownloading = true;
+    harness.server.original = { status: 200 };
+    dropRuntime(harness, connection.id);
+
+    const first = await harness.manager.openOriginal(harness.admin, refFor(harness, connection.id, library.id, "m1", "v1"), { method: "GET" });
+    const second = await harness.manager.openOriginal(harness.bob, refFor(harness, connection.id, library.id, "m1", "v1", bob), { method: "GET" });
+    const download = downloadRefFor(harness, connection.id, library.id, "m2", "v2");
+    const bytes = harness.server.originalCalls;
+    await assert.rejects(harness.manager.openDownloadOriginal(harness.admin, download, { method: "GET" }), { code: "busy" });
+    assert.equal(harness.server.originalCalls, bytes);
+    await second.body!.cancel();
+    const admitted = await harness.manager.openDownloadOriginal(harness.admin, download, { method: "GET" });
+    await admitted.body?.cancel();
+    await first.body!.cancel();
   });
 });
 

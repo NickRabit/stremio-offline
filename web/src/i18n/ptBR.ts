@@ -1296,6 +1296,7 @@ export const ptBR: Catalog = {
   "err.mediaServerIdentity": "A identidade do servidor de mídia mudou. Crie a conexão novamente.",
   "err.mediaServerFormatUnknown": "O servidor de mídia não forneceu um formato compatível para o arquivo original.",
   "err.mediaServerRestricted": "Esta conta do servidor de mídia tem restrições não suportadas.",
+  "err.mediaServerBitrateLimit": "Este arquivo excede o limite de taxa de bits de streaming da conta do servidor de mídia. Baixe-o em vez disso.",
   "err.notAllowed": "Esta conta pode não fazer isso.",
   "err.homeLayoutShape": "Um layout do Início deve informar uma ordem, as fileiras ocultas e os feeds.",
   "err.lastAdmin": "O último administrador não pode ser removido.",
