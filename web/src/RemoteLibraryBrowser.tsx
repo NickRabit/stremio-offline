@@ -695,6 +695,14 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
         if (epoch !== targetEpoch.current) return;
         // This path already read the full record, so the detail effect must not read it again.
         needsDetailMeta.current = false;
+        if (item.type === "folder" || item.type === "season") {
+          setDetail(null);
+          setSeries(null);
+          setSources(null);
+          setState(null);
+          setStack([item]);
+          return;
+        }
         if (item.type === "series") { setSeries(item); setDetail(item); return; }
         setDetail(item);
         if (item.type !== "episode" || !item.seriesId) return;

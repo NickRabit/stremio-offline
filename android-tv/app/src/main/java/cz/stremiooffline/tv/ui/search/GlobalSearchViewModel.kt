@@ -127,6 +127,7 @@ class GlobalSearchViewModel(
   private var revision = 0
   private var restartDepth = 0
   private var active = false
+  private var interacted = false
   private var startJob: Job? = null
   private var pollJob: Job? = null
   private var actionJob: Job? = null
@@ -156,12 +157,14 @@ class GlobalSearchViewModel(
   }
 
   fun setFocusAnchor(anchor: String?) {
+    if (anchor != null) interacted = true
     if (anchor != state.focusAnchor) state = state.copy(focusAnchor = anchor)
   }
 
   fun loadMore() {
     val id = sessionId ?: return
     if (actionJob?.isActive == true) return
+    interacted = true
     val currentGeneration = generation
     actionJob = viewModelScope.launch {
       try {
@@ -231,6 +234,7 @@ class GlobalSearchViewModel(
   }
 
   private fun startSearch(query: String, freshLayout: Boolean) {
+    if (freshLayout) interacted = false
     val currentGeneration = ++generation
     startJob?.cancel()
     pollJob?.cancel()
@@ -293,9 +297,10 @@ class GlobalSearchViewModel(
   private fun applySnapshot(next: GlobalSearchSnapshotDto, freshLayout: Boolean) {
     val oldOrder = state.order
     val oldClusters = state.snapshot?.clusters.orEmpty()
-    val order = if (freshLayout) next.clusters.map { it.key }
+    val adoptServerOrder = freshLayout || !interacted
+    val order = if (adoptServerOrder) next.clusters.map { it.key }
     else mergeGlobalSearchOrder(oldOrder, next.clusters, next.aliases)
-    val unidentified = if (freshLayout) next.unidentified.map { it.key }
+    val unidentified = if (adoptServerOrder) next.unidentified.map { it.key }
     else mergeGlobalSearchOrder(state.unidentifiedOrder, next.unidentified, next.aliases)
     val anchor = retainedFocusAnchor(state.focusAnchor, oldOrder, oldClusters, next.clusters, next.aliases)
     revision = next.revision

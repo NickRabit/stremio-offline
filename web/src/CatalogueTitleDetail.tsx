@@ -44,6 +44,8 @@ export interface CatalogueTitleDetailProps {
   /** The rows the catalogue panel already read for this exact selection. Given, they answer for
    *  the title and the providers are not asked a second time; a Home or favourite entry has none. */
   initialSources?: Stream[];
+  /** Load the title's other library copies with the title itself and let them lead Play. */
+  libraryFirst?: boolean;
   /** Opens the app's gallery overlay over the pictures the metadata supplied. */
   onGallery?: (images: GalleryImage[], target: CatalogueDetailTarget) => void;
   /** The title's chips, drawn by the shared row: the catalogue's watch star, the kind, the trailer
@@ -94,7 +96,7 @@ const dedupe = (streams: Stream[]): Stream[] => {
 };
 
 export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
-  const { target, initialSources, onGallery, chips, preferredLanguage, onRead, progress, resumeStableKey, onSourceChange, onClearProgress, watched, watchedLabel, onToggleWatched, onPlay, onSaveToLibrary, onSaveElsewhere, saveSupported, onDownloadToDevice, addonPriority, showTorrents = true } = props;
+  const { target, initialSources, libraryFirst = false, onGallery, chips, preferredLanguage, onRead, progress, resumeStableKey, onSourceChange, onClearProgress, watched, watchedLabel, onToggleWatched, onPlay, onSaveToLibrary, onSaveElsewhere, saveSupported, onDownloadToDevice, addonPriority, showTorrents = true } = props;
   const { locale } = useI18n();
   const { type, id, name } = target;
   const incomingId = catalogueStreamId(target);
@@ -226,17 +228,35 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
       { addon: "", language: "", sort: "recommended" }, preferredLanguage ?? "", addonPriority, metaLanguage);
     return catalogSourceRows(own, addon, "", "recommended");
   }, [rows, local, preferredLanguage, addonPriority, metaLanguage, showTorrents]);
-  /** The row Play offers before the viewer picks one: the catalogue's first playable row. */
-  const firstPlayable = ordered?.find((stream) => stream.playable) ?? null;
-
   const extra = useLibrarySources({
     scope: `catalogue:${type}:${streamId}`,
-    open: chooserOpen,
+    open: chooserOpen || libraryFirst,
     catalogue: waitingEpisode ? null : { type, id: streamId },
     nameHint: name,
     libraries: null,
     localCopies: true,
   });
+
+  const libraryRows = useMemo(() => {
+    if (!libraryFirst || ordered === null) return [];
+    const present = new Set(ordered.map((stream) => stream.localPath ?? stream.sourceId));
+    const added = new Set<string>();
+    return extra.groups
+      .filter((group) => (group.kind === "local" || group.kind === "remote") && group.status === "loaded")
+      .flatMap((group) => group.streams)
+      .filter((stream) => {
+        const key = stream.localPath ?? stream.sourceId;
+        if (!stream.playable || present.has(key) || added.has(key)) return false;
+        added.add(key);
+        return true;
+      });
+  }, [libraryFirst, ordered, extra.groups]);
+  const detailSources = useMemo(
+    () => ordered === null ? null : [...libraryRows, ...ordered],
+    [libraryRows, ordered],
+  );
+  /** The first playable row in the merged order, so a library copy leads whenever one exists. */
+  const firstPlayable = detailSources?.find((stream) => stream.playable) ?? null;
 
   // What this detail holds is the caller's business too: its chips, its saved position and the
   // episode after the one it plays all belong to the title read here.
@@ -318,7 +338,7 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
       {...(snapshot?.description ? { description: snapshot.description } : {})}
       descriptionLoading={snapshot === null && !metaError}
       {...(chips ? { chips } : {})}
-      sources={ordered}
+      sources={detailSources}
       keepOrder
       {...(addonPriority ? { addonPriority } : {})}
       defaultSources={firstPlayable ? [firstPlayable] : []}

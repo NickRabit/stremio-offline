@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { SearchEverywhere } from "./SearchEverywhere";
 import { setLocale } from "./i18n";
-import type { SearchClusterView, SearchMember, SearchMemberPage, SearchSnapshot } from "./types";
+import type { SearchClusterView, SearchMember, SearchMemberPage, SearchSnapshot, SearchableCatalog } from "./types";
 import type { SearchEverywhereController } from "./useSearchEverywhere";
 
 const cluster = (key: string, over: Partial<SearchClusterView> = {}): SearchClusterView => ({
@@ -17,6 +17,7 @@ const cluster = (key: string, over: Partial<SearchClusterView> = {}): SearchClus
   primaryMemberKey: `member-${key}`,
   memberKeys: [`member-${key}`],
   rank: 1,
+  score: 1,
   ...over,
 });
 
@@ -56,6 +57,8 @@ const controller = (over: Partial<SearchEverywhereController> = {}): SearchEvery
   clear: vi.fn(),
   sources: [],
   setSources: vi.fn(),
+  scope: null,
+  setScope: vi.fn(),
   kind: "all",
   setKind: vi.fn(),
   snapshot: snapshot(),
@@ -69,6 +72,7 @@ const controller = (over: Partial<SearchEverywhereController> = {}): SearchEvery
   error: null,
   focusAnchor: null,
   setFocusAnchor: vi.fn(),
+  markInteracted: vi.fn(),
   scrollTop: 0,
   setScrollTop: vi.fn(),
   ...over,
@@ -93,11 +97,13 @@ afterEach(() => {
 });
 
 const render = async (search: SearchEverywhereController, handlers: {
-  onOpenMember?: (member: SearchMember, anchorKey: string) => void;
-  onOpenCanonical?: (canonical: NonNullable<SearchMemberPage["canonical"]>, anchorKey: string) => void;
+  onOpenMember?: (member: SearchMember, anchorKey: string, libraryFirst?: boolean) => void;
+  onOpenCanonical?: (canonical: NonNullable<SearchMemberPage["canonical"]>, anchorKey: string, libraryFirst?: boolean) => void;
+  searchable?: SearchableCatalog[];
 } = {}) => {
   await act(async () => {
     root.render(<SearchEverywhere search={search} shape="poster" onToggleShape={vi.fn()}
+      searchable={handlers.searchable ?? []}
       onOpenMember={handlers.onOpenMember ?? vi.fn()} onOpenCanonical={handlers.onOpenCanonical ?? vi.fn()}/>);
   });
 };
@@ -112,6 +118,37 @@ const clickCard = async () => {
 };
 
 describe("SearchEverywhere", () => {
+  it("offers the Catalog scope only for the Catalog filter", async () => {
+    const searchable: SearchableCatalog[] = [
+      { addonKey: "addon-a", addonName: "Addon A", globalSearch: false, type: "movie", id: "films", name: "Films" },
+      { addonKey: "addon-a", addonName: "Addon A", globalSearch: false, type: "series", id: "shows", name: "Shows" },
+    ];
+    const setScope = vi.fn();
+    const setSources = vi.fn();
+    await render(controller({ sources: ["catalog"], setScope, setSources }), { searchable });
+
+    const select = host.querySelector<HTMLSelectElement>("select[aria-label='Where to search']")!;
+    expect(select).not.toBeNull();
+    expect([...select.querySelectorAll("option")].map((option) => option.value)).toEqual([
+      "",
+      "addon:addon-a",
+      "catalog:addon-a:movie:films",
+      "catalog:addon-a:series:shows",
+    ]);
+    await act(async () => {
+      select.value = "catalog:addon-a:movie:films";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(setScope).toHaveBeenCalledWith({ addonKey: "addon-a", catalogType: "movie", catalogId: "films" });
+
+    await render(controller({ sources: ["local"], setScope, setSources }), { searchable });
+    expect(host.querySelector("select[aria-label='Where to search']")).toBeNull();
+    const local = [...host.querySelectorAll<HTMLButtonElement>(".search-filters button")]
+      .find((button) => button.textContent === "Local")!;
+    await act(async () => { local.click(); });
+    expect(setSources).toHaveBeenCalledWith(["local"]);
+  });
+
   it("renders source states and offers Retry only for retryable sources", async () => {
     const search = controller({
       snapshot: snapshot({
@@ -180,6 +217,20 @@ describe("SearchEverywhere", () => {
     expect(document.body.textContent).toContain("S1E2–E3");
     expect(document.body.textContent).toContain("Conflicting ids");
     expect([...document.body.querySelectorAll("button")].some((button) => button.textContent === "Open title page")).toBe(false);
+  });
+
+  it("opens the series itself from a series card, not one of its episodes", async () => {
+    const item = cluster("show", { title: "Jiste pane ministře", kind: "series", hasRemote: true, primaryMemberKey: "series", memberKeys: ["series"] });
+    const series = member({ memberKey: "series", kind: "series", sourceClass: "remote", sourceLabel: "Seriály", locator: { kind: "remote", libraryId: "lib", itemId: "s9", itemType: "series" } });
+    const episode = (index: number) => member({ memberKey: `e${index}`, kind: "episode", sourceClass: "remote", season: 1, episode: index, locator: { kind: "remote", libraryId: "lib", itemId: `e${index}`, itemType: "episode" } });
+    const members = vi.fn(async (): Promise<SearchMemberPage> => ({ clusterKey: "show", members: [series, episode(1), episode(2)], truncated: false }));
+    const onOpenMember = vi.fn();
+    await render(controller({ snapshot: snapshot({ clusters: [item] }), order: ["show"], members }), { onOpenMember });
+
+    await clickCard();
+
+    expect(onOpenMember).toHaveBeenCalledWith(series, "series", true);
+    expect(document.body.textContent).not.toContain("Where to open Jiste pane ministře");
   });
 
   it("treats several catalogues of one addon as one copy and opens it directly", async () => {

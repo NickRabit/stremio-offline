@@ -74,6 +74,8 @@ export interface ProviderItem {
   type: ProviderItemType;
   parentId?: string;
   seriesId?: string;
+  /** The series an episode belongs to, as the server names it; no request is needed for it. */
+  seriesName?: string;
   season?: number;
   episode?: number;
   episodeEnd?: number;
@@ -325,6 +327,8 @@ function providerItem(raw: unknown): ProviderItem {
   if (parentId !== undefined) result.parentId = parentId;
   const seriesId = optionalString(item.SeriesId, MEDIA_SERVER_LIMITS.upstreamId);
   if (seriesId !== undefined) result.seriesId = seriesId;
+  const seriesName = optionalString(item.SeriesName, MEDIA_SERVER_LIMITS.name);
+  if (seriesName !== undefined) result.seriesName = seriesName;
   const season = optionalSafeInt(item.ParentIndexNumber);
   if (season !== undefined) result.season = season;
   const episode = optionalSafeInt(item.IndexNumber);
@@ -785,7 +789,7 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
       : searchTypes === "series"
         ? "Series,Episode"
         : searchTypes === "all"
-          ? "Movie,MusicVideo,Series,Episode"
+          ? "Movie,MusicVideo,Series,Episode,Folder"
           : filteredTypes === undefined
             ? mode === "folders" ? DIRECTORY_FOLDER_TYPES : DIRECTORY_TITLE_TYPES
             : mode === "folders" ? `Folder,${filteredTypes}` : filteredTypes;

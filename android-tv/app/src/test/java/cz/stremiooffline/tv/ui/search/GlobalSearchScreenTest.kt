@@ -32,6 +32,7 @@ import cz.stremiooffline.tv.ui.detail.RemoteDetailData
 import kotlinx.coroutines.CompletableDeferred
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -136,6 +137,15 @@ class GlobalSearchScreenTest {
     compose.waitForIdle()
   }
 
+  private fun assertCardBefore(first: String, second: String) {
+    val firstBounds = compose.onNodeWithTag(globalSearchCardTag(first)).fetchSemanticsNode().boundsInRoot
+    val secondBounds = compose.onNodeWithTag(globalSearchCardTag(second)).fetchSemanticsNode().boundsInRoot
+    assertTrue(
+      "$first is before $second",
+      firstBounds.top < secondBounds.top || firstBounds.top == secondBounds.top && firstBounds.left < secondBounds.left,
+    )
+  }
+
   @Test
   fun `typing waits for Done before starting a search`() {
     val api = FakeTvApi()
@@ -191,6 +201,56 @@ class GlobalSearchScreenTest {
     compose.waitForIdle()
 
     compose.onNodeWithTag(globalSearchCardTag("m1")).assertIsFocused()
+  }
+
+  @Test
+  fun `server relevance order is shown until a result card is focused`() {
+    val api = FakeTvApi()
+    start(api, listOf(cluster("c2", "m2", title = "Two"), cluster("c1", "m1", title = "One")))
+    val gate = CompletableDeferred<Unit>()
+    var next: GlobalSearchPollDto? = null
+    api.globalPollHandler = { _, revision ->
+      gate.await()
+      next.also { next = null } ?: GlobalSearchPollDto(changed = false, revision = revision)
+    }
+    mount(api)
+    search()
+    assertCardBefore("m2", "m1")
+
+    next = GlobalSearchPollDto(
+      changed = true,
+      snapshot = snapshot(2, listOf(cluster("c1", "m1", title = "One"), cluster("c2", "m2", title = "Two"))),
+    )
+    gate.complete(Unit)
+    compose.waitForIdle()
+
+    assertCardBefore("m1", "m2")
+  }
+
+  @Test
+  fun `a focused result card stays in place when a later snapshot reorders`() {
+    val api = FakeTvApi()
+    start(api, listOf(cluster("c2", "m2", title = "Two"), cluster("c1", "m1", title = "One")))
+    val gate = CompletableDeferred<Unit>()
+    var next: GlobalSearchPollDto? = null
+    api.globalPollHandler = { _, revision ->
+      gate.await()
+      next.also { next = null } ?: GlobalSearchPollDto(changed = false, revision = revision)
+    }
+    mount(api)
+    search()
+    focus(globalSearchCardTag("m2"))
+    assertCardBefore("m2", "m1")
+
+    next = GlobalSearchPollDto(
+      changed = true,
+      snapshot = snapshot(2, listOf(cluster("c1", "m1", title = "One"), cluster("c2", "m2", title = "Two"))),
+    )
+    gate.complete(Unit)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(globalSearchCardTag("m2")).assertIsFocused()
+    assertCardBefore("m2", "m1")
   }
 
   @Test
@@ -345,6 +405,25 @@ class GlobalSearchScreenTest {
     compose.onNodeWithTag(TagGlobalSearchChooser).assertDoesNotExist()
     assertEquals("tt1", catalogOpened?.meta?.id)
     assertEquals("movie", catalogOpened?.type)
+  }
+
+  @Test
+  fun `a series card opens the series itself, not one of its episodes`() {
+    val api = FakeTvApi()
+    start(api, listOf(cluster("c1", "m1", title = "Jiste pane ministře").copy(kind = "series")))
+    val series = member("m1", locator = GlobalSearchLocatorDto(kind = "remote", libraryId = "lib", itemId = "s9", itemType = "series", provider = "jellyfin")).copy(kind = "series")
+    val episode = member("e1", locator = GlobalSearchLocatorDto(kind = "remote", libraryId = "lib", itemId = "e1", itemType = "episode", provider = "jellyfin")).copy(kind = "episode", season = 1, episode = 1)
+    api.globalMembersHandler = { _, _, _ -> GlobalSearchMemberPageDto(clusterKey = "c1", members = listOf(series, episode)) }
+    api.remoteItemValues["lib:s9"] = RemoteItemDetailDto(RemoteItemDto(id = "s9", name = "Jiste pane ministře", type = "series"))
+    mount(api)
+    search()
+    focus(globalSearchCardTag("m1"))
+    press(Key.DirectionCenter)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagGlobalSearchChooser).assertDoesNotExist()
+    assertEquals(listOf("lib" to "s9"), api.remoteItemRequests)
+    assertEquals("s9", remoteOpened?.item?.id)
   }
 
   @Test

@@ -56,6 +56,7 @@ export interface SearchStartBody {
   sources: SearchSourceClass[];
   slotId: string;
   generation: number;
+  scope?: { addonKey: string; catalogType?: string; catalogId?: string };
 }
 export type SearchLocator =
   | { kind: "catalog"; addonKey: string; type: string; id: string; catalogId?: string }
@@ -89,6 +90,8 @@ export interface SearchClusterView {
   primaryMemberKey: string;
   memberKeys: string[];
   rank: number;
+  score: number;
+  rating?: number;
   episodeCount?: number;
 }
 export interface SearchSnapshot {

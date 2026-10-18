@@ -204,6 +204,20 @@ const openRootLibrary = async (which = 0) => {
 };
 
 describe("RemoteLibraryBrowser listing", () => {
+  it("opens a targeted remote folder as that library's current listing", async () => {
+    const target = folder("search-folder", "Search results");
+    item = () => json({ item: target, capabilities });
+    browse = (url) => json(page(url.searchParams.get("parentId") === target.id ? [movie("m1", "One")] : []));
+
+    await render({ initialTarget: { libraryId: "rlib_a", itemId: target.id, nonce: 1 } });
+
+    expect(calls.browse.at(-1)?.searchParams.get("parentId")).toBe(target.id);
+    expect(calls.sources).toHaveLength(0);
+    expect(host.querySelector(".remote-detail")).toBeNull();
+    expect([...host.querySelectorAll(".crumbs button")].map((node) => node.textContent?.trim())).toContain(target.name);
+    expect(host.querySelector('[data-remote-id="m1"]')).not.toBeNull();
+  });
+
   it("walks the provider hierarchy one page at a time and keeps breadcrumbs and Back", async () => {
     const f1 = folder("f1", "Concerts");
     const f2 = folder("f2", "2024", "f1");

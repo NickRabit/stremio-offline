@@ -165,7 +165,7 @@ test("episodes use synthetic parent identity", () => {
   assert.deepEqual(groupsOf([first, range]), [["local"], ["range"]]);
 });
 
-test("primary member follows rank, identity, metadata, class, source and item order", () => {
+test("primary member follows relevance, identity, metadata, class, source and item order", () => {
   const base: DisplayCandidate = {
     memberKey: "a",
     sequence: 1,
@@ -174,14 +174,15 @@ test("primary member follows rank, identity, metadata, class, source and item or
     itemKey: "a",
     title: "The Matrix",
     hasStrongId: false,
+    score: 0,
   };
   assert.equal(pickPrimary("The Matrix", [
-    base,
+    { ...base, score: 100 },
     { ...base, memberKey: "b", title: "Other", hasStrongId: true },
   ]).memberKey, "a");
   assert.equal(pickPrimary("Other", [
     base,
-    { ...base, memberKey: "b", title: "Other", hasStrongId: true },
+    { ...base, memberKey: "b", title: "Other", hasStrongId: true, score: 100 },
   ]).memberKey, "b");
   assert.equal(pickPrimary("same", [
     { ...base, memberKey: "catalog", title: "same", hasStrongId: true, sourceClass: "catalog" },

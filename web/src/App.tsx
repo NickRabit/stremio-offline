@@ -36,6 +36,7 @@ import { alternativeProgressSaved, sourceProgressOwner, type SourceProgressOwner
 import { alternativeSaveRequest } from "./alternative-save";
 import { sourceIdentity } from "./library-detail-sources";
 import { parseSearchScope } from "./search-scope";
+import { SearchScopeOptions } from "./SearchScopeOptions";
 import { createLiveSearch, type LiveSearch, type LiveSearchState } from "./live-search";
 import { rankByTitle } from "./title-match";
 import { CandidatePool, suggest, type Suggestion } from "./search-suggestions";
@@ -278,7 +279,10 @@ export function App() {
   const [saveTargetOpen, setSaveTargetOpen] = useState(false);
   /** The shared title detail, hosted over whichever page opened it, with the rows the catalogue
    *  panel already read for the selection it was opened on. */
-  const [catalogueDetail, setCatalogueDetail] = useState<(CatalogueDetailTarget & { initialSources?: Stream[] }) | null>(null);
+  const [catalogueDetail, setCatalogueDetail] = useState<(CatalogueDetailTarget & {
+    initialSources?: Stream[];
+    libraryFirst?: boolean;
+  }) | null>(null);
   const [searchReturn, setSearchReturn] = useState(false);
   /** The destination dialog the shared detail's save arrow opens, with the row it was clicked for. */
   const [catalogueSave, setCatalogueSave] = useState<{ title: string; kind: "movie" | "series"; stream: Stream; media: Record<string, unknown>; season?: number; rule?: AddonDownloadSettings; ruleUnavailable?: boolean } | null>(null);
@@ -2660,16 +2664,25 @@ export function App() {
       return true;
     } catch { return false; }
   };
-  const openCatalogueDetail = (target: Omit<CatalogueDetailTarget, "type"> & { type: string }, initialSources?: Stream[]) => {
+  const openCatalogueDetail = (
+    target: Omit<CatalogueDetailTarget, "type"> & { type: string },
+    initialSources?: Stream[],
+    options?: { libraryFirst?: boolean },
+  ) => {
     if (target.type !== "movie" && target.type !== "series") return;
     navigated.current = true;
     if (!catalogueDetail) detailReturn.current = { view, windowY: window.scrollY, pane: view === "catalog" ? "catalog" : null, paneY: gridRef.current?.scrollTop ?? 0 };
     // Nothing the previous title read survives the next one: the episode it was on, the source it
     // selected, the follow it carried and the saved position drawn beside it all belong to it.
     setDetailRead(null); setDetailSource(null); setCatalogueFollow(null); setDetailFollowOpen(false);
-    setCatalogueDetail({ ...target, type: target.type, ...(initialSources ? { initialSources } : {}) });
+    setCatalogueDetail({
+      ...target,
+      type: target.type,
+      ...(initialSources ? { initialSources } : {}),
+      ...(options?.libraryFirst ? { libraryFirst: true } : {}),
+    });
   };
-  const openSearchMember = async (member: import("./types").SearchMember, anchorKey: string) => {
+  const openSearchMember = async (member: import("./types").SearchMember, anchorKey: string, libraryFirst = false) => {
     searchEverywhere.setFocusAnchor(anchorKey);
     searchEverywhere.setScrollTop(window.scrollY);
     setSearchReturn(false);
@@ -2679,7 +2692,7 @@ export function App() {
         id: member.locator.id,
         name: member.title,
         ...(member.poster ? { poster: member.poster } : {}),
-      });
+      }, undefined, libraryFirst ? { libraryFirst } : undefined);
       return;
     }
     if (member.locator.kind === "remote") {
@@ -2693,11 +2706,12 @@ export function App() {
   const openSearchCanonical = async (
     canonical: NonNullable<import("./types").SearchMemberPage["canonical"]>,
     anchorKey: string,
+    libraryFirst = false,
   ) => {
     searchEverywhere.setFocusAnchor(anchorKey);
     searchEverywhere.setScrollTop(window.scrollY);
     setSearchReturn(false);
-    openCatalogueDetail(canonical);
+    openCatalogueDetail(canonical, undefined, libraryFirst ? { libraryFirst } : undefined);
   };
   const focusSearchAnchor = () => {
     const anchor = searchEverywhere.focusAnchor;
@@ -3077,6 +3091,7 @@ export function App() {
           <CatalogueTitleDetail
             target={catalogueDetail}
             {...(catalogueDetail.initialSources ? { initialSources: catalogueDetail.initialSources } : {})}
+            {...(catalogueDetail.libraryFirst ? { libraryFirst: true } : {})}
             onGallery={(images, effective) => presentGallery(images, { type: effective.type, id: effective.id })}
             preferredLanguage={settings.audioLanguage}
             addonPriority={addonPriority} showTorrents={settings.realDebridConfigured}
@@ -3137,11 +3152,7 @@ export function App() {
 
             </div>
             <label className="scope-select"><span>{t("catalog.searchScopeIn")}</span><select aria-label={t("catalog.searchScope")} value={searchScopeValue} onChange={(e) => pickSearchScope(e.target.value)}>
-              <option value="">{t("catalog.allAddons")}</option>
-              {[...new Map(searchable.map((item) => [item.addonKey, { name: item.addonName, globalSearch: item.globalSearch }])).entries()].map(([key, group]) => <optgroup key={key} label={`${group.name}${group.globalSearch ? "" : " ·"}`} title={group.globalSearch ? undefined : t("catalog.onlyWhenPicked")}>
-                <option value={`addon:${key}`} title={group.globalSearch ? undefined : t("catalog.onlyWhenPicked")}>{t("catalog.allCatalogs")}{group.globalSearch ? "" : " ·"}</option>
-                {searchable.filter((item) => item.addonKey === key).map((item) => <option key={`${item.type}:${item.id}`} value={`catalog:${key}:${item.type}:${item.id}`} title={item.globalSearch ? undefined : t("catalog.onlyWhenPicked")}>{item.name} ({catalogTypeTag(item.type)}){item.globalSearch ? "" : " ·"}</option>)}
-              </optgroup>)}
+              <SearchScopeOptions searchable={searchable}/>
             </select></label>
             <button className="primary"><Search/> {t("catalog.search")}</button>
             {submittedQuery && <button type="button" onClick={() => { live.cancel(); setSearch(""); setSubmittedQuery(""); }}><X/> {t("common.cancel")}</button>}
@@ -3277,7 +3288,7 @@ export function App() {
         </>}
       </section>}
       {view === "search" && buildInfo?.searchEverywhere && <SearchEverywhere search={searchEverywhere} shape={settings.searchTileShape} onToggleShape={() => void toggleShape("searchTileShape")}
-        onOpenMember={openSearchMember} onOpenCanonical={openSearchCanonical}/>}
+        searchable={searchable} onOpenMember={openSearchMember} onOpenCanonical={openSearchCanonical}/>}
       {view === "library" && <section ref={libraryPageRef} className={`library-page${remoteRootsPresent && !remoteOpen && !browsePath && !localDetail ? " library-remote-roots" : ""}${(remoteOpen ? remoteCompact : libraryCompact) ? " library-compact" : ""}`} {...chromeGestures(() => browseScrollRef.current)} onKeyDown={(event) => { if (event.key === "Escape") setMenuFor(null); }} onClick={() => menuFor && setMenuFor(null)}>
         {searchReturn && <button type="button" className="search-return" onClick={returnToSearch}><ChevronLeft/> {t("searchAll.backToSearch")}</button>}
         <Heading eyebrow={t("library.eyebrow")} title={t("library.title")}/>

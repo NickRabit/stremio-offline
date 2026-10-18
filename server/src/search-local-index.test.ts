@@ -182,7 +182,7 @@ test("a failed rebuild keeps the previous generation and records the failure", a
   assert.deepEqual((await index.search("lib_00000001", "kept", "all")).entries.map((item) => item.key), ["lib_00000001/Kept"]);
 });
 
-test("ranking is exact, prefix, substring, then file name, with a stable key order", async () => {
+test("ranking follows relevance and then a stable key order", async () => {
   const index = new LocalSearchIndex({
     entries: async () => [
       entry("lib_00000001/Misc", "Misc"),
@@ -227,6 +227,41 @@ test("the kind filter applies to identified entries and leaves unidentified ones
     "lib_00000001/Alien Folder",
     "lib_00000001/Alien Series",
   ]);
+});
+
+test("a folder name finds an episode file whose own name is only a marker", async () => {
+  const index = new LocalSearchIndex({
+    entries: async () => [
+      movie("lib_00000001/Jistě pane ministře/S01E03.mkv", "S01E03"),
+    ],
+  });
+  index.start();
+  await until(() => index.state().ready);
+  const found = await index.search("lib_00000001", "jistě pane ministře", "all");
+  assert.deepEqual(found.entries.map((item) => item.key), [
+    "lib_00000001/Jistě pane ministře/S01E03.mkv",
+  ]);
+});
+
+test("byIds returns matching movie or series entries of the requested library", async () => {
+  const index = new LocalSearchIndex({
+    entries: async () => [
+      movie("lib_00000001/Yes Minister", "Yes Minister", "tt0080306"),
+      series("lib_00000002/Yes Minister", "Yes Minister", "tmdb:4549"),
+      movie("lib_00000001/Other", "Other", "tmdb:4549"),
+    ],
+  });
+  index.start();
+  await until(() => index.state().ready);
+  assert.deepEqual(
+    index.byIds("lib_00000001", { imdb: "tt0080306", tmdb: "4549" }, "movie").map((item) => item.key),
+    ["lib_00000001/Yes Minister", "lib_00000001/Other"],
+  );
+  assert.deepEqual(index.byIds("lib_00000002", { tmdb: "4549" }, "movie"), []);
+  assert.deepEqual(
+    index.byIds("lib_00000002", { tmdb: "4549" }, "series").map((item) => item.key),
+    ["lib_00000002/Yes Minister"],
+  );
 });
 
 test("100,000 entries search under a second and yield between chunks", async () => {

@@ -8,9 +8,14 @@ import {
   type CatalogTarget,
 } from "./addons.js";
 import { isVideo, type LibraryEntry } from "./library.js";
-import { posixBase, visibleLibraries, type LibraryRecord } from "./libraries.js";
+import { parseLibraryPath, posixBase, posixDir, visibleLibraries, type LibraryRecord } from "./libraries.js";
 import type { MediaServerAuthority, MediaServerManager } from "./media-server-manager.js";
-import { isMediaServerError, type PublicRemoteItem, type PublicRemoteLibrary } from "./media-server-types.js";
+import {
+  isMediaServerError,
+  publicRemoteItem,
+  type PublicRemoteItem,
+  type PublicRemoteLibrary,
+} from "./media-server-types.js";
 import { GuardRejection, OutboundError } from "./outbound.js";
 import type { AddonRecord, MetaItem } from "./types.js";
 import type { UserRecord } from "./users.js";
@@ -48,6 +53,7 @@ export interface DiscoverDeps {
     visibleLibraries(authority: MediaServerAuthority): Promise<PublicRemoteLibrary[]>;
     searchLibrary: MediaServerManager["searchLibrary"];
     canSearchLibrary: MediaServerManager["canSearchLibrary"];
+    matchingItems: MediaServerManager["matchingItems"];
     libraryGeneration(libraryId: string): number | undefined;
   };
   mediaAuthority(userId: string): MediaServerAuthority;
@@ -85,6 +91,15 @@ const hostnameOf = (manifestUrl: string): string => {
 const hasIds = (ids: StrongIds): boolean =>
   ids.imdb !== undefined || ids.tmdb !== undefined || ids.tvdb !== undefined;
 
+const ratingOf = (meta: MetaItem): number | undefined => {
+  const value = typeof meta.imdbRating === "number"
+    ? meta.imdbRating
+    : typeof meta.imdbRating === "string" && meta.imdbRating.trim() !== ""
+      ? Number(meta.imdbRating)
+      : Number.NaN;
+  return Number.isFinite(value) && value >= 0 && value <= 10 ? value : undefined;
+};
+
 const catalogFailure = (error: unknown): SourceFailure => {
   if (error instanceof OutboundError) {
     switch (error.code) {
@@ -108,6 +123,7 @@ const catalogSource = (
   deps: DiscoverDeps,
   context: SourceContext,
   target: CatalogTarget,
+  explicitScope: boolean,
 ): Omit<SearchSource, "id"> => {
   const { addon, definition } = target;
   const type = definition.type;
@@ -127,7 +143,7 @@ const catalogSource = (
         throw catalogFailure(error);
       }
       const records: RawSearchRecord[] = [];
-      for (const meta of metas) {
+      for (const [index, meta] of metas.entries()) {
         if (meta.type !== "movie" && meta.type !== "series") continue;
         const id = String(meta.id);
         const name = typeof meta.name === "string" ? meta.name : "";
@@ -137,6 +153,7 @@ const catalogSource = (
         const ids = file ? {} : strongIdsFromStremioId(id);
         const rewritten = deps.rewriteMeta(meta);
         const year = yearOf(meta);
+        const rating = ratingOf(meta);
         records.push({
           itemKey: file ? `file:${id}` : `${meta.type}:${id}`,
           kind: file ? "file" : meta.type,
@@ -145,6 +162,8 @@ const catalogSource = (
           ...(typeof meta.description === "string" ? { description: meta.description } : {}),
           ...(typeof rewritten.poster === "string" ? { poster: rewritten.poster } : {}),
           ...(typeof rewritten.background === "string" ? { background: rewritten.background } : {}),
+          ...(rating === undefined ? {} : { rating }),
+          sourcePosition: skip + index,
           ...(hasIds(ids) ? { ids } : { opaque: `addon:${addon.key}:${file ? "file" : meta.type}:${id}` }),
           locator: {
             kind: "catalog",
@@ -165,11 +184,11 @@ const catalogSource = (
       const user = deps.user(context.userId);
       if (!user || user.disabled) return false;
       const live = allowedAddons(deps.addons(), viewerOf(user)).find((candidate) => candidate.key === addon.key);
-      if (!live || !live.enabled || live.globalSearch === false || live.manifestUrl !== manifestUrl) return false;
+      if (!live || !live.enabled || (!explicitScope && live.globalSearch === false) || live.manifestUrl !== manifestUrl) return false;
       return searchableCatalogs([live], undefined, {
         catalogType: type,
         catalogId: definition.id,
-        respectGlobalSearch: true,
+        respectGlobalSearch: !explicitScope,
       }).length > 0;
     },
   };
@@ -198,6 +217,12 @@ const localRecord = (entry: LibraryEntry, libraryId: string, deps: DiscoverDeps)
   const meta = entry.meta;
   const identified = meta !== undefined && (meta.type === "movie" || meta.type === "series");
   const singleFile = entry.files.length === 1 && isVideo(posixBase(entry.files[0]!.path));
+  const relative = parseLibraryPath(entry.key)?.relative;
+  const parentTitle = singleFile && relative !== undefined ? posixBase(posixDir(relative)) || undefined : undefined;
+  const searchText: RawSearchRecord["searchText"] = {
+    ...(parentTitle === undefined ? {} : { parentTitle }),
+    ...(relative === undefined || relative === "" ? {} : { path: relative }),
+  };
   const posterSource = entry.poster ?? meta?.poster;
   const poster = posterSource === undefined
     ? undefined
@@ -212,6 +237,7 @@ const localRecord = (entry: LibraryEntry, libraryId: string, deps: DiscoverDeps)
       title: meta.name ?? entry.title,
       ...(Number.isInteger(rawYear) ? { year: rawYear } : {}),
       ...(poster === undefined ? {} : { poster }),
+      ...(Object.keys(searchText).length === 0 ? {} : { searchText }),
       ...(hasIds(ids) ? { ids } : { opaque: `local:${libraryId}:${meta.type}:${id}` }),
       locator: { kind: "local", key: entry.key, libraryId, itemKind: singleFile ? "file" : "folder" },
     };
@@ -221,6 +247,7 @@ const localRecord = (entry: LibraryEntry, libraryId: string, deps: DiscoverDeps)
     kind: singleFile ? "file" : "folder",
     title: entry.title,
     ...(poster === undefined ? {} : { poster }),
+    ...(Object.keys(searchText).length === 0 ? {} : { searchText }),
     locator: { kind: "local", key: entry.key, libraryId, itemKind: singleFile ? "file" : "folder" },
   };
 };
@@ -264,6 +291,10 @@ const localSource = (
     onReady(listener): () => void {
       return deps.localIndex.onReady(listener);
     },
+    async expand(ids, kind): Promise<RawSearchRecord[]> {
+      if (kind !== "movie" && kind !== "series") return [];
+      return deps.localIndex.byIds(libraryId, ids, kind).map((entry) => localRecord(entry, libraryId, deps));
+    },
   };
 };
 
@@ -272,7 +303,7 @@ const remoteRecord = (
   libraryId: string,
   provider: PublicRemoteLibrary["provider"],
 ): RawSearchRecord | undefined => {
-  if (item.type !== "movie" && item.type !== "series" && item.type !== "episode") return undefined;
+  if (item.type !== "movie" && item.type !== "series" && item.type !== "episode" && item.type !== "folder") return undefined;
   return {
     itemKey: item.id,
     kind: item.type,
@@ -282,6 +313,7 @@ const remoteRecord = (
     ...(item.poster === undefined ? {} : { poster: item.poster }),
     ids: validStrongIds(item.providerIds),
     ...(item.type !== "episode" ? {} : {
+      ...(item.seriesName === undefined ? {} : { searchText: { parentTitle: item.seriesName } }),
       ...(item.seriesId === undefined ? {} : { parentRef: item.seriesId }),
       ...(item.season === undefined ? {} : { season: item.season }),
       ...(item.episode === undefined ? {} : { episode: item.episode }),
@@ -295,6 +327,13 @@ const remoteRecord = (
       ...(provider === undefined ? {} : { provider }),
     },
   };
+};
+
+const catalogIdFor = (ids: StrongIds): string | undefined => {
+  if (ids.imdb !== undefined) return ids.imdb;
+  if (ids.tmdb !== undefined) return `tmdb:${ids.tmdb}`;
+  if (ids.tvdb !== undefined) return `tvdb:${ids.tvdb}`;
+  return undefined;
 };
 
 const remoteSource = (
@@ -332,14 +371,52 @@ const remoteSource = (
       const record = remoteRecord(item, library.id, library.provider);
       return record === undefined ? [] : [record];
     });
+    // A server matches episodes by their series name without returning the series itself (it
+    // may spell the name with diacritics the query lacks). The episodes name it, so the series is
+    // added from them and they gather under it instead of standing alone.
+    // The series go first: a page accepts a bounded number of rows, and an episode only joins a
+    // series that is already there.
+    const present = new Set(records.map((record) => record.itemKey));
+    const derivedSeries: RawSearchRecord[] = [];
+    for (const item of page.items) {
+      if (item.type !== "episode" || item.seriesId === undefined || item.seriesName === undefined || present.has(item.seriesId)) continue;
+      present.add(item.seriesId);
+      derivedSeries.push({
+        itemKey: item.seriesId,
+        kind: "series",
+        title: item.seriesName,
+        ids: {},
+        derived: true,
+        locator: { kind: "remote", libraryId: library.id, itemId: item.seriesId, itemType: "series", ...(library.provider === undefined ? {} : { provider: library.provider }) },
+      });
+    }
     return {
-      records,
+      records: [...derivedSeries, ...records],
       ...(page.cursor === undefined ? {} : { cursor: page.cursor }),
       exhausted: page.cursor === undefined,
     };
   },
   stillAllowed(): boolean {
     return deps.remote.canSearchLibrary(context.userId, library.id, generation);
+  },
+  async expand(ids, kind, signal): Promise<RawSearchRecord[]> {
+    const catalogId = catalogIdFor(ids);
+    if (catalogId === undefined) return [];
+    try {
+      const items = await deps.remote.matchingItems(
+        deps.mediaAuthority(context.userId),
+        library.id,
+        kind,
+        catalogId,
+        signal,
+      );
+      return items.flatMap((item) => {
+        const record = remoteRecord(publicRemoteItem(item, library.id), library.id, library.provider);
+        return record === undefined ? [] : [record];
+      });
+    } catch {
+      return [];
+    }
   },
 });
 
@@ -383,8 +460,16 @@ export async function discoverSources(
   if (request.sources.includes("catalog")) {
     const order = orderFor(user, (id) => deps.addonOrder(id));
     const allowed = orderedForUser(allowedAddons(deps.addons(), viewer), order);
-    for (const target of searchableCatalogs(allowed, catalogKind(request.kind), { respectGlobalSearch: true })) {
-      sources.push(catalogSource(deps, context, target));
+    const scope = request.scope === undefined
+      ? { respectGlobalSearch: true }
+      : {
+        addonKey: request.scope.addonKey,
+        ...(request.scope.catalogType === undefined ? {} : { catalogType: request.scope.catalogType }),
+        ...(request.scope.catalogId === undefined ? {} : { catalogId: request.scope.catalogId }),
+        respectGlobalSearch: false,
+      };
+    for (const target of searchableCatalogs(allowed, catalogKind(request.kind), scope)) {
+      sources.push(catalogSource(deps, context, target, request.scope !== undefined));
     }
   }
 

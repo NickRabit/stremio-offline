@@ -253,10 +253,10 @@ fun GlobalSearchScreen(
     scope.launch {
       val page = try { viewModel.members(anchor, 0) } catch (_: Exception) { null }
       val canonical = page?.canonical
-      val distinct = distinctMembers(page?.members.orEmpty())
+      val distinct = openableMembers(page?.members.orEmpty())
       when {
         canonical != null && (canonical.type == "movie" || canonical.type == "series") -> openCanonical(canonical)
-        page != null && distinct.size == 1 && page.nextFrom == null -> openMember(distinct.first())
+        page != null && distinct.size == 1 && (page.nextFrom == null || cluster.kind == "series") -> openMember(distinct.first())
         else -> openChooser(cluster, anchor)
       }
     }
@@ -749,7 +749,7 @@ private fun GlobalSearchMemberPanel(
   ) {
     if (loading && page == null) Text(stringResource(R.string.tv_global_search_state_loading), color = Tokens.Muted, fontSize = 12.sp)
     if (error) Text(stringResource(R.string.tv_global_search_open_failed), color = Tokens.Muted, fontSize = 12.sp)
-    distinctMembers(page?.members.orEmpty()).forEachIndexed { index, member ->
+    openableMembers(page?.members.orEmpty()).forEachIndexed { index, member ->
       Column(
         verticalArrangement = Arrangement.spacedBy(2.dp),
         modifier = if (index == 0) Modifier.testTag(TagGlobalSearchPanelEntry) else Modifier,
@@ -790,6 +790,13 @@ private fun GlobalSearchMemberPanel(
 }
 
 /** One addon answers the same title from several of its catalogues; it is one copy. */
+/** What a card can open: a series card opens the series, never one of the episodes under it. */
+internal fun openableMembers(members: List<GlobalSearchMemberDto>): List<GlobalSearchMemberDto> {
+  val distinct = distinctMembers(members)
+  val series = distinct.filter { it.kind == "series" }
+  return if (series.isNotEmpty()) distinct.filter { it.kind != "episode" } else distinct
+}
+
 internal fun distinctMembers(members: List<GlobalSearchMemberDto>): List<GlobalSearchMemberDto> {
   val seen = mutableSetOf<String>()
   return members.filter { member ->

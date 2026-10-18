@@ -68,6 +68,31 @@ test("queries accept 200 code points and reject 201 or more than 256 UTF-16 unit
   assert.equal(Array.from(parseStartRequest({ ...valid(), query: "😀".repeat(128) }).query).length, 128);
 });
 
+test("an explicit addon scope is bounded and catalog type and id travel together", () => {
+  assert.deepEqual(
+    parseStartRequest({
+      ...valid(),
+      scope: { addonKey: "addon:alpha", catalogType: "movie", catalogId: "top" },
+    }).scope,
+    { addonKey: "addon:alpha", catalogType: "movie", catalogId: "top" },
+  );
+  assert.deepEqual(
+    parseStartRequest({ ...valid(), scope: { addonKey: "alpha" } }).scope,
+    { addonKey: "alpha" },
+  );
+  for (const scope of [
+    {},
+    { addonKey: "" },
+    { addonKey: "bad key" },
+    { addonKey: "alpha", catalogType: "movie" },
+    { addonKey: "alpha", catalogId: "top" },
+    { addonKey: "alpha", catalogType: "", catalogId: "top" },
+    { addonKey: "alpha", catalogType: "movie", catalogId: "", extra: true },
+  ]) {
+    assert.throws(() => parseStartRequest({ ...valid(), scope }), SearchError);
+  }
+});
+
 test("revision and opaque id parsing reject loose shapes", () => {
   assert.equal(parseRevision({ revision: 0 }), 0);
   assert.throws(() => parseRevision({ revision: 1, other: 2 }), SearchError);
@@ -90,6 +115,9 @@ test("records are projected with bounded display fields and no unknown propertie
       episode: 2,
       episodeEnd: 3,
       ids: { imdb: "tt1" },
+      searchText: { parentTitle: "Parent", path: "Show/S01E02.mkv" },
+      rating: 8.4,
+      sourcePosition: 3,
     }),
     unknown: "not copied",
   } as RawSearchRecord);
@@ -102,6 +130,9 @@ test("records are projected with bounded display fields and no unknown propertie
   assert.equal(projected.episode, 2);
   assert.equal(projected.episodeEnd, 3);
   assert.deepEqual(projected.ids, { imdb: "tt1" });
+  assert.deepEqual(projected.searchText, { parentTitle: "Parent", path: "Show/S01E02.mkv" });
+  assert.equal(projected.rating, 8.4);
+  assert.equal(projected.sourcePosition, 3);
   assert.equal(Object.hasOwn(projected, "unknown"), false);
 });
 
@@ -119,6 +150,12 @@ test("record projection drops empty titles, invalid years and oversized identiti
   );
   assert.equal(projectRecord(record({ poster: "x".repeat(2049) })), undefined);
   assert.equal(projectRecord(record({ opaque: "x".repeat(2049) })), undefined);
+  assert.equal(projectRecord(record({ rating: 11 }))?.rating, undefined);
+  assert.equal(projectRecord(record({ sourcePosition: -1 }))?.sourcePosition, undefined);
+  assert.equal(
+    Array.from(projectRecord(record({ searchText: { path: "x".repeat(2049) } }))?.searchText?.path ?? "").length,
+    2048,
+  );
 });
 
 test("search errors carry fixed catalogue keys and no query text", () => {
