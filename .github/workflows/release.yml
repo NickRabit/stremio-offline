@@ -175,14 +175,17 @@ jobs:
             mv "$file" "${file%.*}-unsigned.${file##*.}"
           done
           ls -l ./*-unsigned.*
-      # `gh release upload` fails on an asset name that is already there, so a
-      # rerun never replaces what was published.
       - name: Attach the app to the release
         env:
           GH_TOKEN: ${{ github.token }}
-        # The app carries an LGPL FFmpeg statically linked with OpenSSL, so the exact source
-        # archives it was built from travel with the same release (see docs/licensing.md).
-        run: gh release upload "${GITHUB_REF_NAME}" desktop/release/*-unsigned.dmg desktop/release/*-unsigned.zip desktop/ffmpeg/sources/*
+        run: bash scripts/attach-release-assets.sh desktop/release/*-unsigned.dmg desktop/release/*-unsigned.zip
+      # The app carries an LGPL FFmpeg statically linked with OpenSSL, so the exact source
+      # archives it was built from travel with the same release (see docs/licensing.md). The
+      # Windows and Linux jobs attach archives of the same names at the same time.
+      - name: Attach the FFmpeg sources
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/attach-release-assets.sh desktop/ffmpeg/sources/*
   # The LGPL FFmpeg the Windows app carries, cross-built with mingw-w64 exactly as the
   # pull-request check builds it.
   ffmpeg-windows:
@@ -271,36 +274,12 @@ jobs:
             files+=("$file")
           done
           if [ ${#files[@]} -gt 0 ]; then gh release upload "${GITHUB_REF_NAME}" "${files[@]}"; fi
-      # The Windows sources share the FFmpeg tarball's name with the macOS job's, which has
-      # already run, so only names the release does not have yet are uploaded.
+      # The Windows sources share names with the other desktop jobs' archives, attached at the
+      # same time, so the script skips and tolerates names another job attached first.
       - name: Attach the FFmpeg sources
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          present="$(gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name')"
-          files=()
-          for file in desktop/ffmpeg-win/sources/*; do
-            name="$(basename "$file")"
-            if printf '%s\n' "$present" | grep -qxF -e "$name"; then
-              echo "the release already carries $name"
-              continue
-            fi
-            files+=("$file")
-          done
-          if [ ${#files[@]} -eq 0 ]; then
-            echo "every source archive is already attached"
-            exit 0
-          fi
-          if ! gh release upload "${GITHUB_REF_NAME}" "${files[@]}" 2>"$RUNNER_TEMP/source-upload.err"; then
-            if grep -qi "already exists" "$RUNNER_TEMP/source-upload.err"; then
-              echo "an asset was already attached; treating it as success"
-              cat "$RUNNER_TEMP/source-upload.err"
-              exit 0
-            fi
-            cat "$RUNNER_TEMP/source-upload.err" >&2
-            exit 1
-          fi
+        run: bash scripts/attach-release-assets.sh desktop/ffmpeg-win/sources/*
   # The LGPL FFmpeg the Linux app carries, built in the same pinned ubuntu:22.04 container as the
   # pull-request check builds it.
   ffmpeg-linux:
@@ -394,36 +373,12 @@ jobs:
             files+=("$file")
           done
           if [ ${#files[@]} -gt 0 ]; then gh release upload "${GITHUB_REF_NAME}" "${files[@]}"; fi
-      # The Linux sources share the FFmpeg tarball's name with the macOS and Windows jobs' ones,
-      # which have already run, so only names the release does not have yet are uploaded.
+      # The Linux sources share names with the other desktop jobs' archives, attached at the
+      # same time, so the script skips and tolerates names another job attached first.
       - name: Attach the FFmpeg sources
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          present="$(gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name')"
-          files=()
-          for file in desktop/ffmpeg-linux/sources/*; do
-            name="$(basename "$file")"
-            if printf '%s\n' "$present" | grep -qxF -e "$name"; then
-              echo "the release already carries $name"
-              continue
-            fi
-            files+=("$file")
-          done
-          if [ ${#files[@]} -eq 0 ]; then
-            echo "every source archive is already attached"
-            exit 0
-          fi
-          if ! gh release upload "${GITHUB_REF_NAME}" "${files[@]}" 2>"$RUNNER_TEMP/source-upload.err"; then
-            if grep -qi "already exists" "$RUNNER_TEMP/source-upload.err"; then
-              echo "an asset was already attached; treating it as success"
-              cat "$RUNNER_TEMP/source-upload.err"
-              exit 0
-            fi
-            cat "$RUNNER_TEMP/source-upload.err" >&2
-            exit 1
-          fi
+        run: bash scripts/attach-release-assets.sh desktop/ffmpeg-linux/sources/*
 
   # The only job that edits the release body. The three sections are appended in
   # macOS, Windows, Linux order, because each step adds to whatever the release

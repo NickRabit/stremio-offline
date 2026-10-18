@@ -14,6 +14,7 @@ import cz.stremiooffline.tv.data.RemoteLibraryApi
 import cz.stremiooffline.tv.data.RemotePlaybackReport
 import cz.stremiooffline.tv.data.TrackChange
 import cz.stremiooffline.tv.diagnostics.AppLog
+import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -33,6 +34,8 @@ private enum class ReportEvent(val wire: String) {
   Progress("progress"),
   Stop("stop"),
 }
+
+private data class ReportedPlay(val context: RemoteItemContext, val playId: String)
 
 /** The playback calls of one server, taken straight off [cz.stremiooffline.tv.data.ApiClient]. */
 interface PlaybackApi {
@@ -188,7 +191,7 @@ class PlaybackController(
    *  whose own remote-state endpoint holds it when nothing can name the title. */
   private var remote: RemoteItemContext? = null
   /** The identity a `start` was sent for in this session; null while no start report exists. */
-  private var reported: RemoteItemContext? = null
+  private var reported: ReportedPlay? = null
   /** Reports leave one at a time, in order: a progress that overtook a stop would reopen the
    *  media server's session until its idle timeout. */
   private val reportLock = Mutex()
@@ -445,8 +448,9 @@ class PlaybackController(
       startLoops()
       val context = next.remote
       if (context != null && VersionProgress.writer(context) != null) {
-        reported = context
-        report(ReportEvent.Start, context, position, paused = true)
+        val play = ReportedPlay(context, UUID.randomUUID().toString().replace("-", ""))
+        reported = play
+        report(ReportEvent.Start, play, position, paused = true)
       }
     }
   }
@@ -835,14 +839,14 @@ class PlaybackController(
   }
 
   /** A report is best-effort: playback never waits for it and never learns that it failed. */
-  private fun report(event: ReportEvent, context: RemoteItemContext?, position: Double, paused: Boolean) {
-    val remote = context ?: return
-    if (VersionProgress.writer(remote) == null) return
-    scope.launch { sendReport(event, remote, position, paused) }
+  private fun report(event: ReportEvent, play: ReportedPlay?, position: Double, paused: Boolean) {
+    val current = play ?: return
+    if (VersionProgress.writer(current.context) == null) return
+    scope.launch { sendReport(event, current, position, paused) }
   }
 
-  private suspend fun sendReport(event: ReportEvent, context: RemoteItemContext, position: Double, paused: Boolean) {
-    val writer = VersionProgress.writer(context) ?: return
+  private suspend fun sendReport(event: ReportEvent, play: ReportedPlay, position: Double, paused: Boolean) {
+    val writer = VersionProgress.writer(play.context) ?: return
     reportLock.withLock {
       try {
         (api as? RemoteLibraryApi)?.reportRemotePlayback(
@@ -853,6 +857,7 @@ class PlaybackController(
             position = round(position).toLong().coerceAtLeast(0L),
             paused = paused,
             event = event.wire,
+            playId = play.playId,
           ),
         )
       } catch (cancelled: CancellationException) {

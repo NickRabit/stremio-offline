@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { build } from "./build.js";
 import {
   assertMediaServerAddress,
   createMediaServerTransport,
@@ -203,7 +204,7 @@ test("items carries only the fixed allow-listed query and drops raw path fields"
     assert.equal(query.get("Limit"), "25");
     assert.equal(query.get("SearchTerm"), "a b");
     assert.equal(fixture.requests[0].headers["x-emby-token"], "tok");
-    assert.equal(fixture.requests[0].headers.authorization, 'MediaBrowser Client="Stremio Offline", Device="Desktop", DeviceId="stremio-offline-server", Version="1.0.0", Token="tok"');
+    assert.equal(fixture.requests[0].headers.authorization, `MediaBrowser Client="Stremio Offline", Device="Desktop", DeviceId="stremio-offline-server", Version="${build.version}", Token="tok"`);
     await transport.close();
   } finally {
     await fixture?.close();
@@ -1610,19 +1611,19 @@ test("artwork cuts off a body that exceeds its byte cap", async () => {
   }
 });
 
-test("artwork holds its own thirty-two slots and answers an overflow with busy", async () => {
+test("artwork holds its own sixteen slots and answers an overflow with busy", async () => {
   const transport = stubbed(async () => heldImage());
   try {
-    const live = await Promise.all(Array.from({ length: 32 }, (_, index) =>
+    const live = await Promise.all(Array.from({ length: 16 }, (_, index) =>
       transport.requestArtwork({ itemId: `i${index}`, imageType: "Primary" }, "tok")));
-    assert.equal(live.length, 32);
+    assert.equal(live.length, 16);
     await assert.rejects(transport.requestArtwork({ itemId: "overflow", imageType: "Primary" }, "tok"), { code: "busy" });
   } finally {
     await transport.close();
   }
 });
 
-test("twenty-four concurrent artworks leave the metadata pool and its DNS slots free", async () => {
+test("sixteen concurrent artworks leave the metadata pool and its DNS slots free", async () => {
   let releaseLookup!: () => void;
   const lookupGate = new Promise<void>((resolve) => { releaseLookup = resolve; });
   const transport = createMediaServerTransport({ baseUrl: "http://media.example", allowLan: false, allowLoopback: false }, {
@@ -1632,7 +1633,7 @@ test("twenty-four concurrent artworks leave the metadata pool and its DNS slots 
       : new Response(JSON.stringify({ Id: "server-1", Version: "1" }), { status: 200, headers: { "content-type": "application/json" } }),
   });
   try {
-    const artworks = Array.from({ length: 24 }, (_, index) =>
+    const artworks = Array.from({ length: 16 }, (_, index) =>
       transport.requestArtwork({ itemId: `i${index}`, imageType: "Primary" }, "tok"));
     // Every image lookup is parked on the gate at once. Were image DNS sharing the four metadata
     // slots, the fifth lookup would already be refused with busy.
@@ -1641,7 +1642,7 @@ test("twenty-four concurrent artworks leave the metadata pool and its DNS slots 
     const settled = await Promise.allSettled(artworks);
     assert.equal(settled.filter((entry) => entry.status === "rejected").length, 0, "every artwork resolved its headers");
     const info = await transport.requestJson("info", {});
-    assert.deepEqual(info, { Id: "server-1", Version: "1" }, "metadata still runs while 24 image slots are held");
+    assert.deepEqual(info, { Id: "server-1", Version: "1" }, "metadata still runs while 16 image slots are held");
   } finally {
     await transport.close();
   }
@@ -1711,7 +1712,7 @@ test("cancelling a held artwork body frees its slot immediately", async () => {
 
 test("closing the transport errors a held artwork body and frees every image slot", async () => {
   const transport = stubbed(async () => heldImage());
-  const responses = await Promise.all(Array.from({ length: 32 }, (_, index) =>
+  const responses = await Promise.all(Array.from({ length: 16 }, (_, index) =>
     transport.requestArtwork({ itemId: `i${index}`, imageType: "Primary" }, "tok")));
   await transport.close();
   await assert.rejects(readMedia(responses[0].body), { code: "closed" });

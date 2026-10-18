@@ -14,6 +14,7 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -21,6 +22,7 @@ import org.junit.Test
 
 /** A native remote play tells the media server it is playing, moving, paused or gone. */
 class RemotePlaybackReportTest {
+  private val playIdPattern = Regex("^[0-9a-f]{32}$")
 
   private val capabilities = ClientCapabilitiesDto(
     h264 = true,
@@ -136,6 +138,7 @@ class RemotePlaybackReportTest {
     assertEquals(120L, report.position)
     assertEquals(true, report.paused)
     assertEquals("start", report.event)
+    assertTrue(playIdPattern.matches(report.playId!!))
   }
 
   @Test
@@ -158,6 +161,7 @@ class RemotePlaybackReportTest {
     runCurrent()
     assertEquals("progress", api.reports.last().third.event)
     assertEquals(false, api.reports.last().third.paused)
+    assertEquals(api.reports.first().third.playId, api.reports.last().third.playId)
 
     controller.onPaused()
     runCurrent()
@@ -168,6 +172,7 @@ class RemotePlaybackReportTest {
     controller.onPaused()
     runCurrent()
     assertEquals(count, api.reports.size)
+    assertEquals(1, api.reports.mapNotNull { it.third.playId }.distinct().size)
   }
 
   @Test
@@ -201,6 +206,7 @@ class RemotePlaybackReportTest {
     assertEquals("stop", api.reports.last().third.event)
     assertEquals(42L, api.reports.last().third.position)
     assertEquals(1, api.reports.count { it.third.event == "stop" })
+    assertEquals(api.reports.first().third.playId, api.reports.last().third.playId)
 
     val count = api.reports.size
     controller.stop()
@@ -236,6 +242,11 @@ class RemotePlaybackReportTest {
       api.reports.map { it.third.event to it.third.mediaSourceId },
     )
     assertEquals(300L, api.reports[1].third.position)
+    val oldPlayId = api.reports[0].third.playId
+    assertTrue(playIdPattern.matches(oldPlayId!!))
+    assertEquals(oldPlayId, api.reports[1].third.playId)
+    assertTrue(playIdPattern.matches(api.reports[2].third.playId!!))
+    assertNotEquals(oldPlayId, api.reports[2].third.playId)
   }
 
   @Test

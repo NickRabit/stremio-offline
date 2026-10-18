@@ -8,6 +8,7 @@ import {
   validateMediaServerToken,
   type MediaServerKind,
 } from "./media-server-types.js";
+import { build } from "./build.js";
 import { noteProviderCall } from "./provider-stats.js";
 
 /** Requests the metadata transport is allowed to make, with the exact argument fields each
@@ -142,7 +143,7 @@ const ORIGINAL_RANGE_MAX = 128;
 const ORIGINAL_HEADER_TYPE_MAX = 256;
 const ORIGINAL_HEADER_ETAG_MAX = 512;
 const ORIGINAL_HEADER_DATE_MAX = 128;
-const IMAGE_MAX_CONCURRENCY = 32;
+const IMAGE_MAX_CONCURRENCY = 16;
 const IMAGE_HEADER_MS = 10_000;
 const IMAGE_IDLE_MS = 30_000;
 const IMAGE_LIFETIME_MS = 5 * 60 * 1000;
@@ -173,7 +174,7 @@ export const MEDIA_SERVER_IMAGE_LIMITS = Object.freeze({
 const CLIENT = "Stremio Offline";
 const DEVICE = "Desktop";
 const DEVICE_ID = "stremio-offline-server";
-const CLIENT_VERSION = "1.0.0";
+const CLIENT_VERSION = build.version;
 const ITEM_TYPES = new Set(["Movie", "Series", "Season", "Episode", "MusicVideo"]);
 /** The directory listing admits Folder alongside the media types; the recursive `items`
  *  operation above never does, so the old snapshot contract is unchanged. */

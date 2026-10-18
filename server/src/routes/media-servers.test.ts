@@ -490,6 +490,9 @@ test("every internal failure maps to a fixed status and key, and its internal te
       assert.equal((JSON.parse(body) as { messageKey?: string }).messageKey, key, `${error.code} key`);
       assert.equal(body.includes(sentinel), false, `${error.code} must not forward the internal text`);
       assert.equal(body.includes("token"), false, "no token leaks through an error");
+      if (error.code === "authentication-required") {
+        await harness.manager.reauthenticate(authority(admin), harness.connectionId, { username: "reader", password: "pw" });
+      }
     }
     delete harness.server.errors.detail;
   });

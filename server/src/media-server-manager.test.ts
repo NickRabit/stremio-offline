@@ -321,6 +321,7 @@ const mount = async (options: {
   networkStartIntervalMs?: number;
   coalesceReads?: boolean;
   clock?: () => number;
+  deadSessionProbeMs?: number;
   cacheRemoteImages?: boolean;
   logoutTimeoutMs?: number;
   providerFactory?: (kind: "jellyfin" | "emby", transport: MediaServerTransport) => MediaServerProvider;
@@ -362,6 +363,7 @@ const mount = async (options: {
     ...(options.coalesceReads === undefined ? {} : { coalesceReads: options.coalesceReads }),
     ...(options.cleanupIntervalMs === undefined ? {} : { cleanupIntervalMs: options.cleanupIntervalMs }),
     ...(options.clock === undefined ? {} : { clock: options.clock }),
+    ...(options.deadSessionProbeMs === undefined ? {} : { deadSessionProbeMs: options.deadSessionProbeMs }),
     ...(options.logoutTimeoutMs === undefined ? {} : { logoutTimeoutMs: options.logoutTimeoutMs }),
   });
   await manager.initialize();
@@ -446,6 +448,16 @@ const subscribersOf = (harness: Harness, connectionId: string, key: string): num
 /** How many times one provider operation has run, for the assertions about the shared window. */
 const providerCalls = (harness: Harness, operation: string): number =>
   harness.server.calls.filter((call) => call === operation).length;
+
+const trackVaultReads = (harness: Harness): { count: number } => {
+  const read = harness.vault.get.bind(harness.vault);
+  const state = { count: 0 };
+  harness.vault.get = async (...args: Parameters<MediaServerSecrets["get"]>) => {
+    state.count += 1;
+    return read(...args);
+  };
+  return state;
+};
 
 const originalProofCount = (harness: Harness): number =>
   (harness.manager as unknown as { originalProofs: Map<string, unknown> }).originalProofs.size;
@@ -1004,6 +1016,124 @@ test("permission is re-checked live: an upstream 401 marks reauthentication, 403
       delete harness.server.errors[operation];
     }
   });
+});
+
+test("a dead credential is refused locally and probed once after five minutes", async () => {
+  let now = 0;
+  await withHarness(async (harness) => {
+    const connection = await connect(harness);
+    const vaultReads = trackVaultReads(harness);
+    harness.server.errors.user = new MediaServerError("authentication-required", "401", 401);
+    dropRuntime(harness, connection.id);
+
+    await assert.rejects(harness.manager.discoverLibraries(harness.admin, connection.id), { code: "authentication-required" });
+    assert.equal((await harness.manager.listConnections(harness.admin)).connections[0]!.status, "reauthentication-required");
+
+    const calls = harness.server.calls.length;
+    const reads = vaultReads.count;
+    await assert.rejects(harness.manager.discoverLibraries(harness.admin, connection.id), { code: "authentication-required" });
+    assert.equal(harness.server.calls.length, calls, "a refused read never reaches the provider");
+    assert.equal(vaultReads.count, reads, "a refused read never opens the vault");
+
+    delete harness.server.errors.user;
+    now = 5 * 60_000;
+    const info = providerCalls(harness, "info");
+    const readsBeforeProbe = vaultReads.count;
+    const outcomes = await Promise.allSettled([
+      harness.manager.discoverLibraries(harness.admin, connection.id),
+      harness.manager.discoverLibraries(harness.admin, connection.id),
+    ]);
+    assert.equal(outcomes.filter((outcome) => outcome.status === "fulfilled").length, 1);
+    const refused = outcomes.find((outcome): outcome is PromiseRejectedResult => outcome.status === "rejected");
+    assert.equal(refused?.reason.code, "authentication-required");
+    assert.equal(providerCalls(harness, "info"), info + 1, "two concurrent reads let exactly one probe through");
+    assert.equal(vaultReads.count, readsBeforeProbe + 1, "the refused concurrent read never opens the vault");
+    assert.equal((await harness.manager.listConnections(harness.admin)).connections[0]!.status, "available");
+  }, { clock: () => now, deadSessionProbeMs: 5 * 60_000 });
+});
+
+test("reauthentication lifts a local refusal immediately", async () => {
+  await withHarness(async (harness) => {
+    const connection = await connect(harness);
+    harness.server.errors.user = new MediaServerError("authentication-required", "401", 401);
+    dropRuntime(harness, connection.id);
+    await assert.rejects(harness.manager.discoverLibraries(harness.admin, connection.id), { code: "authentication-required" });
+    delete harness.server.errors.user;
+
+    const updated = await harness.manager.reauthenticate(harness.admin, connection.id, { username: "reader", password: "new-password" });
+    assert.notEqual(updated.generation, connection.generation);
+    assert.equal(updated.status, "available");
+
+    const info = providerCalls(harness, "info");
+    await harness.manager.discoverLibraries(harness.admin, connection.id);
+    assert.equal(providerCalls(harness, "info"), info + 1, "the new generation is not held by the old status");
+  }, { clock: () => 0, deadSessionProbeMs: 5 * 60_000 });
+});
+
+test("a session that started before a 401 cannot clear the refusal it raced", async () => {
+  await withHarness(async (harness) => {
+    const connection = await connect(harness);
+    dropRuntime(harness, connection.id);
+    const held = deferred();
+    const entered = deferred();
+    harness.server.nudge = { op: "views", wait: held.promise, entered: () => entered.resolve() };
+    const older = harness.manager.discoverLibraries(harness.admin, connection.id);
+    await entered.promise;
+    (harness.manager as unknown as { markReauthentication(record: unknown): void }).markReauthentication(harness.store.mediaConnections()[0]);
+    harness.server.nudge = undefined;
+    held.resolve();
+    await older;
+    assert.equal((await harness.manager.listConnections(harness.admin)).connections[0]!.status, "reauthentication-required");
+    const calls = harness.server.calls.length;
+    await assert.rejects(harness.manager.discoverLibraries(harness.admin, connection.id), { code: "authentication-required" });
+    assert.equal(harness.server.calls.length, calls, "the refusal still holds the next read locally");
+  }, { clock: () => 0, deadSessionProbeMs: 5 * 60_000 });
+});
+
+test("a probe abandoned before the server answered hands its window back", async () => {
+  let now = 0;
+  await withHarness(async (harness) => {
+    const connection = await connect(harness);
+    harness.server.errors.user = new MediaServerError("authentication-required", "401", 401);
+    dropRuntime(harness, connection.id);
+    await assert.rejects(harness.manager.discoverLibraries(harness.admin, connection.id), { code: "authentication-required" });
+    delete harness.server.errors.user;
+    now = 5 * 60_000;
+
+    const held = deferred();
+    const entered = deferred();
+    harness.server.nudge = { op: "info", wait: held.promise, entered: () => entered.resolve() };
+    const abort = new AbortController();
+    const abandoned = harness.manager.discoverLibraries(harness.admin, connection.id, abort.signal);
+    await entered.promise;
+    abort.abort();
+    harness.server.nudge = undefined;
+    held.resolve();
+    await assert.rejects(abandoned);
+
+    const info = providerCalls(harness, "info");
+    await harness.manager.discoverLibraries(harness.admin, connection.id);
+    assert.equal(providerCalls(harness, "info"), info + 1, "the next read is the probe, not a local refusal");
+    assert.equal((await harness.manager.listConnections(harness.admin)).connections[0]!.status, "available");
+  }, { clock: () => now, deadSessionProbeMs: 5 * 60_000 });
+});
+
+test("an identity change is refused locally", async () => {
+  await withHarness(async (harness) => {
+    const connection = await connect(harness);
+    await harness.manager.discoverLibraries(harness.admin, connection.id);
+    const vaultReads = trackVaultReads(harness);
+
+    harness.server.serverId = "server-2";
+    await assert.rejects(harness.manager.discoverLibraries(harness.admin, connection.id), { code: "identity-changed" });
+    assert.equal((await harness.manager.listConnections(harness.admin)).connections[0]!.status, "identity-changed");
+
+    const calls = harness.server.calls.length;
+    const reads = vaultReads.count;
+    await assert.rejects(harness.manager.discoverLibraries(harness.admin, connection.id), { code: "identity-changed" });
+    assert.equal(harness.server.calls.length, calls, "a refused read never reaches the provider");
+    assert.equal(vaultReads.count, reads, "a refused read never opens the vault");
+  }, { clock: () => 0, deadSessionProbeMs: 5 * 60_000 });
 });
 
 test("account policy gates the read: disabled, no playback and unsupported restrictions fail closed", async () => {
@@ -2248,6 +2378,7 @@ test("original proof: a membership proof is not a playback proof", async () => {
 });
 
 test("original proof: a 401 on the byte read drops the proof", async () => {
+  let now = 0;
   await withHarness(async (harness) => {
     const { connection, library } = await seedPlayable(harness);
     harness.server.original = { error: new MediaServerError("authentication-required", "reauthentication required") };
@@ -2255,12 +2386,13 @@ test("original proof: a 401 on the byte read drops the proof", async () => {
     await assert.rejects(harness.manager.openOriginal(harness.admin, ref, { method: "GET", range: "bytes=0-1" }), { code: "authentication-required" });
     assert.equal((await harness.manager.listConnections(harness.admin)).connections[0]!.status, "reauthentication-required");
     harness.server.original = { status: 206 };
+    now = 5 * 60_000;
     await harness.manager.openOriginal(harness.admin, ref, { method: "GET", range: "bytes=0-1" });
     assert.equal(harness.server.calls.filter((call) => call === "detail").length, 2, "the second open repeats the preflight");
     assert.equal(harness.server.calls.filter((call) => call === "ancestors").length, 2);
     assert.equal(harness.server.calls.filter((call) => call === "versions").length, 2);
     assert.equal(harness.server.originalCalls, 2, "the stub increments before it throws the configured error");
-  });
+  }, { clock: () => now });
 });
 
 test("the content invalidator is registered once and awaited for scoped writes", async () => {
@@ -4200,6 +4332,7 @@ test("one subscriber's abort leaves the other, and the last abort cancels the re
 });
 
 test("a row that lands after its runtime was invalidated neither repopulates nor evicts", async () => {
+  let now = 0;
   await withHarness(async (harness) => {
     const { library } = await warmLibrary(harness);
     harness.server.detailOf["m3"] = movie("m3");
@@ -4219,6 +4352,7 @@ test("a row that lands after its runtime was invalidated neither repopulates nor
     assert.equal((await harness.manager.listConnections(harness.admin)).connections[0]!.status, "reauthentication-required");
 
     // The new runtime reads a newer row and keeps it.
+    now = 5 * 60_000;
     harness.server.detailOf["m1"] = { ...movie("m1"), name: "Newer" };
     assert.equal((await harness.manager.itemDetail(harness.admin, library.id, "m1")).item.name, "Newer");
     const kept = providerCalls(harness, "detail");
@@ -4229,10 +4363,11 @@ test("a row that lands after its runtime was invalidated neither repopulates nor
     await late;
     assert.equal((await harness.manager.itemDetail(harness.admin, library.id, "m1")).item.name, "Newer", "the newer answer is still the one held");
     assert.equal(providerCalls(harness, "detail"), kept, "and the late read cost no provider call of its own");
-  });
+  }, { clock: () => now });
 });
 
 test("an authentication-required read from a miss drops the runtime, its window and its status", async () => {
+  let now = 0;
   await withHarness(async (harness) => {
     const { library } = await warmLibrary(harness);
     harness.server.detailOf["m3"] = movie("m3");
@@ -4248,9 +4383,10 @@ test("an authentication-required read from a miss drops the runtime, its window 
     assert.equal(metadataBytes(harness), 0);
 
     const before = providerCalls(harness, "detail");
+    now = 5 * 60_000;
     await harness.manager.itemDetail(harness.admin, library.id, "m1");
     assert.equal(providerCalls(harness, "detail"), before + 1, "the row is read again, never re-served");
-  });
+  }, { clock: () => now });
 });
 
 test("closing the manager empties the ordinary window", async () => {

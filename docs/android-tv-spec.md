@@ -255,6 +255,9 @@ The server already has the mechanism; the TV follows the web's use of it.
   closed after 90 seconds. The web does the same (`Player.tsx`).
 - On exit, Home, standby and a cancelled or superseded start, the TV calls
   `DELETE /api/playback/:id` instead of waiting for the reaper.
+- Remote playback reports carry an optional `playId`, generated when a play
+  starts and reused for its start, progress and stop. The stop of an outgoing
+  version keeps its old `playId`, so a late report cannot end the new version.
 - Playback is a state machine: source, track and seek changes are serialized
   and stale answers dropped. The absolute position survives a regenerated
   playlist through the server's `offset`.
