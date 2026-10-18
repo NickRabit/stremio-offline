@@ -111,12 +111,41 @@ test("currentAccount records known restrictions without ever claiming they are e
   assert.equal(await restricted({ EnableAllDevices: false }), true);
   assert.equal(await restricted({ EnabledDevices: ["tv"] }), true);
   assert.equal(await restricted({ MaxParentalRating: 12 }), true);
-  assert.equal(await restricted({ RemoteClientBitrateLimit: 5_000_000 }), true);
   assert.equal(await restricted({ BlockedTags: ["x"] }), true);
   assert.equal(await restricted({ EnabledAccessSchedules: [{ start: 1 }] }), true);
   assert.equal(await restricted({ EnabledDevices: [] }), false);
-  assert.equal(await restricted({ RemoteClientBitrateLimit: 0 }), false);
   assert.equal(await restricted({ MaxParentalRating: null }), false);
+});
+
+test("currentAccount reads quota limits separately from restrictions", async () => {
+  const facts = async (over: Record<string, unknown>) => {
+    const { provider } = fixture(() => ({ Id: "user-1", Policy: policy(over) }));
+    return (await provider.currentAccount("tok", "user-1")).policy;
+  };
+  assert.deepEqual(await facts({ RemoteClientBitrateLimit: 50_000_000, MaxActiveSessions: 10 }), {
+    disabled: false,
+    mediaPlayback: true,
+    allFolders: true,
+    folderIds: [],
+    hasAdditionalRestrictions: false,
+    bitrateLimit: 50_000_000,
+    streamLimit: 10,
+  });
+  assert.equal((await facts({ RemoteClientBitrateLimit: 5_000_000 })).hasAdditionalRestrictions, false);
+  assert.equal((await facts({ MaxActiveSessions: 1 })).hasAdditionalRestrictions, false);
+  assert.equal((await facts({ SimultaneousStreamLimit: 1 })).hasAdditionalRestrictions, false);
+  assert.equal((await facts({ MaxActiveSessions: 7, SimultaneousStreamLimit: 3 })).streamLimit, 3);
+  assert.equal((await facts({ MaxActiveSessions: 0, SimultaneousStreamLimit: 4 })).streamLimit, 4);
+
+  for (const unlimited of [
+    { RemoteClientBitrateLimit: 0, MaxActiveSessions: 0, SimultaneousStreamLimit: 0 },
+    { RemoteClientBitrateLimit: null, MaxActiveSessions: null, SimultaneousStreamLimit: null },
+    {},
+  ]) {
+    const result = await facts(unlimited);
+    assert.equal("bitrateLimit" in result, false);
+    assert.equal("streamLimit" in result, false);
+  }
 });
 
 test("listLibraries maps collection folders and drops everything else", async () => {
@@ -329,7 +358,6 @@ test("currentAccount records the wider restriction fields and refuses malformed 
   assert.equal(await restricted({ IncludeTags: ["kids"] }), true);
   assert.equal(await restricted({ ExcludedSubFolders: ["shared"] }), true);
   assert.equal(await restricted({ RestrictedFeatures: ["x"] }), true);
-  assert.equal(await restricted({ MaxActiveSessions: 1 }), true);
   assert.equal(await restricted({ MaxActiveSessions: 0 }), false);
 
   const rejects = async (over: Record<string, unknown>) => {
@@ -342,7 +370,24 @@ test("currentAccount records the wider restriction fields and refuses malformed 
   await rejects({ ExcludedSubFolders: {} });
   await rejects({ RestrictedFeatures: [1] });
   await rejects({ MaxActiveSessions: -1 });
+  await rejects({ MaxActiveSessions: 1.5 });
+  await rejects({ SimultaneousStreamLimit: "2" });
   await rejects({ RemoteClientBitrateLimit: "500" });
+});
+
+test("versions reads a positive safe integer bitrate and ignores malformed values", async () => {
+  const { provider } = fixture(() => ({
+    MediaSources: [
+      { Id: "valid", Protocol: "File", Bitrate: 8_000_000 },
+      { Id: "zero", Protocol: "File", Bitrate: 0 },
+      { Id: "negative", Protocol: "File", Bitrate: -1 },
+      { Id: "string", Protocol: "File", Bitrate: "8000000" },
+      { Id: "float", Protocol: "File", Bitrate: 1.5 },
+    ],
+  }));
+  const versions = await provider.versions("tok", "user-1", "item-1");
+  assert.equal(versions[0]!.bitrate, 8_000_000);
+  for (const version of versions.slice(1)) assert.equal("bitrate" in version, false, version.id);
 });
 
 test("versions restore the file name Emby cut down to a stump after the folder name", async () => {

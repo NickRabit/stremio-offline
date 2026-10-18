@@ -299,6 +299,7 @@ export type MediaServerErrorCode =
   | "stale-generation"
   | "identity-changed"
   | "unsupported-policy"
+  | "bitrate-limit"
   | "secret-key-unavailable"
   | "secret-unavailable";
 

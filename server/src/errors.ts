@@ -137,6 +137,7 @@ const TABLE: Record<string, ErrorClassification> = {
   "err.mediaServerStale": { category: "configuration", retry: "action" },
   "err.mediaServerIdentity": { category: "configuration", retry: "action" },
   "err.mediaServerRestricted": { category: "configuration", retry: "action" },
+  "err.mediaServerBitrateLimit": { category: "configuration", retry: "permanent" },
 };
 
 /** `ResourceError` has no catalogue key, so its stable code is the table's second key. */

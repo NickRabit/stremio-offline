@@ -1296,6 +1296,7 @@ export const pl: Catalog = {
   "err.mediaServerIdentity": "Tożsamość serwera multimediów uległa zmianie. Utwórz połączenie ponownie.",
   "err.mediaServerFormatUnknown": "Serwer multimediów nie podał obsługiwanego formatu oryginalnego pliku.",
   "err.mediaServerRestricted": "To konto serwera multimediów ma nieobsługiwane ograniczenia.",
+  "err.mediaServerBitrateLimit": "Ten plik przekracza limit przepływności strumieniowania konta serwera multimediów. Pobierz go zamiast tego.",
   "err.notAllowed": "To konto może tego nie robić.",
   "err.homeLayoutShape": "Układ strony głównej musi podawać kolejność, ukryte wiersze i kanały.",
   "err.lastAdmin": "Nie można usunąć ostatniego administratora.",

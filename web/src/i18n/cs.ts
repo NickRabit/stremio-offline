@@ -1347,6 +1347,7 @@ export const cs: Catalog = {
   "err.mediaServerIdentity": "Identita mediálního serveru se změnila. Vytvoř připojení znovu.",
   "err.mediaServerFormatUnknown": "Server neposkytl podporovaný formát původního souboru.",
   "err.mediaServerRestricted": "Tento účet mediálního serveru má nepodporovaná omezení.",
+  "err.mediaServerBitrateLimit": "Tento soubor překračuje limit datového toku pro streamování na účtu mediálního serveru. Stáhněte si ho.",
   "err.notAllowed": "Tento účet na to nemá oprávnění.",
   "err.homeLayoutShape": "Domovská obrazovka musí uvádět pořadí, skryté řady a zdroje.",
   "err.lastAdmin": "Posledního administrátora nelze odebrat.",

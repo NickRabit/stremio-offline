@@ -19,6 +19,7 @@ import {
 import { remoteIdsMatch, remoteMatchTarget, type RemoteMatchTarget } from "./media-server-match.js";
 import { MediaServerIndex } from "./media-server-index.js";
 import { IMAGE_FROM_HEADER, imageSurface, noteImage } from "./image-stats.js";
+import { OriginalQuota } from "./media-server-quota.js";
 import { RemoteImageCache, remoteImageKey, type RemoteImageBody } from "./remote-image-cache.js";
 import {
   createMediaServerProvider,
@@ -147,6 +148,8 @@ export interface MediaServerManagerSeams {
   /** The disk and memory cache in front of remote posters and backdrops. Absent turns the
    *  cache off: every read streams from the provider the way it always did. */
   remoteImages?: RemoteImageCache;
+  quotaClock?: () => number;
+  quotaSleep?: (ms: number, signal: AbortSignal) => Promise<void>;
 }
 
 const USERNAME_MAX = 256;
@@ -516,6 +519,7 @@ interface OriginalProof {
   secretRef: string | undefined;
   itemId: string;
   mediaSourceId: string;
+  bitrate?: number;
   at: number;
 }
 
@@ -619,6 +623,7 @@ export class MediaServerManager {
    *  source, they never substitute for the local grant and are dropped with an invalidated
    *  connection. */
   private readonly originalProofs = new Map<string, OriginalProof>();
+  private readonly quota: OriginalQuota;
   /** Bounded, time-limited raw ordinary metadata: one identity-validated detail or version list
    *  per operation, actor, library, connection identity and item. It is never an authorization
    *  and never carries projected local state; it is dropped with an invalidated connection. */
@@ -652,6 +657,10 @@ export class MediaServerManager {
     seams: MediaServerManagerSeams = {},
   ) {
     this.clock = seams.clock ?? (() => Date.now());
+    this.quota = new OriginalQuota({
+      clock: seams.quotaClock ?? this.clock,
+      ...(seams.quotaSleep === undefined ? {} : { sleep: seams.quotaSleep }),
+    });
     this.index = seams.index ?? new MediaServerIndex({ clock: this.clock });
     this.providerFactory = seams.providerFactory ?? createMediaServerProvider;
     this.transportFactory = seams.transportFactory ?? ((config) => createMediaServerTransport(config));
@@ -1628,6 +1637,7 @@ export class MediaServerManager {
     if (ref.subtitleIndex !== undefined) throw notFound("That media-server item does not exist.");
     const { library, connection } = this.recheckRef(authority, request, ref);
     const user = this.currentActor(authority, request);
+    let versionBitrate: number | undefined;
     try {
       const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId, download: options?.download === true }, request);
       this.recheckRef(authority, request, ref);
@@ -1637,10 +1647,12 @@ export class MediaServerManager {
         // membership proof. The playback guard and download admission never take this path.
         const found = await this.versionsUnder(authority, request, library, connection, session, ref.itemId, "cached");
         this.recheckRef(authority, request, ref);
-        if (!found.versions.some((version) => version.id === ref.mediaSourceId)) throw notFound("That media-server source is no longer available.");
+        const version = found.versions.find((candidate) => candidate.id === ref.mediaSourceId);
+        if (!version) throw notFound("That media-server source is no longer available.");
+        if (options.download !== true) this.assertStreamBitrate(session.policy, version.bitrate);
         this.putOriginalProof({
           actorId: user.id, libraryId: library.id, connectionId: connection.id, generation: connection.generation,
-          secretRef: connection.secretRef, itemId: ref.itemId, mediaSourceId: ref.mediaSourceId, at: this.clock(),
+          secretRef: connection.secretRef, itemId: ref.itemId, mediaSourceId: ref.mediaSourceId, bitrate: version.bitrate, at: this.clock(),
         });
         return;
       }
@@ -1654,7 +1666,10 @@ export class MediaServerManager {
       if (item.type !== "movie" && item.type !== "episode") throw invalid("That item has no playable media.");
       const versions = await this.upstream(connection, request, () => session.provider.versions(session.token, connection.accountId, item.id, request));
       this.recheckRef(authority, request, ref);
-      if (!versions.some((version) => version.id === ref.mediaSourceId)) throw notFound("That media-server source is no longer available.");
+      const version = versions.find((candidate) => candidate.id === ref.mediaSourceId);
+      if (!version) throw notFound("That media-server source is no longer available.");
+      versionBitrate = version.bitrate;
+      if (options?.download !== true) this.assertStreamBitrate(session.policy, version.bitrate);
       this.shareFreshOriginal(user, library, connection, runtime, item, versions);
     } catch (error) {
       this.deleteOriginalProof(user.id, library.id, connection.id, connection.generation, connection.secretRef, ref.itemId, ref.mediaSourceId);
@@ -1669,6 +1684,7 @@ export class MediaServerManager {
       secretRef: connection.secretRef,
       itemId: ref.itemId,
       mediaSourceId: ref.mediaSourceId,
+      bitrate: versionBitrate,
       at: this.clock(),
     });
   }
@@ -1680,17 +1696,18 @@ export class MediaServerManager {
    *  re-checked before any body leaves the manager; a stale or denied result has its body
    *  cancelled. The request shares the manager lifetime, so a shutdown or a connection change
    *  aborts it. */
-  async openOriginal(authority: MediaServerAuthority, ref: RemoteContentRef, args: { method: "GET" | "HEAD"; range?: string }, signal?: AbortSignal): Promise<Response> {
+  async openOriginal(authority: MediaServerAuthority, ref: RemoteContentRef, args: { method: "GET" | "HEAD"; range?: string }, signal?: AbortSignal, options?: { download?: boolean }): Promise<Response> {
     const request = this.requestSignal(signal);
     if (!isRemoteContentRef(ref)) throw notFound("That media-server item does not exist.");
     if (ref.subtitleIndex !== undefined) throw notFound("That media-server item does not exist.");
     if (!args || (args.method !== "GET" && args.method !== "HEAD")) throw invalid("The media-server request method is not supported.");
     if (args.range !== undefined && (typeof args.range !== "string" || args.range.length > 128)) throw invalid("The media-server byte range is malformed.");
     const { library, connection } = this.recheckRef(authority, request, ref);
-    const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId }, request);
+    const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId, download: options?.download === true }, request);
     this.recheckRef(authority, request, ref);
     const user = this.currentActor(authority, request);
-    if (!this.originalProofFor(user, library, connection, ref.itemId, ref.mediaSourceId)) {
+    let proof = this.originalProofFor(user, library, connection, ref.itemId, ref.mediaSourceId);
+    if (!proof) {
       const runtime = this.liveRuntime(connection);
       const item = await this.upstream(connection, request, () => session.provider.detail(session.token, connection.accountId, ref.itemId, request));
       this.recheckRef(authority, request, ref);
@@ -1700,9 +1717,10 @@ export class MediaServerManager {
       this.recheckRef(authority, request, ref);
       const versions = await this.upstream(connection, request, () => session.provider.versions(session.token, connection.accountId, item.id, request));
       this.recheckRef(authority, request, ref);
-      if (!versions.some((version) => version.id === ref.mediaSourceId)) throw notFound("That media-server source is no longer available.");
+      const version = versions.find((candidate) => candidate.id === ref.mediaSourceId);
+      if (!version) throw notFound("That media-server source is no longer available.");
       if (item.type === "movie" || item.type === "episode") this.shareFreshOriginal(user, library, connection, runtime, item, versions);
-      this.putOriginalProof({
+      proof = {
         actorId: user.id,
         libraryId: library.id,
         connectionId: connection.id,
@@ -1710,28 +1728,46 @@ export class MediaServerManager {
         secretRef: connection.secretRef,
         itemId: ref.itemId,
         mediaSourceId: ref.mediaSourceId,
+        bitrate: version.bitrate,
         at: this.clock(),
-      });
+      };
+      this.putOriginalProof(proof);
     }
-    const response = await this.originalUpstream(connection, request, () => session.transport.requestOriginal(
-      { itemId: ref.itemId, mediaSourceId: ref.mediaSourceId, method: args.method, ...(args.range === undefined ? {} : { range: args.range }) },
-      session.token,
-      request,
-    ));
+    if (options?.download !== true) this.assertStreamBitrate(session.policy, proof.bitrate);
+    const slot = this.quota.reserve(connection.id, `${user.id}:${ref.itemId}:${ref.mediaSourceId}`, session.policy);
+    let response: Response;
+    try {
+      response = await this.originalUpstream(connection, request, () => session.transport.requestOriginal(
+        { itemId: ref.itemId, mediaSourceId: ref.mediaSourceId, method: args.method, ...(args.range === undefined ? {} : { range: args.range }) },
+        session.token,
+        request,
+      ));
+    } catch (error) {
+      slot.release();
+      throw error;
+    }
     const abortBody = () => { void response.body?.cancel().catch(() => undefined); };
     try {
       this.recheckRef(authority, request, ref);
       this.checkLive(request);
     } catch (error) {
       abortBody();
+      slot.release();
       throw error;
     }
     if (request.aborted) {
       abortBody();
+      slot.release();
       throw cancelled();
     }
     request.addEventListener("abort", abortBody, { once: true });
-    return response;
+    try {
+      return slot.wrap(response, request);
+    } catch (error) {
+      abortBody();
+      slot.release();
+      throw error;
+    }
   }
 
   /** Re-reads the records a durable download reference names and refuses when any moved: the
@@ -1774,7 +1810,8 @@ export class MediaServerManager {
     if (item.type !== "movie" && item.type !== "episode") throw invalid("That item has no playable media.");
     const versions = await this.upstream(connection, signal, () => session.provider.versions(session.token, connection.accountId, item.id, signal));
     this.recheckDownloadRef(authority, signal, reference);
-    if (!versions.some((version) => version.id === reference.mediaSourceId)) throw notFound("That media-server source is no longer available.");
+    const version = versions.find((candidate) => candidate.id === reference.mediaSourceId);
+    if (!version) throw notFound("That media-server source is no longer available.");
     this.putOriginalProof({
       actorId: user.id,
       libraryId: library.id,
@@ -1783,6 +1820,7 @@ export class MediaServerManager {
       secretRef: connection.secretRef,
       itemId: reference.itemId,
       mediaSourceId: reference.mediaSourceId,
+      bitrate: version.bitrate,
       at: this.clock(),
     });
   }
@@ -1821,25 +1859,40 @@ export class MediaServerManager {
     if (!this.originalProofFor(user, library, connection, reference.itemId, reference.mediaSourceId)) {
       await this.proveDownloadOriginal(authority, request, reference, library, connection, session, user);
     }
-    const response = await this.originalUpstream(connection, request, () => session.transport.requestOriginal(
-      { itemId: reference.itemId, mediaSourceId: reference.mediaSourceId, method: args.method, ...(args.range === undefined ? {} : { range: args.range }) },
-      session.token,
-      request,
-    ));
+    const slot = this.quota.reserve(connection.id, `${user.id}:${reference.itemId}:${reference.mediaSourceId}`, session.policy);
+    let response: Response;
+    try {
+      response = await this.originalUpstream(connection, request, () => session.transport.requestOriginal(
+        { itemId: reference.itemId, mediaSourceId: reference.mediaSourceId, method: args.method, ...(args.range === undefined ? {} : { range: args.range }) },
+        session.token,
+        request,
+      ));
+    } catch (error) {
+      slot.release();
+      throw error;
+    }
     const abortBody = () => { void response.body?.cancel().catch(() => undefined); };
     try {
       this.recheckDownloadRef(authority, request, reference);
       this.checkLive(request);
     } catch (error) {
       abortBody();
+      slot.release();
       throw error;
     }
     if (request.aborted) {
       abortBody();
+      slot.release();
       throw cancelled();
     }
     request.addEventListener("abort", abortBody, { once: true });
-    return response;
+    try {
+      return slot.wrap(response, request);
+    } catch (error) {
+      abortBody();
+      slot.release();
+      throw error;
+    }
   }
 
   private requestSignal(signal?: AbortSignal): AbortSignal {
@@ -1849,6 +1902,13 @@ export class MediaServerManager {
   private checkLive(signal: AbortSignal): void {
     if (this.closed) throw closedError();
     if (signal.aborted) throw cancelled();
+  }
+
+  private assertStreamBitrate(policy: RemoteAccountPolicy, bitrate: number | undefined): void {
+    if (policy.bitrateLimit === undefined) return;
+    if (bitrate === undefined || bitrate > policy.bitrateLimit) {
+      throw new MediaServerError("bitrate-limit", "The media-server source is above the account's bitrate limit.");
+    }
   }
 
   /** The current account behind a request, read afresh from the state. Fails closed after a
@@ -1983,6 +2043,7 @@ export class MediaServerManager {
     for (const [key, proof] of [...this.originalProofs]) {
       if (proof.connectionId === connectionId) this.originalProofs.delete(key);
     }
+    this.quota.forget(connectionId);
   }
 
   /** The mosaic cache key: the folder and what was asked of it, bound to the connection

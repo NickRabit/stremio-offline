@@ -456,6 +456,7 @@ test("every internal failure maps to a fixed status and key, and its internal te
       [new MediaServerError("stale-generation", sentinel), 409, "err.mediaServerStale"],
       [new MediaServerError("identity-changed", sentinel), 409, "err.mediaServerIdentity"],
       [new MediaServerError("unsupported-policy", sentinel), 403, "err.mediaServerRestricted"],
+      [new MediaServerError("bitrate-limit", sentinel), 403, "err.mediaServerBitrateLimit"],
       // An unknown code falls through to the safe default rather than leaking a raw status.
       [new MediaServerError("mystery" as MediaServerError["code"], sentinel), 502, "err.mediaServerUnavailable"],
     ];

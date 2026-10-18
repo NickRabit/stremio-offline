@@ -217,7 +217,7 @@ export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps)
           // Asked again at hand-over, exactly as a playback re-checks its own grant: a permission
           // that was taken away between minting the ticket and asking for its bytes stops here.
           await mediaSources.authorize(stream, ticket.owner, controller.signal, { download: true });
-          return mediaSources.open(stream, ticket.owner, init, controller.signal);
+          return mediaSources.open(stream, ticket.owner, init, controller.signal, { download: true });
         })()
         : await safeFetch(stream.url!, { ...init, headers, signal: controller.signal });
     }

@@ -1353,6 +1353,7 @@ export const en = {
   "err.mediaServerIdentity": "The media-server identity changed. Recreate the connection.",
   "err.mediaServerFormatUnknown": "The media server did not provide a supported original file format.",
   "err.mediaServerRestricted": "This media-server account has unsupported restrictions.",
+  "err.mediaServerBitrateLimit": "This file is above the streaming bitrate limit of the media-server account. Download it instead.",
   "err.notAllowed": "This account may not do that.",
   "err.homeLayoutShape": "A Home layout must list an order, the hidden rows and the feeds.",
   "err.lastAdmin": "The last administrator cannot be removed.",
