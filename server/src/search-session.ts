@@ -89,6 +89,9 @@ export interface SessionDeps {
   randomId?: () => string;
   timers?: SessionTimerApi;
   limits?: Partial<{ [K in keyof typeof SEARCH_LIMITS]: number }>;
+  /** Ids already known locally for a title (an IMDb id's TMDB id), so two catalogues that name
+   *  one title in different namespaces still meet. Must not make a request. */
+  knownIds?: (ids: StrongIds, kind: SearchKind) => StrongIds;
 }
 
 interface StoredRecord {
@@ -281,6 +284,7 @@ const shareAndCompatible = (left: StrongIds, right: StrongIds): boolean => {
 export class SearchSessionManager {
   private readonly scheduler: SearchScheduler;
   private readonly discover: SessionDeps["discover"];
+  private readonly knownIds: SessionDeps["knownIds"];
   private readonly now: () => number;
   private readonly randomId: () => string;
   private readonly timers: SessionTimerApi;
@@ -294,6 +298,7 @@ export class SearchSessionManager {
   constructor(deps: SessionDeps) {
     this.scheduler = deps.scheduler;
     this.discover = deps.discover;
+    this.knownIds = deps.knownIds;
     this.now = deps.now ?? Date.now;
     this.randomId = deps.randomId ?? (() => randomBytes(16).toString("base64url"));
     this.limits = { ...SEARCH_LIMITS, ...deps.limits };
@@ -1117,7 +1122,7 @@ export class SearchSessionManager {
       memberKey: stored.memberKey,
       sequence: stored.sequence,
       kind: stored.record.kind,
-      ids: identityIds.get(stored.memberKey) ?? validStrongIds(stored.record.ids),
+      ids: identityIds.get(stored.memberKey) ?? this.withKnownIds(validStrongIds(stored.record.ids), stored.record.kind),
       ...(stored.record.opaque === undefined ? {} : { opaque: stored.record.opaque }),
     }));
     const identities = clusterIdentities(inputs);
@@ -1289,6 +1294,16 @@ export class SearchSessionManager {
       || Math.min(...left.members.map((member) => member.sequence))
         - Math.min(...right.members.map((member) => member.sequence))
       || compareText(left.key, right.key);
+  }
+
+  private withKnownIds(ids: StrongIds, kind: SearchKind): StrongIds {
+    if (this.knownIds === undefined || ids.imdb === undefined || (kind !== "movie" && kind !== "series")) return ids;
+    const known = validStrongIds(this.knownIds(ids, kind));
+    return {
+      ...ids,
+      ...(ids.tmdb === undefined && known.tmdb !== undefined ? { tmdb: known.tmdb } : {}),
+      ...(ids.tvdb === undefined && known.tvdb !== undefined ? { tvdb: known.tvdb } : {}),
+    };
   }
 
   private memberScore(member: StoredRecord): number {

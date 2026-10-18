@@ -44,6 +44,12 @@ interface CatalogApi {
   /** The catalogues search can be scoped to, as `GET /api/searchable` lists them. */
   suspend fun searchable(): List<SearchableCatalogDto>
   suspend fun search(query: String, cursor: String?, scope: SearchScope): SearchResultDto
+  suspend fun startCatalogSearch(body: CatalogSearchStartDto): CatalogSearchStartResultDto =
+    throw ApiError(ApiFailure.Generic)
+  suspend fun pollCatalogSearch(id: String, revision: Int): CatalogSearchPollDto =
+    throw ApiError(ApiFailure.Generic)
+  suspend fun pageCatalogSearch(id: String): Int = throw ApiError(ApiFailure.Generic)
+  suspend fun deleteCatalogSearch(id: String): Unit = throw ApiError(ApiFailure.Generic)
   /** The account's recent searches and whether the server keeps them. */
   suspend fun searchState(): SearchStateDto
   /** Records one committed query; the server trims, dedupes and ignores it while saving is off. */

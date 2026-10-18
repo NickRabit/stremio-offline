@@ -9,14 +9,22 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.CatalogApi
+import cz.stremiooffline.tv.data.CatalogSearchScopeDto
+import cz.stremiooffline.tv.data.CatalogSearchSnapshotDto
+import cz.stremiooffline.tv.data.CatalogSearchStartDto
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.RecentSearchDto
 import cz.stremiooffline.tv.data.SearchScope
 import cz.stremiooffline.tv.data.SearchStateDto
 import cz.stremiooffline.tv.data.SearchableCatalogDto
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.util.UUID
 
 data class SearchState(
   val query: String = "",
@@ -39,12 +47,20 @@ data class SearchState(
 }
 
 /** One committed query and its pages, paged with the server's cursor and scoped like the web. */
-class SearchViewModel(private val api: CatalogApi) : ViewModel() {
+class SearchViewModel(
+  private val api: CatalogApi,
+  private val catalogSessions: Boolean = false,
+) : ViewModel() {
 
   var state by mutableStateOf(SearchState())
     private set
 
   private var job: Job? = null
+  private val catalogSlotId = UUID.randomUUID().toString().replace("-", "")
+  private var catalogGeneration = 0
+  private var catalogSessionId: String? = null
+  private var catalogRevision = 0
+  private var catalogUnsupported = false
 
   init {
     viewModelScope.launch {
@@ -78,6 +94,7 @@ class SearchViewModel(private val api: CatalogApi) : ViewModel() {
   fun submit(query: String) {
     val trimmed = query.trim()
     job?.cancel()
+    deleteCatalogSession()
     if (trimmed.isEmpty()) {
       state = state.copy(query = "", items = emptyList(), cursor = null, hasMore = false, loading = false, loadingMore = false, error = false)
       return
@@ -109,12 +126,14 @@ class SearchViewModel(private val api: CatalogApi) : ViewModel() {
     state = state.copy(scope = scope)
     if (state.query.isEmpty()) return
     job?.cancel()
+    deleteCatalogSession()
     state = state.copy(items = emptyList(), cursor = null, hasMore = false, loading = true, loadingMore = false, error = false)
     job = viewModelScope.launch { load(reset = true) }
   }
 
   fun loadMore() {
-    if (state.loading || state.loadingMore || !state.hasMore || state.cursor.isNullOrEmpty()) return
+    val usesCatalogSession = catalogSessions && !catalogUnsupported
+    if (state.loading || state.loadingMore || !state.hasMore || (!usesCatalogSession && state.cursor.isNullOrEmpty())) return
     state = state.copy(loadingMore = true)
     job = viewModelScope.launch { load(reset = false) }
   }
@@ -122,6 +141,7 @@ class SearchViewModel(private val api: CatalogApi) : ViewModel() {
   fun retry() {
     if (state.query.isEmpty()) return
     job?.cancel()
+    deleteCatalogSession()
     state = state.copy(items = emptyList(), cursor = null, loading = true, loadingMore = false, error = false)
     job = viewModelScope.launch { load(reset = true) }
   }
@@ -161,12 +181,115 @@ class SearchViewModel(private val api: CatalogApi) : ViewModel() {
   }
 
   private suspend fun load(reset: Boolean) {
-    val result = try {
-      api.search(state.query, if (reset) null else state.cursor, state.scope)
+    try {
+      if (catalogSessions && !catalogUnsupported) loadCatalog(reset)
+      else loadLegacy(reset)
+    } catch (cancelled: CancellationException) {
+      throw cancelled
     } catch (_: ApiError) {
       state = if (reset) state.copy(items = emptyList(), loading = false, loadingMore = false, error = true, hasMore = false)
       else state.copy(loadingMore = false)
-      return
+    }
+  }
+
+  private suspend fun loadCatalog(reset: Boolean) {
+    val existing = if (reset) emptyList() else state.items
+    val seen = existing.map { "${it.type}:${it.id}" }.toHashSet()
+    var gained = false
+
+    fun apply(snapshot: CatalogSearchSnapshotDto) {
+      for (item in snapshot.items) {
+        if (seen.add("${item.type}:${item.id}")) gained = true
+      }
+      val settled = snapshot.items.isNotEmpty() || snapshot.state == "complete"
+      state = state.copy(
+        items = snapshot.items,
+        cursor = null,
+        hasMore = snapshot.hasMore && !(snapshot.state == "complete" && !reset && !gained),
+        loading = reset && !settled,
+        loadingMore = !reset && !settled,
+        error = false,
+      )
+    }
+
+    // A session that ended meanwhile (it expired while idle) is started again for the same query
+    // rather than failing the next page.
+    val pagedRevision = if (reset) null else catalogSessionId?.let { id ->
+      try {
+        api.pageCatalogSearch(id)
+      } catch (error: ApiError) {
+        if (error.status == 404 || error.status == 410) null else throw error
+      }
+    }
+    if (!reset && pagedRevision == null) catalogSessionId = null
+    val currentState = if (reset || pagedRevision == null) {
+      val scope = state.scope
+      catalogGeneration += 1
+      val started = try {
+        api.startCatalogSearch(
+          CatalogSearchStartDto(
+            query = state.query,
+            type = scope.catalogType?.takeIf { it == "movie" || it == "series" },
+            scope = scope.addonKey?.takeIf { it.isNotEmpty() }?.let {
+              CatalogSearchScopeDto(
+                addonKey = it,
+                catalogType = scope.catalogType?.takeIf { value -> value.isNotEmpty() },
+                catalogId = scope.catalogId?.takeIf { value -> value.isNotEmpty() },
+              )
+            },
+            slotId = catalogSlotId,
+            generation = catalogGeneration,
+          ),
+        )
+      } catch (error: ApiError) {
+        if (error.status == 404) {
+          catalogUnsupported = true
+          loadLegacy(reset = true)
+          return
+        }
+        throw error
+      }
+      catalogSessionId = started.id
+      apply(started.snapshot)
+      catalogRevision = started.snapshot.revision
+      started.snapshot.state
+    } else {
+      val before = catalogRevision
+      catalogRevision = pagedRevision
+      if (catalogRevision == before) {
+        state = state.copy(loadingMore = false)
+        return
+      }
+      "partial"
+    }
+    pollCatalog(currentState, ::apply)
+  }
+
+  private suspend fun pollCatalog(
+    initialState: String,
+    apply: (CatalogSearchSnapshotDto) -> Unit,
+  ) {
+    var currentState = initialState
+    while (currentState != "complete") {
+      val id = catalogSessionId ?: return
+      val answer = api.pollCatalogSearch(id, catalogRevision)
+      if (answer.changed) {
+        val snapshot = answer.snapshot ?: throw ApiError(cz.stremiooffline.tv.data.ApiFailure.Generic)
+        catalogRevision = snapshot.revision
+        currentState = snapshot.state
+        apply(snapshot)
+      } else {
+        catalogRevision = answer.revision
+        if (currentState == "partial") delay(250) else break
+      }
+    }
+  }
+
+  private suspend fun loadLegacy(reset: Boolean) {
+    val result = try {
+      api.search(state.query, if (reset) null else state.cursor, state.scope)
+    } catch (cancelled: CancellationException) {
+      throw cancelled
     }
     val existing = if (reset) emptyList() else state.items
     val seen = existing.map { "${it.type}:${it.id}" }.toHashSet()
@@ -183,7 +306,25 @@ class SearchViewModel(private val api: CatalogApi) : ViewModel() {
     )
   }
 
+  private fun deleteCatalogSession() {
+    val id = catalogSessionId
+    catalogSessionId = null
+    catalogRevision = 0
+    if (id != null) viewModelScope.launch { api.deleteCatalogSearch(id) }
+  }
+
+  override fun onCleared() {
+    val id = catalogSessionId
+    catalogSessionId = null
+    if (id != null) {
+      CoroutineScope(SupervisorJob() + Dispatchers.IO).launch { api.deleteCatalogSearch(id) }
+    }
+    super.onCleared()
+  }
+
   companion object {
-    fun factory(api: CatalogApi) = viewModelFactory { initializer { SearchViewModel(api) } }
+    fun factory(api: CatalogApi, catalogSessions: Boolean = false) = viewModelFactory {
+      initializer { SearchViewModel(api, catalogSessions) }
+    }
   }
 }

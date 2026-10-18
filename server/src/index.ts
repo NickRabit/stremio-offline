@@ -7,7 +7,7 @@ import path from "node:path";
 import { constants } from "node:fs";
 import { access, mkdir, readdir, realpath, rm, stat, statfs, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { allowedAddons, loadAddon, metadata, searchAll, searchableCatalogs, streams, subtitles, type MetaProvider } from "./addons.js";
+import { addonAllowed, allowedAddons, fetchCatalogPage, loadAddon, metadata, orderFor, orderedForUser, searchAll, searchableCatalogs, streams, subtitles, type MetaProvider } from "./addons.js";
 import { autoRefreshEnabled, refreshDue, refreshManifests, type RefreshOutcome } from "./addon-refresh.js";
 import { rankStreams } from "./ranking.js";
 import { defaultDownloadLibrary, DownloadQueue, ownerMayDownload, type DownloadJob, type RemoteDownloadBackend } from "./downloads.js";
@@ -108,6 +108,7 @@ import { LocalSearchIndex } from "./search-local-index.js";
 import { discoverSources, type DiscoverDeps } from "./search-sources.js";
 import { SearchScheduler } from "./search-scheduler.js";
 import { SearchSessionManager, type SearchAuthority } from "./search-session.js";
+import { CatalogSearchManager } from "./search-catalog-session.js";
 import { SearchError } from "./search-contracts.js";
 
 const STREAM_SORTS = new Set(["recommended", "size-desc", "size-asc", "addon"]);
@@ -143,6 +144,7 @@ const mediaServerSources = new MediaServerSources(store, mediaServers, mediaReso
  *  optional chain so the disabled feature constructs nothing. */
 let localSearchIndex: LocalSearchIndex | undefined;
 let searchSessions: SearchSessionManager | undefined;
+let catalogSearchSessions: CatalogSearchManager | undefined;
 const mediaServerPersonal = new MediaServerPersonal(store, mediaServers, async () => {
   const records = metaStore.qualifiedMeta();
   const units = await libraryUnits();
@@ -597,6 +599,7 @@ const revocations = new Revocations({
 /** One session: what signing out one device drops. */
 const stopOwnedPlayback = (sid: string) => {
   searchSessions?.dropSession(sid);
+  catalogSearchSessions?.dropSession(sid);
   return revocations.stopSession(sid);
 };
 /** Everything one account holds, across all its devices. */
@@ -604,24 +607,28 @@ const stopOwnedPlayback = (sid: string) => {
  *  queued downloads are owner-bound, not session-bound, and must outlive both. */
 const stopUserSessions = (userId: string) => {
   searchSessions?.dropUser(userId);
+  catalogSearchSessions?.dropUser(userId);
   return revocations.stopUserSessions(userId);
 };
 /** An account that is gone: what it holds open, its unfinished queue work and the partial
  *  files behind it. A finished file is library content and never leaves with the account. */
 const deleteUserAccess = (userId: string) => {
   searchSessions?.dropUser(userId);
+  catalogSearchSessions?.dropUser(userId);
   return revocations.deleteUser(userId);
 };
 /** What an edit took away from one account: switching it off goes entirely, losing the
  *  right to queue pauses the queue behind it and touches nothing else. */
 const permissionsChanged = (before: UserRecord, after: UserRecord) => {
   searchSessions?.invalidateContent();
+  catalogSearchSessions?.invalidateContent();
   return revocations.permissionsChanged(before, after);
 };
 /** One account's hold on one library or addon. Passing no user sweeps everybody,
  *  which is what a global disable needs. */
 const stopContentAccess = (opts: StopContentOptions) => {
   searchSessions?.invalidateContent();
+  catalogSearchSessions?.invalidateContent();
   return revocations.stopContent(opts);
 };
 
@@ -629,6 +636,7 @@ const stopContentAccess = (opts: StopContentOptions) => {
 // the scope this callback carries, never through a manager-internal list of live resources.
 mediaServers.setContentInvalidator((scope) => {
   searchSessions?.invalidateContent();
+  catalogSearchSessions?.invalidateContent();
   return revocations.stopContent(scope);
 });
 
@@ -1233,6 +1241,7 @@ const libraryEntries = (read?: WalkRead) => libraryCache.get(read);
 if (searchEverywhereEnabled()) {
   const index = new LocalSearchIndex({ entries: () => libraryEntries({ stale: true }) });
   localSearchIndex = index;
+  const scheduler = new SearchScheduler();
   const discoverDeps: DiscoverDeps = {
     user: (id) => findUserById(store.users(), id),
     addons: () => store.addons(),
@@ -1253,8 +1262,45 @@ if (searchEverywhereEnabled()) {
     rewriteMeta: (meta) => images.rewriteMeta(meta),
   };
   searchSessions = new SearchSessionManager({
-    scheduler: new SearchScheduler(),
+    scheduler,
     discover: (authority, request, sessionId) => discoverSources(discoverDeps, authority, request, sessionId),
+    knownIds: (ids, kind) => {
+      const cached = ids.imdb === undefined ? undefined : externalIds.cachedIds(ids.imdb);
+      const tmdb = kind === "movie" ? cached?.tmdbMovie : cached?.tmdbTv;
+      return tmdb === undefined ? {} : { tmdb };
+    },
+  });
+  catalogSearchSessions = new CatalogSearchManager({
+    scheduler,
+    targets: (authority, request) => {
+      const user = findUserById(store.users(), authority.userId);
+      if (!user || user.disabled) return [];
+      const addons = orderedForUser(
+        allowedAddons(store.addons(), user),
+        orderFor(user, (id) => store.userData(id).addonOrder),
+      );
+      return searchableCatalogs(
+        addons,
+        request.type,
+        request.scope
+          ? { ...request.scope, respectGlobalSearch: false }
+          : { respectGlobalSearch: true },
+      );
+    },
+    stillAllowed: (authority, target) => {
+      const user = findUserById(store.users(), authority.userId);
+      if (!user || user.disabled) return false;
+      const addon = store.addons().find((candidate) => candidate.key === target.addon.key);
+      if (!addon || !addonAllowed(addon, user)) return false;
+      return searchableCatalogs([addon], undefined, {
+        addonKey: addon.key,
+        catalogType: target.definition.type,
+        catalogId: target.definition.id,
+      }).length > 0;
+    },
+    fetchPage: (target, query, skip, signal, key) =>
+      fetchCatalogPage(target, query, skip, { signal, key, interactive: true }),
+    rewriteMeta: (meta) => images.rewriteMeta(meta),
   });
 }
 
@@ -2569,9 +2615,10 @@ registerDiagnosticsRoutes(app, { ...routeContext, stats, imageStats, providerSta
 registerSettingsRoutes(app, { ...routeContext, STREAM_SORTS, accountIdOf, invalidateLibrary, mediaServers, metaCache, metaStore, mutateData, prefsOf, queue, streamCache });
 registerMediaServerRoutes(app, { ...routeContext, mediaServers, mosaics, mediaSources: mediaServerSources, remotePersonal: mediaServerPersonal, playbackReports, ownerOf });
 registerPlaybackRoutes(app, { ...routeContext, mediaSources: mediaServerSources, mediaServerGuard, airplayAccess, airplayRequest, answerHeaders, countBytes, httpSourceOf, internalMediaRequest, libraryTarget, noteSourceQuiet, ownerOf, playback, playbackMeta, playbackOwners, playbackResponse, prefsOf, quietSources, rangeCache, remoteReadAhead, safeInspection, sleep, sourceIsQuiet, stats, subtitleDelay, trackMedia, SOURCE_ATTEMPTS, SOURCE_RETRY_MS, SOURCE_RESUMES, SOURCE_HEADER_MS, SOURCE_QUIET_HEADER_MS });
-if (searchSessions !== undefined) {
+if (searchSessions !== undefined && catalogSearchSessions !== undefined) {
   registerSearchEverywhereRoutes(app, {
     manager: searchSessions,
+    catalogManager: catalogSearchSessions,
     authorityOf: searchAuthorityOf,
     liveSearchOf: (req) => parseSearchState(dataOf(req).search).liveSearch,
   });
@@ -2580,6 +2627,7 @@ if (searchSessions !== undefined) {
     res.status(404).setHeader("Cache-Control", "private, no-store").end();
   };
   app.use("/api/search/everywhere", absent);
+  app.use("/api/search/catalog", absent);
   app.get("/api/search/preferences", absent);
 }
 
@@ -2706,6 +2754,7 @@ const shutdown = createShutdown({
 });
 installSignalHandlers(async (signal) => {
   searchSessions?.close();
+  catalogSearchSessions?.close();
   localSearchIndex?.close();
   await shutdown(signal);
 });

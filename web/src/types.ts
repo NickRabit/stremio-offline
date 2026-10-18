@@ -37,6 +37,25 @@ export interface Meta {
   addonName?: string; sources?: string[]; [key: string]: unknown;
 }
 export interface SearchResult { items: Meta[]; cursor: string; hasMore: boolean; sources: number }
+export interface CatalogSearchRequest {
+  query: string;
+  type?: "movie" | "series";
+  scope?: { addonKey: string; catalogType?: string; catalogId?: string };
+  slotId: string;
+  generation: number;
+}
+export interface CatalogSearchSnapshot {
+  revision: number;
+  state: "partial" | "complete";
+  items: Meta[];
+  sources: number;
+  pending: number;
+  failed: number;
+  hasMore: boolean;
+}
+export type CatalogSearchPollResult =
+  | { changed: false; revision: number }
+  | { changed: true; revision?: number; snapshot: CatalogSearchSnapshot };
 export type SearchSourceClass = "catalog" | "local" | "remote";
 export type SearchKind = "movie" | "series" | "episode" | "season" | "folder" | "file";
 export type SearchKindFilter = "all" | "movie" | "series";

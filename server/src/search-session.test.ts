@@ -179,6 +179,7 @@ const build = (
     limits?: ConstructorParameters<typeof SearchSessionManager>[0]["limits"];
     schedulerLimits?: ConstructorParameters<typeof SearchScheduler>[0];
     discover?: ConstructorParameters<typeof SearchSessionManager>[0]["discover"];
+    knownIds?: ConstructorParameters<typeof SearchSessionManager>[0]["knownIds"];
   } = {},
 ) => {
   const timers = new ManualTimers();
@@ -195,6 +196,7 @@ const build = (
     randomId: () => String(++id),
     timers,
     limits: options.limits,
+    ...(options.knownIds === undefined ? {} : { knownIds: options.knownIds }),
   });
   return { manager, scheduler, timers };
 };
@@ -907,3 +909,22 @@ test("close leaves queued and active scheduler work empty", async () => {
   await flush();
   assert.deepEqual(scheduler.stats(), { active: 0, queued: 0 });
 });
+
+test("an IMDb title and a TMDB-only title meet through ids already known locally", async () => {
+  const matrix = (itemKey: string, ids: RawSearchRecord["ids"], id: string): RawSearchRecord => ({
+    itemKey, kind: "movie", title: "Matrix", year: 1999, ids,
+    locator: { kind: "catalog", addonKey: itemKey, type: "movie", id },
+  });
+  const run = async (knownIds?: (ids: { imdb?: string }) => { tmdb?: string }) => {
+    const catalog = new FakeSource("catalog", "catalog");
+    const { manager } = build(() => [catalog], knownIds === undefined ? {} : { knownIds });
+    const starting = manager.start(authority(), request("matrix"));
+    catalog.respond(page([matrix("cinemeta", { imdb: "tt0133093" }, "tt0133093"), matrix("czdabing", { tmdb: "603" }, "tmdb:603")]));
+    const started = await starting;
+    manager.close();
+    return started.snapshot.clusters.length;
+  };
+  assert.equal(await run(), 2, "without a local mapping the two stay apart");
+  assert.equal(await run((ids) => (ids.imdb === "tt0133093" ? { tmdb: "603" } : {})), 1);
+});
+

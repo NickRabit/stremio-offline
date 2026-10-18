@@ -6,6 +6,7 @@ import express from "express";
 import { messageKeyOf } from "../errors.js";
 import type { SearchSnapshot } from "../search-contracts.js";
 import { SearchError } from "../search-contracts.js";
+import type { CatalogSearchManager } from "../search-catalog-session.js";
 import type { SearchAuthority, SearchSessionManager } from "../search-session.js";
 import { registerSearchEverywhereRoutes, searchEverywhereEnabled } from "./search-everywhere.js";
 
@@ -24,7 +25,7 @@ const snapshot = (): SearchSnapshot => ({
   limitReached: false,
 });
 
-const mount = async (): Promise<Harness> => {
+const mount = async (enabled = true): Promise<Harness> => {
   const app = express();
   app.use(express.json());
   const authority: SearchAuthority = {
@@ -45,11 +46,41 @@ const mount = async (): Promise<Harness> => {
     members: () => ({ clusterKey: "c1", members: [], truncated: false }),
     delete: () => undefined,
   } as unknown as SearchSessionManager;
-  registerSearchEverywhereRoutes(app, {
-    manager,
-    authorityOf: () => authority,
-    liveSearchOf: () => true,
-  });
+  const catalogManager = {
+    start: async () => ({
+      id: "cs_abc",
+      snapshot: {
+        revision: 1,
+        state: "partial",
+        items: [],
+        sources: 2,
+        pending: 1,
+        failed: 0,
+        hasMore: true,
+      },
+    }),
+    poll: async (_authority: SearchAuthority, id: string, revision: number, signal?: AbortSignal) => {
+      if (id !== "cs_abc") throw new SearchError("search-not-found", 404);
+      if (signal?.aborted) return { changed: false, revision };
+      return { changed: false, revision };
+    },
+    page: () => ({ revision: 2 }),
+    delete: () => undefined,
+  } as unknown as CatalogSearchManager;
+  if (enabled) {
+    registerSearchEverywhereRoutes(app, {
+      manager,
+      catalogManager,
+      authorityOf: () => authority,
+      liveSearchOf: () => true,
+    });
+  } else {
+    const absent = (_req: express.Request, res: express.Response) => {
+      res.status(404).setHeader("Cache-Control", "private, no-store").end();
+    };
+    app.use("/api/search/everywhere", absent);
+    app.use("/api/search/catalog", absent);
+  }
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     const status = typeof (error as { status?: unknown }).status === "number"
       ? (error as { status: number }).status
@@ -155,6 +186,12 @@ test("closing a poll request aborts the manager wait", async () => {
   } as unknown as SearchSessionManager;
   registerSearchEverywhereRoutes(app, {
     manager,
+    catalogManager: {
+      start: async () => ({ id: "cs_abc", snapshot: {} }),
+      poll: async () => ({ changed: false, revision: 0 }),
+      page: () => ({ revision: 0 }),
+      delete: () => undefined,
+    } as unknown as CatalogSearchManager,
     authorityOf: () => ({ userId: "usr_00000001", sid: "sid_00000000", isCurrent: () => true }),
     liveSearchOf: () => true,
   });
@@ -177,6 +214,54 @@ test("closing a poll request aborts the manager wait", async () => {
     server.close();
     server.closeAllConnections();
     await once(server, "close");
+  }
+});
+
+test("catalogue session routes are private and validate their start body", async () => {
+  const harness = await mount();
+  try {
+    const body = {
+      query: "alien",
+      type: "movie",
+      scope: { addonKey: "alpha" },
+      slotId: "slot_12345678",
+      generation: 1,
+    };
+    const responses = await Promise.all([
+      api(harness.base, "/api/search/catalog", json(body)),
+      api(harness.base, "/api/search/catalog/cs_abc/poll", json({ revision: 1 })),
+      api(harness.base, "/api/search/catalog/cs_abc/page", { method: "POST" }),
+      api(harness.base, "/api/search/catalog/cs_abc", { method: "DELETE" }),
+      api(harness.base, "/api/search/catalog/bad%21id/poll", json({ revision: 0 })),
+      api(harness.base, "/api/search/catalog", json({ ...body, extra: true })),
+      api(harness.base, "/api/search/catalog/cs_abc/poll", json({ revision: 0, extra: true })),
+    ]);
+    for (const response of responses) {
+      assert.equal(response.headers.get("cache-control"), "private, no-store", response.url);
+    }
+    assert.equal(responses[0]!.status, 200);
+    assert.equal(responses[1]!.status, 200);
+    assert.equal(responses[2]!.status, 202);
+    assert.equal(responses[3]!.status, 204);
+    assert.equal(responses[4]!.status, 404);
+    assert.equal(responses[5]!.status, 400);
+    assert.equal(responses[6]!.status, 400);
+  } finally {
+    await harness.close();
+  }
+});
+
+test("catalogue session routes answer 404 when the feature is off", async () => {
+  const harness = await mount(false);
+  try {
+    const response = await api(harness.base, "/api/search/catalog", json({
+      query: "alien",
+      slotId: "slot_12345678",
+      generation: 1,
+    }));
+    assert.equal(response.status, 404);
+  } finally {
+    await harness.close();
   }
 });
 

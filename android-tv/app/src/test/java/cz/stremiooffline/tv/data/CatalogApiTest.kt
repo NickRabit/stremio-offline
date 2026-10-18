@@ -61,6 +61,52 @@ class CatalogApiTest {
   }
 
   @Test
+  fun `catalogue search starts, polls, pages and deletes its session`() = runTest {
+    val client = client(start())
+    server.enqueue(
+      MockResponse().setBody(
+        """{"id":"cs_1","snapshot":{"revision":1,"state":"partial","items":[],"sources":2,"pending":1,"failed":0,"hasMore":true}}""",
+      ),
+    )
+    server.enqueue(
+      MockResponse().setBody(
+        """{"changed":true,"snapshot":{"revision":2,"state":"complete","items":[],"sources":2,"pending":0,"failed":0,"hasMore":false}}""",
+      ),
+    )
+    server.enqueue(MockResponse().setResponseCode(202).setBody("""{"revision":3}"""))
+    server.enqueue(MockResponse().setResponseCode(204))
+
+    val started = client.startCatalogSearch(
+      CatalogSearchStartDto(
+        query = "matrix",
+        type = "movie",
+        scope = CatalogSearchScopeDto("key", "movie", "top"),
+        slotId = "slot",
+        generation = 2,
+      ),
+    )
+    val polled = client.pollCatalogSearch("cs_1", 1)
+    val revision = client.pageCatalogSearch("cs_1")
+    client.deleteCatalogSearch("cs_1")
+
+    val startRequest = server.takeRequest()
+    val pollRequest = server.takeRequest()
+    val pageRequest = server.takeRequest()
+    val deleteRequest = server.takeRequest()
+    assertEquals("/api/search/catalog", startRequest.path)
+    assertEquals(
+      """{"query":"matrix","type":"movie","scope":{"addonKey":"key","catalogType":"movie","catalogId":"top"},"slotId":"slot","generation":2}""",
+      startRequest.body.readUtf8(),
+    )
+    assertEquals("/api/search/catalog/cs_1/poll", pollRequest.path)
+    assertEquals("/api/search/catalog/cs_1/page", pageRequest.path)
+    assertEquals("DELETE", deleteRequest.method)
+    assertEquals("cs_1", started.id)
+    assertEquals("complete", polled.snapshot?.state)
+    assertEquals(3, revision)
+  }
+
+  @Test
   fun `searchable asks the listing of scopes`() = runTest {
     server.enqueue(MockResponse().setBody("""[{"addonKey":"a","addonName":"A","globalSearch":false,"type":"series","id":"top","name":"Popular"}]"""))
     val scopes = client(start()).searchable()

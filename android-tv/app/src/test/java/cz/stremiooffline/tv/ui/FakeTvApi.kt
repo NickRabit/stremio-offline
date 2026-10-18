@@ -9,6 +9,10 @@ import cz.stremiooffline.tv.data.BulkMediaDto
 import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.BrowseResult
 import cz.stremiooffline.tv.data.CatalogDto
+import cz.stremiooffline.tv.data.CatalogSearchPollDto
+import cz.stremiooffline.tv.data.CatalogSearchSnapshotDto
+import cz.stremiooffline.tv.data.CatalogSearchStartDto
+import cz.stremiooffline.tv.data.CatalogSearchStartResultDto
 import cz.stremiooffline.tv.data.ClientLogBundleDto
 import cz.stremiooffline.tv.data.ClientCapabilitiesDto
 import cz.stremiooffline.tv.data.CopyDto
@@ -177,6 +181,21 @@ open class FakeTvApi : TvApi {
   var searchPages: MutableMap<String, SearchResultDto> = mutableMapOf()
   var searchRequests: MutableList<SearchRequest> = mutableListOf()
   var failSearch = false
+  var catalogStartHandler: suspend (CatalogSearchStartDto) -> CatalogSearchStartResultDto = { request ->
+    CatalogSearchStartResultDto(
+      id = "cs_${request.generation}",
+      snapshot = CatalogSearchSnapshotDto(revision = 1, state = "complete"),
+    )
+  }
+  var catalogPollHandler: suspend (String, Int) -> CatalogSearchPollDto = { _, revision ->
+    CatalogSearchPollDto(changed = false, revision = revision)
+  }
+  var catalogPageHandler: suspend (String) -> Int = { 2 }
+  var catalogDeleteHandler: suspend (String) -> Unit = {}
+  val catalogStartCalls: MutableList<CatalogSearchStartDto> = mutableListOf()
+  val catalogPollCalls: MutableList<Pair<String, Int>> = mutableListOf()
+  val catalogPageCalls: MutableList<String> = mutableListOf()
+  val catalogDeletedIds: MutableList<String> = mutableListOf()
   var searchableValue: List<SearchableCatalogDto> = emptyList()
   var searchableCalls = 0
   var searchStateValue: SearchStateDto = SearchStateDto()
@@ -405,6 +424,26 @@ open class FakeTvApi : TvApi {
     searchRequests += SearchRequest(query, cursor, scope)
     if (failSearch) throw ApiError(ApiFailure.Generic)
     return searchPages[cursor ?: ""] ?: SearchResultDto()
+  }
+
+  override suspend fun startCatalogSearch(body: CatalogSearchStartDto): CatalogSearchStartResultDto {
+    catalogStartCalls += body
+    return catalogStartHandler(body)
+  }
+
+  override suspend fun pollCatalogSearch(id: String, revision: Int): CatalogSearchPollDto {
+    catalogPollCalls += id to revision
+    return catalogPollHandler(id, revision)
+  }
+
+  override suspend fun pageCatalogSearch(id: String): Int {
+    catalogPageCalls += id
+    return catalogPageHandler(id)
+  }
+
+  override suspend fun deleteCatalogSearch(id: String) {
+    catalogDeletedIds += id
+    catalogDeleteHandler(id)
   }
 
   override suspend fun searchState(): SearchStateDto {

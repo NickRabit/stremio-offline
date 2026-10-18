@@ -89,12 +89,14 @@ fun SearchScreen(
   modifier: Modifier = Modifier,
   /** Back to the catalogue when Search was opened from its Hledat chip. */
   onBackToCatalog: (() -> Unit)? = null,
+  /** Read once by the shell from `/api/status`; turns on incremental catalogue sessions. */
+  catalogSessions: Boolean = false,
   /** Whether a recognizer answers here; the mic button and the remote's mic key follow it. */
   voiceAvailable: Boolean = voiceSearchAvailable(),
   /** Test seam: answers a mic press without a device. Null asks the platform recognizer. */
   voiceLauncher: VoiceLauncher? = null,
 ) {
-  val viewModel = viewModel<SearchViewModel>(factory = SearchViewModel.factory(api))
+  val viewModel = viewModel<SearchViewModel>(factory = SearchViewModel.factory(api, catalogSessions))
   val state = viewModel.state
   var text by rememberSaveable { mutableStateOf("") }
   val fieldFocus = remember { FocusRequester() }

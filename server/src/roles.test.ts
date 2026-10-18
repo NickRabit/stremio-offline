@@ -40,6 +40,10 @@ const ALLOWED: Array<[string, string]> = [
   ["POST", "/search/everywhere/ss_abc/sources/s0/retry"],
   ["GET", "/search/everywhere/ss_abc/members/member_1"],
   ["DELETE", "/search/everywhere/ss_abc"],
+  ["POST", "/search/catalog"],
+  ["POST", "/search/catalog/cs_abc/poll"],
+  ["POST", "/search/catalog/cs_abc/page"],
+  ["DELETE", "/search/catalog/cs_abc"],
   ["GET", "/follows"],
   ["POST", "/follows"],
   ["GET", "/follows/defaults"],
@@ -230,6 +234,9 @@ test("the search everywhere routes match exact parameter counts only", () => {
   assert.equal(isUserAllowed("POST", "/search/everywhere/x/y/z"), false);
   assert.equal(isUserAllowed("POST", "/search/everywhere/x/poll/extra"), false);
   assert.equal(isUserAllowed("GET", "/search/everywhere/x/members/y/extra"), false);
+  assert.equal(isUserAllowed("POST", "/search/catalog/x/poll/extra"), false);
+  assert.equal(isUserAllowed("POST", "/search/catalog/x/page/extra"), false);
+  assert.equal(isUserAllowed("DELETE", "/search/catalog/x/extra"), false);
 });
 
 test("an open path, an internal read and a request with no role pass through", () => {
