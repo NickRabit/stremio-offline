@@ -9,6 +9,7 @@ import { AppError } from "../errors.js";
 import { posixBase, type Viewer } from "../libraries.js";
 import { log } from "../logger.js";
 import { isRemoteMediaStream } from "../media-server-reference.js";
+import { isMediaServerError } from "../media-server-types.js";
 import { ResourceError, type DeviceDownloadTicket, type ResourceOwner } from "../media-resources.js";
 import type { MediaServerSources } from "../media-server-sources.js";
 import { defaultDownloadSettings, deviceFilename, type MediaInfo } from "../naming.js";
@@ -17,6 +18,7 @@ import { safeFetch, validateRemoteUrl } from "../security.js";
 import type { StatsLog, TrafficMeta } from "../stats.js";
 import type { StreamItem } from "../types.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
+import { toHttpError } from "./media-servers.js";
 
 /** Saving a stream on the device that asked for it, without handing out the source address. */
 export interface DeviceDeps extends RouteContext {
@@ -214,10 +216,17 @@ export function registerDeviceRoutes(app: express.Application, deps: DeviceDeps)
         // uses: the server resolves the sealed address with the provider's credentials, and the
         // range the browser asked for travels unchanged.
         ? await (async () => {
-          // Asked again at hand-over, exactly as a playback re-checks its own grant: a permission
-          // that was taken away between minting the ticket and asking for its bytes stops here.
-          await mediaSources.authorize(stream, ticket.owner, controller.signal, { download: true });
-          return mediaSources.open(stream, ticket.owner, init, controller.signal, { download: true });
+          try {
+            // Asked again at hand-over, exactly as a playback re-checks its own grant: a permission
+            // that was taken away between minting the ticket and asking for its bytes stops here.
+            await mediaSources.authorize(stream, ticket.owner, controller.signal, { download: true });
+            return await mediaSources.open(stream, ticket.owner, init, controller.signal, { download: true });
+          } catch (error) {
+            if (!isMediaServerError(error)) throw error;
+            const http = toHttpError(error);
+            http.cause = error;
+            throw http;
+          }
         })()
         : await safeFetch(stream.url!, { ...init, headers, signal: controller.signal });
     }

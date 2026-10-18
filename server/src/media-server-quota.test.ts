@@ -104,3 +104,69 @@ test("pacing limits one source to the account bitrate, including concurrent bodi
   await unlimited.wrap(body(4 * 1024 * 1024), signal.signal).arrayBuffer();
   assert.equal(slept, 0);
 });
+
+test("sequential bodies of one source keep their pacing debt", async () => {
+  let now = 0;
+  let slept = 0;
+  const quota = new OriginalQuota({
+    clock: () => now,
+    sleep: async (ms, signal) => {
+      if (signal.aborted) throw signal.reason;
+      slept += ms;
+      now += ms;
+    },
+  });
+  const signal = new AbortController();
+  for (let index = 0; index < 8; index += 1) {
+    const slot = quota.reserve("connection-1", "source", { bitrateLimit: 8_000_000 });
+    await slot.wrap(body(1024 * 1024), signal.signal).arrayBuffer();
+  }
+  assert.ok(slept >= 7_300, `expected sequential ranges to stay paced, got ${slept}ms`);
+});
+
+test("forgetting a connection cannot let an old slot release wipe the new slot map", () => {
+  const quota = new OriginalQuota();
+  const old = quota.reserve("connection-1", "old", { streamLimit: 1 });
+  quota.forget("connection-1");
+  const current = quota.reserve("connection-1", "current", { streamLimit: 1 });
+  old.release();
+  assert.throws(
+    () => quota.reserve("connection-1", "next", { streamLimit: 1 }),
+    busy,
+  );
+  current.release();
+});
+
+test("an idle pacer held by a paused body is kept, so a second body of the source shares it", async () => {
+  let now = 0;
+  let slept = 0;
+  const quota = new OriginalQuota({
+    clock: () => now,
+    sleep: async (ms) => { slept += ms; now += ms; },
+  });
+  const signal = new AbortController();
+  const chunk = 64 * 1024;
+  let sent = 0;
+  // Delivers 64 KiB at a time, but only up to `allowed` bytes until told to go on.
+  let allowed = chunk;
+  let resume: (() => void) | undefined;
+  const pausing = new Response(new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (sent >= 2 * 1024 * 1024) return controller.close();
+      while (sent >= allowed) await new Promise<void>((go) => { resume = go; });
+      sent += chunk;
+      controller.enqueue(new Uint8Array(chunk));
+    },
+  }));
+  const first = quota.reserve("connection-1", "source", { bitrateLimit: 8_000_000 });
+  const reader = first.wrap(pausing, signal.signal).body!.getReader();
+  await reader.read();
+  now += 60_000;
+  const second = quota.reserve("connection-1", "source", { bitrateLimit: 8_000_000 });
+  slept = 0;
+  allowed = Number.MAX_SAFE_INTEGER;
+  resume?.();
+  const drain = async () => { while (!(await reader.read()).done) { /* drain */ } };
+  await Promise.all([drain(), second.wrap(body(2 * 1024 * 1024), signal.signal).arrayBuffer()]);
+  assert.ok(slept >= 2_700, `both bodies must share one pacer, got ${slept}ms`);
+});

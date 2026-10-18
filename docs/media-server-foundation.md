@@ -292,7 +292,8 @@ accept a trailing `AbortSignal`: `verifyIdentity`, `authenticate`,
   source sharing a byte budget. A `streamLimit` admits at most that many
   distinct sources per connection across users, streaming and downloading; an
   extra source fails fast with `busy`, while another range of an open source is
-  admitted.
+  admitted. A limit tightened upstream can take up to 30 seconds to affect new
+  opens because the session facts are cached for that window.
 - `listLibraries` keeps only `CollectionFolder` entries and maps `movies` to
   `movie`, `tvshows` to `series`, and an empty/absent `CollectionType` to
   `mixed`; explicit non-movie collections (music, books, …) are dropped. A

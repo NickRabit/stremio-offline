@@ -10,8 +10,7 @@ export interface OriginalSlot {
   release(): void;
 }
 
-interface SourceState {
-  refs: number;
+interface SourcePacer {
   nextFreeAt: number;
 }
 
@@ -36,7 +35,8 @@ const defaultSleep = (ms: number, signal: AbortSignal): Promise<void> => new Pro
 });
 
 export class OriginalQuota {
-  private readonly connections = new Map<string, Map<string, SourceState>>();
+  private readonly slots = new Map<string, Map<string, number>>();
+  private readonly pacers = new Map<string, Map<string, SourcePacer>>();
   private readonly clock: () => number;
   private readonly sleep: (ms: number, signal: AbortSignal) => Promise<void>;
 
@@ -46,29 +46,47 @@ export class OriginalQuota {
   }
 
   reserve(connectionId: string, sourceKey: string, limits: { bitrateLimit?: number; streamLimit?: number }): OriginalSlot {
-    let sources = this.connections.get(connectionId);
-    if (!sources) {
-      sources = new Map();
-      this.connections.set(connectionId, sources);
+    let slots = this.slots.get(connectionId);
+    if (!slots) {
+      slots = new Map();
+      this.slots.set(connectionId, slots);
     }
-    let state = sources.get(sourceKey);
-    if (!state) {
-      if (limits.streamLimit !== undefined && sources.size >= limits.streamLimit) {
+    const held = slots.get(sourceKey) ?? 0;
+    if (held === 0) {
+      if (limits.streamLimit !== undefined && slots.size >= limits.streamLimit) {
+        if (slots.size === 0 && this.slots.get(connectionId) === slots) this.slots.delete(connectionId);
         throw new MediaServerError("busy", "Too many media-server streams are open.");
       }
-      state = { refs: 0, nextFreeAt: 0 };
-      sources.set(sourceKey, state);
     }
-    state.refs += 1;
-    const held = state;
+    slots.set(sourceKey, held + 1);
+
+    let pacers = this.pacers.get(connectionId);
+    if (!pacers) {
+      pacers = new Map();
+      this.pacers.set(connectionId, pacers);
+    }
+    const now = this.clock();
+    for (const [key, pacer] of pacers) {
+      // A paused body still holds its pacer; a second one for the same key would double the rate.
+      if (pacer.nextFreeAt < now - 1000 && !slots.has(key)) pacers.delete(key);
+    }
+    let pacer = pacers.get(sourceKey);
+    if (!pacer) {
+      pacer = { nextFreeAt: 0 };
+      pacers.set(sourceKey, pacer);
+    }
+    const heldPacer = pacer;
     let released = false;
     const release = () => {
       if (released) return;
       released = true;
-      held.refs -= 1;
-      if (held.refs > 0 || sources.get(sourceKey) !== held) return;
-      sources.delete(sourceKey);
-      if (sources.size === 0) this.connections.delete(connectionId);
+      const refs = (slots.get(sourceKey) ?? 1) - 1;
+      if (refs > 0) {
+        slots.set(sourceKey, refs);
+      } else {
+        slots.delete(sourceKey);
+        if (slots.size === 0 && this.slots.get(connectionId) === slots) this.slots.delete(connectionId);
+      }
     };
 
     return {
@@ -114,8 +132,8 @@ export class OriginalQuota {
               for (let offset = 0; offset < bytes.byteLength; offset += size) {
                 const piece = bytes.subarray(offset, Math.min(bytes.byteLength, offset + size));
                 const now = this.clock();
-                const start = Math.max(now, held.nextFreeAt);
-                held.nextFreeAt = start + piece.byteLength * 8000 / bitrateLimit;
+                const start = Math.max(now, heldPacer.nextFreeAt);
+                heldPacer.nextFreeAt = start + piece.byteLength * 8000 / bitrateLimit;
                 const wait = start - now - 1000;
                 if (wait > 0) await this.sleep(wait, signal);
                 controller.enqueue(piece);
@@ -137,6 +155,7 @@ export class OriginalQuota {
   }
 
   forget(connectionId: string): void {
-    this.connections.delete(connectionId);
+    this.slots.delete(connectionId);
+    this.pacers.delete(connectionId);
   }
 }
