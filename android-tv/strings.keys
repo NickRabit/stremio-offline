@@ -33,6 +33,10 @@ tv.backToExit
 tv.placeholderTitle
 tv.placeholderAction
 tv.libraryTitle
+tv.libraryTypeAll
+tv.libraryTypeMovies
+tv.libraryTypeSeries
+tv.librarySearchScope
 tv.libraryEmpty
 tv.libraryFiles
 tv.detailEyebrowLibrary

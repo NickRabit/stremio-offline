@@ -87,6 +87,7 @@ import cz.stremiooffline.tv.ui.player.LibraryPlaySources
 import cz.stremiooffline.tv.ui.player.PlayerScreen
 import cz.stremiooffline.tv.ui.resume.ResumeRoute
 import cz.stremiooffline.tv.ui.search.GlobalSearchScreen
+import cz.stremiooffline.tv.ui.search.LibrarySearchScope
 import cz.stremiooffline.tv.ui.settings.SettingsRoute
 import cz.stremiooffline.tv.ui.theme.Tokens
 import cz.stremiooffline.tv.ui.theme.appBackground
@@ -213,6 +214,9 @@ fun Shell(
   var searchScope by remember { mutableStateOf(SearchScope()) }
   /** True while Search was opened from the catalogue, so Back returns there instead of the rail. */
   var searchFromCatalog by remember { mutableStateOf(false) }
+  /** The library level the Search page is fixed to, or null for the rail's own search. */
+  var librarySearch by remember { mutableStateOf<LibrarySearchScope?>(null) }
+  var librarySearchReturnToken by remember { mutableIntStateOf(0) }
   var searchEverywhereEnabled by remember { mutableStateOf(false) }
   LaunchedEffect(Unit) {
     searchEverywhereEnabled = runCatching { api.searchEverywhereEnabled() }.getOrDefault(false)
@@ -247,7 +251,10 @@ fun Shell(
     hint = hint,
     onSection = { section ->
       // The rail's Search is not the catalogue's: Back there belongs to the rail again.
-      if (section == Section.Search) searchFromCatalog = false
+      if (section == Section.Search) {
+        searchFromCatalog = false
+        librarySearch = null
+      }
       shellState.pick(section)
       true
     },
@@ -261,7 +268,6 @@ fun Shell(
         Section.Library -> LibraryRoute(
           api = api,
           onOpenDetail = { detail = it },
-          onOpenCatalog = { catalogDetail = it },
           onOpenRemoteItem = { libraryId, libraryName, provider, item ->
             remoteDetail = RemoteDetailData(libraryId = libraryId, libraryName = libraryName, provider = provider, item = item)
           },
@@ -273,6 +279,11 @@ fun Shell(
           loadDestinations = nativeDestinations,
           onQueue = nativeQueue,
           searchEverywhereEnabled = searchEverywhereEnabled,
+          onOpenSearch = { scope ->
+            librarySearch = scope
+            shellState.pick(Section.Search)
+          },
+          searchReturnToken = librarySearchReturnToken,
         )
         Section.Resume -> ResumeRoute(
           api = api,
@@ -304,38 +315,58 @@ fun Shell(
           onOpenSearch = { scope ->
             searchScope = scope
             searchFromCatalog = true
+            librarySearch = null
             shellState.pick(Section.Search)
           },
           imageUrl = { path -> path?.let(api::url) },
           restoreToken = returnToken,
         )
-        Section.Search -> if (searchFromCatalog || !searchEverywhereEnabled) {
-          SearchScreen(
-            api = api,
-            scope = searchScope,
-            onScopeChange = { searchScope = it },
-            onOpenDetail = { catalogDetail = it },
-            imageUrl = { path -> path?.let(api::url) },
-            catalogSessions = searchEverywhereEnabled,
-            onBackToCatalog = if (searchFromCatalog) {
-              {
-                searchFromCatalog = false
-                shellState.pick(Section.Catalog)
-              }
-            } else null,
-          )
-        } else {
-          GlobalSearchScreen(
-            api = api,
-            onOpenCatalog = { catalogDetail = it },
-            onOpenRemote = { remoteDetail = it },
-            onOpenLibrary = { path ->
-              libraryPush = path
-              shellState.pick(Section.Library)
-            },
-            imageUrl = { path -> path?.let(api::url) },
-            overlayOpen = overlayOpen,
-          )
+        Section.Search -> {
+          val libraryPage = librarySearch
+          when {
+            libraryPage != null -> GlobalSearchScreen(
+              api = api,
+              onOpenCatalog = { catalogDetail = it },
+              onOpenRemote = { remoteDetail = it },
+              onOpenLibrary = { path ->
+                libraryPush = path
+                shellState.pick(Section.Library)
+              },
+              imageUrl = { path -> path?.let(api::url) },
+              overlayOpen = overlayOpen,
+              libraryScope = libraryPage,
+              onBack = {
+                librarySearch = null
+                librarySearchReturnToken++
+                shellState.pick(Section.Library)
+              },
+            )
+            searchFromCatalog || !searchEverywhereEnabled -> SearchScreen(
+              api = api,
+              scope = searchScope,
+              onScopeChange = { searchScope = it },
+              onOpenDetail = { catalogDetail = it },
+              imageUrl = { path -> path?.let(api::url) },
+              catalogSessions = searchEverywhereEnabled,
+              onBackToCatalog = if (searchFromCatalog) {
+                {
+                  searchFromCatalog = false
+                  shellState.pick(Section.Catalog)
+                }
+              } else null,
+            )
+            else -> GlobalSearchScreen(
+              api = api,
+              onOpenCatalog = { catalogDetail = it },
+              onOpenRemote = { remoteDetail = it },
+              onOpenLibrary = { path ->
+                libraryPush = path
+                shellState.pick(Section.Library)
+              },
+              imageUrl = { path -> path?.let(api::url) },
+              overlayOpen = overlayOpen,
+            )
+          }
         }
         Section.Home -> HomeScreen(
           api = api,

@@ -10,22 +10,28 @@ import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.pressKey
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
+import cz.stremiooffline.tv.data.BrowseItem
+import cz.stremiooffline.tv.data.BrowseResult
 import cz.stremiooffline.tv.data.CatalogDto
 import cz.stremiooffline.tv.data.CatalogExtraDto
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.SearchableCatalogDto
 import cz.stremiooffline.tv.ui.FakeTvApi
+import cz.stremiooffline.tv.ui.library.TagLibrarySearchAction
+import cz.stremiooffline.tv.ui.search.TagGlobalSearchField
 import cz.stremiooffline.tv.ui.catalog.TagCatalogChip
 import cz.stremiooffline.tv.ui.catalog.TagCatalogGenreChip
 import cz.stremiooffline.tv.ui.catalog.TagCatalogSearchChip
 import cz.stremiooffline.tv.ui.catalog.TagSearchScopeChip
 import cz.stremiooffline.tv.ui.catalog.TagSearchField
-import cz.stremiooffline.tv.ui.search.TagGlobalSearchField
+import androidx.compose.ui.semantics.SemanticsActions
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
@@ -75,6 +81,11 @@ class ShellSearchTest {
 
   private fun press(key: Key) {
     compose.onRoot().performKeyInput { pressKey(key) }
+    compose.waitForIdle()
+  }
+
+  private fun focus(tag: String) {
+    compose.onNodeWithTag(tag).performSemanticsAction(SemanticsActions.RequestFocus)
     compose.waitForIdle()
   }
 
@@ -199,5 +210,32 @@ class ShellSearchTest {
     press(Key.DirectionCenter)
 
     compose.onNodeWithTag(TagSearchScopeChip).assertTextContains("Cinemeta · Popular (movie)", substring = true)
+  }
+
+  @Test
+  fun `a library Search opens its page and Back returns to the Search action`() {
+    val api = FakeTvApi()
+    api.globalSearchEnabled = true
+    api.pages[null] = BrowseResult("", listOf(BrowseItem.Folder(path = "Shows", name = "Shows")), 1, false)
+    mount(api, Section.Library)
+    compose.waitUntil(5_000) { api.globalSearchEnabledCalls > 0 }
+    compose.waitForIdle()
+
+    compose.onNodeWithText("Files").performSemanticsAction(SemanticsActions.RequestFocus)
+    compose.waitForIdle()
+    press(Key.DirectionCenter)
+    compose.waitForIdle()
+
+    focus(TagLibrarySearchAction)
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagGlobalSearchField).assertExists()
+
+    host!!.onBackPressedDispatcher.onBackPressed()
+    compose.waitForIdle()
+    compose.mainClock.advanceTimeBy(200)
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagLibrarySearchAction).assertIsFocused()
+    compose.onNodeWithTag(TagGlobalSearchField).assertDoesNotExist()
   }
 }

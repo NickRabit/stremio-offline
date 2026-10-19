@@ -10,12 +10,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
@@ -28,22 +30,15 @@ import androidx.compose.ui.test.pressKey
 import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.BrowseResult
 import cz.stremiooffline.tv.R
-import cz.stremiooffline.tv.data.GlobalSearchClusterDto
 import cz.stremiooffline.tv.data.GlobalSearchLibraryDto
-import cz.stremiooffline.tv.data.GlobalSearchLocatorDto
-import cz.stremiooffline.tv.data.GlobalSearchMemberDto
-import cz.stremiooffline.tv.data.GlobalSearchMemberPageDto
-import cz.stremiooffline.tv.data.GlobalSearchSnapshotDto
-import cz.stremiooffline.tv.data.GlobalSearchStartResultDto
 import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.RemoteItemsPageDto
 import cz.stremiooffline.tv.data.RemoteLibraryDto
-import cz.stremiooffline.tv.ui.catalog.VoiceLauncher
 import cz.stremiooffline.tv.ui.components.TagPosterMosaic
 import cz.stremiooffline.tv.ui.BrowseRequest
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.detail.DetailData
-import cz.stremiooffline.tv.ui.search.globalSearchCardTag
+import cz.stremiooffline.tv.ui.search.LibrarySearchScope
 import kotlinx.coroutines.CompletableDeferred
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -86,10 +81,8 @@ class LibraryScreenTest {
     api: FakeTvApi,
     pendingDelayMs: Long = 1_500L,
     onDetail: (DetailData) -> Unit = {},
-    onOpenLibrary: ((String) -> Unit)? = null,
+    onOpenSearch: ((LibrarySearchScope) -> Unit)? = null,
     searchEverywhereEnabled: Boolean = false,
-    voiceAvailable: Boolean? = null,
-    voiceLauncher: VoiceLauncher? = null,
   ) {
     scenario.onActivity { activity ->
       host = activity
@@ -97,50 +90,13 @@ class LibraryScreenTest {
       LibraryRoute(
         api = api,
         onOpenDetail = onDetail,
-        onOpenLibrary = onOpenLibrary,
+        onOpenSearch = onOpenSearch ?: {},
         searchEverywhereEnabled = searchEverywhereEnabled,
         pendingDelayMs = pendingDelayMs,
-        voiceAvailable = voiceAvailable,
-        voiceLauncher = voiceLauncher,
       )
       }
     }
   }
-
-  private fun searchResult(api: FakeTvApi, member: GlobalSearchMemberDto) {
-    api.globalStartHandler = {
-      GlobalSearchStartResultDto(
-        id = "gs",
-        snapshot = GlobalSearchSnapshotDto(
-          revision = 1,
-          state = "complete",
-          clusters = listOf(
-            GlobalSearchClusterDto(
-              key = "one",
-              kind = member.kind,
-              title = member.title,
-              memberCount = 1,
-              primaryMemberKey = member.memberKey,
-              memberKeys = listOf(member.memberKey),
-            ),
-          ),
-        ),
-      )
-    }
-    api.globalMembersHandler = { _, _, _ ->
-      GlobalSearchMemberPageDto(clusterKey = "one", members = listOf(member))
-    }
-  }
-
-  private fun localMember(path: String, kind: String = "file") = GlobalSearchMemberDto(
-    memberKey = "m1",
-    sourceId = "local",
-    sourceClass = "local",
-    sourceLabel = "Films",
-    kind = "movie",
-    title = "Hluboky soubor",
-    locator = GlobalSearchLocatorDto(kind = "local", key = path, libraryId = "lib_ab12cd34", itemKind = kind),
-  )
 
   private fun submitSearch(query: String) {
     focusOn(TagLibrarySearchAction)
@@ -456,7 +412,6 @@ class LibraryScreenTest {
     compose.waitForIdle()
 
     compose.onNodeWithTag("Shows/S1").assertExists()
-    compose.onNodeWithTag(TagLibrarySearchAction).assert(hasText("S1"))
 
     // A level opened from the narrowed list is the whole level, never the parent's matching rows.
     focusOn("Shows/S1")
@@ -471,7 +426,6 @@ class LibraryScreenTest {
 
     // Back lands on the parent's own narrowed list, still narrowed and without a second read of it.
     compose.onNodeWithTag("Shows/S1").assertExists()
-    compose.onNodeWithTag(TagLibrarySearchAction).assert(hasText("S1"))
     assertEquals(1, api.browseRequests.count { it.query == "S1" })
   }
 
@@ -545,9 +499,9 @@ class LibraryScreenTest {
     compose.mainClock.advanceTimeBy(100)
     compose.waitForIdle()
 
-    // Nothing matched, and the action that owns the query is still there with it.
+    // Nothing matched, and the action that opens the query is still there.
     compose.onNodeWithTag("Shows/S1").assertDoesNotExist()
-    compose.onNodeWithTag(TagLibrarySearchAction).assert(hasText("zz"))
+    compose.onNodeWithTag(TagLibrarySearchAction).assert(hasText("Search"))
     // The empty level reads as "nothing matched", not as an empty library.
     compose.onNodeWithText(
       androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
@@ -557,6 +511,7 @@ class LibraryScreenTest {
     // Reopening pre-fills it, and clearing it brings the whole level back.
     focusOn(TagLibrarySearchAction)
     press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagLibrarySearchInput).assertTextContains("zz")
     compose.onNodeWithTag(TagLibrarySearchInput).performTextClearance()
     compose.onNodeWithTag(TagLibrarySearchInput).performImeAction()
     compose.waitForIdle()
@@ -564,10 +519,7 @@ class LibraryScreenTest {
     compose.waitForIdle()
 
     compose.onNodeWithTag("Shows/S1").assertExists()
-    compose.onNodeWithTag(TagLibrarySearchAction).assert(hasText(
-      androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
-        .getString(cz.stremiooffline.tv.R.string.media_server_search_action),
-    ))
+    compose.onNodeWithTag(TagLibrarySearchAction).assert(hasText("Search"))
   }
 
   @Test
@@ -610,15 +562,6 @@ class LibraryScreenTest {
   }
 
   // --- The All grid and the search row ----------------------------------------------------------
-
-  /** The microphone seam: each press is recorded and answered when the test says so. */
-  private class Voice {
-    val calls = mutableListOf<(String) -> Unit>()
-
-    fun answer(spoken: String) {
-      calls.last()(spoken)
-    }
-  }
 
   private fun localLibrary(path: String, name: String = path) = BrowseItem.Library(path = path, name = name)
 
@@ -736,38 +679,8 @@ class LibraryScreenTest {
   }
 
   @Test
-  fun `the mic on a files level submits what it heard`() {
-    val voice = Voice()
-    val api = nested()
-    api.browseQueries["Shows|matrix"] = BrowseResult("Shows", emptyList(), 0, false)
-    mount(api, voiceAvailable = true, voiceLauncher = { onResult -> voice.calls += onResult })
-    switchTo("Files")
-    compose.waitForIdle()
-    compose.onNodeWithTag("Shows").performKeyInput { pressKey(Key.DirectionCenter) }
-    compose.waitForIdle()
-    compose.mainClock.advanceTimeBy(100)
-    compose.waitForIdle()
-
-    focusOn(TagLibrarySearchAction)
-    press(Key.DirectionCenter)
-    compose.onNodeWithTag(TagLibrarySearchVoice).assertExists()
-    focusOn(TagLibrarySearchVoice)
-    press(Key.DirectionCenter)
-    assertEquals(1, voice.calls.size)
-    voice.answer("matrix")
-    compose.waitForIdle()
-    compose.mainClock.advanceTimeBy(200)
-    compose.waitForIdle()
-
-    assertEquals("matrix", api.browseRequests.last().query)
-    compose.onNodeWithTag(TagLibrarySearchField).assertDoesNotExist()
-    compose.onNodeWithTag(TagLibrarySearchAction).assert(hasText("matrix"))
-  }
-
-  @Test
-  fun `a scoped files search sends the folder path and opens a local member`() {
+  fun `OK on the search action opens the page rooted at the level on screen`() {
     val api = FakeTvApi()
-    api.globalSearchEnabled = true
     api.pages[null] = BrowseResult("", listOf(localLibrary("lib_ab12cd34", "Films")), 1, false)
     api.pages["lib_ab12cd34"] = BrowseResult(
       "lib_ab12cd34",
@@ -781,9 +694,8 @@ class LibraryScreenTest {
       1,
       false,
     )
-    searchResult(api, localMember("lib_ab12cd34/Shows/S1/E1.mkv"))
-    var opened: String? = null
-    mount(api, searchEverywhereEnabled = true, onOpenLibrary = { opened = it })
+    val opened = mutableListOf<LibrarySearchScope>()
+    mount(api, searchEverywhereEnabled = true, onOpenSearch = { scope -> opened += scope })
     switchTo("Files")
     compose.onNodeWithTag("lib_ab12cd34").performKeyInput { pressKey(Key.DirectionCenter) }
     compose.waitForIdle()
@@ -794,54 +706,47 @@ class LibraryScreenTest {
     compose.mainClock.advanceTimeBy(100)
     compose.waitForIdle()
 
-    submitSearch("hluboky")
-
-    assertEquals(
-      GlobalSearchLibraryDto("lib_ab12cd34", path = "Shows"),
-      api.globalStartCalls.single().library,
-    )
-    assertTrue(api.browseRequests.none { it.query == "hluboky" })
-    compose.onNodeWithTag(globalSearchCardTag("m1")).assertExists()
-
+    compose.onNodeWithTag(TagLibrarySearchField).assertDoesNotExist()
+    compose.onNodeWithContentDescription("Voice search").assertDoesNotExist()
+    compose.onNodeWithTag(TagLibrarySearchAction).assert(hasText("Search"))
     focusOn(TagLibrarySearchAction)
     press(Key.DirectionCenter)
-    press(Key.DirectionDown)
-    compose.onNodeWithTag(globalSearchCardTag("m1")).assertIsFocused()
-    press(Key.DirectionCenter)
-    compose.waitForIdle()
-    assertEquals("lib_ab12cd34/Shows/S1/E1.mkv", opened)
 
-    host!!.onBackPressedDispatcher.onBackPressed()
-    compose.waitForIdle()
-    compose.mainClock.advanceTimeBy(100)
-    compose.waitForIdle()
-    compose.onNodeWithTag(globalSearchCardTag("m1")).assertDoesNotExist()
-    compose.onNodeWithTag("lib_ab12cd34/Shows/S1").assertExists()
-    compose.onNodeWithTag(TagLibrarySearchAction).assert(hasText(
-      ApplicationProvider.getApplicationContext<android.content.Context>()
-        .getString(R.string.media_server_search_action),
-    ))
+    val scope = opened.single()
+    assertEquals(GlobalSearchLibraryDto("lib_ab12cd34", path = "Shows"), scope.library)
+    assertEquals(listOf("local"), scope.sources)
+    assertEquals("Films  ›  Shows", scope.title)
   }
 
   @Test
-  fun `a files search at the multi-library root carries no library`() {
+  fun `the files root opens the page without a library`() {
     val api = FakeTvApi()
-    api.globalSearchEnabled = true
     api.pages[null] = BrowseResult(
       "",
       listOf(localLibrary("lib_1", "Films"), localLibrary("lib_2", "Shows")),
       2,
       false,
     )
-    searchResult(api, localMember("lib_1/Film.mkv"))
-    mount(api, searchEverywhereEnabled = true)
+    val opened = mutableListOf<LibrarySearchScope>()
+    mount(api, searchEverywhereEnabled = true, onOpenSearch = { scope -> opened += scope })
     switchTo("Files")
 
-    submitSearch("hluboky")
+    focusOn(TagLibrarySearchAction)
+    press(Key.DirectionCenter)
 
-    val body = api.globalStartCalls.single()
-    assertEquals(null, body.library)
-    assertEquals(listOf("local"), body.sources)
+    assertEquals(null, opened.single().library)
+    assertEquals(listOf("local"), opened.single().sources)
+    assertEquals("Your library", opened.single().title)
+  }
+
+  @Test
+  fun `UP from the first tile reaches Search`() {
+    mount(nested(), searchEverywhereEnabled = true)
+    switchTo("Files")
+
+    compose.onNodeWithTag("Shows").assertIsFocused()
+    press(Key.DirectionUp)
+    compose.onNodeWithTag(TagLibrarySearchAction).assertIsFocused()
   }
 
   @Test

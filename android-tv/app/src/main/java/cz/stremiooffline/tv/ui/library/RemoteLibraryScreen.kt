@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -27,10 +28,12 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.Key
@@ -67,13 +70,9 @@ import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.data.GlobalSearchLibraryDto
 import cz.stremiooffline.tv.ui.catalog.NativeCopyRequest
 import cz.stremiooffline.tv.ui.catalog.NativeQueuePanel
-import cz.stremiooffline.tv.ui.catalog.VoiceLauncher
-import cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs
 import cz.stremiooffline.tv.ui.catalog.nativeCopyTitle
 import cz.stremiooffline.tv.ui.catalog.nativeQueueTarget
-import cz.stremiooffline.tv.ui.catalog.rememberVoiceSearch
 import cz.stremiooffline.tv.ui.catalog.resolveNativeCopy
-import cz.stremiooffline.tv.ui.catalog.voiceSearchAvailable
 import cz.stremiooffline.tv.ui.catalog.FolderIcon
 import cz.stremiooffline.tv.ui.components.CardRowInset
 import cz.stremiooffline.tv.ui.components.FocusButton
@@ -85,9 +84,7 @@ import cz.stremiooffline.tv.ui.detail.PlayTarget
 import cz.stremiooffline.tv.ui.detail.RemoteDetailData
 import cz.stremiooffline.tv.ui.detail.RemoteDetailScreen
 import cz.stremiooffline.tv.ui.theme.Tokens
-import cz.stremiooffline.tv.ui.search.GlobalSearchResults
-import cz.stremiooffline.tv.ui.search.SourceClass
-import cz.stremiooffline.tv.ui.search.rememberScopedGlobalSearch
+import cz.stremiooffline.tv.ui.search.LibrarySearchScope
 import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -96,7 +93,6 @@ const val TagLibrarySegments = "library_segments"
 const val TagRemoteLoadMore = "remote_load_more"
 const val TagRemoteBreadcrumb = "remote_breadcrumb"
 
-fun remoteFilterTag(key: String): String = "remote_filter_$key"
 fun remoteLibraryTag(id: String): String = "remote_library_$id"
 fun remoteItemTag(id: String): String = "remote_item_$id"
 
@@ -120,11 +116,6 @@ fun RemoteLibraryRoute(
   restoreToken: Int = 0,
   /** False while a detail or the player covers this half, so a hidden Back never pops its stack. */
   backEnabled: Boolean = true,
-  /** Whether a recognizer answers here; the mic button and the remote's mic key follow it. Overrides
-   *  the device check when non-null, which is what a harness passes. */
-  voiceAvailable: Boolean? = null,
-  /** Test seam: answers a mic press without a device. Null asks the platform recognizer. */
-  voiceLauncher: VoiceLauncher? = null,
   /** The destinations this account may copy into, read once when a card's copy action is used;
    *  null keeps the action off. */
   loadDestinations: (suspend () -> List<LibraryDto>)? = null,
@@ -135,8 +126,10 @@ fun RemoteLibraryRoute(
   embedded: Boolean = false,
   /** Whether in-library search runs on the Search everywhere engine. */
   searchEverywhereEnabled: Boolean = false,
-  /** A shared title page opened from a scoped result. */
-  onOpenCatalog: (CatalogDetailArgs) -> Unit = {},
+  /** Opens the section's own search page at the level on screen. */
+  onOpenSearch: (LibrarySearchScope) -> Unit = {},
+  /** Bumped by the shell when Back returns from the search page. */
+  searchReturnToken: Int = 0,
 ) {
   val viewModel = viewModel<RemoteLibraryViewModel>(factory = RemoteLibraryViewModel.factory(api))
   LaunchedEffect(segment) {
@@ -152,7 +145,6 @@ fun RemoteLibraryRoute(
 
   val searchAction = remember { FocusRequester() }
   val searchField = remember { FocusRequester() }
-  val searchGridFocus = remember { FocusRequester() }
   val gridFocus = remember { FocusRequester() }
   val loadMoreFocus = remember { FocusRequester() }
   val errorFocus = remember { FocusRequester() }
@@ -161,33 +153,21 @@ fun RemoteLibraryRoute(
   var query by remember { mutableStateOf("") }
   var committed by remember { mutableStateOf("") }
   var editorOpen by remember { mutableStateOf(false) }
-  val voice = rememberVoiceSearch(
-    voiceAvailable ?: voiceSearchAvailable(),
-    onVoiceResult = { spoken ->
-      query = spoken
-      committed = spoken
-      editorOpen = false
-      viewModel.search(spoken)
-    },
-    launcher = voiceLauncher,
-  )
   val directory = level as? RemoteLevel.Directory
-  val scopedSearchActive = searchEverywhereEnabled && directory != null && committed.isNotEmpty()
+  val searchAvailable = directory != null
+  val scopeTitle = state.levels.joinToString("  ›  ") { it.title }
+  fun openRemoteSearch() {
+    val current = directory ?: return
+    onOpenSearch(
+      LibrarySearchScope(
+        library = GlobalSearchLibraryDto(current.libraryId, parentId = current.parentId),
+        sources = listOf("remote"),
+        title = scopeTitle,
+      ),
+    )
+  }
   LaunchedEffect(searchEverywhereEnabled) {
     viewModel.setSearchEngine(searchEverywhereEnabled)
-  }
-  val scopedSearch = rememberScopedGlobalSearch(
-    api = api,
-    library = directory?.let {
-      GlobalSearchLibraryDto(it.libraryId, parentId = it.parentId)
-    },
-    sources = setOf(SourceClass.Remote),
-    active = scopedSearchActive,
-    query = committed,
-    polling = backEnabled,
-  )
-  LaunchedEffect(scopedSearch.state.focusAnchor) {
-    if (scopedSearch.state.focusAnchor != null) editorOpen = false
   }
 
   // The card's copy panel: nothing is read for it until the viewer presses Menu or Info on a
@@ -273,13 +253,6 @@ fun RemoteLibraryRoute(
   }
 
   BackHandler(enabled = segment == LibrarySegment.Servers && backEnabled) {
-    if (scopedSearchActive) {
-      committed = ""
-      query = ""
-      editorOpen = false
-      viewModel.search("")
-      return@BackHandler
-    }
     if (viewModel.back()) {
       if (onBackToAll != null && viewModel.state.levels.isEmpty()) onBackToAll()
     } else {
@@ -303,9 +276,24 @@ fun RemoteLibraryRoute(
 
   // A page change focuses the card last used on this level, else the first card; Back restores the
   // card that opened the level because the selection is kept per level rather than cleared.
-  LaunchedEffect(levelKey, items.map { it.id }, state.libraries.map { it.id }, segment, restoreToken, backEnabled) {
+  var consumedSearchReturn by rememberSaveable { mutableIntStateOf(0) }
+  LaunchedEffect(
+    levelKey,
+    items.map { it.id },
+    state.libraries.map { it.id },
+    segment,
+    restoreToken,
+    backEnabled,
+    searchReturnToken,
+  ) {
     // A late row, a hidden half and an open search editor all keep the remote where it is.
-    if (segment != LibrarySegment.Servers || !backEnabled || editorOpen || scopedSearchActive) return@LaunchedEffect
+    if (segment != LibrarySegment.Servers || !backEnabled || editorOpen) return@LaunchedEffect
+    if (searchReturnToken > consumedSearchReturn && searchAvailable) {
+      consumedSearchReturn = searchReturnToken
+      awaitFrame()
+      runCatching { searchAction.requestFocus() }
+      return@LaunchedEffect
+    }
     awaitFrame()
     val remembered = viewModel.selectedFor(levelKey)?.let { requesters[it] }
     val requester = remembered ?: requesters.values.firstOrNull() ?: gridFocus
@@ -324,45 +312,37 @@ fun RemoteLibraryRoute(
       if (level != null) {
         LibraryBreadcrumbLine(state.levels.joinToString("  ›  ") { it.title }, TagRemoteBreadcrumb)
       }
-      // The one compact toolbar of the section: the same search action the files half draws, with the
-      // type chips of this level on the same row.
-      LibraryToolbar(
-        open = editorOpen && (searchEverywhereEnabled || directory != null),
-        query = query,
-        onQuery = { query = it },
-        onOpen = { editorOpen = true; query = committed },
-        onSubmit = {
-          editorOpen = false
-          committed = query
-          viewModel.search(query)
-        },
-        onClose = { editorOpen = false },
-        committed = committed,
-        available = searchEverywhereEnabled || directory != null,
-        openFocus = searchAction,
-        fieldFocus = searchField,
-        downFocus = searchGridFocus.takeIf { scopedSearchActive },
-        voice = voice,
-        trailing = if (directory != null && !scopedSearchActive) {
-          ({ TypeFilterChips(state = directory.state, onFilter = { viewModel.filter(it) }) })
-        } else null,
-      )
+      // The one compact toolbar of the section: the same search action the files half draws, with
+      // this level's type filter at the row's right edge.
+      if (searchEverywhereEnabled) {
+        LibraryToolbar(
+          onSearch = { openRemoteSearch() },
+          available = searchAvailable,
+          openFocus = searchAction,
+          typeFilter = directory?.state?.type,
+          onTypeFilter = { viewModel.filter(it) },
+        )
+      } else {
+        LibrarySearchFallback(
+          open = editorOpen && searchAvailable,
+          query = query,
+          onQuery = { query = it },
+          onOpen = { editorOpen = true; query = committed },
+          onSubmit = {
+            editorOpen = false
+            committed = query
+            viewModel.search(query)
+          },
+          onClose = { editorOpen = false },
+          available = searchAvailable,
+          openFocus = searchAction,
+          fieldFocus = searchField,
+          typeFilter = directory?.state?.type,
+          onTypeFilter = { viewModel.filter(it) },
+        )
+      }
       Box(Modifier.weight(1f).fillMaxWidth()) {
-        if (scopedSearchActive) {
-          GlobalSearchResults(
-            search = scopedSearch,
-            remoteApi = api,
-            onOpenCatalog = onOpenCatalog,
-            onOpenRemote = { data ->
-              onOpenItem(data.libraryId, data.libraryName, data.provider, data.item)
-            },
-            onOpenLibrary = {},
-            imageUrl = imageUrl,
-            gridFocus = searchGridFocus,
-            restoreToken = restoreToken,
-            canonicalTitles = false,
-          )
-        } else if (level == null) {
+        if (level == null) {
           LibraryPicker(state, viewModel, imageUrl, requesters, gridFocus, errorFocus)
         } else {
           ItemBrowser(
@@ -375,6 +355,7 @@ fun RemoteLibraryRoute(
             gridFocus = gridFocus,
             loadMoreFocus = loadMoreFocus,
             errorFocus = errorFocus,
+            firstRowUp = searchAction.takeIf { searchAvailable },
             onMenu = if (loadDestinations != null) { item -> openCardCopy(level.libraryId, item) } else null,
             onOpenItem = onOpenItem,
           )
@@ -664,12 +645,12 @@ internal fun LibrarySegments(segment: LibrarySegment, onAll: () -> Unit, onFiles
 }
 
 @Composable
-private fun SegmentButton(text: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+internal fun SegmentButton(text: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
   var focused by remember { mutableStateOf(false) }
   val shape = RoundedCornerShape(8.dp)
   Surface(
     onClick = onClick,
-    modifier = modifier.onFocusChanged { focused = it.isFocused },
+    modifier = modifier.height(36.dp).onFocusChanged { focused = it.isFocused },
     shape = ClickableSurfaceDefaults.shape(shape = shape),
     scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
     border = ClickableSurfaceDefaults.border(
@@ -803,6 +784,7 @@ private fun ItemBrowser(
   gridFocus: FocusRequester,
   loadMoreFocus: FocusRequester,
   errorFocus: FocusRequester,
+  firstRowUp: FocusRequester? = null,
   onMenu: ((RemoteItemDto) -> Unit)? = null,
   onOpenItem: (libraryId: String, libraryName: String, provider: String, item: RemoteItemDto) -> Unit,
 ) {
@@ -854,6 +836,7 @@ private fun ItemBrowser(
               requesters = requesters,
               gridFocus = gridFocus,
               loadMoreFocus = loadMoreFocus,
+              firstRowUp = firstRowUp,
               onMenu = onMenu,
               onOpen = { item ->
                 // A folder opens one directory level deeper; it is never playable, so it never
@@ -878,6 +861,7 @@ private fun ItemGrid(
   requesters: MutableMap<String, FocusRequester>,
   gridFocus: FocusRequester,
   loadMoreFocus: FocusRequester,
+  firstRowUp: FocusRequester? = null,
   /** Invoked for a playable card when the viewer presses Menu or Info on it; null disables it. */
   onMenu: ((RemoteItemDto) -> Unit)? = null,
   onOpen: (RemoteItemDto) -> Unit,
@@ -902,6 +886,13 @@ private fun ItemGrid(
         }
         val focus = Modifier
           .focusRequester(requester)
+          .then(
+            if (index < columns && firstRowUp != null) {
+              Modifier.focusProperties { up = firstRowUp }
+            } else {
+              Modifier
+            },
+          )
           .onFocusChanged {
             if (it.isFocused) {
               viewModel.select(level.key, item.id)
@@ -1004,38 +995,6 @@ private fun LoadMoreCard(loading: Boolean, onClick: () -> Unit, focus: FocusRequ
       if (loading) TvSpinner(color = Tokens.Accent2)
       Text(stringResource(R.string.media_server_load_more), fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
     }
-  }
-}
-
-@Composable
-private fun TypeFilterChips(state: RemoteItemsState, onFilter: (RemoteTypeFilter) -> Unit) {
-  Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-    TypeChip(stringResource(R.string.media_server_filter_all), state.type == RemoteTypeFilter.All) { onFilter(RemoteTypeFilter.All) }
-    TypeChip(stringResource(R.string.media_server_filter_movies), state.type == RemoteTypeFilter.Movies) { onFilter(RemoteTypeFilter.Movies) }
-    TypeChip(stringResource(R.string.media_server_filter_series), state.type == RemoteTypeFilter.Series) { onFilter(RemoteTypeFilter.Series) }
-  }
-}
-
-@Composable
-private fun TypeChip(text: String, selected: Boolean, onClick: () -> Unit) {
-  val shape = RoundedCornerShape(999.dp)
-  Surface(
-    onClick = onClick,
-    modifier = Modifier.testTag(remoteFilterTag(text)),
-    shape = ClickableSurfaceDefaults.shape(shape = shape),
-    scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
-    border = ClickableSurfaceDefaults.border(
-      border = Border(BorderStroke(1.dp, if (selected) Tokens.Accent else Tokens.Line), shape = shape),
-      focusedBorder = Border(BorderStroke(1.5.dp, Tokens.Accent2), shape = shape),
-    ),
-    colors = ClickableSurfaceDefaults.colors(
-      containerColor = if (selected) Tokens.Accent.copy(alpha = 0.15f) else Tokens.Panel2,
-      contentColor = if (selected) Tokens.Accent2 else Tokens.Muted,
-      focusedContainerColor = Tokens.Panel2,
-      focusedContentColor = Tokens.Text,
-    ),
-  ) {
-    Text(text, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
   }
 }
 

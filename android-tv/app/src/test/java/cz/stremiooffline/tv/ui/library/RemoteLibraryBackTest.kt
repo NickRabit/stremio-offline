@@ -117,7 +117,7 @@ class RemoteLibraryBackTest {
       items = listOf(RemoteItemDto(id = "movie2", name = "Another movie", type = "movie")),
       total = 1,
     )
-    compose.onNodeWithTag(remoteFilterTag("Movies")).performSemanticsAction(SemanticsActions.RequestFocus)
+    compose.onNodeWithTag(TagLibraryTypeFilter).performSemanticsAction(SemanticsActions.RequestFocus)
     compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
     compose.waitForIdle()
     compose.waitUntil(5_000) { api.remoteItemsRequests.size >= 2 }

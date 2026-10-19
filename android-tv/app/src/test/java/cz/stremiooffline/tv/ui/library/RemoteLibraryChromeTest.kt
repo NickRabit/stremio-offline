@@ -11,6 +11,7 @@ import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
@@ -26,13 +27,10 @@ import cz.stremiooffline.tv.data.RemoteProviderIdsDto
 import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.RemoteItemsPageDto
 import cz.stremiooffline.tv.data.RemoteLibraryDto
-import cz.stremiooffline.tv.data.GlobalSearchClusterDto
 import cz.stremiooffline.tv.data.GlobalSearchLibraryDto
-import cz.stremiooffline.tv.data.GlobalSearchSnapshotDto
-import cz.stremiooffline.tv.data.GlobalSearchStartResultDto
 import cz.stremiooffline.tv.ui.FakeTvApi
-import cz.stremiooffline.tv.ui.catalog.VoiceLauncher
 import cz.stremiooffline.tv.ui.detail.RemoteDetailData
+import cz.stremiooffline.tv.ui.search.LibrarySearchScope
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -55,15 +53,6 @@ class RemoteLibraryChromeTest {
 
   private lateinit var scenario: ActivityScenario<ComponentActivity>
   private var host: ComponentActivity? = null
-
-  /** The microphone seam: each press is recorded and answered when the test says so. */
-  private class Voice {
-    val calls = mutableListOf<(String) -> Unit>()
-
-    fun answer(spoken: String) {
-      calls.last()(spoken)
-    }
-  }
 
   @Before
   fun launchHost() {
@@ -89,9 +78,8 @@ class RemoteLibraryChromeTest {
   /** The half on its own, the way the section embeds it, with the section header above it. */
   private fun mountEmbedded(
     api: FakeTvApi,
-    voiceAvailable: Boolean? = null,
-    voiceLauncher: VoiceLauncher? = null,
     searchEverywhereEnabled: Boolean = false,
+    onOpenSearch: (LibrarySearchScope) -> Unit = {},
   ) {
     scenario.onActivity { activity ->
       host = activity
@@ -101,8 +89,7 @@ class RemoteLibraryChromeTest {
           onOpenDetail = {},
           searchEverywhereEnabled = searchEverywhereEnabled,
           pendingDelayMs = 10L,
-          voiceAvailable = voiceAvailable,
-          voiceLauncher = voiceLauncher,
+          onOpenSearch = onOpenSearch,
         )
       }
     }
@@ -112,38 +99,6 @@ class RemoteLibraryChromeTest {
     compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
     compose.waitForIdle()
     compose.mainClock.advanceTimeBy(200)
-    compose.waitForIdle()
-  }
-
-  private fun searchResult(api: FakeTvApi) {
-    api.globalStartHandler = {
-      GlobalSearchStartResultDto(
-        id = "gs",
-        snapshot = GlobalSearchSnapshotDto(
-          revision = 1,
-          state = "complete",
-          clusters = listOf(
-            GlobalSearchClusterDto(
-              key = "one",
-              kind = "folder",
-              title = "Casting",
-              memberCount = 1,
-              primaryMemberKey = "m1",
-              memberKeys = listOf("m1"),
-            ),
-          ),
-        ),
-      )
-    }
-  }
-
-  private fun submitSearch(query: String) {
-    focusOn(TagLibrarySearchAction)
-    press(Key.DirectionCenter)
-    compose.onNodeWithTag(TagLibrarySearchInput).performTextInput(query)
-    compose.onNodeWithTag(TagLibrarySearchInput).performImeAction()
-    compose.waitForIdle()
-    compose.mainClock.advanceTimeBy(100)
     compose.waitForIdle()
   }
 
@@ -205,11 +160,10 @@ class RemoteLibraryChromeTest {
     // One path line, the library's name, and no repeated level title beside it.
     compose.onNodeWithTag(TagRemoteBreadcrumb).assert(hasText("Server"))
     compose.onNodeWithText("Server").assertExists()
-    // The type chips and the search live in the one compact toolbar row.
+    // The type button and the search live in the one compact toolbar row.
     compose.onNodeWithTag(TagLibraryToolbar).assertExists()
-    // The switch's own All button is on the same screen, so the chip is named by its tag.
-    compose.onNodeWithTag(remoteFilterTag(ApplicationProvider.getApplicationContext<android.content.Context>().getString(R.string.media_server_filter_all)))
-      .assertExists()
+    compose.onNodeWithTag(TagLibraryTypeFilter)
+      .assert(hasText(ApplicationProvider.getApplicationContext<android.content.Context>().getString(R.string.tv_library_type_all)))
 
     compose.onNodeWithTag(TagLibrarySearchField).assertDoesNotExist()
     focusOn(TagLibrarySearchAction)
@@ -225,9 +179,9 @@ class RemoteLibraryChromeTest {
     compose.waitForIdle()
 
     assertEquals("Shows", api.remoteBrowseRequests.last().search)
-    // The committed query stays on the closed action so the narrowing is never invisible.
+    // The action keeps the Catalog chip's own label; the narrowing lives in the level.
     compose.onNodeWithTag(TagLibrarySearchField).assertDoesNotExist()
-    compose.onNodeWithTag(TagLibrarySearchAction).assert(hasText("Shows"))
+    compose.onNodeWithTag(TagLibrarySearchAction).assert(hasText("Search"))
     assertEquals(1, api.remoteBrowseRequests.count { it.search == "Shows" })
   }
 
@@ -279,8 +233,8 @@ class RemoteLibraryChromeTest {
     compose.mainClock.advanceTimeBy(200)
     compose.waitForIdle()
 
-    // Back lands on the parent's own narrowed list, its search still committed and named.
-    compose.onNodeWithTag(TagLibrarySearchAction).assert(hasText("Shows"))
+    // Back lands on the parent's own narrowed list.
+    compose.onNodeWithTag(TagLibrarySearchAction).assert(hasText("Search"))
     compose.onNodeWithTag(remoteItemTag("f1")).assertExists()
   }
 
@@ -316,50 +270,18 @@ class RemoteLibraryChromeTest {
   }
 
   @Test
-  fun `the mic submits what it heard on the level`() {
-    val voice = Voice()
+  fun `the library toolbar draws no mic`() {
     val api = api()
-    mountEmbedded(api, voiceAvailable = true, voiceLauncher = { onResult -> voice.calls += onResult })
+    mountEmbedded(api)
     openLibrary(api)
 
-    // While the search action is closed the mic already follows it.
-    compose.onNodeWithTag(TagLibrarySearchVoice).assertExists()
-    focusOn(TagLibrarySearchAction)
-    press(Key.DirectionCenter)
-    compose.onNodeWithTag(TagLibrarySearchField).assertIsFocused()
-    compose.onNodeWithTag(TagLibrarySearchVoice).assertExists()
-
-    focusOn(TagLibrarySearchVoice)
-    press(Key.DirectionCenter)
-    assertEquals(1, voice.calls.size)
-    voice.answer("matrix")
-    compose.waitForIdle()
-    compose.mainClock.advanceTimeBy(200)
-    compose.waitForIdle()
-
-    // The spoken phrase becomes the query and is submitted exactly as a typed one.
-    assertEquals("matrix", api.remoteBrowseRequests.last().search)
-    compose.onNodeWithTag(TagLibrarySearchField).assertDoesNotExist()
-    compose.onNodeWithTag(TagLibrarySearchAction).assert(hasText("matrix"))
-  }
-
-  @Test
-  fun `without a recognizer the search row draws no mic`() {
-    val api = api()
-    mountEmbedded(api, voiceAvailable = false)
-    openLibrary(api)
-
-    compose.onNodeWithTag(TagLibrarySearchVoice).assertDoesNotExist()
-    focusOn(TagLibrarySearchAction)
-    press(Key.DirectionCenter)
-    compose.onNodeWithTag(TagLibrarySearchField).assertIsFocused()
-    compose.onNodeWithTag(TagLibrarySearchVoice).assertDoesNotExist()
+    compose.onNodeWithContentDescription("Voice search").assertDoesNotExist()
   }
 
   @Test
   fun `the field and the submit button share their bottom edge`() {
     val api = api()
-    mountEmbedded(api, voiceAvailable = false)
+    mountEmbedded(api)
     openLibrary(api)
     focusOn(TagLibrarySearchAction)
     press(Key.DirectionCenter)
@@ -376,35 +298,67 @@ class RemoteLibraryChromeTest {
   @Test
   fun `a remote search at the library root sends the library without a parent`() {
     val api = api()
-    searchResult(api)
-    mountEmbedded(api, searchEverywhereEnabled = true)
+    val opened = mutableListOf<LibrarySearchScope>()
+    mountEmbedded(api, searchEverywhereEnabled = true, onOpenSearch = { scope -> opened += scope })
     openLibrary(api)
 
-    submitSearch("casting")
+    compose.onNodeWithTag(TagLibrarySearchField).assertDoesNotExist()
+    compose.onNodeWithContentDescription("Voice search").assertDoesNotExist()
+    focusOn(TagLibrarySearchAction)
+    press(Key.DirectionCenter)
 
-    val body = api.globalStartCalls.single()
-    assertEquals(GlobalSearchLibraryDto("rlibA"), body.library)
-    assertEquals(listOf("remote"), body.sources)
-    assertTrue(api.remoteBrowseRequests.none { it.search == "casting" })
+    val scope = opened.single()
+    assertEquals(GlobalSearchLibraryDto("rlibA"), scope.library)
+    assertEquals(listOf("remote"), scope.sources)
+    assertEquals("Server", scope.title)
   }
 
   @Test
   fun `a remote folder search sends the folder parent id`() {
     val api = api()
-    searchResult(api)
-    mountEmbedded(api, searchEverywhereEnabled = true)
+    val opened = mutableListOf<LibrarySearchScope>()
+    mountEmbedded(api, searchEverywhereEnabled = true, onOpenSearch = { scope -> opened += scope })
     openLibrary(api)
     compose.onNodeWithTag(remoteItemTag("f1")).performKeyInput { pressKey(Key.DirectionCenter) }
     compose.waitForIdle()
     compose.mainClock.advanceTimeBy(200)
     compose.waitForIdle()
 
-    submitSearch("casting")
+    focusOn(TagLibrarySearchAction)
+    press(Key.DirectionCenter)
 
-    assertEquals(
-      GlobalSearchLibraryDto("rlibA", parentId = "f1"),
-      api.globalStartCalls.single().library,
-    )
-    assertTrue(api.remoteBrowseRequests.none { it.search == "casting" })
+    assertEquals(GlobalSearchLibraryDto("rlibA", parentId = "f1"), opened.single().library)
+    assertEquals(listOf("remote"), opened.single().sources)
+    assertEquals("Server  ›  Shows", opened.single().title)
+  }
+
+  @Test
+  fun `the type button cycles all movies series and back`() {
+    val api = api()
+    mountEmbedded(api, searchEverywhereEnabled = true)
+    openLibrary(api)
+    val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+
+    compose.onNodeWithTag(TagLibraryTypeFilter).assert(hasText(context.getString(R.string.tv_library_type_all)))
+    compose.onNodeWithText("Movies").assertDoesNotExist()
+
+    focusOn(TagLibraryTypeFilter)
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { api.remoteBrowseRequests.any { it.type == "movie" } }
+    compose.onNodeWithTag(TagLibraryTypeFilter).assert(hasText(context.getString(R.string.tv_library_type_movies)))
+
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) { api.remoteBrowseRequests.any { it.type == "series" } }
+    compose.onNodeWithTag(TagLibraryTypeFilter).assert(hasText(context.getString(R.string.tv_library_type_series)))
+
+    press(Key.DirectionCenter)
+    compose.waitUntil(5_000) {
+      api.remoteBrowseRequests.lastOrNull()?.type == null &&
+        api.remoteBrowseRequests.count { it.type == null } >= 2
+    }
+    compose.onNodeWithTag(TagLibraryTypeFilter).assert(hasText(context.getString(R.string.tv_library_type_all)))
+    focusOn(TagLibraryTypeFilter)
+    press(Key.DirectionLeft)
+    compose.onNodeWithTag(TagLibrarySearchAction).assertIsFocused()
   }
 }
