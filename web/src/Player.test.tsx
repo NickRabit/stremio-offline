@@ -546,3 +546,48 @@ describe("Player stall advice", () => {
     expect(hint()).not.toBeNull();
   });
 });
+
+describe("Player refused direct stream", () => {
+  let escalations: string[];
+  beforeEach(() => {
+    escalations = [];
+    // Safari plays the escalated HLS natively.
+    const native = HTMLMediaElement.prototype.canPlayType;
+    HTMLMediaElement.prototype.canPlayType = (type: string) => /mpegurl/i.test(type) ? "maybe" : "";
+    const base = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input), "http://localhost").pathname;
+      if (/^\/api\/playback\/[^/]+\/escalate$/.test(path)) {
+        escalations.push(path);
+        return Promise.resolve(json({ ...session(), mode: "transcode", url: "/api/playback/sess1/2/master.m3u8" }));
+      }
+      return base(input, init);
+    }));
+    return () => { HTMLMediaElement.prototype.canPlayType = native; };
+  });
+  /** Safari's answer to HEVC under hev1: code 4 with no message. */
+  const refuse = async (code = 4) => {
+    const video = host.querySelector("video")!;
+    Object.defineProperty(video, "error", { configurable: true, get: () => ({ code, message: "" }) });
+    await act(async () => { video.dispatchEvent(new Event("error")); });
+    await flush();
+  };
+
+  it("asks for a conversion once instead of giving up, and gives up when that is refused too", async () => {
+    await render();
+    await refuse();
+    expect(escalations).toEqual(["/api/playback/sess1/escalate"]);
+    expect(host.querySelector(".player-error")).toBeNull();
+    await refuse();
+    expect(escalations).toHaveLength(1);
+    expect(host.querySelector(".player-error")?.textContent).toBe("The browser could not play this stream.");
+  });
+
+  it("gives up at once on a direct stream that already played", async () => {
+    await render();
+    await act(async () => { host.querySelector("video")!.dispatchEvent(new Event("playing")); });
+    await refuse();
+    expect(escalations).toEqual([]);
+    expect(host.querySelector(".player-error")?.textContent).toBe("The browser could not play this stream.");
+  });
+});

@@ -4,7 +4,7 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { dolbyVisionProfile, hasDolbyVisionEnhancementLayer, looksUnreachable, pickVariant, playlistArgsFrom, probe } from "./probe.js";
+import { codecTag, dolbyVisionProfile, hasDolbyVisionEnhancementLayer, looksUnreachable, pickVariant, playlistArgsFrom, probe } from "./probe.js";
 
 test("the picky segment options are passed only to a build that has them", () => {
   assert.deepEqual(
@@ -79,7 +79,7 @@ setTimeout(() => {
   write(deep ? "deep-done" : "fast-done");
   process.stdout.write(JSON.stringify(deep
     ? { format: { format_name: "matroska", duration: "120" }, streams: [
-        { index: 0, codec_type: "video", codec_name: "h264" },
+        { index: 0, codec_type: "video", codec_name: "hevc", codec_tag_string: "hev1" },
         { index: 1, codec_type: "audio", codec_name: "aac" }] }
     : { format: { format_name: "matroska" }, streams: [{ index: 0, codec_type: "video", codec_name: "h264" }] }));
   process.exit(0);
@@ -148,4 +148,14 @@ test("an abort during the deep probe stops the deep round", { skip: process.plat
   await assert.rejects(pending, abortError);
   await pause(100);
   assert.deepEqual(calls(), ["fast", "fast-done", "deep"], "the deep probe was started and then cancelled");
+});
+
+test("the video codec tag is kept, a missing fourcc is not", { skip: process.platform === "win32" ? "The executable fixture requires a POSIX shebang." : false }, async (t) => {
+  await fakeFfprobe(t);
+  const info = await probe("https://cdn.example/movie.mp4");
+  assert.equal(info?.video?.codec, "hevc");
+  assert.equal(info?.video?.codecTag, "hev1");
+  assert.equal(codecTag("hvc1"), "hvc1");
+  assert.equal(codecTag("[0][0][0][0]"), undefined);
+  assert.equal(codecTag(undefined), undefined);
 });
