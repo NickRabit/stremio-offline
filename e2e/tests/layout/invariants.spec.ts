@@ -27,6 +27,13 @@ const openSeries = async (page: Page) => {
   return page.locator(".detail-panel");
 };
 
+const smallFields = (page: Page) => page.evaluate(() =>
+  [...document.querySelectorAll<HTMLElement>("input, select, textarea")]
+    .filter((field) => !["checkbox", "radio", "range", "file", "color", "hidden"].includes((field as HTMLInputElement).type))
+    .filter((field) => field.getClientRects().length > 0)
+    .filter((field) => parseFloat(getComputedStyle(field).fontSize) < 16)
+    .map((field) => `${field.tagName.toLowerCase()}[${field.getAttribute("aria-label") ?? (field as HTMLInputElement).placeholder ?? field.className}] ${getComputedStyle(field).fontSize}`));
+
 const apiFollows = (request: APIRequestContext) =>
   request.get("/api/follows").then((response) => response.json() as Promise<{ follows: Array<{ id: string }> }>)
     .then((body) => body.follows ?? []);
@@ -58,6 +65,67 @@ const horizontalOverflow = (page: Page) => page.evaluate(() => {
 });
 
 test.describe("layout invariants", () => {
+  test("fields are large enough that a phone does not zoom into them", async ({ page }) => {
+    await page.goto("/");
+    test.skip(!(await page.evaluate(() => matchMedia("(pointer:coarse)").matches)), "only touch devices zoom into small fields");
+
+    for (const view of VIEWS) {
+      await openView(page, view);
+      expect(await smallFields(page), `${view} fields`).toEqual([]);
+    }
+
+    await openView(page, "Knihovna");
+    const fixtureLibrary = page.getByRole("button", { name: /^downloads\b.*Otevřít složku/ });
+    if (await fixtureLibrary.count()) await fixtureLibrary.click();
+    await expect(page.getByRole("textbox", { name: "Filtrovat knihovnu" })).toBeVisible();
+    expect(await smallFields(page), "Library").toEqual([]);
+
+    await openView(page, "Stahování");
+    await page.getByText("Filtry a řazení", { exact: true }).click();
+    await expect(page.getByLabel("Hledat název nebo cestu")).toBeVisible();
+    expect(await smallFields(page), "Downloads filters").toEqual([]);
+
+    await openView(page, "Nastavení");
+    for (const tab of await page.getByRole("tab").allTextContents()) {
+      await page.getByRole("tab", { name: tab, exact: true }).click();
+      await expect(page.getByRole("tab", { name: tab, exact: true })).toHaveAttribute("aria-selected", "true");
+      expect(await smallFields(page), `Settings ${tab}`).toEqual([]);
+    }
+
+    await page.getByRole("tab", { name: "Knihovny", exact: true }).click();
+    const libraryManager = page.locator(".library-manager-section");
+    await libraryManager.getByRole("button", { name: "Upravit knihovnu", exact: true }).first().click();
+    const libraryEdit = page.getByRole("dialog", { name: "Upravit knihovnu" });
+    await expect(libraryEdit.getByLabel("Název", { exact: true })).toBeVisible();
+    await expect(libraryEdit.getByLabel("Typ", { exact: true })).toBeVisible();
+    expect(await smallFields(page), "Library edit dialog").toEqual([]);
+    await libraryEdit.getByRole("button", { name: "Zrušit", exact: true }).click();
+    await expect(libraryEdit).toHaveCount(0);
+
+    await libraryManager.getByRole("button", { name: "Přidat knihovnu", exact: true }).click();
+    const libraryPicker = page.getByRole("dialog", { name: "Vyberte složku" });
+    await expect(libraryPicker.getByLabel("Název", { exact: true })).toBeVisible();
+    await expect(libraryPicker.getByLabel("Typ", { exact: true })).toBeVisible();
+    await expect(libraryPicker.getByLabel("Filtrovat složky", { exact: true })).toBeVisible();
+    await libraryPicker.getByText("Moje složka tu není", { exact: true }).click();
+    await expect(libraryPicker.getByLabel("Povolit tuto složku", { exact: true })).toBeVisible();
+    expect(await smallFields(page), "Library picker").toEqual([]);
+    await libraryPicker.getByRole("button", { name: "Zrušit", exact: true }).click();
+    await expect(libraryPicker).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Připojit server", exact: true }).click();
+    const server = page.getByRole("dialog", { name: "Připojit server" });
+    await expect(server).toBeVisible();
+    expect(await smallFields(page), "Connect media server form").toEqual([]);
+    await server.getByRole("button", { name: "Zavřít", exact: true }).click();
+    await expect(server).toHaveCount(0);
+
+    await openView(page, "Katalog");
+    await page.getByRole("button", { name: "Hledat", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Hledat všude" })).toBeVisible();
+    expect(await smallFields(page), "global search").toEqual([]);
+  });
+
   for (const view of VIEWS) {
     test(`${view} does not scroll sideways`, async ({ page }) => {
       await openView(page, view);
