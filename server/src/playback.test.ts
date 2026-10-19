@@ -1165,6 +1165,18 @@ test("incompatible codecs, HLS and notWebReady still force a conversion", () => 
   assert.equal(manager.directPlay({ url: "https://cdn.example/a.avi" }, avi, playCaps).ok, false);
 });
 
+test("hevc tagged hev1 is remuxed for the browser, hvc1 or untagged plays directly", () => {
+  const manager = new PlaybackManager(tmp("test-playback")) as any;
+  const mp4 = (codecTag?: string) => ({ container: "mov,mp4,m4a,3gp,3g2,mj2", video: { codec: "hevc", codecTag, profile: "Main", pixelFormat: "yuv420p" }, audio: { codec: "aac" } });
+  const refused = manager.directPlay({ url: "https://cdn.example/a.mp4" }, mp4("hev1"), playCaps);
+  assert.deepEqual(refused, { ok: false, reason: "hevc tagged hev1 needs the hvc1 tag" });
+  assert.equal(manager.directPlay({ url: "https://cdn.example/a.mp4" }, mp4("hvc1"), playCaps).ok, true);
+  assert.equal(manager.directPlay({ url: "https://cdn.example/a.mp4" }, mp4(), playCaps).ok, true);
+  // The remux copies the picture and only rewrites the tag; no real transcode.
+  const session = { capabilities: playCaps, info: mp4("hev1"), quality: null, audioTrack: 0 };
+  assert.equal(manager.plan(session).copyVideo, true);
+});
+
 test("a playable mp4 with a preferred subtitle stays on direct play", async () => {
   const manager = new PlaybackManager(tmp("test-playback-sidecar")) as any;
   manager.inspect = async () => ({

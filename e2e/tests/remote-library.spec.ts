@@ -675,6 +675,11 @@ for (const [width, height] of [[1440, 900], [390, 844], [844, 390]]) {
           hardware: false, acceleration: false, audioTracks: [], subtitleTracks: [], audioTrack: 0, subtitleTrack: null, quality: null } });
       });
       await page.route("**/api/playback/unified-source-player", route => route.fulfill({ status: 204 }));
+      // The fixture file may be refused by this browser's codecs; the player then asks once for a
+      // conversion of the same session, which is not another start.
+      await page.route("**/api/playback/unified-source-player/escalate", route => route.fulfill({ json: { id: "unified-source-player", mode: "direct",
+        url: "/unified-player.mp4", offset: 0, duration: 600, hardware: false, acceleration: false, audioTracks: [], subtitleTracks: [],
+        audioTrack: 0, subtitleTrack: null, quality: null } }));
       await page.route("**/api/library/source", route => {
         const body = route.request().postDataJSON() as { path: string };
         devicePaths.push(body.path);

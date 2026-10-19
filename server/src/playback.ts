@@ -1023,6 +1023,8 @@ export class PlaybackManager {
       if (!(video === "h264" || (video === "hevc" && hevcPlayable(info.video, caps)))) {
         return { ok: false, reason: `client cannot play video codec ${video || "unknown"}${info.video.profile ? ` (${info.video.profile})` : ""}` };
       }
+      // Safari refuses HEVC under the hev1 tag (code 4); the copy route rewrites it to hvc1.
+      if (video === "hevc" && info.video.codecTag === "hev1") return { ok: false, reason: "hevc tagged hev1 needs the hvc1 tag" };
       if (audio && audio !== "aac" && audio !== "mp3") return { ok: false, reason: `audio codec ${audio} is not playable in mp4` };
       return { ok: true, reason: "container and codecs are playable as they are" };
     }

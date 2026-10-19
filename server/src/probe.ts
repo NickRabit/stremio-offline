@@ -22,7 +22,7 @@ export interface MediaInfo {
   duration?: number;
   /** The whole file's bitrate in bits per second, picture and sound together. */
   bitrate?: number;
-  video?: { codec: string; width?: number; height?: number; profile?: string; pixelFormat?: string; dolbyVisionProfile?: number; dolbyVisionEnhancementLayer?: boolean };
+  video?: { codec: string; codecTag?: string; width?: number; height?: number; profile?: string; pixelFormat?: string; dolbyVisionProfile?: number; dolbyVisionEnhancementLayer?: boolean };
   audio?: { codec: string; channels?: number };
   audioTracks: Track[];
   subtitleTracks: Track[];
@@ -35,6 +35,7 @@ interface ProbeStream {
   index?: number;
   codec_type?: string;
   codec_name?: string;
+  codec_tag_string?: string;
   profile?: string;
   pix_fmt?: string;
   width?: number;
@@ -151,6 +152,9 @@ export async function probe(input: string, signal?: AbortSignal): Promise<MediaI
   return deep.info ?? fast.info;
 }
 
+/** Matroska and other containers without a fourcc report "[0][0][0][0]", which is no tag at all. */
+export const codecTag = (value?: string) => value && !value.startsWith("[") ? value : undefined;
+
 export const looksUnreachable = (stderr: string) => UNREACHABLE.test(stderr);
 
 async function inspect(input: string, limits: string[], timeout: number, stage: string, signal?: AbortSignal): Promise<Inspection> {
@@ -181,6 +185,7 @@ async function inspect(input: string, limits: string[], timeout: number, stage: 
         bitrate: Number.isFinite(bitrate) && bitrate > 0 ? bitrate : undefined,
         video: video?.codec_name ? {
           codec: video.codec_name,
+          codecTag: codecTag(video.codec_tag_string),
           width: video.width,
           height: video.height,
           profile: video.profile,

@@ -333,6 +333,9 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
    * every few seconds and flood the log with the same error until the window is closed. */
   const abandonedRef = useRef(false);
   const escalateRef = useRef(false);
+  /** A direct stream the element refused before a single frame played gets one escalated session. */
+  const playedRef = useRef(false);
+  const directRefusedRef = useRef(false);
   const [sidecarReady, setSidecarReady] = useState(false);
   // The reader is still working through the film, so the track is attached again
   // whenever the picture is about to catch up with the cues it already has.
@@ -629,7 +632,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     timeRef.current = 0; offsetRef.current = 0; probeDurationRef.current = 0; seekingRef.current = false; pendingSeekRef.current = null;
     reportRef.current = { position: 0, duration: 0 }; setResumedFrom(0);
     stallsRef.current = []; setQualityHint(null); setDownloadState("idle");
-    decodeRecoversRef.current = []; abandonedRef.current = false; escalateRef.current = false; setSidecarReady(false); setSidecarPass(0); setSubtitleDelay(0);
+    decodeRecoversRef.current = []; abandonedRef.current = false; escalateRef.current = false; playedRef.current = false; directRefusedRef.current = false; setSidecarReady(false); setSidecarPass(0); setSubtitleDelay(0);
     setSubtitlesHidden(false); subtitlesHiddenRef.current = false;
     // Resuming: the server knows the position and starts playback right there. A start-over
     // never reads the store and never writes to it -- the saved position simply stays.
@@ -1334,7 +1337,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
           if (scrub === null && !seekingRef.current) showTime(absolute);
         }}
         onDurationChange={(event) => { const value = event.currentTarget.duration; if (Number.isFinite(value) && modeRef.current === "direct") setDuration(value); }}
-        onWaiting={noteStall} onPlaying={clearBuffering}
+        onWaiting={noteStall} onPlaying={() => { playedRef.current = true; clearBuffering(); }}
         onError={(event) => {
           if (event.target !== event.currentTarget) return;
           if (seekInFlightRef.current || abandonedRef.current) return;
@@ -1350,6 +1353,15 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
           });
           if (media?.code === 3) {
             recoverFromDecodeRef.current("element");
+            return;
+          }
+          // The probe can say a file is playable as it is while the browser still refuses it
+          // (Safari and HEVC under hev1); a conversion of it may still play.
+          if (media?.code === 4 && modeRef.current === "direct" && !playedRef.current && !directRefusedRef.current) {
+            directRefusedRef.current = true;
+            escalateRef.current = true;
+            report("WARN", "Direct play refused before it started, asking for a conversion", context());
+            void seekTo(timeRef.current, true);
             return;
           }
           abandon(t("player.browserRefused"));
