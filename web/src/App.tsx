@@ -49,6 +49,7 @@ import { FavoritesView } from "./FavoritesView";
 import { CatalogueTitleDetail, catalogueStreamId, type CatalogueDetailTarget } from "./CatalogueTitleDetail";
 import { Downloads } from "./DownloadsPage";
 import { Home } from "./Home";
+import { clearHomeCache } from "./home-cache";
 import { SearchEverywhere } from "./SearchEverywhere";
 import { useSearchEverywhere } from "./useSearchEverywhere";
 import { CatalogSearchStartNotFound, catalogSearchHasMore, catalogSearchSession, newCatalogSearchSlot, runCatalogSearch, type CatalogSearchCursor } from "./catalog-search-session";
@@ -1228,7 +1229,7 @@ export function App() {
     return next;
   });
   /** The top bar and the More menu sign out through the same call. */
-  const signOut = async () => { try { await api.logout(); } finally { location.reload(); } };
+  const signOut = async () => { try { clearHomeCache(); await api.logout(); } finally { location.reload(); } };
 
   const refresh = async (selectFirst = false) => {
     const [nextAddons, nextCatalogs] = await Promise.all([api.addons(), api.catalogs()]); setAddons(nextAddons); setCatalogs(nextCatalogs);

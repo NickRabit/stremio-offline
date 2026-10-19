@@ -64,10 +64,49 @@ export function Home({ jobs, addons, admin, onShowDownloads, onAction, rows, ord
 }) {
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
   const shuffleCount = useRef<Record<string, number>>({});
-  // Stable per row, so a shelf's observer is not torn down and rebuilt on every render.
-  const visibleCallbacks = useRef(new Map<HomeRowId, () => void>());
-  const latestVisible = useRef(onVisible);
-  latestVisible.current = onVisible;
+  const latest = useRef({
+    onShowDownloads, onAction, onRetry, onShowAll, onPlay, onOpenCatalogue, onShuffle,
+    onVisible, onOpenCatalog, onReveal, onForgotten, onError,
+  });
+  latest.current = {
+    onShowDownloads, onAction, onRetry, onShowAll, onPlay, onOpenCatalogue, onShuffle,
+    onVisible, onOpenCatalog, onReveal, onForgotten, onError,
+  };
+  // Stable per row, so a shelf's observer and cards are not rebuilt on every render.
+  const rowCallbacks = useRef(new Map<HomeRowId, { shuffle: () => void; visible: () => void; open: () => void }>());
+  const actions = useRef<HomeCardActions>({
+    play: (card) => latest.current.onPlay(card),
+    open: (card) => latest.current.onOpenCatalogue(card),
+    reveal: (path) => latest.current.onReveal(path),
+    forget: (card) => {
+      if (card.kind === "remote") {
+        if (!window.confirm(t("home.forgetConfirm", { title: card.title }))) return;
+        // Forgetting a remote card clears its position only; the favourite and watched flags stay.
+        void api.saveRemoteState(card.libraryId, card.itemId, { position: 0, duration: 0 }).then(latest.current.onForgotten, latest.current.onError);
+        return;
+      }
+      if (card.kind !== "resume-file" && card.kind !== "resume-catalogue") return;
+      if (!window.confirm(t("home.forgetConfirm", { title: card.title }))) return;
+      void api.forgetManyProgress(card.forgetKeys).then(latest.current.onForgotten, latest.current.onError);
+    },
+  }).current;
+  const retry = useRef((row: HomeRowId) => latest.current.onRetry(row)).current;
+  const showAll = useRef((target: ShowAllTarget) => latest.current.onShowAll(target)).current;
+  const callbacksOf = (row: HomeRowId) => {
+    let callbacks = rowCallbacks.current.get(row);
+    if (!callbacks) {
+      callbacks = {
+        shuffle: () => {
+          shuffleCount.current[row] = (shuffleCount.current[row] ?? 0) + 1;
+          latest.current.onShuffle(row, shuffleCount.current[row]!);
+        },
+        visible: () => latest.current.onVisible?.(row),
+        open: () => latest.current.onOpenCatalog?.(row),
+      };
+      rowCallbacks.current.set(row, callbacks);
+    }
+    return callbacks;
+  };
   const catalogTitles = new Map(homeCatalogShelves(addons).map((shelf) => [shelf.id, homeFeedTitle(shelf.id, shelf.title)]));
   for (const entry of order ?? []) if (entry.title) catalogTitles.set(entry.id, homeFeedTitle(entry.id, entry.title));
   const askedRows = order?.length ? order.map((entry) => entry.id) : homeRowsFor(admin, addons);
@@ -94,41 +133,22 @@ export function Home({ jobs, addons, admin, onShowDownloads, onAction, rows, ord
   if (!items.length && homeAllRowsEmpty(rows, askedRows)) return <>{heading}{confirmError}<Empty icon={<DownloadIcon/>} title={t("home.emptyTitle")} text={t("home.emptyText")}/></>;
 
   const run = (job: Download, action: ReturnType<typeof queueAction>) => {
-    if (action === "open") { onShowDownloads(); return; }
+    if (action === "open") { latest.current.onShowDownloads(); return; }
     setBusy((current) => new Set(current).add(job.id));
-    void onAction(job, action)
+    void latest.current.onAction(job, action)
       .catch(() => undefined)
       .finally(() => setBusy((current) => { const next = new Set(current); next.delete(job.id); return next; }));
   };
-
-  const forget = (card: HomeCard) => {
-    if (card.kind === "remote") {
-      if (!window.confirm(t("home.forgetConfirm", { title: card.title }))) return;
-      // Forgetting a remote card clears its position only; the favourite and watched flags stay.
-      void api.saveRemoteState(card.libraryId, card.itemId, { position: 0, duration: 0 }).then(onForgotten, onError);
-      return;
-    }
-    if (card.kind !== "resume-file" && card.kind !== "resume-catalogue") return;
-    if (!window.confirm(t("home.forgetConfirm", { title: card.title }))) return;
-    void api.forgetManyProgress(card.forgetKeys).then(onForgotten, onError);
-  };
-  const actions: HomeCardActions = { play: onPlay, open: onOpenCatalogue, reveal: onReveal, forget };
-  const visibleOf = (row: HomeRowId) => {
-    let callback = visibleCallbacks.current.get(row);
-    if (!callback) { callback = () => latestVisible.current?.(row); visibleCallbacks.current.set(row, callback); }
-    return callback;
-  };
-  const shuffle = (row: HomeRowId) => { shuffleCount.current[row] = (shuffleCount.current[row] ?? 0) + 1; onShuffle(row, shuffleCount.current[row]!); };
 
   const summary = [t("home.downloadsSummary", { count: items.length }), attention > 0 ? t("home.attention", { count: attention }) : ""].filter(Boolean).join(" · ");
   return <>
     {heading}
     {confirmError}
-    {askedRows.filter((row) => row !== "confirm").map((row) => <HomeShelf key={row} row={row} title={catalogTitles.get(row)} state={rows[row]} shape={shape} actions={actions} onRetry={onRetry} onShowAll={onShowAll} onShuffle={row === "tonight" || isHomeCatalogRow(row) ? () => shuffle(row) : undefined} onVisible={onVisible && isHomeCatalogRow(row) ? visibleOf(row) : undefined} onOpenCatalog={onOpenCatalog && isHomeCatalogRow(row) ? () => onOpenCatalog(row) : undefined}/>)}
+    {askedRows.filter((row) => row !== "confirm").map((row) => <HomeShelf key={row} row={row} title={catalogTitles.get(row)} state={rows[row]} shape={shape} actions={actions} onRetry={retry} onShowAll={showAll} onShuffle={row === "tonight" || isHomeCatalogRow(row) ? callbacksOf(row).shuffle : undefined} onVisible={onVisible && isHomeCatalogRow(row) ? callbacksOf(row).visible : undefined} onOpenCatalog={onOpenCatalog && isHomeCatalogRow(row) ? callbacksOf(row).open : undefined}/>)}
     {items.length > 0 && <section className="home-row">
       <div className="subhead">
         <div className="home-head"><h3>{t("home.downloads")}</h3><span className="count">{summary}</span></div>
-        <button className="resume-show-all" onClick={onShowDownloads}>{t("library.showAll")}<ChevronRight/></button>
+        <button className="resume-show-all" onClick={() => latest.current.onShowDownloads()}>{t("library.showAll")}<ChevronRight/></button>
       </div>
       {cards.length > 0 && <div className="hq">
         {cards.map((job) => {
@@ -136,7 +156,7 @@ export function Home({ jobs, addons, admin, onShowDownloads, onAction, rows, ord
           const action = queueAction(job);
           const percent = percentOf(job);
           return <div className={`hq-card${queueGroup(job) === "attention" ? job.status === "failed" ? " failed" : " attention" : ""}`} key={job.id}>
-            <button className="hq-title" title={job.title} onClick={onShowDownloads}>{job.title}</button>
+            <button className="hq-title" title={job.title} onClick={() => latest.current.onShowDownloads()}>{job.title}</button>
             <div className={`hq-state ${tone}`}>{text}</div>
             <div className={`hq-bar ${tone}`}>{percent != null && <i style={{ width: `${percent}%` }}/>}</div>
             <div className="hq-foot">

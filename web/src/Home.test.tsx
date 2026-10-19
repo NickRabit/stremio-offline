@@ -199,6 +199,11 @@ describe("Home", () => {
     expect(row("resume")!.querySelector(".resume-strip.skeleton")).not.toBeNull();
   });
 
+  it("draws nothing, not a skeleton, while a row that answered empty before refreshes", async () => {
+    await render({ rows: allEmpty({ resume: rowState({ status: "loading", items: [], settled: true }), completed: rowState({ items: [completedCard()] }) }) });
+    expect(row("resume")).toBeNull();
+  });
+
   it("keeps its cards on refresh and marks the row as loading", async () => {
     await render({ rows: allEmpty({ resume: rowState({ status: "loading", items: [resumeFile()] }) }) });
     expect(row("resume")!.querySelectorAll(".home-card")).toHaveLength(1);

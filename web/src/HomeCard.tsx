@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import { Film, FolderOpen, HardDrive, MoreVertical, RotateCcw } from "lucide-react";
 import { TileArt } from "./TileArt";
 import { localeTag, t } from "./i18n";
@@ -39,7 +39,7 @@ const hasPath = (card: HomeCardData): card is Extract<HomeCardData, { path: stri
 
 /** One card on a Home shelf. The artwork and the caption are a single button; the overflow
  *  control is a sibling, so a tap on one never lands on the other. */
-export function HomeCard({ card, shape, actions }: { card: HomeCardData; shape: TileShape; actions: HomeCardActions }) {
+export const HomeCard = memo(function HomeCard({ card, shape, actions }: { card: HomeCardData; shape: TileShape; actions: HomeCardActions }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const percent = cardProgress(card);
   const title = titleOf(card);
@@ -80,4 +80,4 @@ export function HomeCard({ card, shape, actions }: { card: HomeCardData; shape: 
       {(card.kind === "resume-file" || card.kind === "resume-catalogue" || card.kind === "remote") && <button onClick={() => { setMenuOpen(false); actions.forget(card); }}><RotateCcw/> {t("home.forget")}</button>}
     </span>}
   </article>;
-}
+});

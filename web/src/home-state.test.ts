@@ -47,6 +47,14 @@ describe("homeReducer", () => {
     expect(state.resume?.items.map((item) => item.key)).toEqual(["a"]);
   });
 
+  it("remembers that a row answered, so its refresh is told apart from a first load", () => {
+    let state = homeReducer(emptyHomeRows(), { type: "begin", rows: ["resume"], request: 1 });
+    expect(state.resume?.settled).toBe(false);
+    state = homeReducer(state, { type: "answer", rows: ["resume"], request: 1, response: response({ resume: ok([]) }) });
+    state = homeReducer(state, { type: "begin", rows: ["resume"], request: 2 });
+    expect(state.resume).toMatchObject({ status: "loading", items: [], settled: true });
+  });
+
   it("ignores an answer whose request a newer one superseded", () => {
     let state = homeReducer(emptyHomeRows(), { type: "begin", rows: ["resume"], request: 1 });
     state = homeReducer(state, { type: "begin", rows: ["resume"], request: 2 });

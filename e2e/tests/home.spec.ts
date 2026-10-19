@@ -59,3 +59,61 @@ test.describe("compact navigation", () => {
     await expect(more).toHaveClass(/active/);
   });
 });
+
+test.describe("phone Home loading", () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+
+  test("a shelf keeps its height while its cards load", async ({ page }) => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let catalogRequests = 0;
+    await page.route("**/api/home**", async (route) => {
+      const rows = new URL(route.request().url()).searchParams.get("rows") ?? "";
+      if (!rows.includes("catalog:")) return route.continue();
+      catalogRequests += 1;
+      await held;
+      await route.continue();
+    });
+
+    await page.goto("/");
+    await goToView(page, "Domů");
+    const shelf = page.locator(".home-row", { has: page.getByRole("heading", { name: /Filmy/ }) });
+    await expect.poll(() => catalogRequests).toBeGreaterThan(0);
+    const waiting = await shelf.boundingBox();
+    expect(waiting).not.toBeNull();
+
+    release();
+    await expect(shelf.locator(".home-card").first()).toBeVisible();
+    const loaded = await shelf.boundingBox();
+    expect(loaded).not.toBeNull();
+    expect(Math.abs(loaded!.height - waiting!.height)).toBeLessThanOrEqual(1);
+  });
+
+  test("a reload draws the last Home before the server answers", async ({ page, request }) => {
+    expect((await seedFilm(request)).ok()).toBe(true);
+    await page.goto("/");
+    await goToView(page, "Domů");
+    const continueWatching = page.locator(".home-row", { has: page.getByRole("heading", { name: "Pokračovat ve sledování" }) });
+    await expect(continueWatching.locator(".browse-item", { hasText: "Zkušební film" })).toBeVisible();
+    await expect.poll(() => page.evaluate(() => Object.keys(localStorage).some((key) =>
+      key.startsWith("home-cache:") && (localStorage.getItem(key) ?? "").includes("Zkušební film")))).toBe(true);
+
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let requests = 0;
+    await page.route("**/api/home**", async (route) => {
+      requests += 1;
+      await held;
+      await route.continue();
+    });
+
+    try {
+      await page.reload();
+      await goToView(page, "Domů");
+      await expect.poll(() => requests).toBeGreaterThan(0);
+      await expect(continueWatching.locator(".browse-item", { hasText: "Zkušební film" })).toBeVisible();
+    } finally {
+      release();
+    }
+  });
+});
