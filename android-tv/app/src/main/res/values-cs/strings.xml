@@ -34,9 +34,7 @@
   <string name="tv_placeholder_title">Přijde v příští verzi</string>
   <string name="tv_placeholder_action">Zpět domů</string>
   <string name="tv_library_title">Vaše knihovna</string>
-  <string name="tv_library_type_all">Filmy i seriály</string>
-  <string name="tv_library_type_movies">Jen filmy</string>
-  <string name="tv_library_type_series">Jen seriály</string>
+  <string name="tv_library_type_panel">Typ</string>
   <string name="tv_library_search_scope">V knihovně: %1$s</string>
   <string name="tv_library_empty">Zatím tu nic není. Stažené soubory se objeví v této knihovně.</string>
   <string name="tv_library_files">Souborů: %1$s</string>

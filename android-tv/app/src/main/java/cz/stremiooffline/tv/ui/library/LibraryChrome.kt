@@ -1,9 +1,11 @@
 package cz.stremiooffline.tv.ui.library
 
+import cz.stremiooffline.tv.ui.components.leftToNeighbour
+import cz.stremiooffline.tv.ui.catalog.PanelOption
+import cz.stremiooffline.tv.ui.catalog.SidePanel
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
@@ -90,8 +92,8 @@ internal fun LibraryBreadcrumbLine(text: String, tag: String) {
   )
 }
 
-/** The one compact toolbar row: Search opens the library search page, and a remote level's type
- *  filter sits at the row's right edge so it lines up under the section's own tabs. */
+/** The one compact toolbar row, drawn exactly like the Catalog's: the same Search chip first, then a
+ *  remote level's type chip, which opens a side panel the way the Catalog's genre chip does. */
 @Composable
 internal fun LibraryToolbar(
   onSearch: () -> Unit,
@@ -100,9 +102,9 @@ internal fun LibraryToolbar(
   available: Boolean,
   openFocus: FocusRequester,
   typeFilter: RemoteTypeFilter? = null,
-  onTypeFilter: (RemoteTypeFilter) -> Unit = {},
+  typeFocus: FocusRequester = remember { FocusRequester() },
+  onOpenType: () -> Unit = {},
 ) {
-  val typeFocus = remember { FocusRequester() }
   Row(
     modifier = Modifier.fillMaxWidth().testTag(TagLibraryToolbar),
     verticalAlignment = Alignment.CenterVertically,
@@ -111,21 +113,11 @@ internal fun LibraryToolbar(
     if (available) {
       CatalogSearchChip(
         onClick = onSearch,
-        modifier = Modifier
-          .focusRequester(openFocus)
-          .testTag(TagLibrarySearchAction)
-          .focusProperties { if (typeFilter != null) right = typeFocus },
+        modifier = Modifier.focusRequester(openFocus).testTag(TagLibrarySearchAction),
       )
     }
-    Spacer(Modifier.weight(1f))
     if (available && typeFilter != null) {
-      LibraryTypeButton(
-        filter = typeFilter,
-        onFilter = onTypeFilter,
-        modifier = Modifier
-          .focusRequester(typeFocus)
-          .focusProperties { left = openFocus },
-      )
+      LibraryTypeChip(filter = typeFilter, onClick = onOpenType, modifier = Modifier.focusRequester(typeFocus).leftToNeighbour(openFocus))
     }
   }
 }
@@ -146,9 +138,9 @@ internal fun LibrarySearchFallback(
   openFocus: FocusRequester,
   fieldFocus: FocusRequester,
   typeFilter: RemoteTypeFilter? = null,
-  onTypeFilter: (RemoteTypeFilter) -> Unit = {},
+  typeFocus: FocusRequester = remember { FocusRequester() },
+  onOpenType: () -> Unit = {},
 ) {
-  val typeFocus = remember { FocusRequester() }
   BackHandler(enabled = open) { onClose() }
   var wasOpen by remember { mutableStateOf(false) }
   // The opener takes the remote back once the editor and its field are gone; an editor that opens
@@ -190,51 +182,54 @@ internal fun LibrarySearchFallback(
       } else {
         CatalogSearchChip(
           onClick = onOpen,
-          modifier = Modifier
-            .focusRequester(openFocus)
-            .testTag(TagLibrarySearchAction)
-            .focusProperties { if (typeFilter != null) right = typeFocus },
+          modifier = Modifier.focusRequester(openFocus).testTag(TagLibrarySearchAction),
         )
       }
     }
-    Spacer(Modifier.weight(1f))
-    if (available && typeFilter != null) {
-      LibraryTypeButton(
-        filter = typeFilter,
-        onFilter = onTypeFilter,
+    if (available && typeFilter != null && !open) {
+      LibraryTypeChip(filter = typeFilter, onClick = onOpenType, modifier = Modifier.focusRequester(typeFocus).leftToNeighbour(openFocus))
+    }
+  }
+}
+
+/** The type chip: the same button the Catalog's chips are, naming the current choice. */
+@Composable
+private fun LibraryTypeChip(filter: RemoteTypeFilter, onClick: () -> Unit, modifier: Modifier = Modifier) {
+  FocusButton(text = typeFilterLabel(filter), onClick = onClick, modifier = modifier.testTag(TagLibraryTypeFilter))
+}
+
+@Composable
+internal fun typeFilterLabel(filter: RemoteTypeFilter): String = stringResource(
+  when (filter) {
+    RemoteTypeFilter.All -> R.string.media_server_filter_all
+    RemoteTypeFilter.Movies -> R.string.media_server_filter_movies
+    RemoteTypeFilter.Series -> R.string.media_server_filter_series
+  },
+)
+
+/** The type choices in the Catalog's side panel, focus starting on the current one. */
+@Composable
+internal fun LibraryTypePanel(filter: RemoteTypeFilter, onFilter: (RemoteTypeFilter) -> Unit, onClose: () -> Unit) {
+  val entry = remember { FocusRequester() }
+  SidePanel(
+    title = stringResource(R.string.tv_library_type_panel),
+    onClose = onClose,
+    modifier = Modifier.testTag(TagLibraryTypePanel),
+    initialFocus = entry,
+  ) {
+    for (option in RemoteTypeFilter.entries) {
+      PanelOption(
+        text = typeFilterLabel(option),
+        selected = option == filter,
+        onClick = { onFilter(option); onClose() },
         modifier = Modifier
-          .focusRequester(typeFocus)
-          .then(if (open) Modifier else Modifier.focusProperties { left = openFocus }),
+          .testTag(libraryTypeOptionTag(option))
+          .then(if (option == filter) Modifier.focusRequester(entry) else Modifier),
       )
     }
   }
 }
 
-@Composable
-private fun LibraryTypeButton(
-  filter: RemoteTypeFilter,
-  onFilter: (RemoteTypeFilter) -> Unit,
-  modifier: Modifier = Modifier,
-) {
-  SegmentButton(
-    text = typeFilterLabel(filter),
-    selected = filter != RemoteTypeFilter.All,
-    onClick = { onFilter(nextRemoteTypeFilter(filter)) },
-    modifier = modifier.testTag(TagLibraryTypeFilter),
-  )
-}
+internal fun libraryTypeOptionTag(filter: RemoteTypeFilter) = "library_type_option_${filter.name.lowercase()}"
+const val TagLibraryTypePanel = "library_type_panel"
 
-@Composable
-private fun typeFilterLabel(filter: RemoteTypeFilter): String = stringResource(
-  when (filter) {
-    RemoteTypeFilter.All -> R.string.tv_library_type_all
-    RemoteTypeFilter.Movies -> R.string.tv_library_type_movies
-    RemoteTypeFilter.Series -> R.string.tv_library_type_series
-  },
-)
-
-internal fun nextRemoteTypeFilter(filter: RemoteTypeFilter): RemoteTypeFilter = when (filter) {
-  RemoteTypeFilter.All -> RemoteTypeFilter.Movies
-  RemoteTypeFilter.Movies -> RemoteTypeFilter.Series
-  RemoteTypeFilter.Series -> RemoteTypeFilter.All
-}

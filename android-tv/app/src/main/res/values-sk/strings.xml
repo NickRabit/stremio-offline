@@ -34,9 +34,7 @@
   <string name="tv_placeholder_title">Príde v ďalšej verzii</string>
   <string name="tv_placeholder_action">Späť domov</string>
   <string name="tv_library_title">Vaša knižnica</string>
-  <string name="tv_library_type_all">Filmy aj seriály</string>
-  <string name="tv_library_type_movies">Iba filmy</string>
-  <string name="tv_library_type_series">Iba seriály</string>
+  <string name="tv_library_type_panel">Typ</string>
   <string name="tv_library_search_scope">V knižnici: %1$s</string>
   <string name="tv_library_empty">Zatiaľ tu nič nie je. Stiahnuté súbory sa objavia v tejto knižnici.</string>
   <string name="tv_library_files">Súborov: %1$s</string>

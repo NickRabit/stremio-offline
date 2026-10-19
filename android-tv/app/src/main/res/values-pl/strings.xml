@@ -34,9 +34,7 @@
   <string name="tv_placeholder_title">Wkrótce w następnej wersji</string>
   <string name="tv_placeholder_action">Powrót do ekranu głównego</string>
   <string name="tv_library_title">Twoja biblioteka</string>
-  <string name="tv_library_type_all">Filmy i seriale</string>
-  <string name="tv_library_type_movies">Tylko filmy</string>
-  <string name="tv_library_type_series">Tylko seriale</string>
+  <string name="tv_library_type_panel">Typ</string>
   <string name="tv_library_search_scope">W bibliotece: %1$s</string>
   <string name="tv_library_empty">Na razie nic tu nie ma. Pobrane pliki pojawią się w tej bibliotece.</string>
   <string name="tv_library_files">Pliki: %1$s</string>
