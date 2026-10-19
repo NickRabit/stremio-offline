@@ -9,7 +9,7 @@ const delayCatalog = (request: APIRequestContext, catalog: string, ms: number) =
 const openSearch = async (page: Page) => {
   await page.locator(".topbar-search").click();
   await expect(page.locator("main.view-search")).toBeVisible();
-  const box = page.getByRole("searchbox", { name: placeholder });
+  const box = page.getByRole("combobox", { name: placeholder });
   await expect(box).toBeFocused();
   return box;
 };
@@ -33,7 +33,7 @@ test("the top bar and Ctrl+K open Search, while an editable field keeps the shor
   await page.locator("aside.sidebar nav").getByRole("button", { name: "Katalog", exact: true }).click();
   await page.keyboard.press("Control+K");
   await expect(page.locator("main.view-search")).toBeVisible();
-  await expect(page.getByRole("searchbox", { name: placeholder })).toBeFocused();
+  await expect(page.getByRole("combobox", { name: placeholder })).toBeFocused();
 
   await page.locator("aside.sidebar nav").getByRole("button", { name: "Katalog", exact: true }).click();
   const catalogField = page.getByPlaceholder("Hledat ve všech doplňcích naráz…");
@@ -115,11 +115,11 @@ test("a card opens the title page and Back restores the same Search", async ({ p
 
   await page.locator(".browse-head .library-back").click();
   await expect(page.locator("main.view-search")).toBeVisible();
-  await expect(page.getByRole("searchbox", { name: placeholder })).toHaveValue("Zkušební");
+  await expect(page.getByRole("combobox", { name: placeholder })).toHaveValue("Zkušební");
   await expect(page.locator("[data-search-card][title=\"Zkušební film\"]")).toBeVisible();
 });
 
-test("Search remembers a query, offers it on an empty field and drops it on request", async ({ page }) => {
+test("Search remembers a query and drops it under the field the way the Catalog search does", async ({ page }) => {
   await page.goto("/");
   await page.request.delete("/api/search/history");
   try {
@@ -127,23 +127,27 @@ test("Search remembers a query, offers it on an empty field and drops it on requ
     await expect(page.locator("[data-search-card][title=\"Zkušební film\"]")).toBeVisible();
 
     const form = page.locator("form.search-everywhere-form");
-    const box = page.getByRole("searchbox", { name: placeholder });
+    const box = page.getByRole("combobox", { name: placeholder });
+    const list = page.getByRole("listbox", { name: "Návrhy" });
     await form.getByRole("button", { name: "Zrušit" }).click();
     await expect(box).toHaveValue("");
-    const recent = page.getByRole("region", { name: "Nedávná hledání" });
-    await expect(recent.locator(".search-recent-run")).toHaveText(["Zkušební"]);
+    await expect(list).toHaveCount(0);
+    await box.focus();
+    await expect(list.getByRole("option")).toHaveText([/Zkušební/]);
 
-    await recent.getByRole("button", { name: "Zkušební", exact: true }).click();
+    await list.getByRole("option", { name: /Zkušební/ }).click();
     await expect(box).toHaveValue("Zkušební");
+    await expect(list).toHaveCount(0);
     await expect(page.locator("[data-search-card][title=\"Zkušební film\"]")).toBeVisible();
-    await expect(recent).toHaveCount(0);
 
     await form.getByRole("button", { name: "Zrušit" }).click();
-    await recent.getByRole("button", { name: "Odebrat z historie: Zkušební" }).click();
-    await expect(recent).toHaveCount(0);
+    await box.focus();
+    await box.press("ArrowDown");
+    await box.press("Shift+Delete");
+    await expect(list).toHaveCount(0);
     await page.reload();
-    await openSearch(page);
-    await expect(page.locator(".search-recent")).toHaveCount(0);
+    await (await openSearch(page)).focus();
+    await expect(page.locator("#search-all-suggestions")).toHaveCount(0);
   } finally {
     await page.request.delete("/api/search/history");
   }

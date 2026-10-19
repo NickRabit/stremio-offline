@@ -1869,7 +1869,6 @@ export const de: Catalog = {
   "searchAll.title": "Überall suchen",
   "searchAll.placeholder": "Kataloge und Bibliotheken durchsuchen…",
   "searchAll.submit": "Suchen",
-  "searchAll.recent": "Letzte Suchen",
   "searchAll.sourceAll": "Alle",
   "searchAll.sourceCatalog": "Katalog",
   "searchAll.sourceLocal": "Lokal",

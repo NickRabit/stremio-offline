@@ -1644,17 +1644,17 @@ button,.button{transition:background-color .15s ease,border-color .15s ease,filt
 /* Suggestions hang under the search bar. The fold clips its children for the collapse
    animation, so it lets go of that while the list is open. */
 .fold.suggesting>*{overflow:visible}
-.searchbar{position:relative}
+.searchbar,.search-everywhere-form{position:relative}
 .search-suggestions{position:absolute;z-index:40;top:calc(100% + 5px);left:0;width:min(100%,520px);margin:0;padding:5px;list-style:none;background:var(--panel2);border:1px solid var(--line);border-radius:10px;box-shadow:0 14px 34px #0008;max-height:min(330px,50dvh);overflow-y:auto}
 .search-suggestions li{display:flex;align-items:center;gap:9px;min-height:36px;padding:7px 10px;border-radius:7px;font-size:12px;cursor:pointer}
 .search-suggestions li.active,.search-suggestions li:hover{background:#2a3340}
 .search-suggestions li svg{position:static;transform:none;flex:0 0 auto;width:14px;height:14px;color:var(--muted)}
 .search-suggestions li span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .search-suggestions li small{margin-left:auto;padding-left:8px;flex:0 0 auto;font-size:10px;color:var(--muted)}
-.searchbar .search-suggestions .forget-recent{flex:0 0 auto;display:grid;place-items:center;width:26px;height:26px;min-height:0;margin:-4px -4px -4px 2px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--muted)}
-.searchbar .search-suggestions .forget-recent:hover{background:#ffffff14;color:var(--text)}
-.searchbar .search-suggestions .forget-recent svg{width:14px;height:14px}
-@media(pointer:coarse){.searchbar .search-suggestions .forget-recent{width:36px;height:36px;margin:-8px -6px -8px 0}}
+:is(.searchbar,.search-everywhere-form) .search-suggestions .forget-recent{flex:0 0 auto;display:grid;place-items:center;width:26px;height:26px;min-height:0;margin:-4px -4px -4px 2px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--muted)}
+:is(.searchbar,.search-everywhere-form) .search-suggestions .forget-recent:hover{background:#ffffff14;color:var(--text)}
+:is(.searchbar,.search-everywhere-form) .search-suggestions .forget-recent svg{width:14px;height:14px}
+@media(pointer:coarse){:is(.searchbar,.search-everywhere-form) .search-suggestions .forget-recent{width:36px;height:36px;margin:-8px -6px -8px 0}}
 
 /* Followed series: the account dialog, the list of follows and the Library row. */
 .follow-card{width:min(640px,100%)}
@@ -2202,16 +2202,6 @@ main.view-title-detail .catalogue-title-detail{display:flex;flex-direction:colum
 .search-everywhere-form{display:grid;grid-template-columns:minmax(180px,1fr) auto auto;gap:10px;margin-bottom:13px}
 .search-everywhere-form>.search-input{grid-column:auto}
 .search-filters{flex-wrap:wrap;gap:10px 12px;margin-bottom:13px}
-.search-recent{margin-bottom:14px}
-.search-recent h3{margin:0 0 8px;font-size:11px;color:var(--muted);font-weight:700}
-.search-recent ul{display:flex;flex-wrap:wrap;gap:6px;margin:0;padding:0;list-style:none}
-.search-recent li{display:flex;align-items:center;min-width:0;max-width:100%;border:1px solid var(--line);border-radius:99px;background:var(--panel)}
-.search-recent li:focus-within{border-color:var(--accent)}
-.search-recent button{border:0;background:transparent}
-.search-recent-run{min-width:0;gap:6px;padding:7px 4px 7px 12px;font-size:12px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.search-recent-run svg{flex-shrink:0;width:14px;color:var(--muted)}
-.search-recent .search-recent-forget{padding:6px 9px 6px 4px;color:var(--muted)}
-.search-recent .search-recent-forget svg{width:13px;height:13px}
 .search-filters .library-shelf-segments{flex:0 1 auto}
 .search-filters .shape-toggle{margin-left:auto}
 .search-source-strip{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:10px 18px;margin-bottom:14px;padding:10px 13px;border:1px solid var(--line);border-radius:10px;background:#10151dcc}

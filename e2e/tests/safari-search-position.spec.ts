@@ -23,7 +23,7 @@ const searchFolders = async (page: Page) => {
   await page.getByRole("button", { name: "Knihovna", exact: true }).click();
   await scanLibrary(page);
   await page.locator(".topbar-search").click();
-  const box = page.getByRole("searchbox", { name: placeholder });
+  const box = page.getByRole("combobox", { name: placeholder });
   await expect(box).toBeFocused();
   await box.fill("Pozicovka");
   await box.press("Enter");
@@ -55,7 +55,7 @@ test("Safari: the top bar's Search goes back to the top with the query ready to 
 
   await page.locator(".topbar-search").click();
   await expect.poll(() => scrollY(page)).toBe(0);
-  const box = page.getByRole("searchbox", { name: placeholder });
+  const box = page.getByRole("combobox", { name: placeholder });
   await expect(box).toBeFocused();
   expect(await box.evaluate((input: HTMLInputElement) => [input.selectionStart, input.selectionEnd])).toEqual([0, "Pozicovka".length]);
 });

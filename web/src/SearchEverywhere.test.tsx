@@ -123,48 +123,72 @@ const clickCard = async () => {
 };
 
 describe("SearchEverywhere", () => {
-  it("offers recent searches on an empty field: a click runs one, its cross drops it", async () => {
+  const openList = async () => {
+    const input = host.querySelector<HTMLInputElement>("[data-search-input]")!;
+    await act(async () => input.focus());
+    return input;
+  };
+  const rows = () => [...host.querySelectorAll<HTMLLIElement>("#search-all-suggestions [role=option]")];
+  const key = async (input: HTMLInputElement, init: KeyboardEventInit) => {
+    await act(async () => { input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, ...init })); });
+  };
+
+  it("drops the recent searches under the focused field, like the Catalog search", async () => {
     const search = controller({ draft: "", committed: "", snapshot: null });
     const onRecord = vi.fn();
-    const onForget = vi.fn();
-    await render(search, { recent: ["alpha", "beta"], onRecord, onForget });
+    const onRefreshRecent = vi.fn();
+    await render(search, { recent: ["alpha", "beta"], onRecord, onRefreshRecent });
+    expect(host.querySelector("#search-all-suggestions")).toBeNull();
 
-    const runs = [...host.querySelectorAll<HTMLButtonElement>(".search-recent-run")];
-    expect(runs.map((button) => button.textContent?.trim())).toEqual(["alpha", "beta"]);
-    await act(async () => runs[1]!.click());
+    const input = await openList();
+    expect(onRefreshRecent).toHaveBeenCalled();
+    expect(input.getAttribute("role")).toBe("combobox");
+    expect(input.getAttribute("aria-expanded")).toBe("true");
+    expect(rows().map((row) => row.querySelector("span")?.textContent)).toEqual(["alpha", "beta"]);
+
+    await act(async () => rows()[1]!.click());
     expect(search.setDraft).toHaveBeenCalledWith("beta");
     expect(search.submit).toHaveBeenCalled();
+    expect(host.querySelector("#search-all-suggestions")).toBeNull();
     expect(onRecord).not.toHaveBeenCalled();
-    await render({ ...search, draft: "beta", committed: "beta", snapshot: snapshot() }, { recent: ["alpha", "beta"], onRecord, onForget });
+    await render({ ...search, draft: "beta", committed: "beta", snapshot: snapshot() }, { recent: ["alpha", "beta"], onRecord });
     expect(onRecord).toHaveBeenCalledWith("beta");
-    await render({ ...search, draft: "", committed: "", snapshot: null }, { recent: ["alpha", "beta"], onRecord, onForget });
-
-    await act(async () => host.querySelector<HTMLButtonElement>("[aria-label=\"Remove from history: alpha\"]")!.click());
-    expect(onForget).toHaveBeenCalledWith("alpha");
   });
 
-  it("moves the focus to the next entry when one is removed, and to the field after the last", async () => {
-    const onForget = vi.fn();
+  it("walks the list with the arrows, runs a row with Enter, drops one with Shift+Delete or its cross and closes on Escape", async () => {
     const search = controller({ draft: "", committed: "", snapshot: null });
+    const onForget = vi.fn();
     await render(search, { recent: ["alpha", "beta"], onForget });
-    await act(async () => host.querySelector<HTMLButtonElement>("[aria-label=\"Remove from history: alpha\"]")!.click());
-    expect(onForget).toHaveBeenCalledWith("alpha");
-    expect(document.activeElement?.textContent?.trim()).toBe("beta");
+    const input = await openList();
 
-    await render(search, { recent: ["beta"], onForget });
-    await act(async () => host.querySelector<HTMLButtonElement>("[aria-label=\"Remove from history: beta\"]")!.click());
-    expect(document.activeElement).toBe(host.querySelector("[data-search-input]"));
+    await key(input, { key: "ArrowDown" });
+    await key(input, { key: "ArrowDown" });
+    expect(input.getAttribute("aria-activedescendant")).toBe("search-all-suggestion-1");
+    expect(rows()[1]!.getAttribute("aria-selected")).toBe("true");
+    await key(input, { key: "Delete", shiftKey: true });
+    expect(onForget).toHaveBeenCalledWith("beta");
+
+    await act(async () => rows()[0]!.querySelector<HTMLButtonElement>(".forget-recent")!.click());
+    expect(onForget).toHaveBeenCalledWith("alpha");
+    expect(search.submit).not.toHaveBeenCalled();
+
+    await key(input, { key: "ArrowUp" });
+    await key(input, { key: "Enter" });
+    expect(search.setDraft).toHaveBeenCalledWith("alpha");
+    expect(search.submit).toHaveBeenCalled();
+
+    await openList();
+    await act(async () => input.blur());
+    await act(async () => input.focus());
+    expect(rows()).toHaveLength(2);
+    await key(input, { key: "Escape" });
+    expect(host.querySelector("#search-all-suggestions")).toBeNull();
   });
 
-  it("refreshes the history when the field takes the focus or is left empty", async () => {
-    const onRefreshRecent = vi.fn();
-    const search = controller({ draft: "alpha", committed: "alpha" });
-    await render(search, { onRefreshRecent });
-    expect(onRefreshRecent).not.toHaveBeenCalled();
-    await render({ ...search, draft: "", committed: "", snapshot: null }, { onRefreshRecent });
-    expect(onRefreshRecent).toHaveBeenCalledTimes(1);
-    await act(async () => host.querySelector<HTMLInputElement>("[data-search-input]")!.focus());
-    expect(onRefreshRecent).toHaveBeenCalledTimes(2);
+  it("narrows the list to recent searches that match what is typed", async () => {
+    await render(controller({ draft: "alp", committed: "" }), { recent: ["alpha", "beta", "alpine"] });
+    await openList();
+    expect(rows().map((row) => row.querySelector("span")?.textContent)).toEqual(["alpha", "alpine"]);
   });
 
   it("forgets a pending submit once the search is cleared, so a later typed commit is not recorded", async () => {
@@ -203,13 +227,6 @@ describe("SearchEverywhere", () => {
     } finally {
       vi.unstubAllGlobals();
     }
-  });
-
-  it("hides the history once something is typed or searched", async () => {
-    await render(controller({ draft: "al", committed: "", snapshot: null }), { recent: ["alpha"] });
-    expect(host.querySelector(".search-recent")).toBeNull();
-    await render(controller(), { recent: ["alpha"] });
-    expect(host.querySelector(".search-recent")).toBeNull();
   });
 
   it("remembers a submitted query once it is answered, and one whose result was opened", async () => {
