@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -120,6 +122,10 @@ private val Section.labelRes: Int
   }
 
 const val TAG_RAIL_PREFIX = "rail_"
+
+/** The rail item of the section on screen, which LEFT out of the content goes to. A focus group in
+ *  the content does not inherit the shell's own LEFT, so one that has to leave by it reads this. */
+val LocalRailFocus = compositionLocalOf<FocusRequester?> { null }
 
 /** The rail is always icons only: it never widens on focus. */
 private val CollapsedRail = 60.dp
@@ -555,7 +561,9 @@ fun ShellScaffold(
         .padding(start = CollapsedRail)
         .focusProperties { left = railFocusRequesters.getValue(current) },
     ) {
-      content(contentFocusRequester)
+      CompositionLocalProvider(LocalRailFocus provides railFocusRequesters.getValue(current)) {
+        content(contentFocusRequester)
+      }
     }
 
     if (!railHidden) {
