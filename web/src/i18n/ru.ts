@@ -1926,6 +1926,7 @@ export const ru: Catalog = {
 
   "tv.globalSearch.title": "Искать везде",
   "tv.globalSearch.hint": "Ищите в каталогах и библиотеках. Нажмите OK, чтобы начать поиск.",
+  "tv.globalSearch.libraryHint": "Ищите в этой библиотеке. Нажмите OK, чтобы начать поиск.",
   "tv.globalSearch.sourceAll": "Все",
   "tv.globalSearch.sourceCatalog": "Каталог",
   "tv.globalSearch.sourceLocal": "Локальные",

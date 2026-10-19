@@ -291,6 +291,7 @@ sources.noAddonProviders
 # Android TV global search
 tv.globalSearch.title
 tv.globalSearch.hint
+tv.globalSearch.libraryHint
 tv.globalSearch.sourceAll
 tv.globalSearch.sourceCatalog
 tv.globalSearch.sourceLocal

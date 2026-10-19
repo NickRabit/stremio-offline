@@ -1911,6 +1911,7 @@ export const ptBR: Catalog = {
 
   "tv.globalSearch.title": "Pesquisar em tudo",
   "tv.globalSearch.hint": "Pesquise em catálogos e bibliotecas. Prima OK para pesquisar.",
+  "tv.globalSearch.libraryHint": "Pesquise nesta biblioteca. Prima OK para pesquisar.",
   "tv.globalSearch.sourceAll": "Todos",
   "tv.globalSearch.sourceCatalog": "Catálogo",
   "tv.globalSearch.sourceLocal": "Local",

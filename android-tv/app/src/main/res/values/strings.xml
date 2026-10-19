@@ -301,6 +301,7 @@
   <string name="sources_no_addon_providers">No addons offer sources for this title.</string>
   <string name="tv_global_search_title">Search everywhere</string>
   <string name="tv_global_search_hint">Search catalogs and libraries. Press OK to search.</string>
+  <string name="tv_global_search_library_hint">Search this library. Press OK to search.</string>
   <string name="tv_global_search_source_all">All</string>
   <string name="tv_global_search_source_catalog">Catalog</string>
   <string name="tv_global_search_source_local">Local</string>

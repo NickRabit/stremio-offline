@@ -211,6 +211,14 @@ class GlobalSearchScreenTest {
       androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
         .getString(cz.stremiooffline.tv.R.string.tv_library_search_scope, scope.title),
     ).assertExists()
+    // The hint speaks of this library, not of catalogues and libraries in general.
+    val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+    compose.onNodeWithText(context.getString(cz.stremiooffline.tv.R.string.tv_global_search_library_hint)).assertExists()
+    compose.onNodeWithText(context.getString(cz.stremiooffline.tv.R.string.tv_global_search_hint)).assertDoesNotExist()
+    // The page opens ready to type: the field has the remote.
+    compose.mainClock.advanceTimeBy(100)
+    compose.waitForIdle()
+    compose.onNodeWithTag(TagGlobalSearchField).assertIsFocused()
 
     search("matrix")
     compose.waitUntil(5_000) { api.globalStartCalls.isNotEmpty() }

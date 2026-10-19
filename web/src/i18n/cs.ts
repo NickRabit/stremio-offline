@@ -1974,6 +1974,7 @@ export const cs: Catalog = {
 
   "tv.globalSearch.title": "Hledat všude",
   "tv.globalSearch.hint": "Prohledejte katalogy a knihovny. Stisknutím OK spustíte hledání.",
+  "tv.globalSearch.libraryHint": "Prohledejte tuto knihovnu. Stisknutím OK spustíte hledání.",
   "tv.globalSearch.sourceAll": "Vše",
   "tv.globalSearch.sourceCatalog": "Katalog",
   "tv.globalSearch.sourceLocal": "Místní",

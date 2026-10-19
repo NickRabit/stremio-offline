@@ -1923,6 +1923,7 @@ export const sk: Catalog = {
 
   "tv.globalSearch.title": "Vyhľadávať všade",
   "tv.globalSearch.hint": "Prehľadajte katalógy a knižnice. Stlačením OK spustíte vyhľadávanie.",
+  "tv.globalSearch.libraryHint": "Prehľadajte túto knižnicu. Stlačením OK spustíte vyhľadávanie.",
   "tv.globalSearch.sourceAll": "Všetko",
   "tv.globalSearch.sourceCatalog": "Katalóg",
   "tv.globalSearch.sourceLocal": "Miestne",

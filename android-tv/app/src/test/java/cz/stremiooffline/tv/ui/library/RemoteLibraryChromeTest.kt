@@ -163,7 +163,7 @@ class RemoteLibraryChromeTest {
     // The type button and the search live in the one compact toolbar row.
     compose.onNodeWithTag(TagLibraryToolbar).assertExists()
     compose.onNodeWithTag(TagLibraryTypeFilter)
-      .assert(hasText(ApplicationProvider.getApplicationContext<android.content.Context>().getString(R.string.media_server_filter_all)))
+      .assert(hasText(ApplicationProvider.getApplicationContext<android.content.Context>().getString(R.string.catalog_all_genres)))
 
     compose.onNodeWithTag(TagLibrarySearchField).assertDoesNotExist()
     focusOn(TagLibrarySearchAction)
@@ -340,7 +340,7 @@ class RemoteLibraryChromeTest {
     val context = ApplicationProvider.getApplicationContext<android.content.Context>()
 
     // The Catalog's own row: Search first, the type chip right beside it, naming the current choice.
-    compose.onNodeWithTag(TagLibraryTypeFilter).assert(hasText(context.getString(R.string.media_server_filter_all)))
+    compose.onNodeWithTag(TagLibraryTypeFilter).assert(hasText(context.getString(R.string.catalog_all_genres)))
     val search = compose.onNodeWithTag(TagLibrarySearchAction).fetchSemanticsNode().boundsInRoot
     val chip = compose.onNodeWithTag(TagLibraryTypeFilter).fetchSemanticsNode().boundsInRoot
     assertTrue("the type chip follows Search on the same row", chip.left > search.right && chip.left - search.right < 40f && kotlin.math.abs(chip.top - search.top) < 4f)

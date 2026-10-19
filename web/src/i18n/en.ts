@@ -1969,6 +1969,7 @@ export const en = {
   // Android TV global search.
   "tv.globalSearch.title": "Search everywhere",
   "tv.globalSearch.hint": "Search catalogs and libraries. Press OK to search.",
+  "tv.globalSearch.libraryHint": "Search this library. Press OK to search.",
   "tv.globalSearch.sourceAll": "All",
   "tv.globalSearch.sourceCatalog": "Catalog",
   "tv.globalSearch.sourceLocal": "Local",

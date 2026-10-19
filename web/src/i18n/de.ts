@@ -1911,6 +1911,7 @@ export const de: Catalog = {
 
   "tv.globalSearch.title": "Überall suchen",
   "tv.globalSearch.hint": "Kataloge und Bibliotheken durchsuchen. OK startet die Suche.",
+  "tv.globalSearch.libraryHint": "Diese Bibliothek durchsuchen. OK startet die Suche.",
   "tv.globalSearch.sourceAll": "Alle",
   "tv.globalSearch.sourceCatalog": "Katalog",
   "tv.globalSearch.sourceLocal": "Lokal",
