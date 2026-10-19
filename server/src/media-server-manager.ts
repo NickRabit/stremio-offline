@@ -458,12 +458,13 @@ interface SearchCursor {
   a: string;
   q: string;
   k: SearchKindFilter;
+  p: string;
   c: string;
   h: string;
 }
 
 const searchCursorPayload = (cursor: Omit<SearchCursor, "h">): string =>
-  JSON.stringify([cursor.v, cursor.o, cursor.l, cursor.g, cursor.a, cursor.q, cursor.k, cursor.c]);
+  JSON.stringify([cursor.v, cursor.o, cursor.l, cursor.g, cursor.a, cursor.q, cursor.k, cursor.p, cursor.c]);
 
 const searchCursorTag = (cursor: Omit<SearchCursor, "h">): string =>
   createHmac("sha256", DIRECTORY_CURSOR_KEY).update(searchCursorPayload(cursor), "utf8").digest("base64url");
@@ -479,7 +480,7 @@ const decodeSearchCursor = (value: unknown): SearchCursor => {
   try { parsed = JSON.parse(json.toString("utf8")); }
   catch { throw invalid("The media-server cursor is malformed."); }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw invalid("The media-server cursor is malformed.");
-  const { v, o, l, g, a, q, k, c, h } = parsed as Record<string, unknown>;
+  const { v, o, l, g, a, q, k, p, c, h } = parsed as Record<string, unknown>;
   const bounded = (entry: unknown, max: number, allowEmpty: boolean): boolean =>
     typeof entry === "string" && (allowEmpty || entry.length > 0) && entry.length <= max;
   if (v !== 1 || o !== "search" || !bounded(l, MEDIA_SERVER_LIMITS.upstreamId, false)
@@ -487,10 +488,11 @@ const decodeSearchCursor = (value: unknown): SearchCursor => {
     || !bounded(a, MEDIA_SERVER_LIMITS.upstreamId, false)
     || !bounded(q, SEARCH_MAX, false)
     || (k !== "all" && k !== "movie" && k !== "series")
+    || typeof p !== "string" || p.length > MEDIA_SERVER_LIMITS.upstreamId
     || !bounded(c, CURSOR_MAX, false) || !bounded(h, 64, false)) {
     throw invalid("The media-server cursor is malformed.");
   }
-  const body: Omit<SearchCursor, "h"> = { v: 1, o: "search", l: l as string, g, a: a as string, q: q as string, k, c: c as string };
+  const body: Omit<SearchCursor, "h"> = { v: 1, o: "search", l: l as string, g, a: a as string, q: q as string, k, p, c: c as string };
   if (encodeSearchCursor(body) !== value) throw invalid("The media-server cursor is not canonical.");
   return { ...body, h: h as string };
 };
@@ -1472,11 +1474,11 @@ export class MediaServerManager {
 
   /** Whether one account may still search one remote library under the generation a source
    *  was discovered with. Local records only: opening a page proves the live session again. */
-  canSearchLibrary(userId: string, libraryId: string, generation: number): boolean {
+  canSearchLibrary(userId: string, libraryId: string, generation: number, explicitScope = false): boolean {
     const user = findUserById(this.store.users(), userId);
     if (!user || user.disabled) return false;
     const library = this.visibleFor(user).find((candidate) => candidate.id === libraryId);
-    if (!library || !effectiveShowInSearch(library)) return false;
+    if (!library || (!explicitScope && !effectiveShowInSearch(library))) return false;
     const connection = this.store.mediaConnections().find((candidate) => candidate.id === library.connectionId);
     return connection !== undefined && connection.enabled && connection.generation === generation;
   }
@@ -1486,7 +1488,7 @@ export class MediaServerManager {
   async searchLibrary(
     authority: MediaServerAuthority,
     libraryId: unknown,
-    query: { search: string; kind: SearchKindFilter; cursor?: string },
+    query: { search: string; kind: SearchKindFilter; parentId?: string; cursor?: string },
     signal?: AbortSignal,
   ): Promise<{ items: PublicRemoteItem[]; cursor?: string }> {
     const request = this.requestSignal(signal);
@@ -1500,7 +1502,9 @@ export class MediaServerManager {
     if (query.cursor !== undefined && typeof query.cursor !== "string") throw invalid("The media-server cursor is malformed.");
     const library = this.requireVisibleLibrary(user, libraryId);
     const connection = this.requireConnection(library.connectionId);
-    const parent = library.remoteId;
+    const requestedParent = parseParentId(query.parentId);
+    const parent = requestedParent ?? library.remoteId;
+    const cursorParent = requestedParent ?? "";
     let cursor: SearchCursor | undefined;
     if (rawCursor !== undefined) {
       let browseCursor = false;
@@ -1508,9 +1512,12 @@ export class MediaServerManager {
       if (browseCursor) throw stale();
       cursor = decodeSearchCursor(rawCursor);
       if (cursor.l !== library.id || cursor.a !== user.id || cursor.g !== connection.generation
-        || cursor.q !== search || cursor.k !== query.kind) throw stale();
+        || cursor.q !== search || cursor.k !== query.kind || cursor.p !== cursorParent) throw stale();
     }
     const session = await this.liveSession(authority, connection, { libraryRemoteId: library.remoteId }, request);
+    if (requestedParent !== undefined) {
+      await this.proveParent(authority, request, library, connection, session, requestedParent);
+    }
     const page = await this.upstream(connection, request, () => session.provider.pageDirectory(session.token, connection.accountId, parent, {
       mode: "titles",
       limit: 20,
@@ -1526,7 +1533,7 @@ export class MediaServerManager {
     if (page.cursor !== undefined) {
       result.cursor = encodeSearchCursor({
         v: 1, o: "search", l: library.id, g: connection.generation, a: user.id,
-        q: search, k: query.kind, c: page.cursor,
+        q: search, k: query.kind, p: cursorParent, c: page.cursor,
       });
     }
     return result;

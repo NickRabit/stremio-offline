@@ -1,6 +1,6 @@
 import { setImmediate as nextImmediate } from "node:timers";
 import type { LibraryEntry } from "./library.js";
-import { parseLibraryPath } from "./libraries.js";
+import { parseLibraryPath, posixBase } from "./libraries.js";
 import { SEARCH_LIMITS, type SearchKindFilter, type StrongIds } from "./search-contracts.js";
 import { enoughMatched, normalizeSearchText, prepareFields, prepareQuery, relevancePrepared, type PreparedFields } from "./search-relevance.js";
 
@@ -34,6 +34,8 @@ interface IndexedEntry {
   pathSegments: string[];
   /** The entry's text tokenised once at build, so a search only compares. */
   fields: PreparedFields;
+  /** Set on a file listed inside a folder entry: the folder it belongs to. */
+  parentKey?: string;
 }
 
 const CHUNK_SIZE = 5_000;
@@ -107,7 +109,7 @@ export class LocalSearchIndex {
     if (normalizeSearchText(query) === "") return { generation, entries: [] };
 
     const prepared = prepareQuery(query);
-    const matches: Array<{ entry: LibraryEntry; score: number }> = [];
+    const matches: Array<{ entry: LibraryEntry; score: number; parentKey?: string }> = [];
     for (let start = 0; start < indexed.length; start += CHUNK_SIZE) {
       if (signal?.aborted) throw new SourceFailure("cancelled");
       const end = Math.min(indexed.length, start + CHUNK_SIZE);
@@ -118,13 +120,19 @@ export class LocalSearchIndex {
         if (kind !== "all" && (type === "movie" || type === "series") && type !== kind) continue;
         const result = relevancePrepared(prepared, item.fields);
         const score = enoughMatched(result) ? result.score : undefined;
-        if (score !== undefined) matches.push({ entry: item.entry, score });
+        if (score !== undefined) matches.push({ entry: item.entry, score, ...(item.parentKey === undefined ? {} : { parentKey: item.parentKey }) });
       }
       if (end < indexed.length) {
         await new Promise<void>((resolve) => nextImmediate(resolve));
       }
     }
     if (signal?.aborted) throw new SourceFailure("cancelled");
+    // A file inside a folder is offered only when the folder itself did not answer: a show found
+    // by its name is one card, not one more per episode file.
+    const matchedFolders = new Set(matches.filter((match) => match.parentKey === undefined).map((match) => match.entry.key));
+    const kept = matches.filter((match) => match.parentKey === undefined || !matchedFolders.has(match.parentKey));
+    matches.length = 0;
+    matches.push(...kept);
     matches.sort((left, right) =>
       right.score - left.score || (left.entry.key < right.entry.key ? -1 : left.entry.key > right.entry.key ? 1 : 0),
     );
@@ -229,6 +237,24 @@ export class LocalSearchIndex {
         ...(originalTitle === undefined ? {} : { originalTitle }),
         path: item.pathSegments.join(" "),
       });
+      // A folder of several files is one entry, so the names of the files inside it were never
+      // searchable. Each file gets an item of its own, answering as a loose file of that library.
+      if (entry.files.length > 1) {
+        for (const file of entry.files) {
+          const relative = file.path.startsWith(`${parsed.libraryId}/`) ? file.path.slice(parsed.libraryId.length + 1) : file.path;
+          const key = `${parsed.libraryId}/${relative}`;
+          const label = file.label.trim() !== "" ? file.label : posixBase(relative);
+          const pathSegments = relative.split("/").map(normalizeSearchText).filter((segment) => segment !== "");
+          prepared.push({
+            entry: { key, kind: entry.kind, title: label, files: [file], size: file.size, modified: file.modified },
+            libraryId: parsed.libraryId,
+            titles: [label],
+            pathSegments,
+            fields: prepareFields({ title: label, path: pathSegments.join(" ") }),
+            parentKey: entry.key,
+          });
+        }
+      }
     }
     return prepared;
   }

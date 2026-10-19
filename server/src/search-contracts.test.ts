@@ -93,6 +93,62 @@ test("an explicit addon scope is bounded and catalog type and id travel together
   }
 });
 
+test("a library search names exactly one local folder or one remote parent", () => {
+  assert.deepEqual(
+    parseStartRequest({ ...valid(), sources: ["local"], library: { libraryId: "lib_ab12cd34", path: " Shows / Drama " } }),
+    {
+      query: "matrix",
+      kind: "all",
+      sources: ["local"],
+      slotId: "slot_12345",
+      generation: 2,
+      library: { libraryId: "lib_ab12cd34", path: "Shows / Drama" },
+    },
+  );
+  assert.deepEqual(
+    parseStartRequest({ ...valid(), sources: ["local"], library: { libraryId: "lib_ab12cd34" } }).library,
+    { libraryId: "lib_ab12cd34" },
+  );
+  assert.deepEqual(
+    parseStartRequest({ ...valid(), sources: ["remote"], library: { libraryId: "rlib_ab12cd34", parentId: "folder-1" } }).library,
+    { libraryId: "rlib_ab12cd34", parentId: "folder-1" },
+  );
+  assert.deepEqual(
+    parseStartRequest({ ...valid(), sources: ["remote"], library: { libraryId: "rlib_ab12cd34" } }).library,
+    { libraryId: "rlib_ab12cd34" },
+  );
+});
+
+test("a library search rejects ambiguous, escaping, scoped and unknown shapes", () => {
+  const local = { ...valid(), sources: ["local"] };
+  const remote = { ...valid(), sources: ["remote"] };
+  const invalid: unknown[] = [
+    { ...local, library: { libraryId: "" } },
+    { ...local, library: { libraryId: "lib bad" } },
+    { ...local, library: { libraryId: "x".repeat(201) } },
+    { ...local, library: { libraryId: "lib_ab12cd34", path: ".." } },
+    { ...local, library: { libraryId: "lib_ab12cd34", path: "A/../B" } },
+    { ...local, library: { libraryId: "lib_ab12cd34", path: "/A" } },
+    { ...local, library: { libraryId: "lib_ab12cd34", path: "A\0B" } },
+    { ...local, library: { libraryId: "lib_ab12cd34", path: "x".repeat(1001) } },
+    { ...local, library: { libraryId: "lib_ab12cd34", path: "A", parentId: "B" } },
+    { ...local, library: { libraryId: "lib_ab12cd34", parentId: "B" } },
+    { ...remote, library: { libraryId: "lib_ab12cd34", path: "A" } },
+    { ...remote, library: { libraryId: "lib_ab12cd34", parentId: "" } },
+    { ...remote, library: { libraryId: "lib_ab12cd34", parentId: "parent/id" } },
+    { ...local, library: { libraryId: "lib_ab12cd34", extra: "x" } },
+    { ...valid(), library: { libraryId: "lib_ab12cd34" } },
+    { ...local, scope: { addonKey: "alpha" }, library: { libraryId: "lib_ab12cd34" } },
+    { ...local, library: { libraryId: "lib_ab12cd34" }, extra: true },
+  ];
+  for (const body of invalid) {
+    assert.throws(
+      () => parseStartRequest(body),
+      (error: unknown) => error instanceof SearchError && error.code === "search-invalid-request",
+    );
+  }
+});
+
 test("revision and opaque id parsing reject loose shapes", () => {
   assert.equal(parseRevision({ revision: 0 }), 0);
   assert.throws(() => parseRevision({ revision: 1, other: 2 }), SearchError);

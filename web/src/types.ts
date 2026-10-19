@@ -76,6 +76,7 @@ export interface SearchStartBody {
   slotId: string;
   generation: number;
   scope?: { addonKey: string; catalogType?: string; catalogId?: string };
+  library?: { libraryId: string; path?: string } | { libraryId: string; parentId?: string };
 }
 export type SearchLocator =
   | { kind: "catalog"; addonKey: string; type: string; id: string; catalogId?: string }

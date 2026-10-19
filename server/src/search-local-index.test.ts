@@ -299,3 +299,23 @@ test("an aborted search throws the session's cancelled failure", async () => {
     error instanceof SourceFailure && error.code === "cancelled",
   );
 });
+
+test("a file inside a folder answers by its own name, unless the folder already answered", async () => {
+  const file = (relative: string, label: string) => ({ path: relative, label, season: null, episode: null, size: 1, modified: "2026-01-01T00:00:00.000Z" });
+  const folder = entry("lib_00000001/Hledacka/Hloubka/Treti", "Treti", {
+    files: [
+      file("Hledacka/Hloubka/Treti/Hluboky soubor.mp4", "Hluboky soubor"),
+      file("Hledacka/Hloubka/Treti/Jiny.mp4", "Jiny"),
+    ],
+  });
+  const index = new LocalSearchIndex({ entries: async () => [folder] });
+  index.start();
+  await flush();
+
+  const byFile = await index.search("lib_00000001", "hluboky", "all");
+  assert.deepEqual(byFile.entries.map((item) => item.key), ["lib_00000001/Hledacka/Hloubka/Treti/Hluboky soubor.mp4"]);
+  assert.equal(byFile.entries[0]!.files.length, 1);
+
+  const byFolder = await index.search("lib_00000001", "treti", "all");
+  assert.deepEqual(byFolder.entries.map((item) => item.key), ["lib_00000001/Hledacka/Hloubka/Treti"]);
+});
