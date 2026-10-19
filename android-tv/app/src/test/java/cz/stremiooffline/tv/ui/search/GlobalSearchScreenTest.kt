@@ -22,6 +22,7 @@ import cz.stremiooffline.tv.data.GlobalSearchClusterDto
 import cz.stremiooffline.tv.data.GlobalSearchLocatorDto
 import cz.stremiooffline.tv.data.GlobalSearchMemberDto
 import cz.stremiooffline.tv.data.GlobalSearchMemberPageDto
+import cz.stremiooffline.tv.data.GlobalSearchLibraryDto
 import cz.stremiooffline.tv.data.GlobalSearchPollDto
 import cz.stremiooffline.tv.data.GlobalSearchSnapshotDto
 import cz.stremiooffline.tv.data.GlobalSearchSourceDto
@@ -104,6 +105,8 @@ class GlobalSearchScreenTest {
     api: FakeTvApi,
     voiceAvailable: Boolean = false,
     voiceLauncher: VoiceLauncher? = null,
+    libraryScope: LibrarySearchScope? = null,
+    onBack: (() -> Unit)? = null,
   ) {
     compose.setContent {
       GlobalSearchScreen(
@@ -113,6 +116,8 @@ class GlobalSearchScreenTest {
         onOpenLibrary = { libraryOpened = it },
         imageUrl = { null },
         overlayOpen = false,
+        libraryScope = libraryScope,
+        onBack = onBack,
         voiceAvailable = voiceAvailable,
         voiceLauncher = voiceLauncher,
       )
@@ -187,6 +192,61 @@ class GlobalSearchScreenTest {
     compose.onNodeWithTag(TagGlobalSearchInput).performImeAction()
     compose.waitForIdle()
     assertEquals("matrix", api.globalStartCalls.single().query)
+  }
+
+  @Test
+  fun `a library scope starts fixed, hides the filters and returns on Back`() {
+    val api = FakeTvApi()
+    start(api, listOf(cluster("c1", "m1", title = "One")))
+    var backs = 0
+    val scope = LibrarySearchScope(
+      library = GlobalSearchLibraryDto("lib1", path = "Shows"),
+      sources = listOf("local"),
+      title = "Films  ›  Shows",
+    )
+    mount(api, libraryScope = scope, onBack = { backs++ })
+    compose.onNodeWithTag(globalSearchFilterTag("source_all")).assertDoesNotExist()
+    compose.onNodeWithTag(TagGlobalSearchScopeChip).assertDoesNotExist()
+    compose.onNodeWithText(
+      androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        .getString(cz.stremiooffline.tv.R.string.tv_library_search_scope, scope.title),
+    ).assertExists()
+
+    search("matrix")
+    compose.waitUntil(5_000) { api.globalStartCalls.isNotEmpty() }
+    val body = api.globalStartCalls.single()
+    assertEquals("matrix", body.query)
+    assertEquals(GlobalSearchLibraryDto("lib1", path = "Shows"), body.library)
+    assertEquals(listOf("local"), body.sources)
+
+    compose.waitForIdle()
+    focus(globalSearchCardTag("m1"))
+    compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
+    compose.waitForIdle()
+    assertEquals(1, backs)
+  }
+
+  @Test
+  fun `the library scope keeps the page's own voice search`() {
+    val api = FakeTvApi()
+    start(api, listOf(cluster("c1", "m1", title = "One")))
+    val voice = Voice()
+    val scope = LibrarySearchScope(
+      library = GlobalSearchLibraryDto("lib1", path = "Shows"),
+      sources = listOf("local"),
+      title = "Films  ›  Shows",
+    )
+    mount(api, libraryScope = scope, voiceAvailable = true, voiceLauncher = { voice.calls += it })
+
+    focus(TagGlobalSearchVoice)
+    press(Key.DirectionCenter)
+    voice.answer("heat")
+    compose.waitForIdle()
+
+    val body = api.globalStartCalls.single()
+    assertEquals("heat", body.query)
+    assertEquals(GlobalSearchLibraryDto("lib1", path = "Shows"), body.library)
+    assertEquals(listOf("local"), body.sources)
   }
 
   @Test

@@ -34,6 +34,10 @@
   <string name="tv_placeholder_title">Появится в следующей версии</string>
   <string name="tv_placeholder_action">На главную</string>
   <string name="tv_library_title">Ваша библиотека</string>
+  <string name="tv_library_type_all">Фильмы и сериалы</string>
+  <string name="tv_library_type_movies">Только фильмы</string>
+  <string name="tv_library_type_series">Только сериалы</string>
+  <string name="tv_library_search_scope">В библиотеке: %1$s</string>
   <string name="tv_library_empty">Здесь пока ничего нет. Скачанные файлы появятся в этой библиотеке.</string>
   <string name="tv_library_files">Файлов: %1$s</string>
   <string name="tv_detail_eyebrow_library">В вашей библиотеке</string>

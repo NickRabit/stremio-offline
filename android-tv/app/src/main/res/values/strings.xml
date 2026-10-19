@@ -34,6 +34,10 @@
   <string name="tv_placeholder_title">Coming in the next release</string>
   <string name="tv_placeholder_action">Back to Home</string>
   <string name="tv_library_title">Your library</string>
+  <string name="tv_library_type_all">Movies and series</string>
+  <string name="tv_library_type_movies">Movies only</string>
+  <string name="tv_library_type_series">Series only</string>
+  <string name="tv_library_search_scope">In library: %1$s</string>
   <string name="tv_library_empty">Nothing here yet. Files you download appear in this library.</string>
   <string name="tv_library_files">%1$s files</string>
   <string name="tv_detail_eyebrow_library">In your library</string>

@@ -383,8 +383,12 @@ class GlobalSearchViewModel(
   }
 
   companion object {
-    fun factory(api: GlobalSearchApi) = viewModelFactory {
-      initializer { GlobalSearchViewModel(api) }
+    fun factory(
+      api: GlobalSearchApi,
+      library: GlobalSearchLibraryDto? = null,
+      sources: Set<SourceClass>? = null,
+    ) = viewModelFactory {
+      initializer { GlobalSearchViewModel(api, library = library, sources = sources) }
     }
   }
 }

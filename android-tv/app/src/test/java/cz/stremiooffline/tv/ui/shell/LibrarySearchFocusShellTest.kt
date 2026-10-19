@@ -26,7 +26,6 @@ import cz.stremiooffline.tv.data.RemoteItemsPageDto
 import cz.stremiooffline.tv.data.RemoteLibraryDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.library.TagLibrarySearchAction
-import cz.stremiooffline.tv.ui.library.TagLibrarySearchVoice
 import cz.stremiooffline.tv.ui.library.remoteItemTag
 import cz.stremiooffline.tv.ui.library.remoteLibraryTag
 import org.junit.After
@@ -50,7 +49,8 @@ class LibrarySearchFocusShellTest {
 
   @Before
   fun launchHost() {
-    // A recognizer on the device, so the toolbar draws its mic beside the search action.
+    // A recognizer on the device: the library toolbar still draws no mic of its own, since voice
+    // belongs to the search page the action opens.
     val context = ApplicationProvider.getApplicationContext<android.content.Context>()
     val recognizer = ComponentName("com.example.voice", "com.example.voice.Recognize")
     shadowOf(context.packageManager).apply {
@@ -109,7 +109,7 @@ class LibrarySearchFocusShellTest {
     compose.waitForIdle()
     compose.mainClock.advanceTimeBy(200)
     compose.waitForIdle()
-    compose.onNodeWithTag(TagLibrarySearchVoice).assertExists()
+    compose.onNodeWithTag("library_search_voice").assertDoesNotExist()
     compose.onNodeWithTag(remoteItemTag("m1")).performSemanticsAction(SemanticsActions.RequestFocus)
     compose.waitForIdle()
     assertEquals(remoteItemTag("m1"), focusedTag())
@@ -123,12 +123,9 @@ class LibrarySearchFocusShellTest {
   }
 
   @Test
-  fun `left from the mic reaches the search action and left again the rail`() {
+  fun `left from the search action reaches the rail`() {
     openLibrary(api())
-    compose.onNodeWithTag(TagLibrarySearchVoice).performSemanticsAction(SemanticsActions.RequestFocus)
-    compose.waitForIdle()
-    assertEquals(TagLibrarySearchVoice, focusedTag())
-    press(Key.DirectionLeft)
+    press(Key.DirectionUp)
     assertEquals(TagLibrarySearchAction, focusedTag())
     press(Key.DirectionLeft)
     assertEquals(railTag(Section.Library), focusedTag())

@@ -34,6 +34,10 @@
   <string name="tv_placeholder_title">Disponible dans la prochaine version</string>
   <string name="tv_placeholder_action">Retour à l\'accueil</string>
   <string name="tv_library_title">Votre bibliothèque</string>
+  <string name="tv_library_type_all">Films et séries</string>
+  <string name="tv_library_type_movies">Films uniquement</string>
+  <string name="tv_library_type_series">Séries uniquement</string>
+  <string name="tv_library_search_scope">Dans la bibliothèque : %1$s</string>
   <string name="tv_library_empty">Rien ici pour le moment. Les fichiers téléchargés apparaîtront dans cette bibliothèque.</string>
   <string name="tv_library_files">%1$s fichiers</string>
   <string name="tv_detail_eyebrow_library">Dans votre bibliothèque</string>

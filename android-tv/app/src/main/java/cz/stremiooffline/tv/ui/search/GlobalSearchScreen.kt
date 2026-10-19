@@ -82,11 +82,30 @@ fun GlobalSearchScreen(
   onOpenLibrary: (String) -> Unit,
   imageUrl: (String?) -> String?,
   overlayOpen: Boolean,
+  libraryScope: LibrarySearchScope? = null,
+  onBack: (() -> Unit)? = null,
   modifier: Modifier = Modifier,
   voiceAvailable: Boolean = voiceSearchAvailable(),
   voiceLauncher: VoiceLauncher? = null,
 ) {
-  val viewModel = viewModel<GlobalSearchViewModel>(factory = GlobalSearchViewModel.factory(api))
+  val scopeKey = libraryScope?.let {
+    "${it.library?.libraryId.orEmpty()}|${it.library?.path.orEmpty()}|${it.library?.parentId.orEmpty()}|" +
+      it.sources.sorted().joinToString(",")
+  }
+  val viewModel = if (libraryScope == null) {
+    viewModel<GlobalSearchViewModel>(factory = GlobalSearchViewModel.factory(api))
+  } else {
+    viewModel<GlobalSearchViewModel>(
+      key = "library:$scopeKey",
+      factory = GlobalSearchViewModel.factory(
+        api = api,
+        library = libraryScope.library,
+        sources = libraryScope.sources.mapNotNullTo(hashSetOf()) { wire ->
+          SourceClass.entries.firstOrNull { it.wire == wire }
+        },
+      ),
+    )
+  }
   val state = viewModel.state
   val fieldFocus = remember { FocusRequester() }
   val gridFocus = remember { FocusRequester() }
@@ -118,13 +137,13 @@ fun GlobalSearchScreen(
 
   val voice = rememberVoiceSearch(voiceAvailable, onVoiceResult = ::onVoice, launcher = voiceLauncher)
 
-  DisposableEffect(Unit) {
+  DisposableEffect(viewModel) {
     onDispose {
       viewModel.setActive(false)
       viewModel.leave()
     }
   }
-  LaunchedEffect(overlayOpen) {
+  LaunchedEffect(viewModel, overlayOpen) {
     viewModel.setActive(!overlayOpen)
     if (overlayOpen) {
       overlayWasOpen = true
@@ -133,10 +152,11 @@ fun GlobalSearchScreen(
       resultRestore++
     }
   }
-  LaunchedEffect(Unit) {
+  LaunchedEffect(viewModel) {
     awaitFrame()
     runCatching { fieldFocus.requestFocus() }
   }
+  if (onBack != null) BackHandler { onBack() }
   BackHandler(enabled = stripExpanded) { stripExpanded = false }
   LaunchedEffect(scopePanel) {
     if (!scopePanel) {
@@ -162,6 +182,15 @@ fun GlobalSearchScreen(
       fontWeight = FontWeight.Bold,
       letterSpacing = 1.8.sp,
     )
+    if (libraryScope != null) {
+      Text(
+        stringResource(R.string.tv_library_search_scope, libraryScope.title),
+        color = Tokens.Muted,
+        fontSize = 12.sp,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+      )
+    }
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Bottom) {
       TvTextField(
         label = stringResource(R.string.tv_global_search_title),
@@ -194,24 +223,26 @@ fun GlobalSearchScreen(
       Text(stringResource(R.string.tv_global_search_hint), color = Tokens.Muted, fontSize = 12.sp)
     }
 
-    GlobalSearchFilters(
-      sources = state.sources,
-      kind = state.kind,
-      scope = state.scope,
-      searchable = state.searchable,
-      scopeFocus = scopeFocus,
-      onSources = {
-        viewModel.setSources(it)
-        if (it != setOf(SourceClass.Catalog)) scopePanel = false
-      },
-      onKind = viewModel::setKind,
-      onScope = {
-        viewModel.loadSearchable()
-        scopePanelOpener = scopeFocus
-        scopePanel = true
-      },
-      onFocused = ::clearCardFocus,
-    )
+    if (libraryScope == null) {
+      GlobalSearchFilters(
+        sources = state.sources,
+        kind = state.kind,
+        scope = state.scope,
+        searchable = state.searchable,
+        scopeFocus = scopeFocus,
+        onSources = {
+          viewModel.setSources(it)
+          if (it != setOf(SourceClass.Catalog)) scopePanel = false
+        },
+        onKind = viewModel::setKind,
+        onScope = {
+          viewModel.loadSearchable()
+          scopePanelOpener = scopeFocus
+          scopePanel = true
+        },
+        onFocused = ::clearCardFocus,
+      )
+    }
 
     if (state.submitted) {
       GlobalSourceStrip(

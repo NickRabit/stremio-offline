@@ -62,6 +62,16 @@ data class CatalogDetailArgs(
 
 private enum class CatalogPanel { Catalogs, Genres }
 
+/** The section's Search chip: the library toolbar draws the same composable so both pages match. */
+@Composable
+internal fun CatalogSearchChip(onClick: () -> Unit, modifier: Modifier = Modifier) {
+  FocusButton(
+    text = stringResource(R.string.tv_nav_search),
+    onClick = onClick,
+    modifier = modifier,
+  )
+}
+
 @Composable
 fun CatalogScreen(
   api: TvApi,
@@ -127,8 +137,7 @@ fun CatalogScreen(
       Row(horizontalArrangement = Arrangement.spacedBy(9.dp), verticalAlignment = Alignment.CenterVertically) {
         val current = state.current
         val searchScope = if (current == null) SearchScope() else SearchScope(current.addonKey, current.type, current.id)
-        FocusButton(
-          text = stringResource(R.string.tv_nav_search),
+        CatalogSearchChip(
           onClick = { onOpenSearch(searchScope) },
           modifier = Modifier.focusRequester(searchFocus).testTag(TagCatalogSearchChip),
         )

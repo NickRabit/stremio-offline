@@ -1,12 +1,11 @@
 package cz.stremiooffline.tv.ui.library
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -15,9 +14,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
@@ -27,16 +24,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.tv.material3.Icon
 import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
-import cz.stremiooffline.tv.ui.catalog.MicIcon
-import cz.stremiooffline.tv.ui.catalog.VoiceSearch
-import cz.stremiooffline.tv.ui.catalog.voiceKey
+import cz.stremiooffline.tv.ui.catalog.CatalogSearchChip
 import cz.stremiooffline.tv.ui.components.FocusButton
-import cz.stremiooffline.tv.ui.components.FocusButtonKind
 import cz.stremiooffline.tv.ui.components.TvTextField
-import cz.stremiooffline.tv.ui.shell.LocalRailFocus
 import cz.stremiooffline.tv.ui.theme.Tokens
 import androidx.compose.ui.text.input.ImeAction
 import kotlinx.coroutines.android.awaitFrame
@@ -46,7 +38,7 @@ const val TagLibrarySearchAction = "library_search_action"
 const val TagLibrarySearchField = "library_search_field"
 const val TagLibrarySearchInput = "library_search_input"
 const val TagLibrarySearchSubmit = "library_search_submit"
-const val TagLibrarySearchVoice = "library_search_voice"
+const val TagLibraryTypeFilter = "library_type_filter"
 const val TagLibraryHeaderTitle = "library_header_title"
 
 /**
@@ -98,38 +90,65 @@ internal fun LibraryBreadcrumbLine(text: String, tag: String) {
   )
 }
 
-/**
- * The one compact toolbar row of the Library section. The search is an ordinary focusable action
- * until it is opened, so a closed toolbar leaves the grid its height back; opening it shows the
- * app's own field and submit button, and submits only on the IME action or the button, never per
- * keystroke. Back closes the editor and hands the remote to the action that opened it before the
- * screen's own Back is allowed to navigate. The active half adds whatever else belongs to the row
- * through [trailing].
- */
-@OptIn(ExperimentalComposeUiApi::class)
+/** The one compact toolbar row: Search opens the library search page, and a remote level's type
+ *  filter sits at the row's right edge so it lines up under the section's own tabs. */
 @Composable
 internal fun LibraryToolbar(
-  /** True while the editor is open. */
+  onSearch: () -> Unit,
+  /** False where the level cannot be searched at all: the library root lists the libraries, and the
+   *  server narrows nothing there. */
+  available: Boolean,
+  openFocus: FocusRequester,
+  typeFilter: RemoteTypeFilter? = null,
+  onTypeFilter: (RemoteTypeFilter) -> Unit = {},
+) {
+  val typeFocus = remember { FocusRequester() }
+  Row(
+    modifier = Modifier.fillMaxWidth().testTag(TagLibraryToolbar),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(9.dp),
+  ) {
+    if (available) {
+      CatalogSearchChip(
+        onClick = onSearch,
+        modifier = Modifier
+          .focusRequester(openFocus)
+          .testTag(TagLibrarySearchAction)
+          .focusProperties { if (typeFilter != null) right = typeFocus },
+      )
+    }
+    Spacer(Modifier.weight(1f))
+    if (available && typeFilter != null) {
+      LibraryTypeButton(
+        filter = typeFilter,
+        onFilter = onTypeFilter,
+        modifier = Modifier
+          .focusRequester(typeFocus)
+          .focusProperties { left = openFocus },
+      )
+    }
+  }
+}
+
+/**
+ * The flag-off toolbar keeps today's inline narrowing. It lives apart from [LibraryToolbar] so the
+ * engine-backed path never carries an editor it cannot use.
+ */
+@Composable
+internal fun LibrarySearchFallback(
   open: Boolean,
   query: String,
   onQuery: (String) -> Unit,
   onOpen: () -> Unit,
   onSubmit: () -> Unit,
   onClose: () -> Unit,
-  /** The query the level is actually narrowed by, drawn on the closed action so a committed search
-   *  never becomes invisible. */
-  committed: String,
-  /** False where the level cannot be searched at all: the library root lists the libraries, and the
-   *  server narrows nothing there. */
   available: Boolean,
   openFocus: FocusRequester,
   fieldFocus: FocusRequester,
-  /** Where DOWN leaves the field and the closed action once the result grid is on screen. */
-  downFocus: FocusRequester? = null,
-  /** The recognizer of the screen that owns this toolbar; null draws no mic. */
-  voice: VoiceSearch? = null,
-  trailing: (@Composable () -> Unit)? = null,
+  typeFilter: RemoteTypeFilter? = null,
+  onTypeFilter: (RemoteTypeFilter) -> Unit = {},
 ) {
+  val typeFocus = remember { FocusRequester() }
   BackHandler(enabled = open) { onClose() }
   var wasOpen by remember { mutableStateOf(false) }
   // The opener takes the remote back once the editor and its field are gone; an editor that opens
@@ -146,10 +165,7 @@ internal fun LibraryToolbar(
     }
   }
   Row(
-    modifier = Modifier
-      .fillMaxWidth()
-      .testTag(TagLibraryToolbar)
-      .then(if (voice != null && available) Modifier.voiceKey(voice) else Modifier),
+    modifier = Modifier.fillMaxWidth().testTag(TagLibraryToolbar),
     verticalAlignment = Alignment.Bottom,
     horizontalArrangement = Arrangement.spacedBy(9.dp),
   ) {
@@ -164,57 +180,61 @@ internal fun LibraryToolbar(
           testTag = TagLibrarySearchField,
           inputTestTag = TagLibrarySearchInput,
           onSubmit = onSubmit,
-          modifier = Modifier
-            .width(360.dp)
-            .then(if (downFocus != null) Modifier.focusProperties { down = downFocus } else Modifier),
+          modifier = Modifier.width(360.dp),
         )
         FocusButton(
           text = stringResource(R.string.media_server_search_action),
           onClick = onSubmit,
           modifier = Modifier.height(38.dp).testTag(TagLibrarySearchSubmit),
         )
-        if (voice?.available == true && available) VoiceButton(voice)
       } else {
-        // The mic sits nearer the first tile's centre than the action, so UP from the grid would skip
-        // the action; a group entered through the action keeps it the leading item. The group also
-        // keeps the shell's LEFT-to-rail off the mic, so it has to leave by that rail item itself.
-        val rail = LocalRailFocus.current
-        Row(
+        CatalogSearchChip(
+          onClick = onOpen,
           modifier = Modifier
-            .focusProperties {
-              enter = { if (it == FocusDirection.Up) openFocus else FocusRequester.Default }
-              exit = { if (it == FocusDirection.Left) rail ?: FocusRequester.Default else FocusRequester.Default }
-            }
-            .focusGroup(),
-          verticalAlignment = Alignment.Bottom,
-          horizontalArrangement = Arrangement.spacedBy(9.dp),
-        ) {
-          FocusButton(
-            text = committed.ifEmpty { stringResource(R.string.media_server_search_action) },
-            onClick = onOpen,
-            labelMaxWidth = 240.dp,
-            modifier = Modifier
-              .focusRequester(openFocus)
-              .testTag(TagLibrarySearchAction)
-              .then(if (downFocus != null) Modifier.focusProperties { down = downFocus } else Modifier),
-          )
-          if (voice?.available == true && available) VoiceButton(voice)
-        }
+            .focusRequester(openFocus)
+            .testTag(TagLibrarySearchAction)
+            .focusProperties { if (typeFilter != null) right = typeFocus },
+        )
       }
     }
-    trailing?.invoke()
+    Spacer(Modifier.weight(1f))
+    if (available && typeFilter != null) {
+      LibraryTypeButton(
+        filter = typeFilter,
+        onFilter = onTypeFilter,
+        modifier = Modifier
+          .focusRequester(typeFocus)
+          .then(if (open) Modifier else Modifier.focusProperties { left = openFocus }),
+      )
+    }
   }
 }
 
-/** The microphone of the search row, drawn after the search action while it is not editing. */
 @Composable
-private fun VoiceButton(voice: VoiceSearch) {
-  FocusButton(
-    text = "",
-    onClick = voice.start,
-    kind = FocusButtonKind.Icon,
-    leading = { Icon(MicIcon, contentDescription = null, modifier = Modifier.size(18.dp)) },
-    contentDescription = stringResource(R.string.tv_voice_search),
-    modifier = Modifier.size(38.dp).testTag(TagLibrarySearchVoice),
+private fun LibraryTypeButton(
+  filter: RemoteTypeFilter,
+  onFilter: (RemoteTypeFilter) -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  SegmentButton(
+    text = typeFilterLabel(filter),
+    selected = filter != RemoteTypeFilter.All,
+    onClick = { onFilter(nextRemoteTypeFilter(filter)) },
+    modifier = modifier.testTag(TagLibraryTypeFilter),
   )
+}
+
+@Composable
+private fun typeFilterLabel(filter: RemoteTypeFilter): String = stringResource(
+  when (filter) {
+    RemoteTypeFilter.All -> R.string.tv_library_type_all
+    RemoteTypeFilter.Movies -> R.string.tv_library_type_movies
+    RemoteTypeFilter.Series -> R.string.tv_library_type_series
+  },
+)
+
+internal fun nextRemoteTypeFilter(filter: RemoteTypeFilter): RemoteTypeFilter = when (filter) {
+  RemoteTypeFilter.All -> RemoteTypeFilter.Movies
+  RemoteTypeFilter.Movies -> RemoteTypeFilter.Series
+  RemoteTypeFilter.Series -> RemoteTypeFilter.All
 }
