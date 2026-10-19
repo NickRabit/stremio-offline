@@ -549,8 +549,11 @@ describe("Player stall advice", () => {
 
 describe("Player refused direct stream", () => {
   let escalations: string[];
+  /** The server forgot the session, as after a restart. */
+  let escalateGone: boolean;
   beforeEach(() => {
     escalations = [];
+    escalateGone = false;
     // Safari plays the escalated HLS natively.
     const native = HTMLMediaElement.prototype.canPlayType;
     HTMLMediaElement.prototype.canPlayType = (type: string) => /mpegurl/i.test(type) ? "maybe" : "";
@@ -559,6 +562,7 @@ describe("Player refused direct stream", () => {
       const path = new URL(String(input), "http://localhost").pathname;
       if (/^\/api\/playback\/[^/]+\/escalate$/.test(path)) {
         escalations.push(path);
+        if (escalateGone) return Promise.resolve(json({ error: "gone", code: "RESOURCE_NOT_FOUND" }, 404));
         return Promise.resolve(json({ ...session(), mode: "transcode", url: "/api/playback/sess1/2/master.m3u8" }));
       }
       return base(input, init);
@@ -588,6 +592,15 @@ describe("Player refused direct stream", () => {
     await act(async () => { host.querySelector("video")!.dispatchEvent(new Event("playing")); });
     await refuse();
     expect(escalations).toEqual([]);
+    expect(host.querySelector(".player-error")?.textContent).toBe("The browser could not play this stream.");
+  });
+
+  it("gives up instead of starting the refused stream again when the server forgot the session", async () => {
+    escalateGone = true;
+    await render();
+    await refuse();
+    expect(escalations).toHaveLength(1);
+    expect(playbackPosts).toHaveLength(1);
     expect(host.querySelector(".player-error")?.textContent).toBe("The browser could not play this stream.");
   });
 });
