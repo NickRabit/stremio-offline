@@ -242,6 +242,42 @@ describe("useSearchEverywhere", () => {
     expect(current.error).toBe("The search expired. Search again.");
   });
 
+  it("keeps the results on screen while an expired search starts again, then swaps them at once", async () => {
+    // A title played from Search can outlast the idle expiry. The restarted session answers in
+    // pieces; drawing the first piece would shorten the page and drop the reader to the top.
+    const full = ["a", "b", "c"].map((key) => cluster(key));
+    vi.spyOn(api, "searchEverywhereStart")
+      .mockResolvedValueOnce({ id: "session-one", snapshot: snapshot({ revision: 1, state: "complete", clusters: full }) })
+      .mockResolvedValueOnce({ id: "session-two", snapshot: snapshot({ revision: 1, state: "partial", clusters: [cluster("x")] }) });
+    let finish!: () => void;
+    vi.spyOn(api, "searchEverywherePoll")
+      .mockRejectedValueOnce(new ApiError("expired", 410, "search-restart-required", "err.searchRestartRequired"))
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        finish = () => resolve({ changed: true, snapshot: snapshot({ revision: 2, state: "complete", clusters: ["x", "y", "z"].map((key) => cluster(key)) }) });
+      }));
+
+    await render();
+    await submit("alpha");
+    act(() => current.markInteracted());
+    await advance(1000);
+    await flush();
+    await advance(1);
+    await flush();
+
+    expect(api.searchEverywhereStart).toHaveBeenCalledTimes(2);
+    expect(api.searchEverywherePoll).toHaveBeenCalledTimes(2);
+    expect(current.snapshot?.clusters.map((item) => item.key)).toEqual(["a", "b", "c"]);
+    expect(current.order).toEqual(["a", "b", "c"]);
+    // The same query is starting again, not another one: nothing is labelled as earlier results.
+    expect(current.previousQuery).toBe(false);
+
+    await act(async () => { finish(); });
+    await flush();
+    expect(current.snapshot?.clusters.map((item) => item.key)).toEqual(["x", "y", "z"]);
+    expect(current.order).toEqual(["x", "y", "z"]);
+    expect(current.error).toBeNull();
+  });
+
   it("keeps retired aliases in place, appends new cards and drops removed ones", async () => {
     vi.spyOn(api, "searchEverywhereStart").mockResolvedValue({
       id: "session-one",

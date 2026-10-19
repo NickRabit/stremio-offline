@@ -81,6 +81,9 @@ export function useSearchEverywhere(options: { active: boolean; covered: boolean
   if (slotRef.current === null) slotRef.current = slotId();
   const generationRef = useRef(0);
   const restartDepthRef = useRef(0);
+  /** An expired session is started again behind the results already drawn: they stay until the
+   *  new session has answered in full, so the page never shrinks under the reader. */
+  const holdingRef = useRef(false);
   const sessionIdRef = useRef<string | null>(null);
   const revisionRef = useRef(0);
   const snapshotRef = useRef<SearchSnapshot | null>(null);
@@ -129,7 +132,7 @@ export function useSearchEverywhere(options: { active: boolean; covered: boolean
   };
 
   const pollDelay = (): number => {
-    if (snapshotRef.current?.state === "partial") return POLL_PARTIAL_MS;
+    if (holdingRef.current || snapshotRef.current?.state === "partial") return POLL_PARTIAL_MS;
     if (snapshotRef.current?.state === "complete" && completeSinceRef.current !== null
       && Date.now() - completeSinceRef.current > POLL_COMPLETE_SLOW_AFTER_MS) {
       return POLL_COMPLETE_SLOW_MS;
@@ -138,6 +141,11 @@ export function useSearchEverywhere(options: { active: boolean; covered: boolean
   };
 
   const applySnapshot = (next: SearchSnapshot, freshLayout: boolean) => {
+    if (holdingRef.current && !freshLayout && next.state === "partial") {
+      revisionRef.current = next.revision;
+      return;
+    }
+    holdingRef.current = false;
     const adoptServerOrder = freshLayout || !interactedRef.current;
     const main = adoptServerOrder ? next.clusters.map((cluster) => cluster.key) : mergeOrder(orderRef.current, next.clusters, next.aliases);
     const unidentified = adoptServerOrder
@@ -176,6 +184,7 @@ export function useSearchEverywhere(options: { active: boolean; covered: boolean
     if (value instanceof ApiError && value.status === 410) {
       if (restartDepthRef.current === 0) {
         restartDepthRef.current = 1;
+        holdingRef.current = snapshotRef.current !== null;
         startSearch(query, false);
         return;
       }
@@ -248,6 +257,7 @@ export function useSearchEverywhere(options: { active: boolean; covered: boolean
     completeSinceRef.current = null;
     revisionRef.current = 0;
     restartDepthRef.current = 0;
+    holdingRef.current = false;
     setCommittedState("");
     setDraftState("");
     scopeRef.current = null;
@@ -271,6 +281,7 @@ export function useSearchEverywhere(options: { active: boolean; covered: boolean
     if (freshLayout) {
       restartDepthRef.current = 0;
       interactedRef.current = false;
+      holdingRef.current = false;
     }
     const generation = ++generationRef.current;
     const requestSources = sourcesRef.current.length ? sourcesRef.current : ALL_SOURCES;
@@ -278,7 +289,7 @@ export function useSearchEverywhere(options: { active: boolean; covered: boolean
     committedRef.current = query;
     setCommittedState(query);
     setError(null);
-    setPreviousQuery(snapshotRef.current !== null);
+    setPreviousQuery(snapshotRef.current !== null && !holdingRef.current);
     setSnapshotState(snapshotRef.current);
     completeSinceRef.current = null;
     const controller = new AbortController();
