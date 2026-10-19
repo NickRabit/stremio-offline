@@ -43,19 +43,26 @@ export interface SourceFiltersProps {
   sort: { value: StreamSort; onChange: (value: StreamSort) => void };
 }
 
+/** A place that was asked and had nothing is no choice to offer: picking it would only empty the
+ *  list. The one already chosen stays, so the menu still says what is selected. */
+const offered = (field: SourceFilterField): SourceFilterChoice[] =>
+  field.options.filter((option) => option.count > 0 || option.value === field.value);
+
 /** The source, language and order menus over one list of sources, drawn the same way in the
  *  catalogue and in a library detail. The caller owns the options and their counts. */
 export function SourceFilters({ visible, addon, language, sort }: SourceFiltersProps) {
   useI18n();
   if (!visible) return null;
+  const addonOptions = offered(addon);
+  const languageOptions = language ? offered(language) : [];
   return <div className="stream-filters">
     <label><span>{t("sources.addon")}</span><select value={addon.value} onChange={(event) => addon.onChange(event.target.value)}>
       <option value="">{addon.all.label} ({addon.all.count})</option>
-      {addon.options.map((option) => <option key={option.value} value={option.value}>{option.label} ({option.count})</option>)}
+      {addonOptions.map((option) => <option key={option.value} value={option.value}>{option.label} ({option.count})</option>)}
     </select></label>
-    {language && language.options.length > 0 && <label><span>{t("auth.language")}</span><select value={language.value} onChange={(event) => language.onChange(event.target.value)}>
+    {language && languageOptions.length > 0 && <label><span>{t("auth.language")}</span><select value={language.value} onChange={(event) => language.onChange(event.target.value)}>
       <option value="">{language.all.label} ({language.all.count})</option>
-      {language.options.map((option) => <option key={option.value} value={option.value}>{option.label} ({option.count})</option>)}
+      {languageOptions.map((option) => <option key={option.value} value={option.value}>{option.label} ({option.count})</option>)}
     </select></label>}
     <label><span>{t("common.sorting")}</span><select value={sort.value} onChange={(event) => sort.onChange(event.target.value as StreamSort)}>
       <option value="recommended">{t("sources.sortRecommended")}</option>

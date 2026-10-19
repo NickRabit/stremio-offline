@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { SourceRows } from "./source-rows";
+import { SourceFilters, SourceRows } from "./source-rows";
 import { setLocale, t } from "./i18n";
 import type { Stream } from "./types";
 
@@ -85,5 +85,28 @@ describe("SourceRows", () => {
     await act(async () => root.render(<SourceRows rows={[twice, { ...twice }, mine, other]} selected={null} onSelect={() => {}}/>));
     expect([...host.querySelectorAll("button")].map((node) => node.querySelector("strong")!.textContent)).toEqual(["Twice", "Mine", "Other"]);
     expect(errors.mock.calls.flat().join(" ")).not.toContain("same key");
+  });
+});
+
+describe("SourceFilters", () => {
+  const field = (value: string) => ({
+    value, onChange: () => {},
+    all: { label: "All", count: 5 },
+    options: [
+      { value: "pleasure", label: "My Pleasure $$$", count: 5 },
+      { value: "remote:films", label: "Jellyfin · Films", count: 0 },
+      { value: "remote:series", label: "Jellyfin · Series", count: 0 },
+    ],
+  });
+  const options = () => [...host.querySelector("select")!.querySelectorAll("option")].map((option) => option.textContent);
+
+  it("offers no place that answered nothing", () => {
+    act(() => root.render(<SourceFilters visible addon={field("")} sort={{ value: "recommended", onChange: () => {} }}/>));
+    expect(options()).toEqual(["All (5)", "My Pleasure $$$ (5)"]);
+  });
+
+  it("keeps an empty place that is the current choice", () => {
+    act(() => root.render(<SourceFilters visible addon={field("remote:series")} sort={{ value: "recommended", onChange: () => {} }}/>));
+    expect(options()).toEqual(["All (5)", "My Pleasure $$$ (5)", "Jellyfin · Series (0)"]);
   });
 });
