@@ -265,6 +265,21 @@ class CatalogDetailTest {
   }
 
   @Test
+  fun `a title opened without its catalogue files the position under the playing stream's addon`() {
+    // Search and Favourites open a title with no catalogue behind it. A position stored under no
+    // addon would pass every addon's Continue watching switch, so the stream's addon names it.
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    api.streamsValues["movie:tt1"] = listOf(stream("s1", name = "FullHD").copy(addonKey = "pleasure"))
+    mount(api, movieArgs())
+    compose.waitForIdle()
+
+    press(Key.DirectionCenter)
+
+    assertEquals("pleasure", played.single().addonKey)
+  }
+
+  @Test
   fun `the background stays inert while a panel is open`() {
     val api = FakeTvApi()
     api.settingsValue = settings()

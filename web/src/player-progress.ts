@@ -31,3 +31,19 @@ export function initialPlaybackPosition(
   if (remoteContext && saved?.mediaSourceId !== remoteContext.mediaSourceId) return 0;
   return position;
 }
+
+/** The addon a catalogue position is filed under, which decides whether that addon's Continue
+ *  watching and Home switches hide it. A title on the catalogue panel came from the catalogue
+ *  being browsed -- unless the panel holds search results, which every searched addon answered:
+ *  then it is the addon the search was narrowed to, else the addon whose stream is playing. A
+ *  position filed under no addon at all passes every switch, so the stream's addon is the last
+ *  word rather than nothing. */
+export function panelProgressAddonKey(panel: {
+  searching: boolean;
+  scopeAddonKey?: string;
+  catalogAddonKey?: string;
+  streamAddonKey?: string;
+}): string | undefined {
+  if (panel.searching) return panel.scopeAddonKey || panel.streamAddonKey || undefined;
+  return panel.catalogAddonKey || panel.streamAddonKey || undefined;
+}
