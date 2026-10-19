@@ -754,6 +754,8 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
         catch (value) {
           if (epoch !== seekEpochRef.current) return;
           if (!(value instanceof ApiError) || !(value.code === "RESOURCE_NOT_FOUND" || value.messageKey === "err.playbackSessionGone")) throw value;
+          // A fresh start would only hand back the stream the browser just refused.
+          if (escalating) { abandon(t("player.browserRefused")); return; }
           // The server may have restarted in the meantime, or cleaned up an idle session.
           // A new HLS session starts at the target; a direct stream is moved by the browser.
           next = await api.startPlayback(stream!, capabilities(), requested, addonSubtitles.map((item) => item.subtitleId), { audioLanguage: audioPreferenceRef.current, subtitleLanguage: subtitlePreferenceRef.current });
