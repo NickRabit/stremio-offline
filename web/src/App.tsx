@@ -33,6 +33,7 @@ import { catalogTypeTag } from "./catalog-labels";
 import { addonNotices, canQueue, catalogSourceRows, filmHasNoSource, isLocalStream, isRemoteStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, remoteFilterId, remoteSourceFilter, repickStream, streamLanguages, visibleCatalogStreams, type StreamSort } from "./streams";
 import { providerLabel, SourceFilters, SourceRows } from "./source-rows";
 import { alternativeProgressSaved, sourceProgressOwner, type SourceProgressOwner } from "./source-progress";
+import { panelProgressAddonKey } from "./player-progress";
 import { alternativeSaveRequest } from "./alternative-save";
 import { sourceIdentity } from "./library-detail-sources";
 import { parseSearchScope } from "./search-scope";
@@ -3669,7 +3670,10 @@ export function App() {
     <Player nextTitle={localStream ? nextFile?.title : detailPlaying ? (nextDetailEpisode ? episodeLabel(nextDetailEpisode) : undefined) : catalogueNext ? episodeLabel(catalogueNext) : undefined} nextBusy={nextBusy} onNext={localStream ? nextFile ? () => playAdjacent(nextFile) : undefined : detailPlaying ? (nextDetailEpisode ? playNextDetailEpisode : undefined) : catalogueNext ? playNextCatalogEpisode : undefined} autoNext={localStream ? localEpisode : detailPlaying ? Boolean(nextDetailEpisode) : Boolean(catalogueNext)} previousTitle={previousFile?.title} onPrevious={previousFile ? () => playAdjacent(previousFile) : undefined} open={playerOpen} title={localStream ? localTitle : detailPlaying ? detailPlaying.title : playerSubject?.title || localTitle} stream={localStream ?? detailPlaying?.stream ?? selectedStream} subtitles={localStream ? fileSubtitles : detailPlaying ? detailPlaying.subtitles : subtitles} subtitleLanguage={settings.subtitleLanguage} audioLanguage={settings.audioLanguage} onPreferences={setPlaybackPreferences}
       progressKey={localStream?.localPath ? `file:${localStream.localPath}` : detailPlaying ? `${detailPlaying.target.type}:${catalogueStreamId(detailPlaying.target)}` : playerSubject?.key ?? (playingCatalogue ? `${playingCatalogue.type}:${playingCatalogue.id}` : undefined)}
       progressPoster={localStream ? localPoster : detailPlaying ? detailPlaying.target.poster : playerSubject?.poster ?? localPoster}
-      progressAddonKey={localStream ? undefined : detailPlaying ? detailPlaying.stream.addonKey : playerSubject?.panel ? currentCatalog?.addonKey : selectedStream?.addonKey}
+      progressAddonKey={localStream ? undefined : detailPlaying ? detailPlaying.stream.addonKey : playerSubject?.panel ? panelProgressAddonKey({
+        searching: Boolean(submittedQuery), scopeAddonKey: searchScope.addonKey,
+        catalogAddonKey: currentCatalog?.addonKey, streamAddonKey: selectedStream?.addonKey,
+      }) : selectedStream?.addonKey}
       favorite={localStream?.localPath ? libraryFavorites.includes(localStream.localPath) || Boolean(playingCatalogue && inWatchlist(playingCatalogue.type, playingCatalogue.id)) : detailPlaying ? inWatchlist(detailPlaying.target.type, detailPlaying.target.id) : playerSubject?.panel && selected ? inWatchlist(selected.type, selected.id) : false}
       fromBeginning={localStream ? localFromBeginning : detailPlaying?.fromBeginning}
       onToggleFavorite={localStream?.localPath || detailPlaying || (playerSubject?.panel && selected) ? () => void togglePlayerFavorite() : undefined}

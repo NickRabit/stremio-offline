@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { initialPlaybackPosition, progressToSave } from "./player-progress";
+import { initialPlaybackPosition, panelProgressAddonKey, progressToSave } from "./player-progress";
 
 const meta = { key: "movie:tt1", title: "Film", path: undefined, poster: "p.jpg", addonKey: undefined };
 
@@ -46,5 +46,29 @@ describe("initialPlaybackPosition", () => {
     expect(initialPlaybackPosition({ position: Number.NaN }, null, false)).toBe(0);
     expect(initialPlaybackPosition({ position: Number.POSITIVE_INFINITY }, null, false)).toBe(0);
     expect(initialPlaybackPosition({ position: -5 }, null, false)).toBe(0);
+  });
+});
+
+describe("the addon a panel position is filed under", () => {
+  const cinemeta = "cinemeta-key";
+  const pleasure = "pleasure-key";
+
+  it("is the browsed catalogue's addon while no search is on", () => {
+    expect(panelProgressAddonKey({ searching: false, catalogAddonKey: cinemeta, streamAddonKey: pleasure })).toBe(cinemeta);
+  });
+
+  it("is the addon the search was narrowed to, not the catalogue still selected underneath", () => {
+    // An addon kept out of all-addon search is searched by narrowing to it; the catalogue picker
+    // still names the one browsed before, whose Continue watching switch is on.
+    expect(panelProgressAddonKey({ searching: true, scopeAddonKey: pleasure, catalogAddonKey: cinemeta, streamAddonKey: pleasure })).toBe(pleasure);
+  });
+
+  it("is the playing stream's addon when a search across every addon found the title", () => {
+    expect(panelProgressAddonKey({ searching: true, catalogAddonKey: cinemeta, streamAddonKey: pleasure })).toBe(pleasure);
+  });
+
+  it("falls back to the stream's addon rather than filing the position under none", () => {
+    expect(panelProgressAddonKey({ searching: false, streamAddonKey: pleasure })).toBe(pleasure);
+    expect(panelProgressAddonKey({ searching: false })).toBeUndefined();
   });
 });
