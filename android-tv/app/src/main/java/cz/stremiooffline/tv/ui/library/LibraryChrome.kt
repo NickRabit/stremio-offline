@@ -1,6 +1,7 @@
 package cz.stremiooffline.tv.ui.library
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -14,7 +15,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
@@ -33,6 +36,7 @@ import cz.stremiooffline.tv.ui.catalog.voiceKey
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
 import cz.stremiooffline.tv.ui.components.TvTextField
+import cz.stremiooffline.tv.ui.shell.LocalRailFocus
 import cz.stremiooffline.tv.ui.theme.Tokens
 import androidx.compose.ui.text.input.ImeAction
 import kotlinx.coroutines.android.awaitFrame
@@ -102,6 +106,7 @@ internal fun LibraryBreadcrumbLine(text: String, tag: String) {
  * screen's own Back is allowed to navigate. The active half adds whatever else belongs to the row
  * through [trailing].
  */
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 internal fun LibraryToolbar(
   /** True while the editor is open. */
@@ -170,16 +175,31 @@ internal fun LibraryToolbar(
         )
         if (voice?.available == true && available) VoiceButton(voice)
       } else {
-        FocusButton(
-          text = committed.ifEmpty { stringResource(R.string.media_server_search_action) },
-          onClick = onOpen,
-          labelMaxWidth = 240.dp,
+        // The mic sits nearer the first tile's centre than the action, so UP from the grid would skip
+        // the action; a group entered through the action keeps it the leading item. The group also
+        // keeps the shell's LEFT-to-rail off the mic, so it has to leave by that rail item itself.
+        val rail = LocalRailFocus.current
+        Row(
           modifier = Modifier
-            .focusRequester(openFocus)
-            .testTag(TagLibrarySearchAction)
-            .then(if (downFocus != null) Modifier.focusProperties { down = downFocus } else Modifier),
-        )
-        if (voice?.available == true && available) VoiceButton(voice)
+            .focusProperties {
+              enter = { if (it == FocusDirection.Up) openFocus else FocusRequester.Default }
+              exit = { if (it == FocusDirection.Left) rail ?: FocusRequester.Default else FocusRequester.Default }
+            }
+            .focusGroup(),
+          verticalAlignment = Alignment.Bottom,
+          horizontalArrangement = Arrangement.spacedBy(9.dp),
+        ) {
+          FocusButton(
+            text = committed.ifEmpty { stringResource(R.string.media_server_search_action) },
+            onClick = onOpen,
+            labelMaxWidth = 240.dp,
+            modifier = Modifier
+              .focusRequester(openFocus)
+              .testTag(TagLibrarySearchAction)
+              .then(if (downFocus != null) Modifier.focusProperties { down = downFocus } else Modifier),
+          )
+          if (voice?.available == true && available) VoiceButton(voice)
+        }
       }
     }
     trailing?.invoke()
