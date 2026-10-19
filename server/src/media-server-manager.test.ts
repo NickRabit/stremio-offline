@@ -72,7 +72,7 @@ class FakeServer {
   items: Record<string, ProviderItem[]> = {};
   directories: Record<string, ProviderItem[]> = {};
   directoryCalls: Array<{ parentId: string; options: Record<string, unknown> }> = [];
-  directoryOverride: ((parentId: string, options: { cursor?: string; limit?: number }) => FakePage) | undefined;
+  directoryOverride: ((parentId: string, options: { cursor?: string; limit?: number; type?: string }) => FakePage) | undefined;
   detailOf: Record<string, ProviderItem> = {};
   ancestorsOf: Record<string, string[]> = {};
   versionsOf: Record<string, ProviderVersion[]> = {};
@@ -3228,6 +3228,31 @@ test("previewDirectory prefers owned posters and bounds fallback to one child pa
     const before = harness.server.directoryCalls.length;
     assert.deepEqual(await harness.manager.previewDirectory(harness.admin, off.id), { posters: [], versions: [] });
     assert.equal(harness.server.directoryCalls.length, before, "a library with the mosaic off makes no provider call");
+  });
+});
+
+test("previewDirectory draws an unidentified show from its episodes when no season has a picture", async () => {
+  await withHarness(async (harness) => {
+    const connection = await connect(harness);
+    harness.server.libraries.push({ id: "shows", name: "Shows", type: "mixed" });
+    const library = await harness.manager.attachLibrary(harness.admin, connection.id, { remoteId: "shows" });
+    harness.server.detailOf["sh1"] = { id: "sh1", name: "Unidentified show", type: "series", providerIds: {}, hasPrimaryImage: false };
+    harness.server.ancestorsOf["sh1"] = ["shows"];
+    harness.server.directoryOverride = (parentId, options) => {
+      if (parentId !== "sh1") return { items: [], total: 0 };
+      const items = options.type === "episode"
+        ? [episode("e1", { seriesId: "sh1", hasPrimaryImage: true, primaryImageTag: "e1-tag" }), episode("e2", { seriesId: "sh1", hasPrimaryImage: true, primaryImageTag: "e2-tag" })]
+        : [{ id: "season-1", name: "Season 1", type: "season" as const, providerIds: {}, hasPrimaryImage: false }];
+      return { items, total: items.length };
+    };
+
+    const preview = await harness.manager.previewDirectory(harness.admin, library.id, "sh1");
+    assert.deepEqual(preview.posters, [
+      `/api/remote-libraries/${library.id}/items/e1/artwork/Primary?tag=e1-tag`,
+      `/api/remote-libraries/${library.id}/items/e2/artwork/Primary?tag=e2-tag`,
+    ]);
+    assert.deepEqual(harness.server.directoryCalls.map((call) => call.options.type ?? null), [null, "episode"],
+      "the season page first, then one bounded episode page");
   });
 });
 

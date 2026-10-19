@@ -1496,9 +1496,14 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
     const playable = item.type === "movie" || item.type === "episode";
     const stored = itemStates[stateKey(selected?.id ?? "", item.id)];
     const locked = menuLoading || menuBusy || Boolean(menuError);
+    // A show the server could not identify has no picture of its own; it borrows the folder fan,
+    // which the server draws from its episodes when its seasons have none either.
+    const unpictured = item.type === "series" && !item.poster && !item.wide;
     return <LibraryItem key={item.id} dataRemoteId={item.id} artRef={artRef(key)} onOpen={() => onOpen(item)}
       art={<>
-        <RemoteTileArt shape={libraryTileShape} poster={item.poster} wide={item.wide} fallback={<Film/>}/>
+        {unpictured
+          ? <RemoteFolderArt {...previewKey} parentId={item.id} enabled={preview.enabled} target={artRef(key)} shape={libraryTileShape}/>
+          : <RemoteTileArt shape={libraryTileShape} poster={item.poster} wide={item.wide} fallback={<Film/>}/>}
         {stored?.favorite && <i className="fav-mark"><Star/></i>}
         {stored?.watched && <i className="browse-badge">{t("mediaServer.watched")}</i>}
       </>}

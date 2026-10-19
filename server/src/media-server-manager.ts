@@ -1561,6 +1561,7 @@ export class MediaServerManager {
     }
     let root = library.remoteId;
     let tag: string | undefined;
+    let parentType: string | undefined;
     if (requestedParent === undefined) {
       tag = session.libraries.find((entry) => entry.id === root)?.primaryImageTag;
     } else {
@@ -1568,6 +1569,7 @@ export class MediaServerManager {
       if (parent.type === "season") return { posters: [], versions: [] };
       root = parent.itemId;
       tag = parent.primaryImageTag;
+      parentType = parent.type;
     }
     this.recheckContent(authority, request, library.id, connection);
     if (tag !== undefined && (!preferChildren || requestedParent !== undefined)) {
@@ -1580,10 +1582,25 @@ export class MediaServerManager {
     }, request));
     this.recheckContent(authority, request, library.id, connection);
     for (const item of page.items) this.putProof(this.proofOf(user, library, connection, item));
-    const posters = page.items.filter((item) => item.hasPrimaryImage === true).slice(0, 4)
+    let rows = page.items;
+    let posters = rows.filter((item) => item.hasPrimaryImage === true).slice(0, 4)
       .map((item) => remoteArtworkPath(library.id, item.id, "Primary", item.primaryImageTag));
-    this.rememberPreview(library, connection, requestedParent, preferChildren, page.items, posters);
-    return { posters, versions: mosaicVersions(page.items) };
+    // A show the server never identified has no picture of its own and seasons without one either,
+    // yet its episodes carry stills: the fan is drawn from those rather than left empty.
+    if (posters.length === 0 && parentType === "series") {
+      const episodes = await this.upstream(connection, request, () => session.provider.pageDirectory(session.token, connection.accountId, root, {
+        mode: "titles",
+        type: "episode",
+        limit: 12,
+      }, request));
+      this.recheckContent(authority, request, library.id, connection);
+      for (const item of episodes.items) this.putProof(this.proofOf(user, library, connection, item));
+      rows = episodes.items;
+      posters = rows.filter((item) => item.hasPrimaryImage === true).slice(0, 4)
+        .map((item) => remoteArtworkPath(library.id, item.id, "Primary", item.primaryImageTag));
+    }
+    this.rememberPreview(library, connection, requestedParent, preferChildren, rows, posters);
+    return { posters, versions: mosaicVersions(rows) };
   }
 
   /** One folder's fan as bytes: the pictures the tile would have drawn itself, read here under
