@@ -123,7 +123,8 @@ export interface FavoritesOptions {
   filter?: ReturnType<typeof parseFavoriteFilter>;
   skip?: number;
   limit?: number;
-  /** Home drops the library stars of a library switched off there. */
+  /** Home drops the library stars of a library switched off there, and the catalogue stars
+   *  of an add-on switched off there. */
   onHome?: boolean;
   /** Whether this page reads the media server itself. Home's shelf mixes the local page with
    *  the remote cards on its own, so it asks for the local half alone. */
@@ -191,6 +192,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     if (!id) throw new AppError("Missing title id.", "err.missingTitleId");
     const key = `${type}:${id}`;
     const wanted = Boolean(req.body.favorite);
+    const addonKey = typeof req.body.addonKey === "string" ? req.body.addonKey.trim() : "";
     // One title wears one star: clearing the catalogue's own clears the library paths that stand
     // for it too, or the star would come straight back from the other side.
     const records = wanted ? {} : metaStore.qualifiedMeta();
@@ -199,7 +201,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
       .filter((path) => { const title = titleOfPath(path, records, units); return Boolean(title && `${title.type}:${title.id}` === key); }));
     await updateData(req, (data) => {
       const all = { ...watchlistOf(data) };
-      if (wanted) all[key] = { type, id, name: String(req.body.name ?? id), poster: posterOf(req.body.poster), addedAt: new Date().toISOString() };
+      if (wanted) all[key] = { type, id, name: String(req.body.name ?? id), poster: posterOf(req.body.poster), addedAt: new Date().toISOString(), ...(addonKey ? { addonKey } : {}) };
       else delete all[key];
       data.watchlist = all;
       if (starredPaths.size) data.favorites = data.favorites.filter((path) => !starredPaths.has(path));
@@ -647,6 +649,7 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
     }
 
     const catalog: FavoriteEntryCatalog[] = [];
+    const addons = store.addons();
     const watchlist = Object.entries(watchlistOf(data))
       .map(([key, value]) => ({ key, ...value }))
       .filter((entry) => Boolean(entry.id))
@@ -656,6 +659,9 @@ export function registerPersonalRoutes(app: express.Application, deps: PersonalD
       // Starred in the library too: the library card becomes this catalogue star too.
       const starredCopy = owner.get(identity);
       if (starredCopy) { starredCopy.catalogId = entry.id; continue; }
+      // Home leaves out a title starred from an add-on switched off there; an entry that never
+      // recorded its add-on stays.
+      if (options.onHome && entry.addonKey && addons.find((addon) => addon.key === entry.addonKey)?.showOnHome === false) continue;
       // Downloaded and identified: the account opens the local copy rather than the add-on.
       // The binding is looked up by the entry's own kind, never across kinds.
       const bound = boundByImdb.get(identity);

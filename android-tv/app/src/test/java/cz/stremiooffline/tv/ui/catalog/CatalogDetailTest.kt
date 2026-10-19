@@ -188,6 +188,36 @@ class CatalogDetailTest {
   }
 
   @Test
+  fun `a star names the catalogue's addon`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    api.streamsValues["movie:tt1"] = listOf(stream("s1", name = "FullHD").copy(addonKey = "pleasure"))
+    mount(api, movieArgs().copy(addonKey = "com.linvo.cinemeta"))
+    compose.waitForIdle()
+
+    focusFromLeft(TagCatalogFavourite)
+    press(Key.DirectionCenter)
+
+    assertEquals(listOf<String?>("com.linvo.cinemeta"), api.favoriteAddonKeys)
+  }
+
+  @Test
+  fun `a star on a title opened without its catalogue names the source's addon`() {
+    // Search and Favourites open a title with no catalogue behind it; a star filed under no addon
+    // would pass every addon's Home switch.
+    val api = FakeTvApi()
+    api.settingsValue = settings()
+    api.streamsValues["movie:tt1"] = listOf(stream("s1", name = "FullHD").copy(addonKey = "pleasure"))
+    mount(api, movieArgs())
+    compose.waitForIdle()
+
+    focusFromLeft(TagCatalogFavourite)
+    press(Key.DirectionCenter)
+
+    assertEquals(listOf<String?>("pleasure"), api.favoriteAddonKeys)
+  }
+
+  @Test
   fun `sources open in arrangeStreams order, the default is marked and OK chooses it`() {
     val api = FakeTvApi()
     api.settingsValue = settings()

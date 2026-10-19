@@ -522,6 +522,8 @@ test("new episodes are the owner's own, inside the window and after the marker",
   assert.equal(items[1].name, "Show");
   assert.equal(items[1].type, "series");
   assert.equal(items[1].videoId, "tt1:1:3");
+  const included = service.newEpisodes("u1", () => undefined, (entry) => entry.id !== paused.id);
+  assert.equal(included.some((item) => item.followId === paused.id), false, "a follow the caller leaves out yields no episode");
 });
 
 const NOW = Date.parse("2024-06-01T00:00:00.000Z");

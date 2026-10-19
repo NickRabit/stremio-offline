@@ -351,7 +351,7 @@ export function App() {
   const [detailFollow, setDetailFollow] = useState<FollowView | null>(null);
   const [followDialogOpen, setFollowDialogOpen] = useState(false);
   /** The series whose Follow chip was pressed: how to follow it is asked before anything is saved. */
-  const [followStart, setFollowStart] = useState<Meta | null>(null);
+  const [followStart, setFollowStart] = useState<(Meta & { addonKey?: string }) | null>(null);
   const [libraryFavorites, setLibraryFavorites] = useState<string[]>([]);
   const [localPoster, setLocalPoster] = useState<string | undefined>(undefined);
   // The path the listing should scroll to and highlight after a jump from the download queue.
@@ -451,10 +451,12 @@ export function App() {
     } catch (error) { fail(error); }
   };
   const inWatchlist = (type?: string, id?: string) => Boolean(id && watchlist.some((item) => item.key === `${type ?? "movie"}:${id}`));
-  const toggleWatchlist = async (item: Meta) => {
+  /** `addonKey` is the add-on the title came from, picked as its playback position picks it, so
+   *  that add-on's Home switch can hide the star. */
+  const toggleWatchlist = async (item: Meta, addonKey?: string) => {
     const favorite = !inWatchlist(item.type, item.id);
     try {
-      await api.setWatchlist({ type: item.type || "movie", id: item.id, name: item.name, poster: item.poster, favorite });
+      await api.setWatchlist({ type: item.type || "movie", id: item.id, name: item.name, poster: item.poster, ...(favorite && addonKey ? { addonKey } : {}), favorite });
       setWatchlist(await api.watchlist());
       // The library's own stars follow the title's: the listing draws them from the browse rows.
       await loadBrowse(browsePath);
@@ -480,10 +482,10 @@ export function App() {
     // A detail playback is its own title, not whatever the browse panel happens to hold.
     if (detailPlaying) {
       const { target } = detailPlaying;
-      await toggleWatchlist({ type: target.type, id: target.id, name: target.name, ...(target.poster ? { poster: target.poster } : {}) });
+      await toggleWatchlist({ type: target.type, id: target.id, name: target.name, ...(target.poster ? { poster: target.poster } : {}) }, detailPlaying.stream.addonKey);
       return;
     }
-    if (selected) await toggleWatchlist(selected);
+    if (selected) await toggleWatchlist(selected, panelAddonKey(selectedStream?.addonKey));
   };
 
   /** Opens a catalogue title; the resume position then follows from the key on its own. */
@@ -787,6 +789,10 @@ export function App() {
     return () => { observer.disconnect(); window.clearTimeout(settled); };
   }, [view, libraryCompact, catalogCompact, items, browse]);
   const currentCatalog = catalogs.find((catalog) => `${catalog.addonKey}:${catalog.type}:${catalog.id}` === selectedCatalog) ?? catalogs[0];
+  const panelAddonKey = (streamAddonKey?: string) => panelProgressAddonKey({
+    searching: Boolean(submittedQuery), scopeAddonKey: searchScope.addonKey,
+    catalogAddonKey: currentCatalog?.addonKey, streamAddonKey,
+  });
   const searchRequired = Boolean(currentCatalog?.extra?.some((extra) => extra.name === "search" && extra.isRequired));
   const downloadTitleLanguage = settings.downloadTitleLanguage === "ui" ? settings.uiLanguage : settings.downloadTitleLanguage;
   const baseDownloadTitle = selectedDownloadTitle || selected?.name || "Video";
@@ -3122,15 +3128,17 @@ export function App() {
   /** The chips the shared detail draws: the watchlist star, and the follow chip for a show the
    *  account can follow. A film is only worth following while no source of it can play. */
   const detailWatchlisted = inWatchlist(catalogueDetail?.type, catalogueDetail?.id);
+  // The shared detail has no catalogue behind it: the source it has selected names the add-on.
+  const detailAddonKey = detailSource?.addonKey || catalogueDetail?.initialSource?.addonKey || undefined;
   const detailChips = catalogueDetail ? <TitleChips
     kind={t(catalogueDetail.type === "series" ? "catalog.oneSeries" : "catalog.oneMovie")}
     trailer={detailTrailer} links={detailLinks} onTrailer={setTrailerOpen} secureMode={settings.secureMode}
     leading={<>
       <button className={`watch-star ${detailWatchlisted ? "on" : ""}`} title={t(detailWatchlisted ? "watchlist.remove" : "watchlist.add")}
-        onClick={() => void toggleWatchlist({ type: catalogueDetail.type, id: catalogueDetail.id, name: catalogueDetail.name, ...(catalogueDetail.poster ? { poster: catalogueDetail.poster } : {}) })}><Star/></button>
+        onClick={() => void toggleWatchlist({ type: catalogueDetail.type, id: catalogueDetail.id, name: catalogueDetail.name, ...(catalogueDetail.poster ? { poster: catalogueDetail.poster } : {}) }, detailAddonKey)}><Star/></button>
       {(catalogueDetail.type === "series" || (detailRead !== null && !detailRead.pending && !detailRead.playable)) && (catalogueFollow
         ? <button className="follow-chip on" onClick={() => setDetailFollowOpen(true)}><BellRing/>{t("follow.following")}{catalogueFollow.autoDownload && <span className="follow-chip-download" aria-hidden="true" title={t("follow.autoOnHint")}><Download/></span>}</button>
-        : <button className="follow-chip" onClick={() => setFollowStart({ type: catalogueDetail.type, id: catalogueDetail.id, name: catalogueDetail.name, ...(catalogueDetail.poster ? { poster: catalogueDetail.poster } : {}), ...(detailRead?.meta?.videos ? { videos: detailRead.meta.videos } : {}) })}><Bell/>{t("follow.follow")}</button>)}
+        : <button className="follow-chip" onClick={() => setFollowStart({ type: catalogueDetail.type, id: catalogueDetail.id, name: catalogueDetail.name, ...(catalogueDetail.poster ? { poster: catalogueDetail.poster } : {}), ...(detailRead?.meta?.videos ? { videos: detailRead.meta.videos } : {}), ...(detailAddonKey ? { addonKey: detailAddonKey } : {}) })}><Bell/>{t("follow.follow")}</button>)}
     </>}/> : undefined;
 
   if (session === undefined) return <div className="login-screen"><div className="loading">{t("common.loading")}</div></div>;
@@ -3331,7 +3339,7 @@ export function App() {
                   <strong>{item.name}</strong>
                   <small title={metadata}>{metadata}</small>
                   {menuFor === klic && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
-                    <button onClick={() => { setMenuFor(null); void toggleWatchlist(item); }}><Star/> {t(vSeznamu ? "watchlist.remove" : "watchlist.add")}</button>
+                    <button onClick={() => { setMenuFor(null); void toggleWatchlist(item, panelAddonKey()); }}><Star/> {t(vSeznamu ? "watchlist.remove" : "watchlist.add")}</button>
                     {postup && <button onClick={() => void forgetCatalogWatched(postup)}><RotateCcw/> {t("library.markUnwatched")}</button>}
                   </span>}
                 </button>;
@@ -3351,7 +3359,7 @@ export function App() {
             <div className="detail-primary"><DetailHero className={selected.videos?.length ? "series-hero" : ""} background={selected.background}
               gallery={galleryImages.length > 0 ? <button className={`gallery-open ${galleryImages[0].shape}`} onClick={() => presentGallery(galleryImages, selected.type === "movie" || selected.type === "series" ? { type: selected.type, id: selected.id } : null)} title={t("gallery.openHint")}><img src={galleryImages[0].url} alt="" onError={hideBroken}/><span><Images/> {galleryImages.length > 1 ? t("gallery.stillCount", { count: galleryImages.length }) : t("gallery.enlarge")}</span></button> : undefined}
               chips={<TitleChips leading={<><button className={`watch-star ${inWatchlist(selected.type, selected.id) ? "on" : ""}`} title={t(inWatchlist(selected.type, selected.id) ? "watchlist.remove" : "watchlist.add")}
-                onClick={() => void toggleWatchlist(selected)}><Star/></button>{(selected.type === "series" || selected.type === "movie" || Boolean(selected.videos?.length)) && (detailFollow ? <button className="follow-chip on" onClick={() => setFollowDialogOpen(true)}><BellRing/>{t("follow.following")}{detailFollow.autoDownload && <span className="follow-chip-download" aria-hidden="true" title={t("follow.autoOnHint")}><Download/></span>}</button> : (selected.type !== "movie" || movieHasNoSource) && <button className="follow-chip" onClick={() => setFollowStart(selected)}><Bell/>{t("follow.follow")}</button>)}</>} kind={t(selected.type === "series" ? "catalog.oneSeries" : "catalog.oneMovie")} trailer={titleTrailer} links={titleLinks} onTrailer={setTrailerOpen} secureMode={settings.secureMode}
+                onClick={() => void toggleWatchlist(selected, panelAddonKey(selectedStream?.addonKey))}><Star/></button>{(selected.type === "series" || selected.type === "movie" || Boolean(selected.videos?.length)) && (detailFollow ? <button className="follow-chip on" onClick={() => setFollowDialogOpen(true)}><BellRing/>{t("follow.following")}{detailFollow.autoDownload && <span className="follow-chip-download" aria-hidden="true" title={t("follow.autoOnHint")}><Download/></span>}</button> : (selected.type !== "movie" || movieHasNoSource) && <button className="follow-chip" onClick={() => { const addonKey = panelAddonKey(selectedStream?.addonKey); setFollowStart(addonKey ? { ...selected, addonKey } : selected); }}><Bell/>{t("follow.follow")}</button>)}</>} kind={t(selected.type === "series" ? "catalog.oneSeries" : "catalog.oneMovie")} trailer={titleTrailer} links={titleLinks} onTrailer={setTrailerOpen} secureMode={settings.secureMode}
                 {...(selected.type === "movie" || selected.type === "series" ? { trailing: <button type="button" className="detail-info" aria-label={t("catalog.openDetail")} title={t("catalog.openDetail")} onClick={openSelectedDetail}><Info/></button> } : {})}/>}
               copy={<><h2>{selected.name}</h2><p className="meta-line">{imdbRating(selected) && <b className="imdb-rating" title={t("catalog.imdbRating", { rating: imdbRating(selected)! })}><Star/>{imdbRating(selected)}</b>}{imdbRating(selected) && [selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).length ? " · " : ""}{[selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).join(" · ")}</p><DetailDescription text={selected.description} loading={metaLoading} identityKey={selected.id} skeleton={skeletonLines}/></>}/></div>
 
@@ -3675,10 +3683,7 @@ export function App() {
     <Player nextTitle={localStream ? nextFile?.title : detailPlaying ? (nextDetailEpisode ? episodeLabel(nextDetailEpisode) : undefined) : catalogueNext ? episodeLabel(catalogueNext) : undefined} nextBusy={nextBusy} onNext={localStream ? nextFile ? () => playAdjacent(nextFile) : undefined : detailPlaying ? (nextDetailEpisode ? playNextDetailEpisode : undefined) : catalogueNext ? playNextCatalogEpisode : undefined} autoNext={localStream ? localEpisode : detailPlaying ? Boolean(nextDetailEpisode) : Boolean(catalogueNext)} previousTitle={previousFile?.title} onPrevious={previousFile ? () => playAdjacent(previousFile) : undefined} open={playerOpen} title={localStream ? localTitle : detailPlaying ? detailPlaying.title : playerSubject?.title || localTitle} stream={localStream ?? detailPlaying?.stream ?? selectedStream} subtitles={localStream ? fileSubtitles : detailPlaying ? detailPlaying.subtitles : subtitles} subtitleLanguage={settings.subtitleLanguage} audioLanguage={settings.audioLanguage} onPreferences={setPlaybackPreferences}
       progressKey={localStream?.localPath ? `file:${localStream.localPath}` : detailPlaying ? `${detailPlaying.target.type}:${catalogueStreamId(detailPlaying.target)}` : playerSubject?.key ?? (playingCatalogue ? `${playingCatalogue.type}:${playingCatalogue.id}` : undefined)}
       progressPoster={localStream ? localPoster : detailPlaying ? detailPlaying.target.poster : playerSubject?.poster ?? localPoster}
-      progressAddonKey={localStream ? undefined : detailPlaying ? detailPlaying.stream.addonKey : playerSubject?.panel ? panelProgressAddonKey({
-        searching: Boolean(submittedQuery), scopeAddonKey: searchScope.addonKey,
-        catalogAddonKey: currentCatalog?.addonKey, streamAddonKey: selectedStream?.addonKey,
-      }) : selectedStream?.addonKey}
+      progressAddonKey={localStream ? undefined : detailPlaying ? detailPlaying.stream.addonKey : playerSubject?.panel ? panelAddonKey(selectedStream?.addonKey) : selectedStream?.addonKey}
       favorite={localStream?.localPath ? libraryFavorites.includes(localStream.localPath) || Boolean(playingCatalogue && inWatchlist(playingCatalogue.type, playingCatalogue.id)) : detailPlaying ? inWatchlist(detailPlaying.target.type, detailPlaying.target.id) : playerSubject?.panel && selected ? inWatchlist(selected.type, selected.id) : false}
       fromBeginning={localStream ? localFromBeginning : detailPlaying?.fromBeginning}
       onToggleFavorite={localStream?.localPath || detailPlaying || (playerSubject?.panel && selected) ? () => void togglePlayerFavorite() : undefined}
@@ -3782,7 +3787,7 @@ export function App() {
     {followDialogOpen && detailFollow && <FollowDialog follow={detailFollow} videos={selected?.videos} languages={languages} libraries={libraries} addons={addons} audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} canRetain={session!.role === "admin"} onChanged={(updated) => applyFollowChange(detailFollow.id, updated)} onClose={() => setFollowDialogOpen(false)} onNotify={notify}/>}
     {followStart && <SeriesDownloadDialog type={followStart.type || "series"} label={followStart.name} title={followStart.name} episodes={followStart.type === "movie" ? [{ id: followStart.id }] : toEpisodes(followStart.videos)} audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} languages={languages} libraries={libraries} addons={addons}
       canRetain={session!.role === "admin"}
-      follow={{ create: { metaId: followStart.id, name: followStart.name, poster: followStart.poster }, onFollowed: (follow) => followed(followStart, follow) }} onClose={() => setFollowStart(null)}/>}
+      follow={{ create: { metaId: followStart.id, name: followStart.name, poster: followStart.poster, ...(followStart.addonKey ? { addonKey: followStart.addonKey } : {}) }, onFollowed: (follow) => followed(followStart, follow) }} onClose={() => setFollowStart(null)}/>}
     {galleryIndex !== null && shownGallery[galleryIndex] && <MediaGallery images={shownGallery} index={galleryIndex} onIndex={setGalleryIndex} onClose={closeGallery}/>}
     {(message || error) && <div className={`toast ${error ? "error" : ""}`}>{error || message}<button onClick={() => {setError("");setMessage("");}}><X/></button></div>}
   </div>;

@@ -111,3 +111,25 @@ describe("one click rule in the shell", () => {
     expect(app).toMatch(/card\.forgetKeys\?\.length \? api\.forgetManyProgress\(card\.forgetKeys\)/);
   });
 });
+
+describe("a star and a follow name the add-on the title came from", () => {
+  const app = source("./App.tsx");
+
+  it("sends the add-on with a new star", () => {
+    expect(app).toContain("...(favorite && addonKey ? { addonKey } : {}), favorite });");
+  });
+
+  it("picks the add-on as the playback position picks it", () => {
+    expect(app).toContain("void toggleWatchlist(selected, panelAddonKey(selectedStream?.addonKey))");
+    expect(app).toContain("void toggleWatchlist(item, panelAddonKey())");
+    expect(app).toContain("detailPlaying.stream.addonKey);");
+    expect(app).toContain("progressAddonKey={localStream ? undefined : detailPlaying ? detailPlaying.stream.addonKey : playerSubject?.panel ? panelAddonKey(selectedStream?.addonKey)");
+    expect(app).toContain("}, detailAddonKey)}><Star/></button>");
+  });
+
+  it("hands the add-on to the follow it creates", () => {
+    expect(app).toContain("...(detailAddonKey ? { addonKey: detailAddonKey } : {}) })}><Bell/>");
+    expect(app).toContain("const addonKey = panelAddonKey(selectedStream?.addonKey); setFollowStart(addonKey ? { ...selected, addonKey } : selected);");
+    expect(app).toContain("...(followStart.addonKey ? { addonKey: followStart.addonKey } : {}) }, onFollowed");
+  });
+});

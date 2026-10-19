@@ -20,7 +20,8 @@ export const SCHEMA_VERSION = 3;
 /** The shapes inside `UserData`. It keeps its maps opaque so the user model stays clear of
  *  the progress and library modules; they are pinned here, once, because both `index.ts` and
  *  the route modules read the same rows and two copies would drift apart in silence. */
-export type WatchlistEntry = { type: string; id: string; name: string; poster?: string; addedAt: string };
+/** `addonKey` is the add-on the title was starred from; older entries carry none. */
+export type WatchlistEntry = { type: string; id: string; name: string; poster?: string; addedAt: string; addonKey?: string };
 /** The media-server version a title's position was played from, so the detail can name it. */
 export type RemoteProgressWriter = { libraryId: string; itemId: string; mediaSourceId: string };
 export type StoredProgress = { position: number; duration: number; title: string; path?: string; poster?: string; addonKey?: string; series?: ProgressSeries; remote?: RemoteProgressWriter; stableKey?: string; updatedAt: string };

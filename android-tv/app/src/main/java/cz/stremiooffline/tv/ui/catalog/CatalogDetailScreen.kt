@@ -810,7 +810,9 @@ fun CatalogDetailScreen(
     favourite = wanted
     scope.launch {
       try {
-        favourite = api.setWatchlist(args.type, meta.id, meta.name, meta.poster, wanted).favorite
+        // The addon is picked as the position's is: the catalogue's, else the source's.
+        val addonKey = args.addonKey ?: activeStream?.addonKey?.takeIf { it.isNotBlank() }
+        favourite = api.setWatchlist(args.type, meta.id, meta.name, meta.poster, wanted, addonKey).favorite
       } catch (cancelled: CancellationException) {
         throw cancelled
       } catch (error: ApiError) {

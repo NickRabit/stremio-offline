@@ -2603,7 +2603,7 @@ const curate = registerCurateRoutes(app, { ...routeContext, candidates: libraryC
 // route exists.
 const homeCatalogs = new HomeCatalogCache();
 const warmHomeCatalogs = () => { if (!homeCatalogs.idle) homeCatalogs.warm(homeCatalogTargets(store.addons())); };
-registerHomeRoutes(app, { ...routeContext, homeCatalogs, personal, remotePersonal: mediaServerPersonal, authorityOf, completedJobs: () => queue.list(), newEpisodes: (ownerUserId, watched) => followService.newEpisodes(ownerUserId, watched), describeLibraryPath, libraryKey, locateFileArtwork, locateFolderArtworkPair, thumbUrl, scheduleFileArtwork, scheduleFolderArtwork, wirePath, dataOf, markersOf, progressOf, metaStore, seen, suggestionRows: curate.suggestionRows });
+registerHomeRoutes(app, { ...routeContext, homeCatalogs, personal, remotePersonal: mediaServerPersonal, authorityOf, completedJobs: () => queue.list(), newEpisodes: (ownerUserId, watched, include) => followService.newEpisodes(ownerUserId, watched, include), describeLibraryPath, libraryKey, locateFileArtwork, locateFolderArtworkPair, thumbUrl, scheduleFileArtwork, scheduleFolderArtwork, wirePath, dataOf, markersOf, progressOf, metaStore, seen, suggestionRows: curate.suggestionRows });
 
 registerDeviceRoutes(app, { ...routeContext, stats, countBytes, deviceDownloadTickets, deviceTransfers, DEVICE_TICKET_TTL, httpSourceOf, libraryTarget, mediaSource, mediaSources: mediaServerSources, ownerOf, pruneDeviceDownloadTickets, statMeta, trackMedia });
 registerDownloadRoutes(app, { ...routeContext, queue, mediaSources: mediaServerSources, deviceTransfers, jobView, sourceOf, ownerOf, mediaSource, posterOf, rememberTitle, titleKey, saveCatalogPoster, libraryKey, cachedMeta, prefsOf, defaultDownloadLibrary: downloadDefaultLibrary });
