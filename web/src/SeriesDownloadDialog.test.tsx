@@ -93,6 +93,21 @@ describe("SeriesDownloadDialog", () => {
     expect(body.autoDownload.aheadCount).toBe(5);
   });
 
+  it("creates the follow under the add-on the title came from", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      const body = String(url).includes("/api/follows")
+        ? { id: "f9", type: "series", metaId: "tt1", name: "Show", enabled: true, downloads: {} }
+        : [{ key: "first", name: "First" }];
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    await act(async () => { root.render(<SeriesDownloadDialog type="series" label="Show" title="Show" libraries={[]} addons={[]} episodes={[{ id: "tt1:1:1", season: 1, episode: 1 }]} audioLanguage="cs" subtitleLanguage="cs" languages={[{ code: "cs", name: "Čeština" }]} follow={{ create: { metaId: "tt1", name: "Show", addonKey: "pleasure" }, onFollowed: () => undefined }} onClose={() => undefined}/>); });
+    await act(async () => { await Promise.resolve(); });
+    const follow = [...host.querySelectorAll("button")].find((button) => button.textContent === "Follow")!;
+    await act(async () => { follow.click(); await Promise.resolve(); await Promise.resolve(); });
+    const post = fetchMock.mock.calls.find(([url, init]) => String(url).endsWith("/api/follows") && (init as RequestInit | undefined)?.method === "POST");
+    expect(JSON.parse(String((post![1] as RequestInit).body)).addonKey).toBe("pleasure");
+  });
+
   it("asks how to follow first and only creates the follow on confirm", async () => {
     const onFollowed = vi.fn();
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {

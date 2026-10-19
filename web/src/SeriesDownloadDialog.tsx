@@ -48,7 +48,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
   /** Set when the dialog edits a follow's automatic rule instead of queueing a batch. Without
    *  `followId` it is the first step of following: how to follow comes first, and the follow
    *  is created only when the person confirms. */
-  follow?: { followId?: string; initial?: FollowAutoDownload; create?: { metaId: string; name: string; poster?: string }; onFollowed?: (follow: FollowView) => void };
+  follow?: { followId?: string; initial?: FollowAutoDownload; create?: { metaId: string; name: string; poster?: string; addonKey?: string }; onFollowed?: (follow: FollowView) => void };
   onClose: () => void;
   onSubmit?: (selection: DownloadSelection, target?: SaveTarget) => Promise<void>;
 }) {
@@ -185,7 +185,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
     setBusy(true); setError("");
     try {
       if (follow?.create && followMode === "notify") {
-        follow.onFollowed?.(await api.follow({ type, id: follow.create.metaId, name: follow.create.name, poster: follow.create.poster }));
+        follow.onFollowed?.(await api.follow({ type, id: follow.create.metaId, name: follow.create.name, poster: follow.create.poster, ...(follow.create.addonKey ? { addonKey: follow.create.addonKey } : {}) }));
         void api.saveFollowDefaults({ mode: "notify" }).catch(() => undefined);
         onClose();
         return;
@@ -199,7 +199,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
         fallbackSubtitleLanguage: subtitleMode !== "off" && subtitleFallback !== subtitle ? subtitleFallback || undefined : undefined,
       };
       if (follow) {
-        const created = follow.create ? await api.follow({ type, id: follow.create.metaId, name: follow.create.name, poster: follow.create.poster }) : undefined;
+        const created = follow.create ? await api.follow({ type, id: follow.create.metaId, name: follow.create.name, poster: follow.create.poster, ...(follow.create.addonKey ? { addonKey: follow.create.addonKey } : {}) }) : undefined;
         const followId = created?.id ?? follow.followId!;
         const updated = await api.updateFollow(followId, {
           ...(canRetain ? { retention: retentionDays > 0 ? { afterWatchedDays: retentionDays } : null } : {}),

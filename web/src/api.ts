@@ -205,13 +205,13 @@ export const api = {
       skip: options.skip || undefined,
       limit: options.limit ?? 60,
     })}`),
-  setWatchlist: (payload: { type: string; id: string; name?: string; poster?: string; favorite: boolean }) =>
+  setWatchlist: (payload: { type: string; id: string; name?: string; poster?: string; addonKey?: string; favorite: boolean }) =>
     request<{ key: string; favorite: boolean }>("/api/watchlist", { method: "POST", body: JSON.stringify(payload) }),
   follows: () => request<{ follows: FollowView[] }>("/api/follows").then((answer) => answer.follows),
   /** The follow of one title, or nothing. A title nobody follows answers 404, which is not an error. */
   followByMeta: (type: string, id: string) => request<{ follow: FollowView | null }>(`/api/follows/by-meta/${encodeURIComponent(type)}/${encodeURIComponent(id)}`)
     .then((answer) => answer.follow),
-  follow: (payload: { type: string; id: string; name: string; poster?: string }) =>
+  follow: (payload: { type: string; id: string; name: string; poster?: string; addonKey?: string }) =>
     request<FollowView>("/api/follows", { method: "POST", body: JSON.stringify(payload) }),
   updateFollow: (id: string, patch: { enabled?: boolean; retention?: { afterWatchedDays: number } | null; autoDownload?: { startMode: FollowStartMode; startSeason?: number; startEpisode?: number; aheadCount?: number; graceDays?: number; selection: DownloadSelection; target?: SaveTarget } | null }) =>
     request<FollowView>(`/api/follows/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
