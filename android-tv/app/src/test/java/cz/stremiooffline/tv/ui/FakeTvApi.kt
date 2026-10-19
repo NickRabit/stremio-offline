@@ -165,6 +165,8 @@ open class FakeTvApi : TvApi {
   var watchlistValue: MutableList<WatchlistEntryDto> = mutableListOf()
   var watchlistCalls = 0
   var favoriteCalls: MutableList<Triple<String, String, Boolean>> = mutableListOf()
+  /** The addon each `setWatchlist` call named, in order. */
+  var favoriteAddonKeys: MutableList<String?> = mutableListOf()
   var watchlistGate: CompletableDeferred<Unit>? = null
   var watchlistFailure: ApiFailure? = null
   var watchlistAnswer: ((Boolean) -> Boolean)? = null
@@ -558,8 +560,10 @@ open class FakeTvApi : TvApi {
     name: String,
     poster: String?,
     favorite: Boolean,
+    addonKey: String?,
   ): WatchlistToggleDto {
     favoriteCalls += Triple(type, id, favorite)
+    favoriteAddonKeys += addonKey
     watchlistGate?.await()
     watchlistFailure?.let { throw ApiError(it) }
     return WatchlistToggleDto("$type:$id", watchlistAnswer?.invoke(favorite) ?: favorite)

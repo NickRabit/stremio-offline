@@ -267,6 +267,16 @@ class CatalogApiTest {
     assertTrue(body, body.contains("\"type\":\"movie\""))
     assertTrue(body, body.contains("\"id\":\"tt1\""))
     assertTrue(body, body.contains("\"favorite\":true"))
+    assertTrue(body, !body.contains("addonKey"))
+  }
+
+  @Test
+  fun `watchlist toggle names the addon the title was starred from`() = runTest {
+    server.enqueue(MockResponse().setBody("""{"key":"movie:tt1","favorite":true}"""))
+    client(start()).setWatchlist("movie", "tt1", "It", null, true, "pleasure")
+
+    val body = server.takeRequest().body.readUtf8()
+    assertTrue(body, body.contains("\"addonKey\":\"pleasure\""))
   }
 
   private fun start(): ServerAddress {

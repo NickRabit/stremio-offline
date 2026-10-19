@@ -526,10 +526,11 @@ class ApiClient(
     name: String,
     poster: String?,
     favorite: Boolean,
+    addonKey: String?,
   ): WatchlistToggleDto {
     val payload = json.encodeToString(
       WatchlistRequest.serializer(),
-      WatchlistRequest(type, id, name, poster, favorite),
+      WatchlistRequest(type, id, name, poster, favorite, addonKey),
     )
     return request(Request.Builder().url(address.resolve("/api/watchlist")).post(payload.toRequestBody(mediaType)).build())
       .decode() ?: WatchlistToggleDto("$type:$id", favorite)
@@ -858,6 +859,7 @@ private data class WatchlistRequest(
   val name: String,
   val poster: String? = null,
   val favorite: Boolean,
+  val addonKey: String? = null,
 )
 
 @Serializable

@@ -73,7 +73,8 @@ interface CatalogApi {
   suspend fun updateHomeLayout(layout: HomeLayoutDto?): SettingsResponse
   suspend fun progressList(): List<ProgressEntryDto>
   suspend fun watchlist(): List<WatchlistEntryDto>
-  suspend fun setWatchlist(type: String, id: String, name: String, poster: String?, favorite: Boolean): WatchlistToggleDto
+  /** [addonKey] is the addon the title was starred from, so that addon's Home switch can hide it. */
+  suspend fun setWatchlist(type: String, id: String, name: String, poster: String?, favorite: Boolean, addonKey: String? = null): WatchlistToggleDto
   /** Queues one source; [target] names the library the viewer picked, or is null to let the
    *  server pick the addon's own default. */
   suspend fun download(title: String, sourceId: String, media: MediaDto, target: DownloadTargetDto? = null): DownloadResult
