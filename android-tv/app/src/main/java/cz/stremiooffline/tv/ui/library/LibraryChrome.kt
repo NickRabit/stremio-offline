@@ -1,7 +1,6 @@
 package cz.stremiooffline.tv.ui.library
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -15,9 +14,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
@@ -32,7 +29,6 @@ import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.ui.catalog.CatalogSearchChip
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.TvTextField
-import cz.stremiooffline.tv.ui.shell.LocalRailFocus
 import cz.stremiooffline.tv.ui.theme.Tokens
 import androidx.compose.ui.text.input.ImeAction
 import kotlinx.coroutines.android.awaitFrame
