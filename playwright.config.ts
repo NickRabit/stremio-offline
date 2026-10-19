@@ -51,7 +51,7 @@ export default defineConfig({
       // run as their own project: between them they are seventy seconds of test time, and a job of
       // its own lets CI run them beside the WebKit journeys instead of at the far end of this
       // suite.
-      testIgnore: [/setup\.spec\.ts/, /layout\//, /restricted\.spec\.ts/, /safari-scroll\.spec\.ts/, /(proxy|remote-library)\.spec\.ts/],
+      testIgnore: [/setup\.spec\.ts/, /layout\//, /restricted\.spec\.ts/, /safari-(scroll|search-position)\.spec\.ts/, /(proxy|remote-library)\.spec\.ts/],
       dependencies: ["setup"],
       use: { ...devices["Desktop Chrome"], storageState },
     },
@@ -72,7 +72,7 @@ export default defineConfig({
     },
     {
       name: "safari-landscape",
-      testMatch: /safari-scroll\.spec\.ts/,
+      testMatch: /safari-(scroll|search-position)\.spec\.ts/,
       // Scrolling and section restoration only need the account the setup project leaves: the
       // journey suite used to run in front of it for no reason the spec can name.
       dependencies: ["setup"],
