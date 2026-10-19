@@ -2789,9 +2789,14 @@ export function App() {
       ...(options?.libraryFirst ? { libraryFirst: true } : {}),
     });
   };
+  /** Where Search stood when a card took the reader to the Library. Search's own scroll listener
+   *  can still hear the offset the browser clamps to as the shorter Library page replaces it, so
+   *  the way back keeps its own copy, taken before anything moves. */
+  const searchReturnTop = useRef(0);
   const openSearchMember = async (member: import("./types").SearchMember, anchorKey: string, libraryFirst = false) => {
     searchEverywhere.setFocusAnchor(anchorKey);
     searchEverywhere.setScrollTop(window.scrollY);
+    searchReturnTop.current = window.scrollY;
     setSearchReturn(false);
     if (member.locator.kind === "catalog") {
       openCatalogueDetail({
@@ -2830,7 +2835,7 @@ export function App() {
   // The section switch chases the offset recorded for Search, and leaving for the Library already
   // recorded the clamped top there; the position taken when the card was opened is the one meant.
   const returnToSearch = () => {
-    scrollByView.current.search = searchEverywhere.scrollTop;
+    scrollByView.current.search = searchReturnTop.current;
     setSearchReturn(false);
     setView("search");
     window.requestAnimationFrame(() => window.requestAnimationFrame(focusSearchAnchor));
