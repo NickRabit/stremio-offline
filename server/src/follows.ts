@@ -77,6 +77,8 @@ export interface Follow {
   metaId: string;
   name: string;
   poster?: string;
+  /** The add-on the title was followed from; older follows carry none. */
+  addonKey?: string;
   createdAt: string;
   updatedAt: string;
   enabled: boolean;
@@ -738,7 +740,7 @@ export class FollowStore {
       .sort((a, b) => a.nextCheckAt.localeCompare(b.nextCheckAt));
   }
 
-  async create(input: { ownerUserId: string; type: string; metaId: string; name: string; poster?: string }, now: number): Promise<Follow> {
+  async create(input: { ownerUserId: string; type: string; metaId: string; name: string; poster?: string; addonKey?: string }, now: number): Promise<Follow> {
     this.assertWritable();
     const existing = this.findByMeta(input.ownerUserId, input.type, input.metaId);
     if (existing) return existing;
@@ -750,6 +752,7 @@ export class FollowStore {
       metaId: input.metaId,
       name: input.name,
       ...(input.poster ? { poster: input.poster } : {}),
+      ...(input.addonKey ? { addonKey: input.addonKey } : {}),
       createdAt: at,
       updatedAt: at,
       enabled: true,
@@ -1028,11 +1031,12 @@ export class FollowService {
 
   /** Episodes of the owner's followed series released since the follow was created,
    *  inside the last thirty days and not yet watched past. */
-  newEpisodes(ownerUserId: string, watched: (metaId: string) => { season: number; episode: number } | undefined): NewEpisode[] {
+  newEpisodes(ownerUserId: string, watched: (metaId: string) => { season: number; episode: number } | undefined, include: (follow: Follow) => boolean = () => true): NewEpisode[] {
     const now = this.deps.now();
     const floor = now - NEW_EPISODE_WINDOW_MS;
     const items: NewEpisode[] = [];
     for (const follow of this.deps.store.listForOwner(ownerUserId)) {
+      if (!include(follow)) continue;
       const createdAt = Date.parse(follow.createdAt);
       const marker = watched(follow.metaId);
       for (const episode of Object.values(follow.episodes)) {

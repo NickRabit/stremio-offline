@@ -172,6 +172,16 @@ test("a follow belongs to the account that made it", async () => {
   } finally { await h.close(); }
 });
 
+test("a follow records the add-on it was made from", async () => {
+  const h = await mount();
+  try {
+    const created = await (await api(h.base, "/api/follows", { method: "POST", as: "A", body: { type: "series", id: "tt1", name: "Show", addonKey: "quiet" } })).json() as { id: string; addonKey?: string };
+    assert.equal(created.addonKey, "quiet");
+    const plain = await (await api(h.base, "/api/follows", { method: "POST", as: "A", body: { type: "series", id: "tt2", name: "Other" } })).json() as { addonKey?: string };
+    assert.equal(plain.addonKey, undefined);
+  } finally { await h.close(); }
+});
+
 test("a follow needs a type, an id and a name", async () => {
   const h = await mount();
   try {

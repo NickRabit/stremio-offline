@@ -7,7 +7,7 @@ import path from "node:path";
 import { test } from "node:test";
 import express from "express";
 import { messageKeyOf } from "../errors.js";
-import type { NewEpisode } from "../follows.js";
+import type { Follow, NewEpisode } from "../follows.js";
 import { images } from "../images.js";
 import { libraryPath, parseLibraryPath, relativeWithin, type LibraryRecord } from "../libraries.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
@@ -26,7 +26,8 @@ type WatchlistEntry = { type: string; id: string; name: string; poster?: string;
 type StoredProgress = { position: number; duration: number; title: string; path?: string; poster?: string; addonKey?: string; series?: { id: string; name: string; season: number; episode: number }; updatedAt: string };
 type WatchedMarker = { name: string; poster?: string; addonKey?: string; season: number; episode: number; updatedAt: string };
 type MetaRecord = { type: string; id: string; name?: string; year?: string; season?: number; episode?: number; unmatched?: boolean };
-type EpisodeRow = NewEpisode & { ownerUserId: string };
+/** `addonKey` stands for the follow the episode came from, which `include` reads. */
+type EpisodeRow = NewEpisode & { ownerUserId: string; addonKey?: string };
 type SuggestionRow = { key: string; label: string; libraryId: string; library: string; path: string; suggestion: { name: string; year?: number; poster?: string } };
 
 const ALICE = "usr_00000001";
@@ -232,11 +233,13 @@ const mount = async (options: { libraries?: LibraryRecord[]; deadlineMs?: number
     remotePersonal: personalDeps.remotePersonal,
     authorityOf: () => ({ actor: { id: "usr_00000001", secret: "unused" }, assertCurrent: () => undefined }),
     completedJobs: () => { if (state.completedThrows) throw new Error("the queue is unavailable"); return state.completed; },
-    newEpisodes: (ownerUserId, watched) => {
+    newEpisodes: (ownerUserId, watched, include = () => true) => {
       if (state.episodesThrows) throw new Error("the follows are unavailable");
       state.newEpisodesCalls.push(ownerUserId);
       state.watched = watched;
-      return state.episodes.filter((item) => item.ownerUserId === ownerUserId).map(({ ownerUserId: _owner, ...item }) => item);
+      return state.episodes
+        .filter((item) => item.ownerUserId === ownerUserId && include({ id: item.followId, ...(item.addonKey ? { addonKey: item.addonKey } : {}) } as Follow))
+        .map(({ ownerUserId: _owner, addonKey: _addon, ...item }) => item);
     },
     describeLibraryPath: personalDeps.describeLibraryPath,
     locateFileArtwork: personalDeps.locateFileArtwork,
@@ -1083,6 +1086,65 @@ test("new episodes are newest first, only the caller's, and the poster goes thro
   assert.equal(rows.episodes!.items[0]!.poster, images.proxied(poster));
   assert.deepEqual(harness.newEpisodesCalls, [ALICE]);
   assert.deepEqual(harness.watched?.("tt1"), { season: 1, episode: 1 }, "the row reads the caller's markers");
+});
+
+const homeAddon = (key: string, showOnHome: boolean): AddonRecord => ({
+  key, manifestUrl: `https://${key}/manifest.json`, role: "both", enabled: true, globalSearch: true, showOnHome,
+  addedAt: "", allowedUsers: [ALICE], manifest: { id: key, name: key, version: "1" },
+} as AddonRecord);
+
+test("Home Favourites leaves out a title starred from an add-on switched off for Home, and the Favourites section keeps it", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const quiet = homeAddon("quiet", false);
+  harness.addons.push(quiet, homeAddon("loud", true));
+  harness.data(ALICE).watchlist = {
+    "movie:tt1": { type: "movie", id: "tt1", name: "Hidden star", addonKey: "quiet", addedAt: "2024-01-03T00:00:00.000Z" },
+    "movie:tt2": { type: "movie", id: "tt2", name: "Shown star", addonKey: "loud", addedAt: "2024-01-02T00:00:00.000Z" },
+    "movie:tt3": { type: "movie", id: "tt3", name: "No addon recorded", addedAt: "2024-01-01T00:00:00.000Z" },
+  };
+
+  const off = await allRows(harness, ALICE);
+  assert.deepEqual(off.favorites!.items.map((item) => item.name), ["Shown star", "No addon recorded"]);
+  const section = await (await api(harness.base, "/api/favorites", ALICE)).json() as { items: Array<{ name?: string }> };
+  assert.deepEqual(section.items.map((item) => item.name), ["Hidden star", "Shown star", "No addon recorded"],
+    "no add-on switch covers the Favourites section");
+
+  quiet.showOnHome = true;
+  const on = await allRows(harness, ALICE);
+  assert.deepEqual(on.favorites!.items.map((item) => item.name), ["Hidden star", "Shown star", "No addon recorded"]);
+});
+
+test("starring a catalogue title records the add-on it was starred from", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const star = (body: Record<string, unknown>) => fetch(`${harness.base}/api/watchlist`, {
+    method: "POST", headers: { "content-type": "application/json", "x-user": ALICE }, body: JSON.stringify({ favorite: true, ...body }),
+  });
+  await star({ type: "movie", id: "tt1", name: "With addon", addonKey: "quiet" });
+  await star({ type: "movie", id: "tt2", name: "Without addon" });
+  const watchlist = harness.data(ALICE).watchlist as Record<string, { addonKey?: string }>;
+  assert.equal(watchlist["movie:tt1"]!.addonKey, "quiet");
+  assert.equal("addonKey" in watchlist["movie:tt2"]!, false);
+});
+
+test("new episodes of a show followed from an add-on switched off for Home are left out", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const quiet = homeAddon("quiet", false);
+  harness.addons.push(quiet, homeAddon("loud", true));
+  harness.episodes = [
+    { ownerUserId: ALICE, followId: "fq", addonKey: "quiet", type: "series", metaId: "tt1", name: "Quiet", videoId: "q1", season: 1, episode: 1, released: "2024-03-03T00:00:00.000Z" },
+    { ownerUserId: ALICE, followId: "fl", addonKey: "loud", type: "series", metaId: "tt2", name: "Loud", videoId: "l1", season: 1, episode: 1, released: "2024-03-02T00:00:00.000Z" },
+    { ownerUserId: ALICE, followId: "fn", type: "series", metaId: "tt3", name: "Old follow", videoId: "n1", season: 1, episode: 1, released: "2024-03-01T00:00:00.000Z" },
+  ];
+
+  const off = await allRows(harness, ALICE);
+  assert.deepEqual(off.episodes!.items.map((item) => item.key), ["episode:fl:l1", "episode:fn:n1"]);
+
+  quiet.showOnHome = true;
+  const on = await allRows(harness, ALICE);
+  assert.deepEqual(on.episodes!.items.map((item) => item.key), ["episode:fq:q1", "episode:fl:l1", "episode:fn:n1"]);
 });
 
 test("tonight draws the same cards for the same seed and other cards for a different shuffle", async (t) => {

@@ -264,7 +264,8 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
     const metaId = String(req.body?.id ?? "").trim();
     const name = String(req.body?.name ?? "").trim();
     if (!type || !metaId || !name || (type !== "series" && type !== "movie")) throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
-    const follow = await followStore.create({ ownerUserId: owner.id, type, metaId, name, poster: posterOf(req.body?.poster) }, Date.now());
+    const addonKey = typeof req.body?.addonKey === "string" ? req.body.addonKey.trim() : "";
+    const follow = await followStore.create({ ownerUserId: owner.id, type, metaId, name, poster: posterOf(req.body?.poster), ...(addonKey ? { addonKey } : {}) }, Date.now());
     // The first check runs now rather than at the next tick, so the episodes are known
     // while the person who just followed is still looking.
     void follows.check(follow.id, "schedule").catch(() => undefined);

@@ -3,7 +3,7 @@ import { remoteArtworkPath } from "../media-server-types.js";
 import type { ArtShape } from "../artwork.js";
 import { messageKeyOf } from "../errors.js";
 import type { FavoriteCatalogItem, FavoriteLibraryItem } from "../favorites.js";
-import type { NewEpisode } from "../follows.js";
+import type { Follow, NewEpisode } from "../follows.js";
 import { images } from "../images.js";
 import { allowedAddons } from "../addons.js";
 import { HomeCatalogCache, homeCatalogOfferings, homeCatalogTargets, type HomeCatalogTarget } from "../home-catalogs.js";
@@ -73,7 +73,7 @@ export interface HomeDeps extends RouteContext {
   authorityOf(req: express.Request): MediaServerAuthority;
   completedJobs(): CompletedJobView[];
   /** The owner's unseen episodes, read exactly the way `GET /api/follows/new-episodes` reads them. */
-  newEpisodes(ownerUserId: string, watched: (metaId: string) => { season: number; episode: number } | undefined): NewEpisode[];
+  newEpisodes(ownerUserId: string, watched: (metaId: string) => { season: number; episode: number } | undefined, include?: (follow: Follow) => boolean): NewEpisode[];
   describeLibraryPath(key: string, read?: { stale?: boolean }): Promise<BrowseItem | undefined>;
   locateFileArtwork(key: string, shape?: ArtShape): Promise<string | undefined>;
   locateFolderArtworkPair(key: string): Promise<{ poster: string | undefined; wide: string | undefined }>;
@@ -380,14 +380,15 @@ export function registerHomeRoutes(app: express.Application, deps: HomeDeps): vo
     return { status: "ok", items: cards, hasMore: bounded.hasMore };
   };
 
-  /** A followed show belongs to the account, not to a library or an add-on, so the Home
-   *  switch does not apply to this row. */
+  /** A show followed from an add-on switched off for Home stays off this row; a follow that
+   *  never recorded its add-on stays. */
   const episodesRow = (req: express.Request, viewer: Viewer): HomeRow => {
     const markers = markersOf(dataOf(req));
+    const addons = store.addons();
     const items = newEpisodes(viewer.id, (metaId) => {
       const marker = markers[metaId];
       return marker ? { season: marker.season, episode: marker.episode } : undefined;
-    })
+    }, (follow) => !follow.addonKey || addons.find((addon) => addon.key === follow.addonKey)?.showOnHome !== false)
       .sort((a, b) => b.released.localeCompare(a.released) || a.followId.localeCompare(b.followId) || a.videoId.localeCompare(b.videoId))
       .map((item): HomeCard => ({
         kind: "episode", key: `episode:${item.followId}:${item.videoId}`,
