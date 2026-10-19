@@ -117,13 +117,24 @@ class RemoteLibraryBackTest {
       items = listOf(RemoteItemDto(id = "movie2", name = "Another movie", type = "movie")),
       total = 1,
     )
+    // The type chip opens the catalogue's side panel; picking Movies reloads the level and hands the
+    // remote back to the chip.
     compose.onNodeWithTag(TagLibraryTypeFilter).performSemanticsAction(SemanticsActions.RequestFocus)
+    compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
+    compose.mainClock.advanceTimeBy(200)
+    compose.waitForIdle()
+    compose.onRoot().performKeyInput { pressKey(Key.DirectionDown) }
+    compose.waitForIdle()
     compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
     compose.waitForIdle()
     compose.waitUntil(5_000) { api.remoteItemsRequests.size >= 2 }
     compose.waitForIdle()
+    compose.mainClock.advanceTimeBy(200)
+    compose.waitForIdle()
     compose.onNodeWithTag(remoteItemTag("movie1")).assertDoesNotExist()
-    compose.onNodeWithTag(remoteItemTag("movie2")).assertIsFocused()
+    compose.onNodeWithTag(remoteItemTag("movie2")).assertExists()
+    compose.onNodeWithTag(TagLibraryTypeFilter).assertIsFocused()
     host!!.onBackPressedDispatcher.onBackPressed()
     compose.waitForIdle()
     compose.onNodeWithTag(remoteLibraryTag("rlibA")).assertIsFocused()

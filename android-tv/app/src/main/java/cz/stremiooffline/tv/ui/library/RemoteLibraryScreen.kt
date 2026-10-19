@@ -300,6 +300,15 @@ fun RemoteLibraryRoute(
     runCatching { requester.requestFocus() }
   }
 
+  // The type chip opens the Catalog's side panel; closing it hands the remote back to the chip.
+  val typeFocus = remember { FocusRequester() }
+  var typePanel by remember { mutableStateOf(false) }
+  var typePanelWasOpen by remember { mutableStateOf(false) }
+  LaunchedEffect(typePanel) {
+    if (typePanel) typePanelWasOpen = true
+    else if (typePanelWasOpen) { typePanelWasOpen = false; awaitFrame(); runCatching { typeFocus.requestFocus() } }
+  }
+
   // Embedded, the Library section already applied its own safe padding around this half; standalone
   // the half brings its own, so a screen entered from elsewhere is not glued to the edges.
   Box(modifier.then(if (embedded) Modifier else Modifier.padding(start = Tokens.SafeX, top = Tokens.SafeY, end = Tokens.SafeX))) {
@@ -320,7 +329,8 @@ fun RemoteLibraryRoute(
           available = searchAvailable,
           openFocus = searchAction,
           typeFilter = directory?.state?.type,
-          onTypeFilter = { viewModel.filter(it) },
+          typeFocus = typeFocus,
+          onOpenType = { typePanel = true },
         )
       } else {
         LibrarySearchFallback(
@@ -338,7 +348,8 @@ fun RemoteLibraryRoute(
           openFocus = searchAction,
           fieldFocus = searchField,
           typeFilter = directory?.state?.type,
-          onTypeFilter = { viewModel.filter(it) },
+          typeFocus = typeFocus,
+          onOpenType = { typePanel = true },
         )
       }
       Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -361,6 +372,11 @@ fun RemoteLibraryRoute(
           )
         }
       }
+    }
+
+    val typeNow = directory?.state?.type
+    if (typePanel && typeNow != null) {
+      LibraryTypePanel(filter = typeNow, onFilter = { viewModel.filter(it) }, onClose = { typePanel = false })
     }
 
     val cardRequest = copyRequest

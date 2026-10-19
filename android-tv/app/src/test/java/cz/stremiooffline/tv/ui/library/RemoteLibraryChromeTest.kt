@@ -163,7 +163,7 @@ class RemoteLibraryChromeTest {
     // The type button and the search live in the one compact toolbar row.
     compose.onNodeWithTag(TagLibraryToolbar).assertExists()
     compose.onNodeWithTag(TagLibraryTypeFilter)
-      .assert(hasText(ApplicationProvider.getApplicationContext<android.content.Context>().getString(R.string.tv_library_type_all)))
+      .assert(hasText(ApplicationProvider.getApplicationContext<android.content.Context>().getString(R.string.media_server_filter_all)))
 
     compose.onNodeWithTag(TagLibrarySearchField).assertDoesNotExist()
     focusOn(TagLibrarySearchAction)
@@ -333,31 +333,31 @@ class RemoteLibraryChromeTest {
   }
 
   @Test
-  fun `the type button cycles all movies series and back`() {
+  fun `the type chip sits right after Search and picks the type in the catalogue side panel`() {
     val api = api()
     mountEmbedded(api, searchEverywhereEnabled = true)
     openLibrary(api)
     val context = ApplicationProvider.getApplicationContext<android.content.Context>()
 
-    compose.onNodeWithTag(TagLibraryTypeFilter).assert(hasText(context.getString(R.string.tv_library_type_all)))
-    compose.onNodeWithText("Movies").assertDoesNotExist()
+    // The Catalog's own row: Search first, the type chip right beside it, naming the current choice.
+    compose.onNodeWithTag(TagLibraryTypeFilter).assert(hasText(context.getString(R.string.media_server_filter_all)))
+    val search = compose.onNodeWithTag(TagLibrarySearchAction).fetchSemanticsNode().boundsInRoot
+    val chip = compose.onNodeWithTag(TagLibraryTypeFilter).fetchSemanticsNode().boundsInRoot
+    assertTrue("the type chip follows Search on the same row", chip.left > search.right && chip.left - search.right < 40f && kotlin.math.abs(chip.top - search.top) < 4f)
 
     focusOn(TagLibraryTypeFilter)
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagLibraryTypePanel).assertExists()
+    compose.onNodeWithTag(libraryTypeOptionTag(RemoteTypeFilter.All)).assertIsFocused()
+    press(Key.DirectionDown)
     press(Key.DirectionCenter)
     compose.waitUntil(5_000) { api.remoteBrowseRequests.any { it.type == "movie" } }
-    compose.onNodeWithTag(TagLibraryTypeFilter).assert(hasText(context.getString(R.string.tv_library_type_movies)))
+    compose.onNodeWithTag(TagLibraryTypePanel).assertDoesNotExist()
+    compose.onNodeWithTag(TagLibraryTypeFilter).assert(hasText(context.getString(R.string.media_server_filter_movies)))
+    compose.mainClock.advanceTimeBy(200)
+    compose.waitForIdle()
+    compose.onNodeWithTag(TagLibraryTypeFilter).assertIsFocused()
 
-    press(Key.DirectionCenter)
-    compose.waitUntil(5_000) { api.remoteBrowseRequests.any { it.type == "series" } }
-    compose.onNodeWithTag(TagLibraryTypeFilter).assert(hasText(context.getString(R.string.tv_library_type_series)))
-
-    press(Key.DirectionCenter)
-    compose.waitUntil(5_000) {
-      api.remoteBrowseRequests.lastOrNull()?.type == null &&
-        api.remoteBrowseRequests.count { it.type == null } >= 2
-    }
-    compose.onNodeWithTag(TagLibraryTypeFilter).assert(hasText(context.getString(R.string.tv_library_type_all)))
-    focusOn(TagLibraryTypeFilter)
     press(Key.DirectionLeft)
     compose.onNodeWithTag(TagLibrarySearchAction).assertIsFocused()
   }
