@@ -1867,6 +1867,7 @@ export const it: Catalog = {
   "searchAll.title": "Cerca ovunque",
   "searchAll.placeholder": "Cerca nei cataloghi e nelle librerie…",
   "searchAll.submit": "Cerca",
+  "searchAll.recent": "Ricerche recenti",
   "searchAll.sourceAll": "Tutti",
   "searchAll.sourceCatalog": "Catalogo",
   "searchAll.sourceLocal": "Locale",

@@ -155,6 +155,14 @@ Thresholds below are product choices, not benchmark results.
   user only looked at, superseded drafts, failed requests, pagination and
   filter changes are not recorded. Each committed query is recorded at most
   once.
+- The Search everywhere screen follows the same rule: a query submitted with
+  Enter or Search, or picked from history, is recorded once its first answer is
+  on screen, and opening a result records the query it came from. Under an empty
+  field with nothing searched, the screen lists the account's recent searches;
+  a click runs one, its cross removes it from history. The list is read again
+  whenever the field takes the focus or is left empty. On a touch screen the
+  field lets go of the focus after a search, so the keyboard closes and the
+  browser does not pull the field back into view while the results scroll.
 - The server checks Save search history inside the same `updateData` mutator
   that would append, so nothing is stored while saving is off, whatever a stale
   tab sends. Clearing or disabling in a tab drops that tab's not-yet-sent

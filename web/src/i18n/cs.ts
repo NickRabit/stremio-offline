@@ -1918,6 +1918,7 @@ export const cs: Catalog = {
   "searchAll.title": "Hledat všude",
   "searchAll.placeholder": "Hledat v katalozích a knihovnách…",
   "searchAll.submit": "Hledat",
+  "searchAll.recent": "Nedávná hledání",
   "searchAll.sourceAll": "Vše",
   "searchAll.sourceCatalog": "Katalog",
   "searchAll.sourceLocal": "Místní",

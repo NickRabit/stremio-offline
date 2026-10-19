@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { createPortal } from "react-dom";
-import { Film, FolderOpen, HardDrive, Search, X } from "lucide-react";
+import { Film, FolderOpen, HardDrive, History, Search, X } from "lucide-react";
 import { describeError } from "./api";
 import { ShapeToggle } from "./app-chrome";
 import { TileArt } from "./TileArt";
@@ -237,11 +237,17 @@ function MemberChooser({ cluster, members, anchorKey, onOpenMember, onOpenCanoni
   </div>, document.body);
 }
 
-export function SearchEverywhere({ search, shape, onToggleShape, searchable, onOpenMember, onOpenCanonical }: {
+export function SearchEverywhere({ search, shape, onToggleShape, searchable, recent, onRecord, onForget, onRefreshRecent, onOpenMember, onOpenCanonical }: {
   search: SearchEverywhereController;
   shape: TileShape;
   onToggleShape: () => void;
   searchable: SearchableCatalog[];
+  /** The account's history, newest first; empty when it is not kept. */
+  recent: string[];
+  onRecord: (query: string) => void;
+  onForget: (query: string) => void;
+  /** Reads the history again: on focus and whenever the field is left empty. */
+  onRefreshRecent: () => void;
   onOpenMember: (member: SearchMember, anchorKey: string, libraryFirst?: boolean) => Promise<void> | void;
   onOpenCanonical: (canonical: NonNullable<SearchMemberPage["canonical"]>, anchorKey: string, libraryFirst?: boolean) => Promise<void> | void;
 }) {
@@ -324,7 +330,40 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, onO
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (!composing.current) search.submit();
+    if (composing.current) return;
+    recordWhenAnswered.current = search.draft.trim() || null;
+    search.submit();
+    // A phone's keyboard would cover the results, and a field that keeps the focus is scrolled back
+    // into view as the page re-renders under the reader's finger.
+    if (navigator.maxTouchPoints > 0 || window.matchMedia?.("(pointer: coarse)").matches) (event.target as HTMLFormElement).querySelector("input")?.blur();
+  };
+  const runRecent = (query: string) => {
+    recordWhenAnswered.current = query;
+    search.setDraft(query);
+    search.submit();
+  };
+  /** A submitted query joins the history only once its first answer is on screen. */
+  const recordWhenAnswered = useRef<string | null>(null);
+  useEffect(() => {
+    const query = recordWhenAnswered.current;
+    if (!query) return;
+    if (query !== search.committed) { recordWhenAnswered.current = null; return; }
+    if (!search.snapshot || search.previousQuery) return;
+    recordWhenAnswered.current = null;
+    onRecord(query);
+  }, [search.committed, search.snapshot, search.previousQuery, onRecord]);
+  const idle = !search.committed && !search.draft.trim();
+  const showRecent = idle && recent.length > 0;
+  const refreshRecentRef = useRef(onRefreshRecent);
+  refreshRecentRef.current = onRefreshRecent;
+  useEffect(() => { if (idle) refreshRecentRef.current(); }, [idle]);
+  const recentList = useRef<HTMLUListElement>(null);
+  /** The removed entry's neighbour takes the focus, or the field once the list is empty. */
+  const forgetRecent = (index: number) => {
+    const runs = [...(recentList.current?.querySelectorAll<HTMLButtonElement>(".search-recent-run") ?? [])];
+    const next = runs[index + 1] ?? runs[index - 1];
+    onForget(recent[index]!);
+    (next ?? root.current?.querySelector<HTMLInputElement>("[data-search-input]"))?.focus();
   };
 
   /** A title with an id every source shares opens its one title page, which lists the library
@@ -333,6 +372,7 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, onO
   const openCluster = async (button: HTMLButtonElement, cluster: SearchClusterView) => {
     previousPosition.current = [...(root.current?.querySelectorAll<HTMLElement>("[data-search-card]") ?? [])].indexOf(button);
     const libraryFirst = cluster.hasLocal || cluster.hasRemote;
+    if (search.committed && !search.previousQuery) onRecord(search.committed);
     try {
       const page = await members(cluster.primaryMemberKey);
       if (page.canonical) {
@@ -370,7 +410,7 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, onO
       <div className="search-input">
         <Search/>
         <input data-search-input role="searchbox" autoComplete="off" aria-label={t("searchAll.placeholder")}
-          placeholder={t("searchAll.placeholder")} value={search.draft}
+          placeholder={t("searchAll.placeholder")} value={search.draft} onFocus={onRefreshRecent}
           onChange={(event) => search.setDraft(event.target.value)}
           onCompositionStart={() => { composing.current = true; search.compositionStart(); }}
           onCompositionEnd={(event) => { composing.current = false; search.compositionEnd(event.currentTarget.value); }}/>
@@ -378,6 +418,14 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, onO
       <button className="primary" type="submit"><Search/> {t("searchAll.submit")}</button>
       {search.committed && <button type="button" onClick={search.clear}><X/> {t("common.cancel")}</button>}
     </form>
+    {showRecent && <section className="search-recent" aria-label={t("searchAll.recent")}>
+      <h3>{t("searchAll.recent")}</h3>
+      <ul ref={recentList}>{recent.map((query, index) => <li key={query}>
+        <button type="button" className="search-recent-run" onClick={() => runRecent(query)}><History/> {query}</button>
+        <button type="button" className="icon-button search-recent-forget" title={t("catalog.forgetRecent")}
+          aria-label={`${t("catalog.forgetRecent")}: ${query}`} onClick={() => forgetRecent(index)}><X/></button>
+      </li>)}</ul>
+    </section>}
     <div className="filterbar section-filter search-filters">
       <div className="library-shelf-segments" role="group" aria-label={t("searchAll.sourcesToggle")}>
         {SOURCE_OPTIONS.map((option) => {
