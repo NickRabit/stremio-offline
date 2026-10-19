@@ -1286,18 +1286,26 @@ export function App() {
     active: view === "search",
     covered: (view === "library" && searchReturn) || (view === "search" && catalogueDetail !== null),
   });
+  /** The query is selected as well, so whatever is typed next starts a new search. */
   const focusSearchInput = () => {
     window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => {
-        document.querySelector<HTMLInputElement>("[data-search-input]")?.focus();
+        const input = document.querySelector<HTMLInputElement>("[data-search-input]");
+        input?.focus();
+        input?.select();
       });
     });
   };
+  /** The top bar's Search always lands at the top of Search with the field ready for a new query;
+   *  the way back to a position in the results is Back from the title that was opened. */
   const openSearch = () => {
+    scrollByView.current.search = 0;
     if (view === "search" && !catalogueDetail) {
+      window.scrollTo({ top: 0, behavior: "smooth" });
       focusSearchInput();
       return;
     }
+    if (view === "search") detailReturn.current = null;
     openView("search");
     focusSearchInput();
   };
@@ -2818,17 +2826,13 @@ export function App() {
       .find((candidate) => (candidate.dataset.memberKeys ?? "").split(" ").includes(anchor));
     card?.focus({ preventScroll: true });
   };
+  // The section switch chases the offset recorded for Search, and leaving for the Library already
+  // recorded the clamped top there; the position taken when the card was opened is the one meant.
   const returnToSearch = () => {
-    const top = searchEverywhere.scrollTop;
+    scrollByView.current.search = searchEverywhere.scrollTop;
     setSearchReturn(false);
     setView("search");
-    window.requestAnimationFrame(() => {
-      window.scrollTo(0, top);
-      window.requestAnimationFrame(() => {
-        window.scrollTo(0, top);
-        focusSearchAnchor();
-      });
-    });
+    window.requestAnimationFrame(() => window.requestAnimationFrame(focusSearchAnchor));
   };
   /** The one way out of the shared detail: the breadcrumb's Back, the menu, and anything else
    *  that asks for the page the detail was drawn over. */
