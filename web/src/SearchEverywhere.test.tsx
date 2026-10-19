@@ -100,10 +100,15 @@ const render = async (search: SearchEverywhereController, handlers: {
   onOpenMember?: (member: SearchMember, anchorKey: string, libraryFirst?: boolean) => void;
   onOpenCanonical?: (canonical: NonNullable<SearchMemberPage["canonical"]>, anchorKey: string, libraryFirst?: boolean) => void;
   searchable?: SearchableCatalog[];
+  recent?: string[];
+  onRecord?: (query: string) => void;
+  onForget?: (query: string) => void;
+  onRefreshRecent?: () => void;
 } = {}) => {
   await act(async () => {
     root.render(<SearchEverywhere search={search} shape="poster" onToggleShape={vi.fn()}
-      searchable={handlers.searchable ?? []}
+      searchable={handlers.searchable ?? []} recent={handlers.recent ?? []}
+      onRecord={handlers.onRecord ?? vi.fn()} onForget={handlers.onForget ?? vi.fn()} onRefreshRecent={handlers.onRefreshRecent ?? vi.fn()}
       onOpenMember={handlers.onOpenMember ?? vi.fn()} onOpenCanonical={handlers.onOpenCanonical ?? vi.fn()}/>);
   });
 };
@@ -118,6 +123,111 @@ const clickCard = async () => {
 };
 
 describe("SearchEverywhere", () => {
+  it("offers recent searches on an empty field: a click runs one, its cross drops it", async () => {
+    const search = controller({ draft: "", committed: "", snapshot: null });
+    const onRecord = vi.fn();
+    const onForget = vi.fn();
+    await render(search, { recent: ["alpha", "beta"], onRecord, onForget });
+
+    const runs = [...host.querySelectorAll<HTMLButtonElement>(".search-recent-run")];
+    expect(runs.map((button) => button.textContent?.trim())).toEqual(["alpha", "beta"]);
+    await act(async () => runs[1]!.click());
+    expect(search.setDraft).toHaveBeenCalledWith("beta");
+    expect(search.submit).toHaveBeenCalled();
+    expect(onRecord).not.toHaveBeenCalled();
+    await render({ ...search, draft: "beta", committed: "beta", snapshot: snapshot() }, { recent: ["alpha", "beta"], onRecord, onForget });
+    expect(onRecord).toHaveBeenCalledWith("beta");
+    await render({ ...search, draft: "", committed: "", snapshot: null }, { recent: ["alpha", "beta"], onRecord, onForget });
+
+    await act(async () => host.querySelector<HTMLButtonElement>("[aria-label=\"Remove from history: alpha\"]")!.click());
+    expect(onForget).toHaveBeenCalledWith("alpha");
+  });
+
+  it("moves the focus to the next entry when one is removed, and to the field after the last", async () => {
+    const onForget = vi.fn();
+    const search = controller({ draft: "", committed: "", snapshot: null });
+    await render(search, { recent: ["alpha", "beta"], onForget });
+    await act(async () => host.querySelector<HTMLButtonElement>("[aria-label=\"Remove from history: alpha\"]")!.click());
+    expect(onForget).toHaveBeenCalledWith("alpha");
+    expect(document.activeElement?.textContent?.trim()).toBe("beta");
+
+    await render(search, { recent: ["beta"], onForget });
+    await act(async () => host.querySelector<HTMLButtonElement>("[aria-label=\"Remove from history: beta\"]")!.click());
+    expect(document.activeElement).toBe(host.querySelector("[data-search-input]"));
+  });
+
+  it("refreshes the history when the field takes the focus or is left empty", async () => {
+    const onRefreshRecent = vi.fn();
+    const search = controller({ draft: "alpha", committed: "alpha" });
+    await render(search, { onRefreshRecent });
+    expect(onRefreshRecent).not.toHaveBeenCalled();
+    await render({ ...search, draft: "", committed: "", snapshot: null }, { onRefreshRecent });
+    expect(onRefreshRecent).toHaveBeenCalledTimes(1);
+    await act(async () => host.querySelector<HTMLInputElement>("[data-search-input]")!.focus());
+    expect(onRefreshRecent).toHaveBeenCalledTimes(2);
+  });
+
+  it("forgets a pending submit once the search is cleared, so a later typed commit is not recorded", async () => {
+    const onRecord = vi.fn();
+    const search = controller({ draft: "gamma", committed: "", snapshot: null });
+    await render(search, { onRecord });
+    await act(async () => host.querySelector<HTMLFormElement>("form.search-everywhere-form")!.requestSubmit());
+    await render({ ...search, committed: "gamma", snapshot: null }, { onRecord });
+    await render({ ...search, draft: "", committed: "", snapshot: null }, { onRecord });
+    await render({ ...search, committed: "gamma", snapshot: snapshot() }, { onRecord });
+    expect(onRecord).not.toHaveBeenCalled();
+  });
+
+  it("does not record the new query when a card of the previous one is opened", async () => {
+    const onRecord = vi.fn();
+    await render(controller({ committed: "beta", previousQuery: true, order: ["one"], snapshot: snapshot({ clusters: [cluster("one")] }) }), { onRecord });
+    await clickCard();
+    expect(onRecord).not.toHaveBeenCalled();
+  });
+
+  it("lets go of the field after a search on a touch screen, and keeps it on a desktop", async () => {
+    const search = controller({ draft: "gamma" });
+    await render(search);
+    const input = host.querySelector<HTMLInputElement>("[data-search-input]")!;
+    const submit = async () => {
+      input.focus();
+      await act(async () => host.querySelector<HTMLFormElement>("form.search-everywhere-form")!.requestSubmit());
+    };
+    await submit();
+    expect(document.activeElement).toBe(input);
+
+    vi.stubGlobal("matchMedia", (query: string) => ({ matches: query === "(pointer: coarse)" }));
+    try {
+      await submit();
+      expect(document.activeElement).not.toBe(input);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("hides the history once something is typed or searched", async () => {
+    await render(controller({ draft: "al", committed: "", snapshot: null }), { recent: ["alpha"] });
+    expect(host.querySelector(".search-recent")).toBeNull();
+    await render(controller(), { recent: ["alpha"] });
+    expect(host.querySelector(".search-recent")).toBeNull();
+  });
+
+  it("remembers a submitted query once it is answered, and one whose result was opened", async () => {
+    const onRecord = vi.fn();
+    const search = controller({ draft: " gamma ", order: ["one"], snapshot: snapshot({ clusters: [cluster("one")] }) });
+    await render(search, { onRecord });
+    await act(async () => host.querySelector<HTMLFormElement>("form.search-everywhere-form")!.requestSubmit());
+    expect(search.submit).toHaveBeenCalled();
+    await render({ ...search, committed: "gamma", previousQuery: true }, { onRecord });
+    expect(onRecord).not.toHaveBeenCalled();
+    await render({ ...search, committed: "gamma" }, { onRecord });
+    expect(onRecord).toHaveBeenCalledWith("gamma");
+
+    onRecord.mockClear();
+    await clickCard();
+    expect(onRecord).toHaveBeenCalledWith("gamma");
+  });
+
   it("offers the Catalog scope only for the Catalog filter", async () => {
     const searchable: SearchableCatalog[] = [
       { addonKey: "addon-a", addonName: "Addon A", globalSearch: false, type: "movie", id: "films", name: "Films" },

@@ -727,6 +727,8 @@ export function App() {
   // A query is remembered once somebody acted on it -- Enter, a suggestion, an opened result --
   // and only after its first page came back. Whatever was merely typed past is not.
   const firstPageOk = useRef<string | null>(null); const recordIntent = useRef<string | null>(null); const recordedQuery = useRef<string | null>(null);
+  // Another account must never see this one's history, not even until its own arrives.
+  useEffect(() => { setSearchState(null); recordedQuery.current = null; }, [session?.username]);
   const recordSearch = (query: string) => {
     if (!searchStateRef.current?.saveHistory || recordedQuery.current === query) return;
     recordedQuery.current = query;
@@ -3402,7 +3404,8 @@ export function App() {
         </>}
       </section>}
       {view === "search" && buildInfo?.searchEverywhere && <SearchEverywhere search={searchEverywhere} shape={settings.searchTileShape} onToggleShape={() => void toggleShape("searchTileShape")}
-        searchable={searchable} onOpenMember={openSearchMember} onOpenCanonical={openSearchCanonical}/>}
+        searchable={searchable} recent={searchState?.saveHistory ? searchState.recent.map((entry) => entry.query) : []}
+        onRecord={recordSearch} onForget={forgetSearch} onRefreshRecent={() => void loadSearchState()} onOpenMember={openSearchMember} onOpenCanonical={openSearchCanonical}/>}
       {view === "library" && <section ref={libraryPageRef} className={`library-page${remoteRootsPresent && !remoteOpen && !browsePath && !localDetail ? " library-remote-roots" : ""}${(remoteOpen ? remoteCompact : libraryCompact) ? " library-compact" : ""}`} {...chromeGestures(() => browseScrollRef.current)} onKeyDown={(event) => { if (event.key === "Escape") setMenuFor(null); }} onClick={() => menuFor && setMenuFor(null)}>
         {searchReturn && <button type="button" className="search-return" onClick={returnToSearch}><ChevronLeft/> {t("searchAll.backToSearch")}</button>}
         <Heading eyebrow={t("library.eyebrow")} title={t("library.title")}/>

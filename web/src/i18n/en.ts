@@ -1924,6 +1924,7 @@ export const en = {
   "searchAll.title": "Search everywhere",
   "searchAll.placeholder": "Search catalogs and libraries…",
   "searchAll.submit": "Search",
+  "searchAll.recent": "Recent searches",
   "searchAll.sourceAll": "All",
   "searchAll.sourceCatalog": "Catalog",
   "searchAll.sourceLocal": "Local",

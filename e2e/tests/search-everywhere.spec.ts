@@ -119,6 +119,36 @@ test("a card opens the title page and Back restores the same Search", async ({ p
   await expect(page.locator("[data-search-card][title=\"Zkušební film\"]")).toBeVisible();
 });
 
+test("Search remembers a query, offers it on an empty field and drops it on request", async ({ page }) => {
+  await page.goto("/");
+  await page.request.delete("/api/search/history");
+  try {
+    await search(page);
+    await expect(page.locator("[data-search-card][title=\"Zkušební film\"]")).toBeVisible();
+
+    const form = page.locator("form.search-everywhere-form");
+    const box = page.getByRole("searchbox", { name: placeholder });
+    await form.getByRole("button", { name: "Zrušit" }).click();
+    await expect(box).toHaveValue("");
+    const recent = page.getByRole("region", { name: "Nedávná hledání" });
+    await expect(recent.locator(".search-recent-run")).toHaveText(["Zkušební"]);
+
+    await recent.getByRole("button", { name: "Zkušební", exact: true }).click();
+    await expect(box).toHaveValue("Zkušební");
+    await expect(page.locator("[data-search-card][title=\"Zkušební film\"]")).toBeVisible();
+    await expect(recent).toHaveCount(0);
+
+    await form.getByRole("button", { name: "Zrušit" }).click();
+    await recent.getByRole("button", { name: "Odebrat z historie: Zkušební" }).click();
+    await expect(recent).toHaveCount(0);
+    await page.reload();
+    await openSearch(page);
+    await expect(page.locator(".search-recent")).toHaveCount(0);
+  } finally {
+    await page.request.delete("/api/search/history");
+  }
+});
+
 test("Search keeps the query out of the URL and browser storage", async ({ page }) => {
   await page.goto("/");
   await search(page);

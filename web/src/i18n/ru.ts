@@ -1867,6 +1867,7 @@ export const ru: Catalog = {
   "searchAll.title": "Искать везде",
   "searchAll.placeholder": "Искать в каталогах и библиотеках…",
   "searchAll.submit": "Искать",
+  "searchAll.recent": "Недавние запросы",
   "searchAll.sourceAll": "Все",
   "searchAll.sourceCatalog": "Каталог",
   "searchAll.sourceLocal": "Локальные",

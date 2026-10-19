@@ -1867,6 +1867,7 @@ export const ptBR: Catalog = {
   "searchAll.title": "Pesquisar em tudo",
   "searchAll.placeholder": "Pesquisar catálogos e bibliotecas…",
   "searchAll.submit": "Pesquisar",
+  "searchAll.recent": "Pesquisas recentes",
   "searchAll.sourceAll": "Todos",
   "searchAll.sourceCatalog": "Catálogo",
   "searchAll.sourceLocal": "Local",

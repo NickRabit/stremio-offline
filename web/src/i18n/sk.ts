@@ -1867,6 +1867,7 @@ export const sk: Catalog = {
   "searchAll.title": "Vyhľadávať všade",
   "searchAll.placeholder": "Hľadať v katalógoch a knižniciach…",
   "searchAll.submit": "Vyhľadať",
+  "searchAll.recent": "Nedávne hľadania",
   "searchAll.sourceAll": "Všetko",
   "searchAll.sourceCatalog": "Katalóg",
   "searchAll.sourceLocal": "Miestne",
