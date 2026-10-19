@@ -58,6 +58,11 @@ export interface SearchStartRequest {
     catalogType?: string;
     catalogId?: string;
   };
+  library?: {
+    libraryId: string;
+    path?: string;
+    parentId?: string;
+  };
 }
 
 export type SearchLocator =
@@ -256,9 +261,11 @@ export function parseStartRequest(body: unknown): SearchStartRequest {
     !isPlainObject(body)
     || !hasExactKeys(
       body,
-      body.scope === undefined
-        ? ["query", "kind", "sources", "slotId", "generation"]
-        : ["query", "kind", "sources", "slotId", "generation", "scope"],
+      [
+        "query", "kind", "sources", "slotId", "generation",
+        ...(body.scope === undefined ? [] : ["scope"]),
+        ...(body.library === undefined ? [] : ["library"]),
+      ],
     )
   ) {
     return invalidRequest();
@@ -331,6 +338,41 @@ export function parseStartRequest(body: unknown): SearchStartRequest {
       result.scope = { addonKey, catalogType, catalogId };
     } else {
       result.scope = { addonKey };
+    }
+  }
+  if (body.library !== undefined) {
+    if (!isPlainObject(body.library)) return invalidRequest();
+    if (
+      !hasExactKeys(body.library, ["libraryId", "path"])
+      && !hasExactKeys(body.library, ["libraryId", "parentId"])
+      && !hasExactKeys(body.library, ["libraryId"])
+    ) {
+      return invalidRequest();
+    }
+    const libraryId = typeof body.library.libraryId === "string" ? body.library.libraryId.trim() : "";
+    if (!/^[A-Za-z0-9_.:-]{1,200}$(?![\s\S])/.test(libraryId)) return invalidRequest();
+    const local = body.sources.length === 1 && body.sources[0] === "local";
+    const remote = body.sources.length === 1 && body.sources[0] === "remote";
+    if ((!local && !remote) || body.scope !== undefined) return invalidRequest();
+    if (body.library.path !== undefined) {
+      if (!local || typeof body.library.path !== "string") return invalidRequest();
+      const path = body.library.path.trim();
+      if (
+        path.startsWith("/")
+        || path.includes("\0")
+        || Array.from(path).length > 1000
+        || path.split("/").some((segment) => segment === "..")
+      ) {
+        return invalidRequest();
+      }
+      result.library = { libraryId, path };
+    } else if (body.library.parentId !== undefined) {
+      if (!remote || typeof body.library.parentId !== "string") return invalidRequest();
+      const parentId = body.library.parentId.trim();
+      if (!/^[A-Za-z0-9_.:-]{1,200}$(?![\s\S])/.test(parentId)) return invalidRequest();
+      result.library = { libraryId, parentId };
+    } else {
+      result.library = { libraryId };
     }
   }
   return result;

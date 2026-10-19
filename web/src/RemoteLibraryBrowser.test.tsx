@@ -189,6 +189,7 @@ const render = async (over: Partial<Parameters<typeof RemoteLibraryBrowser>[0]> 
     compact: false, onCompactChange: vi.fn(), onPersonalChange: vi.fn(),
     uiLanguage: "en", secureMode: true, onTrailer: vi.fn(),
     downloadLibraries: [],
+    searchEverywhere: false,
     ...over,
   };
   await act(async () => { root.render(<RemoteLibraryBrowser {...props}/>); });

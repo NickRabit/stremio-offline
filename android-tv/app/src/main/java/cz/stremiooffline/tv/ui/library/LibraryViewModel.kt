@@ -53,9 +53,14 @@ class LibraryViewModel(
 
   private var job: Job? = null
   private var deepLinked = false
+  private var searchEngine = false
 
   /** True while the section is showing a folder a Home card asked for, not the library root. */
   val needsRootReset: Boolean get() = deepLinked
+
+  fun setSearchEngine(enabled: Boolean) {
+    searchEngine = enabled
+  }
 
   fun start() {
     deepLinked = false
@@ -140,6 +145,10 @@ class LibraryViewModel(
     val depth = state.pages.size
     state = state.copy(loading = true, error = false, loadingMore = false)
     update(depth) { it.copy(search = wanted) }
+    if (searchEngine) {
+      state = state.copy(loading = false)
+      return
+    }
     job = viewModelScope.launch { load(page.path.ifEmpty { null }, wanted) }
   }
 

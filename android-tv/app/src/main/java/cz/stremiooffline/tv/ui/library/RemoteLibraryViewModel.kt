@@ -138,12 +138,17 @@ class RemoteLibraryViewModel(private val api: RemoteLibraryApi) : ViewModel() {
   /** Separate guards, so starting an item load never invalidates a libraries load and vice versa. */
   private var librariesEpoch = 0
   private var itemsEpoch = 0
+  private var searchEngine = false
 
   private val previewJobs = mutableMapOf<String, Job>()
   private val previewSlots = Semaphore(MAX_PREVIEWS)
   private var previewEpoch = 0
 
   fun selectedFor(key: String): String? = selection[key]
+
+  fun setSearchEngine(enabled: Boolean) {
+    searchEngine = enabled
+  }
 
   fun select(key: String, value: String) {
     selection = selection + (key to value)
@@ -306,6 +311,10 @@ class RemoteLibraryViewModel(private val api: RemoteLibraryApi) : ViewModel() {
   fun search(query: String) {
     val level = state.current as? RemoteLevel.Directory ?: return
     if (level.state.search == query) return
+    if (searchEngine) {
+      updateItems(level) { it.copy(search = query) }
+      return
+    }
     clearForLoad(level) { it.copy(search = query) }
     request(currentLevel(level) ?: return, cursor = null, append = false)
   }

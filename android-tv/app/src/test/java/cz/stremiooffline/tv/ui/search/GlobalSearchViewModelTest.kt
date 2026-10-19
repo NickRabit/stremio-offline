@@ -5,6 +5,7 @@ import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.GlobalSearchAliasDto
 import cz.stremiooffline.tv.data.GlobalSearchClusterDto
+import cz.stremiooffline.tv.data.GlobalSearchLibraryDto
 import cz.stremiooffline.tv.data.GlobalSearchPollDto
 import cz.stremiooffline.tv.data.GlobalSearchSnapshotDto
 import cz.stremiooffline.tv.data.GlobalSearchStartResultDto
@@ -229,6 +230,29 @@ class GlobalSearchViewModelTest {
     assertTrue(api.recordedSearches.isEmpty())
     assertTrue(api.forgottenSearches.isEmpty())
     assertEquals(0, api.clearHistoryCalls)
+    viewModel.setActive(false)
+  }
+
+  @Test
+  fun `a fixed library scope sends its library and sources and ignores filters`() = runTest(dispatcher) {
+    val api = FakeTvApi()
+    val viewModel = GlobalSearchViewModel(
+      api,
+      "slot",
+      library = GlobalSearchLibraryDto("lib_ab12cd34", path = "Shows"),
+      sources = setOf(SourceClass.Local),
+    ).also { running = it }
+    viewModel.setActive(true)
+
+    viewModel.setKind(KindFilter.Series)
+    viewModel.setSources(setOf(SourceClass.Remote))
+    viewModel.submit("hluboky")
+    runCurrent()
+
+    val body = api.globalStartCalls.single()
+    assertEquals(listOf("local"), body.sources)
+    assertEquals(GlobalSearchLibraryDto("lib_ab12cd34", path = "Shows"), body.library)
+    assertEquals("all", body.kind)
     viewModel.setActive(false)
   }
 }

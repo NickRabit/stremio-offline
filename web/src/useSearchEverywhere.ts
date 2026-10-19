@@ -62,10 +62,19 @@ const mergeOrder = (
 const isAbort = (error: unknown): boolean =>
   error instanceof DOMException && error.name === "AbortError";
 
-export function useSearchEverywhere(options: { active: boolean; covered: boolean }) {
+export type LibrarySearchScope =
+  | { libraryId: string; path?: string }
+  | { libraryId: string; parentId?: string };
+
+export function useSearchEverywhere(options: {
+  active: boolean;
+  covered: boolean;
+  library?: LibrarySearchScope;
+  sources?: SearchSourceClass[];
+}) {
   const [draft, setDraftState] = useState("");
   const [committed, setCommittedState] = useState("");
-  const [sources, setSourcesState] = useState<SearchSourceClass[]>([]);
+  const [sources, setSourcesState] = useState<SearchSourceClass[]>(options.sources ?? []);
   const [scope, setScopeState] = useState<SearchStartBody["scope"] | null>(null);
   const [kind, setKindState] = useState<SearchKindFilter>("all");
   const [snapshot, setSnapshotState] = useState<SearchSnapshot | null>(null);
@@ -91,7 +100,9 @@ export function useSearchEverywhere(options: { active: boolean; covered: boolean
   const unidentifiedOrderRef = useRef<string[]>([]);
   const committedRef = useRef("");
   const draftRef = useRef("");
-  const sourcesRef = useRef<SearchSourceClass[]>([]);
+  const sourcesRef = useRef<SearchSourceClass[]>(options.sources ?? []);
+  const fixedSourcesRef = useRef(options.sources);
+  const libraryRef = useRef(options.library);
   const scopeRef = useRef<SearchStartBody["scope"] | null>(null);
   const kindRef = useRef<SearchKindFilter>("all");
   const interactedRef = useRef(false);
@@ -113,6 +124,8 @@ export function useSearchEverywhere(options: { active: boolean; covered: boolean
 
   activeRef.current = options.active;
   coveredRef.current = options.covered;
+  fixedSourcesRef.current = options.sources;
+  libraryRef.current = options.library;
 
   const canPoll = () =>
     activeRef.current
@@ -284,7 +297,7 @@ export function useSearchEverywhere(options: { active: boolean; covered: boolean
       holdingRef.current = false;
     }
     const generation = ++generationRef.current;
-    const requestSources = sourcesRef.current.length ? sourcesRef.current : ALL_SOURCES;
+    const requestSources = fixedSourcesRef.current ?? (sourcesRef.current.length ? sourcesRef.current : ALL_SOURCES);
     abortRequests();
     committedRef.current = query;
     setCommittedState(query);
@@ -301,6 +314,7 @@ export function useSearchEverywhere(options: { active: boolean; covered: boolean
       slotId: slotRef.current!,
       generation,
       ...(scopeRef.current ? { scope: { ...scopeRef.current } } : {}),
+      ...(libraryRef.current ? { library: { ...libraryRef.current } } : {}),
     }, controller.signal).then((answer) => {
       if (generation !== generationRef.current || controller.signal.aborted) return;
       sessionIdRef.current = answer.id;
@@ -340,6 +354,7 @@ export function useSearchEverywhere(options: { active: boolean; covered: boolean
   };
 
   const setSources = (value: SearchSourceClass[]) => {
+    if (fixedSourcesRef.current) return;
     const next = [...new Set(value)];
     if (!(next.length === 1 && next[0] === "catalog")) {
       scopeRef.current = null;

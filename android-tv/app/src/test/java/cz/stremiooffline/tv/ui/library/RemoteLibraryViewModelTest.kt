@@ -380,6 +380,24 @@ class RemoteLibraryViewModelTest {
   }
 
   @Test
+  fun `a remote search on the shared engine leaves the directory listing untouched`() = runTest(dispatcher) {
+    val api = FakeRemoteApi()
+    api.pages[""] = page(listOf(item("a")))
+    val vm = RemoteLibraryViewModel(api)
+    vm.openLibrary(library())
+    advanceUntilIdle()
+    val calls = api.calls.size
+
+    vm.setSearchEngine(true)
+    vm.search("casting")
+    advanceUntilIdle()
+
+    assertEquals("casting", state(vm).search)
+    assertEquals(calls, api.calls.size)
+    assertEquals(listOf("a"), state(vm).items.map { it.id })
+  }
+
+  @Test
   fun `a library with the mosaic off never asks for a preview`() = runTest(dispatcher) {
     val api = FakeRemoteApi()
     api.pages[""] = page(listOf(RemoteItemDto(id = "f1", name = "Shows", type = "folder")))

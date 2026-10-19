@@ -438,6 +438,79 @@ test("a local single-file entry carries its folder name and relative path as sea
   });
 });
 
+test("a named local library search keeps only the subtree under its folder", async () => {
+  const entries = [
+    libraryEntry("lib_00000001/Hledacka/Hloubka/Treti/Hluboky soubor.mkv", "Hluboky soubor"),
+    libraryEntry("lib_00000001/Hledacka/Jina/Hluboky jinde.mkv", "Hluboky jinde"),
+    libraryEntry("lib_00000002/Hledacka/Hluboky u souseda.mkv", "Hluboky u souseda"),
+  ];
+  const index = fakeIndex({ search: async () => ({ generation: 1, entries }) });
+  const libraries = [localLibrary("lib_00000001", "Films"), localLibrary("lib_00000002", "Other")];
+  const sources = await discoverSources(
+    deps({ libraries: () => libraries, index }),
+    authority(),
+    request({
+      sources: ["local"],
+      library: { libraryId: "lib_00000001", path: "Hledacka/Hloubka" },
+    }),
+    "ss_test",
+  );
+  assert.equal(sources.length, 1);
+  const page = await sources[0]!.next(undefined, signal());
+  assert.deepEqual(page.records.map((record) => record.title), ["Hluboky soubor"]);
+  assert.deepEqual(page.records[0]!.locator, {
+    kind: "local",
+    key: "lib_00000001/Hledacka/Hloubka/Treti/Hluboky soubor.mkv",
+    libraryId: "lib_00000001",
+    itemKind: "file",
+  });
+});
+
+test("a named library is searched even when global search leaves it out", async () => {
+  const entries = [libraryEntry("lib_00000002/Private/Only here.mkv", "Only here")];
+  const libraries = [
+    localLibrary("lib_00000001", "Films"),
+    { ...localLibrary("lib_00000002", "Private"), showInSearch: false },
+  ];
+  const index = fakeIndex({ search: async () => ({ generation: 1, entries }) });
+  const named = await discoverSources(
+    deps({ libraries: () => libraries, index }),
+    authority(),
+    request({ sources: ["local"], library: { libraryId: "lib_00000002" } }),
+    "ss_test",
+  );
+  assert.deepEqual(named.map((source) => source.label), ["Private"]);
+  assert.equal(named[0]!.stillAllowed(), true);
+  assert.deepEqual((await named[0]!.next(undefined, signal())).records.map((record) => record.title), ["Only here"]);
+
+  const root = await discoverSources(
+    deps({ libraries: () => libraries, index }),
+    authority(),
+    request({ sources: ["local"] }),
+    "ss_test",
+  );
+  assert.deepEqual(root.map((source) => source.label), ["Films"]);
+});
+
+test("an unknown or invisible named library discovers no sources", async () => {
+  const index = fakeIndex();
+  for (const libraryId of ["lib_00000009", "lib_00000002"]) {
+    const sources = await discoverSources(
+      deps({
+        libraries: () => [
+          localLibrary("lib_00000001", "Films"),
+          { ...localLibrary("lib_00000002", "Private"), visibleTo: [] },
+        ],
+        index,
+      }),
+      authority(),
+      request({ sources: ["local"], library: { libraryId } }),
+      "ss_test",
+    );
+    assert.deepEqual(sources, []);
+  }
+});
+
 test("a local source reports indexing until the index is ready", async () => {
   const index = fakeIndex({ state: () => indexState({ ready: false, generation: 0 }) });
   const sources = await discoverSources(
@@ -538,6 +611,38 @@ test("remote rows map titles, episode ranges, the cursor and the library provide
   assert.equal(page.records[3]!.itemCount, 818);
 
   assert.equal(source.stillAllowed(), true);
+});
+
+test("a named remote library search passes its parent through to the provider", async () => {
+  const library = { ...remoteLibrary("rlib_00000001", "conn_00000001"), showInSearch: false };
+  let seen: { libraryId: string; query: { search: string; kind: string; parentId?: string; cursor?: string } } | undefined;
+  const sources = await discoverSources(
+    deps({
+      remote: {
+        visibleLibraries: async () => [library],
+        searchLibrary: async (_authority, libraryId, query) => {
+          seen = { libraryId: String(libraryId), query };
+          return { items: [] };
+        },
+        matchingItems: async () => [],
+        canSearchLibrary: (_userId, _libraryId, _generation, explicit) => explicit === true,
+        libraryGeneration: () => 4,
+      },
+    }),
+    authority(),
+    request({
+      sources: ["remote"],
+      library: { libraryId: "rlib_00000001", parentId: "folder-1" },
+    }),
+    "ss_test",
+  );
+  assert.equal(sources.length, 1);
+  assert.equal(sources[0]!.stillAllowed(), true);
+  await sources[0]!.next(undefined, signal());
+  assert.deepEqual(seen, {
+    libraryId: "rlib_00000001",
+    query: { search: "alien", kind: "all", parentId: "folder-1", cursor: undefined },
+  });
 });
 
 test("a remote source disappears when its grant or generation is revoked", async () => {

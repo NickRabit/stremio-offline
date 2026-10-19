@@ -55,15 +55,20 @@ const advance = async (milliseconds: number) => {
 let root: Root;
 let host: HTMLDivElement;
 let current: SearchEverywhereController;
-let options: { active: boolean; covered: boolean };
+let options: {
+  active: boolean;
+  covered: boolean;
+  library?: { libraryId: string; path?: string } | { libraryId: string; parentId?: string };
+  sources?: SearchSourceClass[];
+};
 
 function Harness() {
   current = useSearchEverywhere(options);
   return null;
 }
 
-const render = async (active = true, covered = false) => {
-  options = { active, covered };
+const render = async (active = true, covered = false, extra: Pick<typeof options, "library" | "sources"> = {}) => {
+  options = { active, covered, ...extra };
   await act(async () => { root.render(createElement(Harness)); });
   await flush();
 };
@@ -119,6 +124,21 @@ afterEach(() => {
 });
 
 describe("useSearchEverywhere", () => {
+  it("sends a library and its fixed sources on every start", async () => {
+    vi.spyOn(api, "searchEverywhereStart").mockResolvedValue({
+      id: "session-one",
+      snapshot: snapshot({ revision: 1 }),
+    });
+    await render(true, false, { library: { libraryId: "lib_ab12cd34", path: "Shows" }, sources: ["local"] });
+    await submit("alpha");
+    await render(true, false, { library: { libraryId: "lib_ab12cd34", path: "Shows" }, sources: ["local"] });
+    await submit("beta");
+    expect(startBodies().map((body) => ({ library: body.library, sources: body.sources }))).toEqual([
+      { library: { libraryId: "lib_ab12cd34", path: "Shows" }, sources: ["local"] },
+      { library: { libraryId: "lib_ab12cd34", path: "Shows" }, sources: ["local"] },
+    ]);
+  });
+
   it("drops a late start response from an older query", async () => {
     let resolveFirst!: (answer: { id: string; snapshot: SearchSnapshot }) => void;
     let resolveSecond!: (answer: { id: string; snapshot: SearchSnapshot }) => void;

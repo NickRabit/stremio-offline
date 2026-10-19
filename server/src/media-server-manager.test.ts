@@ -4563,6 +4563,53 @@ test("searchLibrary reads the root even after a nested browse", async () => {
   });
 });
 
+test("searchLibrary proves a nested parent and binds it in its cursor", async () => {
+  await withHarness(async (harness) => {
+    const library = await directoryLibrary(harness, "search-root", "mixed");
+    harness.server.detailOf["folder-a"] = folder("folder-a", { parentId: "search-root" });
+    harness.server.ancestorsOf["folder-a"] = ["search-root"];
+    harness.server.directoryOverride = (_parent, options) => options.cursor === undefined
+      ? { items: [movie("m1")], total: 2, cursor: "provider-1" }
+      : { items: [movie("m2")], total: 2 };
+
+    const first = await harness.manager.searchLibrary(harness.admin, library.id, {
+      search: "alien", kind: "all", parentId: "folder-a",
+    });
+    const firstCall = harness.server.directoryCalls.at(-1)!;
+    assert.equal(firstCall.parentId, "folder-a");
+    assert.deepEqual(firstCall.options, {
+      mode: "titles", limit: 20, search: "alien", searchTypes: "all",
+    });
+    assert.deepEqual(first.items.map((item) => item.id), ["m1"]);
+    assert.ok(first.cursor);
+
+    const second = await harness.manager.searchLibrary(harness.admin, library.id, {
+      search: "alien", kind: "all", parentId: "folder-a", cursor: first.cursor,
+    });
+    assert.deepEqual(second.items.map((item) => item.id), ["m2"]);
+
+    const before = harness.server.directoryCalls.length;
+    await assert.rejects(
+      harness.manager.searchLibrary(harness.admin, library.id, {
+        search: "alien", kind: "all", cursor: first.cursor,
+      }),
+      { code: "stale-generation" },
+      "a cursor minted for a folder is refused at the root",
+    );
+    assert.equal(harness.server.directoryCalls.length, before);
+
+    harness.server.detailOf["outside"] = folder("outside");
+    harness.server.ancestorsOf["outside"] = ["another-library"];
+    await assert.rejects(
+      harness.manager.searchLibrary(harness.admin, library.id, {
+        search: "alien", kind: "all", parentId: "outside",
+      }),
+      { code: "not-found" },
+      "a parent outside the library is refused as browsing refuses it",
+    );
+  });
+});
+
 test("canSearchLibrary follows the grant and the connection generation", async () => {
   await withHarness(async (harness) => {
     const library = await directoryLibrary(harness, "search-root", "mixed");

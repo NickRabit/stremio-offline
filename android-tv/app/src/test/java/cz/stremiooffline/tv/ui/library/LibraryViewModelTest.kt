@@ -182,6 +182,26 @@ class LibraryViewModelTest {
   }
 
   @Test
+  fun `a library search on the shared engine leaves the browsed level untouched`() = runTest(dispatcher) {
+    val api = FakeTvApi()
+    api.pages[null] = BrowseResult("", listOf(folder("Shows", "Shows")), 1, false)
+    api.pages["Shows"] = BrowseResult("Shows", listOf(folder("Shows/S1", "S1")), 1, false)
+    val readsBefore = api.browseRequests.size
+    val viewModel = LibraryViewModel(api)
+    viewModel.open("Shows", "Shows")
+    advanceUntilIdle()
+    assertEquals(readsBefore + 1, api.browseRequests.size)
+
+    viewModel.setSearchEngine(true)
+    viewModel.search("S1")
+    advanceUntilIdle()
+
+    assertEquals("S1", viewModel.state.current!!.search)
+    assertEquals(readsBefore + 1, api.browseRequests.size)
+    assertEquals(listOf("Shows/S1"), viewModel.state.current!!.items.map { it.path })
+  }
+
+  @Test
   fun `a root listing the libraries is not searchable`() = runTest(dispatcher) {
     val api = FakeTvApi()
     api.pages[null] = BrowseResult(

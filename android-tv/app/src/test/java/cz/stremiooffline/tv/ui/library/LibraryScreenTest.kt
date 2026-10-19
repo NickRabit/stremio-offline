@@ -27,6 +27,14 @@ import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.pressKey
 import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.BrowseResult
+import cz.stremiooffline.tv.R
+import cz.stremiooffline.tv.data.GlobalSearchClusterDto
+import cz.stremiooffline.tv.data.GlobalSearchLibraryDto
+import cz.stremiooffline.tv.data.GlobalSearchLocatorDto
+import cz.stremiooffline.tv.data.GlobalSearchMemberDto
+import cz.stremiooffline.tv.data.GlobalSearchMemberPageDto
+import cz.stremiooffline.tv.data.GlobalSearchSnapshotDto
+import cz.stremiooffline.tv.data.GlobalSearchStartResultDto
 import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.RemoteItemsPageDto
 import cz.stremiooffline.tv.data.RemoteLibraryDto
@@ -35,6 +43,7 @@ import cz.stremiooffline.tv.ui.components.TagPosterMosaic
 import cz.stremiooffline.tv.ui.BrowseRequest
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.detail.DetailData
+import cz.stremiooffline.tv.ui.search.globalSearchCardTag
 import kotlinx.coroutines.CompletableDeferred
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -77,6 +86,8 @@ class LibraryScreenTest {
     api: FakeTvApi,
     pendingDelayMs: Long = 1_500L,
     onDetail: (DetailData) -> Unit = {},
+    onOpenLibrary: ((String) -> Unit)? = null,
+    searchEverywhereEnabled: Boolean = false,
     voiceAvailable: Boolean? = null,
     voiceLauncher: VoiceLauncher? = null,
   ) {
@@ -86,12 +97,59 @@ class LibraryScreenTest {
       LibraryRoute(
         api = api,
         onOpenDetail = onDetail,
+        onOpenLibrary = onOpenLibrary,
+        searchEverywhereEnabled = searchEverywhereEnabled,
         pendingDelayMs = pendingDelayMs,
         voiceAvailable = voiceAvailable,
         voiceLauncher = voiceLauncher,
       )
       }
     }
+  }
+
+  private fun searchResult(api: FakeTvApi, member: GlobalSearchMemberDto) {
+    api.globalStartHandler = {
+      GlobalSearchStartResultDto(
+        id = "gs",
+        snapshot = GlobalSearchSnapshotDto(
+          revision = 1,
+          state = "complete",
+          clusters = listOf(
+            GlobalSearchClusterDto(
+              key = "one",
+              kind = member.kind,
+              title = member.title,
+              memberCount = 1,
+              primaryMemberKey = member.memberKey,
+              memberKeys = listOf(member.memberKey),
+            ),
+          ),
+        ),
+      )
+    }
+    api.globalMembersHandler = { _, _, _ ->
+      GlobalSearchMemberPageDto(clusterKey = "one", members = listOf(member))
+    }
+  }
+
+  private fun localMember(path: String, kind: String = "file") = GlobalSearchMemberDto(
+    memberKey = "m1",
+    sourceId = "local",
+    sourceClass = "local",
+    sourceLabel = "Films",
+    kind = "movie",
+    title = "Hluboky soubor",
+    locator = GlobalSearchLocatorDto(kind = "local", key = path, libraryId = "lib_ab12cd34", itemKind = kind),
+  )
+
+  private fun submitSearch(query: String) {
+    focusOn(TagLibrarySearchAction)
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagLibrarySearchInput).performTextInput(query)
+    compose.onNodeWithTag(TagLibrarySearchInput).performImeAction()
+    compose.waitForIdle()
+    compose.mainClock.advanceTimeBy(100)
+    compose.waitForIdle()
   }
 
   // Bug: the first walk of a library answered empty with pending; the screen must not fall into
@@ -704,5 +762,103 @@ class LibraryScreenTest {
     assertEquals("matrix", api.browseRequests.last().query)
     compose.onNodeWithTag(TagLibrarySearchField).assertDoesNotExist()
     compose.onNodeWithTag(TagLibrarySearchAction).assert(hasText("matrix"))
+  }
+
+  @Test
+  fun `a scoped files search sends the folder path and opens a local member`() {
+    val api = FakeTvApi()
+    api.globalSearchEnabled = true
+    api.pages[null] = BrowseResult("", listOf(localLibrary("lib_ab12cd34", "Films")), 1, false)
+    api.pages["lib_ab12cd34"] = BrowseResult(
+      "lib_ab12cd34",
+      listOf(folder("lib_ab12cd34/Shows", "Shows")),
+      1,
+      false,
+    )
+    api.pages["lib_ab12cd34/Shows"] = BrowseResult(
+      "lib_ab12cd34/Shows",
+      listOf(folder("lib_ab12cd34/Shows/S1", "S1")),
+      1,
+      false,
+    )
+    searchResult(api, localMember("lib_ab12cd34/Shows/S1/E1.mkv"))
+    var opened: String? = null
+    mount(api, searchEverywhereEnabled = true, onOpenLibrary = { opened = it })
+    switchTo("Files")
+    compose.onNodeWithTag("lib_ab12cd34").performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
+    compose.mainClock.advanceTimeBy(100)
+    compose.waitForIdle()
+    compose.onNodeWithTag("lib_ab12cd34/Shows").performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
+    compose.mainClock.advanceTimeBy(100)
+    compose.waitForIdle()
+
+    submitSearch("hluboky")
+
+    assertEquals(
+      GlobalSearchLibraryDto("lib_ab12cd34", path = "Shows"),
+      api.globalStartCalls.single().library,
+    )
+    assertTrue(api.browseRequests.none { it.query == "hluboky" })
+    compose.onNodeWithTag(globalSearchCardTag("m1")).assertExists()
+
+    focusOn(TagLibrarySearchAction)
+    press(Key.DirectionCenter)
+    press(Key.DirectionDown)
+    compose.onNodeWithTag(globalSearchCardTag("m1")).assertIsFocused()
+    press(Key.DirectionCenter)
+    compose.waitForIdle()
+    assertEquals("lib_ab12cd34/Shows/S1/E1.mkv", opened)
+
+    host!!.onBackPressedDispatcher.onBackPressed()
+    compose.waitForIdle()
+    compose.mainClock.advanceTimeBy(100)
+    compose.waitForIdle()
+    compose.onNodeWithTag(globalSearchCardTag("m1")).assertDoesNotExist()
+    compose.onNodeWithTag("lib_ab12cd34/Shows/S1").assertExists()
+    compose.onNodeWithTag(TagLibrarySearchAction).assert(hasText(
+      ApplicationProvider.getApplicationContext<android.content.Context>()
+        .getString(R.string.media_server_search_action),
+    ))
+  }
+
+  @Test
+  fun `a files search at the multi-library root carries no library`() {
+    val api = FakeTvApi()
+    api.globalSearchEnabled = true
+    api.pages[null] = BrowseResult(
+      "",
+      listOf(localLibrary("lib_1", "Films"), localLibrary("lib_2", "Shows")),
+      2,
+      false,
+    )
+    searchResult(api, localMember("lib_1/Film.mkv"))
+    mount(api, searchEverywhereEnabled = true)
+    switchTo("Files")
+
+    submitSearch("hluboky")
+
+    val body = api.globalStartCalls.single()
+    assertEquals(null, body.library)
+    assertEquals(listOf("local"), body.sources)
+  }
+
+  @Test
+  fun `a files search with the flag off keeps the browse query`() {
+    val api = nested()
+    api.globalSearchEnabled = false
+    api.browseQueries["Shows|S1"] = BrowseResult("Shows", listOf(folder("Shows/S1", "S1")), 1, false)
+    mount(api, searchEverywhereEnabled = false)
+    switchTo("Files")
+    compose.onNodeWithTag("Shows").performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
+    compose.mainClock.advanceTimeBy(100)
+    compose.waitForIdle()
+
+    submitSearch("S1")
+
+    assertTrue(api.globalStartCalls.isEmpty())
+    assertEquals("S1", api.browseRequests.last().query)
   }
 }

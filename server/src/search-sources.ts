@@ -8,7 +8,7 @@ import {
   type CatalogTarget,
 } from "./addons.js";
 import { isVideo, type LibraryEntry } from "./library.js";
-import { parseLibraryPath, posixBase, posixDir, visibleLibraries, type LibraryRecord } from "./libraries.js";
+import { libraryPath, parseLibraryPath, posixBase, posixDir, visibleLibraries, type LibraryRecord } from "./libraries.js";
 import type { MediaServerAuthority, MediaServerManager } from "./media-server-manager.js";
 import {
   isMediaServerError,
@@ -262,8 +262,17 @@ const localSource = (
   context: SourceContext,
   libraryId: string,
   libraryName: string,
+  path = "",
+  explicitScope = false,
 ): Omit<SearchSource, "id"> => {
   let cached: { generation: number; entries: LibraryEntry[] } | undefined;
+  const root = libraryPath(libraryId, path);
+  const subtree = `${root}/`;
+  // An index entry is a whole title folder or a loose file. Searching from inside a title folder
+  // (or one of its subfolders) still finds that title, so an entry that contains the folder on
+  // screen counts as well as one beneath it.
+  const withinScope = (entry: LibraryEntry): boolean =>
+    entry.key === root || entry.key.startsWith(subtree) || root.startsWith(`${entry.key}/`);
   return {
     sourceClass: "local",
     label: libraryName,
@@ -279,26 +288,30 @@ const localSource = (
       }
       const previous = localCursor(cursor);
       const offset = previous !== undefined && previous.generation === result.generation ? previous.offset : 0;
-      const entries = result.entries.slice(offset, offset + LOCAL_PAGE_SIZE);
+      const scoped = result.entries.filter(withinScope);
+      const entries = scoped.slice(offset, offset + LOCAL_PAGE_SIZE);
       const nextOffset = offset + entries.length;
       return {
         records: entries.map((entry) => localRecord(entry, libraryId, deps)),
         cursor: { generation: result.generation, offset: nextOffset },
-        exhausted: nextOffset >= result.entries.length,
+        exhausted: nextOffset >= scoped.length,
         stale: deps.localIndex.state().stale,
       };
     },
     stillAllowed(): boolean {
       const user = deps.user(context.userId);
       if (!user || user.disabled) return false;
-      return visibleLibraries(deps.libraries(), viewerOf(user)).some((library) => library.id === libraryId && library.showInSearch !== false);
+      return visibleLibraries(deps.libraries(), viewerOf(user)).some((library) =>
+        library.id === libraryId && (explicitScope || library.showInSearch !== false));
     },
     onReady(listener): () => void {
       return deps.localIndex.onReady(listener);
     },
     async expand(ids, kind): Promise<RawSearchRecord[]> {
       if (kind !== "movie" && kind !== "series") return [];
-      return deps.localIndex.byIds(libraryId, ids, kind).map((entry) => localRecord(entry, libraryId, deps));
+      return deps.localIndex.byIds(libraryId, ids, kind)
+        .filter(withinScope)
+        .map((entry) => localRecord(entry, libraryId, deps));
     },
   };
 };
@@ -347,6 +360,8 @@ const remoteSource = (
   context: SourceContext,
   library: PublicRemoteLibrary,
   generation: number,
+  parentId?: string,
+  explicitScope = false,
 ): Omit<SearchSource, "id"> => ({
   sourceClass: "remote",
   label: library.name,
@@ -358,7 +373,12 @@ const remoteSource = (
       page = await deps.remote.searchLibrary(
         deps.mediaAuthority(context.userId),
         library.id,
-        { search: context.query, kind: context.kind, cursor: cursor as string | undefined },
+        {
+          search: context.query,
+          kind: context.kind,
+          ...(parentId === undefined ? {} : { parentId }),
+          cursor: cursor as string | undefined,
+        },
         signal,
       );
     } catch (error) {
@@ -403,7 +423,7 @@ const remoteSource = (
     };
   },
   stillAllowed(): boolean {
-    return deps.remote.canSearchLibrary(context.userId, library.id, generation);
+    return deps.remote.canSearchLibrary(context.userId, library.id, generation, explicitScope);
   },
   async expand(ids, kind, signal): Promise<RawSearchRecord[]> {
     const catalogId = catalogIdFor(ids);
@@ -445,6 +465,26 @@ export async function discoverSources(
     userId: authority.userId,
   };
   const sources: Array<Omit<SearchSource, "id">> = [];
+
+  if (request.library !== undefined) {
+    const library = request.library;
+    if (request.sources[0] === "local") {
+      const found = visibleLibraries(deps.libraries(), viewer).find((candidate) => candidate.id === library.libraryId);
+      if (found) {
+        sources.push(localSource(deps, context, found.id, found.name, library.path ?? "", true));
+      }
+    } else if (request.sources[0] === "remote") {
+      const libraries = await deps.remote.visibleLibraries(deps.mediaAuthority(authority.userId));
+      const found = libraries.find((candidate) => candidate.id === library.libraryId);
+      if (found) {
+        const generation = deps.remote.libraryGeneration(found.id);
+        if (generation !== undefined) {
+          sources.push(remoteSource(deps, context, found, generation, library.parentId, true));
+        }
+      }
+    }
+    return sources.map((source, index) => ({ ...source, id: `s${index}` }));
+  }
 
   if (request.sources.includes("local")) {
     // A library switched out of search is left out of every search scope, like an addon kept out
