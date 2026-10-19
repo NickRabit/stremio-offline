@@ -51,6 +51,9 @@ export interface HomeRowState {
   partial: boolean;
   /** The request number this row reflects. A newer request supersedes an older one. */
   request: number;
+  /** An answer has landed for this row before, so a refresh of a row that came back empty
+   *  draws nothing instead of a skeleton that would only vanish again. */
+  settled?: boolean;
 }
 
 export type HomeRows = Partial<Record<HomeRowId, HomeRowState>>;
@@ -78,6 +81,7 @@ export function homeReducer(state: HomeRows, action: HomeAction): HomeRows {
         total: current?.total,
         partial: current?.partial ?? false,
         request: action.request,
+        settled: current?.status === "ok" || current?.settled === true,
       };
     }
     return next;
@@ -95,7 +99,7 @@ export function homeReducer(state: HomeRows, action: HomeAction): HomeRows {
       next[row] = { ...current, status: "error" };
       continue;
     }
-    next[row] = { status: "ok", items: answered.items, hasMore: answered.hasMore, total: answered.total, partial: answered.partial === true, request: current.request };
+    next[row] = { status: "ok", items: answered.items, hasMore: answered.hasMore, total: answered.total, partial: answered.partial === true, request: current.request, settled: true };
   }
   return next;
 }

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { memo, useEffect, useRef } from "react";
 import { ChevronRight, Shuffle } from "lucide-react";
 import { HomeCard, type HomeCardActions } from "./HomeCard";
 import { showAllTarget, type ShowAllTarget } from "./home-cards";
@@ -17,11 +17,11 @@ const SKELETON = [0, 1, 2, 3];
  *  scrolls in. */
 const AHEAD = "800px 0px";
 
-const skeleton = <div className="resume-strip skeleton" aria-hidden="true">{SKELETON.map((index) => <div className="browse-item" key={index}><span className="browse-art"/><span className="home-skeleton-line"/></div>)}</div>;
+const skeleton = <div className="resume-strip skeleton" aria-hidden="true">{SKELETON.map((index) => <div className="browse-item" key={index}><span className="browse-art"/><span className="home-skeleton-line title"/><span className="home-skeleton-line caption"/></div>)}</div>;
 
 /** One media shelf: its heading, its Show all, and either its cards, a first-load skeleton or
  *  its own error line with a retry. A row with nothing in it and no failure is not drawn. */
-export function HomeShelf({ row, title, state, shape, actions, onRetry, onShowAll, onShuffle, onVisible, onOpenCatalog }: {
+export const HomeShelf = memo(function HomeShelf({ row, title, state, shape, actions, onRetry, onShowAll, onShuffle, onVisible, onOpenCatalog }: {
   row: HomeRowId;
   title?: string;
   state: HomeRowState | undefined;
@@ -59,7 +59,7 @@ export function HomeShelf({ row, title, state, shape, actions, onRetry, onShowAl
   </section>;
   if (!state || state.status === "idle") return null;
   const empty = state.items.length === 0;
-  if (state.status === "ok" && empty && !state.partial) return null;
+  if ((state.status === "ok" || (state.status === "loading" && state.settled)) && empty && !state.partial) return null;
   const target = showAllTarget(row, state.hasMore);
 
   return <section className="home-row" data-row={row}>
@@ -79,4 +79,4 @@ export function HomeShelf({ row, title, state, shape, actions, onRetry, onShowAl
               </div>}
         </>}
   </section>;
-}
+});

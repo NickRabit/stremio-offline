@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
+import { readHomeCache, writeHomeCache } from "./home-cache";
 import { emptyHomeRows, homeReducer, homeRowsFor, isHomeCatalogRow, type HomeRows } from "./home-state";
 import type { HomeOrderEntry, HomeRowId } from "../../server/src/home";
 
@@ -7,6 +8,7 @@ import type { HomeOrderEntry, HomeRowId } from "../../server/src/home";
  *  again shortly picks the answer up. */
 const PARTIAL_RETRY_MS = 2500;
 const PARTIAL_RETRIES = 3;
+const HOME_CACHE_WRITE_MS = 500;
 
 /** Home's media rows, wired to `GET /api/home`. Each call names its rows, so a retry touches
  *  only the row that failed; an answer only lands on the request still current for it. Addon
@@ -26,6 +28,7 @@ export function useHome({ active, account, admin, playerOpen }: { active: boolea
   const retries = useRef(new Map<HomeRowId, number>());
   const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
   const pending = useRef(new Set<HomeRowId>());
+  const cacheTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   /** Bumped on an account change, so a retry planned for the previous account is dropped. */
   const epoch = useRef(0);
 
@@ -91,9 +94,35 @@ export function useHome({ active, account, admin, playerOpen }: { active: boolea
     orderRef.current = [];
     setOrder([]);
     setRows(emptyHomeRows());
+    if (account !== null) {
+      const cached = readHomeCache(account);
+      if (cached) {
+        setRows(cached.rows);
+        setOrder(cached.order);
+        orderRef.current = cached.order;
+        for (const row of Object.keys(cached.rows)) {
+          if (isHomeCatalogRow(row as HomeRowId)) shown.current.add(row as HomeRowId);
+        }
+      }
+    }
   }, [account]);
 
   useEffect(() => () => { for (const timer of timers.current) clearTimeout(timer); }, []);
+
+  useEffect(() => {
+    if (cacheTimer.current) clearTimeout(cacheTimer.current);
+    cacheTimer.current = undefined;
+    if (account === null || !Object.values(rows).some((row) => row?.status === "ok")) return;
+    cacheTimer.current = setTimeout(() => {
+      cacheTimer.current = undefined;
+      writeHomeCache(account, order, rows);
+    }, HOME_CACHE_WRITE_MS);
+    return () => {
+      if (!cacheTimer.current) return;
+      clearTimeout(cacheTimer.current);
+      cacheTimer.current = undefined;
+    };
+  }, [rows, order, account]);
 
   // Opening Home, and every return to it while signed in.
   useEffect(() => { if (active) full(); }, [active, full]);
