@@ -157,11 +157,12 @@ Thresholds below are product choices, not benchmark results.
   once.
 - The Search everywhere screen follows the same rule: a query submitted with
   Enter or Search, or picked from history, is recorded once its first answer is
-  on screen, and opening a result records the query it came from. Under an empty
-  field with nothing searched, the screen lists the account's recent searches;
-  a click runs one, its cross removes it from history. The list is read again
-  whenever the field takes the focus or is left empty. On a touch screen the
-  field lets go of the focus after a search, so the keyboard closes and the
+  on screen, and opening a result records the query it came from. The field
+  drops the same list as the Catalog search, holding recent queries only (this
+  screen keeps no title pool): up to eight on an empty field, up to three that
+  match the draft otherwise, with the same keys, Shift+Delete and the cross.
+  The list is read again whenever the field takes the focus. On a touch screen
+  the field lets go of the focus after a search, so the keyboard closes and the
   browser does not pull the field back into view while the results scroll.
 - The server checks Save search history inside the same `updateData` mutator
   that would append, so nothing is stored while saving is off, whatever a stale

@@ -8,6 +8,7 @@ import { useDialogFocus } from "./dialog-focus";
 import { useDialogViewport } from "./dialog-viewport";
 import { t, type Key } from "./i18n";
 import { parseSearchScope } from "./search-scope";
+import { suggest, type Suggestion } from "./search-suggestions";
 import { SearchScopeOptions } from "./SearchScopeOptions";
 import { Heading } from "./settings-ui";
 import type {
@@ -365,7 +366,7 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
   recent: string[];
   onRecord: (query: string) => void;
   onForget: (query: string) => void;
-  /** Reads the history again: on focus and whenever the field is left empty. */
+  /** Reads the history again as the field takes the focus. */
   onRefreshRecent: () => void;
   onOpenMember: (member: SearchMember, anchorKey: string, libraryFirst?: boolean) => Promise<void> | void;
   onOpenCanonical: (canonical: NonNullable<SearchMemberPage["canonical"]>, anchorKey: string, libraryFirst?: boolean) => Promise<void> | void;
@@ -386,19 +387,18 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
     return () => window.removeEventListener("scroll", onScroll);
   }, [search.setScrollTop]);
 
+  /** A phone's keyboard would cover the results, and a field that keeps the focus is scrolled back
+   *  into view as the page re-renders under the reader's finger. */
+  const releaseFieldOnTouch = () => {
+    if (navigator.maxTouchPoints > 0 || window.matchMedia?.("(pointer: coarse)").matches) field.current?.blur();
+  };
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (composing.current) return;
     recordWhenAnswered.current = search.draft.trim() || null;
+    closeSuggestions();
     search.submit();
-    // A phone's keyboard would cover the results, and a field that keeps the focus is scrolled back
-    // into view as the page re-renders under the reader's finger.
-    if (navigator.maxTouchPoints > 0 || window.matchMedia?.("(pointer: coarse)").matches) (event.target as HTMLFormElement).querySelector("input")?.blur();
-  };
-  const runRecent = (query: string) => {
-    recordWhenAnswered.current = query;
-    search.setDraft(query);
-    search.submit();
+    releaseFieldOnTouch();
   };
   /** A submitted query joins the history only once its first answer is on screen. */
   const recordWhenAnswered = useRef<string | null>(null);
@@ -410,18 +410,21 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
     recordWhenAnswered.current = null;
     onRecord(query);
   }, [search.committed, search.snapshot, search.previousQuery, onRecord]);
-  const idle = !search.committed && !search.draft.trim();
-  const showRecent = idle && recent.length > 0;
-  const refreshRecentRef = useRef(onRefreshRecent);
-  refreshRecentRef.current = onRefreshRecent;
-  useEffect(() => { if (idle) refreshRecentRef.current(); }, [idle]);
-  const recentList = useRef<HTMLUListElement>(null);
-  /** The removed entry's neighbour takes the focus, or the field once the list is empty. */
-  const forgetRecent = (index: number) => {
-    const runs = [...(recentList.current?.querySelectorAll<HTMLButtonElement>(".search-recent-run") ?? [])];
-    const next = runs[index + 1] ?? runs[index - 1];
-    onForget(recent[index]!);
-    (next ?? root.current?.querySelector<HTMLInputElement>("[data-search-input]"))?.focus();
+
+  // The same list the Catalog search drops under its field: recent searches only, since this
+  // screen keeps no pool of titles to suggest.
+  const field = useRef<HTMLInputElement>(null);
+  const [suggestOpen, setSuggestOpen] = useState(false);
+  const [activeSuggestion, setActiveSuggestion] = useState(-1);
+  const suggestions = suggestOpen ? suggest({ draft: search.draft, recent: recent.map((query) => ({ query })), candidates: [] }) : [];
+  const activeOption = activeSuggestion < suggestions.length ? activeSuggestion : -1;
+  const closeSuggestions = () => { setSuggestOpen(false); setActiveSuggestion(-1); };
+  const chooseSuggestion = (suggestion: Suggestion) => {
+    recordWhenAnswered.current = suggestion.text;
+    closeSuggestions();
+    search.setDraft(suggestion.text);
+    search.submit();
+    releaseFieldOnTouch();
   };
 
   const catalogOnly = search.sources.length === 1 && search.sources[0] === "catalog";
@@ -442,23 +445,38 @@ export function SearchEverywhere({ search, shape, onToggleShape, searchable, rec
     <form className="search-everywhere-form" role="search" onSubmit={submit}>
       <div className="search-input">
         <Search/>
-        <input data-search-input role="searchbox" autoComplete="off" aria-label={t("searchAll.placeholder")}
-          placeholder={t("searchAll.placeholder")} value={search.draft} onFocus={onRefreshRecent}
-          onChange={(event) => search.setDraft(event.target.value)}
+        <input ref={field} data-search-input role="combobox" autoComplete="off" aria-label={t("searchAll.placeholder")}
+          aria-autocomplete="list" aria-expanded={suggestions.length > 0} aria-controls="search-all-suggestions"
+          aria-activedescendant={activeOption >= 0 ? `search-all-suggestion-${activeOption}` : undefined}
+          placeholder={t("searchAll.placeholder")} value={search.draft}
+          onFocus={() => { setSuggestOpen(true); onRefreshRecent(); }} onBlur={closeSuggestions}
+          onChange={(event) => { search.setDraft(event.target.value); setSuggestOpen(true); setActiveSuggestion(-1); }}
+          onKeyDown={(event) => {
+            if (event.nativeEvent.isComposing) return;
+            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+              if (!suggestions.length) { setSuggestOpen(true); return; }
+              event.preventDefault();
+              // The cycle passes through -1, the typed text itself, between the last row and the first.
+              const next = activeOption + (event.key === "ArrowDown" ? 1 : -1);
+              setActiveSuggestion(next >= suggestions.length ? -1 : next < -1 ? suggestions.length - 1 : next);
+            } else if (event.key === "Enter" && activeOption >= 0) { event.preventDefault(); chooseSuggestion(suggestions[activeOption]!); }
+            else if (event.key === "Delete" && event.shiftKey && activeOption >= 0) { event.preventDefault(); onForget(suggestions[activeOption]!.text); }
+            else if (event.key === "Escape" && suggestions.length) { event.preventDefault(); closeSuggestions(); }
+          }}
           onCompositionStart={() => { composing.current = true; search.compositionStart(); }}
           onCompositionEnd={(event) => { composing.current = false; search.compositionEnd(event.currentTarget.value); }}/>
       </div>
       <button className="primary" type="submit"><Search/> {t("searchAll.submit")}</button>
       {search.committed && <button type="button" onClick={search.clear}><X/> {t("common.cancel")}</button>}
+      {suggestions.length > 0 && <ul id="search-all-suggestions" role="listbox" aria-label={t("catalog.suggestions")} className="search-suggestions">{suggestions.map((suggestion, index) =>
+        <li key={suggestion.text} id={`search-all-suggestion-${index}`} role="option" aria-selected={index === activeOption} className={index === activeOption ? "active" : undefined}
+          onPointerDown={(event) => event.preventDefault()} onMouseDown={(event) => event.preventDefault()} onClick={() => chooseSuggestion(suggestion)}>
+          <History/><span>{suggestion.text}</span><small>{t("catalog.suggestRecent")}</small>
+          {/* Outside the tab order: the list is reached through the field, and Shift+Delete does the same. */}
+          <button type="button" className="forget-recent" tabIndex={-1} aria-label={t("catalog.forgetRecent")} title={t("catalog.forgetRecent")}
+            onPointerDown={(event) => event.preventDefault()} onMouseDown={(event) => event.preventDefault()}
+            onClick={(event) => { event.stopPropagation(); onForget(suggestion.text); }}><X/></button></li>)}</ul>}
     </form>
-    {showRecent && <section className="search-recent" aria-label={t("searchAll.recent")}>
-      <h3>{t("searchAll.recent")}</h3>
-      <ul ref={recentList}>{recent.map((query, index) => <li key={query}>
-        <button type="button" className="search-recent-run" onClick={() => runRecent(query)}><History/> {query}</button>
-        <button type="button" className="icon-button search-recent-forget" title={t("catalog.forgetRecent")}
-          aria-label={`${t("catalog.forgetRecent")}: ${query}`} onClick={() => forgetRecent(index)}><X/></button>
-      </li>)}</ul>
-    </section>}
     <div className="filterbar section-filter search-filters">
       <div className="library-shelf-segments" role="group" aria-label={t("searchAll.sourcesToggle")}>
         {SOURCE_OPTIONS.map((option) => {
