@@ -1911,6 +1911,7 @@ export const es: Catalog = {
 
   "tv.globalSearch.title": "Buscar en todas partes",
   "tv.globalSearch.hint": "Busca en catálogos y bibliotecas. Pulsa OK para buscar.",
+  "tv.globalSearch.libraryHint": "Busca en esta biblioteca. Pulsa OK para buscar.",
   "tv.globalSearch.sourceAll": "Todo",
   "tv.globalSearch.sourceCatalog": "Catálogo",
   "tv.globalSearch.sourceLocal": "Local",

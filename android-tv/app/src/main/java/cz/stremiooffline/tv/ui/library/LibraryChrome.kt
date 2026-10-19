@@ -201,7 +201,8 @@ private fun LibraryTypeChip(filter: RemoteTypeFilter, onClick: () -> Unit, modif
 @Composable
 internal fun typeFilterLabel(filter: RemoteTypeFilter): String = stringResource(
   when (filter) {
-    RemoteTypeFilter.All -> R.string.media_server_filter_all
+    // The Catalog's own word for "no narrowing", so the two rows read the same.
+    RemoteTypeFilter.All -> R.string.catalog_all_genres
     RemoteTypeFilter.Movies -> R.string.media_server_filter_movies
     RemoteTypeFilter.Series -> R.string.media_server_filter_series
   },

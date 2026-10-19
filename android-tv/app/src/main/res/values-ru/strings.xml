@@ -311,6 +311,7 @@
   <string name="sources_no_addon_providers">Ни один аддон не предлагает источники для этого заголовка.</string>
   <string name="tv_global_search_title">Искать везде</string>
   <string name="tv_global_search_hint">Ищите в каталогах и библиотеках. Нажмите OK, чтобы начать поиск.</string>
+  <string name="tv_global_search_library_hint">Ищите в этой библиотеке. Нажмите OK, чтобы начать поиск.</string>
   <string name="tv_global_search_source_all">Все</string>
   <string name="tv_global_search_source_catalog">Каталог</string>
   <string name="tv_global_search_source_local">Локальные</string>

@@ -301,6 +301,7 @@
   <string name="sources_no_addon_providers">Nenhum complemento oferece fontes para este título.</string>
   <string name="tv_global_search_title">Pesquisar em tudo</string>
   <string name="tv_global_search_hint">Pesquise em catálogos e bibliotecas. Prima OK para pesquisar.</string>
+  <string name="tv_global_search_library_hint">Pesquise nesta biblioteca. Prima OK para pesquisar.</string>
   <string name="tv_global_search_source_all">Todos</string>
   <string name="tv_global_search_source_catalog">Catálogo</string>
   <string name="tv_global_search_source_local">Local</string>

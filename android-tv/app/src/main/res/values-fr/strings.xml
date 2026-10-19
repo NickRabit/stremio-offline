@@ -301,6 +301,7 @@
   <string name="sources_no_addon_providers">Aucun module complémentaire ne propose de sources pour ce titre.</string>
   <string name="tv_global_search_title">Rechercher partout</string>
   <string name="tv_global_search_hint">Recherchez dans les catalogues et les bibliothèques. Appuyez sur OK pour lancer la recherche.</string>
+  <string name="tv_global_search_library_hint">Recherchez dans cette bibliothèque. Appuyez sur OK pour lancer la recherche.</string>
   <string name="tv_global_search_source_all">Tous</string>
   <string name="tv_global_search_source_catalog">Catalogue</string>
   <string name="tv_global_search_source_local">Local</string>

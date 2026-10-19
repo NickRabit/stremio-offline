@@ -311,6 +311,7 @@
   <string name="sources_no_addon_providers">Žiadny doplnok neponúka zdroje pre tento titul.</string>
   <string name="tv_global_search_title">Vyhľadávať všade</string>
   <string name="tv_global_search_hint">Prehľadajte katalógy a knižnice. Stlačením OK spustíte vyhľadávanie.</string>
+  <string name="tv_global_search_library_hint">Prehľadajte túto knižnicu. Stlačením OK spustíte vyhľadávanie.</string>
   <string name="tv_global_search_source_all">Všetko</string>
   <string name="tv_global_search_source_catalog">Katalóg</string>
   <string name="tv_global_search_source_local">Miestne</string>

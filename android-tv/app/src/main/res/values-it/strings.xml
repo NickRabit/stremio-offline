@@ -301,6 +301,7 @@
   <string name="sources_no_addon_providers">Nessun componente aggiuntivo offre fonti per questo titolo.</string>
   <string name="tv_global_search_title">Cerca ovunque</string>
   <string name="tv_global_search_hint">Cerca nei cataloghi e nelle librerie. Premi OK per cercare.</string>
+  <string name="tv_global_search_library_hint">Cerca in questa libreria. Premi OK per cercare.</string>
   <string name="tv_global_search_source_all">Tutti</string>
   <string name="tv_global_search_source_catalog">Catalogo</string>
   <string name="tv_global_search_source_local">Locale</string>

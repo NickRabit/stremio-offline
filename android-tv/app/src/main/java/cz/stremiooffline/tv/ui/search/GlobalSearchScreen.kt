@@ -220,7 +220,7 @@ fun GlobalSearchScreen(
       }
     }
     if (!state.submitted) {
-      Text(stringResource(R.string.tv_global_search_hint), color = Tokens.Muted, fontSize = 12.sp)
+      Text(stringResource(if (libraryScope != null) R.string.tv_global_search_library_hint else R.string.tv_global_search_hint), color = Tokens.Muted, fontSize = 12.sp)
     }
 
     if (libraryScope == null) {
