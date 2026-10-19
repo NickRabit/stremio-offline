@@ -757,7 +757,7 @@ internal fun RemoteArtTile(
   viewModel: RemoteLibraryViewModel,
   imageUrl: (String?) -> String?,
   cardTag: String,
-  caption: String,
+  caption: String?,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
   poster: String? = null,
@@ -922,7 +922,24 @@ private fun ItemGrid(
               }
             } else Modifier,
           )
-        if (item.type == "folder" || item.type == "season") {
+        // A show the server could not identify has no picture of its own; it borrows the folder fan,
+        // which the server draws from its episodes when its seasons have none either.
+        val unpictured = item.type == "series" && item.poster.isNullOrEmpty() && item.wide.isNullOrEmpty()
+        if (unpictured) {
+          RemoteArtTile(
+            title = item.name,
+            libraryId = level.libraryId,
+            parentId = item.id,
+            mosaic = level.mosaic,
+            container = false,
+            viewModel = viewModel,
+            imageUrl = imageUrl,
+            cardTag = remoteItemTag(item.id),
+            caption = null,
+            onClick = { onOpen(item) },
+            modifier = focus,
+          )
+        } else if (item.type == "folder" || item.type == "season") {
           RemoteArtTile(
             title = item.name,
             libraryId = level.libraryId,
