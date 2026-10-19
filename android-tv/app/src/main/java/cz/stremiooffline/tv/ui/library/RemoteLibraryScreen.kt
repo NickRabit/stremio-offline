@@ -63,9 +63,12 @@ import cz.stremiooffline.tv.data.RemoteLibraryApi
 import cz.stremiooffline.tv.data.RemoteLibraryDto
 import cz.stremiooffline.tv.data.RemoteProviderIdsDto
 import cz.stremiooffline.tv.data.StreamDto
+import cz.stremiooffline.tv.data.TvApi
+import cz.stremiooffline.tv.data.GlobalSearchLibraryDto
 import cz.stremiooffline.tv.ui.catalog.NativeCopyRequest
 import cz.stremiooffline.tv.ui.catalog.NativeQueuePanel
 import cz.stremiooffline.tv.ui.catalog.VoiceLauncher
+import cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs
 import cz.stremiooffline.tv.ui.catalog.nativeCopyTitle
 import cz.stremiooffline.tv.ui.catalog.nativeQueueTarget
 import cz.stremiooffline.tv.ui.catalog.rememberVoiceSearch
@@ -82,6 +85,9 @@ import cz.stremiooffline.tv.ui.detail.PlayTarget
 import cz.stremiooffline.tv.ui.detail.RemoteDetailData
 import cz.stremiooffline.tv.ui.detail.RemoteDetailScreen
 import cz.stremiooffline.tv.ui.theme.Tokens
+import cz.stremiooffline.tv.ui.search.GlobalSearchResults
+import cz.stremiooffline.tv.ui.search.SourceClass
+import cz.stremiooffline.tv.ui.search.rememberScopedGlobalSearch
 import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -100,7 +106,7 @@ fun remoteItemTag(id: String): String = "remote_item_$id"
  */
 @Composable
 fun RemoteLibraryRoute(
-  api: RemoteLibraryApi,
+  api: TvApi,
   /** The session image loader; remote artwork is same-origin and content-authorized. */
   imageUrl: (String?) -> String? = { null },
   segment: LibrarySegment,
@@ -127,6 +133,10 @@ fun RemoteLibraryRoute(
   /** True when the Library section's own header, safe padding and heading are already in place
    *  around this half. Standalone (a harness, or a section of its own) the half draws its own. */
   embedded: Boolean = false,
+  /** Whether in-library search runs on the Search everywhere engine. */
+  searchEverywhereEnabled: Boolean = false,
+  /** A shared title page opened from a scoped result. */
+  onOpenCatalog: (CatalogDetailArgs) -> Unit = {},
 ) {
   val viewModel = viewModel<RemoteLibraryViewModel>(factory = RemoteLibraryViewModel.factory(api))
   LaunchedEffect(segment) {
@@ -142,6 +152,7 @@ fun RemoteLibraryRoute(
 
   val searchAction = remember { FocusRequester() }
   val searchField = remember { FocusRequester() }
+  val searchGridFocus = remember { FocusRequester() }
   val gridFocus = remember { FocusRequester() }
   val loadMoreFocus = remember { FocusRequester() }
   val errorFocus = remember { FocusRequester() }
@@ -160,6 +171,24 @@ fun RemoteLibraryRoute(
     },
     launcher = voiceLauncher,
   )
+  val directory = level as? RemoteLevel.Directory
+  val scopedSearchActive = searchEverywhereEnabled && directory != null && committed.isNotEmpty()
+  LaunchedEffect(searchEverywhereEnabled) {
+    viewModel.setSearchEngine(searchEverywhereEnabled)
+  }
+  val scopedSearch = rememberScopedGlobalSearch(
+    api = api,
+    library = directory?.let {
+      GlobalSearchLibraryDto(it.libraryId, parentId = it.parentId)
+    },
+    sources = setOf(SourceClass.Remote),
+    active = scopedSearchActive,
+    query = committed,
+    polling = backEnabled,
+  )
+  LaunchedEffect(scopedSearch.state.focusAnchor) {
+    if (scopedSearch.state.focusAnchor != null) editorOpen = false
+  }
 
   // The card's copy panel: nothing is read for it until the viewer presses Menu or Info on a
   // playable card, so a listing never fans out into a source read per tile. One copy is in flight
@@ -244,6 +273,13 @@ fun RemoteLibraryRoute(
   }
 
   BackHandler(enabled = segment == LibrarySegment.Servers && backEnabled) {
+    if (scopedSearchActive) {
+      committed = ""
+      query = ""
+      editorOpen = false
+      viewModel.search("")
+      return@BackHandler
+    }
     if (viewModel.back()) {
       if (onBackToAll != null && viewModel.state.levels.isEmpty()) onBackToAll()
     } else {
@@ -269,7 +305,7 @@ fun RemoteLibraryRoute(
   // card that opened the level because the selection is kept per level rather than cleared.
   LaunchedEffect(levelKey, items.map { it.id }, state.libraries.map { it.id }, segment, restoreToken, backEnabled) {
     // A late row, a hidden half and an open search editor all keep the remote where it is.
-    if (segment != LibrarySegment.Servers || !backEnabled || editorOpen) return@LaunchedEffect
+    if (segment != LibrarySegment.Servers || !backEnabled || editorOpen || scopedSearchActive) return@LaunchedEffect
     awaitFrame()
     val remembered = viewModel.selectedFor(levelKey)?.let { requesters[it] }
     val requester = remembered ?: requesters.values.firstOrNull() ?: gridFocus
@@ -290,9 +326,8 @@ fun RemoteLibraryRoute(
       }
       // The one compact toolbar of the section: the same search action the files half draws, with the
       // type chips of this level on the same row.
-      val directory = level as? RemoteLevel.Directory
       LibraryToolbar(
-        open = editorOpen && directory != null,
+        open = editorOpen && (searchEverywhereEnabled || directory != null),
         query = query,
         onQuery = { query = it },
         onOpen = { editorOpen = true; query = committed },
@@ -303,14 +338,31 @@ fun RemoteLibraryRoute(
         },
         onClose = { editorOpen = false },
         committed = committed,
-        available = directory != null,
+        available = searchEverywhereEnabled || directory != null,
         openFocus = searchAction,
         fieldFocus = searchField,
+        downFocus = searchGridFocus.takeIf { scopedSearchActive },
         voice = voice,
-        trailing = if (directory != null) ({ TypeFilterChips(state = directory.state, onFilter = { viewModel.filter(it) }) }) else null,
+        trailing = if (directory != null && !scopedSearchActive) {
+          ({ TypeFilterChips(state = directory.state, onFilter = { viewModel.filter(it) }) })
+        } else null,
       )
       Box(Modifier.weight(1f).fillMaxWidth()) {
-        if (level == null) {
+        if (scopedSearchActive) {
+          GlobalSearchResults(
+            search = scopedSearch,
+            remoteApi = api,
+            onOpenCatalog = onOpenCatalog,
+            onOpenRemote = { data ->
+              onOpenItem(data.libraryId, data.libraryName, data.provider, data.item)
+            },
+            onOpenLibrary = {},
+            imageUrl = imageUrl,
+            gridFocus = searchGridFocus,
+            restoreToken = restoreToken,
+            canonicalTitles = false,
+          )
+        } else if (level == null) {
           LibraryPicker(state, viewModel, imageUrl, requesters, gridFocus, errorFocus)
         } else {
           ItemBrowser(

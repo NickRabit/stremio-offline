@@ -37,12 +37,13 @@ import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.BrowseItem
 import cz.stremiooffline.tv.data.DownloadTargetDto
+import cz.stremiooffline.tv.data.GlobalSearchLibraryDto
 import cz.stremiooffline.tv.data.RemoteItemDto
-import cz.stremiooffline.tv.data.RemoteLibraryApi
 import cz.stremiooffline.tv.data.LibraryDto
 import cz.stremiooffline.tv.data.MediaDto
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.ui.catalog.VoiceLauncher
+import cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs
 import cz.stremiooffline.tv.ui.catalog.rememberVoiceSearch
 import cz.stremiooffline.tv.ui.catalog.voiceSearchAvailable
 import cz.stremiooffline.tv.ui.components.CardRowInset
@@ -52,6 +53,9 @@ import cz.stremiooffline.tv.ui.components.PosterCard
 import cz.stremiooffline.tv.ui.components.ShimmerCards
 import cz.stremiooffline.tv.ui.detail.DetailData
 import cz.stremiooffline.tv.ui.detail.episodeLabel
+import cz.stremiooffline.tv.ui.search.GlobalSearchResults
+import cz.stremiooffline.tv.ui.search.SourceClass
+import cz.stremiooffline.tv.ui.search.rememberScopedGlobalSearch
 import cz.stremiooffline.tv.ui.theme.Tokens
 import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.launch
@@ -80,6 +84,7 @@ internal fun posterMosaicUrl(url: String): String {
 fun LibraryRoute(
   api: TvApi,
   onOpenDetail: (DetailData) -> Unit,
+  onOpenCatalog: (CatalogDetailArgs) -> Unit = {},
   /** A native remote item was opened; the shell shows its detail and plays its versions. */
   onOpenRemoteItem: (libraryId: String, libraryName: String, provider: String, item: RemoteItemDto) -> Unit = { _, _, _, _ -> throw UnsupportedOperationException("Remote item opened without a handler") },
   /** Bumped when a remote detail or its player closes, so the remote grid restores its focus. */
@@ -101,11 +106,14 @@ fun LibraryRoute(
   voiceAvailable: Boolean? = null,
   /** Test seam: answers a mic press without a device. Null asks the platform recognizer. */
   voiceLauncher: VoiceLauncher? = null,
+  /** Whether in-library search runs on the Search everywhere engine. */
+  searchEverywhereEnabled: Boolean = false,
+  /** Test seam for a local result; the section reveals the path itself when no callback is set. */
+  onOpenLibrary: ((String) -> Unit)? = null,
 ) {
   var segment by rememberSaveable { mutableStateOf(LibrarySegment.All) }
   // The All tile the viewer opened, so Back to All lands on it rather than on the grid's start.
   var enteredFromAll by rememberSaveable { mutableStateOf<String?>(null) }
-  val remoteApi: RemoteLibraryApi = api
   val viewModel = viewModel<LibraryViewModel>(factory = LibraryViewModel.factory(api, pendingDelayMs))
   val remoteViewModel = viewModel<RemoteLibraryViewModel>(factory = RemoteLibraryViewModel.factory(api))
   // A fresh entry starts at the root; a Home jump (arriving with a path) pushes its folder.
@@ -140,6 +148,7 @@ fun LibraryRoute(
   var query by remember { mutableStateOf("") }
   val searchAction = remember { FocusRequester() }
   val searchField = remember { FocusRequester() }
+  val searchGridFocus = remember { FocusRequester() }
   val allGridFocus = remember { FocusRequester() }
   val allRequesters = remember { mutableMapOf<String, FocusRequester>() }
   val voice = rememberVoiceSearch(
@@ -151,9 +160,34 @@ fun LibraryRoute(
     },
     launcher = voiceLauncher,
   )
+  var libraryIds by remember { mutableStateOf(emptyList<String>()) }
+  LaunchedEffect(Unit) {
+    libraryIds = runCatching { api.libraries().map { it.id } }.getOrDefault(emptyList())
+  }
+  LaunchedEffect(searchEverywhereEnabled) {
+    viewModel.setSearchEngine(searchEverywhereEnabled)
+  }
   LaunchedEffect(segment, state.pages.size) {
     editorOpen = false
     query = state.current?.search.orEmpty()
+  }
+  val knownLibraryIds = (
+    libraryIds + state.pages.flatMap { page ->
+      page.items.filterIsInstance<BrowseItem.Library>().map { it.libraryId.ifEmpty { it.path } }
+    }
+  ).distinct()
+  val searchScope = localSearchScope(state.current, knownLibraryIds)
+  val scopedSearchActive = searchEverywhereEnabled && committed.isNotEmpty()
+  val scopedSearch = rememberScopedGlobalSearch(
+    api = api,
+    library = searchScope,
+    sources = setOf(SourceClass.Local),
+    active = scopedSearchActive,
+    query = committed,
+    polling = backEnabled,
+  )
+  LaunchedEffect(scopedSearch.state.focusAnchor) {
+    if (scopedSearch.state.focusAnchor != null) editorOpen = false
   }
 
   // Bumped whenever Back pops a level, so the return restores the card that opened that level.
@@ -164,7 +198,16 @@ fun LibraryRoute(
 
   // The filesystem breadcrumb only owns Back while the files half is showing; the remote half
   // pops its own stack through RemoteLibraryRoute below.
-  BackHandler(enabled = segment == LibrarySegment.Files && state.pages.size > 1 && backEnabled) {
+  BackHandler(
+    enabled = segment == LibrarySegment.Files && backEnabled && (state.pages.size > 1 || scopedSearchActive),
+  ) {
+    if (scopedSearchActive) {
+      query = ""
+      editorOpen = false
+      viewModel.search("")
+      restoreKey = ""
+      return@BackHandler
+    }
     restoreKey = openedBy.removeLastOrNull() ?: ""
     if (viewModel.back()) {
       // A library entered from All has no Files root above it: the pop lands back on the All grid.
@@ -204,7 +247,7 @@ fun LibraryRoute(
   LaunchedEffect(segment, state.loading, state.pages.size, items.size, restoreToken, backToken, backEnabled) {
     // Only the files half owns this grid: a late local answer, a half a detail covers and an open
     // search editor all leave the remote where it is.
-    if (segment != LibrarySegment.Files || !backEnabled) return@LaunchedEffect
+    if (segment != LibrarySegment.Files || !backEnabled || scopedSearchActive) return@LaunchedEffect
     val keys = items.map { it.path.ifEmpty { it.title } }
     if (!state.loading && !editorOpen && keys.isNotEmpty()) {
       val target = restoreKey.takeIf { key -> key.isNotEmpty() && key in keys }
@@ -231,6 +274,26 @@ fun LibraryRoute(
         openedBy.add(folder.path.ifEmpty { folder.title })
         viewModel.push(result.path.ifEmpty { folder.path }, folder.title, result.items, result.total)
       }
+    }
+  }
+
+  fun openSearchResult(path: String) {
+    val callback = onOpenLibrary
+    if (callback != null) {
+      callback(path)
+      return
+    }
+    scope.launch {
+      val folder = runCatching { api.browse(path, limit = 1) }.getOrNull()
+      if (folder != null) {
+        openedBy.add(path)
+        viewModel.push(folder.path.ifEmpty { path }, path.substringAfterLast('/'), folder.items, folder.total)
+        return@launch
+      }
+      val parent = path.substringBeforeLast('/', "")
+      val listing = runCatching { api.browse(parent.ifEmpty { null }, limit = LibraryViewModel.PAGE) }.getOrNull()
+      val file = listing?.items?.filterIsInstance<BrowseItem.File>()?.firstOrNull { it.path == path }
+      if (file != null) onOpenDetail(DetailData.ofFile(file))
     }
   }
 
@@ -341,20 +404,35 @@ fun LibraryRoute(
       // query can always be reopened and cleared.
       val searchable = state.current?.searchable == true
       LibraryToolbar(
-        open = editorOpen && searchable,
+        open = editorOpen && (searchEverywhereEnabled || searchable),
         query = query,
         onQuery = { query = it },
         onOpen = { editorOpen = true; query = committed },
         onSubmit = { editorOpen = false; viewModel.search(query) },
         onClose = { editorOpen = false },
         committed = committed,
-        available = searchable,
+        available = searchEverywhereEnabled || searchable,
         openFocus = searchAction,
         fieldFocus = searchField,
+        downFocus = searchGridFocus.takeIf { scopedSearchActive },
         voice = voice,
       )
       Box(Modifier.weight(1f).fillMaxWidth()) {
-        when {
+        if (scopedSearchActive) {
+          GlobalSearchResults(
+            search = scopedSearch,
+            remoteApi = api,
+            onOpenCatalog = onOpenCatalog,
+            onOpenRemote = { data ->
+              onOpenRemoteItem(data.libraryId, data.libraryName, data.provider, data.item)
+            },
+            onOpenLibrary = ::openSearchResult,
+            imageUrl = { path -> path?.let(api::url) },
+            gridFocus = searchGridFocus,
+            restoreToken = restoreToken + backToken,
+            canonicalTitles = false,
+          )
+        } else when {
           state.loading -> ShimmerCards()
           state.error -> ErrorPanel { viewModel.retry() }
           items.isEmpty() -> Text(
@@ -405,7 +483,7 @@ fun LibraryRoute(
       }
     } else {
       RemoteLibraryRoute(
-        api = remoteApi,
+        api = api,
         imageUrl = { path -> path?.let(api::url) },
         segment = segment,
         onOpenItem = onOpenRemoteItem,
@@ -420,6 +498,8 @@ fun LibraryRoute(
         onQueue = onQueue,
         // The section's own header and padding are already in place above and around this half.
         embedded = true,
+        searchEverywhereEnabled = searchEverywhereEnabled,
+        onOpenCatalog = onOpenCatalog,
       )
     }
   }
@@ -483,4 +563,16 @@ private fun progressFraction(item: BrowseItem): Float? {
   val position = file.progress?.position ?: 0.0
   if (duration <= 0 || position <= 0) return null
   return (position / duration).toFloat()
+}
+
+internal fun localSearchScope(page: LibraryPage?, libraryIds: List<String>): GlobalSearchLibraryDto? {
+  if (page == null) return null
+  val first = page.path.substringBefore('/')
+  if (first.isNotEmpty() && (first in libraryIds || first.startsWith("lib_"))) {
+    val relative = page.path.removePrefix(first).trim('/')
+    return GlobalSearchLibraryDto(first, path = relative.ifEmpty { null })
+  }
+  if (page.items.any { it is BrowseItem.Library }) return null
+  val only = libraryIds.singleOrNull() ?: return null
+  return GlobalSearchLibraryDto(only, path = page.path.ifEmpty { null })
 }

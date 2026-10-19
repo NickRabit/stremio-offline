@@ -14,6 +14,7 @@ import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.GlobalSearchAliasDto
 import cz.stremiooffline.tv.data.GlobalSearchApi
 import cz.stremiooffline.tv.data.GlobalSearchClusterDto
+import cz.stremiooffline.tv.data.GlobalSearchLibraryDto
 import cz.stremiooffline.tv.data.GlobalSearchMemberPageDto
 import cz.stremiooffline.tv.data.GlobalSearchSnapshotDto
 import cz.stremiooffline.tv.data.GlobalSearchStartDto
@@ -121,9 +122,13 @@ internal fun retainedFocusAnchor(
 class GlobalSearchViewModel(
   private val api: GlobalSearchApi,
   private val slotId: String = UUID.randomUUID().toString().replace("-", ""),
+  private val library: GlobalSearchLibraryDto? = null,
+  sources: Set<SourceClass>? = null,
 ) : ViewModel() {
 
-  var state by mutableStateOf(GlobalSearchState())
+  private val fixedSources = sources
+
+  var state by mutableStateOf(GlobalSearchState(sources = fixedSources.orEmpty()))
     private set
 
   private var generation = 0
@@ -145,6 +150,7 @@ class GlobalSearchViewModel(
   }
 
   fun setSources(sources: Set<SourceClass>) {
+    if (fixedSources != null) return
     if (sources == state.sources) return
     state = state.copy(
       sources = sources,
@@ -169,6 +175,7 @@ class GlobalSearchViewModel(
   }
 
   fun setScope(scope: SearchScope) {
+    if (fixedSources != null) return
     val scopedSources = setOf(SourceClass.Catalog)
     if (state.scope == scope && state.sources == scopedSources) return
     state = state.copy(sources = scopedSources, scope = scope)
@@ -176,6 +183,7 @@ class GlobalSearchViewModel(
   }
 
   fun setKind(kind: KindFilter) {
+    if (fixedSources != null) return
     if (kind == state.kind) return
     state = state.copy(kind = kind)
     if (state.committed.isNotEmpty()) startSearch(state.committed, freshLayout = true)
@@ -270,7 +278,7 @@ class GlobalSearchViewModel(
     startJob?.cancel()
     pollJob?.cancel()
     actionJob?.cancel()
-    val requestSources = state.sources.ifEmpty { SourceClass.entries.toSet() }
+    val requestSources = fixedSources ?: state.sources.ifEmpty { SourceClass.entries.toSet() }
     state = state.copy(
       committed = query,
       previousQuery = state.snapshot != null,
@@ -287,8 +295,10 @@ class GlobalSearchViewModel(
             slotId = slotId,
             generation = currentGeneration,
             scope = state.scope.takeIf {
+              fixedSources == null &&
               requestSources == setOf(SourceClass.Catalog) && !it.addonKey.isNullOrEmpty()
             },
+            library = library,
           ),
         )
         if (currentGeneration != generation) return@launch

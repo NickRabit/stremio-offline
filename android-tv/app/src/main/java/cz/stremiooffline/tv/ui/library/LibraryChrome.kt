@@ -16,6 +16,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -118,6 +119,8 @@ internal fun LibraryToolbar(
   available: Boolean,
   openFocus: FocusRequester,
   fieldFocus: FocusRequester,
+  /** Where DOWN leaves the field and the closed action once the result grid is on screen. */
+  downFocus: FocusRequester? = null,
   /** The recognizer of the screen that owns this toolbar; null draws no mic. */
   voice: VoiceSearch? = null,
   trailing: (@Composable () -> Unit)? = null,
@@ -156,7 +159,9 @@ internal fun LibraryToolbar(
           testTag = TagLibrarySearchField,
           inputTestTag = TagLibrarySearchInput,
           onSubmit = onSubmit,
-          modifier = Modifier.width(360.dp),
+          modifier = Modifier
+            .width(360.dp)
+            .then(if (downFocus != null) Modifier.focusProperties { down = downFocus } else Modifier),
         )
         FocusButton(
           text = stringResource(R.string.media_server_search_action),
@@ -169,7 +174,10 @@ internal fun LibraryToolbar(
           text = committed.ifEmpty { stringResource(R.string.media_server_search_action) },
           onClick = onOpen,
           labelMaxWidth = 240.dp,
-          modifier = Modifier.focusRequester(openFocus).testTag(TagLibrarySearchAction),
+          modifier = Modifier
+            .focusRequester(openFocus)
+            .testTag(TagLibrarySearchAction)
+            .then(if (downFocus != null) Modifier.focusProperties { down = downFocus } else Modifier),
         )
         if (voice?.available == true && available) VoiceButton(voice)
       }

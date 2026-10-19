@@ -255,6 +255,7 @@ fun Shell(
         Section.Library -> LibraryRoute(
           api = api,
           onOpenDetail = { detail = it },
+          onOpenCatalog = { catalogDetail = it },
           onOpenRemoteItem = { libraryId, libraryName, provider, item ->
             remoteDetail = RemoteDetailData(libraryId = libraryId, libraryName = libraryName, provider = provider, item = item)
           },
@@ -265,6 +266,7 @@ fun Shell(
           backEnabled = !overlayOpen,
           loadDestinations = nativeDestinations,
           onQueue = nativeQueue,
+          searchEverywhereEnabled = searchEverywhereEnabled,
         )
         Section.Resume -> ResumeRoute(
           api = api,

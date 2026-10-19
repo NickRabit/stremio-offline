@@ -26,6 +26,10 @@ import cz.stremiooffline.tv.data.RemoteProviderIdsDto
 import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.RemoteItemsPageDto
 import cz.stremiooffline.tv.data.RemoteLibraryDto
+import cz.stremiooffline.tv.data.GlobalSearchClusterDto
+import cz.stremiooffline.tv.data.GlobalSearchLibraryDto
+import cz.stremiooffline.tv.data.GlobalSearchSnapshotDto
+import cz.stremiooffline.tv.data.GlobalSearchStartResultDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import cz.stremiooffline.tv.ui.catalog.VoiceLauncher
 import cz.stremiooffline.tv.ui.detail.RemoteDetailData
@@ -83,13 +87,19 @@ class RemoteLibraryChromeTest {
   }
 
   /** The half on its own, the way the section embeds it, with the section header above it. */
-  private fun mountEmbedded(api: FakeTvApi, voiceAvailable: Boolean? = null, voiceLauncher: VoiceLauncher? = null) {
+  private fun mountEmbedded(
+    api: FakeTvApi,
+    voiceAvailable: Boolean? = null,
+    voiceLauncher: VoiceLauncher? = null,
+    searchEverywhereEnabled: Boolean = false,
+  ) {
     scenario.onActivity { activity ->
       host = activity
       activity.setContent {
         LibraryRoute(
           api = api,
           onOpenDetail = {},
+          searchEverywhereEnabled = searchEverywhereEnabled,
           pendingDelayMs = 10L,
           voiceAvailable = voiceAvailable,
           voiceLauncher = voiceLauncher,
@@ -102,6 +112,38 @@ class RemoteLibraryChromeTest {
     compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
     compose.waitForIdle()
     compose.mainClock.advanceTimeBy(200)
+    compose.waitForIdle()
+  }
+
+  private fun searchResult(api: FakeTvApi) {
+    api.globalStartHandler = {
+      GlobalSearchStartResultDto(
+        id = "gs",
+        snapshot = GlobalSearchSnapshotDto(
+          revision = 1,
+          state = "complete",
+          clusters = listOf(
+            GlobalSearchClusterDto(
+              key = "one",
+              kind = "folder",
+              title = "Casting",
+              memberCount = 1,
+              primaryMemberKey = "m1",
+              memberKeys = listOf("m1"),
+            ),
+          ),
+        ),
+      )
+    }
+  }
+
+  private fun submitSearch(query: String) {
+    focusOn(TagLibrarySearchAction)
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagLibrarySearchInput).performTextInput(query)
+    compose.onNodeWithTag(TagLibrarySearchInput).performImeAction()
+    compose.waitForIdle()
+    compose.mainClock.advanceTimeBy(100)
     compose.waitForIdle()
   }
 
@@ -329,5 +371,40 @@ class RemoteLibraryChromeTest {
     assertTrue("the field ends at ${field.bottom}px and the button at ${submit.bottom}px", gap <= 2f)
     // The field's own box is 38.dp high, so sharing its height is the 38.dp button the row wants.
     assertEquals(field.height, submit.height, 0.5f)
+  }
+
+  @Test
+  fun `a remote search at the library root sends the library without a parent`() {
+    val api = api()
+    searchResult(api)
+    mountEmbedded(api, searchEverywhereEnabled = true)
+    openLibrary(api)
+
+    submitSearch("casting")
+
+    val body = api.globalStartCalls.single()
+    assertEquals(GlobalSearchLibraryDto("rlibA"), body.library)
+    assertEquals(listOf("remote"), body.sources)
+    assertTrue(api.remoteBrowseRequests.none { it.search == "casting" })
+  }
+
+  @Test
+  fun `a remote folder search sends the folder parent id`() {
+    val api = api()
+    searchResult(api)
+    mountEmbedded(api, searchEverywhereEnabled = true)
+    openLibrary(api)
+    compose.onNodeWithTag(remoteItemTag("f1")).performKeyInput { pressKey(Key.DirectionCenter) }
+    compose.waitForIdle()
+    compose.mainClock.advanceTimeBy(200)
+    compose.waitForIdle()
+
+    submitSearch("casting")
+
+    assertEquals(
+      GlobalSearchLibraryDto("rlibA", parentId = "f1"),
+      api.globalStartCalls.single().library,
+    )
+    assertTrue(api.remoteBrowseRequests.none { it.search == "casting" })
   }
 }

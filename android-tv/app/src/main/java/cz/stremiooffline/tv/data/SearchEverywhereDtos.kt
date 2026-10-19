@@ -10,6 +10,14 @@ data class GlobalSearchStartDto(
   val slotId: String,
   val generation: Int,
   val scope: SearchScope? = null,
+  val library: GlobalSearchLibraryDto? = null,
+)
+
+@Serializable
+data class GlobalSearchLibraryDto(
+  val libraryId: String,
+  val path: String? = null,
+  val parentId: String? = null,
 )
 
 @Serializable

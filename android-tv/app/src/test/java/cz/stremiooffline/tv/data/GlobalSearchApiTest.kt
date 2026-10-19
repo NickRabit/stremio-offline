@@ -84,6 +84,28 @@ class GlobalSearchApiTest {
   }
 
   @Test
+  fun `a library scope is serialized only when it is set`() = runTest {
+    server.enqueue(MockResponse().setBody("""{"id":"ss_1","snapshot":{"revision":1,"state":"complete"}}"""))
+
+    client(start()).startGlobalSearch(
+      GlobalSearchStartDto(
+        "matrix",
+        "all",
+        listOf("local"),
+        "slot",
+        5,
+        library = GlobalSearchLibraryDto("lib_ab12cd34", path = "Shows/S1"),
+      ),
+    )
+
+    assertEquals(
+      """{"query":"matrix","kind":"all","sources":["local"],"slotId":"slot","generation":5,""" +
+        """"library":{"libraryId":"lib_ab12cd34","path":"Shows/S1"}}""",
+      server.takeRequest().body.readUtf8(),
+    )
+  }
+
+  @Test
   fun `poll posts the revision and maps an expired session to 410`() = runTest {
     server.enqueue(MockResponse().setResponseCode(410).setBody("""{"error":"expired","messageKey":"err.searchRestartRequired"}"""))
 
