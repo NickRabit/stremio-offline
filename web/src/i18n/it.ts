@@ -297,6 +297,7 @@ export const it: Catalog = {
   "player.playFromStart": "Gioca dall'inizio",
   "player.stalling": "La riproduzione continua a bloccarsi.",
   "player.lowerQualityTo": "Scendi a {height} p",
+  "player.autoQuality": "Connessione lenta, riproduzione a {height}p.",
   "player.hideHint": "Ignora",
   "player.seekRestored": "Impossibile cambiare posizione. È stata mantenuta la posizione precedente.",
   "player.playbackFailed": "Riproduzione non riuscita: {details} ({type})",

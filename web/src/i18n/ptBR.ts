@@ -297,6 +297,7 @@ export const ptBR: Catalog = {
   "player.playFromStart": "Jogue desde o início",
   "player.stalling": "A reprodução continua paralisada.",
   "player.lowerQualityTo": "Desça para {height}p",
+  "player.autoQuality": "Conexão lenta, reproduzindo em {height}p.",
   "player.hideHint": "Dispensar",
   "player.seekRestored": "Não foi possível mudar de posição. A posição anterior foi mantida.",
   "player.playbackFailed": "Falha na reprodução: {details} ({type})",

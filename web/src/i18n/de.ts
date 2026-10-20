@@ -297,6 +297,7 @@ export const de: Catalog = {
   "player.playFromStart": "Spielen Sie von Anfang an",
   "player.stalling": "Die Wiedergabe stockt ständig.",
   "player.lowerQualityTo": "Auf {height}p absenken",
+  "player.autoQuality": "Langsame Verbindung, Wiedergabe in {height}p.",
   "player.hideHint": "Entlassen",
   "player.seekRestored": "Springen nicht möglich. Die vorherige Position wurde beibehalten.",
   "player.playbackFailed": "Wiedergabe fehlgeschlagen: {details} ({type})",

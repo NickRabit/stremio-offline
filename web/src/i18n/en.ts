@@ -317,6 +317,7 @@ export const en = {
   "player.playFromStart": "Play from the start",
   "player.stalling": "Playback keeps stalling.",
   "player.lowerQualityTo": "Drop to {height}p",
+  "player.autoQuality": "Slow connection, playing at {height}p.",
   "player.hideHint": "Dismiss",
   "player.seekRestored": "Could not seek. Kept the previous position.",
   "player.playbackFailed": "Playback failed: {details} ({type})",

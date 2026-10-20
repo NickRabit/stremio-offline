@@ -32,6 +32,16 @@ as it is. On a NAS without QuickSync, stay on original quality — the mode labe
 then reads *Direct Stream* and the CPU stays idle. See
 [Hardware acceleration](hardware-acceleration.md).
 
+On a slow or mobile link the player starts at a lower quality by itself. Chromium
+browsers (Chrome, Edge, Android) report the link through the Network Information
+API: Data Saver or a link slower than 4G starts at 480p, an estimated throughput
+under 2.5 Mb/s at 480p, under 5 Mb/s at 720p and under 9 Mb/s at 1080p, and
+mobile data at 720p at most. The player says so and offers **Original**; turning
+it down keeps the original for the following episodes until the player is
+closed. Like the stall offer below, this happens only when the server has
+hardware acceleration. Safari and Firefox do not report the link, so on an
+iPhone or iPad only the stall offer applies.
+
 When playback stalls repeatedly, the player offers a lower quality; a smaller
 bitrate helps network drop-outs. The offer appears only when the server has
 hardware acceleration, because a software transcode on a weak CPU would make

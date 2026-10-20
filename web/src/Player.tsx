@@ -14,6 +14,7 @@ import { remoteVersionKey, versionSavedRow } from "./source-progress";
 import { SourceChooser } from "./SourceChooser";
 import type { LibrarySourceGroup, LibrarySourcePanel } from "./library-sources";
 import { detectCapabilities } from "./capabilities";
+import { networkHint } from "./network";
 import { t, useI18n, type Key } from "./i18n";
 import type { Capabilities, PlaybackMode, PlaybackSession, Stream, Subtitle, Track } from "./types";
 
@@ -360,6 +361,9 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   /** A stall inside a conversion's first two segments, waiting to see whether playback resumes. */
   const earlyStallRef = useRef<number | undefined>(undefined);
   const [qualityHint, setQualityHint] = useState<number | null>(null);
+  const [autoQualityHint, setAutoQualityHint] = useState(false);
+  /** Once the viewer turns down a lowered quality, the next episode starts at the original too. */
+  const autoQualityDeclinedRef = useRef(false);
   const [downloadState, setDownloadState] = useState<"idle" | "busy" | "done">("idle");
   const [deviceDownloadBusy, setDeviceDownloadBusy] = useState(false);
   const [resumedFrom, setResumedFrom] = useState(0);
@@ -380,7 +384,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const controlsTimerRef = useRef<number | undefined>(undefined);
   const automaticFullscreenRef = useRef(false);
   useEffect(() => {
-    if (!open) { setSettingsOpen(false); setSourcesOpen(false); setSourceFailure(""); setBrowserFullscreen(false); setFullscreenUnavailable(false); setPictureFilled(false); return; }
+    if (!open) { autoQualityDeclinedRef.current = false; setSettingsOpen(false); setSourcesOpen(false); setSourceFailure(""); setBrowserFullscreen(false); setFullscreenUnavailable(false); setPictureFilled(false); return; }
     const bottom = bottomRef.current;
     if (!bottom) return;
     const measure = () => overlayRef.current?.style.setProperty("--player-bottom-height", `${bottom.getBoundingClientRect().height}px`);
@@ -631,7 +635,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     setError(""); setUserPaused(false); setPlaybackFailed(false); setBuffering(true); setTime(0); setDuration(0); setOffset(0); setScrub(null); setSession(null); setAddonSubtitle(null);
     timeRef.current = 0; offsetRef.current = 0; probeDurationRef.current = 0; seekingRef.current = false; pendingSeekRef.current = null;
     reportRef.current = { position: 0, duration: 0 }; setResumedFrom(0);
-    stallsRef.current = []; setQualityHint(null); setDownloadState("idle");
+    stallsRef.current = []; setQualityHint(null); setAutoQualityHint(false); setDownloadState("idle");
     decodeRecoversRef.current = []; abandonedRef.current = false; escalateRef.current = false; playedRef.current = false; directRefusedRef.current = false; setSidecarReady(false); setSidecarPass(0); setSubtitleDelay(0);
     setSubtitlesHidden(false); subtitlesHiddenRef.current = false;
     // Resuming: the server knows the position and starts playback right there. A start-over
@@ -647,14 +651,16 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       // from the store the title keeps.
       const from = startAtSeconds !== undefined ? Math.max(0, startAtSeconds) : initialPlaybackPosition(saved, null, fromBeginning);
       if (from) setResumedFrom(from);
-      return { created: await api.startPlayback(stream, capabilities(), from, addonSubtitles.map((item) => item.subtitleId), { audioLanguage: audioPreferenceRef.current, subtitleLanguage: subtitlePreferenceRef.current }), from };
+      return { created: await api.startPlayback(stream, capabilities(), from, addonSubtitles.map((item) => item.subtitleId), { audioLanguage: audioPreferenceRef.current, subtitleLanguage: subtitlePreferenceRef.current }, autoQualityDeclinedRef.current ? undefined : networkHint()), from };
     })().then((result) => {
       if (!result) return;
       const { created, from } = result;
       if (disposed) { void api.stopPlayback(created.id).catch(() => undefined); return; }
       applySession(created);
+      setAutoQualityHint(Boolean(created.autoQuality));
       report("DEBUG", `Playback session started in ${created.mode} mode`, {
         ...context(), mode: created.mode, hardware: created.hardware, acceleration: created.acceleration,
+        quality: created.quality, autoQuality: created.autoQuality, network: networkHint(),
         video: created.video, audio: created.audio, resumedFrom: Math.round(from), capabilities: capabilities(),
       });
       // For direct play the server need not start FFmpeg, so the video element sets the
@@ -857,7 +863,8 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   };
 
   const changeQuality = (value: number | null) => {
-    stallsRef.current = []; setQualityHint(null);
+    stallsRef.current = []; setQualityHint(null); setAutoQualityHint(false);
+    if (session?.autoQuality) autoQualityDeclinedRef.current = true;
     void changeTrack({ quality: value });
   };
 
@@ -1381,6 +1388,11 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
         <span>{t("player.stalling")}</span>
         <button onClick={() => changeQuality(qualityHint)}>{t("player.lowerQualityTo", { height: qualityHint })}</button>
         <button className="icon-button" aria-label={t("player.hideHint")} onClick={() => { stallsRef.current = []; setQualityHint(null); }}><X /></button>
+      </div>}
+      {autoQualityHint && qualityHint === null && session?.quality && !error && <div className="player-hint" role="status">
+        <span>{t("player.autoQuality", { height: session.quality })}</span>
+        <button onClick={() => changeQuality(null)}>{t("player.qualityOriginal")}</button>
+        <button className="icon-button" aria-label={t("player.hideHint")} onClick={() => setAutoQualityHint(false)}><X /></button>
       </div>}
       {upNext && <div className="player-up-next" role="status">
         <small>{t("player.upNext")}</small>

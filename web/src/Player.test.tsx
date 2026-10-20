@@ -46,6 +46,7 @@ let remoteReads: string[];
 let remoteAnswers: Record<string, unknown>;
 /** Every playback session started, so the position it resumed from can be read back. */
 let playbackPosts: Array<Record<string, unknown>>;
+let trackPosts: Array<Record<string, unknown>>;
 /** The answer of the next `/api/progress` write, when the test holds it open. */
 let heldWrite: Promise<Response> | null;
 
@@ -78,6 +79,7 @@ beforeEach(() => {
   remoteReads = [];
   remoteAnswers = {};
   playbackPosts = [];
+  trackPosts = [];
   heldWrite = null;
   sessionShape = {};
   host = document.createElement("div");
@@ -89,6 +91,11 @@ beforeEach(() => {
     if (path === "/api/playback" && init?.method === "POST") {
       playbackPosts.push(JSON.parse(String(init.body)) as Record<string, unknown>);
       return Promise.resolve(json(session()));
+    }
+    if (/^\/api\/playback\/[^/]+\/track$/.test(path) && init?.method === "POST") {
+      const changes = JSON.parse(String(init.body)) as Record<string, unknown>;
+      trackPosts.push(changes);
+      return Promise.resolve(json({ ...session(), quality: changes.quality ?? null, autoQuality: undefined }));
     }
     if (/^\/api\/playback\/[^/]+$/.test(path) && init?.method === "DELETE") return Promise.resolve(new Response(null, { status: 204 }));
     if (/^\/api\/playback\/[^/]+\/ping$/.test(path)) return Promise.resolve(new Response(null, { status: 204 }));
@@ -465,6 +472,42 @@ describe("Player progress reporting", () => {
     await act(async () => { video.currentTime = 120; video.dispatchEvent(new Event("timeupdate", { bubbles: true })); });
     await rerender({ stream: file, progressKey: "movie:tt5000", open: false });
     expect(progressPosts).toEqual([expect.objectContaining({ stableKey: file.stableKey, path: "Films/One.mkv" })]);
+  });
+});
+
+describe("Player automatic quality", () => {
+  beforeEach(() => {
+    Object.defineProperty(navigator, "connection", { configurable: true, value: { effectiveType: "4g", downlink: 3.2, type: "cellular", saveData: false } });
+    const native = HTMLMediaElement.prototype.canPlayType;
+    HTMLMediaElement.prototype.canPlayType = (type: string) => /mpegurl/i.test(type) ? "maybe" : "";
+    return () => {
+      delete (navigator as { connection?: unknown }).connection;
+      HTMLMediaElement.prototype.canPlayType = native;
+    };
+  });
+  const original = () => [...host.querySelectorAll(".player-hint button")].find((node) => node.textContent === "Original") ?? null;
+
+  it("tells the server what the browser knows about the link", async () => {
+    await render();
+    expect(playbackPosts[0]!.network).toEqual({ effectiveType: "4g", downlink: 3.2, type: "cellular", saveData: false });
+    expect(host.querySelector(".player-hint")).toBeNull();
+  });
+
+  it("says the quality was lowered and goes back to the original for the rest of the series", async () => {
+    sessionShape = { mode: "transcode", url: "/api/playback/sess1/1/master.m3u8", acceleration: true, quality: 720, autoQuality: true };
+    await render();
+    expect(host.querySelector(".player-hint")?.textContent).toContain("Slow connection, playing at 720p.");
+
+    await click(original()!);
+    expect(trackPosts).toEqual([expect.objectContaining({ quality: null })]);
+    expect(host.querySelector(".player-hint")).toBeNull();
+
+    await rerender({ stream: addonRow({ sourceId: "addon-2" }) });
+    expect(playbackPosts[1]).not.toHaveProperty("network");
+
+    await rerender({ stream: addonRow({ sourceId: "addon-2" }), open: false });
+    await rerender({ stream: addonRow({ sourceId: "addon-3" }) });
+    expect(playbackPosts[2]!.network).toBeDefined();
   });
 });
 

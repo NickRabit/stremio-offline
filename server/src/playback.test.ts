@@ -7,7 +7,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { DOLBY_VISION_UNITS_FILTER, PlaybackManager, fitsQuality, SOURCE_UNREACHABLE, SerialOperations, clientCapabilities, describeFailure, hlsCanStart, hlsPlaylistFiles, isPlaylistSource, sourceReachable, nvencBusy } from "./playback.js";
+import { DOLBY_VISION_UNITS_FILTER, PlaybackManager, fitsQuality, SOURCE_UNREACHABLE, SerialOperations, clientCapabilities, clientNetwork, networkQuality, describeFailure, hlsCanStart, hlsPlaylistFiles, isPlaylistSource, sourceReachable, nvencBusy } from "./playback.js";
 import { mediaResources as registry, type ResourceOwner } from "./media-resources.js";
 import { setFetchTransport } from "./security.js";
 
@@ -1427,6 +1427,63 @@ test("a chosen quality forces a conversion for a native client too", async () =>
   const started = await manager.start({ url: "https://cdn.example/movie.mkv" }, nativeCaps, { quality: 720 });
 
   assert.notEqual(started.mode, "direct");
+});
+
+test("clientNetwork keeps only the network fields it knows", () => {
+  assert.equal(clientNetwork(undefined), undefined);
+  assert.equal(clientNetwork({}), undefined);
+  assert.equal(clientNetwork({ effectiveType: "5g", downlink: -1, type: "Wi Fi", saveData: "yes" }), undefined);
+  assert.deepEqual(clientNetwork({ effectiveType: "3g", downlink: 1.2, type: "cellular", saveData: false, rtt: 300 }),
+    { effectiveType: "3g", downlink: 1.2, type: "cellular", saveData: false });
+});
+
+test("networkQuality lowers the quality to what the link carries", () => {
+  assert.equal(networkQuality(undefined), null);
+  assert.equal(networkQuality({ effectiveType: "4g", downlink: 10, type: "wifi" }), null);
+  assert.equal(networkQuality({ saveData: true, downlink: 10 }), 480);
+  assert.equal(networkQuality({ effectiveType: "3g" }), 480);
+  assert.equal(networkQuality({ effectiveType: "4g", downlink: 1.5 }), 480);
+  assert.equal(networkQuality({ effectiveType: "4g", downlink: 3.6 }), 720);
+  assert.equal(networkQuality({ effectiveType: "4g", downlink: 7 }), 1080);
+  assert.equal(networkQuality({ effectiveType: "4g", downlink: 10, type: "cellular" }), 720);
+  assert.equal(networkQuality({ effectiveType: "4g", downlink: 1.5, type: "cellular" }), 480);
+});
+
+test("a slow link lowers the quality only where hardware can encode", async () => {
+  const slow = { effectiveType: "4g", downlink: 3 };
+  const start = async (accelerated: boolean, options: Record<string, unknown>) => {
+    const manager = new PlaybackManager(tmp("test-auto-quality")) as any;
+    if (accelerated) manager.vaapiDevice = "/dev/dri/renderD128";
+    manager.inspect = async () => nativeInfo();
+    manager.spawnAt = async (session: any, time: number) => { session.offset = time; return "/hls"; };
+    return manager.start({ url: "https://cdn.example/movie.mkv" }, nativeCaps, options);
+  };
+
+  const lowered = await start(true, { network: slow });
+  assert.equal(lowered.quality, 720);
+  assert.equal(lowered.autoQuality, true);
+  assert.notEqual(lowered.mode, "direct");
+
+  const software = await start(false, { network: slow });
+  assert.equal(software.quality, null);
+  assert.equal(software.autoQuality, undefined);
+
+  const chosen = await start(true, { network: slow, quality: null });
+  assert.equal(chosen.quality, null);
+  assert.equal(chosen.autoQuality, undefined);
+});
+
+test("choosing a quality after an automatic one clears the automatic mark", async () => {
+  const manager = new PlaybackManager(tmp("test-auto-quality-track")) as any;
+  manager.vaapiDevice = "/dev/dri/renderD128";
+  manager.inspect = async () => nativeInfo();
+  manager.spawnAt = async (session: any, time: number) => { session.offset = time; return "/hls"; };
+
+  const started = await manager.start({ url: "https://cdn.example/movie.mkv" }, nativeCaps, { network: { saveData: true } });
+  assert.equal(started.autoQuality, true);
+  const switched = await manager.track(started.id, { quality: 1080, time: 0 });
+  assert.equal(switched.quality, 1080);
+  assert.equal(switched.autoQuality, undefined);
 });
 
 test("a native direct session switches to another playable audio track without restarting", async () => {

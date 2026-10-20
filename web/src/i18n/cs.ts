@@ -312,6 +312,7 @@ export const cs: Catalog = {
   "player.playFromStart": "Přehrát od začátku",
   "player.stalling": "Přehrávání se zadrhává.",
   "player.lowerQualityTo": "Snížit na {height}p",
+  "player.autoQuality": "Pomalé připojení, přehrává se v {height}p.",
   "player.hideHint": "Skrýt",
   "player.seekRestored": "Nepodařilo se přeskočit. Zůstává předchozí pozice.",
   "player.playbackFailed": "Přehrávání selhalo: {details} ({type})",

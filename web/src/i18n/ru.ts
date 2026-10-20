@@ -297,6 +297,7 @@ export const ru: Catalog = {
   "player.playFromStart": "Играйте с самого начала",
   "player.stalling": "Воспроизведение постоянно останавливается.",
   "player.lowerQualityTo": "Опуститься до {height}p",
+  "player.autoQuality": "Медленное соединение, воспроизведение в {height}p.",
   "player.hideHint": "Уволить",
   "player.seekRestored": "Не удалось перемотать. Сохранена предыдущая позиция.",
   "player.playbackFailed": "Не удалось воспроизвести: {details} ({type})",

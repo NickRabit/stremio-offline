@@ -297,6 +297,7 @@ export const sk: Catalog = {
   "player.playFromStart": "Hrajte od začiatku",
   "player.stalling": "Prehrávanie sa stále zastavuje.",
   "player.lowerQualityTo": "Pokles na {height}p",
+  "player.autoQuality": "Pomalé pripojenie, prehráva sa v {height}p.",
   "player.hideHint": "Odmietnuť",
   "player.seekRestored": "Nepodarilo sa preskočiť. Zostáva predchádzajúca pozícia.",
   "player.playbackFailed": "Prehrávanie zlyhalo: {details} ({type})",

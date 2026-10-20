@@ -18,7 +18,7 @@ import type { MediaServerSources } from "../media-server-sources.js";
 import { isMediaServerError } from "../media-server-types.js";
 import { contentOf } from "../revocation.js";
 import { readMediaText, rewritePlaylist } from "../media-playlist.js";
-import { clientCapabilities } from "../playback.js";
+import { clientCapabilities, clientNetwork } from "../playback.js";
 import type { PlaybackManager, PlaybackOptions } from "../playback.js";
 import type { RangeCache } from "../range-cache.js";
 import { RangeNotSatisfiable, ReadAheadFull, UnexpectedAnswer, type OpenRange, type ReadAheadBlock, type RemoteReadAhead } from "../remote-read-ahead.js";
@@ -193,6 +193,7 @@ export function registerPlaybackRoutes(app: express.Application, deps: PlaybackD
     if (req.body.subtitleTrack !== undefined) options.subtitleTrack = req.body.subtitleTrack === null ? null : Number(req.body.subtitleTrack);
     if (req.body.time !== undefined) options.startTime = Math.max(0, Number(req.body.time) || 0);
     if (req.body.quality !== undefined) options.quality = req.body.quality === null ? null : Number(req.body.quality);
+    options.network = clientNetwork(req.body.network);
     const owner = ownerOf(req);
     const stream = await httpSourceOf(req);
     const remote = isRemoteMediaStream(stream);

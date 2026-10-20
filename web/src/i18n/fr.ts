@@ -297,6 +297,7 @@ export const fr: Catalog = {
   "player.playFromStart": "Jouez depuis le début",
   "player.stalling": "La lecture continue de stagner.",
   "player.lowerQualityTo": "Descendre à {height}p",
+  "player.autoQuality": "Connexion lente, lecture en {height}p.",
   "player.hideHint": "Rejeter",
   "player.seekRestored": "Impossible de changer de position. La position précédente a été conservée.",
   "player.playbackFailed": "Échec de la lecture : {details} ({type})",

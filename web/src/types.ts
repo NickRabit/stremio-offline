@@ -401,11 +401,16 @@ export interface SettingsBackup {
   addons: Array<{ manifestUrl: string; role: Addon["role"]; enabled: boolean; globalSearch: boolean; showOnHome?: boolean; homeCatalogs?: string[]; addedAt: string; downloadSettings: AddonDownloadSettings }>;
 }
 export interface Capabilities { h264: boolean; hevc: boolean; hevc10: boolean; vp8: boolean; vp9: boolean; av1: boolean; aac: boolean; mp3: boolean; opus: boolean; vorbis: boolean; ac3: boolean; eac3: boolean; flac: boolean }
+/** The Network Information API's view of the link, sent so the server can pick a quality. */
+export interface NetworkHint { saveData?: boolean; effectiveType?: string; downlink?: number; type?: string }
+
 export interface PlaybackSession {
   seekRestored?: boolean;
   id: string; mode: PlaybackMode; url: string; offset: number; duration?: number; video?: string; audio?: string; hardware: boolean; acceleration: boolean;
   audioTracks: Track[]; subtitleTracks: Track[]; audioTrack: number; subtitleTrack: number | null;
   quality: number | null; sidecarUrl?: string; subtitleIds?: Record<string, string>;
+  /** The server lowered the quality for the slow link rather than the viewer choosing it. */
+  autoQuality?: boolean;
   /** `url` addresses a playlist, so the element cannot simply be handed it. */
   playlist?: boolean;
 }

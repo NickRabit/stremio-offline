@@ -90,6 +90,40 @@ export function clientCapabilities(raw: unknown): ClientCapabilities {
   return caps;
 }
 
+/** What a browser's Network Information API says about the link. Only Chromium has one;
+ *  Safari and Firefox send nothing. */
+export interface NetworkHint {
+  saveData?: boolean;
+  /** "slow-2g", "2g", "3g" or "4g": the class of the measured link, not the radio. */
+  effectiveType?: string;
+  /** Estimated throughput in Mb/s; Chromium rounds it and caps it at 10. */
+  downlink?: number;
+  /** "cellular", "wifi", ...; only Android reports it. */
+  type?: string;
+}
+
+export function clientNetwork(raw: unknown): NetworkHint | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const source = raw as Record<string, unknown>;
+  const hint: NetworkHint = {};
+  if (typeof source.saveData === "boolean") hint.saveData = source.saveData;
+  if (typeof source.effectiveType === "string" && /^(slow-2g|2g|3g|4g)$/.test(source.effectiveType)) hint.effectiveType = source.effectiveType;
+  if (typeof source.downlink === "number" && Number.isFinite(source.downlink) && source.downlink > 0) hint.downlink = source.downlink;
+  if (typeof source.type === "string" && /^[a-z]{1,16}$/.test(source.type)) hint.type = source.type;
+  return Object.keys(hint).length ? hint : undefined;
+}
+
+/** The quality a link can carry without stalling, or null when it carries the original. Each
+ *  step leaves room above the quality's bitrate cap; mobile data gets 720p either way. */
+export function networkQuality(hint: NetworkHint | undefined): number | null {
+  if (!hint) return null;
+  if (hint.saveData || (hint.effectiveType && hint.effectiveType !== "4g")) return 480;
+  let quality: number | null = null;
+  if (hint.downlink !== undefined) quality = hint.downlink < 2.5 ? 480 : hint.downlink < 5 ? 720 : hint.downlink < 9 ? 1080 : null;
+  if (hint.type === "cellular") quality = Math.min(quality ?? 720, 720);
+  return quality;
+}
+
 /** A native client is one that declares containers; a browser declares only booleans. */
 const native = (caps: ClientCapabilities) => Array.isArray(caps.containers);
 
@@ -101,6 +135,8 @@ export interface PlaybackOptions {
   startTime?: number;
   /** Maximum picture height; null or undefined = the original, with the video untouched. */
   quality?: number | null;
+  /** Lowers the quality on a slow link when no quality was asked for and hardware can encode. */
+  network?: NetworkHint;
 }
 
 export interface PlaybackDescriptor {
@@ -113,6 +149,8 @@ export interface PlaybackDescriptor {
   audioTracks: Track[]; subtitleTracks: Track[];
   audioTrack: number; subtitleTrack: number | null;
   quality: number | null;
+  /** The quality was lowered for the client's slow link rather than chosen by the viewer. */
+  autoQuality?: boolean;
   /** What the conversion copies rather than re-encodes; absent for a direct stream. */
   copy?: { video: boolean; audio: boolean };
   sidecarUrl?: string;
@@ -190,7 +228,7 @@ interface Session {
   /** Failed attempts must not reuse output directories after a rollback. */
   generationSequence?: number;
   fallback?: { generation: number; directory: string };
-  audioTrack: number; subtitleTrack: number | null; quality: number | null;
+  audioTrack: number; subtitleTrack: number | null; quality: number | null; autoQuality?: boolean;
   process?: ChildProcess; directory?: string; error?: string; startedAt: number; lastAccess: number; pendingKill?: Promise<void>;
   operations: SerialOperations; stopped: boolean;
   /** Until the client first loads it, a session is only a promise; an unclaimed one is closed after a while. */
@@ -585,10 +623,12 @@ export class PlaybackManager {
       ? options.subtitleTrack
       : this.preferredSubtitle(subtitleTracks, options.subtitleLanguage, audioTracks[audioTrack]?.language, options.audioLanguage);
 
-    const quality = options.quality != null && QUALITY_BITRATE[options.quality] ? options.quality : null;
+    // A software transcode on a weak CPU would stall more than the link does.
+    const autoQuality = options.quality === undefined && this.accelerated() ? networkQuality(options.network) : null;
+    const quality = autoQuality ?? (options.quality != null && QUALITY_BITRATE[options.quality] ? options.quality : null);
     const session: Session = {
       id, stream, capabilities, info, mode: "direct", generation: 0, offset: 0, hardware: false,
-      audioTrack, subtitleTrack, quality, startedAt: Date.now(), lastAccess: Date.now(), operations: new SerialOperations(), stopped: false, claimed: false,
+      audioTrack, subtitleTrack, quality, autoQuality: autoQuality !== null, startedAt: Date.now(), lastAccess: Date.now(), operations: new SerialOperations(), stopped: false, claimed: false,
     };
     this.sessions.set(id, session);
     const summary = {
@@ -609,7 +649,7 @@ export class PlaybackManager {
       // "timescale not set".
       const avDefault = audioTrack === 0 && quality === null;
       const direct = this.directAllowed(session);
-      reason = avDefault && subtitleTrack === null ? direct.reason : "a non-default track or quality was requested";
+      reason = avDefault && subtitleTrack === null ? direct.reason : autoQuality !== null ? "the client's link is slow" : "a non-default track or quality was requested";
       if (direct.ok) {
         signal?.throwIfAborted();
         if (subtitleTrack !== null && !this.clientRendersSubtitle(session)) this.extractSidecar(session);
@@ -627,7 +667,7 @@ export class PlaybackManager {
       log("INFO", "Conversion started", {
         id, mode: session.mode, reason, hardware: session.hardware,
         copyVideo: plan.copyVideo, copyAudio: plan.copyAudio,
-        audioTrack, subtitleTrack, quality, startTime: Math.round(startTime), ...summary,
+        audioTrack, subtitleTrack, quality, network: options.network, startTime: Math.round(startTime), ...summary,
       });
       return this.describe(session, url);
     } catch (error) {
@@ -664,7 +704,10 @@ export class PlaybackManager {
       this.assertActive(session);
       if (changes.audio !== undefined) session.audioTrack = Math.max(0, changes.audio);
       if (changes.subtitle !== undefined) session.subtitleTrack = changes.subtitle;
-      if (changes.quality !== undefined) session.quality = changes.quality != null && QUALITY_BITRATE[changes.quality] ? changes.quality : null;
+      if (changes.quality !== undefined) {
+        session.quality = changes.quality != null && QUALITY_BITRATE[changes.quality] ? changes.quality : null;
+        session.autoQuality = false;
+      }
       // A native direct session plays the new track as it is: no restart while the container and
       // the new codec are still among those the client declared.
       if (session.mode === "direct" && native(session.capabilities) && changes.quality === undefined
@@ -862,10 +905,11 @@ export class PlaybackManager {
     return {
       id: session.id, mode: session.mode, url, offset: session.offset,
       duration: session.info?.duration, video: session.info?.video?.codec, audio: session.info?.audio?.codec,
-      hardware: session.hardware, acceleration: Boolean(this.vaapiDevice || this.nvenc || this.videotoolbox || this.mediafoundation),
+      hardware: session.hardware, acceleration: this.accelerated(),
       audioTracks: (session.info?.audioTracks ?? []).map((track) => ({ ...track, title: safeSourceText(track.title, session.stream) })),
       subtitleTracks: (session.info?.subtitleTracks ?? []).map((track) => ({ ...track, title: safeSourceText(track.title, session.stream) })),
       audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack, quality: session.quality,
+      autoQuality: session.autoQuality || undefined,
       sidecarUrl: session.subtitleTrack !== null && !this.clientRendersSubtitle(session) ? this.sidecarUrl(session) : undefined,
       copy: copy ? { video: copy.copyVideo, audio: copy.copyAudio } : undefined,
       playlist: session.mode === "direct" ? isPlaylistSource(session.stream, session.info) : true,
@@ -1134,6 +1178,8 @@ export class PlaybackManager {
 
   /** VideoToolbox is always there on a Mac, but a frame is still encoded: the encoder can fail
    *  even when the framework loads, and only the result says whether a conversion would work. */
+  private accelerated() { return Boolean(this.vaapiDevice || this.nvenc || this.videotoolbox || this.mediafoundation); }
+
   /** The hardware path a conversion started now would use, in the order they are preferred. */
   private accelerator(): "vaapi" | "nvenc" | "videotoolbox" | "mediafoundation" | null {
     if (this.vaapiDevice) return "vaapi";
