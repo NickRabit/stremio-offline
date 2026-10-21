@@ -3,7 +3,8 @@
 A working checklist for a systematic pass over the whole repository: find
 defects, prove them, fix them, and remove measured waste. It is split into
 **units** (one area of the code) and **parts** (one reviewable slice of a
-unit). Tick a part only when its pull request has merged.
+unit). Record merged parts in periodic documentation pull requests; the part's
+own pull request is the source of truth until then.
 
 This plan builds on the hardening backlog in
 [roadmap.md](roadmap.md#p1--recoverable-filesystem-and-cross-store-operations);
@@ -13,11 +14,17 @@ write contract from #304, the follow-service shutdown from #311/#318).
 ## How to run it with the AI team
 
 Each part has an ID (`BH-<unit>.<part>`) that doubles as the `ai-team` task ID,
-so its brief, worker log and review live under `.ai-team/tasks/BH-x.y/` and the
-gates run as `.claude/skills/ai-team/scripts/gates.sh BH-x.y`. See
+so its brief, worker log and review live under `.ai-team/tasks/BH-x.y/`. Invoke
+`.claude/skills/ai-team/scripts/gates.sh BH-x.y` from the main checkout; the
+script runs its checks in the task worktree. See
 [android-tv-development.md](android-tv-development.md#6-the-ai-team-workflow-optional)
-for the setup; the worker sandbox has no Node or Java, so the reviewer runs the
-gates and `./gradlew` on the host.
+for the local setup. The worker may run its specified tests, but the reviewer
+confirms their results and runs Android checks from `android-tv/` when relevant.
+
+Fault injection, destructive operations, interrupted scans and shutdown tests
+must use disposable data and download roots with synthetic libraries. Check
+resolved paths before a test runs so it cannot touch configured user data or a
+mounted library. A physical NAS run requires a separate, explicit test plan.
 
 Per part:
 
@@ -31,14 +38,16 @@ Per part:
 3. **Worker (DeepSeek via Codex)** implements the smallest fix that turns the
    test green. No drive-by refactors.
 4. **Reviewer (Claude)** runs the gates (`npm test`, `npm run build`, Docker
-   `/api/status`, `./gradlew assembleDebug testDebugUnitTest lintDebug` for
-   Android), and the adversarial checklist below for any change touching
+   `/api/status`, and `cd android-tv && ./gradlew assembleDebug
+   testDebugUnitTest lintDebug` for Android), and the adversarial checklist
+   below for any change touching
    state, files, auth or processes.
 5. One branch and one PR per part (or one per confirmed defect when a part
    yields several unrelated ones). Patch version bump when the fix is
    user-facing, per [AGENTS.md](../AGENTS.md).
-6. Findings that are real but out of scope for the part go to the
-   **Found along the way** list at the bottom, not into the PR.
+6. Record real out-of-scope findings in the part PR description or a linked
+   issue, then copy them into **Found along the way** in a documentation PR.
+   Do not implement them in an unrelated part.
 
 Adversarial checklist (from the roadmap): actor/resource authorization, two
 concurrent callers, failure before/after each side effect, repeated request,
@@ -49,8 +58,9 @@ restart/replay, secrets in logs or responses, abort/cleanup ownership.
 Do this first; every later "optimisation" is judged against these numbers.
 
 - [ ] **BH-0.1 Green baseline.** `npm test`, `npm run build`, e2e in Docker,
-      Android gates. Record counts, durations and the existing large-chunk
-      warning. List every skipped and every flaky test with its file.
+      Android gates. Record counts, durations and build warnings. List observed
+      skips and flakes with their files and run or CI evidence; a single pass
+      cannot establish that no flaky tests exist.
 - [ ] **BH-0.2 Runtime baseline.** On a seeded instance (e2e seed or a fixed
       synthetic library of ~5k files): cold start time, RSS after start and
       after a full scan, full-scan and rescan latency, `/api/home` and
@@ -61,8 +71,9 @@ Do this first; every later "optimisation" is judged against these numbers.
       commit counts for typing in search and for an idle Home with polling.
       Android: cold start and Home first frame on the emulator.
 - [ ] **BH-0.4 Error-swallowing inventory.** List every `.catch(() => {})` /
-      `.catch(() => undefined)` in production code (~130, densest in
-      `web/src/App.tsx`, `server/src/media-server-security.ts`,
+      `.catch(() => undefined)` in production code (currently over 300 matching
+      lines, densest in `desktop/src/main.ts`, `web/src/App.tsx`,
+      `server/src/media-server-security.ts`,
       `media-server-manager.ts`, `downloads.ts`, `Player.tsx`,
       `remote-image-cache.ts`, `index.ts`). Classify each as *intended
       best-effort* (leave, maybe log at debug) or *hides a failure the user
@@ -75,17 +86,19 @@ Files: `store.ts`, `state-file.ts`, `fs-retry.ts`, `library-meta-store.ts`,
 `provider-stats.ts`, `image-stats.ts`, `external-ids.ts`, `server-start.ts`,
 `server-shutdown.ts`, `index.ts` (lifecycle parts only).
 
-- [ ] **BH-1.1 One write contract everywhere.** Check every JSON store against
-      the contract `Store.update` follows (apply, write, roll back on failure;
-      preserve unreadable files as `.damaged-*`). Stores not yet audited:
+- [ ] **BH-1.1 State write and recovery contracts.** Check every JSON store
+      against the `Store.update` write contract (apply, write, roll back on
+      failure). Audit read-side handling separately: stores using
+      `preserveDamaged` keep a `.damaged-*` copy, while `Store.load` currently
+      rejects malformed `state.json`. Stores not yet audited:
       `stats`, `activity`, `provider-stats`, `image-stats`, `external-ids`,
       `library-seen`, `library/episodes.json`.
-- [ ] **BH-1.2 Shutdown completeness.** `server-shutdown.ts` flushes stores
-      and stops the follow service, but does not stop the download queue,
-      settle scan persistence or kill FFmpeg children explicitly. Test SIGTERM
-      during a download, a scan and a conversion; nothing written half, no
-      orphan process, exit within the bounded time.
-- [ ] **BH-1.3 Timers and intervals.** 42 `setInterval` calls across
+- [ ] **BH-1.2 Shutdown completeness.** `server-shutdown.ts` flushes stores,
+      stops the follow service and explicitly kills tracked media processes.
+      It deliberately leaves the download queue to resume after restart.
+      Test SIGTERM during a download, a scan and a conversion: verify queue
+      recovery, scan persistence, child coverage and bounded exit.
+- [ ] **BH-1.3 Timers and intervals.** Every `setInterval` across
       server/web/desktop. Each one: is it cleared on stop, `unref()`'d on the
       server, and is its period justified? Coalesce intervals that poll the
       same thing.
@@ -194,13 +207,13 @@ largest), `routes/media-servers.ts`.
 
 - [ ] **BH-6.1 Secrets.** Tokens never in logs, responses, error messages or
       exported settings; rotation and removal leave nothing behind.
-- [ ] **BH-6.2 Swallowed errors.** The ~40 silent catches in
+- [ ] **BH-6.2 Swallowed errors.** The silent catches in
       `media-server-security.ts` and `media-server-manager.ts` from BH-0.4.
 - [ ] **BH-6.3 Index and sync.** Incremental vs full sync, server
       unreachable mid-sync, deleted items, quota and retention edge cases.
 - [ ] **BH-6.4 Playback and progress bridging.** `media-server-playing.ts`,
-      `-personal.ts`: progress reported back once, not per tick; behaviour
-      when the remote server rejects it.
+      `-personal.ts`: expected progress cadence and duplicate suppression,
+      session cleanup, and behaviour when the remote server rejects an update.
 
 ## Unit 7 — Server: auth, roles and the HTTP boundary
 
@@ -208,7 +221,7 @@ Files: `auth.ts`, `roles.ts`, `secure.ts`, `security.ts`, `host-check.ts`,
 `restricted.ts`, `revocation.ts`, `users.ts`, `library-grants.ts`,
 `airplay-access.ts`, `logger.ts`, `access-log.ts`, `routes/*.ts`.
 
-- [ ] **BH-7.1 Route inventory.** Generate the list of all 189 route
+- [ ] **BH-7.1 Route inventory.** Generate the list of all route
       registrations with their role requirement and ownership check; flag
       read routes that serve private data without an owner check, and
       routes where a foreign ID is distinguishable from a missing one.
@@ -232,7 +245,7 @@ Files: `auth.ts`, `roles.ts`, `secure.ts`, `security.ts`, `host-check.ts`,
 
 ## Unit 9 — Web: application shell
 
-Files: `web/src/App.tsx` (3.9k lines, 63 `useEffect`, 118 `useState`),
+Files: `web/src/App.tsx` (about 3.9k lines, many effects and state hooks),
 `api.ts`, `useHome.ts`, `home-state.ts`, `start-view.ts`, `views.ts`.
 
 - [ ] **BH-9.1 Effect hygiene.** Every effect in `App.tsx`: cleanup present,
@@ -276,9 +289,10 @@ dialogs, `style.css` (2.3k), `i18n/*`, `vite.config.ts`.
 - [ ] **BH-11.2 Dialogs and focus.** Conformance with
       [ui-conventions.md](ui-conventions.md); focus trap, Escape, TV/remote
       navigation.
-- [ ] **BH-11.3 i18n completeness.** `cs.ts` is type-checked against `en.ts`;
-      the other eight catalogues are not. Report missing and stale keys
-      per language; decide whether to type them the same way.
+- [ ] **BH-11.3 i18n completeness.** All nine translated catalogues are
+      type-checked against `en.ts`. Check placeholder names and plural forms,
+      untranslated values and meaning in context; report verified gaps per
+      language.
 - [ ] **BH-11.4 Bundle.** No `React.lazy` split exists today and the build
       warns about chunk size. Split rarely used views (settings, admin,
       stats, media-server manager, player) and measure first-load bytes.
@@ -339,6 +353,7 @@ Files: `android-tv/app/src/main/java/cz/stremiooffline/tv/` — `playback/`
 | --- | --- | --- |
 | Server tests (passed / skipped / s) | | |
 | Web tests (passed / s) | | |
+| Desktop and media-client tests (passed / skipped / s) | | |
 | Cold start / RSS | | |
 | Full scan / rescan (5k files) | | |
 | `/api/home` p95 | | |
@@ -348,6 +363,7 @@ Files: `android-tv/app/src/main/java/cz/stremiooffline/tv/` — `playback/`
 ## Found along the way
 
 Real issues outside the part that found them. Each becomes its own part or
-issue; do not fix them inside an unrelated PR.
+issue; do not fix them inside an unrelated PR. Copy verified findings here in
+a periodic documentation PR after recording them in the originating PR.
 
 - *(empty)*
