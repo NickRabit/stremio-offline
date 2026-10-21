@@ -309,3 +309,17 @@ test("an unqualified path is refused, not resolved, once a second library exists
   assert.equal(await resolveLibraryPath(two, "Film/Film.mkv"), undefined, "nothing can say which library it meant");
   assert.equal(await resolveLibraryPath([two[0]!], "Film/Film.mkv") === undefined, false, "one library is still the pass-through");
 });
+
+test("parseLibraryPath reads a key the same as splitting it on every separator did", () => {
+  const split = (value: string) => {
+    const trimmed = value.replace(/\/{2,}/g, "/").replace(/^\/+|\/+$/g, "");
+    const parts = trimmed.split("/");
+    if (!/^lib_[0-9a-f]{8}$/.test(parts[0] ?? "")) return undefined;
+    return { libraryId: parts[0]!, relative: parts.slice(1).join("/") };
+  };
+  for (const key of [
+    "lib_ab12cd34", "lib_ab12cd34/", "/lib_ab12cd34/Show", "lib_ab12cd34//Show///01.mkv", "//lib_ab12cd34//",
+    "lib_ab12cd34/Show/01 serie/01.mkv", "lib_ab12cd34\\Show\\01.mkv", "lib_AB12CD34/Show", "lib_ab12cd345/x",
+    "Show/lib_ab12cd34", "", "/", "dir:lib_ab12cd34/Show",
+  ]) assert.deepEqual(parseLibraryPath(key), split(key), JSON.stringify(key));
+});
