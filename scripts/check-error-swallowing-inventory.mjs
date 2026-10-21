@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { execFileSync } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
 import { dirname, extname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,24 +31,40 @@ const walk = async (path) => {
   return files.sort();
 };
 
+// The inventory is keyed by line, so it describes one commit. By default it is checked against
+// that commit; --worktree checks the current files instead, which is how a refresh starts.
+const document = await readFile(inventoryPath, "utf8");
+const recorded = /Recorded against `([0-9a-f]{40})`/.exec(document)?.[1];
+if (!recorded) throw new Error("The inventory must name the commit it was recorded against.");
+const useWorktree = process.argv.includes("--worktree");
+const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+
+const sourceFiles = async () => {
+  if (useWorktree) return (await Promise.all(targets.map((target) => walk(join(root, target))))).flat();
+  return git("ls-tree", "-r", "--name-only", recorded, "--", ...targets).split("\n").filter((file) => file
+    && extensions.has(extname(file))
+    && !/\.(?:test|spec)\.[^.]+$/i.test(file)
+    && !file.split("/").slice(0, -1).some((part) => excludedDirectories.has(part))).sort().map((file) => join(root, file));
+};
+const readSource = async (file) => useWorktree
+  ? readFile(file, "utf8")
+  : git("show", `${recorded}:${relative(root, file).split(sep).join("/")}`);
+
 const source = new Map();
-for (const target of targets) {
-  for (const file of await walk(join(root, target))) {
-    const lines = (await readFile(file, "utf8")).split("\n");
-    lines.forEach((text, index) => {
-      let count = 0;
-      for (const pattern of patterns) {
-        for (let at = text.indexOf(pattern); at !== -1; at = text.indexOf(pattern, at + pattern.length)) count += 1;
-      }
-      if (count > 0) {
-        const path = relative(root, file).split(sep).join("/");
-        source.set(`${path}:${index + 1}`, { count, text: text.trim() });
-      }
-    });
-  }
+for (const file of await sourceFiles()) {
+  const lines = (await readSource(file)).split("\n");
+  lines.forEach((text, index) => {
+    let count = 0;
+    for (const pattern of patterns) {
+      for (let at = text.indexOf(pattern); at !== -1; at = text.indexOf(pattern, at + pattern.length)) count += 1;
+    }
+    if (count > 0) {
+      const path = relative(root, file).split(sep).join("/");
+      source.set(`${path}:${index + 1}`, { count, text: text.trim() });
+    }
+  });
 }
 
-const document = await readFile(inventoryPath, "utf8");
 const inventoryStart = document.indexOf("## Complete inventory");
 const summaryStart = document.indexOf("## Needs-review candidates");
 const countsStart = document.indexOf("## Counts");
@@ -174,5 +191,5 @@ if (errors.length) {
   process.exitCode = 1;
 } else {
   const packageSummary = [...expectedPackages].sort().map(([name, count]) => `${name} ${count}`).join(", ");
-  console.log(`error-swallowing inventory ok: ${rows.length} rows, ${needsReview.length} needs review, ${rows.length - needsReview.length} best effort (${packageSummary})`);
+  console.log(`error-swallowing inventory ok against ${useWorktree ? "the working tree" : recorded.slice(0, 12)}: ${rows.length} rows, ${needsReview.length} needs review, ${rows.length - needsReview.length} best effort (${packageSummary})`);
 }
