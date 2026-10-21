@@ -57,20 +57,22 @@ restart/replay, secrets in logs or responses, abort/cleanup ownership.
 
 Do this first; every later "optimisation" is judged against these numbers.
 
-- [ ] **BH-0.1 Green baseline.** `npm test`, `npm run build`, e2e in Docker,
+- [x] **BH-0.1 Green baseline.** `npm test`, `npm run build`, e2e in Docker,
       Android gates. Record counts, durations and build warnings. List observed
       skips and flakes with their files and run or CI evidence; a single pass
       cannot establish that no flaky tests exist.
-- [ ] **BH-0.2 Runtime baseline.** On a seeded instance (e2e seed or a fixed
+      Done in #489: [bug-hunt-baseline.md](bug-hunt-baseline.md).
+- [x] **BH-0.2 Runtime baseline.** On a seeded instance (e2e seed or a fixed
       synthetic library of ~5k files): cold start time, RSS after start and
       after a full scan, full-scan and rescan latency, `/api/home` and
       `/api/library/browse` p50/p95, search-everywhere time to first and last
       result. Script it under `scripts/` so later parts can re-run it.
+      Done in #490: [bug-hunt-runtime-baseline.md](bug-hunt-runtime-baseline.md), `scripts/benchmark-runtime.mjs`.
 - [ ] **BH-0.3 Client baseline.** Web bundle size per chunk, Lighthouse/
       Playwright trace of Home, Library and Player first paint; React Profiler
       commit counts for typing in search and for an idle Home with polling.
       Android: cold start and Home first frame on the emulator.
-- [ ] **BH-0.4 Error-swallowing inventory.** List every `.catch(() => {})` /
+- [x] **BH-0.4 Error-swallowing inventory.** List every `.catch(() => {})` /
       `.catch(() => undefined)` in production code (currently over 300 matching
       lines, densest in `desktop/src/main.ts`, `web/src/App.tsx`,
       `server/src/media-server-security.ts`,
@@ -78,6 +80,7 @@ Do this first; every later "optimisation" is judged against these numbers.
       `remote-image-cache.ts`, `index.ts`). Classify each as *intended
       best-effort* (leave, maybe log at debug) or *hides a failure the user
       or a store needs to know* (becomes a part in its unit).
+      Done in #491: [bug-hunt-error-swallowing-inventory.md](bug-hunt-error-swallowing-inventory.md), 129 candidates.
 
 ## Unit 1 — Server: persistent state and lifecycle
 
@@ -231,6 +234,7 @@ Files: `auth.ts`, `roles.ts`, `secure.ts`, `security.ts`, `host-check.ts`,
       while a download, scan, transfer or playback runs.
 - [ ] **BH-7.4 Input validation.** Path traversal on every route that takes
       a path, request body size limits, malformed JSON handling.
+      Progress: #493 tells a refused folder from a missing one (browse, grants, preview, library root, create folder, rename).
 - [ ] **BH-7.5 Log redaction.** Addon URLs with embedded keys, debrid tokens,
       media-server tokens in `app.log` and client logs.
 
@@ -296,6 +300,7 @@ dialogs, `style.css` (2.3k), `i18n/*`, `vite.config.ts`.
 - [ ] **BH-11.4 Bundle.** No `React.lazy` split exists today and the build
       warns about chunk size. Split rarely used views (settings, admin,
       stats, media-server manager, player) and measure first-load bytes.
+      Progress: #494 loads non-English catalogues on demand (first load 713 → 412 kB gzip). hls.js (~160 kB gzip) is the next candidate.
 - [ ] **BH-11.5 CSS.** Dead selectors, duplicated rules; split by
       responsibility only with the visual matrix run once at the end
       (roadmap P2).
@@ -313,6 +318,7 @@ Files: `desktop/src/main.ts` (1.8k), `local-backend.ts`, `download-dir.ts`,
       and the sender; nothing exposes arbitrary file paths.
 - [ ] **BH-12.3 Settings files.** `connection.json`, `local-settings.json`,
       `window-state.json`: corrupt-file handling, off-screen window recovery.
+      Progress: #492 reports sign-ins, settings or servers a reset could not remove.
 
 ## Unit 13 — Android TV
 
@@ -351,13 +357,13 @@ Files: `android-tv/app/src/main/java/cz/stremiooffline/tv/` — `playback/`
 
 | Metric | Baseline (BH-0) | After (BH-14.4) |
 | --- | --- | --- |
-| Server tests (passed / skipped / s) | | |
-| Web tests (passed / s) | | |
-| Desktop and media-client tests (passed / skipped / s) | | |
-| Cold start / RSS | | |
-| Full scan / rescan (5k files) | | |
-| `/api/home` p95 | | |
-| Web first-load JS (gzip) | | |
+| Server tests (passed / skipped / s) | 2,829 / 6 / 47.5 (Mac) | |
+| Web tests (passed / s) | 1,167 / 8.9 (Mac) | |
+| Desktop and media-client tests (passed / skipped / s) | 301 / 0 / 1.2; 29 / 1 / 1.7 (Mac) | |
+| Cold start / RSS | 343 ms / 167 MiB (5k files, Mac) | |
+| Full scan / rescan (5k files) | 24.3 s / 0.76 s (Mac) | |
+| `/api/home` p95 | 5.6 ms (Mac) | |
+| Web first-load JS (gzip) | 715 kB | |
 | Android cold start | | |
 
 ## Found along the way
@@ -366,4 +372,12 @@ Real issues outside the part that found them. Each becomes its own part or
 issue; do not fix them inside an unrelated PR. Copy verified findings here in
 a periodic documentation PR after recording them in the originating PR.
 
-- *(empty)*
+- Desktop reset (BH-12.3, #492): the wiring in `desktop/src/main.ts` has no unit
+  test; `main.ts` has no harness. Covered by typecheck and desktop-e2e only.
+- `scripts/check-error-swallowing-inventory.mjs` reads the recorded commit from
+  git and fails in a shallow clone that lacks it (#491).
+- A failed `.part` unlink after a source failover leaves an orphan `.part` and
+  gives the next download a `(2)` name; no corruption (`downloads.ts`, BH-2.2).
+- `LibraryOps.settled()` swallows failures but has no production caller (BH-1.1).
+- `scripts/benchmark-runtime.mjs` serves `web/` rather than `web/dist` from a
+  source checkout; it measures the API only, so its numbers are unaffected.
