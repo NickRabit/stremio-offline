@@ -1,8 +1,9 @@
 import { enterPlayerFullscreen, exitPlayerFullscreen, playerIsFullscreen, supportsPlayerFullscreen } from "./player-fullscreen";
-import Hls from "hls.js";
+import type Hls from "hls.js";
 import { useEffect, useRef, useState } from "react";
 import { AudioLines, Captions, CaptionsOff, Check, Download, HardDrive, ListVideo, Star, Gauge, Maximize, Minimize, Pause, Play, RectangleHorizontal, RotateCcw, RotateCw, Settings, SlidersHorizontal, SkipBack, SkipForward, Volume2, X } from "lucide-react";
 import { ApiError, api, describeError, subtitleUrl } from "./api";
+import { hlsIfLoaded, loadHls } from "./hls-loader";
 import { watchSidecar } from "./player-sidecar";
 import { label, pickAddonSubtitle } from "./languages";
 import { hostOf, report } from "./diagnostics";
@@ -316,6 +317,8 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     return () => video.removeEventListener("volumechange", remember);
   }, [open, volume]);
   const hlsRef = useRef<Hls | null>(null);
+  /** Bumped by every attach, so one still waiting for hls.js knows a later one replaced it. */
+  const attachSeqRef = useRef(0);
   const sessionRef = useRef<string | null>(null);
   const remotePlayIdRef = useRef<string | null>(null);
   const modeRef = useRef<PlaybackMode>("transcode");
@@ -381,6 +384,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const automaticFullscreenRef = useRef(false);
   useEffect(() => {
     if (!open) { setSettingsOpen(false); setSourcesOpen(false); setSourceFailure(""); setBrowserFullscreen(false); setFullscreenUnavailable(false); setPictureFilled(false); return; }
+    void loadHls().catch(() => undefined);
     const bottom = bottomRef.current;
     if (!bottom) return;
     const measure = () => overlayRef.current?.style.setProperty("--player-bottom-height", `${bottom.getBoundingClientRect().height}px`);
@@ -545,11 +549,25 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const attach = (url: string, mode: PlaybackMode, autoplay = true, playlist = false) => {
     const video = videoRef.current; if (!video) return;
     detach();
+    const seq = ++attachSeqRef.current;
     // Direct play normally means handing the element the address and letting the
     // browser get on with it. A playlist is the exception: only Safari reads one
     // natively, so it falls through to hls.js the same way a converted stream
     // does — and costs the server nothing, unlike converting it would.
     if (mode === "direct" && !playlist) { video.src = url; if (autoplay) void video.play().catch(() => undefined); return; }
+    const Hls = hlsIfLoaded();
+    if (!Hls) {
+      void loadHls().then(
+        () => { if (seq === attachSeqRef.current && !abandonedRef.current) attach(url, mode, autoplay, playlist); },
+        (error: unknown) => {
+          if (seq !== attachSeqRef.current || abandonedRef.current) return;
+          report("ERROR", "hls.js could not be loaded", { ...context(), reason: error instanceof Error ? error.message : String(error) });
+          if (video.canPlayType("application/vnd.apple.mpegurl")) { video.src = url; if (autoplay) void video.play().catch(() => undefined); }
+          else abandon(t("player.playbackFailed", { details: "hls.js", type: "load" }));
+        },
+      );
+      return;
+    }
     if (Hls.isSupported()) {
       // A longer buffer on both sides means the browser handles an ordinary few-second
       // skip itself, immediately, instead of restarting FFmpeg on the server.
