@@ -209,3 +209,21 @@ test("only a release-group folder is packaging, never a title or a season", () =
   assert.equal(isPackagingFolderName("2012"), false);
   assert.equal(isPackagingFolderName("S01"), false);
 });
+
+test("a title that holds a year keeps it, and the release year is the last one", () => {
+  const result = parseMediaName("Blade.Runner.2049.2017.2160p.UHD");
+  assert.equal(result.title, "Blade Runner 2049");
+  assert.equal(result.year, 2017);
+  assert.equal(parseMediaName("2001.A.Space.Odyssey.1968.1080p").title, "2001 A Space Odyssey");
+  assert.equal(parseMediaName("2001.A.Space.Odyssey.1968.1080p").year, 1968);
+  assert.equal(parseMediaName("The.Matrix.1999.1080p").year, 1999, "a single year is still the year");
+});
+
+test("a file holding several episodes is read as its first one", () => {
+  for (const name of ["The.Office.US.S02E01E02", "The.Office.US.S02E01-E02", "The Office US S02E01-02"]) {
+    const result = parseMediaName(name);
+    assert.equal(result.title, "The Office US", name);
+    assert.equal(result.season, 2, name);
+    assert.equal(result.episode, 1, name);
+  }
+});
