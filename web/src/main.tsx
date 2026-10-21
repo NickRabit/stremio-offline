@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import "./style.css";
 import { classifyClientError, report } from "./diagnostics";
+import { i18nReady } from "./i18n";
 
 // An interface error would otherwise land in the browser console, which nobody opens on a TV.
 window.addEventListener("error", (event) => {
@@ -17,4 +18,4 @@ window.addEventListener("unhandledrejection", (event) => {
   if (level) report(level, `Unhandled rejection: ${message}`, { stack });
 });
 
-createRoot(document.getElementById("root")!).render(<StrictMode><App /></StrictMode>);
+void i18nReady.then(() => createRoot(document.getElementById("root")!).render(<StrictMode><App /></StrictMode>));
