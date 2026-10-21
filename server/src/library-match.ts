@@ -1378,6 +1378,32 @@ export function unitFor(relative: string, units: TitleUnit[]): TitleUnit | undef
   return covering.sort((a, b) => b.key.length - a.key.length)[0];
 }
 
+/** The units at or under a folder, in the list's order. A browse page asks this once per
+ *  folder row, so a list asked twice gets an index from each folder to the units below it. */
+function unitsWithin(units: TitleUnit[], folderKey: string): TitleUnit[] {
+  const known = folderIndexes.get(units);
+  if (known === undefined) { folderIndexes.set(units, 1); return units; }
+  const index = typeof known === "number" ? buildFolderIndex(units) : known;
+  return index.get(folderKey) ?? [];
+}
+
+const folderIndexes = new WeakMap<TitleUnit[], Map<string, TitleUnit[]> | number>();
+
+function buildFolderIndex(units: TitleUnit[]): Map<string, TitleUnit[]> {
+  const index = new Map<string, TitleUnit[]>();
+  for (const unit of units) {
+    // The unit's own key, then every folder above it: each one holds the unit.
+    for (let end = unit.key.length; end > 0; end = lastSeparator(unit.key, end)) {
+      const folder = unit.key.slice(0, end);
+      const list = index.get(folder);
+      if (list) list.push(unit);
+      else index.set(folder, [unit]);
+    }
+  }
+  folderIndexes.set(units, index);
+  return index;
+}
+
 type UnitIndex = (relative: string) => TitleUnit | undefined;
 const unitIndexes = new WeakMap<TitleUnit[], UnitIndex | number>();
 
@@ -1448,7 +1474,7 @@ export function folderMosaicUnits(
 ): TitleUnit[] {
   const seen = new Set<string>();
   const out: TitleUnit[] = [];
-  for (const unit of units) {
+  for (const unit of unitsWithin(units, folderKey)) {
     if (unit.kind !== "movie" || !isPathWithin(unit.key, folderKey)) continue;
     if (mosaicSkipped(unit.key, records)) continue;
     const record = knownTitleForUnit(unit, records);

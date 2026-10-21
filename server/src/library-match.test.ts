@@ -1575,3 +1575,21 @@ test("unitFor answers the same from its index as from a pass over every unit", (
     for (const relative of paths) assert.equal(unitFor(relative, units), linear(relative, units), `${relative} (round ${round})`);
   }
 });
+
+test("a folder's mosaic units are the same from the folder index as from a pass over every unit", () => {
+  const unit = (key: string, kind = "movie") => ({ key, kind, sampleFiles: [key] } as unknown as Parameters<typeof folderMosaicUnits>[0][number]);
+  const units = [
+    unit("Films/A.mkv"), unit("Films/Sub/B.mkv"), unit("Films/Sub/C (2001)"), unit("Films/Show", "series"),
+    unit("Filmsy/D.mkv"), unit("Films/E.mkv"), unit("Films/F.mkv"), unit("Films/G.mkv"), unit("Other/H.mkv"),
+  ];
+  const fresh = () => [...units];
+  for (const folder of ["Films", "Films/Sub", "Filmsy", "Other", "Nowhere", "Films/A.mkv"]) {
+    const once = folderMosaicUnits(fresh(), folder, {}, {}, 5).map((item) => item.key);
+    // The same list asked again answers from its index.
+    const list = fresh();
+    folderMosaicUnits(list, folder, {}, {}, 5);
+    for (let round = 0; round < 2; round += 1) {
+      assert.deepEqual(folderMosaicUnits(list, folder, {}, {}, 5).map((item) => item.key), once, `${folder} (round ${round})`);
+    }
+  }
+});
