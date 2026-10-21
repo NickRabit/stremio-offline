@@ -1406,6 +1406,7 @@ export const cs: Catalog = {
   "err.recheckNeedsLibrary": "Kontrola automatických přiřazení potřebuje jednu knihovnu.",
   "err.invalidRequest": "Požadavku nešlo rozumět.",
   "err.pathMissing": "Soubor ani složka neexistuje.",
+  "err.folderNoAccess": "Server nemá oprávnění tu složku otevřít. Zkontrolujte její oprávnění pro účet, pod kterým server běží.",
   "err.pathBusy": "S položkou právě pracuje jiná operace knihovny.",
   "err.libraryNotFound": "Knihovna nebyla nalezena.",
   "err.unknownUser": "Takový účet neexistuje.",

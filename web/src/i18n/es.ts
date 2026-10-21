@@ -1355,6 +1355,7 @@ export const es: Catalog = {
   "err.recheckNeedsLibrary": "Volver a comprobar las coincidencias automáticas necesita una biblioteca.",
   "err.invalidRequest": "La petición no fue entendida.",
   "err.pathMissing": "El archivo o carpeta no existe.",
+  "err.folderNoAccess": "El servidor no tiene permiso para abrir esa carpeta. Revisa sus permisos para la cuenta con la que se ejecuta el servidor.",
   "err.pathBusy": "El elemento está ocupado con otra operación de biblioteca.",
   "err.libraryNotFound": "La biblioteca no fue encontrada.",
   "err.unknownUser": "Esa cuenta no existe.",

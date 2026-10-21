@@ -1355,6 +1355,7 @@ export const fr: Catalog = {
   "err.recheckNeedsLibrary": "La revérification des correspondances automatiques nécessite une bibliothèque.",
   "err.invalidRequest": "La demande n'a pas été comprise.",
   "err.pathMissing": "Le fichier ou le dossier n'existe pas.",
+  "err.folderNoAccess": "Le serveur n'a pas le droit d'ouvrir ce dossier. Vérifiez ses autorisations pour le compte sous lequel le serveur s'exécute.",
   "err.pathBusy": "L'élément est occupé par une autre opération de bibliothèque.",
   "err.libraryNotFound": "La bibliothèque n'a pas été trouvée.",
   "err.unknownUser": "Ce compte n'existe pas.",

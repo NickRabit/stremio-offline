@@ -1,10 +1,11 @@
 import type express from "express";
 import path from "node:path";
 import { constants } from "node:fs";
-import { access, mkdir, readdir, realpath, rm, stat } from "node:fs/promises";
+import { access, mkdir, realpath, rm } from "node:fs/promises";
 import { artworks } from "../artwork-cache.js";
 import { mayDownloadToLibrary } from "../downloads.js";
 import { AppError } from "../errors.js";
+import { existingFolder, folderEntries } from "../folder-access.js";
 import { activeDeparted, automaticMetadataEnabled, carveOuts, DEPARTED_MAX, departedIdIn, isInside, rootForms, libraryPath, newLibraryId, parseLibraryPath, posixBase, sameFile, toPosix, visibleLibraries, type LibraryRecord, type RootGrant } from "../libraries.js";
 import { asLibraryType, checkLibraryRemoval, checkLibraryRoot, checkRerootItems, checkRerootPaths, libraryFlag, libraryRootTaken, withLibraryRootLock } from "../library-admin.js";
 import { grantingRoot, insideGrant } from "../library-grants.js";
@@ -155,8 +156,8 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     const inside = await grantingRoot(grants, requested);
     if (!inside) throw new AppError("That folder is outside every granted root.", "err.libraryRootNotGranted", 403);
     const dir = path.resolve(requested);
-    if (!(await stat(dir).catch(() => undefined))?.isDirectory()) throw new AppError("The folder does not exist.", "err.pathMissing");
-    const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+    await existingFolder(dir);
+    const entries = await folderEntries(dir);
     const rows = [];
     for (const entry of entries) {
       if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
@@ -182,7 +183,7 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     if (!raw) throw new AppError("Missing folder.", "err.missingFolder");
     if (!path.isAbsolute(raw)) throw new AppError("The path has to be absolute.", "err.libraryRootAbsolute");
     const root = path.resolve(raw);
-    if (!(await stat(root).catch(() => undefined))?.isDirectory()) throw new AppError("The folder does not exist.", "err.pathMissing");
+    await existingFolder(root);
     // A grant is recorded, never inferred: the request names a folder that is already there.
     // One a grant already covers gets no second, nested grant: revoking that one later would
     // switch off the libraries under it while the outer grant still reaches them.
@@ -241,7 +242,7 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
     if (!await insideGrant(libraryGrants(), root)) {
       throw new AppError("That folder is outside every granted root.", "err.libraryRootNotGranted", 403);
     }
-    if (!(await stat(root).catch(() => undefined))?.isDirectory()) throw new AppError("The folder does not exist.", "err.pathMissing");
+    await existingFolder(root);
     const budget: WalkBudget = { files: PREVIEW_MAX_FILES, until: Date.now() + PREVIEW_DEADLINE_MS };
     const files = await listVideos(root, "", 0, undefined, budget);
     const type = asLibraryType(req.body?.type) ?? "mixed";

@@ -9,6 +9,7 @@ import { FileSnapCache, fileEtag } from "../byte-cache.js";
 import type { ArtShape } from "../artwork.js";
 import { folderMosaicUnits, mosaicIdentities, mosaicSkipped, pendingSuggestionKeys, unitFor, type GalleryEntry, type LibraryMetaRecord, type LibrarySuggestion, type TitleUnit } from "../library-match.js";
 import { AppError } from "../errors.js";
+import { statUnlessMissing } from "../folder-access.js";
 import { assertStillAdmin } from "../roles.js";
 import { libraryFor, libraryPath, libraryVisible, parseLibraryPath, posixBase, posixDir, posixJoin, resolveLibraryPath, sameFile, visibleLibraries, type LibraryRecord, type Viewer } from "../libraries.js";
 import { composeMosaic, MOSAIC_CACHE_CONTROL, MOSAIC_IMMUTABLE_CACHE_CONTROL, MosaicCache, mosaicShape } from "../mosaic.js";
@@ -258,7 +259,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     const parent = String(req.body?.path ?? "").trim();
     const resolved = await resolveLibraryPath(store.libraries(), parent);
     if (!resolved) throw new AppError("Invalid path.", "err.invalidPath");
-    const info = await stat(resolved.absolute).catch(() => undefined);
+    const info = await statUnlessMissing(resolved.absolute);
     if (!info?.isDirectory()) throw new AppError("The destination folder does not exist.", "err.targetMissing");
     const name = assertUsableName(String(req.body?.name ?? ""));
     const relative = posixJoin(resolved.relative, name);
@@ -277,7 +278,7 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     const resolved = relative ? await resolveLibraryPath(store.libraries(), relative) : undefined;
     if (!resolved || !resolved.relative) throw new AppError("Invalid path.", "err.invalidPath");
     if (await libraryPathBusy([relative])) throw new AppError("The item is busy with another library operation.", "err.pathBusy", 409);
-    const info = await stat(resolved.absolute).catch(() => undefined);
+    const info = await statUnlessMissing(resolved.absolute);
     if (!info) throw new AppError("The file or folder does not exist.", "err.pathMissing");
     // The fold comes from the volume the folder sits on: the carve-outs are compared as
     // spellings inside this library's tree, so this library's probe decides.
