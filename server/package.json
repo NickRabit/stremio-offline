@@ -1,7 +1,7 @@
 {
   "name": "@stremio-offline/server",
   "private": true,
-  "version": "0.5.131",
+  "version": "0.5.132",
   "license": "MIT",
   "type": "module",
   "scripts": {
