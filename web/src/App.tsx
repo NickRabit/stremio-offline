@@ -1594,7 +1594,9 @@ export function App() {
   useEffect(() => {
     if (!ready || view !== "library") return;
     let cancelled = false;
-    const tick = async () => {
+    // A repeat in a hidden tab is skipped, like the downloads poll; the first read never is.
+    const tick = async (repeat = false) => {
+      if (repeat && document.hidden) return;
       try {
         const state = await api.libraryScan();
         if (cancelled) return;
@@ -1606,7 +1608,7 @@ export function App() {
     };
     void tick();
     if (!scanning) return () => { cancelled = true; };
-    const timer = window.setInterval(() => void tick(), 2000);
+    const timer = window.setInterval(() => void tick(true), 2000);
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [ready, view, scanning]);
   const operationsActive = libraryOps.some((job) => job.status === "running" || job.status === "paused");
@@ -1615,7 +1617,8 @@ export function App() {
     // ordinary account is a refusal every few seconds for a panel that never shows.
     if (!ready || view !== "library" || session?.role !== "admin") return;
     let cancelled = false;
-    const tick = async () => {
+    const tick = async (repeat = false) => {
+      if (repeat && document.hidden) return;
       try {
         const jobs = await api.libraryOps();
         if (cancelled) return;
@@ -1633,7 +1636,7 @@ export function App() {
     void tick();
     // A job this tab did not queue still has to appear, so the idle wait is short enough to
     // notice one -- and slow enough not to ask the server every second for nothing.
-    const timer = window.setInterval(() => void tick(), operationsActive ? 1000 : 5000);
+    const timer = window.setInterval(() => void tick(true), operationsActive ? 1000 : 5000);
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [ready, view, session?.role, operationsActive, browsePath]);
   useEffect(() => { if (ready && view === "library") void loadSuggestionCount(); }, [ready, view, session?.role, scanEpoch]);
