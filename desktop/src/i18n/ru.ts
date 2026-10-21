@@ -33,6 +33,7 @@ export const ru: typeof en & Record<string, string> = {
   "reset.detailServers": "Сохраненные серверы и входы на них также забываются.",
   "reset.detailKeepsFilms": "Загруженные фильмы остаются там, где они есть.",
   "reset.trashFailed": "Не удалось переместить данные в Корзину, и ничего не было удалено: {reason}",
+  "reset.leftovers": "Сброс выполнен, но часть прежних входов или настроек удалить не удалось: {reason}",
   "tray.open": "Открыть Stremio Offline",
   "tray.settings": "Настройки…",
   "tray.quit": "Выйти",

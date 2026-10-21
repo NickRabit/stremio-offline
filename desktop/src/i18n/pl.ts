@@ -33,6 +33,7 @@ export const pl: typeof en & Record<string, string> = {
   "reset.detailServers": "Zapisane serwery i logowania do nich również zostają zapomniane.",
   "reset.detailKeepsFilms": "Pobrane filmy pozostają tam, gdzie są.",
   "reset.trashFailed": "Nie udało się przenieść danych do Kosza i nic nie zostało usunięte: {reason}",
+  "reset.leftovers": "Resetowanie zakończone, ale części dawnych logowań lub ustawień nie udało się usunąć: {reason}",
   "tray.open": "Otwórz Stremio Offline",
   "tray.settings": "Ustawienia…",
   "tray.quit": "Zamknij",

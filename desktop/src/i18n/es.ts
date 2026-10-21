@@ -33,6 +33,7 @@ export const es: typeof en & Record<string, string> = {
   "reset.detailServers": "Los servidores guardados y los inicios de sesión en ellos también se olvidan.",
   "reset.detailKeepsFilms": "Las películas descargadas permanecen donde están.",
   "reset.trashFailed": "No se pudieron mover los datos a la Papelera y no se eliminó nada: {reason}",
+  "reset.leftovers": "El restablecimiento se completó, pero no se pudo eliminar parte de los inicios de sesión o ajustes anteriores: {reason}",
   "tray.open": "Abrir Stremio Offline",
   "tray.settings": "Configuración…",
   "tray.quit": "Salir",

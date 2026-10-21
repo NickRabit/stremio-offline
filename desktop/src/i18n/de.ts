@@ -33,6 +33,7 @@ export const de: typeof en & Record<string, string> = {
   "reset.detailServers": "Die gespeicherten Server und die Anmeldungen bei ihnen werden ebenfalls vergessen.",
   "reset.detailKeepsFilms": "Heruntergeladene Filme bleiben dort, wo sie sind.",
   "reset.trashFailed": "Die Daten konnten nicht in den Papierkorb verschoben werden und nichts wurde gelöscht: {reason}",
+  "reset.leftovers": "Das Zurücksetzen ist abgeschlossen, aber ein Teil der alten Anmeldungen oder Einstellungen konnte nicht entfernt werden: {reason}",
   "tray.open": "Stremio Offline öffnen",
   "tray.settings": "Einstellungen…",
   "tray.quit": "Beenden",
