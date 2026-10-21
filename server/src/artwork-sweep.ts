@@ -77,10 +77,18 @@ export function createArtworkSweep(deps: SweepDeps): () => Promise<{ removed: nu
         const rememberArt = (key: string) => { for (const name of deps.artNames(key)) valid.add(name); };
         // The ancestor rows matter: a folder is keyed `dir:<path>` for paths that appear in
         // no file and in no binding, because a folder is not a file.
+        // Every folder above a file is remembered with all of its own ancestors, so the deepest
+        // one already seen means the rest are too: a season's episodes name each folder once.
+        const folders = new Set<string>();
         const remember = (key: string) => {
           rememberArt(key);
           const parts = key.split("/");
-          for (let depth = 1; depth < parts.length; depth += 1) rememberArt(`dir:${parts.slice(0, depth).join("/")}`);
+          for (let depth = parts.length - 1; depth >= 1; depth -= 1) {
+            const folder = `dir:${parts.slice(0, depth).join("/")}`;
+            if (folders.has(folder)) break;
+            folders.add(folder);
+            rememberArt(folder);
+          }
         };
         for (const entry of buildLibrary(walk.files)) {
           rememberArt(libraryPath(library.id, entry.key));

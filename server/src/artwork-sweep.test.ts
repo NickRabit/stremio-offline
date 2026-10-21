@@ -55,11 +55,12 @@ const makeSweep = (options: {
   now?: () => number;
   signal?: AbortSignal;
   remove?: (file: string) => Promise<void>;
+  onArtNames?: (key: string) => void;
 }) => createArtworkSweep({
   libraries: async () => options.libraries,
   scan: options.scan,
   queuedKeys: options.queuedKeys ?? (() => []),
-  artNames: (key) => namesFor(options.cache, key),
+  artNames: (key) => { options.onArtNames?.(key); return namesFor(options.cache, key); },
   directoryOf: (libraryId) => options.cache.dirOf(libraryId),
   remove: options.remove ?? (async (file) => { await rm(file, { force: true }); await options.cache.removed(file); }),
   busy: options.busy ?? (() => false),
@@ -262,5 +263,32 @@ test("the directory of a library that is not configured is never read", async ()
     await sweep();
     await sweep();
     assert.ok(await exists(departed), "a departed but not forgotten library keeps its directory");
+  });
+});
+
+test("a folder shared by many files is named once, and its files' thumbnails still stay", async () => {
+  await withSweep(async ({ cache, dataDir }) => {
+    const root = path.join(dataDir, "media");
+    const season = path.join(root, "Shows", "Lost", "Season 1");
+    await mkdir(season, { recursive: true });
+    const kept: string[] = [];
+    for (let episode = 1; episode <= 5; episode += 1) {
+      await writeFile(path.join(season, `Lost.S01E0${episode}.mkv`), "");
+      kept.push(await put(cache, `lib_aaaaaaaa/Shows/Lost/Season 1/Lost.S01E0${episode}.mkv`));
+    }
+    kept.push(await put(cache, "dir:lib_aaaaaaaa/Shows/Lost/Season 1"), await put(cache, "dir:lib_aaaaaaaa/Shows"));
+    const gone = await put(cache, "dir:lib_aaaaaaaa/Shows/Gone");
+    const asked = new Map<string, number>();
+    const sweep = makeSweep({
+      cache, libraries: [library(root)],
+      scan: (swept) => listVideosChecked(swept.root, swept.exclude),
+      onArtNames: (key) => asked.set(key, (asked.get(key) ?? 0) + 1),
+    });
+    assert.deepEqual(await sweep(), { removed: 1 });
+    for (const file of kept) assert.ok(await exists(file), `${file} is kept`);
+    assert.equal(await exists(gone), false);
+    for (const folder of ["dir:lib_aaaaaaaa", "dir:lib_aaaaaaaa/Shows", "dir:lib_aaaaaaaa/Shows/Lost", "dir:lib_aaaaaaaa/Shows/Lost/Season 1"]) {
+      assert.equal(asked.get(folder), 1, `${folder} is named once`);
+    }
   });
 });
