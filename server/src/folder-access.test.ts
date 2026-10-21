@@ -17,7 +17,7 @@ test("a refused folder is a permission error, not a missing folder", async () =>
 });
 
 test("a folder that is not there is still missing", async () => {
-  for (const code of ["ENOENT", "ENOTDIR"]) {
+  for (const code of ["ENOENT", "ENOTDIR", "ELOOP", "ENAMETOOLONG"]) {
     assert.equal(await statUnlessMissing("/media", failing(code)), undefined, code);
     await assert.rejects(existingFolder("/media", failing(code)), (error) => messageKeyOf(error) === "err.pathMissing", code);
     assert.deepEqual(await folderEntries("/media", failing(code)), [], code);

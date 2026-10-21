@@ -3,7 +3,8 @@ import { readdir, stat } from "node:fs/promises";
 import { AppError } from "./errors.js";
 
 const DENIED = new Set(["EACCES", "EPERM"]);
-const ABSENT = new Set(["ENOENT", "ENOTDIR"]);
+// A symlink loop or an overlong name resolves to nothing either; both were "missing" before.
+const ABSENT = new Set(["ENOENT", "ENOTDIR", "ELOOP", "ENAMETOOLONG"]);
 
 const codeOf = (error: unknown) => (error as NodeJS.ErrnoException | undefined)?.code;
 
