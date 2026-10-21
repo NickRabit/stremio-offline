@@ -1355,6 +1355,7 @@ export const sk: Catalog = {
   "err.recheckNeedsLibrary": "Opätovná kontrola automatických zhôd vyžaduje jednu knižnicu.",
   "err.invalidRequest": "Žiadosť nebola pochopená.",
   "err.pathMissing": "Súbor alebo priečinok neexistuje.",
+  "err.folderNoAccess": "Server nemá oprávnenie otvoriť tento priečinok. Skontrolujte jeho oprávnenia pre účet, pod ktorým server beží.",
   "err.pathBusy": "Položka je zaneprázdnená inou operáciou knižnice.",
   "err.libraryNotFound": "Knižnica sa nenašla.",
   "err.unknownUser": "Tento účet neexistuje.",

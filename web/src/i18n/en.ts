@@ -1412,6 +1412,7 @@ export const en = {
   "err.recheckNeedsLibrary": "Rechecking automatic matches needs one library.",
   "err.invalidRequest": "The request was not understood.",
   "err.pathMissing": "The file or folder does not exist.",
+  "err.folderNoAccess": "The server is not allowed to open that folder. Check its permissions for the account the server runs as.",
   "err.pathBusy": "The item is busy with another library operation.",
   "err.libraryNotFound": "The library was not found.",
   "err.unknownUser": "That account does not exist.",

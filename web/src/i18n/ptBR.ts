@@ -1355,6 +1355,7 @@ export const ptBR: Catalog = {
   "err.recheckNeedsLibrary": "A nova verificação de correspondências automáticas precisa de uma biblioteca.",
   "err.invalidRequest": "O pedido não foi compreendido.",
   "err.pathMissing": "O arquivo ou pasta não existe.",
+  "err.folderNoAccess": "O servidor não tem permissão para abrir essa pasta. Verifique as permissões dela para a conta em que o servidor é executado.",
   "err.pathBusy": "O item está ocupado com outra operação de biblioteca.",
   "err.libraryNotFound": "A biblioteca não foi encontrada.",
   "err.unknownUser": "Essa conta não existe.",

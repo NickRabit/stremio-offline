@@ -1355,6 +1355,7 @@ export const it: Catalog = {
   "err.recheckNeedsLibrary": "Il ricontrollo delle corrispondenze automatiche richiede una libreria.",
   "err.invalidRequest": "La richiesta non è stata compresa.",
   "err.pathMissing": "Il file o la cartella non esiste.",
+  "err.folderNoAccess": "Il server non ha il permesso di aprire quella cartella. Controlla i suoi permessi per l'account con cui gira il server.",
   "err.pathBusy": "L'elemento è occupato con un'altra operazione di libreria.",
   "err.libraryNotFound": "La libreria non è stata trovata.",
   "err.unknownUser": "Quel conto non esiste.",

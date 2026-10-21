@@ -1355,6 +1355,7 @@ export const de: Catalog = {
   "err.recheckNeedsLibrary": "Für die erneute Überprüfung automatischer Übereinstimmungen ist eine Bibliothek erforderlich.",
   "err.invalidRequest": "Die Anfrage wurde nicht verstanden.",
   "err.pathMissing": "Die Datei oder der Ordner existiert nicht.",
+  "err.folderNoAccess": "Der Server darf diesen Ordner nicht öffnen. Prüfen Sie seine Berechtigungen für das Konto, unter dem der Server läuft.",
   "err.pathBusy": "Das Element ist mit einem anderen Bibliotheksvorgang beschäftigt.",
   "err.libraryNotFound": "Die Bibliothek wurde nicht gefunden.",
   "err.unknownUser": "Dieses Konto existiert nicht.",

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -677,4 +677,24 @@ test("POST /api/libraries/grants adds no nested grant for a folder a grant alrea
   const inside = await api(harness.base, "/api/libraries/grants", { method: "POST", body: { path: elsewhere + "/" } });
   assert.equal(inside.status, 201);
   assert.equal(harness.userGrants().length, 1, "asking again for the same folder adds nothing");
+});
+
+test("a granted folder the server may not open is refused, not missing and not empty", { skip: process.platform === "win32" || process.getuid?.() === 0 ? "needs POSIX permissions and a non-root user" : false }, async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-grant-"));
+  const locked = path.join(root, "Locked");
+  await mkdir(path.join(locked, "Films"), { recursive: true });
+  await chmod(locked, 0o000);
+  t.after(async () => { await chmod(locked, 0o700); await rm(root, { recursive: true, force: true }); });
+  const harness = await mount([], [{ path: root, source: "env", grantedAt: "2024-01-01T00:00:00.000Z" }]);
+  t.after(harness.close);
+
+  const listing = await api(harness.base, `/api/libraries/browse?path=${encodeURIComponent(locked)}`);
+  assert.equal(listing.status, 400, "an unreadable folder was listed as an empty one");
+  assert.equal((await failure(listing)).messageKey, "err.folderNoAccess");
+
+  const inside = await api(harness.base, `/api/libraries/browse?path=${encodeURIComponent(path.join(locked, "Films"))}`);
+  assert.equal((await failure(inside)).messageKey, "err.folderNoAccess", "a folder behind a refused one was called missing");
+
+  const granted = await api(harness.base, "/api/libraries/grants", { method: "POST", body: { path: path.join(locked, "Films") } });
+  assert.equal((await failure(granted)).messageKey, "err.folderNoAccess");
 });

@@ -1,5 +1,7 @@
-import { mkdir, readdir, realpath, stat } from "node:fs/promises";
+import { mkdir, readdir, realpath } from "node:fs/promises";
 import path from "node:path";
+import { AppError } from "./errors.js";
+import { statUnlessMissing } from "./folder-access.js";
 import { grantingRoot } from "./library-grants.js";
 import { isInside, realTarget, sameFile, type LibraryRecord, type LibraryType, type RootGrant } from "./libraries.js";
 import type { FinishOutcome, LibraryOp, OpsState } from "./library-ops.js";
@@ -79,7 +81,12 @@ export async function checkLibraryRoot(opts: {
   if (!await grantingRoot(opts.grants, root)) {
     return refuse("That folder is outside every granted root.", "err.libraryRootNotGranted", 403);
   }
-  const info = await stat(root).catch(() => undefined);
+  let info;
+  try { info = await statUnlessMissing(root); }
+  catch (error) {
+    if (error instanceof AppError) return refuse(error.message, error.messageKey);
+    throw error;
+  }
   if (info && !info.isDirectory()) return refuse("The root has to be a folder.", "err.libraryRootNotFolder");
   if (!info) {
     if (!opts.create) return refuse("The folder does not exist.", "err.pathMissing");

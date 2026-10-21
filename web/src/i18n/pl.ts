@@ -1355,6 +1355,7 @@ export const pl: Catalog = {
   "err.recheckNeedsLibrary": "Ponowne sprawdzanie automatycznych dopasowań wymaga jednej biblioteki.",
   "err.invalidRequest": "Prośba nie została zrozumiana.",
   "err.pathMissing": "Plik lub folder nie istnieje.",
+  "err.folderNoAccess": "Serwer nie ma uprawnień do otwarcia tego folderu. Sprawdź jego uprawnienia dla konta, na którym działa serwer.",
   "err.pathBusy": "Element jest zajęty inną operacją biblioteczną.",
   "err.libraryNotFound": "Nie znaleziono biblioteki.",
   "err.unknownUser": "To konto nie istnieje.",
