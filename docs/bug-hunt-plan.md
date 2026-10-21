@@ -176,6 +176,10 @@ candidates, episodes, migrate, actions, admin, grants, runtime), `naming.ts`,
       against a table of real-world names (years, multi-episode, anime
       absolute numbering, editions, foreign titles). Look for quadratic
       matching over candidates.
+      Progress: #498 fixes year and multi-episode parsing. The validated
+      [parser decision](shared-release-parser-spec.md) defers sharing to preserve
+      the tuned indexer and scopes isolated Offline fixes; see the
+      [measurement](shared-release-parser-validation.md).
 - [ ] **BH-4.4 Destructive actions.** Rename, move, copy, delete, bulk and
       cross-library: explicit preconditions, no swallowed errors (roadmap
       P1.4).
