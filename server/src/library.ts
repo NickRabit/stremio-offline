@@ -49,18 +49,23 @@ const ROMAN_SEASONS: Array<[string, number]> = [
 const ROMAN_SEASON = ROMAN_SEASONS.map(([word]) => word).join("|");
 const ROMAN_SEASON_VALUE = new Map(ROMAN_SEASONS);
 
+const SEASON_PREFIXED = new RegExp(`^(?:${SEASON_PREFIX})[\\s._-]*(\\d{1,3})(?:[\\s._-]*(?:${SEASON_SUFFIX}))?${SEASON_NOTE}$`, "iu");
+const SEASON_SUFFIXED = new RegExp(`^(\\d{1,3})[\\s._-]*(?:${SEASON_SUFFIX})${SEASON_NOTE}$`, "iu");
+const SEASON_ROMAN_PREFIXED = new RegExp(`^(?:${SEASON_WORD_PREFIX})[\\s._-]*(${ROMAN_SEASON})(?:[\\s._-]*(?:${SEASON_SUFFIX}))?${SEASON_NOTE}$`, "iu");
+const SEASON_ROMAN_SUFFIXED = new RegExp(`^(${ROMAN_SEASON})[\\s._-]*(?:${SEASON_SUFFIX})${SEASON_NOTE}$`, "iu");
+
 /** A season written with a season word or an S-form: "01 serie", "Season 2", "S03",
  *  "II. série", "Season IV". A bare number is not one of these, so the show folder
  *  "Hawaii Five - 0" is not read as season zero; a Roman numeral only counts beside a
  *  season word, because a bare one is a film's title ("Rocky IV"). */
 function seasonWordForm(form: string): number | null {
-  const prefixed = new RegExp(`^(?:${SEASON_PREFIX})[\\s._-]*(\\d{1,3})(?:[\\s._-]*(?:${SEASON_SUFFIX}))?${SEASON_NOTE}$`, "iu").exec(form);
+  const prefixed = SEASON_PREFIXED.exec(form);
   if (prefixed) return Number(prefixed[1]);
-  const suffixed = new RegExp(`^(\\d{1,3})[\\s._-]*(?:${SEASON_SUFFIX})${SEASON_NOTE}$`, "iu").exec(form);
+  const suffixed = SEASON_SUFFIXED.exec(form);
   if (suffixed) return Number(suffixed[1]);
-  const romanPrefixed = new RegExp(`^(?:${SEASON_WORD_PREFIX})[\\s._-]*(${ROMAN_SEASON})(?:[\\s._-]*(?:${SEASON_SUFFIX}))?${SEASON_NOTE}$`, "iu").exec(form);
+  const romanPrefixed = SEASON_ROMAN_PREFIXED.exec(form);
   if (romanPrefixed) return ROMAN_SEASON_VALUE.get(romanPrefixed[1]!.toLowerCase()) ?? null;
-  const romanSuffixed = new RegExp(`^(${ROMAN_SEASON})[\\s._-]*(?:${SEASON_SUFFIX})${SEASON_NOTE}$`, "iu").exec(form);
+  const romanSuffixed = SEASON_ROMAN_SUFFIXED.exec(form);
   if (romanSuffixed) return ROMAN_SEASON_VALUE.get(romanSuffixed[1]!.toLowerCase()) ?? null;
   const legacy = /(?:^|\D)s(\d{1,3})(?:\D|$)/i.exec(form);
   return legacy ? Number(legacy[1]) : null;

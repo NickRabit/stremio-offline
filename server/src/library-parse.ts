@@ -104,6 +104,8 @@ function dropTrailingEditions(value: string): string {
 
 const phrasePattern = (phrase: string) =>
   new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/ /g, "[\\s._]+"), "gi");
+// Built once: every name a scan parses runs through all of them.
+const PHRASE_PATTERNS = PHRASES.map(phrasePattern);
 
 /** Folder name or root filename; a trailing video file uses its parent folder.
  *  The library id of a qualified key is not a folder anybody named, so a file
@@ -195,7 +197,7 @@ function takeYear(source: string): { year?: number; rest: string } {
 
 function stripPhrases(source: string): string {
   let next = source;
-  for (const phrase of PHRASES) next = next.replace(phrasePattern(phrase), " ");
+  for (const pattern of PHRASE_PATTERNS) next = next.replace(pattern, " ");
   return next;
 }
 
