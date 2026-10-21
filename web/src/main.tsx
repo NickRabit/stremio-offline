@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import "./style.css";
 import { classifyClientError, report } from "./diagnostics";
+import { loadHls } from "./hls-loader";
 import { i18nReady } from "./i18n";
 
 // An interface error would otherwise land in the browser console, which nobody opens on a TV.
@@ -19,3 +20,9 @@ window.addEventListener("unhandledrejection", (event) => {
 });
 
 void i18nReady.then(() => createRoot(document.getElementById("root")!).render(<StrictMode><App /></StrictMode>));
+
+// hls.js stays off the first load but is fetched as soon as the page is idle, so starting or
+// seeking a stream never has to wait for it.
+const prefetchHls = () => void loadHls().catch(() => undefined);
+if ("requestIdleCallback" in window) window.requestIdleCallback(prefetchHls, { timeout: 3000 });
+else setTimeout(prefetchHls, 1500);
