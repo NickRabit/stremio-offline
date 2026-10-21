@@ -155,7 +155,7 @@ export class LibraryMetaStore {
 
   /** A qualified-path facade over the files: a read or a write lands on the file that
    *  owns the key, and every write names the library it touched. */
-  private qualifiedView<T>(pick: (file: LibraryMetaFile) => Record<string, T>, touched: Set<string>): Record<string, T> {
+  private qualifiedView<T>(pick: (file: LibraryMetaFile) => Record<string, T>, touched: Set<string>, patch: (key: string, value: T, deleted?: boolean) => void): Record<string, T> {
     const at = (key: unknown, create: boolean) => {
       if (typeof key !== "string") return undefined;
       const parsed = parseLibraryPath(key);
@@ -167,8 +167,16 @@ export class LibraryMetaStore {
     };
     return new Proxy({} as Record<string, T>, {
       get: (_target, key) => { const found = at(key, false); return found?.records[found.relative]; },
-      set: (_target, key, value) => { const found = at(key, true); if (found) found.records[found.relative] = value as T; return true; },
-      deleteProperty: (_target, key) => { const found = at(key, false); if (found) { delete found.records[found.relative]; touched.add(found.libraryId); } return true; },
+      set: (_target, key, value) => {
+        const found = at(key, true);
+        if (found) { found.records[found.relative] = value as T; patch(`${found.libraryId}/${found.relative}`, value as T); }
+        return true;
+      },
+      deleteProperty: (_target, key) => {
+        const found = at(key, false);
+        if (found) { delete found.records[found.relative]; touched.add(found.libraryId); patch(`${found.libraryId}/${found.relative}`, undefined as T, true); }
+        return true;
+      },
       has: (_target, key) => Boolean(at(key, false)),
       ownKeys: () => [...this.files].flatMap(([libraryId, file]) => Object.keys(pick(file)).map((key) => libraryPath(libraryId, key))),
       getOwnPropertyDescriptor: (_target, key) => {
@@ -182,8 +190,20 @@ export class LibraryMetaStore {
    *  whole map would rewrite every library on every accepted match. */
   async updateQualified(mutator: QualifiedMutator) {
     const touched = new Set<string>();
-    mutator(this.qualifiedView((file) => file.meta, touched), this.qualifiedView((file) => file.suggestions, touched), this.episodeMap);
-    for (const libraryId of touched) { this.invalidate(libraryId); this.save(libraryId); }
+    // The memoised view is patched key by key: rebuilding a library's slice of it per write
+    // made a scan, which writes once per accepted unit, quadratic in the library's size.
+    const views = this.views;
+    const patch = <T>(rows: Record<string, T> | undefined) => (key: string, value: T, deleted = false) => {
+      if (!rows) return;
+      if (deleted) delete rows[key];
+      else rows[key] = value;
+    };
+    mutator(
+      this.qualifiedView((file) => file.meta, touched, patch(views?.meta)),
+      this.qualifiedView((file) => file.suggestions, touched, patch(views?.suggestions)),
+      this.episodeMap,
+    );
+    for (const libraryId of touched) this.save(libraryId);
     this.saveEpisodes();
   }
 
