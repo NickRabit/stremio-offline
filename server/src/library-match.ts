@@ -808,10 +808,25 @@ export function isAutomaticRecord(record: LibraryMetaRecord): boolean {
   return record.source === "scan" || (record.source == null && record.locked === false);
 }
 
-/** Whether a path sits strictly below a series unit: the show folder owns it, so its own
- *  binding or proposal is a relic of the folder that used to be a unit. */
-function insideSeriesUnit(key: string, units: TitleUnit[]): boolean {
-  return units.some((unit) => unit.kind === "series" && unit.key !== key && isPathWithin(key, unit.key));
+/** What the end of a scan asks of every saved row: whether a unit covers the path, and whether
+ *  the path sits strictly below a series unit -- the show folder owns it, so its own binding or
+ *  proposal is a relic of the folder that used to be a unit. Both walk up the path's own
+ *  folders, so a library's rows are not each compared with every unit. */
+function unitCover(units: TitleUnit[]) {
+  const keys = new Set<string>();
+  const series = new Set<string>();
+  for (const unit of units) {
+    keys.add(unit.key);
+    if (unit.kind === "series") series.add(unit.key);
+  }
+  const anyAbove = (key: string, within: Set<string>, start: number) => {
+    for (let end = start; end > 0; end = lastSeparator(key, end)) if (within.has(key.slice(0, end))) return true;
+    return false;
+  };
+  return {
+    covered: (key: string) => anyAbove(key, keys, key.length),
+    insideSeries: (key: string) => anyAbove(key, series, lastSeparator(key, key.length)),
+  };
 }
 
 /** The saved proposals a finished scan may drop: their library is here now, and either no
@@ -823,10 +838,11 @@ export function staleSuggestionKeys(
   units: TitleUnit[],
   reachableLibraryIds: ReadonlySet<string>,
 ): string[] {
+  const cover = unitCover(units);
   return Object.keys(suggestions).filter((key) => {
     const libraryId = parseLibraryPath(key)?.libraryId;
     if (!libraryId || !reachableLibraryIds.has(libraryId)) return false;
-    return insideSeriesUnit(key, units) || !units.some((unit) => isPathWithin(key, unit.key));
+    return cover.insideSeries(key) || !cover.covered(key);
   });
 }
 
@@ -838,10 +854,11 @@ export function staleScanRecordKeys(
   units: TitleUnit[],
   reachableLibraryIds: ReadonlySet<string>,
 ): string[] {
+  const cover = unitCover(units);
   return Object.entries(meta).filter(([key, record]) => {
     const libraryId = parseLibraryPath(key)?.libraryId;
     if (!libraryId || !reachableLibraryIds.has(libraryId)) return false;
-    return isAutomaticRecord(record) && insideSeriesUnit(key, units);
+    return isAutomaticRecord(record) && cover.insideSeries(key);
   }).map(([key]) => key);
 }
 
