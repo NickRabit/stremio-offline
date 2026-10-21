@@ -21,6 +21,7 @@ const scanTimeoutMs = 15 * 60_000;
 const searchTimeoutMs = 2 * 60_000;
 const pollDelayMs = 100;
 const searchNoProgressPollLimit = 30;
+const serverOutputLines = 20;
 
 class BenchmarkError extends Error {}
 
@@ -147,8 +148,13 @@ function startServer({ dataDir, downloadsDir, port }) {
       SEARCH_EVERYWHERE_ENABLED: "1",
     },
   });
-  child.stdout.resume();
-  child.stderr.resume();
+  child.outputTail = [];
+  const keep = (chunk) => {
+    child.outputTail.push(...String(chunk).split("\n").filter(Boolean));
+    child.outputTail.splice(0, Math.max(0, child.outputTail.length - serverOutputLines));
+  };
+  child.stdout.on("data", keep);
+  child.stderr.on("data", keep);
   return child;
 }
 
@@ -293,6 +299,9 @@ async function measureRoute(baseUrl, cookie, route, samples, valid) {
   const statuses = {};
   let validResponses = 0;
   let lastBody;
+  // The first request pays for lazy initialisation; with few samples it would be the p95.
+  const warmUp = await fetchJson(`${baseUrl}${route}`, { headers: { cookie } });
+  if (warmUp.response.status !== 200) fail(`GET ${route} answered ${warmUp.response.status}`);
   for (let sample = 0; sample < samples; sample += 1) {
     const result = await fetchJson(`${baseUrl}${route}`, { headers: { cookie } });
     const key = String(result.response.status);
@@ -448,6 +457,8 @@ async function revision() {
   return stdout.trim();
 }
 
+let serverChild;
+
 async function benchmark(options) {
   let child;
   let tempRoot;
@@ -458,6 +469,7 @@ async function benchmark(options) {
     const seeded = await seedFixture(tempRoot, options.files);
     const port = await reservePort();
     child = startServer({ dataDir: seeded.dataDir, downloadsDir: seeded.downloadsDir, port });
+    serverChild = child;
     const baseUrl = `http://127.0.0.1:${port}`;
 
     const coldStartMs = await waitForStartup(baseUrl, child);
@@ -530,7 +542,7 @@ async function benchmark(options) {
       qualifications: [
         "Cold start excludes dependency installation and build time.",
         "RSS is resident set size sampled after readiness and after the first scan, not a peak or steady-state value.",
-        "Home and browse use serial authenticated requests after both scans. Browse measures only the root page; the server page limit is 60.",
+        "Home and browse use serial authenticated requests after both scans and one discarded warm-up request each. Browse measures only the root page; the server page limit is 60.",
         "Percentiles use nearest-rank: for sorted N samples, rank ceil(p/100 * N), with p50 and p95 reported.",
         "The fixture copies a small synthetic MP4. It does not model NAS disk I/O, media inspection, real metadata providers, or production libraries.",
       ],
@@ -558,6 +570,7 @@ async function main() {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Benchmark failed: ${message}`);
+    if (serverChild?.outputTail?.length) console.error(`Last server output:\n${serverChild.outputTail.join("\n")}`);
     process.exitCode = 1;
   }
 }

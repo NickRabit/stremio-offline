@@ -79,7 +79,8 @@ A failed or timed-out scan is an error, not a latency. The second scan is
 started the same way without changing files and measures the warm rescan path.
 
 Home and browse make the requested number of serial authenticated requests
-after both scans. Browse uses the empty path for the library root. The server
+after both scans. Each route first gets one discarded warm-up request: with a
+small sample count the cold first request would otherwise be the p95. Browse uses the empty path for the library root. The server
 returns at most 60 root rows per response; the report records both the page
 size and the unpaginated total so a five-thousand-file run can be compared
 correctly. Percentiles use nearest rank: after sorting N samples, rank
@@ -120,7 +121,9 @@ rather than a zero latency.
 Both runs used `acdc44e8a6661d616a45ed4e317d3b70976e40b8` on macOS arm64
 (Darwin 25.6.0, Node v22.23.3). The fixture file is 3,697 bytes. The 20-file
 smoke ran at 2026-10-21T12:19:47Z; the 5,000-file run at
-2026-10-21T12:20:27Z. RSS used the host `ps` fallback.
+2026-10-21T12:20:27Z. RSS used the host `ps` fallback. These runs predate the
+warm-up request, so their Home and browse p95 include one cold request; re-run
+on the same Mac before comparing a later p95 with them.
 
 | Measurement | 20 files, 3 samples | 5,000 files, 30 samples |
 | --- | ---: | ---: |
@@ -148,6 +151,9 @@ wall time including fixture generation, setup, measurement and cleanup.
 These are Mac measurements of a synthetic local tree. In particular, the scan
 does not measure provider matching or a NAS-mounted filesystem. Compare future
 runs on the same platform and fixture before attributing a change to code.
+
+When the benchmark fails, stderr also carries the last 20 lines the server
+printed, so a crash or refused start can be diagnosed without re-running.
 
 ## Qualification
 
