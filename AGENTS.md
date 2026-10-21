@@ -87,6 +87,7 @@ endpoint `/api/status`, which must return `{"status":"ok",…}`.
 | --- | --- |
 | Test layers and what belongs where | [docs/testing.md](docs/testing.md) |
 | Backlog and product direction | [docs/roadmap.md](docs/roadmap.md) |
+| Bug hunt and optimisation checklist (AI team) | [docs/bug-hunt-plan.md](docs/bug-hunt-plan.md) |
 | Environment variables | [docs/configuration.md](docs/configuration.md) |
 | Accounts, roles and per-user access | [docs/users.md](docs/users.md) |
 | Dialogs, form controls, safe areas, folding toolbars | [docs/ui-conventions.md](docs/ui-conventions.md) |
