@@ -73,6 +73,24 @@ The observed skips were:
   in `scripts/media-client-verification.test.mjs`: TAP emitted
   `# SKIP no build in this checkout; the runner exercises this path explicitly`.
 
+A second run of `npm test` on the same commit in a Linux container (x64,
+Node 22, as root) reproduced the same totals per suite (2,835 / 1,167 / 301 /
+30) with no failures, but a different set of server skips: 8 instead of 6.
+Six of them are permission tests that skip under root because root ignores
+the permission bits:
+
+- `a directory that refuses the probe file reads as read-only`
+- `a copy that fails part way leaves the destination absent and the source alone`
+- `a move that fails after it took the name leaves the source and no placeholder`
+- `the source of a finished move is reported, not thrown, when it will not go`
+- `a directory that cannot be read leaves the walk incomplete but the rest listed`
+- `a folder that could not be read is never taken for empty`
+- plus the platform skips (`a Mac never probes NVENC`, the NTFS mtime test).
+
+These are the fault-injection tests BH-2.2, BH-4.1 and BH-4.4 depend on.
+Gates for those parts must run as a non-root user, and a part's PR states
+which user ran them.
+
 No flaky unit tests were established by the aggregate and timed suite
 invocations; those successful runs are not treated as flakiness evidence.
 
