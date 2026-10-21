@@ -33,6 +33,7 @@ export const ptBR: typeof en & Record<string, string> = {
   "reset.detailServers": "Os servidores salvos e os logins neles também são esquecidos.",
   "reset.detailKeepsFilms": "Os filmes baixados permanecem onde estão.",
   "reset.trashFailed": "Não foi possível mover os dados para a Lixeira e nada foi excluído: {reason}",
+  "reset.leftovers": "A redefinição foi concluída, mas parte dos logins ou das configurações antigas não pôde ser removida: {reason}",
   "tray.open": "Abrir Stremio Offline",
   "tray.settings": "Configurações…",
   "tray.quit": "Sair",

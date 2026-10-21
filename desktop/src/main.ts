@@ -23,6 +23,7 @@ import { catalogue } from "./i18n.js";
 import { layout, type PageMode } from "./layout.js";
 import { autostartExecutable, autostartFile, launchedHidden, launchExecutable, loginItemQuery, loginItemStatus, loginItemUpdate, readAutostart, removeAutostart, writeAutostart, type LoginItemReadings, loginItemOn } from "./login-item.js";
 import { bundledMediaTools, DOWNLOADS_DIRECTORY, INSTANCE_DIRECTORY, LOCAL_PARTITION, LocalBackend, LocalPortBusyError, PORT_FILE, type LocalBackendConnection } from "./local-backend.js";
+import { forgetLocalState, removeIfPresent } from "./local-reset.js";
 import { defaultLocalSettings, parseLocalSettings, readLocalSettings, SETTINGS_FILE, writeLocalSettings, type LocalSettings } from "./local-settings.js";
 import { buildMenuTemplate } from "./menu.js";
 import { externalBrowserUrl, httpAllowedHost, isAccessSignInUrl, parseServerOrigin, partitionForOrigin, type ServerOrigin } from "./origin.js";
@@ -1233,8 +1234,8 @@ const resetLocal = async (
   });
   if (answer.response !== 0) return { ok: false, cancelled: true, downloadsKept: true };
   const previous = shellState.connection?.target ?? null;
-  const result = await queue.run(async (): Promise<{ ok: boolean; touched: boolean; downloadsKept: boolean; trashFailure: string | null }> => {
-    if (effectiveDownloadDir() !== shownDir) return { ok: false, touched: false, downloadsKept: true, trashFailure: null };
+  const result = await queue.run(async (): Promise<{ ok: boolean; touched: boolean; downloadsKept: boolean; trashFailure: string | null; leftovers: string[] }> => {
+    if (effectiveDownloadDir() !== shownDir) return { ok: false, touched: false, downloadsKept: true, trashFailure: null, leftovers: [] };
     // A fresh ticket, so a connect still probing cannot land on the reset state afterwards.
     requests.next();
     stopRepoll();
@@ -1248,7 +1249,7 @@ const resetLocal = async (
       try {
         await electronShell.trashItem(instance);
       } catch (error) {
-        return { ok: false, touched: true, downloadsKept: true, trashFailure: error instanceof Error ? error.message : String(error) };
+        return { ok: false, touched: true, downloadsKept: true, trashFailure: error instanceof Error ? error.message : String(error), leftovers: [] };
       }
     }
     let downloadsKept = !trashDownloads;
@@ -1260,14 +1261,14 @@ const resetLocal = async (
       }
     }
     // Sign-ins go only once the data has: a reset that stopped above leaves them as they were.
-    await session.fromPartition(LOCAL_PARTITION).clearStorageData().catch(() => {});
-    for (const file of [SETTINGS_FILE, STARTUP_FILE, PORT_FILE, OWNERSHIP_FILE]) await unlink(path.join(userDataDir, file)).catch(() => {});
-    if (options.forgetServers) {
-      await writeProfiles(userDataDir, { profiles: [], selectedProfileId: null }).catch(() => {});
-      for (const profile of profileStore.profiles) {
-        await session.fromPartition(partitionForOrigin(profile.origin)).clearStorageData().catch(() => {});
-      }
-    }
+    const leftovers = await forgetLocalState([
+      () => session.fromPartition(LOCAL_PARTITION).clearStorageData(),
+      ...[SETTINGS_FILE, STARTUP_FILE, PORT_FILE, OWNERSHIP_FILE].map((file) => () => removeIfPresent(path.join(userDataDir, file))),
+      ...(options.forgetServers ? [
+        () => writeProfiles(userDataDir, { profiles: [], selectedProfileId: null }),
+        ...profileStore.profiles.map((profile) => () => session.fromPartition(partitionForOrigin(profile.origin)).clearStorageData()),
+      ] : []),
+    ]);
     localSettings = defaultLocalSettings();
     ownership = null;
     preparedDirs.clear();
@@ -1279,7 +1280,7 @@ const resetLocal = async (
     shellState.screen = { kind: "welcome" };
     pushState();
     settingsWindow.close();
-    return { ok: true, touched: true, downloadsKept, trashFailure: null };
+    return { ok: true, touched: true, downloadsKept, trashFailure: null, leftovers };
   });
   // A reset that stopped half way brings back what the window showed rather than leave it blank.
   if (!result.ok && result.touched && previous) void connectTarget(previous, { launch: false });
@@ -1288,6 +1289,13 @@ const resetLocal = async (
     void showMessageBox(senderWindow(event), {
       type: "warning",
       message: strings["reset.trashFailed"].replace("{reason}", result.trashFailure),
+    }).catch(() => {});
+  }
+  // The data is in the Trash by now, so the reset stands; what stayed behind is said, not hidden.
+  if (result.ok && result.leftovers.length) {
+    void showMessageBox(senderWindow(event), {
+      type: "warning",
+      message: strings["reset.leftovers"].replace("{reason}", result.leftovers[0]),
     }).catch(() => {});
   }
   if (result.ok && options.deleteDownloads && result.downloadsKept) {
