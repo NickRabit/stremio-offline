@@ -132,9 +132,10 @@ export const posixJoin = (...parts: string[]) => parts.filter(Boolean).join("/")
 /** "lib_ab12cd34/Show/01 serie/01.mkv" -> the id and "Show/01 serie/01.mkv". */
 export function parseLibraryPath(value: string): { libraryId: string; relative: string } | undefined {
   const trimmed = wireKey(value);
-  const parts = trimmed.split("/");
-  if (!LIBRARY_ID.test(parts[0] ?? "")) return undefined;
-  return { libraryId: parts[0]!, relative: parts.slice(1).join("/") };
+  const slash = trimmed.indexOf("/");
+  const libraryId = slash < 0 ? trimmed : trimmed.slice(0, slash);
+  if (!LIBRARY_ID.test(libraryId)) return undefined;
+  return { libraryId, relative: slash < 0 ? "" : trimmed.slice(slash + 1) };
 }
 
 export function libraryPath(libraryId: string, relative: string): string {
@@ -288,6 +289,8 @@ function normalize(value: string): string {
 /** The same on the wire, where the separator is always `/`: a backslash is an ordinary
  *  character, so a key spelled with one does not name a library. */
 function wireKey(value: string): string {
+  // Most keys are already clean; the thumbnail sweep asks for thousands of them.
+  if (!value.includes("//") && !value.startsWith("/") && !value.endsWith("/")) return value;
   return value.replace(/\/{2,}/g, "/").replace(/^\/+|\/+$/g, "");
 }
 
