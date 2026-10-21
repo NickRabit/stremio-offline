@@ -27,6 +27,8 @@ test("Safari landscape keeps document scrolling available and restores its posit
 
 test("Safari landscape sidebar accepts touch navigation from every page", async ({ page }) => {
   await page.goto("/");
+  // isVisible below does not wait, so the shell has to be drawn before the first look at More.
+  await expect(page.locator("aside.sidebar nav")).toBeVisible();
   for (const name of ["Nastavení", "Knihovna", "Stahování", "Doplňky", "Statistiky", "Katalog"]) {
     const more = page.locator(".sidebar nav .nav-more");
     const behindMore = (await more.isVisible()) && !["Knihovna", "Stahování", "Katalog"].includes(name);
