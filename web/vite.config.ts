@@ -6,5 +6,5 @@ export default defineConfig({
   build: { outDir: "dist", emptyOutDir: true },
   server: { proxy: { "/api": "http://localhost:8080" } },
   define: { "process.env": "{}", global: "globalThis" },
-  test: { environment: "jsdom", include: ["src/**/*.test.ts", "src/**/*.test.tsx"], restoreMocks: true },
+  test: { environment: "jsdom", include: ["src/**/*.test.ts", "src/**/*.test.tsx"], restoreMocks: true, setupFiles: ["src/test-setup.ts"] },
 });

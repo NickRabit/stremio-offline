@@ -2,15 +2,6 @@ import { useSyncExternalStore } from "react";
 import { detectLocale } from "./detect";
 import { pluralForm, type PluralForms } from "./plural";
 import { en } from "./en";
-import { cs } from "./cs";
-import { sk } from "./sk";
-import { de } from "./de";
-import { es } from "./es";
-import { fr } from "./fr";
-import { it } from "./it";
-import { pl } from "./pl";
-import { ptBR } from "./ptBR";
-import { ru } from "./ru";
 
 export const LOCALES = ["en", "cs", "sk", "de", "es", "fr", "it", "pl", "pt-BR", "ru"] as const;
 export type Locale = (typeof LOCALES)[number];
@@ -25,7 +16,25 @@ export const LOCALE_NAMES: Record<Locale, string> = {
   fr: "Français", it: "Italiano", pl: "Polski", "pt-BR": "Português (Brasil)", ru: "Русский",
 };
 
-const CATALOGS: Record<Locale, Catalog> = { en, cs, sk, de, es, fr, it, pl, "pt-BR": ptBR, ru };
+// English ships with the page and stands in for any missing key. Every other language is its own
+// chunk, fetched when it is chosen: nine catalogues nobody reads were nearly half the first load.
+const LOADERS: Record<Exclude<Locale, "en">, () => Promise<Catalog>> = {
+  cs: () => import("./cs").then((module) => module.cs),
+  sk: () => import("./sk").then((module) => module.sk),
+  de: () => import("./de").then((module) => module.de),
+  es: () => import("./es").then((module) => module.es),
+  fr: () => import("./fr").then((module) => module.fr),
+  it: () => import("./it").then((module) => module.it),
+  pl: () => import("./pl").then((module) => module.pl),
+  "pt-BR": () => import("./ptBR").then((module) => module.ptBR),
+  ru: () => import("./ru").then((module) => module.ru),
+};
+const catalogs: Partial<Record<Locale, Catalog>> = { en };
+
+export async function loadCatalog(next: Locale): Promise<void> {
+  if (catalogs[next]) return;
+  catalogs[next] = await LOADERS[next as Exclude<Locale, "en">]();
+}
 const CACHE_KEY = "ui-language";
 const isLocale = (value: unknown): value is Locale => LOCALES.includes(value as Locale);
 
@@ -43,17 +52,34 @@ const desktopLocale = (): Locale | undefined => {
   return isLocale(value) ? value : undefined;
 };
 
-let current: Locale = cached() ?? desktopLocale() ?? detectLocale(LOCALES, "en");
+// A language only becomes current once its catalogue is here, so nothing is ever drawn half in
+// English. The last one asked for wins when two are still loading.
+let current: Locale = "en";
+let requested: Locale = cached() ?? desktopLocale() ?? detectLocale(LOCALES, "en");
 const listeners = new Set<() => void>();
+
+const apply = (next: Locale) => {
+  current = next;
+  document.documentElement.lang = localeTag(next);
+  for (const listener of listeners) listener();
+};
 
 export const locale = () => current;
 export function setLocale(next: Locale) {
-  if (!isLocale(next) || next === current) return;
-  current = next;
+  if (!isLocale(next)) return;
+  requested = next;
+  if (next === current) return;
   try { localStorage.setItem(CACHE_KEY, next); } catch { /* storage may be unavailable */ }
-  document.documentElement.lang = localeTag(next);
-  for (const listener of listeners) listener();
+  if (catalogs[next]) { apply(next); return; }
+  // A catalogue that cannot be fetched leaves the interface in the language it already speaks.
+  void loadCatalog(next).then(() => { if (requested === next) apply(next); }, () => undefined);
 }
+
+/** Settles once the first language is ready to draw; the page renders after it, not before. */
+export const i18nReady: Promise<void> = (() => {
+  const first = requested;
+  return loadCatalog(first).then(() => { if (requested === first && first !== current) apply(first); }, () => undefined);
+})();
 
 const fill = (text: string, vars?: Vars) =>
   vars ? text.replace(/\{(\w+)\}/g, (match, name) => name in vars ? String(vars[name]) : match) : text;
@@ -61,7 +87,7 @@ const fill = (text: string, vars?: Vars) =>
 /** Missing keys render as the key itself: visible in a screenshot, harmless in
  *  production, and the typed catalogue makes them a build error anyway. */
 export function t(key: Key, vars?: Vars): string {
-  const entry = CATALOGS[current][key] ?? en[key];
+  const entry = (catalogs[current] ?? en)[key] ?? en[key];
   if (entry === undefined) return key;
   const text = typeof entry === "string" ? entry : pluralForm(current, Number(vars?.count ?? 0), entry);
   return fill(text, vars);

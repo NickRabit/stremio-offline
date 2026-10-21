@@ -15,7 +15,10 @@ const firstLocale = async (desktop: string, browser: string, stored: Record<stri
   vi.stubGlobal("localStorage", memoryStorage(stored));
   vi.stubGlobal("stremioDesktop", { version: 1, locale: desktop, pickFolder: async () => null });
   vi.stubGlobal("navigator", { ...navigator, language: browser, languages: [browser] });
-  return (await import("./index")).locale();
+  const i18n = await import("./index");
+  // The page draws once the first language is here; that is the language it opens in.
+  await i18n.i18nReady;
+  return i18n.locale();
 };
 
 describe("the first language of a page the desktop app serves", () => {
