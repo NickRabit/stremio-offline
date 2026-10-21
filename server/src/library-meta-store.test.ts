@@ -343,3 +343,29 @@ test("holds is false for a path nothing remembered, an unknown library and a bar
     assert.equal(store.holds("Show/01.mkv"), false, "an unparsable key holds nothing");
   });
 });
+
+test("a qualified write keeps an already built view the same as a fresh one", async () => {
+  await withStore(async (store, dataDir) => {
+    await seed(dataDir, "lib_aaaaaaaa", { "One.mkv": record("tt1"), "Gone.mkv": record("tt2") }, { "Proposal": { type: "movie", id: "tt3", name: "Proposal", score: 60 } });
+    await seed(dataDir, "lib_bbbbbbbb", { "Two.mkv": record("tt4") });
+    await store.load();
+    // The view is built first, so every write below has to land in it rather than in a rebuild.
+    assert.equal(store.qualifiedMeta()["lib_aaaaaaaa/One.mkv"]!.id, "tt1");
+    await store.updateQualified((meta, suggestions) => {
+      meta["lib_aaaaaaaa/One.mkv"] = { ...meta["lib_aaaaaaaa/One.mkv"]!, name: "Renamed" };
+      delete meta["lib_aaaaaaaa/Gone.mkv"];
+      meta["lib_cccccccc/New.mkv"] = record("tt9");
+      delete suggestions["lib_aaaaaaaa/Proposal"];
+      suggestions["lib_bbbbbbbb/Other"] = { type: "series", id: "tt7", name: "Other", score: 70 };
+    });
+    const patched = { meta: { ...store.qualifiedMeta() }, suggestions: { ...store.qualifiedSuggestions() } };
+    assert.equal(patched.meta["lib_aaaaaaaa/One.mkv"]!.name, "Renamed");
+    assert.equal("lib_aaaaaaaa/Gone.mkv" in patched.meta, false, "a deleted row leaves the view");
+    assert.equal(patched.meta["lib_cccccccc/New.mkv"]!.id, "tt9", "a row in a new library joins the view");
+    assert.equal("lib_aaaaaaaa/Proposal" in patched.suggestions, false);
+    await store.flush();
+    const fresh = new LibraryMetaStore(dataDir);
+    await fresh.load();
+    assert.deepEqual(patched, { meta: { ...fresh.qualifiedMeta() }, suggestions: { ...fresh.qualifiedSuggestions() } });
+  });
+});

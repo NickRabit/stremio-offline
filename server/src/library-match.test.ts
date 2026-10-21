@@ -9,7 +9,7 @@ import {
 import { fileMayUseFolderArtwork } from "./artwork.js";
 import { parseMediaPath, partSignature, titleVariants } from "./library-parse.js";
 import { posixBase } from "./libraries.js";
-import type { FoundFile } from "./library.js";
+import { isPathWithin, type FoundFile } from "./library.js";
 import type { MetaItem } from "./types.js";
 
 const file = (relative: string): FoundFile => ({ relative, size: 1, modified: "2026-01-01T00:00:00.000Z" });
@@ -1548,4 +1548,48 @@ test("clearing a flag preserves a legacy unmatch sentinel but removes a legacy e
   const included = withSkipFlag(exclusion, "Heat/Heat.mkv", "skipLookup", false);
   assert.equal(included["Heat/Heat.mkv"], undefined, "a flag-only record is removed when its last flag is cleared");
   assert.equal(knownTitleForUnit(unit, included, "Heat/Heat.mkv")?.id, "tt-heat", "the cleared exclusion still inherits the folder");
+});
+
+test("unitFor answers the same from its index as from a pass over every unit", () => {
+  const unit = (key: string, sampleFiles: string[] = []) => ({ key, kind: "movie", sampleFiles } as unknown as Parameters<typeof unitFor>[1][number]);
+  const linear = (relative: string, units: Parameters<typeof unitFor>[1]) => {
+    const sampled = units.find((item) => item.key === relative || item.sampleFiles.includes(relative));
+    if (sampled) return sampled;
+    return units.filter((item) => isPathWithin(relative, item.key)).sort((a, b) => b.key.length - a.key.length)[0];
+  };
+  const units = [
+    unit("Films"),
+    unit("Films/Alien (1979)", ["Films/Alien (1979)/Alien.mkv", "Films/Alien (1979)/Extras/Trailer.mkv"]),
+    unit("Films/Alien (1979)/Extras"),
+    unit("Films/Alien (1979)", ["Films/Alien (1979)/Duplicate.mkv"]),
+    unit("Loose.mkv", ["Loose.mkv"]),
+    unit("Shows/Dark", ["Shows/Dark/S01/Dark.S01E01.mkv"]),
+  ];
+  const paths = [
+    "Films", "Films/Alien (1979)", "Films/Alien (1979)/Alien.mkv", "Films/Alien (1979)/Extras/Trailer.mkv",
+    "Films/Alien (1979)/Extras/Other.mkv", "Films/Alien (1979)/Duplicate.mkv", "Films/Other.mkv", "Loose.mkv",
+    "Shows/Dark/S01/Dark.S01E02.mkv", "Shows/Darker/x.mkv", "Elsewhere/x.mkv", "Film", "",
+  ];
+  // Twice over: the first call on an array scans it, later ones answer from the index.
+  for (let round = 0; round < 3; round += 1) {
+    for (const relative of paths) assert.equal(unitFor(relative, units), linear(relative, units), `${relative} (round ${round})`);
+  }
+});
+
+test("a folder's mosaic units are the same from the folder index as from a pass over every unit", () => {
+  const unit = (key: string, kind = "movie") => ({ key, kind, sampleFiles: [key] } as unknown as Parameters<typeof folderMosaicUnits>[0][number]);
+  const units = [
+    unit("Films/A.mkv"), unit("Films/Sub/B.mkv"), unit("Films/Sub/C (2001)"), unit("Films/Show", "series"),
+    unit("Filmsy/D.mkv"), unit("Films/E.mkv"), unit("Films/F.mkv"), unit("Films/G.mkv"), unit("Other/H.mkv"),
+  ];
+  const fresh = () => [...units];
+  for (const folder of ["Films", "Films/Sub", "Filmsy", "Other", "Nowhere", "Films/A.mkv"]) {
+    const once = folderMosaicUnits(fresh(), folder, {}, {}, 5).map((item) => item.key);
+    // The same list asked again answers from its index.
+    const list = fresh();
+    folderMosaicUnits(list, folder, {}, {}, 5);
+    for (let round = 0; round < 2; round += 1) {
+      assert.deepEqual(folderMosaicUnits(list, folder, {}, {}, 5).map((item) => item.key), once, `${folder} (round ${round})`);
+    }
+  }
 });

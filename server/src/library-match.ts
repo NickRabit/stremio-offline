@@ -1,3 +1,4 @@
+import path from "node:path";
 import { episodeTag, isPathWithin, isVideo, numberedEpisode, parseSeason, remapPath, type FoundFile } from "./library.js";
 import { LIBRARY_ID, parseLibraryPath, posixBase, type LibraryType } from "./libraries.js";
 import { isPackagingFolderName, parseMediaName, parseMediaPath, partSignature, stripPartMarkers, titleSides, titleVariants, type ParsedMedia } from "./library-parse.js";
@@ -1365,11 +1366,73 @@ export function titleUnits(files: FoundFile[], type: LibraryType = "mixed"): Tit
  *  covers it. Every sample file of a unit answers with that unit, so an alternate encode or
  *  a CD half is identified with the film it belongs to rather than on its own path. */
 export function unitFor(relative: string, units: TitleUnit[]): TitleUnit | undefined {
+  // A cached unit list is asked once per browse row and once per library entry, which made a
+  // pass over every unit per question quadratic. The second question on the same list builds
+  // an index; a list asked only once is still just scanned.
+  const known = unitIndexes.get(units);
+  if (known === undefined) unitIndexes.set(units, 1);
+  else return (typeof known === "number" ? buildUnitIndex(units) : known)(relative);
   const sampled = units.find((unit) => unit.key === relative || unit.sampleFiles.includes(relative));
   if (sampled) return sampled;
   const covering = units.filter((unit) => isPathWithin(relative, unit.key));
   return covering.sort((a, b) => b.key.length - a.key.length)[0];
 }
+
+/** The units at or under a folder, in the list's order. A browse page asks this once per
+ *  folder row, so a list asked twice gets an index from each folder to the units below it. */
+function unitsWithin(units: TitleUnit[], folderKey: string): TitleUnit[] {
+  const known = folderIndexes.get(units);
+  if (known === undefined) { folderIndexes.set(units, 1); return units; }
+  const index = typeof known === "number" ? buildFolderIndex(units) : known;
+  return index.get(folderKey) ?? [];
+}
+
+const folderIndexes = new WeakMap<TitleUnit[], Map<string, TitleUnit[]> | number>();
+
+function buildFolderIndex(units: TitleUnit[]): Map<string, TitleUnit[]> {
+  const index = new Map<string, TitleUnit[]>();
+  for (const unit of units) {
+    // The unit's own key, then every folder above it: each one holds the unit.
+    for (let end = unit.key.length; end > 0; end = lastSeparator(unit.key, end)) {
+      const folder = unit.key.slice(0, end);
+      const list = index.get(folder);
+      if (list) list.push(unit);
+      else index.set(folder, [unit]);
+    }
+  }
+  folderIndexes.set(units, index);
+  return index;
+}
+
+type UnitIndex = (relative: string) => TitleUnit | undefined;
+const unitIndexes = new WeakMap<TitleUnit[], UnitIndex | number>();
+
+/** The same answers as the scan in `unitFor`: the first unit a path is the key or a sample file
+ *  of, else the nearest covering key -- the longest one, the first unit of that key. */
+function buildUnitIndex(units: TitleUnit[]): UnitIndex {
+  const sampled = new Map<string, TitleUnit>();
+  const byKey = new Map<string, TitleUnit>();
+  for (const unit of units) {
+    if (!sampled.has(unit.key)) sampled.set(unit.key, unit);
+    for (const file of unit.sampleFiles) if (!sampled.has(file)) sampled.set(file, unit);
+    if (!byKey.has(unit.key)) byKey.set(unit.key, unit);
+  }
+  const index: UnitIndex = (relative) => {
+    const hit = sampled.get(relative);
+    if (hit) return hit;
+    for (let end = relative.length; end > 0; end = lastSeparator(relative, end)) {
+      const covering = byKey.get(relative.slice(0, end));
+      if (covering) return covering;
+    }
+    return undefined;
+  };
+  unitIndexes.set(units, index);
+  return index;
+}
+
+/** Where the folder above `relative.slice(0, end)` ends, or -1 at the top. */
+const lastSeparator = (relative: string, end: number) =>
+  Math.max(relative.lastIndexOf("/", end - 1), path.sep === "/" ? -1 : relative.lastIndexOf(path.sep, end - 1));
 
 export function matchKeyFor(relative: string, files: FoundFile[], units = titleUnits(files)): string {
   // Nothing covers it: the file stands for itself.
@@ -1411,7 +1474,7 @@ export function folderMosaicUnits(
 ): TitleUnit[] {
   const seen = new Set<string>();
   const out: TitleUnit[] = [];
-  for (const unit of units) {
+  for (const unit of unitsWithin(units, folderKey)) {
     if (unit.kind !== "movie" || !isPathWithin(unit.key, folderKey)) continue;
     if (mosaicSkipped(unit.key, records)) continue;
     const record = knownTitleForUnit(unit, records);

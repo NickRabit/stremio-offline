@@ -19,6 +19,8 @@ import { isPathWithin, type FoundFile } from "./library.js";
 import type { MediaInfo } from "./naming.js";
 import type { AddonRecord, MetaItem } from "./types.js";
 
+const PROGRESS_SAVE_MS = 2_000;
+
 export type ScanStatus = "idle" | "running" | "paused" | "completed" | "failed";
 export type ScanPauseReason = "playback" | "download" | "breaker" | "operation";
 
@@ -195,6 +197,8 @@ export class LibraryScan {
   private readonly wakeMs: number;
   private readonly metaTtlMs: number;
   private saveChain: Promise<void> = Promise.resolve();
+  private progressSavedAt = 0;
+  private progressTimer: NodeJS.Timeout | undefined;
   /** The state file holds bytes that could not be read or copied aside: the scan runs, but
    *  never writes over them. */
   private stateProtected = false;
@@ -409,7 +413,7 @@ export class LibraryScan {
           return;
         }
         this.state.current = key;
-        await this.save();
+        await this.saveProgress();
         await this.processUnit(key);
       }
     } catch (error) {
@@ -537,9 +541,28 @@ export class LibraryScan {
     const key = this.state.current;
     this.state[kind] += 1;
     this.state.done += 1;
-    this.state.remaining = this.state.remaining.filter((item) => item !== key);
+    // The loop takes the first key, so dropping it is a shift, not a pass over every key left.
+    if (this.state.remaining[0] === key) this.state.remaining.shift();
+    else this.state.remaining = this.state.remaining.filter((item) => item !== key);
     delete this.state.current;
-    return this.save();
+    return this.saveProgress();
+  }
+
+  /** Progress within a scan is written at most once per `PROGRESS_SAVE_MS`. Writing the whole
+   *  remaining list after every unit made a scan quadratic in the library's size; a crash now
+   *  loses at most that much progress, and those units are simply processed again. Status
+   *  changes still save at once, and `flush` writes what is pending before shutdown. */
+  private saveProgress() {
+    const wait = this.progressSavedAt + PROGRESS_SAVE_MS - Date.now();
+    if (wait <= 0) return this.save();
+    this.progressTimer ??= setTimeout(() => { this.progressTimer = undefined; void this.save(); }, wait);
+    this.progressTimer.unref?.();
+    return Promise.resolve();
+  }
+
+  async flush() {
+    if (this.progressTimer) await this.save();
+    return this.saveChain;
   }
 
   /** One structured line of what happened to a unit, kept bounded and counted. */
@@ -840,6 +863,8 @@ export class LibraryScan {
   }
 
   private save() {
+    if (this.progressTimer) { clearTimeout(this.progressTimer); this.progressTimer = undefined; }
+    this.progressSavedAt = Date.now();
     this.state.updatedAt = nowIso();
     if (this.stateProtected) return this.saveChain;
     const snapshot = this.snapshot();
