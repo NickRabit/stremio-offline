@@ -1593,3 +1593,28 @@ test("a folder's mosaic units are the same from the folder index as from a pass 
     }
   }
 });
+
+test("the stale rows of a finished scan are the same from the units' keys as from a pass over every unit", () => {
+  const unit = (key: string, kind: string) => ({ key, kind, sampleFiles: [] } as unknown as TitleUnit);
+  const units = [
+    unit("lib_aaaaaaaa/Shows/Dark", "series"), unit("lib_aaaaaaaa/Shows/Ted/", "series"),
+    unit("lib_aaaaaaaa/Films/Alien (1979)", "movie"), unit("lib_aaaaaaaa/Films/Loose.mkv", "movie"),
+    unit("lib_aaaaaaaa/Films", "movie"), unit("lib_bbbbbbbb/Show", "series"),
+  ];
+  const keys = [
+    "lib_aaaaaaaa/Shows/Dark", "lib_aaaaaaaa/Shows/Dark/S01", "lib_aaaaaaaa/Shows/Dark/S01/E01.mkv",
+    "lib_aaaaaaaa/Shows/Darker/E01.mkv", "lib_aaaaaaaa/Shows/Ted/", "lib_aaaaaaaa/Shows/Ted//x.mkv",
+    "lib_aaaaaaaa/Shows/Ted/01 serie", "lib_aaaaaaaa/Films/Alien (1979)/Alien.mkv", "lib_aaaaaaaa/Films/Loose.mkv",
+    "lib_aaaaaaaa/Elsewhere/x.mkv", "lib_aaaaaaaa/Shows", "lib_bbbbbbbb/Show/S01/E01.mkv", "lib_cccccccc/Show/x.mkv",
+  ];
+  const insideSeries = (key: string) => units.some((item) => item.kind === "series" && item.key !== key && isPathWithin(key, item.key));
+  const here = new Set(["lib_aaaaaaaa", "lib_bbbbbbbb"]);
+  const reachable = (key: string) => here.has(key.slice(0, 12));
+  const suggestions = Object.fromEntries(keys.map((key) => [key, {} as unknown as LibrarySuggestion]));
+  assert.deepEqual(
+    staleSuggestionKeys(suggestions, units, here),
+    keys.filter((key) => reachable(key) && (insideSeries(key) || !units.some((item) => isPathWithin(key, item.key)))),
+  );
+  const meta = Object.fromEntries(keys.map((key) => [key, { type: "movie", id: "tt1", source: "scan" } as LibraryMetaRecord]));
+  assert.deepEqual(staleScanRecordKeys(meta, units, here), keys.filter((key) => reachable(key) && insideSeries(key)));
+});
