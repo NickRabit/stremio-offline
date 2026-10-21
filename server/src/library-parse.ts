@@ -51,7 +51,8 @@ const PHRASES = [...QUALITY_PHRASES].sort((a, b) => b.length - a.length);
 const YEAR_TOKEN = /^(19|20)\d{2}$/;
 const PAREN_YEAR = /\((19|20)\d{2}\)/;
 const COUNTRY_TAG = /\s*\(([A-Z]{2})\)\s*$/;
-const TAGGED_EPISODE = /\bS(\d{1,3})E(\d{1,4})\b/i;
+// A file can hold several episodes (S02E01E02, S02E01-E02, S02E01-02); it is read as the first.
+const TAGGED_EPISODE = /\bS(\d{1,3})E(\d{1,4})(?:-E?\d{1,4}|E\d{1,4})*\b/i;
 const X_EPISODE = /\b(\d{1,2})x(\d{1,4})\b/i;
 const CHANNEL = /\b(?:[57]\.1|2\.0)\b/gi;
 const RELEASE_GROUP = /-[A-Za-z0-9]{2,15}$/;
@@ -186,11 +187,10 @@ function takeYear(source: string): { year?: number; rest: string } {
       rest: `${source.slice(0, paren.index)} ${source.slice(paren.index + paren[0].length)}`,
     };
   }
-  for (const part of source.split(/[.\s_]+/).filter(Boolean)) {
-    if (!isYearPart(part)) continue;
-    return { year: Number(part), rest: removeWholePart(source, part) };
-  }
-  return { rest: source };
+  // The release year is the last one: an earlier one belongs to the title (Blade Runner 2049).
+  const years = source.split(/[.\s_]+/).filter(isYearPart);
+  const last = years[years.length - 1];
+  return last ? { year: Number(last), rest: removeWholePart(source, last) } : { rest: source };
 }
 
 function stripPhrases(source: string): string {
