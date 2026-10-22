@@ -1,9 +1,52 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { addMagnet, advanceTorrent, DebridError, isRetryableDebridFailure, magnetFromHash, RD_API, resolveIfReady, videoFileIds, verifyRealDebridToken, type FetchLike } from "./debrid.js";
+import { addMagnet, advanceTorrent, DebridError, isRetryableDebridFailure, magnetFromHash, RD_API, RD_MAX_JSON_BYTES, resolveIfReady, videoFileIds, verifyRealDebridToken, type FetchLike } from "./debrid.js";
+import { messageKeyOf } from "./errors.js";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+
+const MiB = 1024 * 1024;
+
+function streamed(chunks: Uint8Array[], options: {
+  status?: number;
+  contentLength?: string;
+  cancelPending?: boolean;
+  onCancel?: () => void;
+} = {}) {
+  let pulled = 0;
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      const chunk = chunks[pulled];
+      if (!chunk) { controller.close(); return; }
+      pulled += 1;
+      controller.enqueue(chunk);
+    },
+    cancel() {
+      cancelled = true;
+      options.onCancel?.();
+      if (options.cancelPending) return new Promise<void>(() => undefined);
+    },
+  }, { highWaterMark: 0 });
+  const headers = options.contentLength === undefined ? undefined : { "content-length": options.contentLength };
+  return {
+    response: new Response(body, { status: options.status, headers }),
+    pulled: () => pulled,
+    cancelled: () => cancelled,
+  };
+}
+
+const failingBody = (error: unknown, status = 200) =>
+  new Response(new ReadableStream<Uint8Array>({
+    start(controller) { controller.error(error); },
+  }), { status });
+
+const oversizedFailure = (error: unknown) =>
+  error instanceof DebridError
+  && error.status === 413
+  && error.code === "response_too_large"
+  && !isRetryableDebridFailure(error);
 
 test("a premium token is accepted", async () => {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
@@ -160,10 +203,8 @@ test("a request that ran past its deadline is a retryable failure", async () => 
   assert.equal(isRetryableDebridFailure(error), true);
 });
 
-test("a response body that times out after successful headers is retryable", async () => {
-  const response = Object.assign(new Response(null), {
-    json: async () => { throw new DOMException("The operation was aborted due to timeout", "TimeoutError"); },
-  });
+test("a successful response body that times out after its headers is retryable", async () => {
+  const response = failingBody(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
   await assert.rejects(
     verifyRealDebridToken("secret-token", async () => response),
     (error: unknown) => error instanceof DebridError && error.status === 408 && isRetryableDebridFailure(error),
@@ -171,13 +212,78 @@ test("a response body that times out after successful headers is retryable", asy
 });
 
 test("a response body transport failure is retryable", async () => {
-  const response = Object.assign(new Response(null), {
-    json: async () => { throw new TypeError("terminated"); },
-  });
+  const response = failingBody(new TypeError("terminated"));
   await assert.rejects(
     addMagnet("token", magnetFromHash(HASH), async () => response),
     (error: unknown) => error instanceof DebridError && error.status === 408 && isRetryableDebridFailure(error),
   );
+});
+
+test("a declared oversized successful body is rejected before it is read", async () => {
+  const source = streamed([new Uint8Array(1)], {
+    contentLength: String(RD_MAX_JSON_BYTES + 1),
+    cancelPending: true,
+  });
+  await assert.rejects(
+    verifyRealDebridToken("token", async () => source.response),
+    oversizedFailure,
+  );
+  assert.equal(source.pulled(), 0);
+  assert.equal(source.cancelled(), true);
+});
+
+test("a declared oversized non-2xx body is rejected before it is read", async () => {
+  const source = streamed([new Uint8Array(1)], {
+    status: 503,
+    contentLength: String(RD_MAX_JSON_BYTES + 1),
+    cancelPending: true,
+  });
+  await assert.rejects(
+    addMagnet("token", magnetFromHash(HASH), async () => source.response),
+    oversizedFailure,
+  );
+  assert.equal(source.pulled(), 0);
+  assert.equal(source.cancelled(), true);
+});
+
+test("an oversized response carries its catalogue key", async () => {
+  const source = streamed([new Uint8Array(1)], { contentLength: String(RD_MAX_JSON_BYTES + 1) });
+  const error = await verifyRealDebridToken("token", async () => source.response).then(() => undefined, (failure: unknown) => failure);
+  assert.ok(oversizedFailure(error));
+  assert.equal(messageKeyOf(error), "err.debridResponseTooLarge");
+});
+
+test("a lying-low chunked successful response stops and cancels at the byte cap", async () => {
+  const chunks = Array.from({ length: 20 }, () => new Uint8Array(MiB));
+  const source = streamed(chunks, { contentLength: "1", cancelPending: true });
+  await assert.rejects(
+    verifyRealDebridToken("token", async () => source.response),
+    oversizedFailure,
+  );
+  assert.equal(source.cancelled(), true);
+  assert.ok(source.pulled() > 0 && source.pulled() < chunks.length, `the source stopped after ${source.pulled()} chunks`);
+});
+
+test("a chunked non-2xx response stops and cancels at the byte cap", async () => {
+  const chunks = Array.from({ length: 20 }, () => new Uint8Array(MiB));
+  const source = streamed(chunks, { status: 500, cancelPending: true });
+  await assert.rejects(
+    addMagnet("token", magnetFromHash(HASH), async () => source.response),
+    oversizedFailure,
+  );
+  assert.equal(source.cancelled(), true);
+  assert.ok(source.pulled() > 0 && source.pulled() < chunks.length, `the source stopped after ${source.pulled()} chunks`);
+});
+
+test("a successful JSON body at the exact byte cap is accepted", async () => {
+  const prefix = '{"username":"nick","type":"premium","padding":"';
+  const suffix = '"}';
+  const payload = new TextEncoder().encode(prefix + "x".repeat(RD_MAX_JSON_BYTES - prefix.length - suffix.length) + suffix);
+  assert.equal(payload.byteLength, RD_MAX_JSON_BYTES);
+  const response = new Response(payload, {
+    headers: { "content-length": String(RD_MAX_JSON_BYTES), "content-type": "application/json" },
+  });
+  assert.deepEqual(await verifyRealDebridToken("token", async () => response), { username: "nick", premium: true });
 });
 
 test("malformed successful response JSON stays a data error", async () => {
@@ -187,10 +293,18 @@ test("malformed successful response JSON stays a data error", async () => {
   );
 });
 
+test("malformed non-2xx JSON falls back to the response status without becoming retryable", async () => {
+  await assert.rejects(
+    addMagnet("token", magnetFromHash(HASH), async () => new Response("{", { status: 418 })),
+    (error: unknown) => error instanceof DebridError
+      && error.status === 418
+      && error.code === undefined
+      && !isRetryableDebridFailure(error),
+  );
+});
+
 test("a non-2xx response body timeout is retryable", async () => {
-  const response = Object.assign(new Response(null, { status: 503 }), {
-    json: async () => { throw new DOMException("The operation was aborted due to timeout", "TimeoutError"); },
-  });
+  const response = failingBody(new DOMException("The operation was aborted due to timeout", "TimeoutError"), 503);
   await assert.rejects(
     addMagnet("token", magnetFromHash(HASH), async () => response),
     (error: unknown) => error instanceof DebridError && error.status === 408 && isRetryableDebridFailure(error),

@@ -1478,6 +1478,7 @@ export const en = {
   "err.debridTimeout": "Real-Debrid did not finish the torrent in time.",
   "err.debridTokenMissing": "The Real-Debrid token is missing.",
   "err.debridWrongEpisode": "Real-Debrid resolved a different episode.",
+  "err.debridResponseTooLarge": "Real-Debrid returned a response that is too large.",
   "err.jobNoInfoHash": "The torrent has no infoHash.",
   "err.noFreeName": "Could not find a free file name.",
   "err.pathTooLong": "The folder path is too long for Windows. Choose a library with a shorter path, for example D:\\Films.",
