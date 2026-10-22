@@ -97,12 +97,12 @@ Files: `store.ts`, `state-file.ts`, `fs-retry.ts`, `library-meta-store.ts`,
       `stats`, `activity`, `provider-stats`, `image-stats`, `external-ids`,
       `library-seen`, `library/episodes.json`.
       Progress: #505 keeps traffic, image and provider statistics saving after a failed write; #506 serialises the image and artwork cache index writes and retries a failed one. `activity` and `follows` were already serialised; `library-meta-store` already protects an unreadable file. #512 does the same for the per-library match history and `episodes.json` (one write per file at a time, a failed write owed again, a forget that waits for a write under way), for the first-seen index and for the external id cache.
-- [ ] **BH-1.2 Shutdown completeness.** `server-shutdown.ts` flushes stores,
+- [x] **BH-1.2 Shutdown completeness.** `server-shutdown.ts` flushes stores,
       stops the follow service and explicitly kills tracked media processes.
       It deliberately leaves the download queue to resume after restart.
       Test SIGTERM during a download, a scan and a conversion: verify queue
       recovery, scan persistence, child coverage and bounded exit.
-      Progress: #505 adds the traffic log to the shutdown flushes (up to a minute of transfer bytes was lost on restart). The SIGTERM runs during a download, scan and conversion are still to do.
+      Progress: #505 adds the traffic log to the shutdown flushes (up to a minute of transfer bytes was lost on restart). The three cases are covered by unit tests rather than a spawned-server run (which would need the outbound guard opened to a local source): `downloads.test.ts` requeues a downloading job from its `.part` after load; `library-scan.test.ts` resumes an interrupted scan and recheck; `playback.test.ts` stops media and subtitle readers and a preserved fallback conversion; `server-shutdown.test.ts` covers step order, a failing flush, the one-second follow bound and exit on the first signal.
 - [x] **BH-1.3 Timers and intervals.** Every `setInterval` across
       server/web/desktop. Each one: is it cleared on stop, `unref()`'d on the
       server, and is its period justified? Coalesce intervals that poll the
