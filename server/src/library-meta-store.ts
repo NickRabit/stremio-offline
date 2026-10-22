@@ -62,6 +62,7 @@ export class LibraryMetaStore {
   private episodeRows: Record<string, LibraryEpisodeRecord> = {};
   private views?: { meta: Record<string, LibraryMetaRecord>; suggestions: Record<string, LibrarySuggestion> };
   private timers = new Map<string, NodeJS.Timeout>();
+  private writes = new Map<string, Promise<void>>();
   private dirty = new Set<string>();
   private episodesTouched = false;
   /** Store names whose file could not be read or preserved: a later write must not put a
@@ -301,6 +302,10 @@ export class LibraryMetaStore {
     this.protectedNames.delete(libraryId);
     this.files.delete(libraryId);
     this.views = undefined;
+    // A write already under way would put the file back after the removal; it finds nothing owed
+    // once it is done, so waiting for it is enough.
+    await this.writes.get(libraryId);
+    this.writes.delete(libraryId);
     await rm(this.fileFor(libraryId), { force: true });
   }
 
@@ -322,7 +327,16 @@ export class LibraryMetaStore {
     this.timers.set(name, timer);
   }
 
-  private async write(name: string) {
+  /** One write per file at a time: two would share the temporary file, and a rename could move
+   *  the other's half-written bytes into place -- a file that then loads as damaged, with the
+   *  library's matches copied aside. Each write takes the rows as they are when it runs. */
+  private write(name: string): Promise<void> {
+    const run = (this.writes.get(name) ?? Promise.resolve()).then(() => this.writeNow(name));
+    this.writes.set(name, run);
+    return run;
+  }
+
+  private async writeNow(name: string) {
     if (!this.dirty.delete(name)) return;
     if (this.protectedNames.has(name)) {
       log("WARN", "Library metadata was not saved over a file that could not be read", { file: path.basename(this.fileFor(name)) });
@@ -333,6 +347,8 @@ export class LibraryMetaStore {
     try {
       await writeAtomic(file, data);
     } catch (error) {
+      // Still owed: the next save or flush writes it, rather than a restart dropping the change.
+      this.dirty.add(name);
       log("WARN", "Library metadata could not be saved", { file: path.basename(file), reason: String(error).slice(0, 120) });
     }
   }

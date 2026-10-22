@@ -60,6 +60,7 @@ async function writeAtomic(file: string, data: string) {
 export class ExternalIdStore {
   private entries: Record<string, CachedIds> = {};
   private inFlight = new Map<string, Promise<ExternalIds | null>>();
+  private saving: Promise<void> = Promise.resolve();
   private readonly file: string;
 
   constructor(dataDir: string, private readonly fetchImpl: FetchLike = guardedMetadataFetch) {
@@ -132,12 +133,16 @@ export class ExternalIdStore {
     }
   }
 
-  private async save() {
-    try {
-      await writeAtomic(this.file, JSON.stringify({ version: 1, entries: this.entries } satisfies CacheFile, null, 2));
-    } catch (error) {
-      log("WARN", "External ids could not be saved", { file: path.basename(this.file), reason: reasonOf(error) });
-    }
+  /** One write at a time: two lookups finishing together would share the temporary file. */
+  private save(): Promise<void> {
+    this.saving = this.saving.then(async () => {
+      try {
+        await writeAtomic(this.file, JSON.stringify({ version: 1, entries: this.entries } satisfies CacheFile, null, 2));
+      } catch (error) {
+        log("WARN", "External ids could not be saved", { file: path.basename(this.file), reason: reasonOf(error) });
+      }
+    });
+    return this.saving;
   }
 }
 
