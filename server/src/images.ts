@@ -5,6 +5,7 @@ import { renameWithRetry } from "./fs-retry.js";
 import { log } from "./logger.js";
 import { ffmpegPath, runMedia } from "./media-tools.js";
 import { guardedFetch } from "./outbound.js";
+import { readLimitedBody } from "./response-body.js";
 import { secureMode } from "./secure.js";
 import type { MetaItem } from "./types.js";
 
@@ -465,7 +466,7 @@ export class ImageProxy {
       const type = (response.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
       const ext = EXTENSIONS[type];
       if (!ext) { await response.body?.cancel(); return rejected(`content-type ${type || "missing"}`); }
-      const fetched = Buffer.from(await response.arrayBuffer());
+      const fetched = await readLimitedBody(response, MAX_BYTES);
       if (!fetched.length || fetched.length > MAX_BYTES) return rejected(`${fetched.length} bytes`);
       await mkdir(this.dir, { recursive: true });
       const data = await this.downscale(fetched, ext, entry.width ?? TILE_WIDTH);

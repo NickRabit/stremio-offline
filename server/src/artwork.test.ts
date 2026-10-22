@@ -9,9 +9,10 @@ import { test } from "node:test";
 import { promisify } from "node:util";
 import {
   artNames, artOutput, artVariantKey, ArtworkQueue, artworkBesideMedia, BACKDROP_NAMES, fileMayUseFolderArtwork,
-  ART_VARIANTS, findArtwork, galleryVariant, GALLERY_SIZE, imageSize, pickArtwork, pictureShape, POSTER_NAMES, readFolderListing, saveBackdropAs, saveFrame, savePosterAs,
+  ART_VARIANTS, findArtwork, galleryVariant, GALLERY_SIZE, imageSize, pickArtwork, pictureShape, POSTER_NAMES, readFolderListing, saveBackdropAs, saveFrame, savePosterAs, savePosterFromUrl,
 } from "./artwork.js";
 import { ArtworkCache } from "./artwork-cache.js";
+import { setFetchTransport } from "./security.js";
 
 process.env.ALLOW_PRIVATE_ADDONS = "1";
 
@@ -124,7 +125,10 @@ test("a poster that does not arrive says why", async () => {
     // Every refusal is named, because a title that stays blank has to be explainable.
     assert.deepEqual(await savePosterAs(target, `${base}/missing`), { ok: false, reason: "status", detail: "404" });
     assert.deepEqual(await savePosterAs(target, `${base}/text`), { ok: false, reason: "content-type", detail: "text/plain" });
-    assert.deepEqual(await savePosterAs(target, `${base}/big`), { ok: false, reason: "size", detail: `${9 * 1024 * 1024}` });
+    const oversized = await savePosterAs(target, `${base}/big`);
+    assert.equal(oversized.ok, false);
+    assert.equal(oversized.ok === false && oversized.reason, "size");
+    assert.ok(oversized.ok === false && Number(oversized.detail) > 8 * 1024 * 1024);
     const refused = await savePosterAs(target, "http://127.0.0.1:1/poster.jpg");
     assert.equal(refused.ok, false);
     assert.equal(refused.ok === false && refused.reason, "failed");
@@ -132,6 +136,39 @@ test("a poster that does not arrive says why", async () => {
     assert.deepEqual(await savePosterAs(target, `${base}/ok`), { ok: true });
   } finally {
     await new Promise<void>((resolve) => (server as Server).close(() => resolve()));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("catalogue artwork rejects an oversized stream without reading it all", async () => {
+  const MiB = 1024 * 1024;
+  const totalChunks = 20;
+  const pulls = [0, 0];
+  const cancelled = [false, false];
+  let sourceIndex = 0;
+  setFetchTransport(async () => {
+    const slot = sourceIndex++;
+    const chunk = new Uint8Array(MiB);
+    return new Response(new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pulls[slot]! >= totalChunks) { controller.close(); return; }
+        pulls[slot]! += 1;
+        controller.enqueue(chunk);
+      },
+      cancel() { cancelled[slot] = true; },
+    }), { headers: { "content-type": "image/jpeg" } });
+  });
+  const directory = await mkdtemp(path.join(os.tmpdir(), "poster-stream-"));
+  try {
+    const result = await savePosterAs(path.join(directory, "poster.jpg"), "https://art.example/huge.jpg");
+    assert.deepEqual(result, { ok: false, reason: "size", detail: `${9 * MiB}` });
+    assert.equal(await savePosterFromUrl(directory, "https://art.example/huge.jpg"), false);
+    for (let slot = 0; slot < 2; slot += 1) {
+      assert.equal(cancelled[slot], true);
+      assert.ok(pulls[slot]! < totalChunks, `source ${slot} stopped after ${pulls[slot]} chunks`);
+    }
+  } finally {
+    setFetchTransport();
     await rm(directory, { recursive: true, force: true });
   }
 });

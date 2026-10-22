@@ -11,6 +11,7 @@ process.env.LOG_STDOUT = "0";
 await initLogger(await mkdtemp(path.join(os.tmpdir(), "stremio-images-log-")));
 
 const PNG = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
+const MiB = 1024 * 1024;
 const REMOTE = "https://images.example/poster/tt1234.jpg?token=secret";
 const PLAIN = "https://cdn.example/backdrop.jpg";
 const MEDIUM = "https://images.metahub.space/background/medium/tt0903747/img";
@@ -109,10 +110,6 @@ test("only real images are cached", async () => {
   const html = await harness(async () => imageResponse(Buffer.from("<html>"), "text/html"));
   const htmlId = html.proxy.proxied(REMOTE)!.split("/").pop()!;
   assert.equal(await html.proxy.fetch(htmlId), undefined);
-
-  const big = await harness(async () => imageResponse(Buffer.alloc(9 * 1024 * 1024), "image/jpeg"));
-  const bigId = big.proxy.proxied(REMOTE)!.split("/").pop()!;
-  assert.equal(await big.proxy.fetch(bigId), undefined);
 
   const failed = await harness(async () => imageResponse(PNG, "image/png", 404));
   const failedId = failed.proxy.proxied(REMOTE)!.split("/").pop()!;
@@ -277,12 +274,25 @@ test("a width nobody serves is clamped to the listing tile", async () => {
   assert.equal(stored[id]!.width, undefined, "an unknown width reads as the listing width");
 });
 
-test("a picture over the cap is turned away before any resize", async () => {
-  const { proxy, calls, dir } = await harness(async () => imageResponse(Buffer.alloc(9 * 1024 * 1024, 7), "image/jpeg"));
+test("a chunked picture over the cap is turned away before the full body arrives", async () => {
+  const totalChunks = 20;
+  let pulled = 0;
+  let cancelled = false;
+  const source = new Uint8Array(MiB);
+  const { proxy, calls, dir } = await harness(async () => new Response(new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (pulled >= totalChunks) { controller.close(); return; }
+      pulled += 1;
+      controller.enqueue(source);
+    },
+    cancel() { cancelled = true; },
+  }), { headers: { "content-type": "image/jpeg" } }));
   const id = proxy.proxied(REMOTE)!.split("/").pop()!;
   assert.equal(await proxy.fetch(id), undefined);
   assert.deepEqual(calls, [REMOTE]);
   assert.deepEqual((await readdir(dir)).filter((name) => name !== "index.json"), []);
+  assert.equal(cancelled, true);
+  assert.ok(pulled < totalChunks, `the source stopped after ${pulled} chunks`);
 });
 
 test("a picture ffmpeg cannot read is kept as it was fetched", async () => {
