@@ -4,8 +4,9 @@ import path from "node:path";
 import { renameWithRetry } from "./fs-retry.js";
 import { log } from "./logger.js";
 import { ffmpegPath, runMedia } from "./media-tools.js";
-import { guardedFetch } from "./outbound.js";
-import { readLimitedBody } from "./response-body.js";
+import { guardedBody } from "./outbound.js";
+import { cancelResponseBody, readLimitedBody, ResponseTooLargeError } from "./response-body.js";
+import { safeFetch } from "./security.js";
 import { secureMode } from "./secure.js";
 import type { MetaItem } from "./types.js";
 
@@ -159,7 +160,7 @@ export class ImageProxy {
     private dir = path.join(process.env.DATA_DIR ?? "/data", "images"),
     private cap = megabytes(process.env.IMAGE_CACHE_MB, 512),
     private ttlMs = days(process.env.IMAGE_CACHE_TTL_DAYS),
-    private fetcher: (url: string, init: RequestInit) => Promise<Response> = guardedFetch,
+    private fetcher: (url: string, init: RequestInit) => Promise<Response> = safeFetch,
     private indexTtlMs = indexDays(process.env.IMAGE_CACHE_INDEX_TTL_DAYS),
     private now: () => number = Date.now,
     private memoryCap = memoryMegabytes(process.env.IMAGE_MEMORY_MB, 32),
@@ -461,13 +462,35 @@ export class ImageProxy {
       return undefined;
     };
     try {
-      const response = await this.fetcher(entry.url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-      if (!response.ok) { await response.body?.cancel(); return rejected(`HTTP ${response.status}`); }
-      const type = (response.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
-      const ext = EXTENSIONS[type];
-      if (!ext) { await response.body?.cancel(); return rejected(`content-type ${type || "missing"}`); }
-      const fetched = await readLimitedBody(response, MAX_BYTES);
-      if (!fetched.length || fetched.length > MAX_BYTES) return rejected(`${fetched.length} bytes`);
+      const result = await guardedBody<{ data: Buffer; ext: string } | { reason: string }>(
+        entry.url,
+        {},
+        async (response, signal) => {
+          if (!response.ok) {
+            cancelResponseBody(response);
+            return { reason: `HTTP ${response.status}` };
+          }
+          const type = (response.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
+          const ext = EXTENSIONS[type];
+          if (!ext) {
+            cancelResponseBody(response);
+            return { reason: `content-type ${type || "missing"}` };
+          }
+          let data: Buffer;
+          try {
+            data = await readLimitedBody(response, MAX_BYTES, signal);
+          } catch (error) {
+            if (error instanceof ResponseTooLargeError) return { reason: String(error) };
+            throw error;
+          }
+          return data.length ? { data, ext } : { reason: "0 bytes" };
+        },
+        { deadlineMs: FETCH_TIMEOUT_MS },
+        this.fetcher,
+      );
+      if ("reason" in result) return rejected(result.reason);
+      const fetched = result.data;
+      const ext = result.ext;
       await mkdir(this.dir, { recursive: true });
       const data = await this.downscale(fetched, ext, entry.width ?? TILE_WIDTH);
       // The same buffer back means nothing was re-encoded; mjpeg output is a jpeg.

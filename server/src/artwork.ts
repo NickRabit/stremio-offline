@@ -3,13 +3,14 @@ import path from "node:path";
 import { renameWithRetry } from "./fs-retry.js";
 import { log } from "./logger.js";
 import { ffmpegPath, runMedia } from "./media-tools.js";
-import { guardedFetch } from "./outbound.js";
-import { readLimitedBody, ResponseTooLargeError } from "./response-body.js";
+import { guardedBody } from "./outbound.js";
+import { cancelResponseBody, readLimitedBody, ResponseTooLargeError } from "./response-body.js";
 import type { LibraryHealth } from "./library-probe.js";
 import type { LibraryRecord } from "./libraries.js";
 
 const run = runMedia;
 const MAX_PICTURE_BYTES = 8 * 1024 * 1024;
+const PICTURE_TIMEOUT_MS = 20_000;
 
 /** The names Emby and Jellyfin look for pictures under. The order is the priority. */
 export const POSTER_NAMES = ["poster.jpg", "poster.png", "folder.jpg", "folder.png", "cover.jpg", "cover.png", "default.jpg"];
@@ -127,18 +128,30 @@ type FetchOutcome = { ok: true; data: Buffer } | Extract<PosterOutcome, { ok: fa
 
 const fetchPicture = async (url: string): Promise<FetchOutcome> => {
   try {
-    const response = await guardedFetch(url, { signal: AbortSignal.timeout(20_000) });
-    if (!response.ok) return { ok: false, reason: "status", detail: `${response.status}` };
-    const type = response.headers.get("content-type") ?? "";
-    if (!type.startsWith("image/")) return { ok: false, reason: "content-type", detail: type || "(none)" };
-    try {
-      const data = await readLimitedBody(response, MAX_PICTURE_BYTES);
-      if (!data.length) return { ok: false, reason: "size", detail: "0" };
-      return { ok: true, data };
-    } catch (error) {
-      if (error instanceof ResponseTooLargeError) return { ok: false, reason: "size", detail: `${error.observedBytes}` };
-      throw error;
-    }
+    return await guardedBody<FetchOutcome>(
+      url,
+      {},
+      async (response, signal) => {
+        if (!response.ok) {
+          cancelResponseBody(response);
+          return { ok: false, reason: "status", detail: `${response.status}` };
+        }
+        const type = response.headers.get("content-type") ?? "";
+        if (!type.startsWith("image/")) {
+          cancelResponseBody(response);
+          return { ok: false, reason: "content-type", detail: type || "(none)" };
+        }
+        try {
+          const data = await readLimitedBody(response, MAX_PICTURE_BYTES, signal);
+          if (!data.length) return { ok: false, reason: "size", detail: "0" };
+          return { ok: true, data };
+        } catch (error) {
+          if (error instanceof ResponseTooLargeError) return { ok: false, reason: "size", detail: `${error.observedBytes}` };
+          throw error;
+        }
+      },
+      { deadlineMs: PICTURE_TIMEOUT_MS },
+    );
   } catch (error) {
     return { ok: false, reason: "failed", detail: error instanceof Error ? error.message : String(error) };
   }
@@ -300,12 +313,30 @@ export async function saveBackdropAs(target: string, url: string): Promise<Poste
 
 export async function savePosterFromUrl(directory: string, url: string): Promise<boolean> {
   try {
-    const response = await guardedFetch(url, { signal: AbortSignal.timeout(20_000) });
-    if (!response.ok) return false;
-    const type = response.headers.get("content-type") ?? "";
-    if (!type.startsWith("image/")) return false;
-    const data = await readLimitedBody(response, MAX_PICTURE_BYTES);
-    if (!data.length) return false;
+    const data = await guardedBody<Buffer | undefined>(
+      url,
+      {},
+      async (response, signal) => {
+        if (!response.ok) {
+          cancelResponseBody(response);
+          return undefined;
+        }
+        const type = response.headers.get("content-type") ?? "";
+        if (!type.startsWith("image/")) {
+          cancelResponseBody(response);
+          return undefined;
+        }
+        try {
+          const body = await readLimitedBody(response, MAX_PICTURE_BYTES, signal);
+          return body.length ? body : undefined;
+        } catch (error) {
+          if (error instanceof ResponseTooLargeError) return undefined;
+          throw error;
+        }
+      },
+      { deadlineMs: PICTURE_TIMEOUT_MS },
+    );
+    if (!data?.length) return false;
     await writeAtomic(path.join(directory, POSTER_OUTPUT), data);
     return true;
   } catch { return false; }

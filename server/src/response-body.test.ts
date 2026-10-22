@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readLimitedBody, ResponseTooLargeError } from "./response-body.js";
+import { cancelResponseBody, readLimitedBody, ResponseTooLargeError } from "./response-body.js";
 
 const MiB = 1024 * 1024;
 const chunk = new Uint8Array(MiB);
@@ -89,6 +89,38 @@ test("a reader timeout is rethrown after cancellation rather than becoming a siz
   const response = { body, headers: new Headers() } as unknown as Response;
 
   await assert.rejects(readLimitedBody(response, MiB), (error: unknown) => error === failure);
+  assert.equal(cancelled, true);
+});
+
+test("an aborted read cancels a blocked body without waiting for its cancellation", async () => {
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    start() {},
+    cancel() {
+      cancelled = true;
+      return new Promise<void>(() => undefined);
+    },
+  });
+  const controller = new AbortController();
+  const reading = readLimitedBody(new Response(body), 4 * MiB, controller.signal);
+  controller.abort();
+
+  await assert.rejects(reading, (error: unknown) =>
+    error instanceof DOMException && error.name === "AbortError");
+  assert.equal(cancelled, true);
+});
+
+test("a rejected response body is cancelled without being awaited", () => {
+  let cancelled = false;
+  const response = new Response(new ReadableStream<Uint8Array>({
+    start() {},
+    cancel() {
+      cancelled = true;
+      return new Promise<void>(() => undefined);
+    },
+  }));
+
+  cancelResponseBody(response);
   assert.equal(cancelled, true);
 });
 
