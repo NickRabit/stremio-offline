@@ -35,7 +35,11 @@ const pad2 = (value: number) => String(Math.max(0, Math.trunc(value))).padStart(
 const episodeCode = (season: number, episode: number) => `S${pad2(season)}E${pad2(episode)}`;
 /** A film shows itself as a film; a series episode by its code. */
 const codeOf = (item: { type: string; season: number; episode: number }): string => item.type === "movie" ? t("follow.movieBadge") : episodeCode(item.season, item.episode);
-const formatDay = (value?: string) => value ? new Date(value).toLocaleDateString(localeTag()) : "";
+/** A release is a calendar date, kept as an instant inside that UTC day (a date-only one as its
+ *  last millisecond), and the server's calendar feed files it under that UTC date. Read in local
+ *  time it would move to the next day east of UTC, or the previous one west of it. */
+const formatDay = (value?: string) => value ? new Date(value).toLocaleDateString(localeTag(), { timeZone: "UTC" }) : "";
+const releaseDayKey = (value: string) => new Date(value).toISOString().slice(0, 10);
 const formatWhen = (value?: string) => value ? new Date(value).toLocaleString(localeTag(), { dateStyle: "short", timeStyle: "short" }) : "";
 
 const addDays = (value: Date, days: number) => new Date(value.getFullYear(), value.getMonth(), value.getDate() + days);
@@ -259,7 +263,7 @@ function CalendarTab({ onOpenSeries, onNotify }: { onOpenSeries: FollowingPagePr
   const byDay = useMemo(() => {
     const map = new Map<string, CalendarItem[]>();
     for (const item of items) {
-      const key = dayKey(new Date(item.released));
+      const key = releaseDayKey(item.released);
       const list = map.get(key);
       if (list) list.push(item); else map.set(key, [item]);
     }
@@ -362,7 +366,7 @@ function CalendarTab({ onOpenSeries, onNotify }: { onOpenSeries: FollowingPagePr
       <h4>{dayHeading}</h4>
       {selectedItems.length
         ? selectedItems.map((item) => <EpisodeRow key={itemKey(item)} item={item} onOpen={() => openOf(item)}/>)
-        : <p className="following-empty">{loaded && !items.some((item) => dayKey(new Date(item.released)).startsWith(dayKey(monthStart).slice(0, 7))) ? t("following.calendarEmpty") : t("following.dayEmpty")}</p>}
+        : <p className="following-empty">{loaded && !items.some((item) => releaseDayKey(item.released).startsWith(dayKey(monthStart).slice(0, 7))) ? t("following.calendarEmpty") : t("following.dayEmpty")}</p>}
     </section>
     </>}
     <FeedRow onNotify={onNotify}/>

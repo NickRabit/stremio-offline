@@ -14,6 +14,8 @@ const follow = (overrides: Partial<FollowView>): FollowView => ({
   ...overrides,
 });
 
+/** A release is a calendar date: the local day the test means, as the server would send it. */
+const localDay = (value: Date) => `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -128,7 +130,7 @@ describe("FollowingPage", () => {
 
   it("places an episode on its day in the month grid and lists it for the chosen day", async () => {
     fetchMock.mockImplementation(async (url: string) => String(url).includes("/api/follows/calendar")
-      ? json({ items: [{ followId: "f1", type: "series", metaId: "tt1", name: "Show", videoId: "v1", season: 1, episode: 2, title: "Pilot", released: new Date().toISOString(), state: "released" }], undated: [] })
+      ? json({ items: [{ followId: "f1", type: "series", metaId: "tt1", name: "Show", videoId: "v1", season: 1, episode: 2, title: "Pilot", released: `${localDay(new Date())}T12:00:00.000Z`, state: "released" }], undated: [] })
       : json({ items: [] }));
     await render([]);
     await clickTab("Calendar");
@@ -144,10 +146,27 @@ describe("FollowingPage", () => {
     expect(panel.querySelector(".state-pill")!.textContent).toBe("Released");
   });
 
+  it("puts an episode on the day its release date names, east of UTC as well", async () => {
+    // The server keeps a date-only release as the last instant of that UTC day, and its
+    // calendar feed files it under that UTC date; in Prague that instant is already tomorrow.
+    process.env.TZ = "Europe/Prague";
+    try {
+      const day = localDay(new Date());
+      fetchMock.mockImplementation(async (url: string) => String(url).includes("/api/follows/calendar")
+        ? json({ items: [{ followId: "f1", type: "series", metaId: "tt1", name: "Show", videoId: "v1", season: 1, episode: 2, released: `${day}T23:59:59.999Z`, state: "released" }], undated: [] })
+        : json({ items: [] }));
+      await render([]);
+      await clickTab("Calendar");
+      expect(host.querySelector(".following-day.today .following-event")?.textContent).toBe("ShowS01E02");
+    } finally {
+      delete process.env.TZ;
+    }
+  });
+
   it("choosing another day lists that day's episodes", async () => {
-    const other = new Date(); other.setDate(other.getDate() === 15 ? 16 : 15); other.setHours(20, 0, 0, 0);
+    const other = new Date(); other.setDate(other.getDate() === 15 ? 16 : 15);
     fetchMock.mockImplementation(async (url: string) => String(url).includes("/api/follows/calendar")
-      ? json({ items: [{ followId: "f1", type: "series", metaId: "tt1", name: "Show", videoId: "v1", season: 1, episode: 5, released: other.toISOString(), state: "waiting" }], undated: [] })
+      ? json({ items: [{ followId: "f1", type: "series", metaId: "tt1", name: "Show", videoId: "v1", season: 1, episode: 5, released: `${localDay(other)}T12:00:00.000Z`, state: "waiting" }], undated: [] })
       : json({ items: [] }));
     await render([]);
     await clickTab("Calendar");
