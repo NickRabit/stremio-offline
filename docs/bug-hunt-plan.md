@@ -242,8 +242,9 @@ Files: `auth.ts`, `roles.ts`, `secure.ts`, `security.ts`, `host-check.ts`,
       a path, request body size limits, malformed JSON handling.
       Progress: #493 tells a refused folder from a missing one (browse, grants, preview, library root, create folder, rename).
       Progress: `mediaPath` rejects absolute, drive-letter and `.`/`..` paths before joining onto the library root, as the last line behind every route; a per-route audit is still to do.
-- [ ] **BH-7.5 Log redaction.** Addon URLs with embedded keys, debrid tokens,
+- [x] **BH-7.5 Log redaction.** Addon URLs with embedded keys, debrid tokens,
       media-server tokens in `app.log` and client logs.
+      Progress: verified. `logger.ts` redacts centrally: every http(s) address in a message or a context value is cut to scheme and host (query and path, where tokens and addon keys live, never reach the log), keys named like token, password, secret, authorization, cookie or api key are masked, and a newline cannot forge a second record.
 
 ## Unit 8 — Server: `index.ts` composition
 
