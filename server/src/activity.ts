@@ -67,9 +67,11 @@ export class ActivityLog {
     return { items, total, next: more ? items.at(-1)?.id : undefined, users: [...users].map(([id, username]) => ({ id, username })) };
   }
 
-  flush() {
+  flush(): Promise<void> {
     if (this.timer) { clearTimeout(this.timer); this.timer = undefined; }
-    if (!this.dirty) return this.chain;
+    // Nothing new: wait for the write already under way, and make it again if that one failed --
+    // shutdown is the last chance to save what it carried.
+    if (!this.dirty) return this.chain.catch(() => undefined).then(() => this.dirty ? this.flush() : undefined);
     this.dirty = false;
     this.chain = this.chain.catch(() => undefined).then(async () => {
       try {

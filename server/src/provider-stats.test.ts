@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { rmSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -91,5 +92,25 @@ test("a failed write neither stops the later ones nor loses the counts it carrie
     const reloaded = new ProviderStats(file, () => now);
     await reloaded.load();
     assert.equal(reloaded.summary(6, now).detail, 1, "the count of the failed write lands with the next one");
+  });
+});
+
+test("a flush that waits on a write already in flight writes again when that one fails", async () => {
+  await withDir(async (dir) => {
+    const file = path.join(dir, "provider-stats.json");
+    const now = Date.UTC(2026, 0, 2, 3, 10);
+    const stats = new ProviderStats(file, () => now);
+    await stats.load();
+    await mkdir(`${file}.tmp`);
+    stats.record("detail");
+    // The debounced write is under way when shutdown asks for its own flush; the first one fails.
+    const inFlight = stats.flush();
+    inFlight.catch(() => rmSync(`${file}.tmp`, { recursive: true }));
+    const shutdown = stats.flush();
+    await assert.rejects(inFlight);
+    await shutdown;
+    const reloaded = new ProviderStats(file, () => now);
+    await reloaded.load();
+    assert.equal(reloaded.summary(6, now).detail, 1, "the shutdown flush writes what the failed write carried");
   });
 });

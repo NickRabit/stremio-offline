@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { rmSync } from "node:fs";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -47,4 +48,25 @@ test("the chosen period excludes older activity and keeps user options independe
     assert.equal(log.page(24, "playback").total, 0);
     assert.deepEqual(log.page(24, "playback").users, [{ id: "ada", username: "Ada" }]);
   } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("a flush that waits on a write already in flight writes again when that one fails", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "activity-"));
+  try {
+    const log = new ActivityLog(dir);
+    await log.load();
+    await mkdir(path.join(dir, "activity.json.tmp"));
+    log.record({ kind: "playback", title: "Heat" });
+    // The debounced write is under way when shutdown asks for its own flush; the first one fails.
+    const inFlight = log.flush();
+    inFlight.catch(() => rmSync(path.join(dir, "activity.json.tmp"), { recursive: true }));
+    const shutdown = log.flush();
+    await assert.rejects(inFlight);
+    await shutdown;
+    const restored = new ActivityLog(dir);
+    await restored.load();
+    assert.equal(restored.page(24).items[0]?.title, "Heat", "the shutdown flush writes what the failed write carried");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
