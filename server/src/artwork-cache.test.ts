@@ -367,3 +367,16 @@ test("a thumbnail that cannot be removed stays indexed and is retried", async ()
     assert.equal(cache.size, 0, "the next pass retries and drops it");
   });
 });
+
+test("an index write that failed is made again by the next flush", async () => {
+  await withCache(1024 * 1024, async (cache, dir) => {
+    // A directory where the temporary file goes makes the write fail, the way a full disk would.
+    await mkdir(path.join(dir, "index.json.tmp"), { recursive: true });
+    await put(cache, "lib_aaaaaaaa/One.mkv", 64);
+    await cache.flush();
+    await rm(path.join(dir, "index.json.tmp"), { recursive: true });
+    await cache.flush();
+    assert.deepEqual(Object.keys(JSON.parse(await readFile(path.join(dir, "index.json"), "utf8"))),
+      [path.join("lib_aaaaaaaa", hash("One.mkv"))]);
+  });
+});

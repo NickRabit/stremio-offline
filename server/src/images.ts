@@ -154,6 +154,7 @@ export class ImageProxy {
   private dirty = false;
   private maintenance?: Promise<void>;
   private chain: Promise<unknown> = Promise.resolve();
+  private indexWrites: Promise<void> = Promise.resolve();
 
   constructor(
     private dir = path.join(process.env.DATA_DIR ?? "/data", "images"),
@@ -248,15 +249,22 @@ export class ImageProxy {
     this.saveTimer.unref?.();
   }
 
-  private async writeIndex() {
-    const data = JSON.stringify(Object.fromEntries(this.index));
-    const temp = `${this.indexFile}.tmp`;
-    try {
-      await writeFile(temp, data, { mode: 0o600 });
-      await renameWithRetry(temp, this.indexFile);
-    } catch (error) {
-      log("WARN", "The image cache index could not be saved", { reason: String(error).slice(0, 120) });
-    }
+  /** One write at a time: two would share the temporary file, and a rename could move the
+   *  other's half-written bytes into place. An index that lags the files costs them all at the
+   *  next load, which deletes what it does not list, so a failed write is owed again. */
+  private writeIndex() {
+    const run = this.indexWrites.then(async () => {
+      const temp = `${this.indexFile}.tmp`;
+      try {
+        await writeFile(temp, JSON.stringify(Object.fromEntries(this.index)), { mode: 0o600 });
+        await renameWithRetry(temp, this.indexFile);
+      } catch (error) {
+        this.dirty = true;
+        log("WARN", "The image cache index could not be saved", { reason: String(error).slice(0, 120) });
+      }
+    });
+    this.indexWrites = run;
+    return run;
   }
 
   async flush() {
