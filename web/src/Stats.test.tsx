@@ -169,3 +169,28 @@ it("filters history on the server, pages by cursor and does not poll it with liv
   expect(fetchMock.mock.calls.filter(([input]) => String(input).includes("/activity"))).toHaveLength(urls.length);
   vi.useRealTimers();
 });
+
+it("does not poll live streams while the tab is hidden, and picks up again once it is shown", async () => {
+  vi.useFakeTimers();
+  fetchMock.mockImplementation((input: RequestInfo | URL) => {
+    const url = new URL(String(input), "http://localhost");
+    if (url.pathname === "/api/stats/activity") return Promise.resolve(json({ items: [], users: [], total: 0 }));
+    return Promise.resolve(json(url.pathname.endsWith("streams") ? [] : data));
+  });
+  const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+  try {
+    await render();
+    const streams = () => fetchMock.mock.calls.filter(([input]) => String(input).includes("/streams")).length;
+    const first = streams();
+    expect(first).toBe(1);
+    hidden.mockReturnValue(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+    expect(streams(), "a hidden tab asks nothing").toBe(first);
+    hidden.mockReturnValue(false);
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(streams(), "the next tick after the tab is shown asks again").toBe(first + 1);
+  } finally {
+    hidden.mockRestore();
+    vi.useRealTimers();
+  }
+});
