@@ -397,7 +397,7 @@ Files: `android-tv/app/src/main/java/cz/stremiooffline/tv/` — `playback/`
 | Android cold start | | |
 
 The Mac baseline cannot be repeated from a cloud session, so the runtime numbers were taken
-again on one Linux machine for both ends: `node scripts/benchmark-runtime.mjs --files 5000`
+again on one Linux machine for both ends: `node scripts/benchmark-runtime.mjs --files 5000 --samples 40`
 on the baseline commit (`2d1d2b47`, #490) and on `main` after #513 (`b8760659`). Same machine,
 same fixture, back to back; home and browse are the 40-sample runs.
 

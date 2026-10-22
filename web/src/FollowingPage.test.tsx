@@ -180,7 +180,7 @@ describe("FollowingPage", () => {
   it("a phone opens the calendar as a list grouped by day", async () => {
     stubMatchMedia(390);
     fetchMock.mockImplementation(async (url: string) => String(url).includes("/api/follows/calendar")
-      ? json({ items: [{ followId: "f1", type: "series", metaId: "tt1", name: "Show", videoId: "v1", season: 1, episode: 2, title: "Pilot", released: new Date().toISOString(), state: "waiting" }], undated: [] })
+      ? json({ items: [{ followId: "f1", type: "series", metaId: "tt1", name: "Show", videoId: "v1", season: 1, episode: 2, title: "Pilot", released: `${localDay(new Date())}T12:00:00.000Z`, state: "waiting" }], undated: [] })
       : json({ items: [] }));
     await render([]);
     await clickTab("Calendar");

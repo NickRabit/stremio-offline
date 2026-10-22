@@ -2,14 +2,14 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
 import {
   artNames, artOutput, artVariantKey, ArtworkQueue, artworkBesideMedia, BACKDROP_NAMES, fileMayUseFolderArtwork,
-  ART_VARIANTS, findArtwork, galleryVariant, GALLERY_SIZE, imageSize, pickArtwork, pictureShape, POSTER_NAMES, readFolderListing, saveBackdropAs, savePosterAs,
+  ART_VARIANTS, findArtwork, galleryVariant, GALLERY_SIZE, imageSize, pickArtwork, pictureShape, POSTER_NAMES, readFolderListing, saveBackdropAs, saveFrame, savePosterAs,
 } from "./artwork.js";
 import { ArtworkCache } from "./artwork-cache.js";
 
@@ -151,6 +151,20 @@ test("a catalogue backdrop is narrowed before it is stored", { skip: !hasFfmpeg 
     assert.ok(Number(stdout.trim()) <= 640, `stored ${stdout.trim()} px wide`);
   } finally {
     await new Promise<void>((resolve) => (server as Server).close(() => resolve()));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a failed thumbnail cleanup does not replace the original failure", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "thumbnail-failure-"));
+  const previous = process.env.FFMPEG_PATH;
+  const target = path.join(directory, "thumb.jpg");
+  try {
+    await mkdir(`${target}.tmp.jpg`);
+    process.env.FFMPEG_PATH = path.join(directory, "missing-ffmpeg");
+    assert.equal(await saveFrame(path.join(directory, "film.mkv"), target), false);
+  } finally {
+    if (previous === undefined) delete process.env.FFMPEG_PATH; else process.env.FFMPEG_PATH = previous;
     await rm(directory, { recursive: true, force: true });
   }
 });

@@ -320,7 +320,14 @@ export async function saveFrame(videoPath: string, target: string, seconds = 300
     return true;
   } catch (error) {
     // A killed or failed ffmpeg can leave a partial picture behind, which nothing would ever remove.
-    await rm(temp, { force: true });
+    try {
+      await rm(temp, { force: true });
+    } catch (cleanupError) {
+      log("WARN", "The thumbnail temporary file could not be removed", {
+        file: path.basename(temp),
+        reason: cleanupError instanceof Error ? cleanupError.message.slice(0, 120) : String(cleanupError),
+      });
+    }
     log("WARN", "The thumbnail could not be generated", { file: path.basename(videoPath), reason: error instanceof Error ? error.message.slice(0, 120) : String(error) });
     return false;
   }

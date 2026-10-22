@@ -52,6 +52,16 @@ export function isRetryableDebridFailure(error: unknown): boolean {
   return /fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND|UND_ERR|not answering right now|no free slot/i.test(message);
 }
 
+async function readJson<T>(response: Response, path: string): Promise<T> {
+  try {
+    return await response.json() as T;
+  } catch (error) {
+    if (error instanceof SyntaxError) throw error;
+    log("WARN", "Real-Debrid response body failed", { path, reason: error instanceof Error ? error.message : String(error) });
+    throw new DebridError("Real-Debrid is not answering right now, trying again.", 408, "network");
+  }
+}
+
 async function rdRequest(token: string, path: string, body?: Record<string, string>, fetchImpl: FetchLike = guardedFetch): Promise<Response> {
   const init: RequestInit = {
     method: body ? "POST" : "GET",
@@ -70,10 +80,13 @@ async function rdRequest(token: string, path: string, body?: Record<string, stri
   let code: string | undefined;
   let errorCode: number | undefined;
   try {
-    const payload = await response.json() as { error?: string; error_code?: number };
+    const payload = await readJson<{ error?: string; error_code?: number }>(response, path);
     code = typeof payload.error === "string" ? payload.error : undefined;
     errorCode = Number.isFinite(payload.error_code) ? Number(payload.error_code) : undefined;
-  } catch { /* Real-Debrid sometimes answers with an empty body. */ }
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+    /* Real-Debrid sometimes answers with an empty or malformed body. */
+  }
   log("WARN", "Real-Debrid request failed", { path, status: response.status, code, errorCode });
   throw rdError(response.status, code, errorCode);
 }
@@ -84,7 +97,7 @@ export async function verifyRealDebridToken(token: string, fetchImpl: FetchLike 
   const value = normalizeToken(token);
   if (!value) throw new DebridError("Enter the Real-Debrid API token.");
   const response = await rdRequest(value, "/user", undefined, fetchImpl);
-  const body = await response.json() as { username?: string; type?: string; premium?: number };
+  const body = await readJson<{ username?: string; type?: string; premium?: number }>(response, "/user");
   const premium = body.type === "premium" || Number(body.premium) > 0;
   if (!premium) throw new DebridError("The Real-Debrid account is not premium.");
   return { username: String(body.username ?? ""), premium };
@@ -113,7 +126,7 @@ export interface UnrestrictedLink { download: string; filename?: string; filesiz
 
 export async function addMagnet(token: string, magnet: string, fetchImpl: FetchLike = guardedFetch): Promise<string> {
   const response = await rdRequest(token, "/torrents/addMagnet", { magnet }, fetchImpl);
-  const body = await response.json() as { id?: string };
+  const body = await readJson<{ id?: string }>(response, "/torrents/addMagnet");
   if (!body.id) throw new DebridError("Real-Debrid returned no torrent id.");
   return body.id;
 }
@@ -123,13 +136,14 @@ export async function selectFiles(token: string, torrentId: string, files: strin
 }
 
 export async function torrentInfo(token: string, torrentId: string, fetchImpl: FetchLike = guardedFetch): Promise<DebridTorrent> {
-  const response = await rdRequest(token, `/torrents/info/${encodeURIComponent(torrentId)}`, undefined, fetchImpl);
-  return await response.json() as DebridTorrent;
+  const path = `/torrents/info/${encodeURIComponent(torrentId)}`;
+  const response = await rdRequest(token, path, undefined, fetchImpl);
+  return await readJson<DebridTorrent>(response, path);
 }
 
 export async function unrestrictLink(token: string, link: string, fetchImpl: FetchLike = guardedFetch): Promise<UnrestrictedLink> {
   const response = await rdRequest(token, "/unrestrict/link", { link }, fetchImpl);
-  const body = await response.json() as UnrestrictedLink;
+  const body = await readJson<UnrestrictedLink>(response, "/unrestrict/link");
   if (!body.download) throw new DebridError("Real-Debrid returned no downloadable address.");
   return body;
 }
