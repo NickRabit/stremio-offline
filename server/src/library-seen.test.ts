@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -162,5 +162,18 @@ test("the index round-trips through its file", async () => {
     const reloaded = new LibrarySeenStore(dataDir);
     await reloaded.load();
     assert.deepEqual(reloaded.recent(["lib_a"], 60), [{ libraryId: "lib_a", relative: "Films/New.mkv", at: "2026-02-02T00:00:00.000Z" }]);
+  });
+});
+
+test("a write that failed is made by the next flush", async () => {
+  await withStore(async (store, dataDir) => {
+    store.observe("lib_a", [], new Date("2026-01-01T00:00:00.000Z"));
+    store.observe("lib_a", [file("Films/New.mkv", 20, "2026-02-01T00:00:00.000Z")], new Date("2026-02-02T00:00:00.000Z"));
+    // A directory where the temporary file goes makes the write fail, the way a full disk would.
+    await mkdir(`${seenFile(dataDir)}.tmp`);
+    await store.flush();
+    await rm(`${seenFile(dataDir)}.tmp`, { recursive: true });
+    await store.flush();
+    assert.match(await readFile(seenFile(dataDir), "utf8"), /Films\/New\.mkv/, "the stamp the failed write carried reaches the disk");
   });
 });

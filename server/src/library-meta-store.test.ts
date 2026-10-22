@@ -369,3 +369,25 @@ test("a qualified write keeps an already built view the same as a fresh one", as
     assert.deepEqual(patched, { meta: { ...fresh.qualifiedMeta() }, suggestions: { ...fresh.qualifiedSuggestions() } });
   });
 });
+
+test("a write that failed is made by the next flush, and two flushes never overlap", async () => {
+  await withStore(async (store, dataDir) => {
+    await store.load();
+    await store.update("lib_a", (file) => { file.meta["Heat.mkv"] = record("tt1"); });
+    // A directory where the temporary file goes makes the write fail, the way a full disk would.
+    await mkdir(`${libraryFile(dataDir, "lib_a")}.tmp`, { recursive: true });
+    await store.flush();
+    await rm(`${libraryFile(dataDir, "lib_a")}.tmp`, { recursive: true });
+    await store.flush();
+    assert.deepEqual(Object.keys(JSON.parse(await readFile(libraryFile(dataDir, "lib_a"), "utf8")).meta), ["Heat.mkv"],
+      "the binding the failed write carried reaches the disk");
+
+    // Two flushes in flight share one temporary file; the second must wait for the first.
+    await store.update("lib_a", (file) => { file.meta["Dune.mkv"] = record("tt2"); });
+    const first = store.flush();
+    await store.update("lib_a", (file) => { file.meta["Alien.mkv"] = record("tt3"); });
+    await Promise.all([first, store.flush()]);
+    assert.deepEqual(Object.keys(JSON.parse(await readFile(libraryFile(dataDir, "lib_a"), "utf8")).meta).sort(),
+      ["Alien.mkv", "Dune.mkv", "Heat.mkv"], "the last write to land is the newest");
+  });
+});

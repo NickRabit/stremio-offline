@@ -241,6 +241,7 @@ export class LibrarySeenStore {
       await writeFile(temp, JSON.stringify(this.state, null, 2), { mode: 0o600 });
       await renameWithRetry(temp, this.file);
     } catch (error) {
+      this.dirty = true;
       log("WARN", "The first-seen index could not be saved", { file: this.file, reason: String(error).slice(0, 200) });
     }
   }
