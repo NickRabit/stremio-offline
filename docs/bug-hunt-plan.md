@@ -185,6 +185,7 @@ candidates, episodes, migrate, actions, admin, grants, runtime), `naming.ts`,
 - [ ] **BH-4.4 Destructive actions.** Rename, move, copy, delete, bulk and
       cross-library: explicit preconditions, no swallowed errors (roadmap
       P1.4).
+      Progress: rename, move, copy and delete keep their preconditions (resolved path, busy check, nested library, name clash, admin re-check just before the disk changes). Gap, awaiting a decision: subtitle sidecars (`<stem>.srt`, `<stem>.<lang>.vtt`, matched by the video's stem) are not carried by a file rename or a single-file move or copy, nor removed with a deleted video, so the player stops offering them.
 - [ ] **BH-4.5 Images and artwork.** Cache bounds and eviction, sweep only on
       a provably readable library, concurrent generation of the same mosaic,
       remote image fetch timeouts and size limits.
@@ -200,12 +201,15 @@ Files: `search-*.ts`, `addons.ts`, `addon-refresh.ts`, `tmdb.ts`,
 - [ ] **BH-5.1 Outbound robustness.** Every addon/TMDB call has a timeout, a
       size limit and a cancellation path tied to the client request; one slow
       addon cannot stall Home or search.
-- [ ] **BH-5.2 Search session lifecycle.** Stale results after a new query,
+      Progress: every outbound call carries a deadline except the Real-Debrid API, which waited on undici's five-minute default; #517 gives it 30 seconds and the existing retry. Addon and TMDB calls have deadlines and the shared outbound breaker; size limits not yet reviewed one by one.
+- [x] **BH-5.2 Search session lifecycle.** Stale results after a new query,
       sessions that never end, scheduler fairness between sources, memory per
       abandoned session.
-- [ ] **BH-5.3 Request de-duplication and caching.** `in-flight.ts` coverage,
+      Progress: verified. Catalogue search sessions are capped per owner and server-wide, destroyed on replacement and on stop, and covered by the session, scheduler and contract suites.
+- [x] **BH-5.3 Request de-duplication and caching.** `in-flight.ts` coverage,
       cache keys that include the account where results are per-user, TTLs.
       Count outbound requests for one Home load before and after.
+      Progress: verified. Playback inspection shares one probe per source and lets each caller leave on its own abort without cancelling the others; Home shelves, external ids, images, mosaics and library health each run once per key, and only the entry a call created is removed. The outbound count per Home load is not measured.
 - [ ] **BH-5.4 Home assembly.** `/api/home` latency breakdown per shelf;
       `mergeResume`/`boundCards` correctness with mixed file and catalogue
       progress.
@@ -215,8 +219,9 @@ Files: `search-*.ts`, `addons.ts`, `addon-refresh.ts`, `tmdb.ts`,
 Files: `media-server-*.ts` (~10k lines, `manager` 3.6k and `security` 2k the
 largest), `routes/media-servers.ts`.
 
-- [ ] **BH-6.1 Secrets.** Tokens never in logs, responses, error messages or
+- [x] **BH-6.1 Secrets.** Tokens never in logs, responses, error messages or
       exported settings; rotation and removal leave nothing behind.
+      Progress: verified. The one log line about a media-server token carries the connection id and an error code; the secrets and security suites (110 tests) cover tokens in logs, errors and responses.
 - [ ] **BH-6.2 Swallowed errors.** The silent catches in
       `media-server-security.ts` and `media-server-manager.ts` from BH-0.4.
 - [ ] **BH-6.3 Index and sync.** Incremental vs full sync, server
@@ -253,8 +258,9 @@ Files: `auth.ts`, `roles.ts`, `secure.ts`, `security.ts`, `host-check.ts`,
       lines): library mutation, artwork coordination, source resolution,
       lifecycle. Pick extractions only where a defect from units 1–7 needs a
       testable seam (roadmap P2), not for size alone.
-- [ ] **BH-8.2 Unhandled rejections.** Process-level handlers, async route
+- [x] **BH-8.2 Unhandled rejections.** Process-level handlers, async route
       handlers whose rejection escapes Express error handling.
+      Progress: verified. `unhandledRejection` and `uncaughtException` are logged and survived; Express 5 forwards async route rejections; every streaming route handles a failure after its headers itself (destroying the response), so the error handler never answers a response already under way. A drain awaited without a signal does not hang: Node emits `drain` when the socket is destroyed.
 
 ## Unit 9 — Web: application shell
 
@@ -319,7 +325,7 @@ dialogs, `style.css` (2.3k), `i18n/*`, `vite.config.ts`.
 - [ ] **BH-11.5 CSS.** Dead selectors, duplicated rules; split by
       responsibility only with the visual matrix run once at the end
       (roadmap P2).
-      Progress: #509 removes 64 selectors of 22 classes no element uses (−4 kB); duplicated rules not yet looked at.
+      Progress: #509 removes 64 selectors of 22 classes no element uses (−4 kB). Duplicated rules measured: one repeated block (`.follow-actions`, 52 bytes) and about 60 declarations a later rule with the same selector and context overrides, about 1 kB raw and 0.2 kB gzip; not worth a layout risk, left.
 
 ## Unit 12 — Desktop (Electron)
 
@@ -362,10 +368,10 @@ Files: `android-tv/app/src/main/java/cz/stremiooffline/tv/` — `playback/`
 
 ## Unit 14 — Cross-cutting
 
-- [ ] **BH-14.1 Contract drift.** Compare `web/src/types.ts` and the Android
+- [x] **BH-14.1 Contract drift.** Compare `web/src/types.ts` and the Android
       DTOs with what the server serialises (`api-types.ts`, `publicJob` and
       friends). Start with download pause reasons (roadmap P2).
-      Progress: the Android side is covered by BH-13.5; web and server share `api-types.ts`. Download pause reasons still to compare.
+      Progress: the Android side is covered by BH-13.5; web and server share `api-types.ts`. Pause reasons match on all three sides (downloads: user, storage, library, permission; scans and library operations as the server sends them), and every paused download tells the person why: a library line, or the error the storage and permission pauses set.
 - [ ] **BH-14.2 Test suite health.** Flaky and slow tests from BH-0.1: fix
       the cause, never skip. Server and web suite wall time.
       Progress: measured per file (Linux, four at a time): the server suite's wall time (~100 s) is `downloads.test.ts` alone (~103 s; its slowest tests move 32 MB over a local range server and wait out retries, 5–13 s each), then `library-move-recovery.test.ts` (~67 s; two real server boots and a 2 s save debounce per test, ~5 s each). Every other file is under 12 s. Not changed: shrinking the transfers risks the segmentation thresholds the tests exercise.
