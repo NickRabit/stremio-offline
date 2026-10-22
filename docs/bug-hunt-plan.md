@@ -112,6 +112,7 @@ Files: `store.ts`, `state-file.ts`, `fs-retry.ts`, `library-meta-store.ts`,
       under load (progress ticks, stats, activity). Pretty-printed
       (`JSON.stringify(…, null, 2)`) large files rewritten per tick are a
       candidate; coalesce, do not lose durability of commits.
+      Progress: a playing client posts its position every 10 s, and each post rewrites the whole state file (clone, pretty JSON, temporary file and rename). For a state of a few hundred kB that is tens of MB an hour per player: acceptable, and coalescing would change what an awaited `update` promises. Not changed.
 - [ ] **BH-1.5 Journalled relocation** (roadmap P1.3) — only if not already
       shipped when this part starts.
 
@@ -150,6 +151,7 @@ Files: `playback.ts`, `routes/playback.ts`, `media-playlist.ts`,
       owner and one kill path: session end, owner revocation, client
       disconnect, server shutdown, hardware-accel fallback. Closing one HLS
       segment request must not kill a healthy conversion.
+      Progress: #515 tracks the thumbnail, mosaic, image-resize and ffprobe children with `trackMedia`, so the shutdown takes them down too (they outlived the server and kept writing into its data folder; found as the benchmark's occasional ENOTEMPTY). The hardware-encoder probes in `playback.ts` stay untracked: 0.1 s of `nullsrc`, nothing written.
 - [ ] **BH-3.2 Seek and restart races.** Rapid seeks, two tabs on one
       session, switching source mid-play; serialized operations hold.
 - [ ] **BH-3.3 Caches.** `range-cache`, `byte-cache`, `remote-read-ahead`:
@@ -184,6 +186,7 @@ candidates, episodes, migrate, actions, admin, grants, runtime), `naming.ts`,
 - [ ] **BH-4.4 Destructive actions.** Rename, move, copy, delete, bulk and
       cross-library: explicit preconditions, no swallowed errors (roadmap
       P1.4).
+      Progress: rename, move, copy and delete keep their preconditions (resolved path, busy check, nested library, name clash, admin re-check just before the disk changes). Gap, awaiting a decision: subtitle sidecars (`<stem>.srt`, `<stem>.<lang>.vtt`, matched by the video's stem) are not carried by a file rename or a single-file move or copy, nor removed with a deleted video, so the player stops offering them.
 - [ ] **BH-4.5 Images and artwork.** Cache bounds and eviction, sweep only on
       a provably readable library, concurrent generation of the same mosaic,
       remote image fetch timeouts and size limits.
@@ -199,12 +202,15 @@ Files: `search-*.ts`, `addons.ts`, `addon-refresh.ts`, `tmdb.ts`,
 - [ ] **BH-5.1 Outbound robustness.** Every addon/TMDB call has a timeout, a
       size limit and a cancellation path tied to the client request; one slow
       addon cannot stall Home or search.
-- [ ] **BH-5.2 Search session lifecycle.** Stale results after a new query,
+      Progress: every outbound call carries a deadline except the Real-Debrid API, which waited on undici's five-minute default; #517 gives it 30 seconds and the existing retry. Addon answers (manifest, catalogue, meta, streams, subtitles) were read whole; only the search catalogue had a limit. #518 cuts them off at 16 MB.
+- [x] **BH-5.2 Search session lifecycle.** Stale results after a new query,
       sessions that never end, scheduler fairness between sources, memory per
       abandoned session.
-- [ ] **BH-5.3 Request de-duplication and caching.** `in-flight.ts` coverage,
+      Progress: verified. Catalogue search sessions are capped per owner and server-wide, destroyed on replacement and on stop, and covered by the session, scheduler and contract suites.
+- [x] **BH-5.3 Request de-duplication and caching.** `in-flight.ts` coverage,
       cache keys that include the account where results are per-user, TTLs.
       Count outbound requests for one Home load before and after.
+      Progress: verified. Playback inspection shares one probe per source and lets each caller leave on its own abort without cancelling the others; Home shelves, external ids, images, mosaics and library health each run once per key, and only the entry a call created is removed. The outbound count per Home load is not measured.
 - [ ] **BH-5.4 Home assembly.** `/api/home` latency breakdown per shelf;
       `mergeResume`/`boundCards` correctness with mixed file and catalogue
       progress.
@@ -214,8 +220,9 @@ Files: `search-*.ts`, `addons.ts`, `addon-refresh.ts`, `tmdb.ts`,
 Files: `media-server-*.ts` (~10k lines, `manager` 3.6k and `security` 2k the
 largest), `routes/media-servers.ts`.
 
-- [ ] **BH-6.1 Secrets.** Tokens never in logs, responses, error messages or
+- [x] **BH-6.1 Secrets.** Tokens never in logs, responses, error messages or
       exported settings; rotation and removal leave nothing behind.
+      Progress: verified. The one log line about a media-server token carries the connection id and an error code; the secrets and security suites (110 tests) cover tokens in logs, errors and responses.
 - [ ] **BH-6.2 Swallowed errors.** The silent catches in
       `media-server-security.ts` and `media-server-manager.ts` from BH-0.4.
 - [ ] **BH-6.3 Index and sync.** Incremental vs full sync, server
@@ -252,8 +259,9 @@ Files: `auth.ts`, `roles.ts`, `secure.ts`, `security.ts`, `host-check.ts`,
       lines): library mutation, artwork coordination, source resolution,
       lifecycle. Pick extractions only where a defect from units 1–7 needs a
       testable seam (roadmap P2), not for size alone.
-- [ ] **BH-8.2 Unhandled rejections.** Process-level handlers, async route
+- [x] **BH-8.2 Unhandled rejections.** Process-level handlers, async route
       handlers whose rejection escapes Express error handling.
+      Progress: verified. `unhandledRejection` and `uncaughtException` are logged and survived; Express 5 forwards async route rejections; every streaming route handles a failure after its headers itself (destroying the response), so the error handler never answers a response already under way. A drain awaited without a signal does not hang: Node emits `drain` when the socket is destroyed.
 
 ## Unit 9 — Web: application shell
 
@@ -286,6 +294,7 @@ Files: `Player.tsx`, `player-hls.ts`, `TrailerPlayer.tsx`,
 - [ ] **BH-10.1 Teardown.** hls.js and `<video>` listeners released on close,
       source switch and navigation; no growing listener count after ten
       open/close cycles (heap snapshot).
+      Progress: read through. Closing destroys hls.js, empties the source and removes every listener the player adds. To check on a device (BH-3.2): after a track switch or a recovery that falls back to direct play, the move to the kept position waits for `loadedmetadata` with a `once` listener that no attach sequence guards; a seek or a second switch made before the metadata arrives could be overridden by it.
 - [ ] **BH-10.2 Progress reporting.** Frequency, final position on close/tab
       hide (`pagehide`/`sendBeacon`), no duplicate writes, correct identity
       for library vs catalogue plays.
@@ -318,7 +327,7 @@ dialogs, `style.css` (2.3k), `i18n/*`, `vite.config.ts`.
 - [ ] **BH-11.5 CSS.** Dead selectors, duplicated rules; split by
       responsibility only with the visual matrix run once at the end
       (roadmap P2).
-      Progress: #509 removes 64 selectors of 22 classes no element uses (−4 kB); duplicated rules not yet looked at.
+      Progress: #509 removes 64 selectors of 22 classes no element uses (−4 kB). Duplicated rules measured: one repeated block (`.follow-actions`, 52 bytes) and about 60 declarations a later rule with the same selector and context overrides, about 1 kB raw and 0.2 kB gzip; not worth a layout risk, left.
 
 ## Unit 12 — Desktop (Electron)
 
@@ -361,10 +370,10 @@ Files: `android-tv/app/src/main/java/cz/stremiooffline/tv/` — `playback/`
 
 ## Unit 14 — Cross-cutting
 
-- [ ] **BH-14.1 Contract drift.** Compare `web/src/types.ts` and the Android
+- [x] **BH-14.1 Contract drift.** Compare `web/src/types.ts` and the Android
       DTOs with what the server serialises (`api-types.ts`, `publicJob` and
       friends). Start with download pause reasons (roadmap P2).
-      Progress: the Android side is covered by BH-13.5; web and server share `api-types.ts`. Download pause reasons still to compare.
+      Progress: the Android side is covered by BH-13.5; web and server share `api-types.ts`. Pause reasons match on all three sides (downloads: user, storage, library, permission; scans and library operations as the server sends them), and every paused download tells the person why: a library line, or the error the storage and permission pauses set.
 - [ ] **BH-14.2 Test suite health.** Flaky and slow tests from BH-0.1: fix
       the cause, never skip. Server and web suite wall time.
       Progress: measured per file (Linux, four at a time): the server suite's wall time (~100 s) is `downloads.test.ts` alone (~103 s; its slowest tests move 32 MB over a local range server and wait out retries, 5–13 s each), then `library-move-recovery.test.ts` (~67 s; two real server boots and a 2 s save debounce per test, ~5 s each). Every other file is under 12 s. Not changed: shrinking the transfers risks the segmentation thresholds the tests exercise.
@@ -372,19 +381,34 @@ Files: `android-tv/app/src/main/java/cz/stremiooffline/tv/` — `playback/`
       duration per workflow; Synology/ARM64 build.
 - [ ] **BH-14.4 Re-run the baseline** (BH-0.2, BH-0.3) and record the
       before/after table below.
+      Progress: the runtime baseline (BH-0.2) is re-run on one Linux machine for both commits, table below; the web bundle size is filled in. BH-0.3's Lighthouse and React Profiler traces and the Android cold start are still to do, so the part stays open.
 
 ## Results
 
 | Metric | Baseline (BH-0) | After (BH-14.4) |
 | --- | --- | --- |
-| Server tests (passed / skipped / s) | 2,829 / 6 / 47.5 (Mac) | |
-| Web tests (passed / s) | 1,167 / 8.9 (Mac) | |
+| Server tests (passed / skipped / s) | 2,829 / 6 / 47.5 (Mac) | 2,848 passed (Linux, ~100 s: see BH-14.2) |
+| Web tests (passed / s) | 1,167 / 8.9 (Mac) | 1,169 passed (Linux) |
 | Desktop and media-client tests (passed / skipped / s) | 301 / 0 / 1.2; 29 / 1 / 1.7 (Mac) | |
 | Cold start / RSS | 343 ms / 167 MiB (5k files, Mac) | |
 | Full scan / rescan (5k files) | 24.3 s / 0.76 s (Mac) | |
 | `/api/home` p95 | 5.6 ms (Mac) | |
-| Web first-load JS (gzip) | 715 kB | |
+| Web first-load JS (gzip) | 715 kB | 250 kB (Linux build; hls.js 162 kB and non-English catalogues load on demand) |
 | Android cold start | | |
+
+The Mac baseline cannot be repeated from a cloud session, so the runtime numbers were taken
+again on one Linux machine for both ends: `node scripts/benchmark-runtime.mjs --files 5000`
+on the baseline commit (`2d1d2b47`, #490) and on `main` after #513 (`b8760659`). Same machine,
+same fixture, back to back; home and browse are the 40-sample runs.
+
+| Metric (5,000 files, Linux) | Baseline `2d1d2b47` | After `b8760659` |
+| --- | ---: | ---: |
+| Cold start | 1,316 ms | 1,156 ms |
+| RSS after start / after first scan | 148 / 325 MiB | 147 / 205 MiB |
+| Full scan | 39.3 s | 2.8 s |
+| Rescan | 1.96 s | 1.27 s |
+| `/api/home` p50 / p95 | 6.2 / 11.7 ms | 4.3 / 8.6 ms |
+| `/api/library/browse` p50 | 38.5 ms | 24.0 ms |
 
 ## Found along the way
 
