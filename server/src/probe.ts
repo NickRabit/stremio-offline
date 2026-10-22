@@ -1,10 +1,8 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { detectLanguage, normalizeLanguage } from "./language.js";
 import { log } from "./logger.js";
-import { ffmpegPath, ffprobePath } from "./media-tools.js";
+import { ffmpegPath, ffprobePath, runMedia } from "./media-tools.js";
 
-const run = promisify(execFile);
+const run = runMedia;
 
 export interface Track {
   /** The index within its own type, that is N in the mapping 0:a:N or 0:s:N. */

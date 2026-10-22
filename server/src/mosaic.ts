@@ -1,11 +1,9 @@
-import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import { log } from "./logger.js";
-import { ffmpegPath } from "./media-tools.js";
+import { ffmpegPath, runMedia } from "./media-tools.js";
 
 /**
  * The fan a tile draws when it stands for several films: one picture, composed here, so the
@@ -14,7 +12,7 @@ import { ffmpegPath } from "./media-tools.js";
  * the fan is cached under a stamp drawn from their own versions.
  */
 
-const run = promisify(execFile);
+const run = runMedia;
 
 /** The extension a source really is: the bytes come from a provider or from a thumbnail and may
  *  be any of the four formats the image cache stores. */

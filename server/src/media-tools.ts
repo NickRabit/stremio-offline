@@ -1,4 +1,5 @@
-import type { ChildProcess } from "node:child_process";
+import { execFile, type ChildProcess } from "node:child_process";
+import { promisify } from "node:util";
 
 /** The executable named by the variable, or the bare name that `PATH` resolves. Read per call,
  *  so a test or a container can set the variable after the module was imported. */
@@ -33,6 +34,17 @@ export function trackMedia<T extends ChildProcess>(child: T): T {
   child.once("exit", () => running.delete(child));
   return child;
 }
+
+const execFileAsync = promisify(execFile);
+
+/** `promisify(execFile)` for FFmpeg and ffprobe, with the child tracked: a thumbnail, a mosaic or a
+ *  probe still running when the server stops would otherwise keep writing into the data folder
+ *  after it, until its own timeout. */
+export const runMedia = ((...args: Parameters<typeof execFileAsync>) => {
+  const pending = execFileAsync(...args);
+  trackMedia(pending.child);
+  return pending;
+}) as typeof execFileAsync;
 
 /** Kills every tracked FFmpeg and answers how many were still running. */
 export function killRunningMedia(): number {
