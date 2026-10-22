@@ -1,6 +1,6 @@
 import type { ReactNode, SyntheticEvent } from "react";
 
-export const bytes = (value?: number) => !value ? "—" : value > 1e9 ? `${(value / 1e9).toFixed(1)} GB` : value > 1e6 ? `${(value / 1e6).toFixed(1)} MB` : `${Math.round(value / 1e3)} kB`;
+export const bytes = (value?: number) => !value ? "—" : value > 1e12 ? `${(value / 1e12).toFixed(1)} TB` : value > 1e9 ? `${(value / 1e9).toFixed(1)} GB` : value > 1e6 ? `${(value / 1e6).toFixed(1)} MB` : `${Math.round(value / 1e3)} kB`;
 
 /** Shared by the settings page and the sign-in card, so both look the same. */
 export function SettingsSectionHead({ icon, title, text }: { icon: ReactNode; title: string; text?: string }) {
