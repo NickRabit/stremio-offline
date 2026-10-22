@@ -47,7 +47,7 @@ export const pl: Catalog = {
   "auth.sectionTitle": "Logowanie",
   "auth.signedInAs": "Zalogowano jako {username}",
   "auth.usernameHint": "Służy do logowania się na tym serwerze.",
-  "auth.currentPasswordHint": "Potwierdza, że ​​zmiana naprawdę pochodzi od Ciebie.",
+  "auth.currentPasswordHint": "Potwierdza, że zmiana naprawdę pochodzi od Ciebie.",
   "auth.currentPassword": "Aktualne hasło",
   "auth.newPassword": "Nowe hasło",
   "auth.newPasswordHint": "Co najmniej 6 znaków. Wylogowuje każde inne urządzenie.",

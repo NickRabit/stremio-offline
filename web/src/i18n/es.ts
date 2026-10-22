@@ -543,7 +543,7 @@ export const es: Catalog = {
   "episodes.wholeShowCount": { one: "el único episodio", other: "todos los {count} episodios" },
   "episodes.bulkConfirm": "¿Agregar {what} a la cola? Cada episodio elige su fuente cuando se descarga.",
   "episodes.bulkAdded": { one: "1 episodio añadido a la cola.", other: "{count} episodios agregados a la cola." },
-  "episodes.bulkSkipped": { one: "1 saltado, ya en cola.", other: "{count} omitido, ya en cola." },
+  "episodes.bulkSkipped": { one: "1 saltado, ya en cola.", other: "{count} omitidos, ya en cola." },
   "bulk.title": "Descargar serie",
   "bulk.episodeCount": { one: "1 episodio", other: "{count} episodios" },
   "bulk.sourceStrategy": "Selección de fuente",

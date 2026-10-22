@@ -251,7 +251,7 @@
   </plurals>
   <plurals name="episodes_bulk_skipped">
     <item quantity="one">1 saltado, ya en cola.</item>
-    <item quantity="other">%1$s omitido, ya en cola.</item>
+    <item quantity="other">%1$s omitidos, ya en cola.</item>
   </plurals>
   <string name="catalog_suggest_recent">Búsqueda reciente</string>
   <string name="common_remove">Quitar</string>
