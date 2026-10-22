@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useDialogFocus } from "./dialog-focus";
 import { ArrowDown, ArrowUp, Bell, CalendarClock, FolderOpen, Languages, ListFilter, Subtitles, Trash2, X } from "lucide-react";
 import { api, describeError } from "./api";
 import { languageName, t, useI18n } from "./i18n";
@@ -52,6 +53,8 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
   onClose: () => void;
   onSubmit?: (selection: DownloadSelection, target?: SaveTarget) => Promise<void>;
 }) {
+  const dialog = useRef<HTMLDivElement>(null);
+  useDialogFocus(dialog);
   useI18n();
   const initial = follow?.initial;
   const startAudio = initial?.selection.audioLanguage ?? audioLanguage;
@@ -233,7 +236,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
     finally { setBusy(false); }
   };
 
-  return <div className="identify-overlay" role="dialog" aria-modal="true" aria-labelledby="bulk-dialog-title" onChangeCapture={() => { touched.current = true; }} onClick={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
+  return <div ref={dialog} tabIndex={-1} className="identify-overlay" role="dialog" aria-modal="true" aria-labelledby="bulk-dialog-title" onChangeCapture={() => { touched.current = true; }} onClick={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
     <div className="panel identify-card dialog-split bulk-card">
       <div className="identify-head bulk-head"><div><span className="bulk-eyebrow">{label}</span><h2 id="bulk-dialog-title">{creating ? t(isMovie ? "follow.createTitleMovie" : "follow.createTitle") : follow ? t("follow.setupTitle") : t("bulk.title")}</h2></div><button className="icon-button" aria-label={t("common.cancel")} disabled={busy} onClick={onClose}><X/></button></div>
       <div className="dialog-body bulk-body">

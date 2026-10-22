@@ -1,3 +1,6 @@
+import { readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { act, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -45,4 +48,19 @@ it("keeps an all-disabled dialog focused and recovers when a control enables", (
   trigger.focus(); tab(); expect(document.activeElement).toBe(host.querySelector('[role="dialog"]'));
   host.querySelector("button")!.disabled = false;
   tab(true); expect(document.activeElement).toBe(host.querySelector("button"));
+});
+
+/** Every modal dialog keeps keyboard focus inside itself and hands it back on close. Read from
+ *  the source because most of them only mount deep inside a page; a new modal that forgets the
+ *  hook fails here. The player and the trailer manage focus of their own on purpose. */
+it("is used by every modal dialog", () => {
+  const exempt = new Set(["Player.tsx", "TrailerPlayer.tsx"]);
+  const dir = path.dirname(fileURLToPath(import.meta.url));
+  const missing = readdirSync(dir)
+    .filter((name) => name.endsWith(".tsx") && !name.endsWith(".test.tsx") && !exempt.has(name))
+    .filter((name) => {
+      const text = readFileSync(path.join(dir, name), "utf8");
+      return text.includes('aria-modal="true"') && !text.includes("useDialogFocus(");
+    });
+  expect(missing).toEqual([]);
 });

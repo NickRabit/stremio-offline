@@ -1,4 +1,5 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useState, useRef } from "react";
+import { useDialogFocus } from "./dialog-focus";
 import { ArrowDown, ArrowUp, Copy, ExternalLink, FileJson, PackagePlus, Plus, RefreshCw, ShieldCheck, SlidersHorizontal, Trash2, X } from "lucide-react";
 import { api } from "./api";
 import { copyText } from "./clipboard";
@@ -186,6 +187,8 @@ type Draft = {
 function AddonEditDialog({ addon, libraries, onClose, onChanged, onNotify, onError, onRemoved }:
   { addon: Addon; libraries: LibraryView[]; onClose: () => void; onChanged: () => Promise<void>;
     onNotify: (message: string) => void; onError: (error: unknown) => void; onRemoved: () => void }) {
+  const dialog = useRef<HTMLDivElement>(null);
+  useDialogFocus(dialog);
   useI18n();
   const stored = addon.downloadSettings ?? emptyDownloadSettings();
   const catalogDefinitions = addon.manifest.catalogs ?? [];
@@ -275,7 +278,7 @@ function AddonEditDialog({ addon, libraries, onClose, onChanged, onNotify, onErr
       <span>{labelText}</span>
     </label>;
 
-  return <div className="identify-overlay" role="dialog" aria-modal="true" aria-label={t("addons.editAddon")}
+  return <div ref={dialog} tabIndex={-1} className="identify-overlay" role="dialog" aria-modal="true" aria-label={t("addons.editAddon")}
     onClick={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
     <form className="panel identify-card dialog-split addon-edit-card" onSubmit={(event) => { event.preventDefault(); if (dirty && valid) void save(); }}>
       <div className="identify-head">

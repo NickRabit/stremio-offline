@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
+import { useDialogFocus } from "./dialog-focus";
 import { ArrowDown, ArrowUp, Check, ChevronRight, CornerLeftUp, FolderOpen, FolderPlus, HardDrive, Plus, RefreshCw, Search, SlidersHorizontal, Sparkles, Trash2, X } from "lucide-react";
 import { api, describeError } from "./api";
 import { desktopBridge } from "./desktop-bridge";
@@ -116,13 +117,15 @@ export function LibraryManager({ restricted = false, onChanged, onError, onNotif
 
 /** The same panel behind an overlay, for the library tools menu. */
 export function LibraryManagerDialog({ onClose, ...rest }: Parameters<typeof LibraryManager>[0] & { onClose: () => void }) {
+  const dialog = useRef<HTMLDivElement>(null);
+  useDialogFocus(dialog);
   useI18n();
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
-  return <div className="identify-overlay" role="dialog" aria-modal="true" aria-label={t("library.libraries")}
+  return <div ref={dialog} tabIndex={-1} className="identify-overlay" role="dialog" aria-modal="true" aria-label={t("library.libraries")}
     onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <div className="panel identify-card dialog-split library-manager-card">
       <div className="identify-head">
@@ -140,6 +143,8 @@ type LibrarySettingsPatch = Parameters<typeof api.updateLibrary>[1];
 
 function LibraryEditDialog({ library, libraryCount, onClose, onSave, onScan, onReroot, onRemove }:
   { library: LibraryView; libraryCount: number; onClose: () => void; onSave: (patch: LibrarySettingsPatch) => Promise<void>; onScan: () => Promise<void>; onReroot: () => void; onRemove: (forget: boolean) => Promise<void> }) {
+  const dialog = useRef<HTMLDivElement>(null);
+  useDialogFocus(dialog);
   useI18n();
   const [draft, setDraft] = useState(() => ({
     name: library.name, type: library.type, enabled: library.enabled, writeArtwork: library.writeArtwork,
@@ -197,7 +202,7 @@ function LibraryEditDialog({ library, libraryCount, onClose, onSave, onScan, onR
       <span>{label}</span>
     </label>;
 
-  return <div className="identify-overlay" role="dialog" aria-modal="true" aria-label={t("library.editLibrary")}
+  return <div ref={dialog} tabIndex={-1} className="identify-overlay" role="dialog" aria-modal="true" aria-label={t("library.editLibrary")}
     onClick={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
     <form className="panel identify-card dialog-split library-edit-card" onSubmit={(event) => { event.preventDefault(); void save(); }}>
       <div className="identify-head">
@@ -263,6 +268,8 @@ function LibraryEditDialog({ library, libraryCount, onClose, onSave, onScan, onR
  *  what the scan behind the confirmation will cost. */
 function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
   { reroot?: LibraryView; onClose: () => void; onDone: (message: string) => void; onError: (error: unknown) => void; onLibrariesChanged?: () => void }) {
+  const dialog = useRef<HTMLDivElement>(null);
+  useDialogFocus(dialog);
   useI18n();
   const [browse, setBrowse] = useState<GrantBrowse | null>(null);
   const [grants, setGrants] = useState<LibraryGrant[]>([]);
@@ -389,7 +396,7 @@ function RootPicker({ reroot, onClose, onDone, onError, onLibrariesChanged }:
     : "";
   const crumbs = browse && browse.path ? browse.path.split("/") : [];
   const visibleEntries = browse?.entries.filter((entry) => entry.name.toLocaleLowerCase().includes(folderFilter.trim().toLocaleLowerCase())) ?? [];
-  return <div className="identify-overlay" role="dialog" aria-modal="true" aria-label={t("library.chooseFolder")}
+  return <div ref={dialog} tabIndex={-1} className="identify-overlay" role="dialog" aria-modal="true" aria-label={t("library.chooseFolder")}
     onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <div className="panel identify-card dialog-split library-picker-card">
       <div className="identify-head">
