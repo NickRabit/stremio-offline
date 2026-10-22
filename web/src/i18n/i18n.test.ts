@@ -102,6 +102,16 @@ describe("catalogues", () => {
       }
     }
   });
+
+  it("carry no invisible characters a translation tool left behind", () => {
+    const texts = (value: unknown): string[] => typeof value === "string" ? [value] : Object.values(value as Record<string, string>);
+    for (const [locale, catalog] of Object.entries(catalogues)) {
+      const found = Object.entries(catalog)
+        .filter(([, value]) => texts(value).some((text) => /[\u200b-\u200d\u2060\ufeff]/.test(text)))
+        .map(([key]) => key);
+      expect({ locale, found }).toEqual({ locale, found: [] });
+    }
+  });
 });
 
 /** A key the server can send that the catalogue does not carry falls back to the server's

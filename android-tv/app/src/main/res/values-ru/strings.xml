@@ -252,7 +252,7 @@
   <string name="save_target_default_library">Библиотека по умолчанию</string>
   <string name="save_target_no_library">Ни одна библиотека, в которую вы можете писать, не имеет такого названия.</string>
   <plurals name="episodes_bulk_added">
-    <item quantity="one">В очередь добавлена ​​%1$s серия.</item>
+    <item quantity="one">В очередь добавлена %1$s серия.</item>
     <item quantity="few">В очередь добавлено %1$s серии.</item>
     <item quantity="many">В очередь добавлено %1$s серий.</item>
     <item quantity="other">В очередь добавлено %1$s серий.</item>

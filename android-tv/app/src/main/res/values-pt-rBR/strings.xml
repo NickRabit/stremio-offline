@@ -250,8 +250,8 @@
     <item quantity="other">%1$s episódios adicionados à fila.</item>
   </plurals>
   <plurals name="episodes_bulk_skipped">
-    <item quantity="one">%1$s pulei, já estou na fila.</item>
-    <item quantity="other">%1$s ignorado, já na fila.</item>
+    <item quantity="one">%1$s ignorado, já na fila.</item>
+    <item quantity="other">%1$s ignorados, já na fila.</item>
   </plurals>
   <string name="catalog_suggest_recent">Pesquisa recente</string>
   <string name="common_remove">Remover</string>

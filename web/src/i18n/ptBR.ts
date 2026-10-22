@@ -543,7 +543,7 @@ export const ptBR: Catalog = {
   "episodes.wholeShowCount": { one: "o único episódio", other: "todos os {count} episódios" },
   "episodes.bulkConfirm": "Adicionar {what} à fila? Cada episódio escolhe sua fonte durante o download.",
   "episodes.bulkAdded": { one: "{count} episódio adicionado à fila.", other: "{count} episódios adicionados à fila." },
-  "episodes.bulkSkipped": { one: "{count} pulei, já estou na fila.", other: "{count} ignorado, já na fila." },
+  "episodes.bulkSkipped": { one: "{count} ignorado, já na fila.", other: "{count} ignorados, já na fila." },
   "bulk.title": "Baixar série",
   "bulk.episodeCount": { one: "{count} episódio", other: "{count} episódios" },
   "bulk.sourceStrategy": "Seleção de fonte",

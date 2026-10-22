@@ -869,7 +869,7 @@ export const it: Catalog = {
   "library.identifySeason": "Stagione",
   "library.identifyEpisode": "Episodio",
   "library.identifyEpisodePick": "Scegli un episodio...",
-  "library.identifyEpisodeHint": "Quale episodio contiene questo file. Vengono quindi mostrati il ​​nome e la trama della serie al posto della trama della serie.",
+  "library.identifyEpisodeHint": "Quale episodio contiene questo file. Vengono quindi mostrati il nome e la trama della serie al posto della trama della serie.",
   "users.title": "Utenti",
   "users.hint": "Gli account su questo server e ciò che ciascuno di essi può utilizzare.",
   "users.addAccount": "Aggiungi account",
