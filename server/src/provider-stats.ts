@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { renameWithRetry } from "./fs-retry.js";
+import { log } from "./logger.js";
 
 /** One request the app put on the wire towards an Emby or Jellyfin server. The transport names
  *  the operation, so a count is a call that left this process: what it answered from its own
@@ -62,7 +63,7 @@ export class ProviderStats {
     bucket[kind] += 1;
     this.dirty = true;
     if (!this.timer) {
-      this.timer = setTimeout(() => { this.timer = undefined; void this.flush(); }, 1000);
+      this.timer = setTimeout(() => { this.timer = undefined; this.flushQuietly(); }, 1000);
       this.timer.unref?.();
     }
   }
@@ -79,19 +80,26 @@ export class ProviderStats {
     return out;
   }
 
+  /** A write nobody waits for: the next one carries the same counts, so a failure is only said. */
+  private flushQuietly() {
+    this.flush().catch((error: unknown) => log("WARN", "The provider call counts could not be saved", { file: path.basename(this.file), reason: String(error).slice(0, 200) }));
+  }
+
   flush(): Promise<void> {
     if (!this.dirty) return this.chain;
     this.dirty = false;
     const cutoff = this.now() - KEEP_MS;
     this.buckets = this.buckets.filter((bucket) => Date.parse(bucket.at) >= cutoff);
     const payload = JSON.stringify(this.buckets);
-    this.chain = this.chain.then(async () => {
+    const write = this.chain.then(async () => {
       await mkdir(path.dirname(this.file), { recursive: true });
       const temp = `${this.file}.tmp`;
       await writeFile(temp, payload, { mode: 0o600 });
       await renameWithRetry(temp, this.file);
-    });
-    return this.chain;
+    }).catch((error: unknown) => { this.dirty = true; throw error; });
+    // Chaining onto the rejection itself would skip every later write until a restart.
+    this.chain = write.catch(() => undefined);
+    return write;
   }
 
   private readBucket(item: unknown): Bucket[] {

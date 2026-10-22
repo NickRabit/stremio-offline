@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -42,4 +42,21 @@ test("an unknown surface keeps the store's own layer and an unset counter record
   assert.equal(askedSurface("nope"), "other");
   useImageStats(undefined);
   noteImage("library", "memory");
+});
+
+test("a failed write neither stops the later ones nor loses the counts it carried", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "image-stats-"));
+  const file = path.join(dir, "image-stats.json");
+  const now = Date.parse("2026-10-14T12:30:00Z");
+  const stats = new ImageStats(file, () => now);
+  // A directory where the temporary file goes makes the write fail, the way a full disk would.
+  await mkdir(`${file}.tmp`);
+  stats.record("remote", "disk");
+  await assert.rejects(stats.flush());
+  await rm(`${file}.tmp`, { recursive: true });
+  await stats.flush();
+  const restarted = new ImageStats(file, () => now);
+  await restarted.load();
+  assert.equal(restarted.summary(24).remote.disk, 1, "the count of the failed write lands with the next one");
+  await rm(dir, { recursive: true, force: true });
 });

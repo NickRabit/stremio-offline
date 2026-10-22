@@ -2745,7 +2745,7 @@ const shutdown = createShutdown({
   maintenance,
   followService,
   killRunningMedia,
-  flushes: [() => stats.activity.flush(), () => imageStats.flush(), () => providerStats.flush(), () => images.flush(), () => artworks.flush(), () => metaStore.flush(), () => seen.flush(), () => libraryOps.flush(), () => libraryScan.flush(), () => mediaServerGuard.close(), () => playbackReports.close(), () => mediaServers.close()],
+  flushes: [() => stats.flush(), () => stats.activity.flush(), () => imageStats.flush(), () => providerStats.flush(), () => images.flush(), () => artworks.flush(), () => metaStore.flush(), () => seen.flush(), () => libraryOps.flush(), () => libraryScan.flush(), () => mediaServerGuard.close(), () => playbackReports.close(), () => mediaServers.close()],
   store,
   flushLog,
   log,
