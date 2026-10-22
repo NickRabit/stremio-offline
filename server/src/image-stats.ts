@@ -120,7 +120,9 @@ export class ImageStats {
   }
 
   flush(): Promise<void> {
-    if (!this.dirty) return this.chain;
+    // Nothing new: wait for the write already under way, and make it again if that one failed --
+    // shutdown is the last chance to save what it carried.
+    if (!this.dirty) return this.chain.then(() => this.dirty ? this.flush() : undefined);
     this.dirty = false;
     const cutoff = this.now() - KEEP_MS;
     this.buckets = this.buckets.filter((bucket) => Date.parse(bucket.at) >= cutoff);

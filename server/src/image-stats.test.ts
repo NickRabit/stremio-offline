@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { rmSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -58,5 +59,24 @@ test("a failed write neither stops the later ones nor loses the counts it carrie
   const restarted = new ImageStats(file, () => now);
   await restarted.load();
   assert.equal(restarted.summary(24).remote.disk, 1, "the count of the failed write lands with the next one");
+  await rm(dir, { recursive: true, force: true });
+});
+
+test("a flush that waits on a write already in flight writes again when that one fails", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "image-stats-"));
+  const file = path.join(dir, "image-stats.json");
+  const now = Date.parse("2026-10-14T12:30:00Z");
+  const stats = new ImageStats(file, () => now);
+  await mkdir(`${file}.tmp`);
+  stats.record("remote", "disk");
+  // The debounced write is under way when shutdown asks for its own flush; the first one fails.
+  const inFlight = stats.flush();
+  inFlight.catch(() => rmSync(`${file}.tmp`, { recursive: true }));
+  const shutdown = stats.flush();
+  await assert.rejects(inFlight);
+  await shutdown;
+  const restarted = new ImageStats(file, () => now);
+  await restarted.load();
+  assert.equal(restarted.summary(24).remote.disk, 1, "the shutdown flush writes what the failed write carried");
   await rm(dir, { recursive: true, force: true });
 });
