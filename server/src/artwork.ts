@@ -1,15 +1,13 @@
-import { execFile } from "node:child_process";
 import { access, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import { renameWithRetry } from "./fs-retry.js";
 import { log } from "./logger.js";
-import { ffmpegPath } from "./media-tools.js";
+import { ffmpegPath, runMedia } from "./media-tools.js";
 import { guardedFetch } from "./outbound.js";
 import type { LibraryHealth } from "./library-probe.js";
 import type { LibraryRecord } from "./libraries.js";
 
-const run = promisify(execFile);
+const run = runMedia;
 
 /** The names Emby and Jellyfin look for pictures under. The order is the priority. */
 export const POSTER_NAMES = ["poster.jpg", "poster.png", "folder.jpg", "folder.png", "cover.jpg", "cover.png", "default.jpg"];
@@ -321,6 +319,8 @@ export async function saveFrame(videoPath: string, target: string, seconds = 300
     await renameWithRetry(temp, target);
     return true;
   } catch (error) {
+    // A killed or failed ffmpeg can leave a partial picture behind, which nothing would ever remove.
+    await rm(temp, { force: true });
     log("WARN", "The thumbnail could not be generated", { file: path.basename(videoPath), reason: error instanceof Error ? error.message.slice(0, 120) : String(error) });
     return false;
   }

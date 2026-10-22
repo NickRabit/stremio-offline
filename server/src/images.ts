@@ -1,11 +1,9 @@
-import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import { renameWithRetry } from "./fs-retry.js";
 import { log } from "./logger.js";
-import { ffmpegPath } from "./media-tools.js";
+import { ffmpegPath, runMedia } from "./media-tools.js";
 import { guardedFetch } from "./outbound.js";
 import { secureMode } from "./secure.js";
 import type { MetaItem } from "./types.js";
@@ -349,7 +347,7 @@ export class ImageProxy {
     const temp = path.join(this.dir, `.resize-${randomUUID()}`);
     try {
       await writeFile(temp, data, { mode: 0o600 });
-      const { stdout } = await promisify(execFile)(ffmpegPath(), [
+      const { stdout } = await runMedia(ffmpegPath(), [
         "-hide_banner", "-loglevel", "error", "-nostdin", "-threads", "1", "-i", temp,
         "-vf", `scale='min(${target},iw)':-2`, "-q:v", "5", "-c:v", "mjpeg", "-f", "image2pipe", "pipe:1",
       ], { encoding: "buffer", timeout: FFMPEG_TIMEOUT_MS, killSignal: "SIGKILL", maxBuffer: MAX_BYTES * 2 });
