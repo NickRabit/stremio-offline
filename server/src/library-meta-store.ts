@@ -306,6 +306,7 @@ export class LibraryMetaStore {
     // once it is done, so waiting for it is enough.
     await this.writes.get(libraryId);
     this.writes.delete(libraryId);
+    this.dirty.delete(libraryId);
     await rm(this.fileFor(libraryId), { force: true });
   }
 
@@ -358,6 +359,8 @@ export class LibraryMetaStore {
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
     this.saveEpisodes();
+    for (const name of [...this.dirty]) await this.write(name);
+    await Promise.all(this.writes.values());
     for (const name of [...this.dirty]) await this.write(name);
   }
 }

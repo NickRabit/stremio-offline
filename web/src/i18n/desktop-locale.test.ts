@@ -35,4 +35,13 @@ describe("the first language of a page the desktop app serves", () => {
   it("falls back to the browser for a language it does not know", async () => {
     expect(await firstLocale("xx", "sk")).toBe("sk");
   });
+
+  it("persists a return to English while another language is loading", async () => {
+    await firstLocale("en", "en-US");
+    const i18n = await import("./index");
+    i18n.setLocale("ru");
+    i18n.setLocale("en");
+    expect(localStorage.getItem("ui-language")).toBe("en");
+    expect(i18n.locale()).toBe("en");
+  });
 });

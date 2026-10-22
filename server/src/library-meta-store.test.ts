@@ -391,3 +391,19 @@ test("a write that failed is made by the next flush, and two flushes never overl
       ["Alien.mkv", "Dune.mkv", "Heat.mkv"], "the last write to land is the newest");
   });
 });
+
+test("forget does not recreate a library after its in-flight write fails", async () => {
+  await withStore(async (store, dataDir) => {
+    await store.load();
+    await store.update("lib_a", (file) => { file.meta["Heat.mkv"] = record("tt1"); });
+    const file = libraryFile(dataDir, "lib_a");
+    await mkdir(`${file}.tmp`, { recursive: true });
+    const writing = store.flush();
+    await Promise.resolve();
+    await store.forget("lib_a");
+    await writing;
+    await rm(`${file}.tmp`, { recursive: true });
+    await store.flush();
+    await assert.rejects(stat(file), { code: "ENOENT" });
+  });
+});

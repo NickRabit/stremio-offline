@@ -49,7 +49,7 @@ const QUALITY = new Set(QUALITY_TOKENS.map((token) => token.toLowerCase()));
 const GENRES = new Set(CZECH_GENRE_TOKENS.map((token) => token.toLowerCase()));
 const PHRASES = [...QUALITY_PHRASES].sort((a, b) => b.length - a.length);
 const YEAR_TOKEN = /^(19|20)\d{2}$/;
-const PAREN_YEAR = /\((19|20)\d{2}\)/;
+const PAREN_YEAR = /\((19|20)\d{2}\)/g;
 const COUNTRY_TAG = /\s*\(([A-Z]{2})\)\s*$/;
 // A file can hold several episodes (S02E01E02, S02E01-E02, S02E01-02); it is read as the first.
 const TAGGED_EPISODE = /\bS(\d{1,3})E(\d{1,4})(?:-E?\d{1,4}|E\d{1,4})*\b/i;
@@ -156,11 +156,6 @@ function extractHints(input: string): { rest: string; hints: NonNullable<ParsedM
   return { rest, hints };
 }
 
-function removeWholePart(source: string, part: string): string {
-  const escaped = part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return source.replace(new RegExp(`(^|[.\\s_])${escaped}(?=$|[.\\s_])`), "$1");
-}
-
 function isYearPart(part: string): boolean {
   if (!YEAR_TOKEN.test(part)) return false;
   if (QUALITY.has(part.toLowerCase())) return false;
@@ -182,17 +177,18 @@ function splitHyphenRuns(source: string): string {
 }
 
 function takeYear(source: string): { year?: number; rest: string } {
-  const paren = PAREN_YEAR.exec(source);
-  if (paren) {
-    return {
-      year: Number(paren[0].slice(1, -1)),
-      rest: `${source.slice(0, paren.index)} ${source.slice(paren.index + paren[0].length)}`,
-    };
+  let last: { year: number; start: number; end: number } | undefined;
+  for (const match of source.matchAll(PAREN_YEAR)) {
+    last = { year: Number(match[0].slice(1, -1)), start: match.index, end: match.index + match[0].length };
   }
-  // The release year is the last one: an earlier one belongs to the title (Blade Runner 2049).
-  const years = source.split(/[.\s_]+/).filter(isYearPart);
-  const last = years[years.length - 1];
-  return last ? { year: Number(last), rest: removeWholePart(source, last) } : { rest: source };
+  for (const match of source.matchAll(/(^|[.\s_])((?:19|20)\d{2})(?=$|[.\s_])/g)) {
+    const start = match.index + match[1].length;
+    if (last && start < last.start) continue;
+    last = { year: Number(match[2]), start, end: start + match[2].length };
+  }
+  return last
+    ? { year: last.year, rest: `${source.slice(0, last.start)} ${source.slice(last.end)}` }
+    : { rest: source };
 }
 
 function stripPhrases(source: string): string {

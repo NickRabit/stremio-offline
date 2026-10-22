@@ -217,6 +217,9 @@ test("a title that holds a year keeps it, and the release year is the last one",
   assert.equal(parseMediaName("2001.A.Space.Odyssey.1968.1080p").title, "2001 A Space Odyssey");
   assert.equal(parseMediaName("2001.A.Space.Odyssey.1968.1080p").year, 1968);
   assert.equal(parseMediaName("The.Matrix.1999.1080p").year, 1999, "a single year is still the year");
+  assert.equal(parseMediaName("Blade Runner (2049) 2017 1080p").year, 2017, "a parenthesised title year does not outrank a later release year");
+  assert.equal(parseMediaName("Blade Runner 2049 (2017)").year, 2017, "the final parenthesised year is still a release year");
+  assert.equal(parseMediaName("Movie.2017.Alternate.2017.1080p").title, "Movie 2017 Alternate", "only the final repeated year is removed");
 });
 
 test("a file holding several episodes is read as its first one", () => {

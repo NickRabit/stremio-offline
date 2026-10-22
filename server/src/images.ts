@@ -270,6 +270,8 @@ export class ImageProxy {
   async flush() {
     if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = undefined; }
     if (this.dirty) { this.dirty = false; await this.writeIndex(); }
+    await this.indexWrites;
+    if (this.dirty) { this.dirty = false; await this.writeIndex(); }
   }
 
   /** Remote address in, opaque link out. Anything already local is left alone. A width other

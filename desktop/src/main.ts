@@ -1275,7 +1275,12 @@ const resetLocal = async (
     shellState.chosen = null;
     shellState.connection = null;
     connected = null;
-    profileStore = await readProfiles(userDataDir);
+    try {
+      profileStore = await readProfiles(userDataDir);
+    } catch (error) {
+      profileStore = { profiles: [], selectedProfileId: null };
+      leftovers.push(error instanceof Error ? error.message : String(error));
+    }
     refreshInitialized();
     shellState.screen = { kind: "welcome" };
     pushState();

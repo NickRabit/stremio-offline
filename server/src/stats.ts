@@ -238,6 +238,7 @@ export class StatsLog {
   private pending = new Map<string, { meta: TrafficMeta; bytes: number; items: number }>();
   private file: string;
   private chain: Promise<void> = Promise.resolve();
+  private unsaved = false;
   private timer?: NodeJS.Timeout;
   private compactedAt = 0;
 
@@ -304,7 +305,7 @@ export class StatsLog {
 
   /** Pending increments are turned into entries stamped with the time the traffic actually flowed. */
   flush() {
-    if (!this.pending.size) return this.chain;
+    if (!this.pending.size) return this.chain.then(() => this.unsaved ? this.save() : undefined);
     const at = new Date().toISOString();
     for (const { meta, bytes, items } of this.pending.values()) {
       if (bytes || items) this.events.push({ ...meta, at, bytes, items });
@@ -323,7 +324,8 @@ export class StatsLog {
       const temp = `${this.file}.tmp`;
       await writeFile(temp, JSON.stringify(this.events), { mode: 0o600 });
       await renameWithRetry(temp, this.file);
-    });
+      this.unsaved = false;
+    }).catch((error: unknown) => { this.unsaved = true; throw error; });
     // Chaining onto the rejection itself would skip every later write until a restart.
     this.chain = write.catch(() => undefined);
     return write;
