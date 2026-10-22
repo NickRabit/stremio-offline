@@ -4,10 +4,12 @@ import { renameWithRetry } from "./fs-retry.js";
 import { log } from "./logger.js";
 import { ffmpegPath, runMedia } from "./media-tools.js";
 import { guardedFetch } from "./outbound.js";
+import { readLimitedBody, ResponseTooLargeError } from "./response-body.js";
 import type { LibraryHealth } from "./library-probe.js";
 import type { LibraryRecord } from "./libraries.js";
 
 const run = runMedia;
+const MAX_PICTURE_BYTES = 8 * 1024 * 1024;
 
 /** The names Emby and Jellyfin look for pictures under. The order is the priority. */
 export const POSTER_NAMES = ["poster.jpg", "poster.png", "folder.jpg", "folder.png", "cover.jpg", "cover.png", "default.jpg"];
@@ -129,9 +131,14 @@ const fetchPicture = async (url: string): Promise<FetchOutcome> => {
     if (!response.ok) return { ok: false, reason: "status", detail: `${response.status}` };
     const type = response.headers.get("content-type") ?? "";
     if (!type.startsWith("image/")) return { ok: false, reason: "content-type", detail: type || "(none)" };
-    const data = Buffer.from(await response.arrayBuffer());
-    if (!data.length || data.length > 8 * 1024 * 1024) return { ok: false, reason: "size", detail: `${data.length}` };
-    return { ok: true, data };
+    try {
+      const data = await readLimitedBody(response, MAX_PICTURE_BYTES);
+      if (!data.length) return { ok: false, reason: "size", detail: "0" };
+      return { ok: true, data };
+    } catch (error) {
+      if (error instanceof ResponseTooLargeError) return { ok: false, reason: "size", detail: `${error.observedBytes}` };
+      throw error;
+    }
   } catch (error) {
     return { ok: false, reason: "failed", detail: error instanceof Error ? error.message : String(error) };
   }
@@ -297,8 +304,8 @@ export async function savePosterFromUrl(directory: string, url: string): Promise
     if (!response.ok) return false;
     const type = response.headers.get("content-type") ?? "";
     if (!type.startsWith("image/")) return false;
-    const data = Buffer.from(await response.arrayBuffer());
-    if (!data.length || data.length > 8 * 1024 * 1024) return false;
+    const data = await readLimitedBody(response, MAX_PICTURE_BYTES);
+    if (!data.length) return false;
     await writeAtomic(path.join(directory, POSTER_OUTPUT), data);
     return true;
   } catch { return false; }
@@ -320,7 +327,14 @@ export async function saveFrame(videoPath: string, target: string, seconds = 300
     return true;
   } catch (error) {
     // A killed or failed ffmpeg can leave a partial picture behind, which nothing would ever remove.
-    await rm(temp, { force: true });
+    try {
+      await rm(temp, { force: true });
+    } catch (cleanupError) {
+      log("WARN", "The thumbnail temporary file could not be removed", {
+        file: path.basename(temp),
+        reason: cleanupError instanceof Error ? cleanupError.message.slice(0, 120) : String(cleanupError),
+      });
+    }
     log("WARN", "The thumbnail could not be generated", { file: path.basename(videoPath), reason: error instanceof Error ? error.message.slice(0, 120) : String(error) });
     return false;
   }

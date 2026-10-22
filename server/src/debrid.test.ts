@@ -159,3 +159,40 @@ test("a request that ran past its deadline is a retryable failure", async () => 
   assert.ok(error instanceof DebridError);
   assert.equal(isRetryableDebridFailure(error), true);
 });
+
+test("a response body that times out after successful headers is retryable", async () => {
+  const response = Object.assign(new Response(null), {
+    json: async () => { throw new DOMException("The operation was aborted due to timeout", "TimeoutError"); },
+  });
+  await assert.rejects(
+    verifyRealDebridToken("secret-token", async () => response),
+    (error: unknown) => error instanceof DebridError && error.status === 408 && isRetryableDebridFailure(error),
+  );
+});
+
+test("a response body transport failure is retryable", async () => {
+  const response = Object.assign(new Response(null), {
+    json: async () => { throw new TypeError("terminated"); },
+  });
+  await assert.rejects(
+    addMagnet("token", magnetFromHash(HASH), async () => response),
+    (error: unknown) => error instanceof DebridError && error.status === 408 && isRetryableDebridFailure(error),
+  );
+});
+
+test("malformed successful response JSON stays a data error", async () => {
+  await assert.rejects(
+    verifyRealDebridToken("token", async () => new Response("{")),
+    (error: unknown) => error instanceof SyntaxError && !isRetryableDebridFailure(error),
+  );
+});
+
+test("a non-2xx response body timeout is retryable", async () => {
+  const response = Object.assign(new Response(null, { status: 503 }), {
+    json: async () => { throw new DOMException("The operation was aborted due to timeout", "TimeoutError"); },
+  });
+  await assert.rejects(
+    addMagnet("token", magnetFromHash(HASH), async () => response),
+    (error: unknown) => error instanceof DebridError && error.status === 408 && isRetryableDebridFailure(error),
+  );
+});

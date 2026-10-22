@@ -202,7 +202,7 @@ Files: `search-*.ts`, `addons.ts`, `addon-refresh.ts`, `tmdb.ts`,
 - [ ] **BH-5.1 Outbound robustness.** Every addon/TMDB call has a timeout, a
       size limit and a cancellation path tied to the client request; one slow
       addon cannot stall Home or search.
-      Progress: every outbound call carries a deadline except the Real-Debrid API, which waited on undici's five-minute default; #517 gives it 30 seconds and the existing retry. Addon answers (manifest, catalogue, meta, streams, subtitles) were read whole; only the search catalogue had a limit. #518 cuts them off at 16 MB.
+      Progress: #517 gives Real-Debrid a 30-second deadline and retry; #521 classifies body-read timeouts for that retry. #518 limits addon JSON to 16 MiB, and #521 stops image reads at 8 MiB. A follow-up audit confirmed that the outbound guard releases host slots at response headers for non-search addon JSON and images, so concurrent body reads can exceed its limit. Real-Debrid, TMDB, and Wikidata JSON still need read-time size caps. User-facing catalogue, metadata, stream, subtitle, and image routes still need client-disconnect cancellation, with shared image downloads retaining other callers.
 - [x] **BH-5.2 Search session lifecycle.** Stale results after a new query,
       sessions that never end, scheduler fairness between sources, memory per
       abandoned session.
@@ -397,7 +397,7 @@ Files: `android-tv/app/src/main/java/cz/stremiooffline/tv/` — `playback/`
 | Android cold start | | |
 
 The Mac baseline cannot be repeated from a cloud session, so the runtime numbers were taken
-again on one Linux machine for both ends: `node scripts/benchmark-runtime.mjs --files 5000`
+again on one Linux machine for both ends: `node scripts/benchmark-runtime.mjs --files 5000 --samples 40`
 on the baseline commit (`2d1d2b47`, #490) and on `main` after #513 (`b8760659`). Same machine,
 same fixture, back to back; home and browse are the 40-sample runs.
 

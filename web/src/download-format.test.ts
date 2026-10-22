@@ -19,4 +19,23 @@ describe("bytes", () => {
     expect(bytes(4e12)).toBe("4.0 TB");
     expect(bytes(48.5e9)).toBe("48.5 GB");
   });
+
+  it("uses the exact boundary of each decimal unit", () => {
+    expect(bytes(1e6)).toBe("1.0 MB");
+    expect(bytes(1e9)).toBe("1.0 GB");
+    expect(bytes(1e12)).toBe("1.0 TB");
+  });
+
+  it("carries values that would round to a thousand of the lower unit", () => {
+    expect(bytes(999_999)).toBe("1.0 MB");
+    expect(bytes(999_999_999)).toBe("1.0 GB");
+    expect(bytes(999_999_999_999)).toBe("1.0 TB");
+  });
+
+  it("keeps ordinary values in each unit", () => {
+    expect(bytes(2e3)).toBe("2 kB");
+    expect(bytes(2e6)).toBe("2.0 MB");
+    expect(bytes(2e9)).toBe("2.0 GB");
+    expect(bytes(2e12)).toBe("2.0 TB");
+  });
 });
