@@ -96,15 +96,18 @@ Files: `store.ts`, `state-file.ts`, `fs-retry.ts`, `library-meta-store.ts`,
       rejects malformed `state.json`. Stores not yet audited:
       `stats`, `activity`, `provider-stats`, `image-stats`, `external-ids`,
       `library-seen`, `library/episodes.json`.
+      Progress: #505 keeps traffic, image and provider statistics saving after a failed write; #506 serialises the image and artwork cache index writes and retries a failed one. `activity` and `follows` were already serialised; `library-meta-store` already protects an unreadable file. Still to audit: `external-ids`, `library-seen`, `library/episodes.json`.
 - [ ] **BH-1.2 Shutdown completeness.** `server-shutdown.ts` flushes stores,
       stops the follow service and explicitly kills tracked media processes.
       It deliberately leaves the download queue to resume after restart.
       Test SIGTERM during a download, a scan and a conversion: verify queue
       recovery, scan persistence, child coverage and bounded exit.
-- [ ] **BH-1.3 Timers and intervals.** Every `setInterval` across
+      Progress: #505 adds the traffic log to the shutdown flushes (up to a minute of transfer bytes was lost on restart). The SIGTERM runs during a download, scan and conversion are still to do.
+- [x] **BH-1.3 Timers and intervals.** Every `setInterval` across
       server/web/desktop. Each one: is it cleared on stop, `unref()`'d on the
       server, and is its period justified? Coalesce intervals that poll the
       same thing.
+      Progress: every server `setInterval` is `unref()`'d or cleared on stop (download watchers clear themselves when the halt lifts); web polls stop in a hidden tab (#497, #508); the player's intervals stay on purpose, playback continues in a background tab.
 - [ ] **BH-1.4 Write amplification.** Measure how often each store writes
       under load (progress ticks, stats, activity). Pretty-printed
       (`JSON.stringify(…, null, 2)`) large files rewritten per tick are a
@@ -169,19 +172,22 @@ candidates, episodes, migrate, actions, admin, grants, runtime), `naming.ts`,
       vanished during scan, symlinks and loops, unmounted root (must never be
       read as "library is empty"), case-only renames, Unicode normalization
       (NFC/NFD on macOS/Synology shares).
-- [ ] **BH-4.2 Scan performance.** Profile a full scan of the baseline set:
+- [x] **BH-4.2 Scan performance.** Profile a full scan of the baseline set:
       directory walk concurrency, probe calls per file, repeated `stat`,
       work done on unchanged files during a rescan.
+      Progress: #500 makes a scan linear (4,000 files: 34.8 s → 3.5 s; browse p50 55 → 35 ms), #501 builds parse patterns once, #502 names a folder's artwork once per sweep, #503 finds a finished scan's stale rows by key (~3.6 s blocking → ~30 ms), #504 reads a library key without splitting it. Full scan of 4,000 files on main: ~2.1 s (Linux); the rest is disk I/O and artwork hashes.
 - [ ] **BH-4.3 Parser and matcher.** `library-parse.ts` / `library-match.ts`
       against a table of real-world names (years, multi-episode, anime
       absolute numbering, editions, foreign titles). Look for quadratic
       matching over candidates.
+      Progress: #498 fixes the year and multi-episode tags; the shared parser brief (#499) is set aside.
 - [ ] **BH-4.4 Destructive actions.** Rename, move, copy, delete, bulk and
       cross-library: explicit preconditions, no swallowed errors (roadmap
       P1.4).
 - [ ] **BH-4.5 Images and artwork.** Cache bounds and eviction, sweep only on
       a provably readable library, concurrent generation of the same mosaic,
       remote image fetch timeouts and size limits.
+      Progress: #502 (sweep cost) and #506 (cache index writes). `ArtworkCache.copyKey` writes its target directly rather than through a temporary file; a cache-only file, so left as is.
 
 ## Unit 5 — Server: catalogue, addons and search
 
@@ -235,6 +241,7 @@ Files: `auth.ts`, `roles.ts`, `secure.ts`, `security.ts`, `host-check.ts`,
 - [ ] **BH-7.4 Input validation.** Path traversal on every route that takes
       a path, request body size limits, malformed JSON handling.
       Progress: #493 tells a refused folder from a missing one (browse, grants, preview, library root, create folder, rename).
+      Progress: `mediaPath` rejects absolute, drive-letter and `.`/`..` paths before joining onto the library root, as the last line behind every route; a per-route audit is still to do.
 - [ ] **BH-7.5 Log redaction.** Addon URLs with embedded keys, debrid tokens,
       media-server tokens in `app.log` and client logs.
 
@@ -252,17 +259,20 @@ Files: `auth.ts`, `roles.ts`, `secure.ts`, `security.ts`, `host-check.ts`,
 Files: `web/src/App.tsx` (about 3.9k lines, many effects and state hooks),
 `api.ts`, `useHome.ts`, `home-state.ts`, `start-view.ts`, `views.ts`.
 
-- [ ] **BH-9.1 Effect hygiene.** Every effect in `App.tsx`: cleanup present,
+- [x] **BH-9.1 Effect hygiene.** Every effect in `App.tsx`: cleanup present,
       dependencies correct, no fetch whose late response overwrites newer
       state (AbortController or request token). React StrictMode double-run
       safe.
-- [ ] **BH-9.2 Polling.** Which effects poll, how often, and whether they
+      Progress: every effect that reruns on changed input drops a late answer (`live`/`cancelled` flags); every `addEventListener` in `App.tsx` and the player has its removal.
+- [x] **BH-9.2 Polling.** Which effects poll, how often, and whether they
       stop when the tab is hidden or the view is not shown.
+      Progress: #497 (library scan and operations polls) and #508 (statistics live streams) skip a repeat in a hidden tab.
 - [ ] **BH-9.3 Re-render cost.** Profiler on typing in search, scrolling
       Home and the library; memoise only what the profiler shows.
-- [ ] **BH-9.4 API error surface.** `api.ts` silent catches: does the user
+- [x] **BH-9.4 API error surface.** `api.ts` silent catches: does the user
       ever see "nothing" where an error happened? Every server `AppError`
       key reaches a translated message.
+      Progress: the silent catches in `api.ts` are the unload beacons, which have nobody to tell; the i18n test already checks every server message key against the catalogue.
 - [ ] **BH-9.5 Extractions with a reason.** Settings/diagnostics and
       catalogue/search orchestration out of `App.tsx` (roadmap P2), only
       after 9.1–9.4 so the moves carry their tests.
@@ -290,20 +300,24 @@ dialogs, `style.css` (2.3k), `i18n/*`, `vite.config.ts`.
 - [ ] **BH-11.1 Large lists.** Library and remote browser with thousands of
       items: render time, virtualisation need (measure first), image lazy
       loading.
-- [ ] **BH-11.2 Dialogs and focus.** Conformance with
+- [x] **BH-11.2 Dialogs and focus.** Conformance with
       [ui-conventions.md](ui-conventions.md); focus trap, Escape, TV/remote
       navigation.
-- [ ] **BH-11.3 i18n completeness.** All nine translated catalogues are
+      Progress: #510 puts the ten modal dialogs that lacked it on `useDialogFocus`, with a source guard for new ones; the player and the trailer keep their own handling.
+- [x] **BH-11.3 i18n completeness.** All nine translated catalogues are
       type-checked against `en.ts`. Check placeholder names and plural forms,
       untranslated values and meaning in context; report verified gaps per
       language.
-- [ ] **BH-11.4 Bundle.** No `React.lazy` split exists today and the build
+      Progress: #507 removes zero-width characters from it, pl and ru (and Android ru) and fixes the pt-BR and es 'skipped' wording; a catalogue test keeps invisible characters out. Keys, placeholders and plural forms were already complete.
+- [x] **BH-11.4 Bundle.** No `React.lazy` split exists today and the build
       warns about chunk size. Split rarely used views (settings, admin,
       stats, media-server manager, player) and measure first-load bytes.
       Progress: #494 loads non-English catalogues on demand (first load 713 → 412 kB gzip). hls.js (~160 kB gzip) is the next candidate.
+      Progress: #496 loads hls.js on demand. Splitting settings, statistics and addons would save about 25 kB gzip, but the app has no error boundary, so a failed chunk (a tab kept open across an upgrade) would blank the page: not done, see Found along the way.
 - [ ] **BH-11.5 CSS.** Dead selectors, duplicated rules; split by
       responsibility only with the visual matrix run once at the end
       (roadmap P2).
+      Progress: #509 removes 64 selectors of 22 classes no element uses (−4 kB); duplicated rules not yet looked at.
 
 ## Unit 12 — Desktop (Electron)
 
@@ -314,8 +328,9 @@ Files: `desktop/src/main.ts` (1.8k), `local-backend.ts`, `download-dir.ts`,
 - [ ] **BH-12.1 Local backend lifecycle.** Start failure, port in use, crash
       and restart, quit during a download or conversion, switch between
       local and remote server.
-- [ ] **BH-12.2 IPC surface.** Every `ipcMain` handler validates its input
+- [x] **BH-12.2 IPC surface.** Every `ipcMain` handler validates its input
       and the sender; nothing exposes arbitrary file paths.
+      Progress: every handler checks its sender (`assertShellSender` or `localPageSent`) and validates its input; folder paths come only from the native picker.
 - [ ] **BH-12.3 Settings files.** `connection.json`, `local-settings.json`,
       `window-state.json`: corrupt-file handling, off-screen window recovery.
       Progress: #492 reports sign-ins, settings or servers a reset could not remove.
@@ -338,14 +353,16 @@ Files: `android-tv/app/src/main/java/cz/stremiooffline/tv/` — `playback/`
       at tile size.
 - [ ] **BH-13.4 D-pad focus.** Lost focus after data refresh, focus restore on
       back, long rows.
-- [ ] **BH-13.5 Server contract.** DTOs in `data/*Dtos.kt` vs the server's
+- [x] **BH-13.5 Server contract.** DTOs in `data/*Dtos.kt` vs the server's
       responses: missing or renamed fields, nullable assumptions.
+      Progress: every list (Home, browse, favourites, resume, media servers) decodes item by item and drops an unknown `kind`; unknown fields are ignored, and every Home kind the server sends is known to the app.
 
 ## Unit 14 — Cross-cutting
 
 - [ ] **BH-14.1 Contract drift.** Compare `web/src/types.ts` and the Android
       DTOs with what the server serialises (`api-types.ts`, `publicJob` and
       friends). Start with download pause reasons (roadmap P2).
+      Progress: the Android side is covered by BH-13.5; web and server share `api-types.ts`. Download pause reasons still to compare.
 - [ ] **BH-14.2 Test suite health.** Flaky and slow tests from BH-0.1: fix
       the cause, never skip. Server and web suite wall time.
 - [ ] **BH-14.3 Docker image and CI.** Image size, layer caching, CI
@@ -381,3 +398,9 @@ a periodic documentation PR after recording them in the originating PR.
 - `LibraryOps.settled()` swallows failures but has no production caller (BH-1.1).
 - `scripts/benchmark-runtime.mjs` serves `web/` rather than `web/dist` from a
   source checkout; it measures the API only, so its numbers are unaffected.
+- The web app has no React error boundary, so a failed lazy chunk would blank the
+  whole page. Any further `React.lazy` split needs a boundary (with a reload
+  offer) first (BH-11.4).
+- `TrailerPlayer` declares `aria-modal` but cannot use `useDialogFocus` as it is
+  (always mounted, returns `null` until a trailer is chosen, YouTube iframe
+  inside); exempted in the guard of #510 (BH-11.2).
