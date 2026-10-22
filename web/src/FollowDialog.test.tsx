@@ -61,6 +61,18 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); host.remove(); vi.unstubAllGlobals(); });
 
 describe("FollowDialog", () => {
+  it("shows a release on the date it names, west and east of UTC", async () => {
+    for (const zone of ["America/New_York", "Asia/Tokyo"]) {
+      process.env.TZ = zone;
+      try {
+        await render({ ...follow, nextEpisode: { season: 1, episode: 3, released: zone === "Asia/Tokyo" ? "2030-01-01T23:59:59.999Z" : "2030-01-01T00:00:00.000Z" } });
+        expect(host.textContent, zone).toContain("Next episode: S01E03 · 01/01/2030");
+      } finally {
+        delete process.env.TZ;
+      }
+    }
+  });
+
   it("renders the status, summary and every episode state", async () => {
     await render();
     const text = host.textContent ?? "";

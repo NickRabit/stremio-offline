@@ -19,7 +19,8 @@ export const toEpisodes = (videos?: Video[]): SetupEpisode[] => (videos ?? []).f
 const pad2 = (value: number) => String(Math.max(0, Math.trunc(value))).padStart(2, "0");
 const episodeCode = (season: number, episode: number) => `S${pad2(season)}E${pad2(episode)}`;
 const formatWhen = (value?: string) => value ? new Date(value).toLocaleString(localeTag(), { dateStyle: "short", timeStyle: "short" }) : "";
-const formatDay = (value?: string) => value ? new Date(value).toLocaleDateString(localeTag()) : "";
+/** A release is a calendar date kept as an instant inside that UTC day; see FollowingPage. */
+const formatDay = (value?: string) => value ? new Date(value).toLocaleDateString(localeTag(), { timeZone: "UTC" }) : "";
 /** The window close, only while it is still ahead, so a stale value reads as an ordinary wait. */
 const futureGrace = (value?: string) => value && Date.parse(value) > Date.now() ? value : undefined;
 /** An uncertain date is shown with the marker the calendar uses; without a date at all it says so. */

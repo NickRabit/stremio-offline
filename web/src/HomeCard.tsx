@@ -19,7 +19,8 @@ function captionOf(card: HomeCardData, locale: string): string {
   const label = cardLabel(card);
   const parts: Array<string | undefined> = [label && t(label), cardNumbering(card)];
   if (card.kind === "resume-file") parts.push(card.subtitle);
-  if (card.kind === "episode") parts.push(new Intl.DateTimeFormat(locale, { dateStyle: "short" }).format(new Date(card.released)));
+  // A release is a calendar date kept inside that UTC day, so it is read in UTC, not moved by the zone.
+  if (card.kind === "episode") parts.push(new Intl.DateTimeFormat(locale, { dateStyle: "short", timeZone: "UTC" }).format(new Date(card.released)));
   if (card.kind === "recent") parts.push(relativeAge(card.addedAt, Date.now(), locale));
   if (card.kind === "tonight") parts.push(card.year);
   if (card.kind === "discovery") parts.push(card.year);

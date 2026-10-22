@@ -58,6 +58,18 @@ const loads = (node: HTMLImageElement, width: number, height: number) => {
 };
 
 describe("HomeCard wide tiles", () => {
+  it("dates a new episode by the day its release names, whatever the zone", () => {
+    for (const zone of ["America/New_York", "Asia/Tokyo"]) {
+      process.env.TZ = zone;
+      try {
+        render(episode({ released: zone === "Asia/Tokyo" ? "2026-01-01T23:59:59.999Z" : at }));
+        expect(host.textContent, zone).toContain("01/01/2026");
+      } finally {
+        delete process.env.TZ;
+      }
+    }
+  });
+
   it("draws the wide picture of a new episode and of a catalogue star", () => {
     render(episode({ wide: "/episode-wide.jpg" }));
     expect(picture()!.getAttribute("src")).toBe("/episode-wide.jpg");
