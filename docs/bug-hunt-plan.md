@@ -112,6 +112,7 @@ Files: `store.ts`, `state-file.ts`, `fs-retry.ts`, `library-meta-store.ts`,
       under load (progress ticks, stats, activity). Pretty-printed
       (`JSON.stringify(…, null, 2)`) large files rewritten per tick are a
       candidate; coalesce, do not lose durability of commits.
+      Progress: a playing client posts its position every 10 s, and each post rewrites the whole state file (clone, pretty JSON, temporary file and rename). For a state of a few hundred kB that is tens of MB an hour per player: acceptable, and coalescing would change what an awaited `update` promises. Not changed.
 - [ ] **BH-1.5 Journalled relocation** (roadmap P1.3) — only if not already
       shipped when this part starts.
 
@@ -201,7 +202,7 @@ Files: `search-*.ts`, `addons.ts`, `addon-refresh.ts`, `tmdb.ts`,
 - [ ] **BH-5.1 Outbound robustness.** Every addon/TMDB call has a timeout, a
       size limit and a cancellation path tied to the client request; one slow
       addon cannot stall Home or search.
-      Progress: every outbound call carries a deadline except the Real-Debrid API, which waited on undici's five-minute default; #517 gives it 30 seconds and the existing retry. Addon and TMDB calls have deadlines and the shared outbound breaker; size limits not yet reviewed one by one.
+      Progress: every outbound call carries a deadline except the Real-Debrid API, which waited on undici's five-minute default; #517 gives it 30 seconds and the existing retry. Addon answers (manifest, catalogue, meta, streams, subtitles) were read whole; only the search catalogue had a limit. #518 cuts them off at 16 MB.
 - [x] **BH-5.2 Search session lifecycle.** Stale results after a new query,
       sessions that never end, scheduler fairness between sources, memory per
       abandoned session.
@@ -293,6 +294,7 @@ Files: `Player.tsx`, `player-hls.ts`, `TrailerPlayer.tsx`,
 - [ ] **BH-10.1 Teardown.** hls.js and `<video>` listeners released on close,
       source switch and navigation; no growing listener count after ten
       open/close cycles (heap snapshot).
+      Progress: read through. Closing destroys hls.js, empties the source and removes every listener the player adds. To check on a device (BH-3.2): after a track switch or a recovery that falls back to direct play, the move to the kept position waits for `loadedmetadata` with a `once` listener that no attach sequence guards; a seek or a second switch made before the metadata arrives could be overridden by it.
 - [ ] **BH-10.2 Progress reporting.** Frequency, final position on close/tab
       hide (`pagehide`/`sendBeacon`), no duplicate writes, correct identity
       for library vs catalogue plays.
