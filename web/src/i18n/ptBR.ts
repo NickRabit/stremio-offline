@@ -1421,6 +1421,7 @@ export const ptBR: Catalog = {
   "err.debridTimeout": "O Real-Debrid não terminou o torrent a tempo.",
   "err.debridTokenMissing": "O token Real-Debrid está faltando.",
   "err.debridWrongEpisode": "O Real-Debrid resolveu um episódio diferente.",
+  "err.debridResponseTooLarge": "A resposta do Real-Debrid é muito grande.",
   "err.jobNoInfoHash": "O torrent não tem infoHash.",
   "err.noFreeName": "Não foi possível encontrar um nome de arquivo gratuito.",
   "err.pathTooLong": "O caminho da pasta é muito longo para o Windows. Escolha uma biblioteca com um caminho mais curto, por exemplo D:\\Films.",

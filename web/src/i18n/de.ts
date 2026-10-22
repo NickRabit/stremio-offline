@@ -1421,6 +1421,7 @@ export const de: Catalog = {
   "err.debridTimeout": "Real-Debrid hat den Torrent nicht rechtzeitig fertiggestellt.",
   "err.debridTokenMissing": "Der Real-Debrid-Token fehlt.",
   "err.debridWrongEpisode": "Real-Debrid hat eine andere Folge geliefert.",
+  "err.debridResponseTooLarge": "Die Antwort von Real-Debrid ist zu groß.",
   "err.jobNoInfoHash": "Der Torrent hat keinen InfoHash.",
   "err.noFreeName": "Es konnte kein freier Dateiname gefunden werden.",
   "err.pathTooLong": "Der Ordnerpfad ist für Windows zu lang. Wählen Sie eine Bibliothek mit einem kürzeren Pfad, zum Beispiel D:\\Filme.",

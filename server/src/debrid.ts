@@ -1,17 +1,22 @@
 import { log } from "./logger.js";
 import { guardedFetch } from "./outbound.js";
+import { readLimitedBody, ResponseTooLargeError } from "./response-body.js";
 
 export const RD_API = "https://api.real-debrid.com/rest/1.0";
+/** Bounds every JSON answer while leaving room for large torrent file lists. */
+export const RD_MAX_JSON_BYTES = 16 * 1024 * 1024;
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 
 export class DebridError extends Error {
   readonly status: number;
   readonly code?: string;
-  constructor(message: string, status = 400, code?: string) {
+  readonly messageKey?: string;
+  constructor(message: string, status = 400, code?: string, messageKey?: string) {
     super(message);
     this.name = "DebridError";
     this.status = status;
     this.code = code;
+    this.messageKey = messageKey;
   }
 }
 
@@ -54,9 +59,23 @@ export function isRetryableDebridFailure(error: unknown): boolean {
 
 async function readJson<T>(response: Response, path: string): Promise<T> {
   try {
-    return await response.json() as T;
+    const body = await readLimitedBody(response, RD_MAX_JSON_BYTES);
+    return JSON.parse(new TextDecoder().decode(body)) as T;
   } catch (error) {
     if (error instanceof SyntaxError) throw error;
+    if (error instanceof ResponseTooLargeError) {
+      log("WARN", "Real-Debrid response body is too large", {
+        path,
+        limit: error.limit,
+        observedBytes: error.observedBytes,
+      });
+      throw new DebridError(
+        "Real-Debrid returned a response that is too large.",
+        413,
+        "response_too_large",
+        "err.debridResponseTooLarge",
+      );
+    }
     log("WARN", "Real-Debrid response body failed", { path, reason: error instanceof Error ? error.message : String(error) });
     throw new DebridError("Real-Debrid is not answering right now, trying again.", 408, "network");
   }
