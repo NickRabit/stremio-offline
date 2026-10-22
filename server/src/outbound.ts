@@ -298,6 +298,7 @@ export class OutboundGuard {
     log("WARN", "Circuit breaker opened for the host", { host, failures: entry.failures, pauseSeconds: seconds(pause), reason });
   }
 
+  /** Leaves the slot at response headers; use runJson when reading the body is part of the call. */
   async run(host: string, task: () => Promise<Response>, interactive = false): Promise<Response> {
     if (!this.config.enabled) return task();
     this.prune();
@@ -370,6 +371,7 @@ export class OutboundGuard {
       }
       const reason = reasonCategory(error);
       fail(reason);
+      if (error instanceof AppError) throw error;
       throw new OutboundError(reason);
     };
     const readBody = async (response: Response): Promise<Uint8Array> => {
@@ -423,6 +425,13 @@ export class OutboundGuard {
       if (!contentType.includes("json")) {
         fail("invalid-json");
         throw new OutboundError("invalid-json");
+      }
+
+      const contentLength = Number(response.headers.get("content-length"));
+      if (Number.isFinite(contentLength) && contentLength > options.maxBytes) {
+        void response.body?.cancel().catch(() => undefined);
+        fail("too-large");
+        throw new OutboundError("too-large");
       }
 
       let body: Uint8Array;

@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { Viewer } from "./libraries.js";
 import type { AddonRecord, AddonRole, CatalogDefinition, MetaItem, StremioManifest, StreamItem, SubtitleItem } from "./types.js";
 import { validateRemoteUrl } from "./security.js";
-import { GuardRejection, OutboundError, guardedFetch, guardedJson } from "./outbound.js";
+import { GuardRejection, OutboundError, guardedJson } from "./outbound.js";
 import { defaultDownloadSettings } from "./naming.js";
 import { log } from "./logger.js";
 import { normalizeLanguage } from "./language.js";
@@ -19,39 +19,24 @@ const STREAM_TIMEOUT_MS = Number(process.env.STREAM_ADDON_TIMEOUT_MS ?? 60_000);
  *  broken, and reading it whole would only fill the server's memory for the length of the timeout. */
 const ADDON_MAX_BYTES = 16 * 1024 * 1024;
 
-async function boundedText(response: Response, maxBytes: number): Promise<string> {
-  const tooLarge = () => new Error(`The addon answered with more than ${Math.round(maxBytes / (1024 * 1024))} MB.`);
-  if (Number(response.headers.get("content-length")) > maxBytes) {
-    void response.body?.cancel().catch(() => undefined);
-    throw tooLarge();
-  }
-  const reader = response.body?.getReader();
-  if (!reader) return "";
-  const decoder = new TextDecoder();
-  let text = "";
-  let length = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) return text + decoder.decode();
-    length += value.byteLength;
-    if (length > maxBytes) {
-      void reader.cancel().catch(() => undefined);
-      throw tooLarge();
-    }
-    text += decoder.decode(value, { stream: true });
-  }
-}
-
 async function jsonFetch<T>(rawUrl: string, timeoutMs = TIMEOUT_MS, interactive = false): Promise<T> {
   const url = await validateRemoteUrl(rawUrl);
-  const response = await guardedFetch(url.toString(), {
-    signal: AbortSignal.timeout(timeoutMs),
-    headers: { accept: "application/json", "user-agent": "StremioOffline/0.3.1" },
-  }, interactive);
-  if (!response.ok) throw new Error(`The addon answered HTTP ${response.status}.`);
-  const contentType = response.headers.get("content-type") ?? "";
-  if (!contentType.includes("json")) throw new AppError("The addon did not return JSON.", "err.addonNotJson");
-  return JSON.parse(await boundedText(response, ADDON_MAX_BYTES)) as T;
+  try {
+    return await guardedJson<T>(url.toString(), {
+      headers: { accept: "application/json", "user-agent": "StremioOffline/0.3.1" },
+    }, {
+      deadlineMs: timeoutMs,
+      maxBytes: ADDON_MAX_BYTES,
+      interactive,
+    });
+  } catch (error) {
+    if (!(error instanceof OutboundError)) throw error;
+    if (error.code === "invalid-json") throw new AppError("The addon did not return JSON.", "err.addonNotJson");
+    if (error.code === "too-large") throw new Error(`The addon answered with more than ${Math.round(ADDON_MAX_BYTES / (1024 * 1024))} MB.`);
+    const status = /^http-(\d+)$/.exec(error.code)?.[1];
+    if (status) throw new Error(`The addon answered HTTP ${status}.`);
+    throw error;
+  }
 }
 
 export async function loadAddon(rawUrl: string, role: AddonRole): Promise<AddonRecord> {
