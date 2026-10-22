@@ -6,6 +6,7 @@ import test from "node:test";
 import { AppError } from "./errors.js";
 import { flushLog, initLogger } from "./logger.js";
 import { GuardRejection, OutboundError, OutboundGuard, configFromEnv, metadataConfigFromEnv, retryAfterMs } from "./outbound.js";
+import { readLimitedBody, ResponseTooLargeError } from "./response-body.js";
 
 process.env.LOG_STDOUT = "0";
 await initLogger(await mkdtemp(path.join(os.tmpdir(), "stremio-outbound-")));
@@ -33,6 +34,31 @@ const ownTimeout = async (): Promise<Response> => {
 };
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+function blockedBody() {
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  let closed = false;
+  let cancelled = false;
+  const response = new Response(new ReadableStream<Uint8Array>({
+    start(next) {
+      controller = next;
+      next.enqueue(Uint8Array.of(1));
+    },
+    cancel() {
+      cancelled = true;
+      return new Promise<void>(() => undefined);
+    },
+  }), { headers: { "content-type": "image/png" } });
+  return {
+    response,
+    close() {
+      if (closed) return;
+      closed = true;
+      controller.close();
+    },
+    cancelled: () => cancelled,
+  };
+}
 
 test("failures below the threshold keep the host in service", async () => {
   const { guard } = harness();
@@ -445,4 +471,162 @@ test("the breaker log carries a fixed reason, never the upstream text", async ()
   const lines = await readFile(path.join(logDir, "app.log"), "utf8");
   assert.equal(lines.includes("zz-sentinel"), false);
   assert.match(lines, /"reason":"network"/);
+});
+
+test("a host slot stays occupied until its body is read", async () => {
+  const { guard } = harness({ maxConcurrent: 1, maxQueue: 4 });
+  const calls = new Map<string, number>();
+  const record = (host: string, response: () => Response) => {
+    calls.set(host, (calls.get(host) ?? 0) + 1);
+    return Promise.resolve(response());
+  };
+  const blocked = blockedBody();
+  const first = guard.runBody(
+    "same.test",
+    () => record("same.test", () => blocked.response),
+    (response, signal) => readLimitedBody(response, 1024, signal),
+    { deadlineMs: 5_000 },
+  );
+  await tick();
+
+  const second = guard.runBody(
+    "same.test",
+    () => record("same.test", () => new Response(Uint8Array.of(2))),
+    (response, signal) => readLimitedBody(response, 1024, signal),
+    { deadlineMs: 5_000 },
+  );
+  const other = guard.runBody(
+    "other.test",
+    () => record("other.test", () => new Response(Uint8Array.of(3))),
+    (response, signal) => readLimitedBody(response, 1024, signal),
+    { deadlineMs: 5_000 },
+  );
+  await tick();
+
+  assert.equal(calls.get("same.test"), 1);
+  assert.equal(calls.get("other.test"), 1, "another host does not wait behind the blocked body");
+  assert.equal(guard.diagnostics().find((entry) => entry.host === "same.test")?.queued, 1);
+
+  blocked.close();
+  const [firstBody, secondBody, otherBody] = await Promise.all([first, second, other]);
+  assert.deepEqual([...firstBody, ...secondBody], [1, 2]);
+  assert.deepEqual([...otherBody], [3]);
+  assert.equal(calls.get("same.test"), 2);
+});
+
+test("a blocked body times out, cancels, and releases the next waiter", async () => {
+  const { guard } = harness({ maxConcurrent: 1, maxQueue: 2 });
+  const keepAlive = setTimeout(() => undefined, 200);
+  const blocked = blockedBody();
+  try {
+    const first = guard.runBody(
+      "deadline-body.test",
+      () => Promise.resolve(blocked.response),
+      (response, signal) => readLimitedBody(response, 1024, signal),
+      { deadlineMs: 30 },
+    );
+    await tick();
+
+    let followingCalled = false;
+    const following = guard.runBody(
+      "deadline-body.test",
+      () => {
+        followingCalled = true;
+        return Promise.resolve(new Response(Uint8Array.of(4)));
+      },
+      (response, signal) => readLimitedBody(response, 1024, signal),
+      { deadlineMs: 1_000 },
+    );
+    await tick();
+    assert.equal(followingCalled, false);
+
+    await assert.rejects(first, (error: unknown) =>
+      error instanceof OutboundError && error.code === "timeout");
+    assert.deepEqual([...await following], [4]);
+    assert.equal(blocked.cancelled(), true);
+  } finally {
+    clearTimeout(keepAlive);
+  }
+});
+
+test("caller abort releases an admitted body without failing the host", async () => {
+  const { guard } = harness({ maxConcurrent: 1, maxQueue: 2 });
+  const blocked = blockedBody();
+  const controller = new AbortController();
+  const first = guard.runBody(
+    "caller-body.test",
+    () => Promise.resolve(blocked.response),
+    (response, signal) => readLimitedBody(response, 1024, signal),
+    { signal: controller.signal, deadlineMs: 5_000 },
+  );
+  await tick();
+
+  const following = guard.runBody(
+    "caller-body.test",
+    () => Promise.resolve(new Response(Uint8Array.of(5))),
+    (response, signal) => readLimitedBody(response, 1024, signal),
+    { deadlineMs: 1_000 },
+  );
+  controller.abort();
+
+  await assert.rejects(first, (error: unknown) =>
+    error instanceof OutboundError && error.code === "cancelled");
+  assert.deepEqual([...await following], [5]);
+  assert.deepEqual(guard.diagnostics(), []);
+});
+
+test("runBody keeps status and body policy outcomes out of breaker accounting", async () => {
+  const { guard } = harness({ maxConcurrent: 2, maxQueue: 2 });
+  const status = (code: number) => guard.runBody(
+    `status-${code}.test`,
+    () => Promise.resolve(new Response(null, { status: code })),
+    async (response) => response.status,
+    { deadlineMs: 1_000 },
+  );
+
+  assert.equal(await status(404), 404);
+  assert.deepEqual(guard.diagnostics(), []);
+  assert.equal(await status(503), 503);
+  assert.equal(guard.diagnostics()[0]?.failures, 1);
+  assert.equal(await status(429), 429);
+  assert.equal(guard.diagnostics().find((entry) => entry.host === "status-429.test")?.failures, 1);
+
+  const policy = harness();
+  await policy.guard.runBody(
+    "policy.test",
+    () => Promise.resolve(new Response("x".repeat(20))),
+    async (response, signal) => {
+      try {
+        return await readLimitedBody(response, 10, signal);
+      } catch (error) {
+        if (error instanceof ResponseTooLargeError) return Buffer.alloc(0);
+        throw error;
+      }
+    },
+    { deadlineMs: 1_000 },
+  );
+  await policy.guard.runBody(
+    "empty.test",
+    () => Promise.resolve(new Response("")),
+    async () => ({ reason: "empty" }),
+    { deadlineMs: 1_000 },
+  );
+  await policy.guard.runBody(
+    "type.test",
+    () => Promise.resolve(new Response("not an image")),
+    async () => ({ reason: "content-type" }),
+    { deadlineMs: 1_000 },
+  );
+  assert.deepEqual(policy.guard.diagnostics(), []);
+});
+
+test("runBody keeps an explained validation error for the caller", async () => {
+  const { guard } = harness({ failureThreshold: 1 });
+  const failure = new AppError("Invalid URL.", "err.invalidUrl");
+
+  await assert.rejects(guard.runBody("body-validation.test", async () => { throw failure; }, async () => "unused", {
+    deadlineMs: 5_000,
+  }), (error: unknown) => error === failure);
+
+  assert.equal(guard.diagnostics()[0]?.failures, 1);
 });

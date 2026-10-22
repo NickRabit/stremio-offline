@@ -202,7 +202,7 @@ Files: `search-*.ts`, `addons.ts`, `addon-refresh.ts`, `tmdb.ts`,
 - [ ] **BH-5.1 Outbound robustness.** Every addon/TMDB call has a timeout, a
       size limit and a cancellation path tied to the client request; one slow
       addon cannot stall Home or search.
-      Progress: #517 gives Real-Debrid a 30-second deadline and retry; #521 classifies body-read timeouts for that retry. #518 limits addon JSON to 16 MiB, and #521 stops image reads at 8 MiB. A follow-up audit confirmed that the outbound guard releases host slots at response headers for non-search addon JSON and images, so concurrent body reads can exceed its limit. Real-Debrid, TMDB, and Wikidata JSON still need read-time size caps. User-facing catalogue, metadata, stream, subtitle, and image routes still need client-disconnect cancellation, with shared image downloads retaining other callers.
+      Progress: #517 gives Real-Debrid a 30-second deadline and retry; #521 classifies body-read timeouts for that retry. #518 limits addon JSON to 16 MiB, and #521 stops image reads at 8 MiB. #522 holds host slots through non-search addon JSON bodies; the image-body guard fix holds them through image reads too. Redirected image bodies remain accounted to the original URL host. Real-Debrid, TMDB, and Wikidata JSON still need read-time size caps. User-facing catalogue, metadata, stream, subtitle, and image routes still need client-disconnect cancellation, with shared image downloads retaining other callers.
 - [x] **BH-5.2 Search session lifecycle.** Stale results after a new query,
       sessions that never end, scheduler fairness between sources, memory per
       abandoned session.

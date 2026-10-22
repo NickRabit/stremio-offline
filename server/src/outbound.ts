@@ -144,6 +144,15 @@ const raceAbort = <T>(promise: Promise<T>, signal: AbortSignal): Promise<T> => {
   });
 };
 
+export type GuardedBodyReader<T> = (response: Response, signal: AbortSignal) => Promise<T>;
+
+export interface GuardedBodyOptions {
+  signal?: AbortSignal;
+  deadlineMs: number;
+  interactive?: boolean;
+  key?: string;
+}
+
 export class OutboundGuard {
   private hosts = new Map<string, HostState>();
 
@@ -459,6 +468,75 @@ export class OutboundGuard {
     }
   }
 
+  /** Unlike `runJson`, the caller owns status and body policy. Any value the reader resolves is
+   *  an answer from the host; a throw is treated as a transport failure. */
+  async runBody<T>(
+    host: string,
+    task: (signal: AbortSignal) => Promise<Response>,
+    read: GuardedBodyReader<T>,
+    options: GuardedBodyOptions,
+  ): Promise<T> {
+    const entry = this.config.enabled ? (this.prune(), this.stateOf(host)) : undefined;
+    if (entry) {
+      this.admit(host, entry, options.interactive ?? false);
+      try {
+        await this.acquire(entry, options.signal, options.key ?? "");
+      } catch (error) {
+        entry.trialInFlight = false;
+        if (error instanceof Error && error.message === QUEUE_FULL) throw new OutboundError("queue-full");
+        throw error;
+      }
+    }
+
+    const signal = options.signal
+      ? AbortSignal.any([options.signal, AbortSignal.timeout(options.deadlineMs)])
+      : AbortSignal.timeout(options.deadlineMs);
+    let statusFailure = false;
+    const failed = (error: unknown): never => {
+      if (options.signal?.aborted) {
+        if (entry) entry.trialInFlight = false;
+        throw new OutboundError("cancelled");
+      }
+      if (signal.aborted) {
+        if (this.config.countTimeoutsAsFailure) {
+          if (entry) this.fail(host, entry, "timeout");
+        } else if (entry) {
+          entry.trialInFlight = false;
+        }
+        throw new OutboundError("timeout");
+      }
+      const reason = reasonCategory(error);
+      if (entry) this.fail(host, entry, reason);
+      if (error instanceof AppError) throw error;
+      throw new OutboundError(reason);
+    };
+
+    try {
+      let response: Response;
+      try {
+        response = await raceAbort(task(signal), signal);
+      } catch (error) {
+        return failed(error);
+      }
+
+      if (response.status === 429 || response.status >= 500) {
+        statusFailure = true;
+        if (entry) this.fail(host, entry, httpCode(response.status), retryAfterMs(response.headers.get("retry-after"), this.now()));
+      }
+
+      try {
+        const value = await raceAbort(read(response, signal), signal);
+        if (entry && !statusFailure) this.succeed(host, entry);
+        return value;
+      } catch (error) {
+        if (statusFailure) throw error;
+        return failed(error);
+      }
+    } finally {
+      if (entry) this.release(entry);
+    }
+  }
+
   diagnostics() {
     const now = this.now();
     return [...this.hosts.entries()]
@@ -501,6 +579,25 @@ export async function guardedJson<T>(raw: string, init: { headers?: HeadersInit 
   const host = hostOf(raw);
   if (!host) throw new OutboundError("network");
   return outbound.runJson(host, (signal) => safeFetch(raw, { ...init, signal }), options);
+}
+
+export async function guardedBody<T>(
+  raw: string,
+  init: Omit<RequestInit, "signal">,
+  read: GuardedBodyReader<T>,
+  options: GuardedBodyOptions,
+  fetchImpl: (url: string, init: RequestInit) => Promise<Response> = safeFetch,
+): Promise<T> {
+  // Redirects followed inside safeFetch stay accounted to the original host.
+  const host = hostOf(raw);
+  const request = (signal: AbortSignal) => fetchImpl(raw, { ...init, signal });
+  if (host) return outbound.runBody(host, request, read, options);
+
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, AbortSignal.timeout(options.deadlineMs)])
+    : AbortSignal.timeout(options.deadlineMs);
+  const response = await raceAbort(request(signal), signal);
+  return raceAbort(read(response, signal), signal);
 }
 
 /** Metadata providers that are legitimately slow. A cold Wikidata SPARQL query runs

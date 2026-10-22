@@ -15,7 +15,45 @@ const cancel = (cancelable: { cancel(reason?: unknown): Promise<void> }) => {
   }
 };
 
-export async function readLimitedBody(response: Response, maxBytes: number): Promise<Buffer> {
+export function cancelResponseBody(response: Response): void {
+  if (response.body) cancel(response.body);
+}
+
+const abortReason = (signal: AbortSignal): unknown =>
+  signal.reason ?? Object.assign(new Error("Aborted"), { name: "AbortError" });
+
+function readWithSignal(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  signal?: AbortSignal,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  if (!signal) return reader.read();
+  if (signal.aborted) {
+    cancel(reader);
+    return Promise.reject(abortReason(signal));
+  }
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    const settle = () => {
+      if (settled) return false;
+      settled = true;
+      cleanup();
+      return true;
+    };
+    const onAbort = () => {
+      if (!settle()) return;
+      cancel(reader);
+      reject(abortReason(signal));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    reader.read().then(
+      (result) => { if (settle()) resolve(result); },
+      (error) => { if (settle()) reject(error); },
+    );
+  });
+}
+
+export async function readLimitedBody(response: Response, maxBytes: number, signal?: AbortSignal): Promise<Buffer> {
   const body = response.body;
   const lengthHeader = response.headers.get("content-length")?.trim() ?? "";
   const declared = /^\d+$/.test(lengthHeader) ? Number(lengthHeader) : undefined;
@@ -34,7 +72,7 @@ export async function readLimitedBody(response: Response, maxBytes: number): Pro
 
   try {
     for (;;) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readWithSignal(reader, signal);
       if (done) return total === data.length ? data : data.subarray(0, total);
       if (!value.byteLength) continue;
       if (value.byteLength > maxBytes - total) throw new ResponseTooLargeError(maxBytes, total + value.byteLength);
