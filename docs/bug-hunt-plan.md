@@ -150,6 +150,7 @@ Files: `playback.ts`, `routes/playback.ts`, `media-playlist.ts`,
       owner and one kill path: session end, owner revocation, client
       disconnect, server shutdown, hardware-accel fallback. Closing one HLS
       segment request must not kill a healthy conversion.
+      Progress: #515 tracks the thumbnail, mosaic, image-resize and ffprobe children with `trackMedia`, so the shutdown takes them down too (they outlived the server and kept writing into its data folder; found as the benchmark's occasional ENOTEMPTY). The hardware-encoder probes in `playback.ts` stay untracked: 0.1 s of `nullsrc`, nothing written.
 - [ ] **BH-3.2 Seek and restart races.** Rapid seeks, two tabs on one
       session, switching source mid-play; serialized operations hold.
 - [ ] **BH-3.3 Caches.** `range-cache`, `byte-cache`, `remote-read-ahead`:
@@ -372,19 +373,34 @@ Files: `android-tv/app/src/main/java/cz/stremiooffline/tv/` — `playback/`
       duration per workflow; Synology/ARM64 build.
 - [ ] **BH-14.4 Re-run the baseline** (BH-0.2, BH-0.3) and record the
       before/after table below.
+      Progress: the runtime baseline (BH-0.2) is re-run on one Linux machine for both commits, table below; the web bundle size is filled in. BH-0.3's Lighthouse and React Profiler traces and the Android cold start are still to do, so the part stays open.
 
 ## Results
 
 | Metric | Baseline (BH-0) | After (BH-14.4) |
 | --- | --- | --- |
-| Server tests (passed / skipped / s) | 2,829 / 6 / 47.5 (Mac) | |
-| Web tests (passed / s) | 1,167 / 8.9 (Mac) | |
+| Server tests (passed / skipped / s) | 2,829 / 6 / 47.5 (Mac) | 2,848 passed (Linux, ~100 s: see BH-14.2) |
+| Web tests (passed / s) | 1,167 / 8.9 (Mac) | 1,169 passed (Linux) |
 | Desktop and media-client tests (passed / skipped / s) | 301 / 0 / 1.2; 29 / 1 / 1.7 (Mac) | |
 | Cold start / RSS | 343 ms / 167 MiB (5k files, Mac) | |
 | Full scan / rescan (5k files) | 24.3 s / 0.76 s (Mac) | |
 | `/api/home` p95 | 5.6 ms (Mac) | |
-| Web first-load JS (gzip) | 715 kB | |
+| Web first-load JS (gzip) | 715 kB | 250 kB (Linux build; hls.js 162 kB and non-English catalogues load on demand) |
 | Android cold start | | |
+
+The Mac baseline cannot be repeated from a cloud session, so the runtime numbers were taken
+again on one Linux machine for both ends: `node scripts/benchmark-runtime.mjs --files 5000`
+on the baseline commit (`2d1d2b47`, #490) and on `main` after #513 (`b8760659`). Same machine,
+same fixture, back to back; home and browse are the 40-sample runs.
+
+| Metric (5,000 files, Linux) | Baseline `2d1d2b47` | After `b8760659` |
+| --- | ---: | ---: |
+| Cold start | 1,316 ms | 1,156 ms |
+| RSS after start / after first scan | 148 / 325 MiB | 147 / 205 MiB |
+| Full scan | 39.3 s | 2.8 s |
+| Rescan | 1.96 s | 1.27 s |
+| `/api/home` p50 / p95 | 6.2 / 11.7 ms | 4.3 / 8.6 ms |
+| `/api/library/browse` p50 | 38.5 ms | 24.0 ms |
 
 ## Found along the way
 
