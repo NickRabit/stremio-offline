@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -74,4 +74,22 @@ test("the hop records nothing until a store is installed", async () => {
     }
   });
   noteProviderCall("versions");
+});
+
+test("a failed write neither stops the later ones nor loses the counts it carried", async () => {
+  await withDir(async (dir) => {
+    const file = path.join(dir, "provider-stats.json");
+    const now = Date.UTC(2026, 0, 2, 3, 10);
+    const stats = new ProviderStats(file, () => now);
+    await stats.load();
+    // A directory where the temporary file goes makes the write fail, the way a full disk would.
+    await mkdir(`${file}.tmp`);
+    stats.record("detail");
+    await assert.rejects(stats.flush());
+    await rm(`${file}.tmp`, { recursive: true });
+    await stats.flush();
+    const reloaded = new ProviderStats(file, () => now);
+    await reloaded.load();
+    assert.equal(reloaded.summary(6, now).detail, 1, "the count of the failed write lands with the next one");
+  });
 });

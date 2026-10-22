@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { ActivityLog } from "./activity.js";
 import { renameWithRetry } from "./fs-retry.js";
+import { log } from "./logger.js";
 
 /** Where the traffic flows from. The library reads a file from disk and so costs the line
  * nothing -- it is kept apart and not mixed into the external traffic figures. */
@@ -257,7 +258,7 @@ export class StatsLog {
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     // The timer holds pending increments for at most a minute; unref so it does not keep
     // the server alive when it wants to exit.
-    if (!this.timer) { this.timer = setInterval(() => void this.flush(), FLUSH_MS); this.timer.unref(); }
+    if (!this.timer) { this.timer = setInterval(() => this.flushQuietly(), FLUSH_MS); this.timer.unref(); }
     return this.events.length;
   }
 
@@ -296,6 +297,11 @@ export class StatsLog {
     return fresh;
   }
 
+  /** A write nobody waits for: the next one carries the same entries, so a failure is only said. */
+  private flushQuietly() {
+    this.flush().catch((error: unknown) => log("WARN", "The traffic statistics could not be saved", { file: path.basename(this.file), reason: String(error).slice(0, 200) }));
+  }
+
   /** Pending increments are turned into entries stamped with the time the traffic actually flowed. */
   flush() {
     if (!this.pending.size) return this.chain;
@@ -307,17 +313,19 @@ export class StatsLog {
     return this.save();
   }
 
-  summary(hours: number) { this.flush(); return summarize(this.events, hours); }
+  summary(hours: number) { this.flushQuietly(); return summarize(this.events, hours); }
 
   private save() {
     const now = Date.now();
     if (now - this.compactedAt > HOUR) { this.events = compact(this.events, now - DAY); this.compactedAt = now; }
     if (this.events.length > LIMIT) this.events = this.events.slice(-LIMIT);
-    this.chain = this.chain.then(async () => {
+    const write = this.chain.then(async () => {
       const temp = `${this.file}.tmp`;
       await writeFile(temp, JSON.stringify(this.events), { mode: 0o600 });
       await renameWithRetry(temp, this.file);
     });
-    return this.chain;
+    // Chaining onto the rejection itself would skip every later write until a restart.
+    this.chain = write.catch(() => undefined);
+    return write;
   }
 }

@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
-import { compact, registrableDomain, summarize, type TrafficEvent, type TrafficSource } from "./stats.js";
+import { compact, registrableDomain, StatsLog, summarize, type TrafficEvent, type TrafficSource } from "./stats.js";
 
 const GB = 1024 ** 3;
 const now = new Date("2026-09-02T18:00:00");
@@ -213,4 +216,22 @@ test("older entries merge by the hour and the sums hold", () => {
   assert.equal(merged.reduce((sum, item) => sum + item.bytes, 0), 9 * GB);
   assert.equal(merged.reduce((sum, item) => sum + item.items, 0), 3);
   assert.deepEqual(summarize(merged, 90 * 24, now).total, summarize(events, 90 * 24, now).total);
+});
+
+test("a failed write does not stop the traffic log from saving again", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "stats-log-"));
+  try {
+    const log = new StatsLog(dir);
+    await log.load();
+    const meta = { source: "download", provider: "example.org", title: "Dune", kind: "movie" } as const;
+    // A directory where the temporary file goes makes the write fail, the way a full disk would.
+    await mkdir(path.join(dir, "stats.json.tmp"));
+    await assert.rejects(log.complete(meta, 100));
+    await rm(path.join(dir, "stats.json.tmp"), { recursive: true });
+    await log.complete(meta, 50);
+    const stored = JSON.parse(await readFile(path.join(dir, "stats.json"), "utf8")) as TrafficEvent[];
+    assert.deepEqual(stored.map((event) => event.bytes), [100, 50], "the later write lands, carrying the earlier entry too");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
