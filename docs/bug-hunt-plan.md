@@ -366,6 +366,7 @@ Files: `android-tv/app/src/main/java/cz/stremiooffline/tv/` — `playback/`
       Progress: the Android side is covered by BH-13.5; web and server share `api-types.ts`. Download pause reasons still to compare.
 - [ ] **BH-14.2 Test suite health.** Flaky and slow tests from BH-0.1: fix
       the cause, never skip. Server and web suite wall time.
+      Progress: measured per file (Linux, four at a time): the server suite's wall time (~100 s) is `downloads.test.ts` alone (~103 s; its slowest tests move 32 MB over a local range server and wait out retries, 5–13 s each), then `library-move-recovery.test.ts` (~67 s; two real server boots and a 2 s save debounce per test, ~5 s each). Every other file is under 12 s. Not changed: shrinking the transfers risks the segmentation thresholds the tests exercise.
 - [ ] **BH-14.3 Docker image and CI.** Image size, layer caching, CI
       duration per workflow; Synology/ARM64 build.
 - [ ] **BH-14.4 Re-run the baseline** (BH-0.2, BH-0.3) and record the
