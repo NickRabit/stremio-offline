@@ -318,14 +318,18 @@ export function StatsPanel({ onError }: { onError: (error: unknown) => void }) {
 
   // Polled rather than pushed: the page is open for a moment and a socket for this alone
   // would outweigh a request every five seconds. A failure only empties the panel -- the
-  // statistics behind it are still worth showing.
+  // statistics behind it are still worth showing. A repeat in a hidden tab is skipped, like
+  // the library polls; the first read never is.
   useEffect(() => {
     let alive = true;
-    const tick = () => api.activeStreams()
-      .then((data) => { if (alive) { setStreams(data); setNow(Date.now()); } })
-      .catch(() => { if (alive) setStreams([]); });
-    void tick();
-    const timer = setInterval(tick, LIVE_MS);
+    const tick = (repeat = false) => {
+      if (repeat && document.hidden) return;
+      void api.activeStreams()
+        .then((data) => { if (alive) { setStreams(data); setNow(Date.now()); } })
+        .catch(() => { if (alive) setStreams([]); });
+    };
+    tick();
+    const timer = setInterval(() => tick(true), LIVE_MS);
     return () => { alive = false; clearInterval(timer); };
   }, []);
 
