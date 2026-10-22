@@ -89,14 +89,14 @@ Files: `store.ts`, `state-file.ts`, `fs-retry.ts`, `library-meta-store.ts`,
 `provider-stats.ts`, `image-stats.ts`, `external-ids.ts`, `server-start.ts`,
 `server-shutdown.ts`, `index.ts` (lifecycle parts only).
 
-- [ ] **BH-1.1 State write and recovery contracts.** Check every JSON store
+- [x] **BH-1.1 State write and recovery contracts.** Check every JSON store
       against the `Store.update` write contract (apply, write, roll back on
       failure). Audit read-side handling separately: stores using
       `preserveDamaged` keep a `.damaged-*` copy, while `Store.load` currently
       rejects malformed `state.json`. Stores not yet audited:
       `stats`, `activity`, `provider-stats`, `image-stats`, `external-ids`,
       `library-seen`, `library/episodes.json`.
-      Progress: #505 keeps traffic, image and provider statistics saving after a failed write; #506 serialises the image and artwork cache index writes and retries a failed one. `activity` and `follows` were already serialised; `library-meta-store` already protects an unreadable file. Still to audit: `external-ids`, `library-seen`, `library/episodes.json`.
+      Progress: #505 keeps traffic, image and provider statistics saving after a failed write; #506 serialises the image and artwork cache index writes and retries a failed one. `activity` and `follows` were already serialised; `library-meta-store` already protects an unreadable file. #512 does the same for the per-library match history and `episodes.json` (one write per file at a time, a failed write owed again, a forget that waits for a write under way), for the first-seen index and for the external id cache.
 - [ ] **BH-1.2 Shutdown completeness.** `server-shutdown.ts` flushes stores,
       stops the follow service and explicitly kills tracked media processes.
       It deliberately leaves the download queue to resume after restart.
