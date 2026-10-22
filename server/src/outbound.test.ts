@@ -3,6 +3,7 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { AppError } from "./errors.js";
 import { flushLog, initLogger } from "./logger.js";
 import { GuardRejection, OutboundError, OutboundGuard, configFromEnv, metadataConfigFromEnv, retryAfterMs } from "./outbound.js";
 
@@ -393,6 +394,17 @@ test("too-large and invalid JSON answers count as failures", async () => {
     headers: { "content-type": "text/plain" },
   })), { deadlineMs: 5_000, maxBytes: 1024 }), (error: unknown) => error instanceof OutboundError && error.code === "invalid-json");
   assert.equal(notJson.guard.diagnostics()[0]?.failures, 1);
+});
+
+test("runJson keeps an explained validation error for the caller", async () => {
+  const { guard } = harness({ failureThreshold: 1 });
+  const failure = new AppError("Invalid URL.", "err.invalidUrl");
+
+  await assert.rejects(guard.runJson("validation.test", async () => { throw failure; }, {
+    deadlineMs: 5_000, maxBytes: 1024,
+  }), (error: unknown) => error === failure);
+
+  assert.equal(guard.diagnostics()[0]?.failures, 1);
 });
 
 test("queued keys are served round-robin", async () => {
