@@ -2,6 +2,7 @@ import { AppError } from "./errors.js";
 import { guardedFetch } from "./outbound.js";
 import { log } from "./logger.js";
 import { normalizeLanguage } from "./language.js";
+import { readLimitedBody } from "./response-body.js";
 import type { FetchLike } from "./debrid.js";
 import type { MetaItem } from "./types.js";
 
@@ -16,6 +17,7 @@ export interface TmdbConfig {
 
 const TMDB_API = "https://api.themoviedb.org/3";
 const TIMEOUT_MS = 12_000;
+const MAX_JSON_BYTES = 16 * 1024 * 1024;
 /** A title search sits between the user and the result list, so it gets a shorter deadline
  *  than a detail lookup whose answer nobody is waiting on. */
 const SEARCH_TIMEOUT_MS = 5_000;
@@ -62,6 +64,7 @@ let searchPausedUntil = 0;
 export function clearTmdbSearchPause(): void { searchPausedUntil = 0; }
 
 const reasonOf = (error: unknown, secret?: string) => {
+  if (error instanceof SyntaxError) return "Response body is not valid JSON.";
   const reason = error instanceof Error ? error.message : String(error);
   return secret ? reason.split(secret).join("[redacted]") : reason;
 };
@@ -74,6 +77,9 @@ const tmdbUrl = (path: string, params: Record<string, string>) => {
 
 const request = (path: string, params: Record<string, string>, fetchImpl: FetchLike, timeoutMs = TIMEOUT_MS) =>
   fetchImpl(tmdbUrl(path, params), { signal: AbortSignal.timeout(timeoutMs) });
+
+const readTmdbJson = async <T>(response: Response): Promise<T> =>
+  JSON.parse(new TextDecoder().decode(await readLimitedBody(response, MAX_JSON_BYTES))) as T;
 
 /** The seconds TMDB asks the caller to wait, when a refusal carries a `Retry-After`. */
 export function tmdbRetryAfterMs(response: Response): number {
@@ -150,7 +156,7 @@ export async function tmdbSearch(
     return [];
   }
   let body: TmdbSearchResponse;
-  try { body = await response.json() as TmdbSearchResponse; }
+  try { body = await readTmdbJson<TmdbSearchResponse>(response); }
   catch (error) {
     log("WARN", "TMDB answered with malformed JSON", { operation: "search", type, reason: reasonOf(error, config.apiKey) });
     return [];
@@ -203,7 +209,7 @@ export async function tmdbExternalId(
     return null;
   }
   let body: TmdbExternalIds;
-  try { body = await response.json() as TmdbExternalIds; }
+  try { body = await readTmdbJson<TmdbExternalIds>(response); }
   catch (error) {
     log("WARN", "TMDB answered with malformed JSON", { operation: "external_ids", type, reason: reasonOf(error, config.apiKey) });
     return null;
@@ -236,7 +242,7 @@ export async function tmdbGallery(
     return [];
   }
   let body: TmdbImages;
-  try { body = await response.json() as TmdbImages; }
+  try { body = await readTmdbJson<TmdbImages>(response); }
   catch (error) {
     log("WARN", "TMDB answered with malformed JSON", { operation: "images", type, reason: reasonOf(error, config.apiKey) });
     return [];
@@ -303,7 +309,7 @@ export async function tmdbSeasonAirDates(
         return;
       }
       let body: TmdbSeason;
-      try { body = await response.json() as TmdbSeason; }
+      try { body = await readTmdbJson<TmdbSeason>(response); }
       catch (error) {
         log("WARN", "TMDB answered with malformed JSON", { operation: "season", season, reason: reasonOf(error, config.apiKey) });
         return;
@@ -346,7 +352,7 @@ export async function tmdbMovieReleases(movieId: string, config: TmdbConfig, fet
     return null;
   }
   let body: TmdbReleaseDates;
-  try { body = await response.json() as TmdbReleaseDates; }
+  try { body = await readTmdbJson<TmdbReleaseDates>(response); }
   catch (error) {
     log("WARN", "TMDB answered with malformed JSON", { operation: "release_dates", id: movieId, reason: reasonOf(error, config.apiKey) });
     return null;
@@ -415,7 +421,7 @@ async function resolveId(type: string, id: string, config: TmdbConfig, fetchImpl
   }
 
   let body: TmdbFind;
-  try { body = await response.json() as TmdbFind; }
+  try { body = await readTmdbJson<TmdbFind>(response); }
   catch (error) {
     log("WARN", "TMDB answered with malformed JSON", { operation: "find", type, id: imdb, reason: reasonOf(error, config.apiKey) });
     return null;
@@ -446,7 +452,7 @@ export async function tmdbTrailer(type: "movie" | "series", id: string, config: 
     return null;
   }
   let body: TmdbVideos;
-  try { body = await response.json() as TmdbVideos; }
+  try { body = await readTmdbJson<TmdbVideos>(response); }
   catch (error) {
     log("WARN", "TMDB answered with malformed JSON", { operation: "videos", type, id, reason: reasonOf(error, config.apiKey) });
     return null;
@@ -507,7 +513,7 @@ export async function tmdbMeta(type: string, id: string, config: TmdbConfig, fet
     return null;
   }
 
-  try { return toMetaItem(type, id, await response.json() as TmdbDetail, config); }
+  try { return toMetaItem(type, id, await readTmdbJson<TmdbDetail>(response), config); }
   catch (error) {
     log("WARN", "TMDB answered with malformed JSON", { operation: "meta", type, id, reason: reasonOf(error, config.apiKey) });
     return null;
