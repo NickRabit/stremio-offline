@@ -228,6 +228,9 @@ test("a failed write does not stop the traffic log from saving again", async () 
     await mkdir(path.join(dir, "stats.json.tmp"));
     await assert.rejects(log.complete(meta, 100));
     await rm(path.join(dir, "stats.json.tmp"), { recursive: true });
+    await log.flush();
+    assert.deepEqual((JSON.parse(await readFile(path.join(dir, "stats.json"), "utf8")) as TrafficEvent[]).map((event) => event.bytes), [100],
+      "shutdown flush retries the failed write even without new traffic");
     await log.complete(meta, 50);
     const stored = JSON.parse(await readFile(path.join(dir, "stats.json"), "utf8")) as TrafficEvent[];
     assert.deepEqual(stored.map((event) => event.bytes), [100, 50], "the later write lands, carrying the earlier entry too");

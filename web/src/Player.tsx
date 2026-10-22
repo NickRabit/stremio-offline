@@ -526,6 +526,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   }, [subtitlesHidden]);
 
   const detach = () => {
+    attachSeqRef.current += 1;
     hlsRef.current?.destroy(); hlsRef.current = null;
     releaseMediaElement(videoRef.current);
   };
@@ -549,7 +550,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const attach = (url: string, mode: PlaybackMode, autoplay = true, playlist = false) => {
     const video = videoRef.current; if (!video) return;
     detach();
-    const seq = ++attachSeqRef.current;
+    const seq = attachSeqRef.current;
     // Direct play normally means handing the element the address and letting the
     // browser get on with it. A playlist is the exception: only Safari reads one
     // natively, so it falls through to hls.js the same way a converted stream

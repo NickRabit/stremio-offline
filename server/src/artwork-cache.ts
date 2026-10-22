@@ -128,6 +128,8 @@ export class ArtworkCache {
   async flush() {
     if (this.timer) { clearTimeout(this.timer); this.timer = undefined; }
     if (this.dirty) { this.dirty = false; await this.writeIndex(); }
+    await this.indexWrites;
+    if (this.dirty) { this.dirty = false; await this.writeIndex(); }
   }
 
   /** Removals run one at a time: each candidate is a snapshot, and two passes must never

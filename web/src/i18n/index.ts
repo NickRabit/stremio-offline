@@ -68,8 +68,8 @@ export const locale = () => current;
 export function setLocale(next: Locale) {
   if (!isLocale(next)) return;
   requested = next;
-  if (next === current) return;
   try { localStorage.setItem(CACHE_KEY, next); } catch { /* storage may be unavailable */ }
+  if (next === current) return;
   if (catalogs[next]) { apply(next); return; }
   // A catalogue that cannot be fetched leaves the interface in the language it already speaks.
   void loadCatalog(next).then(() => { if (requested === next) apply(next); }, () => undefined);
