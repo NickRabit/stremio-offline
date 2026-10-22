@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useDialogFocus } from "./dialog-focus";
 import { X } from "lucide-react";
 import { api, describeError } from "./api";
 import { FolderBrowser } from "./FolderBrowser";
@@ -14,6 +15,8 @@ const parentOf = (folder: string) => folder.includes("/") ? folder.slice(0, fold
 export function MoveDialog({ path, paths, copy = false, label, itemType, libraries = [], onClose, onQueued }:
   { path: string; label: string; itemType?: "movie" | "series"; libraries?: LibraryView[];
     paths?: string[]; copy?: boolean; onClose: () => void; onQueued?: (id: string) => void }) {
+  const dialog = useRef<HTMLDivElement>(null);
+  useDialogFocus(dialog);
   useI18n();
   const [folder, setFolder] = useState(parentOf(path));
   const [busy, setBusy] = useState(false);
@@ -62,7 +65,7 @@ export function MoveDialog({ path, paths, copy = false, label, itemType, librari
     } catch (value) { setError(describeError(value)); setBusy(false); }
   };
 
-  return <div className="identify-overlay" role="dialog" aria-modal="true" aria-label={t("library.move")}
+  return <div ref={dialog} tabIndex={-1} className="identify-overlay" role="dialog" aria-modal="true" aria-label={t("library.move")}
     onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <div className="panel identify-card dialog-split move-card">
       <div className="identify-head">

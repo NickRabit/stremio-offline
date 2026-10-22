@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useDialogFocus } from "./dialog-focus";
 import { Check, Film, Sparkles, X } from "lucide-react";
 import { api, describeError } from "./api";
 import { t, useI18n } from "./i18n";
@@ -52,6 +53,8 @@ export function SuggestionsDialog(
     onIdentify: (path: string) => void;
   },
 ) {
+  const dialog = useRef<HTMLDivElement>(null);
+  useDialogFocus(dialog);
   useI18n();
   const [rows, setRows] = useState<SuggestionRow[] | null>(null);
   const [busy, setBusy] = useState("");
@@ -99,7 +102,7 @@ export function SuggestionsDialog(
     finally { setBusy(""); }
   };
 
-  return <div className="identify-overlay" role="dialog" aria-modal="true" aria-label={t("library.suggestions")} onClick={(event) => { if (event.target === event.currentTarget && !identifyPath) onClose(); }}>
+  return <div ref={dialog} tabIndex={-1} className="identify-overlay" role="dialog" aria-modal="true" aria-label={t("library.suggestions")} onClick={(event) => { if (event.target === event.currentTarget && !identifyPath) onClose(); }}>
     <div className="panel identify-card dialog-split">
       <div className="identify-head">
         <h2>{t("library.suggestions")}</h2>

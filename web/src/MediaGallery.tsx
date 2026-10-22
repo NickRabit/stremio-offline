@@ -1,4 +1,5 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
+import { useDialogFocus } from "./dialog-focus";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { t } from "./i18n";
 import { hideBroken } from "./settings-ui";
@@ -7,6 +8,8 @@ import type { GalleryImage } from "./gallery-images";
 export type { GalleryImage } from "./gallery-images";
 
 export function MediaGallery({ images, index, onIndex, onClose }: { images: GalleryImage[]; index: number; onIndex: (index: number) => void; onClose: () => void }) {
+  const dialog = useRef<HTMLDivElement>(null);
+  useDialogFocus(dialog);
   const current = images[index];
   const move = (step: number) => onIndex((index + step + images.length) % images.length);
   useEffect(() => {
@@ -18,7 +21,7 @@ export function MediaGallery({ images, index, onIndex, onClose }: { images: Gall
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [index, images.length]);
-  return <div className="gallery-overlay" role="dialog" aria-modal="true" aria-label={t("gallery.title")} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+  return <div ref={dialog} tabIndex={-1} className="gallery-overlay" role="dialog" aria-modal="true" aria-label={t("gallery.title")} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <button className="gallery-close icon-button" aria-label={t("gallery.close")} onClick={onClose}><X/></button>
     {images.length > 1 && <button className="gallery-arrow previous" aria-label={t("gallery.previous")} onClick={() => move(-1)}><ChevronLeft/></button>}
     <figure><img className={current.shape} src={current.url} alt={current.label} onError={hideBroken}/><figcaption>{t("gallery.caption", { label: current.label, index: index + 1, total: images.length })}</figcaption></figure>

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useDialogFocus } from "./dialog-focus";
 import { BellRing, Download, ListVideo, X } from "lucide-react";
 import { ApiError, api, describeError } from "./api";
 import { languageName, localeTag, serverText, t, useI18n } from "./i18n";
@@ -39,6 +40,8 @@ export function FollowDialog({ follow, videos, languages, libraries, addons, aud
   onClose: () => void;
   onNotify: (text: string) => void;
 }) {
+  const dialog = useRef<HTMLDivElement>(null);
+  useDialogFocus(dialog);
   useI18n();
   const [current, setCurrent] = useState(follow);
   const [episodes, setEpisodes] = useState<FollowEpisodeRow[]>([]);
@@ -145,7 +148,7 @@ export function FollowDialog({ follow, videos, languages, libraries, addons, aud
     : movie?.theatricalAt ? t("follow.movieTheatrical", { date: formatDay(movie.theatricalAt) }) : t("follow.movieUnannounced");
 
   return <>
-    <div className="identify-overlay" role="dialog" aria-modal="true" aria-labelledby="follow-dialog-title" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <div ref={dialog} tabIndex={-1} className="identify-overlay" role="dialog" aria-modal="true" aria-labelledby="follow-dialog-title" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <div className="panel identify-card dialog-split follow-card">
         <div className="identify-head"><div><span className="bulk-eyebrow">{current.name}</span><h2 id="follow-dialog-title">{t("follow.dialogTitle")}</h2></div><button className="icon-button" aria-label={t("common.close")} onClick={onClose}><X/></button></div>
         <div className="dialog-body">
