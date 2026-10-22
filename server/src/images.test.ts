@@ -542,3 +542,23 @@ test("an addon that names its own poster as the backdrop has no backdrop", () =>
   const real = images.rewriteMeta({ id: "tt1", type: "series", name: "One", poster, background: "https://images.metahub.space/background/medium/tt1/img" });
   assert.match(String(real.background), /^\/api\/image\//, "a real backdrop is kept");
 });
+
+test("an index write that failed is made again by the next flush, and writes never overlap", async () => {
+  const { proxy, dir } = await harness();
+  const first = proxy.proxied("https://cdn.example/first.jpg")!.split("/").pop()!;
+  // A directory where the temporary file goes makes the write fail, the way a full disk would.
+  await mkdir(path.join(dir, "index.json.tmp"));
+  await proxy.flush();
+  await rm(path.join(dir, "index.json.tmp"), { recursive: true });
+  await proxy.flush();
+  const stored = JSON.parse(await readFile(path.join(dir, "index.json"), "utf8")) as Record<string, unknown>;
+  assert.ok(stored[first], "the entry the failed write carried reaches the disk with the next flush");
+
+  // Two flushes in flight at once share one temporary file; the second must wait for the first.
+  const second = proxy.proxied("https://cdn.example/second.jpg")!.split("/").pop()!;
+  const pending = proxy.flush();
+  const third = proxy.proxied("https://cdn.example/third.jpg")!.split("/").pop()!;
+  await Promise.all([pending, proxy.flush()]);
+  const after = JSON.parse(await readFile(path.join(dir, "index.json"), "utf8")) as Record<string, unknown>;
+  assert.ok(after[second] && after[third], "the last write to land is the newest index");
+});

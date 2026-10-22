@@ -42,6 +42,7 @@ export class ArtworkCache {
   private dirty = false;
   private maintenance?: Promise<void>;
   private chain: Promise<unknown> = Promise.resolve();
+  private indexWrites: Promise<void> = Promise.resolve();
 
   constructor(
     private dir = path.join(process.env.DATA_DIR ?? "/data", "artwork"),
@@ -81,14 +82,21 @@ export class ArtworkCache {
     this.timer.unref?.();
   }
 
-  private async writeIndex() {
-    const temp = `${this.indexFile}.tmp`;
-    try {
-      await writeFile(temp, JSON.stringify(Object.fromEntries(this.entries)), { mode: 0o600 });
-      await renameWithRetry(temp, this.indexFile);
-    } catch (error) {
-      log("WARN", "The artwork cache index could not be saved", { reason: String(error).slice(0, 120) });
-    }
+  /** One write at a time: two would share the temporary file, and a rename could move the
+   *  other's half-written bytes into place. A failed write is owed again. */
+  private writeIndex() {
+    const run = this.indexWrites.then(async () => {
+      const temp = `${this.indexFile}.tmp`;
+      try {
+        await writeFile(temp, JSON.stringify(Object.fromEntries(this.entries)), { mode: 0o600 });
+        await renameWithRetry(temp, this.indexFile);
+      } catch (error) {
+        this.dirty = true;
+        log("WARN", "The artwork cache index could not be saved", { reason: String(error).slice(0, 120) });
+      }
+    });
+    this.indexWrites = run;
+    return run;
   }
 
   async load() {
