@@ -15,6 +15,32 @@ const TIMEOUT_MS = 12_000;
 export const SEARCH_TIMEOUT_MS = 12_000;
 export const CATALOG_MAX_BYTES = 8 * 1024 * 1024;
 const STREAM_TIMEOUT_MS = Number(process.env.STREAM_ADDON_TIMEOUT_MS ?? 60_000);
+/** Far past any real manifest, stream list or long series' metadata; an addon sending more is
+ *  broken, and reading it whole would only fill the server's memory for the length of the timeout. */
+const ADDON_MAX_BYTES = 16 * 1024 * 1024;
+
+async function boundedText(response: Response, maxBytes: number): Promise<string> {
+  const tooLarge = () => new Error(`The addon answered with more than ${Math.round(maxBytes / (1024 * 1024))} MB.`);
+  if (Number(response.headers.get("content-length")) > maxBytes) {
+    void response.body?.cancel().catch(() => undefined);
+    throw tooLarge();
+  }
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+  const decoder = new TextDecoder();
+  let text = "";
+  let length = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return text + decoder.decode();
+    length += value.byteLength;
+    if (length > maxBytes) {
+      void reader.cancel().catch(() => undefined);
+      throw tooLarge();
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+}
 
 async function jsonFetch<T>(rawUrl: string, timeoutMs = TIMEOUT_MS, interactive = false): Promise<T> {
   const url = await validateRemoteUrl(rawUrl);
@@ -25,7 +51,7 @@ async function jsonFetch<T>(rawUrl: string, timeoutMs = TIMEOUT_MS, interactive 
   if (!response.ok) throw new Error(`The addon answered HTTP ${response.status}.`);
   const contentType = response.headers.get("content-type") ?? "";
   if (!contentType.includes("json")) throw new AppError("The addon did not return JSON.", "err.addonNotJson");
-  return response.json() as Promise<T>;
+  return JSON.parse(await boundedText(response, ADDON_MAX_BYTES)) as T;
 }
 
 export async function loadAddon(rawUrl: string, role: AddonRole): Promise<AddonRecord> {
