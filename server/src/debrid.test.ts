@@ -137,3 +137,25 @@ test("a dropped connection is retried", async () => {
     (error: unknown) => error instanceof DebridError && error.status === 408 && isRetryableDebridFailure(error),
   );
 });
+
+test("every Real-Debrid request carries a deadline, so a host that never answers is retried", async () => {
+  const signals: Array<AbortSignal | null | undefined> = [];
+  const fetchImpl: FetchLike = async (_url, init) => {
+    signals.push(init?.signal);
+    return json({ username: "nick", type: "premium", premium: 1 });
+  };
+  await verifyRealDebridToken("token", fetchImpl);
+  await addMagnet("token", magnetFromHash("a".repeat(40)), async (url, init) => { signals.push(init?.signal); return json({ id: "t1" }); });
+  assert.equal(signals.length, 2);
+  for (const signal of signals) {
+    assert.ok(signal instanceof AbortSignal);
+    assert.equal(signal.aborted, false);
+  }
+});
+
+test("a request that ran past its deadline is a retryable failure", async () => {
+  const error = await verifyRealDebridToken("token", async () => { throw new DOMException("The operation was aborted due to timeout", "TimeoutError"); })
+    .then(() => undefined, (value: unknown) => value);
+  assert.ok(error instanceof DebridError);
+  assert.equal(isRetryableDebridFailure(error), true);
+});

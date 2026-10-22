@@ -20,6 +20,11 @@ export function normalizeToken(value: unknown): string {
 }
 
 const INFRINGING = new Set(["infringing_file", "virus_file"]);
+/** Real-Debrid answers its API in seconds; one that has not after this is treated like a
+ *  dropped connection and retried, rather than holding a check or a download for undici's
+ *  five-minute default. */
+const RD_TIMEOUT_MS = 30_000;
+
 const FATAL = new Set([...INFRINGING, "bad_token", "expired_token", "account_blocked", "need_premium", "traffic_exhausted", "fair_usage_limit"]);
 
 const rdError = (status: number, code?: string, errorCode?: number) => {
@@ -52,6 +57,7 @@ async function rdRequest(token: string, path: string, body?: Record<string, stri
     method: body ? "POST" : "GET",
     headers: { authorization: `Bearer ${token}`, ...(body ? { "content-type": "application/x-www-form-urlencoded" } : {}) },
     body: body ? new URLSearchParams(body).toString() : undefined,
+    signal: AbortSignal.timeout(RD_TIMEOUT_MS),
   };
   let response: Response;
   try {
