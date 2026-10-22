@@ -397,3 +397,20 @@ test("a title whose metadata names no IMDb id asks no subtitle addon", async () 
   });
   assert.ok(calls.every((url) => !url.includes("/subtitles/")));
 });
+
+test("an addon answer past the size limit is cut off rather than read whole", async () => {
+  const chunk = new Uint8Array(1024 * 1024).fill(0x20);
+  const total = 40 * chunk.byteLength;
+  let pulled = 0;
+  await withStubbedAddons(() => new Response(new ReadableStream({
+    pull(controller) {
+      if (pulled === 0) { controller.enqueue(new TextEncoder().encode('{"subtitles":[')); }
+      if (pulled >= total) { controller.enqueue(new TextEncoder().encode("]}")); controller.close(); return; }
+      pulled += chunk.byteLength;
+      controller.enqueue(chunk);
+    },
+  }), { headers: { "content-type": "application/json" } }), async () => {
+    assert.deepEqual(await subtitles([subtitleAddon()], "movie", "tt0241527"), []);
+  });
+  assert.ok(pulled < total / 2, `read ${pulled} bytes of ${total}`);
+});
