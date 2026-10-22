@@ -332,9 +332,10 @@ Files: `desktop/src/main.ts` (1.8k), `local-backend.ts`, `download-dir.ts`,
 - [x] **BH-12.2 IPC surface.** Every `ipcMain` handler validates its input
       and the sender; nothing exposes arbitrary file paths.
       Progress: every handler checks its sender (`assertShellSender` or `localPageSent`) and validates its input; folder paths come only from the native picker.
-- [ ] **BH-12.3 Settings files.** `connection.json`, `local-settings.json`,
+- [x] **BH-12.3 Settings files.** `connection.json`, `local-settings.json`,
       `window-state.json`: corrupt-file handling, off-screen window recovery.
       Progress: #492 reports sign-ins, settings or servers a reset could not remove.
+      Progress: verified. Every settings file (connection, local settings, window state, shell prefs, remembered port, download-folder ownership) reads a malformed file as its defaults and is written through a uniquely named temporary file and a rename; a saved window is fitted back onto a display's work area. A malformed `connection.json` reads as no servers, so the next save replaces it; with atomic writes that needs damage from outside.
 
 ## Unit 13 — Android TV
 
