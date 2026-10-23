@@ -3,8 +3,11 @@ import test from "node:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { ExternalIdStore, siteLinks, type ExternalIds } from "./external-ids.js";
 import type { FetchLike } from "./debrid.js";
+
+process.env.WIKIDATA_GUARD = "0";
+const { ExternalIdStore, siteLinks } = await import("./external-ids.js");
+type ExternalIds = import("./external-ids.js").ExternalIds;
 
 const bindings = (rows: Array<Record<string, { value: string }>>) =>
   new Response(JSON.stringify({ results: { bindings: rows } }), { status: 200, headers: { "content-type": "application/sparql-results+json" } });
@@ -32,6 +35,35 @@ const chunkedBody = (chunkBytes: number, plannedChunks: number) => {
 const tempDir = () => mkdtemp(path.join(os.tmpdir(), "external-ids-"));
 
 const cacheFile = (dir: string) => path.join(dir, "external-ids.json");
+
+const deferred = <T = void>() => {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
+};
+
+const until = async (condition: () => boolean) => {
+  const deadline = Date.now() + 250;
+  while (!condition() && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  return condition();
+};
+
+const heldBody = () => {
+  const reading = deferred();
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    pull() {
+      reading.resolve();
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  return { body, reading: reading.promise, cancelled: () => cancelled };
+};
 
 test("the query carries the format, the escaped SPARQL with the id and a descriptive agent", async (t) => {
   const dir = await tempDir();
@@ -113,6 +145,98 @@ test("two concurrent lookups of one id share a single query", async (t) => {
   // One query means one save: the write sits inside the promise both callers await.
   const written = JSON.parse(await readFile(cacheFile(dir), "utf8")) as { entries: Record<string, unknown> };
   assert.deepEqual(Object.keys(written.entries), ["tt0090257"]);
+});
+
+test("one caller leaving keeps the shared query and its remaining caller alive", async (t) => {
+  const dir = await tempDir();
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const entered = deferred();
+  const answer = deferred<Response>();
+  let calls = 0;
+  let transport: AbortSignal | undefined;
+  const store = new ExternalIdStore(dir, async (_url, init) => {
+    calls += 1;
+    transport = init?.signal ?? undefined;
+    entered.resolve();
+    return answer.promise;
+  });
+  await store.load();
+  const leaving = new AbortController();
+
+  const first = store.ids("tt0090257", leaving.signal);
+  const second = store.ids("tt0090257");
+  await entered.promise;
+  leaving.abort();
+  await assert.rejects(first, { name: "AbortError" });
+  assert.equal(transport?.aborted, false, "the remaining caller keeps the transport alive");
+
+  answer.resolve(bindings([{ tmdbMovie: { value: "31410" } }]));
+  assert.deepEqual(await second, { tmdbMovie: "31410" });
+  assert.equal(calls, 1);
+  assert.equal(store.cachedIds("tt0090257")?.tmdbMovie, "31410");
+});
+
+test("the last caller leaving cancels the body, writes nothing, and a retry asks again", async (t) => {
+  const dir = await tempDir();
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const source = heldBody();
+  let calls = 0;
+  let transport: AbortSignal | undefined;
+  const store = new ExternalIdStore(dir, async (_url, init) => {
+    calls += 1;
+    transport = init?.signal ?? undefined;
+    return calls === 1 ? new Response(source.body) : bindings([]);
+  });
+  await store.load();
+  const first = new AbortController();
+  const second = new AbortController();
+
+  const abandoned = store.ids("tt0090257", first.signal);
+  const alsoAbandoned = store.ids("tt0090257", second.signal);
+  await source.reading;
+  assert.equal(await until(() => source.body.locked), true);
+  first.abort();
+  second.abort();
+  await assert.rejects(abandoned, { name: "AbortError" });
+  await assert.rejects(alsoAbandoned, { name: "AbortError" });
+
+  assert.equal(transport?.aborted, true);
+  assert.equal(store.cachedIds("tt0090257"), undefined);
+  await assert.rejects(readFile(cacheFile(dir), "utf8"));
+
+  const retry = store.ids("tt0090257");
+  assert.equal(calls, 2, "the retry starts a new query instead of joining the abandoned one");
+  assert.deepEqual(await retry, {});
+  assert.equal(await until(source.cancelled), true);
+  const written = JSON.parse(await readFile(cacheFile(dir), "utf8")) as { entries: Record<string, unknown> };
+  assert.deepEqual(Object.keys(written.entries), ["tt0090257"]);
+});
+
+test("a caller without a signal keeps a shared lookup alive after the first caller leaves", async (t) => {
+  const dir = await tempDir();
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const entered = deferred();
+  const answer = deferred<Response>();
+  let cancelling: AbortSignal | undefined;
+  const store = new ExternalIdStore(dir, async (_url, init) => {
+    cancelling = init?.signal ?? undefined;
+    entered.resolve();
+    return answer.promise;
+  });
+  await store.load();
+  const leaving = new AbortController();
+
+  const first = store.ids("tt0090257", leaving.signal);
+  const background = store.ids("tt0090257");
+  await entered.promise;
+  leaving.abort();
+  await assert.rejects(first, { name: "AbortError" });
+  assert.equal(cancelling?.aborted, false);
+
+  answer.resolve(bindings([]));
+  assert.deepEqual(await background, {});
+  assert.deepEqual(await store.ids("tt0090257"), {});
+  assert.equal(cancelling?.aborted, false);
 });
 
 test("a lookup that throws answers null and writes no cache file", async (t) => {

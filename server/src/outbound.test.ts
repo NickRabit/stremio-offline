@@ -5,7 +5,16 @@ import path from "node:path";
 import test from "node:test";
 import { AppError } from "./errors.js";
 import { flushLog, initLogger } from "./logger.js";
-import { GuardRejection, OutboundError, OutboundGuard, configFromEnv, metadataConfigFromEnv, retryAfterMs } from "./outbound.js";
+import {
+  GuardRejection,
+  OutboundError,
+  OutboundGuard,
+  configFromEnv,
+  guardedMetadataBody,
+  metadataConfigFromEnv,
+  metadataOutbound,
+  retryAfterMs,
+} from "./outbound.js";
 import { readLimitedBody, ResponseTooLargeError } from "./response-body.js";
 
 process.env.LOG_STDOUT = "0";
@@ -618,6 +627,57 @@ test("runBody keeps status and body policy outcomes out of breaker accounting", 
     { deadlineMs: 1_000 },
   );
   assert.deepEqual(policy.guard.diagnostics(), []);
+});
+
+test("an aborted metadata body releases its host slot without failing the host", async () => {
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    cancel() {
+      cancelled = true;
+    },
+  });
+  const controller = new AbortController();
+  const request = guardedMetadataBody(
+    "https://query.wikidata.org/sparql",
+    {},
+    (response, signal) => readLimitedBody(response, 1024, signal),
+    { signal: controller.signal, deadlineMs: 5_000 },
+    async () => new Response(body),
+  );
+  while (!body.locked) await tick();
+  controller.abort();
+
+  await assert.rejects(request, (error: unknown) =>
+    error instanceof OutboundError && error.code === "cancelled");
+  assert.equal(cancelled, true);
+  assert.deepEqual(metadataOutbound.diagnostics(), []);
+});
+
+test("a metadata body deadline releases its host slot without failing the host", async () => {
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    cancel() {
+      cancelled = true;
+    },
+  });
+  const request = guardedMetadataBody(
+    "https://metadata-deadline.example/",
+    {},
+    (response, signal) => readLimitedBody(response, 1024, signal),
+    { deadlineMs: 20 },
+    async () => new Response(body),
+  );
+  while (!body.locked) await tick();
+
+  const keepAlive = setTimeout(() => undefined, 100);
+  try {
+    await assert.rejects(request, (error: unknown) =>
+      error instanceof OutboundError && error.code === "timeout");
+  } finally {
+    clearTimeout(keepAlive);
+  }
+  assert.equal(cancelled, true);
+  assert.deepEqual(metadataOutbound.diagnostics(), []);
 });
 
 test("runBody keeps an explained validation error for the caller", async () => {

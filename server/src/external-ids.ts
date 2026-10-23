@@ -3,7 +3,7 @@ import path from "node:path";
 import type { FetchLike } from "./debrid.js";
 import { renameWithRetry } from "./fs-retry.js";
 import { log } from "./logger.js";
-import { guardedMetadataFetch } from "./outbound.js";
+import { guardedMetadataBody } from "./outbound.js";
 import { readLimitedBody } from "./response-body.js";
 
 /** Ids of the sites a title links to. IMDb is the catalogue id, the other two come
@@ -40,8 +40,23 @@ interface CacheFile { version: number; entries: Record<string, CachedIds> }
 const reasonOf = (error: unknown) =>
   error instanceof SyntaxError ? "Response body is not valid JSON." : (error instanceof Error ? error.message : String(error)).slice(0, 120);
 
-const readWikidataJson = async <T>(response: Response): Promise<T> =>
-  JSON.parse(new TextDecoder().decode(await readLimitedBody(response, MAX_JSON_BYTES))) as T;
+const abortReason = (signal: AbortSignal): unknown =>
+  signal.reason ?? Object.assign(new Error("The lookup was cancelled."), { name: "AbortError" });
+
+const readWikidataJson = async <T>(response: Response, signal: AbortSignal): Promise<T> =>
+  JSON.parse(new TextDecoder().decode(await readLimitedBody(response, MAX_JSON_BYTES, signal))) as T;
+
+type WikidataAnswer =
+  | { status: "ok"; body: { results?: { bindings?: Array<Record<string, { value?: string }>> } } }
+  | { status: "http"; code: number };
+
+const readWikidataAnswer = async (response: Response, signal: AbortSignal): Promise<WikidataAnswer> => {
+  if (!response.ok) {
+    void response.body?.cancel().catch(() => undefined);
+    return { status: "http", code: response.status };
+  }
+  return { status: "ok", body: await readWikidataJson(response, signal) };
+};
 
 const withoutEmpty = (ids: ExternalIds): ExternalIds => {
   const kept: ExternalIds = {};
@@ -58,6 +73,18 @@ async function writeAtomic(file: string, data: string) {
   await renameWithRetry(temp, file);
 }
 
+interface FlightWaiter {
+  onAbort(): void;
+}
+
+interface IdFlight {
+  controller: AbortController;
+  waiters: Set<FlightWaiter>;
+  done: Promise<ExternalIds | null>;
+  settled: boolean;
+  abandoned: boolean;
+}
+
 /**
  * Wikidata ids of a catalogue title, kept on disk: an id never changes, so a title is
  * asked about once. The store is the only place that talks to Wikidata, and it does so
@@ -65,11 +92,11 @@ async function writeAtomic(file: string, data: string) {
  */
 export class ExternalIdStore {
   private entries: Record<string, CachedIds> = {};
-  private inFlight = new Map<string, Promise<ExternalIds | null>>();
+  private inFlight = new Map<string, IdFlight>();
   private saving: Promise<void> = Promise.resolve();
   private readonly file: string;
 
-  constructor(dataDir: string, private readonly fetchImpl: FetchLike = guardedMetadataFetch) {
+  constructor(dataDir: string, private readonly fetchImpl?: FetchLike) {
     this.file = path.join(dataDir, "external-ids.json");
   }
 
@@ -95,45 +122,105 @@ export class ExternalIdStore {
 
   /** Cached, otherwise one Wikidata query. Returns an empty object when Wikidata knows
    *  nothing, null when the lookup itself failed. */
-  async ids(imdbId: string): Promise<ExternalIds | null> {
+  async ids(imdbId: string, signal?: AbortSignal): Promise<ExternalIds | null> {
     if (!IMDB_ID.test(imdbId)) return null;
     const cached = this.entries[imdbId];
     if (cached) {
       const ids = withoutEmpty(cached);
       if (Object.keys(ids).length > 0 || Date.now() - Date.parse(cached.at) < NEGATIVE_TTL_MS) return ids;
     }
-    let pending = this.inFlight.get(imdbId);
-    if (!pending) {
-      pending = (async () => {
-        const found = await this.lookup(imdbId);
-        if (!found) return null;
+    if (signal?.aborted) throw abortReason(signal);
+    const flight = this.inFlight.get(imdbId) ?? this.start(imdbId);
+    return this.attach(imdbId, flight, signal);
+  }
+
+  private start(imdbId: string): IdFlight {
+    const flight: IdFlight = {
+      controller: new AbortController(),
+      waiters: new Set<FlightWaiter>(),
+      done: Promise.resolve<ExternalIds | null>(null),
+      settled: false,
+      abandoned: false,
+    };
+    this.inFlight.set(imdbId, flight);
+    flight.done = (async () => {
+      try {
+        const found = await this.lookup(imdbId, flight.controller.signal);
+        if (!found || flight.abandoned || flight.controller.signal.aborted) return null;
         this.entries[imdbId] = { ...found, at: new Date().toISOString() };
         await this.save();
         return found;
-      })().finally(() => this.inFlight.delete(imdbId));
-      this.inFlight.set(imdbId, pending);
-    }
-    return pending;
+      } catch (error) {
+        if (flight.controller.signal.aborted) return null;
+        throw error;
+      }
+    })().finally(() => {
+      flight.settled = true;
+      if (this.inFlight.get(imdbId) === flight) this.inFlight.delete(imdbId);
+    });
+    return flight;
   }
 
-  private async lookup(imdbId: string): Promise<ExternalIds | null> {
+  private attach(imdbId: string, flight: IdFlight, signal?: AbortSignal): Promise<ExternalIds | null> {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const waiter: FlightWaiter = {
+        onAbort: () => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          flight.waiters.delete(waiter);
+          reject(abortReason(signal!));
+          this.abandon(imdbId, flight);
+        },
+      };
+      const cleanup = () => signal?.removeEventListener("abort", waiter.onAbort);
+      const finish = (settle: () => void) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        flight.waiters.delete(waiter);
+        settle();
+      };
+      flight.waiters.add(waiter);
+      signal?.addEventListener("abort", waiter.onAbort, { once: true });
+      flight.done.then(
+        (ids) => finish(() => resolve(ids)),
+        (error) => finish(() => reject(error)),
+      );
+      if (signal?.aborted) waiter.onAbort();
+    });
+  }
+
+  private abandon(imdbId: string, flight: IdFlight): void {
+    if (flight.waiters.size > 0 || flight.settled) return;
+    flight.abandoned = true;
+    if (this.inFlight.get(imdbId) === flight) this.inFlight.delete(imdbId);
+    flight.controller.abort();
+  }
+
+  private async lookup(imdbId: string, signal: AbortSignal): Promise<ExternalIds | null> {
     const url = new URL(WIKIDATA_ENDPOINT);
     url.searchParams.set("format", "json");
     url.searchParams.set("query", sparql(imdbId));
     try {
-      const response = await this.fetchImpl(url.toString(), {
-        headers: { accept: "application/sparql-results+json", "user-agent": USER_AGENT },
-        signal: AbortSignal.timeout(TIMEOUT_MS),
-      });
-      if (!response.ok) {
-        log("WARN", "Wikidata did not answer, the links stay partial", { id: imdbId, status: response.status });
+      const answer = await guardedMetadataBody<WikidataAnswer>(
+        url.toString(),
+        { headers: { accept: "application/sparql-results+json", "user-agent": USER_AGENT } },
+        readWikidataAnswer,
+        { signal, deadlineMs: TIMEOUT_MS },
+        this.fetchImpl,
+      );
+      if (answer.status === "http") {
+        log("WARN", "Wikidata did not answer, the links stay partial", { id: imdbId, status: answer.code });
         return null;
       }
-      const body = await readWikidataJson<{ results?: { bindings?: Array<Record<string, { value?: string }>> } }>(response);
+      const body = answer.body;
       const row = body.results?.bindings?.[0];
       const value = (name: string) => row?.[name]?.value || undefined;
       return withoutEmpty({ csfd: value("csfd"), tmdbMovie: value("tmdbMovie"), tmdbTv: value("tmdbTv") });
     } catch (error) {
+      if (signal.aborted) throw abortReason(signal);
       log("WARN", "Wikidata could not be reached, the links stay partial", { id: imdbId, reason: reasonOf(error) });
       return null;
     }

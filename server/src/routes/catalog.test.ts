@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
 import type { AddressInfo } from "node:net";
+import os from "node:os";
+import path from "node:path";
 import { test } from "node:test";
 import express from "express";
 import { messageKeyOf } from "../errors.js";
-import type { ExternalIdStore } from "../external-ids.js";
+import { ExternalIdStore } from "../external-ids.js";
 import type { LibraryMetaRecord, TitleUnit } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { LibraryRecord } from "../libraries.js";
@@ -62,6 +65,7 @@ const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null, 
   units?: TitleUnit[];
   cachedMeta?: CatalogDeps["cachedMeta"];
   tmdbApiKey?: string;
+  externalIds?: ExternalIdStore;
 } = {}): Promise<Harness> => {
   const viewer = options.viewer === undefined ? admin : options.viewer;
   const lookups: Harness["lookups"] = [];
@@ -98,7 +102,7 @@ const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null, 
     libraryUnits: async () => options.units ?? [],
     ownRecord: (relative, records) => (records[relative]?.id ? records[relative] : undefined),
     metaStore: { qualifiedMeta: () => options.bound ?? ({}) } as unknown as LibraryMetaStore,
-    externalIds: { ids: async () => ({}) } as unknown as ExternalIdStore,
+    externalIds: options.externalIds ?? { ids: async () => ({}) } as unknown as ExternalIdStore,
     subtitleDelay: () => 0,
     mediaSources: {} as unknown as CatalogDeps["mediaSources"],
   };
@@ -129,7 +133,14 @@ const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null, 
   };
 };
 
-const api = (base: string, pathname: string) => fetch(`${base}${pathname}`);
+const api = (base: string, pathname: string, init?: RequestInit) => fetch(`${base}${pathname}`, init);
+
+const deferred = <T = void>() => {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
+};
 
 test("GET /api/catalogs lists only enabled addons whose role is not source", async (t) => {
   const harness = await mount([
@@ -250,6 +261,132 @@ test("an administrator still reads a binding in a library nobody was granted", a
 
   const response = await api(harness.base, `/api/library/links?path=${encodeURIComponent("lib_00000001/Films/Heat")}`);
   assert.deepEqual(await response.json(), { links: [{ site: "imdb", url: "https://www.imdb.com/title/tt1/" }] });
+});
+
+test("the two link routes share a query and one disconnecting client leaves the other alive", async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "catalog-links-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const entered = deferred();
+  const answer = deferred<Response>();
+  let queries = 0;
+  let transport: AbortSignal | undefined;
+  const externalIds = new ExternalIdStore(dir, async (_url, init) => {
+    queries += 1;
+    transport = init?.signal ?? undefined;
+    entered.resolve();
+    return answer.promise;
+  });
+  await externalIds.load();
+  const original = externalIds.ids.bind(externalIds);
+  const joined = deferred();
+  let joins = 0;
+  externalIds.ids = async (id, signal) => {
+    const pending = original(id, signal);
+    if (++joins === 2) joined.resolve();
+    return pending;
+  };
+
+  const bound = { "lib_00000001/Films/Heat": { type: "movie", id: "tt1", name: "Heat" } };
+  const harness = await mount([], null, {
+    libraries: [library("lib_00000001")],
+    bound,
+    externalIds,
+  });
+  t.after(harness.close);
+  const leaving = new AbortController();
+  const first = api(harness.base, "/api/links/movie/tt1", { signal: leaving.signal })
+    .catch((error: unknown) => error);
+  await entered.promise;
+  const second = api(harness.base, `/api/library/links?path=${encodeURIComponent("lib_00000001/Films/Heat")}`);
+  await joined.promise;
+
+  leaving.abort();
+  const disconnected = await first;
+  assert.ok(disconnected instanceof Error);
+  assert.equal(disconnected.name, "AbortError");
+  assert.equal(transport?.aborted, false, "the surviving route keeps the query alive");
+
+  answer.resolve(new Response(JSON.stringify({ results: { bindings: [{ tmdbMovie: { value: "1" } }] } })));
+  const surviving = await second;
+  assert.equal(surviving.status, 200);
+  assert.deepEqual(await surviving.json(), {
+    links: [
+      { site: "tmdb", url: "https://www.themoviedb.org/movie/1?language=cs-CZ" },
+      { site: "imdb", url: "https://www.imdb.com/title/tt1/" },
+    ],
+  });
+  assert.equal(queries, 1);
+});
+
+test("the two link routes cancel an abandoned body and a retry starts a fresh query", async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "catalog-links-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    cancel() {
+      cancelled = true;
+    },
+  });
+  const entered = deferred();
+  let queries = 0;
+  let transport: AbortSignal | undefined;
+  const externalIds = new ExternalIdStore(dir, async (_url, init) => {
+    queries += 1;
+    transport = init?.signal ?? undefined;
+    entered.resolve();
+    return queries === 1
+      ? new Response(body)
+      : new Response(JSON.stringify({ results: { bindings: [] } }));
+  });
+  await externalIds.load();
+  const original = externalIds.ids.bind(externalIds);
+  const joined = deferred();
+  let joins = 0;
+  externalIds.ids = async (id, signal) => {
+    const pending = original(id, signal);
+    if (++joins === 2) joined.resolve();
+    return pending;
+  };
+
+  const bound = { "lib_00000001/Films/Heat": { type: "movie", id: "tt1", name: "Heat" } };
+  const harness = await mount([], null, {
+    libraries: [library("lib_00000001")],
+    bound,
+    externalIds,
+  });
+  t.after(harness.close);
+  const closes = harness.responseCloses();
+  const first = new AbortController();
+  const second = new AbortController();
+  const direct = api(harness.base, "/api/links/movie/tt1", { signal: first.signal })
+    .catch((error: unknown) => error);
+  await entered.promise;
+  const viaLibrary = api(
+    harness.base,
+    `/api/library/links?path=${encodeURIComponent("lib_00000001/Films/Heat")}`,
+    { signal: second.signal },
+  ).catch((error: unknown) => error);
+  await joined.promise;
+  await until(() => body.locked, "the shared body starts reading");
+
+  first.abort();
+  second.abort();
+  const outcomes = await Promise.all([direct, viaLibrary]);
+  for (const outcome of outcomes) {
+    assert.ok(outcome instanceof Error);
+    assert.equal(outcome.name, "AbortError");
+  }
+  await until(() => harness.responseCloses() >= closes + 2, "both routes see their clients leave");
+  assert.equal(transport?.aborted, true);
+  await until(() => cancelled, "the abandoned body is cancelled");
+  assert.equal(externalIds.cachedIds("tt1"), undefined);
+  await assert.rejects(readFile(path.join(dir, "external-ids.json"), "utf8"));
+
+  const retry = await api(harness.base, "/api/links/movie/tt1");
+  assert.equal(retry.status, 200);
+  assert.deepEqual(await retry.json(), { links: [{ site: "imdb", url: "https://www.imdb.com/title/tt1/" }] });
+  assert.equal(queries, 2, "the retry does not join the abandoned flight");
+  assert.deepEqual(externalIds.cachedIds("tt1"), {});
 });
 
 /** What a play that started from the library needs: the title its file is bound to, so the
