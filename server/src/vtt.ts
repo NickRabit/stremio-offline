@@ -4,7 +4,8 @@ const cueSeconds = (value: string) => { const parts = value.split(":").map(Numbe
 const cueStamp = (value: number) => { const total = Math.max(0, value); return `${String(Math.floor(total / 3600)).padStart(2, "0")}:${String(Math.floor((total % 3600) / 60)).padStart(2, "0")}:${(total % 60).toFixed(3).padStart(6, "0")}`; };
 
 export function shiftVtt(text: string, offset: number) {
-  return text.split(/\n\n+/).map((block) => {
+  // Blocks are found by their blank lines, which a file saved on Windows spells "\r\n\r\n".
+  return text.replace(/\r\n?/g, "\n").split(/\n\n+/).map((block) => {
     const match = block.match(CUE); if (!match) return block;
     const end = cueSeconds(match[2]) - offset; if (end <= 0) return "";
     return block.replace(CUE, `${cueStamp(cueSeconds(match[1]) - offset)} --> ${cueStamp(end)}`);

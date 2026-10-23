@@ -25,3 +25,9 @@ test("a half-written cue is not handed out while FFmpeg is still writing", () =>
   assert.equal(completeVttBlocks(growing), "WEBVTT\n\n00:10:00.000 --> 00:10:02.000\nwritten");
   assert.equal(completeVttBlocks("WEBVTT\n\n00:10:00.000 --> 00:10:02.000\nwritten\n\n"), "WEBVTT\n\n00:10:00.000 --> 00:10:02.000\nwritten\n\n");
 });
+
+test("a file saved with Windows line endings is shifted cue by cue", () => {
+  const shifted = shiftVtt("WEBVTT\r\n\r\n00:10:05.000 --> 00:10:07.000\r\nfirst\r\n\r\n00:10:20.000 --> 00:10:22.000\r\nsecond\r\n", 600);
+  assert.match(shifted, /00:00:05\.000 --> 00:00:07\.000\nfirst/);
+  assert.match(shifted, /00:00:20\.000 --> 00:00:22\.000\nsecond/);
+});

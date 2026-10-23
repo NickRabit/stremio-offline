@@ -407,9 +407,12 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     const raw = resource.stream.url!;
     if (raw.startsWith("file://")) {
       const target = await libraryTarget(raw.slice(7), currentUser(req));
-      const text = await readFile(target, "utf8");
-      const vtt = text.trimStart().startsWith("WEBVTT") ? text : `WEBVTT\n\n${text.replace(/^\ufeff/, "").replace(/\r/g, "").replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2").replace(/^\d+\n(?=\d{2}:\d{2}:\d{2}[.,]\d{3} -->)/gm, "")}`;
-      return void res.type("text/vtt; charset=utf-8").send(vtt);
+      let text = await readFile(target, "utf8");
+      if (!text.trimStart().startsWith("WEBVTT")) text = `WEBVTT\n\n${text.replace(/^\ufeff/, "").replace(/\r/g, "").replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2").replace(/^\d+\n(?=\d{2}:\d{2}:\d{2}[.,]\d{3} -->)/gm, "")}`;
+      // Shifted like an addon's: the player asks with the same offset and delay for both.
+      const shift = (Number(req.query.offset) || 0) - subtitleDelay(req.query.delay);
+      if (shift) text = shiftVtt(text, shift);
+      return void res.type("text/vtt; charset=utf-8").setHeader("x-content-type-options", "nosniff").send(text);
     }
     const disconnect = routeDisconnectSignal(req, res);
     try {
