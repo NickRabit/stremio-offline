@@ -132,7 +132,7 @@ const EXTRA_TOKENS = new Set(["trailer", "sample", "extra", "bonus", "deleted", 
 const ARTICLES = /^(the|a|an)\s+/;
 /** The matching rules that wrote a suggestion or a remembered miss. Bumped whenever a
  *  decision changes meaning, so old rows are reconsidered exactly once. */
-export const MATCH_RULE_VERSION = 7;
+export const MATCH_RULE_VERSION = 8;
 
 /** The lowest score a single candidate can carry and still be bound without a person's word. */
 export const AUTO_ACCEPT_MIN_SCORE = 85;
