@@ -13,8 +13,9 @@ import { mediaResources, ResourceError, safeSourceText, type ResourceOwner } fro
 import { readMediaText } from "../media-playlist.js";
 import { isRemoteMediaStream } from "../media-server-reference.js";
 import type { MediaServerSources } from "../media-server-sources.js";
-import { guardedFetch } from "../outbound.js";
+import { guardedBody } from "../outbound.js";
 import { contentOf } from "../revocation.js";
+import { cancelResponseBody } from "../response-body.js";
 import type { UserPrefs } from "../store.js";
 import { trailerFor } from "../trailers.js";
 import { tmdbGallery, type TmdbGalleryPicture } from "../tmdb.js";
@@ -41,6 +42,9 @@ export interface CatalogDeps extends RouteContext {
   subtitleDelay(value: unknown): number;
   mediaSources: MediaServerSources;
 }
+
+const SUBTITLE_MAX_BYTES = 2 * 1024 * 1024;
+const SUBTITLE_DEADLINE_MS = 20_000;
 
 export function registerCatalogRoutes(app: express.Application, deps: CatalogDeps): void {
   const { store, currentUser, cachedMeta, prefsOf, libraryTarget, ownerOf, trackMedia, libraryKey, localCopies, libraryUnits, ownRecord, metaStore, externalIds, subtitleDelay, mediaSources, requireAccess } = deps;
@@ -341,13 +345,38 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
       const vtt = text.trimStart().startsWith("WEBVTT") ? text : `WEBVTT\n\n${text.replace(/^\ufeff/, "").replace(/\r/g, "").replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2").replace(/^\d+\n(?=\d{2}:\d{2}:\d{2}[.,]\d{3} -->)/gm, "")}`;
       return void res.type("text/vtt; charset=utf-8").send(vtt);
     }
-    const controller = new AbortController();
-    res.once("close", () => { if (!res.writableEnded) controller.abort(); });
-    const response = await guardedFetch(raw, { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(20_000)]) });
-    if (!response.ok) { await response.body?.cancel(); throw new Error("Subtitle source unavailable."); }
-    let text = await readMediaText(response); if (!text.trimStart().startsWith("WEBVTT")) text = `WEBVTT\n\n${text.replace(/^\ufeff/, "").replace(/\r/g, "").replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2").replace(/^\d+\n(?=\d{2}:\d{2}:\d{2}[.,]\d{3} -->)/gm, "")}`;
-    const shift = (Number(req.query.offset) || 0) - subtitleDelay(req.query.delay);
-    if (shift) text = shiftVtt(text, shift);
-    res.type("text/vtt; charset=utf-8").setHeader("cache-control", "private, no-store").send(text);
+    const disconnect = routeDisconnectSignal(req, res);
+    try {
+      if (disconnect.signal.aborted) return;
+      const downloaded = await guardedBody<string | null>(
+        raw,
+        {},
+        async (response, signal) => {
+          if (!response.ok) {
+            cancelResponseBody(response);
+            return null;
+          }
+          return readMediaText(response, SUBTITLE_MAX_BYTES, signal);
+        },
+        { signal: disconnect.signal, deadlineMs: SUBTITLE_DEADLINE_MS },
+      );
+      if (downloaded === null) throw new Error("Subtitle source unavailable.");
+      let text = downloaded;
+      if (!text.trimStart().startsWith("WEBVTT")) text = `WEBVTT\n\n${text.replace(/^\ufeff/, "").replace(/\r/g, "").replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2").replace(/^\d+\n(?=\d{2}:\d{2}:\d{2}[.,]\d{3} -->)/gm, "")}`;
+      const shift = (Number(req.query.offset) || 0) - subtitleDelay(req.query.delay);
+      if (shift) text = shiftVtt(text, shift);
+      requireAccess(req, { addonKey: resource.stream.addonKey });
+      mediaResources.get(resource.id, owner.sid, "subtitle");
+      if (disconnect.signal.aborted || res.destroyed || res.writableEnded) return;
+      res.type("text/vtt; charset=utf-8")
+        .setHeader("cache-control", "private, no-store")
+        .setHeader("x-content-type-options", "nosniff")
+        .send(text);
+    } catch (error) {
+      if (disconnect.signal.aborted) return;
+      throw error;
+    } finally {
+      disconnect.dispose();
+    }
   }));
 }

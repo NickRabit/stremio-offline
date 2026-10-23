@@ -704,6 +704,215 @@ test("the subtitle listing re-checks each addon it is about to name", async (t) 
   });
 });
 
+const subtitleOwner = { userId: "usr_00000001", sid: "session-1", expiresAt: Number.MAX_SAFE_INTEGER };
+const externalSubtitle = (url: string) => mediaResources.add({ url, addonKey: "subs" }, subtitleOwner, "subtitle");
+
+const heldMediaText = () => {
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  let started!: () => void;
+  let cancelled!: () => void;
+  let pulled = false;
+  const readStarted = new Promise<void>((resolve) => { started = resolve; });
+  const bodyCancelled = new Promise<void>((resolve) => { cancelled = resolve; });
+  const response = new Response(new ReadableStream<Uint8Array>({
+    start(value) { controller = value; },
+    pull() {
+      if (!pulled) {
+        pulled = true;
+        started();
+      }
+      return new Promise<void>(() => undefined);
+    },
+    cancel() { cancelled(); },
+  }), { headers: { "content-type": "application/x-subrip" } });
+  return {
+    response,
+    readStarted,
+    bodyCancelled,
+    release(text: string) {
+      controller.enqueue(new TextEncoder().encode(text));
+      controller.close();
+    },
+  };
+};
+
+test("an external subtitle holds its host slot through the body and preserves the VTT response headers", async (t) => {
+  const host = "subtitle-held-body.example";
+  const subtitleId = externalSubtitle(`https://${host}/subtitle.srt`);
+  t.after(() => mediaResources.remove(subtitleId));
+  const harness = await mount();
+  t.after(harness.close);
+  const held = heldMediaText();
+
+  await withStubbedAddons(() => held.response, async () => {
+    const pending = api(harness.base, `/api/subtitle/${subtitleId}`);
+    await until(() => outbound.diagnostics().find((entry) => entry.host === host)?.active === 1, "the held subtitle slot");
+    await prompt(held.readStarted, "the subtitle body read");
+
+    held.release("1\n00:00:01,000 --> 00:00:02,000\nHello\n");
+    const response = await prompt(pending, "the subtitle response");
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("cache-control"), "private, no-store");
+    assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+    assert.match(response.headers.get("content-type") ?? "", /^text\/vtt/);
+    const text = await response.text();
+    assert.match(text, /^WEBVTT\n\n/);
+    assert.match(text, /00:00:01\.000 --> 00:00:02\.000/);
+    assert.equal(text.includes("00:00:01,000"), false);
+  });
+
+  await until(() => !outbound.diagnostics().some((entry) => entry.host === host), "the released host slot");
+});
+
+test("a client disconnect before subtitle headers is cancelled without failing the host", async (t) => {
+  const host = "subtitle-before-headers.example";
+  const subtitleId = externalSubtitle(`https://${host}/subtitle.srt`);
+  t.after(() => mediaResources.remove(subtitleId));
+  const harness = await mount();
+  t.after(harness.close);
+  let started!: () => void;
+  let aborted!: () => void;
+  const requestStarted = new Promise<void>((resolve) => { started = resolve; });
+  const signalAborted = new Promise<void>((resolve) => { aborted = resolve; });
+
+  await withStubbedAddons((_url, init) => new Promise<Response>((_resolve, reject) => {
+    const signal = init.signal as AbortSignal;
+    started();
+    signal.addEventListener("abort", () => {
+      aborted();
+      reject(signal.reason);
+    }, { once: true });
+  }), async () => {
+    const request = http.get(`${harness.base}/api/subtitle/${subtitleId}`);
+    request.on("error", () => undefined);
+    t.after(() => request.destroy());
+    const closed = new Promise<void>((resolve) => request.once("close", resolve));
+    await prompt(requestStarted, "the subtitle request");
+    request.destroy();
+    await prompt(signalAborted, "the subtitle request abort");
+    await prompt(closed, "the disconnected subtitle request");
+    await until(() => !outbound.diagnostics().some((entry) => entry.host === host), "the cancelled subtitle slot");
+  });
+
+  assert.equal(outbound.diagnostics().find((entry) => entry.host === host)?.failures ?? 0, 0);
+});
+
+test("a client disconnect while an external subtitle body is held cancels it without failing the host", async (t) => {
+  const host = "subtitle-during-body.example";
+  const subtitleId = externalSubtitle(`https://${host}/subtitle.srt`);
+  t.after(() => mediaResources.remove(subtitleId));
+  const harness = await mount();
+  t.after(harness.close);
+  const held = heldMediaText();
+
+  await withStubbedAddons(() => held.response, async () => {
+    const request = http.get(`${harness.base}/api/subtitle/${subtitleId}`);
+    request.on("error", () => undefined);
+    t.after(() => request.destroy());
+    const closed = new Promise<void>((resolve) => request.once("close", resolve));
+    await until(() => outbound.diagnostics().find((entry) => entry.host === host)?.active === 1, "the held subtitle slot");
+    await prompt(held.readStarted, "the held subtitle body");
+    request.destroy();
+    await prompt(held.bodyCancelled, "the held subtitle body cancellation");
+    await prompt(closed, "the disconnected subtitle request");
+    await until(() => !outbound.diagnostics().some((entry) => entry.host === host), "the cancelled held slot");
+  });
+
+  assert.equal(outbound.diagnostics().find((entry) => entry.host === host)?.failures ?? 0, 0);
+});
+
+test("an oversized external subtitle is cancelled at the media text limit and accounted as a failure", async (t) => {
+  const host = "subtitle-too-large.example";
+  const subtitleId = externalSubtitle(`https://${host}/subtitle.srt`);
+  t.after(() => mediaResources.remove(subtitleId));
+  const harness = await mount();
+  t.after(harness.close);
+  let cancel!: () => void;
+  const bodyCancelled = new Promise<void>((resolve) => { cancel = resolve; });
+
+  await withStubbedAddons(() => new Response(new ReadableStream<Uint8Array>({
+    start(controller) { controller.enqueue(new Uint8Array(2 * 1024 * 1024 + 1)); },
+    cancel() { cancel(); },
+  }), { headers: { "content-type": "application/x-subrip" } }), async () => {
+    const response = await prompt(api(harness.base, `/api/subtitle/${subtitleId}`), "the oversized subtitle response");
+    assert.equal(response.status, 400);
+    assert.equal((await response.text()).includes("WEBVTT"), false);
+    await prompt(bodyCancelled, "the oversized subtitle body cancellation");
+  });
+
+  assert.equal(outbound.diagnostics().find((entry) => entry.host === host)?.failures, 1);
+});
+
+test("a truncated external subtitle body is accounted as a host failure", async (t) => {
+  const host = "subtitle-truncated.example";
+  const subtitleId = externalSubtitle(`https://${host}/subtitle.srt`);
+  t.after(() => mediaResources.remove(subtitleId));
+  const harness = await mount();
+  t.after(harness.close);
+
+  await withStubbedAddons(() => new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode("WEBVTT\n\n"));
+      controller.error(new TypeError("terminated"));
+    },
+  })), async () => {
+    const response = await prompt(api(harness.base, `/api/subtitle/${subtitleId}`), "the truncated subtitle response");
+    assert.equal(response.status, 400);
+    assert.equal((await response.text()).includes("WEBVTT"), false);
+  });
+
+  assert.equal(outbound.diagnostics().find((entry) => entry.host === host)?.failures, 1);
+});
+
+test("an external subtitle re-checks addon access after the held body", async (t) => {
+  const host = "subtitle-revoked.example";
+  const subtitleId = externalSubtitle(`https://${host}/subtitle.srt`);
+  t.after(() => mediaResources.remove(subtitleId));
+  let allowed = true;
+  let accessChecks = 0;
+  const harness = await mount([], null, {
+    access: () => {
+      accessChecks += 1;
+      if (!allowed) throw Object.assign(new Error("revoked"), { status: 404 });
+    },
+  });
+  t.after(harness.close);
+  const held = heldMediaText();
+
+  await withStubbedAddons(() => held.response, async () => {
+    const pending = api(harness.base, `/api/subtitle/${subtitleId}`);
+    await until(() => outbound.diagnostics().find((entry) => entry.host === host)?.active === 1, "the held subtitle slot");
+    await prompt(held.readStarted, "the subtitle body before revocation");
+    allowed = false;
+    held.release("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nsecret subtitle\n");
+    const response = await prompt(pending, "the revoked subtitle response");
+    assert.equal(response.status, 404);
+    assert.equal((await response.text()).includes("secret subtitle"), false);
+  });
+
+  assert.equal(accessChecks, 2);
+});
+
+test("an external subtitle re-checks its resource after the held body", async (t) => {
+  const host = "subtitle-resource-revoked.example";
+  const subtitleId = externalSubtitle(`https://${host}/subtitle.srt`);
+  t.after(() => mediaResources.remove(subtitleId));
+  const harness = await mount();
+  t.after(harness.close);
+  const held = heldMediaText();
+
+  await withStubbedAddons(() => held.response, async () => {
+    const pending = api(harness.base, `/api/subtitle/${subtitleId}`);
+    await until(() => outbound.diagnostics().find((entry) => entry.host === host)?.active === 1, "the held subtitle slot");
+    await prompt(held.readStarted, "the subtitle body before resource removal");
+    mediaResources.remove(subtitleId);
+    held.release("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nsecret subtitle\n");
+    const response = await prompt(pending, "the removed subtitle response");
+    assert.equal(response.status, 404);
+    assert.equal((await response.text()).includes("secret subtitle"), false);
+  });
+});
+
 test("the sources a person picks from follow the priority they set, not the instance's", async (t) => {
   const records = [
     addon("first", [], { role: "source", allowedUsers: [alice.id], resources: ["stream"] }),

@@ -51,6 +51,22 @@ test("oversized playlist transfers stop at the byte budget", async () => {
   assert.equal(canceled, true);
 });
 
+test("an aborted media text transfer cancels its body", async () => {
+  const { readMediaText } = await import("./media-playlist.js");
+  let cancel!: () => void;
+  const cancelled = new Promise<void>((resolve) => { cancel = resolve; });
+  const response = new Response(new ReadableStream({
+    pull() { return new Promise<void>(() => undefined); },
+    cancel() { cancel(); },
+  }));
+  const controller = new AbortController();
+  const reading = readMediaText(response, 2 * 1024 * 1024, controller.signal);
+  controller.abort();
+
+  await assert.rejects(reading, (error: unknown) => error instanceof DOMException && error.name === "AbortError");
+  await cancelled;
+});
+
 test("an attribute that is not modelled is dropped, not fatal", () => {
   // PROGRAM-ID is deprecated but still emitted, and it used to reject the whole
   // master playlist, which left the source unplayable.
