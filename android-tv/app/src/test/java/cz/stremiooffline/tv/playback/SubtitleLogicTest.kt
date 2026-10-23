@@ -27,6 +27,8 @@ class SubtitleLogicTest {
   fun `the addon and sidecar addresses match the web`() {
     assertEquals("/api/subtitle/abc", SubtitleUrls.addon("abc", 0.0, 0.0))
     assertEquals("/api/subtitle/abc?offset=120.000&delay=0.25", SubtitleUrls.addon("abc", 120.0, 0.25))
+    assertEquals("/api/subtitle/abc?offset=120.000&delay=0.25&lang=cs", SubtitleUrls.addon("abc", 120.0, 0.25, "cs"))
+    assertEquals("/api/subtitle/abc?lang=pt-BR", SubtitleUrls.addon("abc", 0.0, 0.0, "pt-BR"))
     assertEquals("/sidecar.vtt?revision=1&offset=0.000&position=12.500", SubtitleUrls.sidecar("/sidecar.vtt?revision=1&offset=0.000", 12.5, 0.0))
     assertEquals("/sidecar.vtt?position=0.000&delay=-0.25", SubtitleUrls.sidecar("/sidecar.vtt", -5.0, -0.25))
   }

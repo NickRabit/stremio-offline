@@ -551,7 +551,10 @@ fun PlayerScreen(
   LaunchedEffect(resumed, addonChoice, resolvedAddonId, delaySeconds, state.offset) {
     if (!resumed || addonChoice == null || resolvedAddonId == null) return@LaunchedEffect
     cues = emptyList()
-    val text = runCatching { api.subtitleText(resolvedAddonId, state.offset, delaySeconds) }.getOrNull() ?: return@LaunchedEffect
+    // The language it is listed under, else the one asked for: a file that is not Unicode is
+    // read by the server in that language's code page.
+    val lang = state.addonSubtitles.firstOrNull { it.subtitleId == addonChoice.subtitleId }?.lang ?: settings.subtitleLanguage
+    val text = runCatching { api.subtitleText(resolvedAddonId, state.offset, delaySeconds, lang) }.getOrNull() ?: return@LaunchedEffect
     cues = absoluteCues(parseVtt(text), state.offset)
   }
 

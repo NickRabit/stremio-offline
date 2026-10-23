@@ -6,11 +6,13 @@ import java.util.Locale
 object SubtitleUrls {
 
   /** `subtitleUrl` in `web/src/api.ts`: `offset` and `delay` ride in the query, each only when
-   *  it is not zero, and a comma-free two/three-decimal form keeps the URL stable. */
-  fun addon(id: String, offset: Double, delay: Double): String {
+   *  it is not zero, and a comma-free two/three-decimal form keeps the URL stable. `lang` is the
+   *  language the track is shown under, which the server reads a non-Unicode file in. */
+  fun addon(id: String, offset: Double, delay: Double, lang: String? = null): String {
     val query = buildList {
       if (offset != 0.0) add("offset=" + fixed(offset, 3))
       if (delay != 0.0) add("delay=" + fixed(delay, 2))
+      if (!lang.isNullOrBlank()) add("lang=" + encode(lang))
     }.joinToString("&")
     return "/api/subtitle/" + encode(id) + if (query.isEmpty()) "" else "?$query"
   }
