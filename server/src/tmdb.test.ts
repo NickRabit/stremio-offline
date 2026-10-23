@@ -11,6 +11,26 @@ import type { FetchLike } from "./debrid.js";
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
+const chunkedBody = (chunkBytes: number, plannedChunks: number) => {
+  let pulled = 0;
+  let cancelled = false;
+  const chunk = new Uint8Array(chunkBytes);
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (pulled >= plannedChunks) {
+        controller.close();
+        return;
+      }
+      pulled += 1;
+      controller.enqueue(chunk);
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  return { body, pulled: () => pulled, cancelled: () => cancelled };
+};
+
 const config: TmdbConfig = { apiKey: "test-key", language: "cs" };
 
 const findMovie = { movie_results: [{ id: 31410 }], tv_results: [] };
@@ -332,6 +352,15 @@ test("a search that times out, is refused or answers rubbish is an empty list", 
   assert.deepEqual(await tmdbSearch("movie", "   ", config, async () => json({ results: [searchRow()] })), []);
 });
 
+test("an oversized chunked search response is cancelled before the whole body is read", async () => {
+  clearTmdbCache();
+  const source = chunkedBody(1024 * 1024, 64);
+
+  assert.deepEqual(await tmdbSearch("movie", "Anything", config, async () => new Response(source.body)), []);
+  assert.equal(source.cancelled(), true);
+  assert.ok(source.pulled() < 20, `the response stopped after ${source.pulled()} chunks`);
+});
+
 test("a 429 with Retry-After stops asking for the next title instead of retrying each one", async () => {
   clearTmdbCache();
   clearTmdbSearchPause();
@@ -438,6 +467,8 @@ test("neither the log nor the answered metadata carries the API key", async () =
     await initLogger(directory);
     const refused: FetchLike = async (url) => { throw new Error(`Request failed: ${String(url)}`); };
     assert.deepEqual(await tmdbSearch("movie", "Anything", { apiKey: "secret-key-42", language: "cs" }, refused), []);
+    assert.deepEqual(await tmdbSearch("movie", "Anything", { apiKey: "secret-key-42", language: "cs" }, async () =>
+      new Response("secret-key-42", { headers: { "content-type": "application/json" } })), []);
     assert.equal(await tmdbExternalId("movie", 1, { apiKey: "secret-key-42", language: "cs" }, refused), null);
     const meta = await tmdbMeta("movie", "tmdb:1", { apiKey: "secret-key-42", language: "cs" }, refused);
     assert.equal(meta, null);

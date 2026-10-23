@@ -4,6 +4,7 @@ import type { FetchLike } from "./debrid.js";
 import { renameWithRetry } from "./fs-retry.js";
 import { log } from "./logger.js";
 import { guardedMetadataFetch } from "./outbound.js";
+import { readLimitedBody } from "./response-body.js";
 
 /** Ids of the sites a title links to. IMDb is the catalogue id, the other two come
  *  from Wikidata. */
@@ -15,6 +16,7 @@ const WIKIDATA_ENDPOINT = "https://query.wikidata.org/sparql";
 const USER_AGENT = "StremioOffline (+https://github.com/NickRabit/stremio-offline)";
 /** WDQS's own hard query limit is 60 s and a cold query ordinarily takes 15-30 s. */
 const TIMEOUT_MS = 45_000;
+const MAX_JSON_BYTES = 2 * 1024 * 1024;
 /** An answer that names no ids is the memory of a fruitless search, not a fact. */
 const NEGATIVE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const IMDB_ID = /^tt\d+$/;
@@ -35,7 +37,11 @@ const sparql = (imdbId: string) => `SELECT ?csfd ?tmdbMovie ?tmdbTv WHERE {
 interface CachedIds extends ExternalIds { at: string }
 interface CacheFile { version: number; entries: Record<string, CachedIds> }
 
-const reasonOf = (error: unknown) => (error instanceof Error ? error.message : String(error)).slice(0, 120);
+const reasonOf = (error: unknown) =>
+  error instanceof SyntaxError ? "Response body is not valid JSON." : (error instanceof Error ? error.message : String(error)).slice(0, 120);
+
+const readWikidataJson = async <T>(response: Response): Promise<T> =>
+  JSON.parse(new TextDecoder().decode(await readLimitedBody(response, MAX_JSON_BYTES))) as T;
 
 const withoutEmpty = (ids: ExternalIds): ExternalIds => {
   const kept: ExternalIds = {};
@@ -123,7 +129,7 @@ export class ExternalIdStore {
         log("WARN", "Wikidata did not answer, the links stay partial", { id: imdbId, status: response.status });
         return null;
       }
-      const body = await response.json() as { results?: { bindings?: Array<Record<string, { value?: string }>> } };
+      const body = await readWikidataJson<{ results?: { bindings?: Array<Record<string, { value?: string }>> } }>(response);
       const row = body.results?.bindings?.[0];
       const value = (name: string) => row?.[name]?.value || undefined;
       return withoutEmpty({ csfd: value("csfd"), tmdbMovie: value("tmdbMovie"), tmdbTv: value("tmdbTv") });

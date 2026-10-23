@@ -9,6 +9,26 @@ import type { FetchLike } from "./debrid.js";
 const bindings = (rows: Array<Record<string, { value: string }>>) =>
   new Response(JSON.stringify({ results: { bindings: rows } }), { status: 200, headers: { "content-type": "application/sparql-results+json" } });
 
+const chunkedBody = (chunkBytes: number, plannedChunks: number) => {
+  let pulled = 0;
+  let cancelled = false;
+  const chunk = new Uint8Array(chunkBytes);
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (pulled >= plannedChunks) {
+        controller.close();
+        return;
+      }
+      pulled += 1;
+      controller.enqueue(chunk);
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  return { body, pulled: () => pulled, cancelled: () => cancelled };
+};
+
 const tempDir = () => mkdtemp(path.join(os.tmpdir(), "external-ids-"));
 
 const cacheFile = (dir: string) => path.join(dir, "external-ids.json");
@@ -102,6 +122,30 @@ test("a lookup that throws answers null and writes no cache file", async (t) => 
   await store.load();
 
   assert.equal(await store.ids("tt0090257"), null);
+  await assert.rejects(readFile(cacheFile(dir), "utf8"));
+});
+
+test("a malformed answer returns null and writes no cache file", async (t) => {
+  const dir = await tempDir();
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const store = new ExternalIdStore(dir, async () =>
+    new Response("<html>", { headers: { "content-type": "application/sparql-results+json" } }));
+  await store.load();
+
+  assert.equal(await store.ids("tt0090257"), null);
+  await assert.rejects(readFile(cacheFile(dir), "utf8"));
+});
+
+test("an oversized chunked answer is cancelled before the whole body is read", async (t) => {
+  const dir = await tempDir();
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const source = chunkedBody(256 * 1024, 64);
+  const store = new ExternalIdStore(dir, async () => new Response(source.body));
+  await store.load();
+
+  assert.equal(await store.ids("tt0090257"), null);
+  assert.equal(source.cancelled(), true);
+  assert.ok(source.pulled() < 20, `the response stopped after ${source.pulled()} chunks`);
   await assert.rejects(readFile(cacheFile(dir), "utf8"));
 });
 
