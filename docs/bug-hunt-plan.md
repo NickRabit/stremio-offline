@@ -157,8 +157,9 @@ Files: `playback.ts`, `routes/playback.ts`, `media-playlist.ts`,
 - [ ] **BH-3.3 Caches.** `range-cache`, `byte-cache`, `remote-read-ahead`:
       bounded size, eviction under memory pressure, no unbounded `Map`
       growth per session.
-- [ ] **BH-3.4 Sidecars and subtitles.** Encoding detection, malformed VTT/SRT,
+- [x] **BH-3.4 Sidecars and subtitles.** Encoding detection, malformed VTT/SRT,
       very large subtitle files, timing offsets.
+      Progress: #540 shifts a subtitle file beside a library video by the conversion offset and the viewer's delay (both were ignored, so after a seek in a converted film the cues ran off by the seek and the timing slider did nothing), and splits Windows line endings so every cue of a CRLF WebVTT moves, not just the first. #541 reads a subtitle that is not UTF-8 in the code page of its language (windows-1250 for Czech, which showed `�` for every č, ř, ů), recognises UTF-16 by its mark and writes downloaded subtitles out as UTF-8; #542 has the TV app name the language too. Size: addon and media-server subtitles are capped; a file beside a library video is the owner's own and read whole. The media-server path still refuses a subtitle that is not UTF-8 (`checkSubtitleText`); Jellyfin and Emby hand text subtitles out converted, so left as is.
 - [ ] **BH-3.5 Conversion cost.** FFmpeg concurrency limit, preset choice,
       remux-instead-of-transcode coverage. Measure CPU and time to first
       segment on the baseline media set.
@@ -214,6 +215,7 @@ Files: `search-*.ts`, `addons.ts`, `addon-refresh.ts`, `tmdb.ts`,
 - [ ] **BH-5.4 Home assembly.** `/api/home` latency breakdown per shelf;
       `mergeResume`/`boundCards` correctness with mixed file and catalogue
       progress.
+      Progress: merge verified. Equal identities fold into one card, a pending catalogue row never speaks for a group that has something playable, ties go file, catalogue, then media server, artwork is borrowed across the group, and every timestamp compared is the server's own ISO string. The per-shelf latency breakdown is not measured.
 
 ## Unit 6 — Server: media-server integration (Jellyfin/Emby)
 
@@ -223,8 +225,9 @@ largest), `routes/media-servers.ts`.
 - [x] **BH-6.1 Secrets.** Tokens never in logs, responses, error messages or
       exported settings; rotation and removal leave nothing behind.
       Progress: verified. The one log line about a media-server token carries the connection id and an error code; the secrets and security suites (110 tests) cover tokens in logs, errors and responses.
-- [ ] **BH-6.2 Swallowed errors.** The silent catches in
+- [x] **BH-6.2 Swallowed errors.** The silent catches in
       `media-server-security.ts` and `media-server-manager.ts` from BH-0.4.
+      Progress: verified. What is left silent is cleanup that must not mask the error already being thrown (body and reader cancels, transport and agent closes), the stored token read for a best-effort remote logout on removal, and the secret-cleanup queue, whose failures stay queued for the next drain or are logged. Malformed URLs and cursors rethrow as typed errors.
 - [ ] **BH-6.3 Index and sync.** Incremental vs full sync, server
       unreachable mid-sync, deleted items, quota and retention edge cases.
 - [ ] **BH-6.4 Playback and progress bridging.** `media-server-playing.ts`,
