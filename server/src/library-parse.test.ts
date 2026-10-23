@@ -230,3 +230,32 @@ test("a file holding several episodes is read as its first one", () => {
     assert.equal(result.episode, 1, name);
   }
 });
+
+test("a Czech or Slovak dub or subtitle phrase is not part of the title", () => {
+  const title = (name: string) => parseMediaName(name).title;
+  for (const name of [
+    "Film cesky dabing", "Film český dabing", "Film Česky Dabing", "Film ČESKÉ ZNĚNÍ", "Film ceske zneni",
+    "Film slovenský dabing", "Film slovensky dabing", "Film CZ-titulky", "Film české titulky", "Film ceske titulky",
+    "Film.cesky.dabing", "Film_ceske_titulky",
+  ]) assert.equal(title(name), "Film", name);
+  assert.deepEqual(
+    { ...parseMediaName("Pelisky 1999 cesky dabing") },
+    { title: "Pelisky", query: "Pelisky", year: 1999 },
+  );
+  // The same name written in decomposed form reads the same.
+  assert.equal(title("Film český dabing".normalize("NFD")), "Film");
+});
+
+test("words that only look like a language phrase stay in the title", () => {
+  const title = (name: string) => parseMediaName(name).title;
+  assert.equal(title("Český sen"), "Český sen");
+  assert.equal(title("Slovenský příběh"), "Slovenský příběh");
+  assert.equal(title("It dabing 2017"), "It");
+  // What follows the phrase is not presumed to be an uploader.
+  assert.equal(title("Film CZ dabing Návrat"), "Film Návrat");
+  assert.equal(title("Neceskydabing"), "Neceskydabing");
+  const series = parseMediaName("Show S02E03 cesky dabing");
+  assert.deepEqual({ title: series.title, season: series.season, episode: series.episode }, { title: "Show", season: 2, episode: 3 });
+  const country = parseMediaName("The Office cesky dabing (US)");
+  assert.deepEqual({ title: country.title, country: country.country }, { title: "The Office", country: "US" });
+});

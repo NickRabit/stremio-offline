@@ -48,6 +48,13 @@ export interface ParsedMedia {
 const QUALITY = new Set(QUALITY_TOKENS.map((token) => token.toLowerCase()));
 const GENRES = new Set(CZECH_GENRE_TOKENS.map((token) => token.toLowerCase()));
 const PHRASES = [...QUALITY_PHRASES].sort((a, b) => b.length - a.length);
+/** "cesky dabing", "ČESKÉ ZNĚNÍ", "CZ-titulky": the language a release is dubbed or subtitled in,
+ *  never part of its title. Whole words on both sides, so "Český sen" stays a film's name. */
+const LANGUAGE_PHRASE = new RegExp(
+  "(?<![\\p{L}\\p{N}])(?:cz|sk|česky|cesky|český|české|ceske|česká|ceska|slovensky|slovenský|slovenské|slovenske|slovenská|slovenska)"
+    + "[\\s._-]+(?:dabing|znění|zneni|titulky)(?![\\p{L}\\p{N}])",
+  "giu",
+);
 const YEAR_TOKEN = /^(19|20)\d{2}$/;
 const PAREN_YEAR = /\((19|20)\d{2}\)/g;
 const COUNTRY_TAG = /\s*\(([A-Z]{2})\)\s*$/;
@@ -433,7 +440,8 @@ export function stripSegmentMarkers(normalized: string): string {
 /** One file or folder name, parsed on its own. Unlike `parseMediaPath` it does not reach for
  *  a parent folder: a name that a caller already knows is the subject is read as it stands. */
 export function parseMediaName(name: string): ParsedMedia {
-  const original = name;
+  // Composed, so a name written either way reads the same and the phrases below match it.
+  const original = name.normalize("NFC");
   const releaseGroup = original.match(RELEASE_GROUP)?.[0].slice(1);
   const { rest: withoutHints, hints } = extractHints(original);
   // A bracket is punctuation between fields, not part of the title: "[2007]" is a year and
@@ -441,7 +449,7 @@ export function parseMediaName(name: string): ParsedMedia {
   const separated = withoutHints.replace(/[\[\]]/g, " ");
   const countryTag = COUNTRY_TAG.exec(separated);
   const country = countryTag?.[1];
-  const withoutCountry = countryTag ? separated.slice(0, countryTag.index) : separated;
+  const withoutCountry = (countryTag ? separated.slice(0, countryTag.index) : separated).replace(LANGUAGE_PHRASE, " ");
 
   let year: number | undefined;
   const firstYear = takeYear(splitHyphenRuns(withoutCountry));
