@@ -68,9 +68,9 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     return library && libraryVisible(library, viewer) ? key : undefined;
   };
 
-  const titleTrailer = (type: string, id: string, language: string, viewer: Viewer) => {
+  const titleTrailer = (type: string, id: string, language: string, viewer: Viewer, signal?: AbortSignal) => {
     const apiKey = store.settings().tmdbApiKey;
-    return trailerFor(allowedAddons(store.addons(), viewer), type, id, language, apiKey ? { apiKey, language } : undefined);
+    return trailerFor(allowedAddons(store.addons(), viewer), type, id, language, apiKey ? { apiKey, language } : undefined, signal);
   };
 
   const galleryCache = new Map<string, { at: number; promise: Promise<TmdbGalleryPicture[]> }>();
@@ -162,16 +162,43 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     }
   }));
   app.get("/api/library/trailer", asyncRoute(async (req, res) => {
-    const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
-    const viewer = viewerOf(currentUser(req));
-    const raw = String(req.query.path ?? "").trim();
-    const key = raw ? boundKey(raw, viewer) : undefined;
-    const entry = key ? knownTitleEntry(key, metaStore.qualifiedMeta()) : undefined;
-    res.json({ trailer: entry ? await titleTrailer(entry.record.type, entry.record.id, language, viewer) : null });
+    const disconnect = routeDisconnectSignal(req, res);
+    try {
+      const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
+      const viewer = viewerOf(currentUser(req));
+      const raw = String(req.query.path ?? "").trim();
+      const key = raw ? boundKey(raw, viewer) : undefined;
+      const entry = key ? knownTitleEntry(key, metaStore.qualifiedMeta()) : undefined;
+      if (disconnect.signal.aborted) return;
+      const trailer = entry ? await titleTrailer(entry.record.type, entry.record.id, language, viewer, disconnect.signal) : null;
+      if (disconnect.signal.aborted) return;
+      res.json({ trailer });
+    } catch (error) {
+      if (disconnect.signal.aborted) return;
+      throw error;
+    } finally {
+      disconnect.dispose();
+    }
   }));
   app.get("/api/trailer/:type/:id", asyncRoute(async (req, res) => {
-    const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
-    res.json({ trailer: await titleTrailer(String(req.params.type), String(req.params.id), language, viewerOf(currentUser(req))) });
+    const disconnect = routeDisconnectSignal(req, res);
+    try {
+      const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
+      const trailer = await titleTrailer(
+        String(req.params.type),
+        String(req.params.id),
+        language,
+        viewerOf(currentUser(req)),
+        disconnect.signal,
+      );
+      if (disconnect.signal.aborted) return;
+      res.json({ trailer });
+    } catch (error) {
+      if (disconnect.signal.aborted) return;
+      throw error;
+    } finally {
+      disconnect.dispose();
+    }
   }));
   /** The same row for a folder that is bound to a title. A path with no binding asks
    *  Wikidata nothing and answers no links. */

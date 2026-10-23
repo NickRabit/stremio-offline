@@ -318,6 +318,40 @@ test("a cancelled find body is not cached as a miss and a healthy retry resolves
   assert.equal(outbound.diagnostics().find((entry) => entry.host === "api.themoviedb.org")?.failures ?? 0, 0);
 });
 
+test("a cancelled trailer videos body aborts promptly and a healthy retry answers normally", async () => {
+  clearTmdbCache();
+  const held = heldBody();
+  const controller = new AbortController();
+  let videoRequests = 0;
+  let videoStarted!: () => void;
+  const videoStartedSignal = new Promise<void>((resolve) => { videoStarted = resolve; });
+  const fetchImpl: FetchLike = async (url) => {
+    assert.match(url, /\/movie\/31410\/videos\?/);
+    videoRequests += 1;
+    if (videoRequests === 1) {
+      videoStarted();
+      return held.response;
+    }
+    return json({ results: [{ key: "jjjjjjjjjjj", site: "YouTube", type: "Trailer" }] });
+  };
+
+  const cancelled = tmdbTrailer("movie", "tmdb:31410", config, fetchImpl, controller.signal);
+  await prompt(videoStartedSignal, "the TMDB videos request");
+  held.activate();
+  await prompt(held.readStarted, "the TMDB videos body read");
+  controller.abort();
+  await assert.rejects(cancelled, (error: unknown) => error instanceof OutboundError && error.code === "cancelled");
+  await prompt(held.bodyCancelled, "the TMDB videos body cancel");
+  assert.equal(videoRequests, 1);
+
+  assert.deepEqual(
+    await tmdbTrailer("movie", "tmdb:31410", config, fetchImpl, new AbortController().signal),
+    { youtubeId: "jjjjjjjjjjj" },
+  );
+  assert.equal(videoRequests, 2);
+  assert.equal(outbound.diagnostics().find((entry) => entry.host === "api.themoviedb.org")?.failures ?? 0, 0);
+});
+
 test("a revoked key answers null instead of throwing", async () => {
   clearTmdbCache();
   const fetchImpl: FetchLike = async (url) =>
