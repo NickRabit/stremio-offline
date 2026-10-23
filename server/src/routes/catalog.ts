@@ -1,6 +1,7 @@
 import type express from "express";
 import { readFile } from "node:fs/promises";
 import { allowedAddons, catalog, orderedForUser, orderFor, searchAll, searchableCatalogs, streamCandidates, streams, subtitles, type MetaProvider } from "../addons.js";
+import { DetailGalleryCache } from "../detail-gallery.js";
 import { AppError } from "../errors.js";
 import { ExternalIdStore, imdbOf, siteLinks } from "../external-ids.js";
 import { askedSurface, imageSurface, logPoster, noteImage } from "../image-stats.js";
@@ -18,7 +19,7 @@ import { contentOf } from "../revocation.js";
 import { cancelResponseBody } from "../response-body.js";
 import type { UserPrefs } from "../store.js";
 import { trailerFor } from "../trailers.js";
-import { tmdbGallery, type TmdbGalleryPicture } from "../tmdb.js";
+import { tmdbGallery } from "../tmdb.js";
 import type { MetaItem, StreamItem } from "../types.js";
 import { shiftVtt } from "../vtt.js";
 import { asyncRoute, routeDisconnectSignal, viewerOf, type RouteContext } from "./context.js";
@@ -75,18 +76,7 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     return trailerFor(allowedAddons(store.addons(), viewer), type, id, language, apiKey ? { apiKey, language } : undefined, signal);
   };
 
-  const galleryCache = new Map<string, { at: number; promise: Promise<TmdbGalleryPicture[]> }>();
-  const detailGallery = (type: string, id: string, language: string) => {
-    const apiKey = store.settings().tmdbApiKey;
-    if (!apiKey || (type !== "movie" && type !== "series") || !/^(tt[0-9]+|tmdb:[0-9]+)$/.test(id)) return Promise.resolve([]);
-    const key = `${type}:${id}:${language}:${apiKey}`;
-    const cached = galleryCache.get(key);
-    if (cached && Date.now() - cached.at < 30 * 60_000) return cached.promise;
-    const entry = { at: Date.now(), promise: tmdbGallery(type, id, { apiKey, language }).catch(() => []) };
-    galleryCache.set(key, entry);
-    if (galleryCache.size > 128) galleryCache.delete(galleryCache.keys().next().value!);
-    return entry.promise;
-  };
+  const detailGallery = new DetailGalleryCache((type, id, config, signal) => tmdbGallery(type, id, config, undefined, signal));
 
   app.get("/api/catalogs", (req, res) => res.json(inOrder(req).filter((a) => a.enabled && a.role !== "source").flatMap((addon) => (addon.manifest.catalogs ?? []).map((item) => ({ ...item, addonKey: addon.key, addonName: addon.manifest.name })) )));
   app.get("/api/catalog", asyncRoute(async (req, res) => {
@@ -136,9 +126,9 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
   app.get("/api/meta/:type/:id", asyncRoute(async (req, res) => {
     const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
     const gallery = req.query.gallery === "1";
-    const disconnect = gallery ? undefined : routeDisconnectSignal(req, res);
+    const disconnect = routeDisconnectSignal(req, res);
     try {
-      if (disconnect?.signal.aborted) return;
+      if (disconnect.signal.aborted) return;
       // The detail page is the one reader that wants the wider backdrop, so it asks for the
       // artwork reading and keeps a Metahub background at its full size.
       const meta = await cachedMeta(
@@ -146,21 +136,22 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
         String(req.params.id),
         language,
         viewerOf(currentUser(req)),
-        { artwork: true, ...(disconnect ? { signal: disconnect.signal } : {}) },
+        { artwork: true, signal: disconnect.signal },
       );
-      if (disconnect?.signal.aborted) return;
+      if (disconnect.signal.aborted) return;
       if (!meta) throw new AppError("The metadata was not found.", "err.metaNotFound", 404);
       if (gallery) {
-        const pictures = await detailGallery(String(req.params.type), String(req.params.id), language);
+        const pictures = await detailGallery.get(String(req.params.type), String(req.params.id), language, store.settings().tmdbApiKey, disconnect.signal);
+        if (disconnect.signal.aborted) return;
         res.json(images.rewriteMeta({ ...meta, images: pictures.map((picture) => ({ ...picture, shape: picture.kind === "poster" ? "poster" : "wide" })) }, true));
         return;
       }
       res.json(images.rewriteMeta(meta, true));
     } catch (error) {
-      if (disconnect?.signal.aborted) return;
+      if (disconnect.signal.aborted) return;
       throw error;
     } finally {
-      disconnect?.dispose();
+      disconnect.dispose();
     }
   }));
   app.get("/api/library/trailer", asyncRoute(async (req, res) => {

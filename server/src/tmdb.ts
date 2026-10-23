@@ -270,26 +270,42 @@ export async function tmdbGallery(
   id: string,
   config: TmdbConfig,
   fetchImpl: FetchLike = guardedFetch,
+  signal?: AbortSignal,
 ): Promise<TmdbGalleryPicture[]> {
   if (type !== "movie" && type !== "series") return [];
-  const tmdbId = await resolveId(type, id, config, fetchImpl);
+  throwIfCancelled(signal);
+  const tmdbId = await resolveId(type, id, config, fetchImpl, signal);
   if (tmdbId == null) return [];
+  throwIfCancelled(signal);
   const language = normalizeLanguage(config.language);
   const include = [...new Set([...(language ? [language] : []), "en", "null"])].join(",");
-  let response: Response;
+  let reply: TmdbReply<TmdbImages>;
   try {
-    response = await request(`/${mediaType(type)}/${tmdbId}/images`, { api_key: config.apiKey, include_image_language: include }, fetchImpl);
+    reply = await tmdbReply<TmdbImages>(
+      `/${mediaType(type)}/${tmdbId}/images`,
+      { api_key: config.apiKey, include_image_language: include },
+      fetchImpl,
+      signal,
+    );
   } catch (error) {
+    if (signal?.aborted) throw error;
     log("WARN", "TMDB images lookup failed", { operation: "images", type, reason: reasonOf(error, config.apiKey) });
     return [];
   }
+  const { response } = reply;
+  throwIfCancelled(signal);
   if (!response.ok) {
     log("WARN", "TMDB images lookup failed", { operation: "images", type, status: response.status, retryAfterMs: tmdbRetryAfterMs(response) });
     return [];
   }
   let body: TmdbImages;
-  try { body = await readTmdbJson<TmdbImages>(response); }
+  try {
+    if (reply.parseError) throw reply.parseError;
+    body = reply.body ?? await readTmdbJson<TmdbImages>(response, signal);
+    throwIfCancelled(signal);
+  }
   catch (error) {
+    if (signal?.aborted) throw error;
     log("WARN", "TMDB answered with malformed JSON", { operation: "images", type, reason: reasonOf(error, config.apiKey) });
     return [];
   }
@@ -441,7 +457,13 @@ export async function verifyTmdbKey(apiKey: string, fetchImpl: FetchLike = guard
   if (!response.ok) throw new AppError("TMDB refused the API key.", "err.tmdbKeyRejected");
 }
 
-async function resolveId(type: string, id: string, config: TmdbConfig, fetchImpl: FetchLike, signal?: AbortSignal): Promise<number | null> {
+async function resolveId(
+  type: string,
+  id: string,
+  config: TmdbConfig,
+  fetchImpl: FetchLike,
+  signal?: AbortSignal,
+): Promise<number | null> {
   throwIfCancelled(signal);
   const direct = /^tmdb:(\d+)$/.exec(id);
   if (direct) return Number(direct[1]);
@@ -457,7 +479,12 @@ async function resolveId(type: string, id: string, config: TmdbConfig, fetchImpl
 
   let reply: TmdbReply<TmdbFind>;
   try {
-    reply = await tmdbReply<TmdbFind>(`/find/${encodeURIComponent(imdb)}`, { api_key: config.apiKey, language: config.language, external_source: "imdb_id" }, fetchImpl, signal);
+    reply = await tmdbReply<TmdbFind>(
+      `/find/${encodeURIComponent(imdb)}`,
+      { api_key: config.apiKey, language: config.language, external_source: "imdb_id" },
+      fetchImpl,
+      signal,
+    );
   } catch (error) {
     if (signal?.aborted) throw error;
     log("WARN", "TMDB id lookup failed", { operation: "find", type, id: imdb, reason: reasonOf(error, config.apiKey) });

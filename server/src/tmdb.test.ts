@@ -536,6 +536,91 @@ test("a gallery request that fails leaves the title without a gallery rather tha
   assert.deepEqual(await tmdbGallery("series", "tmdb:1396", config, async () => { throw new Error("offline"); }), []);
 });
 
+test("a cancelled gallery find body is not cached as a miss and a healthy retry resolves normally", async () => {
+  clearTmdbCache();
+  const held = heldBody();
+  const controller = new AbortController();
+  let finds = 0;
+  let images = 0;
+  let findStarted!: () => void;
+  const findStartedSignal = new Promise<void>((resolve) => { findStarted = resolve; });
+  const fetchImpl: FetchLike = async (url) => {
+    if (url.includes("/find/")) {
+      finds += 1;
+      if (finds === 1) {
+        findStarted();
+        return held.response;
+      }
+      return json(findMovie);
+    }
+    images += 1;
+    return json({ posters: [{ file_path: "/poster.jpg", iso_639_1: "cs" }] });
+  };
+
+  const cancelled = tmdbGallery("movie", "tt0090257", config, fetchImpl, controller.signal);
+  await prompt(findStartedSignal, "the gallery TMDB find request");
+  held.activate();
+  await prompt(held.readStarted, "the gallery TMDB find body read");
+  controller.abort();
+  await assert.rejects(cancelled, (error: unknown) => error instanceof OutboundError && error.code === "cancelled");
+  await prompt(held.bodyCancelled, "the gallery TMDB find body cancel");
+  assert.equal(images, 0);
+
+  const retried = await tmdbGallery("movie", "tt0090257", config, fetchImpl, new AbortController().signal);
+  assert.equal(retried.length, 1);
+  assert.equal(finds, 2, "the cancelled find left no negative id-cache entry");
+  assert.equal(images, 1);
+
+  assert.equal(outbound.diagnostics().find((entry) => entry.host === "api.themoviedb.org")?.failures ?? 0, 0);
+});
+
+test("a cancelled gallery images body aborts promptly and a healthy retry answers normally", async () => {
+  clearTmdbCache();
+  const held = heldBody();
+  const controller = new AbortController();
+  let imageRequests = 0;
+  let imageStarted!: () => void;
+  const imageStartedSignal = new Promise<void>((resolve) => { imageStarted = resolve; });
+  const fetchImpl: FetchLike = async (url) => {
+    assert.match(url, /\/movie\/31410\/images\?/);
+    imageRequests += 1;
+    if (imageRequests === 1) {
+      imageStarted();
+      return held.response;
+    }
+    return json({ posters: [{ file_path: "/retried.jpg", iso_639_1: "en" }] });
+  };
+
+  const cancelled = tmdbGallery("movie", "tmdb:31410", config, fetchImpl, controller.signal);
+  await prompt(imageStartedSignal, "the gallery TMDB images request");
+  held.activate();
+  await prompt(held.readStarted, "the gallery TMDB images body read");
+  controller.abort();
+  await assert.rejects(cancelled, (error: unknown) => error instanceof OutboundError && error.code === "cancelled");
+  await prompt(held.bodyCancelled, "the gallery TMDB images body cancel");
+
+  const retried = await tmdbGallery("movie", "tmdb:31410", config, fetchImpl, new AbortController().signal);
+  assert.equal(retried[0]?.url, "https://image.tmdb.org/t/p/w500/retried.jpg");
+  assert.equal(imageRequests, 2);
+  assert.equal(outbound.diagnostics().find((entry) => entry.host === "api.themoviedb.org")?.failures ?? 0, 0);
+});
+
+test("a multi-megabyte gallery response remains within the TMDB JSON limit", async () => {
+  clearTmdbCache();
+  const result = await tmdbGallery(
+    "movie",
+    "tmdb:31410",
+    config,
+    async () => json({
+      posters: [{ file_path: "/large.jpg", iso_639_1: "en" }],
+      padding: "x".repeat(3 * 1024 * 1024),
+    }),
+    new AbortController().signal,
+  );
+
+  assert.equal(result[0]?.url, "https://image.tmdb.org/t/p/w500/large.jpg");
+});
+
 test("TMDB season air dates are read per episode and cached for the next check", async () => {
   clearTmdbCache();
   const calls: string[] = [];
