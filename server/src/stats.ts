@@ -51,7 +51,10 @@ export type Step = "minute" | "hour" | "day";
 export interface Summary {
   hour: Window; day: Window; week: Window; month: Window; total: Window;
   step: Step;
-  points: Array<{ at: string; bytes: number; count: number }>;
+  /** `day`, on a day bar only: the calendar date the bar counts, in the server's own zone. The
+   *  instant in `at` is that day's local midnight, which a viewer in another zone would read
+   *  as the day before or after. */
+  points: Array<{ at: string; day?: string; bytes: number; count: number }>;
   providers: Bucket[];
   addons: Bucket[];
   sources: Bucket[];
@@ -143,7 +146,9 @@ export function summarize(events: TrafficEvent[], hours = 720, now = new Date())
   const span = Math.max(1, Math.min(24 * 365, hours));
   const edges = boundaries(span, now);
 
-  const points = edges.map((at) => ({ at: new Date(at).toISOString(), bytes: 0, count: 0 }));
+  const step = stepFor(span);
+  const localDay = (at: Date) => `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")}`;
+  const points = edges.map((at) => ({ at: new Date(at).toISOString(), ...(step === "day" ? { day: localDay(new Date(at)) } : {}), bytes: 0, count: 0 }));
   const totals = { provider: new Map<string, Bucket>(), addon: new Map<string, Bucket>(), source: new Map<string, Bucket>() };
   const lines = { provider: new Map<string, Series>(), addon: new Map<string, Series>(), source: new Map<string, Series>() };
   /** The hosts behind each provider row, kept so the interface can open the row. */
@@ -195,7 +200,7 @@ export function summarize(events: TrafficEvent[], hours = 720, now = new Date())
     week: window(external, now.getTime() - 7 * DAY),
     month: window(external, now.getTime() - 30 * DAY),
     total: window(external, 0),
-    step: stepFor(span),
+    step,
     points,
     providers,
     addons,
