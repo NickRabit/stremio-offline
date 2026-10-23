@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import express from "express";
@@ -12,12 +13,14 @@ import type { Store, UserPrefs } from "../store.js";
 import type { AddonRecord, AddonRole, CatalogDefinition, MetaItem } from "../types.js";
 import type { UserRecord } from "../users.js";
 import { mediaResources } from "../media-resources.js";
+import { outbound } from "../outbound.js";
 import { setFetchTransport } from "../security.js";
 import { registerCatalogRoutes, type CatalogDeps } from "./catalog.js";
 
 interface Harness {
   base: string;
   lookups: Array<{ type: string; id: string; language?: string; artwork?: boolean }>;
+  responseCloses(): number;
   close(): Promise<void>;
 }
 
@@ -82,6 +85,11 @@ const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null, 
     mediaSources: {} as unknown as CatalogDeps["mediaSources"],
   };
   const app = express();
+  let responseCloses = 0;
+  app.use((_req, res, next) => {
+    res.once("close", () => { responseCloses += 1; });
+    next();
+  });
   app.use(express.json());
   registerCatalogRoutes(app, deps);
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
@@ -94,6 +102,7 @@ const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null, 
   return {
     base: `http://127.0.0.1:${port}`,
     lookups,
+    responseCloses: () => responseCloses,
     close: async () => {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -332,10 +341,13 @@ const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { 
 
 /** Serves the addon requests from a stub instead of the network. The test's own calls to the
  *  loopback server keep using the global fetch, because only `safeFetch` goes through the seam. */
-async function withStubbedAddons(handler: (url: string) => Response, run: () => Promise<void>) {
+async function withStubbedAddons(
+  handler: (url: string, init: RequestInit) => Response | Promise<Response>,
+  run: () => Promise<void>,
+) {
   const originalFlag = process.env.ALLOW_PRIVATE_ADDONS;
   process.env.ALLOW_PRIVATE_ADDONS = "1";
-  setFetchTransport(async (url) => handler(url.href));
+  setFetchTransport(async (url, init) => handler(url.href, init));
   try { await run(); }
   finally {
     setFetchTransport();
@@ -343,6 +355,133 @@ async function withStubbedAddons(handler: (url: string) => Response, run: () => 
     else process.env.ALLOW_PRIVATE_ADDONS = originalFlag;
   }
 }
+
+const prompt = async <T>(promise: Promise<T>, label: string): Promise<T> => {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} did not happen promptly`)), 1_000);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+};
+
+const until = async (condition: () => boolean, label: string): Promise<void> => {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (condition()) return;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  throw new Error(`${label} was not reached`);
+};
+
+const heldAddon = () => {
+  let signal: AbortSignal | undefined;
+  let started!: () => void;
+  let cancelled!: () => void;
+  const readStarted = new Promise<void>((resolve) => { started = resolve; });
+  const bodyCancelled = new Promise<void>((resolve) => { cancelled = resolve; });
+  const handler = async (_url: string, init: RequestInit): Promise<Response> => {
+    signal = init.signal as AbortSignal;
+    return new Response(new ReadableStream<Uint8Array>({
+      pull() {
+        started();
+        return new Promise<void>(() => undefined);
+      },
+      cancel() {
+        cancelled();
+      },
+    }), { headers: { "content-type": "application/json" } });
+  };
+  return { handler, readStarted, bodyCancelled, signal: () => signal };
+};
+
+const disconnectCases = [
+  {
+    name: "catalog",
+    records: [addon("catalog-hold", [{ type: "movie", id: "top" }])],
+    path: "/api/catalog?addon=catalog-hold&type=movie&id=top",
+    host: "catalog-hold.example",
+  },
+  {
+    name: "search",
+    records: [addon("search-hold", [{ type: "movie", id: "top", extra: [{ name: "search" }] }])],
+    path: "/api/search?query=dune",
+    host: "search-hold.example",
+  },
+  {
+    name: "streams",
+    records: [addon("stream-hold", [], { role: "source", resources: ["stream"] })],
+    path: "/api/streams/movie/tt1",
+    host: "stream-hold.example",
+  },
+];
+
+for (const scenario of disconnectCases) {
+  test(`GET /api/${scenario.name} cancels its outbound body when the client disconnects`, async (t) => {
+    const harness = await mount(scenario.records);
+    t.after(harness.close);
+    const held = heldAddon();
+
+    await withStubbedAddons(held.handler, async () => {
+      const request = http.get(`${harness.base}${scenario.path}`);
+      request.on("error", () => undefined);
+      t.after(() => request.destroy());
+      await prompt(held.readStarted, "the outbound body read");
+      const signal = held.signal()!;
+
+      request.destroy();
+      await prompt(new Promise<void>((resolve) => {
+        if (signal.aborted) resolve();
+        else signal.addEventListener("abort", () => resolve(), { once: true });
+      }), "the outbound signal abort");
+      await prompt(held.bodyCancelled, "the outbound body cancel");
+
+      assert.equal(signal.aborted, true);
+    });
+
+    assert.equal(outbound.diagnostics().find((entry) => entry.host === scenario.host)?.failures ?? 0, 0);
+  });
+}
+
+test("a healthy addon request still answers and its ordinary response close does not abort", async (t) => {
+  const records = [
+    addon("catalog-ok", [{ type: "movie", id: "top" }]),
+    addon("search-ok", [{ type: "movie", id: "top", extra: [{ name: "search" }] }]),
+    addon("stream-ok", [], { role: "source", resources: ["stream"] }),
+  ];
+  const harness = await mount(records);
+  t.after(harness.close);
+  const signals = new Map<string, AbortSignal>();
+
+  await withStubbedAddons((url, init) => {
+    const parsed = new URL(url);
+    signals.set(parsed.hostname, init.signal as AbortSignal);
+    if (parsed.hostname === "catalog-ok.example") return json({ metas: [{ id: "tt1", type: "movie", name: "Catalogue" }] });
+    if (parsed.hostname === "search-ok.example") return json({ metas: [{ id: "tt2", type: "movie", name: "Search" }] });
+    return json({ streams: [{ url: "https://cdn.example/movie.mp4", name: "Healthy source" }] });
+  }, async () => {
+    const catalogResponse = await api(harness.base, "/api/catalog?addon=catalog-ok&type=movie&id=top");
+    assert.equal(catalogResponse.status, 200);
+    assert.deepEqual((await catalogResponse.json() as Array<{ name: string }>).map((item) => item.name), ["Catalogue"]);
+
+    const searchResponse = await api(harness.base, "/api/search?query=dune");
+    assert.equal(searchResponse.status, 200);
+    assert.deepEqual((await searchResponse.json() as { items: Array<{ name: string }> }).items.map((item) => item.name), ["Search"]);
+
+    const streamsResponse = await api(harness.base, "/api/streams/movie/tt1");
+    assert.equal(streamsResponse.status, 200);
+    const streams = await streamsResponse.json() as Array<{ addonKey: string; name: string }>;
+    assert.deepEqual(streams.map((item) => [item.addonKey, item.name]), [["stream-ok", "Healthy source"]]);
+  });
+
+  await until(() => harness.responseCloses() === 3, "all three successful response closes");
+  assert.deepEqual([...signals.keys()].sort(), ["catalog-ok.example", "search-ok.example", "stream-ok.example"]);
+  for (const signal of signals.values()) assert.equal(signal.aborted, false);
+});
 
 test("GET /api/streams/:type/:id returns no source from an addon the caller may not use", async (t) => {
   const records = [

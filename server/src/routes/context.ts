@@ -33,6 +33,26 @@ export interface RouteContext {
 export const asyncRoute = (fn: express.RequestHandler): express.RequestHandler =>
   (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
+export function routeDisconnectSignal(req: express.Request, res: express.Response): {
+  signal: AbortSignal;
+  dispose(): void;
+} {
+  const controller = new AbortController();
+  const onDisconnect = () => {
+    if (!res.writableEnded) controller.abort();
+  };
+  req.once("aborted", onDisconnect);
+  res.once("close", onDisconnect);
+  if (req.aborted || (res.destroyed && !res.writableEnded)) controller.abort();
+  return {
+    signal: controller.signal,
+    dispose() {
+      req.off("aborted", onDisconnect);
+      res.off("close", onDisconnect);
+    },
+  };
+}
+
 /** The account a request speaks for, as much of it as a library visibility check needs.
  *  Every route that serves a person runs behind the sign-in gate, so a request that names
  *  nobody is a bug rather than a case. */
