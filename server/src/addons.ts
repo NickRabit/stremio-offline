@@ -297,7 +297,11 @@ function fillMissingMeta(base: MetaItem, extra: MetaItem): MetaItem {
   return filled;
 }
 
-export type MetaProvider = (type: string, id: string) => Promise<MetaItem | null>;
+export type MetaProvider = (type: string, id: string, signal?: AbortSignal) => Promise<MetaItem | null>;
+
+const throwIfCancelled = (signal?: AbortSignal) => {
+  if (signal?.aborted) throw new OutboundError("cancelled");
+};
 
 /** One metadata answer, kept public for focused consumers such as trailers that must not
  * use the aggregate's provider order. */
@@ -317,24 +321,45 @@ export async function addonMetadata(
 
 /** `requireArtwork` keeps the loop going past a description that carries no backdrop, so a
  *  later addon can supply one. Only the explicit detail request asks for it. */
-export async function metadata(addons: AddonRecord[], type: string, id: string, preferredLanguage?: string, provider?: MetaProvider, interactive = false, requireArtwork = false) {
+export async function metadata(
+  addons: AddonRecord[],
+  type: string,
+  id: string,
+  preferredLanguage?: string,
+  provider?: MetaProvider,
+  interactive = false,
+  requireArtwork = false,
+  signal?: AbortSignal,
+) {
+  throwIfCancelled(signal);
   let best: MetaItem | null = null;
   if (provider) {
-    try { best = await provider(type, id); }
-    catch { best = null; }
+    try {
+      best = await provider(type, id, signal);
+      throwIfCancelled(signal);
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      best = null;
+    }
   }
   const candidates = addons.filter((a) => a.enabled && a.role !== "source" && supports(a, "meta", type, id));
   const ordered = preferredLanguage
     ? [...candidates.filter((addon) => addonMetadataLanguage(addon) === preferredLanguage), ...candidates.filter((addon) => addonMetadataLanguage(addon) !== preferredLanguage)]
     : candidates;
   for (const addon of ordered) {
+    throwIfCancelled(signal);
     try {
-      const meta = await addonMetadata(addon, type, id, interactive);
+      const meta = await addonMetadata(addon, type, id, interactive, signal);
+      throwIfCancelled(signal);
       if (!meta) continue;
       best = best ? fillMissingMeta(best, meta) : meta;
       if (best.description && (type !== "series" || (best.videos?.length ?? 0) > 0) && (!requireArtwork || Boolean(best.background))) return best;
-    } catch { /* try next metadata provider */ }
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      /* try next metadata provider */
+    }
   }
+  throwIfCancelled(signal);
   return best;
 }
 

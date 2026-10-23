@@ -173,6 +173,19 @@ test("without a provider the first addon with a description ends the loop", asyn
   assert.equal(calls.length, 1);
 });
 
+test("a real provider failure still falls through to metadata addons", async () => {
+  const calls: string[] = [];
+  await withStubbedAddons((url) => {
+    calls.push(url);
+    return json({ meta: { id: "tt2", type: "movie", name: "Addon answer", description: "Description" } });
+  }, async () => {
+    const provider = async () => { throw new Error("TMDB is offline"); };
+    const result = await metadata([metaAddon("fallback")], "movie", "tt2", "cs", provider);
+    assert.equal(result?.name, "Addon answer");
+  });
+  assert.equal(calls.length, 1);
+});
+
 test("the artwork reading reads on past a localized description until a backdrop appears", async () => {
   const czech = { ...metaAddon("czech"), manifestUrl: "https://czech.example/manifest.json?language=cs" };
   const cinemeta = metaAddon("com.linvo.cinemeta");
