@@ -213,7 +213,7 @@ interface TvApi : LibraryApi, FavoritesApi, ResumeApi, DetailApi, PlaybackApi, C
   suspend fun subtitles(type: String, id: String): List<AddonSubtitleDto>
 
   /** One subtitle as WebVTT, shifted by `offset` and `delay` the way the web asks for it. */
-  suspend fun subtitleText(id: String, offset: Double, delay: Double): String?
+  suspend fun subtitleText(id: String, offset: Double, delay: Double, lang: String? = null): String?
 
   /** The next library file after this source, or null when there is none. */
   suspend fun libraryNext(sourceId: String): NextFileDto?

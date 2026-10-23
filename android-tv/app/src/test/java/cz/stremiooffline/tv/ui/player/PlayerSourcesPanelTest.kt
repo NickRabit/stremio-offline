@@ -487,6 +487,8 @@ class PlayerSourcesPanelTest {
     compose.waitUntil(5_000) { api.subtitleTextRequests.isNotEmpty() }
     compose.waitForIdle()
     assertEquals("sid-cs", api.subtitleTextRequests.last().first)
+    // Named with the request, so a subtitle that is not Unicode is read as Czech.
+    assertEquals("cs", api.subtitleTextLanguages.last())
 
     // The account's own preference moves while the session runs; the picture does not follow it.
     api.settingsValue = SettingsResponse(subtitleLanguage = "en")

@@ -375,8 +375,8 @@ class ApiClient(
     request(Request.Builder().url(address.resolve("/api/subtitles/" + encode(type) + "/" + encode(id))).get().build())
       .decode() ?: emptyList()
 
-  override suspend fun subtitleText(id: String, offset: Double, delay: Double): String? {
-    val path = SubtitleUrls.addon(id, offset, delay)
+  override suspend fun subtitleText(id: String, offset: Double, delay: Double, lang: String?): String? {
+    val path = SubtitleUrls.addon(id, offset, delay, lang)
     return call(Request.Builder().url(address.resolve(path)).get().build()).closing { response ->
       if (!response.isSuccessful) null else readBody(response, log = false)
     }

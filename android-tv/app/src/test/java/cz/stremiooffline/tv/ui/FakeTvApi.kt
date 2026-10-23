@@ -813,13 +813,15 @@ open class FakeTvApi : TvApi {
   var subtitlesValue: List<AddonSubtitleDto> = emptyList()
   val subtitlesRequests: MutableList<Pair<String, String>> = mutableListOf()
 
-  override suspend fun subtitleText(id: String, offset: Double, delay: Double): String? {
+  override suspend fun subtitleText(id: String, offset: Double, delay: Double, lang: String?): String? {
     subtitleTextRequests += Triple(id, offset, delay)
+    subtitleTextLanguages += lang
     return subtitleTextValue
   }
 
   var subtitleTextValue: String? = null
   val subtitleTextRequests: MutableList<Triple<String, Double, Double>> = mutableListOf()
+  val subtitleTextLanguages: MutableList<String?> = mutableListOf()
 
   override suspend fun libraryNext(sourceId: String): NextFileDto? {
     libraryNextRequests += sourceId

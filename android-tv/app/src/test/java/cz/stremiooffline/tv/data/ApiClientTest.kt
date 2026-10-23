@@ -401,9 +401,9 @@ class ApiClientTest {
   @Test
   fun `the addon subtitle text is fetched with the offset and the delay`() = runTest {
     server.enqueue(MockResponse().setBody("WEBVTT\n\n"))
-    val text = client(start()).subtitleText("sid", 120.0, 0.25)
+    val text = client(start()).subtitleText("sid", 120.0, 0.25, "cs")
 
-    assertEquals("/api/subtitle/sid?offset=120.000&delay=0.25", server.takeRequest().path)
+    assertEquals("/api/subtitle/sid?offset=120.000&delay=0.25&lang=cs", server.takeRequest().path)
     assertTrue(text!!.startsWith("WEBVTT"))
   }
 
