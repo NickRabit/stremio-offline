@@ -262,7 +262,7 @@ export async function searchAll(addons: AddonRecord[], query: string, type: stri
         : reason instanceof GuardRejection ? "breaker-open"
         : typeof reason === "object" && reason !== null && invalidCatalogUrls.has(reason) ? "invalid-url"
         : "error";
-      log("WARN", "Addon request failed", { operation: "search", addon: addon.manifest.name, catalog: definition.id, reason: code });
+      if (!options?.signal?.aborted) log("WARN", "Addon request failed", { operation: "search", addon: addon.manifest.name, catalog: definition.id, reason: code });
       nextOffsets[key] = -1;
       return;
     }
