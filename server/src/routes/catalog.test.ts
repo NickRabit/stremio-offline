@@ -12,6 +12,7 @@ import type { LibraryRecord } from "../libraries.js";
 import type { Store, UserPrefs } from "../store.js";
 import type { AddonRecord, AddonRole, CatalogDefinition, MetaItem } from "../types.js";
 import type { UserRecord } from "../users.js";
+import { resetImdbTargets } from "../addons.js";
 import { mediaResources } from "../media-resources.js";
 import { outbound } from "../outbound.js";
 import { setFetchTransport } from "../security.js";
@@ -418,6 +419,12 @@ const disconnectCases = [
     path: "/api/streams/movie/tt1",
     host: "stream-hold.example",
   },
+  {
+    name: "subtitles",
+    records: [addon("subtitle-hold", [], { role: "both", resources: ["subtitles"] })],
+    path: "/api/subtitles/movie/tt1",
+    host: "subtitle-hold.example",
+  },
 ];
 
 for (const scenario of disconnectCases) {
@@ -447,11 +454,75 @@ for (const scenario of disconnectCases) {
   });
 }
 
+test("a disconnected subtitle target lookup is not cached and a later request retries", async (t) => {
+  resetImdbTargets();
+  const id = "mpa:route-cancel:needs-imdb";
+  const prefixed = addon("subtitle-retry", [], { role: "both", resources: ["subtitles"] });
+  prefixed.manifest.resources = [{ name: "subtitles", types: ["movie"], idPrefixes: ["tt"] }];
+  const records = [
+    addon("subtitle-meta-first", [], { role: "both", resources: ["meta"] }),
+    addon("subtitle-meta-next", [], { role: "both", resources: ["meta"] }),
+    prefixed,
+  ];
+  const harness = await mount(records);
+  t.after(harness.close);
+  const held = heldAddon();
+  const calls: string[] = [];
+  let firstMetadataRequests = 0;
+
+  await withStubbedAddons((url, init) => {
+    const host = new URL(url).hostname;
+    calls.push(host);
+    if (host === "subtitle-meta-first.example") {
+      firstMetadataRequests += 1;
+      if (firstMetadataRequests === 1) return held.handler(url, init);
+      return json({ meta: { id, type: "movie", name: "Retried", imdb_id: "tt7654321" } });
+    }
+    if (host === "subtitle-meta-next.example") return json({ meta: { id, type: "movie", name: "Wrong target" } });
+    if (host === "subtitle-retry.example") {
+      return json({ subtitles: [{ url: "https://cdn.example/retried.srt", lang: "cs" }] });
+    }
+    throw new Error(`Unexpected addon host ${host}`);
+  }, async () => {
+    const closes = harness.responseCloses();
+    const request = http.get(`${harness.base}/api/subtitles/movie/${encodeURIComponent(id)}`);
+    request.on("error", () => undefined);
+    t.after(() => request.destroy());
+
+    await prompt(held.readStarted, "the target metadata body read");
+    const signal = held.signal()!;
+    request.destroy();
+    await prompt(new Promise<void>((resolve) => {
+      if (signal.aborted) resolve();
+      else signal.addEventListener("abort", () => resolve(), { once: true });
+    }), "the target metadata signal abort");
+    await prompt(held.bodyCancelled, "the target metadata body cancel");
+    await until(() => harness.responseCloses() === closes + 1, "the disconnected response close");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.equal(calls.includes("subtitle-meta-next.example"), false, "a cancelled lookup does not try the next metadata addon");
+
+    const response = await api(harness.base, `/api/subtitles/movie/${encodeURIComponent(id)}`);
+    assert.equal(response.status, 200);
+    const body = await response.json() as Array<{ addonName: string }>;
+    assert.deepEqual(body.map((item) => item.addonName), ["Addon subtitle-retry"]);
+    assert.equal(firstMetadataRequests, 2, "the healthy request retries the aborted target lookup");
+    assert.equal(calls.includes("subtitle-meta-next.example"), false, "the healthy request finds the first target");
+
+    const cached = await api(harness.base, `/api/subtitles/movie/${encodeURIComponent(id)}`);
+    assert.equal(cached.status, 200);
+    assert.equal(firstMetadataRequests, 2, "the successful target is cached for the next request");
+  });
+
+  assert.equal(outbound.diagnostics().find((entry) => entry.host === "subtitle-meta-first.example")?.failures ?? 0, 0);
+});
+
 test("a healthy addon request still answers and its ordinary response close does not abort", async (t) => {
   const records = [
     addon("catalog-ok", [{ type: "movie", id: "top" }]),
     addon("search-ok", [{ type: "movie", id: "top", extra: [{ name: "search" }] }]),
     addon("stream-ok", [], { role: "source", resources: ["stream"] }),
+    addon("subtitle-ok", [], { role: "both", resources: ["subtitles"] }),
   ];
   const harness = await mount(records);
   t.after(harness.close);
@@ -462,6 +533,7 @@ test("a healthy addon request still answers and its ordinary response close does
     signals.set(parsed.hostname, init.signal as AbortSignal);
     if (parsed.hostname === "catalog-ok.example") return json({ metas: [{ id: "tt1", type: "movie", name: "Catalogue" }] });
     if (parsed.hostname === "search-ok.example") return json({ metas: [{ id: "tt2", type: "movie", name: "Search" }] });
+    if (parsed.hostname === "subtitle-ok.example") return json({ subtitles: [{ url: "https://cdn.example/subtitle.srt", lang: "cs" }] });
     return json({ streams: [{ url: "https://cdn.example/movie.mp4", name: "Healthy source" }] });
   }, async () => {
     const catalogResponse = await api(harness.base, "/api/catalog?addon=catalog-ok&type=movie&id=top");
@@ -476,10 +548,15 @@ test("a healthy addon request still answers and its ordinary response close does
     assert.equal(streamsResponse.status, 200);
     const streams = await streamsResponse.json() as Array<{ addonKey: string; name: string }>;
     assert.deepEqual(streams.map((item) => [item.addonKey, item.name]), [["stream-ok", "Healthy source"]]);
+
+    const subtitlesResponse = await api(harness.base, "/api/subtitles/movie/tt3");
+    assert.equal(subtitlesResponse.status, 200);
+    const subtitles = await subtitlesResponse.json() as Array<{ addonName: string }>;
+    assert.deepEqual(subtitles.map((item) => item.addonName), ["Addon subtitle-ok"]);
   });
 
-  await until(() => harness.responseCloses() === 3, "all three successful response closes");
-  assert.deepEqual([...signals.keys()].sort(), ["catalog-ok.example", "search-ok.example", "stream-ok.example"]);
+  await until(() => harness.responseCloses() === 4, "all four successful response closes");
+  assert.deepEqual([...signals.keys()].sort(), ["catalog-ok.example", "search-ok.example", "stream-ok.example", "subtitle-ok.example"]);
   for (const signal of signals.values()) assert.equal(signal.aborted, false);
 });
 

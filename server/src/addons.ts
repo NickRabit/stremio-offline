@@ -301,9 +301,15 @@ export type MetaProvider = (type: string, id: string) => Promise<MetaItem | null
 
 /** One metadata answer, kept public for focused consumers such as trailers that must not
  * use the aggregate's provider order. */
-export async function addonMetadata(addon: AddonRecord, type: string, id: string, interactive = false): Promise<MetaItem | null> {
+export async function addonMetadata(
+  addon: AddonRecord,
+  type: string,
+  id: string,
+  interactive = false,
+  signal?: AbortSignal,
+): Promise<MetaItem | null> {
   if (!addon.enabled || addon.role === "source" || !supports(addon, "meta", type, id)) return null;
-  const response = await jsonFetch<{ meta?: MetaItem }>(resourceUrl(addon, "meta", type, id), TIMEOUT_MS, interactive);
+  const response = await jsonFetch<{ meta?: MetaItem }>(resourceUrl(addon, "meta", type, id), TIMEOUT_MS, interactive, signal);
   if (!response.meta) return null;
   const language = addonMetadataLanguage(addon);
   return { ...response.meta, ...(language ? { nameLanguage: language } : {}) };
@@ -365,7 +371,7 @@ export function resetImdbTargets() { imdbTargets.clear(); }
 
 /** The IMDb id a title of an addon with its own ids stands for: carried in the id itself
  *  (`mpa:webshare-index:tt2709692`) or named by the addon's metadata as `imdb_id`. */
-async function imdbTitle(addons: AddonRecord[], type: string, id: string, interactive: boolean): Promise<string | null> {
+async function imdbTitle(addons: AddonRecord[], type: string, id: string, interactive: boolean, signal?: AbortSignal): Promise<string | null> {
   const carried = imdbOf(id);
   if (carried) return carried;
   const key = `${type}:${id}`;
@@ -373,38 +379,51 @@ async function imdbTitle(addons: AddonRecord[], type: string, id: string, intera
   if (cached && Date.now() - cached.at < IMDB_TARGET_TTL_MS) return cached.imdb;
   let imdb: string | null = null;
   for (const addon of addons.filter((a) => a.enabled && a.role !== "source" && supports(a, "meta", type, id))) {
+    if (signal?.aborted) return null;
     try {
-      const meta = await addonMetadata(addon, type, id, interactive);
+      const meta = await addonMetadata(addon, type, id, interactive, signal);
       const named = [meta?.imdb_id, meta?.id].find((value): value is string => typeof value === "string" && /^tt\d+$/.test(value));
       if (named) { imdb = named; break; }
-    } catch { /* the next metadata addon may know it */ }
+    } catch {
+      if (signal?.aborted) return null;
+      /* the next metadata addon may know it */
+    }
   }
+  if (signal?.aborted) return null;
   imdbTargets.set(key, { imdb, at: Date.now() });
   return imdb;
 }
 
 /** Subtitle addons such as OpenSubtitles accept IMDb ids only, so a title whose id they do not
  *  take is asked under its IMDb id instead, an episode keeping its season and episode. */
-async function subtitleTarget(addons: AddonRecord[], type: string, id: string, interactive: boolean): Promise<string | null> {
+async function subtitleTarget(addons: AddonRecord[], type: string, id: string, interactive: boolean, signal?: AbortSignal): Promise<string | null> {
   const episode = type === "series" ? /^(.+):(\d+):(\d+)$/.exec(id) : null;
   const title = episode ? episode[1]! : id;
-  const imdb = await imdbTitle(addons, type, title, interactive);
+  const imdb = await imdbTitle(addons, type, title, interactive, signal);
   return imdb ? (episode ? `${imdb}:${episode[2]}:${episode[3]}` : imdb) : null;
 }
 
-export async function subtitles(addons: AddonRecord[], type: string, id: string, interactive = false): Promise<SubtitleItem[]> {
+export async function subtitles(
+  addons: AddonRecord[],
+  type: string,
+  id: string,
+  interactive = false,
+  signal?: AbortSignal,
+): Promise<SubtitleItem[]> {
   const offered = addons.filter((a) => a.enabled && supports(a, "subtitles", type));
   let candidates = offered.filter((a) => supports(a, "subtitles", type, id));
   if (!candidates.length && offered.length) {
-    const target = await subtitleTarget(addons, type, id, interactive);
+    const target = await subtitleTarget(addons, type, id, interactive, signal);
+    if (signal?.aborted) return [];
     if (target) { id = target; candidates = offered.filter((a) => supports(a, "subtitles", type, id)); }
   }
   const results = await Promise.allSettled(candidates.map(async (addon) => {
-    const response = await jsonFetch<{ subtitles?: SubtitleItem[] }>(resourceUrl(addon, "subtitles", type, id), TIMEOUT_MS, interactive);
+    const response = await jsonFetch<{ subtitles?: SubtitleItem[] }>(resourceUrl(addon, "subtitles", type, id), TIMEOUT_MS, interactive, signal);
     // The key as well as the name, the way a stream carries it: the name is for the person
     // choosing, the key is what a permission check and a revocation sweep match on.
     return (response.subtitles ?? []).map((subtitle) => ({ ...subtitle, addonKey: addon.key, addonName: addon.manifest.name }));
   }));
+  if (signal?.aborted) return [];
   results.forEach((result, index) => {
     if (result.status === "rejected") log("WARN", "Addon request failed", { operation: "subtitles", addon: candidates[index].manifest.name, type, id, reason: reasonOf(result.reason) });
   });
