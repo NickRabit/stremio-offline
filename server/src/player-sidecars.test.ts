@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
 import test from "node:test";
-import { extractInto, PlayerSidecars, SIDECAR_AHEAD_S, SIDECAR_LEAD_S, SIDECAR_RETRY_MS } from "./player-sidecars.js";
+import { extractInto, PlayerSidecars, SIDECAR_AHEAD_S, SIDECAR_LEAD_S, SIDECAR_RETRY_MS, withoutHeader } from "./player-sidecars.js";
 
 /** A fake reader waits for its abort. The abort may already have fired while the fake was still
  *  starting -- the Windows runner is slow enough for that -- and a listener added then never hears
@@ -418,4 +418,30 @@ test("subtitle polls cannot reopen the source while repeated seeks hold it relea
       assert.equal(sidecars.revision("session"), revision);
     }
   } finally { await sidecars.stop("session"); await rm(directory, { recursive: true, force: true }); }
+});
+
+/** What a resumed reader's output looks like after its header is cut, fed in the chunks given. */
+const resumed = async (...chunks: Buffer[]) => {
+  const cut = withoutHeader();
+  const out: Buffer[] = [];
+  cut.on("data", (chunk: Buffer) => out.push(Buffer.from(chunk)));
+  const ended = new Promise((resolve) => cut.once("end", resolve));
+  for (const chunk of chunks) cut.write(chunk);
+  cut.end();
+  await ended;
+  return Buffer.concat(out).toString("utf8");
+};
+
+test("a resumed reader's header is cut without breaking a letter the pipe split", async () => {
+  const text = Buffer.from("WEBVTT\n\n00:10:00.000 --> 00:10:02.000\nŽluťoučký kůň\n\n", "utf8");
+  // The pipe hands the bytes over wherever it likes, here in the middle of the two-byte "ť".
+  const middle = text.indexOf(Buffer.from("ť", "utf8")) + 1;
+  assert.equal(await resumed(text.subarray(0, middle), text.subarray(middle)), "00:10:00.000 --> 00:10:02.000\nŽluťoučký kůň\n\n");
+});
+
+test("a header that arrives in two pieces costs no cue", async () => {
+  assert.equal(
+    await resumed(Buffer.from("WEBVTT\n"), Buffer.from("\n00:10:00.000 --> 00:10:02.000\nfirst\n\n00:10:03.000 --> 00:10:04.000\nsecond\n\n")),
+    "00:10:00.000 --> 00:10:02.000\nfirst\n\n00:10:03.000 --> 00:10:04.000\nsecond\n\n",
+  );
 });

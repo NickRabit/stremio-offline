@@ -10,17 +10,21 @@ import { completeVttBlocks, shiftVtt, vttCoverage } from "./vtt.js";
 
 type Extract = (args: string[], file: string, append: boolean, signal: AbortSignal) => Promise<unknown>;
 
-/** A resumed reader writes its own WEBVTT header, which belongs only at the top. */
-const withoutHeader = () => {
+/** A resumed reader writes its own WEBVTT header, which belongs only at the top. The cut is made
+ *  in bytes and only once the blank line after the header has arrived: the pipe splits wherever
+ *  it likes, and decoding a piece on its own breaks a letter cut in half, as dropping a piece
+ *  that holds only part of the header would cut the first cue along with the rest of it. */
+export const withoutHeader = () => {
   let past = false;
+  let head = Buffer.alloc(0);
   return new Transform({
-    transform(chunk, _encoding, next) {
+    transform(chunk: Buffer, _encoding, next) {
       if (past) return next(null, chunk);
-      const text = chunk.toString() as string;
-      const blank = text.indexOf("\n\n");
+      head = Buffer.concat([head, chunk]);
+      const blank = head.indexOf("\n\n");
       if (blank < 0) return next();
       past = true;
-      next(null, text.slice(blank + 2));
+      next(null, head.subarray(blank + 2));
     },
   });
 };
