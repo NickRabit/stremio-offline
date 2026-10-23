@@ -1817,6 +1817,21 @@ test("a subtitle beside a library file is shifted to the playing position like a
   assert.match(fromSrt, /00:00:05\.000 --> 00:00:07\.000/);
 });
 
+test("a subtitle that is not UTF-8 is read in the code page of the language it is shown under", async (t) => {
+  const folder = await mkdtemp(path.join(os.tmpdir(), "legacy-subtitle-"));
+  t.after(() => rm(folder, { recursive: true, force: true }));
+  const srt = path.join(folder, "Film.srt");
+  // "Žluťoučký kůň" as a Czech subtitle saved on Windows holds it.
+  await writeFile(srt, Buffer.concat([Buffer.from("1\r\n00:00:01,000 --> 00:00:02,000\r\n"), Buffer.from([0x8e, 0x6c, 0x75, 0x9d, 0x6f, 0x75, 0xe8, 0x6b, 0xfd, 0x20, 0x6b, 0xf9, 0xf2]), Buffer.from("\r\n")]));
+  const subtitleId = mediaResources.add({ url: `file://${srt}` }, subtitleOwner, "subtitle");
+  t.after(() => mediaResources.remove(subtitleId));
+  const harness = await mount();
+  t.after(harness.close);
+
+  const text = await (await api(harness.base, `/api/subtitle/${subtitleId}?lang=cze`)).text();
+  assert.match(text, /00:00:01\.000 --> 00:00:02\.000\nŽluťoučký kůň\n/);
+});
+
 test("the sources a person picks from follow the priority they set, not the instance's", async (t) => {
   const records = [
     addon("first", [], { role: "source", allowedUsers: [alice.id], resources: ["stream"] }),

@@ -76,8 +76,13 @@ export function rewritePlaylist(text: string, resource: (uri: string) => string,
 
 
 export async function readMediaText(response: Response, maxBytes = 2 * 1024 * 1024, signal?: AbortSignal): Promise<string> {
+  return (await readMediaBytes(response, maxBytes, signal)).toString("utf8");
+}
+
+/** The body as it came, for text whose encoding is decided by the caller. */
+export async function readMediaBytes(response: Response, maxBytes = 2 * 1024 * 1024, signal?: AbortSignal): Promise<Buffer> {
   try {
-    return (await readLimitedBody(response, maxBytes, signal)).toString("utf8");
+    return await readLimitedBody(response, maxBytes, signal);
   } catch (error) {
     if (error instanceof ResponseTooLargeError) throw new Error("Media text exceeds the supported size.");
     throw error;

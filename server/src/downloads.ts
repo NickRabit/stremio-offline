@@ -34,8 +34,9 @@ import type { UserRecord } from "./users.js";
 import {
   planSegments, segmentCount, segmentedBytes, segmentSize, usableSegments, type Segment,
 } from "./download-segments.js";
-import { readMediaText } from "./media-playlist.js";
+import { readMediaBytes } from "./media-playlist.js";
 import { preserveDamaged, readStateFile } from "./state-file.js";
+import { subtitleVtt } from "./subtitle-text.js";
 import type { DownloadSnapshot, DownloadStatus, PauseReason, PublicDownload, QueueHalt } from "./api-types.js";
 
 export type { DownloadStatus, PauseReason, QueueHalt };
@@ -1489,8 +1490,8 @@ export class DownloadQueue {
     try {
       const response = await safeFetch(job.subtitle.url, { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(20_000)]) });
       if (!response.ok) { await response.body?.cancel(); throw new SourceError(`The subtitle source answered HTTP ${response.status}.`); }
-      let text = await readMediaText(response);
-      if (!text.trimStart().startsWith("WEBVTT")) text = `WEBVTT\n\n${text.replace(/^\ufeff/, "").replace(/\r/g, "").replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2").replace(/^\d+\n(?=\d{2}:\d{2}:\d{2}[.,]\d{3} -->)/gm, "")}`;
+      // Written out as UTF-8 whatever it arrived in, so the player never has to guess again.
+      const text = subtitleVtt(await readMediaBytes(response), job.resolution?.subtitleLanguage);
       if (!text.includes(" --> ")) throw new SourceError("The subtitle file contains no cues.");
       await mkdir(path.dirname(files.partial), { recursive: true });
       await writeFile(files.partial, text, { mode: 0o600 });
