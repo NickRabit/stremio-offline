@@ -35,14 +35,20 @@ jobs:
   # consumed by the Windows packaging job (win-package), which runs it on a Windows runner.
   ffmpeg-windows:
     runs-on: ubuntu-24.04
+    # A stalled package mirror once held this job, and every PR behind it, for half an hour.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
       # The LGPL FFmpeg takes minutes to build; the result only changes with the script.
       - uses: actions/cache@v6
+        id: ffmpeg-cache
         with:
           path: desktop/ffmpeg-win
           key: desktop-ffmpeg-win-${{ hashFiles('desktop/scripts/build-ffmpeg-win.sh') }}
-      - run: sudo apt-get update && sudo apt-get install -y mingw-w64 nasm pkg-config make xz-utils curl libz-mingw-w64-dev
+      # The toolchain is needed only to build; on an exact cache hit the script exits at once,
+      # so the Ubuntu mirrors are not asked at all.
+      - if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        run: sudo apt-get update && sudo apt-get install -y mingw-w64 nasm pkg-config make xz-utils curl libz-mingw-w64-dev
       - run: bash desktop/scripts/build-ffmpeg-win.sh
       - uses: actions/upload-artifact@v7
         with:
