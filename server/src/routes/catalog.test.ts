@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
 import type { AddressInfo } from "node:net";
@@ -10,6 +10,7 @@ import { test } from "node:test";
 import express from "express";
 import { messageKeyOf } from "../errors.js";
 import { ExternalIdStore } from "../external-ids.js";
+import { ImageProxy } from "../images.js";
 import type { LibraryMetaRecord, TitleUnit } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { LibraryRecord } from "../libraries.js";
@@ -66,6 +67,7 @@ const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null, 
   cachedMeta?: CatalogDeps["cachedMeta"];
   tmdbApiKey?: string;
   externalIds?: ExternalIdStore;
+  imageProxy?: ImageProxy;
 } = {}): Promise<Harness> => {
   const viewer = options.viewer === undefined ? admin : options.viewer;
   const lookups: Harness["lookups"] = [];
@@ -105,6 +107,7 @@ const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null, 
     externalIds: options.externalIds ?? { ids: async () => ({}) } as unknown as ExternalIdStore,
     subtitleDelay: () => 0,
     mediaSources: {} as unknown as CatalogDeps["mediaSources"],
+    ...(options.imageProxy ? { imageProxy: options.imageProxy } : {}),
   };
   const app = express();
   let responseCloses = 0;
@@ -589,6 +592,53 @@ const heldJson = () => {
   };
 };
 
+const PNG = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
+
+const heldImage = (body: Buffer = PNG) => {
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  let started!: () => void;
+  let cancelled!: () => void;
+  const readStarted = new Promise<void>((resolve) => { started = resolve; });
+  const bodyCancelled = new Promise<void>((resolve) => { cancelled = resolve; });
+  let released = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(value) { controller = value; },
+    pull() { return new Promise<void>(() => undefined); },
+    cancel() { cancelled(); },
+  });
+  const getReader = stream.getReader.bind(stream);
+  stream.getReader = ((...args: Parameters<typeof getReader>) => {
+    started();
+    return getReader(...args);
+  }) as typeof stream.getReader;
+  const response = new Response(stream, { headers: { "content-type": "image/png" } });
+  return {
+    response,
+    readStarted,
+    bodyCancelled,
+    release() {
+      if (released) return;
+      released = true;
+      controller.enqueue(body);
+      controller.close();
+    },
+  };
+};
+
+const routeImages = async (
+  t: { after(fn: () => unknown): unknown },
+  responder: (url: string, init: RequestInit) => Promise<Response>,
+) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-catalog-images-"));
+  const proxy = new ImageProxy(directory, 1024 * 1024, 0, responder);
+  await proxy.load();
+  t.after(async () => {
+    await proxy.flush();
+    await rm(directory, { recursive: true, force: true });
+  });
+  return { proxy, directory };
+};
+
 const cachedMetadataLookup = (
   records: AddonRecord[],
   provider?: (type: string, id: string, signal?: AbortSignal) => Promise<MetaItem | null>,
@@ -667,6 +717,102 @@ for (const scenario of disconnectCases) {
     assert.equal(outbound.diagnostics().find((entry) => entry.host === scenario.host)?.failures ?? 0, 0);
   });
 }
+
+test("two image clients share one download and one disconnect leaves the other alive", async (t) => {
+  const host = "image-route-shared.example";
+  const held = heldImage();
+  let requests = 0;
+  let upstream: AbortSignal | undefined;
+  const { proxy } = await routeImages(t, (_url, init) => {
+    requests += 1;
+    upstream = init.signal as AbortSignal;
+    return Promise.resolve(held.response);
+  });
+  const fetchImage = proxy.fetch.bind(proxy);
+  let joins = 0;
+  proxy.fetch = async (...args) => {
+    joins += 1;
+    return fetchImage(...args);
+  };
+  const harness = await mount([], null, { imageProxy: proxy });
+  t.after(harness.close);
+  const id = proxy.proxied(`https://${host}/poster.png`)!.split("/").pop()!;
+  const route = `/api/image/${id}?surface=home`;
+
+  const first = http.get(`${harness.base}${route}`);
+  first.on("error", () => undefined);
+  t.after(() => first.destroy());
+  await prompt(held.readStarted, "the shared image body read");
+  assert.equal(requests, 1);
+
+  const second = prompt(api(harness.base, route), "the surviving image response");
+  await until(() => joins === 2, "the second image waiter");
+  const firstClosed = new Promise<void>((resolve) => first.once("close", resolve));
+  first.destroy();
+  await prompt(firstClosed, "the disconnected image request");
+  await prompt(new Promise<void>((resolve) => setImmediate(resolve)), "the first image waiter to leave");
+  assert.equal(upstream?.aborted, false, "one image client leaving does not abort the shared download");
+
+  held.release();
+  const response = await second;
+  assert.equal(response.status, 200);
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()), PNG);
+  assert.equal(response.headers.get("cache-control"), "private, max-age=86400");
+  const etag = response.headers.get("etag");
+  assert.ok(etag);
+  assert.equal(requests, 1);
+
+  const notModified = await fetch(`${harness.base}${route}`, { headers: { "if-none-match": etag! } });
+  assert.equal(notModified.status, 304);
+  assert.equal(await notModified.text(), "");
+  assert.equal(outbound.diagnostics().find((entry) => entry.host === host)?.failures ?? 0, 0);
+});
+
+test("the last image client disconnect cancels its body and a retry caches afresh", async (t) => {
+  const host = "image-route-cancel.example";
+  const held = heldImage();
+  let requests = 0;
+  let upstream: AbortSignal | undefined;
+  const { proxy, directory } = await routeImages(t, (_url, init) => {
+    requests += 1;
+    if (requests === 1) {
+      upstream = init.signal as AbortSignal;
+      return Promise.resolve(held.response);
+    }
+    return Promise.resolve(new Response(PNG, { headers: { "content-type": "image/png" } }));
+  });
+  const harness = await mount([], null, { imageProxy: proxy });
+  t.after(harness.close);
+  const id = proxy.proxied(`https://${host}/poster.png`)!.split("/").pop()!;
+  const route = `/api/image/${id}`;
+
+  const request = http.get(`${harness.base}${route}`);
+  request.on("error", () => undefined);
+  t.after(() => request.destroy());
+  await prompt(held.readStarted, "the held image body read");
+  const signal = upstream!;
+  const closed = new Promise<void>((resolve) => request.once("close", resolve));
+  request.destroy();
+  await prompt(new Promise<void>((resolve) => {
+    if (signal.aborted) resolve();
+    else signal.addEventListener("abort", () => resolve(), { once: true });
+  }), "the image upstream abort");
+  await prompt(held.bodyCancelled, "the image body cancellation");
+  await prompt(closed, "the disconnected image request");
+
+  assert.equal(await proxy.readCached(id), undefined);
+  assert.equal(proxy.inMemory(id), false);
+  assert.equal(proxy.takeFetched(id), false);
+  assert.deepEqual((await readdir(directory)).filter((name) => name.startsWith(`${id}.`)), []);
+  await until(() => !outbound.diagnostics().some((entry) => entry.host === host && entry.active > 0), "the released image host slot");
+
+  const retried = await prompt(api(harness.base, route), "the retried image response");
+  assert.equal(retried.status, 200);
+  assert.deepEqual(Buffer.from(await retried.arrayBuffer()), PNG);
+  assert.equal(requests, 2, "the retry starts a fresh upstream request");
+  assert.deepEqual((await readdir(directory)).filter((name) => name.startsWith(`${id}.`)), [`${id}.png`]);
+  assert.equal(outbound.diagnostics().find((entry) => entry.host === host)?.failures ?? 0, 0);
+});
 
 test("a no-gallery metadata disconnect cancels the addon body and does not cache or fall through", async (t) => {
   resetImdbTargets();
