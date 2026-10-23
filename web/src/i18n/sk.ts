@@ -163,6 +163,8 @@ export const sk: Catalog = {
   "common.ascending": "Vzostupne",
   "common.descending": "Zostupne",
   "api.timeout": "Server neodpovedal včas.",
+  "api.unreachable": "Server nie je dostupný. Skontrolujte, či beží, a skúste to znova.",
+  "api.badResponse": "Server odpovedal niečím, čo aplikácia nevie prečítať. Ak je pred ním proxy, prihláste sa do nej znova.",
   "api.copyRefused": "Prehliadač odmietol kopírovať. Vyberte text a skopírujte ho ručne.",
   "app.goToCleanCatalog": "Späť k čistému katalógu",
   "app.goToStart": "Na úvodnú stránku",

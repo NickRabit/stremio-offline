@@ -172,6 +172,10 @@ export const cs: Catalog = {
   "common.descending": "Sestupně",
 
   "api.timeout": "Server neodpověděl včas.",
+
+  "api.unreachable": "Server není dostupný. Zkontrolujte, že běží, a zkuste to znovu.",
+
+  "api.badResponse": "Server odpověděl něčím, co aplikace neumí přečíst. Pokud je před ním proxy, přihlaste se k ní znovu.",
   "api.copyRefused": "Prohlížeč kopírování nepovolil. Označte text a zkopírujte ho ručně.",
 
   // Kostra aplikace.

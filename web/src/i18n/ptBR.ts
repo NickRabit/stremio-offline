@@ -163,6 +163,8 @@ export const ptBR: Catalog = {
   "common.ascending": "Ascendente",
   "common.descending": "Descendente",
   "api.timeout": "O servidor não respondeu a tempo.",
+  "api.unreachable": "Não foi possível conectar ao servidor. Verifique se ele está em execução e tente novamente.",
+  "api.badResponse": "O servidor respondeu algo que o aplicativo não consegue ler. Se houver um proxy na frente dele, entre nele novamente.",
   "api.copyRefused": "O navegador se recusou a copiar. Selecione o texto e copie-o manualmente.",
   "app.goToCleanCatalog": "Voltar para um catálogo limpo",
   "app.goToStart": "Ir para a página inicial",

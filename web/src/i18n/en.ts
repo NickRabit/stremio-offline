@@ -176,6 +176,10 @@ export const en = {
   "common.descending": "Descending",
 
   "api.timeout": "The server did not answer in time.",
+
+  "api.unreachable": "The server cannot be reached. Check that it is running and try again.",
+
+  "api.badResponse": "The server answered with something the app cannot read. If a proxy sits in front of it, sign in to the proxy again.",
   "api.copyRefused": "The browser refused to copy. Select the text and copy it by hand.",
 
   // Application shell.

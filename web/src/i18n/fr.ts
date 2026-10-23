@@ -163,6 +163,8 @@ export const fr: Catalog = {
   "common.ascending": "Ascendant",
   "common.descending": "Décroissant",
   "api.timeout": "Le serveur n'a pas répondu à temps.",
+  "api.unreachable": "Le serveur est injoignable. Vérifiez qu'il est démarré, puis réessayez.",
+  "api.badResponse": "Le serveur a renvoyé une réponse que l'application ne peut pas lire. Si un proxy se trouve devant lui, reconnectez-vous à ce proxy.",
   "api.copyRefused": "Le navigateur a refusé de copier. Sélectionnez le texte et copiez-le à la main.",
   "app.goToCleanCatalog": "Retour à un catalogue propre",
   "app.goToStart": "Vers la page de démarrage",
