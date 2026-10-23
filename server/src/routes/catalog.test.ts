@@ -18,6 +18,7 @@ import { mediaResources } from "../media-resources.js";
 import { outbound } from "../outbound.js";
 import { setFetchTransport } from "../security.js";
 import { clearTmdbCache, tmdbMeta } from "../tmdb.js";
+import { clearTrailerCache } from "../trailers.js";
 import { registerCatalogRoutes, type CatalogDeps } from "./catalog.js";
 
 interface Harness {
@@ -42,6 +43,12 @@ const addon = (key: string, catalogs: CatalogDefinition[], options: { role?: Add
   manifest: { id: key, name: `Addon ${key}`, version: "1.0.0", ...(options.resources ? { resources: options.resources } : {}), catalogs },
   downloadSettings: { movie: { subfolder: "", layout: "structured" }, series: { subfolder: "", layout: "structured" } },
 });
+
+const cinemeta = (): AddonRecord => {
+  const record = addon("cinemeta", [], { role: "both", resources: ["meta"] });
+  record.manifest = { ...record.manifest, id: "com.linvo.cinemeta", name: "Cinemeta" };
+  return record;
+};
 
 /** The routes take everything they need from the context, so the app here is a real express
  *  instance over fake collaborators that record what they were asked to do. */
@@ -690,6 +697,142 @@ test("a no-gallery TMDB find disconnect leaves no id cache entry and stops addon
     assert.equal(findRequests, 2);
     assert.equal(detailRequests, 1, "the successful metadata answer is cached");
     assert.equal(fallbackRequests, 1);
+  });
+
+  assert.equal(outbound.diagnostics().find((entry) => entry.host === "api.themoviedb.org")?.failures ?? 0, 0);
+});
+
+test("GET /api/trailer cancels a held Cinemeta body, retries, and serves the retry from cache", async (t) => {
+  clearTrailerCache();
+  clearTmdbCache();
+  t.after(() => {
+    clearTrailerCache();
+    clearTmdbCache();
+  });
+  const harness = await mount([cinemeta()], null, { tmdbApiKey: "test-key" });
+  t.after(harness.close);
+  const held = heldJson();
+  let cinemetaRequests = 0;
+  let tmdbRequests = 0;
+  let transportSignal: AbortSignal | undefined;
+  let requestStarted!: () => void;
+  const requestStartedSignal = new Promise<void>((resolve) => { requestStarted = resolve; });
+
+  await withStubbedAddons((url, init) => {
+    const parsed = new URL(url);
+    if (parsed.hostname === "cinemeta.example") {
+      cinemetaRequests += 1;
+      if (cinemetaRequests === 1) {
+        transportSignal = init.signal as AbortSignal;
+        requestStarted();
+        return held.response;
+      }
+      return json({ meta: { trailers: [{ source: "hhhhhhhhhhh", type: "Trailer" }] } });
+    }
+    tmdbRequests += 1;
+    throw new Error(`TMDB must not follow a cancelled Cinemeta lookup: ${url}`);
+  }, async () => {
+    const closes = harness.responseCloses();
+    const request = http.get(`${harness.base}/api/trailer/movie/tt1`);
+    request.on("error", () => undefined);
+    t.after(() => request.destroy());
+
+    await prompt(requestStartedSignal, "the Cinemeta trailer request");
+    held.activate();
+    await prompt(held.readStarted, "the Cinemeta trailer body read");
+    request.destroy();
+    await prompt(new Promise<void>((resolve) => {
+      if (transportSignal?.aborted) resolve();
+      else transportSignal?.addEventListener("abort", () => resolve(), { once: true });
+    }), "the Cinemeta trailer signal abort");
+    await prompt(held.bodyCancelled, "the Cinemeta trailer body cancel");
+    await until(() => harness.responseCloses() === closes + 1, "the disconnected trailer response");
+
+    assert.equal(tmdbRequests, 0);
+
+    const retried = await prompt(api(harness.base, "/api/trailer/movie/tt1"), "the retried trailer response");
+    assert.equal(retried.status, 200);
+    assert.deepEqual(await retried.json(), { trailer: { youtubeId: "hhhhhhhhhhh", provider: "cinemeta" } });
+    assert.equal(cinemetaRequests, 2, "the cancelled trailer was not cached");
+
+    const cached = await prompt(api(harness.base, "/api/trailer/movie/tt1"), "the cached trailer response");
+    assert.equal(cached.status, 200);
+    assert.deepEqual(await cached.json(), { trailer: { youtubeId: "hhhhhhhhhhh", provider: "cinemeta" } });
+    assert.equal(cinemetaRequests, 2, "the successful retry is served from the trailer cache");
+    assert.equal(tmdbRequests, 0);
+  });
+
+  assert.equal(outbound.diagnostics().find((entry) => entry.host === "cinemeta.example")?.failures ?? 0, 0);
+});
+
+test("GET /api/library/trailer cancels a held TMDB find, retries, and serves the retry from cache", async (t) => {
+  clearTrailerCache();
+  clearTmdbCache();
+  t.after(() => {
+    clearTrailerCache();
+    clearTmdbCache();
+  });
+  const path = "lib_00000001/Films/Heat";
+  const bound = { [path]: { type: "movie", id: "tt0090257", name: "Heat" } };
+  const harness = await mount([], null, {
+    libraries: [library("lib_00000001")],
+    bound,
+    tmdbApiKey: "test-key",
+  });
+  t.after(harness.close);
+  const held = heldJson();
+  let findRequests = 0;
+  let videoRequests = 0;
+  let transportSignal: AbortSignal | undefined;
+  let findStarted!: () => void;
+  const findStartedSignal = new Promise<void>((resolve) => { findStarted = resolve; });
+
+  await withStubbedAddons((url, init) => {
+    const parsed = new URL(url);
+    if (parsed.pathname.includes("/find/")) {
+      findRequests += 1;
+      if (findRequests === 1) {
+        transportSignal = init.signal as AbortSignal;
+        findStarted();
+        return held.response;
+      }
+      return json({ movie_results: [{ id: 31410 }], tv_results: [] });
+    }
+    if (parsed.pathname.endsWith("/movie/31410/videos")) {
+      videoRequests += 1;
+      return json({ results: [{ key: "iiiiiiiiiii", site: "YouTube", type: "Trailer" }] });
+    }
+    throw new Error(`Unexpected TMDB URL ${url}`);
+  }, async () => {
+    const closes = harness.responseCloses();
+    const request = http.get(`${harness.base}/api/library/trailer?path=${encodeURIComponent(path)}`);
+    request.on("error", () => undefined);
+    t.after(() => request.destroy());
+
+    await prompt(findStartedSignal, "the TMDB trailer find request");
+    held.activate();
+    await prompt(held.readStarted, "the TMDB trailer find body read");
+    request.destroy();
+    await prompt(new Promise<void>((resolve) => {
+      if (transportSignal?.aborted) resolve();
+      else transportSignal?.addEventListener("abort", () => resolve(), { once: true });
+    }), "the TMDB trailer find signal abort");
+    await prompt(held.bodyCancelled, "the TMDB trailer find body cancel");
+    await until(() => harness.responseCloses() === closes + 1, "the disconnected library trailer response");
+
+    assert.equal(videoRequests, 0);
+
+    const retried = await prompt(api(harness.base, `/api/library/trailer?path=${encodeURIComponent(path)}`), "the retried library trailer");
+    assert.equal(retried.status, 200);
+    assert.deepEqual(await retried.json(), { trailer: { youtubeId: "iiiiiiiiiii", provider: "tmdb" } });
+    assert.equal(findRequests, 2, "the cancelled find left no TMDB id-cache entry");
+    assert.equal(videoRequests, 1);
+
+    const cached = await prompt(api(harness.base, `/api/library/trailer?path=${encodeURIComponent(path)}`), "the cached library trailer");
+    assert.equal(cached.status, 200);
+    assert.deepEqual(await cached.json(), { trailer: { youtubeId: "iiiiiiiiiii", provider: "tmdb" } });
+    assert.equal(findRequests, 2, "the trailer cache serves the retried answer");
+    assert.equal(videoRequests, 1);
   });
 
   assert.equal(outbound.diagnostics().find((entry) => entry.host === "api.themoviedb.org")?.failures ?? 0, 0);

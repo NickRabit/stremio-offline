@@ -492,23 +492,44 @@ async function resolveId(type: string, id: string, config: TmdbConfig, fetchImpl
 
 const YOUTUBE_ID = /^[A-Za-z0-9_-]{11}$/;
 
-export async function tmdbTrailer(type: "movie" | "series", id: string, config: TmdbConfig, fetchImpl: FetchLike = guardedFetch): Promise<{ youtubeId: string; title?: string } | null> {
-  const tmdbId = await resolveId(type, id, config, fetchImpl);
+export async function tmdbTrailer(
+  type: "movie" | "series",
+  id: string,
+  config: TmdbConfig,
+  fetchImpl: FetchLike = guardedFetch,
+  signal?: AbortSignal,
+): Promise<{ youtubeId: string; title?: string } | null> {
+  throwIfCancelled(signal);
+  const tmdbId = await resolveId(type, id, config, fetchImpl, signal);
   if (tmdbId == null) return null;
-  let response: Response;
+  throwIfCancelled(signal);
+  let reply: TmdbReply<TmdbVideos>;
   try {
-    response = await request(`/${type === "movie" ? "movie" : "tv"}/${tmdbId}/videos`, { api_key: config.apiKey, language: config.language }, fetchImpl);
+    reply = await tmdbReply<TmdbVideos>(
+      `/${type === "movie" ? "movie" : "tv"}/${tmdbId}/videos`,
+      { api_key: config.apiKey, language: config.language },
+      fetchImpl,
+      signal,
+    );
   } catch (error) {
+    if (signal?.aborted) throw error;
     log("WARN", "TMDB trailer lookup failed", { operation: "videos", type, id, reason: reasonOf(error, config.apiKey) });
     return null;
   }
+  const { response } = reply;
+  throwIfCancelled(signal);
   if (!response.ok) {
     log("WARN", "TMDB trailer lookup failed", { operation: "videos", type, id, status: response.status });
     return null;
   }
   let body: TmdbVideos;
-  try { body = await readTmdbJson<TmdbVideos>(response); }
+  try {
+    if (reply.parseError) throw reply.parseError;
+    body = reply.body ?? await readTmdbJson<TmdbVideos>(response, signal);
+    throwIfCancelled(signal);
+  }
   catch (error) {
+    if (signal?.aborted) throw error;
     log("WARN", "TMDB answered with malformed JSON", { operation: "videos", type, id, reason: reasonOf(error, config.apiKey) });
     return null;
   }
