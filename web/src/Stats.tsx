@@ -58,8 +58,11 @@ const xTicks = (count: number) => {
   return Array.from({ length: wanted }, (_, index) => Math.round((index * (count - 1)) / (wanted - 1)));
 };
 
-const stamp = (at: string, step: StatsSummary["step"]) => {
-  const date = new Date(at);
+/** A day bar is named by the server's own date for it: its instant is the server's midnight,
+ *  which a viewer in another zone would read as the day before or after. */
+const stamp = (point: StatsSummary["points"][number], step: StatsSummary["step"]) => {
+  if (step === "day" && point.day) return new Date(`${point.day}T00:00:00Z`).toLocaleDateString(localeTag(), { day: "numeric", month: "numeric", timeZone: "UTC" });
+  const date = new Date(point.at);
   if (step === "day") return date.toLocaleDateString(localeTag(), { day: "numeric", month: "numeric" });
   return date.toLocaleTimeString(localeTag(), { hour: "2-digit", minute: "2-digit" });
 };
@@ -147,11 +150,11 @@ function Chart({ summary, lines }: { summary: StatsSummary; lines: Array<StatsSe
             {/* Transparent columns over the chart carry the tooltip with every picked series. */}
             <div className="stats-hover">
               {summary.points.map((point, index) => <div key={point.at}
-                title={`${stamp(point.at, summary.step)}\n${lines.map((line) => `${line.label}: ${size(line.points[index])}`).join("\n")}`}/>)}
+                title={`${stamp(point, summary.step)}\n${lines.map((line) => `${line.label}: ${size(line.points[index])}`).join("\n")}`}/>)}
             </div>
           </>
         : <div className="stats-chart" role="img" aria-label={t("stats.chartLabel", { peak: size(peak) })}>
-            {summary.points.map((point) => <div key={point.at} className="stats-bar" title={`${stamp(point.at, summary.step)}: ${size(point.bytes)}, ${files(point.count)}`}>
+            {summary.points.map((point) => <div key={point.at} className="stats-bar" title={`${stamp(point, summary.step)}: ${size(point.bytes)}, ${files(point.count)}`}>
               <span style={{ height: `${Math.max(point.bytes ? 2 : 0, (point.bytes / peak) * 100)}%` }}/>
             </div>)}
           </div>}
@@ -161,7 +164,7 @@ function Chart({ summary, lines }: { summary: StatsSummary; lines: Array<StatsSe
       {marks.map((index, order) => <span key={index} style={{
         left: `${summary.points.length > 1 ? (index / (summary.points.length - 1)) * 100 : 0}%`,
         transform: order === 0 ? "none" : order === marks.length - 1 ? "translateX(-100%)" : "translateX(-50%)",
-      }}>{summary.points[index] ? stamp(summary.points[index].at, summary.step) : ""}</span>)}
+      }}>{summary.points[index] ? stamp(summary.points[index], summary.step) : ""}</span>)}
     </div>
   </div>;
 }

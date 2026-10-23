@@ -194,3 +194,22 @@ it("does not poll live streams while the tab is hidden, and picks up again once 
     vi.useRealTimers();
   }
 });
+
+it("labels a day bar with the server's day, whatever the viewer's time zone", async () => {
+  // Midnight of 3 September on a server two hours east of UTC is still 2 September in New York.
+  const days: StatsSummary = { ...data, step: "day", points: [
+    { at: "2026-09-01T22:00:00.000Z", day: "2026-09-02", bytes: GB, count: 1 },
+    { at: "2026-09-02T22:00:00.000Z", day: "2026-09-03", bytes: GB, count: 1 },
+  ], byProvider: [], byAddon: [], bySource: [] };
+  fetchMock.mockImplementation((input: RequestInfo | URL) => Promise.resolve(json(
+    String(input).includes("/api/stats/activity") ? { items: [], users: [], total: 0 }
+      : String(input).includes("/api/stats/streams") ? [] : days)));
+  process.env.TZ = "America/New_York";
+  try {
+    await render();
+    const axis = [...hostElement.querySelectorAll(".stats-xaxis span")].map((node) => node.textContent);
+    expect(axis).toEqual(["02/09", "03/09"]);
+  } finally {
+    delete process.env.TZ;
+  }
+});

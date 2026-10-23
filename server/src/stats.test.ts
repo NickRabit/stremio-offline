@@ -158,6 +158,14 @@ test("an evening download belongs to the local day, not to the UTC one", () => {
   assert.equal(summary.points.at(-1)?.bytes, GB, "it belongs to 2 September even though UTC is already on the 3rd");
 });
 
+test("a day bar names its day as the server counts it, so a viewer elsewhere reads the same date", () => {
+  const summary = summarize(sample, 3 * 24, now);
+  const local = (at: Date) => `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")}`;
+  assert.equal(summary.points.at(-1)?.day, local(now));
+  for (const point of summary.points) assert.equal(point.day, local(new Date(point.at)));
+  assert.equal(summarize(sample, 24, now).points[0]?.day, undefined, "an hour bar has a time, not a day");
+});
+
 test("an empty record does not throw", () => {
   const summary = summarize([], 7 * 24, now);
   assert.deepEqual(summary.total, { bytes: 0, count: 0 });

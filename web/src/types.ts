@@ -348,7 +348,8 @@ export type ProviderCallKind =
 export interface StatsSummary {
   hour: StatsWindow; day: StatsWindow; week: StatsWindow; month: StatsWindow; total: StatsWindow;
   step: "minute" | "hour" | "day";
-  points: Array<{ at: string; bytes: number; count: number }>;
+  /** `day`, on a day bar: the server's calendar date for it. Absent from an older server. */
+  points: Array<{ at: string; day?: string; bytes: number; count: number }>;
   providers: StatsBucket[]; addons: StatsBucket[]; sources: StatsBucket[];
   byProvider: StatsSeries[]; byAddon: StatsSeries[]; bySource: StatsSeries[];
   since?: string;
