@@ -607,3 +607,23 @@ export async function guardedMetadataFetch(raw: string, init: RequestInit = {}):
   if (!host) return safeFetch(raw, init);
   return metadataOutbound.run(host, () => safeFetch(raw, init));
 }
+
+/** Keeps a metadata host slot through body parsing. The supplied signal may be cancelled by
+ *  the shared caller; runBody classifies that as a cancellation, not a host failure. */
+export async function guardedMetadataBody<T>(
+  raw: string,
+  init: Omit<RequestInit, "signal">,
+  read: GuardedBodyReader<T>,
+  options: GuardedBodyOptions,
+  fetchImpl: (url: string, init: RequestInit) => Promise<Response> = safeFetch,
+): Promise<T> {
+  const host = hostOf(raw);
+  const request = (signal: AbortSignal) => fetchImpl(raw, { ...init, signal });
+  if (host) return metadataOutbound.runBody(host, request, read, options);
+
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, AbortSignal.timeout(options.deadlineMs)])
+    : AbortSignal.timeout(options.deadlineMs);
+  const response = await raceAbort(request(signal), signal);
+  return raceAbort(read(response, signal), signal);
+}

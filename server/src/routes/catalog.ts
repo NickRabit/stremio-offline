@@ -203,13 +203,22 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
   /** The same row for a folder that is bound to a title. A path with no binding asks
    *  Wikidata nothing and answers no links. */
   app.get("/api/library/links", asyncRoute(async (req, res) => {
-    const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
-    const raw = String(req.query.path ?? "").trim();
-    const key = raw ? boundKey(raw, viewerOf(currentUser(req))) : undefined;
-    const entry = key ? knownTitleEntry(key, metaStore.qualifiedMeta()) : undefined;
-    if (!entry) return res.json({ links: [] });
-    const ids = (await externalIds.ids(entry.record.id)) ?? {};
-    res.json({ links: siteLinks(entry.record.type, entry.record.id, ids, language) });
+    const disconnect = routeDisconnectSignal(req, res);
+    try {
+      const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
+      const raw = String(req.query.path ?? "").trim();
+      const key = raw ? boundKey(raw, viewerOf(currentUser(req))) : undefined;
+      const entry = key ? knownTitleEntry(key, metaStore.qualifiedMeta()) : undefined;
+      if (!entry) return res.json({ links: [] });
+      const ids = (await externalIds.ids(entry.record.id, disconnect.signal)) ?? {};
+      if (disconnect.signal.aborted) return;
+      res.json({ links: siteLinks(entry.record.type, entry.record.id, ids, language) });
+    } catch (error) {
+      if (disconnect.signal.aborted) return;
+      throw error;
+    } finally {
+      disconnect.dispose();
+    }
   }));
   /** The catalogue title a library file is bound to, so a play that started from the library can
    *  ask the addons about it the way the catalogue detail does. A path the caller may not see, an
@@ -238,11 +247,20 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
   /** The sites worth checking before watching. Wikidata supplies two ids, the catalogue id
    *  the rest; when it cannot be reached the links it would have added are simply missing. */
   app.get("/api/links/:type/:id", asyncRoute(async (req, res) => {
-    const id = String(req.params.id);
-    const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
-    const imdbId = imdbOf(id);
-    const ids = imdbId ? await externalIds.ids(imdbId) : {};
-    res.json({ links: siteLinks(String(req.params.type), id, ids ?? {}, language) });
+    const disconnect = routeDisconnectSignal(req, res);
+    try {
+      const id = String(req.params.id);
+      const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
+      const imdbId = imdbOf(id);
+      const ids = imdbId ? await externalIds.ids(imdbId, disconnect.signal) : {};
+      if (disconnect.signal.aborted) return;
+      res.json({ links: siteLinks(String(req.params.type), id, ids ?? {}, language) });
+    } catch (error) {
+      if (disconnect.signal.aborted) return;
+      throw error;
+    } finally {
+      disconnect.dispose();
+    }
   }));
   /** Opaque id in, cached bytes out. An id we never handed out means nothing here. The id is a
    *  hash of the address, not of the bytes, so it stays a day rather than a year: the bytes may
