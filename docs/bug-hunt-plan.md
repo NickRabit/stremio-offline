@@ -186,7 +186,7 @@ candidates, episodes, migrate, actions, admin, grants, runtime), `naming.ts`,
 - [ ] **BH-4.4 Destructive actions.** Rename, move, copy, delete, bulk and
       cross-library: explicit preconditions, no swallowed errors (roadmap
       P1.4).
-      Progress: rename, move, copy and delete keep their preconditions (resolved path, busy check, nested library, name clash, admin re-check just before the disk changes). Gap, awaiting a decision: subtitle sidecars (`<stem>.srt`, `<stem>.<lang>.vtt`, matched by the video's stem) are not carried by a file rename or a single-file move or copy, nor removed with a deleted video, so the player stops offering them.
+      Progress: rename, move, copy and delete keep their preconditions (resolved path, busy check, nested library, name clash, admin re-check just before the disk changes). Subtitle sidecars (`<stem>.srt`, `<stem>.<lang>.vtt`, matched by the video's stem, the way the player offers them) were left behind by a file rename or a single-file move or copy, and outlived a deleted video; #537 carries them, renames them and deletes them with it. They stay when another video of the same stem still uses them and never overwrite a file at the destination. The move journal still covers only the video, so a crash between the two leaves the subtitles in the old folder.
 - [ ] **BH-4.5 Images and artwork.** Cache bounds and eviction, sweep only on
       a provably readable library, concurrent generation of the same mosaic,
       remote image fetch timeouts and size limits.
@@ -282,6 +282,7 @@ Files: `web/src/App.tsx` (about 3.9k lines, many effects and state hooks),
       ever see "nothing" where an error happened? Every server `AppError`
       key reaches a translated message.
       Progress: the silent catches in `api.ts` are the unload beacons, which have nobody to tell; the i18n test already checks every server message key against the catalogue.
+      Progress: #535 turns the browser's own network error ("Failed to fetch", "Load failed") and a non-JSON success (a reverse proxy's sign-in page) into translated messages; both reached the interface in English before.
 - [ ] **BH-9.5 Extractions with a reason.** Settings/diagnostics and
       catalogue/search orchestration out of `App.tsx` (roadmap P2), only
       after 9.1–9.4 so the moves carry their tests.
@@ -324,6 +325,9 @@ dialogs, `style.css` (2.3k), `i18n/*`, `vite.config.ts`.
       stats, media-server manager, player) and measure first-load bytes.
       Progress: #494 loads non-English catalogues on demand (first load 713 → 412 kB gzip). hls.js (~160 kB gzip) is the next candidate.
       Progress: #496 loads hls.js on demand. Splitting settings, statistics and addons would save about 25 kB gzip, but the app has no error boundary, so a failed chunk (a tab kept open across an upgrade) would blank the page: not done, see Found along the way.
+- [x] **BH-11.6 Dates, times and sizes** (found during the hunt). Values read in the wrong
+      zone or rounded at a unit boundary.
+      Progress: release dates are a UTC calendar day on the server, the calendar feed and Android, but the web read them in local time, a day late in Prague (#519). The statistics' day bars were read in the viewer's zone rather than the server's (#538). A download's time left read "1 h 60 min" and sizes stopped at GB (#520); Home's recent files read "60 minutes ago" (#534).
 - [ ] **BH-11.5 CSS.** Dead selectors, duplicated rules; split by
       responsibility only with the visual matrix run once at the end
       (roadmap P2).
@@ -379,6 +383,7 @@ Files: `android-tv/app/src/main/java/cz/stremiooffline/tv/` — `playback/`
       Progress: measured per file (Linux, four at a time): the server suite's wall time (~100 s) is `downloads.test.ts` alone (~103 s; its slowest tests move 32 MB over a local range server and wait out retries, 5–13 s each), then `library-move-recovery.test.ts` (~67 s; two real server boots and a 2 s save debounce per test, ~5 s each). Every other file is under 12 s. Not changed: shrinking the transfers risks the segmentation thresholds the tests exercise.
 - [ ] **BH-14.3 Docker image and CI.** Image size, layer caching, CI
       duration per workflow; Synology/ARM64 build.
+      Progress: `ffmpeg-windows` ran `apt-get` on every run and hung for half an hour on a stalled Ubuntu mirror, holding every PR's desktop packaging; #536 runs it only on a cache miss and bounds the job at 45 minutes. Image size and layer caching not yet looked at.
 - [ ] **BH-14.4 Re-run the baseline** (BH-0.2, BH-0.3) and record the
       before/after table below.
       Progress: the runtime baseline (BH-0.2) is re-run on one Linux machine for both commits, table below; the web bundle size is filled in. BH-0.3's Lighthouse and React Profiler traces and the Android cold start are still to do, so the part stays open.
