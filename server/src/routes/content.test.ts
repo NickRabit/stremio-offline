@@ -695,6 +695,26 @@ test("move, rename and delete refuse a path a library job is working on, and wor
   assert.deepEqual(harness.calls.deleted, ["Films/Ronin.mkv"]);
 });
 
+test("POST /api/library/rename takes the video's subtitles along under its new name", async (t) => {
+  const root = await makeRoot();
+  await put(root, "Films/Heat.mkv");
+  await put(root, "Films/Heat.srt");
+  await put(root, "Films/Heat.cs.vtt");
+  await put(root, "Films/Heat 2.srt");
+  const harness = await mount([library("lib_00000001", root)]);
+  t.after(async () => { await harness.close(); await rm(root, { recursive: true, force: true }); });
+
+  const response = await api(harness.base, "/api/library/rename", { method: "POST", body: { path: "Films/Heat.mkv", name: "Thief" } });
+
+  assert.equal(response.status, 200);
+  assert.equal(await exists(path.join(root, "Films/Thief.mkv")), true);
+  assert.equal(await exists(path.join(root, "Films/Thief.srt")), true, "the plain subtitle follows");
+  assert.equal(await exists(path.join(root, "Films/Thief.cs.vtt")), true, "a language-tagged subtitle follows");
+  assert.equal(await exists(path.join(root, "Films/Heat.srt")), false);
+  assert.equal(await exists(path.join(root, "Films/Heat.cs.vtt")), false);
+  assert.equal(await exists(path.join(root, "Films/Heat 2.srt")), true, "another title's subtitle stays");
+});
+
 test("POST /api/library/rename refuses a target that already exists", async (t) => {
   const root = await makeRoot();
   await put(root, "Films/Heat.mkv");
