@@ -1152,12 +1152,18 @@ test("a gallery client disconnect does not cancel a shared gallery waiter", asyn
 
     const second = api(harness.base, "/api/meta/movie/tt0090257?gallery=1");
     await until(() => harness.lookups.length === 2, "the second gallery waiter");
-    assert.deepEqual(harness.signals, [], "gallery metadata never receives a client disconnect signal");
+    assert.equal(harness.signals.length, 2, "each gallery request owns a disconnect signal");
+    assert.notEqual(harness.signals[0], harness.signals[1]);
     const firstClosed = new Promise<void>((resolve) => first.once("close", resolve));
     first.destroy();
     await prompt(firstClosed, "the disconnected gallery request");
+    await prompt(new Promise<void>((resolve) => {
+      if (harness.signals[0]?.aborted) resolve();
+      else harness.signals[0]?.addEventListener("abort", () => resolve(), { once: true });
+    }), "the first gallery route signal abort");
     await new Promise<void>((resolve) => setImmediate(resolve));
 
+    assert.equal(harness.signals[1]?.aborted, false, "the remaining gallery route is still live");
     assert.equal(held.cancelled(), false, "one waiter leaving does not abort the shared gallery");
     held.release({ movie_results: [{ id: 31410 }], tv_results: [] });
     const response = await prompt(second, "the surviving gallery response");
@@ -1166,6 +1172,165 @@ test("a gallery client disconnect does not cancel a shared gallery waiter", asyn
     assert.equal(body.images?.length, 1);
     assert.equal(findRequests, 1);
     assert.equal(imageRequests, 1);
+  });
+
+  assert.equal(outbound.diagnostics().find((entry) => entry.host === "api.themoviedb.org")?.failures ?? 0, 0);
+});
+
+test("all gallery clients leaving during TMDB find cancel its body, cache nothing, and a retry succeeds", async (t) => {
+  clearTmdbCache();
+  t.after(clearTmdbCache);
+  const harness = await mount([], { id: "tt5310001", type: "movie", name: "Gallery find retry" }, { tmdbApiKey: "test-key" });
+  t.after(harness.close);
+  const held = heldJson();
+  let findRequests = 0;
+  let imageRequests = 0;
+  let transportSignal: AbortSignal | undefined;
+  let findStarted!: () => void;
+  const findStartedSignal = new Promise<void>((resolve) => { findStarted = resolve; });
+
+  await withStubbedAddons((url, init) => {
+    const parsed = new URL(url);
+    if (parsed.pathname.includes("/find/")) {
+      findRequests += 1;
+      if (findRequests === 1) {
+        transportSignal = init.signal as AbortSignal;
+        findStarted();
+        return held.response;
+      }
+      return json({ movie_results: [{ id: 31410 }], tv_results: [] });
+    }
+    if (parsed.pathname.endsWith("/movie/31410/images")) {
+      imageRequests += 1;
+      return json({ posters: [{ file_path: "/retried.jpg", iso_639_1: "en" }], backdrops: [], logos: [] });
+    }
+    throw new Error(`Unexpected TMDB URL ${url}`);
+  }, async () => {
+    const closes = harness.responseCloses();
+    const first = http.get(`${harness.base}/api/meta/movie/tt5310001?gallery=1`);
+    first.on("error", () => undefined);
+    t.after(() => first.destroy());
+    await prompt(findStartedSignal, "the gallery find request");
+    held.activate();
+    await prompt(held.readStarted, "the gallery find body read");
+
+    const second = http.get(`${harness.base}/api/meta/movie/tt5310001?gallery=1`);
+    second.on("error", () => undefined);
+    t.after(() => second.destroy());
+    await until(() => harness.lookups.length === 2, "the second gallery waiter");
+    assert.equal(harness.signals.length, 2);
+    assert.notEqual(transportSignal, harness.signals[0]);
+    assert.notEqual(transportSignal, harness.signals[1]);
+
+    first.destroy();
+    await prompt(new Promise<void>((resolve) => {
+      if (harness.signals[0]?.aborted) resolve();
+      else harness.signals[0]?.addEventListener("abort", () => resolve(), { once: true });
+    }), "the first gallery route signal abort");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(transportSignal?.aborted, false, "the remaining gallery waiter keeps TMDB find alive");
+    assert.equal(held.cancelled(), false);
+
+    second.destroy();
+    await prompt(new Promise<void>((resolve) => {
+      if (harness.signals[1]?.aborted) resolve();
+      else harness.signals[1]?.addEventListener("abort", () => resolve(), { once: true });
+    }), "the last gallery route signal abort");
+    await prompt(new Promise<void>((resolve) => {
+      if (transportSignal?.aborted) resolve();
+      else transportSignal?.addEventListener("abort", () => resolve(), { once: true });
+    }), "the abandoned TMDB find signal abort");
+    await prompt(held.bodyCancelled, "the abandoned TMDB find body cancel");
+    await until(() => harness.responseCloses() >= closes + 2, "both disconnected gallery responses");
+
+    const retried = await prompt(api(harness.base, "/api/meta/movie/tt5310001?gallery=1"), "the retried gallery response");
+    assert.equal(retried.status, 200);
+    const body = await retried.json() as MetaItem & { images?: unknown[] };
+    assert.equal(body.images?.length, 1);
+    assert.equal(findRequests, 2, "the cancelled find was not cached as a miss");
+    assert.equal(imageRequests, 1);
+
+    const cached = await prompt(api(harness.base, "/api/meta/movie/tt5310001?gallery=1"), "the cached gallery response");
+    assert.equal(cached.status, 200);
+    assert.equal((await cached.json() as MetaItem & { images?: unknown[] }).images?.length, 1);
+    assert.equal(findRequests, 2, "the successful retry is cached");
+    assert.equal(imageRequests, 1);
+  });
+
+  assert.equal(outbound.diagnostics().find((entry) => entry.host === "api.themoviedb.org")?.failures ?? 0, 0);
+});
+
+test("all gallery clients leaving during TMDB images cancel its body, cache nothing, and a retry succeeds", async (t) => {
+  clearTmdbCache();
+  t.after(clearTmdbCache);
+  const harness = await mount([], { id: "tmdb:5310002", type: "movie", name: "Gallery images retry" }, { tmdbApiKey: "test-key" });
+  t.after(harness.close);
+  const held = heldJson();
+  let imageRequests = 0;
+  let transportSignal: AbortSignal | undefined;
+  let imageStarted!: () => void;
+  const imageStartedSignal = new Promise<void>((resolve) => { imageStarted = resolve; });
+
+  await withStubbedAddons((url, init) => {
+    const parsed = new URL(url);
+    if (parsed.pathname.endsWith("/movie/5310002/images")) {
+      imageRequests += 1;
+      if (imageRequests === 1) {
+        transportSignal = init.signal as AbortSignal;
+        imageStarted();
+        return held.response;
+      }
+      return json({ posters: [{ file_path: "/retried.jpg", iso_639_1: "en" }], backdrops: [], logos: [] });
+    }
+    throw new Error(`Unexpected TMDB URL ${url}`);
+  }, async () => {
+    const closes = harness.responseCloses();
+    const first = http.get(`${harness.base}/api/meta/movie/tmdb%3A5310002?gallery=1`);
+    first.on("error", () => undefined);
+    t.after(() => first.destroy());
+    await prompt(imageStartedSignal, "the gallery images request");
+    held.activate();
+    await prompt(held.readStarted, "the gallery images body read");
+
+    const second = http.get(`${harness.base}/api/meta/movie/tmdb%3A5310002?gallery=1`);
+    second.on("error", () => undefined);
+    t.after(() => second.destroy());
+    await until(() => harness.lookups.length === 2, "the second gallery waiter");
+    assert.equal(harness.signals.length, 2);
+    assert.notEqual(transportSignal, harness.signals[0]);
+    assert.notEqual(transportSignal, harness.signals[1]);
+
+    first.destroy();
+    await prompt(new Promise<void>((resolve) => {
+      if (harness.signals[0]?.aborted) resolve();
+      else harness.signals[0]?.addEventListener("abort", () => resolve(), { once: true });
+    }), "the first gallery route signal abort");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(transportSignal?.aborted, false, "the remaining gallery waiter keeps TMDB images alive");
+    assert.equal(held.cancelled(), false);
+
+    second.destroy();
+    await prompt(new Promise<void>((resolve) => {
+      if (harness.signals[1]?.aborted) resolve();
+      else harness.signals[1]?.addEventListener("abort", () => resolve(), { once: true });
+    }), "the last gallery route signal abort");
+    await prompt(new Promise<void>((resolve) => {
+      if (transportSignal?.aborted) resolve();
+      else transportSignal?.addEventListener("abort", () => resolve(), { once: true });
+    }), "the abandoned TMDB images signal abort");
+    await prompt(held.bodyCancelled, "the abandoned TMDB images body cancel");
+    await until(() => harness.responseCloses() >= closes + 2, "both disconnected gallery responses");
+
+    const retried = await prompt(api(harness.base, "/api/meta/movie/tmdb%3A5310002?gallery=1"), "the retried gallery response");
+    assert.equal(retried.status, 200);
+    const body = await retried.json() as MetaItem & { images?: unknown[] };
+    assert.equal(body.images?.length, 1);
+    assert.equal(imageRequests, 2, "the cancelled images body was not cached as an empty gallery");
+
+    const cached = await prompt(api(harness.base, "/api/meta/movie/tmdb%3A5310002?gallery=1"), "the cached gallery response");
+    assert.equal(cached.status, 200);
+    assert.equal((await cached.json() as MetaItem & { images?: unknown[] }).images?.length, 1);
+    assert.equal(imageRequests, 2, "the successful retry is cached");
   });
 
   assert.equal(outbound.diagnostics().find((entry) => entry.host === "api.themoviedb.org")?.failures ?? 0, 0);
