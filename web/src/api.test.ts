@@ -96,14 +96,28 @@ describe("request", () => {
     await expect(api.addons()).rejects.toMatchObject({ message: "HTTP 502", status: 502, code: undefined });
   });
 
+  it("says the server cannot be reached rather than the browser's own network error", async () => {
+    fetchMock.mockRejectedValue(new TypeError("Failed to fetch"));
+    const error = await api.addons().catch((value: unknown) => value);
+    expect(error).toMatchObject({ status: 0, code: "NETWORK_ERROR" });
+    expect(describeError(error)).toBe("The server cannot be reached. Check that it is running and try again.");
+  });
+
+  it("says the answer could not be read when a success is not JSON, such as a proxy's sign-in page", async () => {
+    fetchMock.mockResolvedValue(new Response("<!doctype html><title>Sign in</title>", { status: 200, headers: { "content-type": "text/html" } }));
+    const error = await api.addons().catch((value: unknown) => value);
+    expect(error).toMatchObject({ status: 200, code: "BAD_RESPONSE" });
+    expect(describeError(error)).not.toMatch(/Unexpected token|JSON/);
+  });
+
+  it("leaves a caller's own abort as it was", async () => {
+    fetchMock.mockRejectedValue(new DOMException("aborted", "AbortError"));
+    await expect(api.addons()).rejects.toMatchObject({ name: "AbortError" });
+  });
+
   it("turns a timeout into a 408, not an abort nobody can read", async () => {
     fetchMock.mockRejectedValue(new DOMException("timed out", "TimeoutError"));
     await expect(api.addons()).rejects.toMatchObject({ status: 408 });
-  });
-
-  it("passes a network failure through untouched", async () => {
-    fetchMock.mockRejectedValue(new TypeError("Failed to fetch"));
-    await expect(api.addons()).rejects.toThrow(TypeError);
   });
 
   it("gives every call a deadline", async () => {

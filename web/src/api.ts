@@ -47,16 +47,32 @@ async function request<T>(url: string, options?: RequestInit & { timeoutMs?: num
   if (callerSignal?.aborted) controller.abort(callerSignal.reason);
   // The deadline also covers reading the body: a stalled answer holds the connection just the same.
   try {
-    const response = await fetch(url, {
-      ...init,
-      signal: controller.signal,
-      headers: { "content-type": "application/json", ...init.headers },
-    });
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        ...init,
+        signal: controller.signal,
+        headers: { "content-type": "application/json", ...init.headers },
+      });
+    } catch (error) {
+      // An abort is a DOMException; a TypeError is the browser saying the server could not be
+      // reached at all, in its own English ("Failed to fetch", "Load failed"), which nobody
+      // should have to read.
+      if (error instanceof TypeError) throw new ApiError(t("api.unreachable"), 0, "NETWORK_ERROR");
+      throw error;
+    }
     if (!response.ok) {
       const body = await response.json().catch(() => ({} as { error?: string; code?: string; messageKey?: string; vars?: Record<string, string | number>; category?: string; retry?: string; reference?: string }));
       throw new ApiError(body.error ?? `HTTP ${response.status}`, response.status, body.code, body.messageKey, body.vars, body.category, body.retry, body.reference);
     }
-    return response.status === 204 ? undefined as T : await response.json();
+    if (response.status === 204) return undefined as T;
+    try {
+      return await response.json();
+    } catch (error) {
+      // A success that is not JSON is most often a proxy's sign-in page in front of the server.
+      if (error instanceof SyntaxError) throw new ApiError(t("api.badResponse"), response.status, "BAD_RESPONSE");
+      throw error;
+    }
   } catch (error) {
     if (error instanceof DOMException && error.name === "TimeoutError") throw new ApiError(t("api.timeout"), 408, "REQUEST_TIMEOUT");
     throw error;

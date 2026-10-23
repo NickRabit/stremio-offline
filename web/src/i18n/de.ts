@@ -163,6 +163,8 @@ export const de: Catalog = {
   "common.ascending": "Aufsteigend",
   "common.descending": "Absteigend",
   "api.timeout": "Der Server antwortete nicht rechtzeitig.",
+  "api.unreachable": "Der Server ist nicht erreichbar. Prüfen Sie, ob er läuft, und versuchen Sie es erneut.",
+  "api.badResponse": "Der Server hat etwas geantwortet, das die App nicht lesen kann. Steht ein Proxy davor, melden Sie sich dort erneut an.",
   "api.copyRefused": "Der Browser weigerte sich zu kopieren. Wählen Sie den Text aus und kopieren Sie ihn von Hand.",
   "app.goToCleanCatalog": "Zurück zu einem sauberen Katalog",
   "app.goToStart": "Zur Startseite",
