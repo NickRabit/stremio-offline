@@ -230,3 +230,17 @@ test("a file holding several episodes is read as its first one", () => {
     assert.equal(result.episode, 1, name);
   }
 });
+
+test("a written widescreen ratio is the picture's shape, not an episode", () => {
+  const read = (name: string) => { const result = parseMediaName(name); return { title: result.title, season: result.season, episode: result.episode }; };
+  assert.deepEqual(read("Film 16x9"), { title: "Film", season: undefined, episode: undefined });
+  assert.deepEqual(read("Film 2010 21x9 1080p"), { title: "Film", season: undefined, episode: undefined });
+  assert.deepEqual(read("Film 16X10"), { title: "Film", season: undefined, episode: undefined });
+  // A ratio in front does not hide the episode that follows it.
+  assert.deepEqual(read("Show 16x9 2x03"), { title: "Show", season: 2, episode: 3 });
+  // Real episodes keep their numbers, a padded "16x09" and an unpadded "4x3" among them.
+  assert.deepEqual(read("Show 1x03"), { title: "Show", season: 1, episode: 3 });
+  assert.deepEqual(read("Show 16x09"), { title: "Show", season: 16, episode: 9 });
+  assert.deepEqual(read("Show 31x02"), { title: "Show", season: 31, episode: 2 });
+  assert.deepEqual(read("Show 4x3"), { title: "Show", season: 4, episode: 3 });
+});

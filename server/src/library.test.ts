@@ -782,3 +782,12 @@ test("the carve-out guard compares folders, not spellings, where the volume fold
   // do another way costs less than a library taken along by one.
   assert.equal(holdsLibraryRoot(carveOuts, "archiv"), true, "a fold nobody answered with is folded");
 });
+
+test("a written widescreen ratio is not read as an episode by the disk readers", () => {
+  assert.equal(numberedEpisode("Films/Film 16x9.mkv"), undefined);
+  assert.equal(numberedEpisode("Films/Film 16x9.mkv", { loose: true }), undefined);
+  assert.equal(numberedEpisode("Show/Season 2/Film 16x9.mkv", { loose: true })?.episode === 9, false);
+  assert.deepEqual(numberedEpisode("Show/Show 16x9 2x03.mkv"), { season: 2, episode: 3 });
+  assert.deepEqual(numberedEpisode("Show/Show 16x09.mkv"), { season: 16, episode: 9 });
+  assert.deepEqual(numberedEpisode("Show/Show 1x265.mkv"), { season: 1, episode: 265 });
+});

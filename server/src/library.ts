@@ -3,6 +3,7 @@ import { readdir, stat } from "node:fs/promises";
 import type { Dirent } from "node:fs";
 import path from "node:path";
 import { foldPath, posixBase, posixDir, posixJoin, toFs } from "./libraries.js";
+import { crossEpisode } from "./written-ratio.js";
 
 const VIDEO = new Set([".mkv", ".mp4", ".avi", ".m4v", ".mov", ".webm", ".ts", ".m2ts", ".wmv", ".flv", ".mpg", ".mpeg"]);
 
@@ -105,7 +106,6 @@ export function parseEpisode(filename: string): { episode: number | null; title:
 }
 
 const TAGGED_EPISODE = /\bs(\d{1,3})[\s._-]*e(\d{1,4})\b/i;
-const CROSS_EPISODE = /\b(\d{1,2})x(\d{1,3})\b/i;
 /** "E10", "Ep. 1", "Episode 3", "díl 3" -- a separator is what tells the word from a title
  *  ("Svět pod hlavou_E10" keeps its E after the underscore). */
 const WORDED_EPISODE = /(?:^|[\s._-])(?:episode|epizoda|ep|e|d[íi]l)[\s._-]*(\d{1,4})(?=$|[\s._-])/i;
@@ -126,8 +126,10 @@ const YEAR_NUMBER = /^(?:19|20)\d{2}$/;
 export function episodeTag(name: string): { season?: number; episode: number } | undefined {
   // Only a video's own extension is dropped: a folder named "Ep. 1" is not a file.
   const stem = isVideo(name) ? name.replace(/\.[^.]+$/, "") : name;
-  const tagged = TAGGED_EPISODE.exec(stem) ?? CROSS_EPISODE.exec(stem);
+  const tagged = TAGGED_EPISODE.exec(stem);
   if (tagged) return { season: Number(tagged[1]), episode: Number(tagged[2]) };
+  const cross = crossEpisode(stem, 3);
+  if (cross) return { season: cross.season, episode: cross.episode };
   const worded = WORDED_EPISODE.exec(stem);
   return worded ? { episode: Number(worded[1]) } : undefined;
 }

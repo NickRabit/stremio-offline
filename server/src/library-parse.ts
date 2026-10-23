@@ -1,5 +1,6 @@
 import { isVideo, parseSeason } from "./library.js";
 import { LIBRARY_ID } from "./libraries.js";
+import { crossEpisode, WRITTEN_RATIO } from "./written-ratio.js";
 
 export const QUALITY_TOKENS = [
   "2160p", "1080p", "720p", "576p", "480p", "4k", "uhd",
@@ -53,7 +54,6 @@ const PAREN_YEAR = /\((19|20)\d{2}\)/g;
 const COUNTRY_TAG = /\s*\(([A-Z]{2})\)\s*$/;
 // A file can hold several episodes (S02E01E02, S02E01-E02, S02E01-02); it is read as the first.
 const TAGGED_EPISODE = /\bS(\d{1,3})E(\d{1,4})(?:-E?\d{1,4}|E\d{1,4})*\b/i;
-const X_EPISODE = /\b(\d{1,2})x(\d{1,4})\b/i;
 const CHANNEL = /\b(?:[57]\.1|2\.0)\b/gi;
 const RELEASE_GROUP = /-[A-Za-z0-9]{2,15}$/;
 
@@ -485,12 +485,14 @@ export function parseMediaName(name: string): ParsedMedia {
     return " ";
   });
   if (season == null) {
-    title = title.replace(X_EPISODE, (_all, s: string, e: string) => {
-      season = Number(s);
-      episode = Number(e);
-      return " ";
-    });
+    const cross = crossEpisode(title);
+    if (cross) {
+      season = cross.season;
+      episode = cross.episode;
+      title = `${title.slice(0, cross.index)} ${title.slice(cross.end)}`;
+    }
   }
+  title = title.replace(WRITTEN_RATIO, " ");
   title = collapse(title);
   const query = bilingualQuery(title);
   const result: ParsedMedia = { title, query };

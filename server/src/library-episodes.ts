@@ -2,6 +2,7 @@ import { numberedEpisode } from "./library.js";
 import { parseMediaName } from "./library-parse.js";
 import { titleSimilarity } from "./library-match.js";
 import { posixBase } from "./libraries.js";
+import { crossEpisode } from "./written-ratio.js";
 
 export interface DiskEpisode {
   season: number;
@@ -23,15 +24,16 @@ export interface EpisodeEvidence {
 }
 
 const TAG_EPISODE = /\bs\d{1,3}[\s._-]*e\d{1,4}\b[\s._-]*(.*)$/i;
-const CROSS_EPISODE = /\b\d{1,2}x\d{1,4}\b[\s._-]*(.*)$/i;
 const LEADING_EPISODE = /^\s*\d{1,4}\s*[-–.)]?\s*(.*)$/;
 const PLACEHOLDER_TITLE = /^(?:episode|epizoda)\s*\d+$/i;
 
 function episodeTitle(relative: string): string | undefined {
   const stem = posixBase(relative).replace(/\.[^.]+$/, "");
-  const match = TAG_EPISODE.exec(stem) ?? CROSS_EPISODE.exec(stem) ?? LEADING_EPISODE.exec(stem);
-  if (!match) return undefined;
-  const parsed = parseMediaName(match[1] ?? "").title;
+  const tagged = TAG_EPISODE.exec(stem);
+  const cross = tagged ? undefined : crossEpisode(stem);
+  const rest = tagged ? tagged[1] : cross ? stem.slice(cross.end).replace(/^[\s._-]*/, "") : LEADING_EPISODE.exec(stem)?.[1];
+  if (rest === undefined) return undefined;
+  const parsed = parseMediaName(rest).title;
   return parsed && !PLACEHOLDER_TITLE.test(parsed) ? parsed : undefined;
 }
 

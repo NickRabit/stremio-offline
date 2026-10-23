@@ -41,3 +41,8 @@ test("an episode list confirms a candidate only when its names are clearly the b
   assert.equal(confirmedByEpisodes([{ ...winner, named: 2 }, { ...loser, named: 2 }]), undefined, "a tie confirms nobody");
   assert.equal(confirmedByEpisodes([{ numbered: 1, present: 1, titled: 1, named: 1 }]), undefined, "one title proves nothing");
 });
+
+test("a widescreen ratio gives a file no episode and no episode title", () => {
+  assert.deepEqual(diskEpisodes(["Show/Film 16x9 Pilot.mkv"]), []);
+  assert.deepEqual(diskEpisodes(["Show/Show 16x9 2x03 Pilot.mkv"]), [{ season: 2, episode: 3, title: "Pilot" }]);
+});
