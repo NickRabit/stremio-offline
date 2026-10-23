@@ -183,7 +183,7 @@ candidates, episodes, migrate, actions, admin, grants, runtime), `naming.ts`,
       absolute numbering, editions, foreign titles). Look for quadratic
       matching over candidates.
       Progress: #498 fixes the year and multi-episode tags; the shared parser brief (#499) is set aside.
-- [ ] **BH-4.4 Destructive actions.** Rename, move, copy, delete, bulk and
+- [x] **BH-4.4 Destructive actions.** Rename, move, copy, delete, bulk and
       cross-library: explicit preconditions, no swallowed errors (roadmap
       P1.4).
       Progress: rename, move, copy and delete keep their preconditions (resolved path, busy check, nested library, name clash, admin re-check just before the disk changes). Subtitle sidecars (`<stem>.srt`, `<stem>.<lang>.vtt`, matched by the video's stem, the way the player offers them) were left behind by a file rename or a single-file move or copy, and outlived a deleted video; #537 carries them, renames them and deletes them with it. They stay when another video of the same stem still uses them and never overwrite a file at the destination. The move journal still covers only the video, so a crash between the two leaves the subtitles in the old folder.
