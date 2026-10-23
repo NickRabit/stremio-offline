@@ -81,6 +81,11 @@ describe("relativeAge", () => {
     expect(relativeAge(ago(3 * 86_400_000), now, "en")).toBe("3 days ago");
   });
 
+  it("moves to the larger unit when the rounding reaches it", () => {
+    expect(relativeAge(ago(59.5 * 60_000), now, "en")).toBe("1 hour ago");
+    expect(relativeAge(ago(23.9 * 3_600_000), now, "en")).toBe("yesterday");
+  });
+
   it("reads in the asked language and answers the injected now, not the wall clock", () => {
     expect(relativeAge(ago(2 * 3_600_000), now, "cs")).toContain("2");
     expect(relativeAge(ago(2 * 3_600_000), now + 2 * 86_400_000, "en")).toBe("2 days ago");
