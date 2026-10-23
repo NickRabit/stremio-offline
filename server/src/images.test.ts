@@ -339,11 +339,15 @@ test("cancellation during an image downscale leaves no cache entry or temporary 
 
     waiter.abort();
     assert.equal(await fetching, undefined);
-    await settle();
+    let leftovers: string[] = [];
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      leftovers = (await readdir(dir)).filter((name) => name.startsWith(`${id}.`) || name.startsWith(".resize-"));
+      if (leftovers.length === 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
     assert.deepEqual(await proxy.readCached(id), undefined);
     assert.equal(proxy.inMemory(id), false);
     assert.equal(proxy.takeFetched(id), false);
-    const leftovers = (await readdir(dir)).filter((name) => name.startsWith(`${id}.`) || name.startsWith(".resize-"));
     assert.deepEqual(leftovers, []);
   } finally {
     if (previous === undefined) delete process.env.FFMPEG_PATH;
