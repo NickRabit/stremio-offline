@@ -136,3 +136,60 @@ test("a replayed finishTransfer leaves the destination's carried rows unpinned",
   assert.equal(await fresh.actions.finishTransfer(step), step.to);
   assert.deepEqual(fresh.calls.relocate, [{ from: step.from, to: step.to, pin: true }]);
 });
+
+const withRoot = async (files: string[], run: (root: string, actions: ReturnType<typeof createLibraryActions>) => Promise<void>) => {
+  const root = await mkdtemp(path.join(tmpdir(), "library-actions-"));
+  try {
+    for (const file of files) {
+      await mkdir(path.dirname(path.join(root, file)), { recursive: true });
+      await writeFile(path.join(root, file), file);
+    }
+    const { actions } = harness({ libraries: () => [{ ...library, root }] });
+    await run(root, actions);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+};
+
+test("deleting a video deletes its subtitles, not another title's", async () => {
+  await withRoot(["Films/Heat.mkv", "Films/Heat.srt", "Films/Heat.cs.vtt", "Films/Heat 2.srt"], async (root, actions) => {
+    await actions.deleteLibraryItem(`${LIBRARY_ID}/Films/Heat.mkv`);
+    assert.equal(await exists(path.join(root, "Films/Heat.mkv")), false);
+    assert.equal(await exists(path.join(root, "Films/Heat.srt")), false);
+    assert.equal(await exists(path.join(root, "Films/Heat.cs.vtt")), false);
+    assert.equal(await exists(path.join(root, "Films/Heat 2.srt")), true);
+  });
+});
+
+test("a subtitle another video of the same name still uses stays behind", async () => {
+  await withRoot(["Films/Heat.mkv", "Films/Heat.mp4", "Films/Heat.srt"], async (root, actions) => {
+    await actions.deleteLibraryItem(`${LIBRARY_ID}/Films/Heat.mkv`);
+    assert.equal(await exists(path.join(root, "Films/Heat.srt")), true);
+  });
+});
+
+test("moving a video takes its subtitles along", async () => {
+  await withRoot(["Films/Heat.mkv", "Films/Heat.en.srt", "Archive/.keep"], async (root, actions) => {
+    await actions.transferLibraryItem(`${LIBRARY_ID}/Films/Heat.mkv`, `${LIBRARY_ID}/Archive`);
+    assert.equal(await exists(path.join(root, "Archive/Heat.mkv")), true);
+    assert.equal(await exists(path.join(root, "Archive/Heat.en.srt")), true);
+    assert.equal(await exists(path.join(root, "Films/Heat.en.srt")), false);
+  });
+});
+
+test("copying a video copies its subtitles and leaves the originals", async () => {
+  await withRoot(["Films/Heat.mkv", "Films/Heat.srt", "Archive/.keep"], async (root, actions) => {
+    await actions.transferLibraryItem(`${LIBRARY_ID}/Films/Heat.mkv`, `${LIBRARY_ID}/Archive`, true);
+    assert.equal(await exists(path.join(root, "Archive/Heat.srt")), true);
+    assert.equal(await exists(path.join(root, "Films/Heat.srt")), true);
+  });
+});
+
+test("a subtitle already at the destination is never overwritten", async () => {
+  await withRoot(["Films/Heat.mkv", "Films/Heat.srt", "Archive/Heat.srt"], async (root, actions) => {
+    await actions.transferLibraryItem(`${LIBRARY_ID}/Films/Heat.mkv`, `${LIBRARY_ID}/Archive`);
+    const { readFile } = await import("node:fs/promises");
+    assert.equal(await readFile(path.join(root, "Archive/Heat.srt"), "utf8"), "Archive/Heat.srt", "the one there stays");
+    assert.equal(await exists(path.join(root, "Films/Heat.srt")), true, "the source's subtitle is kept rather than lost");
+  });
+});

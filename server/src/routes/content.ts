@@ -19,6 +19,7 @@ import type { LibraryHealth } from "../library-probe.js";
 import type { TransferProgress } from "../library-transfer.js";
 import { log } from "../logger.js";
 import { assertUsableName } from "../naming.js";
+import { renamedSidecar, subtitleSidecars } from "../library-sidecars.js";
 import { fileProgressKeys, newestProgress, titleProgressKey } from "../progress-identity.js";
 import type { StoredProgress, UserPrefs } from "../store.js";
 import type { UserData } from "../users.js";
@@ -304,8 +305,25 @@ export function registerContentRoutes(app: express.Application, deps: ContentDep
     // write is what closes the window without risking an inconsistency: refuse now and nothing
     // has happened; refuse after the rename and the state would describe a file that moved.
     assertStillAdmin(store.users(), actor);
+    // Read before the rename: the player finds a video's subtitles by its name, so they take
+    // the new one with it or the player stops offering them.
+    const sidecars = info.isFile() ? await subtitleSidecars(resolved.absolute) : { stem: "", names: [] };
     await rename(resolved.absolute, target.absolute);
     await relocateLibraryPath(resolved.key, target.key);
+    for (const name of sidecars.names) {
+      const from = path.join(path.dirname(resolved.absolute), name);
+      const to = path.join(path.dirname(target.absolute), renamedSidecar(name, sidecars.stem, wanted));
+      try {
+        // Never over another file; a case-only rename on a folding volume is the same file.
+        if (!sameFile(to, from) && await fileExists(to)) {
+          log("INFO", "A subtitle kept its name, another file already has the new one", { file: name });
+          continue;
+        }
+        await rename(from, to);
+      } catch (error) {
+        log("WARN", "A subtitle could not follow its renamed video", { file: name, reason: error instanceof Error ? error.message : String(error) });
+      }
+    }
     invalidateLibrary();
     log("INFO", "Renamed in the library", { from: relative, to: nextRelative });
     res.json({ path: nextRelative });

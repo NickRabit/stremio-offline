@@ -10,6 +10,7 @@ import type { LibraryHealth } from "./library-probe.js";
 import { libraryPath, parseLibraryPath, posixBase, posixJoin, resolveLibraryPath, toPosix, type LibraryRecord } from "./libraries.js";
 import { placeholderOnly, removePlaceholder, transferLibraryPath, type TransferProgress } from "./library-transfer.js";
 import { log } from "./logger.js";
+import { renamedSidecar, subtitleSidecars } from "./library-sidecars.js";
 import type { LibraryOp, OpsJournal } from "./library-ops.js";
 import type { Store, StoredProgress, WatchlistEntry } from "./store.js";
 import type { UserData } from "./users.js";
@@ -231,7 +232,15 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
     if (holdsLibraryRoot(carveOutsOf(resolved.library), resolved.relative, healthOf(resolved.library).caseInsensitive)) {
       throw new AppError("This folder holds another library. Move that library out first.", "err.libraryHoldsAnother", 409);
     }
+    // Read before the video goes: whether another video of the same name still uses them is a
+    // question about the folder as it stands now.
+    const sidecars = info.isFile() ? await subtitleSidecars(resolved.absolute) : { stem: "", names: [] };
     await rm(resolved.absolute, { recursive: true, force: true });
+    for (const name of sidecars.names) {
+      await rm(path.join(path.dirname(resolved.absolute), name), { force: true }).catch((error: unknown) => {
+        log("WARN", "A subtitle of a deleted video could not be removed", { file: name, reason: error instanceof Error ? error.message : String(error) });
+      });
+    }
     await removeGeneratedArt(resolved.key);
     const orphans = await forgetLibraryPath(resolved.key);
     const pruned = await pruneEmptiedFolders(resolved.key);
@@ -413,9 +422,26 @@ export function createLibraryActions(deps: LibraryActionDeps): LibraryActions {
       phase: "moving", copy, from: resolved.key, to: target.key, carried,
       ...(cover && cover.key !== resolved.key && isPathWithin(resolved.key, cover.key) ? { cover: cover.key } : {}),
     };
+    // A single video's subtitles sit beside it, not inside it, so a move or copy of the file
+    // alone would leave them behind and the player would stop offering them.
+    const sidecars = info.isFile() ? await subtitleSidecars(resolved.absolute) : { stem: "", names: [] };
     // What is about to happen is on disk before the disk is touched.
     await journal?.record(step);
     const transferred = await transferLibraryPath(resolved.absolute, target.absolute, !copy, progress);
+    const targetStem = posixBase(target.key).slice(0, posixBase(target.key).length - path.extname(target.key).length);
+    for (const name of sidecars.names) {
+      const from = path.join(path.dirname(resolved.absolute), name);
+      const to = path.join(path.dirname(target.absolute), renamedSidecar(name, sidecars.stem, targetStem));
+      try {
+        if (await fileExists(to)) {
+          log("INFO", "A subtitle stayed behind, the destination already has one of that name", { file: name });
+          continue;
+        }
+        await transferLibraryPath(from, to, !copy);
+      } catch (error) {
+        log("WARN", "A subtitle could not follow its video", { file: name, reason: error instanceof Error ? error.message : String(error) });
+      }
+    }
     await recordPublished(step, journal);
     return finishTransfer(step, transferred.sourceLeft);
   };
