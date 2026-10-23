@@ -39,8 +39,11 @@ export function cardProgress(card: HomeCard): number | null {
 export function relativeAge(iso: string, now: number, locale: string): string {
   const seconds = Math.round((now - Date.parse(iso)) / 1000);
   const format = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
-  if (Math.abs(seconds) < 3600) return format.format(-Math.round(seconds / 60), "minute");
-  if (Math.abs(seconds) < 86_400) return format.format(-Math.round(seconds / 3600), "hour");
+  // The unit is chosen after rounding, so 59.5 minutes reads as an hour, never as "60 minutes".
+  const minutes = Math.round(seconds / 60);
+  if (Math.abs(minutes) < 60) return format.format(-minutes, "minute");
+  const hours = Math.round(seconds / 3600);
+  if (Math.abs(hours) < 24) return format.format(-hours, "hour");
   return format.format(-Math.round(seconds / 86_400), "day");
 }
 
