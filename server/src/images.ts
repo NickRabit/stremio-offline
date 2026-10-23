@@ -107,6 +107,12 @@ interface Entry {
   at: number;
 }
 
+interface Inflight {
+  controller: AbortController;
+  waiters: number;
+  promise: Promise<Entry | undefined>;
+}
+
 export interface CachedImage { file: string; type: string; etag: string }
 
 const megabytes = (value: string | undefined, fallback: number) => {
@@ -145,7 +151,7 @@ const indexDays = (value: string | undefined) => {
 
 export class ImageProxy {
   private index = new Map<string, Entry>();
-  private inflight = new Map<string, Promise<Entry | undefined>>();
+  private inflight = new Map<string, Inflight>();
   private memory = new Map<string, Buffer>();
   private memoryBytes = 0;
   /** Ids whose bytes were downloaded by the fetch that is about to serve them. */
@@ -164,6 +170,7 @@ export class ImageProxy {
     private indexTtlMs = indexDays(process.env.IMAGE_CACHE_INDEX_TTL_DAYS),
     private now: () => number = Date.now,
     private memoryCap = memoryMegabytes(process.env.IMAGE_MEMORY_MB, 32),
+    private renameFile: typeof renameWithRetry = renameWithRetry,
   ) {}
 
   private get indexFile() { return path.join(this.dir, "index.json"); }
@@ -341,20 +348,22 @@ export class ImageProxy {
 
   /** Fewer bytes on disk: the fetched picture is re-encoded once, or comes back as it was.
    *  A picture already at or under the target width is never scaled up. */
-  private async downscale(data: Buffer, ext: string, width: number = TILE_WIDTH): Promise<Buffer> {
+  private async downscale(data: Buffer, ext: string, width: number = TILE_WIDTH, signal?: AbortSignal): Promise<Buffer> {
+    signal?.throwIfAborted();
     if (ext === "svg" || ext === "gif") return data;
     const target = artworkWidth(width);
     const current = imageWidth(data);
     if (current !== undefined && current <= target) return data;
     const temp = path.join(this.dir, `.resize-${randomUUID()}`);
     try {
-      await writeFile(temp, data, { mode: 0o600 });
+      await writeFile(temp, data, { mode: 0o600, signal });
       const { stdout } = await runMedia(ffmpegPath(), [
         "-hide_banner", "-loglevel", "error", "-nostdin", "-threads", "1", "-i", temp,
         "-vf", `scale='min(${target},iw)':-2`, "-q:v", "5", "-c:v", "mjpeg", "-f", "image2pipe", "pipe:1",
-      ], { encoding: "buffer", timeout: FFMPEG_TIMEOUT_MS, killSignal: "SIGKILL", maxBuffer: MAX_BYTES * 2 });
+      ], { encoding: "buffer", timeout: FFMPEG_TIMEOUT_MS, killSignal: "SIGKILL", maxBuffer: MAX_BYTES * 2, signal });
       return stdout.length && stdout.length < data.length ? stdout : data;
     } catch (error) {
+      signal?.throwIfAborted();
       log("DEBUG", "The image stays at the size it was fetched", { reason: String(error).slice(0, 120) });
       return data;
     } finally {
@@ -363,22 +372,64 @@ export class ImageProxy {
   }
 
   /** Cached bytes, or one fetch shared by everyone who asked at the same time. */
-  async fetch(id: string): Promise<CachedImage | undefined> {
+  async fetch(id: string, signal?: AbortSignal): Promise<CachedImage | undefined> {
+    if (signal?.aborted) return undefined;
     const entry = this.index.get(id);
     if (!entry) { log("DEBUG", "An unknown image id was requested", { id }); return undefined; }
     if (entry.ext) {
       entry.at = this.now();
       return { file: this.path(id, entry.ext), type: TYPES[entry.ext]!, etag: `"${id}-${entry.bytes ?? 0}"` };
     }
-    let pending = this.inflight.get(id);
-    if (!pending) {
-      pending = this.download(id, entry).finally(() => this.inflight.delete(id));
-      this.inflight.set(id, pending);
+    let flight = this.inflight.get(id);
+    if (!flight) {
+      const controller = new AbortController();
+      const created: Inflight = { controller, waiters: 0, promise: Promise.resolve(undefined) };
+      created.promise = this.download(id, entry, controller.signal).finally(() => {
+        if (this.inflight.get(id) === created) this.inflight.delete(id);
+      });
+      this.inflight.set(id, created);
+      flight = created;
     }
-    const done = await pending;
-    if (!done?.ext) return undefined;
+    const done = await this.waitFor(id, flight, signal);
+    if (!done?.ext || signal?.aborted) return undefined;
     this.justFetched.add(id);
     return { file: this.path(id, done.ext), type: TYPES[done.ext]!, etag: `"${id}-${done.bytes ?? 0}"` };
+  }
+
+  private waitFor(id: string, flight: Inflight, signal?: AbortSignal): Promise<Entry | undefined> {
+    flight.waiters += 1;
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      flight.waiters -= 1;
+      if (flight.waiters > 0) return;
+      if (this.inflight.get(id) === flight) this.inflight.delete(id);
+      flight.controller.abort();
+    };
+    if (!signal) return flight.promise.finally(release);
+    if (signal.aborted) {
+      release();
+      return Promise.resolve(undefined);
+    }
+    return new Promise<Entry | undefined>((resolve, reject) => {
+      let settled = false;
+      const finish = (value?: Entry, error?: unknown) => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener("abort", onAbort);
+        release();
+        if (error === undefined) resolve(value);
+        else reject(error);
+      };
+      const onAbort = () => finish();
+      signal.addEventListener("abort", onAbort, { once: true });
+      flight.promise.then(
+        (value) => finish(value),
+        (error) => finish(undefined, error),
+      );
+      if (signal.aborted) onAbort();
+    });
   }
 
   /** True when this id's bytes are already in memory, before the route reads them. */
@@ -408,7 +459,8 @@ export class ImageProxy {
 
   /** The bytes behind an id the page holds: from memory when they are there, otherwise read
    *  once from disk and remembered. An id whose bytes were evicted holds nothing. */
-  async readCached(id: string): Promise<Buffer | undefined> {
+  async readCached(id: string, signal?: AbortSignal): Promise<Buffer | undefined> {
+    if (signal?.aborted) return undefined;
     const entry = this.index.get(id);
     if (!entry?.ext) return undefined;
     const remembered = this.memory.get(id);
@@ -417,8 +469,8 @@ export class ImageProxy {
       this.memory.set(id, remembered);
       return remembered;
     }
-    const data = await readFile(this.path(id, entry.ext)).catch(() => undefined);
-    if (!data) return undefined;
+    const data = await readFile(this.path(id, entry.ext), signal ? { signal } : undefined).catch(() => undefined);
+    if (!data || signal?.aborted) return undefined;
     this.putMemory(id, data);
     return data;
   }
@@ -456,7 +508,7 @@ export class ImageProxy {
     log("INFO", "Image cache preheat finished", { files, bytes });
   }
 
-  private async download(id: string, entry: Entry): Promise<Entry | undefined> {
+  private async download(id: string, entry: Entry, signal: AbortSignal): Promise<Entry | undefined> {
     const rejected = (reason: string) => {
       log("DEBUG", "The image was not cached", { host: hostOf(entry.url), reason });
       return undefined;
@@ -485,39 +537,53 @@ export class ImageProxy {
           }
           return data.length ? { data, ext } : { reason: "0 bytes" };
         },
-        { deadlineMs: FETCH_TIMEOUT_MS },
+        { deadlineMs: FETCH_TIMEOUT_MS, signal },
         this.fetcher,
       );
       if ("reason" in result) return rejected(result.reason);
       const fetched = result.data;
       const ext = result.ext;
+      signal.throwIfAborted();
       await mkdir(this.dir, { recursive: true });
-      const data = await this.downscale(fetched, ext, entry.width ?? TILE_WIDTH);
+      const data = await this.downscale(fetched, ext, entry.width ?? TILE_WIDTH, signal);
+      signal.throwIfAborted();
       // The same buffer back means nothing was re-encoded; mjpeg output is a jpeg.
       const storedExt = data === fetched ? ext : "jpg";
       const target = this.path(id, storedExt);
-      const temp = `${target}.tmp`;
-      await writeFile(temp, data, { mode: 0o600 });
-      await renameWithRetry(temp, target);
-      entry.ext = storedExt;
-      entry.bytes = data.length;
-      entry.at = this.now();
-      this.save();
-      await this.evict();
-      // Eviction may have taken this very picture; never hand out a path it just deleted.
+      const temp = `${target}.${randomUUID()}.tmp`;
+      try {
+        await writeFile(temp, data, { mode: 0o600, signal });
+        await this.exclusively(async () => {
+          signal.throwIfAborted();
+          await this.evictOnce(data.length);
+          signal.throwIfAborted();
+          // Rename is the irreversible byte-publish boundary, and the commit lock keeps an
+          // older flight from renaming after a newer retry has already published this id.
+          await this.renameFile(temp, target);
+          signal.throwIfAborted();
+          entry.ext = storedExt;
+          entry.bytes = data.length;
+          entry.at = this.now();
+          this.save();
+        });
+      } finally {
+        await rm(temp, { force: true });
+      }
       return entry.ext ? entry : undefined;
     } catch (error) {
       return rejected(String(error).slice(0, 120));
     }
   }
 
-  private evict(): Promise<boolean> { return this.exclusively(() => this.evictOnce()); }
+  private evict(): Promise<boolean> {
+    return this.exclusively(() => this.evictOnce());
+  }
 
   /** Oldest first, down to `evictionFloor(cap)` so this does not run on every write.
    *  `IMAGE_CACHE_TTL_DAYS` also drops the bytes of anything not served for that long,
    *  while the cache still sits under its cap. */
-  private async evictOnce(): Promise<boolean> {
-    let total = 0;
+  private async evictOnce(additionalBytes = 0): Promise<boolean> {
+    let total = additionalBytes;
     for (const entry of this.index.values()) total += entry.bytes ?? 0;
     let changed = false;
     const aged = this.ttlMs

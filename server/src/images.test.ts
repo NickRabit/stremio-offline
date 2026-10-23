@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -23,9 +23,43 @@ const imageResponse = (body: Buffer = PNG, type = "image/png", status = 200) =>
 
 const jpeg = async () => imageResponse(Buffer.alloc(64, 7), "image/jpeg");
 const cached = async (dir: string) => (await readdir(dir)).filter((name) => /^[\w-]{32}\.jpg$/.test(name));
+const settle = async () => {
+  for (let index = 0; index < 5; index += 1) await new Promise<void>((resolve) => setImmediate(resolve));
+};
+
+function heldImage(body: Buffer = PNG) {
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  let started!: () => void;
+  let cancelled!: () => void;
+  const readStarted = new Promise<void>((resolve) => { started = resolve; });
+  const bodyCancelled = new Promise<void>((resolve) => { cancelled = resolve; });
+  let released = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(value) { controller = value; },
+    pull() { return new Promise<void>(() => undefined); },
+    cancel() { cancelled(); },
+  });
+  const getReader = stream.getReader.bind(stream);
+  stream.getReader = ((...args: Parameters<typeof getReader>) => {
+    started();
+    return getReader(...args);
+  }) as typeof stream.getReader;
+  const response = new Response(stream, { headers: { "content-type": "image/png" } });
+  return {
+    response,
+    readStarted,
+    bodyCancelled,
+    release() {
+      if (released) return;
+      released = true;
+      controller.enqueue(body);
+      controller.close();
+    },
+  };
+}
 
 async function harness(
-  responder: (url: string) => Promise<Response> = async () => imageResponse(),
+  responder: (url: string, init?: RequestInit) => Promise<Response> = async () => imageResponse(),
   cap = 1024 * 1024,
   ttlMs = 0,
   indexTtlMs?: number,
@@ -34,7 +68,7 @@ async function harness(
 ) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "stremio-images-"));
   const calls: string[] = [];
-  const proxy = new ImageProxy(dir, cap, ttlMs, async (url) => { calls.push(url); return responder(url); }, indexTtlMs, now, memoryCap);
+  const proxy = new ImageProxy(dir, cap, ttlMs, async (url, init) => { calls.push(url); return await responder(url, init); }, indexTtlMs, now, memoryCap);
   await proxy.load();
   return { dir, proxy, calls };
 }
@@ -98,6 +132,223 @@ test("the image is fetched once and then served from disk", async () => {
   assert.deepEqual(await readFile(first!.file), PNG);
   assert.deepEqual(await proxy.fetch(id), first);
   assert.deepEqual(calls, [REMOTE]);
+});
+
+test("one image waiter leaving does not cancel another waiter's shared download", async () => {
+  const held = heldImage();
+  let upstream: AbortSignal | undefined;
+  const { proxy, calls } = await harness((_url, init) => {
+    upstream = init?.signal as AbortSignal;
+    return Promise.resolve(held.response);
+  });
+  const id = proxy.proxied(REMOTE)!.split("/").pop()!;
+  const first = new AbortController();
+  const second = new AbortController();
+
+  const leaving = proxy.fetch(id, first.signal);
+  await held.readStarted;
+  const staying = proxy.fetch(id, second.signal);
+  first.abort();
+
+  assert.equal(await leaving, undefined);
+  assert.equal(upstream?.aborted, false, "the remaining waiter keeps the upstream request alive");
+  held.release();
+  assert.ok(await staying);
+  assert.deepEqual(calls, [REMOTE], "both callers shared one download");
+});
+
+test("the last image waiter cancels a held body and a retry starts with a fresh flight", async () => {
+  const held = heldImage();
+  let requests = 0;
+  let upstream: AbortSignal | undefined;
+  const { proxy, calls, dir } = await harness(async (_url, init) => {
+    requests += 1;
+    if (requests === 1) {
+      upstream = init?.signal as AbortSignal;
+      return held.response;
+    }
+    return imageResponse();
+  });
+  const id = proxy.proxied(REMOTE)!.split("/").pop()!;
+  const waiter = new AbortController();
+  const abandoned = proxy.fetch(id, waiter.signal);
+  await held.readStarted;
+
+  waiter.abort();
+  assert.equal(await abandoned, undefined);
+  await held.bodyCancelled;
+  assert.equal(upstream?.aborted, true);
+  assert.equal(proxy.inMemory(id), false);
+  assert.equal(proxy.takeFetched(id), false);
+
+  const retrying = proxy.fetch(id);
+  const retried = await retrying;
+  assert.ok(retried, "the retry begins without joining the abandoned flight");
+  assert.deepEqual(calls, [REMOTE, REMOTE]);
+  assert.deepEqual(await readFile(retried!.file), PNG);
+  assert.equal(proxy.takeFetched(id), true);
+  assert.deepEqual((await readdir(dir)).filter((name) => name.startsWith(`${id}.`)), [`${id}.png`]);
+});
+
+test("an abandoned flight cannot remove a retry committed after its rename", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "stremio-images-retry-rename-"));
+  const firstBytes = Buffer.from("GIF89a abandoned");
+  const retryBytes = Buffer.from("GIF89a successful retry");
+  let requests = 0;
+  let renames = 0;
+  let renamedFirst!: () => void;
+  let releaseFirst!: () => void;
+  const firstRenamed = new Promise<void>((resolve) => { renamedFirst = resolve; });
+  const firstRelease = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const proxy = new ImageProxy(
+    dir,
+    1024 * 1024,
+    0,
+    async () => {
+      requests += 1;
+      return imageResponse(requests === 1 ? firstBytes : retryBytes, "image/gif");
+    },
+    undefined,
+    Date.now,
+    0,
+    async (from, to) => {
+      renames += 1;
+      await rename(from, to);
+      if (renames === 1) {
+        renamedFirst();
+        await firstRelease;
+      }
+    },
+  );
+  try {
+    await proxy.load();
+    const id = proxy.proxied(REMOTE)!.split("/").pop()!;
+    const abandonedWaiter = new AbortController();
+    const abandoned = proxy.fetch(id, abandonedWaiter.signal);
+    await firstRenamed;
+
+    abandonedWaiter.abort();
+    const retrying = proxy.fetch(id);
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      const temporary = (await readdir(dir)).filter((name) => name.endsWith(".tmp"));
+      if (temporary.length >= 2) break;
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    releaseFirst();
+    const retried = await retrying;
+    assert.ok(retried);
+    assert.equal(await abandoned, undefined);
+    assert.deepEqual(await readFile(retried.file), retryBytes, "the abandoned flight cannot roll back the retry");
+    assert.equal(proxy.takeFetched(id), true, "the retry remains the fetch that published the image");
+    assert.deepEqual((await readdir(dir)).filter((name) => name.endsWith(".tmp")), []);
+  } finally {
+    releaseFirst();
+    await proxy.flush();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("an abandoned rename cannot overtake a retry that is waiting to publish", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "stremio-images-publish-order-"));
+  const firstBytes = Buffer.from("GIF89a old publish");
+  const retryBytes = Buffer.from("GIF89a newer publish");
+  let requests = 0;
+  let renames = 0;
+  let renameStarted!: () => void;
+  let releaseRename!: () => void;
+  const firstRenameStarted = new Promise<void>((resolve) => { renameStarted = resolve; });
+  const firstRenameRelease = new Promise<void>((resolve) => { releaseRename = resolve; });
+  const proxy = new ImageProxy(
+    dir,
+    1024 * 1024,
+    0,
+    async () => {
+      requests += 1;
+      return imageResponse(requests === 1 ? firstBytes : retryBytes, "image/gif");
+    },
+    undefined,
+    Date.now,
+    0,
+    async (from, to) => {
+      renames += 1;
+      if (renames === 1) {
+        renameStarted();
+        await firstRenameRelease;
+      }
+      await rename(from, to);
+    },
+  );
+  try {
+    await proxy.load();
+    const id = proxy.proxied(REMOTE)!.split("/").pop()!;
+    const abandonedWaiter = new AbortController();
+    const abandoned = proxy.fetch(id, abandonedWaiter.signal);
+    await firstRenameStarted;
+
+    abandonedWaiter.abort();
+    let retrySettled = false;
+    const retrying = proxy.fetch(id).finally(() => { retrySettled = true; });
+    for (let attempt = 0; attempt < 200 && !retrySettled; attempt += 1) {
+      const temporary = (await readdir(dir)).filter((name) => name.endsWith(".tmp"));
+      if (temporary.length >= 2) break;
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    await settle();
+    assert.equal(requests, 2, "the retry has reached the publish boundary");
+
+    releaseRename();
+    const retried = await retrying;
+    assert.ok(retried);
+    assert.equal(await abandoned, undefined);
+    assert.deepEqual(await readFile(retried.file), retryBytes, "the newer retry publishes last");
+    assert.equal(proxy.takeFetched(id), true, "the newer retry remains the published fetch");
+  } finally {
+    releaseRename();
+    await proxy.flush();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("cancellation during an image downscale leaves no cache entry or temporary file", {
+  skip: process.platform === "win32" ? "the test uses a POSIX script for FFmpeg" : false,
+}, async () => {
+  const widePng = Buffer.alloc(24);
+  widePng.writeUInt32BE(0x89504e47, 0);
+  widePng.write("IHDR", 12, "latin1");
+  widePng.writeUInt32BE(1_000, 16);
+  const { proxy, dir } = await harness(async () => imageResponse(widePng));
+  const marker = path.join(dir, "ffmpeg-started");
+  const fake = path.join(dir, "ffmpeg");
+  await writeFile(fake, `#!/usr/bin/env node\nrequire("node:fs").writeFileSync(${JSON.stringify(marker)}, "started");\nsetInterval(() => {}, 1000);\n`);
+  await chmod(fake, 0o755);
+  const previous = process.env.FFMPEG_PATH;
+  process.env.FFMPEG_PATH = fake;
+  try {
+    const id = proxy.proxied(REMOTE)!.split("/").pop()!;
+    const waiter = new AbortController();
+    const fetching = proxy.fetch(id, waiter.signal);
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await stat(marker);
+        break;
+      } catch (error) {
+        if (attempt >= 100) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    }
+
+    waiter.abort();
+    assert.equal(await fetching, undefined);
+    await settle();
+    assert.deepEqual(await proxy.readCached(id), undefined);
+    assert.equal(proxy.inMemory(id), false);
+    assert.equal(proxy.takeFetched(id), false);
+    const leftovers = (await readdir(dir)).filter((name) => name.startsWith(`${id}.`) || name.startsWith(".resize-"));
+    assert.deepEqual(leftovers, []);
+  } finally {
+    if (previous === undefined) delete process.env.FFMPEG_PATH;
+    else process.env.FFMPEG_PATH = previous;
+  }
 });
 
 test("an id nobody handed out is never fetched", async () => {

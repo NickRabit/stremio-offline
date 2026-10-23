@@ -4,7 +4,7 @@ import { allowedAddons, catalog, orderedForUser, orderFor, searchAll, searchable
 import { AppError } from "../errors.js";
 import { ExternalIdStore, imdbOf, siteLinks } from "../external-ids.js";
 import { askedSurface, imageSurface, logPoster, noteImage } from "../image-stats.js";
-import { images } from "../images.js";
+import { images, type ImageProxy } from "../images.js";
 import { normalizeLanguage } from "../language.js";
 import { libraryFor, libraryVisible, parseLibraryPath, posixBase, type Viewer } from "../libraries.js";
 import { episodeNumberOf, knownTitleEntry, unitFor, type LibraryMetaRecord, type TitleUnit } from "../library-match.js";
@@ -41,6 +41,7 @@ export interface CatalogDeps extends RouteContext {
   externalIds: ExternalIdStore;
   subtitleDelay(value: unknown): number;
   mediaSources: MediaServerSources;
+  imageProxy?: ImageProxy;
 }
 
 const SUBTITLE_MAX_BYTES = 2 * 1024 * 1024;
@@ -48,6 +49,7 @@ const SUBTITLE_DEADLINE_MS = 20_000;
 
 export function registerCatalogRoutes(app: express.Application, deps: CatalogDeps): void {
   const { store, currentUser, cachedMeta, prefsOf, libraryTarget, ownerOf, trackMedia, libraryKey, localCopies, libraryUnits, ownRecord, metaStore, externalIds, subtitleDelay, mediaSources, requireAccess } = deps;
+  const imageProxy = deps.imageProxy ?? images;
 
   /** The addons this caller may use, read once per request. A disabled addon is left out
    *  later by the helpers that honour `enabled`; visibility narrows an enabled addon only. */
@@ -266,32 +268,43 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
    *  hash of the address, not of the bytes, so it stays a day rather than a year: the bytes may
    *  be replaced under the same id. */
   app.get("/api/image/:id", asyncRoute(async (req, res) => {
-    const id = String(req.params.id);
-    const cached = await images.fetch(id);
-    if (!cached) return res.status(404).end();
-    const surface = imageSurface(req.query.surface, "catalog");
-    const asked = askedSurface(req.query.surface);
-    const cache = "private, max-age=86400";
-    res.setHeader("content-type", cached.type);
-    res.setHeader("etag", cached.etag);
-    res.setHeader("cache-control", cache);
-    if (req.headers["if-none-match"] === cached.etag) {
-      images.takeFetched(id);
-      logPoster({ kind: "catalog", surface, asked, status: 304, bytes: 0, cache });
-      return res.status(304).end();
+    const disconnect = routeDisconnectSignal(req, res);
+    try {
+      if (disconnect.signal.aborted) return;
+      const id = String(req.params.id);
+      const cached = await imageProxy.fetch(id, disconnect.signal);
+      if (disconnect.signal.aborted) return;
+      if (!cached) return res.status(404).end();
+      const surface = imageSurface(req.query.surface, "catalog");
+      const asked = askedSurface(req.query.surface);
+      const cache = "private, max-age=86400";
+      res.setHeader("content-type", cached.type);
+      res.setHeader("etag", cached.etag);
+      res.setHeader("cache-control", cache);
+      if (req.headers["if-none-match"] === cached.etag) {
+        imageProxy.takeFetched(id);
+        logPoster({ kind: "catalog", surface, asked, status: 304, bytes: 0, cache });
+        return res.status(304).end();
+      }
+      // The bytes come from memory when they are already there, and from one read otherwise;
+      // sendFile would refuse a data directory that sits inside a dotted folder.
+      const warm = imageProxy.inMemory(id);
+      const bytes = await imageProxy.readCached(id, disconnect.signal);
+      if (disconnect.signal.aborted) return;
+      if (!bytes) {
+        imageProxy.takeFetched(id);
+        return res.status(404).end();
+      }
+      const from = imageProxy.takeFetched(id) ? "upstream" : warm ? "memory" : "disk";
+      noteImage(surface, from);
+      logPoster({ kind: "catalog", surface, asked, from, status: 200, bytes: bytes.length, cache });
+      res.end(bytes);
+    } catch (error) {
+      if (disconnect.signal.aborted) return;
+      throw error;
+    } finally {
+      disconnect.dispose();
     }
-    // The bytes come from memory when they are already there, and from one read otherwise;
-    // sendFile would refuse a data directory that sits inside a dotted folder.
-    const warm = images.inMemory(id);
-    const bytes = await images.readCached(id);
-    if (!bytes) {
-      images.takeFetched(id);
-      return res.status(404).end();
-    }
-    const from = images.takeFetched(id) ? "upstream" : warm ? "memory" : "disk";
-    noteImage(surface, from);
-    logPoster({ kind: "catalog", surface, asked, from, status: 200, bytes: bytes.length, cache });
-    res.end(bytes);
   }));
   app.get("/api/stream-sources/:type/:id", (req, res) => {
     // The picker lists these in the caller's own order, the same one `GET /api/addons` answers.
