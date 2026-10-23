@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
 import type { AddressInfo } from "node:net";
@@ -1793,6 +1793,28 @@ test("an external subtitle re-checks its resource after the held body", async (t
     assert.equal(response.status, 404);
     assert.equal((await response.text()).includes("secret subtitle"), false);
   });
+});
+
+test("a subtitle beside a library file is shifted to the playing position like an addon's", async (t) => {
+  const folder = await mkdtemp(path.join(os.tmpdir(), "local-subtitle-"));
+  t.after(() => rm(folder, { recursive: true, force: true }));
+  const vtt = path.join(folder, "Film.cs.vtt");
+  const srt = path.join(folder, "Film.srt");
+  // Saved on Windows, the way subtitles found beside a film usually are.
+  await writeFile(vtt, "WEBVTT\r\n\r\n00:10:05.000 --> 00:10:07.000\r\nfirst\r\n\r\n00:10:20.000 --> 00:10:22.000\r\nsecond\r\n");
+  await writeFile(srt, "1\r\n00:10:05,000 --> 00:10:07,000\r\nfirst\r\n");
+  const vttId = mediaResources.add({ url: `file://${vtt}` }, subtitleOwner, "subtitle");
+  const srtId = mediaResources.add({ url: `file://${srt}` }, subtitleOwner, "subtitle");
+  t.after(() => { mediaResources.remove(vttId); mediaResources.remove(srtId); });
+  const harness = await mount();
+  t.after(harness.close);
+
+  // A conversion restarted at 10:00 plays from zero, so a cue at 10:05 belongs at 0:05.
+  const fromVtt = await (await api(harness.base, `/api/subtitle/${vttId}?offset=600`)).text();
+  assert.match(fromVtt, /00:00:05\.000 --> 00:00:07\.000/);
+  assert.match(fromVtt, /00:00:20\.000 --> 00:00:22\.000/);
+  const fromSrt = await (await api(harness.base, `/api/subtitle/${srtId}?offset=600`)).text();
+  assert.match(fromSrt, /00:00:05\.000 --> 00:00:07\.000/);
 });
 
 test("the sources a person picks from follow the priority they set, not the instance's", async (t) => {
