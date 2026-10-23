@@ -19,12 +19,13 @@ const STREAM_TIMEOUT_MS = Number(process.env.STREAM_ADDON_TIMEOUT_MS ?? 60_000);
  *  broken, and reading it whole would only fill the server's memory for the length of the timeout. */
 const ADDON_MAX_BYTES = 16 * 1024 * 1024;
 
-async function jsonFetch<T>(rawUrl: string, timeoutMs = TIMEOUT_MS, interactive = false): Promise<T> {
+async function jsonFetch<T>(rawUrl: string, timeoutMs = TIMEOUT_MS, interactive = false, signal?: AbortSignal): Promise<T> {
   const url = await validateRemoteUrl(rawUrl);
   try {
     return await guardedJson<T>(url.toString(), {
       headers: { accept: "application/json", "user-agent": "StremioOffline/0.3.1" },
     }, {
+      signal,
       deadlineMs: timeoutMs,
       maxBytes: ADDON_MAX_BYTES,
       interactive,
@@ -123,17 +124,33 @@ function supports(addon: AddonRecord, resource: string, type: string, id?: strin
   return !id || !prefixes?.length || prefixes.some((prefix) => id.startsWith(prefix));
 }
 
-export async function catalogWithExtras(addon: AddonRecord, type: string, catalogId: string, extras: Record<string, string | number> = {}, interactive = false) {
-  const response = await jsonFetch<{ metas?: MetaItem[] }>(resourceUrl(addon, "catalog", type, catalogId, extras), TIMEOUT_MS, interactive);
+export async function catalogWithExtras(
+  addon: AddonRecord,
+  type: string,
+  catalogId: string,
+  extras: Record<string, string | number> = {},
+  interactive = false,
+  signal?: AbortSignal,
+) {
+  const response = await jsonFetch<{ metas?: MetaItem[] }>(resourceUrl(addon, "catalog", type, catalogId, extras), TIMEOUT_MS, interactive, signal);
   return response.metas ?? [];
 }
 
-export async function catalog(addon: AddonRecord, type: string, catalogId: string, search?: string, skip = 0, genre?: string, interactive = false) {
+export async function catalog(
+  addon: AddonRecord,
+  type: string,
+  catalogId: string,
+  search?: string,
+  skip = 0,
+  genre?: string,
+  interactive = false,
+  signal?: AbortSignal,
+) {
   const extras: Record<string, string | number> = {};
   if (search) extras.search = search;
   if (genre) extras.genre = genre;
   if (skip) extras.skip = skip;
-  return catalogWithExtras(addon, type, catalogId, extras, interactive);
+  return catalogWithExtras(addon, type, catalogId, extras, interactive, signal);
 }
 
 /** Addons declare extras support in three different ways; the protocol changed over time. */
@@ -245,7 +262,7 @@ export async function searchAll(addons: AddonRecord[], query: string, type: stri
         : reason instanceof GuardRejection ? "breaker-open"
         : typeof reason === "object" && reason !== null && invalidCatalogUrls.has(reason) ? "invalid-url"
         : "error";
-      log("WARN", "Addon request failed", { operation: "search", addon: addon.manifest.name, catalog: definition.id, reason: code });
+      if (!options?.signal?.aborted) log("WARN", "Addon request failed", { operation: "search", addon: addon.manifest.name, catalog: definition.id, reason: code });
       nextOffsets[key] = -1;
       return;
     }
@@ -320,12 +337,20 @@ export function streamCandidates(addons: AddonRecord[], type: string, id: string
   return addons.filter((a) => a.enabled && a.role !== "catalog" && supports(a, "stream", type, id));
 }
 
-export async function streams(addons: AddonRecord[], type: string, id: string, addonKey?: string, interactive = false): Promise<StreamItem[]> {
+export async function streams(
+  addons: AddonRecord[],
+  type: string,
+  id: string,
+  addonKey?: string,
+  interactive = false,
+  signal?: AbortSignal,
+): Promise<StreamItem[]> {
   const candidates = streamCandidates(addons, type, id).filter((a) => !addonKey || a.key === addonKey);
   const results = await Promise.allSettled(candidates.map(async (addon) => {
-    const response = await jsonFetch<{ streams?: StreamItem[] }>(resourceUrl(addon, "stream", type, id), STREAM_TIMEOUT_MS, interactive);
+    const response = await jsonFetch<{ streams?: StreamItem[] }>(resourceUrl(addon, "stream", type, id), STREAM_TIMEOUT_MS, interactive, signal);
     return (response.streams ?? []).map((stream) => ({ ...stream, addonKey: addon.key, addonName: addon.manifest.name }));
   }));
+  if (signal?.aborted) return [];
   results.forEach((result, index) => {
     if (result.status === "rejected") log("WARN", "Addon request failed", { operation: "streams", addon: candidates[index].manifest.name, type, id, reason: reasonOf(result.reason) });
   });

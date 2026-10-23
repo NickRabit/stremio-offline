@@ -20,7 +20,7 @@ import { trailerFor } from "../trailers.js";
 import { tmdbGallery, type TmdbGalleryPicture } from "../tmdb.js";
 import type { MetaItem, StreamItem } from "../types.js";
 import { shiftVtt } from "../vtt.js";
-import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
+import { asyncRoute, routeDisconnectSignal, viewerOf, type RouteContext } from "./context.js";
 
 export interface CatalogDeps extends RouteContext {
   tmdbProvider(language: string): MetaProvider | undefined;
@@ -84,27 +84,47 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
 
   app.get("/api/catalogs", (req, res) => res.json(inOrder(req).filter((a) => a.enabled && a.role !== "source").flatMap((addon) => (addon.manifest.catalogs ?? []).map((item) => ({ ...item, addonKey: addon.key, addonName: addon.manifest.name })) )));
   app.get("/api/catalog", asyncRoute(async (req, res) => {
-    // Switched off as well as allowed: `usable` narrows by who is asking, and the listing
-    // above drops the disabled ones, but a catalogue id somebody already has is a direct
-    // request that never passes the listing. Answered as a miss, which is what it now is.
-    const addon = usable(req).find((a) => a.key === req.query.addon && a.enabled);
-    if (!addon) throw new AppError("The addon was not found.", "err.addonNotFound");
-    const items = await catalog(addon, String(req.query.type), String(req.query.id), req.query.search ? String(req.query.search) : undefined, Number(req.query.skip) || 0, req.query.genre ? String(req.query.genre) : undefined, true);
-    res.json(items.map((item) => images.rewriteMeta(item)));
+    const disconnect = routeDisconnectSignal(req, res);
+    try {
+      if (disconnect.signal.aborted) return;
+      // Switched off as well as allowed: `usable` narrows by who is asking, and the listing
+      // above drops the disabled ones, but a catalogue id somebody already has is a direct
+      // request that never passes the listing. Answered as a miss, which is what it now is.
+      const addon = usable(req).find((a) => a.key === req.query.addon && a.enabled);
+      if (!addon) throw new AppError("The addon was not found.", "err.addonNotFound");
+      const items = await catalog(addon, String(req.query.type), String(req.query.id), req.query.search ? String(req.query.search) : undefined, Number(req.query.skip) || 0, req.query.genre ? String(req.query.genre) : undefined, true, disconnect.signal);
+      if (disconnect.signal.aborted) return;
+      res.json(items.map((item) => images.rewriteMeta(item)));
+    } catch (error) {
+      if (disconnect.signal.aborted) return;
+      throw error;
+    } finally {
+      disconnect.dispose();
+    }
   }));
   app.get("/api/search", asyncRoute(async (req, res) => {
-    const query = String(req.query.query ?? "").trim();
-    if (!query) throw new AppError("Enter a search term.", "err.emptyQuery");
-    res.set("Cache-Control", "no-store");
-    const type = req.query.type ? String(req.query.type) : undefined;
-    const addonKey = req.query.addon ? String(req.query.addon) : undefined;
-    const found = await searchAll(inOrder(req), query, type, req.query.cursor ? String(req.query.cursor) : undefined, {
-      addonKey,
-      catalogType: addonKey && req.query.catalogType ? String(req.query.catalogType) : undefined,
-      catalogId: addonKey && req.query.catalogId ? String(req.query.catalogId) : undefined,
-      respectGlobalSearch: !addonKey,
-    }, true, { key: currentUser(req)?.id ?? "" });
-    res.json({ ...found, items: found.items.map((item) => images.rewriteMeta(item)) });
+    const disconnect = routeDisconnectSignal(req, res);
+    try {
+      if (disconnect.signal.aborted) return;
+      const query = String(req.query.query ?? "").trim();
+      if (!query) throw new AppError("Enter a search term.", "err.emptyQuery");
+      res.set("Cache-Control", "no-store");
+      const type = req.query.type ? String(req.query.type) : undefined;
+      const addonKey = req.query.addon ? String(req.query.addon) : undefined;
+      const found = await searchAll(inOrder(req), query, type, req.query.cursor ? String(req.query.cursor) : undefined, {
+        addonKey,
+        catalogType: addonKey && req.query.catalogType ? String(req.query.catalogType) : undefined,
+        catalogId: addonKey && req.query.catalogId ? String(req.query.catalogId) : undefined,
+        respectGlobalSearch: !addonKey,
+      }, true, { signal: disconnect.signal, key: currentUser(req)?.id ?? "" });
+      if (disconnect.signal.aborted) return;
+      res.json({ ...found, items: found.items.map((item) => images.rewriteMeta(item)) });
+    } catch (error) {
+      if (disconnect.signal.aborted) return;
+      throw error;
+    } finally {
+      disconnect.dispose();
+    }
   }));
   app.get("/api/searchable", (req, res) => res.json(searchableCatalogs(inOrder(req)).map(({ addon, definition }) => ({ addonKey: addon.key, addonName: addon.manifest.name, globalSearch: addon.globalSearch, type: definition.type, id: definition.id, name: definition.name ?? definition.id }))));
   app.get("/api/meta/:type/:id", asyncRoute(async (req, res) => {
@@ -213,15 +233,26 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
       .map((addon) => ({ key: addon.key, name: addon.manifest.name })));
   });
   app.get("/api/streams/:type/:id", asyncRoute(async (req, res) => {
-    const owner = ownerOf(req);
-    const items = await streams(inOrder(req), String(req.params.type), String(req.params.id), req.query.addon ? String(req.query.addon) : undefined, true);
-    // The listing hands out one resource per source, and the addons that answered took as
-    // long as they liked: an addon switched off, or a grant withdrawn, while they were
-    // answering must not get one. Nothing is awaited between the check and the listing.
-    for (const addonKey of new Set(items.map((item) => item.addonKey).filter((key): key is string => Boolean(key)))) {
-      requireAccess(req, { addonKey });
+    const disconnect = routeDisconnectSignal(req, res);
+    try {
+      if (disconnect.signal.aborted) return;
+      const owner = ownerOf(req);
+      const items = await streams(inOrder(req), String(req.params.type), String(req.params.id), req.query.addon ? String(req.query.addon) : undefined, true, disconnect.signal);
+      if (disconnect.signal.aborted) return;
+      // The listing hands out one resource per source, and the addons that answered took as
+      // long as they liked: an addon switched off, or a grant withdrawn, while they were
+      // answering must not get one. Nothing is awaited between the check and the listing.
+      for (const addonKey of new Set(items.map((item) => item.addonKey).filter((key): key is string => Boolean(key)))) {
+        requireAccess(req, { addonKey });
+      }
+      if (disconnect.signal.aborted) return;
+      res.setHeader("cache-control", "private, no-store").json(mediaResources.listing(items, owner));
+    } catch (error) {
+      if (disconnect.signal.aborted) return;
+      throw error;
+    } finally {
+      disconnect.dispose();
     }
-    res.setHeader("cache-control", "private, no-store").json(mediaResources.listing(items, owner));
   }));
   app.get("/api/local-streams/:type/:id", asyncRoute(async (req, res) => {
     const viewer = viewerOf(currentUser(req));
