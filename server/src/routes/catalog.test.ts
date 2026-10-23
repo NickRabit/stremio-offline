@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import http from "node:http";
+import net from "node:net";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import express from "express";
@@ -12,15 +13,17 @@ import type { LibraryRecord } from "../libraries.js";
 import type { Store, UserPrefs } from "../store.js";
 import type { AddonRecord, AddonRole, CatalogDefinition, MetaItem } from "../types.js";
 import type { UserRecord } from "../users.js";
-import { resetImdbTargets } from "../addons.js";
+import { metadata, resetImdbTargets } from "../addons.js";
 import { mediaResources } from "../media-resources.js";
 import { outbound } from "../outbound.js";
 import { setFetchTransport } from "../security.js";
+import { clearTmdbCache, tmdbMeta } from "../tmdb.js";
 import { registerCatalogRoutes, type CatalogDeps } from "./catalog.js";
 
 interface Harness {
   base: string;
   lookups: Array<{ type: string; id: string; language?: string; artwork?: boolean }>;
+  signals: AbortSignal[];
   responseCloses(): number;
   close(): Promise<void>;
 }
@@ -50,15 +53,18 @@ const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null, 
   access?: CatalogDeps["requireAccess"];
   localCopies?: CatalogDeps["localCopies"];
   units?: TitleUnit[];
+  cachedMeta?: CatalogDeps["cachedMeta"];
+  tmdbApiKey?: string;
 } = {}): Promise<Harness> => {
   const viewer = options.viewer === undefined ? admin : options.viewer;
   const lookups: Harness["lookups"] = [];
+  const signals: AbortSignal[] = [];
   const store = {
     addons: () => records,
     libraries: () => options.libraries ?? [],
     // The caller's own addon priority, which every chooser list is ordered by.
     userData: (id: string) => ({ addonOrder: options.addonOrder?.[id] ?? [] }),
-    settings: () => ({ tmdbApiKey: undefined }),
+    settings: () => ({ tmdbApiKey: options.tmdbApiKey }),
   } as unknown as Store;
   const deps: CatalogDeps = {
     store,
@@ -71,7 +77,11 @@ const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null, 
     requireAccess: options.access ?? (() => undefined),
     stopContentAccess: async () => undefined,
     tmdbProvider: () => undefined,
-    cachedMeta: async (type, id, language, _viewer, opts) => { lookups.push({ type, id, language, ...(opts?.artwork ? { artwork: true } : {}) }); return meta; },
+    cachedMeta: options.cachedMeta ?? (async (type, id, language, _viewer, opts) => {
+      lookups.push({ type, id, language, ...(opts?.artwork ? { artwork: true } : {}) });
+      if (opts?.signal) signals.push(opts.signal);
+      return meta;
+    }),
     prefsOf: () => ({ uiLanguage: "cs" }) as UserPrefs,
     libraryTarget: async (value) => value,
     ownerOf: () => ({ userId: "usr_00000001", sid: "session-1", expiresAt: Number.MAX_SAFE_INTEGER }),
@@ -103,6 +113,7 @@ const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null, 
   return {
     base: `http://127.0.0.1:${port}`,
     lookups,
+    signals,
     responseCloses: () => responseCloses,
     close: async () => {
       server.closeAllConnections();
@@ -400,6 +411,65 @@ const heldAddon = () => {
   return { handler, readStarted, bodyCancelled, signal: () => signal };
 };
 
+const heldJson = () => {
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  let started!: () => void;
+  let cancelled!: () => void;
+  let activate!: () => void;
+  const activated = new Promise<void>((resolve) => { activate = resolve; });
+  const readStarted = new Promise<void>((resolve) => { started = resolve; });
+  const bodyCancelled = new Promise<void>((resolve) => { cancelled = resolve; });
+  let wasCancelled = false;
+  const response = new Response(new ReadableStream<Uint8Array>({
+    start(value) { controller = value; },
+    async pull() {
+      await activated;
+      started();
+      return new Promise<void>(() => undefined);
+    },
+    cancel() {
+      wasCancelled = true;
+      cancelled();
+    },
+  }), { headers: { "content-type": "application/json" } });
+  return {
+    response,
+    readStarted,
+    bodyCancelled,
+    cancelled: () => wasCancelled,
+    activate,
+    release(body: unknown) {
+      controller.enqueue(new TextEncoder().encode(JSON.stringify(body)));
+      controller.close();
+    },
+  };
+};
+
+const cachedMetadataLookup = (
+  records: AddonRecord[],
+  provider?: (type: string, id: string, signal?: AbortSignal) => Promise<MetaItem | null>,
+) => {
+  let cached: MetaItem | null | undefined;
+  const lookup: CatalogDeps["cachedMeta"] = async (type, id, language, viewer, opts) => {
+    if (opts?.signal?.aborted) return null;
+    if (cached) return cached;
+    const value = await metadata(
+      viewer ? records.filter((record) => record.enabled && record.role !== "source") : records,
+      type,
+      id,
+      language,
+      provider,
+      true,
+      true,
+      opts?.signal,
+    ).catch(() => null);
+    if (opts?.signal?.aborted) return null;
+    if (value) cached = value;
+    return value;
+  };
+  return { lookup, cached: () => cached };
+};
+
 const disconnectCases = [
   {
     name: "catalog",
@@ -453,6 +523,227 @@ for (const scenario of disconnectCases) {
     assert.equal(outbound.diagnostics().find((entry) => entry.host === scenario.host)?.failures ?? 0, 0);
   });
 }
+
+test("a no-gallery metadata disconnect cancels the addon body and does not cache or fall through", async (t) => {
+  resetImdbTargets();
+  const records = [
+    addon("metadata-first", [], { role: "both", resources: ["meta"] }),
+    addon("metadata-next", [], { role: "both", resources: ["meta"] }),
+  ];
+  const cached = cachedMetadataLookup(records);
+  const harness = await mount(records, null, { cachedMeta: cached.lookup });
+  t.after(harness.close);
+  const held = heldJson();
+  let requestStarted!: () => void;
+  let transportSignal: AbortSignal | undefined;
+  const requestStartedSignal = new Promise<void>((resolve) => { requestStarted = resolve; });
+  let firstRequests = 0;
+  let nextRequests = 0;
+
+  await withStubbedAddons((url, init) => {
+    const host = new URL(url).hostname;
+    if (host === "metadata-first.example") {
+      firstRequests += 1;
+      if (firstRequests === 1) {
+        transportSignal = init.signal as AbortSignal;
+        requestStarted();
+        return held.response;
+      }
+      return json({ meta: { id: "tt-meta", type: "movie", name: "Retried", description: "Answer", background: "https://img.example/background.jpg" } });
+    }
+    if (host === "metadata-next.example") nextRequests += 1;
+    throw new Error(`Unexpected addon host ${host}`);
+  }, async () => {
+    const closes = harness.responseCloses();
+    const request = http.get(`${harness.base}/api/meta/movie/tt-meta`);
+    request.on("error", () => undefined);
+    t.after(() => request.destroy());
+
+    await prompt(requestStartedSignal, "the metadata request");
+    held.activate();
+    await prompt(held.readStarted, "the metadata body read");
+    const signal = transportSignal!;
+    request.destroy();
+    await prompt(new Promise<void>((resolve) => {
+      if (signal.aborted) resolve();
+      else signal.addEventListener("abort", () => resolve(), { once: true });
+    }), "the metadata signal abort");
+    await prompt(held.bodyCancelled, "the metadata body cancel");
+    await until(() => harness.responseCloses() === closes + 1, "the disconnected metadata response");
+
+    assert.equal(nextRequests, 0, "cancellation does not fall through to the next addon");
+    assert.equal(cached.cached(), undefined, "a cancelled answer is not cached");
+
+    const retried = await prompt(api(harness.base, "/api/meta/movie/tt-meta"), "the retried metadata response");
+    assert.equal(retried.status, 200);
+    assert.equal((await retried.json() as MetaItem).name, "Retried");
+    assert.equal(firstRequests, 2);
+    assert.equal(nextRequests, 0);
+
+    const cachedResponse = await prompt(api(harness.base, "/api/meta/movie/tt-meta"), "the cached metadata response");
+    assert.equal(cachedResponse.status, 200);
+    assert.equal(firstRequests, 2, "the successful retry is served from cache next time");
+  });
+
+  assert.equal(outbound.diagnostics().find((entry) => entry.host === "metadata-first.example")?.failures ?? 0, 0);
+});
+
+test("a no-gallery TMDB find disconnect leaves no id cache entry and stops addon fallback", async (t) => {
+  clearTmdbCache();
+  t.after(clearTmdbCache);
+  const records = [addon("tmdb-fallback", [], { role: "both", resources: ["meta"] })];
+  const config = { apiKey: "test-key", language: "cs", artwork: true };
+  let providerSignal: AbortSignal | undefined;
+  const lookupSignals: Array<AbortSignal | undefined> = [];
+  const cached = cachedMetadataLookup(records, (type, id, signal) => {
+    providerSignal = signal;
+    return tmdbMeta(type, id, config, undefined, signal);
+  });
+  const harness = await mount(records, null, {
+    cachedMeta: (type, id, language, viewer, opts) => {
+      lookupSignals.push(opts?.signal);
+      return cached.lookup(type, id, language, viewer, opts);
+    },
+  });
+  t.after(harness.close);
+  const held = heldJson();
+  let findRequests = 0;
+  let detailRequests = 0;
+  let fallbackRequests = 0;
+  let transportSignal: AbortSignal | undefined;
+  let findStarted!: () => void;
+  const findStartedSignal = new Promise<void>((resolve) => { findStarted = resolve; });
+  const findMovie = { movie_results: [{ id: 31410 }], tv_results: [] };
+  const detail = {
+    id: 31410,
+    title: "Retried through TMDB",
+    overview: "Answer",
+    backdrop_path: "/backdrop.jpg",
+  };
+
+  await withStubbedAddons((url, init) => {
+    const parsed = new URL(url);
+    if (parsed.hostname === "tmdb-fallback.example") {
+      fallbackRequests += 1;
+      return json({ meta: { id: "tt0090257", type: "movie", name: "Fallback", description: "Fallback answer" } });
+    }
+    if (parsed.pathname.includes("/find/")) {
+      findRequests += 1;
+      if (findRequests === 1) {
+        transportSignal = init.signal as AbortSignal;
+        assert.equal(transportSignal.aborted, false);
+        findStarted();
+        return held.response;
+      }
+      return json(findMovie);
+    }
+    if (parsed.pathname.endsWith("/movie/31410")) {
+      detailRequests += 1;
+      return json(detail);
+    }
+    throw new Error(`Unexpected TMDB URL ${url}`);
+  }, async () => {
+    const closes = harness.responseCloses();
+    const target = new URL(harness.base);
+    const socket = net.connect(Number(target.port), target.hostname, () => {
+      socket.write(`GET /api/meta/movie/tt0090257 HTTP/1.1\r\nHost: ${target.host}\r\nConnection: close\r\n\r\n`);
+    });
+    socket.on("error", () => undefined);
+    t.after(() => socket.destroy());
+
+    await prompt(findStartedSignal, "the TMDB find request");
+    held.activate();
+    await prompt(held.readStarted, "the TMDB find body read");
+    const lookupSignal = lookupSignals[0];
+    assert.deepEqual(lookupSignals, [lookupSignal], "one metadata lookup owns this request");
+    assert.ok(lookupSignal, "the metadata lookup received the route signal");
+    assert.equal(providerSignal, lookupSignal);
+    socket.destroy();
+    await prompt(new Promise<void>((resolve) => {
+      if (lookupSignal?.aborted) resolve();
+      else lookupSignal?.addEventListener("abort", () => resolve(), { once: true });
+    }), "the metadata lookup signal abort");
+    await prompt(new Promise<void>((resolve) => {
+      if (providerSignal?.aborted) resolve();
+      else providerSignal?.addEventListener("abort", () => resolve(), { once: true });
+    }), "the metadata provider signal abort");
+    await prompt(new Promise<void>((resolve) => {
+      if (transportSignal?.aborted) resolve();
+      else transportSignal?.addEventListener("abort", () => resolve(), { once: true });
+    }), "the TMDB outbound signal abort");
+    await prompt(held.bodyCancelled, "the TMDB find body cancel");
+    await until(() => harness.responseCloses() === closes + 1, "the disconnected TMDB response");
+    assert.equal(fallbackRequests, 0);
+    assert.equal(cached.cached(), undefined);
+
+    const retried = await prompt(api(harness.base, "/api/meta/movie/tt0090257"), "the retried TMDB response");
+    assert.equal(retried.status, 200);
+    const retriedBody = await retried.json() as MetaItem;
+    assert.equal(retriedBody.name, "Retried through TMDB");
+    assert.ok(retriedBody.background);
+    assert.equal(findRequests, 2, "the cancelled /find was not cached as a miss");
+    assert.equal(detailRequests, 1);
+    assert.equal(fallbackRequests, 1, "an ordinary successful lookup still fills from its addon");
+
+    const cachedResponse = await prompt(api(harness.base, "/api/meta/movie/tt0090257"), "the cached TMDB response");
+    assert.equal(cachedResponse.status, 200);
+    assert.equal(findRequests, 2);
+    assert.equal(detailRequests, 1, "the successful metadata answer is cached");
+    assert.equal(fallbackRequests, 1);
+  });
+
+  assert.equal(outbound.diagnostics().find((entry) => entry.host === "api.themoviedb.org")?.failures ?? 0, 0);
+});
+
+test("a gallery client disconnect does not cancel a shared gallery waiter", async (t) => {
+  const harness = await mount([], { id: "tt0090257", type: "movie", name: "Gallery" }, { tmdbApiKey: "test-key" });
+  t.after(harness.close);
+  const held = heldJson();
+  let findRequests = 0;
+  let imageRequests = 0;
+  let findStarted!: () => void;
+  const findStartedSignal = new Promise<void>((resolve) => { findStarted = resolve; });
+
+  await withStubbedAddons((url) => {
+    const parsed = new URL(url);
+    if (parsed.pathname.includes("/find/")) {
+      findRequests += 1;
+      findStarted();
+      return held.response;
+    }
+    if (parsed.pathname.endsWith("/movie/31410/images")) {
+      imageRequests += 1;
+      return json({ posters: [{ file_path: "/poster.jpg", iso_639_1: "en" }], backdrops: [], logos: [] });
+    }
+    throw new Error(`Unexpected TMDB URL ${url}`);
+  }, async () => {
+    const first = http.get(`${harness.base}/api/meta/movie/tt0090257?gallery=1`);
+    first.on("error", () => undefined);
+    t.after(() => first.destroy());
+    await prompt(findStartedSignal, "the shared gallery find request");
+    held.activate();
+    await prompt(held.readStarted, "the shared gallery body read");
+
+    const second = api(harness.base, "/api/meta/movie/tt0090257?gallery=1");
+    await until(() => harness.lookups.length === 2, "the second gallery waiter");
+    assert.deepEqual(harness.signals, [], "gallery metadata never receives a client disconnect signal");
+    const firstClosed = new Promise<void>((resolve) => first.once("close", resolve));
+    first.destroy();
+    await prompt(firstClosed, "the disconnected gallery request");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.equal(held.cancelled(), false, "one waiter leaving does not abort the shared gallery");
+    held.release({ movie_results: [{ id: 31410 }], tv_results: [] });
+    const response = await prompt(second, "the surviving gallery response");
+    assert.equal(response.status, 200);
+    const body = await response.json() as MetaItem & { images?: unknown[] };
+    assert.equal(body.images?.length, 1);
+    assert.equal(findRequests, 1);
+    assert.equal(imageRequests, 1);
+  });
+
+  assert.equal(outbound.diagnostics().find((entry) => entry.host === "api.themoviedb.org")?.failures ?? 0, 0);
+});
 
 test("a disconnected subtitle target lookup is not cached and a later request retries", async (t) => {
   resetImdbTargets();

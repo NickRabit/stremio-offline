@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { AppError } from "./errors.js";
 import { flushLog, initLogger } from "./logger.js";
+import { outbound, OutboundError } from "./outbound.js";
 import { clearTmdbCache, clearTmdbSearchPause, tmdbExternalId, tmdbGallery, tmdbImage, tmdbMeta, tmdbMovieReleases, tmdbSearch, tmdbSeasonAirDates, tmdbTrailer, verifyTmdbKey, type TmdbConfig } from "./tmdb.js";
 import type { FetchLike } from "./debrid.js";
 
@@ -29,6 +30,40 @@ const chunkedBody = (chunkBytes: number, plannedChunks: number) => {
     },
   });
   return { body, pulled: () => pulled, cancelled: () => cancelled };
+};
+
+const heldBody = () => {
+  let started!: () => void;
+  let cancelled!: () => void;
+  let activate!: () => void;
+  const activated = new Promise<void>((resolve) => { activate = resolve; });
+  const readStarted = new Promise<void>((resolve) => { started = resolve; });
+  const bodyCancelled = new Promise<void>((resolve) => { cancelled = resolve; });
+  const response = new Response(new ReadableStream<Uint8Array>({
+    async pull() {
+      await activated;
+      started();
+      return new Promise<void>(() => undefined);
+    },
+    cancel() {
+      cancelled();
+    },
+  }), { headers: { "content-type": "application/json" } });
+  return { response, readStarted, bodyCancelled, activate };
+};
+
+const prompt = async <T>(promise: Promise<T>, label: string): Promise<T> => {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} did not happen promptly`)), 1_000);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 };
 
 const config: TmdbConfig = { apiKey: "test-key", language: "cs" };
@@ -238,6 +273,49 @@ test("a repeated imdb lookup makes no second find call", async () => {
   await tmdbMeta("movie", "tt0090257", config, fetchImpl);
 
   assert.equal(finds, 1);
+});
+
+test("a cancelled find body is not cached as a miss and a healthy retry resolves normally", async () => {
+  clearTmdbCache();
+  const held = heldBody();
+  const controller = new AbortController();
+  let finds = 0;
+  let details = 0;
+  let findStarted!: () => void;
+  const findStartedSignal = new Promise<void>((resolve) => { findStarted = resolve; });
+  const fetchImpl: FetchLike = async (url) => {
+    if (url.includes("/find/")) {
+      finds += 1;
+      if (finds === 1) {
+        findStarted();
+        return held.response;
+      }
+      return json(findMovie);
+    }
+    details += 1;
+    return json(movieDetail);
+  };
+
+  const cancelled = tmdbMeta("movie", "tt0090257", config, fetchImpl, controller.signal);
+  await prompt(findStartedSignal, "the TMDB find request");
+  held.activate();
+  await prompt(held.readStarted, "the TMDB find body read");
+  controller.abort();
+  await assert.rejects(cancelled, (error: unknown) => error instanceof OutboundError && error.code === "cancelled");
+  await prompt(held.bodyCancelled, "the TMDB find body cancel");
+  assert.equal(details, 0);
+
+  const retried = await tmdbMeta("movie", "tt0090257", config, fetchImpl, new AbortController().signal);
+  assert.equal(retried?.name, movieDetail.title);
+  assert.equal(finds, 2, "the cancelled lookup left no negative id-cache entry");
+  assert.equal(details, 1);
+
+  const cached = await tmdbMeta("movie", "tt0090257", config, fetchImpl, new AbortController().signal);
+  assert.equal(cached?.name, movieDetail.title);
+  assert.equal(finds, 2, "the successful lookup is cached");
+  assert.equal(details, 2);
+
+  assert.equal(outbound.diagnostics().find((entry) => entry.host === "api.themoviedb.org")?.failures ?? 0, 0);
 });
 
 test("a revoked key answers null instead of throwing", async () => {

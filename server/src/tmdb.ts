@@ -1,5 +1,5 @@
 import { AppError } from "./errors.js";
-import { guardedFetch } from "./outbound.js";
+import { guardedBody, guardedFetch, OutboundError } from "./outbound.js";
 import { log } from "./logger.js";
 import { normalizeLanguage } from "./language.js";
 import { readLimitedBody } from "./response-body.js";
@@ -78,8 +78,54 @@ const tmdbUrl = (path: string, params: Record<string, string>) => {
 const request = (path: string, params: Record<string, string>, fetchImpl: FetchLike, timeoutMs = TIMEOUT_MS) =>
   fetchImpl(tmdbUrl(path, params), { signal: AbortSignal.timeout(timeoutMs) });
 
-const readTmdbJson = async <T>(response: Response): Promise<T> =>
-  JSON.parse(new TextDecoder().decode(await readLimitedBody(response, MAX_JSON_BYTES))) as T;
+const readTmdbJson = async <T>(response: Response, signal?: AbortSignal): Promise<T> =>
+  JSON.parse(new TextDecoder().decode(await readLimitedBody(response, MAX_JSON_BYTES, signal))) as T;
+
+const throwIfCancelled = (signal?: AbortSignal) => {
+  if (signal?.aborted) throw new OutboundError("cancelled");
+};
+
+interface TmdbReply<T> {
+  response: Response;
+  body?: T;
+  parseError?: unknown;
+}
+
+async function tmdbReply<T>(
+  path: string,
+  params: Record<string, string>,
+  fetchImpl: FetchLike | undefined,
+  signal?: AbortSignal,
+): Promise<TmdbReply<T>> {
+  const raw = tmdbUrl(path, params);
+  if (!signal) {
+    const response = await (fetchImpl ?? guardedFetch)(raw, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+    if (!response.ok) return { response };
+    try {
+      return { response, body: await readTmdbJson<T>(response) };
+    } catch (error) {
+      return { response, parseError: error };
+    }
+  }
+
+  const read = async (response: Response, readSignal: AbortSignal): Promise<TmdbReply<T>> => {
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      return { response };
+    }
+    try {
+      return { response, body: await readTmdbJson<T>(response, readSignal) };
+    } catch (error) {
+      if (readSignal.aborted || !(error instanceof SyntaxError)) throw error;
+      return { response, parseError: error };
+    }
+  };
+  const options = { signal, deadlineMs: TIMEOUT_MS };
+  const bodyFetch = fetchImpl === guardedFetch ? undefined : fetchImpl;
+  return bodyFetch
+    ? guardedBody<TmdbReply<T>>(raw, {}, read, options, bodyFetch)
+    : guardedBody<TmdbReply<T>>(raw, {}, read, options);
+}
 
 /** The seconds TMDB asks the caller to wait, when a refusal carries a `Retry-After`. */
 export function tmdbRetryAfterMs(response: Response): number {
@@ -395,7 +441,8 @@ export async function verifyTmdbKey(apiKey: string, fetchImpl: FetchLike = guard
   if (!response.ok) throw new AppError("TMDB refused the API key.", "err.tmdbKeyRejected");
 }
 
-async function resolveId(type: string, id: string, config: TmdbConfig, fetchImpl: FetchLike): Promise<number | null> {
+async function resolveId(type: string, id: string, config: TmdbConfig, fetchImpl: FetchLike, signal?: AbortSignal): Promise<number | null> {
+  throwIfCancelled(signal);
   const direct = /^tmdb:(\d+)$/.exec(id);
   if (direct) return Number(direct[1]);
 
@@ -408,21 +455,28 @@ async function resolveId(type: string, id: string, config: TmdbConfig, fetchImpl
   const key = `${type}:${imdb}`;
   if (idCache.has(key)) return idCache.get(key) ?? null;
 
-  let response: Response;
+  let reply: TmdbReply<TmdbFind>;
   try {
-    response = await request(`/find/${encodeURIComponent(imdb)}`, { api_key: config.apiKey, language: config.language, external_source: "imdb_id" }, fetchImpl);
+    reply = await tmdbReply<TmdbFind>(`/find/${encodeURIComponent(imdb)}`, { api_key: config.apiKey, language: config.language, external_source: "imdb_id" }, fetchImpl, signal);
   } catch (error) {
+    if (signal?.aborted) throw error;
     log("WARN", "TMDB id lookup failed", { operation: "find", type, id: imdb, reason: reasonOf(error, config.apiKey) });
     return null;
   }
+  const { response } = reply;
+  throwIfCancelled(signal);
   if (!response.ok) {
     log("WARN", "TMDB id lookup failed", { operation: "find", type, id: imdb, status: response.status });
     return null;
   }
 
   let body: TmdbFind;
-  try { body = await readTmdbJson<TmdbFind>(response); }
+  try {
+    if (reply.parseError) throw reply.parseError;
+    body = reply.body ?? await readTmdbJson<TmdbFind>(response, signal);
+  }
   catch (error) {
+    if (signal?.aborted) throw error;
     log("WARN", "TMDB answered with malformed JSON", { operation: "find", type, id: imdb, reason: reasonOf(error, config.apiKey) });
     return null;
   }
@@ -430,6 +484,7 @@ async function resolveId(type: string, id: string, config: TmdbConfig, fetchImpl
   const results = type === "movie" ? body.movie_results : body.tv_results;
   const found = results?.[0]?.id;
   const resolved = typeof found === "number" ? found : null;
+  throwIfCancelled(signal);
   if (idCache.size > ID_CACHE_LIMIT) idCache.clear();
   idCache.set(key, resolved);
   return resolved;
@@ -492,18 +547,22 @@ const toMetaItem = (type: string, id: string, detail: TmdbDetail, config: TmdbCo
 
 /** Metadata for one title, or null when TMDB does not know it. Never throws for a
  *  missing title; a transport failure is logged and answered with null. */
-export async function tmdbMeta(type: string, id: string, config: TmdbConfig, fetchImpl: FetchLike = guardedFetch): Promise<MetaItem | null> {
+export async function tmdbMeta(type: string, id: string, config: TmdbConfig, fetchImpl?: FetchLike, signal?: AbortSignal): Promise<MetaItem | null> {
   if (type !== "movie" && type !== "series") return null;
-  const tmdbId = await resolveId(type, id, config, fetchImpl);
+  throwIfCancelled(signal);
+  const tmdbId = await resolveId(type, id, config, fetchImpl ?? guardedFetch, signal);
   if (tmdbId == null) return null;
 
-  let response: Response;
+  let reply: TmdbReply<TmdbDetail>;
   try {
-    response = await request(`/${type === "movie" ? "movie" : "tv"}/${tmdbId}`, { api_key: config.apiKey, language: config.language }, fetchImpl);
+    reply = await tmdbReply<TmdbDetail>(`/${type === "movie" ? "movie" : "tv"}/${tmdbId}`, { api_key: config.apiKey, language: config.language }, fetchImpl, signal);
   } catch (error) {
+    if (signal?.aborted) throw error;
     log("WARN", "TMDB request failed", { operation: "meta", type, id, reason: reasonOf(error, config.apiKey) });
     return null;
   }
+  const { response } = reply;
+  throwIfCancelled(signal);
   if (response.status === 401) {
     log("WARN", "TMDB request failed", { operation: "meta", type, id, status: response.status });
     return null;
@@ -513,8 +572,14 @@ export async function tmdbMeta(type: string, id: string, config: TmdbConfig, fet
     return null;
   }
 
-  try { return toMetaItem(type, id, await readTmdbJson<TmdbDetail>(response), config); }
+  try {
+    if (reply.parseError) throw reply.parseError;
+    const body = reply.body ?? await readTmdbJson<TmdbDetail>(response, signal);
+    throwIfCancelled(signal);
+    return toMetaItem(type, id, body, config);
+  }
   catch (error) {
+    if (signal?.aborted) throw error;
     log("WARN", "TMDB answered with malformed JSON", { operation: "meta", type, id, reason: reasonOf(error, config.apiKey) });
     return null;
   }

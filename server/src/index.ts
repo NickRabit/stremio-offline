@@ -887,14 +887,14 @@ if (autoRefreshEnabled()) {
 registerAddonsRoutes(app, { ...routeContext, storeRefreshed, publicAddonView });
 const tmdbProvider = (language: string): MetaProvider | undefined => {
   const apiKey = store.settings().tmdbApiKey;
-  return apiKey ? (type, id) => tmdbMeta(type, id, { apiKey, language }) : undefined;
+  return apiKey ? (type, id, signal) => tmdbMeta(type, id, { apiKey, language }, undefined, signal) : undefined;
 };
 /** The detail behind a binding: the same lookup, asking for the pictures as well. Only a
  *  title somebody just bound is read this way; the browsing paths leave the artwork to the
  *  catalogue so a tile does not change its face when TMDB happens to know the title. */
 const tmdbArtworkProvider = (language: string): MetaProvider | undefined => {
   const apiKey = store.settings().tmdbApiKey;
-  return apiKey ? (type, id) => tmdbMeta(type, id, { apiKey, language, artwork: true }) : undefined;
+  return apiKey ? (type, id, signal) => tmdbMeta(type, id, { apiKey, language, artwork: true }, undefined, signal) : undefined;
 };
 const tmdbConfigOf = (language: string): TmdbConfig | undefined => {
   const apiKey = store.settings().tmdbApiKey;
@@ -1072,8 +1072,9 @@ const cachedMeta = async (
   id: string,
   language: string = prefsOf().uiLanguage,
   viewer?: Viewer,
-  opts: { fresh?: boolean; interactive?: boolean; artwork?: boolean } = {},
+  opts: { fresh?: boolean; interactive?: boolean; artwork?: boolean; signal?: AbortSignal } = {},
 ) => {
+  if (opts.signal?.aborted) return null;
   // The answer is merged from every candidate addon, so it cannot be filtered after the
   // fact: the allowance is part of the key, or one person's grants would decide what
   // another sees. A caller with no viewer reads every addon, as the background work needs.
@@ -1090,7 +1091,9 @@ const cachedMeta = async (
     opts.artwork ? tmdbArtworkProvider(language) : tmdbProvider(language),
     opts.interactive ?? viewer !== undefined,
     opts.artwork === true,
+    opts.signal,
   ).catch(() => null);
+  if (opts.signal?.aborted) return null;
   if (metaCache.size > 300) metaCache.clear();
   // A failed lookup is not an answer: caching it would hold a title empty for six hours.
   if (value) metaCache.set(key, { value, at: Date.now() });

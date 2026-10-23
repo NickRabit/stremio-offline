@@ -25,7 +25,7 @@ import { asyncRoute, routeDisconnectSignal, viewerOf, type RouteContext } from "
 
 export interface CatalogDeps extends RouteContext {
   tmdbProvider(language: string): MetaProvider | undefined;
-  cachedMeta(type: string, id: string, language?: string, viewer?: Viewer, opts?: { artwork?: boolean }): Promise<MetaItem | null>;
+  cachedMeta(type: string, id: string, language?: string, viewer?: Viewer, opts?: { artwork?: boolean; signal?: AbortSignal }): Promise<MetaItem | null>;
   prefsOf(req?: express.Request): UserPrefs;
   libraryTarget(value: string, viewer: Viewer | undefined): Promise<string>;
   ownerOf(req: express.Request): ResourceOwner;
@@ -133,16 +133,33 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
   app.get("/api/searchable", (req, res) => res.json(searchableCatalogs(inOrder(req)).map(({ addon, definition }) => ({ addonKey: addon.key, addonName: addon.manifest.name, globalSearch: addon.globalSearch, type: definition.type, id: definition.id, name: definition.name ?? definition.id }))));
   app.get("/api/meta/:type/:id", asyncRoute(async (req, res) => {
     const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
-    // The detail page is the one reader that wants the wider backdrop, so it asks for the
-    // artwork reading and keeps a Metahub background at its full size.
-    const meta = await cachedMeta(String(req.params.type), String(req.params.id), language, viewerOf(currentUser(req)), { artwork: true });
-    if (!meta) throw new AppError("The metadata was not found.", "err.metaNotFound", 404);
-    if (req.query.gallery === "1") {
-      const gallery = await detailGallery(String(req.params.type), String(req.params.id), language);
-      res.json(images.rewriteMeta({ ...meta, images: gallery.map((image) => ({ ...image, shape: image.kind === "poster" ? "poster" : "wide" })) }, true));
-      return;
+    const gallery = req.query.gallery === "1";
+    const disconnect = gallery ? undefined : routeDisconnectSignal(req, res);
+    try {
+      if (disconnect?.signal.aborted) return;
+      // The detail page is the one reader that wants the wider backdrop, so it asks for the
+      // artwork reading and keeps a Metahub background at its full size.
+      const meta = await cachedMeta(
+        String(req.params.type),
+        String(req.params.id),
+        language,
+        viewerOf(currentUser(req)),
+        { artwork: true, ...(disconnect ? { signal: disconnect.signal } : {}) },
+      );
+      if (disconnect?.signal.aborted) return;
+      if (!meta) throw new AppError("The metadata was not found.", "err.metaNotFound", 404);
+      if (gallery) {
+        const pictures = await detailGallery(String(req.params.type), String(req.params.id), language);
+        res.json(images.rewriteMeta({ ...meta, images: pictures.map((picture) => ({ ...picture, shape: picture.kind === "poster" ? "poster" : "wide" })) }, true));
+        return;
+      }
+      res.json(images.rewriteMeta(meta, true));
+    } catch (error) {
+      if (disconnect?.signal.aborted) return;
+      throw error;
+    } finally {
+      disconnect?.dispose();
     }
-    res.json(images.rewriteMeta(meta, true));
   }));
   app.get("/api/library/trailer", asyncRoute(async (req, res) => {
     const language = normalizeLanguage(String(req.query.language ?? "")) ?? prefsOf(req).uiLanguage;
