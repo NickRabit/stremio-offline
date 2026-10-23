@@ -426,7 +426,9 @@ export const logDownloadUrl = (options: { tail?: number; level?: string; hours?:
   return `/api/logs${query ? `?${query}` : ""}`;
 };
 
-export const subtitleUrl = (subtitleId: string, offset = 0, delay = 0) => {
-  const query = [offset ? `offset=${offset.toFixed(3)}` : "", delay ? `delay=${delay.toFixed(2)}` : ""].filter(Boolean).join("&");
+/** `lang` is the language the track is shown under: the server reads a file that is not
+ *  Unicode in that language's code page. */
+export const subtitleUrl = (subtitleId: string, offset = 0, delay = 0, lang = "") => {
+  const query = [offset ? `offset=${offset.toFixed(3)}` : "", delay ? `delay=${delay.toFixed(2)}` : "", lang ? `lang=${encodeURIComponent(lang)}` : ""].filter(Boolean).join("&");
   return `/api/subtitle/${encodeURIComponent(subtitleId)}${query ? `?${query}` : ""}`;
 };

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { describeError, ApiError, api , logDownloadUrl } from "./api";
+import { describeError, ApiError, api , logDownloadUrl, subtitleUrl } from "./api";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -299,5 +299,13 @@ describe("logDownloadUrl", () => {
 
   it("escapes a search that would otherwise break the address", () => {
     expect(logDownloadUrl({ search: "a&b c" })).toBe("/api/logs?q=a%26b%20c");
+  });
+});
+
+describe("subtitleUrl", () => {
+  it("names the language the track is shown under, so a legacy file is read in its code page", () => {
+    expect(subtitleUrl("abc")).toBe("/api/subtitle/abc");
+    expect(subtitleUrl("abc", 120, 0.25, "cs")).toBe("/api/subtitle/abc?offset=120.000&delay=0.25&lang=cs");
+    expect(subtitleUrl("abc", 0, 0, "pt-BR")).toBe("/api/subtitle/abc?lang=pt-BR");
   });
 });

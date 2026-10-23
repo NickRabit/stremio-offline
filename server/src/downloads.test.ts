@@ -841,7 +841,8 @@ test("a smart job stores selected addon subtitles beside the completed episode",
   const { server, port } = await listen((req, res) => {
     if (req.url === "/episode.srt") {
       res.writeHead(200, { "content-type": "application/x-subrip" });
-      res.end("1\n00:00:01,000 --> 00:00:02,000\nAhoj\n");
+      // In the code page a Czech subtitle saved on Windows is in: "kůň" is k, 0xf9, 0xf2.
+      res.end(Buffer.concat([Buffer.from("1\n00:00:01,000 --> 00:00:02,000\nAhoj k"), Buffer.from([0xf9, 0xf2]), Buffer.from("\n")]));
       return;
     }
     res.writeHead(200, { "content-length": "2048", "content-type": "video/mp4" });
@@ -861,7 +862,7 @@ test("a smart job stores selected addon subtitles beside the completed episode",
     } }, { kind: "episode", title: "Show", season: 1, episode: 1 });
     await waitFor(queue, () => queue.list()[0].status === "completed" || queue.list()[0].status === "failed");
     assert.equal(queue.list()[0].status, "completed", queue.list()[0].error);
-    assert.match(await readFile(path.join(downloads, "Show", "01 serie", "Show - S01E01.cs.vtt"), "utf8"), /WEBVTT[\s\S]*00:00:01\.000[\s\S]*Ahoj/);
+    assert.match(await readFile(path.join(downloads, "Show", "01 serie", "Show - S01E01.cs.vtt"), "utf8"), /WEBVTT[\s\S]*00:00:01\.000[\s\S]*Ahoj kůň/);
   } finally {
     await queue.stop(); server.close(); await rm(directory, { recursive: true, force: true });
   }

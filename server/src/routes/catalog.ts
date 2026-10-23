@@ -11,7 +11,7 @@ import { libraryFor, libraryVisible, parseLibraryPath, posixBase, type Viewer } 
 import { episodeNumberOf, knownTitleEntry, unitFor, type LibraryMetaRecord, type TitleUnit } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import { mediaResources, ResourceError, safeSourceText, type ResourceOwner } from "../media-resources.js";
-import { readMediaText } from "../media-playlist.js";
+import { readMediaBytes } from "../media-playlist.js";
 import { isRemoteMediaStream } from "../media-server-reference.js";
 import type { MediaServerSources } from "../media-server-sources.js";
 import { guardedBody } from "../outbound.js";
@@ -21,8 +21,13 @@ import type { UserPrefs } from "../store.js";
 import { trailerFor } from "../trailers.js";
 import { tmdbGallery } from "../tmdb.js";
 import type { MetaItem, StreamItem } from "../types.js";
+import { subtitleVtt } from "../subtitle-text.js";
 import { shiftVtt } from "../vtt.js";
 import { asyncRoute, routeDisconnectSignal, viewerOf, type RouteContext } from "./context.js";
+
+/** The language the player shows a subtitle under, which is what a file that is not Unicode
+ *  is read by. Only ever picks a code page, so anything unrecognised just falls back. */
+const subtitleLanguage = (value: unknown) => typeof value === "string" ? value.slice(0, 32) : undefined;
 
 export interface CatalogDeps extends RouteContext {
   tmdbProvider(language: string): MetaProvider | undefined;
@@ -386,8 +391,7 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
       const controller = new AbortController();
       res.once("close", () => { if (!res.writableEnded) controller.abort(); });
       const asset = await mediaSources.readSubtitle(resource.stream, owner, controller.signal);
-      let text = new TextDecoder().decode(asset.bytes);
-      if (!text.trimStart().startsWith("WEBVTT")) text = `WEBVTT\n\n${text.replace(/^\ufeff/, "").replace(/\r/g, "").replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2").replace(/^\d+\n(?=\d{2}:\d{2}:\d{2}[.,]\d{3} -->)/gm, "")}`;
+      let text = subtitleVtt(asset.bytes, subtitleLanguage(req.query.lang));
       const shift = (Number(req.query.offset) || 0) - subtitleDelay(req.query.delay);
       if (shift) text = shiftVtt(text, shift);
       // The session, the grant and the resource are all re-read after the await and the
@@ -407,8 +411,7 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     const raw = resource.stream.url!;
     if (raw.startsWith("file://")) {
       const target = await libraryTarget(raw.slice(7), currentUser(req));
-      let text = await readFile(target, "utf8");
-      if (!text.trimStart().startsWith("WEBVTT")) text = `WEBVTT\n\n${text.replace(/^\ufeff/, "").replace(/\r/g, "").replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2").replace(/^\d+\n(?=\d{2}:\d{2}:\d{2}[.,]\d{3} -->)/gm, "")}`;
+      let text = subtitleVtt(await readFile(target), subtitleLanguage(req.query.lang));
       // Shifted like an addon's: the player asks with the same offset and delay for both.
       const shift = (Number(req.query.offset) || 0) - subtitleDelay(req.query.delay);
       if (shift) text = shiftVtt(text, shift);
@@ -417,7 +420,7 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     const disconnect = routeDisconnectSignal(req, res);
     try {
       if (disconnect.signal.aborted) return;
-      const downloaded = await guardedBody<string | null>(
+      const downloaded = await guardedBody<Buffer | null>(
         raw,
         {},
         async (response, signal) => {
@@ -425,13 +428,12 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
             cancelResponseBody(response);
             return null;
           }
-          return readMediaText(response, SUBTITLE_MAX_BYTES, signal);
+          return readMediaBytes(response, SUBTITLE_MAX_BYTES, signal);
         },
         { signal: disconnect.signal, deadlineMs: SUBTITLE_DEADLINE_MS },
       );
       if (downloaded === null) throw new Error("Subtitle source unavailable.");
-      let text = downloaded;
-      if (!text.trimStart().startsWith("WEBVTT")) text = `WEBVTT\n\n${text.replace(/^\ufeff/, "").replace(/\r/g, "").replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2").replace(/^\d+\n(?=\d{2}:\d{2}:\d{2}[.,]\d{3} -->)/gm, "")}`;
+      let text = subtitleVtt(downloaded, subtitleLanguage(req.query.lang));
       const shift = (Number(req.query.offset) || 0) - subtitleDelay(req.query.delay);
       if (shift) text = shiftVtt(text, shift);
       requireAccess(req, { addonKey: resource.stream.addonKey });
