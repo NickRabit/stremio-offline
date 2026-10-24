@@ -21,7 +21,9 @@ profile CRUD must not depend on remote automatic downloads being ready.
 This work does not migrate favourites, title bindings or progress stores, add household/account
 profiles, change native remote history, add arbitrary rule scripts, or redesign playback and
 FFmpeg. Coordinate with existing title/progress identity work instead of creating another identity
-or migration. The local-only `SOURCE_PARITY_TASK.md` was consulted; do not add it to git.
+or migration. `SOURCE_PARITY_TASK.md` (one title, one favourite, one position, one "next") was
+consulted. It describes itself as an untracked working note but was committed by mistake in #544
+and is missing from `.gitignore`; removing it is separate housekeeping, not part of this work.
 
 ## Current implementation and demonstrated differences
 
@@ -30,16 +32,21 @@ Baseline inspected: `cebf6fa6` on `main`. Recheck these seams on the implementat
 | Responsibility | Existing seam | Difference to protect or deliberately fix |
 | --- | --- | --- |
 | Provider discovery | `server/src/addons.ts`: `streamCandidates`; `routes/catalog.ts` | Shared addon eligibility, viewer permissions and ordering; no common local/remote provider plan |
-| Addon requests | `addons.ts`: `streams` | Upstream failures are logged and flattened to empty arrays |
-| Catalogue loading | `web/src/App.tsx`: `fetchSources`, `fetchEpisodeSources` | Independent fan-out; catalogue results arrive incrementally; subtitle lookup can delay addon fan-out |
-| Title loading | `web/src/CatalogueTitleDetail.tsx` | Separate fan-out, waits for all; can reuse handed-over rows |
-| Other-source panels | `web/src/library-sources.ts`: `useLibrarySources` | Bounded concurrency and group retry, but state is per hook instance |
-| Ranking | `web/src/streams.ts`, `server/src/ranking.ts`, `download-selection.ts` | Duplicated language/size parsing; UI priority often uses display names, downloads use addon keys |
+| Addon requests | `addons.ts`: `streams` | Upstream failures are logged and flattened to empty arrays. Interactive `GET /api/streams` has no cache: every client lookup reaches the addon |
+| Catalogue loading | `web/src/App.tsx`: `fetchSources`, `fetchEpisodeSources` | Independent fan-out asking every addon at once; results arrive incrementally; the addon fan-out starts only after `api.subtitles` answers (`Promise.all`); addon and local-copy requests carry no abort signal, so a left title keeps its requests running until their deadline |
+| Title loading | `web/src/CatalogueTitleDetail.tsx` | Separate fan-out, waits for all; can reuse handed-over rows; always ranks `recommended`, ignoring the viewer's `streamSort` |
+| Other-source panels | `web/src/library-sources.ts`: `useLibrarySources` | Bounded concurrency (two addon, two remote, one local) and group retry, but state is per hook instance. Five instances exist (catalogue detail, player, second player, local and remote library details); with the catalogue panel, one title can be asked of every addon up to four times, with no cache in between |
+| Ranking | `web/src/streams.ts`, `server/src/ranking.ts`, `download-selection.ts` | Duplicated language/size parsing (identical copies today, so drift is the risk); UI priority uses display names, downloads use addon keys; the legacy no-selection resolver uses instance addon order, not the owner's `addonOrder`; web and TV feed size sorts in different input orders, so ties resolve differently |
 | Resume | `CatalogueTitleDetail.tsx`, `LibraryTitleDetail.tsx`, `source-progress.ts` | Remembered source has different precedence across entry points; App catalogue default ignores it |
-| Bulk/follow setup | `SeriesDownloadDialog.tsx`, `routes/downloads.ts`, `routes/follows.ts` | Shared dialog and parser; first-episode addon discovery; stored `addonKeys` |
-| Automatic resolution | `server/src/index.ts`: `cachedStreams`, `queue.setResolver` | Five-minute cache; requests all allowed suitable addons before applying selected keys |
+| Bulk/follow setup | `SeriesDownloadDialog.tsx`, `routes/downloads.ts`, `routes/follows.ts` | Shared dialog and parser; first-episode addon discovery; stored `addonKeys`; bulk defaults to `largest`, follow to `priority`; `POST /api/downloads` coerces an unknown `sourceStrategy` to `priority` and silently drops unknown or disallowed addon keys |
+| Automatic resolution | `server/src/index.ts`: `cachedStreams`, `queue.setResolver` | Five-minute cache of the merged list, flattened failures included, so an addon that failed once stays absent for that episode for five minutes; requests all allowed suitable addons before applying selected keys; only addon candidates are considered |
+| Local copies | `server/src/local-sources.ts`: `localCopies`; `GET /api/local-streams` | A binding lookup, not a provider query: files bound to the catalogue title, in library order then size descending, at most 20, visible libraries only, read from the last library walk. Rows carry `localPath` and `libraryName` but no `libraryId`. No audio, resolution or duration facts are stored, and download names carry no language, so most owned copies have unknown language |
+| Next episode | `App.tsx`: `playNextCatalogEpisode`, `playNextDetailEpisode`, `playLocal` | Three disjoint rules: an owned copy continues with the next file in its folder; an addon source picks from addon rows only (the next episode's owned copy is loaded but never chosen); a remote source stays on the same library and version name or stops |
+| Episode ownership | `downloads.ts`: `addPending`, `admitDirect` | Lazy episode jobs deduplicate only against active jobs and explicit saves only by source; nothing checks whether the episode already exists in a library, so a follow downloads it again under a `(2)` name |
+| Follow retries | `follows.ts`: `effectiveSelection`, `queue.retry` | Admission stores the grace-adjusted selection in the job; a reserved episode stores none; every retry recomputes the selection from the follow's current configuration and the current time |
+| Settings backup | `backup.ts`, `media-server-store.ts` | Version 3 carries addon manifest URLs but no addon keys, users, personal data or follows; import mints new addon keys and new remote library IDs |
 | Remote copy | `media-server-sources.ts`, `media-server-quota.ts`, `downloads.ts` | Exact-source durable references and guarded original transfers already exist |
-| TV | `catalog/Streams.kt`, `ui/catalog/NativeSources.kt`, `CatalogDetailScreen.kt`, `ui/player/LibraryPlaySources.kt` | Independent implementations, ranking port, inconsistent request deadlines |
+| TV | `catalog/Streams.kt`, `ui/catalog/NativeSources.kt`, `CatalogDetailScreen.kt`, `ui/player/LibraryPlaySources.kt` | Independent implementations, ranking port, inconsistent request deadlines: 8 seconds per addon on TV against 30 seconds on the web client and 60 on the server, so a slow addon appears on the web but not on TV |
 
 Existing differences are characterization targets, not all desired behavior. Keep a test ledger
 that labels each difference as preserved, deliberately corrected, or deferred. In particular,
@@ -52,6 +59,21 @@ local-first ordering depends on sort mode today; do not assert that it is univer
 A provider is an origin, not a media version. Use typed stable keys:
 `addon:<addonKey>`, `remote:<libraryId>`, and `local`. Display names never identify or rank providers.
 `local` groups owned copies for ordering; each candidate still carries its real library identity.
+
+Provider keys are installation-local. Addon keys are `randomUUID()` values, re-adding an addon
+mints a new one, settings backup version 3 carries each addon's manifest URL but no key, and
+import mints new remote library IDs (`prepareMediaServerConfiguration`). Profiles, follow and job
+snapshots, personal defaults and `stableKey` (which includes the addon key for addon and torrent
+sources) therefore do not survive import or reinstall by themselves. Backup version 4 writes a
+portable identity beside every provider reference: the manifest URL for an addon, the connection
+and upstream library ID for a remote library. Import maps them to this instance's keys, never by
+display name; the media-server import returns its old-to-new library ID map for this. Unresolved
+references stay dormant and are listed in the import result: after an import this is the expected
+state, not an edge case. Backups 1 to 3 still import. Profiles, personal defaults and new follow
+and job snapshots store the portable identity beside the key, so after an addon is re-added the
+admin repair can offer rebinding a dormant reference to it; nothing rebinds silently. A manifest
+URL can carry addon credentials, so the portable identity appears only in admin reads and backups,
+never in public profile projections, job or follow DTOs, errors or logs.
 
 The server builds an authorized provider plan for a catalogue subject (type, title/video ID and
 resolved episode identity) and operation (`play`, `downloadToLibrary`, `downloadToDevice`).
@@ -74,19 +96,25 @@ subscriber does not cancel another; the last subscriber leaving aborts pending w
 account, server, subject or access/configuration revision drops obsolete answers immediately.
 TV uses one equivalent repository, not three independently evolving loaders.
 
-Start with two addon and two remote discovery requests concurrently, retaining separate budgets
-so a slow class cannot starve another. Define request budgets in the contract: interactive addon
-attempts initially 30 seconds end-to-end with a smaller upstream deadline to leave transport
-margin, remote discovery 3 seconds and matching 8 seconds; background addon work may use the
-existing configurable 60-second budget. Cancellation reaches the upstream transport. Tests prove
-these deliberate differences; a deadline is not hidden inside each screen. Subtitles load
-independently and do not block the first source result.
+Concurrency is a budget per consumer, not one global number. The primary catalogue and player lookup
+keep today's all-at-once addon fan-out, because each call already has its own deadline; other-source
+panels keep the current `useLibrarySources` limits (two addon, two remote, one local). Separate
+budgets per class keep a slow class from starving another. A test with eight addons shows that time
+to the first row does not regress on the primary path. Define request budgets in the contract:
+interactive addon attempts initially 30 seconds end-to-end with a smaller upstream deadline to leave
+transport margin, remote discovery 3 seconds and matching 8 seconds; background addon work may use
+the existing configurable 60-second budget. TV cuts each addon at 8 seconds today; adopting the
+contract budget there is a deliberate, tested behavior change. Cancellation reaches the upstream
+transport; today the web catalogue sends addon and local-copy requests without an abort signal.
+Tests prove these deliberate differences; a deadline is not hidden inside each screen. Subtitles
+load independently and do not block the first source result.
 
 Share in-flight raw results only inside their authorization/configuration scope. Cache per provider
 and subject, not a merged list of every addon. Local-library scan revisions invalidate copy listings;
 profile edits invalidate ranked views only when the acquisition scope has not changed. Bound both entry count and memory; start with at
 most five minutes for successful background addon listings and short-lived interactive reuse.
-Do not cache transport failures as empty results. Retry bypasses failed/negative entries. Include
+Do not cache transport failures as empty results; today the background cache stores the
+flattened merged list, failures included. Retry bypasses failed/negative entries. Include
 provider configuration generation, relevant metadata language and authorization scope in keys;
 invalidate on enable/disable, URL/manifest/credential changes, grant changes and connection
 replacement. Recheck rights before and after I/O and before projection/use even on cache hits.
@@ -106,9 +134,11 @@ normal fallback, not proof that a source was revoked or that two variants are id
 
 Normalized candidates contain provider key, opaque stable identity, source kind, capabilities and
 facts (languages, bytes, duration, resolution when known), including evidence (`listed`, provider
-metadata or verified inspection). Unknown is distinct from zero. Normalize units and language
-aliases once; notices and unsupported rows are not playable candidates. Keep authorization and
-capability checks in trusted services, not in this pure package.
+metadata or verified inspection). Nothing parses resolution from listings today, and media-server
+versions report size, duration, bitrate and container but neither audio languages nor resolution, so
+in v1 resolution is known only after inspection. Unknown is distinct from zero. Normalize units and
+language aliases once; notices and unsupported rows are not playable candidates. Keep authorization
+and capability checks in trusted services, not in this pure package.
 
 Ranking is lexicographic over a bounded ordered list of typed criteria, not weighted scores or
 executable expressions. Ties use stable provider/source order, never network completion order.
@@ -129,7 +159,7 @@ Do not introduce a second heuristic parser if the server already supplies the fa
 | Explicit manual choice or an explicitly supplied initial version | Keep it while authorized; no late automatic replacement. If missing, show unavailable rather than silently launch a different version. |
 | Continue watching | After eligible discovery completes or reaches its deadline, use a playable exact saved `stableKey`; otherwise choose the profile winner. Show that a different version was selected. |
 | Ordinary detail/default play | Prefer an eligible remembered version when present; otherwise use the profile winner. A preview may update until the user commits a choice. |
-| Next episode | Never reuse the previous episode's source ID. Apply the selected profile and episode identity; optional same-provider/nearest-size preference is a named selection policy, subordinate to hard eligibility. |
+| Next episode | Never reuse the previous episode's source ID. Apply the selected profile and episode identity; optional same-provider/nearest-size preference is a named selection policy, subordinate to hard eligibility. One rule spans provider classes: owned copies, addon rows and remote versions of the next episode are all candidates. Coordinate the file-versus-title "next" with the title identity work. |
 | Automatic download | Resolve the stored policy, verify candidates and persist one authorized source; no resume preference unless an explicit future product requirement adds it. |
 
 Manual choice may bypass soft ranking only, never rights, capabilities or hard constraints. A
@@ -150,10 +180,10 @@ parsing and comparisons, not an assumption that interactive and download winners
 A list explains preference; downloading may reject an unverified candidate after inspection.
 
 Exact-source saves continue to save the selected source; applying a profile must not replace it.
-Automatic resolution requests only selected, currently authorized providers. Capability filtering
-is operation-specific and candidate-specific: playable does not imply downloadable. Local copies
-may prevent a redundant download through existing ownership/destination checks, but are not
-network download candidates; copying/moving local files remains the library operation workflow.
+Automatic resolution requests only selected, currently authorized providers. Capability filtering is
+operation-specific and candidate-specific: playable does not imply downloadable. Local copies are
+not network download candidates; copying/moving local files remains the library operation workflow.
+No existing check prevents a redundant episode download: see [Local libraries](#local-libraries).
 
 ## Administrator-managed profile contract
 
@@ -170,27 +200,38 @@ at 64 and include schema limits in request validation before allocating work.
 A profile contains:
 
 - Provider scope: membership only, `allAvailable` or an explicit selected-key set. Only the
-  provider-order criterion defines priority. New providers participate only in `allAvailable`.
-  Removed provider references stay dormant for admin repair, never broaden scope.
+  provider-class and provider-order criteria define priority. New providers participate only in
+  `allAvailable`. Removed provider references stay dormant for admin repair, never broaden scope.
 - Hard constraints: allowed source kinds, audio mode and preferred/fallback languages, subtitle
   policy, optional byte/duration/resolution bounds. A language can explicitly mean the executing
   viewer's preference; resolve that value into each admitted job. No hidden locale dependence.
-- Ordered soft criteria: preferred audio tier, provider order, size ascending/descending,
-  resolution ascending/descending, and subtitle preference where applicable. Each criterion has
-  specified evidence and missing-value handling. Ascending and descending unknown sizes sort last.
+- Ordered soft criteria: provider class (owned copy, remote library, addon), preferred audio tier,
+  provider order, size ascending/descending, resolution ascending/descending, and subtitle
+  preference where applicable. Each criterion has specified evidence and missing-value handling.
+  Ascending and descending unknown sizes sort last.
 - Explicit selection options, such as next-episode continuity; these are not fabricated ranking
   weights and cannot override a running or manual selection.
 
 A bounded fact needed by a hard constraint must be known before automatic acceptance. Downloads
 may inspect it within their budget; unknown after verification is ineligible. Interactive UI can
 show an unverified/excluded row with its reason, but cannot silently autoplay it. Existing rules
-without that constraint keep their old unknown-value behavior.
+without that constraint keep their old unknown-value behavior. Owned copies carry no stored audio
+or resolution facts, so a hard audio or resolution bound would stop them from autoplaying. Before a
+play profile ships with such a bound, either inspect owned files into a cache keyed by path, size
+and modification time (local inspection is cheap and needs no provider quota) or exempt owned
+copies from bounds they cannot prove, explicitly and per profile.
 
-Seed editable Recommended, Provider priority and Travel templates for new installations. Travel
-prefers the chosen audio language and then smaller verified eligible files. Do not invent a
-universal minimum file size: shorts, low-bitrate media and feature films differ. Expose optional
-minimum duration/bytes, retain existing anti-sample checks, and test sample/trailer rejection and
-legitimate short media separately. Show estimated/unknown sizes honestly.
+Seed editable Recommended, Provider priority and Travel templates for new installations. Recommended
+reproduces today's unfiltered order: `providerClass` (`local`, `remote`, `addon`), then `audioTier`,
+then `providerOrder` from the viewer, then size descending. Class comes first because today language
+and provider priority rank addon rows only; a language-first template would put an owned copy, whose
+language is usually unknown, below every addon row in the preferred language. Conformance vectors
+pin today's order and label any remaining difference in the ledger, for example an owned copy whose
+filename names a language. Provider priority is `providerClass`, `providerOrder`, `audioTier`, size
+descending. Travel prefers the chosen audio language and then smaller verified eligible files. Do
+not invent a universal minimum file size: shorts, low-bitrate media and feature films differ. Expose
+optional minimum duration/bytes, retain existing anti-sample checks, and test sample/trailer
+rejection and legitimate short media separately. Show estimated/unknown sizes honestly.
 
 Built-in names use i18n keys until renamed; administrator-authored names are plain data. Every
 seeded profile can be renamed, edited, duplicated and deleted. Templates can be restored as new
@@ -221,8 +262,10 @@ type SourcePolicyV1 = {
     heightPixels?: { min?: number; max?: number };
   };
   criteria: Array<
+    | { kind: "providerClass"; order: Array<"local" | "remote" | "addon"> }
     | { kind: "audioTier" }
     | { kind: "providerOrder"; keys: string[] }
+    | { kind: "providerOrder"; from: "viewer" }
     | { kind: "size"; direction: "asc" | "desc" }
     | { kind: "resolution"; direction: "asc" | "desc" }
     | { kind: "subtitleTier" }
@@ -231,8 +274,12 @@ type SourcePolicyV1 = {
 };
 ```
 
-Each criterion kind occurs at most once. Provider-order keys occur once and are intersected with
-scope; absent providers sort after listed ones in stable provider-key order. Selected scope is
+Each criterion kind occurs at most once. `providerClass` lists each class once. Provider-order keys
+occur once and are intersected with scope; absent providers sort after listed ones in the
+instance's configured provider order, as today's `addonOrder` does ("missing ones sort after, in
+the global order"), never by key string, which is a random identifier. `from: "viewer"` uses the
+executing viewer's own provider order, today's per-user `addonOrder` extended with `local` and
+`remote:` keys, so an instance-wide profile can still respect personal order. Selected scope is
 nonempty at validation (it may become unavailable later). Source kinds and operations are nonempty
 sets. Numeric bounds are finite, nonnegative safe integers with at least one endpoint and min <=
 max; duration/height bounds, when supplied, must be positive. Normalize explicit language codes
@@ -243,8 +290,10 @@ resolution. Missing criteria mean no preference, not a hidden size/provider rule
 Facts carry `listed | providerMetadata | inspected` evidence. `audioTier` and `subtitleTier` compare
 preferred, fallback, known-other, unknown, in that order; a higher evidence level does not by itself
 outweigh a language tier. Size/resolution compare numeric values in the requested direction, with
-unknown last in both directions. Final ties use provider key then stable source identity and stable
-provider response index for otherwise indistinguishable rows. No locale-sensitive name sort.
+unknown last in both directions. Final ties use the configured provider order, then stable source
+identity and the stable provider response index for otherwise indistinguishable rows. Within
+`local`, the stable source order is the one `localCopies` returns (library order, then size). No
+locale-sensitive name sort.
 
 Hard audio/subtitle eligibility and download verification retain the existing mode semantics through
 the compatibility evaluator. Strict audio requires inspected tracks or equivalent authoritative
@@ -257,7 +306,7 @@ and download evidence can legitimately differ, but identical facts/policy/contex
 ### Authorization, APIs and user experience
 
 Proposed additive routes: `GET /api/source-profiles`, administrator-only `POST`, `PATCH /:id`,
-`DELETE /:id`, plus ordinary preference updates that accept only selected profile IDs.
+`DELETE /:id`. Remembered profile IDs are personal settings, described below.
 There is no draft/publish state in v1: saved profiles are available for selection. A public read
 returns ID, public profile name, revision, supported operations and an authorized policy projection:
 intersect selected membership and provider-order keys with the caller's visible providers, omit
@@ -268,19 +317,26 @@ autogenerate names from private provider configuration. Use a neutral deleted-pr
 not an old provider-derived name. Admin editor reads the full configuration. Cache public profile
 responses by authorization epoch as well as catalogue revision; test raw JSON/errors after revocation.
 Perform admin authorization server-side on every mutation, including duplicate/restore and bulk
-updates. Restricted/read-only mode still applies. Never accept a caller-supplied owner/admin flag.
+updates. Admin checks are written per route today (`role === "admin"`, no shared helper), so every
+new mutation route gets its own check and its own test. Restricted mode is deny-by-default
+(`ALLOWED_MUTATIONS` in `server/src/restricted.ts`): new admin routes stay denied there, remembering
+a profile goes through `PATCH /api/settings`, which restricted mode already refuses, and choosing
+a profile for one view writes nothing. Never accept a caller-supplied owner/admin flag.
 
 Use expected revisions (If-Match or equivalent) for edits/deletion/default replacement. A stale
 write returns a localized conflict and requires reload; it cannot silently overwrite another edit.
 Delete, instance-default reassignment and catalogue revision publication are one settings-store
-transaction. Personal defaults live in a different store: retain a minimal deleted-ID replacement
-map in the profile catalogue so those preferences resolve to the explicitly chosen compatible
-replacement without a cross-store rewrite. Validate/flatten replacement chains, forbid cycles, and
-clear stale personal IDs on their next preference write. Report the replacement on the next
-selection; an explicit submission of a deleted ID fails instead of silently running another policy.
-Historical follow/job snapshots never follow that map. Reads of another user's personal defaults
+transaction. Personal defaults are `UserData.prefs` in the same state file, written by the same
+serialized `store.update`, so that transaction also rewrites every personal default that named the
+deleted profile to the explicitly chosen compatible replacement; no deleted-ID replacement map is
+needed. Store remembered profile IDs as `PERSONAL_SETTINGS` keys so they get the existing
+`PATCH /api/settings` validation, restricted-mode rule and settings backup. Report the replacement
+on the next selection; an explicit submission of a deleted ID fails instead of silently running
+another policy.
+Historical follow/job snapshots are never rewritten. Reads of another user's personal defaults
 remain forbidden. Export/import validates revisions/schema,
-remaps IDs/references, and never restores grants or secrets from profile data.
+remaps provider references through their portable identity, and never restores grants or secrets
+from profile data.
 
 Admin Settings has a profile list with Add, Edit, Duplicate, Delete and default assignment.
 The editor separates mandatory constraints from ordered preferences and shows a safe preview using
@@ -290,14 +346,14 @@ keyboard ordering controls, accessible labels and translations per [UI conventio
 
 Catalogue/details/player offer the same profile selector. Bulk download and Follow offer only
 operation-compatible profiles plus existing destination/scheduling controls. Ordinary users cannot
-edit profile criteria or save personal variants; they may choose another profile and manually
-choose an eligible source. Allow separate remembered playback/download profile IDs per user, with
-instance defaults when unset. Resolve a remembered default (including a deleted-ID replacement)
-only if it is operation-compatible and has an authorized provider path, otherwise try the instance
-default. If neither qualifies, show a neutral no-usable-profile state and start no lookup/job;
-never broaden provider scope to make a default work. A per-view profile change does not silently
-overwrite the user's default. TV supports profile selection and the same semantics; the first editor is web/desktop
-admin Settings, not a duplicate TV rule editor.
+edit profile criteria or save personal variants; they may choose another profile and manually choose
+an eligible source. Allow separate remembered playback/download profile IDs per user, with instance
+defaults when unset. Resolve a remembered default (including one rewritten after a deletion) only if
+it is operation-compatible and has an authorized provider path, otherwise try the instance default.
+If neither qualifies, show a neutral no-usable-profile state and start no lookup/job; never broaden
+provider scope to make a default work. A per-view profile change does not silently overwrite the
+user's default. TV supports profile selection and the same semantics; the first editor is
+web/desktop admin Settings, not a duplicate TV rule editor.
 
 ### Profile revisions, follows and queued work
 
@@ -322,18 +378,54 @@ Deletion preserves snapshots and shows a deleted-profile label; it changes defau
 needed to delete a profile safely.
 
 For `allAvailable`, the follow snapshot retains that scope policy; each future admission resolves
-current eligible providers and stores a concrete list in the job. Selected-only follows never
-pick up new providers implicitly. Current rights are always intersected at admission, resolution
-and transfer; a snapshot never preserves a revoked grant. Grace-window transformations are derived
-from the follow/job snapshot and episode dates, not from the current profile catalogue. Retries
-retain the admitted policy and existing grace semantics; choosing new rules requires an explicit
-reconfigure/requeue action. A profile rename is cosmetic and cannot alter a job's rule digest.
+current eligible providers and stores a concrete list in the job. Selected-only follows never pick
+up new providers implicitly. Current rights are always intersected at admission, resolution and
+transfer; a snapshot never preserves a revoked grant. Grace-window transformations are derived from
+the follow/job snapshot and episode dates, not from the current profile catalogue. Today every retry
+recomputes the selection from the follow's current configuration and the current time
+(`effectiveSelection` in `follows.ts`). That restores the saved rules once the grace window closes,
+but it also applies later follow edits to jobs already queued. Keep the first and correct the
+second: store the pre-grace base snapshot and the grace parameters with the job and the reserved
+intent, and recompute the effective selection from that snapshot and the current time on every
+retry. Choosing new rules requires an explicit reconfigure/requeue action. A profile rename is
+cosmetic and cannot alter a job's rule digest.
+
+## Local libraries
+
+Owned copies are a provider class of their own, not an addon. They have no manifest, role, grants
+or download settings, and an addon record would leak into `allowedAddons`, `streamCandidates`, the
+addon APIs and the settings backup. In v1 they are one provider key, `local`, shown as a virtual
+row in the provider-order editor that cannot be removed. Keys per library (`local:<libraryId>`)
+are deferred until ranking one library above another is a real requirement; until then the order
+inside `local` stays the library order, then size, exactly as `localCopies` returns it.
+
+- **Discovery** stays the binding lookup in `localCopies`: the files bound to the catalogue title,
+  in visible libraries only. A library scan revision invalidates the listing. The listing gains an
+  additive `libraryId` field beside `localPath` and `libraryName`, so a candidate carries its real
+  library identity as the provider contract requires.
+- **Default position** is first, then remote libraries, then addons. That is today's order for the
+  unfiltered recommended and by-addon lists; size sorts mix classes today, and a template keeps or
+  changes that explicitly.
+- **Facts** are size and file name only. Language comes from the name, and app-downloaded names
+  carry none. See the hard-constraint rule above before a play profile uses audio or resolution
+  bounds.
+- **Next episode** follows the one cross-class rule of the selection intent table. An owned copy of
+  the next episode is a candidate even when an addon row is playing, and continuing from an owned
+  copy can reach an addon row when no copy of the next episode exists.
+- **Ownership before download.** Before a follow admits an episode, and before a lazy episode job
+  is queued, check whether the owner can already see an owned copy of that episode through the same
+  binding lookup and visibility rules. If so, record the episode as present instead of queueing it.
+  Proposed rule: any owned copy counts, not only one that satisfies the profile. An explicit manual
+  save still runs. Never rely on the `(2)` rename as deduplication, and never let the check reveal a
+  copy in a library the owner cannot see.
 
 ## Remote libraries in future downloads (separate delivery stage)
 
-Discover by the episode's catalogue identity through existing remote matching. No speculative
-fallback to another episode, title or fuzzy match below the existing confidence threshold. Selected
-providers with no released item remain empty/unavailable; the follow scheduler owns retry timing.
+Discover by the episode's catalogue identity through existing remote matching. That matching is
+exact today (`remoteIdsMatch`: a shared IMDb, TMDB or TVDB ID plus season and episode; files that
+span several episodes are excluded). Keep it exact and add no fuzzy fallback to another episode or
+title. Catalogue IDs in other schemes never match. Selected providers with no released item remain
+empty/unavailable; the follow scheduler owns retry timing.
 
 The current `downloadReference()` starts from a session-bound resource. Background resolution
 needs a narrowly scoped owner-based entry point that derives `RemoteDownloadReference` from a
@@ -342,14 +434,17 @@ Reuse canonical reference validation, provider account/generation binding and na
 checks. Persist no expiring source ID or credentials. Never accept raw remote URLs/references
 from client input to make this work.
 
-Return a discriminated queue resolution: existing addon source or authorized remote reference.
-Feed the latter into existing remote-copy execution, destination ownership, reservation, retry and
+Return a discriminated queue resolution: existing addon source or authorized remote reference. Feed
+the latter into existing remote-copy execution, destination ownership, reservation, retry and
 cleanup paths. Inspection and transfer both use the guarded provider transport and `OriginalQuota`;
-metadata-only discovery does not hold an original-transfer slot. Do not bypass the quota with a
-raw ffprobe URL. Reuse trusted track metadata only at the evidence level it proves; missing facts
-need bounded guarded inspection or explicit rejection. A busy quota is retryable, not an empty
+metadata-only discovery does not hold an original-transfer slot. Do not bypass the quota with a raw
+ffprobe URL. Reuse trusted track metadata only at the evidence level it proves (media-server
+versions report size, duration, bitrate and container, not audio languages or resolution); missing
+facts need bounded guarded inspection or explicit rejection. A busy quota is retryable, not an empty
 provider response or permission failure. Abort, denial, failed probe and shutdown release every
-slot/body; never hold a probe slot while waiting to acquire a transfer slot.
+slot/body; never hold a probe slot while waiting to acquire a transfer slot. `OriginalQuota` counts
+holds per source and checks the stream limit only on a source's first hold, so this applies across
+different sources; a probe and a transfer of the same source share one slot count.
 
 ## Migration and rollout
 
@@ -368,16 +463,21 @@ slot/body; never hold a probe slot while waiting to acquire a transfer slot.
    compatibility window. Legacy ad-hoc job settings are not profile CRUD and cannot mutate shared
    profiles. New clients submit profile references. Unsupported rules on older clients produce an
    upgrade-required response, not a weaker rule. Reject unknown future persisted schemas safely.
+   This changes today's behavior: `POST /api/downloads` coerces an unknown `sourceStrategy` to
+   `priority`. A legacy payload the contract can express keeps working; one it cannot express gets
+   a distinct upgrade-required error with a message key. Dropping addon keys the caller may not use
+   stays (it is an access rule), and an empty result keeps `err.missingDownloadSources`.
 6. Existing users retain a server-side legacy compatibility mode until they explicitly choose
    a profile. It preserves their stream sort, language and addon order; it is not a user-editable
    shared profile. New installations use instance defaults. New templates are optional explicit
    choices for existing users. Default profile selection and deliberate resume-policy corrections
    are not hidden inside an extraction. Persist migration version/backup and prove restart/idempotency.
-7. Deleted IDs are never reused. Retain and flatten replacement mappings while personal/default
-   references can exist; no time-based pruning. Settings import publishes remapped profiles and
-   old-ID mappings in one catalogue transaction, preserving unaffected account preferences and all
-   historical snapshots. Test import failure/restart and rollback; an older binary must refuse an
-   unsupported new schema rather than overwrite it. Retain the pre-migration backup for rollback.
+7. Deleted IDs are never reused. Settings backup moves to version 4 with portable provider
+   identities (see Provider adapters). Import publishes remapped profiles in one settings-store
+   transaction, preserving unaffected account preferences and all historical snapshots, and lists
+   dormant references it could not map. Test import failure/restart and rollback; an older binary
+   must refuse an unsupported new schema rather than overwrite it. Retain the pre-migration backup
+   for rollback.
 8. Add remote automatic candidates after the addon/profile pipeline and its tests are stable.
 
 ## Acceptance
@@ -393,5 +493,10 @@ slot/body; never hold a probe slot while waiting to acquire a transfer slot.
   profile edits/deletion/restart, and observes current permission revocation.
 - Remote automatic copies use durable server-created references and existing bounded transfer
   machinery; quota and cancellation tests pass before enabling this provider kind in profiles.
+- Owned copies keep their place under Recommended, are candidates for the next episode from any
+  class, and a follow never downloads an episode the owner already has in a visible library.
+- Profiles and personal defaults survive settings import, and profiles, personal defaults and
+  follows survive an addon reinstall, through portable provider identity; otherwise the exact
+  dormant references are reported. No public read, DTO or log exposes a manifest URL.
 - Every stage satisfies the test and rollout gates in the delivery plan. Runtime-changing PRs
   follow repository build, version, Docker health and final visual-verification requirements.

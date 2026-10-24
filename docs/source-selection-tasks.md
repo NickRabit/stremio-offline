@@ -20,24 +20,34 @@ scope, active-source stability) must make its test fail; remove all mutations be
 
 | Family | Required cases | Layer and existing starting points |
 | --- | --- | --- |
-| Facts/ranking | Language aliases/flags, bytes and text sizes, unknown vs zero, ties, duplicate provider names, local/remote/addon groups, all sort modes, deterministic arrival permutations | L0/L1: `server/src/ranking.test.ts`, `download-selection.test.ts`, `web/src/streams.test.ts`, `library-sources.test.tsx`; Kotlin `StreamsTest` |
+| Facts/ranking | Language aliases/flags, bytes and text sizes, unknown vs zero, ties, duplicate provider names, local/remote/addon groups, all sort modes, deterministic arrival permutations, owned copies before addon rows under recommended and by-addon whatever their language, web versus TV tie order under size sorts | L0/L1: `server/src/ranking.test.ts`, `download-selection.test.ts`, `web/src/streams.test.ts`, `library-sources.test.tsx`; Kotlin `StreamsTest` |
 | Discovery | Disabled/catalog-only addons, manifest type/ID prefixes, no eligible providers, first episode vs later episode IDs, account order and grants | L0: `addons.test.ts`, `routes/catalog.test.ts`, `routes/addons.test.ts` |
-| Acquisition | Slow/fast providers, independent subtitle failure, timeout vs empty, partial success, retry only failed group, rapid subject change, close/reopen, unmount, two subscribers and last-subscriber cancellation | L1 network mocks and L2 counting fixture; `library-sources.test.tsx`, `CatalogueTitleDetail.test.tsx`, local/remote detail tests |
-| Resume/current source | Exact saved match, disappeared/changed key, disallowed saved source, explicit choice vs late better row, current playback not switched, account change, position after source switch, same next-episode identity from each entry point | L1 source/progress helpers, L2 real player; Kotlin catalogue/player tests |
-| Automatic jobs | Largest/priority, provider order, audio modes/fallbacks, subtitles, direct vs torrent, inspection cap, tried candidates, selected-provider request counts, no source, retry cache bypass | L0 `download-selection.test.ts`, queue/resolver fixture integration |
-| Follows | New/from/ahead admission, unreleased/ambiguous episode, grace boundary, deleted/disabled owner, schedule revision race, deduplication, retry after restart, selection snapshot and unchanged retention/target | L0 `follows.test.ts`, routes/follows and downloads tests; L2 follow setup |
+| Acquisition | Slow/fast providers, independent subtitle failure, a slow subtitle addon delaying the first source row, timeout vs empty, partial success, retry only failed group, rapid subject change (addon and local-copy requests of the old title aborted), close/reopen, unmount, two subscribers and last-subscriber cancellation, the number of lookups one title causes across catalogue panel, detail, chooser and player | L1 network mocks and L2 counting fixture; `library-sources.test.tsx`, `CatalogueTitleDetail.test.tsx`, local/remote detail tests |
+| Resume/current source | Exact saved match, disappeared/changed key, disallowed saved source, explicit choice vs late better row, current playback not switched, account change, position after source switch, same next-episode identity from each entry point; next episode from an owned copy, an addon row and a remote version, including an owned copy of the next episode while an addon row plays | L1 source/progress helpers, L2 real player; Kotlin catalogue/player tests |
+| Automatic jobs | Largest/priority, provider order, audio modes/fallbacks, subtitles, direct vs torrent, inspection cap, tried candidates, selected-provider request counts, no source, retry cache bypass, an addon failure kept out of the five-minute cache, legacy strategy coercion and dropped addon keys on `POST /api/downloads`, bulk versus follow default strategy | L0 `download-selection.test.ts`, queue/resolver fixture integration |
+| Follows | New/from/ahead admission, unreleased/ambiguous episode, grace boundary, deleted/disabled owner, schedule revision race, deduplication, retry after restart, selection snapshot and unchanged retention/target; a retry after the grace window and after a follow edit (today both recompute from the current follow); an episode already present in a visible library (today downloaded again as `(2)`), and one present only in a library the owner cannot see | L0 `follows.test.ts`, routes/follows and downloads tests; L2 follow setup |
 | Access/cache | Two users and sessions, grant revoked during lookup/inspection/use, provider reconfigured under same key, disabled provider, empty vs error caching, generation change, session source handles never reused | L0 production routes/cache/transport, L2 accounts |
 | Remote originals | Canonical match, native download denied, connection replacement, forged reference rejected, probe/transfer quota, busy/cancel/shutdown releasing slots | L0 media-server source/quota/download tests with owned fixtures |
 | Exact-source saves | Selected version preserved without re-ranking, download-to-library vs device rights, no local self-download | L0 routes/downloads and L2 source chooser |
+| Provider identity | Settings export and import into an empty instance, re-adding an addon, remote libraries re-attached by import, two addons with the same name, backup versions 1 to 3 still importing | L0 `backup` and settings route tests, media-server store tests |
 
 Use a counting addon/remote fixture with controllable completion barriers, fake clocks and explicit
-abort observation. Do not use arbitrary sleeps or real configured providers. Have it return two
-providers with the same name, changed signed addresses, missing/false metadata and distinct episode
-versions. Do not log credentials in request-count evidence.
+abort observation. This is new test infrastructure: `e2e/fixtures/addon-server.mjs` returns static
+streams and counts only media requests today. Do not use arbitrary sleeps or real configured
+providers. Have it return two providers with the same name, changed signed addresses, missing/false
+metadata and distinct episode versions. Do not log credentials in request-count evidence.
 
 **Gate:** critical baseline cases above pass on unrefactored `main`, the ledger identifies defects
 and approved behavior differences, and an independent review verifies that assertions reach the
 real production boundary. No implementation extraction before this gate.
+
+## Early fix: owned episodes are not downloaded again
+
+The duplicate download of an episode already in a visible library is a defect, not a design
+choice. It does not depend on profiles, so it may land right after the Stage 0 gate as its own PR:
+give the follow service and lazy episode admission a check for an owned copy through the existing
+binding lookup and visibility rules, record the episode as present, and leave explicit manual saves
+unchanged. Activate the Stage 0 reproducer as a failing-before/passing-after regression.
 
 ## Stage 1: stable contracts and pure extraction
 
@@ -45,7 +55,8 @@ real production boundary. No implementation extraction before this gate.
 - Extract existing parsing/comparators with compatibility adapters; include HTTP/torrent download
   ordering without flattening audio/subtitle verification into a simplistic global score.
 - Add portable JSON vectors consumed by TypeScript and Kotlin. Cover a changed display name,
-  same-name providers, unknown evidence, deterministic ties and legacy largest/priority policies.
+  same-name providers, unknown evidence, deterministic ties, legacy largest/priority policies,
+  provider class order with owned copies of unknown language, and the order inside `local`.
 - Keep source/progress identity and default selection behavior unchanged in this extraction.
 - Wire actual package builds, container copies, desktop packaging and version checks.
 
@@ -57,7 +68,10 @@ checks pass. Golden expectations are hand-asserted, not generated from the new r
 - Add versioned authorized provider-plan/outcome endpoints; retain legacy array routes.
 - Move UI orchestration into one query owner/repository, keeping adapters small.
 - Introduce bounded per-provider caches/in-flight sharing and revision invalidation; split subtitle
-  work from source discovery; propagate cancellation through the server.
+  work from source discovery; propagate cancellation through the server and from the web catalogue.
+- Apply concurrency budgets per consumer: the primary catalogue/player lookup keeps its parallel
+  fan-out, other-source panels keep their limits. Change the TV addon deadline deliberately.
+- Add `libraryId` to owned-copy rows and one next-episode rule across provider classes.
 - Correct provider identity to keys and selected-provider filtering before outbound requests.
 - Apply the specification's explicit/current/resume/default/next policy with clear fallback.
 - Migrate catalogue, details and both player panels on web/desktop, then equivalent TV consumers.
@@ -76,6 +90,8 @@ requests local/pure; do not double live provider traffic for a shadow rollout.
 - Seed editable templates; implement replacement on default/last-profile deletion.
 - Add immutable policy snapshots for follows/jobs and idempotent legacy migration, including
   settings export/import. Preserve old client payloads through an explicit legacy adapter.
+- Store the pre-grace base snapshot with jobs and reserved intents; retries recompute from it.
+- Move settings backup to version 4 with portable provider identities; keep versions 1 to 3.
 
 Add tests **before implementation** for ordinary-user raw POST/PATCH/DELETE/duplicate attempts,
 restricted mode, spoofed owner, hidden providers, stale revisions, concurrent delete/edit,
@@ -84,8 +100,9 @@ schemas. Test editing/deleting a profile while jobs run; existing jobs and follo
 keep their rules. Test explicit follow reconfiguration versus concurrent episode admission, plus waiting/reserved
 intents with no job: retries must recover the original admitted snapshot. Inspect raw JSON, errors
 and rendered labels after revocation for hidden provider keys/names/counts. Cover empty authorized
-profile scope, operation changes, deleted-ID replacement chains, per-user legacy mode and settings
-import/restart without dangling defaults or rewriting historical snapshots.
+profile scope, operation changes, a deletion rewriting every affected personal default in the same
+transaction, per-user legacy mode and settings import/restart without dangling defaults or
+rewriting historical snapshots.
 
 **Gate:** API/serialization tests prove only admins mutate profiles, no cross-user leak, no orphaned
 default, no retroactive job mutation, no duplicate episode and no migration loss. Profiles are
@@ -145,8 +162,9 @@ Local self-download remains excluded; exact-source remote copy still works.
 
 ## Definition of complete delivery
 
-All stages are independently reviewable and passing. There is one provider identity contract,
-one authoritative fact/ranking definition with TV parity, consistent source choice semantics,
-shared acquisition per client, admin-managed profile CRUD, durable snapshots and selected-provider
-background resolution. Old data remains readable, forbidden sources remain forbidden, and the
-test ledger demonstrates the invariants rather than merely counting tests.
+All stages are independently reviewable and passing. There is one provider identity contract, one
+authoritative fact/ranking definition with TV parity, consistent source choice semantics, shared
+acquisition per client, admin-managed profile CRUD, durable snapshots, selected-provider background
+resolution, owned copies as a first-class provider and portable provider identity. Old data remains
+readable, forbidden sources remain forbidden, and the test ledger demonstrates the invariants rather
+than merely counting tests.
