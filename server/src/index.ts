@@ -10,11 +10,10 @@ import { fileURLToPath } from "node:url";
 import { addonAllowed, allowedAddons, fetchCatalogPage, loadAddon, metadata, orderFor, orderedForUser, searchAll, searchableCatalogs, subtitles, type MetaProvider } from "./addons.js";
 import { StreamListingCache } from "./stream-listing-cache.js";
 import { autoRefreshEnabled, refreshDue, refreshManifests, type RefreshOutcome } from "./addon-refresh.js";
-import { rankStreams } from "./ranking.js";
 import { defaultDownloadLibrary, DownloadQueue, ownerMayDownload, type DownloadJob, type RemoteDownloadBackend } from "./downloads.js";
 import { DeviceTransfers } from "./device-transfers.js";
 import { ClientLogStore } from "./client-logs.js";
-import { selectDownloadSource, selectTorrentSource } from "./download-selection.js";
+import { createSourceResolver } from "./source-resolver.js";
 import { ImageStats, useImageStats } from "./image-stats.js";
 import { MosaicCache } from "./mosaic.js";
 import { ProviderStats, useProviderStats } from "./provider-stats.js";
@@ -345,45 +344,16 @@ if (!store.defaultsInstalled()) {
 // provider so another job can reuse them without reviving a failed request.
 const streamCache = new StreamListingCache();
 queue.setRetrySourceHook(({ type, videoId }) => streamCache.invalidate(type, videoId));
-queue.setResolver(async (source, ownerUserId) => {
-  // Narrowed before a single request goes out. Checking the chosen stream afterwards is too
-  // late twice over: the addons have already been asked on this account's behalf, and the
-  // external subtitle that comes back with the choice is never checked at all.
-  const owner = ownerUserId ? findUserById(store.users(), ownerUserId) : undefined;
-  // A job whose owner is gone resolves against nothing rather than against everything.
-  if (ownerUserId && !owner) return undefined;
-  const usable = owner ? allowedAddons(store.addons(), { id: owner.id, role: owner.role }) : store.addons();
-  const priority = new Map(usable.map((addon, index) => [addon.key, index]));
-  const selectedKeys = source.selection ? new Set(source.selection.addonKeys) : undefined;
-  const streamSources = selectedKeys ? usable.filter((addon) => selectedKeys.has(addon.key)) : usable;
-  const listed = await streamCache.list(streamSources, source.type, source.videoId);
-  const candidates = listed.filter((stream) => stream.url);
-  if (source.selection) {
-    await serverReady;
-    const external = source.selection.subtitleMode === "off" ? [] : await subtitles(usable, source.type, source.videoId);
-    const selected = await selectDownloadSource({ candidates, subtitles: external, selection: source.selection, tried: source.tried, inspect: (stream) => playback.inspect(stream) });
-    if (selected) {
-      const addon = usable.find((item) => item.key === selected.stream.addonKey);
-      return { ...selected, settings: addon?.downloadSettings ?? defaultDownloadSettings() };
-    }
-    // HTTP always wins, so a torrent is considered only when no direct source was chosen and
-    // Real-Debrid is there to fetch it.
-    if (store.settings().realDebridToken) {
-      const torrent = selectTorrentSource({ candidates: listed, subtitles: external, selection: source.selection, tried: source.tried, episode: source.type === "series" });
-      if (torrent) {
-        const addon = usable.find((item) => item.key === torrent.stream.addonKey);
-        return { ...torrent, settings: addon?.downloadSettings ?? defaultDownloadSettings() };
-      }
-    }
-    return undefined;
-  }
-  // The queue picks a source with no request in hand, so the language is the owner's.
-  const ranked = rankStreams(candidates, store.prefs(ownerUserId).audioLanguage, priority);
-  const next = ranked.find((stream) => !source.tried.includes(stream.url!));
-  if (!next) return undefined;
-  const addon = usable.find((item) => item.key === next.addonKey);
-  return { stream: next, settings: addon?.downloadSettings ?? defaultDownloadSettings() };
-});
+queue.setResolver(createSourceResolver({
+  users: () => store.users(),
+  addons: () => store.addons(),
+  prefs: (ownerUserId) => store.prefs(ownerUserId),
+  hasRealDebrid: () => Boolean(store.settings().realDebridToken),
+  serverReady,
+  listStreams: (addons, type, id) => streamCache.list(addons, type, id),
+  listSubtitles: (addons, type, id, signal) => subtitles(addons, type, id, false, signal),
+  inspect: (stream, signal) => playback.inspect(stream, signal),
+}));
 await playback.load();
 
 /** With no account at all and no fallback credentials, nothing can be done. */

@@ -116,6 +116,17 @@ unusable. The selection's own ordering still controls source picking. Authorized
 addons remain independently queried: stream-provider scope does not restrict subtitle search,
 because an external subtitle addon may not also be a selected stream provider.
 
+The lazy resolver receives the active queue signal, rebuilds the owner and addon scope after
+every awaited phase, filters returned streams and subtitles against that current scope, and
+passes the signal to subtitle lookup and media inspection. Selection checks the caller before
+each probe and after each awaited probe. A provider listing already in flight may finish and
+remain available to another authorized caller, but the canceled job does not consume it.
+`server/src/addons.ts` was unchanged: its title-lookup and subtitle request paths already honor
+the signal adequately. Remaining limitation: an addon request sent before cancellation may
+finish upstream, and deletion of an addon record cannot identify its resource capabilities, so
+only an already `checking` lazy job is matched conservatively for that deletion case. An active
+legacy lookup without selected addon keys is also canceled on addon revocation.
+
 ## Follow admission, retry and identity
 
 | Required case | Evidence | Status | Later stage |
@@ -142,7 +153,7 @@ because an external subtitle addon may not also be a selected stream provider.
 | Users, jobs and follows stay separated | `GET /api/downloads shows an administrator every job and a user only their own`; `acting on somebody else's job answers exactly like an id that is not there`; `two owners get two follows of the same series` | Baseline contract | Preserve |
 | Session-bound source handles are not persisted or reused | `persisted remote state carries no seal, session or credential`; `assertCurrent binds the sealed source to the exact owner session`; `downloadReference captures a durable, session-free handle for the exact version` | Baseline contract for exact-source saves | Preserve |
 | Current permission is checked during exact-source admission | `a withdrawal while the handle is minted queues nothing`; `a withdrawal during admission writes no metadata`; `a withdrawal while the native handle is minted leaves nothing queued` in `routes/downloads.test.ts` | Baseline contract | Preserve |
-| Current permission is checked throughout background lookup/use | **New regressions:** `a restored waiting job with a revoked owner makes no Real-Debrid request`; `revocation while a Real-Debrid advance is pending discards its ready result`; `an account removal that cannot be saved stops a direct transfer before returning`. The pending resolver/probe permission race remains open. | Fixed for waiting polls and account cancellation; resolver/probe recheck open | Separate resolver-cancellation change |
+| Current permission is checked throughout background lookup/use | **New regressions:** `revocation after the listing await starts no subtitle lookup or probe`; `deleting the owner during the stream listing leaves no job and starts no probe`; `revocation during subtitle title lookup sends no subtitle request`; `revocation during the first probe runs no second probe and selects nothing`; `the resolver reauthorizes the owner after the listing without a revocation signal`; `a caller stop is checked before the first probe`; `a stop after an awaited probe discards its answer before the next probe`; `an addon revocation reaches an unresolved job that selected it`; `an external subtitle revocation aborts active lazy lookup without pausing a queued unrelated job`; `a currently authorized owner completes through the production resolver`; `authorized owners share the provider listing cache`. Existing `a restored waiting job with a revoked owner makes no Real-Debrid request`, `revocation while a Real-Debrid advance is pending discards its ready result`, and `an account removal that cannot be saved stops a direct transfer before returning` remain green. | Fixed for lazy resolver/probe cancellation | Preserve |
 | Disabled provider | `a disabled addon is refused for an administrator too, where enabled is enforced` in `addons.test.ts` | Baseline contract | Preserve |
 | Provider reconfigured under the same key | **New regression:** `provider manifest revisions do not reuse another definition's listing` changes both the manifest version and URL under one addon key. The cache identity includes type, title id, addon key, manifest URL and manifest version. Profile-aware identity remains outside this change. | Fixed for provider revisions | Preserve; profiles remain Stage 3/4 |
 | Empty result versus transport failure | **New regressions:** `successful empty listings are cached for five minutes while failures are retried`; `stream listings reject a non-array field and non-object entries while accepting an absent field` proves that malformed payloads fail rather than become cacheable empties. | Fixed by Stage 2 per-provider result caching | Preserve |

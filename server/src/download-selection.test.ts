@@ -132,6 +132,41 @@ test("probing gives up after a bounded number of candidates instead of checking 
   assert.equal(checked, 15);
 });
 
+test("a caller stop is checked before the first probe", async () => {
+  let inspected = 0;
+  const chosen = await selectDownloadSource({
+    candidates: [stream("https://one.test/episode.mkv", "first")],
+    subtitles: [],
+    selection: selection(),
+    tried: [],
+    inspect: async () => { inspected += 1; return info(["cs"]); },
+    shouldContinue: () => false,
+  });
+
+  assert.equal(inspected, 0);
+  assert.equal(chosen, undefined);
+});
+
+test("a stop after an awaited probe discards its answer before the next probe", async () => {
+  let inspected = 0;
+  let checks = 0;
+  const chosen = await selectDownloadSource({
+    candidates: [
+      stream("https://one.test/episode.mkv", "first"),
+      stream("https://two.test/episode.mkv", "second"),
+    ],
+    subtitles: [],
+    selection: selection(),
+    tried: [],
+    inspect: async () => { inspected += 1; return info(["en"]); },
+    shouldContinue: () => { checks += 1; return checks === 1; },
+  });
+
+  assert.equal(inspected, 1);
+  assert.equal(checks, 2);
+  assert.equal(chosen, undefined);
+});
+
 test("required subtitles reject a source while optional subtitles do not", async () => {
   const candidates = [stream("https://one.test/episode.mkv", "first")];
   const inspect = async () => info(["cs"]);

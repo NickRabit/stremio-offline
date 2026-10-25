@@ -217,7 +217,7 @@ export function ownerMayDownload(scope: DownloadOwnerScope, job: { stream?: Stre
 /** The owner travels with the source: a job is picked up long after the request that queued
  *  it, and choosing between candidates means asking addons. Which addons may be asked is the
  *  owner's business, so the resolver cannot be given the source alone. */
-export type StreamResolver = (source: NonNullable<DownloadJob["source"]>, ownerUserId: string | undefined) => Promise<{
+export type StreamResolver = (source: NonNullable<DownloadJob["source"]>, ownerUserId: string | undefined, signal: AbortSignal) => Promise<{
   stream: StreamItem;
   settings: AddonDownloadSettings;
   subtitle?: SubtitleItem;
@@ -1453,16 +1453,21 @@ export class DownloadQueue {
 
   /** The addons are asked for streams only here, right before one particular episode is downloaded,
    *  so adding a whole season in bulk does not set off an avalanche of requests at once. */
-  private async resolve(job: DownloadJob) {
+  private async resolve(job: DownloadJob, controller: AbortController): Promise<boolean> {
     if (!job.source) throw new SourceError("The job has neither a source nor a rule for finding one.");
     if (!this.resolver) throw new SourceError("Source selection is unavailable.");
     const startedAt = this.now();
-    const resolved = await this.resolver(job.source, this.ownerOf(job));
+    const resolved = await this.resolver(job.source, this.ownerOf(job), controller.signal);
+    controller.signal.throwIfAborted();
     const selectionMs = this.now() - startedAt;
     // A torrent is a resolved source too: it has an infoHash and no URL yet, and the queue turns
     // it into a Real-Debrid wait. Only a stream with neither -- or none at all -- means nothing
     // was found.
     if (!resolved?.stream || (!resolved.stream.url && !resolved.stream.infoHash)) {
+      if (await this.ownerRefused(job)) {
+        this.pauseForPermission(job);
+        return false;
+      }
       const selection = job.source.selection;
       const requested = selection
         ? selection.audioMode === "preferred"
@@ -1497,6 +1502,7 @@ export class DownloadQueue {
       audioLanguage: resolved.resolution?.audioLanguage, fallbackAudio: resolved.resolution?.fallbackUsed,
       subtitleStatus: resolved.resolution?.subtitleStatus,
     });
+    return true;
   }
 
   private subtitleFiles(job: DownloadJob) {
@@ -1825,7 +1831,7 @@ export class DownloadQueue {
         return;
       }
       if (!job.stream) {
-        await this.resolve(job);
+        if (!await this.resolve(job, controller)) return;
         if (controller.signal.aborted) throw new Error("The download was stopped.");
         // The lazy resolve is where this matters most: the enqueue validated a selection, not
         // the addon the resolver eventually picks, and the owner may have lost that one.
