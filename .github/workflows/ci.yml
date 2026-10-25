@@ -28,6 +28,7 @@ jobs:
       - run: npm ci
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - run: npm run build -w @stremio-offline/source-selection
       - run: npx tsc -p desktop
       - run: npx tsc --noEmit -p server
       - run: npx tsc --noEmit -p e2e
@@ -51,6 +52,7 @@ jobs:
       - run: npm ci
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - run: npm run build -w @stremio-offline/source-selection
       - run: npx tsc -p desktop
       - run: npx tsc --noEmit -p server
       - run: npm run test -w server
