@@ -57,6 +57,34 @@ total:        4,496 tests, 4,489 passed, 7 skipped, 0 failed
 The seven skips are the repository's existing environment/build-dependent cases. No new test is
 skipped. `npm run build` also passes; Vite reports the repository's existing large-chunk warning.
 
+### Round 2: real-resolver fixture evidence
+
+Commands:
+
+```text
+npm run build
+# passed; only the existing Vite large-chunk warning
+
+npx tsc --noEmit -p e2e
+# passed
+
+docker run --rm -v "$PWD":/work -w /work -e CI=1 stremio-offline-e2e \
+  npx playwright test source-selection-baseline.spec.ts --project=chromium
+# 3 passed: setup plus the two source-selection baseline tests
+
+npm test
+# 4,496 tests, 4,490 passed, 6 skipped, 0 failed
+# server 2,977 (2,971 passed, 6 skipped)
+# web 1,185 passed
+# desktop 304 passed
+# media-client 30 passed (the build removed its environment-dependent skip)
+```
+
+The fixture counts at the addon HTTP boundary, not in the browser. Each row contains the provider
+manifest identity, media type and episode ID; request headers and credentials are never returned or
+logged. The second provider has manifest ID `e2e.secondary.source` and a distinct
+`/secondary/manifest.json` URL, but deliberately uses the primary fixture's display name.
+
 ## Background source selection
 
 | Required case | Evidence | Status | Later stage |
@@ -69,10 +97,10 @@ skipped. `npm run build` also passes; Vite reports the repository's existing lar
 | Bounded inspection | `probing gives up after a bounded number of candidates instead of checking every source` | Baseline contract | Preserve |
 | Tried direct URLs and torrent identity | **New:** `direct selection skips an already tried URL before inspection`; existing `a torrent that was already tried is skipped` | Baseline contract | Preserve |
 | Selected-provider scope before probing | **New:** `a source from an addon outside the selected scope is never inspected` covers direct and torrent candidates | Baseline contract | Preserve |
-| Request count for selected providers | No fixture counts outbound stream requests at the production resolver. `server/src/index.ts` currently calls `streams` for every usable addon before applying `selection.addonKeys`. | Known defect | Stage 2 |
+| Request count for selected providers | **New characterization:** `characterization: a selected-provider job contacts every usable addon`. With only `e2e.secondary.source` selected for a unique episode, the fixture receives one `stream` request for the primary provider and one for the secondary provider. | Characterization / known defect | Stage 2: desired primary count is zero |
 | No usable source | `a lazy job that finds no source fails with the no-matching-source key` in `downloads.test.ts` | Baseline contract | Preserve |
-| Retry bypasses a cached failure/empty listing | `DownloadQueue.retry` clears `tried`, but the five-minute merged stream cache can still return the failed/empty listing. No scope-level failure cache exists. | Known defect | Stage 2 |
-| Addon failure is not cached as an empty result | `cachedStreams` in `server/src/index.ts` caches the merged, flattened result for five minutes, including an addon failure. | Known defect | Stage 2 |
+| Retry bypasses a cached failure/empty listing | **New characterization:** `characterization: retrying inside the stream cache window does not ask the failed selected addon again`. After one controlled failure, fixture recovery and control reset, the immediate public-route retry makes zero provider requests. | Characterization / known defect | Stage 2: desired is one request to the recovered selected provider and zero to the unselected provider |
+| Addon failure is not cached as an empty result | The same retry test shows the successful unselected listing remains cached while the selected provider's one-shot failure is omitted. Retrying inside five minutes never re-asks the recovered selected provider. | Characterization / known defect | Stage 2 |
 | Legacy strategy and provider-key normalization | **New characterization:** `characterization: a legacy bulk submission drops duplicate provider keys and coerces an unknown strategy`; existing `POST /api/downloads/bulk refuses addons the caller may not use and queues only from the allowed ones` | Characterization | Stage 3 |
 | Bulk versus follow default strategy | The two clients/dialogs own their defaults; there is no route-level assertion for both defaults. | Uncovered | First slice / Stage 4 |
 
@@ -126,8 +154,8 @@ These are documented reproducers and desired outcomes. They are not passing fina
 | --- | --- | --- | --- |
 | Retry applies a later follow edit | Admit an episode, fail its job, edit the follow selection, then let the retry run. `known defect: a retry after a follow edit uses the edited selection instead of the admitted one` observes the replacement provider key. | Persist the pre-grace admission snapshot and grace parameters with the reserved intent/job. Every retry derives selection from that snapshot; a separate explicit reconfigure action changes work. The future regression expects `["admitted"]` after the edit. | Stage 3 |
 | Owned episode is downloaded again | With `Film.mkv` already in a visible local library, save the same title again; `a file already on disk pushes a job of the same title to (2)` shows the collision. A follow has no owned-copy admission check. | Apply the explicit `any`/`meetsRequirements` local-copy policy before automatic admission and again before transfer; do not treat a remote-only copy as local. | Early delivery |
-| Failed/empty addon listing stays cached | Fail one addon, resolve the episode, then retry within five minutes. The merged `cachedStreams` entry still omits that addon. | Cache per provider and subject, cache successful empty separately from failure, and bypass negative/failed entries on retry and generation change. | Stage 2 |
-| Unselected providers are called | A lazy selection names one addon, but the resolver calls `streams` with every usable addon before `selectDownloadSource` filters by key. | Build an authorized provider plan and make outbound requests only for the selected, currently authorized providers. Count requests in a fixture. | Stage 2 |
+| Failed/empty addon listing stays cached | `characterization: retrying inside the stream cache window does not ask the failed selected addon again` fails `e2e.secondary.source` once, waits for the lazy job to fail, resets the counters while recovering the fixture, and retries the still-failed job through `POST /api/downloads/:id/retry`. The counter remains empty. | Cache per provider and subject, cache successful empty separately from failure, and bypass negative/failed entries on retry and generation change. The future regression expects exactly one new request to the recovered selected provider. | Stage 2 |
+| Unselected providers are called | `characterization: a selected-provider job contacts every usable addon` installs the same-name secondary addon, selects only it, queues a unique episode, and observes one request to both manifest identities. | Build an authorized provider plan and make outbound requests only for the selected, currently authorized providers. The future regression expects one secondary request and zero primary requests. | Stage 2 |
 | Legacy unknown strategy is silently coerced | The new bulk characterization sends `smallest` and receives a queued `priority` rule. | Keep expressible legacy submissions working. Return a distinct upgrade-required response for a rule the final contract cannot express rather than silently weakening it. Unauthorized keys remain dropped. | Stage 3 |
 
 ## Controlled mutation evidence

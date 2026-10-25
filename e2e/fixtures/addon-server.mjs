@@ -57,16 +57,27 @@ const MANIFEST = {
   ],
 };
 
+const SECONDARY_PROVIDER = "e2e.secondary.source";
+const SECONDARY_MANIFEST = {
+  id: SECONDARY_PROVIDER,
+  version: "1.0.0",
+  name: MANIFEST.name,
+  description: MANIFEST.description,
+  resources: ["stream"],
+  types: ["series"],
+  idPrefixes: ["tt-e2e"],
+};
+
 // Two sizes and two languages, so ordering and the language filter have something
 // to actually order and filter.
-const streamsFor = (id) => id === "tt-e2e-proxy" ? [{
+const streamsFor = (id, provider = MANIFEST.id) => id === "tt-e2e-proxy" ? [{
   name: "Proxy fixture", title: "Movie query-canary", url: `http://127.0.0.1:${port}/proxy-fixture.mp4?token=query-canary`,
   behaviorHints: { proxyHeaders: { request: { Authorization: "Bearer header-canary" } } },
   subtitles: [{ url: `http://127.0.0.1:${port}/proxy-subtitle?token=subtitle-canary`, lang: "cs" }],
   extra: { url: "https://unknown-canary.test/secret" },
 }] : proxyMode === "browser" ? [{ name: "E2E WebM", url: `http://127.0.0.1:${port}/browser-video.webm` }] : [
-  { name: "E2E 1080p", title: `Czech \u{1F1E8}\u{1F1FF} 2.4 GB\n${id}`, url: `http://127.0.0.1:${port}/video/${encodeURIComponent(id)}.mp4` },
-  { name: "E2E 720p", title: `English \u{1F1EC}\u{1F1E7} 900 MB\n${id}`, url: `http://127.0.0.1:${port}/video/${encodeURIComponent(id)}.mp4` },
+  { name: provider === SECONDARY_PROVIDER ? "E2E secondary 1080p" : "E2E 1080p", title: `Czech \u{1F1E8}\u{1F1FF} 2.4 GB\n${id}`, url: `http://127.0.0.1:${port}/video/${encodeURIComponent(id)}.mp4${provider === SECONDARY_PROVIDER ? "?provider=secondary" : ""}` },
+  { name: provider === SECONDARY_PROVIDER ? "E2E secondary 720p" : "E2E 720p", title: `English \u{1F1EC}\u{1F1E7} 900 MB\n${id}`, url: `http://127.0.0.1:${port}/video/${encodeURIComponent(id)}.mp4${provider === SECONDARY_PROVIDER ? "?provider=secondary" : ""}` },
 ];
 
 const POSTER = `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="450" viewBox="0 0 300 450">
@@ -101,6 +112,8 @@ async function serveVideo(req, res, file = videoFile) {
 let proxyMode = "video";
 // How many times the source was actually asked for the film, which is what the cache is about.
 let mediaRequests = 0;
+const sourceRequests = [];
+let forcedSourceFailure;
 // A test can slow the poster down, so the write a tile waits for lands after the listing that
 // named the picture it replaces.
 let posterDelayMs = 0;
@@ -112,6 +125,16 @@ const server = createServer(async (req, res) => {
   if (pathname === "/browser-video.webm") return void serveVideo(req, res, browserVideo);
   if (pathname === "/proxy-control") { proxyMode = searchParams.get("mode") ?? "video"; if (searchParams.get("reset")) mediaRequests = 0; return json(res, { ok: true, requests: mediaRequests }); }
   if (pathname === "/proxy-requests") return json(res, { requests: mediaRequests });
+  if (pathname === "/source-control") {
+    if (searchParams.get("reset")) sourceRequests.length = 0;
+    if (searchParams.has("fail")) {
+      const provider = searchParams.get("fail");
+      const id = searchParams.get("id");
+      forcedSourceFailure = provider && provider !== "none" && id ? { provider, id } : undefined;
+    }
+    return json(res, { ok: true, requests: sourceRequests, failure: forcedSourceFailure ?? null });
+  }
+  if (pathname === "/source-requests") return json(res, { requests: sourceRequests, failure: forcedSourceFailure ?? null });
   if (pathname === "/proxy-subtitle") { res.writeHead(200, { "content-type": "text/vtt" }); return res.end("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello\n"); }
   if (pathname === "/proxy-fixture.mp4") {
     if (req.headers.authorization !== "Bearer header-canary") return res.writeHead(403).end("header-canary");
@@ -171,6 +194,7 @@ const server = createServer(async (req, res) => {
     return res.end(status === 200 ? req.method : "provider-canary-secret");
   }
   if (pathname === "/manifest.json") return json(res, MANIFEST);
+  if (pathname === "/secondary/manifest.json") return json(res, SECONDARY_MANIFEST);
   if (pathname === "/poster-delay") { posterDelayMs = Math.max(0, Number(searchParams.get("ms")) || 0); res.writeHead(204); return res.end(); }
   if (pathname === "/catalog-delay") {
     const catalog = searchParams.get("catalog") ?? "";
@@ -188,7 +212,8 @@ const server = createServer(async (req, res) => {
   // Lets a test make an addon call fail without stopping the whole fixture.
   if (pathname === "/boom.json") { res.writeHead(500, { "content-type": "application/json" }); return res.end('{"error":"rozbito"}'); }
 
-  const [resource, type, id, extras] = parts;
+  const provider = parts[0] === "secondary" ? SECONDARY_PROVIDER : MANIFEST.id;
+  const [resource, type, id, extras] = provider === SECONDARY_PROVIDER ? parts.slice(1) : parts;
   const extra = new URLSearchParams((extras ?? "").replaceAll("&amp;", "&"));
   const search = (extra.get("search") ?? searchParams.get("search") ?? "").toLowerCase();
   const genre = extra.get("genre") ?? searchParams.get("genre") ?? "";
@@ -206,7 +231,15 @@ const server = createServer(async (req, res) => {
     const meta = [MOVIE, SERIES].find((item) => item.id === id && item.type === type);
     return meta ? json(res, { meta }) : json(res, {});
   }
-  if (resource === "stream") return json(res, { streams: streamsFor(id) });
+  if (resource === "stream") {
+    sourceRequests.push({ provider, type, id });
+    if (forcedSourceFailure?.provider === provider && forcedSourceFailure.id === id) {
+      forcedSourceFailure = undefined;
+      res.writeHead(500, { "content-type": "application/json" });
+      return res.end('{"error":"controlled stream failure"}');
+    }
+    return json(res, { streams: streamsFor(id, provider) });
+  }
 
   res.writeHead(404, { "content-type": "application/json" });
   res.end('{"error":"not found"}');
