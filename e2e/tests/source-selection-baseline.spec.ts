@@ -139,3 +139,28 @@ test("explicit retry refreshes the failed selected provider's stream listing", a
 
   expect(await sourceRequests(request)).toEqual([{ ...failure, type: "series" }]);
 });
+
+test("a failed provider listing does not poison another job for the same video", async ({ request }) => {
+  const videoId = "tt-e2e-source-failure-not-poison";
+  const failure = { provider: SECONDARY_PROVIDER, id: videoId, type: "series" };
+  expect((await control(request, { reset: true, fail: { provider: failure.provider, id: videoId } })).ok()).toBe(true);
+  const secondary = await installSecondary(request);
+
+  const firstTitle = await queueEpisode(request, secondary.key, `${TITLE_PREFIX} poison first`, videoId);
+  await expect.poll(async () => (await findJob(request, firstTitle))?.status, {
+    timeout: 30_000,
+    message: "the controlled provider failure did not fail the first job",
+  }).toBe("failed");
+  expect(await sourceRequests(request)).toEqual([failure]);
+
+  expect((await control(request, { reset: true, recover: true })).ok()).toBe(true);
+  const secondTitle = await queueEpisode(request, secondary.key, `${TITLE_PREFIX} poison second`, videoId);
+  await expect.poll(async () => {
+    const job = await findJob(request, secondTitle);
+    return {
+      settled: job?.status === "failed" || job?.pending === false,
+      requests: (await sourceRequests(request)).filter((row) => row.id === videoId),
+    };
+  }, { timeout: 30_000, message: "the second job did not request the recovered selected provider" })
+    .toEqual({ settled: true, requests: [failure] });
+});
