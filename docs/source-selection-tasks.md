@@ -5,6 +5,44 @@ The current PR is documentation only. Do not start a broad refactor from this do
 first landing the baseline tests below. Each stage is a separate reviewable PR based on current
 `main`; rebase and rerun affected checks after intervening merges.
 
+## Delivery dependencies and the first usable slice
+
+Stage numbers name work packages, not one six-stage release train. Keep a shared test/contract
+foundation, then deliver the background and interactive paths independently. Parallel delivery
+means separate PRs with explicit dependencies, not concurrent unreviewed edits to the same code.
+
+| Deliverable | Hard dependencies | Not a prerequisite |
+| --- | --- | --- |
+| Fixed download/follow presets (first usable slice) | Stage 0 background/identity/access baseline; Stage 1 server policy contracts and vectors; admission snapshots, selected-provider requests and local-copy policy | Web query owner, new interactive API, Kotlin integration, CRUD editor |
+| Admin profile CRUD and download/follow editor | First slice; Stage 3 storage/revision/migration/API tests | Interactive fan-out rewrite, remote automatic downloads |
+| Interactive source consistency and profile selection | Stage 0 interactive baseline; Stage 1 shared contracts; Stage 2 acquisition/selection; profile read contract | Remote automatic downloads |
+| Remote automatic episode downloads | Stage 0 remote baseline; Stage 1 server contracts; first slice snapshots; owner-based remote resolver/cache/quota work in Stage 5 | Stage 2 web fan-out, playback editor, Kotlin migration, complete profile CRUD UI |
+| TV profile parity | Shared conformance corpus; profile API/version negotiation; relevant TV baseline | Remote automatic downloads |
+
+The first slice is a complete web/desktop journey: choose a fixed server-defined Travel or Provider
+priority recipe in bulk download/Follow, submit a profile ID/version, persist the admission snapshot,
+and download the correct episode through the existing queue. Travel uses the selected/preferred
+language, a 480-pixel minimum height and ascending size, with the bounded verification behavior in
+the specification. Keep existing legacy selections available without changing their winners.
+These are shipped definitions, not ordinary-user-editable presets. Implementing code-defined
+presets is an intermediate release, not completion of the requested administrator editor.
+
+Use the final policy schema and profile-reference submission contract from the start; do not add
+a temporary `smallest` value to the legacy strategy enum. Fixed IDs/revisions resolve on the server,
+not from a client-supplied rule object. On introducing Stage 3 storage, seed those definitions with
+the same identities/revisions, preserving explicit choices and snapshots. Only then enable admin
+CRUD. Until that transition, a preset change ships as a new definition revision and leaves existing
+work unchanged. Do not advertise create/edit/delete before they exist. Preserve these interim
+choices in settings export/import before shipping them; a complete CRUD editor is not required.
+
+Test the first slice before wiring it in: request counts for selected providers, forged policy
+rejection, fresh authorization, profile/version conflict, old client compatibility, retry/restart,
+follow admission/reconfiguration race, local-copy policy (including a remote-only episode), and
+Travel's quality/probe-budget cases. Server-side cache
+isolation/invalidation and safe snapshot persistence are required even if Stage 2 has not shipped.
+No unrelated interactive or Kotlin rewrite blocks this gate. Each later lane must land its own
+applicable Stage 0 coverage before changing production code; no lane may waive relevant tests.
+
 ## Stage 0: characterize and close test gaps before refactoring
 
 First produce a coverage ledger linking each case below to an existing test or a new named test.
@@ -25,7 +63,7 @@ scope, active-source stability) must make its test fail; remove all mutations be
 | Acquisition | Slow/fast providers, independent subtitle failure, a slow subtitle addon delaying the first source row, timeout vs empty, partial success, retry only failed group, rapid subject change (addon and local-copy requests of the old title aborted), close/reopen, unmount, two subscribers and last-subscriber cancellation, the number of lookups one title causes across catalogue panel, detail, chooser and player | L1 network mocks and L2 counting fixture; `library-sources.test.tsx`, `CatalogueTitleDetail.test.tsx`, local/remote detail tests |
 | Resume/current source | Exact saved match, disappeared/changed key, disallowed saved source, explicit choice vs late better row, current playback not switched, account change, position after source switch, same next-episode identity from each entry point; next episode from an owned copy, an addon row and a remote version, including an owned copy of the next episode while an addon row plays | L1 source/progress helpers, L2 real player; Kotlin catalogue/player tests |
 | Automatic jobs | Largest/priority, provider order, audio modes/fallbacks, subtitles, direct vs torrent, inspection cap, tried candidates, selected-provider request counts, no source, retry cache bypass, an addon failure kept out of the five-minute cache, legacy strategy coercion and dropped addon keys on `POST /api/downloads`, bulk versus follow default strategy | L0 `download-selection.test.ts`, queue/resolver fixture integration |
-| Follows | New/from/ahead admission, unreleased/ambiguous episode, grace boundary, deleted/disabled owner, schedule revision race, deduplication, retry after restart, selection snapshot and unchanged retention/target; a retry after the grace window and after a follow edit (today both recompute from the current follow); an episode already present in a visible library (today downloaded again as `(2)`), and one present only in a library the owner cannot see | L0 `follows.test.ts`, routes/follows and downloads tests; L2 follow setup |
+| Follows | New/from/ahead admission, unreleased/ambiguous episode, grace boundary, deleted/disabled owner, schedule revision race, deduplication, retry after restart, selection snapshot and unchanged retention/target; a retry after the grace window and after a follow edit (today both recompute from the current follow); an episode already present in a visible local library (today downloaded again as `(2)`), matching versus inadequate local copies, a remote-only copy, and one present only in a library the owner cannot see | L0 `follows.test.ts`, routes/follows and downloads tests; L2 follow setup |
 | Access/cache | Two users and sessions, grant revoked during lookup/inspection/use, provider reconfigured under same key, disabled provider, empty vs error caching, generation change, session source handles never reused | L0 production routes/cache/transport, L2 accounts |
 | Remote originals | Canonical match, native download denied, connection replacement, forged reference rejected, probe/transfer quota, busy/cancel/shutdown releasing slots | L0 media-server source/quota/download tests with owned fixtures |
 | Exact-source saves | Selected version preserved without re-ranking, download-to-library vs device rights, no local self-download | L0 routes/downloads and L2 source chooser |
@@ -37,17 +75,25 @@ streams and counts only media requests today. Do not use arbitrary sleeps or rea
 providers. Have it return two providers with the same name, changed signed addresses, missing/false
 metadata and distinct episode versions. Do not log credentials in request-count evidence.
 
-**Gate:** critical baseline cases above pass on unrefactored `main`, the ledger identifies defects
-and approved behavior differences, and an independent review verifies that assertions reach the
-real production boundary. No implementation extraction before this gate.
+**Gate:** critical baseline cases applicable to a delivery lane pass on its unrefactored production
+path. The ledger identifies defects and approved behavior differences, and an independent review
+verifies assertions reach the real boundary. Each extraction needs this gate first; a background
+slice need not wait for unrelated UI tests. The overall ledger stays open until every family is covered.
 
-## Early fix: owned episodes are not downloaded again
+## Early delivery: avoid redundant local-episode downloads
 
-The duplicate download of an episode already in a visible library is a defect, not a design
-choice. It does not depend on profiles, so it may land right after the Stage 0 gate as its own PR:
-give the follow service and lazy episode admission a check for an owned copy through the existing
-binding lookup and visibility rules, record the episode as present, and leave explicit manual saves
-unchanged. Activate the Stage 0 reproducer as a failing-before/passing-after regression.
+This can land independently after its applicable Stage 0 coverage. Add the explicit local-copy
+policy from the specification: `any` or `meetsRequirements`. Only files in this application's local
+libraries qualify; Jellyfin/Emby items are remote candidates, never proof of local ownership.
+Do not classify every repeat as a bug: replacing a wrong-language or inadequate copy is intentional.
+Explicit manual saves remain unchanged; legacy automatic rules retain their old behavior until
+explicitly migrated to the new policy. Start new profile-based recipes with `meetsRequirements`.
+
+Test wrong-language/low-quality copies, matching copies, unknown facts and bounded local inspection,
+an adequate local file under an HTTP/torrent-only acquisition filter, a file deleted or access
+revoked after the initial check, presence in a hidden library, a remote-only
+episode, concurrent admissions and a copy appearing while a job waits. Distinguish externally
+missing copies from intentional retention cleanup so watched episodes are not downloaded again.
 
 ## Stage 1: stable contracts and pure extraction
 
@@ -60,17 +106,23 @@ unchanged. Activate the Stage 0 reproducer as a failing-before/passing-after reg
 - Keep source/progress identity and default selection behavior unchanged in this extraction.
 - Wire actual package builds, container copies, desktop packaging and version checks.
 
-**Gate:** baseline tests plus cross-runtime vectors, workspace build and packaged-runtime smoke
-checks pass. Golden expectations are hand-asserted, not generated from the new ranker itself.
+**Gate:** baseline tests, policy vectors, workspace build and packaged-runtime smoke checks pass
+for consumers changed by this PR. Land the portable corpus with the server implementation; Kotlin
+consumers pass it before their own cutover, not before the first background slice. Expectations
+are hand-asserted, not generated from the new ranker itself.
 
 ## Stage 2: acquisition and selection consistency
+
+This interactive lane is not a prerequisite for background presets or remote jobs. Required shared
+server access/cache fixes land as separate prerequisites rather than waiting for every UI consumer.
 
 - Add versioned authorized provider-plan/outcome endpoints; retain legacy array routes.
 - Move UI orchestration into one query owner/repository, keeping adapters small.
 - Introduce bounded per-provider caches/in-flight sharing and revision invalidation; split subtitle
   work from source discovery; propagate cancellation through the server and from the web catalogue.
-- Apply concurrency budgets per consumer: the primary catalogue/player lookup keeps its parallel
-  fan-out, other-source panels keep their limits. Change the TV addon deadline deliberately.
+- Apply shared query/account concurrency caps with primary versus supplementary priority, not
+  multiplied fan-out per subscriber. Compare first-row latency and peak calls against the baseline
+  using eight and more addons. Change the TV addon deadline deliberately.
 - Add `libraryId` to owned-copy rows and one next-episode rule across provider classes.
 - Correct provider identity to keys and selected-provider filtering before outbound requests.
 - Apply the specification's explicit/current/resume/default/next policy with clear fallback.
@@ -88,10 +140,15 @@ requests local/pure; do not double live provider traffic for a shadow rollout.
 - Add per-user default profile selection with no criteria editing; project only authorized provider
   details on reads. Validate compatible profile IDs and server-owned provenance on submissions.
 - Seed editable templates; implement replacement on default/last-profile deletion.
-- Add immutable policy snapshots for follows/jobs and idempotent legacy migration, including
-  settings export/import. Preserve old client payloads through an explicit legacy adapter.
+- Extend the immutable follow/intent/job snapshot implementation already delivered by the first
+  slice to editable profiles and legacy migration; retain the final schema and admission semantics.
+  Add editable-profile settings export/import and preserve old clients through the legacy adapter.
 - Store the pre-grace base snapshot with jobs and reserved intents; retries recompute from it.
-- Move settings backup to version 4 with portable provider identities; keep versions 1 to 3.
+- Materialize viewer/instance provider order and language references at admission; test that later
+  preference/order changes do not alter reserved, waiting or queued work.
+- Move settings backup to version 4 with opaque portable provider references and a separate
+  protected admin mapping section; keep versions 1 to 3. Inspect raw persisted policies for secrets,
+  not only their public projections.
 
 Add tests **before implementation** for ordinary-user raw POST/PATCH/DELETE/duplicate attempts,
 restricted mode, spoofed owner, hidden providers, stale revisions, concurrent delete/edit,
@@ -127,13 +184,17 @@ cannot mutate; desktop and TV match web decisions on the conformance corpus. No 
 
 ## Stage 5: remote providers for series/future downloads
 
+Depends on durable admission snapshots, server provider contracts and the relevant remote tests,
+not Stage 2 or a complete CRUD editor. Initially a versioned server-defined recipe can select remote
+providers; the later admin editor uses the same scope contract without rewriting accepted jobs.
+
 - Extend automatic provider adapters to remote libraries using canonical episode matching.
 - Add owner-based authorized durable-reference creation and discriminated resolver results.
 - Integrate existing remote-copy execution, native download rights and original-transfer quotas.
 - Admit remote providers in download profiles only once this path is implemented end-to-end.
 
 Write fixture integration tests first: mixed addon/remote order, an episode appearing later,
-provider temporarily offline, wrong episode/no confident match, source permission removed after
+provider temporarily offline, wrong episode/no exact match, Travel probe-budget exhaustion and false metadata, source permission removed after
 admission, account/generation replaced, full quota, cancellation during inspection, restart after
 reference persistence and target conflict. Verify no raw/session reference accepted from a client,
 no transfer before authorization, no leaked quota slot or partial-file publication. Metadata that

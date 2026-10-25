@@ -16,7 +16,8 @@ preferred profile IDs. A profile never grants access to a provider, source or de
 
 Deliver web/desktop and Android TV consumers, editable profiles, safe migration of existing
 rules, and eventually remote-library candidates for future downloads. Deliver these separately;
-profile CRUD must not depend on remote automatic downloads being ready.
+profile CRUD must not depend on remote automatic downloads being ready. The delivery plan separates
+a first usable background-preset slice from interactive acquisition and the full admin editor.
 
 This work does not migrate favourites, title bindings or progress stores, add household/account
 profiles, change native remote history, add arbitrary rule scripts, or redesign playback and
@@ -58,22 +59,34 @@ local-first ordering depends on sort mode today; do not assert that it is univer
 
 A provider is an origin, not a media version. Use typed stable keys:
 `addon:<addonKey>`, `remote:<libraryId>`, and `local`. Display names never identify or rank providers.
-`local` groups owned copies for ordering; each candidate still carries its real library identity.
+`local` groups files in this application's local libraries for ordering; each candidate still
+carries its real library identity. Jellyfin and Emby libraries are always `remote:` providers, never
+local copies, even on the same machine or LAN. No source class has unconditional priority: a
+profile may put remote/local libraries after addons, move class/order criteria later, or omit them.
+Local-first is a template/compatibility choice, not an invariant of the acquisition service.
 
 Provider keys are installation-local. Addon keys are `randomUUID()` values, re-adding an addon
-mints a new one, settings backup version 3 carries each addon's manifest URL but no key, and
-import mints new remote library IDs (`prepareMediaServerConfiguration`). Profiles, follow and job
-snapshots, personal defaults and `stableKey` (which includes the addon key for addon and torrent
-sources) therefore do not survive import or reinstall by themselves. Backup version 4 writes a
-portable identity beside every provider reference: the manifest URL for an addon, the connection
-and upstream library ID for a remote library. Import maps them to this instance's keys, never by
-display name; the media-server import returns its old-to-new library ID map for this. Unresolved
-references stay dormant and are listed in the import result: after an import this is the expected
-state, not an edge case. Backups 1 to 3 still import. Profiles, personal defaults and new follow
-and job snapshots store the portable identity beside the key, so after an addon is re-added the
-admin repair can offer rebinding a dormant reference to it; nothing rebinds silently. A manifest
-URL can carry addon credentials, so the portable identity appears only in admin reads and backups,
-never in public profile projections, job or follow DTOs, errors or logs.
+mints a new one, and backup version 3 carries manifest URLs but no addon keys. Import into an
+existing instance preserves a key when manifest ID and URL both match (`routes/settings.ts`);
+empty-instance imports and remove/re-add cannot rely on that. Remote import also mints new library
+IDs (`prepareMediaServerConfiguration`). Do not promise that a key or addon-derived `stableKey`
+survives these operations unchanged.
+
+Backup version 4 introduces an opaque portable provider reference and an admin-only provider
+mapping section. Profiles and follow/job policy snapshots store only that opaque reference beside
+the installation key, never a manifest URL, credential or expiring source handle. The protected
+provider configuration/mapping resolves it to manifest identity/configuration for addons, or
+connection/upstream-library identity for remote libraries. Credential-bearing restore descriptors
+belong only to protected provider configuration and the explicit admin backup, not to profiles,
+policy snapshots, normal reads, errors or logs. Public DTOs omit private mapping records entirely.
+Test raw persisted profile/follow/admission policies as well as public DTOs for token/URL leakage.
+
+Import uses that mapping and the media-server old-to-new ID map, never display names; ambiguous or
+unresolved references remain dormant and are reported safely. Backups 1 to 3 still import. The
+admin repair flow can explicitly rebind a portable reference after reinstall; nothing rebinds
+silently, changes historical job policy or preserves a revoked grant. An admitted job whose old
+binding is unusable requires revalidation/requeue under current permissions. Historical snapshots
+are immutable; a remapped live profile or future follow configuration is a distinct operation.
 
 The server builds an authorized provider plan for a catalogue subject (type, title/video ID and
 resolved episode identity) and operation (`play`, `downloadToLibrary`, `downloadToDevice`).
@@ -96,11 +109,16 @@ subscriber does not cancel another; the last subscriber leaving aborts pending w
 account, server, subject or access/configuration revision drops obsolete answers immediately.
 TV uses one equivalent repository, not three independently evolving loaders.
 
-Concurrency is a budget per consumer, not one global number. The primary catalogue and player lookup
-keep today's all-at-once addon fan-out, because each call already has its own deadline; other-source
-panels keep the current `useLibrarySources` limits (two addon, two remote, one local). Separate
-budgets per class keep a slow class from starving another. A test with eight addons shows that time
-to the first row does not regress on the primary path. Define request budgets in the contract:
+Concurrency has a shared request owner and explicit consumer priorities. Characterize today's
+all-at-once primary fan-out separately from the two-addon/two-remote/one-local other-source limits.
+Do not multiply those budgets for subscribers to the same query. A primary subscriber may raise
+that query's scheduling priority within a server-owned cap, but cannot bypass the cap or duplicate
+in-flight requests. Deadlines bound duration, not concurrency. Start with a bounded interactive cap
+of eight addon and two remote requests per account, with fair scheduling across subjects and a
+separate background budget; keep a lower two-addon budget for supplementary-only queries.
+Fixture tests with eight and more addons measure first-row latency and peak concurrency before
+choosing the final cap. Record an intentional latency tradeoff rather than promising unrestricted
+fan-out and bounded concurrency simultaneously. Separate class budgets prevent starvation. Define request budgets in the contract:
 interactive addon attempts initially 30 seconds end-to-end with a smaller upstream deadline to leave
 transport margin, remote discovery 3 seconds and matching 8 seconds; background addon work may use
 the existing configurable 60-second budget. TV cuts each addon at 8 seconds today; adopting the
@@ -217,9 +235,10 @@ may inspect it within their budget; unknown after verification is ineligible. In
 show an unverified/excluded row with its reason, but cannot silently autoplay it. Existing rules
 without that constraint keep their old unknown-value behavior. Owned copies carry no stored audio
 or resolution facts, so a hard audio or resolution bound would stop them from autoplaying. Before a
-play profile ships with such a bound, either inspect owned files into a cache keyed by path, size
-and modification time (local inspection is cheap and needs no provider quota) or exempt owned
-copies from bounds they cannot prove, explicitly and per profile.
+play profile ships with such a bound, inspect owned files into a bounded cache keyed by library
+generation, path, size and modification time (without remote quota), and leave an unverified
+candidate ineligible for automatic choice. v1 has no exemption field;
+do not silently relax a hard bound for a local copy.
 
 Seed editable Recommended, Provider priority and Travel templates for new installations. Recommended
 reproduces today's unfiltered order: `providerClass` (`local`, `remote`, `addon`), then `audioTier`,
@@ -228,8 +247,12 @@ and provider priority rank addon rows only; a language-first template would put 
 language is usually unknown, below every addon row in the preferred language. Conformance vectors
 pin today's order and label any remaining difference in the ledger, for example an owned copy whose
 filename names a language. Provider priority is `providerClass`, `providerOrder`, `audioTier`, size
-descending. Travel prefers the chosen audio language and then smaller verified eligible files. Do
-not invent a universal minimum file size: shorts, low-bitrate media and feature films differ. Expose
+descending. These are editable template choices, not compulsory class priorities. Travel prefers
+the chosen audio language and then smaller verified eligible files, with `heightPixels.min = 480`
+as an explicit initial template value. Admins can change/remove it or clone a 720p variant once
+CRUD ships. A high-resolution sample still needs duration/content checks; resolution alone cannot
+identify it. Do not invent a universal
+minimum file size: shorts, low-bitrate media and feature films differ. Expose
 optional minimum duration/bytes, retain existing anti-sample checks, and test sample/trailer
 rejection and legitimate short media separately. Show estimated/unknown sizes honestly.
 
@@ -238,6 +261,34 @@ seeded profile can be renamed, edited, duplicated and deleted. Templates can be 
 profiles without overwriting changes. An administrator may delete a referenced/default profile
 only after choosing an operation-compatible replacement; a sole usable profile can be replaced
 in the same transaction. This maintains at least one usable default per supported operation.
+
+### Travel and bounded candidate verification
+
+Apply already proven hard exclusions before spending a probe. Provider metadata must be
+authoritative for that fact; a title containing `720p` is only a hint, never proof that a hard height
+bound passes. Unknown quality/duration needs bounded guarded inspection, not an implicit pass or
+unlimited scanning. Use byte estimates to choose a probe order, and verified facts for final hard
+acceptance. Preserve the existing anti-sample checks; the height floor complements them.
+
+Keep a server-owned attempt budget, initially the existing 15 actual candidate probes, plus
+existing time/transfer limits. Every probe counts, including failed requests, samples and rejected
+quality. Metadata-only rejection does not count as a probe. In new resolution outcomes distinguish
+`noMatch` (eligible search exhausted), `budgetExhausted` (unexamined candidates remain), temporary
+provider failure and access denial. Never promise that the smallest file in the entire provider
+catalogue was examined; Travel returns the best verified eligible choice found within its budget.
+If budget exhaustion leaves a valid verified candidate, it can be selected with an incomplete-search
+diagnostic. Without one, keep the job/follow in a retryable waiting/attention state, not a false
+permanent no-source state. Existing scheduler backoff/attempt ceilings govern automatic retry; do
+not start another immediate batch to evade the budget. Remember rejected source evidence briefly
+under source/configuration identity, invalidate it on changed facts/configuration and explicit retry,
+and never let a transient transport error become a durable blacklist.
+
+Required fixtures include: 15 verified samples followed by a valid episode; 15 failed/unknown
+sources; low-resolution rows rejected from authoritative metadata without probing; a high-resolution
+short sample; a false `720p` title; valid 480p and sub-480p content; and a successful match within the
+budget. Assert bounded calls, honest outcomes, no weakening of audio/subtitle constraints, retry
+backoff and no starvation of interactive work. A resolution floor alone does not solve probe-budget
+exhaustion, and no test should claim otherwise.
 
 ### Normative v1 policy shape
 
@@ -271,6 +322,7 @@ type SourcePolicyV1 = {
     | { kind: "subtitleTier" }
   >;
   nextEpisode: "profile" | "sameProviderThenNearestSize";
+  existingLocalCopy: "any" | "meetsRequirements";
 };
 ```
 
@@ -360,9 +412,14 @@ web/desktop admin Settings, not a duplicate TV rule editor.
 Profiles are templates, not live mutable dependencies of background jobs. A new submission carries
 only a profile ID/revision and legitimate operation fields; the server resolves a fresh authorized
 policy. For a submitted job it persists a versioned admission snapshot with profile provenance,
-effective language preferences and the concrete resolved provider allowlist. A follow instead
+effective language preferences, the concrete resolved provider allowlist and all provider-order
+criteria/tie-break order materialized from the viewer and instance configuration. No admitted
+snapshot retains `from: "viewer"` or an implicit mutable instance-order dependency. A follow instead
 stores a policy snapshot retaining its membership mode; provider materialization happens at each
-episode admission, as specified below. Ordinary callers cannot forge a snapshot or override criteria.
+episode admission, as specified below. A profile/follow may retain symbolic viewer preferences
+until admission; each reserved episode/job freezes them, including fallback provider order.
+Current access checks can remove a provider later, but cannot reorder the remaining frozen list.
+Ordinary callers cannot forge a snapshot or override criteria.
 A stale submission returns a revision conflict rather than running unseen rules.
 
 A follow stores the profile snapshot when configured. Editing/deleting a profile does not silently
@@ -392,11 +449,12 @@ cosmetic and cannot alter a job's rule digest.
 
 ## Local libraries
 
-Owned copies are a provider class of their own, not an addon. They have no manifest, role, grants
-or download settings, and an addon record would leak into `allowedAddons`, `streamCandidates`, the
-addon APIs and the settings backup. In v1 they are one provider key, `local`, shown as a virtual
-row in the provider-order editor that cannot be removed. Keys per library (`local:<libraryId>`)
-are deferred until ranking one library above another is a real requirement; until then the order
+Owned local files are a provider class of their own, not an addon. They have no addon manifest,
+role, addon grants or addon download settings; local-library visibility grants still apply. An addon
+record would leak into `allowedAddons`, `streamCandidates`, the addon APIs and the settings backup. In v1 they are one provider key, `local`, shown as a virtual
+row in the provider catalogue that cannot be deleted as an installed addon. An admin may exclude
+it from a profile scope, move it after other providers, or omit provider/class priority criteria.
+Keys per library (`local:<libraryId>`) are deferred until ranking one library above another is a real requirement; until then the order
 inside `local` stays the library order, then size, exactly as `localCopies` returns it.
 
 - **Discovery** stays the binding lookup in `localCopies`: the files bound to the catalogue title,
@@ -412,12 +470,39 @@ inside `local` stays the library order, then size, exactly as `localCopies` retu
 - **Next episode** follows the one cross-class rule of the selection intent table. An owned copy of
   the next episode is a candidate even when an addon row is playing, and continuing from an owned
   copy can reach an addon row when no copy of the next episode exists.
-- **Ownership before download.** Before a follow admits an episode, and before a lazy episode job
-  is queued, check whether the owner can already see an owned copy of that episode through the same
-  binding lookup and visibility rules. If so, record the episode as present instead of queueing it.
-  Proposed rule: any owned copy counts, not only one that satisfies the profile. An explicit manual
-  save still runs. Never rely on the `(2)` rename as deduplication, and never let the check reveal a
-  copy in a library the owner cannot see.
+- **Local ownership before download.** `existingLocalCopy` applies only to automatic
+  `downloadToLibrary` admission/execution. It never removes playback candidates or redirects an
+  exact-source save. Only accessible files in this application's local libraries
+  count. A Jellyfin/Emby copy does not suppress a download; it remains a remote source candidate.
+  This check answers whether the requested local result already exists, not which transport to
+  download from. `scope` and `constraints.sourceKinds` govern acquisition/selection candidates;
+  `existingLocalCopy` independently governs reuse of an already downloaded file. Neither can
+  waive visibility or content requirements. The administrator configures `existingLocalCopy`:
+  - `any`: any accessible, present bound local copy of that exact episode satisfies ownership.
+  - `meetsRequirements`: the local copy must meet the policy's content requirements (audio,
+    subtitles and numeric quality/size bounds) with sufficient evidence. Provider membership,
+    source kind and download capability do not apply to this check: an addon-only acquisition
+    scope can still avoid downloading an adequate local copy. Soft ranking does not require an
+    upgrade merely because another candidate would rank better. In particular, an `http`/`torrent`
+  source-kind filter still permits an adequate local file to satisfy ownership: it constrains the
+  acquisition transport, not the resulting file. Test that case explicitly; excluding `localFile`
+  from playback selection and finding an existing adequate download are different operations.
+  New profile-based recipes default to `meetsRequirements`. Legacy rules retain their current
+  behavior until explicitly migrated, rather than gaining a silent skip. Unknown required facts
+  trigger bounded local inspection; if unresolved, defer with an actionable reason, without falsely
+  marking the episode present or automatically creating a duplicate. Inspection is authorized and
+  bounded like other work; it is not free merely because the path is local. An explicit manual save
+  remains independent of this automatic policy.
+- **Presence lifecycle and races.** Record a distinct `presentLocally` outcome with private local
+  identity and the evidence/scan revision used, not a fabricated completed download. Recheck visible
+  presence before admission and immediately before transfer; serialize same-owner/episode admission
+  through the queue's reservation discipline. A bound copy appearing while a job waits can satisfy
+  it. A stale scan alone cannot prove that a file still exists: verify current file identity/access.
+  On a relevant scan, binding or permission change, re-evaluate the marker and normal follow
+  eligibility. If an unwatched eligible episode loses its qualifying copy, it may be admitted again.
+  Preserve watched/retention and explicit skip decisions: intentional retention cleanup must not
+  trigger a redownload loop. An externally owned file is never deleted by follow retention simply
+  because it satisfied presence. Do not expose hidden paths, libraries or markers in public DTOs.
 
 ## Remote libraries in future downloads (separate delivery stage)
 
@@ -447,6 +532,10 @@ holds per source and checks the stream limit only on a source's first hold, so t
 different sources; a probe and a transfer of the same source share one slot count.
 
 ## Migration and rollout
+
+These are compatibility steps, not one serial UI release train. The [delivery dependencies](source-selection-tasks.md#delivery-dependencies-and-the-first-usable-slice) allow fixed background
+presets before the interactive rewrite and editor, and remote automation after background
+authorization/snapshots are stable. Administrator CRUD remains a required later deliverable.
 
 1. Characterize existing flows before extracting production logic. Preserve `sourceId`, `stableKey`,
    authorization, exact-source saves and progress ownership contracts.
@@ -478,7 +567,9 @@ different sources; a probe and a transfer of the same source share one slot coun
    dormant references it could not map. Test import failure/restart and rollback; an older binary
    must refuse an unsupported new schema rather than overwrite it. Retain the pre-migration backup
    for rollback.
-8. Add remote automatic candidates after the addon/profile pipeline and its tests are stable.
+8. Add remote automatic candidates after the background policy/admission pipeline and relevant
+   remote tests are stable. Interactive fan-out, Kotlin migration and the complete editor are not
+   prerequisites; shared server access/cache guarantees are.
 
 ## Acceptance
 
@@ -494,7 +585,9 @@ different sources; a probe and a transfer of the same source share one slot coun
 - Remote automatic copies use durable server-created references and existing bounded transfer
   machinery; quota and cancellation tests pass before enabling this provider kind in profiles.
 - Owned copies keep their place under Recommended, are candidates for the next episode from any
-  class, and a follow never downloads an episode the owner already has in a visible library.
+  class, and a follow applies its explicit local-copy policy before downloading. A remote-only copy
+  never counts as local ownership; a copy failing required content constraints does not satisfy
+  `meetsRequirements`.
 - Profiles and personal defaults survive settings import, and profiles, personal defaults and
   follows survive an addon reinstall, through portable provider identity; otherwise the exact
   dormant references are reported. No public read, DTO or log exposes a manifest URL.

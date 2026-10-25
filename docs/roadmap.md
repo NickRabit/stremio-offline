@@ -577,8 +577,9 @@ provider acquisition, ranking and selection intent (including the remembered/cur
 Only administrators create, edit or delete instance-wide source-selection profiles; users select
 them. Existing follows and jobs retain versioned policy snapshots. The
 [test-first delivery plan](source-selection-tasks.md) requires characterization coverage before
-refactoring, then shared contracts/acquisition, profile CRUD and clients, and finally remote-library
-providers for automatic episode downloads. These are source-selection recipes, separate from the
+refactoring, then a first usable download/follow slice with server-defined recipes. Interactive
+acquisition, admin CRUD and remote automatic downloads have explicit dependencies rather than one
+serial release train. Local-copy checks cover only this application's libraries, not Jellyfin/Emby. These are source-selection recipes, separate from the
 account/household profiles below.
 
 ## Later
