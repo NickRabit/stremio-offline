@@ -67,6 +67,26 @@ test("stream listings distinguish a successful empty response from provider fail
   ]);
 });
 
+test("stream listings reject a non-array field and non-object entries while accepting an absent field", async () => {
+  setFetchTransport(async (url) => {
+    const host = new URL(url).hostname;
+    if (host === "absent-stream.example") return json({});
+    if (host === "null-stream.example") return json({ streams: null });
+    return json({ streams: [{ url: "https://cdn.example/video.mp4" }, "not-a-stream"] });
+  });
+
+  const listings = await streamListings([
+    addon("absent-stream.example", "stream"),
+    addon("null-stream.example", "stream"),
+    addon("malformed-stream.example", "stream"),
+  ], "movie", "tt0241527");
+  assert.deepEqual(listings, [
+    { addonKey: "absent-stream.example", status: "success", items: [] },
+    { addonKey: "null-stream.example", status: "failure" },
+    { addonKey: "malformed-stream.example", status: "failure" },
+  ]);
+});
+
 test("non-search JSON holds its host slot through the body read while other hosts proceed", async () => {
   const calls: string[] = [];
   let releaseFirst = () => {};

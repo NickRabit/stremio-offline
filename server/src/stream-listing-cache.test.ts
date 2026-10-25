@@ -26,6 +26,8 @@ const item = (name: string): StreamItem => ({ url: `https://cdn.example/${name}.
 const success = (addon: AddonRecord, items: StreamItem[] = [item(addon.key)]): StreamListing =>
   ({ addonKey: addon.key, status: "success", items });
 
+const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+
 test("successful empty listings are cached for five minutes while failures are retried", async () => {
   let now = 0;
   const calls = new Map<string, number>();
@@ -110,10 +112,81 @@ test("an in-flight result cannot reenter the cache after title invalidation", as
   });
 
   const stale = cache.list([addon], "movie", "tt1");
+  await settle();
   cache.invalidate("movie", "tt1");
   resolveFirst(success(addon, [item("stale")]));
   assert.deepEqual((await stale).map((stream) => stream.name), ["stale"]);
   assert.deepEqual((await cache.list([addon], "movie", "tt1")).map((stream) => stream.name), ["fresh"]);
+  assert.equal(calls, 2);
+});
+
+test("concurrent misses for one provider share one in-flight fetch", async () => {
+  const addon = provider("alpha");
+  let calls = 0;
+  let resolveListing!: (listing: StreamListing) => void;
+  const cache = new StreamListingCache({
+    fetch: async () => {
+      calls += 1;
+      return await new Promise((resolve) => { resolveListing = resolve; });
+    },
+  });
+
+  const first = cache.list([addon], "movie", "tt1");
+  const second = cache.list([addon], "movie", "tt1");
+  await settle();
+  assert.equal(calls, 1);
+
+  resolveListing(success(addon, [item("shared")]));
+  assert.deepEqual((await first).map((stream) => stream.name), ["shared"]);
+  assert.deepEqual((await second).map((stream) => stream.name), ["shared"]);
+  assert.deepEqual((await cache.list([addon], "movie", "tt1")).map((stream) => stream.name), ["shared"]);
+  assert.equal(calls, 1);
+});
+
+test("title invalidation starts a fresh request and an old completion cannot unshare it", async () => {
+  const addon = provider("alpha");
+  const resolvers: Array<(listing: StreamListing) => void> = [];
+  let calls = 0;
+  const cache = new StreamListingCache({
+    fetch: async () => {
+      calls += 1;
+      return await new Promise((resolve) => { resolvers.push(resolve); });
+    },
+  });
+
+  const stale = cache.list([addon], "series", "tt1:1:1");
+  await settle();
+  cache.invalidate("series", "tt1:1:1");
+  const fresh = cache.list([addon], "series", "tt1:1:1");
+  await settle();
+  assert.equal(calls, 2);
+
+  resolvers[0](success(addon, [item("stale")]));
+  assert.deepEqual((await stale).map((stream) => stream.name), ["stale"]);
+  const joined = cache.list([addon], "series", "tt1:1:1");
+  await settle();
+  assert.equal(calls, 2, "the old completion does not remove the replacement in-flight entry");
+
+  resolvers[1](success(addon, [item("fresh")]));
+  assert.deepEqual((await fresh).map((stream) => stream.name), ["fresh"]);
+  assert.deepEqual((await joined).map((stream) => stream.name), ["fresh"]);
+  assert.deepEqual((await cache.list([addon], "series", "tt1:1:1")).map((stream) => stream.name), ["fresh"]);
+  assert.equal(calls, 2);
+});
+
+test("a rejected fetch is treated as a failure and cleaned up", async () => {
+  const addon = provider("alpha");
+  let calls = 0;
+  const cache = new StreamListingCache({
+    fetch: async (asked) => {
+      calls += 1;
+      if (calls === 1) throw new Error("provider unavailable");
+      return success(asked, [item("recovered")]);
+    },
+  });
+
+  assert.deepEqual(await cache.list([addon], "movie", "tt1"), []);
+  assert.deepEqual((await cache.list([addon], "movie", "tt1")).map((stream) => stream.name), ["recovered"]);
   assert.equal(calls, 2);
 });
 
@@ -130,6 +203,7 @@ test("clear prevents an in-flight result from reentering after an import", async
   });
 
   const stale = cache.list([addon], "movie", "tt1");
+  await settle();
   cache.clear();
   resolveFirst(success(addon, [item("stale")]));
   await stale;

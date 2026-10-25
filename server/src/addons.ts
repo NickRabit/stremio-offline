@@ -372,6 +372,21 @@ export type StreamListing =
   | { addonKey: string; status: "success"; items: StreamItem[] }
   | { addonKey: string; status: "failure" };
 
+function mapStreams(response: unknown, addon: AddonRecord): StreamItem[] {
+  if (typeof response !== "object" || response === null || Array.isArray(response)) {
+    throw new Error("The addon stream response was not an object.");
+  }
+  if (!Object.hasOwn(response, "streams")) return [];
+  const streams = (response as { streams?: unknown }).streams;
+  if (!Array.isArray(streams)) throw new Error("The addon streams field was not an array.");
+  return streams.map((stream) => {
+    if (typeof stream !== "object" || stream === null || Array.isArray(stream)) {
+      throw new Error("The addon stream listing contained a non-object item.");
+    }
+    return { ...stream, addonKey: addon.key, addonName: addon.manifest.name };
+  });
+}
+
 export async function streamListings(
   addons: AddonRecord[],
   type: string,
@@ -381,8 +396,8 @@ export async function streamListings(
 ): Promise<StreamListing[]> {
   const candidates = streamCandidates(addons, type, id);
   const results = await Promise.allSettled(candidates.map(async (addon) => {
-    const response = await jsonFetch<{ streams?: StreamItem[] }>(resourceUrl(addon, "stream", type, id), STREAM_TIMEOUT_MS, interactive, signal);
-    return (response.streams ?? []).map((stream) => ({ ...stream, addonKey: addon.key, addonName: addon.manifest.name }));
+    const response = await jsonFetch<unknown>(resourceUrl(addon, "stream", type, id), STREAM_TIMEOUT_MS, interactive, signal);
+    return mapStreams(response, addon);
   }));
   if (!signal?.aborted) {
     results.forEach((result, index) => {
