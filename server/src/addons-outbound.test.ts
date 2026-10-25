@@ -10,7 +10,7 @@ process.env.ADDON_MAX_CONCURRENT = "1";
 process.env.ALLOW_PRIVATE_ADDONS = "1";
 process.env.STREAM_ADDON_TIMEOUT_MS = "100";
 
-const { loadAddon, streams, subtitles } = await import("./addons.js");
+const { loadAddon, streamListings, streams, subtitles } = await import("./addons.js");
 const { AppError } = await import("./errors.js");
 const { flushLog, initLogger } = await import("./logger.js");
 const { defaultDownloadSettings } = await import("./naming.js");
@@ -44,6 +44,28 @@ const addon = (host: string, resource: "stream" | "subtitles"): AddonRecord => (
 });
 
 const hostDiagnostics = (host: string) => outbound.diagnostics().find((entry) => entry.host === host);
+
+test("stream listings distinguish a successful empty response from provider failure", async () => {
+  setFetchTransport(async (url) => {
+    const host = new URL(url).hostname;
+    if (host === "failed-stream.example") return new Response("{}", { status: 503 });
+    if (host === "empty-stream.example") return json({ streams: [] });
+    return json({ streams: [{ url: "https://cdn.example/video.mp4" }] });
+  });
+
+  const listings = await streamListings([
+    addon("failed-stream.example", "stream"),
+    addon("empty-stream.example", "stream"),
+    addon("full-stream.example", "stream"),
+  ], "movie", "tt0241527");
+  assert.deepEqual(listings, [
+    { addonKey: "failed-stream.example", status: "failure" },
+    { addonKey: "empty-stream.example", status: "success", items: [] },
+    { addonKey: "full-stream.example", status: "success", items: [{
+      url: "https://cdn.example/video.mp4", addonKey: "full-stream.example", addonName: "full-stream.example",
+    }] },
+  ]);
+});
 
 test("non-search JSON holds its host slot through the body read while other hosts proceed", async () => {
   const calls: string[] = [];

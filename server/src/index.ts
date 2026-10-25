@@ -7,7 +7,8 @@ import path from "node:path";
 import { constants } from "node:fs";
 import { access, mkdir, readdir, realpath, rm, stat, statfs, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { addonAllowed, allowedAddons, fetchCatalogPage, loadAddon, metadata, orderFor, orderedForUser, searchAll, searchableCatalogs, streams, subtitles, type MetaProvider } from "./addons.js";
+import { addonAllowed, allowedAddons, fetchCatalogPage, loadAddon, metadata, orderFor, orderedForUser, searchAll, searchableCatalogs, subtitles, type MetaProvider } from "./addons.js";
+import { StreamListingCache } from "./stream-listing-cache.js";
 import { autoRefreshEnabled, refreshDue, refreshManifests, type RefreshOutcome } from "./addon-refresh.js";
 import { rankStreams } from "./ranking.js";
 import { defaultDownloadLibrary, DownloadQueue, ownerMayDownload, type DownloadJob, type RemoteDownloadBackend } from "./downloads.js";
@@ -340,31 +341,10 @@ if (!store.defaultsInstalled()) {
     state.defaultsInstalled = defaults.every((item) => state.addons.some((addon) => addon.manifestUrl === item.url));
   });
 }
-// Source pick for lazy queue jobs: the addons are asked at download time and the
-// answer is held for a while, so repeated attempts at one episode do not hammer them.
-const streamCache = new Map<string, { at: number; items: StreamItem[]; type: string; videoId: string }>();
-let streamCacheEpoch = 0;
-/** The allowed set is part of the key, not a filter over the answer: the candidates are
- *  merged from whichever addons were asked, so one account's cache entry would otherwise
- *  hand another account sources it may not use -- and, worse, they would already have been
- *  contacted on its behalf. */
-const cachedStreams = async (sources: AddonRecord[], type: string, id: string) => {
-  const key = `${type}:${id}:${sources.map((addon) => addon.key).join(",")}`;
-  const hit = streamCache.get(key);
-  if (hit && Date.now() - hit.at < 5 * 60_000) return hit.items;
-  const epoch = streamCacheEpoch;
-  const items = await streams(sources, type, id);
-  if (epoch !== streamCacheEpoch) return items;
-  if (streamCache.size > 100) streamCache.clear();
-  streamCache.set(key, { at: Date.now(), items, type, videoId: id });
-  return items;
-};
-queue.setRetrySourceHook(({ type, videoId }) => {
-  streamCacheEpoch += 1;
-  for (const [key, entry] of streamCache) {
-    if (entry.type === type && entry.videoId === videoId) streamCache.delete(key);
-  }
-});
+// Source pick for lazy queue jobs: successful provider listings are held per
+// provider so another job can reuse them without reviving a failed request.
+const streamCache = new StreamListingCache();
+queue.setRetrySourceHook(({ type, videoId }) => streamCache.invalidate(type, videoId));
 queue.setResolver(async (source, ownerUserId) => {
   // Narrowed before a single request goes out. Checking the chosen stream afterwards is too
   // late twice over: the addons have already been asked on this account's behalf, and the
@@ -376,7 +356,7 @@ queue.setResolver(async (source, ownerUserId) => {
   const priority = new Map(usable.map((addon, index) => [addon.key, index]));
   const selectedKeys = source.selection ? new Set(source.selection.addonKeys) : undefined;
   const streamSources = selectedKeys ? usable.filter((addon) => selectedKeys.has(addon.key)) : usable;
-  const listed = await cachedStreams(streamSources, source.type, source.videoId);
+  const listed = await streamCache.list(streamSources, source.type, source.videoId);
   const candidates = listed.filter((stream) => stream.url);
   if (source.selection) {
     await serverReady;

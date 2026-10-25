@@ -18,7 +18,7 @@ import { assertStillAdmin, ForbiddenError } from "../roles.js";
 import { memberSettings, publicSettings, type InstanceSettings, type Settings, type State, type UserPrefs } from "../store.js";
 import { verifyTmdbKey } from "../tmdb.js";
 import { clearTrailerCache } from "../trailers.js";
-import type { MetaItem, StreamItem } from "../types.js";
+import type { MetaItem } from "../types.js";
 import { PERSONAL_SETTINGS, type UserData } from "../users.js";
 import { asyncRoute, type RouteContext } from "./context.js";
 
@@ -35,7 +35,7 @@ export interface SettingsDeps extends RouteContext {
   mutateData(state: State, id: string, mutate: (data: UserData) => void): void;
   prefsOf(req?: express.Request): UserPrefs;
   queue: DownloadQueue;
-  streamCache: Map<string, { at: number; items: StreamItem[] }>;
+  streamCache: { clear(): void };
 }
 
 export function registerSettingsRoutes(app: express.Application, deps: SettingsDeps): void {
