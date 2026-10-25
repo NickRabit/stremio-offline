@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -83,6 +83,11 @@ const media = (audioLanguage = "en", subtitleLanguages: string[] = []): MediaInf
 const success = (addonRecord: AddonRecord, items: StreamItem[]): StreamListing =>
   ({ addonKey: addonRecord.key, status: "success", items });
 
+const rotateProvider = (addonRecord: AddonRecord, version = "2") => {
+  addonRecord.manifestUrl = addonRecord.manifestUrl.replace("/manifest.json", `/v${version}/manifest.json`);
+  addonRecord.manifest = { ...addonRecord.manifest, version };
+};
+
 const listen = (handler: Parameters<typeof createServer>[1]) => new Promise<{ server: Server; port: number }>((resolve) => {
   const server = createServer(handler);
   server.listen(0, "127.0.0.1", () => resolve({ server, port: (server.address() as { port: number }).port }));
@@ -105,6 +110,7 @@ async function harness(options: {
   listStreams: (addons: AddonRecord[], type: string, id: string) => Promise<StreamItem[]>;
   inspect: (stream: StreamItem, signal: AbortSignal) => Promise<MediaInfo | undefined>;
   listSubtitles?: (addons: AddonRecord[], type: string, id: string, signal: AbortSignal) => ReturnType<typeof subtitles>;
+  libraryState?: (libraryId: string) => Promise<LibraryRecord | undefined>;
 }): Promise<Harness> {
   const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-source-resolver-"));
   const downloads = path.join(directory, "downloads");
@@ -126,6 +132,7 @@ async function harness(options: {
     stallTransferMs: 2_000,
     libraries: () => [library],
     defaultLibrary: () => library,
+    libraryState: options.libraryState,
     ownerAllowed: (job) => ownerMayDownload({
       owner: state.users.find((candidate) => candidate.id === job.ownerUserId),
       addons: state.addons,
@@ -375,6 +382,246 @@ test("revocation during the first probe runs no second probe and selects nothing
     assert.equal(h.queue.get(job!.id)?.pauseReason, "permission");
   } finally {
     releaseProbe.release();
+    await h.close();
+  }
+});
+
+test("an in-flight stream listing is discarded after its provider identity changes", async () => {
+  const gate = deferred();
+  let listingStarted = false;
+  let probes = 0;
+  const stream = addon("stream-a", ["stream"], [OWNER]);
+  const cache = new StreamListingCache({
+    fetch: async (asked) => {
+      listingStarted = true;
+      await gate.promise;
+      return success(asked, [{ url: "https://media.example/film.mp4", addonKey: asked.key }]);
+    },
+  });
+  const h = await harness({
+    users: [owner()],
+    addons: [stream],
+    listStreams: (addons, type, id) => cache.list(addons, type, id),
+    inspect: async () => { probes += 1; return media(); },
+  });
+  try {
+    const resolving = h.resolver({
+      type: "movie",
+      videoId: VIDEO_ID,
+      tried: [],
+      selection: selection([stream.key]),
+    }, OWNER, new AbortController().signal);
+    await waitFor(() => listingStarted);
+
+    rotateProvider(stream);
+    gate.release();
+
+    assert.equal(await resolving, undefined);
+    assert.equal(probes, 0);
+  } finally {
+    gate.release();
+    await h.close();
+  }
+});
+
+test("an in-flight subtitle result is discarded after its provider identity changes", async () => {
+  const subtitleStarted = deferred();
+  const gate = deferred();
+  let probes = 0;
+  const stream = addon("stream-a", ["stream"], [OWNER]);
+  const subtitle = addon("subtitle-a", [{ name: "subtitles", types: ["movie"] }], [OWNER]);
+  const cache = new StreamListingCache({
+    fetch: async (asked) => success(asked, [{ url: "https://media.example/film.mp4", addonKey: asked.key }]),
+  });
+  const h = await harness({
+    users: [owner()],
+    addons: [stream, subtitle],
+    listStreams: (addons, type, id) => cache.list(addons, type, id),
+    listSubtitles: async () => {
+      subtitleStarted.release();
+      await gate.promise;
+      return [{ url: "https://subtitles.example/film.srt", lang: "en", addonKey: subtitle.key }];
+    },
+    inspect: async () => { probes += 1; return media(); },
+  });
+  try {
+    const resolving = h.resolver({
+      type: "movie",
+      videoId: VIDEO_ID,
+      tried: [],
+      selection: selection([stream.key], "optional"),
+    }, OWNER, new AbortController().signal);
+    await subtitleStarted.promise;
+
+    rotateProvider(subtitle);
+    gate.release();
+
+    const result = await resolving;
+    assert.equal(result?.stream.addonKey, stream.key);
+    assert.equal(result?.subtitle, undefined);
+    assert.equal(probes, 1);
+  } finally {
+    gate.release();
+    await h.close();
+  }
+});
+
+test("a provider identity change during a probe cancels before another probe or selection", async () => {
+  const probeStarted = deferred();
+  const releaseProbe = deferred();
+  let probes = 0;
+  const stream = addon("stream-a", ["stream"], [OWNER]);
+  const cache = new StreamListingCache({
+    fetch: async (asked) => success(asked, [
+      { url: "https://media.example/one.mp4", addonKey: asked.key },
+      { url: "https://media.example/two.mp4", addonKey: asked.key },
+    ]),
+  });
+  const h = await harness({
+    users: [owner()],
+    addons: [stream],
+    listStreams: (addons, type, id) => cache.list(addons, type, id),
+    inspect: async () => {
+      probes += 1;
+      probeStarted.release();
+      await releaseProbe.promise;
+      return media();
+    },
+  });
+  try {
+    const resolving = h.resolver({
+      type: "movie",
+      videoId: VIDEO_ID,
+      tried: [],
+      selection: selection([stream.key]),
+    }, OWNER, new AbortController().signal);
+    await probeStarted.promise;
+
+    rotateProvider(stream);
+    releaseProbe.release();
+
+    assert.equal(await resolving, undefined);
+    assert.equal(probes, 1);
+  } finally {
+    releaseProbe.release();
+    await h.close();
+  }
+});
+
+test("selected-provider loss after listing pauses without waiting for the sweep", async () => {
+  const gate = deferred();
+  let listingStarted = false;
+  let probes = 0;
+  const stream = addon("stream-a", ["stream"], [OWNER]);
+  const cache = new StreamListingCache({
+    fetch: async (asked) => {
+      listingStarted = true;
+      await gate.promise;
+      return success(asked, [{ url: "https://media.example/film.mp4", addonKey: asked.key }]);
+    },
+  });
+  const h = await harness({
+    users: [owner()],
+    addons: [stream],
+    listStreams: (addons, type, id) => cache.list(addons, type, id),
+    inspect: async () => { probes += 1; return media(); },
+  });
+  try {
+    const job = await h.queue.addPending("Film", {
+      type: "movie",
+      videoId: VIDEO_ID,
+      selection: selection([stream.key]),
+    }, { kind: "movie", title: "Film" }, OWNER);
+    await waitFor(() => listingStarted);
+
+    stream.allowedUsers = [];
+    gate.release();
+    await waitFor(() => h.queue.get(job!.id)?.status === "paused");
+    await h.revocations.stopContent({ userId: OWNER, addonKey: stream.key });
+
+    const paused = h.queue.get(job!.id);
+    assert.equal(paused?.pauseReason, "permission");
+    assert.equal(paused?.errorKey, "download.pausedNoPermission");
+    assert.equal(probes, 0);
+  } finally {
+    gate.release();
+    await h.close();
+  }
+});
+
+test("a genuine no-source result still fails when selected providers are authorized", async () => {
+  const stream = addon("stream-a", ["stream"], [OWNER]);
+  const cache = new StreamListingCache({
+    fetch: async (asked) => success(asked, []),
+  });
+  const h = await harness({
+    users: [owner()],
+    addons: [stream],
+    listStreams: (addons, type, id) => cache.list(addons, type, id),
+    inspect: async () => media(),
+  });
+  try {
+    const job = await h.queue.addPending("Film", {
+      type: "movie",
+      videoId: VIDEO_ID,
+      selection: selection([stream.key]),
+    }, { kind: "movie", title: "Film" }, OWNER);
+    await waitFor(() => h.queue.get(job!.id)?.status === "failed");
+
+    assert.equal(h.queue.get(job!.id)?.errorKey, "err.noMatchingSource");
+    assert.equal(h.queue.get(job!.id)?.pauseReason, undefined);
+  } finally {
+    await h.close();
+  }
+});
+
+test("revocation during target resolution never persists or keeps the lazy choice", async () => {
+  const libraryStarted = deferred();
+  const releaseLibrary = deferred();
+  const stream = addon("stream-a", ["stream"], [OWNER]);
+  const cache = new StreamListingCache({
+    fetch: async (asked) => success(asked, [{ url: "https://media.example/film.mp4", addonKey: asked.key }]),
+  });
+  let stagedLibrary: LibraryRecord | undefined;
+  const h = await harness({
+    users: [owner()],
+    addons: [stream],
+    listStreams: (addons, type, id) => cache.list(addons, type, id),
+    inspect: async () => media(),
+    libraryState: async (libraryId) => {
+      libraryStarted.release();
+      await releaseLibrary.promise;
+      return libraryId === LIBRARY_ID ? stagedLibrary : undefined;
+    },
+  });
+  stagedLibrary = h.library;
+  try {
+    const chosen = selection([stream.key]);
+    chosen.targetSettings = { ...chosen.targetSettings, libraryId: LIBRARY_ID, explicit: true };
+    const job = await h.queue.addPending("Film", {
+      type: "movie",
+      videoId: VIDEO_ID,
+      selection: chosen,
+    }, { kind: "movie", title: "Film" }, OWNER);
+    await libraryStarted.promise;
+
+    const before = { ...h.users[0]!, permissions: { ...h.users[0]!.permissions } };
+    h.users[0]!.permissions.downloadToLibrary = false;
+    const revoking = h.revocations.permissionsChanged(before, h.users[0]!);
+    releaseLibrary.release();
+    await revoking;
+    await waitFor(() => h.queue.get(job!.id)?.status === "paused");
+
+    const stored = JSON.parse(await readFile(path.join(h.directory, "data", "downloads.json"), "utf8")) as Array<Record<string, unknown>>;
+    const row = stored.find((candidate) => candidate.id === job!.id)!;
+    assert.equal(row.pauseReason, "permission");
+    assert.equal(row.target, "");
+    assert.equal("stream" in row, false);
+    assert.equal("subtitle" in row, false);
+    assert.equal("resolution" in row, false);
+    assert.equal("libraryId" in row, false);
+  } finally {
+    releaseLibrary.release();
     await h.close();
   }
 });

@@ -230,3 +230,34 @@ test("provider manifest revisions do not reuse another definition's listing", as
   ]);
   assert.equal(calls, 3);
 });
+
+test("an in-flight listing is stored under the identity captured when it started", async () => {
+  const alpha = provider("alpha");
+  const originalUrl = alpha.manifestUrl;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let calls = 0;
+  const cache = new StreamListingCache({
+    fetch: async (addon) => {
+      calls += 1;
+      if (calls === 1) await gate;
+      return success(addon, [item(calls === 1 ? "old" : "new")]);
+    },
+  });
+
+  const oldListing = cache.list([alpha], "movie", "tt1");
+  await settle();
+  alpha.manifestUrl = "https://alpha.example/new/manifest.json";
+  alpha.manifest = { ...alpha.manifest, version: "2" };
+  release();
+
+  assert.deepEqual((await oldListing).map((stream) => stream.name), ["old"]);
+  const originalIdentity = {
+    ...alpha,
+    manifestUrl: originalUrl,
+    manifest: { ...alpha.manifest, version: "1" },
+  };
+  assert.deepEqual((await cache.list([originalIdentity], "movie", "tt1")).map((stream) => stream.name), ["old"]);
+  assert.deepEqual((await cache.list([alpha], "movie", "tt1")).map((stream) => stream.name), ["new"]);
+  assert.equal(calls, 2);
+});

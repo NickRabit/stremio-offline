@@ -22,7 +22,10 @@ interface Authorization {
   usable: AddonRecord[];
   streamSources: AddonRecord[];
   priority: Map<string, number>;
+  identities: Map<string, string>;
 }
+
+const identityOf = (addon: AddonRecord) => JSON.stringify([addon.manifestUrl, addon.manifest.version]);
 
 const selectedBy = (addons: AddonRecord[], keys: string[] | undefined) => {
   if (!keys) return addons;
@@ -38,21 +41,39 @@ export function createSourceResolver(deps: SourceResolverDeps): StreamResolver {
       const owner = findUserById(deps.users(), ownerUserId);
       if (!owner || owner.disabled || !mayDownloadToLibrary(owner)) return undefined;
       const usable = allowedAddons(deps.addons(), { id: owner.id, role: owner.role }).filter((addon) => addon.enabled);
+      const identities = new Map(usable.map((addon) => [addon.key, identityOf(addon)]));
       return {
         usable,
         streamSources: selectedBy(usable, source.selection?.addonKeys),
         priority: new Map(usable.map((addon, index) => [addon.key, index])),
+        identities,
       };
     };
-    const permittedStreams = (authorization: Authorization, streams: StreamItem[]) => {
-      const keys = new Set(authorization.streamSources.map((addon) => addon.key));
-      return streams.filter((stream) => stream.addonKey !== undefined && keys.has(stream.addonKey));
+    const streamSourceIs = (authorization: Authorization, stream: StreamItem, expected: Map<string, string>) => {
+      if (!stream.addonKey) return false;
+      const identity = expected.get(stream.addonKey);
+      return identity !== undefined
+        && authorization.streamSources.some((addon) => addon.key === stream.addonKey)
+        && authorization.identities.get(stream.addonKey) === identity;
     };
+    const permittedStreams = (authorization: Authorization, streams: StreamItem[], expected: Map<string, string>) =>
+      streams.filter((stream) => streamSourceIs(authorization, stream, expected));
     const settingsFor = (authorization: Authorization, stream: StreamItem): AddonDownloadSettings | undefined =>
       authorization.usable.find((addon) => addon.key === stream.addonKey)?.downloadSettings;
-    const returnable = (authorization: Authorization, choice: { stream: StreamItem; subtitle?: SubtitleItem; resolution?: DownloadResolution }) => {
-      if (!authorization.streamSources.some((addon) => addon.key === choice.stream.addonKey)) return undefined;
-      if (choice.subtitle?.addonKey && !authorization.usable.some((addon) => addon.key === choice.subtitle!.addonKey)) return undefined;
+    const returnable = (
+      authorization: Authorization,
+      choice: { stream: StreamItem; subtitle?: SubtitleItem; resolution?: DownloadResolution },
+      streamIdentities: Map<string, string>,
+      subtitleIdentities: Map<string, string>,
+    ) => {
+      if (!streamSourceIs(authorization, choice.stream, streamIdentities)) return undefined;
+      if (choice.subtitle?.addonKey) {
+        const expected = subtitleIdentities.get(choice.subtitle.addonKey)
+          ?? (choice.subtitle.addonKey === choice.stream.addonKey ? streamIdentities.get(choice.subtitle.addonKey) : undefined);
+        if (!expected
+          || !authorization.usable.some((addon) => addon.key === choice.subtitle!.addonKey)
+          || authorization.identities.get(choice.subtitle.addonKey) !== expected) return undefined;
+      }
       const settings = settingsFor(authorization, choice.stream);
       return settings ? { ...choice, settings } : undefined;
     };
@@ -62,7 +83,7 @@ export function createSourceResolver(deps: SourceResolverDeps): StreamResolver {
     const listed = await deps.listStreams(initial.streamSources, source.type, source.videoId);
     const afterListing = current();
     if (!afterListing) return undefined;
-    const candidates = permittedStreams(afterListing, listed).filter((stream) => stream.url);
+    const candidates = permittedStreams(afterListing, listed, initial.identities).filter((stream) => stream.url);
 
     if (source.selection) {
       await deps.serverReady;
@@ -73,41 +94,49 @@ export function createSourceResolver(deps: SourceResolverDeps): StreamResolver {
         : await deps.listSubtitles(beforeSubtitles.usable, source.type, source.videoId, signal);
       const beforeSelection = current();
       if (!beforeSelection) return undefined;
-      const external = listedSubtitles.filter((subtitle) => subtitle.addonKey && beforeSelection.usable.some((addon) => addon.key === subtitle.addonKey));
+      const external = listedSubtitles.filter((subtitle) => {
+        if (!subtitle.addonKey) return false;
+        const identity = beforeSubtitles.identities.get(subtitle.addonKey);
+        return identity !== undefined
+          && beforeSelection.usable.some((addon) => addon.key === subtitle.addonKey)
+          && beforeSelection.identities.get(subtitle.addonKey) === identity;
+      });
 
       const selected = await selectDownloadSource({
-        candidates: permittedStreams(beforeSelection, candidates),
+        candidates: permittedStreams(beforeSelection, candidates, initial.identities),
         subtitles: external,
         selection: source.selection,
         tried: source.tried,
         inspect: (stream) => deps.inspect(stream, signal),
         shouldContinue: (stream) => {
           const authorization = current();
-          return Boolean(authorization?.streamSources.some((addon) => addon.key === stream.addonKey));
+          return Boolean(authorization && streamSourceIs(authorization, stream, initial.identities));
         },
       });
       const afterSelection = current();
       if (!afterSelection) return undefined;
-      if (selected) return returnable(afterSelection, selected);
+      if (selected) return returnable(afterSelection, selected, initial.identities, beforeSubtitles.identities);
 
       if (!deps.hasRealDebrid()) return undefined;
       const beforeTorrent = current();
       if (!beforeTorrent) return undefined;
       const torrent = selectTorrentSource({
-        candidates: permittedStreams(beforeTorrent, listed),
+        candidates: permittedStreams(beforeTorrent, listed, initial.identities),
         subtitles: external.filter((subtitle) => beforeTorrent.usable.some((addon) => addon.key === subtitle.addonKey)),
         selection: source.selection,
         tried: source.tried,
         episode: source.type === "series",
       });
       if (!torrent) return undefined;
-      return returnable(beforeTorrent, torrent);
+      return returnable(beforeTorrent, torrent, initial.identities, beforeSubtitles.identities);
     }
 
     const ranked = rankStreams(candidates, deps.prefs(ownerUserId).audioLanguage, afterListing.priority);
     const next = ranked.find((stream) => !source.tried.includes(stream.url!));
     if (!next) return undefined;
-    const settings = settingsFor(afterListing, next);
+    const final = current();
+    if (!final || !streamSourceIs(final, next, initial.identities)) return undefined;
+    const settings = settingsFor(final, next);
     return settings ? { stream: next, settings } : undefined;
   };
 }

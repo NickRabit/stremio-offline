@@ -199,9 +199,11 @@ export function ownerMayDownload(scope: DownloadOwnerScope, job: { stream?: Stre
     if (!remote || !remoteDownloadAccessible(remote, job.remoteDownload, owner.id)) return false;
   }
   const viewer: Viewer = { id: owner.id, role: owner.role };
-  // Both addons, not only the video's: an external subtitle is commonly chosen from a
-  // different one, and it is fetched on resume -- arbitrarily long after a withdrawal.
-  for (const addonKey of [job.stream?.addonKey, job.subtitle?.addonKey]) {
+  // Both resolved addons, or every selected source while a lazy job is still unresolved.
+  const addonKeys = job.stream || !job.source?.selection
+    ? [job.stream?.addonKey, job.subtitle?.addonKey]
+    : [...job.source.selection.addonKeys, job.subtitle?.addonKey];
+  for (const addonKey of new Set(addonKeys)) {
     if (!addonKey) continue;
     const addon = scope.addons.find((item) => item.key === addonKey);
     if (!addon?.enabled || !addonAllowed(addon, viewer)) return false;
@@ -645,9 +647,21 @@ export class DownloadQueue {
     return this.ownerAllowed ? !await this.ownerAllowed(job) : false;
   }
 
+  private clearLazyChoice(job: DownloadJob) {
+    if (job.target) this.targetsInFlight.delete(job.target);
+    job.stream = undefined;
+    job.subtitle = undefined;
+    job.resolution = undefined;
+    job.target = "";
+    job.targetSettings = undefined;
+    job.libraryId = undefined;
+  }
+
   private pauseForPermission(job: DownloadJob) {
+    const clearChoice = job.status === "checking" && Boolean(job.source);
     job.status = "paused";
     job.pauseReason = "permission";
+    if (clearChoice) this.clearLazyChoice(job);
     job.speed = 0;
     this.setError(job, PERMISSION_PAUSE.message, PERMISSION_PAUSE.key);
     job.updatedAt = new Date().toISOString();
@@ -1464,7 +1478,9 @@ export class DownloadQueue {
     // it into a Real-Debrid wait. Only a stream with neither -- or none at all -- means nothing
     // was found.
     if (!resolved?.stream || (!resolved.stream.url && !resolved.stream.infoHash)) {
-      if (await this.ownerRefused(job)) {
+      const refused = await this.ownerRefused(job);
+      controller.signal.throwIfAborted();
+      if (refused) {
         this.pauseForPermission(job);
         return false;
       }
@@ -1479,23 +1495,52 @@ export class DownloadQueue {
         ? `Every available source failed (${job.source.tried.length}).`
         : requested, "err.noMatchingSource");
     }
-    job.stream = resolved.stream;
-    job.subtitle = resolved.subtitle;
-    job.resolution = resolved.resolution;
-    if (isRemoteDownloadSource(job.stream) || (job.subtitle && isRemoteMediaStream({ url: job.subtitle.url }))) {
-      job.stream = undefined; job.subtitle = undefined; job.resolution = undefined;
+    if (isRemoteDownloadSource(resolved.stream) || (resolved.subtitle && isRemoteMediaStream({ url: resolved.subtitle.url }))) {
       throw new SourceError("This library is read-only.", "library.readOnly");
     }
     const settings = job.source.selection?.targetSettings ?? (job.media?.kind === "episode" ? resolved.settings.series : resolved.settings.movie);
-    job.targetSettings = settings;
     const kind = this.kindOf(job);
+    const staged: DownloadJob = {
+      ...job,
+      stream: resolved.stream,
+      subtitle: resolved.subtitle,
+      resolution: resolved.resolution,
+      targetSettings: settings,
+    };
     const library = await this.resolveLibrary(kind, settings);
+    controller.signal.throwIfAborted();
     // No library takes this kind, so there is nowhere to put the file. The job is already
     // mid-pump, so it fails rather than reaching ensureTarget with nowhere to write.
     if (!library) throw new NoLibraryForKindError(kind);
-    await this.ensureTarget(job, library);
+    try {
+      await this.ensureTarget(staged, library);
+      controller.signal.throwIfAborted();
+    } catch (error) {
+      if (staged.target) this.targetsInFlight.delete(staged.target);
+      throw error;
+    }
+    const refused = await this.ownerRefused(staged);
+    controller.signal.throwIfAborted();
+    if (refused) {
+      if (staged.target) this.targetsInFlight.delete(staged.target);
+      this.pauseForPermission(job);
+      return false;
+    }
+    job.stream = staged.stream;
+    job.subtitle = staged.subtitle;
+    job.resolution = staged.resolution;
+    job.targetSettings = settings;
+    job.target = staged.target;
     job.libraryId = library.id;
+    if (job.target) this.targetsInFlight.delete(job.target);
     await this.save();
+    const refusedAfterSave = await this.ownerRefused(job);
+    if (controller.signal.aborted || refusedAfterSave) {
+      this.clearLazyChoice(job);
+      if (refusedAfterSave) this.pauseForPermission(job);
+      await this.save();
+      return false;
+    }
     log("INFO", "Download source selected", {
       id: job.id, title: job.title, addon: resolved.stream.addonName, target: job.target, library: library?.id, attempt: job.source.tried.length + 1,
       selectionMs, checkedCandidates: resolved.resolution?.checkedCandidates,
@@ -1826,7 +1871,9 @@ export class DownloadQueue {
       }
       // The owner is read afresh before any work: the right to queue may be gone since the
       // job was added, and nothing about the request that added it can speak for it now.
-      if (await this.ownerRefused(job)) {
+      const refused = await this.ownerRefused(job);
+      controller.signal.throwIfAborted();
+      if (refused) {
         this.pauseForPermission(job);
         return;
       }
@@ -1835,7 +1882,9 @@ export class DownloadQueue {
         if (controller.signal.aborted) throw new Error("The download was stopped.");
         // The lazy resolve is where this matters most: the enqueue validated a selection, not
         // the addon the resolver eventually picks, and the owner may have lost that one.
-        if (await this.ownerRefused(job)) {
+        const refused = await this.ownerRefused(job);
+        controller.signal.throwIfAborted();
+        if (refused) {
           this.pauseForPermission(job);
           return;
         }

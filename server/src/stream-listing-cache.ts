@@ -95,18 +95,20 @@ export class StreamListingCache {
 
   private fetchOnce(addon: AddonRecord, type: string, id: string): Promise<StreamListing> {
     const key = this.key(type, id, addon);
+    const addonKey = addon.key;
+    const requested = { ...addon, manifest: structuredClone(addon.manifest) };
     const existing = this.inFlight.get(key);
     if (existing) return existing.promise;
 
     const promise = Promise.resolve()
-      .then(() => this.fetch(addon, type, id))
-      .catch((): StreamListing => ({ addonKey: addon.key, status: "failure" }));
+      .then(() => this.fetch(requested, type, id))
+      .catch((): StreamListing => ({ addonKey, status: "failure" }));
     const entry: InFlightEntry = { type, videoId: id, epoch: this.epoch, promise };
     this.inFlight.set(key, entry);
     void promise.then((listing) => {
       try {
-        if (entry.epoch === this.epoch && listing.status === "success" && listing.addonKey === addon.key) {
-          this.remember(type, id, addon, listing.items);
+        if (entry.epoch === this.epoch && listing.status === "success" && listing.addonKey === addonKey) {
+          this.remember(key, type, id, listing.items);
         }
       } finally {
         if (this.inFlight.get(key) === entry) this.inFlight.delete(key);
@@ -115,8 +117,7 @@ export class StreamListingCache {
     return promise;
   }
 
-  private remember(type: string, id: string, addon: AddonRecord, items: StreamItem[]): void {
-    const key = this.key(type, id, addon);
+  private remember(key: string, type: string, id: string, items: StreamItem[]): void {
     this.entries.set(key, {
       type,
       videoId: id,
