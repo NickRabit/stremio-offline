@@ -993,9 +993,17 @@ export class DownloadQueue {
   /** Drops every unfinished job the predicate names, its partial file with it. What is
    *  completed stays: it is in the library and belongs to nobody's access any more. */
   async removeMatching(match: (job: DownloadJob) => boolean): Promise<number> {
-    const ids = this.jobs.filter((job) => job.status !== "completed" && match(job)).map((job) => job.id);
-    for (const id of ids) await this.remove(id, "account");
-    return ids.length;
+    const jobs = this.jobs.filter((job) => job.status !== "completed" && match(job));
+    for (const job of jobs) {
+      this.clearDebrid(job.id);
+      if (this.active.has(job.id)) this.pauseRequested.add(job.id);
+      this.pauseForPermission(job);
+      this.active.get(job.id)?.abort();
+    }
+    if (!jobs.length) return 0;
+    await this.save();
+    for (const job of jobs) await this.remove(job.id, "account");
+    return jobs.length;
   }
 
   async resume(id: string) {
@@ -1112,11 +1120,23 @@ export class DownloadQueue {
       || (media.season != null && marker.season != null && marker.season !== media.season);
   }
 
+  private async debridMayContinue(job: DownloadJob): Promise<boolean> {
+    if (!this.jobs.includes(job) || job.status !== "waiting") return false;
+    if (!await this.ownerRefused(job)) return this.jobs.includes(job) && job.status === "waiting";
+    this.clearDebrid(job.id);
+    if (this.jobs.includes(job) && job.status === "waiting") {
+      this.pauseForPermission(job);
+      await this.save();
+    }
+    return false;
+  }
+
   private async pollDebrid(id: string) {
     const job = this.jobs.find((item) => item.id === id);
     if (!job || job.status !== "waiting" || this.debridBusy.has(id)) return;
     this.debridBusy.add(id);
     try {
+      if (!await this.debridMayContinue(job)) return;
       if (this.now() - Date.parse(job.debridStartedAt ?? job.createdAt) > this.debridTimeoutMs) {
         await this.debridSourceFailed(job, "Real-Debrid did not finish the torrent in time.", "err.debridTimeout");
         return;
@@ -1133,6 +1153,7 @@ export class DownloadQueue {
         return;
       }
       const result = await this.debrid.advance({ infoHash, fileIdx: job.stream?.fileIdx, torrentId: job.debrid?.torrentId });
+      if (!await this.debridMayContinue(job)) return;
       job.debrid = { torrentId: result.torrentId, progress: result.ready ? 100 : result.progress, status: result.ready ? "downloaded" : result.status };
       job.updatedAt = new Date().toISOString();
       if (result.ready) {
@@ -1156,6 +1177,7 @@ export class DownloadQueue {
       await this.saveSoon();
       this.scheduleDebrid(job.id, this.debridPollMs);
     } catch (error) {
+      if (!await this.debridMayContinue(job)) return;
       this.setError(job, error instanceof Error ? error.message : String(error));
       job.updatedAt = new Date().toISOString();
       if (isRetryableDebridFailure(error)) {

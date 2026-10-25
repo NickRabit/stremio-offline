@@ -7,6 +7,7 @@ import path from "node:path";
 import { Writable } from "node:stream";
 import test from "node:test";
 import { DownloadQueue, isPlaylist } from "./downloads.js";
+import type { DebridAdvance } from "./debrid.js";
 import { AppError } from "./errors.js";
 import { relativeWithin, type LibraryRecord } from "./libraries.js";
 import { defaultDownloadSettings } from "./naming.js";
@@ -913,6 +914,83 @@ test("an episode published under (2) takes its subtitles along", async () => {
 
 const HASH = "59e11cef8c2152ac73681092844ebd3db19025bc";
 
+test("a restored waiting job with a revoked owner makes no Real-Debrid request", async () => {
+  let advances = 0;
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
+  const data = path.join(directory, "data");
+  const downloads = path.join(directory, "downloads");
+  await mkdir(data, { recursive: true });
+  await writeFile(path.join(data, "downloads.json"), JSON.stringify([{
+    id: "revoked-wait", title: "Film", stream: { infoHash: HASH, fileIdx: 0 },
+    status: "waiting", target: `${LIBRARY_ID}/Film/Film.mkv`, received: 0, speed: 0,
+    debrid: {}, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  }]));
+  const library = downloadLibrary(downloads);
+  const queue = new DownloadQueue(() => 1, () => 1, data, downloads, {
+    libraries: () => [library], defaultLibrary: () => library,
+    ownerAllowed: () => false,
+    debridPollMs: 0,
+    debrid: {
+      configured: () => true,
+      advance: async () => { advances += 1; return { ready: false, torrentId: "rd1", status: "downloading" }; },
+    },
+  });
+  try {
+    await queue.load();
+    await waitFor(queue, () => queue.list()[0]?.status === "paused");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(advances, 0, "a restored waiting job must not reach Real-Debrid after revocation");
+    assert.equal(queue.list()[0].pauseReason, "permission");
+    assert.equal(queue.list()[0].retryCount, undefined, "permission refusal does not spend a retry");
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("revocation while a Real-Debrid advance is pending discards its ready result", async () => {
+  let allowed = true;
+  let advances = 0;
+  let requests = 0;
+  let started!: () => void;
+  let finish!: (result: DebridAdvance) => void;
+  const advanceStarted = new Promise<void>((resolve) => { started = resolve; });
+  const pending = new Promise<DebridAdvance>((resolve) => { finish = resolve; });
+  const { server, port } = await listen((_req, res) => {
+    requests += 1;
+    res.writeHead(200, { "content-length": "1" });
+    res.end(Buffer.from([1]));
+  });
+  const { directory, queue } = await tempQueue({
+    ownerAllowed: () => allowed,
+    debridPollMs: 0,
+    debrid: {
+      configured: () => true,
+      advance: async () => {
+        advances += 1;
+        started();
+        return pending;
+      },
+    },
+  });
+  try {
+    await queue.add("Film", { infoHash: HASH, fileIdx: 0 });
+    await advanceStarted;
+    allowed = false;
+    finish({ ready: true, torrentId: "rd1", url: `http://127.0.0.1:${port}/film.mp4`, filename: "Film.mkv" });
+    await waitFor(queue, () => queue.list()[0]?.status === "paused");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(advances, 1, "the discarded result must not schedule another advance");
+    assert.equal(requests, 0, "the ready link must not start an HTTP download");
+    assert.equal(queue.list()[0].pauseReason, "permission");
+    assert.equal(queue.list()[0].debridProgress, undefined, "the returned result is not applied");
+  } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("a torrent waits on Real-Debrid then downloads over HTTP without taking a slot", async () => {
   const payload = Buffer.alloc(32 * 1024, 7);
   const { server, port } = await listen((_req, res) => {
@@ -1664,6 +1742,55 @@ test("a playlist is told apart from a file, whatever the segments are named", ()
   assert.equal(isPlaylist("not a url"), false);
 });
 
+test("an account removal that cannot be saved stops a direct transfer before returning", async () => {
+  const size = 8192;
+  const first = Buffer.alloc(2048, 1);
+  let release!: () => void;
+  let finished!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const responseFinished = new Promise<void>((resolve) => { finished = resolve; });
+  const { server, port } = await listen(async (_req, res) => {
+    res.writeHead(200, { "content-length": String(size), "content-type": "video/mp4" });
+    res.write(first);
+    await gate;
+    if (!res.destroyed) res.end(Buffer.alloc(size - first.length, 2));
+    finished();
+  });
+  let failing = false;
+  let closed = false;
+  const { directory, queue, downloads } = await tempQueue({
+    writeState: async (file, data) => {
+      if (failing) throw Object.assign(new Error("no space left"), { code: "ENOSPC" });
+      await writeFile(file, data);
+    },
+    createWriteStream: (file, options) => {
+      const stream = createWriteStream(file, options);
+      stream.once("close", () => { closed = true; });
+      return stream;
+    },
+  });
+  try {
+    const added = await queue.add("Film", { url: `http://127.0.0.1:${port}/film.mp4` });
+    const partial = `${queuedFile(downloads, added.target)}.part`;
+    await waitFor(queue, () => queue.get(added.id)?.received === first.length && existsSync(partial));
+    failing = true;
+    await assert.rejects(queue.removeMatching(() => true), (error: AppError) => error.messageKey === "err.queueNotSaved");
+    await waitFor(queue, () => closed, 5_000);
+    const stoppedAt = (await stat(partial)).size;
+    release();
+    await responseFinished;
+    assert.equal((await stat(partial)).size, stoppedAt, "no bytes may flow after account removal refuses the job");
+    assert.equal(stoppedAt, first.length, "the gated second half must never reach the partial file");
+    assert.equal(queue.get(added.id)?.status, "paused");
+    assert.equal(queue.get(added.id)?.pauseReason, "permission");
+  } finally {
+    release();
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("a removal guard that throws refuses the removal and keeps the row", async () => {
   const { directory, queue } = await tempQueue({ beforeRemove: async () => { throw new Error("no removal"); } });
   try {
@@ -1967,6 +2094,7 @@ test("a lazy torrent job that is waiting resumes polling after a restart", async
   const boot = async () => {
     const queue = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloads, {
       libraries: () => [downloadLibrary(downloads)], defaultLibrary: () => downloadLibrary(downloads),
+      ownerAllowed: () => true,
       debridPollMs: 20,
       debrid: {
         configured: () => true,
