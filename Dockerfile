@@ -1,9 +1,11 @@
 FROM node:22-trixie-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
+COPY packages/source-selection/package.json packages/source-selection/package.json
 COPY server/package.json server/package.json
 COPY web/package.json web/package.json
 RUN npm ci
+COPY packages/source-selection packages/source-selection
 COPY server server
 COPY web web
 RUN npm run build
@@ -23,9 +25,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libva-dr
     && if [ "$(dpkg --print-architecture)" = "amd64" ]; then apt-get install -y --no-install-recommends intel-media-va-driver i965-va-driver; fi \
     && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
+COPY packages/source-selection/package.json packages/source-selection/package.json
 COPY server/package.json server/package.json
 COPY web/package.json web/package.json
 RUN npm ci --omit=dev --workspace=@stremio-offline/server && npm cache clean --force
+COPY --from=build /app/packages/source-selection/dist /app/packages/source-selection/dist
 COPY --from=build /app/server/dist /app/server/dist
 COPY --from=build /app/web/dist /app/web
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh

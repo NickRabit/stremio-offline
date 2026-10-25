@@ -1,0 +1,200 @@
+{
+  "languageCases": [
+    {
+      "name": "country flag",
+      "source": {
+        "name": "Titulky \ud83c\udde8\ud83c\uddff"
+      },
+      "expected": {
+        "text": "Titulky \ud83c\udde8\ud83c\uddff",
+        "guessLanguages": ["cs"],
+        "bingeGroupLanguages": [],
+        "leavesLanguageBlank": false,
+        "sourceLanguages": ["cs"]
+      }
+    },
+    {
+      "name": "English flags and name aliases are deduplicated",
+      "source": {
+        "name": "\ud83c\uddec\ud83c\udde7 \ud83c\uddfa\ud83c\uddf8 English"
+      },
+      "expected": {
+        "text": "\ud83c\uddec\ud83c\udde7 \ud83c\uddfa\ud83c\uddf8 English",
+        "guessLanguages": ["en"],
+        "bingeGroupLanguages": [],
+        "leavesLanguageBlank": false,
+        "sourceLanguages": ["en"]
+      }
+    },
+    {
+      "name": "word aliases",
+      "source": {
+        "title": "SLOVENSKY \u00b7 Deutsch"
+      },
+      "expected": {
+        "text": "SLOVENSKY \u00b7 Deutsch",
+        "guessLanguages": ["sk", "de"],
+        "bingeGroupLanguages": [],
+        "leavesLanguageBlank": false,
+        "sourceLanguages": ["sk", "de"]
+      }
+    },
+    {
+      "name": "whole binge fields with ordered deduplication",
+      "source": {
+        "behaviorHints": {
+          "bingeGroup": "Webshare|CZ,SK|720p|English|Czech"
+        }
+      },
+      "expected": {
+        "text": "",
+        "guessLanguages": [],
+        "bingeGroupLanguages": ["cs", "sk", "en"],
+        "leavesLanguageBlank": false,
+        "sourceLanguages": ["cs", "sk", "en"]
+      }
+    },
+    {
+      "name": "blank binge field falls back to the title language",
+      "source": {
+        "name": "SD",
+        "behaviorHints": {
+          "bingeGroup": "Webshare||480p|"
+        }
+      },
+      "titleLanguage": "cs",
+      "expected": {
+        "text": "SD",
+        "guessLanguages": [],
+        "bingeGroupLanguages": [],
+        "leavesLanguageBlank": true,
+        "sourceLanguages": ["cs"]
+      }
+    },
+    {
+      "name": "listing language wins over a conflicting title language",
+      "source": {
+        "name": "FullHD",
+        "behaviorHints": {
+          "bingeGroup": "Webshare|EN|1080p|"
+        }
+      },
+      "titleLanguage": "cs",
+      "expected": {
+        "text": "FullHD",
+        "guessLanguages": [],
+        "bingeGroupLanguages": ["en"],
+        "leavesLanguageBlank": true,
+        "sourceLanguages": ["en"]
+      }
+    },
+    {
+      "name": "Torrentio-like infohash is not a language",
+      "source": {
+        "name": "4K",
+        "behaviorHints": {
+          "bingeGroup": "torrentio|aba496ab7b4ccd69cd106585771ad411de048be3"
+        }
+      },
+      "titleLanguage": "cs",
+      "expected": {
+        "text": "4K",
+        "guessLanguages": [],
+        "bingeGroupLanguages": [],
+        "leavesLanguageBlank": false,
+        "sourceLanguages": []
+      }
+    }
+  ],
+  "sizeCases": [
+    {
+      "name": "Torrentio-like GB size",
+      "source": {
+        "title": "\ud83d\udcbe 35.09 GB"
+      },
+      "expected": 35090000000
+    },
+    {
+      "name": "Luna G size beside a bitrate",
+      "source": {
+        "title": "2 Mb/s \u00b7 2:22:00 \u00b7 2.2G"
+      },
+      "expected": 2200000000
+    },
+    {
+      "name": "bitrate is excluded",
+      "source": {
+        "title": "2 Mbit/s"
+      },
+      "expected": null
+    },
+    {
+      "name": "unknown size",
+      "source": {
+        "title": "1080p WEB-DL"
+      },
+      "expected": null
+    },
+    {
+      "name": "zero hint remains unknown without size text",
+      "source": {
+        "title": "1080p WEB-DL",
+        "behaviorHints": {
+          "videoSize": 0
+        }
+      },
+      "expected": null
+    },
+    {
+      "name": "zero hint falls back to size text",
+      "source": {
+        "title": "500 MB",
+        "behaviorHints": {
+          "videoSize": 0
+        }
+      },
+      "expected": 500000000
+    },
+    {
+      "name": "positive hinted byte size",
+      "source": {
+        "title": "1 GB",
+        "behaviorHints": {
+          "videoSize": 12345
+        }
+      },
+      "expected": 12345
+    },
+    {
+      "name": "last listed file size",
+      "source": {
+        "title": "Complete pack 86 GB\nEpisode 4.01 GB"
+      },
+      "expected": 4010000000
+    },
+    {
+      "name": "decimal comma",
+      "source": {
+        "name": "2,5 GB"
+      },
+      "expected": 2500000000
+    }
+  ],
+  "titleLanguageCases": [
+    {
+      "name": "first known language",
+      "value": "Czech, Slovak",
+      "expected": "cs"
+    },
+    {
+      "name": "unknown language",
+      "value": "Klingon",
+      "expected": null
+    },
+    {
+      "name": "non-string value",
+      "value": 42,
+      "expected": null
+    }
+  ]
+}

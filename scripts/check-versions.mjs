@@ -40,11 +40,13 @@ export function main(argv = process.argv) {
   const lock = read("package-lock.json");
   const versions = {
     "package.json": read("package.json").version,
+    "packages/source-selection/package.json": read("packages/source-selection/package.json").version,
     "server/package.json": read("server/package.json").version,
     "web/package.json": read("web/package.json").version,
     "desktop/package.json": read("desktop/package.json").version,
     "package-lock.json": lock.version,
     'package-lock.json packages[""]': lock.packages[""]?.version,
+    'package-lock.json packages["packages/source-selection"]': lock.packages["packages/source-selection"]?.version,
     "package-lock.json packages.server": lock.packages.server?.version,
     "package-lock.json packages.web": lock.packages.web?.version,
     "package-lock.json packages.desktop": lock.packages.desktop?.version,
