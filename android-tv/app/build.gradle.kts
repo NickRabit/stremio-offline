@@ -73,6 +73,10 @@ android {
         if (deps != null && file(deps).isDirectory) {
           it.systemProperty("robolectric.dependency.dir", deps)
         }
+        it.systemProperty(
+          "sourceSelectionVectors",
+          rootProject.file("../packages/source-selection/vectors.json").absolutePath,
+        )
       }
     }
   }
