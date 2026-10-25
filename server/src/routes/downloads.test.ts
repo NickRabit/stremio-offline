@@ -7,7 +7,7 @@ import path from "node:path";
 import { test } from "node:test";
 import express from "express";
 import { DeviceTransfers } from "../device-transfers.js";
-import { ownerMayDownload, type DownloadQueue } from "../downloads.js";
+import { ownerMayDownload, type DownloadQueue, type DownloadSelection } from "../downloads.js";
 import { AppError, messageKeyOf } from "../errors.js";
 import type { LibraryRecord } from "../libraries.js";
 import { sealRemoteContent } from "../media-server-reference.js";
@@ -32,7 +32,7 @@ interface Harness {
   actions: string[];
   moves: Array<{ id: string; direction: number }>;
   viewed: Array<{ id?: string; media?: MediaInfo; target?: string }>;
-  pending: Array<{ selection?: { addonKeys?: string[]; targetSettings?: DownloadTargetSettings }; ownerUserId?: string }>;
+  pending: Array<{ selection?: DownloadSelection; ownerUserId?: string }>;
   close(): Promise<void>;
 }
 
@@ -106,7 +106,7 @@ const mount = async (
   const actions: string[] = [];
   const moves: Array<{ id: string; direction: number }> = [];
   const viewed: Array<{ id?: string; media?: MediaInfo; target?: string }> = [];
-  const pending: Array<{ selection?: { addonKeys?: string[]; targetSettings?: DownloadTargetSettings }; ownerUserId?: string }> = [];
+  const pending: Array<{ selection?: DownloadSelection; ownerUserId?: string }> = [];
   /** What the queue does with an id it does not hold, so a foreign job can be compared with one. */
   const require = (name: string, id: string) => {
     if (!jobs.some((job) => job.id === id)) throw new AppError("The item was not found.", "err.itemNotFound");
@@ -120,7 +120,7 @@ const mount = async (
       if (options.withdrawOnAdd) held.viewer = options.withdrawOnAdd;
       return { id: "job-1", target: "Movies/Film/Film.mkv" };
     },
-    addPending: async (_title: string, source: { selection?: { addonKeys?: string[] } }, _media: unknown, ownerUserId?: string) => {
+    addPending: async (_title: string, source: { selection?: DownloadSelection }, _media: unknown, ownerUserId?: string) => {
       pending.push({ ...source, ownerUserId });
       return { id: "job-1" };
     },
@@ -356,6 +356,34 @@ test("POST /api/downloads/bulk refuses addons the caller may not use and queues 
   });
   assert.equal(mixed.status, 201);
   assert.deepEqual(harness.pending.map((source) => source.selection?.addonKeys), [["open"]], "the disallowed key never reaches the queue");
+});
+
+test("characterization: a legacy bulk submission drops duplicate provider keys and coerces an unknown strategy", async (t) => {
+  const harness = await mount(
+    [streamAddon("open", { allowedUsers: [BOB] }), streamAddon("shut")],
+    { viewer: ordinary },
+  );
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/downloads/bulk", {
+    method: "POST",
+    body: {
+      title: "Show",
+      episodes: episodes(1),
+      selection: {
+        addonKeys: ["shut", "open", "open"],
+        sourceStrategy: "smallest",
+        audioLanguage: "en-US",
+      },
+    },
+  });
+  assert.equal(response.status, 201, await response.text());
+  const queued = harness.pending[0]!.selection!;
+  assert.deepEqual(queued.addonKeys, ["open"]);
+  assert.equal(queued.sourceStrategy, "priority");
+  assert.equal(queued.audioLanguage, "en");
+  assert.equal(queued.audioMode, "listed");
+  assert.equal(queued.subtitleMode, "off");
 });
 
 test("POST /api/downloads/bulk refuses required subtitles without a subtitle language", async (t) => {

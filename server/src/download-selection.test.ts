@@ -56,6 +56,37 @@ test("largest strategy ignores addon priority", async () => {
   assert.equal(chosen?.resolution.checkedCandidates, 1);
 });
 
+test("a source from an addon outside the selected scope is never inspected", async () => {
+  const candidates = [
+    stream("https://unselected.test/episode.mkv", "unselected"),
+    torrent(HASH_A, "unselected", { title: "Film CZ dabing" }),
+  ];
+  let checked = 0;
+  const selected = selection({ sourceStrategy: "largest" });
+  const direct = await selectDownloadSource({
+    candidates, subtitles: [], selection: selected, tried: [],
+    inspect: async () => { checked += 1; return info(["cs"]); },
+  });
+  assert.equal(direct, undefined);
+  assert.equal(checked, 0, "an excluded provider is not asked for a probe");
+  assert.equal(selectTorrentSource({
+    candidates, subtitles: [], selection: { ...selected, audioMode: "listed" }, tried: [], episode: false,
+  }), undefined);
+});
+
+test("direct selection skips an already tried URL before inspection", async () => {
+  const tried = stream("https://tried.test/episode.mkv", "first");
+  const fresh = stream("https://fresh.test/episode.mkv", "first");
+  const inspected: string[] = [];
+  const chosen = await selectDownloadSource({
+    candidates: [tried, fresh], subtitles: [], selection: selection(), tried: [tried.url!],
+    inspect: async (item) => { inspected.push(item.url!); return info(["cs"]); },
+  });
+  assert.equal(chosen?.stream.url, fresh.url);
+  assert.deepEqual(inspected, [fresh.url]);
+  assert.equal(chosen?.resolution.checkedCandidates, 1);
+});
+
 test("largest strategy compares an episode size instead of its torrent pack size", async () => {
   const pack = { ...stream("https://pack.test/episode.mkv", "first"), title: "Complete pack 86 GB\nEpisode 4.01 GB" };
   const single = { ...stream("https://single.test/episode.mkv", "second"), title: "Episode 5 GB" };

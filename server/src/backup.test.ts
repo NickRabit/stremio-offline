@@ -35,6 +35,30 @@ test("a backup keeps the settings, the order and the addon's sensitive URL", () 
   assert.deepEqual(parseSettingsBackup(backup).addons, backup.addons);
 });
 
+test("a backup distinguishes same-name providers by URL and omits installation-local addon keys", () => {
+  const addons = [
+    {
+      key: "local-alpha", manifestUrl: "https://alpha.example/manifest.json", role: "source" as const,
+      enabled: true, globalSearch: true, addedAt: "2026-01-01T00:00:00.000Z",
+      downloadSettings: defaultDownloadSettings(), manifest: { id: "alpha", name: "Same name", version: "1" },
+    },
+    {
+      key: "local-beta", manifestUrl: "https://beta.example/manifest.json", role: "source" as const,
+      enabled: true, globalSearch: true, addedAt: "2026-01-01T00:00:00.000Z",
+      downloadSettings: defaultDownloadSettings(), manifest: { id: "beta", name: "Same name", version: "1" },
+    },
+  ];
+  const backup = createSettingsBackup(defaultSettings(), addons);
+  assert.equal(backup.version, 3);
+  assert.deepEqual(backup.addons.map((addon) => addon.manifestUrl), [
+    "https://alpha.example/manifest.json",
+    "https://beta.example/manifest.json",
+  ]);
+  assert.equal(backup.addons.some((addon) => "key" in addon), false);
+  assert.equal(backup.addons.some((addon) => "manifest" in addon), false);
+  assert.deepEqual(parseSettingsBackup(JSON.parse(JSON.stringify(backup))).addons, backup.addons);
+});
+
 test("an import refuses a foreign format and normalises the values", () => {
   assert.throws(() => parseSettingsBackup({ format: "other", version: 1, settings: {}, addons: [] }), /not a Stremio Offline settings backup/);
   const parsed = parseSettingsBackup({
