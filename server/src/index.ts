@@ -342,7 +342,8 @@ if (!store.defaultsInstalled()) {
 }
 // Source pick for lazy queue jobs: the addons are asked at download time and the
 // answer is held for a while, so repeated attempts at one episode do not hammer them.
-const streamCache = new Map<string, { at: number; items: StreamItem[] }>();
+const streamCache = new Map<string, { at: number; items: StreamItem[]; type: string; videoId: string }>();
+let streamCacheEpoch = 0;
 /** The allowed set is part of the key, not a filter over the answer: the candidates are
  *  merged from whichever addons were asked, so one account's cache entry would otherwise
  *  hand another account sources it may not use -- and, worse, they would already have been
@@ -351,11 +352,19 @@ const cachedStreams = async (sources: AddonRecord[], type: string, id: string) =
   const key = `${type}:${id}:${sources.map((addon) => addon.key).join(",")}`;
   const hit = streamCache.get(key);
   if (hit && Date.now() - hit.at < 5 * 60_000) return hit.items;
+  const epoch = streamCacheEpoch;
   const items = await streams(sources, type, id);
+  if (epoch !== streamCacheEpoch) return items;
   if (streamCache.size > 100) streamCache.clear();
-  streamCache.set(key, { at: Date.now(), items });
+  streamCache.set(key, { at: Date.now(), items, type, videoId: id });
   return items;
 };
+queue.setRetrySourceHook(({ type, videoId }) => {
+  streamCacheEpoch += 1;
+  for (const [key, entry] of streamCache) {
+    if (entry.type === type && entry.videoId === videoId) streamCache.delete(key);
+  }
+});
 queue.setResolver(async (source, ownerUserId) => {
   // Narrowed before a single request goes out. Checking the chosen stream afterwards is too
   // late twice over: the addons have already been asked on this account's behalf, and the

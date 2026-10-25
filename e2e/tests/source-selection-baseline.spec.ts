@@ -109,7 +109,7 @@ test("a selected-provider job requests streams only from the selected provider",
   }, { timeout: 30_000, message: "the lazy resolver did not finish with only the selected addon's stream request" }).toEqual([true, 0, 1]);
 });
 
-test("characterization: retrying inside the stream cache window does not ask the failed selected addon again", async ({ request }) => {
+test("explicit retry refreshes the failed selected provider's stream listing", async ({ request }) => {
   const videoId = "tt-e2e-source-retry-cache";
   const failure = { provider: SECONDARY_PROVIDER, id: videoId };
   expect((await control(request, { reset: true, fail: failure })).ok()).toBe(true);
@@ -128,8 +128,14 @@ test("characterization: retrying inside the stream cache window does not ask the
   expect((await request.post(`/api/downloads/${failed!.id}/retry`)).status()).toBe(204);
   await expect.poll(async () => {
     const job = await findJob(request, title);
-    return job?.status === "failed" && job.updatedAt !== failed!.updatedAt;
-  }, { timeout: 30_000, message: "the retried lazy job did not finish its second resolution" }).toBe(true);
+    const rows = (await sourceRequests(request)).filter((row) => row.type === "series" && row.id === videoId);
+    return {
+      settled: job?.status === "completed" || job?.status === "failed",
+      primary: rows.filter((row) => row.provider === PRIMARY_PROVIDER).length,
+      secondary: rows.filter((row) => row.provider === SECONDARY_PROVIDER).length,
+    };
+  }, { timeout: 30_000, message: "the retried lazy job did not settle after refreshing the selected provider's listing" })
+    .toEqual({ settled: true, primary: 0, secondary: 1 });
 
-  expect(await sourceRequests(request)).toEqual([]);
+  expect(await sourceRequests(request)).toEqual([{ ...failure, type: "series" }]);
 });

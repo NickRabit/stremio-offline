@@ -389,6 +389,7 @@ export class DownloadQueue {
    *  is taken back out before anything started transferring it. */
   private admitting = new Set<string>();
   private resolver?: StreamResolver;
+  private retrySourceHook?: (source: { type: string; videoId: string }) => void;
   private halt?: QueueHalt;
   private readonly stateFile: string;
   private readonly downloadDir: string;
@@ -466,6 +467,7 @@ export class DownloadQueue {
 
   /** index.ts owns source selection for lazy jobs, because it needs the addons and the settings. */
   setResolver(resolver: StreamResolver) { this.resolver = resolver; }
+  setRetrySourceHook(hook: (source: { type: string; videoId: string }) => void) { this.retrySourceHook = hook; }
   setDebrid(engine: DebridEngine) { this.debrid = engine; }
   /** Wired after construction because the follow service that answers these is built later. */
   setRemovalGuard(guard: (job: Readonly<DownloadJob>, reason: "user" | "account") => Promise<void>) { this.beforeRemove = guard; }
@@ -1054,6 +1056,7 @@ export class DownloadQueue {
       job.source.tried = [];
       if (!job.stream) { job.target = ""; job.received = 0; job.total = undefined; }
     }
+    if (job.source && !job.stream) this.retrySourceHook?.({ type: job.source.type, videoId: job.source.videoId });
     return this.resume(id);
   }
 

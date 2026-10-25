@@ -1743,6 +1743,26 @@ test("a lazy job that finds no source fails with the no-matching-source key", as
   }
 });
 
+test("explicit retry signals the failed lazy source once before resolving it again", async () => {
+  const { directory, queue } = await tempQueue();
+  const retried: Array<{ type: string; videoId: string }> = [];
+  let resolutions = 0;
+  queue.setResolver(async () => { resolutions += 1; return undefined; });
+  queue.setRetrySourceHook((source) => retried.push(source));
+  try {
+    await queue.addPending("Show", { type: "series", videoId: "tt1:1:1" }, { kind: "episode", title: "Show", season: 1, episode: 1 });
+    await waitFor(queue, () => queue.list()[0]?.status === "failed");
+    assert.deepEqual(retried, []);
+
+    await queue.retry(queue.list()[0].id);
+    await waitFor(queue, () => resolutions === 2 && queue.list()[0]?.status === "failed");
+    assert.deepEqual(retried, [{ type: "series", videoId: "tt1:1:1" }]);
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("a lazy job falls back to a torrent and downloads it through Real-Debrid", async () => {
   const payload = Buffer.alloc(16 * 1024, 3);
   const { server, port } = await listen((_req, res) => {
