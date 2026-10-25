@@ -104,6 +104,7 @@ logged. The second provider has manifest ID `e2e.secondary.source` and a distinc
 | Legacy strategy and provider-key normalization | **New characterization:** `characterization: a legacy bulk submission drops duplicate provider keys and coerces an unknown strategy`; existing `POST /api/downloads/bulk refuses addons the caller may not use and queues only from the allowed ones` | Characterization | Stage 3 |
 | Bulk versus follow default strategy | The two clients/dialogs own their defaults; there is no route-level assertion for both defaults. | Uncovered | First slice / Stage 4 |
 | Strict `SourcePolicyV1` contract | `source-policy.test.ts` proves exact v1 parsing, bounds, provider limits, criteria order, language alias normalization and rejection of nested unknown/prototype-bearing input. | Parser contract | Profile storage, admission and local-copy execution remain open |
+| Fixed profile catalogue read | `source-profiles.test.ts` and `routes/source-profiles.test.ts` cover the immutable definitions, current-grant operation projection and authorized read contract. | Read contract | Selected-scope projection, submission, storage and local-copy enforcement remain open |
 
 The delivery plan names `POST /api/downloads` for the legacy strategy case. In the current route,
 `POST /api/downloads` saves an already resolved exact source; the shared selection parser is used by
