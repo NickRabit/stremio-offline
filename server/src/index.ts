@@ -365,7 +365,9 @@ queue.setResolver(async (source, ownerUserId) => {
   if (ownerUserId && !owner) return undefined;
   const usable = owner ? allowedAddons(store.addons(), { id: owner.id, role: owner.role }) : store.addons();
   const priority = new Map(usable.map((addon, index) => [addon.key, index]));
-  const listed = await cachedStreams(usable, source.type, source.videoId);
+  const selectedKeys = source.selection ? new Set(source.selection.addonKeys) : undefined;
+  const streamSources = selectedKeys ? usable.filter((addon) => selectedKeys.has(addon.key)) : usable;
+  const listed = await cachedStreams(streamSources, source.type, source.videoId);
   const candidates = listed.filter((stream) => stream.url);
   if (source.selection) {
     await serverReady;

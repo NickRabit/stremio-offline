@@ -15,6 +15,7 @@ interface Job {
   id: string;
   title: string;
   status: string;
+  pending: boolean;
   errorKey?: string;
   updatedAt: string;
 }
@@ -90,7 +91,7 @@ test.afterEach(async ({ request }) => {
   expect((await control(request, { reset: true, recover: true })).ok()).toBe(true);
 });
 
-test("characterization: a selected-provider job contacts every usable addon", async ({ request }) => {
+test("a selected-provider job requests streams only from the selected provider", async ({ request }) => {
   expect((await control(request, { reset: true })).ok()).toBe(true);
   const secondary = await installSecondary(request);
   expect(secondary.manifest).toMatchObject({ id: SECONDARY_PROVIDER, name: "E2E doplněk" });
@@ -98,14 +99,14 @@ test("characterization: a selected-provider job contacts every usable addon", as
   const videoId = "tt-e2e-source-selected";
   const title = await queueEpisode(request, secondary.key, `${TITLE_PREFIX} selected`, videoId);
   await expect.poll(async () => {
+    const job = await findJob(request, title);
     const rows = (await sourceRequests(request)).filter((row) => row.type === "series" && row.id === videoId);
     return [
+      job?.status === "failed" || job?.pending === false,
       rows.filter((row) => row.provider === PRIMARY_PROVIDER).length,
       rows.filter((row) => row.provider === SECONDARY_PROVIDER).length,
     ];
-  }, { timeout: 30_000, message: "the lazy resolver did not contact both addons" }).toEqual([1, 1]);
-
-  expect(await findJob(request, title)).toBeDefined();
+  }, { timeout: 30_000, message: "the lazy resolver did not finish with only the selected addon's stream request" }).toEqual([true, 0, 1]);
 });
 
 test("characterization: retrying inside the stream cache window does not ask the failed selected addon again", async ({ request }) => {
@@ -121,10 +122,7 @@ test("characterization: retrying inside the stream cache window does not ask the
   }).toBe("failed");
   const failed = await findJob(request, title);
   expect(failed?.errorKey).toBe("err.noMatchingSource");
-  expect(await sourceRequests(request)).toEqual(expect.arrayContaining([
-    { provider: PRIMARY_PROVIDER, type: "series", id: videoId },
-    { ...failure, type: "series" },
-  ]));
+  expect(await sourceRequests(request)).toEqual([{ ...failure, type: "series" }]);
 
   expect((await control(request, { reset: true, recover: true })).ok()).toBe(true);
   expect((await request.post(`/api/downloads/${failed!.id}/retry`)).status()).toBe(204);
