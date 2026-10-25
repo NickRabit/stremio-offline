@@ -23,7 +23,7 @@ This work does not migrate favourites, title bindings or progress stores, add ho
 profiles, change native remote history, add arbitrary rule scripts, or redesign playback and
 FFmpeg. Coordinate with existing title/progress identity work instead of creating another identity
 or migration. `SOURCE_PARITY_TASK.md` (one title, one favourite, one position, one "next") was
-consulted. It describes itself as an untracked working note but was committed by mistake in #544
+consulted. It describes itself as an untracked working note but was committed in #438
 and is missing from `.gitignore`; removing it is separate housekeeping, not part of this work.
 
 ## Current implementation and demonstrated differences
@@ -45,7 +45,7 @@ Baseline inspected: `cebf6fa6` on `main`. Recheck these seams on the implementat
 | Next episode | `App.tsx`: `playNextCatalogEpisode`, `playNextDetailEpisode`, `playLocal` | Three disjoint rules: an owned copy continues with the next file in its folder; an addon source picks from addon rows only (the next episode's owned copy is loaded but never chosen); a remote source stays on the same library and version name or stops |
 | Episode ownership | `downloads.ts`: `addPending`, `admitDirect` | Lazy episode jobs deduplicate only against active jobs and explicit saves only by source; nothing checks whether the episode already exists in a library, so a follow downloads it again under a `(2)` name |
 | Follow retries | `follows.ts`: `effectiveSelection`, `queue.retry` | Admission stores the grace-adjusted selection in the job; a reserved episode stores none; every retry recomputes the selection from the follow's current configuration and the current time |
-| Settings backup | `backup.ts`, `media-server-store.ts` | Version 3 carries addon manifest URLs but no addon keys, users, personal data or follows; import mints new addon keys and new remote library IDs |
+| Settings backup | `backup.ts`, `media-server-store.ts`, `routes/settings.ts` | Version 3 carries addon manifest URLs and the exporting admin's personal preferences, but no addon keys, other users' preferences or follows; import restores those preferences to the importing admin and mints new addon keys and remote library IDs where identity cannot be retained |
 | Remote copy | `media-server-sources.ts`, `media-server-quota.ts`, `downloads.ts` | Exact-source durable references and guarded original transfers already exist |
 | TV | `catalog/Streams.kt`, `ui/catalog/NativeSources.kt`, `CatalogDetailScreen.kt`, `ui/player/LibraryPlaySources.kt` | Independent implementations, ranking port, inconsistent request deadlines: 8 seconds per addon on TV against 30 seconds on the web client and 60 on the server, so a slow addon appears on the web but not on TV |
 
@@ -264,11 +264,14 @@ in the same transaction. This maintains at least one usable default per supporte
 
 ### Travel and bounded candidate verification
 
-Apply already proven hard exclusions before spending a probe. Provider metadata must be
+Apply already proven hard exclusions before spending a probe, including authoritative duration,
+sample/trailer flags and configured minimum bytes when available. Provider metadata must be
 authoritative for that fact; a title containing `720p` is only a hint, never proof that a hard height
 bound passes. Unknown quality/duration needs bounded guarded inspection, not an implicit pass or
 unlimited scanning. Use byte estimates to choose a probe order, and verified facts for final hard
-acceptance. Preserve the existing anti-sample checks; the height floor complements them.
+acceptance. Preserve the existing anti-sample checks; the height floor complements them. Order
+unknown candidates by estimated bytes only after those exclusions. Do not infer a universal size
+floor from duration; low-bitrate episodes and legitimate shorts must remain eligible.
 
 Keep a server-owned attempt budget, initially the existing 15 actual candidate probes, plus
 existing time/transfer limits. Every probe counts, including failed requests, samples and rejected
@@ -280,8 +283,11 @@ If budget exhaustion leaves a valid verified candidate, it can be selected with 
 diagnostic. Without one, keep the job/follow in a retryable waiting/attention state, not a false
 permanent no-source state. Existing scheduler backoff/attempt ceilings govern automatic retry; do
 not start another immediate batch to evade the budget. Remember rejected source evidence briefly
-under source/configuration identity, invalidate it on changed facts/configuration and explicit retry,
-and never let a transient transport error become a durable blacklist.
+under source/configuration identity and carry a bounded continuation cursor across scheduled retries.
+After 15 verified samples, the next scheduled attempt must reach later candidates rather than probe
+the same 15 again. Reset the cursor on changed provider facts/configuration; explicit retry bypasses
+cached failures but may keep the cursor over still-valid verified rejections. Never let a transient
+transport error become a durable blacklist or skip an unexamined candidate indefinitely.
 
 Required fixtures include: 15 verified samples followed by a valid episode; 15 failed/unknown
 sources; low-resolution rows rejected from authoritative metadata without probing; a high-resolution
@@ -381,9 +387,12 @@ Delete, instance-default reassignment and catalogue revision publication are one
 transaction. Personal defaults are `UserData.prefs` in the same state file, written by the same
 serialized `store.update`, so that transaction also rewrites every personal default that named the
 deleted profile to the explicitly chosen compatible replacement; no deleted-ID replacement map is
-needed. Store remembered profile IDs as `PERSONAL_SETTINGS` keys so they get the existing
-`PATCH /api/settings` validation, restricted-mode rule and settings backup. Report the replacement
-on the next selection; an explicit submission of a deleted ID fails instead of silently running
+needed. Store remembered profile IDs as `PERSONAL_SETTINGS` keys and add them to the explicit
+`splitSettings` mapping in `routes/settings.ts`. This gives them the existing `PATCH /api/settings`
+validation and restricted-mode rule. Settings export carries only the exporting admin's personal
+defaults; import restores that one set to the importing admin. Other users' preferences remain in
+the instance and must be reconciled in the import transaction. Report a deletion replacement on
+the next selection; an explicit submission of a deleted ID fails instead of silently running
 another policy.
 Historical follow/job snapshots are never rewritten. Reads of another user's personal defaults
 remain forbidden. Export/import validates revisions/schema,
@@ -507,8 +516,9 @@ inside `local` stays the library order, then size, exactly as `localCopies` retu
 ## Remote libraries in future downloads (separate delivery stage)
 
 Discover by the episode's catalogue identity through existing remote matching. That matching is
-exact today (`remoteIdsMatch`: a shared IMDb, TMDB or TVDB ID plus season and episode; files that
-span several episodes are excluded). Keep it exact and add no fuzzy fallback to another episode or
+exact today (`remoteIdsMatch`: every IMDb, TMDB or TVDB ID present on both sides must agree,
+with at least one shared ID, plus season and episode; files spanning several episodes are excluded).
+Keep it exact and add no fuzzy fallback to another episode or
 title. Catalogue IDs in other schemes never match. Selected providers with no released item remain
 empty/unavailable; the follow scheduler owns retry timing.
 
@@ -562,9 +572,15 @@ authorization/snapshots are stable. Administrator CRUD remains a required later 
    choices for existing users. Default profile selection and deliberate resume-policy corrections
    are not hidden inside an extraction. Persist migration version/backup and prove restart/idempotency.
 7. Deleted IDs are never reused. Settings backup moves to version 4 with portable provider
-   identities (see Provider adapters). Import publishes remapped profiles in one settings-store
-   transaction, preserving unaffected account preferences and all historical snapshots, and lists
-   dormant references it could not map. Test import failure/restart and rollback; an older binary
+   identities (see Provider adapters). Preserve an imported profile ID when it identifies the same
+   profile without collision; otherwise build an old-to-new profile ID map. In the same serialized
+   settings-store transaction that publishes profiles, rewrite every affected `UserData.prefs`
+   default through that map. Clear a reference to a removed or unresolved profile so resolution
+   falls back to the operation-compatible instance default; never leave a dangling ID. The backup
+   restores only the
+   exporting admin's personal defaults to the importing admin; existing users retain their own
+   defaults, subject to this remap. Preserve all historical snapshots and list dormant provider
+   references that could not map. Test import failure/restart and rollback; an older binary
    must refuse an unsupported new schema rather than overwrite it. Retain the pre-migration backup
    for rollback.
 8. Add remote automatic candidates after the background policy/admission pipeline and relevant
@@ -588,8 +604,10 @@ authorization/snapshots are stable. Administrator CRUD remains a required later 
   class, and a follow applies its explicit local-copy policy before downloading. A remote-only copy
   never counts as local ownership; a copy failing required content constraints does not satisfy
   `meetsRequirements`.
-- Profiles and personal defaults survive settings import, and profiles, personal defaults and
-  follows survive an addon reinstall, through portable provider identity; otherwise the exact
-  dormant references are reported. No public read, DTO or log exposes a manifest URL.
+- Profiles and the exporting admin's personal defaults survive settings import. Existing users'
+  defaults remain valid or fall back through the transactional profile-ID remap. Profiles,
+  applicable personal defaults and follows survive an addon reinstall through portable provider
+  identity; otherwise report the exact dormant references. No public read, DTO or log exposes a
+  manifest URL.
 - Every stage satisfies the test and rollout gates in the delivery plan. Runtime-changing PRs
   follow repository build, version, Docker health and final visual-verification requirements.

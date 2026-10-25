@@ -38,7 +38,8 @@ choices in settings export/import before shipping them; a complete CRUD editor i
 Test the first slice before wiring it in: request counts for selected providers, forged policy
 rejection, fresh authorization, profile/version conflict, old client compatibility, retry/restart,
 follow admission/reconfiguration race, local-copy policy (including a remote-only episode), and
-Travel's quality/probe-budget cases. Server-side cache
+Travel's quality/probe-budget cases, including authoritative sample prefiltering and a scheduled
+retry that advances past 15 verified samples to a later valid episode. Server-side cache
 isolation/invalidation and safe snapshot persistence are required even if Stage 2 has not shipped.
 No unrelated interactive or Kotlin rewrite blocks this gate. Each later lane must land its own
 applicable Stage 0 coverage before changing production code; no lane may waive relevant tests.
@@ -67,7 +68,7 @@ scope, active-source stability) must make its test fail; remove all mutations be
 | Access/cache | Two users and sessions, grant revoked during lookup/inspection/use, provider reconfigured under same key, disabled provider, empty vs error caching, generation change, session source handles never reused | L0 production routes/cache/transport, L2 accounts |
 | Remote originals | Canonical match, native download denied, connection replacement, forged reference rejected, probe/transfer quota, busy/cancel/shutdown releasing slots | L0 media-server source/quota/download tests with owned fixtures |
 | Exact-source saves | Selected version preserved without re-ranking, download-to-library vs device rights, no local self-download | L0 routes/downloads and L2 source chooser |
-| Provider identity | Settings export and import into an empty instance, re-adding an addon, remote libraries re-attached by import, two addons with the same name, backup versions 1 to 3 still importing | L0 `backup` and settings route tests, media-server store tests |
+| Provider identity | Settings export and import into an empty instance, exporting admin's personal preferences restored to importing admin, other users' preferences absent from backup, re-adding an addon, remote libraries re-attached by import, two addons with the same name, backup versions 1 to 3 still importing | L0 `backup` and settings route tests, media-server store tests |
 
 Use a counting addon/remote fixture with controllable completion barriers, fake clocks and explicit
 abort observation. This is new test infrastructure: `e2e/fixtures/addon-server.mjs` returns static
@@ -137,8 +138,9 @@ requests local/pure; do not double live provider traffic for a shadow rollout.
 ## Stage 3: administrator profile storage and lifecycle
 
 - Implement schema validation, serialized storage, revisions and admin-only CRUD/duplicate/restore.
-- Add per-user default profile selection with no criteria editing; project only authorized provider
-  details on reads. Validate compatible profile IDs and server-owned provenance on submissions.
+- Add per-user default profile selection with no criteria editing; include new personal keys in
+  `PERSONAL_SETTINGS` and the explicit settings-import `splitSettings` map. Project only authorized
+  provider details on reads. Validate compatible profile IDs and server-owned provenance on submissions.
 - Seed editable templates; implement replacement on default/last-profile deletion.
 - Extend the immutable follow/intent/job snapshot implementation already delivered by the first
   slice to editable profiles and legacy migration; retain the final schema and admission semantics.
@@ -155,8 +157,11 @@ restricted mode, spoofed owner, hidden providers, stale revisions, concurrent de
 transaction failure/restart, last-profile replacement, import reference collisions and unknown
 schemas. Test editing/deleting a profile while jobs run; existing jobs and follow snapshots must
 keep their rules. Test explicit follow reconfiguration versus concurrent episode admission, plus waiting/reserved
-intents with no job: retries must recover the original admitted snapshot. Inspect raw JSON, errors
-and rendered labels after revocation for hidden provider keys/names/counts. Cover empty authorized
+intents with no job: retries must recover the original admitted snapshot. Verify export includes
+only the acting admin's personal defaults, import assigns them to the importing admin, and profile
+ID collisions/removal remap or clear every existing user's affected default in the same transaction.
+Inspect raw JSON, errors and rendered labels after revocation for hidden provider keys/names/counts.
+Cover empty authorized
 profile scope, operation changes, a deletion rewriting every affected personal default in the same
 transaction, per-user legacy mode and settings import/restart without dangling defaults or
 rewriting historical snapshots.
@@ -194,7 +199,8 @@ providers; the later admin editor uses the same scope contract without rewriting
 - Admit remote providers in download profiles only once this path is implemented end-to-end.
 
 Write fixture integration tests first: mixed addon/remote order, an episode appearing later,
-provider temporarily offline, wrong episode/no exact match, Travel probe-budget exhaustion and false metadata, source permission removed after
+provider temporarily offline, wrong episode/no exact match, Travel probe-budget exhaustion,
+scheduled continuation after 15 verified samples and false metadata, source permission removed after
 admission, account/generation replaced, full quota, cancellation during inspection, restart after
 reference persistence and target conflict. Verify no raw/session reference accepted from a client,
 no transfer before authorization, no leaked quota slot or partial-file publication. Metadata that
