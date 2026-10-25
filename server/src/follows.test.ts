@@ -905,6 +905,29 @@ test("changing the rules retries waiting episodes at once with the new selection
   assert.equal(q.added.length, 4);
 });
 
+test("known defect: a retry after a follow edit uses the edited selection instead of the admitted one", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const service = buildService(store, q);
+  const target = { subfolder: "Shows", layout: "structured" as const, libraryId: "lib_shows" };
+  const admitted = { ...selection(), addonKeys: ["admitted"], targetSettings: target };
+  const replacement = { ...selection(), addonKeys: ["replacement"], targetSettings: target };
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule({
+    retention: { afterWatchedDays: 7 },
+    selection: admitted,
+  }));
+
+  await service.admit(id);
+  q.fail(q.jobs[0].id, "err.noMatchingSource");
+  await service.sync();
+  await service.setAutoDownload(id, "u1", { startMode: "new", selection: replacement });
+
+  assert.deepEqual(q.added[0].source.selection?.addonKeys, ["admitted"], "admission scored the unchanged selection");
+  assert.deepEqual(q.retriedWith.at(-1)?.addonKeys, ["replacement"], "today the retry follows the live rule");
+  assert.deepEqual(q.retriedWith.at(-1)?.targetSettings, target, "the edited rule kept its target");
+  assert.deepEqual(store.get(id)!.autoDownload?.retention, { afterWatchedDays: 7 }, "the edit kept retention");
+});
+
 test("switching automatic downloads off frees the shared budget for other follows", async (t) => {
   const { store } = await withStore(t);
   const q = fakeQueue();
