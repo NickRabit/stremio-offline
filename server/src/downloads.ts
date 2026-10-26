@@ -96,6 +96,7 @@ export interface DownloadJob {
   source?: { type: string; videoId: string; tried: string[]; selection?: DownloadSelection };
   sourceAdmission?: SourceAdmissionSnapshotV1;
   travelCursor?: TravelContinuationCursorV1;
+  travelSourceFallbackAttempts?: number;
   travelTemporaryFailures?: number;
   travelBudgetAttempts?: number;
   /** Present when a followed series queued the job, so the follow can be reconciled
@@ -422,6 +423,7 @@ export const LIBRARY_WAIT_MS = 30 * 60_000;
  *  download is never re-checked harder than a remote film being watched. */
 const REMOTE_REVALIDATE_MS = 30_000;
 const REMOTE_REVALIDATE_TIMEOUT_MS = 5_000;
+export const TRAVEL_SOURCE_FALLBACK_ATTEMPT_LIMIT = 8;
 const TRAVEL_TEMPORARY_FAILURE_LIMIT = 3;
 const TRAVEL_BUDGET_ATTEMPT_LIMIT = 1_000;
 
@@ -612,6 +614,7 @@ export class DownloadQueue {
       if (isList) {
         const canonicalSnapshots: Array<{ index: number; snapshot: SourceAdmissionSnapshotV1 }> = [];
         const canonicalCursors: Array<{ index: number; cursor: TravelContinuationCursorV1 }> = [];
+        const canonicalSourceFallbackAttempts: Array<{ index: number; attempts: number }> = [];
         const canonicalTemporaryFailures: Array<{ index: number; failures: number }> = [];
         const canonicalBudgetAttempts: Array<{ index: number; attempts: number }> = [];
         try {
@@ -629,6 +632,14 @@ export class DownloadQueue {
                 throw new Error("The Travel continuation cursor is misplaced.");
               }
               canonicalCursors.push({ index, cursor });
+            }
+            if (Object.hasOwn(rawJob, "travelSourceFallbackAttempts")) {
+              const attempts = (rawJob as { travelSourceFallbackAttempts: unknown }).travelSourceFallbackAttempts;
+              if (!isTravelSnapshot(snapshot) || typeof attempts !== "number" || !Number.isSafeInteger(attempts) || attempts < 0
+                || attempts > TRAVEL_SOURCE_FALLBACK_ATTEMPT_LIMIT) {
+                throw new Error("The Travel source fallback count is invalid.");
+              }
+              canonicalSourceFallbackAttempts.push({ index, attempts });
             }
             if (Object.hasOwn(rawJob, "travelTemporaryFailures")) {
               const failures = (rawJob as { travelTemporaryFailures: unknown }).travelTemporaryFailures;
@@ -660,6 +671,7 @@ export class DownloadQueue {
         const jobs = parsed as DownloadJob[];
         for (const { index, snapshot } of canonicalSnapshots) jobs[index]!.sourceAdmission = snapshot;
         for (const { index, cursor } of canonicalCursors) jobs[index]!.travelCursor = cursor;
+        for (const { index, attempts } of canonicalSourceFallbackAttempts) jobs[index]!.travelSourceFallbackAttempts = attempts;
         for (const { index, failures } of canonicalTemporaryFailures) jobs[index]!.travelTemporaryFailures = failures;
         for (const { index, attempts } of canonicalBudgetAttempts) jobs[index]!.travelBudgetAttempts = attempts;
         this.jobs = jobs;
@@ -1330,6 +1342,7 @@ export class DownloadQueue {
     if (pinned !== undefined && REMOTE_LIBRARY_ID.test(pinned)) throw remoteDownloadRefused();
     if (job.sourceAdmission && job.stream) await this.discardProfileSelection(job, true);
     delete job.travelCursor;
+    delete job.travelSourceFallbackAttempts;
     delete job.travelTemporaryFailures;
     delete job.travelBudgetAttempts;
     job.retryCount = 0;
@@ -1557,12 +1570,20 @@ export class DownloadQueue {
     job.updatedAt = new Date(this.now()).toISOString();
   }
 
+  private async failTravelSourceFallback(job: DownloadJob, markTried: boolean) {
+    await this.discardProfileSelection(job, markTried);
+    job.status = "failed";
+    job.speed = 0;
+    this.setError(job, "No matching source was found.", "err.noMatchingSource");
+  }
+
   private require(id: string) { const job = this.jobs.find((item) => item.id === id); if (!job) throw new AppError("The item was not found.", "err.itemNotFound"); return job; }
   /** Source addresses (often carrying tokens) must not reach the interface; only the lazy flag goes out. */
   private publicJob(job: DownloadJob): Omit<PublicDownload, "order"> {
     const {
       stream, source, subtitle: _subtitle, remoteDownload: _remoteDownload, notBefore: _notBefore,
       debrid, segments, sourceAdmission: _sourceAdmission, travelCursor: _travelCursor,
+      travelSourceFallbackAttempts: _travelSourceFallbackAttempts,
       travelTemporaryFailures: _travelTemporaryFailures, travelBudgetAttempts: _travelBudgetAttempts, ...rest
     } = job;
     return { ...rest, ownerUserId: this.ownerOf(job), pending: !stream && Boolean(source), debridProgress: debrid?.progress, segments: segments?.length };
@@ -2214,7 +2235,9 @@ export class DownloadQueue {
       await this.dropPlaceholder(reserved);
       throw error;
     }
-    job.status = "completed"; job.completedAt = new Date(this.now()).toISOString(); job.speed = 0; job.retryCount = 0; job.segments = undefined; this.setError(job);
+    job.status = "completed"; job.completedAt = new Date(this.now()).toISOString(); job.speed = 0; job.retryCount = 0; job.segments = undefined;
+    delete job.travelSourceFallbackAttempts;
+    this.setError(job);
     log("INFO", "Download finished", { id: job.id, received: job.received, target: job.target, audioLanguage: job.resolution?.audioLanguage, subtitleLanguage: job.resolution?.subtitleLanguage });
     try { await this.onCompleted?.(job); }
     catch (error) { log("WARN", "The library could not be refreshed after completion", { id: job.id, reason: error instanceof Error ? error.message : String(error) }); }
@@ -2438,8 +2461,9 @@ export class DownloadQueue {
     let stalled = false;
     let remoteStopped = false;
     try {
-      if (job.sourceAdmission && job.stream) {
-        throw new SourceAdmissionRuntimeUnavailable();
+      if (job.sourceAdmission && job.travelSourceFallbackAttempts === TRAVEL_SOURCE_FALLBACK_ATTEMPT_LIMIT) {
+        await this.failTravelSourceFallback(job, false);
+        return;
       }
       // The owner is read afresh before any work: the right to queue may be gone since the
       // job was added, and nothing about the request that added it can speak for it now.
@@ -2682,17 +2706,25 @@ export class DownloadQueue {
         if (job.sourceAdmission && job.stream) await this.discardProfileSelection(job, false);
         await this.haltForStorage(storageMessage(error));
       } else if (job.sourceAdmission && job.stream) {
-        await this.discardProfileSelection(job, true);
-        job.status = "queued";
-        const wait = this.retryDelay(1);
-        job.notBefore = this.now() + wait;
-        this.setError(job, `Source failed (${message}), trying the next one\u2026`, "err.sourceFailedTryingNext", { reason: message });
-        retryScheduled = true;
-        log("WARN", "The profile source failed, trying the next one", {
-          id: job.id, title: job.title, reason: message, tried: job.source?.tried.length,
-        });
-        if (this.retryTimer) clearTimeout(this.retryTimer);
-        this.retryTimer = setTimeout(() => { this.retryTimer = undefined; this.pump(); }, wait);
+        job.travelSourceFallbackAttempts = (job.travelSourceFallbackAttempts ?? 0) + 1;
+        if (job.travelSourceFallbackAttempts >= TRAVEL_SOURCE_FALLBACK_ATTEMPT_LIMIT) {
+          await this.failTravelSourceFallback(job, true);
+          log("ERROR", "Download failed", {
+            id: job.id, title: job.title, reason: message, received: job.received, total: job.total,
+          });
+        } else {
+          await this.discardProfileSelection(job, true);
+          job.status = "queued";
+          const wait = this.retryDelay(1);
+          job.notBefore = this.now() + wait;
+          this.setError(job, `Source failed (${message}), trying the next one\u2026`, "err.sourceFailedTryingNext", { reason: message });
+          retryScheduled = true;
+          log("WARN", "The profile source failed, trying the next one", {
+            id: job.id, title: job.title, reason: message, tried: job.source?.tried.length,
+          });
+          if (this.retryTimer) clearTimeout(this.retryTimer);
+          this.retryTimer = setTimeout(() => { this.retryTimer = undefined; this.pump(); }, wait);
+        }
       } else if (kind === "transient" && error instanceof HttpSourceError && error.httpStatus === 200 && job.segments) {
         // The source promised ranges and then answered one with the whole file. The plan cannot
         // work, so it is dropped rather than retried; what is left is a single stream, which this
