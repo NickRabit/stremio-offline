@@ -14,8 +14,10 @@ import { sealRemoteContent } from "../media-server-reference.js";
 import type { RemoteDownloadReference } from "../media-server-download.js";
 import type { ResourceOwner } from "../media-resources.js";
 import { defaultDownloadSettings, type MediaInfo } from "../naming.js";
+import type { SourceAdmissionSnapshotV1 } from "../source-admission.js";
+import { SOURCE_PROFILE_IDS } from "../source-profiles.js";
 import type { Store, UserPrefs } from "../store.js";
-import type { DownloadTargetSettings, StreamItem } from "../types.js";
+import type { AddonDownloadSettings, DownloadTargetSettings, StreamItem } from "../types.js";
 import type { UserRecord } from "../users.js";
 import { registerDownloadRoutes, type DownloadsDeps } from "./downloads.js";
 
@@ -32,18 +34,25 @@ interface Harness {
   actions: string[];
   moves: Array<{ id: string; direction: number }>;
   viewed: Array<{ id?: string; media?: MediaInfo; target?: string }>;
-  pending: Array<{ selection?: DownloadSelection; ownerUserId?: string }>;
+  pending: Array<{ selection?: DownloadSelection; ownerUserId?: string; sourceAdmission?: SourceAdmissionSnapshotV1 }>;
+  setAddonAllowedUsers(key: string, allowedUsers: string[]): void;
+  setLibraryVisibleTo(id: string, visibleTo: string[]): void;
   close(): Promise<void>;
 }
 
 /** A stream addon the bulk handler accepts: enabled, not a catalogue, with save rules. */
-const streamAddon = (key: string, options: { enabled?: boolean; role?: string; allowedUsers?: string[] } = {}) => ({
+const streamAddon = (key: string, options: {
+  enabled?: boolean;
+  role?: string;
+  allowedUsers?: string[];
+  downloadSettings?: AddonDownloadSettings;
+} = {}) => ({
   key,
   enabled: options.enabled ?? true,
   role: options.role ?? "source",
   ...(options.allowedUsers ? { allowedUsers: options.allowedUsers } : {}),
-  manifest: { id: key, name: key },
-  downloadSettings: defaultDownloadSettings(),
+  manifest: { id: key, name: key, resources: [{ name: "stream" }] },
+  downloadSettings: options.downloadSettings ?? defaultDownloadSettings(),
 });
 
 const ADA = "usr_00000001";
@@ -94,6 +103,10 @@ const mount = async (
     withdrawOnAdd?: UserRecord;
     /** The library a rule with no library lands in, either fixed or decided by the kind. */
     defaultLibrary?: LibraryRecord | ((kind: "movie" | "series") => LibraryRecord | undefined);
+    addonOrder?: string[];
+    prefs?: Partial<UserPrefs>;
+    onCachedMeta?: () => void | Promise<void>;
+    onPending?: (count: number) => void | Promise<void>;
   } = {},
 ): Promise<Harness> => {
   const jobs = options.jobs ?? [{ id: "job-1", ownerUserId: ADA }, { id: "job-2", ownerUserId: ADA }];
@@ -106,7 +119,7 @@ const mount = async (
   const actions: string[] = [];
   const moves: Array<{ id: string; direction: number }> = [];
   const viewed: Array<{ id?: string; media?: MediaInfo; target?: string }> = [];
-  const pending: Array<{ selection?: DownloadSelection; ownerUserId?: string }> = [];
+  const pending: Array<{ selection?: DownloadSelection; ownerUserId?: string; sourceAdmission?: SourceAdmissionSnapshotV1 }> = [];
   /** What the queue does with an id it does not hold, so a foreign job can be compared with one. */
   const require = (name: string, id: string) => {
     if (!jobs.some((job) => job.id === id)) throw new AppError("The item was not found.", "err.itemNotFound");
@@ -120,8 +133,10 @@ const mount = async (
       if (options.withdrawOnAdd) held.viewer = options.withdrawOnAdd;
       return { id: "job-1", target: "Movies/Film/Film.mkv" };
     },
-    addPending: async (_title: string, source: { selection?: DownloadSelection }, _media: unknown, ownerUserId?: string) => {
-      pending.push({ ...source, ownerUserId });
+    addPending: async (_title: string, source: { selection?: DownloadSelection }, _media: unknown, ownerUserId?: string, follow?: unknown, sourceAdmission?: SourceAdmissionSnapshotV1) => {
+      assert.equal(follow, undefined);
+      pending.push({ ...source, ownerUserId, sourceAdmission });
+      await options.onPending?.(pending.length);
       return { id: "job-1" };
     },
     pause: async (id: string) => { require("pause", id); },
@@ -139,6 +154,7 @@ const mount = async (
       mediaConnections: () => options.connections ?? [],
       remoteLibraries: () => options.remoteLibraries ?? [],
       settings: () => options.settings ?? {},
+      userData: () => ({ addonOrder: options.addonOrder }),
     } as unknown as Store,
     needsSetup: () => false,
     currentSession: () => undefined,
@@ -173,8 +189,11 @@ const mount = async (
     titleKey: () => ".",
     saveCatalogPoster: () => undefined,
     libraryKey: (value) => value,
-    cachedMeta: async () => null,
-    prefsOf: () => ({ uiLanguage: "en" }) as UserPrefs,
+    cachedMeta: async () => {
+      await options.onCachedMeta?.();
+      return null;
+    },
+    prefsOf: () => ({ uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", ...options.prefs }) as UserPrefs,
     // The queue resolves a rule with no library to the default for the kind; tests name it
     // explicitly, and otherwise it is the single configured library.
     defaultDownloadLibrary: (kind) => typeof options.defaultLibrary === "function"
@@ -203,6 +222,14 @@ const mount = async (
     moves,
     viewed,
     pending,
+    setAddonAllowedUsers: (key, allowedUsers) => {
+      const addon = addons.find((entry) => (entry as { key?: unknown }).key === key) as { allowedUsers?: string[] } | undefined;
+      if (addon) addon.allowedUsers = allowedUsers;
+    },
+    setLibraryVisibleTo: (id, visibleTo) => {
+      const entry = options.libraries?.find((candidate) => (candidate as LibraryRecord).id === id) as LibraryRecord | undefined;
+      if (entry) entry.visibleTo = visibleTo;
+    },
     close: async () => {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -220,6 +247,7 @@ const api = (base: string, pathname: string, init: { method?: string; body?: unk
 const keyOf = async (response: Response) => ((await response.json()) as { messageKey?: string }).messageKey;
 
 const episodes = (count: number) => Array.from({ length: count }, (_, index) => ({ id: `ep-${index}` }));
+const profileSelection = (profileId: string, revision = 1) => ({ profile: { profileId, revision } });
 
 /** A response the registry can wrap and dispose of without a socket behind it. */
 class OpenResponse extends EventEmitter {
@@ -384,6 +412,260 @@ test("characterization: a legacy bulk submission drops duplicate provider keys a
   assert.equal(queued.audioLanguage, "en");
   assert.equal(queued.audioMode, "listed");
   assert.equal(queued.subtitleMode, "off");
+});
+
+test("profile bulk materializes Travel in the user's addon order with frozen language preferences", async (t) => {
+  const settings = (subfolder: string): AddonDownloadSettings => ({
+    movie: { subfolder, layout: "structured" },
+    series: { subfolder, layout: "flat" },
+  });
+  const harness = await mount([
+    streamAddon("alpha", { allowedUsers: [BOB], downloadSettings: settings("Alpha") }),
+    streamAddon("beta", { allowedUsers: [BOB], downloadSettings: settings("Travel") }),
+    streamAddon("shut"),
+  ], {
+    viewer: ordinary,
+    addonOrder: ["beta", "alpha"],
+    prefs: { audioLanguage: "Czech", subtitleLanguage: "ENG" },
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/downloads/bulk", {
+    method: "POST",
+    body: {
+      title: "Show",
+      episodes: episodes(1),
+      selection: profileSelection(SOURCE_PROFILE_IDS.travel),
+    },
+  });
+  assert.equal(response.status, 201);
+  const body = await response.json();
+  assert.deepEqual(body, { added: 1, skipped: 0 });
+
+  const queued = harness.pending[0]!;
+  const snapshot = queued.sourceAdmission!;
+  assert.deepEqual(snapshot.profile, { id: SOURCE_PROFILE_IDS.travel, revision: 1 });
+  assert.equal(snapshot.operation, "downloadToLibrary");
+  assert.deepEqual(snapshot.providerKeys, ["addon:beta", "addon:alpha"]);
+  assert.deepEqual(snapshot.policy.constraints.audio, { mode: "preferred", preferred: { code: "cs" } });
+  assert.deepEqual(snapshot.policy.constraints.subtitles, { mode: "optional", preferred: { code: "en" } });
+  assert.deepEqual(snapshot.policy.constraints.heightPixels, { min: 480 });
+  assert.deepEqual(
+    snapshot.policy.criteria.find((criterion) => criterion.kind === "providerOrder"),
+    { kind: "providerOrder", keys: ["addon:beta", "addon:alpha"] },
+  );
+  assert.deepEqual(queued.selection?.addonKeys, ["beta", "alpha"]);
+  assert.equal(queued.selection?.audioLanguage, "cs");
+  assert.equal(queued.selection?.subtitleLanguage, "en");
+  assert.deepEqual(queued.selection?.targetSettings, { subfolder: "Travel", layout: "flat" });
+});
+
+test("profile bulk materializes Provider Priority and keeps the request target separate", async (t) => {
+  const shows = library("lib_shows", "series", { visibleTo: [BOB] });
+  const harness = await mount([
+    streamAddon("alpha", { allowedUsers: [BOB] }),
+    streamAddon("beta", { allowedUsers: [BOB] }),
+  ], {
+    viewer: ordinary,
+    libraries: [shows],
+    addonOrder: ["beta", "alpha"],
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/downloads/bulk", {
+    method: "POST",
+    body: {
+      title: "Show",
+      episodes: episodes(1),
+      selection: profileSelection(SOURCE_PROFILE_IDS.providerPriority),
+      target: { libraryId: shows.id, subfolder: "S", layout: "flat" },
+    },
+  });
+  assert.equal(response.status, 201, await response.text());
+  const snapshot = harness.pending[0]!.sourceAdmission!;
+  assert.deepEqual(snapshot.providerKeys, ["addon:beta", "addon:alpha"]);
+  assert.deepEqual(
+    snapshot.policy.criteria.find((criterion) => criterion.kind === "providerOrder"),
+    { kind: "providerOrder", keys: ["addon:beta", "addon:alpha"] },
+  );
+  assert.deepEqual(harness.pending[0]?.selection?.targetSettings, {
+    subfolder: "S",
+    layout: "flat",
+    libraryId: shows.id,
+    explicit: true,
+  });
+});
+
+test("profile bulk re-admits each job and drops providers revoked before it is queued", async (t) => {
+  const settings = (subfolder: string): AddonDownloadSettings => ({
+    movie: { subfolder, layout: "structured" },
+    series: { subfolder, layout: "flat" },
+  });
+  let harness!: Harness;
+  harness = await mount([
+    streamAddon("alpha", { allowedUsers: [BOB], downloadSettings: settings("Alpha") }),
+    streamAddon("beta", { allowedUsers: [BOB], downloadSettings: settings("Beta") }),
+    streamAddon("gamma", { allowedUsers: [BOB], downloadSettings: settings("Validated") }),
+  ], {
+    viewer: ordinary,
+    addonOrder: ["gamma", "beta", "alpha"],
+    onCachedMeta: () => harness.setAddonAllowedUsers("beta", []),
+    onPending: (count) => {
+      if (count === 1) harness.setAddonAllowedUsers("gamma", []);
+    },
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/downloads/bulk", {
+    method: "POST",
+    body: {
+      title: "Show",
+      media: { id: "tt1", metaType: "series" },
+      episodes: episodes(2),
+      selection: profileSelection(SOURCE_PROFILE_IDS.providerPriority),
+    },
+  });
+  assert.equal(response.status, 201, await response.text());
+  assert.deepEqual(
+    harness.pending.map((job) => job.sourceAdmission?.providerKeys),
+    [["addon:gamma", "addon:alpha"], ["addon:alpha"]],
+  );
+  assert.deepEqual(
+    harness.pending.map((job) => job.selection?.addonKeys),
+    [["gamma", "alpha"], ["alpha"]],
+  );
+  assert.deepEqual(
+    harness.pending.map((job) => job.selection?.targetSettings),
+    [
+      { subfolder: "Validated", layout: "flat" },
+      { subfolder: "Validated", layout: "flat" },
+    ],
+  );
+});
+
+test("profile bulk re-reads destination rights before each queue addition", async (t) => {
+  const shows = library("lib_shows", "series", { visibleTo: [BOB] });
+  let harness!: Harness;
+  harness = await mount([streamAddon("stream-addon", { allowedUsers: [BOB] })], {
+    viewer: ordinary,
+    libraries: [shows],
+    onPending: (count) => {
+      if (count === 1) harness.setLibraryVisibleTo(shows.id, []);
+    },
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/downloads/bulk", {
+    method: "POST",
+    body: {
+      title: "Show",
+      episodes: episodes(2),
+      selection: profileSelection(SOURCE_PROFILE_IDS.travel),
+      target: { libraryId: shows.id, subfolder: "S", layout: "flat" },
+    },
+  });
+  assert.equal(response.status, 403);
+  assert.equal(await keyOf(response), "err.downloadLibraryNotAllowed");
+  assert.equal(harness.pending.length, 1, "the job admitted before the revocation remains queued");
+});
+
+test("profile bulk rejects criteria and admission snapshots supplied by the body", async (t) => {
+  const harness = await mount([streamAddon("stream-addon")]);
+  t.after(harness.close);
+  const forged = [
+    {
+      ...profileSelection(SOURCE_PROFILE_IDS.travel),
+      policy: { scope: { mode: "allAvailable" } },
+      addonKeys: ["forged"],
+      sourceStrategy: "largest",
+      audioLanguage: "xx",
+    },
+    {
+      ...profileSelection(SOURCE_PROFILE_IDS.travel),
+      sourceAdmission: { schemaVersion: 1 },
+    },
+  ];
+
+  for (const selection of forged) {
+    const response = await api(harness.base, "/api/downloads/bulk", {
+      method: "POST",
+      body: { title: "Show", episodes: episodes(1), selection },
+    });
+    assert.equal(response.status, 400);
+    assert.equal(await keyOf(response), "err.invalidSourceProfileReference");
+  }
+  assert.deepEqual(harness.pending, []);
+});
+
+test("profile bulk distinguishes stale and unknown references without leaking their identifiers", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const cases = [
+    { selection: profileSelection(SOURCE_PROFILE_IDS.travel, 2), status: 409, key: "err.sourceProfileRevisionStale", id: SOURCE_PROFILE_IDS.travel },
+    { selection: profileSelection("private-profile-id"), status: 400, key: "err.sourceProfileUnavailable", id: "private-profile-id" },
+  ];
+
+  for (const item of cases) {
+    const response = await api(harness.base, "/api/downloads/bulk", {
+      method: "POST",
+      body: { title: "Show", episodes: episodes(1), selection: item.selection },
+    });
+    assert.equal(response.status, item.status);
+    const text = await response.text();
+    assert.equal((JSON.parse(text) as { messageKey?: string }).messageKey, item.key);
+    assert.equal(text.includes(item.id), false);
+  }
+  assert.deepEqual(harness.pending, []);
+});
+
+test("profile bulk refuses a forbidden account and an empty provider scope", async (t) => {
+  const forbidden = await mount([streamAddon("stream-addon")], { viewer: denied });
+  t.after(forbidden.close);
+  const refused = await api(forbidden.base, "/api/downloads/bulk", {
+    method: "POST",
+    body: { title: "Show", episodes: episodes(1), selection: profileSelection(SOURCE_PROFILE_IDS.travel) },
+  });
+  assert.equal(refused.status, 403);
+  assert.equal(await keyOf(refused), "err.sourceProfileOperationForbidden");
+  assert.deepEqual(forbidden.pending, []);
+
+  const empty = await mount([]);
+  t.after(empty.close);
+  const unavailable = await api(empty.base, "/api/downloads/bulk", {
+    method: "POST",
+    body: { title: "Show", episodes: episodes(1), selection: profileSelection(SOURCE_PROFILE_IDS.providerPriority) },
+  });
+  assert.equal(unavailable.status, 400);
+  assert.equal(await keyOf(unavailable), "err.sourceProviderScopeUnavailable");
+  assert.deepEqual(empty.pending, []);
+});
+
+test("profile bulk maps an unavailable language preference to a keyed error", async (t) => {
+  const harness = await mount([streamAddon("stream-addon")], { prefs: { audioLanguage: "xx" } });
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/downloads/bulk", {
+    method: "POST",
+    body: { title: "Show", episodes: episodes(1), selection: profileSelection(SOURCE_PROFILE_IDS.travel) },
+  });
+  assert.equal(response.status, 400);
+  assert.equal(await keyOf(response), "err.sourceLanguagePreferenceUnavailable");
+  assert.deepEqual(harness.pending, []);
+});
+
+test("legacy bulk selection remains lazy and queues without an admission snapshot", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/downloads/bulk", {
+    method: "POST",
+    body: {
+      title: "Show",
+      episodes: episodes(1),
+      selection: { addonKeys: ["stream-addon"], audioLanguage: "en", sourceStrategy: "largest" },
+    },
+  });
+  assert.equal(response.status, 201);
+  assert.equal(harness.pending[0]?.sourceAdmission, undefined);
+  assert.equal(harness.pending[0]?.selection?.sourceStrategy, "largest");
 });
 
 test("POST /api/downloads/bulk refuses required subtitles without a subtitle language", async (t) => {

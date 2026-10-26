@@ -14,6 +14,8 @@ import { openRemoteContent } from "../media-server-reference.js";
 import { REMOTE_LIBRARY_ID, type RemoteLibraryRecord } from "../media-server-types.js";
 import { titleLanguage } from "../ranking.js";
 import type { ResourceOwner } from "../media-resources.js";
+import { materializeSourceAdmission, parseSourceProfileReference, SourceAdmissionRejected, SourceAdmissionValidationError, type SourceAdmissionRejectionCode, type SourceAdmissionSnapshotV1 } from "../source-admission.js";
+import { viewerOfProfileAccount } from "../source-profiles.js";
 import type { UserPrefs } from "../store.js";
 import type { DownloadTargetSettings, MetaItem, StreamItem } from "../types.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
@@ -44,6 +46,83 @@ export interface DownloadsDeps extends RouteContext {
 /** The deps the body-validation of a lazy download selection needs, shared by the bulk route
  *  and the follow routes so both parse audio, subtitles and the pinned target the same way. */
 type SelectionDeps = Pick<DownloadsDeps, "store" | "currentUser" | "cachedMeta" | "prefsOf" | "defaultDownloadLibrary">;
+
+const invalidSourceProfileReference = () =>
+  new AppError("The source profile selection is invalid.", "err.invalidSourceProfileReference", 400);
+
+const sourceAdmissionError = (code: SourceAdmissionRejectionCode): AppError => {
+  switch (code) {
+    case "profileUnknown":
+      return new AppError("That source profile is unavailable.", "err.sourceProfileUnavailable", 400);
+    case "profileRevisionStale":
+      return new AppError("This source profile revision is no longer available.", "err.sourceProfileRevisionStale", 409);
+    case "operationUnsupported":
+      return new AppError("This source profile cannot be used for this operation.", "err.sourceProfileOperationUnavailable", 400);
+    case "operationForbidden":
+      return new AppError("This account may not use this source profile for downloads.", "err.sourceProfileOperationForbidden", 403);
+    case "providerScopeUnavailable":
+      return new AppError("No authorized source is available for this profile.", "err.sourceProviderScopeUnavailable", 400);
+    case "languagePreferenceUnavailable":
+      return new AppError("The source language preferences are not available.", "err.sourceLanguagePreferenceUnavailable", 400);
+    case "languagePreferenceDuplicate":
+      return new AppError("The source language preferences cannot be used together.", "err.sourceLanguagePreferenceConflict", 400);
+  }
+};
+
+const materializeBulkSourceAdmission = (
+  deps: SelectionDeps,
+  req: express.Request,
+  referenceInput: unknown,
+): SourceAdmissionSnapshotV1 => {
+  const owner = deps.currentUser(req);
+  if (!owner) throw new AppError("This account may not download to the library.", "err.downloadLibraryNotAllowed", 403);
+  try {
+    const reference = parseSourceProfileReference(referenceInput);
+    const preferences = deps.prefsOf(req);
+    return materializeSourceAdmission(reference, {
+      viewer: viewerOfProfileAccount(owner),
+      addons: deps.store.addons(),
+      libraries: deps.store.libraries(),
+      remoteLibraries: deps.store.remoteLibraries(),
+      mediaConnections: deps.store.mediaConnections(),
+      addonOrder: deps.store.userData(owner.id).addonOrder,
+      preferences: {
+        audioLanguage: preferences.audioLanguage,
+        subtitleLanguage: preferences.subtitleLanguage,
+      },
+      operation: "downloadToLibrary",
+    });
+  } catch (error) {
+    if (error instanceof SourceAdmissionValidationError) throw invalidSourceProfileReference();
+    if (error instanceof SourceAdmissionRejected) throw sourceAdmissionError(error.code);
+    throw error;
+  }
+};
+
+const profileSelectionReference = (selection: unknown): { present: false } | { present: true; reference: unknown } => {
+  if (selection === null || typeof selection !== "object" || Array.isArray(selection)
+    || !Object.hasOwn(selection, "profile")) return { present: false };
+  const keys = Reflect.ownKeys(selection);
+  if (keys.length !== 1 || keys[0] !== "profile") throw invalidSourceProfileReference();
+  return { present: true, reference: (selection as Record<string, unknown>).profile };
+};
+
+const legacySelectionFromAdmission = (snapshot: SourceAdmissionSnapshotV1) => {
+  const { audio, subtitles } = snapshot.policy.constraints;
+  const audioFallback = audio.fallback && "code" in audio.fallback ? audio.fallback.code : undefined;
+  const subtitleLanguage = subtitles.mode === "off" ? undefined : subtitles.preferred && "code" in subtitles.preferred ? subtitles.preferred.code : undefined;
+  const subtitleFallback = subtitles.mode === "off" || !subtitles.fallback || !("code" in subtitles.fallback) ? undefined : subtitles.fallback.code;
+  return {
+    addonKeys: snapshot.providerKeys.map((key) => key.slice("addon:".length)),
+    sourceStrategy: "priority" as const,
+    audioLanguage: "code" in audio.preferred ? audio.preferred.code : "",
+    ...(audioFallback === undefined ? {} : { fallbackAudioLanguage: audioFallback }),
+    audioMode: audio.mode,
+    subtitleMode: subtitles.mode,
+    ...(subtitleLanguage === undefined ? {} : { subtitleLanguage }),
+    ...(subtitleFallback === undefined ? {} : { fallbackSubtitleLanguage: subtitleFallback }),
+  };
+};
 
 /** The owner-bound check where a failure reaches the caller instead of pausing a job. The
  *  rights are asked before the body is read; the source and the library the rule names are
@@ -247,7 +326,9 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
   // Adding episodes in bulk: the jobs are lazy, streams are asked for at download time.
   app.post("/api/downloads/bulk", asyncRoute(async (req, res) => {
     const owner = currentUser(req);
-    assertMayQueue(req);
+    const profileReference = profileSelectionReference(req.body.selection);
+    // A profile admission answers its own operation check, including a distinct 403.
+    if (!profileReference.present) assertMayQueue(req);
     const explicit = await explicitTarget(req, req.body.target, "series");
     const title = String(req.body.title ?? "").trim() || "Show";
     const type = String(req.body.type ?? "series");
@@ -260,7 +341,16 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
     if (episodes.length > 500) throw new AppError("At most 500 episodes at a time.", "err.tooManyEpisodes");
     // Every job this route adds carries `media.kind: "episode"`, so the queue reads it as a
     // series whatever `metaType` the body claims for the title; the door has to agree.
-    const selection = await parseSelection(req, { selection: req.body.selection, target: req.body.target, metaType, parentId, kind: "series" });
+    const sourceAdmission = !profileReference.present
+      ? undefined
+      : materializeBulkSourceAdmission(deps, req, profileReference.reference);
+    const validatedSelection = await parseSelection(req, {
+      selection: sourceAdmission === undefined ? req.body.selection : legacySelectionFromAdmission(sourceAdmission),
+      target: req.body.target,
+      metaType,
+      parentId,
+      kind: "series",
+    });
     let added = 0, skipped = 0;
     for (const episode of episodes) {
       const videoId = String(episode.id ?? "").trim();
@@ -270,7 +360,18 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
       const episodeTitle = episode.title ? String(episode.title) : undefined;
       const jobTitle = `${title} · ${episodeTitle ?? (season != null ? `S${String(season).padStart(2, "0")}E${String(number ?? 0).padStart(2, "0")}` : `Episode ${number ?? "?"}`)}`;
       const media: MediaInfo = { kind: "episode", title, season, episode: number, episodeTitle, id: parentId, metaType, poster };
-      const job = await queue.addPending(jobTitle, { type, videoId, selection }, media, owner?.id);
+      let jobSelection = validatedSelection;
+      let jobAdmission = sourceAdmission;
+      if (profileReference.present) {
+        jobAdmission = materializeBulkSourceAdmission(deps, req, profileReference.reference);
+        jobSelection = {
+          ...legacySelectionFromAdmission(jobAdmission),
+          titleLanguage: validatedSelection.titleLanguage,
+          targetSettings: validatedSelection.targetSettings,
+        };
+        assertMayQueue(req, { libraryId: jobSelection.targetSettings.libraryId ?? defaultDownloadLibrary("series")?.id });
+      }
+      const job = await queue.addPending(jobTitle, { type, videoId, selection: jobSelection }, media, owner?.id, undefined, jobAdmission);
       if (job) added += 1; else skipped += 1;
     }
     log("INFO", "Bulk addition to the queue", { title, added, skipped });

@@ -1018,6 +1018,14 @@ export const en = {
   "err.missingDownloadSources": "Pick at least one source addon.",
   "err.missingAudioLanguage": "Pick an audio language.",
   "err.missingSubtitleLanguage": "Pick a subtitle language.",
+  "err.invalidSourceProfileReference": "The source profile selection is invalid.",
+  "err.sourceProfileUnavailable": "That source profile is unavailable.",
+  "err.sourceProfileRevisionStale": "This source profile revision is no longer available.",
+  "err.sourceProfileOperationUnavailable": "This source profile cannot be used for this operation.",
+  "err.sourceProfileOperationForbidden": "This account may not use this source profile for downloads.",
+  "err.sourceProviderScopeUnavailable": "No authorized source is available for this profile.",
+  "err.sourceLanguagePreferenceUnavailable": "The source language preferences are not available.",
+  "err.sourceLanguagePreferenceConflict": "The source language preferences cannot be used together.",
 
   // Addons.
   "addons.eyebrow": "ADDONS",

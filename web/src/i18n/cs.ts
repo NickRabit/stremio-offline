@@ -1013,6 +1013,14 @@ export const cs: Catalog = {
   "err.missingDownloadSources": "Vyberte alespoň jeden zdrojový doplněk.",
   "err.missingAudioLanguage": "Vyberte jazyk zvuku.",
   "err.missingSubtitleLanguage": "Vyberte jazyk titulků.",
+  "err.invalidSourceProfileReference": "Výběr zdrojového profilu není platný.",
+  "err.sourceProfileUnavailable": "Tento zdrojový profil není dostupný.",
+  "err.sourceProfileRevisionStale": "Tato revize zdrojového profilu už není dostupná.",
+  "err.sourceProfileOperationUnavailable": "Tento zdrojový profil nelze pro tuto operaci použít.",
+  "err.sourceProfileOperationForbidden": "Tento účet nesmí tento zdrojový profil použít ke stahování.",
+  "err.sourceProviderScopeUnavailable": "Pro tento profil není dostupný žádný povolený zdroj.",
+  "err.sourceLanguagePreferenceUnavailable": "Jazykové předvolby zdroje nejsou dostupné.",
+  "err.sourceLanguagePreferenceConflict": "Jazykové předvolby zdroje nelze použít společně.",
 
   // Doplňky.
   "addons.eyebrow": "DOPLŇKY",
