@@ -13,7 +13,8 @@ import { autoRefreshEnabled, refreshDue, refreshManifests, type RefreshOutcome }
 import { defaultDownloadLibrary, DownloadQueue, ownerMayDownload, type DownloadJob, type RemoteDownloadBackend } from "./downloads.js";
 import { DeviceTransfers } from "./device-transfers.js";
 import { ClientLogStore } from "./client-logs.js";
-import { createSourceResolver } from "./source-resolver.js";
+import { createSourceResolver, type SourceResolverDeps } from "./source-resolver.js";
+import { createTravelProfileResolver } from "./source-profile-resolver.js";
 import { ImageStats, useImageStats } from "./image-stats.js";
 import { MosaicCache } from "./mosaic.js";
 import { ProviderStats, useProviderStats } from "./provider-stats.js";
@@ -345,7 +346,7 @@ if (!store.defaultsInstalled()) {
 // provider so another job can reuse them without reviving a failed request.
 const streamCache = new StreamListingCache();
 queue.setRetrySourceHook(({ type, videoId }) => streamCache.invalidate(type, videoId));
-queue.setResolver(createSourceResolver({
+const queueResolverDeps: SourceResolverDeps = {
   users: () => store.users(),
   addons: () => store.addons(),
   prefs: (ownerUserId) => store.prefs(ownerUserId),
@@ -354,7 +355,9 @@ queue.setResolver(createSourceResolver({
   listStreams: (addons, type, id) => streamCache.list(addons, type, id),
   listSubtitles: (addons, type, id, signal) => subtitles(addons, type, id, false, signal),
   inspect: (stream, signal) => playback.inspect(stream, signal),
-}));
+};
+queue.setResolver(createSourceResolver(queueResolverDeps));
+queue.setTravelResolver(createTravelProfileResolver(queueResolverDeps));
 await playback.load();
 
 /** With no account at all and no fallback credentials, nothing can be done. */

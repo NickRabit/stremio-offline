@@ -18,6 +18,7 @@ import {
   TravelVerificationError,
   type TravelContinuationCursorV1,
 } from "./source-travel.js";
+import type { TravelProfileResolution } from "./source-profile-resolver.js";
 import {
   DownloadQueue,
   type DownloadJob,
@@ -25,16 +26,22 @@ import {
   type QueueHooks,
 } from "./downloads.js";
 
+process.env.ALLOW_PRIVATE_ADDONS = "1";
+
 const LIBRARY_ID = "lib_51a5510a";
 const PROVIDER_ONE = "addon:queue-private-token";
 const PROVIDER_TWO = "addon:second-provider";
+const TRAVEL_BUDGET_ATTEMPT_LIMIT = 1_000;
 
-const travelCursor = (): TravelContinuationCursorV1 => ({
+const travelCursor = (
+  nextIndex = 2,
+  rejectedIndices = [0, 1],
+): TravelContinuationCursorV1 => ({
   schemaVersion: 1,
   scopeFingerprint: "a".repeat(64),
   listingFingerprint: "b".repeat(64),
-  nextIndex: 2,
-  rejectedIndices: [0, 1],
+  nextIndex,
+  rejectedIndices,
 });
 
 const travelDefinition = SOURCE_PROFILE_DEFINITIONS.find((definition) => definition.id === SOURCE_PROFILE_IDS.travel);
@@ -122,25 +129,53 @@ const rawLazyJob = (sourceAdmission: unknown = undefined): Record<string, unknow
 const assertPublicViewIsClean = (view: Record<string, unknown>) => {
   assert.equal(Object.hasOwn(view, "sourceAdmission"), false);
   assert.equal(Object.hasOwn(view, "travelCursor"), false);
+  assert.equal(Object.hasOwn(view, "travelBudgetAttempts"), false);
   assert.equal(Object.hasOwn(view, "policy"), false);
   const text = JSON.stringify(view);
   assert.doesNotMatch(text, /queue-private-token/);
   assert.doesNotMatch(text, /sourceAdmission/);
   assert.doesNotMatch(text, /travelCursor/);
+  assert.doesNotMatch(text, /travelBudgetAttempts/);
   assert.doesNotMatch(text, /"policy"/);
 };
 
-const countingServer = () => new Promise<{ server: Server; url: string; requests: () => number }>((resolve) => {
+const countingServer = (status = 200) => new Promise<{ server: Server; url: string; requests: () => number }>((resolve) => {
   let requests = 0;
   const server = createServer((_request, response) => {
     requests += 1;
-    response.writeHead(200, { "content-type": "video/mp4", "content-length": "1" });
+    response.writeHead(status, { "content-type": "video/mp4", "content-length": "1" });
     response.end("x");
   });
   server.listen(0, "127.0.0.1", () => {
     const address = server.address() as { port: number };
     resolve({ server, url: `http://127.0.0.1:${address.port}/film.mp4`, requests: () => requests });
   });
+});
+
+const emptyObservations = {
+  probesUsed: 0,
+  confirmedRejections: 0,
+  temporaryFailures: 0,
+  accessDenials: 0,
+  unresolvedCandidates: 0,
+} as const;
+
+type SelectedTravel = Extract<TravelProfileResolution, { status: "selected" }>;
+
+const selectedTravel = (url: string, title = "Film"): SelectedTravel => ({
+  status: "selected",
+  stream: {
+    url,
+    addonKey: "queue-private-token",
+    addonName: "Travel fixture",
+    name: `${title}.mp4`,
+    behaviorHints: { filename: `${title}.mp4`, videoSize: 1 },
+  },
+  resolution: { checkedCandidates: 1, audioLanguage: "en", audioEvidence: "probe" },
+  settings: defaultDownloadSettings(),
+  searchStatus: "complete",
+  retryable: false,
+  observations: emptyObservations,
 });
 
 test("a lazy job durably stores a detached materialized Travel snapshot without exposing it", async () => {
@@ -280,11 +315,17 @@ test("malformed or misplaced Travel cursors make the queue unreadable without ch
   const validSnapshot = travelSnapshot();
   const nonTravelSnapshot = structuredClone(validSnapshot);
   nonTravelSnapshot.profile.id = SOURCE_PROFILE_IDS.recommended;
-  const cases: Array<{ name: string; admission?: unknown; cursor: unknown; stream?: unknown }> = [
+  const cases: Array<{ name: string; admission?: unknown; cursor: unknown; stream?: unknown; budgetAttempts?: unknown }> = [
     { name: "malformed cursor", admission: validSnapshot, cursor: { ...travelCursor(), extra: true } },
     { name: "legacy job", cursor: travelCursor() },
     { name: "non-Travel snapshot", admission: nonTravelSnapshot, cursor: travelCursor() },
     { name: "selected stream", admission: validSnapshot, cursor: travelCursor(), stream: { url: "http://127.0.0.1/private" } },
+    {
+      name: "budget attempts over limit",
+      admission: validSnapshot,
+      cursor: travelCursor(),
+      budgetAttempts: TRAVEL_BUDGET_ATTEMPT_LIMIT + 1,
+    },
   ];
 
   for (const entry of cases) {
@@ -293,6 +334,7 @@ test("malformed or misplaced Travel cursors make the queue unreadable without ch
       ...rawLazyJob(entry.admission),
       ...(entry.stream === undefined ? {} : { stream: entry.stream }),
       travelCursor: entry.cursor,
+      ...(entry.budgetAttempts === undefined ? {} : { travelBudgetAttempts: entry.budgetAttempts }),
     }], null, 2);
     await writeFile(state, bytes);
     let resolutions = 0;
@@ -408,7 +450,7 @@ test("a valid snapshot survives restart and retry without accepting a legacy sel
   }
 });
 
-test("a restored snapshot with a preselected stream fails closed without transferring it", async () => {
+test("a restored snapshot without a Travel resolver fails closed without transferring its stream", async () => {
   const { directory, data, downloads, state } = await setup();
   const snapshot = travelSnapshot();
   const { server, url, requests } = await countingServer();
@@ -431,13 +473,509 @@ test("a restored snapshot with a preselected stream fails closed without transfe
     assert.equal(requests(), 0, "no byte or header request reaches the preselected stream");
     assert.equal(resolutions, 0);
     assert.deepEqual(internalJobs(queue)[0]?.sourceAdmission, snapshot);
-    assert.equal(internalJobs(queue)[0]?.startedAt, undefined, "the direct transfer path never starts");
+    assert.equal(internalJobs(queue)[0]?.stream, undefined, "the saved selection is discarded before dispatch");
     const view = queue.get("job-source-admission")!;
     assert.equal(view.errorKey, "err.noMatchingSource");
     assert.doesNotMatch(JSON.stringify(view), /queue-private-token/);
   } finally {
     await queue.stop();
     server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a Travel budget makes progress past four exhausted attempts without using the temporary-failure limit", async () => {
+  const { directory, data, downloads, state } = await setup();
+  let clock = 10_000;
+  const queue = openQueue(data, downloads, {
+    now: () => clock,
+    retryDelay: () => 250,
+  });
+  let legacyResolutions = 0;
+  const inputs: Array<{ cursor?: TravelContinuationCursorV1 }> = [];
+  queue.setResolver(async () => {
+    legacyResolutions += 1;
+    return undefined;
+  });
+  queue.setTravelResolver(async (input) => {
+    inputs.push({ ...(input.cursor === undefined ? {} : { cursor: input.cursor }) });
+    if (inputs.length === 1) {
+      return {
+        status: "temporaryFailure",
+        retryable: true,
+        observations: { ...emptyObservations, temporaryFailures: 1 },
+        cursor: travelCursor(1, [0]),
+      };
+    }
+    if (inputs.length <= 5) {
+      const nextIndex = inputs.length;
+      return {
+        status: "budgetExhausted",
+        retryable: true,
+        observations: { ...emptyObservations, probesUsed: 15 },
+        cursor: travelCursor(nextIndex, Array.from({ length: nextIndex - 1 }, (_entry, index) => index)),
+      };
+    }
+    return { status: "noMatch", retryable: false, observations: emptyObservations };
+  });
+  await queue.load();
+  try {
+    const added = await queue.addPending(
+      "Film",
+      { type: "series", videoId: "tt-budget" },
+      { kind: "episode", title: "Show", season: 1, episode: 1 },
+      "usr_00000011",
+      undefined,
+      travelSnapshot(),
+    );
+    assert.ok(added);
+
+    await waitFor(queue, () => internalJobs(queue)[0]?.travelCursor?.nextIndex === 1);
+    assert.equal(internalJobs(queue)[0]?.travelTemporaryFailures, 1);
+    assert.equal(internalJobs(queue)[0]?.notBefore, 10_250);
+    let stored = (await readJobs(state)).find((entry) => entry.id === added.id)!;
+    assert.equal(stored.travelTemporaryFailures, 1);
+    assert.equal(stored.notBefore, 10_250);
+
+    clock = 10_250;
+    queue.changed();
+    for (let nextIndex = 2; nextIndex <= 5; nextIndex += 1) {
+      await waitFor(queue, () => internalJobs(queue)[0]?.travelCursor?.nextIndex === nextIndex);
+      const job = internalJobs(queue)[0]!;
+      assert.equal(job.status, "queued");
+      assert.equal(job.travelTemporaryFailures, undefined, "budget progress resets temporary failures");
+      assert.equal(job.travelBudgetAttempts, nextIndex - 1);
+      assert.equal(job.retryCount, undefined, "source inspection does not spend a transfer retry");
+      assert.equal(job.notBefore, clock + 250);
+      stored = (await readJobs(state)).find((entry) => entry.id === added.id)!;
+      assert.deepEqual(stored.travelCursor, job.travelCursor);
+      assert.equal(Object.hasOwn(stored, "travelTemporaryFailures"), false);
+      assert.equal(stored.travelBudgetAttempts, nextIndex - 1);
+      assert.equal(inputs.length, nextIndex);
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      assert.equal(inputs.length, nextIndex, "the retry does not run before notBefore");
+      clock += 250;
+      queue.changed();
+    }
+
+    await waitFor(queue, () => queue.get(added.id)?.status === "failed");
+    assert.equal(inputs.length, 6);
+    assert.deepEqual(inputs[1]?.cursor, travelCursor(1, [0]));
+    assert.deepEqual(inputs[5]?.cursor, travelCursor(5, [0, 1, 2, 3]));
+    assert.equal(queue.get(added.id)?.errorKey, "err.noMatchingSource");
+    assert.equal(internalJobs(queue)[0]?.travelBudgetAttempts, undefined);
+    assert.equal(legacyResolutions, 0);
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a persisted Travel budget count at its limit fails before scheduling another attempt", async () => {
+  const { directory, data, downloads, state } = await setup();
+  await writeFile(state, JSON.stringify([{
+    ...rawLazyJob(travelSnapshot()),
+    ownerUserId: "usr_00000020",
+    travelCursor: travelCursor(5, [0, 1, 2, 3]),
+    travelBudgetAttempts: TRAVEL_BUDGET_ATTEMPT_LIMIT,
+  }], null, 2));
+  let calls = 0;
+  let legacyResolutions = 0;
+  const queue = openQueue(data, downloads);
+  queue.setResolver(async () => {
+    legacyResolutions += 1;
+    return undefined;
+  });
+  queue.setTravelResolver(async (input) => {
+    calls += 1;
+    assert.equal(input.cursor?.nextIndex, 5);
+    return {
+      status: "budgetExhausted",
+      retryable: true,
+      observations: { ...emptyObservations, probesUsed: 15 },
+      cursor: travelCursor(6, [0, 1, 2, 3, 4]),
+    };
+  });
+  try {
+    await queue.load();
+    await waitFor(queue, () => queue.get("job-source-admission")?.status === "failed");
+    assert.equal(calls, 1);
+    assert.equal(queue.get("job-source-admission")?.errorKey, "err.noMatchingSource");
+    assert.equal(internalJobs(queue)[0]?.travelCursor, undefined);
+    assert.equal(internalJobs(queue)[0]?.travelBudgetAttempts, undefined);
+    assert.equal(internalJobs(queue)[0]?.notBefore, undefined);
+    assertPublicViewIsClean(queue.get("job-source-admission")! as unknown as Record<string, unknown>);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(calls, 1, "the final budget outcome schedules no further attempt");
+    const stored = (await readJobs(state)).find((entry) => entry.id === "job-source-admission")!;
+    assert.equal(stored.status, "failed");
+    assert.equal(Object.hasOwn(stored, "travelCursor"), false);
+    assert.equal(Object.hasOwn(stored, "travelBudgetAttempts"), false);
+    assert.equal(Object.hasOwn(stored, "notBefore"), false);
+    assert.equal(legacyResolutions, 0);
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("repeated Travel temporary failures remain finite and use bounded delays", async () => {
+  const { directory, data, downloads } = await setup();
+  let clock = 20_000;
+  let calls = 0;
+  const queue = openQueue(data, downloads, {
+    now: () => clock,
+    retryDelay: () => 100,
+  });
+  queue.setTravelResolver(async () => {
+    calls += 1;
+    return {
+      status: "temporaryFailure",
+      retryable: true,
+      observations: { ...emptyObservations, temporaryFailures: 1 },
+      cursor: travelCursor(calls, Array.from({ length: calls }, (_entry, index) => index)),
+    };
+  });
+  await queue.load();
+  try {
+    const added = await queue.addPending(
+      "Film",
+      { type: "series", videoId: "tt-temporary-budget" },
+      { kind: "episode", title: "Show", season: 1, episode: 1 },
+      "usr_00000019",
+      undefined,
+      travelSnapshot(),
+    );
+    assert.ok(added);
+    for (let failures = 1; failures <= 3; failures += 1) {
+      await waitFor(queue, () => internalJobs(queue)[0]?.travelTemporaryFailures === failures);
+      assert.equal(internalJobs(queue)[0]?.status, "queued");
+      assert.equal(internalJobs(queue)[0]?.travelBudgetAttempts, undefined);
+      assert.equal(internalJobs(queue)[0]?.notBefore, clock + 100);
+      clock += 100;
+      queue.changed();
+    }
+    await waitFor(queue, () => queue.get(added.id)?.status === "failed");
+    assert.equal(calls, 4);
+    assert.equal(queue.get(added.id)?.errorKey, "err.noMatchingSource");
+    assert.equal(internalJobs(queue)[0]?.travelCursor, undefined);
+    assert.equal(internalJobs(queue)[0]?.travelTemporaryFailures, undefined);
+    assert.equal(internalJobs(queue)[0]?.retryCount, undefined);
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Travel no-match fails while denied or cancelled work stops without staying active", async () => {
+  for (const status of ["noMatch", "accessDenied", "cancelled"] as const) {
+    const { directory, data, downloads } = await setup();
+    let legacyResolutions = 0;
+    const queue = openQueue(data, downloads);
+    queue.setResolver(async () => {
+      legacyResolutions += 1;
+      return undefined;
+    });
+    queue.setTravelResolver(async () => status === "noMatch"
+      ? { status: "noMatch", retryable: false, observations: emptyObservations }
+      : { status, retryable: false, observations: emptyObservations });
+    await queue.load();
+    try {
+      const added = await queue.addPending(
+        status,
+        { type: "series", videoId: `tt-${status}` },
+        { kind: "episode", title: "Show", season: 1, episode: 1 },
+        "usr_00000012",
+        undefined,
+        travelSnapshot(),
+      );
+      assert.ok(added);
+      await waitFor(queue, () => {
+        const job = queue.get(added.id);
+        return status === "noMatch" ? job?.status === "failed" : job?.status === "paused";
+      });
+      const view = queue.get(added.id)!;
+      if (status === "noMatch") {
+        assert.equal(view.status, "failed");
+        assert.equal(view.errorKey, "err.noMatchingSource");
+      } else {
+        assert.equal(view.status, "paused");
+        assert.equal(view.pauseReason, "permission");
+      }
+      assert.equal(view.retryCount, undefined);
+      assert.equal(legacyResolutions, 0);
+    } finally {
+      await queue.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+});
+
+test("Travel rejects non-HTTP and torrent selections before opening bytes", async () => {
+  const { server, url, requests } = await countingServer();
+  const cases: Array<{ name: string; selected: SelectedTravel }> = [
+    { name: "file URL", selected: selectedTravel("file:///tmp/private-travel.mp4") },
+    { name: "empty URL", selected: selectedTravel("") },
+    {
+      name: "torrent hash",
+      selected: {
+        ...selectedTravel(url),
+        stream: { ...selectedTravel(url).stream, infoHash: "a".repeat(40) },
+      },
+    },
+  ];
+  try {
+    for (const entry of cases) {
+      const { directory, data, downloads } = await setup();
+      let legacyResolutions = 0;
+      const queue = openQueue(data, downloads);
+      queue.setResolver(async () => {
+        legacyResolutions += 1;
+        return undefined;
+      });
+      queue.setTravelResolver(async () => entry.selected);
+      await queue.load();
+      try {
+        const added = await queue.addPending(
+          entry.name,
+          {
+            type: "movie",
+            videoId: `tt-invalid-${entry.name}`,
+            selection: selection("addon:queue-private-token"),
+          },
+          { kind: "movie", title: entry.name },
+          "usr_00000018",
+          undefined,
+          travelSnapshot(),
+        );
+        assert.ok(added);
+        await waitFor(queue, () => queue.get(added.id)?.status === "failed");
+        assert.equal(queue.get(added.id)?.errorKey, "err.noMatchingSource", entry.name);
+        assert.equal(internalJobs(queue)[0]?.stream, undefined, entry.name);
+        assert.equal(internalJobs(queue)[0]?.target, "", entry.name);
+        assert.equal(requests(), 0, `${entry.name} never reaches the transfer path`);
+        assert.equal(legacyResolutions, 0, entry.name);
+      } finally {
+        await queue.stop();
+        await rm(directory, { recursive: true, force: true });
+      }
+    }
+  } finally {
+    server.close();
+  }
+});
+
+test("a selected Travel source transfers over HTTP and persists no cursor beside it", async () => {
+  const { directory, data, downloads, state } = await setup();
+  const { server, url, requests } = await countingServer();
+  let overlappingPrivateState = false;
+  let legacyResolutions = 0;
+  await writeFile(state, JSON.stringify([{
+    ...rawLazyJob(travelSnapshot()),
+    ownerUserId: "usr_00000013",
+    travelCursor: travelCursor(),
+    travelBudgetAttempts: 7,
+  }], null, 2));
+  const queue = openQueue(data, downloads, {
+    writeState: async (file, contents) => {
+      const jobs = JSON.parse(contents) as Array<Record<string, unknown>>;
+      if (jobs.some((job) => job.stream !== undefined && job.travelCursor !== undefined)) {
+        overlappingPrivateState = true;
+      }
+      await writeFile(file, contents);
+    },
+  });
+  queue.setResolver(async () => {
+    legacyResolutions += 1;
+    return undefined;
+  });
+  queue.setTravelResolver(async (input) => {
+    assert.deepEqual(input.cursor, travelCursor());
+    return selectedTravel(url);
+  });
+  await queue.load();
+  try {
+    await waitFor(queue, () => queue.get("job-source-admission")?.status === "completed");
+
+    assert.equal(requests(), 1);
+    assert.equal(legacyResolutions, 0);
+    assert.equal(overlappingPrivateState, false);
+    const stored = (await readJobs(state)).find((entry) => entry.id === "job-source-admission")!;
+    assert.equal(Object.hasOwn(stored, "travelCursor"), false);
+    assert.equal(Object.hasOwn(stored, "travelBudgetAttempts"), false);
+    assert.equal((stored.stream as { url?: string }).url, url);
+    assert.match(String(stored.target), new RegExp(`^${LIBRARY_ID}/Film/Film\\.mp4$`));
+  } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("an explicit retry of a Travel no-match resolves again under the Travel callback", async () => {
+  const { directory, data, downloads } = await setup();
+  const { server, url, requests } = await countingServer();
+  let calls = 0;
+  let legacyResolutions = 0;
+  const queue = openQueue(data, downloads);
+  queue.setResolver(async () => {
+    legacyResolutions += 1;
+    return undefined;
+  });
+  queue.setTravelResolver(async () => {
+    calls += 1;
+    assert.ok(internalJobs(queue)[0]?.source?.selection?.targetSettings);
+    return calls === 1
+      ? { status: "noMatch", retryable: false, observations: emptyObservations }
+      : selectedTravel(url);
+  });
+  await queue.load();
+  try {
+    const added = await queue.addPending(
+      "Film",
+      {
+        type: "movie",
+        videoId: "tt-explicit-travel",
+        selection: selection("addon:queue-private-token"),
+      },
+      { kind: "movie", title: "Film" },
+      "usr_00000014",
+      undefined,
+      travelSnapshot(),
+    );
+    assert.ok(added);
+    await waitFor(queue, () => queue.get(added.id)?.status === "failed");
+    internalJobs(queue)[0]!.travelBudgetAttempts = 3;
+    await queue.retry(added.id);
+    await waitFor(queue, () => queue.get(added.id)?.status === "completed");
+    assert.equal(calls, 2);
+    assert.equal(requests(), 1);
+    assert.equal(internalJobs(queue)[0]?.travelBudgetAttempts, undefined);
+    assert.equal(legacyResolutions, 0);
+  } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a failed Travel transfer re-resolves without spending the transfer retry count", async () => {
+  const { directory, data, downloads } = await setup();
+  const failedSource = await countingServer(404);
+  const goodSource = await countingServer();
+  let calls = 0;
+  let legacyResolutions = 0;
+  const queue = openQueue(data, downloads, { retryDelay: () => 20 });
+  queue.setResolver(async () => {
+    legacyResolutions += 1;
+    return undefined;
+  });
+  queue.setTravelResolver(async (input) => {
+    calls += 1;
+    if (calls === 2) {
+      assert.deepEqual(input.source.tried, [failedSource.url]);
+      assert.equal(internalJobs(queue)[0]?.retryCount, undefined);
+      return selectedTravel(goodSource.url);
+    }
+    return selectedTravel(failedSource.url);
+  });
+  await queue.load();
+  try {
+    const added = await queue.addPending(
+      "Film",
+      {
+        type: "movie",
+        videoId: "tt-transfer-retry-travel",
+        selection: selection("addon:queue-private-token"),
+      },
+      { kind: "movie", title: "Film" },
+      "usr_00000017",
+      undefined,
+      travelSnapshot(),
+    );
+    assert.ok(added);
+    await waitFor(queue, () => queue.get(added.id)?.status === "completed");
+    assert.equal(calls, 2);
+    assert.equal(failedSource.requests(), 1);
+    assert.equal(goodSource.requests(), 1);
+    assert.equal(legacyResolutions, 0);
+  } finally {
+    await queue.stop();
+    failedSource.server.close();
+    goodSource.server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("restart discards an old Travel URL and partial before resolving a fresh source", async () => {
+  const { directory, data, downloads, state } = await setup();
+  const oldSource = await countingServer();
+  const newSource = await countingServer();
+  const oldPartial = path.join(downloads, "Film", "Film.mp4.part");
+  await mkdir(path.dirname(oldPartial), { recursive: true });
+  await writeFile(oldPartial, "stale");
+  const snapshot = travelSnapshot();
+  await writeFile(state, JSON.stringify([{
+    ...rawLazyJob(snapshot),
+    ownerUserId: "usr_00000015",
+    stream: { url: oldSource.url, addonKey: "queue-private-token", name: "Film.mp4", behaviorHints: { filename: "Film.mp4" } },
+    target: `${LIBRARY_ID}/Film/Film.mp4`,
+    targetSettings: defaultDownloadSettings().movie,
+    libraryId: LIBRARY_ID,
+  }], null, 2));
+
+  let legacyResolutions = 0;
+  const queue = openQueue(data, downloads);
+  queue.setResolver(async () => {
+    legacyResolutions += 1;
+    return undefined;
+  });
+  queue.setTravelResolver(async (input) => {
+    assert.equal(input.cursor, undefined);
+    assert.deepEqual(input.source.tried, []);
+    return selectedTravel(newSource.url);
+  });
+  try {
+    await queue.load();
+    await waitFor(queue, () => queue.get("job-source-admission")?.status === "completed");
+    assert.equal(oldSource.requests(), 0);
+    assert.equal(newSource.requests(), 1);
+    assert.equal(legacyResolutions, 0);
+    assert.equal(await readFile(oldPartial, "utf8").catch(() => undefined), undefined);
+    const stored = (await readJobs(state)).find((entry) => entry.id === "job-source-admission")!;
+    assert.equal((stored.stream as { url?: string }).url, newSource.url);
+    assert.equal(Object.hasOwn(stored, "travelCursor"), false);
+    assert.equal(stored.ownerUserId, "usr_00000015");
+    assert.deepEqual(stored.sourceAdmission, snapshot);
+  } finally {
+    await queue.stop();
+    oldSource.server.close();
+    newSource.server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a non-Travel snapshot remains fail-closed without a Travel resolver", async () => {
+  const { directory, data, downloads, state } = await setup();
+  const snapshot = structuredClone(travelSnapshot());
+  snapshot.profile.id = SOURCE_PROFILE_IDS.providerPriority;
+  await writeFile(state, JSON.stringify([{
+    ...rawLazyJob(snapshot),
+    ownerUserId: "usr_00000016",
+  }], null, 2));
+  let legacyResolutions = 0;
+  const queue = openQueue(data, downloads);
+  queue.setResolver(async () => {
+    legacyResolutions += 1;
+    return undefined;
+  });
+  try {
+    await queue.load();
+    await waitFor(queue, () => queue.get("job-source-admission")?.status === "failed");
+    assert.equal(queue.get("job-source-admission")?.errorKey, "err.noMatchingSource");
+    assert.equal(legacyResolutions, 0);
+  } finally {
+    await queue.stop();
     await rm(directory, { recursive: true, force: true });
   }
 });
