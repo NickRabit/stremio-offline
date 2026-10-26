@@ -935,6 +935,93 @@ test("revocation during final publication withdraws the Travel file", async () =
   }
 });
 
+test("a type flip during final publication withdraws video and subtitle and resumes in place", async () => {
+  const { directory, data, downloads } = await setup();
+  const { server, videoUrl, subtitleUrl } = await publicationServer();
+  const configured = library(downloads);
+  let type: LibraryRecord["type"] = "series";
+  const current = () => [{ ...configured, type }];
+  const renameEntered = deferred();
+  const releaseRename = deferred();
+  const queue = new DownloadQueue(() => 1, () => 1, data, downloads, {
+    libraries: current,
+    defaultLibrary: () => current()[0],
+    libraryState: async (libraryId) => current().find((library) => library.id === libraryId),
+    renamePublication: async (from, to) => {
+      renameEntered.release();
+      await releaseRename.promise;
+      await rename(from, to);
+    },
+  });
+  queue.setTravelResolver(async () => {
+    const selected = selectedTravel(videoUrl, "Show");
+    return {
+      ...selected,
+      subtitle: { addonKey: "queue-private-token", url: subtitleUrl, lang: "cs" },
+      resolution: {
+        ...selected.resolution,
+        subtitleLanguage: "cs",
+        subtitleSource: "addon",
+      },
+    };
+  });
+  await queue.load();
+  try {
+    const added = await queue.addPending(
+      "Show",
+      {
+        type: "series",
+        videoId: "tt-publication-library-type",
+        selection: selection("queue-private-token"),
+      },
+      { kind: "episode", title: "Show", season: 1, episode: 1 },
+      "usr_00000019",
+      undefined,
+      travelSnapshot(),
+    );
+    assert.ok(added);
+    await renameEntered.promise;
+    const target = queue.get(added.id)?.target;
+    assert.ok(target);
+    const published = path.join(downloads, target.slice(LIBRARY_ID.length + 1));
+    const publishedSubtitle = path.join(
+      path.dirname(published),
+      `${path.basename(published, path.extname(published))}.cs.vtt`,
+    );
+
+    type = "movie";
+    releaseRename.release();
+    await waitFor(queue, () => queue.get(added.id)?.status === "paused");
+    await waitFor(queue, async () => {
+      try {
+        await stat(published);
+        return false;
+      } catch {
+        try {
+          await stat(publishedSubtitle);
+          return false;
+        } catch {
+          return true;
+        }
+      }
+    });
+    assert.equal(queue.get(added.id)?.pauseReason, "library");
+    assert.equal(queue.get(added.id)?.target, target);
+
+    type = "series";
+    await queue.resume(added.id);
+    await waitFor(queue, () => queue.get(added.id)?.status === "completed");
+    assert.equal(queue.get(added.id)?.target, target, "the restored job kept its destination");
+    assert.ok((await stat(published)).isFile());
+    assert.ok((await stat(publishedSubtitle)).isFile());
+  } finally {
+    releaseRename.release();
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("an explicit retry of a Travel no-match resolves again under the Travel callback", async () => {
   const { directory, data, downloads } = await setup();
   const { server, url, requests } = await countingServer();

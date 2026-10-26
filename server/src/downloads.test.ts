@@ -39,6 +39,12 @@ const waitFor = async (queue: DownloadQueue, predicate: () => boolean, ms = 15_0
   throw new Error(`timeout: ${JSON.stringify(queue.snapshot())}`);
 };
 
+const deferred = () => {
+  let release!: () => void;
+  const promise = new Promise<void>((resolve) => { release = resolve; });
+  return { promise, release };
+};
+
 const LIBRARY_ID = "lib_d10ad10a";
 /** A queue refuses a download no library accepts, so every test queue has one library rooted
  *  at the download directory -- the shape a migrated install has. */
@@ -499,6 +505,122 @@ test("a mixed library takes both kinds", async () => {
   } finally {
     await queue.stop();
     server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a type change pauses a queued incompatible job while a compatible transfer continues", async () => {
+  const size = 4096;
+  const filmStarted = deferred();
+  const releaseFilm = deferred();
+  let episodeRequests = 0;
+  const { server, port } = await listen(async (req, res) => {
+    res.writeHead(200, { "content-length": String(size), "content-type": "video/mp4" });
+    if (req.url === "/film.mp4") {
+      res.write(Buffer.alloc(1, 1));
+      filmStarted.release();
+      await releaseFilm.promise;
+      res.end(Buffer.alloc(size - 1, 1));
+      return;
+    }
+    episodeRequests += 1;
+    res.end(Buffer.alloc(size, 2));
+  });
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
+  const downloads = path.join(directory, "downloads");
+  const configured = downloadLibrary(downloads);
+  let type: LibraryRecord["type"] = "mixed";
+  const current = () => [{ ...configured, type }];
+  const queue = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloads, {
+    libraries: current,
+    defaultLibrary: () => current()[0],
+    libraryState: async (libraryId) => current().find((library) => library.id === libraryId),
+  });
+  await queue.load();
+  try {
+    const film = await queue.add("Film", { url: `http://127.0.0.1:${port}/film.mp4` }, { kind: "movie", title: "Film" });
+    await filmStarted.promise;
+    const episode = await queue.add("Show", { url: `http://127.0.0.1:${port}/episode.mp4` }, { kind: "episode", title: "Show", season: 1, episode: 1 });
+    assert.equal(queue.get(film.id)?.status, "downloading");
+    assert.equal(queue.get(episode.id)?.status, "queued");
+
+    type = "movie";
+    assert.equal(await queue.pauseIncompatibleLibraryJobs(configured.id), 1);
+    assert.equal(queue.get(episode.id)?.status, "paused");
+    assert.equal(queue.get(episode.id)?.pauseReason, "library");
+    assert.equal(queue.get(film.id)?.status, "downloading", "the compatible transfer was not stopped");
+    assert.equal(episodeRequests, 0, "the incompatible job never started transferring");
+
+    const destination = queue.get(episode.id)!.target;
+    releaseFilm.release();
+    await waitFor(queue, () => queue.get(film.id)?.status === "completed");
+    type = "series";
+    await queue.resume(episode.id);
+    assert.equal(queue.get(episode.id)?.target, destination, "resuming keeps the chosen destination");
+    await waitFor(queue, () => queue.list().every((job) => job.status === "completed"));
+    assert.equal(episodeRequests, 1);
+    assert.equal((await stat(queuedFile(downloads, destination))).size, size);
+  } finally {
+    releaseFilm.release();
+    await queue.stop();
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a type change aborts an active transfer, then its restored library resumes in place", async () => {
+  const size = 4096;
+  const firstStarted = deferred();
+  const releaseFirst = deferred();
+  let requests = 0;
+  const { server, port } = await listen(async (_req, res) => {
+    requests += 1;
+    res.writeHead(200, { "content-length": String(size), "content-type": "video/mp4" });
+    if (requests === 1) {
+      res.write(Buffer.alloc(1, 3));
+      firstStarted.release();
+      await releaseFirst.promise;
+      res.end(Buffer.alloc(size - 1, 3));
+      return;
+    }
+    res.end(Buffer.alloc(size, 3));
+  });
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
+  const downloads = path.join(directory, "downloads");
+  const configured = downloadLibrary(downloads);
+  let type: LibraryRecord["type"] = "mixed";
+  const current = () => [{ ...configured, type }];
+  const queue = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloads, {
+    libraries: current,
+    defaultLibrary: () => current()[0],
+    libraryState: async (libraryId) => current().find((library) => library.id === libraryId),
+  });
+  await queue.load();
+  try {
+    const episode = await queue.add("Show", { url: `http://127.0.0.1:${port}/episode.mp4` }, { kind: "episode", title: "Show", season: 1, episode: 1 });
+    await firstStarted.promise;
+    assert.equal(queue.get(episode.id)?.status, "downloading");
+
+    type = "movie";
+    assert.equal(await queue.pauseIncompatibleLibraryJobs(configured.id), 1);
+    assert.equal(queue.get(episode.id)?.status, "paused");
+    assert.equal(queue.get(episode.id)?.pauseReason, "library");
+    assert.equal(queue.transferring(), false, "the callback waited for the aborted transfer to stop");
+
+    const destination = queue.get(episode.id)!.target;
+    type = "series";
+    releaseFirst.release();
+    await queue.resume(episode.id);
+    await waitFor(queue, () => queue.get(episode.id)?.status === "completed");
+    assert.equal(queue.get(episode.id)?.target, destination);
+    assert.equal(requests, 2);
+    assert.equal((await stat(queuedFile(downloads, destination))).size, size);
+  } finally {
+    releaseFirst.release();
+    await queue.stop();
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
     await rm(directory, { recursive: true, force: true });
   }
 });

@@ -189,6 +189,19 @@ export const jobLibraryId = (job: Pick<DownloadJob, "libraryId" | "target" | "ta
   job.libraryId ?? (job.target ? parseLibraryPath(job.target)?.libraryId : undefined)
     ?? job.targetSettings?.libraryId ?? job.source?.selection?.targetSettings.libraryId;
 
+const knownKindOf = (
+  job: Pick<DownloadJob, "media" | "source">,
+): "movie" | "series" | undefined => {
+  if (job.media?.kind === "episode") return "series";
+  if (job.media?.kind === "movie") return "movie";
+  if (job.source?.type === "series") return "series";
+  if (job.source?.type === "movie") return "movie";
+  return undefined;
+};
+
+const libraryAcceptsKind = (library: LibraryRecord, kind: "movie" | "series"): boolean =>
+  library.type === "mixed" || library.type === kind;
+
 /** The library a rule that names no library lands in. The door, a follow's automatic rule and
  *  the queue all resolve it through this one function, so all three name the same library:
  *  the default for the kind, with read-only libraries left out because a download is never
@@ -200,11 +213,11 @@ export const defaultDownloadLibrary = (libraries: LibraryRecord[], settings: Def
  * The owner-bound check, answered from the current state every time it is asked because a
  * queued job outlives the request that queued it: the account must still exist and may queue,
  * the source addon must be allowed to it and enabled, and the target library must be visible
- * to it, enabled and writable. A part whose subject is not chosen yet is left to the moment it
- * is known -- a lazy job has no source until the resolver picks one, and a library that has
- * been removed is waited for -- so the check is asked again once they are.
+ * to it, enabled, writable and accepting the job's kind. A part whose subject is not chosen yet
+ * is left to the moment it is known -- a lazy job has no source until the resolver picks one,
+ * and a library that has been removed is waited for -- so the check is asked again once they are.
  */
-export function ownerMayDownload(scope: DownloadOwnerScope, job: { stream?: StreamItem; subtitle?: SubtitleItem; remoteDownload?: RemoteDownloadReference; libraryId?: string; target?: string; targetSettings?: DownloadTargetSettings; source?: DownloadJob["source"] }): boolean {
+export function ownerMayDownload(scope: DownloadOwnerScope, job: { stream?: StreamItem; subtitle?: SubtitleItem; remoteDownload?: RemoteDownloadReference; media?: MediaInfo; libraryId?: string; target?: string; targetSettings?: DownloadTargetSettings; source?: DownloadJob["source"] }): boolean {
   const owner = scope.owner;
   if (!owner || owner.disabled || !mayDownloadToLibrary(owner)) return false;
   // A raw sealed address is never a queued source: a remote copy is identified by its own
@@ -231,6 +244,8 @@ export function ownerMayDownload(scope: DownloadOwnerScope, job: { stream?: Stre
   const library = libraryId ? scope.libraries.find((item) => item.id === libraryId) : undefined;
   if (job.remoteDownload && !library) return false;
   if (library && (!libraryVisible(library, viewer) || !library.enabled || Boolean(library.readOnly))) return false;
+  const kind = knownKindOf({ media: job.media, source: job.source });
+  if (library && kind && !libraryAcceptsKind(library, kind)) return false;
   return true;
 }
 
@@ -429,7 +444,15 @@ class PublicationWithdrawalError extends Error {
   }
 }
 
-type PublicationGate = "allowed" | "permission" | "stopped";
+type PublicationGate =
+  | { status: "allowed" }
+  | { status: "permission" }
+  | { status: "stopped" }
+  | { status: "library"; error: LibraryUnavailableError };
+
+type OwnerRefusal =
+  | { reason: "permission" }
+  | { reason: "library"; error: LibraryUnavailableError };
 
 export async function volumeSpace(target: string) {
   try {
@@ -445,6 +468,8 @@ export class DownloadQueue {
   private active = new Map<string, AbortController>();
   /** The transfers still in flight, so stop() can wait for their last state write. */
   private running = new Set<Promise<void>>();
+  /** The transfer for each job, so a targeted pause can wait for exactly the work it aborts. */
+  private runningById = new Map<string, Promise<void>>();
   private stopped = false;
   private pauseRequested = new Set<string>();
   private pumpScheduled = false;
@@ -739,15 +764,18 @@ export class DownloadQueue {
    *  because a library that never comes back must not strand a queue for ever. */
   private async resolveLibrary(kind: "movie" | "series", settings: DownloadTargetSettings) {
     const wanted = settings.libraryId;
-    if (!wanted) return this.defaultLibrary(kind);
+    if (!wanted) {
+      const fallback = this.defaultLibrary(kind);
+      return fallback && libraryAcceptsKind(fallback, kind) ? fallback : undefined;
+    }
     const named = (await this.libraryState?.(wanted)) ?? this.libraries().find((library) => library.id === wanted);
     if (!named) throw new LibraryUnavailableError(wanted, true);
-    if (!libraryUsable(named)) throw new LibraryUnavailableError(named.id);
+    if (!libraryUsable(named) || !libraryAcceptsKind(named, kind)) throw new LibraryUnavailableError(named.id);
     return named;
   }
 
   private kindOf(job: DownloadJob): "movie" | "series" {
-    return job.media?.kind === "episode" ? "series" : "movie";
+    return knownKindOf(job) ?? "movie";
   }
 
   /** The file name is chosen when the download can actually start, so a name picked while a
@@ -774,12 +802,31 @@ export class DownloadQueue {
     this.watchLibraries();
   }
 
+  private async currentLibrary(libraryId: string): Promise<LibraryRecord | undefined> {
+    return (await this.libraryState?.(libraryId)) ?? this.libraries().find((library) => library.id === libraryId);
+  }
+
+  private async libraryKindRefusal(job: DownloadJob): Promise<LibraryUnavailableError | undefined> {
+    const libraryId = jobLibraryId(job);
+    if (!libraryId) return undefined;
+    const library = await this.currentLibrary(libraryId);
+    if (!library || libraryAcceptsKind(library, this.kindOf(job))) return undefined;
+    return new LibraryUnavailableError(library.id);
+  }
+
   /** The owner-bound check as the queue asks it: the answer comes from the account, the
    *  addons and the libraries as they are now, never from the request that queued the job.
    *  A refusal pauses the job rather than failing it, because the work is not wrong and the
    *  queue position is worth keeping for when the permission comes back. */
-  private async ownerRefused(job: DownloadJob): Promise<boolean> {
-    return this.ownerAllowed ? !await this.ownerAllowed(job) : false;
+  private async ownerRefusal(job: DownloadJob): Promise<OwnerRefusal | undefined> {
+    const libraryRefusal = await this.libraryKindRefusal(job);
+    if (libraryRefusal) return { reason: "library", error: libraryRefusal };
+    return this.ownerAllowed && !await this.ownerAllowed(job) ? { reason: "permission" } : undefined;
+  }
+
+  private pauseForRefusal(job: DownloadJob, refusal: OwnerRefusal) {
+    if (refusal.reason === "library") this.pauseForLibrary(job, refusal.error);
+    else this.pauseForPermission(job);
   }
 
   private clearLazyChoice(job: DownloadJob) {
@@ -841,14 +888,14 @@ export class DownloadQueue {
     let woke = false;
     for (const job of waiting) {
       const waited = job.libraryId!;
-      const named = (await this.libraryState?.(waited)) ?? this.libraries().find((item) => item.id === waited);
-      if (named && !libraryUsable(named)) continue;
+      const kind = this.kindOf(job);
+      const named = await this.currentLibrary(waited);
+      if (named && (!libraryUsable(named) || !libraryAcceptsKind(named, kind))) continue;
       // A library whose record is gone gets a deadline: the folder keeps its identity, so a
       // re-add brings this same library back and the job continues there. Past the deadline
       // nothing is coming, and a queue that waits for ever is not honest either.
       const expired = !named && job.libraryGone && this.now() - Date.parse(job.pausedAt ?? "") >= this.libraryWaitMs;
       if (!named && !expired) continue;
-      const kind = this.kindOf(job);
       // A library the user picked is never swapped for the default: once the deadline for a
       // removed one passes, the job fails where it is instead of landing somewhere unasked for.
       if (!named && (job.targetSettings?.explicit || job.remoteDownload)) {
@@ -864,7 +911,8 @@ export class DownloadQueue {
         woke = true;
         continue;
       }
-      const library = named ?? this.defaultLibrary(kind);
+      const fallback = named ?? this.defaultLibrary(kind);
+      const library = fallback && libraryAcceptsKind(fallback, kind) ? fallback : undefined;
       // The deadline passed and no library takes this kind either: the job has nowhere to go,
       // so it fails instead of landing in the download directory. The rest of the queue carries on.
       if (!library) {
@@ -1185,6 +1233,29 @@ export class DownloadQueue {
     return hit.length;
   }
 
+  /** Pauses queued and running jobs whose kind the library no longer accepts. The current
+   *  library record decides, and compatible jobs keep their place and continue. */
+  async pauseIncompatibleLibraryJobs(libraryId: string): Promise<number> {
+    const library = await this.currentLibrary(libraryId);
+    if (!library || library.type === "mixed") return 0;
+    const incompatible = library.type === "movie" ? "series" : "movie";
+    const running: DownloadStatus[] = ["queued", "waiting", "checking", "downloading"];
+    const hit = this.jobs.filter((job) => running.includes(job.status)
+      && jobLibraryId(job) === library.id
+      && this.kindOf(job) === incompatible);
+    for (const job of hit) {
+      this.clearDebrid(job.id);
+      if (this.active.has(job.id)) this.pauseRequested.add(job.id);
+      this.pauseForLibrary(job, new LibraryUnavailableError(library.id));
+      this.active.get(job.id)?.abort();
+    }
+    if (!hit.length) return 0;
+    await this.save();
+    this.pump();
+    await Promise.all(hit.map((job) => this.runningById.get(job.id)).filter((run): run is Promise<void> => run !== undefined));
+    return hit.length;
+  }
+
   /** Drops every unfinished job the predicate names, its partial file with it. What is
    *  completed stays: it is in the library and belongs to nobody's access any more. */
   async removeMatching(match: (job: DownloadJob) => boolean): Promise<number> {
@@ -1206,8 +1277,9 @@ export class DownloadQueue {
     if (!(["paused", "failed"] as DownloadStatus[]).includes(job.status)) throw new AppError("This item cannot be resumed.", "err.cannotResume");
     // Read again here rather than trusted from when the job was paused: the right may have
     // gone while it waited, and the answer is what decides.
-    if (await this.ownerRefused(job)) {
-      this.pauseForPermission(job);
+    const refusal = await this.ownerRefusal(job);
+    if (refusal) {
+      this.pauseForRefusal(job, refusal);
       await this.save();
       return;
     }
@@ -1215,8 +1287,10 @@ export class DownloadQueue {
     const storageRoot = this.locate(job)?.root;
     if (job.sourceAdmission && job.stream) await this.discardProfileSelection(job, job.status === "failed");
     if (job.pauseReason === "library" && pausedLibraryId) {
-      const library = (await this.libraryState?.(pausedLibraryId)) ?? this.libraries().find((item) => item.id === pausedLibraryId);
-      if (!library || !libraryUsable(library)) throw new AppError("The library this download goes to is not available right now.", "err.libraryNotWritable");
+      const library = await this.currentLibrary(pausedLibraryId);
+      if (!library || !libraryUsable(library) || !libraryAcceptsKind(library, this.kindOf(job))) {
+        throw new AppError("The library this download goes to is not available right now.", "err.libraryNotWritable");
+      }
       await this.ensureTarget(job, library);
     } else if (!job.target && job.stream) {
       // A direct job that failed before it had anywhere to go, because no library took its kind.
@@ -1323,10 +1397,11 @@ export class DownloadQueue {
 
   private async debridMayContinue(job: DownloadJob): Promise<boolean> {
     if (!this.jobs.includes(job) || job.status !== "waiting") return false;
-    if (!await this.ownerRefused(job)) return this.jobs.includes(job) && job.status === "waiting";
+    const refusal = await this.ownerRefusal(job);
+    if (!refusal) return this.jobs.includes(job) && job.status === "waiting";
     this.clearDebrid(job.id);
     if (this.jobs.includes(job) && job.status === "waiting") {
-      this.pauseForPermission(job);
+      this.pauseForRefusal(job, refusal);
       await this.save();
     }
     return false;
@@ -1676,7 +1751,12 @@ export class DownloadQueue {
         const key = this.provider(job); taken.set(key, (taken.get(key) ?? 0) + 1);
         const run = this.download(job);
         this.running.add(run);
-        void run.then(() => this.running.delete(run), () => this.running.delete(run));
+        this.runningById.set(job.id, run);
+        const done = () => {
+          this.running.delete(run);
+          if (this.runningById.get(job.id) === run) this.runningById.delete(job.id);
+        };
+        void run.then(done, done);
       }
       const waiting = this.jobs.filter((item) => item.status === "queued" && !this.active.has(item.id) && (item.notBefore ?? 0) > now);
       if (waiting.length) {
@@ -1800,11 +1880,11 @@ export class DownloadQueue {
       throw error;
     }
 
-    const refused = await this.ownerRefused(staged);
+    const refused = await this.ownerRefusal(staged);
     controller.signal.throwIfAborted();
     if (refused) {
       if (staged.target) this.targetsInFlight.delete(staged.target);
-      this.pauseForPermission(job);
+      this.pauseForRefusal(job, refused);
       return false;
     }
 
@@ -1853,10 +1933,10 @@ export class DownloadQueue {
     }
     if (job.target) this.targetsInFlight.delete(job.target);
 
-    const refusedAfterSave = await this.ownerRefused(job);
+    const refusedAfterSave = await this.ownerRefusal(job);
     if (controller.signal.aborted || refusedAfterSave) {
       await this.discardProfileSelection(job, false);
-      if (refusedAfterSave) this.pauseForPermission(job);
+      if (refusedAfterSave) this.pauseForRefusal(job, refusedAfterSave);
       await this.save();
       return false;
     }
@@ -1884,10 +1964,10 @@ export class DownloadQueue {
     // it into a Real-Debrid wait. Only a stream with neither -- or none at all -- means nothing
     // was found.
     if (!resolved?.stream || (!resolved.stream.url && !resolved.stream.infoHash)) {
-      const refused = await this.ownerRefused(job);
+      const refused = await this.ownerRefusal(job);
       controller.signal.throwIfAborted();
       if (refused) {
-        this.pauseForPermission(job);
+        this.pauseForRefusal(job, refused);
         return false;
       }
       const selection = job.source.selection;
@@ -1925,11 +2005,11 @@ export class DownloadQueue {
       if (staged.target) this.targetsInFlight.delete(staged.target);
       throw error;
     }
-    const refused = await this.ownerRefused(staged);
+    const refused = await this.ownerRefusal(staged);
     controller.signal.throwIfAborted();
     if (refused) {
       if (staged.target) this.targetsInFlight.delete(staged.target);
-      this.pauseForPermission(job);
+      this.pauseForRefusal(job, refused);
       return false;
     }
     job.stream = staged.stream;
@@ -1940,10 +2020,10 @@ export class DownloadQueue {
     job.libraryId = library.id;
     if (job.target) this.targetsInFlight.delete(job.target);
     await this.save();
-    const refusedAfterSave = await this.ownerRefused(job);
+    const refusedAfterSave = await this.ownerRefusal(job);
     if (controller.signal.aborted || refusedAfterSave) {
       this.clearLazyChoice(job);
-      if (refusedAfterSave) this.pauseForPermission(job);
+      if (refusedAfterSave) this.pauseForRefusal(job, refusedAfterSave);
       await this.save();
       return false;
     }
@@ -2032,10 +2112,16 @@ export class DownloadQueue {
   }
 
   private async publicationGate(job: DownloadJob, signal: AbortSignal): Promise<PublicationGate> {
-    if (!isTravelSnapshot(job.sourceAdmission)) return "allowed";
-    if (!this.publicationLive(job, signal)) return "stopped";
-    if (await this.ownerRefused(job)) return "permission";
-    return this.publicationLive(job, signal) ? "allowed" : "stopped";
+    if (!this.publicationLive(job, signal)) return { status: "stopped" };
+    const libraryRefusal = await this.libraryKindRefusal(job);
+    if (!this.publicationLive(job, signal)) return { status: "stopped" };
+    if (libraryRefusal) return { status: "library", error: libraryRefusal };
+    if (!isTravelSnapshot(job.sourceAdmission)) return { status: "allowed" };
+    const refusal = await this.ownerRefusal(job);
+    if (!this.publicationLive(job, signal)) return { status: "stopped" };
+    if (refusal?.reason === "library") return { status: "library", error: refusal.error };
+    if (refusal) return { status: "permission" };
+    return { status: "allowed" };
   }
 
   private failPublicationWithdrawal(job: DownloadJob) {
@@ -2093,9 +2179,10 @@ export class DownloadQueue {
     let subtitlePublished = false;
     const continuePublication = async (): Promise<boolean> => {
       const gate = await this.publicationGate(job, signal);
-      if (gate === "allowed") return true;
+      if (gate.status === "allowed") return true;
       await this.withdrawPublication(reserved, subtitleTarget, videoPublished, subtitlePublished);
-      if (gate === "permission" && this.publicationLive(job, signal)) this.pauseForPermission(job);
+      if (gate.status === "library" && this.publicationLive(job, signal)) this.pauseForLibrary(job, gate.error);
+      if (gate.status === "permission" && this.publicationLive(job, signal)) this.pauseForPermission(job);
       return false;
     };
     if (!await continuePublication()) return false;
@@ -2354,17 +2441,17 @@ export class DownloadQueue {
       if (job.sourceAdmission && job.stream) {
         throw new SourceAdmissionRuntimeUnavailable();
       }
+      // The owner is read afresh before any work: the right to queue may be gone since the
+      // job was added, and nothing about the request that added it can speak for it now.
+      const refused = await this.ownerRefusal(job);
+      controller.signal.throwIfAborted();
+      if (refused) {
+        this.pauseForRefusal(job, refused);
+        return;
+      }
       // A remote copy has no session to fall back on: the durable reference is re-checked
       // against the live records before a single byte, and a refusal pauses rather than fails.
       if (job.remoteDownload && this.remoteRefused(job)) {
-        this.pauseForPermission(job);
-        return;
-      }
-      // The owner is read afresh before any work: the right to queue may be gone since the
-      // job was added, and nothing about the request that added it can speak for it now.
-      const refused = await this.ownerRefused(job);
-      controller.signal.throwIfAborted();
-      if (refused) {
         this.pauseForPermission(job);
         return;
       }
@@ -2373,10 +2460,10 @@ export class DownloadQueue {
         if (controller.signal.aborted) throw new Error("The download was stopped.");
         // The lazy resolve is where this matters most: the enqueue validated a selection, not
         // the addon the resolver eventually picks, and the owner may have lost that one.
-        const refused = await this.ownerRefused(job);
+        const refused = await this.ownerRefusal(job);
         controller.signal.throwIfAborted();
         if (refused) {
-          this.pauseForPermission(job);
+          this.pauseForRefusal(job, refused);
           return;
         }
       }
@@ -2533,10 +2620,10 @@ export class DownloadQueue {
       if (!expected || job.received !== expected) throw new IncompleteDownloadError(job.received, expected);
       if (job.remoteDownload && this.remoteRefused(job)) throw new RemotePermissionLost();
       if (job.sourceAdmission) {
-        const refusedAtCommit = await this.ownerRefused(job);
+        const refusedAtCommit = await this.ownerRefusal(job);
         controller.signal.throwIfAborted();
         if (refusedAtCommit) {
-          this.pauseForPermission(job);
+          this.pauseForRefusal(job, refusedAtCommit);
           return;
         }
       }
@@ -2571,6 +2658,11 @@ export class DownloadQueue {
         job.status = "failed";
         this.setError(job, error.message, error.messageKey);
         log("ERROR", "Download failed", { id: job.id, title: job.title, reason: error.message });
+        return;
+      }
+      const libraryRefusal = await this.libraryKindRefusal(job);
+      if (libraryRefusal) {
+        this.pauseForLibrary(job, libraryRefusal);
         return;
       }
       // A remote copy whose owner, grant or target went away mid-transfer pauses with its
