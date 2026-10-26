@@ -38,6 +38,11 @@ import { readMediaBytes } from "./media-playlist.js";
 import { preserveDamaged, readStateFile } from "./state-file.js";
 import { subtitleVtt } from "./subtitle-text.js";
 import type { DownloadSnapshot, DownloadStatus, PauseReason, PublicDownload, QueueHalt } from "./api-types.js";
+import {
+  parseSourceAdmissionSnapshotV1,
+  SourceAdmissionValidationError,
+  type SourceAdmissionSnapshotV1,
+} from "./source-admission.js";
 
 export type { DownloadStatus, PauseReason, QueueHalt };
 export type SubtitleMode = "off" | "optional" | "required";
@@ -80,6 +85,7 @@ export interface DownloadJob {
    *  the administrator the state migrated into. */
   ownerUserId?: string;
   source?: { type: string; videoId: string; tried: string[]; selection?: DownloadSelection };
+  sourceAdmission?: SourceAdmissionSnapshotV1;
   /** Present when a followed series queued the job, so the follow can be reconciled
    *  with the queue across restarts. */
   follow?: { followId: string; episodeKey: string; intent: string };
@@ -295,6 +301,24 @@ export interface QueueHooks {
 const exists = async (file: string) => { try { await stat(file); return true; } catch { return false; } };
 const MiB = 1024 ** 2;
 
+const SOURCE_ADMISSION_RUNTIME_UNAVAILABLE = {
+  message: "The admitted source profile cannot run in the legacy download runtime.",
+  key: "err.noMatchingSource",
+};
+
+class SourceAdmissionRuntimeUnavailable extends SourceError {
+  constructor() {
+    super(SOURCE_ADMISSION_RUNTIME_UNAVAILABLE.message, SOURCE_ADMISSION_RUNTIME_UNAVAILABLE.key);
+    this.name = "SourceAdmissionRuntimeUnavailable";
+  }
+}
+
+const parseDownloadSourceAdmission = (input: unknown): SourceAdmissionSnapshotV1 => {
+  const snapshot = parseSourceAdmissionSnapshotV1(input);
+  if (snapshot.operation !== "downloadToLibrary") throw new SourceAdmissionValidationError();
+  return snapshot;
+};
+
 /** What a job paused on a missing permission carries: the interface translates the key, and
  *  the English text is the fallback for a client that does not know it. */
 const PERMISSION_PAUSE = {
@@ -509,7 +533,27 @@ export class DownloadQueue {
         isList = Array.isArray(parsed);
       } catch { isList = false; }
       if (isList) {
+        const canonicalSnapshots: Array<{ index: number; snapshot: SourceAdmissionSnapshotV1 }> = [];
+        try {
+          for (const [index, rawJob] of (parsed as unknown[]).entries()) {
+            if (rawJob === null || typeof rawJob !== "object" || !Object.hasOwn(rawJob, "sourceAdmission")) continue;
+            canonicalSnapshots.push({
+              index,
+              snapshot: parseDownloadSourceAdmission((rawJob as { sourceAdmission: unknown }).sourceAdmission),
+            });
+          }
+        } catch (error) {
+          this.unreadable = true;
+          log("ERROR", "The queue contains an invalid source admission snapshot", {
+            file: this.stateFile,
+            reason: error instanceof SourceAdmissionValidationError
+              ? "invalid source admission snapshot"
+              : "source admission snapshot could not be validated",
+          });
+          return;
+        }
         this.jobs = parsed as DownloadJob[];
+        for (const { index, snapshot } of canonicalSnapshots) this.jobs[index]!.sourceAdmission = snapshot;
       } else {
         try {
           const preserved = await preserveDamaged(this.stateFile, state.raw);
@@ -558,6 +602,9 @@ export class DownloadQueue {
     if (refused.length) {
       this.jobs = this.jobs.filter((job) => !refused.includes(job));
       log("WARN", "Remote downloads that could not be re-proved were refused", { count: refused.length, ids: refused.map((job) => job.id) });
+    }
+    for (const job of this.jobs) {
+      if (job.sourceAdmission && job.stream) this.failSourceAdmission(job);
     }
     if (this.jobs.some((job) => job.status === "paused" && job.pauseReason === "storage")) {
       this.halt = { reason: "storage", at: new Date().toISOString(), message: "No space left on the disk.", messageKey: "err.noSpace" };
@@ -904,15 +951,39 @@ export class DownloadQueue {
   }
 
   /** A lazy job: both target and source are filled in when the download starts. A duplicate episode is not added. */
-  async addPending(title: string, source: { type: string; videoId: string; selection?: DownloadSelection }, media?: MediaInfo, ownerUserId?: string, follow?: DownloadJob["follow"]) {
+  async addPending(
+    title: string,
+    source: { type: string; videoId: string; selection?: DownloadSelection },
+    media?: MediaInfo,
+    ownerUserId?: string,
+    follow?: DownloadJob["follow"],
+    sourceAdmissionInput?: unknown,
+  ) {
     if (this.unreadable) throw new AppError("The download queue file could not be read.", "err.queueUnreadable", 503);
+    const sourceAdmission = sourceAdmissionInput === undefined
+      ? undefined
+      : parseDownloadSourceAdmission(sourceAdmissionInput);
     // A remote library id is not a local target: it cannot be smuggled in as the pinned library.
     const pinned = source.selection?.targetSettings?.libraryId;
     if (pinned !== undefined && REMOTE_LIBRARY_ID.test(pinned)) throw remoteDownloadRefused();
     return this.admit(async () => {
       if (this.jobs.some((job) => job.source?.videoId === source.videoId && job.source?.type === source.type && job.status !== "completed" && job.status !== "failed" && this.ownedBy(job, ownerUserId))) return undefined;
       const now = new Date().toISOString();
-      const job: DownloadJob = { id: crypto.randomUUID(), ownerUserId, title, media, source: { ...source, tried: [] }, ...(follow ? { follow } : {}), status: "queued", target: "", received: 0, speed: 0, createdAt: now, updatedAt: now };
+      const job: DownloadJob = {
+        id: crypto.randomUUID(),
+        ownerUserId,
+        title,
+        media,
+        source: { ...source, tried: [] },
+        ...(follow ? { follow } : {}),
+        ...(sourceAdmission === undefined ? {} : { sourceAdmission }),
+        status: "queued",
+        target: "",
+        received: 0,
+        speed: 0,
+        createdAt: now,
+        updatedAt: now,
+      };
       await this.admitJob(job);
       this.pump();
       return this.publicJob(job);
@@ -1069,12 +1140,12 @@ export class DownloadQueue {
   async retry(id: string, selection?: DownloadSelection) {
     const job = this.require(id);
     if (job.status !== "failed") throw new AppError("Only a failed download can be retried.", "err.retryOnlyFailed");
-    const pinned = selection?.targetSettings?.libraryId;
+    const pinned = job.sourceAdmission === undefined ? selection?.targetSettings?.libraryId : undefined;
     if (pinned !== undefined && REMOTE_LIBRARY_ID.test(pinned)) throw remoteDownloadRefused();
     job.retryCount = 0;
     job.notBefore = undefined;
     if (job.source) {
-      if (selection && !job.stream) job.source.selection = selection;
+      if (selection && !job.stream && job.sourceAdmission === undefined) job.source.selection = selection;
       job.source.tried = [];
       if (!job.stream) { job.target = ""; job.received = 0; job.total = undefined; }
     }
@@ -1264,10 +1335,20 @@ export class DownloadQueue {
     job.error = message; job.errorKey = key; job.errorVars = vars;
   }
 
+  private failSourceAdmission(job: DownloadJob) {
+    job.status = "failed";
+    job.speed = 0;
+    this.setError(job, SOURCE_ADMISSION_RUNTIME_UNAVAILABLE.message, SOURCE_ADMISSION_RUNTIME_UNAVAILABLE.key);
+    job.updatedAt = new Date(this.now()).toISOString();
+  }
+
   private require(id: string) { const job = this.jobs.find((item) => item.id === id); if (!job) throw new AppError("The item was not found.", "err.itemNotFound"); return job; }
   /** Source addresses (often carrying tokens) must not reach the interface; only the lazy flag goes out. */
   private publicJob(job: DownloadJob): Omit<PublicDownload, "order"> {
-    const { stream, source, subtitle: _subtitle, remoteDownload: _remoteDownload, notBefore: _notBefore, debrid, segments, ...rest } = job;
+    const {
+      stream, source, subtitle: _subtitle, remoteDownload: _remoteDownload, notBefore: _notBefore,
+      debrid, segments, sourceAdmission: _sourceAdmission, ...rest
+    } = job;
     return { ...rest, ownerUserId: this.ownerOf(job), pending: !stream && Boolean(source), debridProgress: debrid?.progress, segments: segments?.length };
   }
   /** Saves have to run one after another: concurrent writes share one .tmp and the second
@@ -1469,6 +1550,9 @@ export class DownloadQueue {
    *  so adding a whole season in bulk does not set off an avalanche of requests at once. */
   private async resolve(job: DownloadJob, controller: AbortController): Promise<boolean> {
     if (!job.source) throw new SourceError("The job has neither a source nor a rule for finding one.");
+    if (job.sourceAdmission) {
+      throw new SourceAdmissionRuntimeUnavailable();
+    }
     if (!this.resolver) throw new SourceError("Source selection is unavailable.");
     const startedAt = this.now();
     const resolved = await this.resolver(job.source, this.ownerOf(job), controller.signal);
@@ -1863,6 +1947,9 @@ export class DownloadQueue {
     let stalled = false;
     let remoteStopped = false;
     try {
+      if (job.sourceAdmission && job.stream) {
+        throw new SourceAdmissionRuntimeUnavailable();
+      }
       // A remote copy has no session to fall back on: the durable reference is re-checked
       // against the live records before a single byte, and a refusal pauses rather than fails.
       if (job.remoteDownload && this.remoteRefused(job)) {
@@ -2041,6 +2128,11 @@ export class DownloadQueue {
       if (job.remoteDownload && this.remoteRefused(job)) throw new RemotePermissionLost();
       await this.commit(job, partial, target);
     } catch (error) {
+      if (error instanceof SourceAdmissionRuntimeUnavailable) {
+        this.failSourceAdmission(job);
+        log("ERROR", "Download failed", { id: job.id, reason: SOURCE_ADMISSION_RUNTIME_UNAVAILABLE.message });
+        return;
+      }
       job.speed = 0;
       const nativeDenied = isMediaServerError(error) && (error.code === "forbidden" || error.code === "unsupported-policy");
       if (isMediaServerError(error) && typeof error.status === "number") error = new HttpSourceError(error.status, error.message, error.retryAfterMs);

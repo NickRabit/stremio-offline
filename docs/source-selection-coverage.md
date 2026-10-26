@@ -105,7 +105,7 @@ logged. The second provider has manifest ID `e2e.secondary.source` and a distinc
 | Bulk versus follow default strategy | The two clients/dialogs own their defaults; there is no route-level assertion for both defaults. | Uncovered | First slice / Stage 4 |
 | Strict `SourcePolicyV1` contract | `source-policy.test.ts` proves exact v1 parsing, bounds, provider limits, criteria order, language alias normalization and rejection of nested unknown/prototype-bearing input. | Parser contract | Profile storage, admission and local-copy execution remain open |
 | Fixed profile catalogue read | `source-profiles.test.ts` and `routes/source-profiles.test.ts` cover the immutable definitions, current-grant operation projection and authorized read contract. | Read contract | Selected-scope projection, submission, storage and local-copy enforcement remain open |
-| Immutable admission snapshot contract | `source-admission.test.ts` covers exact profile references, current provider authorization/order, selected scope, materialized languages and provider order, Travel constraints, strict historical reads, revocation and secret-free deep copies. | Pure contract | Route submission, queue persistence/execution, follow admission and local-copy enforcement remain open; profile submission is not enabled |
+| Immutable admission snapshot contract | `source-admission.test.ts` covers exact profile references, current provider authorization/order, selected scope, materialized languages and provider order, Travel constraints, strict historical reads, revocation and secret-free deep copies. `source-admission-queue.test.ts` covers detached job-only persistence, restart and retry preservation, public redaction, fail-closed restored streams and malformed-load recovery. | Pure contract and durable job storage | Route submission, Follow intent or cursor storage, profile runtime/execution and local-copy enforcement remain open; profile submission is not enabled |
 | Hard policy evidence and deterministic ranking | `source-evidence.test.ts` covers authoritative numeric filtering, unknown and inspected facts, sample and duration rejection, audio modes and evidence tiers, required subtitles, existing local-copy policies, criterion order, frozen provider order, stable ties, local response order, unknown numeric ordering and secret-free reasons. | Pure evaluator contract | Profile submission, queue cutover, local/remote provider adapters, filesystem inspection and runtime enforcement remain open |
 | Addon stream evidence adapter | `source-addon-evidence.test.ts` covers direct HTTP and torrent identity, stable secret-free source IDs, listing-only language and size hints, inspected media facts, unavailable media and Travel ordering/evaluation. | Pure provider adapter contract | Runtime wiring, provider authorization, queue/submission integration and inspection orchestration remain open; legacy selection is unchanged |
 | Pure Travel verification and continuation | `source-travel.test.ts` covers the 15-probe attempt budget, size-ordered inspection, exact metadata exclusion, truthful post-inspection quality, temporary/access outcomes, cancellation, scope/config/listing resets and the bounded continuation cursor. | Pure attempt/continuation contract | Runtime queue retry/backoff, cursor storage, local/remote provider adapters and profile submission remain open; legacy resolution is unchanged |
@@ -137,6 +137,15 @@ only an already `checking` lazy job is matched conservatively for that deletion 
 legacy lookup without selected addon keys is also canceled on addon revocation. Provider
 identity is the stored key, manifest URL and manifest version; a content change that keeps all
 three identical remains indistinguishable.
+
+An internally materialized source admission snapshot can now be stored at the top level of a
+lazy download job. Loading validates and canonicalizes every stored snapshot before assigning
+jobs, writing normalized state or starting work; an invalid stored snapshot makes the queue
+unreadable without changing its file or falling back to legacy selection. Snapshot-bearing jobs
+are hidden from public job views and fail closed instead of using the legacy resolver, including
+after restart, retry and when a stream was preselected. No route creates such a job in this
+slice, no Follow intent or continuation cursor stores the snapshot, and the profile runtime is
+not enabled.
 
 ## Follow admission, retry and identity
 
