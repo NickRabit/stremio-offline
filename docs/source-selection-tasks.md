@@ -68,7 +68,7 @@ scope, active-source stability) must make its test fail; remove all mutations be
 | Access/cache | Two users and sessions, grant revoked during lookup/inspection/use, provider reconfigured under same key, disabled provider, empty vs error caching, generation change, session source handles never reused | L0 production routes/cache/transport, L2 accounts |
 | Remote originals | Canonical match, native download denied, connection replacement, forged reference rejected, probe/transfer quota, busy/cancel/shutdown releasing slots | L0 media-server source/quota/download tests with owned fixtures |
 | Exact-source saves | Selected version preserved without re-ranking, download-to-library vs device rights, no local self-download | L0 routes/downloads and L2 source chooser |
-| Provider identity | Settings export and import into an empty instance, exporting admin's personal preferences restored to importing admin, other users' preferences absent from backup, re-adding an addon, remote libraries re-attached by import, two addons with the same name, backup versions 1 to 3 still importing | L0 `backup` and settings route tests, media-server store tests |
+| Provider identity | Settings export and import into an empty instance, exporting admin's personal preferences restored to importing admin, other users' preferences absent from backup, re-adding an addon, remote libraries restored under new IDs but disabled without grants or credentials, two addons with the same name, backup versions 1 to 3 still importing | L0 `backup` and settings route tests, media-server store tests |
 
 Use a counting addon/remote fixture with controllable completion barriers, fake clocks and explicit
 abort observation. This is new test infrastructure: `e2e/fixtures/addon-server.mjs` returns static
@@ -150,21 +150,25 @@ requests local/pure; do not double live provider traffic for a shadow rollout.
   preference/order changes do not alter reserved, waiting or queued work.
 - Move settings backup to version 4 with opaque portable provider references and a separate
   protected admin mapping section; keep versions 1 to 3. Inspect raw persisted policies for secrets,
-  not only their public projections.
+  not only their public projections. Build an old-to-new remote connection/library ID map during
+  import; it is not returned by the current `prepareMediaServerConfiguration`. Imported remote
+  libraries remain disabled without grants or credentials until an admin reconnects them.
 
 Add tests **before implementation** for ordinary-user raw POST/PATCH/DELETE/duplicate attempts,
 restricted mode, spoofed owner, hidden providers, stale revisions, concurrent delete/edit,
 transaction failure/restart, last-profile replacement, import reference collisions and unknown
 schemas. Test editing/deleting a profile while jobs run; existing jobs and follow snapshots must
-keep their rules. Test explicit follow reconfiguration versus concurrent episode admission, plus waiting/reserved
-intents with no job: retries must recover the original admitted snapshot. Verify export includes
+keep their rules. Test explicit follow reconfiguration versus concurrent episode admission, plus
+waiting and reserved intents with no job: retries must recover the original admitted snapshot.
+Verify export includes
 only the acting admin's personal defaults, import assigns them to the importing admin, and profile
 ID collisions/removal remap or clear every existing user's affected default in the same transaction.
+Cover equal seeded IDs with differing revisions or definitions: retain the local definition,
+mint an ID for the imported one, remap live defaults and leave historical snapshots unchanged.
 Inspect raw JSON, errors and rendered labels after revocation for hidden provider keys/names/counts.
-Cover empty authorized
-profile scope, operation changes, a deletion rewriting every affected personal default in the same
-transaction, per-user legacy mode and settings import/restart without dangling defaults or
-rewriting historical snapshots.
+Cover empty authorized profile scope, operation changes, a deletion rewriting every affected
+personal default in the same transaction, per-user legacy mode and settings import/restart without
+dangling defaults or rewriting historical snapshots.
 
 **Gate:** API/serialization tests prove only admins mutate profiles, no cross-user leak, no orphaned
 default, no retroactive job mutation, no duplicate episode and no migration loss. Profiles are

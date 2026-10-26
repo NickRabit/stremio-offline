@@ -45,7 +45,7 @@ Baseline inspected: `cebf6fa6` on `main`. Recheck these seams on the implementat
 | Next episode | `App.tsx`: `playNextCatalogEpisode`, `playNextDetailEpisode`, `playLocal` | Three disjoint rules: an owned copy continues with the next file in its folder; an addon source picks from addon rows only (the next episode's owned copy is loaded but never chosen); a remote source stays on the same library and version name or stops |
 | Episode ownership | `downloads.ts`: `addPending`, `admitDirect` | Lazy episode jobs deduplicate only against active jobs and explicit saves only by source; nothing checks whether the episode already exists in a library, so a follow downloads it again under a `(2)` name |
 | Follow retries | `follows.ts`: `effectiveSelection`, `queue.retry` | Admission stores the grace-adjusted selection in the job; a reserved episode stores none; every retry recomputes the selection from the follow's current configuration and the current time |
-| Settings backup | `backup.ts`, `media-server-store.ts`, `routes/settings.ts` | Version 3 carries addon manifest URLs and the exporting admin's personal preferences, but no addon keys, other users' preferences or follows; import restores those preferences to the importing admin and mints new addon keys and remote library IDs where identity cannot be retained |
+| Settings backup | `backup.ts`, `media-server-store.ts`, `routes/settings.ts` | Version 3 carries addon manifest URLs and the exporting admin's personal preferences, but no addon keys, other users' preferences or follows; import restores those preferences to the importing admin. Remote configuration restore always mints new connection and library IDs and installs disabled libraries without grants or credentials |
 | Remote copy | `media-server-sources.ts`, `media-server-quota.ts`, `downloads.ts` | Exact-source durable references and guarded original transfers already exist |
 | TV | `catalog/Streams.kt`, `ui/catalog/NativeSources.kt`, `CatalogDetailScreen.kt`, `ui/player/LibraryPlaySources.kt` | Independent implementations, ranking port, inconsistent request deadlines: 8 seconds per addon on TV against 30 seconds on the web client and 60 on the server, so a slow addon appears on the web but not on TV |
 
@@ -68,8 +68,9 @@ Local-first is a template/compatibility choice, not an invariant of the acquisit
 Provider keys are installation-local. Addon keys are `randomUUID()` values, re-adding an addon
 mints a new one, and backup version 3 carries manifest URLs but no addon keys. Import into an
 existing instance preserves a key when manifest ID and URL both match (`routes/settings.ts`);
-empty-instance imports and remove/re-add cannot rely on that. Remote import also mints new library
-IDs (`prepareMediaServerConfiguration`). Do not promise that a key or addon-derived `stableKey`
+empty-instance imports and remove/re-add cannot rely on that. Remote import always mints new
+connection and library IDs (`prepareMediaServerConfiguration`), with disabled libraries, no grants
+and no restored credentials. Do not promise that a key or addon-derived `stableKey`
 survives these operations unchanged.
 
 Backup version 4 introduces an opaque portable provider reference and an admin-only provider
@@ -81,8 +82,12 @@ belong only to protected provider configuration and the explicit admin backup, n
 policy snapshots, normal reads, errors or logs. Public DTOs omit private mapping records entirely.
 Test raw persisted profile/follow/admission policies as well as public DTOs for token/URL leakage.
 
-Import uses that mapping and the media-server old-to-new ID map, never display names; ambiguous or
-unresolved references remain dormant and are reported safely. Backups 1 to 3 still import. The
+Version 4 import must build and expose an old-to-new remote connection/library ID map while
+installing the new disabled records; the current `prepareMediaServerConfiguration` keeps only a
+connection map internally and returns no mapping. Profile references use that map and the portable
+provider mapping, never display names. Imported remote references remain dormant until an admin
+restores credentials, grants and enabled state; ambiguous or unresolved references are reported
+safely. Backups 1 to 3 still import. The
 admin repair flow can explicitly rebind a portable reference after reinstall; nothing rebinds
 silently, changes historical job policy or preserves a revoked grant. An admitted job whose old
 binding is unusable requires revalidation/requeue under current permissions. Historical snapshots
@@ -284,13 +289,20 @@ diagnostic. Without one, keep the job/follow in a retryable waiting/attention st
 permanent no-source state. Existing scheduler backoff/attempt ceilings govern automatic retry; do
 not start another immediate batch to evade the budget. Remember rejected source evidence briefly
 under source/configuration identity and carry a bounded continuation cursor across scheduled retries.
+Use an info hash plus file index for torrent identity, or a provider-scoped filename, size and
+name when those are present. A URL-only row has no durable identity: continue by its provider
+response position and unchanged non-address facts, but do not persist its rejection as a reusable
+blacklist. Wrap and recheck such rows on later attempts. A changed signed URL alone must not reset
+the cursor; changed provider facts or scope must reset it. This positional fallback can delay a
+new row at the same position by one bounded pass, so it must never mark that row permanently tried.
 After 15 verified samples, the next scheduled attempt must reach later candidates rather than probe
 the same 15 again. Reset the cursor on changed provider facts/configuration; explicit retry bypasses
 cached failures but may keep the cursor over still-valid verified rejections. Never let a transient
 transport error become a durable blacklist or skip an unexamined candidate indefinitely.
 
-Required fixtures include: 15 verified samples followed by a valid episode; 15 failed/unknown
-sources; low-resolution rows rejected from authoritative metadata without probing; a high-resolution
+Required fixtures include: 15 verified samples followed by a valid episode, including changed
+signed URLs between attempts; 15 failed/unknown sources; low-resolution rows rejected from
+authoritative metadata without probing; a high-resolution
 short sample; a false `720p` title; valid 480p and sub-480p content; and a successful match within the
 budget. Assert bounded calls, honest outcomes, no weakening of audio/subtitle constraints, retry
 backoff and no starvation of interactive work. A resolution floor alone does not solve probe-budget
@@ -518,8 +530,8 @@ inside `local` stays the library order, then size, exactly as `localCopies` retu
 Discover by the episode's catalogue identity through existing remote matching. That matching is
 exact today (`remoteIdsMatch`: every IMDb, TMDB or TVDB ID present on both sides must agree,
 with at least one shared ID, plus season and episode; files spanning several episodes are excluded).
-Keep it exact and add no fuzzy fallback to another episode or
-title. Catalogue IDs in other schemes never match. Selected providers with no released item remain
+Keep it exact and add no fuzzy fallback to another episode or title. Catalogue IDs in other
+schemes never match. Selected providers with no released item remain
 empty/unavailable; the follow scheduler owns retry timing.
 
 The current `downloadReference()` starts from a session-bound resource. Background resolution
@@ -572,15 +584,18 @@ authorization/snapshots are stable. Administrator CRUD remains a required later 
    choices for existing users. Default profile selection and deliberate resume-policy corrections
    are not hidden inside an extraction. Persist migration version/backup and prove restart/idempotency.
 7. Deleted IDs are never reused. Settings backup moves to version 4 with portable provider
-   identities (see Provider adapters). Preserve an imported profile ID when it identifies the same
-   profile without collision; otherwise build an old-to-new profile ID map. In the same serialized
-   settings-store transaction that publishes profiles, rewrite every affected `UserData.prefs`
+   identities (see Provider adapters). Preserve an imported profile ID if it is unused locally.
+   An identical definition has the same revision, operations, canonical policy and stored display
+   metadata. If an ID collides with that exact definition, reuse the local profile; if revision or
+   definition differs, keep the local profile and mint a new ID for the imported one, including
+   collisions between seeded templates. Build an old-to-new profile ID map. Historical admission
+   snapshots retain their original ID, revision and rules. In the same serialized settings-store
+   transaction that publishes profiles, rewrite every affected `UserData.prefs`
    default through that map. Clear a reference to a removed or unresolved profile so resolution
    falls back to the operation-compatible instance default; never leave a dangling ID. The backup
-   restores only the
-   exporting admin's personal defaults to the importing admin; existing users retain their own
-   defaults, subject to this remap. Preserve all historical snapshots and list dormant provider
-   references that could not map. Test import failure/restart and rollback; an older binary
+   restores only the exporting admin's personal defaults to the importing admin; existing users
+   retain their own defaults, subject to this remap. Preserve all historical snapshots and list
+   dormant provider references that could not map. Test import failure/restart and rollback; an older binary
    must refuse an unsupported new schema rather than overwrite it. Retain the pre-migration backup
    for rollback.
 8. Add remote automatic candidates after the background policy/admission pipeline and relevant
@@ -608,6 +623,7 @@ authorization/snapshots are stable. Administrator CRUD remains a required later 
   defaults remain valid or fall back through the transactional profile-ID remap. Profiles,
   applicable personal defaults and follows survive an addon reinstall through portable provider
   identity; otherwise report the exact dormant references. No public read, DTO or log exposes a
-  manifest URL.
+  manifest URL. Remote libraries imported with new IDs remain disabled and ungranted until an
+  administrator restores credentials, grants and enabled state.
 - Every stage satisfies the test and rollout gates in the delivery plan. Runtime-changing PRs
   follow repository build, version, Docker health and final visual-verification requirements.
