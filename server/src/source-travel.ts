@@ -132,6 +132,31 @@ const canonicalJson = (value: unknown): string => {
 const fingerprint = (value: unknown): string =>
   createHash("sha256").update(canonicalJson(value), "utf8").digest("hex");
 
+const continuationIdentity = (
+  candidate: SourceEvidenceCandidateV1,
+): NonNullable<SourceEvidenceCandidateV1["continuationIdentity"]> | undefined => {
+  if (candidate === null || typeof candidate !== "object") return invalid();
+  const identity = candidate.continuationIdentity;
+  if (identity === undefined) return undefined;
+  if (identity === null || typeof identity !== "object" || Array.isArray(identity)
+    || Object.getPrototypeOf(identity) !== Object.prototype) {
+    return invalid();
+  }
+  const keys = Object.keys(identity);
+  if (keys.length !== 2 || !Object.hasOwn(identity, "key") || !Object.hasOwn(identity, "reusableRejection")
+    || typeof identity.key !== "string" || identity.key.length === 0
+    || typeof identity.reusableRejection !== "boolean") {
+    return invalid();
+  }
+  return identity;
+};
+
+const continuationKey = (candidate: SourceEvidenceCandidateV1): string =>
+  continuationIdentity(candidate)?.key ?? candidate.sourceId;
+
+const persistsRejection = (candidate: SourceEvidenceCandidateV1): boolean =>
+  continuationIdentity(candidate)?.reusableRejection ?? true;
+
 const candidateListing = (snapshot: SourceAdmissionSnapshotV1, candidates: readonly SourceEvidenceCandidateV1[]) => ({
   snapshot: {
     schemaVersion: snapshot.schemaVersion,
@@ -141,7 +166,7 @@ const candidateListing = (snapshot: SourceAdmissionSnapshotV1, candidates: reado
     policy: snapshot.policy,
   },
   candidates: candidates.map((candidate) => ({
-    sourceId: candidate.sourceId,
+    continuationIdentity: continuationKey(candidate),
     providerKey: candidate.providerKey,
     providerClass: candidate.providerClass,
     sourceKind: candidate.sourceKind,
@@ -225,7 +250,7 @@ const sortInspectionCandidates = (
     const rightProvider = providerOrder.get(right.candidate.providerKey) ?? Number.MAX_SAFE_INTEGER;
     if (leftProvider !== rightProvider) return leftProvider - rightProvider;
 
-    const identity = compareText(left.candidate.sourceId, right.candidate.sourceId);
+    const identity = compareText(continuationKey(left.candidate), continuationKey(right.candidate));
     if (identity) return identity;
     if (left.candidate.providerResponseIndex !== right.candidate.providerResponseIndex) {
       return left.candidate.providerResponseIndex - right.candidate.providerResponseIndex;
@@ -281,6 +306,7 @@ export async function verifyTravelCandidates(
   }
 
   const priorCursor = parseCursor(input.cursor);
+  for (const candidate of input.candidates) continuationIdentity(candidate);
   const scopeFingerprint = fingerprint(input.scopeStamp);
   const listingFingerprint = fingerprint(candidateListing(input.snapshot, input.candidates));
   const inspectable: SourceEvidenceCandidateV1[] = [];
@@ -296,8 +322,11 @@ export async function verifyTravelCandidates(
   const sameAttempt = priorCursor !== undefined
     && priorCursor.scopeFingerprint === scopeFingerprint
     && priorCursor.listingFingerprint === listingFingerprint;
-  const rejected = new Set<number>(sameAttempt ? priorCursor.rejectedIndices : []);
-  if ([...rejected].some((index) => index >= sorted.length)) return invalid();
+  const persistedRejections = sameAttempt ? priorCursor.rejectedIndices : [];
+  if (persistedRejections.some((index) => index >= sorted.length)) return invalid();
+  const rejected = new Set<number>(sameAttempt
+    ? persistedRejections.filter((index) => persistsRejection(sorted[index]!.candidate))
+    : []);
 
   if (sameAttempt && (sorted.length === 0 ? priorCursor.nextIndex !== 0 : priorCursor.nextIndex >= sorted.length)) {
     return invalid();
@@ -383,7 +412,9 @@ export async function verifyTravelCandidates(
       eligible.push(result.candidate);
     } else if (evaluation.status === "excluded") {
       confirmedRejections++;
-      if (rejected.size < TRAVEL_MAX_REJECTED_INDICES) rejected.add(index);
+      if (persistsRejection(result.candidate) && rejected.size < TRAVEL_MAX_REJECTED_INDICES) {
+        rejected.add(index);
+      }
     } else {
       unresolved.add(index);
     }

@@ -103,6 +103,78 @@ const addonStreamSize = (stream: StreamItem): number | undefined => {
   }
 };
 
+const continuationKey = (parts: unknown): string =>
+  createHash("sha256")
+    .update(JSON.stringify(["addon-source-continuation-v1", parts]), "utf8")
+    .digest("hex");
+
+const optionalString = (value: unknown): string | undefined =>
+  typeof value === "string" ? value : undefined;
+
+const validVideoSize = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+
+const urlOnlyListingFacts = (input: ListedAddonSourceEvidenceInput): unknown => {
+  const stream = input.stream;
+  const behaviorHints = stream.behaviorHints;
+  return {
+    providerResponseIndex: input.providerResponseIndex,
+    available: input.available,
+    name: optionalString(stream.name),
+    title: optionalString(stream.title),
+    description: optionalString(stream.description),
+    behaviorHints: behaviorHints === undefined ? undefined : {
+      notWebReady: typeof behaviorHints.notWebReady === "boolean" ? behaviorHints.notWebReady : undefined,
+      videoSize: validVideoSize(behaviorHints.videoSize),
+      bingeGroup: optionalString(behaviorHints.bingeGroup),
+    },
+  };
+};
+
+const addonContinuationIdentity = (
+  input: ListedAddonSourceEvidenceInput,
+  identity: SourceIdentity,
+  facts: SourceEvidenceCandidateV1["facts"],
+  hints: SourceEvidenceCandidateV1["hints"],
+): NonNullable<SourceEvidenceCandidateV1["continuationIdentity"]> => {
+  if (identity.kind === "torrent") {
+    return {
+      key: continuationKey({
+        providerKey: input.providerKey,
+        kind: "torrent",
+        infoHash: identity.infoHash.trim().toLowerCase(),
+        fileIdx: identity.fileIdx ?? null,
+      }),
+      reusableRejection: true,
+    };
+  }
+
+  const filename = input.stream.behaviorHints?.filename;
+  if (typeof filename === "string" && filename.trim() !== "") {
+    return {
+      key: continuationKey({
+        providerKey: input.providerKey,
+        kind: "http-filename",
+        filename,
+        videoSize: validVideoSize(input.stream.behaviorHints?.videoSize) ?? null,
+        name: optionalString(input.stream.name) ?? null,
+      }),
+      reusableRejection: true,
+    };
+  }
+
+  return {
+    key: continuationKey({
+      providerKey: input.providerKey,
+      kind: "http-position",
+      listing: urlOnlyListingFacts(input),
+      facts,
+      hints,
+    }),
+    reusableRejection: false,
+  };
+};
+
 export function listedAddonSourceEvidence(
   input: ListedAddonSourceEvidenceInput,
 ): SourceEvidenceCandidateV1 | undefined {
@@ -123,27 +195,29 @@ export function listedAddonSourceEvidence(
   const hints = bytes !== undefined && Number.isFinite(bytes) && bytes >= 0
     ? { bytes }
     : undefined;
+  const facts: SourceEvidenceCandidateV1["facts"] = {
+    audio: {
+      listed: audioLanguages,
+      tracks: unknown(),
+    },
+    embeddedSubtitles: unknown(),
+    externalSubtitles: subtitleLanguages(input.stream, input.externalSubtitles ?? []),
+    bytes: unknown(),
+    durationSeconds: unknown(),
+    heightPixels: unknown(),
+    sampleOrTrailer: unknown(),
+  };
 
   return {
     sourceId: sourceId(input.providerKey, identity),
+    continuationIdentity: addonContinuationIdentity(input, identity, facts, hints),
     providerKey: input.providerKey,
     providerClass: "addon",
     sourceKind: identity.kind,
     capabilities: ["downloadToLibrary"],
     providerResponseIndex: input.providerResponseIndex,
     available: input.available,
-    facts: {
-      audio: {
-        listed: audioLanguages,
-        tracks: unknown(),
-      },
-      embeddedSubtitles: unknown(),
-      externalSubtitles: subtitleLanguages(input.stream, input.externalSubtitles ?? []),
-      bytes: unknown(),
-      durationSeconds: unknown(),
-      heightPixels: unknown(),
-      sampleOrTrailer: unknown(),
-    },
+    facts,
     ...(hints === undefined ? {} : { hints }),
   };
 }
@@ -202,5 +276,8 @@ export function inspectedAddonSourceEvidence(
       sampleOrTrailer: unknown(),
     },
     ...(candidate.hints === undefined ? {} : { hints: { ...candidate.hints } }),
+    ...(candidate.continuationIdentity === undefined
+      ? {}
+      : { continuationIdentity: { ...candidate.continuationIdentity } }),
   };
 }

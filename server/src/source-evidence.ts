@@ -28,6 +28,10 @@ export interface SourceEvidenceFactsV1 {
 
 export interface SourceEvidenceCandidateV1 {
   readonly sourceId: string;
+  readonly continuationIdentity?: {
+    readonly key: string;
+    readonly reusableRejection: boolean;
+  };
   readonly providerKey: string;
   readonly providerClass: ProviderClass;
   readonly sourceKind: SourceKind;

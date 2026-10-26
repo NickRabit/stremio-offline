@@ -161,6 +161,60 @@ test("addon rows map only supported addresses and use stable secret-free hashed 
   }
 });
 
+test("continuation identity ignores rotated addresses and distinguishes listing facts", () => {
+  const filenameOne = addon({
+    url: "https://media.example/film.mkv?token=one",
+    name: "English 1080p",
+    behaviorHints: { filename: "Film.1080p.mkv", videoSize: 8_000_000_000 },
+  });
+  const filenameTwo = addon({
+    url: "https://media.example/film.mkv?token=two",
+    name: "English 1080p",
+    behaviorHints: { filename: "Film.1080p.mkv", videoSize: 8_000_000_000 },
+  });
+  assert.notEqual(filenameOne.sourceId, filenameTwo.sourceId);
+  assert.deepEqual(filenameOne.continuationIdentity, filenameTwo.continuationIdentity);
+  assert.equal(filenameOne.continuationIdentity?.reusableRejection, true);
+
+  const positionalOne = addon({
+    url: "https://media.example/film.mkv?token=one",
+    name: "English 1080p",
+    title: "Film",
+    behaviorHints: { videoSize: 4_000_000_000 },
+  }, { providerResponseIndex: 3 });
+  const positionalTwo = addon({
+    url: "https://media.example/film.mkv?token=two",
+    name: "English 1080p",
+    title: "Film",
+    behaviorHints: { videoSize: 4_000_000_000 },
+  }, { providerResponseIndex: 3 });
+  assert.notEqual(positionalOne.sourceId, positionalTwo.sourceId);
+  assert.deepEqual(positionalOne.continuationIdentity, positionalTwo.continuationIdentity);
+  assert.equal(positionalOne.continuationIdentity?.reusableRejection, false);
+  assert.notEqual(positionalOne.continuationIdentity?.key, addon({
+    url: "https://media.example/film.mkv?token=one",
+    name: "Czech 1080p",
+    title: "Film",
+    behaviorHints: { videoSize: 4_000_000_000 },
+  }, { providerResponseIndex: 3 }).continuationIdentity?.key);
+  assert.notEqual(positionalOne.continuationIdentity?.key, addon({
+    url: "https://media.example/film.mkv?token=one",
+    name: "English 1080p",
+    title: "Film",
+    behaviorHints: { videoSize: 4_000_000_000 },
+  }, { providerResponseIndex: 4, providerKey: "addon:two" }).continuationIdentity?.key);
+
+  const torrentOne = addon({ infoHash: HASH_A, fileIdx: 2 });
+  const torrentTwo = addon({ infoHash: ` ${HASH_A.toUpperCase()} `, fileIdx: 2 });
+  assert.notEqual(torrentOne.sourceId, torrentTwo.sourceId);
+  assert.deepEqual(torrentOne.continuationIdentity, torrentTwo.continuationIdentity);
+  assert.equal(torrentOne.continuationIdentity?.reusableRejection, true);
+
+  for (const candidate of [filenameOne, positionalOne, torrentOne]) {
+    assert.doesNotMatch(JSON.stringify(candidate), /media\.example|token=|token%3d/i);
+  }
+});
+
 test("listing claims stay hints and cannot settle numeric hard bounds", () => {
   const source = addon({
     url: "https://media.example/movie.mkv",
@@ -304,6 +358,8 @@ test("adapter output keeps its identity in a fresh immutable copy and preserves 
   assert.notEqual(inspected.capabilities, source.capabilities);
   assert.notEqual(inspected.hints, source.hints);
   assert.equal(inspected.sourceId, source.sourceId);
+  assert.deepEqual(inspected.continuationIdentity, source.continuationIdentity);
+  assert.notEqual(inspected.continuationIdentity, source.continuationIdentity);
   assert.equal(inspected.providerKey, source.providerKey);
   assert.equal(inspected.providerResponseIndex, source.providerResponseIndex);
   assert.deepEqual(inspected.capabilities, ["downloadToLibrary"]);

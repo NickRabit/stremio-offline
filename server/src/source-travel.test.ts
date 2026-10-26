@@ -17,6 +17,15 @@ import {
   SOURCE_PROFILE_IDS,
 } from "./source-profiles.js";
 import {
+  parseSourcePolicyV1,
+  type SourcePolicyConstraints,
+} from "./source-policy.js";
+import {
+  inspectedAddonSourceEvidence,
+  listedAddonSourceEvidence,
+} from "./source-addon-evidence.js";
+import {
+  TRAVEL_INSPECTION_BUDGET,
   TRAVEL_MAX_REJECTED_INDICES,
   verifyTravelCandidates,
   type TravelContinuationCursorV1,
@@ -95,7 +104,218 @@ const snapshot = (
   ),
 });
 
+const snapshotWithKinds = (
+  sourceKinds: SourcePolicyConstraints["sourceKinds"],
+): SourceAdmissionSnapshotV1 => {
+  const providerKeys = ["addon:one"];
+  const policy = parseSourcePolicyV1({
+    ...structuredClone(travelDefinition.policy),
+    constraints: {
+      ...structuredClone(travelDefinition.policy.constraints),
+      sourceKinds,
+    },
+  });
+  return parseSourceAdmissionSnapshotV1({
+    schemaVersion: 1,
+    profile: { id: SOURCE_PROFILE_IDS.travel, revision: 1 },
+    operation: "downloadToLibrary",
+    providerKeys,
+    policy: materializeSourceAdmissionPolicy(
+      policy,
+      providerKeys,
+      { audioLanguage: "en", subtitleLanguage: "en" },
+    ),
+  });
+};
+
 const always = () => true;
+
+test("rotated URL-only candidates continue past fifteen rejections to the sixteenth", async () => {
+  const listing = (token: string): SourceEvidenceCandidateV1[] => {
+    const samples = Array.from({ length: TRAVEL_INSPECTION_BUDGET }, (_entry, index) => {
+      const source = listedAddonSourceEvidence({
+        providerKey: "addon:one",
+        providerResponseIndex: index,
+        stream: {
+          url: `https://media.example/sample-${index}.mkv?token=${token}`,
+          name: "English sample",
+          title: `Sample ${index}`,
+          behaviorHints: { videoSize: index + 1 },
+        },
+        available: true,
+      });
+      assert.ok(source);
+      return source;
+    });
+    const episode = listedAddonSourceEvidence({
+      providerKey: "addon:one",
+      providerResponseIndex: TRAVEL_INSPECTION_BUDGET,
+      stream: {
+        url: `https://media.example/episode.mkv?token=${token}`,
+        name: "English episode",
+        title: "Episode",
+        behaviorHints: { videoSize: 100 },
+      },
+      available: true,
+    });
+    assert.ok(episode);
+    return [...samples, episode];
+  };
+  const inspectedIndices: number[] = [];
+  const inspect = async (source: SourceEvidenceCandidateV1): Promise<TravelInspectionResult> => {
+    inspectedIndices.push(source.providerResponseIndex);
+    const video = source.providerResponseIndex === TRAVEL_INSPECTION_BUDGET
+      ? { height: 480, duration: 3_600 }
+      : { height: 2_160, duration: 59 };
+    return {
+      status: "ok",
+      candidate: inspectedAddonSourceEvidence(source, {
+        container: "matroska",
+        duration: video.duration,
+        video: { codec: "h264", height: video.height },
+        audioTracks: [{ index: 0, codec: "aac", language: "en" }],
+        subtitleTracks: [],
+      }),
+    };
+  };
+
+  const first = await verifyTravelCandidates({
+    snapshot: snapshot(["addon:one"]),
+    candidates: listing("first"),
+    inspect,
+    shouldContinue: always,
+    scopeStamp: "scope-one",
+  });
+  assert.equal(first.status, "budgetExhausted");
+  assert.equal(first.observations.probesUsed, TRAVEL_INSPECTION_BUDGET);
+  assert.deepEqual(first.cursor.rejectedIndices, []);
+  assert.doesNotMatch(JSON.stringify(first), /media\.example|token=|first/i);
+
+  inspectedIndices.length = 0;
+  const second = await verifyTravelCandidates({
+    snapshot: snapshot(["addon:one"]),
+    candidates: listing("second"),
+    inspect,
+    shouldContinue: always,
+    scopeStamp: "scope-one",
+    cursor: first.cursor,
+  });
+  assert.equal(second.status, "selected");
+  assert.equal(second.selection.candidate.providerResponseIndex, TRAVEL_INSPECTION_BUDGET);
+  assert.equal(inspectedIndices[0], TRAVEL_INSPECTION_BUDGET);
+  assert.equal(second.observations.probesUsed, TRAVEL_INSPECTION_BUDGET);
+  assert.ok(second.observations.probesUsed <= TRAVEL_INSPECTION_BUDGET);
+});
+
+test("rotated URL-only continuation resets for changed listing facts or scope", async () => {
+  const listing = (token: string, name = "English sample"): SourceEvidenceCandidateV1[] =>
+    Array.from({ length: TRAVEL_INSPECTION_BUDGET + 1 }, (_entry, index) => {
+      const source = listedAddonSourceEvidence({
+        providerKey: "addon:one",
+        providerResponseIndex: index,
+        stream: {
+          url: `https://media.example/${index}.mkv?token=${token}`,
+          name: index === 0 ? name : `English sample ${index}`,
+          title: `Sample ${index}`,
+          behaviorHints: { videoSize: index + 1 },
+        },
+        available: true,
+      });
+      assert.ok(source);
+      return source;
+    });
+
+  const first = await verifyTravelCandidates({
+    snapshot: snapshot(["addon:one"]),
+    candidates: listing("first"),
+    inspect: async () => ({ status: "temporaryFailure" }),
+    shouldContinue: always,
+    scopeStamp: { token: "scope-one" },
+  });
+  assert.equal(first.status, "budgetExhausted");
+
+  for (const variant of [
+    {
+      snapshot: snapshot(["addon:one"]),
+      candidates: listing("rotated", "Czech sample"),
+      scopeStamp: { token: "scope-one" },
+    },
+    {
+      snapshot: snapshot(["addon:one"]),
+      candidates: listing("rotated"),
+      scopeStamp: { token: "scope-two" },
+    },
+    {
+      snapshot: snapshot(["addon:two", "addon:one"]),
+      candidates: listing("rotated"),
+      scopeStamp: { token: "scope-one" },
+    },
+  ]) {
+    const calls: number[] = [];
+    const result = await verifyTravelCandidates({
+      ...variant,
+      inspect: async (source) => {
+        calls.push(source.providerResponseIndex);
+        return { status: "temporaryFailure" };
+      },
+      shouldContinue: always,
+      cursor: first.cursor,
+    });
+    assert.equal(result.status, "budgetExhausted");
+    assert.equal(calls[0], 0);
+  }
+});
+
+test("URL-only rejections stay episodic while durable rows keep their rejections", async () => {
+  const sources = [
+    candidate("url-only", {
+      hints: { bytes: 1 },
+      continuationIdentity: { key: "url-position", reusableRejection: false },
+    }),
+    candidate("filename", {
+      hints: { bytes: 2 },
+      continuationIdentity: { key: "stable-filename", reusableRejection: true },
+    }),
+    candidate("torrent-file", {
+      hints: { bytes: 3 },
+      sourceKind: "torrent",
+      continuationIdentity: { key: "stable-torrent", reusableRejection: true },
+    }),
+    candidate("temporary", { hints: { bytes: 4 } }),
+  ];
+  const calls: string[] = [];
+  const inspect = async (source: SourceEvidenceCandidateV1): Promise<TravelInspectionResult> => {
+    calls.push(source.sourceId);
+    return source.sourceId === "temporary"
+      ? { status: "temporaryFailure" }
+      : inspectedCandidate(source, { heightPixels: fact(360) });
+  };
+
+  const first = await verifyTravelCandidates({
+    snapshot: snapshotWithKinds(["http", "torrent"]),
+    candidates: sources,
+    inspect,
+    shouldContinue: always,
+    scopeStamp: "scope-one",
+  });
+  assert.equal(first.status, "temporaryFailure");
+  assert.deepEqual(first.cursor.rejectedIndices, [1, 2]);
+  assert.ok(first.observations.probesUsed <= TRAVEL_INSPECTION_BUDGET);
+
+  calls.length = 0;
+  const second = await verifyTravelCandidates({
+    snapshot: snapshotWithKinds(["http", "torrent"]),
+    candidates: sources,
+    inspect,
+    shouldContinue: always,
+    scopeStamp: "scope-one",
+    cursor: first.cursor,
+  });
+  assert.equal(second.status, "temporaryFailure");
+  assert.deepEqual(calls, ["url-only", "temporary"]);
+  assert.deepEqual(second.cursor.rejectedIndices, [1, 2]);
+  assert.ok(second.observations.probesUsed <= TRAVEL_INSPECTION_BUDGET);
+});
 
 test("fifteen inspected samples stop at the budget and the cursor reaches the valid episode", async () => {
   const samples = Array.from({ length: 15 }, (_entry, index) => candidate(
