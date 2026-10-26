@@ -178,7 +178,9 @@ const candidateListing = (snapshot: SourceAdmissionSnapshotV1, candidates: reado
   })),
 });
 
-const parseCursor = (input: unknown): TravelContinuationCursorV1 | undefined => {
+export const parseTravelContinuationCursorV1 = (
+  input: unknown,
+): TravelContinuationCursorV1 | undefined => {
   if (input === undefined) return undefined;
   if (input === null || typeof input !== "object" || Array.isArray(input)
     || Object.getPrototypeOf(input) !== Object.prototype) {
@@ -305,7 +307,7 @@ export async function verifyTravelCandidates(
     return invalid();
   }
 
-  const priorCursor = parseCursor(input.cursor);
+  const priorCursor = parseTravelContinuationCursorV1(input.cursor);
   for (const candidate of input.candidates) continuationIdentity(candidate);
   const scopeFingerprint = fingerprint(input.scopeStamp);
   const listingFingerprint = fingerprint(candidateListing(input.snapshot, input.candidates));

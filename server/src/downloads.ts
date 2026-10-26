@@ -43,6 +43,11 @@ import {
   SourceAdmissionValidationError,
   type SourceAdmissionSnapshotV1,
 } from "./source-admission.js";
+import {
+  parseTravelContinuationCursorV1,
+  type TravelContinuationCursorV1,
+} from "./source-travel.js";
+import { SOURCE_PROFILE_IDS } from "./source-profiles.js";
 
 export type { DownloadStatus, PauseReason, QueueHalt };
 export type SubtitleMode = "off" | "optional" | "required";
@@ -86,6 +91,7 @@ export interface DownloadJob {
   ownerUserId?: string;
   source?: { type: string; videoId: string; tried: string[]; selection?: DownloadSelection };
   sourceAdmission?: SourceAdmissionSnapshotV1;
+  travelCursor?: TravelContinuationCursorV1;
   /** Present when a followed series queued the job, so the follow can be reconciled
    *  with the queue across restarts. */
   follow?: { followId: string; episodeKey: string; intent: string };
@@ -319,6 +325,16 @@ const parseDownloadSourceAdmission = (input: unknown): SourceAdmissionSnapshotV1
   return snapshot;
 };
 
+const isTravelSnapshot = (
+  snapshot: SourceAdmissionSnapshotV1 | undefined,
+): snapshot is SourceAdmissionSnapshotV1 =>
+  snapshot?.profile.id === SOURCE_PROFILE_IDS.travel && snapshot.profile.revision === 1;
+
+const supportsTravelCursor = (
+  job: Pick<DownloadJob, "sourceAdmission" | "stream" | "source">,
+  snapshot: SourceAdmissionSnapshotV1 | undefined = job.sourceAdmission,
+): boolean => isTravelSnapshot(snapshot) && job.stream === undefined && Boolean(job.source);
+
 /** What a job paused on a missing permission carries: the interface translates the key, and
  *  the English text is the fallback for a client that does not know it. */
 const PERMISSION_PAUSE = {
@@ -534,26 +550,36 @@ export class DownloadQueue {
       } catch { isList = false; }
       if (isList) {
         const canonicalSnapshots: Array<{ index: number; snapshot: SourceAdmissionSnapshotV1 }> = [];
+        const canonicalCursors: Array<{ index: number; cursor: TravelContinuationCursorV1 }> = [];
         try {
           for (const [index, rawJob] of (parsed as unknown[]).entries()) {
-            if (rawJob === null || typeof rawJob !== "object" || !Object.hasOwn(rawJob, "sourceAdmission")) continue;
-            canonicalSnapshots.push({
-              index,
-              snapshot: parseDownloadSourceAdmission((rawJob as { sourceAdmission: unknown }).sourceAdmission),
-            });
+            if (rawJob === null || typeof rawJob !== "object") continue;
+            const snapshot = Object.hasOwn(rawJob, "sourceAdmission")
+              ? parseDownloadSourceAdmission((rawJob as { sourceAdmission: unknown }).sourceAdmission)
+              : undefined;
+            if (snapshot) canonicalSnapshots.push({ index, snapshot });
+            if (!Object.hasOwn(rawJob, "travelCursor")) continue;
+            const cursor = parseTravelContinuationCursorV1((rawJob as { travelCursor: unknown }).travelCursor);
+            if (cursor === undefined) continue;
+            if (!supportsTravelCursor(rawJob as DownloadJob, snapshot)) {
+              throw new Error("The Travel continuation cursor is misplaced.");
+            }
+            canonicalCursors.push({ index, cursor });
           }
         } catch (error) {
           this.unreadable = true;
-          log("ERROR", "The queue contains an invalid source admission snapshot", {
+          log("ERROR", "The queue contains an invalid private source state", {
             file: this.stateFile,
             reason: error instanceof SourceAdmissionValidationError
               ? "invalid source admission snapshot"
-              : "source admission snapshot could not be validated",
+              : "private source state could not be validated",
           });
           return;
         }
-        this.jobs = parsed as DownloadJob[];
-        for (const { index, snapshot } of canonicalSnapshots) this.jobs[index]!.sourceAdmission = snapshot;
+        const jobs = parsed as DownloadJob[];
+        for (const { index, snapshot } of canonicalSnapshots) jobs[index]!.sourceAdmission = snapshot;
+        for (const { index, cursor } of canonicalCursors) jobs[index]!.travelCursor = cursor;
+        this.jobs = jobs;
       } else {
         try {
           const preserved = await preserveDamaged(this.stateFile, state.raw);
@@ -1142,6 +1168,7 @@ export class DownloadQueue {
     if (job.status !== "failed") throw new AppError("Only a failed download can be retried.", "err.retryOnlyFailed");
     const pinned = job.sourceAdmission === undefined ? selection?.targetSettings?.libraryId : undefined;
     if (pinned !== undefined && REMOTE_LIBRARY_ID.test(pinned)) throw remoteDownloadRefused();
+    delete job.travelCursor;
     job.retryCount = 0;
     job.notBefore = undefined;
     if (job.source) {
@@ -1329,6 +1356,26 @@ export class DownloadQueue {
     });
   }
   changed() { this.pump(); }
+
+  async setTravelCursor(id: string, cursor?: TravelContinuationCursorV1): Promise<void> {
+    const job = this.require(id);
+    const canonical = cursor === undefined ? undefined : parseTravelContinuationCursorV1(cursor);
+    if ((job.status !== "queued" && job.status !== "checking") || !supportsTravelCursor(job)) {
+      throw new Error("A Travel continuation cursor requires a queued Travel snapshot job.");
+    }
+    const previous = job.travelCursor;
+    await this.persist({
+      apply: () => {
+        if (canonical === undefined) delete job.travelCursor;
+        else job.travelCursor = canonical;
+      },
+      revert: () => {
+        if (previous === undefined) delete job.travelCursor;
+        else job.travelCursor = previous;
+      },
+    });
+  }
+
   /** The key travels with the text so the interface can render a stored failure in
    *  whatever language is set now, not the one that was set when it failed. */
   private setError(job: DownloadJob, message?: string, key?: string, vars?: Record<string, string | number>) {
@@ -1347,7 +1394,7 @@ export class DownloadQueue {
   private publicJob(job: DownloadJob): Omit<PublicDownload, "order"> {
     const {
       stream, source, subtitle: _subtitle, remoteDownload: _remoteDownload, notBefore: _notBefore,
-      debrid, segments, sourceAdmission: _sourceAdmission, ...rest
+      debrid, segments, sourceAdmission: _sourceAdmission, travelCursor: _travelCursor, ...rest
     } = job;
     return { ...rest, ownerUserId: this.ownerOf(job), pending: !stream && Boolean(source), debridProgress: debrid?.progress, segments: segments?.length };
   }

@@ -15,6 +15,10 @@ import { defaultDownloadSettings } from "./naming.js";
 import type { LibraryRecord } from "./libraries.js";
 import { SOURCE_PROFILE_DEFINITIONS, SOURCE_PROFILE_IDS } from "./source-profiles.js";
 import {
+  TravelVerificationError,
+  type TravelContinuationCursorV1,
+} from "./source-travel.js";
+import {
   DownloadQueue,
   type DownloadJob,
   type DownloadSelection,
@@ -24,6 +28,14 @@ import {
 const LIBRARY_ID = "lib_51a5510a";
 const PROVIDER_ONE = "addon:queue-private-token";
 const PROVIDER_TWO = "addon:second-provider";
+
+const travelCursor = (): TravelContinuationCursorV1 => ({
+  schemaVersion: 1,
+  scopeFingerprint: "a".repeat(64),
+  listingFingerprint: "b".repeat(64),
+  nextIndex: 2,
+  rejectedIndices: [0, 1],
+});
 
 const travelDefinition = SOURCE_PROFILE_DEFINITIONS.find((definition) => definition.id === SOURCE_PROFILE_IDS.travel);
 assert.ok(travelDefinition);
@@ -109,10 +121,12 @@ const rawLazyJob = (sourceAdmission: unknown = undefined): Record<string, unknow
 
 const assertPublicViewIsClean = (view: Record<string, unknown>) => {
   assert.equal(Object.hasOwn(view, "sourceAdmission"), false);
+  assert.equal(Object.hasOwn(view, "travelCursor"), false);
   assert.equal(Object.hasOwn(view, "policy"), false);
   const text = JSON.stringify(view);
   assert.doesNotMatch(text, /queue-private-token/);
   assert.doesNotMatch(text, /sourceAdmission/);
+  assert.doesNotMatch(text, /travelCursor/);
   assert.doesNotMatch(text, /"policy"/);
 };
 
@@ -178,6 +192,159 @@ test("a lazy job durably stores a detached materialized Travel snapshot without 
     );
     assert.deepEqual(canonical.policy.constraints.audio.preferred, { code: "en" });
     assert.deepEqual(canonical.policy.constraints.subtitles.preferred, { code: "cs" });
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a canonical Travel cursor is saved, hidden, and restored with its snapshot", async () => {
+  const { directory, data, downloads, state } = await setup();
+  let releasePermission!: (allowed: boolean) => void;
+  const permission = new Promise<boolean>((resolve) => { releasePermission = resolve; });
+  let resolutions = 0;
+  const queue = openQueue(data, downloads, { ownerAllowed: () => permission });
+  queue.setResolver(async () => {
+    resolutions += 1;
+    return undefined;
+  });
+  await queue.load();
+  let id = "";
+  try {
+    const added = await queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt0000007" },
+      undefined,
+      "usr_00000007",
+      { followId: "follow-cursor", episodeKey: "movie", intent: "download" },
+      travelSnapshot(),
+    );
+    assert.ok(added);
+    id = added.id;
+    await waitFor(queue, () => queue.get(id)?.status === "checking");
+
+    const submitted = travelCursor();
+    await queue.setTravelCursor(id, submitted);
+    (submitted as unknown as { rejectedIndices: number[] }).rejectedIndices = [99];
+    (submitted as unknown as { nextIndex: number }).nextIndex = 99;
+    assert.deepEqual(internalJobs(queue)[0]?.travelCursor, travelCursor());
+
+    for (const view of [queue.get(id)!, queue.list()[0]!, queue.snapshot().jobs[0]!, queue.followJobs()[0]!]) {
+      assertPublicViewIsClean(view as unknown as Record<string, unknown>);
+    }
+    let stored = (await readJobs(state)).find((job) => job.id === id)!;
+    assert.deepEqual(stored.travelCursor, travelCursor());
+    await queue.setTravelCursor(id, undefined);
+    assert.equal(Object.hasOwn(internalJobs(queue)[0]!, "travelCursor"), false);
+    stored = (await readJobs(state)).find((job) => job.id === id)!;
+    assert.equal(Object.hasOwn(stored, "travelCursor"), false);
+    await queue.setTravelCursor(id, travelCursor());
+
+    await assert.rejects(
+      queue.setTravelCursor(id, { ...travelCursor(), rejectedIndices: [1, 1] }),
+      TravelVerificationError,
+    );
+    assert.deepEqual(internalJobs(queue)[0]?.travelCursor, travelCursor());
+    stored = (await readJobs(state)).find((job) => job.id === id)!;
+    assert.deepEqual(stored.travelCursor, travelCursor());
+
+    releasePermission(true);
+    await waitFor(queue, () => queue.get(id)?.status === "failed");
+    assert.equal(resolutions, 0, "the snapshot remains fail-closed with a cursor present");
+    await assert.rejects(queue.setTravelCursor(id, travelCursor()), /queued Travel snapshot job/);
+  } finally {
+    releasePermission(true);
+    await queue.stop();
+  }
+
+  const reopened = openQueue(data, downloads);
+  reopened.setResolver(async () => {
+    resolutions += 1;
+    return undefined;
+  });
+  try {
+    await reopened.load();
+    await waitFor(reopened, () => reopened.get(id)?.status === "failed");
+    assert.deepEqual(internalJobs(reopened)[0]?.travelCursor, travelCursor());
+    assertPublicViewIsClean(reopened.get(id)! as unknown as Record<string, unknown>);
+    assert.equal(resolutions, 0, "reload never dispatches a resolver for a snapshot job");
+  } finally {
+    await reopened.stop();
+    const stored = (await readJobs(state)).find((job) => job.id === id)!;
+    assert.deepEqual(stored.travelCursor, travelCursor());
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("malformed or misplaced Travel cursors make the queue unreadable without changing its bytes", async () => {
+  const validSnapshot = travelSnapshot();
+  const nonTravelSnapshot = structuredClone(validSnapshot);
+  nonTravelSnapshot.profile.id = SOURCE_PROFILE_IDS.recommended;
+  const cases: Array<{ name: string; admission?: unknown; cursor: unknown; stream?: unknown }> = [
+    { name: "malformed cursor", admission: validSnapshot, cursor: { ...travelCursor(), extra: true } },
+    { name: "legacy job", cursor: travelCursor() },
+    { name: "non-Travel snapshot", admission: nonTravelSnapshot, cursor: travelCursor() },
+    { name: "selected stream", admission: validSnapshot, cursor: travelCursor(), stream: { url: "http://127.0.0.1/private" } },
+  ];
+
+  for (const entry of cases) {
+    const { directory, data, downloads, state } = await setup();
+    const bytes = JSON.stringify([{
+      ...rawLazyJob(entry.admission),
+      ...(entry.stream === undefined ? {} : { stream: entry.stream }),
+      travelCursor: entry.cursor,
+    }], null, 2);
+    await writeFile(state, bytes);
+    let resolutions = 0;
+    const queue = openQueue(data, downloads);
+    queue.setResolver(async () => {
+      resolutions += 1;
+      return undefined;
+    });
+    try {
+      await queue.load();
+      assert.deepEqual(queue.list(), [], entry.name);
+      assert.equal(await readFile(state, "utf8"), bytes, `${entry.name} leaves the queue bytes intact`);
+      assert.equal((await readdir(data)).some((name) => name.startsWith("downloads.json.damaged-")), false);
+      assert.equal(resolutions, 0, `${entry.name} starts no resolver work`);
+      await assert.rejects(
+        queue.addPending("Other", { type: "movie", videoId: "tt0000008" }),
+        (error: AppError) => error.messageKey === "err.queueUnreadable" && error.status === 503,
+      );
+      assert.equal(await readFile(state, "utf8"), bytes, `${entry.name} refuses new work without writing`);
+    } finally {
+      await queue.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+});
+
+test("an explicit retry clears a Travel cursor while passive snapshot failure retains it", async () => {
+  const { directory, data, downloads, state } = await setup();
+  await writeFile(state, JSON.stringify([{
+    ...rawLazyJob(travelSnapshot()),
+    travelCursor: travelCursor(),
+  }], null, 2));
+  let resolutions = 0;
+  const queue = openQueue(data, downloads);
+  queue.setResolver(async () => {
+    resolutions += 1;
+    return undefined;
+  });
+  try {
+    await queue.load();
+    await waitFor(queue, () => queue.get("job-source-admission")?.status === "failed");
+    assert.deepEqual(internalJobs(queue)[0]?.travelCursor, travelCursor());
+
+    await queue.retry("job-source-admission");
+    assert.equal(internalJobs(queue)[0]?.travelCursor, undefined);
+    await waitFor(queue, () => queue.get("job-source-admission")?.status === "failed");
+    assert.equal(resolutions, 0, "retrying a snapshot job still never reaches the legacy resolver");
+
+    await queue.stop();
+    const stored = (await readJobs(state)).find((job) => job.id === "job-source-admission")!;
+    assert.equal(Object.hasOwn(stored, "travelCursor"), false);
+    assert.deepEqual(stored.sourceAdmission, travelSnapshot());
   } finally {
     await queue.stop();
     await rm(directory, { recursive: true, force: true });
