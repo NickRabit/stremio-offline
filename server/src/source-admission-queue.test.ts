@@ -101,10 +101,10 @@ const openQueue = (data: string, downloads: string, hooks: QueueHooks = {}) => {
 const readJobs = async (state: string): Promise<Array<Record<string, unknown>>> =>
   JSON.parse(await readFile(state, "utf8")) as Array<Record<string, unknown>>;
 
-const waitFor = async (queue: DownloadQueue, predicate: () => boolean, ms = 5_000) => {
+const waitFor = async (queue: DownloadQueue, predicate: () => boolean | Promise<boolean>, ms = 5_000) => {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
-    if (predicate()) return;
+    if (await predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   throw new Error(`timeout: ${JSON.stringify(queue.snapshot())}`);
@@ -533,7 +533,11 @@ test("a Travel budget makes progress past four exhausted attempts without using 
     await waitFor(queue, () => internalJobs(queue)[0]?.travelCursor?.nextIndex === 1);
     assert.equal(internalJobs(queue)[0]?.travelTemporaryFailures, 1);
     assert.equal(internalJobs(queue)[0]?.notBefore, 10_250);
-    let stored = (await readJobs(state)).find((entry) => entry.id === added.id)!;
+    let stored!: Record<string, unknown>;
+    await waitFor(queue, async () => {
+      stored = (await readJobs(state)).find((entry) => entry.id === added.id)!;
+      return (stored?.travelCursor as TravelContinuationCursorV1 | undefined)?.nextIndex === 1;
+    });
     assert.equal(stored.travelTemporaryFailures, 1);
     assert.equal(stored.notBefore, 10_250);
 
@@ -547,7 +551,10 @@ test("a Travel budget makes progress past four exhausted attempts without using 
       assert.equal(job.travelBudgetAttempts, nextIndex - 1);
       assert.equal(job.retryCount, undefined, "source inspection does not spend a transfer retry");
       assert.equal(job.notBefore, clock + 250);
-      stored = (await readJobs(state)).find((entry) => entry.id === added.id)!;
+      await waitFor(queue, async () => {
+        stored = (await readJobs(state)).find((entry) => entry.id === added.id)!;
+        return (stored.travelCursor as TravelContinuationCursorV1 | undefined)?.nextIndex === nextIndex;
+      });
       assert.deepEqual(stored.travelCursor, job.travelCursor);
       assert.equal(Object.hasOwn(stored, "travelTemporaryFailures"), false);
       assert.equal(stored.travelBudgetAttempts, nextIndex - 1);
