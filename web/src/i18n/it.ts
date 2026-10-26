@@ -1417,6 +1417,7 @@ export const it: Catalog = {
   "err.deviceAssemblyFailed": "Impossibile assemblare il flusso.",
   "err.downloadNeedsHttp": "È possibile scaricare solo un flusso HTTP diretto.",
   "err.downloadLibraryNotAllowed": "Questo account potrebbe non essere scaricato nella libreria.",
+  "err.revokedDownloadCleanupFailed": "Non è stato possibile rimuovere il download dalla libreria dopo la revoca dell’autorizzazione.",
   "err.clientLogTooLarge": "Il pacchetto di log è troppo grande.",
   "err.clientLogTooMany": "Troppi pacchetti di log. Riprova più tardi.",
   "err.downloadDeviceNotAllowed": "Questo account potrebbe non essere salvato sul dispositivo.",

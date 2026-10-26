@@ -1475,6 +1475,7 @@ export const en = {
   "err.deviceNeedsHttp": "Only a direct HTTP stream can be saved to a device.",
   "err.deviceAssemblyFailed": "The stream could not be assembled.",
   "err.downloadNeedsHttp": "Only a direct HTTP stream can be downloaded.",
+  "err.revokedDownloadCleanupFailed": "The revoked download could not be removed from the library.",
   "err.downloadLibraryNotAllowed": "This account may not download to the library.",
   "err.clientLogTooLarge": "The log bundle is too large.",
   "err.clientLogTooMany": "Too many log bundles. Try again later.",

@@ -1417,6 +1417,7 @@ export const fr: Catalog = {
   "err.deviceAssemblyFailed": "Le flux n'a pas pu être assemblé.",
   "err.downloadNeedsHttp": "Seul un flux HTTP direct peut être téléchargé.",
   "err.downloadLibraryNotAllowed": "Ce compte ne peut pas être téléchargé vers la bibliothèque.",
+  "err.revokedDownloadCleanupFailed": "Le téléchargement n’a pas pu être supprimé de la bibliothèque après la révocation de l’autorisation.",
   "err.clientLogTooLarge": "Le lot de journaux est trop volumineux.",
   "err.clientLogTooMany": "Trop de lots de journaux. Réessayez plus tard.",
   "err.downloadDeviceNotAllowed": "Ce compte peut ne pas être enregistré sur l'appareil.",

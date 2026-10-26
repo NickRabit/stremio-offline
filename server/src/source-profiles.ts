@@ -126,7 +126,7 @@ export const SOURCE_PROFILE_DEFINITIONS: readonly SourceProfileDefinition[] = Ob
   }),
 ]);
 
-const declaresStream = (addon: AddonRecord): boolean =>
+export const declaresStream = (addon: AddonRecord): boolean =>
   (addon.manifest.resources ?? []).some((resource) =>
     typeof resource === "string" ? resource === "stream" : resource.name === "stream");
 

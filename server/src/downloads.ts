@@ -277,6 +277,8 @@ export interface QueueHooks {
   libraryRetryMs?: number;
   freeSpace?: (dir: string) => Promise<{ freeBytes?: number; totalBytes?: number }>;
   createWriteStream?: (file: string, options: { flags: string }) => NodeJS.WritableStream;
+  /** Replaces only the final video rename, so tests can hold publication open. */
+  renamePublication?: (from: string, to: string) => Promise<void>;
   /** Writes the queue's own state file; tests use it to fail one particular write. */
   writeState?: (file: string, data: string) => Promise<void>;
   stallInitialMs?: number;
@@ -420,6 +422,15 @@ class RemotePermissionLost extends Error {
   }
 }
 
+class PublicationWithdrawalError extends Error {
+  constructor(readonly cleanupError: unknown) {
+    super(cleanupError instanceof Error ? cleanupError.message : String(cleanupError));
+    this.name = "PublicationWithdrawalError";
+  }
+}
+
+type PublicationGate = "allowed" | "permission" | "stopped";
+
 export async function volumeSpace(target: string) {
   try {
     const info = await statfs(target);
@@ -466,6 +477,7 @@ export class DownloadQueue {
   private readonly now: () => number;
   private readonly freeSpace: (dir: string) => Promise<{ freeBytes?: number; totalBytes?: number }>;
   private readonly createWriteStream: (file: string, options: { flags: string }) => NodeJS.WritableStream;
+  private readonly renamePublication: (from: string, to: string) => Promise<void>;
   private readonly writeState: (file: string, data: string) => Promise<void>;
   private readonly stallInitialMs: number;
   private readonly stallTransferMs: number;
@@ -509,6 +521,7 @@ export class DownloadQueue {
     this.now = hooks.now ?? Date.now;
     this.freeSpace = hooks.freeSpace ?? volumeSpace;
     this.createWriteStream = hooks.createWriteStream ?? fsCreateWriteStream;
+    this.renamePublication = hooks.renamePublication ?? rename;
     this.writeState = hooks.writeState ?? ((file, data) => writeFile(file, data, { mode: 0o600 }));
     this.stallInitialMs = hooks.stallInitialMs ?? 15_000;
     this.stallTransferMs = hooks.stallTransferMs ?? 30_000;
@@ -2011,24 +2024,105 @@ export class DownloadQueue {
     } catch { /* already gone */ }
   }
 
-  private async commit(job: DownloadJob, partial: string, target: string) {
+  private publicationLive(job: DownloadJob, signal: AbortSignal): boolean {
+    return !signal.aborted
+      && this.jobs.includes(job)
+      && job.status === "downloading"
+      && !this.pauseRequested.has(job.id);
+  }
+
+  private async publicationGate(job: DownloadJob, signal: AbortSignal): Promise<PublicationGate> {
+    if (!isTravelSnapshot(job.sourceAdmission)) return "allowed";
+    if (!this.publicationLive(job, signal)) return "stopped";
+    if (await this.ownerRefused(job)) return "permission";
+    return this.publicationLive(job, signal) ? "allowed" : "stopped";
+  }
+
+  private failPublicationWithdrawal(job: DownloadJob) {
+    if (job.status !== "paused") job.status = "failed";
+  }
+
+  private async unlinkIfPresent(file: string): Promise<void> {
+    try {
+      await unlink(file);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+
+  private async clearEmptyReservation(file: string | undefined): Promise<void> {
+    if (!file) return;
+    try {
+      if ((await stat(file)).size === 0) await unlink(file);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+
+  private async withdrawPublication(
+    reserved: string | undefined,
+    subtitleTarget: string | undefined,
+    videoPublished: boolean,
+    subtitlePublished: boolean,
+  ): Promise<void> {
+    let cleanupError: unknown;
+    const attempt = async (work: () => Promise<void>) => {
+      try {
+        await work();
+      } catch (error) {
+        cleanupError ??= error;
+      }
+    };
+    if (videoPublished && reserved) await attempt(() => this.unlinkIfPresent(reserved));
+    if (subtitlePublished && subtitleTarget) await attempt(() => this.unlinkIfPresent(subtitleTarget));
+    if (!videoPublished) await attempt(() => this.clearEmptyReservation(reserved));
+    if (cleanupError !== undefined) throw new PublicationWithdrawalError(cleanupError);
+  }
+
+  private async commit(
+    job: DownloadJob,
+    partial: string,
+    target: string,
+    signal: AbortSignal,
+  ): Promise<boolean> {
     // A remote copy re-checks the owner and the grant one last time before the file is published.
     if (job.remoteDownload && this.remoteRefused(job)) throw new RemotePermissionLost();
+    let reserved: string | undefined;
+    let subtitleTarget: string | undefined;
+    let videoPublished = false;
+    let subtitlePublished = false;
+    const continuePublication = async (): Promise<boolean> => {
+      const gate = await this.publicationGate(job, signal);
+      if (gate === "allowed") return true;
+      await this.withdrawPublication(reserved, subtitleTarget, videoPublished, subtitlePublished);
+      if (gate === "permission" && this.publicationLive(job, signal)) this.pauseForPermission(job);
+      return false;
+    };
+    if (!await continuePublication()) return false;
     // The partial subtitle was written beside the name the episode had while it downloaded;
     // the reservation may move the episode to "(2)", and the subtitle follows it there.
     const written = this.subtitleFiles(job);
-    const reserved = await this.reserveTarget(job, target);
+    reserved = await this.reserveTarget(job, target);
+    if (!await continuePublication()) return false;
     try {
       const published = this.subtitleFiles(job);
       const files = written && published ? { partial: written.partial, target: published.target } : undefined;
+      subtitleTarget = files?.target;
       const moveSubtitle = Boolean(files && await exists(files.partial));
-      if (moveSubtitle && files) await rename(files.partial, files.target);
+      if (!await continuePublication()) return false;
+      if (moveSubtitle && files) {
+        await rename(files.partial, files.target);
+        subtitlePublished = true;
+        if (!await continuePublication()) return false;
+      }
       try {
-        await rename(partial, reserved);
+        await this.renamePublication(partial, reserved);
+        videoPublished = true;
       } catch (error) {
         if (moveSubtitle && files) await rename(files.target, files.partial).catch(() => undefined);
         throw error;
       }
+      if (!await continuePublication()) return false;
     } catch (error) {
       await this.dropPlaceholder(reserved);
       throw error;
@@ -2037,6 +2131,7 @@ export class DownloadQueue {
     log("INFO", "Download finished", { id: job.id, received: job.received, target: job.target, audioLanguage: job.resolution?.audioLanguage, subtitleLanguage: job.resolution?.subtitleLanguage });
     try { await this.onCompleted?.(job); }
     catch (error) { log("WARN", "The library could not be refreshed after completion", { id: job.id, reason: error instanceof Error ? error.message : String(error) }); }
+    return true;
   }
 
   /** A file is split only when the source serves byte ranges and the whole size is known.
@@ -2188,7 +2283,7 @@ export class DownloadQueue {
     if (!written) throw new IncompleteDownloadError(0, undefined);
 
     job.received = written; job.total = written;
-    await this.commit(job, partial, target);
+    if (!await this.commit(job, partial, target, controller.signal)) return;
     await this.save();
   }
 
@@ -2445,7 +2540,7 @@ export class DownloadQueue {
           return;
         }
       }
-      await this.commit(job, partial, target);
+      if (!await this.commit(job, partial, target, controller.signal)) return;
     } catch (error) {
       if (error instanceof SourceAdmissionRuntimeUnavailable) {
         this.failSourceAdmission(job);
@@ -2453,6 +2548,14 @@ export class DownloadQueue {
         return;
       }
       job.speed = 0;
+      if (error instanceof PublicationWithdrawalError) {
+        if (this.jobs.includes(job)) this.failPublicationWithdrawal(job);
+        this.setError(job, "The revoked download could not be removed from the library.", "err.revokedDownloadCleanupFailed");
+        log("ERROR", "A revoked download could not withdraw its published files", {
+          id: job.id, title: job.title, reason: error.message,
+        });
+        return;
+      }
       const nativeDenied = isMediaServerError(error) && (error.code === "forbidden" || error.code === "unsupported-policy");
       if (isMediaServerError(error) && typeof error.status === "number") error = new HttpSourceError(error.status, error.message, error.retryAfterMs);
       // The rule's library went away while the job waited for its source, or is gone now.

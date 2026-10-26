@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -110,6 +110,12 @@ const waitFor = async (queue: DownloadQueue, predicate: () => boolean | Promise<
   throw new Error(`timeout: ${JSON.stringify(queue.snapshot())}`);
 };
 
+const deferred = () => {
+  let release!: () => void;
+  const promise = new Promise<void>((resolve) => { release = resolve; });
+  return { promise, release };
+};
+
 const internalJobs = (queue: DownloadQueue): DownloadJob[] =>
   (queue as unknown as { jobs: DownloadJob[] }).jobs;
 
@@ -149,6 +155,27 @@ const countingServer = (status = 200) => new Promise<{ server: Server; url: stri
   server.listen(0, "127.0.0.1", () => {
     const address = server.address() as { port: number };
     resolve({ server, url: `http://127.0.0.1:${address.port}/film.mp4`, requests: () => requests });
+  });
+});
+
+const publicationServer = () => new Promise<{ server: Server; videoUrl: string; subtitleUrl: string }>((resolve) => {
+  const server = createServer((request, response) => {
+    if (request.url?.endsWith(".vtt")) {
+      response.writeHead(200, { "content-type": "text/vtt" });
+      response.end("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nSubtitle\n");
+      return;
+    }
+    response.writeHead(200, { "content-type": "video/mp4", "content-length": "1" });
+    response.end("x");
+  });
+  server.listen(0, "127.0.0.1", () => {
+    const address = server.address() as { port: number };
+    const origin = `http://127.0.0.1:${address.port}`;
+    resolve({
+      server,
+      videoUrl: `${origin}/film.mp4`,
+      subtitleUrl: `${origin}/film.cs.vtt`,
+    });
   });
 });
 
@@ -816,6 +843,95 @@ test("a selected Travel source transfers over HTTP and persists no cursor beside
     await queue.stop();
     server.close();
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("revocation during final publication withdraws the Travel file", async () => {
+  for (const revocation of ["permission", "removal"] as const) {
+    await test(`during rename: ${revocation}`, async () => {
+      const { directory, data, downloads } = await setup();
+      const { server, videoUrl, subtitleUrl } = await publicationServer();
+      let allowed = true;
+      const renameEntered = deferred();
+      const releaseRename = deferred();
+      const queue = openQueue(data, downloads, {
+        ownerAllowed: () => allowed,
+        renamePublication: async (from, to) => {
+          renameEntered.release();
+          await releaseRename.promise;
+          await rename(from, to);
+        },
+      });
+      queue.setTravelResolver(async () => {
+        const selected = selectedTravel(videoUrl);
+        return {
+          ...selected,
+          subtitle: { addonKey: "queue-private-token", url: subtitleUrl, lang: "cs" },
+          resolution: {
+            ...selected.resolution,
+            subtitleLanguage: "cs",
+            subtitleSource: "addon",
+          },
+        };
+      });
+      await queue.load();
+      let remove: Promise<number> | undefined;
+      try {
+        const added = await queue.addPending(
+          "Film",
+          {
+            type: "movie",
+            videoId: `tt-publication-${revocation}`,
+            selection: selection("queue-private-token"),
+          },
+          { kind: "movie", title: "Film" },
+          "usr_00000018",
+          undefined,
+          travelSnapshot(),
+        );
+        assert.ok(added);
+        await renameEntered.promise;
+        const target = internalJobs(queue)[0]?.target;
+        assert.ok(target);
+        const published = path.join(downloads, target.slice(LIBRARY_ID.length + 1));
+        const publishedSubtitle = path.join(
+          path.dirname(published),
+          `${path.basename(published, path.extname(published))}.cs.vtt`,
+        );
+
+        allowed = false;
+        if (revocation === "removal") {
+          remove = queue.removeMatching((job) => job.id === added.id);
+          await waitFor(queue, () => queue.get(added.id) === undefined);
+        }
+        releaseRename.release();
+
+        if (remove) await remove;
+        const absent = async (file: string) => {
+          try {
+            await stat(file);
+            return false;
+          } catch {
+            return true;
+          }
+        };
+        await waitFor(queue, async () => await absent(published) && await absent(publishedSubtitle));
+        await assert.rejects(stat(published), { code: "ENOENT" });
+        await assert.rejects(stat(publishedSubtitle), { code: "ENOENT" });
+        assert.equal(queue.snapshot().jobs.some((job) => job.status === "completed"), false);
+        if (revocation === "permission") {
+          assert.equal(queue.get(added.id)?.status, "paused");
+        } else {
+          assert.equal(queue.get(added.id), undefined);
+        }
+      } finally {
+        releaseRename.release();
+        await remove?.catch(() => undefined);
+        await queue.stop();
+        server.close();
+        await rm(directory, { recursive: true, force: true });
+      }
+    });
   }
 });
 

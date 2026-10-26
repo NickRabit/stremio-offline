@@ -3,6 +3,7 @@ import { allowedAddons } from "./addons.js";
 import { mayDownloadToLibrary, type DownloadJob } from "./downloads.js";
 import type { SourceAdmissionSnapshotV1 } from "./source-admission.js";
 import type { SourceResolverDeps } from "./source-resolver.js";
+import { declaresStream } from "./source-profiles.js";
 import {
   verifyTravelAddonStreams,
   type TravelAddonStreamOutcome,
@@ -37,7 +38,12 @@ interface LiveAuthorization {
 }
 
 const identityOf = (addon: AddonRecord): string =>
-  JSON.stringify([addon.manifestUrl, addon.manifest.version]);
+  JSON.stringify([
+    addon.manifestUrl,
+    addon.manifest.version,
+    addon.role,
+    addon.manifest.resources ?? [],
+  ]);
 
 const identityFingerprint = (addon: AddonRecord): string =>
   createHash("sha256").update(identityOf(addon), "utf8").digest("hex");
@@ -105,7 +111,9 @@ export function createTravelProfileResolver(
         .filter((addon) => addon.enabled);
       const providerKeys = new Set(snapshot.providerKeys);
       const scopedStreamProviders = usable.filter((addon) =>
-        providerKeys.has(`addon:${addon.key}`));
+        providerKeys.has(`addon:${addon.key}`)
+        && addon.role !== "catalog"
+        && declaresStream(addon));
       return { owner, usable, scopedStreamProviders };
     };
 

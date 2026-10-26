@@ -1417,6 +1417,7 @@ export const es: Catalog = {
   "err.deviceAssemblyFailed": "No se pudo montar la corriente.",
   "err.downloadNeedsHttp": "Sólo se puede descargar una secuencia HTTP directa.",
   "err.downloadLibraryNotAllowed": "Es posible que esta cuenta no se descargue en la biblioteca.",
+  "err.revokedDownloadCleanupFailed": "No se pudo eliminar la descarga de la biblioteca tras revocar el permiso.",
   "err.clientLogTooLarge": "El paquete de registro es demasiado grande.",
   "err.clientLogTooMany": "Demasiados paquetes de registro. Inténtalo más tarde.",
   "err.downloadDeviceNotAllowed": "Es posible que esta cuenta no se guarde en el dispositivo.",

@@ -1417,6 +1417,7 @@ export const pl: Catalog = {
   "err.deviceAssemblyFailed": "Nie udało się złożyć strumienia.",
   "err.downloadNeedsHttp": "Można pobrać tylko bezpośredni strumień HTTP.",
   "err.downloadLibraryNotAllowed": "Z tego konta nie można pobrać plików do biblioteki.",
+  "err.revokedDownloadCleanupFailed": "Po cofnięciu uprawnienia nie udało się usunąć pobranego pliku z biblioteki.",
   "err.clientLogTooLarge": "Pakiet logów jest za duży.",
   "err.clientLogTooMany": "Zbyt wiele pakietów logów. Spróbuj później.",
   "err.downloadDeviceNotAllowed": "To konto może nie zostać zapisane na urządzeniu.",

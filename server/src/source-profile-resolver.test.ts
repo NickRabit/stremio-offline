@@ -381,6 +381,64 @@ test("stream revocation during a probe never returns a selected stream", async (
   }
 });
 
+test("a provider changed to catalog during inspection is cancelled", async () => {
+  const gate = deferred();
+  const state = { users: [user()], addons: [addon("one")] };
+  let probes = 0;
+  const resolver = resolverFor(state, {
+    listStreams: async () => [stream("one", "https://media.example/one.mkv")],
+    inspect: async () => {
+      probes += 1;
+      await gate.promise;
+      return media();
+    },
+  });
+
+  const resolving = resolver(input(snapshot(), new AbortController().signal));
+  await new Promise((resolve) => setImmediate(resolve));
+  state.addons[0] = { ...state.addons[0]!, role: "catalog" };
+  gate.release();
+  const result = await resolving;
+
+  assert.equal(result.status, "cancelled");
+  assert.equal(probes, 1);
+  assert.equal("stream" in result, false);
+});
+
+test("removing the stream resource during listing or inspection denies the old source", async () => {
+  for (const phase of ["listing", "inspection"] as const) {
+    await test(`during ${phase}`, async () => {
+      const gate = deferred();
+      const state = { users: [user()], addons: [addon("one")] };
+      let probes = 0;
+      const resolver = resolverFor(state, {
+        listStreams: async () => {
+          if (phase === "listing") await gate.promise;
+          return [stream("one", "https://media.example/one.mkv")];
+        },
+        inspect: async () => {
+          probes += 1;
+          if (phase === "inspection") await gate.promise;
+          return media();
+        },
+      });
+
+      const resolving = resolver(input(snapshot(), new AbortController().signal));
+      await new Promise((resolve) => setImmediate(resolve));
+      state.addons[0] = {
+        ...state.addons[0]!,
+        manifest: { ...state.addons[0]!.manifest, resources: [] },
+      };
+      gate.release();
+      const result = await resolving;
+
+      assert.equal(result.status, phase === "listing" ? "accessDenied" : "cancelled");
+      assert.equal(probes, phase === "inspection" ? 1 : 0);
+      assert.equal("stream" in result, false);
+    });
+  }
+});
+
 test("revoking the selected subtitle addon during a probe denies the selected result", async () => {
   const gate = deferred();
   const state = { users: [user()], addons: [addon("one"), subtitleAddon()] };

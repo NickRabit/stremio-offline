@@ -1470,6 +1470,7 @@ export const cs: Catalog = {
   "err.deviceAssemblyFailed": "Stream se nepodařilo sestavit.",
   "err.downloadNeedsHttp": "Stáhnout lze jen přímý HTTP stream.",
   "err.downloadLibraryNotAllowed": "Tento účet nesmí stahovat do knihovny.",
+  "err.revokedDownloadCleanupFailed": "Stažený soubor se po odebrání oprávnění nepodařilo odstranit z knihovny.",
   "err.clientLogTooLarge": "Logový balík je příliš velký.",
   "err.clientLogTooMany": "Příliš mnoho logových balíků. Zkuste to později.",
   "err.downloadDeviceNotAllowed": "Tento účet nesmí ukládat do zařízení.",
