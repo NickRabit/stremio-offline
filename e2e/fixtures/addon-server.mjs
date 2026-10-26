@@ -1,18 +1,44 @@
 // A Stremio addon that answers from memory, so the end-to-end tests never reach
 // the internet and always get the same catalog back.
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import os from "node:os";
 import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 const port = Number(process.env.ADDON_PORT ?? 8098);
 const here = path.dirname(fileURLToPath(import.meta.url));
 const videoFile = path.join(here, "media", "sample.mp4");
 const browserVideo = path.join(os.tmpdir(), `stremio-e2e-${process.pid}.webm`);
 execFileSync("ffmpeg", ["-v", "error", "-i", videoFile, "-c:v", "libvpx-vp9", "-c:a", "libopus", "-y", browserVideo]);
+const travelVideo = path.join(os.tmpdir(), `stremio-e2e-travel-${process.pid}.mp4`);
+const execFileAsync = promisify(execFile);
+let travelVideoReady;
+
+const prepareTravelVideo = () => {
+  travelVideoReady ??= execFileAsync("ffmpeg", [
+    "-v", "error",
+    "-stream_loop", "119",
+    "-i", videoFile,
+    "-t", "61",
+    "-vf", "scale=-2:480",
+    "-c:v", "libx264",
+    "-preset", "ultrafast",
+    "-crf", "30",
+    "-pix_fmt", "yuv420p",
+    "-c:a", "aac",
+    "-b:a", "64k",
+    "-movflags", "+faststart",
+    "-y", travelVideo,
+  ]).then(() => travelVideo);
+  return travelVideoReady;
+};
+
+export const TRAVEL_VIDEO_ID = "tt-e2e-travel-episode";
+export const TRAVEL_SOURCE_SECRET = "travel-signed-source-canary";
 
 export const MOVIE = {
   id: "tt-e2e-movie",
@@ -70,7 +96,12 @@ const SECONDARY_MANIFEST = {
 
 // Two sizes and two languages, so ordering and the language filter have something
 // to actually order and filter.
-const streamsFor = (id, provider = MANIFEST.id) => id === "tt-e2e-proxy" ? [{
+const streamsFor = (id, provider = MANIFEST.id) => id === TRAVEL_VIDEO_ID ? [{
+  name: "Travel 720p",
+  title: `English \u{1F1EC}\u{1F1E7} 720p\nSRCSEL Travel fixture`,
+  url: `http://127.0.0.1:${port}/travel-video.mp4?token=${TRAVEL_SOURCE_SECRET}`,
+  behaviorHints: { filename: "SRCSEL Travel fixture S01E01.mp4", videoSize: 12_000_000 },
+}] : id === "tt-e2e-proxy" ? [{
   name: "Proxy fixture", title: "Movie query-canary", url: `http://127.0.0.1:${port}/proxy-fixture.mp4?token=query-canary`,
   behaviorHints: { proxyHeaders: { request: { Authorization: "Bearer header-canary" } } },
   subtitles: [{ url: `http://127.0.0.1:${port}/proxy-subtitle?token=subtitle-canary`, lang: "cs" }],
@@ -123,6 +154,14 @@ const server = createServer(async (req, res) => {
   const parts = route(pathname);
 
   if (pathname === "/browser-video.webm") return void serveVideo(req, res, browserVideo);
+  if (pathname === "/travel-video.mp4") {
+    try {
+      return void serveVideo(req, res, await prepareTravelVideo());
+    } catch {
+      res.writeHead(500, { "content-type": "text/plain" });
+      return res.end("travel fixture media could not be generated");
+    }
+  }
   if (pathname === "/proxy-control") { proxyMode = searchParams.get("mode") ?? "video"; if (searchParams.get("reset")) mediaRequests = 0; return json(res, { ok: true, requests: mediaRequests }); }
   if (pathname === "/proxy-requests") return json(res, { requests: mediaRequests });
   if (pathname === "/source-control") {
