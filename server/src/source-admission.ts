@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { allowedAddons, orderedForUser } from "./addons.js";
 import { mayDownloadToDevice, mayDownloadToLibrary } from "./downloads.js";
 import { LANGUAGE_NAMES, normalizeLanguage } from "./language.js";
@@ -6,6 +7,7 @@ import { remoteLibraryVisibleTo } from "./media-server-access.js";
 import type { MediaConnectionRecord, RemoteLibraryRecord } from "./media-server-types.js";
 import {
   SOURCE_PROFILE_DEFINITIONS,
+  SOURCE_PROFILE_IDS,
   type SourceOperation,
   type SourceProfileDefinition,
   type SourceProfileViewer,
@@ -259,6 +261,49 @@ export function materializeSourceAdmissionPolicy(
   });
 }
 
+const validateTravelPolicy = (
+  profileRevision: number,
+  operation: SourceOperation,
+  selectedProviderKeys: readonly string[],
+  policy: SourcePolicyV1,
+): void => {
+  const definition = SOURCE_PROFILE_DEFINITIONS.find((candidate) =>
+    candidate.id === SOURCE_PROFILE_IDS.travel);
+  if (!definition || definition.revision !== profileRevision || !definition.operations.includes(operation)) {
+    return failValidation();
+  }
+
+  const languageCode = (definitionRef: LanguageRef, snapshotRef: LanguageRef): string | undefined => {
+    if (!("preference" in definitionRef)) return undefined;
+    return "code" in snapshotRef ? snapshotRef.code : failValidation();
+  };
+  const audioLanguage = languageCode(
+    definition.policy.constraints.audio.preferred,
+    policy.constraints.audio.preferred,
+  );
+  const definitionSubtitles = definition.policy.constraints.subtitles;
+  let subtitleLanguage: string | undefined;
+  if (definitionSubtitles.mode !== "off") {
+    const snapshotPreferred = policy.constraints.subtitles.preferred;
+    if (definitionSubtitles.preferred === undefined
+      || policy.constraints.subtitles.mode === "off"
+      || snapshotPreferred === undefined) {
+      return failValidation();
+    }
+    subtitleLanguage = languageCode(definitionSubtitles.preferred, snapshotPreferred);
+  }
+
+  const expected = materializeSourceAdmissionPolicy(
+    definition.policy,
+    selectedProviderKeys,
+    {
+      ...(audioLanguage === undefined ? {} : { audioLanguage }),
+      ...(subtitleLanguage === undefined ? {} : { subtitleLanguage }),
+    },
+  );
+  if (!isDeepStrictEqual(policy, expected)) return failValidation();
+};
+
 const declaresStream = (addon: AddonRecord): boolean =>
   (addon.manifest.resources ?? []).some((resource) =>
     typeof resource === "string" ? resource === "stream" : resource.name === "stream");
@@ -377,6 +422,9 @@ export function parseSourceAdmissionSnapshotV1(input: unknown): SourceAdmissionS
       if (criterion.kind === "providerOrder") {
         if ("from" in criterion || !sameKeys(selectedProviderKeys, criterion.keys)) return failValidation();
       }
+    }
+    if (profileId === SOURCE_PROFILE_IDS.travel) {
+      validateTravelPolicy(profileRevision, parsedOperation, selectedProviderKeys, policy);
     }
 
     return {

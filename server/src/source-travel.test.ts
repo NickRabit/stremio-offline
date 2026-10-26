@@ -115,7 +115,7 @@ const snapshotWithKinds = (
       sourceKinds,
     },
   });
-  return parseSourceAdmissionSnapshotV1({
+  return {
     schemaVersion: 1,
     profile: { id: SOURCE_PROFILE_IDS.travel, revision: 1 },
     operation: "downloadToLibrary",
@@ -125,7 +125,7 @@ const snapshotWithKinds = (
       providerKeys,
       { audioLanguage: "en", subtitleLanguage: "en" },
     ),
-  });
+  };
 };
 
 const always = () => true;

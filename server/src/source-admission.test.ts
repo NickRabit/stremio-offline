@@ -438,6 +438,45 @@ test("Travel freezes its quality floor, ascending size and local-copy policy", (
   assert.equal(snapshot.policy.nextEpisode, "profile");
 });
 
+test("Travel snapshot parsing rematerializes only its mutable provider and language fields", () => {
+  const materialized = materializeSourceAdmission(
+    reference(SOURCE_PROFILE_IDS.travel),
+    context(account(), {
+      addons: [addon("travel-source"), addon("travel-backup")],
+      audioLanguage: "cs",
+      subtitleLanguage: "en",
+      operation: "downloadToLibrary",
+    }),
+  );
+  const snapshot = parseSourceAdmissionSnapshotV1(JSON.parse(JSON.stringify(materialized)));
+  assert.deepEqual(snapshot.providerKeys, ["addon:travel-source", "addon:travel-backup"]);
+  assert.deepEqual(snapshot.policy.constraints.audio.preferred, { code: "cs" });
+  assert.deepEqual(snapshot.policy.constraints.subtitles.preferred, { code: "en" });
+
+  const reordered = JSON.parse(JSON.stringify(snapshot));
+  reordered.policy = Object.fromEntries(Object.entries(reordered.policy).reverse());
+  reordered.policy.constraints = Object.fromEntries(Object.entries(reordered.policy.constraints).reverse());
+  reordered.policy.constraints.audio = Object.fromEntries(
+    Object.entries(reordered.policy.constraints.audio).reverse(),
+  );
+  assert.deepEqual(parseSourceAdmissionSnapshotV1(reordered), snapshot);
+
+  const reject = (tamper: (value: SourceAdmissionSnapshotV1) => void) => {
+    const value = structuredClone(snapshot);
+    tamper(value);
+    expectValidationError(() => parseSourceAdmissionSnapshotV1(value));
+  };
+  reject((value) => { value.policy.constraints.heightPixels = { min: 1 }; });
+  reject((value) => {
+    const ranking = value.policy.criteria.find((criterion) => criterion.kind === "size");
+    assert.ok(ranking?.kind === "size");
+    ranking.direction = "desc";
+  });
+  reject((value) => { value.policy.constraints.audio.mode = "listed"; });
+  reject((value) => { value.policy.existingLocalCopy = "any"; });
+  reject((value) => { value.profile.revision = 2; });
+});
+
 test("snapshots are JSON-safe deep copies and leak no provider configuration", () => {
   const provider = addon("opaque-addon-key", { name: "Secret display name", allowedUsers: [MEMBER] });
   const local = library("lib_00000001", [MEMBER]);

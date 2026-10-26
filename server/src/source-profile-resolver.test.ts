@@ -5,7 +5,6 @@ import { defaultDownloadSettings } from "./naming.js";
 import type { MediaInfo } from "./probe.js";
 import {
   materializeSourceAdmissionPolicy,
-  parseSourceAdmissionSnapshotV1,
   type SourceAdmissionSnapshotV1,
 } from "./source-admission.js";
 import {
@@ -42,13 +41,13 @@ const snapshot = (
     ? { mode: "off" }
     : { mode: subtitleMode, preferred: { code: "en" } };
   const policy = parseSourcePolicyV1(source);
-  return parseSourceAdmissionSnapshotV1({
+  return {
     schemaVersion: 1,
     profile: { id: SOURCE_PROFILE_IDS.travel, revision: 1 },
     operation: "downloadToLibrary",
     providerKeys,
     policy: materializeSourceAdmissionPolicy(policy, providerKeys, {}),
-  });
+  };
 };
 
 const user = (overrides: Partial<UserRecord> = {}): UserRecord => ({

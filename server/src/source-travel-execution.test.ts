@@ -3,7 +3,6 @@ import test from "node:test";
 import type { MediaInfo } from "./probe.js";
 import {
   materializeSourceAdmissionPolicy,
-  parseSourceAdmissionSnapshotV1,
   type SourceAdmissionSnapshotV1,
 } from "./source-admission.js";
 import {
@@ -48,13 +47,13 @@ const snapshot = (
       ...(options.fallbackSubtitle === undefined ? {} : { fallback: { code: options.fallbackSubtitle } }),
     };
   const policy = parseSourcePolicyV1(source);
-  return parseSourceAdmissionSnapshotV1({
+  return {
     schemaVersion: 1,
     profile: { id: SOURCE_PROFILE_IDS.travel, revision: 1 },
     operation: "downloadToLibrary",
     providerKeys,
     policy: materializeSourceAdmissionPolicy(policy, providerKeys, {}),
-  });
+  };
 };
 
 const mediaInfo = (input: {

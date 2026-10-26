@@ -73,7 +73,7 @@ const travelWithNumericBounds = (): SourceAdmissionSnapshotV1 => {
       durationSeconds: { min: 60 },
     },
   });
-  return parseSourceAdmissionSnapshotV1({
+  return {
     schemaVersion: 1,
     profile: { id: SOURCE_PROFILE_IDS.travel, revision: 1 },
     operation: "downloadToLibrary",
@@ -83,7 +83,7 @@ const travelWithNumericBounds = (): SourceAdmissionSnapshotV1 => {
       providerKeys,
       { audioLanguage: "en", subtitleLanguage: "en" },
     ),
-  });
+  };
 };
 
 const mediaInfo = (input: {

@@ -1107,9 +1107,12 @@ test("malformed persisted snapshots make the queue unreadable without rewriting 
   const valid = travelSnapshot();
   const malformedScope = structuredClone(valid);
   malformedScope.policy.scope = { mode: "allAvailable" };
+  const tamperedHeight = structuredClone(valid);
+  tamperedHeight.policy.constraints.heightPixels = { min: 1 };
   const cases: Array<{ name: string; value: unknown }> = [
     { name: "unknown schema version", value: { ...structuredClone(valid), schemaVersion: 2 } },
     { name: "malformed scope", value: malformedScope },
+    { name: "tampered Travel height", value: tamperedHeight },
     { name: "null snapshot", value: null },
     { name: "wrong operation", value: { ...structuredClone(valid), operation: "play" } },
   ];
