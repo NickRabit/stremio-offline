@@ -308,6 +308,14 @@ const compareNumeric = (
   return direction === "asc" ? difference : -difference;
 };
 
+const rankingBytes = (candidate: SourceEvidenceCandidateV1): SourceFact<number> => {
+  if (candidate.facts.bytes.evidence !== "unknown") return candidate.facts.bytes;
+  const hint = candidate.hints?.bytes;
+  return typeof hint === "number" && Number.isFinite(hint) && hint >= 0
+    ? { evidence: "listed", value: hint }
+    : { evidence: "unknown" };
+};
+
 const compareIdentifiers = (left: string, right: string): number =>
   left < right ? -1 : left > right ? 1 : 0;
 
@@ -359,7 +367,7 @@ export function compareEligibleSourceCandidates(
         break;
       }
       case "size":
-        comparison = compareNumeric(left.candidate.facts.bytes, right.candidate.facts.bytes, criterion.direction);
+        comparison = compareNumeric(rankingBytes(left.candidate), rankingBytes(right.candidate), criterion.direction);
         break;
       case "resolution":
         comparison = compareNumeric(

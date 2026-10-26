@@ -471,6 +471,50 @@ test("unknown numeric values sort last in both directions", () => {
   }
 });
 
+test("listing size hints break ties only for soft size ranking", () => {
+  const facts = {
+    audio: {
+      listed: unknown<readonly string[]>(),
+      tracks: fact(["cs"]),
+    },
+    heightPixels: fact(480),
+  } as const;
+  const large = candidate({
+    sourceId: "a-large",
+    hints: { bytes: 200 },
+    facts,
+  });
+  const small = candidate({
+    sourceId: "z-small",
+    hints: { bytes: 100 },
+    facts,
+  });
+  const ranked = rankEligibleSources(
+    snapshot({ criteria: [{ kind: "size", direction: "asc" }] }),
+    [large, small],
+  );
+  assert.deepEqual(ranked.map((item) => item.candidate.sourceId), ["z-small", "a-large"]);
+
+  assert.deepEqual(
+    evaluateSourceCandidate(snapshot({ bytes: { max: 150 } }), small),
+    { status: "needsInspection", reasons: [{ code: "inspectionRequired", field: "bytes" }] },
+  );
+});
+
+test("provider order still decides when both size facts and hints are unknown", () => {
+  const ranked = rankEligibleSources(
+    snapshot({
+      providerKeys: ["addon:two", "addon:one"],
+      criteria: [{ kind: "size", direction: "asc" }],
+    }),
+    [
+      candidate({ sourceId: "one", providerKey: "addon:one" }),
+      candidate({ sourceId: "two", providerKey: "addon:two" }),
+    ],
+  );
+  assert.deepEqual(ranked.map((item) => item.candidate.sourceId), ["two", "one"]);
+});
+
 test("ranking does not add a size preference when criteria omit size", () => {
   const profile = snapshot();
   const ranked = rankEligibleSources(profile, [
