@@ -227,10 +227,11 @@ rules.preset.smaller
 rules.preset.myLanguage
 rules.audioPrefer
 rules.audioOnly
+rules.resolutionValue
 rules.resolutionRange
 rules.resolutionAtLeast
 rules.resolutionAtMost
-rules.maxSize
+rules.summary.upToEpisode
 rules.summaryJoin
 save.adding
 saveTarget.defaultLibrary

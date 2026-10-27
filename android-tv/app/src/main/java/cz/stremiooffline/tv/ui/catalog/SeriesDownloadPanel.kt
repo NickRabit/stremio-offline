@@ -13,6 +13,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -459,23 +460,32 @@ private fun ruleName(profile: SourceProfileDto): String {
   return if (label != null) stringResource(label) else profile.name.orEmpty()
 }
 
-/** `720-1080p · prefer audio · ≤ 4 GB`, omitting a part the public policy does not carry. */
+/** `720p–1080p · prefer my language · up to ~4 GB per episode`, omitting a part the policy does not carry. */
 @Composable
 private fun ruleSummary(policy: SourceProfilePolicyDto?): String? {
   val parts = ruleSummaryParts(policy)
   if (parts.isEmpty()) return null
+  val locale = LocalConfiguration.current.locales[0]
   val texts = ArrayList<String>(parts.size)
   for (part in parts) {
     texts += when (part) {
-      is RuleSummaryPart.Resolution -> if (part.min != null && part.max != null) {
-        stringResource(R.string.rules_resolution_range, part.min.toString(), part.max.toString())
-      } else if (part.min != null) {
-        stringResource(R.string.rules_resolution_at_least, part.min.toString())
-      } else {
-        stringResource(R.string.rules_resolution_at_most, part.max?.toString().orEmpty())
+      is RuleSummaryPart.Resolution -> when {
+        part.min != null && part.max != null && part.min == part.max ->
+          stringResource(R.string.rules_resolution_value, part.min.toString())
+        part.min != null && part.max != null ->
+          stringResource(R.string.rules_resolution_range, part.min.toString(), part.max.toString())
+        part.min != null ->
+          stringResource(R.string.rules_resolution_at_least, part.min.toString())
+        else ->
+          stringResource(R.string.rules_resolution_at_most, part.max?.toString().orEmpty())
       }
-      is RuleSummaryPart.Audio -> stringResource(if (part.only) R.string.rules_audio_only else R.string.rules_audio_prefer)
-      is RuleSummaryPart.MaxBytes -> stringResource(R.string.rules_max_size, formatRuleGigabytes(part.bytes))
+      is RuleSummaryPart.Audio -> stringResource(
+        if (part.only) R.string.rules_audio_only else R.string.rules_audio_prefer,
+      ).replaceFirstChar { it.lowercase(locale) }
+      is RuleSummaryPart.MaxBytes -> stringResource(
+        R.string.rules_summary_up_to_episode,
+        formatRuleGigabytes(part.bytes),
+      )
     }
   }
   var line = texts.first()

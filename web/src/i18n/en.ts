@@ -606,6 +606,9 @@ export const en = {
   "rules.resolutionTo": "Resolution to",
   "rules.resolutionAny": "No limit",
   "rules.resolutionValue": "{height}p",
+  "rules.resolutionRange": "{min}p–{max}p",
+  "rules.resolutionAtLeast": "{height}p+",
+  "rules.resolutionAtMost": "≤{height}p",
   "rules.audio": "Audio",
   "rules.audioPrefer": "Prefer my language",
   "rules.audioOnly": "My language only",
@@ -646,6 +649,7 @@ export const en = {
   "rules.summary.anyResolution": "any resolution",
   "rules.summary.upToEpisode": "up to ~{size} GB per episode",
   "rules.summary.upToMovie": "up to ~{size} GB per film",
+  "rules.summaryJoin": "{first} · {second}",
 
   // Sources for a title.
   "sources.heading": "Sources",

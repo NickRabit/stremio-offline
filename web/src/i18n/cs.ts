@@ -601,6 +601,9 @@ export const cs: Catalog = {
   "rules.resolutionTo": "Rozlišení do",
   "rules.resolutionAny": "Bez omezení",
   "rules.resolutionValue": "{height}p",
+  "rules.resolutionRange": "{min}p–{max}p",
+  "rules.resolutionAtLeast": "{height}p+",
+  "rules.resolutionAtMost": "≤{height}p",
   "rules.audio": "Zvuk",
   "rules.audioPrefer": "Upřednostnit můj jazyk",
   "rules.audioOnly": "Jen můj jazyk",
@@ -641,6 +644,7 @@ export const cs: Catalog = {
   "rules.summary.anyResolution": "libovolné rozlišení",
   "rules.summary.upToEpisode": "do ~{size} GB na díl",
   "rules.summary.upToMovie": "do ~{size} GB na film",
+  "rules.summaryJoin": "{first} · {second}",
 
   // Sources for a title.
   "sources.heading": "Zdroje",
