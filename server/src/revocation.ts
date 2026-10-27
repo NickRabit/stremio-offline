@@ -1,7 +1,8 @@
 import { addonAllowed } from "./addons.js";
+import { addonIdentity } from "./addon-identity.js";
 import type { AirPlayAccess } from "./airplay-access.js";
 import { readSession } from "./auth.js";
-import { jobLibraryId, mayDownloadToDevice, mayDownloadToLibrary, type DownloadJob } from "./downloads.js";
+import { isSelectedTravelJob, jobLibraryId, mayDownloadToDevice, mayDownloadToLibrary, type DownloadJob } from "./downloads.js";
 import { libraryVisible, parseLibraryPath, type LibraryRecord, type Viewer } from "./libraries.js";
 import { log } from "./logger.js";
 import { remoteContentAccessible, remoteLibraryVisibleTo, type RemoteAccessSource } from "./media-server-access.js";
@@ -350,7 +351,25 @@ export class Revocations {
     if (opts.addonKey === undefined) return false;
     // The subtitle counts as much as the video: it is commonly chosen from another addon and
     // is fetched on resume, which can be long after that addon was taken away.
-    if (job.stream?.addonKey === opts.addonKey || job.subtitle?.addonKey === opts.addonKey) return true;
+    const streamTouches = job.stream?.addonKey === opts.addonKey;
+    const subtitleTouches = job.subtitle?.addonKey === opts.addonKey;
+    if (streamTouches || subtitleTouches) {
+      const ownerId = this.deps.queue.ownerOf(job);
+      const owner = ownerId ? findUserById(this.deps.source.users(), ownerId) : undefined;
+      const addon = this.deps.source.addons().find((item) => item.key === opts.addonKey);
+      const stillAvailable = addon?.enabled
+        && owner !== undefined
+        && !owner.disabled
+        && addonAllowed(addon, { id: owner.id, role: owner.role });
+      if (stillAvailable) {
+        if (!isSelectedTravelJob(job)) return false;
+        const captured = streamTouches
+          ? job.travelStreamAddonIdentity
+          : job.travelSubtitleAddonIdentity;
+        return captured !== addonIdentity(addon);
+      }
+      return true;
+    }
     if (!job.stream && job.source) {
       if (!job.source.selection) return job.status === "checking";
       if (job.source.selection?.addonKeys.includes(opts.addonKey)) return true;

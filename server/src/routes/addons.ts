@@ -1,4 +1,5 @@
 import type express from "express";
+import { addonIdentity } from "../addon-identity.js";
 import { manifestChanged, refreshManifests, type RefreshOutcome } from "../addon-refresh.js";
 import { allowedAddons, loadAddon, orderedForUser, orderFor } from "../addons.js";
 import { AppError } from "../errors.js";
@@ -164,12 +165,14 @@ export function registerAddonsRoutes(app: express.Application, deps: AddonsDeps)
     // The switch and the grant list on either side of the write, taken from the state the write
     // lands on: the sweep below needs the transition that really happened, not an earlier read.
     let before: { enabled: boolean; allowedUsers?: string[] } = { enabled: existing.enabled, allowedUsers: existing.allowedUsers };
+    let beforeIdentity = addonIdentity(existing);
     let result: AddonRecord | undefined;
     await store.update((state) => {
       assertStillAdmin(state.users ?? [], actor!);
       const addon = state.addons.find((a) => a.key === req.params.key);
       if (!addon) throw new AppError("The addon was not found.", "err.addonNotFound");
       before = { enabled: addon.enabled, allowedUsers: addon.allowedUsers };
+      beforeIdentity = addonIdentity(addon);
       // The grant list is merged over what lies dormant on the record now: only the accounts
       // the request names change, and the ones it leaves out keep the value they hold.
       let allowedUsers: string[] | undefined;
@@ -207,6 +210,7 @@ export function registerAddonsRoutes(app: express.Application, deps: AddonsDeps)
     });
     const after = result;
     if (after) {
+      if (beforeIdentity !== addonIdentity(after)) await stopContentAccess({ addonKey: after.key });
       // Switching it off takes it from everybody, which no counter records.
       if (before.enabled && !after.enabled) await stopContentAccess({ addonKey: after.key });
       else {

@@ -1,4 +1,5 @@
 import type express from "express";
+import { addonIdentity } from "../addon-identity.js";
 import { normalizeRefreshHours } from "../addon-refresh.js";
 import { allowedAddons, loadAddon } from "../addons.js";
 import { createSettingsBackup, parseSettingsBackup, remapBackupLibraries } from "../backup.js";
@@ -136,12 +137,16 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
     }
     // The list as it is on either side of the write, read from the state the write lands on:
     // the sweep below needs the transition that really happened, not an earlier read.
-    let before: Array<{ key: string; enabled: boolean }> = [];
+    let before: Array<{ key: string; enabled: boolean; identity: string }> = [];
     const applySettings = (state: State) => {
       // Every manifest was fetched before this point, which is ample time for the gate's
       // answer to go stale.
       assertStillAdmin(state.users ?? [], actor);
-      before = state.addons.map((addon) => ({ key: addon.key, enabled: addon.enabled }));
+      before = state.addons.map((addon) => ({
+        key: addon.key,
+        enabled: addon.enabled,
+        identity: addonIdentity(addon),
+      }));
       // A backup carries the instance's configuration, not its accounts: the ids in a grant
       // list belong to this install and would mean nothing in a backup taken from another. So
       // the grants are not read from the file -- they are kept from the record this state holds
@@ -177,7 +182,9 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
     // already running on them, which no counter records.
     for (const addon of before) {
       const after = store.addons().find((item) => item.key === addon.key);
-      if (addon.enabled && (!after || !after.enabled)) await stopContentAccess({ addonKey: addon.key });
+      if (addon.enabled && (!after || !after.enabled || addon.identity !== addonIdentity(after))) {
+        await stopContentAccess({ addonKey: addon.key });
+      }
     }
     log("INFO", "Settings backup imported", { addons: loaded.length, version: backup.version, remapped: parsed.remaps.length });
     res.json({ settings: settingsView(req), addons: store.addons().map(publicAddon), remapped: parsed.remaps.length });

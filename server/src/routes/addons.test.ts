@@ -1,15 +1,18 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import express from "express";
+import { applyAddonManifestRefreshes } from "../addon-identity.js";
+import type { RefreshOutcome } from "../addon-refresh.js";
 import { messageKeyOf } from "../errors.js";
 import { defaultDownloadSettings } from "../naming.js";
 import { roleMiddleware } from "../roles.js";
-import { publicAddon, setFetchTransport } from "../security.js";
+import { publicAddon, setDnsLookup, setFetchTransport } from "../security.js";
 import type { Store } from "../store.js";
 import type { AddonRecord, AddonRole } from "../types.js";
 import { emptyUserData, type UserData, type UserRecord } from "../users.js";
+import type { StopContentOptions } from "../revocation.js";
 import { registerAddonsRoutes, type AddonsDeps } from "./addons.js";
 
 interface Harness {
@@ -18,6 +21,8 @@ interface Harness {
   viewed: AddonRecord[];
   stored: () => AddonRecord[];
   data: (id: string) => UserData | undefined;
+  refreshes: RefreshOutcome[][];
+  stopCalls: StopContentOptions[];
   /** How many writes are waiting for `releaseWrites`, so a test can interleave two of them. */
   pendingWrites(): number;
   holdWrites(): void;
@@ -52,6 +57,8 @@ const mount = async (records: AddonRecord[] = [addon("alpha")]): Promise<Harness
   // and the write-time role check is one of the things that does.
   const state = { addons: records, users: [admin, ordinary, other], userData: { [BOB]: emptyUserData(), [CAROL]: emptyUserData() } as Record<string, UserData> };
   const viewed: AddonRecord[] = [];
+  const refreshes: RefreshOutcome[][] = [];
+  const stopCalls: StopContentOptions[] = [];
   const userOf = (req: express.Request) =>
     req.header("x-user") === BOB ? ordinary : req.header("x-user") === CAROL ? other : admin;
   // A write can be held, so two requests can both read the state before either mutator runs.
@@ -81,8 +88,11 @@ const mount = async (records: AddonRecord[] = [addon("alpha")]): Promise<Harness
     stopOwnedPlayback: async () => undefined,
     stopUserSessions: async () => undefined,
     requireAccess: () => undefined,
-    stopContentAccess: async () => undefined,
-    storeRefreshed: async () => undefined,
+    stopContentAccess: async (options) => { stopCalls.push(options); },
+    storeRefreshed: async (outcomes) => {
+      refreshes.push(outcomes);
+      for (const addonKey of applyAddonManifestRefreshes(state.addons, outcomes)) stopCalls.push({ addonKey });
+    },
     publicAddonView: (record) => {
       viewed.push(record);
       const view = { ...publicAddon(record), viewed: true };
@@ -105,6 +115,8 @@ const mount = async (records: AddonRecord[] = [addon("alpha")]): Promise<Harness
   return {
     base: `http://127.0.0.1:${port}`,
     viewed,
+    refreshes,
+    stopCalls,
     stored: () => state.addons,
     demote: (id: string) => { state.users = state.users.map((user) => user.id === id ? { ...user, role: "user" } as UserRecord : user); },
     data: (id: string) => state.userData[id],
@@ -127,6 +139,24 @@ const api = (base: string, pathname: string, init: { method?: string; body?: unk
     },
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
   });
+
+const useManifestTransport = (
+  t: TestContext,
+  manifests: (url: URL) => { id: string; name: string; version: string; resources?: string[] },
+) => {
+  setDnsLookup((_hostname, options, callback) => {
+    if (options.all) callback(null, [{ address: "8.8.8.8", family: 4 }]);
+    else callback(null, "8.8.8.8", 4);
+  });
+  setFetchTransport(async (url) => new Response(JSON.stringify(manifests(url)), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  }));
+  t.after(() => {
+    setDnsLookup();
+    setFetchTransport();
+  });
+};
 
 const keysOf = (harness: Harness) => harness.stored().map((record) => record.key);
 const failure = async (response: Response) => (await response.json()) as { error: string; messageKey?: string };
@@ -397,4 +427,68 @@ test("a PATCH naming an unknown account is refused before any manifest is fetche
   assert.equal(response.status, 400);
   assert.equal(messageKeyOf(await response.json()), "err.unknownUser");
   assert.equal(fetched, 0, "the manifest is not fetched for a request that is refused anyway");
+});
+
+test("single and all refresh sweeps follow effective addon identity changes", async (t) => {
+  const harness = await mount([addon("alpha"), addon("beta")]);
+  t.after(harness.close);
+  useManifestTransport(t, (url) => {
+    const key = url.hostname.split(".")[0]!;
+    return {
+      id: key,
+      name: `Addon ${key}`,
+      version: url.hostname.startsWith("alpha") ? "2.0.0" : "1.0.0",
+      ...(url.hostname.startsWith("alpha") ? { resources: ["stream"] } : {}),
+    };
+  });
+
+  assert.equal((await api(harness.base, "/api/addons/alpha/refresh", { method: "POST" })).status, 200);
+  assert.deepEqual(harness.stopCalls, [{ addonKey: "alpha" }]);
+  harness.stopCalls.length = 0;
+
+  assert.equal((await api(harness.base, "/api/addons/refresh", { method: "POST" })).status, 200);
+  assert.deepEqual(harness.stopCalls, [], "a second round with unchanged identities pauses nothing");
+});
+
+test("refresh identity updates are shared with the automatic refresh path", () => {
+  const records = [addon("alpha")];
+  const changed = applyAddonManifestRefreshes(records, [{
+    key: "alpha",
+    changed: true,
+    manifest: { ...records[0]!.manifest, version: "2.0.0" },
+  }]);
+
+  assert.deepEqual(changed, ["alpha"]);
+  assert.equal(records[0]?.manifest.version, "2.0.0");
+});
+
+test("URL and role reconfiguration sweep only when the stored identity changes", async (t) => {
+  const harness = await mount([addon("alpha")]);
+  t.after(harness.close);
+  useManifestTransport(t, () => ({
+    id: "alpha",
+    name: "Addon alpha",
+    version: "2.0.0",
+    resources: ["stream"],
+  }));
+
+  const reconfigured = await api(harness.base, "/api/addons/alpha", {
+    method: "PATCH",
+    body: { url: "https://alpha.example/reconfigured/manifest.json" },
+  });
+  assert.equal(reconfigured.status, 200);
+  assert.deepEqual(harness.stopCalls, [{ addonKey: "alpha" }]);
+  harness.stopCalls.length = 0;
+
+  assert.equal((await api(harness.base, "/api/addons/alpha", {
+    method: "PATCH",
+    body: { globalSearch: false },
+  })).status, 200);
+  assert.deepEqual(harness.stopCalls, [], "settings outside the identity pause nothing");
+
+  assert.equal((await api(harness.base, "/api/addons/alpha", {
+    method: "PATCH",
+    body: { role: "catalog" },
+  })).status, 200);
+  assert.deepEqual(harness.stopCalls, [{ addonKey: "alpha" }]);
 });

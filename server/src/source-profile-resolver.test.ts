@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { addonIdentity } from "./addon-identity.js";
 import type { DownloadJob, DownloadSelection } from "./downloads.js";
 import { defaultDownloadSettings } from "./naming.js";
 import type { MediaInfo } from "./probe.js";
@@ -213,8 +214,38 @@ test("asks only scoped providers and returns the selected addon settings", async
   if (result.status !== "selected") return;
   assert.equal(result.stream.addonKey, "one");
   assert.deepEqual(result.settings, selectedSettings);
+  assert.equal(result.streamAddonIdentity, addonIdentity(scoped));
   assert.deepEqual(requested, [["one"]]);
   assert.deepEqual(probed, ["one"]);
+});
+
+test("selected stream and subtitle identities are hashes captured at the final check", async () => {
+  const streamAddon = addon("one");
+  const subs = subtitleAddon();
+  const state = { users: [user()], addons: [streamAddon, subs] };
+  const resolver = resolverFor(state, {
+    listStreams: async () => [stream("one", "https://media.example/episode.mkv?token=stream-secret")],
+    listSubtitles: async () => [{
+      addonKey: "subs",
+      url: "https://subs.example/episode.srt?token=subtitle-secret",
+      lang: "en",
+    }],
+    inspect: async () => media(),
+  });
+
+  const result = await resolver(input(snapshot(["addon:one"], { subtitleMode: "required" }),
+    new AbortController().signal));
+
+  assert.equal(result.status, "selected");
+  if (result.status !== "selected") return;
+  assert.equal(result.streamAddonIdentity, addonIdentity(streamAddon));
+  assert.equal(result.subtitleAddonIdentity, addonIdentity(subs));
+  assert.match(result.streamAddonIdentity, /^[0-9a-f]{64}$/);
+  assert.match(result.subtitleAddonIdentity, /^[0-9a-f]{64}$/);
+  assert.doesNotMatch(JSON.stringify({
+    streamAddonIdentity: result.streamAddonIdentity,
+    subtitleAddonIdentity: result.subtitleAddonIdentity,
+  }), /manifest\.json|stream-secret|subtitle-secret/);
 });
 
 test("a stream grant or addon identity that changes during listing denies access before probing", async () => {

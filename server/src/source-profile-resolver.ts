@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
 import { allowedAddons } from "./addons.js";
+import { addonIdentity, isAddonIdentity } from "./addon-identity.js";
 import { mayDownloadToLibrary, type DownloadJob } from "./downloads.js";
 import type { SourceAdmissionSnapshotV1 } from "./source-admission.js";
 import type { SourceResolverDeps } from "./source-resolver.js";
@@ -29,6 +29,8 @@ export type TravelProfileResolution =
   | TravelUnselectedOutcome
   | (Extract<TravelAddonStreamOutcome, { status: "selected" }> & {
     readonly settings: AddonDownloadSettings;
+    readonly streamAddonIdentity: string;
+    readonly subtitleAddonIdentity?: string;
   });
 
 interface LiveAuthorization {
@@ -36,17 +38,6 @@ interface LiveAuthorization {
   readonly usable: AddonRecord[];
   readonly scopedStreamProviders: AddonRecord[];
 }
-
-const identityOf = (addon: AddonRecord): string =>
-  JSON.stringify([
-    addon.manifestUrl,
-    addon.manifest.version,
-    addon.role,
-    addon.manifest.resources ?? [],
-  ]);
-
-const identityFingerprint = (addon: AddonRecord): string =>
-  createHash("sha256").update(identityOf(addon), "utf8").digest("hex");
 
 const emptyObservations = (): TravelObservationSummary => ({
   probesUsed: 0,
@@ -75,7 +66,7 @@ const sameIdentity = (
   captured: ReadonlyMap<string, string>,
   addon: AddonRecord | undefined,
 ): addon is AddonRecord =>
-  addon !== undefined && captured.get(addon.key) === identityOf(addon);
+  addon !== undefined && captured.get(addon.key) === addonIdentity(addon);
 
 const permittedScopedStreams = (
   authorization: LiveAuthorization,
@@ -92,7 +83,7 @@ const scopeStampFor = (
   ownerUserId,
   providerKeys: [...snapshot.providerKeys].sort(),
   scopedStreamAddons: streamProviders
-    .map((addon) => ({ key: addon.key, identity: identityFingerprint(addon) }))
+    .map((addon) => ({ key: addon.key, identity: addonIdentity(addon) }))
     .sort((left, right) => left.key < right.key ? -1 : left.key > right.key ? 1 : 0),
 });
 
@@ -122,7 +113,7 @@ export function createTravelProfileResolver(
     if (initial.scopedStreamProviders.length === 0) return accessDenied();
 
     const streamIdentities = new Map(
-      initial.scopedStreamProviders.map((addon) => [addon.key, identityOf(addon)]),
+      initial.scopedStreamProviders.map((addon) => [addon.key, addonIdentity(addon)]),
     );
 
     let listed: StreamItem[];
@@ -141,7 +132,7 @@ export function createTravelProfileResolver(
     let streams = listed.filter((stream) =>
       typeof stream.addonKey === "string"
       && streamProviders.some((addon) =>
-        addon.key === stream.addonKey && streamIdentities.get(addon.key) === identityOf(addon)));
+        addon.key === stream.addonKey && streamIdentities.get(addon.key) === addonIdentity(addon)));
 
     try {
       await deps.serverReady;
@@ -156,7 +147,7 @@ export function createTravelProfileResolver(
     if (streamProviders.length === 0) return accessDenied();
 
     const subtitleIdentities = new Map(
-      beforeSubtitles.usable.map((addon) => [addon.key, identityOf(addon)]),
+      beforeSubtitles.usable.map((addon) => [addon.key, addonIdentity(addon)]),
     );
     let listedSubtitles: SubtitleItem[] = [];
     if (snapshot.policy.constraints.subtitles.mode !== "off") {
@@ -181,12 +172,12 @@ export function createTravelProfileResolver(
     streams = streams.filter((stream) =>
       typeof stream.addonKey === "string"
       && streamProviders.some((addon) =>
-        addon.key === stream.addonKey && streamIdentities.get(addon.key) === identityOf(addon)));
+        addon.key === stream.addonKey && streamIdentities.get(addon.key) === addonIdentity(addon)));
     const externalSubtitles = listedSubtitles.filter((subtitle) =>
       typeof subtitle.addonKey === "string"
       && beforeVerification.usable.some((addon) =>
         addon.key === subtitle.addonKey
-        && subtitleIdentities.get(addon.key) === identityOf(addon)));
+        && subtitleIdentities.get(addon.key) === addonIdentity(addon)));
 
     const shouldContinue = (): boolean => {
       if (signal.aborted) return false;
@@ -223,6 +214,8 @@ export function createTravelProfileResolver(
       addon.key === outcome.stream.addonKey);
     if (!sameIdentity(streamIdentities, selectedStreamProvider)) return accessDenied();
 
+    const streamAddonIdentity = addonIdentity(selectedStreamProvider);
+    let subtitleAddonIdentity: string | undefined;
     if (outcome.subtitle?.addonKey !== undefined) {
       const selectedSubtitleAddon = final.usable.find((addon) =>
         addon.key === outcome.subtitle!.addonKey);
@@ -230,11 +223,18 @@ export function createTravelProfileResolver(
         ?? streamIdentities.get(outcome.subtitle.addonKey);
       if (capturedIdentity === undefined
         || selectedSubtitleAddon === undefined
-        || identityOf(selectedSubtitleAddon) !== capturedIdentity) {
+        || addonIdentity(selectedSubtitleAddon) !== capturedIdentity
+        || !isAddonIdentity(capturedIdentity)) {
         return accessDenied();
       }
+      subtitleAddonIdentity = capturedIdentity;
     }
 
-    return { ...outcome, settings: selectedStreamProvider.downloadSettings };
+    return {
+      ...outcome,
+      settings: selectedStreamProvider.downloadSettings,
+      streamAddonIdentity,
+      ...(subtitleAddonIdentity === undefined ? {} : { subtitleAddonIdentity }),
+    };
   };
 }

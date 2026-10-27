@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from "
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { addonIdentity } from "./addon-identity.js";
 import { AppError } from "./errors.js";
 import {
   materializeSourceAdmissionPolicy,
@@ -21,15 +22,19 @@ import {
 import type { TravelProfileResolution } from "./source-profile-resolver.js";
 import {
   DownloadQueue,
+  ownerMayDownload,
   TRAVEL_SOURCE_FALLBACK_ATTEMPT_LIMIT,
   type DownloadJob,
   type DownloadSelection,
   type QueueHooks,
 } from "./downloads.js";
+import type { AddonRecord } from "./types.js";
+import type { UserRecord } from "./users.js";
 
 process.env.ALLOW_PRIVATE_ADDONS = "1";
 
 const LIBRARY_ID = "lib_51a5510a";
+const QUEUE_OWNER = "usr_00000031";
 const PROVIDER_ONE = "addon:queue-private-token";
 const PROVIDER_TWO = "addon:second-provider";
 const TRAVEL_BUDGET_ATTEMPT_LIMIT = 1_000;
@@ -79,6 +84,7 @@ const library = (root: string): LibraryRecord => ({
   order: 0,
   addedAt: "2026-01-01T00:00:00.000Z",
   writeArtwork: false,
+  visibleTo: [QUEUE_OWNER],
 });
 
 const setup = async () => {
@@ -136,6 +142,8 @@ const rawLazyJob = (sourceAdmission: unknown = undefined): Record<string, unknow
 const assertPublicViewIsClean = (view: Record<string, unknown>) => {
   assert.equal(Object.hasOwn(view, "sourceAdmission"), false);
   assert.equal(Object.hasOwn(view, "travelCursor"), false);
+  assert.equal(Object.hasOwn(view, "travelStreamAddonIdentity"), false);
+  assert.equal(Object.hasOwn(view, "travelSubtitleAddonIdentity"), false);
   assert.equal(Object.hasOwn(view, "travelSourceFallbackAttempts"), false);
   assert.equal(Object.hasOwn(view, "travelBudgetAttempts"), false);
   assert.equal(Object.hasOwn(view, "policy"), false);
@@ -143,6 +151,8 @@ const assertPublicViewIsClean = (view: Record<string, unknown>) => {
   assert.doesNotMatch(text, /queue-private-token/);
   assert.doesNotMatch(text, /sourceAdmission/);
   assert.doesNotMatch(text, /travelCursor/);
+  assert.doesNotMatch(text, /travelStreamAddonIdentity/);
+  assert.doesNotMatch(text, /travelSubtitleAddonIdentity/);
   assert.doesNotMatch(text, /travelSourceFallbackAttempts/);
   assert.doesNotMatch(text, /travelBudgetAttempts/);
   assert.doesNotMatch(text, /"policy"/);
@@ -182,6 +192,44 @@ const publicationServer = () => new Promise<{ server: Server; videoUrl: string; 
   });
 });
 
+const gatedBodyServer = () => new Promise<{
+  server: Server;
+  url: string;
+  entered: Promise<void>;
+  release: () => void;
+}>((resolve) => {
+  const entered = deferred();
+  const body = deferred();
+  let requests = 0;
+  const server = createServer(async (_request, response) => {
+    requests += 1;
+    response.writeHead(200, { "content-type": "video/mp4", "content-length": "1" });
+    if (requests === 1) {
+      entered.release();
+      await body.promise;
+    }
+    response.end("x");
+  });
+  server.listen(0, "127.0.0.1", () => {
+    const address = server.address() as { port: number };
+    resolve({
+      server,
+      url: `http://127.0.0.1:${address.port}/film.mp4`,
+      entered: entered.promise,
+      release: body.release,
+    });
+  });
+});
+
+const fileAbsent = async (file: string) => {
+  try {
+    await stat(file);
+    return false;
+  } catch {
+    return true;
+  }
+};
+
 const emptyObservations = {
   probesUsed: 0,
   confirmedRejections: 0,
@@ -192,7 +240,40 @@ const emptyObservations = {
 
 type SelectedTravel = Extract<TravelProfileResolution, { status: "selected" }>;
 
-const selectedTravel = (url: string, title = "Film"): SelectedTravel => ({
+const queueOwner: UserRecord = {
+  id: QUEUE_OWNER,
+  username: "queue-owner",
+  passwordHash: "scrypt$aa$bb",
+  secret: "secret",
+  role: "user",
+  createdAt: "2026-01-01T00:00:00.000Z",
+  permissions: { downloadToLibrary: true, downloadToDevice: true },
+  permissionsVersion: 0,
+};
+
+const identityAddon = (overrides: Partial<AddonRecord> = {}): AddonRecord => ({
+  key: "queue-private-token",
+  manifestUrl: "https://travel.example/manifest.json?token=addon-secret",
+  role: "source",
+  enabled: true,
+  globalSearch: true,
+  allowedUsers: [QUEUE_OWNER],
+  addedAt: "2026-01-01T00:00:00.000Z",
+  downloadSettings: defaultDownloadSettings(),
+  manifest: {
+    id: "travel",
+    name: "Travel fixture",
+    version: "1",
+    resources: ["stream"],
+  },
+  ...overrides,
+});
+
+const selectedTravel = (
+  url: string,
+  title = "Film",
+  streamAddonIdentity = "a".repeat(64),
+): SelectedTravel => ({
   status: "selected",
   stream: {
     url,
@@ -203,6 +284,7 @@ const selectedTravel = (url: string, title = "Film"): SelectedTravel => ({
   },
   resolution: { checkedCandidates: 1, audioLanguage: "en", audioEvidence: "probe" },
   settings: defaultDownloadSettings(),
+  streamAddonIdentity,
   searchStatus: "complete",
   retryable: false,
   observations: emptyObservations,
@@ -384,6 +466,72 @@ test("malformed or misplaced Travel cursors make the queue unreadable without ch
         (error: AppError) => error.messageKey === "err.queueUnreadable" && error.status === 503,
       );
       assert.equal(await readFile(state, "utf8"), bytes, `${entry.name} refuses new work without writing`);
+    } finally {
+      await queue.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+});
+
+test("malformed or misplaced Travel addon identities make the queue unreadable without rewriting", async () => {
+  const validSnapshot = travelSnapshot();
+  const nonTravelSnapshot = structuredClone(validSnapshot);
+  nonTravelSnapshot.profile.id = SOURCE_PROFILE_IDS.recommended;
+  const stream = {
+    url: "http://127.0.0.1/private.mp4",
+    addonKey: "queue-private-token",
+    name: "Film.mp4",
+  };
+  const cases: Array<Record<string, unknown>> = [
+    { snapshot: validSnapshot, stream, identity: "not-a-hash" },
+    { snapshot: validSnapshot, identity: identityAddon() },
+    { snapshot: nonTravelSnapshot, stream, identity: "a".repeat(64) },
+    {
+      snapshot: validSnapshot,
+      stream,
+      identity: "a".repeat(64),
+      subtitle: { addonKey: "subtitle-provider", url: "http://127.0.0.1/subtitle.srt" },
+    },
+    {
+      snapshot: validSnapshot,
+      stream,
+      identity: "a".repeat(64),
+      subtitle: { url: "http://127.0.0.1/subtitle.srt" },
+      subtitleIdentity: "b".repeat(64),
+    },
+    {
+      snapshot: validSnapshot,
+      stream: { url: "http://127.0.0.1/private.mp4" },
+      identity: "a".repeat(64),
+    },
+  ];
+
+  for (const [index, entry] of cases.entries()) {
+    const { directory, data, downloads, state } = await setup();
+    const bytes = JSON.stringify([{
+      ...rawLazyJob(entry.snapshot),
+      ...(entry.stream === undefined ? {} : { stream: entry.stream }),
+      ...(entry.subtitle === undefined ? {} : { subtitle: entry.subtitle }),
+      ...(entry.identity === undefined ? {} : { travelStreamAddonIdentity: entry.identity }),
+      ...(entry.subtitleIdentity === undefined ? {} : { travelSubtitleAddonIdentity: entry.subtitleIdentity }),
+    }], null, 2);
+    await writeFile(state, bytes);
+    let resolutions = 0;
+    const queue = openQueue(data, downloads);
+    queue.setTravelResolver(async () => {
+      resolutions += 1;
+      return { status: "noMatch", retryable: false, observations: emptyObservations };
+    });
+    try {
+      await queue.load();
+      assert.deepEqual(queue.list(), [], `identity case ${index}`);
+      assert.equal(await readFile(state, "utf8"), bytes, `identity case ${index} leaves bytes intact`);
+      assert.equal((await readdir(data)).some((name) => name.startsWith("downloads.json.damaged-")), false);
+      assert.equal(resolutions, 0);
+      await assert.rejects(
+        queue.addPending("Other", { type: "movie", videoId: `tt-identity-${index}` }),
+        (error: AppError) => error.messageKey === "err.queueUnreadable" && error.status === 503,
+      );
     } finally {
       await queue.stop();
       await rm(directory, { recursive: true, force: true });
@@ -840,9 +988,293 @@ test("a selected Travel source transfers over HTTP and persists no cursor beside
     const stored = (await readJobs(state)).find((entry) => entry.id === "job-source-admission")!;
     assert.equal(Object.hasOwn(stored, "travelCursor"), false);
     assert.equal(Object.hasOwn(stored, "travelBudgetAttempts"), false);
+    assert.equal(stored.travelStreamAddonIdentity, "a".repeat(64));
+    assert.match(String(stored.travelStreamAddonIdentity), /^[0-9a-f]{64}$/);
+    assert.equal(Object.hasOwn(stored, "travelSubtitleAddonIdentity"), false);
     assert.equal((stored.stream as { url?: string }).url, url);
     assert.match(String(stored.target), new RegExp(`^${LIBRARY_ID}/Film/Film\\.mp4$`));
+    assertPublicViewIsClean(queue.get("job-source-admission")! as unknown as Record<string, unknown>);
   } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("the live owner check refuses every effective Travel addon identity loss", () => {
+  const configured = library("/tmp/travel-owner-identity");
+  const original = identityAddon();
+  const job: DownloadJob = {
+    id: "identity-owner-check",
+    title: "Film",
+    ownerUserId: QUEUE_OWNER,
+    source: {
+      type: "movie",
+      videoId: "tt-owner-identity",
+      tried: [],
+      selection: selection(original.key),
+    },
+    sourceAdmission: travelSnapshot(),
+    stream: {
+      url: "http://127.0.0.1/film.mp4",
+      addonKey: original.key,
+      name: "Film.mp4",
+    },
+    travelStreamAddonIdentity: addonIdentity(original),
+    targetSettings: defaultDownloadSettings().movie,
+    libraryId: configured.id,
+    target: `${configured.id}/Film/Film.mp4`,
+    status: "downloading",
+    received: 0,
+    speed: 0,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const allowed = (addons: AddonRecord[]) => ownerMayDownload({
+    owner: queueOwner,
+    addons,
+    libraries: [configured],
+  }, job);
+
+  assert.equal(allowed([original]), true);
+  const losses: Array<[string, AddonRecord[]]> = [
+    ["deleted", []],
+    ["disabled", [{ ...original, enabled: false }]],
+    ["ungranted", [{ ...original, allowedUsers: [] }]],
+    ["catalog-only", [{ ...original, role: "catalog" }]],
+    ["stream resource removed", [{ ...original, manifest: { ...original.manifest, resources: [] } }]],
+  ];
+  for (const [name, addons] of losses) assert.equal(allowed(addons), false, name);
+});
+
+test("a Travel stream identity change during transfer pauses without a fallback or published file", async () => {
+  for (const change of ["version", "url"] as const) {
+    await test(`during transfer: ${change}`, async () => {
+      const { directory, data, downloads } = await setup();
+      const { server, url, entered, release } = await gatedBodyServer();
+      const configured = library(downloads);
+      const addons = [identityAddon()];
+      const selectedIdentity = addonIdentity(addons[0]!);
+      let resolutions = 0;
+      const queue = openQueue(data, downloads, {
+        ownerAllowed: (job) => ownerMayDownload({
+          owner: queueOwner,
+          addons,
+          libraries: [configured],
+        }, job),
+      });
+      queue.setTravelResolver(async () => {
+        resolutions += 1;
+        return selectedTravel(url, "Film", selectedIdentity);
+      });
+      await queue.load();
+      try {
+        const added = await queue.addPending(
+          "Film",
+          { type: "movie", videoId: `tt-identity-${change}`, selection: selection("queue-private-token") },
+          { kind: "movie", title: "Film" },
+          QUEUE_OWNER,
+          undefined,
+          travelSnapshot(),
+        );
+        assert.ok(added);
+        await entered;
+        addons[0] = change === "version"
+          ? { ...addons[0]!, manifest: { ...addons[0]!.manifest, version: "2" } }
+          : { ...addons[0]!, manifestUrl: "https://travel.example/reconfigured.json" };
+        release();
+
+        await waitFor(queue, () => queue.get(added.id)?.status === "paused");
+        const job = internalJobs(queue)[0]!;
+        assert.equal(job.pauseReason, "permission");
+        assert.equal(job.errorKey, "download.pausedNoPermission");
+        assert.equal(job.travelSourceFallbackAttempts, undefined);
+        assert.equal(resolutions, 1);
+        assert.ok(job.target);
+        assert.equal(await fileAbsent(path.join(downloads, job.target.slice(LIBRARY_ID.length + 1))), true);
+      } finally {
+        await queue.stop();
+        server.close();
+        await rm(directory, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+test("an explicit retry after an identity refusal resolves against the current identity", async () => {
+  const { directory, data, downloads, state } = await setup();
+  const { server, url, entered, release } = await gatedBodyServer();
+  const configured = library(downloads);
+  const addons = [identityAddon()];
+  const firstIdentity = addonIdentity(addons[0]!);
+  let secondIdentity: string | undefined;
+  let resolutions = 0;
+  const queue = openQueue(data, downloads, {
+    ownerAllowed: (job) => ownerMayDownload({ owner: queueOwner, addons, libraries: [configured] }, job),
+  });
+  queue.setTravelResolver(async () => {
+    resolutions += 1;
+    return selectedTravel(url, "Film", resolutions === 1 ? firstIdentity : secondIdentity!);
+  });
+  await queue.load();
+  try {
+    const added = await queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt-retry-current-identity", selection: selection("queue-private-token") },
+      { kind: "movie", title: "Film" },
+      QUEUE_OWNER,
+      undefined,
+      travelSnapshot(),
+    );
+    assert.ok(added);
+    await entered;
+    addons[0] = { ...addons[0]!, manifest: { ...addons[0]!.manifest, version: "2" } };
+    secondIdentity = addonIdentity(addons[0]);
+    release();
+    await waitFor(queue, () => queue.get(added.id)?.status === "paused");
+
+    await queue.resume(added.id);
+    await waitFor(queue, () => queue.get(added.id)?.status === "completed");
+    assert.equal(resolutions, 2);
+    assert.equal(internalJobs(queue)[0]?.travelStreamAddonIdentity, secondIdentity);
+    const stored = (await readJobs(state)).find((job) => job.id === added.id)!;
+    assert.equal(stored.travelStreamAddonIdentity, secondIdentity);
+  } finally {
+    release();
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a Travel identity change at final publication withdraws the file and spends no fallback", async () => {
+  const { directory, data, downloads } = await setup();
+  const { server, videoUrl } = await publicationServer();
+  const configured = library(downloads);
+  const addons = [identityAddon()];
+  const selectedIdentity = addonIdentity(addons[0]!);
+  const renameEntered = deferred();
+  const releaseRename = deferred();
+  let resolutions = 0;
+  const queue = openQueue(data, downloads, {
+    ownerAllowed: (job) => ownerMayDownload({ owner: queueOwner, addons, libraries: [configured] }, job),
+    renamePublication: async (from, to) => {
+      renameEntered.release();
+      await releaseRename.promise;
+      await rename(from, to);
+    },
+  });
+  queue.setTravelResolver(async () => {
+    resolutions += 1;
+    return selectedTravel(videoUrl, "Film", selectedIdentity);
+  });
+  await queue.load();
+  try {
+    const added = await queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt-final-identity", selection: selection("queue-private-token") },
+      { kind: "movie", title: "Film" },
+      QUEUE_OWNER,
+      undefined,
+      travelSnapshot(),
+    );
+    assert.ok(added);
+    await renameEntered.promise;
+    const target = internalJobs(queue)[0]!.target;
+    assert.ok(target);
+    const published = path.join(downloads, target.slice(LIBRARY_ID.length + 1));
+    addons[0] = { ...addons[0]!, manifest: { ...addons[0]!.manifest, resources: [] } };
+    releaseRename.release();
+
+    await waitFor(queue, async () => queue.get(added.id)?.status === "paused" && await fileAbsent(published));
+    assert.equal(queue.get(added.id)?.pauseReason, "permission");
+    assert.equal(internalJobs(queue)[0]?.travelSourceFallbackAttempts, undefined);
+    assert.equal(resolutions, 1);
+  } finally {
+    releaseRename.release();
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a selected subtitle identity change at publication withdraws video and subtitle", async () => {
+  const { directory, data, downloads } = await setup();
+  const { server, videoUrl, subtitleUrl } = await publicationServer();
+  const configured = library(downloads);
+  const streamAddon = identityAddon();
+  const subtitleAddon: AddonRecord = {
+    ...identityAddon(),
+    key: "subtitle-provider",
+    manifestUrl: "https://subtitles.example/manifest.json",
+    role: "both",
+    manifest: {
+      id: "subtitles",
+      name: "Subtitles",
+      version: "1",
+      resources: ["subtitles"],
+    },
+  };
+  const addons = [streamAddon, subtitleAddon];
+  const renameEntered = deferred();
+  const releaseRename = deferred();
+  let resolutions = 0;
+  const queue = openQueue(data, downloads, {
+    ownerAllowed: (job) => ownerMayDownload({ owner: queueOwner, addons, libraries: [configured] }, job),
+    renamePublication: async (from, to) => {
+      renameEntered.release();
+      await releaseRename.promise;
+      await rename(from, to);
+    },
+  });
+  queue.setTravelResolver(async () => {
+    resolutions += 1;
+    const selected = selectedTravel(videoUrl, "Film", addonIdentity(streamAddon));
+    return {
+      ...selected,
+      subtitle: { addonKey: subtitleAddon.key, url: subtitleUrl, lang: "cs" },
+      subtitleAddonIdentity: addonIdentity(subtitleAddon),
+      resolution: {
+        ...selected.resolution,
+        subtitleLanguage: "cs",
+        subtitleSource: "addon",
+      },
+    };
+  });
+  await queue.load();
+  try {
+    const added = await queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt-subtitle-identity", selection: selection("queue-private-token") },
+      { kind: "movie", title: "Film" },
+      QUEUE_OWNER,
+      undefined,
+      travelSnapshot(),
+    );
+    assert.ok(added);
+    await renameEntered.promise;
+    const target = internalJobs(queue)[0]!.target;
+    assert.ok(target);
+    const published = path.join(downloads, target.slice(LIBRARY_ID.length + 1));
+    const publishedSubtitle = path.join(
+      path.dirname(published),
+      `${path.basename(published, path.extname(published))}.cs.vtt`,
+    );
+    addons[1] = {
+      ...addons[1]!,
+      manifest: { ...addons[1]!.manifest, version: "2" },
+    };
+    releaseRename.release();
+
+    await waitFor(queue, async () =>
+      queue.get(added.id)?.status === "paused"
+      && await fileAbsent(published)
+      && await fileAbsent(publishedSubtitle));
+    assert.equal(queue.get(added.id)?.pauseReason, "permission");
+    assert.equal(internalJobs(queue)[0]?.travelSourceFallbackAttempts, undefined);
+    assert.equal(resolutions, 1);
+  } finally {
+    releaseRename.release();
     await queue.stop();
     server.close();
     await rm(directory, { recursive: true, force: true });

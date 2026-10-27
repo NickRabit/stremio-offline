@@ -378,7 +378,7 @@ test("an import keeps the grants and the keys of the addons this instance alread
   const kept = {
     key: "alpha-key", manifestUrl: alphaUrl, role: "both", enabled: true, globalSearch: true,
     addedAt: "2026-01-01T00:00:00.000Z", allowedUsers: [CAROL],
-    manifest: { id: "alpha", name: "Addon alpha", version: "1.0.0" },
+    manifest: { id: "alpha", name: "Addon alpha", version: "1.0.0", resources: ["stream"] },
     downloadSettings: { movie: { subfolder: "", layout: "flat" }, series: { subfolder: "", layout: "flat" } },
   };
   const dropped = { ...kept, key: "beta-key", manifestUrl: betaUrl, manifest: { id: "beta", name: "Addon beta", version: "1.0.0" } };
@@ -407,6 +407,70 @@ test("an import keeps the grants and the keys of the addons this instance alread
   assert.equal(restored?.key, "alpha-key", "the key a grant and a personal order both point at was replaced");
   // The addon the backup does not carry is gone for everybody, which no counter records.
   assert.deepEqual(stopped, [{ addonKey: "beta-key" }]);
+});
+
+test("an import sweeps a preserved addon key when its effective identity changes", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const originalFlag = process.env.ALLOW_PRIVATE_ADDONS;
+  process.env.ALLOW_PRIVATE_ADDONS = "1";
+  t.after(() => { if (originalFlag === undefined) delete process.env.ALLOW_PRIVATE_ADDONS; else process.env.ALLOW_PRIVATE_ADDONS = originalFlag; });
+  const manifests = createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" })
+      .end(JSON.stringify({
+        id: "alpha",
+        name: "Addon alpha",
+        version: "2.0.0",
+        resources: ["subtitles"],
+        types: ["movie"],
+        catalogs: [],
+      }));
+  });
+  manifests.listen(0, "127.0.0.1");
+  await once(manifests, "listening");
+  t.after(() => new Promise<void>((resolve) => manifests.close(() => resolve())));
+  const alphaUrl = `http://127.0.0.1:${(manifests.address() as AddressInfo).port}/alpha/manifest.json`;
+
+  harness.state.addons = [{
+    key: "alpha-key",
+    manifestUrl: alphaUrl,
+    role: "both",
+    enabled: true,
+    globalSearch: true,
+    addedAt: "2026-01-01T00:00:00.000Z",
+    allowedUsers: [CAROL],
+    manifest: { id: "alpha", name: "Addon alpha", version: "1.0.0", resources: ["stream"] },
+    downloadSettings: { movie: { subfolder: "", layout: "flat" }, series: { subfolder: "", layout: "flat" } },
+  }] as State["addons"];
+  const stopped: Array<{ addonKey?: string }> = [];
+  harness.onStopContent = (opts) => { stopped.push(opts); };
+  const importBackup = () => api(harness.base, "/api/settings/import", {
+    method: "POST",
+    user: "ada",
+    body: {
+      format: "stremio-offline-settings",
+      version: 2,
+      exportedAt: new Date().toISOString(),
+      settings: { concurrentDownloads: 3 },
+      addons: [{
+        manifestUrl: alphaUrl,
+        role: "both",
+        enabled: true,
+        globalSearch: true,
+        addedAt: "2026-01-01T00:00:00.000Z",
+      }],
+      libraries: [],
+    },
+  });
+
+  assert.equal((await importBackup()).status, 200);
+  assert.equal(harness.state.addons[0]?.key, "alpha-key");
+  assert.deepEqual(harness.state.addons[0]?.allowedUsers, [CAROL]);
+  assert.deepEqual(stopped, [{ addonKey: "alpha-key" }]);
+
+  stopped.length = 0;
+  assert.equal((await importBackup()).status, 200);
+  assert.deepEqual(stopped, [], "an unchanged identity pauses nothing");
 });
 
 test("an import carries the grant list the state holds when the write lands", async (t) => {

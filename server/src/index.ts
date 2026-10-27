@@ -11,6 +11,7 @@ import { addonAllowed, allowedAddons, fetchCatalogPage, loadAddon, metadata, ord
 import { StreamListingCache } from "./stream-listing-cache.js";
 import { autoRefreshEnabled, refreshDue, refreshManifests, type RefreshOutcome } from "./addon-refresh.js";
 import { defaultDownloadLibrary, DownloadQueue, ownerMayDownload, type DownloadJob, type RemoteDownloadBackend } from "./downloads.js";
+import { applyAddonManifestRefreshes } from "./addon-identity.js";
 import { DeviceTransfers } from "./device-transfers.js";
 import { ClientLogStore } from "./client-logs.js";
 import { createSourceResolver, type SourceResolverDeps } from "./source-resolver.js";
@@ -823,12 +824,11 @@ app.get("/api/status", (_req, res) => res.json({
 const storeRefreshed = async (outcomes: RefreshOutcome[]) => {
   const updated = outcomes.filter((outcome) => outcome.changed && outcome.manifest);
   if (!updated.length) return;
+  const identityChanged: string[] = [];
   await store.update((state) => {
-    for (const outcome of updated) {
-      const addon = state.addons.find((a) => a.key === outcome.key);
-      if (addon && outcome.manifest) addon.manifest = outcome.manifest;
-    }
+    identityChanged.push(...applyAddonManifestRefreshes(state.addons, updated));
   });
+  for (const addonKey of identityChanged) await stopContentAccess({ addonKey });
   for (const outcome of updated) log("INFO", "Addon manifest updated", { name: outcome.name, from: outcome.previousVersion, to: outcome.version });
 };
 // The automatic round is a background chore: it never blocks the boot, it asks only
