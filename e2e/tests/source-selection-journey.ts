@@ -9,6 +9,8 @@ export interface Profile {
   id: string;
   revision: number;
   operations: string[];
+  nameKey?: string;
+  name?: string;
 }
 
 export interface Job {
@@ -32,6 +34,16 @@ export const sourceRequests = async (request: APIRequestContext): Promise<Source
   (await (await request.get(new URL("/source-requests", addonManifest).href)).json() as {
     requests: SourceRequest[];
   }).requests;
+
+export const profileByNameKey = async (request: APIRequestContext, nameKey: string): Promise<Profile> => {
+  const response = await request.get("/api/source-profiles");
+  expect(response.status(), await response.text()).toBe(200);
+  const { profiles } = await response.json() as { profiles: Profile[] };
+  const profile = profiles.find((candidate) => candidate.nameKey === nameKey);
+  expect(profile, `the ${nameKey} source profile is not available`).toBeDefined();
+  expect(profile!.operations).toContain("downloadToLibrary");
+  return profile!;
+};
 
 export const resetFixture = (request: APIRequestContext) =>
   request.get(new URL("/source-control?reset=1&fail=none", addonManifest).href);

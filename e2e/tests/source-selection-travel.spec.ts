@@ -4,30 +4,22 @@ import path from "node:path";
 import {
   cleanupJourney,
   E2E_LIBRARY,
-  sourceRequests,
+  profileByNameKey,
   type Job,
-  type Profile,
   resetFixture,
 } from "./source-selection-journey";
 
-const TRAVEL_PROFILE_ID = "7e15d713-965c-4636-9ed3-3a112c521fe1";
-const PRIMARY_PROVIDER = "com.linvo.cinemeta";
 const VIDEO_ID = "tt-e2e-travel-episode";
-const TITLE = "SRCSEL Travel E2E journey";
+const TITLE = "SRCSEL Smaller preset E2E journey";
 const SOURCE_SECRET = "travel-signed-source-canary";
 
 test.afterEach(async ({ request }) => {
   await cleanupJourney(request, TITLE);
 });
 
-test("the fixed Travel profile downloads a local addon video through the queue", async ({ request }) => {
+test("the Smaller preset downloads a local addon video through the queue", async ({ request }) => {
   expect((await resetFixture(request)).ok()).toBe(true);
-  const listed = await request.get("/api/source-profiles");
-  expect(listed.status(), await listed.text()).toBe(200);
-  const { profiles } = await listed.json() as { profiles: Profile[] };
-  const travel = profiles.find((profile) => profile.id === TRAVEL_PROFILE_ID);
-  expect(travel, "the fixed Travel profile is not available").toBeDefined();
-  expect(travel!.operations).toContain("downloadToLibrary");
+  const smaller = await profileByNameKey(request, "rules.preset.smaller");
 
   const queued = await request.post("/api/downloads/bulk", {
     data: {
@@ -35,7 +27,7 @@ test("the fixed Travel profile downloads a local addon video through the queue",
       type: "series",
       media: { id: "tt-e2e-travel", metaType: "series" },
       episodes: [{ id: VIDEO_ID, season: 1, episode: 1, title: "Travel journey" }],
-      selection: { profile: { profileId: travel!.id, revision: travel!.revision } },
+      selection: { profile: { profileId: smaller.id, revision: smaller.revision } },
     },
   });
   expect(queued.status(), await queued.text()).toBe(201);
@@ -49,11 +41,9 @@ test("the fixed Travel profile downloads a local addon video through the queue",
     const queue = await response.json() as { jobs: Job[] };
     const serialized = JSON.stringify(queue);
     for (const value of [
-      "travelCursor",
-      "travelTemporaryFailures",
-      "travelBudgetAttempts",
       "sourceAdmission",
-      "travel-video.mp4",
+      "rulesCursor",
+      "sourceStreamAddonIdentity",
       SOURCE_SECRET,
     ]) {
       if (serialized.includes(value)) privateQueueData.add(value);
@@ -62,17 +52,12 @@ test("the fixed Travel profile downloads a local addon video through the queue",
     return job?.status === "completed" || job?.status === "failed" ? job.status : job?.status;
   }, {
     timeout: 60_000,
-    message: "the Travel download did not settle",
+    message: "the Smaller preset download did not settle",
   }).toMatch(/^(completed|failed)$/);
 
   expect(job?.status).toBe("completed");
   expect(job?.pending).toBe(false);
   expect([...privateQueueData]).toEqual([]);
-  expect(await sourceRequests(request)).toEqual([{
-    provider: PRIMARY_PROVIDER,
-    type: "series",
-    id: VIDEO_ID,
-  }]);
 
   const target = path.resolve(E2E_LIBRARY, job!.target);
   expect(path.relative(E2E_LIBRARY, target).split(path.sep)).not.toContain("..");

@@ -1,15 +1,11 @@
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
-import { cleanupJourney, listJobs, resetFixture, type Job } from "./source-selection-journey";
+import { cleanupJourney, profileByNameKey, resetFixture, type Job } from "./source-selection-journey";
 
 const SERIES_ID = "tt-e2e-series";
 const SERIES_NAME = "Zkušební seriál";
-const TRAVEL_PROFILE_ID = "7e15d713-965c-4636-9ed3-3a112c521fe1";
-const PROVIDER_PRIORITY_PROFILE_ID = "390a8b1a-85f6-4ded-9d7e-701a299720bb";
-const TRAVEL_LABEL = /^Na cesty \(malé soubory\)/;
-const PROVIDER_PRIORITY_LABEL = "Pořadí doplňků, ověřeně";
-
-const travelReference = { profileId: TRAVEL_PROFILE_ID, revision: 1 };
-const providerPriorityReference = { profileId: PROVIDER_PRIORITY_PROFILE_ID, revision: 1 };
+const SMALLER_LABEL = /^Menší soubory/;
+const BALANCED_LABEL = /^Vyvážené/;
+const MY_LANGUAGE_LABEL = /^Jen můj jazyk/;
 
 interface Follow {
   id: string;
@@ -56,18 +52,20 @@ test.afterEach(async ({ request }) => {
   await cleanupJourney(request, SERIES_NAME);
 });
 
-test("bulk download queues season one with the fixed Travel profile", async ({ page, request }) => {
+test("bulk download queues season one with the Smaller preset", async ({ page, request }) => {
   expect((await resetFixture(request)).ok()).toBe(true);
+  const smaller = await profileByNameKey(request, "rules.preset.smaller");
 
   const detail = await openSeries(page);
   await detail.getByTitle("Stáhnout celou 1. sérii").click();
   const dialog = page.getByRole("dialog", { name: "Stažení seriálu" });
   await expect(dialog).toBeVisible();
 
-  await dialog.getByRole("radio", { name: TRAVEL_LABEL }).check();
-  await expect(dialog.locator("fieldset.bulk-sources")).toBeHidden();
-  await expect(dialog.getByRole("heading", { name: "Zvuk", exact: true })).toBeHidden();
-  await expect(dialog.getByRole("heading", { name: "Titulky", exact: true })).toBeHidden();
+  await dialog.getByRole("radio", { name: SMALLER_LABEL }).check();
+  await expect(dialog.locator("fieldset.bulk-sources")).toHaveCount(0);
+  await expect(dialog.getByRole("heading", { name: "Výběr zdroje", exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole("heading", { name: "Zvuk", exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole("heading", { name: "Titulky", exact: true })).toHaveCount(0);
   await expect(dialog.getByRole("heading", { name: "Kam uložit", exact: true })).toBeVisible();
 
   const requestPromise = page.waitForRequest((candidate) =>
@@ -78,7 +76,7 @@ test("bulk download queues season one with the fixed Travel profile", async ({ p
   const [submitted, response] = await Promise.all([requestPromise, responsePromise]);
 
   expect((submitted.postDataJSON() as { selection: unknown }).selection)
-    .toEqual({ profile: travelReference });
+    .toEqual({ profile: { profileId: smaller.id, revision: smaller.revision } });
   expect(response.status()).toBe(201);
 
   await expect.poll(async () => (await queue(request))
@@ -91,12 +89,14 @@ test("bulk download queues season one with the fixed Travel profile", async ({ p
   const seasonOneJobs = (await queue(request))
     .filter((job) => job.media?.id === SERIES_ID && job.media.season === 1);
   const serialized = JSON.stringify(seasonOneJobs);
-  for (const privateField of ["sourceAdmission", "sourceStreamAddonIdentity", "travelCursor"]) {
+  for (const privateField of ["sourceAdmission", "sourceStreamAddonIdentity", "rulesCursor"]) {
     expect(serialized).not.toContain(privateField);
   }
 });
 
-test("follow setup starts with Provider priority and edits back to a preferred addon", async ({ page, request }) => {
+test("follow setup starts with the my-language preset and saves another preset", async ({ page, request }) => {
+  const balanced = await profileByNameKey(request, "rules.preset.balanced");
+  const myLanguage = await profileByNameKey(request, "rules.preset.myLanguage");
   const created = await request.post("/api/follows", {
     data: { type: "series", id: SERIES_ID, name: SERIES_NAME },
   });
@@ -116,8 +116,11 @@ test("follow setup starts with Provider priority and edits back to a preferred a
   await setup.getByRole("radio", { name: "Od vybraného dílu" }).check();
   await setup.getByLabel("Série").selectOption("1");
   await setup.getByLabel("Epizody").selectOption("1");
-  await setup.getByRole("radio", { name: new RegExp(`^${PROVIDER_PRIORITY_LABEL}`) }).check();
-  await expect(setup.getByLabel("Čekat na preferovaný jazyk")).toBeHidden();
+  await expect(setup.getByRole("radio", { name: MY_LANGUAGE_LABEL })).toBeChecked();
+  await setup.getByRole("radio", { name: BALANCED_LABEL }).check();
+  const grace = setup.getByRole("combobox", { name: "Čekat na zvukovou stopu v mém jazyce" });
+  await expect(grace).toBeVisible();
+  await grace.selectOption("7");
 
   const patchPath = `/api/follows/${followId}`;
   const patchRequestPromise = page.waitForRequest((candidate) =>
@@ -129,36 +132,34 @@ test("follow setup starts with Provider priority and edits back to a preferred a
   const patchBody = patched.postDataJSON() as {
     autoDownload: { selection: unknown; graceDays: unknown };
   };
-  expect(patchBody.autoDownload.selection).toEqual({ profile: providerPriorityReference });
-  expect(patchBody.autoDownload.graceDays).toBe(0);
+  expect(patchBody.autoDownload.selection)
+    .toEqual({ profile: { profileId: balanced.id, revision: balanced.revision } });
+  expect(patchBody.autoDownload.graceDays).toBe(7);
   expect(patchResponse.status()).toBe(200);
 
   const enabledFollow = (await listFollows(request)).find((follow) => follow.id === followId);
-  expect(enabledFollow?.autoDownload?.sourceProfile).toEqual(providerPriorityReference);
+  expect(enabledFollow?.autoDownload?.sourceProfile)
+    .toEqual({ profileId: balanced.id, revision: balanced.revision });
   const episodes = await request.get(`/api/follows/${followId}/episodes`);
   expect(episodes.status()).toBe(200);
   expect(JSON.stringify(await episodes.json())).not.toContain("sourceAdmission");
 
   await expect(setup).toHaveCount(0);
   await followDialog.getByRole("button", { name: "Změnit nastavení…" }).click();
-  await expect(setup.getByRole("radio", { name: new RegExp(`^${PROVIDER_PRIORITY_LABEL}`) })).toBeChecked();
-
-  await setup.getByRole("radio", { name: /^Nejdřív preferovaný doplněk/ }).check();
-  const sources = setup.locator('fieldset.bulk-sources input[type="checkbox"]');
-  await expect(sources.first()).toBeVisible();
-  await sources.first().check();
-  for (let index = 1; index < await sources.count(); index += 1) await sources.nth(index).uncheck();
+  await expect(setup.getByRole("radio", { name: BALANCED_LABEL })).toBeChecked();
 
   const saveRequestPromise = page.waitForRequest((candidate) =>
     candidate.method() === "PATCH" && new URL(candidate.url()).pathname === patchPath);
   const saveResponsePromise = page.waitForResponse((candidate) =>
     candidate.request().method() === "PATCH" && new URL(candidate.url()).pathname === patchPath);
+  await setup.getByRole("radio", { name: MY_LANGUAGE_LABEL }).check();
+  await expect(grace).toBeHidden();
   await setup.getByRole("button", { name: "Zapnout" }).click();
-  const [, savedResponse] = await Promise.all([saveRequestPromise, saveResponsePromise]);
+  const [saved, savedResponse] = await Promise.all([saveRequestPromise, saveResponsePromise]);
   expect(savedResponse.status()).toBe(200);
+  expect((saved.postDataJSON() as { autoDownload: { selection: unknown } }).autoDownload.selection)
+    .toEqual({ profile: { profileId: myLanguage.id, revision: myLanguage.revision } });
 
-  await expect.poll(async () => {
-    const autoDownload = (await listFollows(request)).find((follow) => follow.id === followId)?.autoDownload;
-    return Boolean(autoDownload && !("sourceProfile" in autoDownload));
-  }).toBe(true);
+  await expect.poll(async () => (await listFollows(request)).find((follow) => follow.id === followId)
+    ?.autoDownload?.sourceProfile).toEqual({ profileId: myLanguage.id, revision: myLanguage.revision });
 });
