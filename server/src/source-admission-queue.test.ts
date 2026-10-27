@@ -50,20 +50,26 @@ const travelCursor = (
   rejectedIndices,
 });
 
-const travelDefinition = SOURCE_PROFILE_DEFINITIONS.find((definition) => definition.id === SOURCE_PROFILE_IDS.travel);
-assert.ok(travelDefinition);
+const fixedSnapshot = (profileId: string): SourceAdmissionSnapshotV1 => {
+  const definition = SOURCE_PROFILE_DEFINITIONS.find((candidate) => candidate.id === profileId);
+  assert.ok(definition);
+  const providerKeys = [PROVIDER_TWO, PROVIDER_ONE];
+  return parseSourceAdmissionSnapshotV1({
+    schemaVersion: 1,
+    profile: { id: profileId, revision: definition.revision },
+    operation: "downloadToLibrary",
+    providerKeys,
+    policy: materializeSourceAdmissionPolicy(
+      definition.policy,
+      providerKeys,
+      { audioLanguage: "English", subtitleLanguage: "cs" },
+    ),
+  });
+};
 
-const travelSnapshot = (): SourceAdmissionSnapshotV1 => parseSourceAdmissionSnapshotV1({
-  schemaVersion: 1,
-  profile: { id: SOURCE_PROFILE_IDS.travel, revision: 1 },
-  operation: "downloadToLibrary",
-  providerKeys: [PROVIDER_TWO, PROVIDER_ONE],
-  policy: materializeSourceAdmissionPolicy(
-    travelDefinition.policy,
-    [PROVIDER_TWO, PROVIDER_ONE],
-    { audioLanguage: "English", subtitleLanguage: "cs" },
-  ),
-});
+const travelSnapshot = (): SourceAdmissionSnapshotV1 => fixedSnapshot(SOURCE_PROFILE_IDS.travel);
+const nonTravelSnapshot = (): SourceAdmissionSnapshotV1 =>
+  fixedSnapshot(SOURCE_PROFILE_IDS.recommended);
 
 const selection = (addonKey: string): DownloadSelection => ({
   addonKeys: [addonKey],
@@ -425,12 +431,11 @@ test("a canonical Travel cursor is saved, hidden, and restored with its snapshot
 
 test("malformed or misplaced Travel cursors make the queue unreadable without changing its bytes", async () => {
   const validSnapshot = travelSnapshot();
-  const nonTravelSnapshot = structuredClone(validSnapshot);
-  nonTravelSnapshot.profile.id = SOURCE_PROFILE_IDS.recommended;
+  const validNonTravelSnapshot = nonTravelSnapshot();
   const cases: Array<{ name: string; admission?: unknown; cursor: unknown; stream?: unknown; budgetAttempts?: unknown }> = [
     { name: "malformed cursor", admission: validSnapshot, cursor: { ...travelCursor(), extra: true } },
     { name: "legacy job", cursor: travelCursor() },
-    { name: "non-Travel snapshot", admission: nonTravelSnapshot, cursor: travelCursor() },
+    { name: "non-Travel snapshot", admission: validNonTravelSnapshot, cursor: travelCursor() },
     { name: "selected stream", admission: validSnapshot, cursor: travelCursor(), stream: { url: "http://127.0.0.1/private" } },
     {
       name: "budget attempts over limit",
@@ -475,8 +480,7 @@ test("malformed or misplaced Travel cursors make the queue unreadable without ch
 
 test("malformed or misplaced Travel addon identities make the queue unreadable without rewriting", async () => {
   const validSnapshot = travelSnapshot();
-  const nonTravelSnapshot = structuredClone(validSnapshot);
-  nonTravelSnapshot.profile.id = SOURCE_PROFILE_IDS.recommended;
+  const validNonTravelSnapshot = nonTravelSnapshot();
   const stream = {
     url: "http://127.0.0.1/private.mp4",
     addonKey: "queue-private-token",
@@ -485,7 +489,7 @@ test("malformed or misplaced Travel addon identities make the queue unreadable w
   const cases: Array<Record<string, unknown>> = [
     { snapshot: validSnapshot, stream, identity: "not-a-hash" },
     { snapshot: validSnapshot, identity: identityAddon() },
-    { snapshot: nonTravelSnapshot, stream, identity: "a".repeat(64) },
+    { snapshot: validNonTravelSnapshot, stream, identity: "a".repeat(64) },
     {
       snapshot: validSnapshot,
       stream,
@@ -1712,8 +1716,7 @@ test("a Travel source fallback count survives restart cleanup without transferri
 
 test("malformed or misplaced Travel source fallback counts make the queue unreadable", async () => {
   const validSnapshot = travelSnapshot();
-  const nonTravelSnapshot = structuredClone(validSnapshot);
-  nonTravelSnapshot.profile.id = SOURCE_PROFILE_IDS.recommended;
+  const validNonTravelSnapshot = nonTravelSnapshot();
   const cases: Array<{ name: string; admission?: unknown; attempts: unknown }> = [
     { name: "negative count", admission: validSnapshot, attempts: -1 },
     { name: "fractional count", admission: validSnapshot, attempts: 1.5 },
@@ -1721,7 +1724,7 @@ test("malformed or misplaced Travel source fallback counts make the queue unread
     { name: "string count", admission: validSnapshot, attempts: "2" },
     { name: "null count", admission: validSnapshot, attempts: null },
     { name: "legacy job", attempts: 1 },
-    { name: "non-Travel snapshot", admission: nonTravelSnapshot, attempts: 1 },
+    { name: "non-Travel snapshot", admission: validNonTravelSnapshot, attempts: 1 },
   ];
 
   for (const entry of cases) {
@@ -1805,8 +1808,7 @@ test("restart discards an old Travel URL and partial before resolving a fresh so
 
 test("a non-Travel snapshot remains fail-closed without a Travel resolver", async () => {
   const { directory, data, downloads, state } = await setup();
-  const snapshot = structuredClone(travelSnapshot());
-  snapshot.profile.id = SOURCE_PROFILE_IDS.providerPriority;
+  const snapshot = fixedSnapshot(SOURCE_PROFILE_IDS.providerPriority);
   await writeFile(state, JSON.stringify([{
     ...rawLazyJob(snapshot),
     ownerUserId: "usr_00000016",

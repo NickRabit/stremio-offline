@@ -7,7 +7,6 @@ import { remoteLibraryVisibleTo } from "./media-server-access.js";
 import type { MediaConnectionRecord, RemoteLibraryRecord } from "./media-server-types.js";
 import {
   SOURCE_PROFILE_DEFINITIONS,
-  SOURCE_PROFILE_IDS,
   type SourceOperation,
   type SourceProfileDefinition,
   type SourceProfileViewer,
@@ -261,15 +260,17 @@ export function materializeSourceAdmissionPolicy(
   });
 }
 
-const validateTravelPolicy = (
+const validateFixedPolicy = (
+  profileId: string,
   profileRevision: number,
   operation: SourceOperation,
   selectedProviderKeys: readonly string[],
   policy: SourcePolicyV1,
 ): void => {
   const definition = SOURCE_PROFILE_DEFINITIONS.find((candidate) =>
-    candidate.id === SOURCE_PROFILE_IDS.travel);
-  if (!definition || definition.revision !== profileRevision || !definition.operations.includes(operation)) {
+    candidate.id === profileId);
+  if (!definition) return;
+  if (definition.revision !== profileRevision || !definition.operations.includes(operation)) {
     return failValidation();
   }
 
@@ -423,9 +424,7 @@ export function parseSourceAdmissionSnapshotV1(input: unknown): SourceAdmissionS
         if ("from" in criterion || !sameKeys(selectedProviderKeys, criterion.keys)) return failValidation();
       }
     }
-    if (profileId === SOURCE_PROFILE_IDS.travel) {
-      validateTravelPolicy(profileRevision, parsedOperation, selectedProviderKeys, policy);
-    }
+    validateFixedPolicy(profileId, profileRevision, parsedOperation, selectedProviderKeys, policy);
 
     return {
       schemaVersion: 1,

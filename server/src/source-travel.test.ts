@@ -92,17 +92,21 @@ const snapshot = (
   providerKeys: string[] = ["addon:one", "addon:two"],
   profileId: string = SOURCE_PROFILE_IDS.travel,
   operation: SourceAdmissionSnapshotV1["operation"] = "downloadToLibrary",
-): SourceAdmissionSnapshotV1 => parseSourceAdmissionSnapshotV1({
-  schemaVersion: 1,
-  profile: { id: profileId, revision: 1 },
-  operation,
-  providerKeys,
-  policy: materializeSourceAdmissionPolicy(
-    travelDefinition.policy,
+): SourceAdmissionSnapshotV1 => {
+  const definition = SOURCE_PROFILE_DEFINITIONS.find((candidate) => candidate.id === profileId);
+  assert.ok(definition);
+  return parseSourceAdmissionSnapshotV1({
+    schemaVersion: 1,
+    profile: { id: profileId, revision: definition.revision },
+    operation,
     providerKeys,
-    { audioLanguage: "en", subtitleLanguage: "en" },
-  ),
-});
+    policy: materializeSourceAdmissionPolicy(
+      definition.policy,
+      providerKeys,
+      { audioLanguage: "en", subtitleLanguage: "en" },
+    ),
+  });
+};
 
 const snapshotWithKinds = (
   sourceKinds: SourcePolicyConstraints["sourceKinds"],

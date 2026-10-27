@@ -477,6 +477,90 @@ test("Travel snapshot parsing rematerializes only its mutable provider and langu
   reject((value) => { value.profile.revision = 2; });
 });
 
+for (const [name, profileId] of [
+  ["Recommended", SOURCE_PROFILE_IDS.recommended],
+  ["Provider priority", SOURCE_PROFILE_IDS.providerPriority],
+] as const) {
+  test(`${name} snapshot parsing validates its current fixed definition`, () => {
+    const definition = SOURCE_PROFILE_DEFINITIONS.find((candidate) => candidate.id === profileId);
+    assert.ok(definition);
+    const providerKeys = ["local", `remote:${REMOTE_ONE}`, "addon:first", "addon:second"];
+    const snapshot = parseSourceAdmissionSnapshotV1({
+      schemaVersion: 1,
+      profile: { id: profileId, revision: definition.revision },
+      operation: "downloadToDevice",
+      providerKeys,
+      policy: materializeSourceAdmissionPolicy(
+        definition.policy,
+        providerKeys,
+        { audioLanguage: "cs", subtitleLanguage: "en" },
+      ),
+    });
+
+    const serialized = JSON.parse(JSON.stringify(snapshot)) as SourceAdmissionSnapshotV1;
+    const reordered = Object.fromEntries(
+      Object.entries(serialized).reverse(),
+    ) as unknown as SourceAdmissionSnapshotV1;
+    reordered.profile = Object.fromEntries(Object.entries(serialized.profile).reverse()) as typeof serialized.profile;
+    reordered.policy = Object.fromEntries(
+      Object.entries(serialized.policy).reverse(),
+    ) as unknown as SourcePolicyV1;
+    reordered.policy.scope = Object.fromEntries(
+      Object.entries(serialized.policy.scope).reverse(),
+    ) as typeof serialized.policy.scope;
+    reordered.policy.constraints = Object.fromEntries(
+      Object.entries(serialized.policy.constraints).reverse(),
+    ) as typeof serialized.policy.constraints;
+    reordered.policy.constraints.audio = Object.fromEntries(
+      Object.entries(serialized.policy.constraints.audio).reverse(),
+    ) as typeof serialized.policy.constraints.audio;
+    reordered.policy.constraints.subtitles = Object.fromEntries(
+      Object.entries(serialized.policy.constraints.subtitles).reverse(),
+    ) as typeof serialized.policy.constraints.subtitles;
+    assert.deepEqual(parseSourceAdmissionSnapshotV1(reordered), snapshot);
+
+    const allowedProviderKeys = ["addon:second", "local"];
+    const allowed = parseSourceAdmissionSnapshotV1({
+      schemaVersion: 1,
+      profile: { id: profileId, revision: definition.revision },
+      operation: "play",
+      providerKeys: allowedProviderKeys,
+      policy: materializeSourceAdmissionPolicy(
+        definition.policy,
+        allowedProviderKeys,
+        { audioLanguage: "en", subtitleLanguage: "cs" },
+      ),
+    });
+    assert.deepEqual(allowed.providerKeys, allowedProviderKeys);
+    assert.deepEqual(allowed.policy.constraints.audio.preferred, { code: "en" });
+    assert.deepEqual(allowed.policy.constraints.subtitles.preferred, { code: "cs" });
+
+    const reject = (tamper: (value: SourceAdmissionSnapshotV1) => void) => {
+      const value = structuredClone(snapshot);
+      tamper(value);
+      expectValidationError(() => parseSourceAdmissionSnapshotV1(value));
+    };
+    reject((value) => {
+      const ranking = value.policy.criteria.find((criterion) => criterion.kind === "providerClass");
+      assert.ok(ranking?.kind === "providerClass");
+      ranking.order.reverse();
+    });
+    reject((value) => { value.policy.existingLocalCopy = "any"; });
+    reject((value) => { value.policy.constraints.audio.mode = "strict"; });
+    reject((value) => { value.policy.constraints.sourceKinds.reverse(); });
+    reject((value) => {
+      value.policy.scope = { mode: "selected", providerKeys: [...value.providerKeys].reverse() };
+    });
+    reject((value) => {
+      const ranking = value.policy.criteria.find((criterion) => criterion.kind === "providerOrder");
+      assert.ok(ranking?.kind === "providerOrder" && "keys" in ranking);
+      ranking.keys.reverse();
+    });
+    reject((value) => { value.policy.constraints.subtitles.mode = "required"; });
+    reject((value) => { value.profile.revision = definition.revision + 1; });
+  });
+}
+
 test("snapshots are JSON-safe deep copies and leak no provider configuration", () => {
   const provider = addon("opaque-addon-key", { name: "Secret display name", allowedUsers: [MEMBER] });
   const local = library("lib_00000001", [MEMBER]);
