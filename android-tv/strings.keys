@@ -231,6 +231,10 @@ bulk.subtitleFallback
 bulk.sourceStrategy
 bulk.strategyLargest
 bulk.strategyPriority
+sourceProfile.travel
+sourceProfile.travelHint
+sourceProfile.providerPriority
+sourceProfile.providerPriorityHint
 bulk.sources
 save.adding
 saveTarget.defaultLibrary

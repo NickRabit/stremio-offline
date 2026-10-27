@@ -247,6 +247,10 @@
   <string name="bulk_source_strategy">Wybór źródła</string>
   <string name="bulk_strategy_largest">Największy pasujący plik</string>
   <string name="bulk_strategy_priority">Najpierw preferowany dodatek</string>
+  <string name="source_profile_travel">Podróże (małe pliki)</string>
+  <string name="source_profile_travel_hint">Najmniejszy plik o rozdzielczości co najmniej 480p w Twoim języku. Dobre rozwiązanie przy wolnym lub limitowanym połączeniu.</string>
+  <string name="source_profile_provider_priority">Kolejność dodatków, zweryfikowana</string>
+  <string name="source_profile_provider_priority_hint">Próbuje dodatków w Twojej kolejności i wybiera pierwszy plik, którego zgodność z Twoim językiem udało się sprawdzić.</string>
   <string name="bulk_sources">Źródła</string>
   <string name="save_adding">Dodawanie…</string>
   <string name="save_target_default_library">Domyślna biblioteka</string>

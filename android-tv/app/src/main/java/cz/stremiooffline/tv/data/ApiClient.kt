@@ -222,6 +222,10 @@ class ApiClient(
   override suspend fun languages(): List<LanguageDto> =
     request(Request.Builder().url(address.resolve("/api/languages")).get().build()).decode() ?: emptyList()
 
+  override suspend fun sourceProfiles(): List<SourceProfileDto> =
+    request(Request.Builder().url(address.resolve("/api/source-profiles")).get().build())
+      .decode<SourceProfilesResponseDto>()?.profiles ?: emptyList()
+
   /** One personal preference per request, spelled as the body's only key: the server refuses a
    *  body that names an instance field, and a non-administrator must never send one. */
   override suspend fun updateSettings(field: String, value: String): SettingsResponse {

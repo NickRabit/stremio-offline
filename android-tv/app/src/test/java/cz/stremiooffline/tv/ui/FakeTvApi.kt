@@ -59,6 +59,7 @@ import cz.stremiooffline.tv.data.SearchableCatalogDto
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.SidecarFetch
 import cz.stremiooffline.tv.data.SourceDto
+import cz.stremiooffline.tv.data.SourceProfileDto
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.StreamSourceDto
 import cz.stremiooffline.tv.data.TrackChange
@@ -152,6 +153,9 @@ open class FakeTvApi : TvApi {
   var settingsPatches: MutableList<Pair<String, String>> = mutableListOf()
   /** When set, every `updateSettings()` throws it instead of answering. */
   var settingsFailure: ApiFailure? = null
+  var sourceProfilesValue: List<SourceProfileDto> = emptyList()
+  var sourceProfilesFailure: ApiFailure? = null
+  var sourceProfilesCalls = 0
   var languagesValue: List<LanguageDto> = listOf(
     LanguageDto("cs", "Čeština"),
     LanguageDto("en", "Angličtina"),
@@ -527,6 +531,12 @@ open class FakeTvApi : TvApi {
   }
 
   override suspend fun languages(): List<LanguageDto> = languagesValue
+
+  override suspend fun sourceProfiles(): List<SourceProfileDto> {
+    sourceProfilesCalls += 1
+    sourceProfilesFailure?.let { throw ApiError(it) }
+    return sourceProfilesValue
+  }
 
   override suspend fun serverVersion(): String = serverVersionValue
 

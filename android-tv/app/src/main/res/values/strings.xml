@@ -241,6 +241,10 @@
   <string name="bulk_source_strategy">Source selection</string>
   <string name="bulk_strategy_largest">Largest matching file</string>
   <string name="bulk_strategy_priority">Preferred addon first</string>
+  <string name="source_profile_travel">Travel (small files)</string>
+  <string name="source_profile_travel_hint">The smallest file of at least 480p in your language. Good for slow or metered connections.</string>
+  <string name="source_profile_provider_priority">Addon order, verified</string>
+  <string name="source_profile_provider_priority_hint">Tries addons in your order and takes the first file it could check matches your language.</string>
   <string name="bulk_sources">Sources</string>
   <string name="save_adding">Adding…</string>
   <string name="save_target_default_library">Default library</string>

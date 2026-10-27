@@ -8,6 +8,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -21,6 +22,7 @@ import cz.stremiooffline.tv.data.LibraryDto
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.ProgressEntryDto
 import cz.stremiooffline.tv.data.SettingsResponse
+import cz.stremiooffline.tv.data.SourceProfileDto
 import cz.stremiooffline.tv.data.StreamSourceDto
 import cz.stremiooffline.tv.data.VideoDto
 import cz.stremiooffline.tv.ui.FakeTvApi
@@ -283,6 +285,102 @@ class SeriesDownloadPanelTest {
     press(Key.DirectionCenter)
 
     assertEquals("priority", api.bulkDownloads.single().selection.sourceStrategy)
+  }
+
+  @Test
+  fun `a source profile hides the manual rows and posts its id and revision`() {
+    val api = ready()
+    api.sourceProfilesValue = listOf(
+      SourceProfileDto(
+        id = "travel",
+        nameKey = "sourceProfile.travel",
+        revision = 1,
+        operations = listOf("play", "downloadToLibrary"),
+      ),
+    )
+    mount(api)
+    openSettings(DownloadScope.Episode)
+
+    focusUp(TagSeriesDownloadStrategy)
+    press(Key.DirectionCenter)
+    focusDown(seriesStrategyTag("profile:travel"))
+    compose.onNodeWithTag(seriesStrategyTag("profile:travel"))
+      .assertTextContains("Travel (small files)", substring = true)
+      .assertTextContains("The smallest file of at least 480p in your language.", substring = true)
+    press(Key.DirectionCenter)
+
+    compose.onNodeWithTag(TagSeriesDownloadAudio).assertDoesNotExist()
+    compose.onNodeWithTag(TagSeriesDownloadSubtitles).assertDoesNotExist()
+    compose.onNodeWithTag(TagSeriesDownloadSources).assertDoesNotExist()
+    compose.onNodeWithTag(TagSeriesDownloadLibrary).assertIsDisplayed()
+    focusDown(TagSeriesDownloadAdd)
+    press(Key.DirectionCenter)
+
+    assertEquals(
+      cz.stremiooffline.tv.data.DownloadProfileRefDto("travel", 1),
+      api.bulkDownloads.single().selection.profile,
+    )
+    assertEquals(emptyList<String>(), api.bulkDownloads.single().selection.addonKeys)
+  }
+
+  @Test
+  fun `a profile fetch failure leaves the two legacy strategies`() {
+    val api = ready()
+    api.sourceProfilesFailure = ApiFailure.Generic
+    mount(api)
+    openSettings(DownloadScope.Episode)
+
+    focusUp(TagSeriesDownloadStrategy)
+    press(Key.DirectionCenter)
+
+    compose.onNodeWithTag(seriesStrategyTag("largest")).assertIsFocused()
+    compose.onNodeWithTag(seriesStrategyTag("priority")).assertIsDisplayed()
+    compose.onNodeWithTag(seriesStrategyTag("profile:travel")).assertDoesNotExist()
+  }
+
+  @Test
+  fun `a profile without library downloads is not offered`() {
+    val api = ready()
+    api.sourceProfilesValue = listOf(
+      SourceProfileDto(
+        id = "travel",
+        nameKey = "sourceProfile.travel",
+        revision = 1,
+        operations = listOf("play", "downloadToDevice"),
+      ),
+    )
+    mount(api)
+    openSettings(DownloadScope.Episode)
+
+    focusUp(TagSeriesDownloadStrategy)
+    press(Key.DirectionCenter)
+
+    compose.onNodeWithTag(seriesStrategyTag("largest")).assertIsDisplayed()
+    compose.onNodeWithTag(seriesStrategyTag("priority")).assertIsDisplayed()
+    compose.onNodeWithTag(seriesStrategyTag("profile:travel")).assertDoesNotExist()
+  }
+
+  @Test
+  fun `a remembered offered profile is preselected`() {
+    val api = ready()
+    api.settingsValue = api.settingsValue.copy(downloadSourceProfile = "travel")
+    api.sourceProfilesValue = listOf(
+      SourceProfileDto(
+        id = "travel",
+        nameKey = "sourceProfile.travel",
+        revision = 1,
+        operations = listOf("downloadToLibrary"),
+      ),
+    )
+    mount(api)
+    openSettings(DownloadScope.Episode)
+
+    compose.onNodeWithTag(TagSeriesDownloadStrategy).assertTextContains("Travel (small files)", substring = true)
+    compose.onNodeWithTag(TagSeriesDownloadAudio).assertDoesNotExist()
+    focusUp(TagSeriesDownloadStrategy)
+    press(Key.DirectionCenter)
+    focusDown(seriesStrategyTag("profile:travel"))
+    compose.onNodeWithTag(seriesStrategyTag("profile:travel")).assertIsFocused().assertIsSelected()
   }
 
   @Test

@@ -11,6 +11,8 @@ import javax.net.ssl.SSLSocketFactory
 import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -205,6 +207,44 @@ class ApiClientTest {
 
     assertEquals("/api/languages", server.takeRequest().path)
     assertEquals(listOf("cs", "en"), languages.map { it.code })
+  }
+
+  @Test
+  fun `a profile bulk selection carries only the profile id and revision`() = runTest {
+    server.enqueue(MockResponse().setBody("""{"added":1,"skipped":0}"""))
+
+    client(start()).downloadBulk(
+      title = "Show",
+      type = "series",
+      episodes = listOf(BulkEpisodeDto("e1", 1, 1)),
+      selection = DownloadSelectionDto(profile = DownloadProfileRefDto("travel", 1)),
+      media = BulkMediaDto(id = "tt1", metaType = "series"),
+    )
+
+    val request = server.takeRequest()
+    assertEquals("/api/downloads/bulk", request.path)
+    val body = Json.parseToJsonElement(request.body.readUtf8()).jsonObject
+    assertEquals("""{"profile":{"profileId":"travel","revision":1}}""", body.getValue("selection").toString())
+  }
+
+  @Test
+  fun `source profiles ignore fields this client does not use`() = runTest {
+    server.enqueue(
+      MockResponse().setBody(
+        """{"profiles":[{"id":"travel","name":"Small files","revision":1,""" +
+          """"operations":["play","downloadToLibrary"],"template":{"quality":480},""" +
+          """"policy":{"schemaVersion":1},"future":{"nested":true}}],"next":null}""",
+      ),
+    )
+
+    val profiles = client(start()).sourceProfiles()
+
+    assertEquals("/api/source-profiles", server.takeRequest().path)
+    assertEquals(1, profiles.size)
+    assertEquals("travel", profiles.single().id)
+    assertEquals("Small files", profiles.single().name)
+    assertEquals(1, profiles.single().revision)
+    assertEquals(listOf("play", "downloadToLibrary"), profiles.single().operations)
   }
 
   @Test

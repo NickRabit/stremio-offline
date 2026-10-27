@@ -127,6 +127,7 @@ fun PanelOption(
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
   selected: Boolean = false,
+  supportingText: String? = null,
 ) {
   val shape = RoundedCornerShape(8.dp)
   Surface(
@@ -148,12 +149,20 @@ fun PanelOption(
       focusedBorder = Border(BorderStroke(1.5.dp, Tokens.Accent2), shape = shape),
     ),
   ) {
-    Row(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-      Text(text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)) {
+      Column(Modifier.weight(1f)) {
+        Text(text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (supportingText != null) {
+          Text(
+            supportingText,
+            color = Tokens.Muted,
+            fontSize = 11.sp,
+            lineHeight = 15.sp,
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis,
+          )
+        }
+      }
     }
   }
 }
