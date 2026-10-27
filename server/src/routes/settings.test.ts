@@ -14,7 +14,7 @@ import { defaultInstanceSettings, defaultPrefs, type State, type Store, type Use
 import type { AddonRecord } from "../types.js";
 import { emptyUserData, type Role, type UserData, type UserRecord } from "../users.js";
 import { homeCatalogRowId, homeFeedSelectionKey } from "../home.js";
-import { SOURCE_PROFILE_IDS } from "../source-profiles.js";
+import { defaultTemplateParameters, SOURCE_PROFILE_IDS } from "../source-profiles.js";
 import { registerSettingsRoutes, type SettingsDeps } from "./settings.js";
 
 const ADA = "usr_00000001";
@@ -62,6 +62,15 @@ const mount = async (): Promise<Harness> => {
     ] as UserRecord[],
     addons: [],
     libraries: [],
+    sourceProfiles: (["recommended", "providerPriority", "travel"] as const).map((template) => ({
+      id: SOURCE_PROFILE_IDS[template],
+      revision: 1,
+      template,
+      nameKey: `sourceProfile.${template}`,
+      ...(template === "recommended" ? {} : { parameters: defaultTemplateParameters(template) }),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    })),
     settings: { ...defaultInstanceSettings(), realDebridToken: "rd-token", tmdbApiKey: "tmdb-key" },
     defaultsInstalled: true,
     userData: {

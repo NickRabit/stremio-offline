@@ -18,7 +18,7 @@ import { AppError } from "./errors.js";
 import { relativeWithin, type LibraryRecord } from "./libraries.js";
 import { defaultDownloadSettings } from "./naming.js";
 import { torrentKey } from "./download-selection.js";
-import { SOURCE_PROFILE_DEFINITIONS, SOURCE_PROFILE_IDS } from "./source-profiles.js";
+import { buildTemplatePolicy, SOURCE_PROFILE_DEFINITIONS, SOURCE_PROFILE_IDS } from "./source-profiles.js";
 import {
   materializeSourceAdmissionPolicy,
   parseSourceAdmissionSnapshotV1,
@@ -60,27 +60,27 @@ const deferred = () => {
 const LIBRARY_ID = "lib_d10ad10a";
 const queueAdmission = (): SourceAdmissionSnapshotV1 => parseSourceAdmissionSnapshotV1({
   schemaVersion: 1,
-  profile: { id: "queue-local-copy-test", revision: 1 },
+  profile: { id: "queue-local-copy-test", revision: 1, template: "providerPriority" },
   operation: "downloadToLibrary",
   providerKeys: ["addon:http-only"],
-  policy: {
-    schemaVersion: 1,
-    scope: { mode: "selected", providerKeys: ["addon:http-only"] },
-    constraints: {
-      sourceKinds: ["http"],
-      audio: { mode: "preferred", preferred: { code: "en" } },
-      subtitles: { mode: "off" },
-    },
-    criteria: [{ kind: "providerOrder", keys: ["addon:http-only"] }],
-    nextEpisode: "profile",
-    existingLocalCopy: "meetsRequirements",
-  },
+  policy: materializeSourceAdmissionPolicy(
+    buildTemplatePolicy("providerPriority", {
+      scope: { mode: "allAvailable" },
+      providerOrder: { from: "viewer" },
+      sizeDirection: "desc",
+      transfer: ["http"],
+      audioMode: "preferred",
+      subtitleMode: "off",
+    }),
+    ["addon:http-only"],
+    { audioLanguage: "en" },
+  ),
 });
 const travelProfile = SOURCE_PROFILE_DEFINITIONS.find((definition) => definition.id === SOURCE_PROFILE_IDS.travel);
 assert.ok(travelProfile);
 const travelQueueAdmission = (): SourceAdmissionSnapshotV1 => parseSourceAdmissionSnapshotV1({
   schemaVersion: 1,
-  profile: { id: SOURCE_PROFILE_IDS.travel, revision: 1 },
+  profile: { id: SOURCE_PROFILE_IDS.travel, revision: 1, template: "travel" },
   operation: "downloadToLibrary",
   providerKeys: ["addon:http-only"],
   policy: materializeSourceAdmissionPolicy(

@@ -75,7 +75,7 @@ const travelWithNumericBounds = (): SourceAdmissionSnapshotV1 => {
   });
   return {
     schemaVersion: 1,
-    profile: { id: SOURCE_PROFILE_IDS.travel, revision: 1 },
+    profile: { id: SOURCE_PROFILE_IDS.travel, revision: 1, template: "travel" },
     operation: "downloadToLibrary",
     providerKeys,
     policy: materializeSourceAdmissionPolicy(

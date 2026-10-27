@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { defaultDownloadSettings } from "./naming.js";
 import {
+  buildTemplatePolicy,
+  defaultTemplateParameters,
   SOURCE_PROFILE_DEFINITIONS,
   SOURCE_PROFILE_IDS,
   sourceProfilesForViewer,
@@ -11,6 +13,7 @@ import {
 import { parseSourcePolicyV1 } from "./source-policy.js";
 import type { LibraryRecord } from "./libraries.js";
 import type { MediaConnectionRecord, RemoteLibraryRecord } from "./media-server-types.js";
+import type { StoredSourceProfile } from "./store.js";
 import type { AddonRecord } from "./types.js";
 import type { UserRecord } from "./users.js";
 
@@ -101,14 +104,26 @@ const remoteLibrary = (allowedUsers: string[]): RemoteLibraryRecord => ({
 
 const catalogue = (
   user: UserRecord,
-  source: Partial<Pick<SourceProfileCatalogue, "addons" | "libraries" | "remoteLibraries" | "mediaConnections">> = {},
+  source: Partial<Pick<SourceProfileCatalogue, "profiles" | "addons" | "libraries" | "remoteLibraries" | "mediaConnections">> = {},
 ): SourceProfileCatalogue => ({
   viewer: viewerOfProfileAccount(user),
+  profiles: source.profiles ?? storedBuiltIns(),
   addons: source.addons ?? [],
   libraries: source.libraries ?? [],
   remoteLibraries: source.remoteLibraries ?? [],
   mediaConnections: source.mediaConnections ?? [connection],
 });
+
+const storedBuiltIns = (): StoredSourceProfile[] =>
+  (["recommended", "providerPriority", "travel"] as const).map((template) => ({
+    id: SOURCE_PROFILE_IDS[template],
+    revision: 1,
+    template,
+    nameKey: `sourceProfile.${template}`,
+    ...(template === "recommended" ? {} : { parameters: defaultTemplateParameters(template) }),
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  }));
 
 const operationIds = (profiles: ReturnType<typeof sourceProfilesForViewer>) =>
   profiles.map((profile) => ({ id: profile.id, operations: profile.operations }));
@@ -171,6 +186,18 @@ test("fixed profile definitions parse and keep stable identities", () => {
     "http",
     "torrent",
   ]);
+});
+
+test("template defaults reproduce every built-in policy", () => {
+  for (const template of ["recommended", "travel", "providerPriority"] as const) {
+    const definition = SOURCE_PROFILE_DEFINITIONS.find((candidate) =>
+      candidate.id === SOURCE_PROFILE_IDS[template]);
+    assert.ok(definition);
+    assert.deepEqual(
+      buildTemplatePolicy(template, defaultTemplateParameters(template)),
+      definition.policy,
+    );
+  }
 });
 
 test("projection returns fresh policies and operation lists on every read", () => {

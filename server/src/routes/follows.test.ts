@@ -12,7 +12,11 @@ import { defaultDownloadLibrary } from "../downloads.js";
 import type { DefaultLibrarySettings, LibraryRecord } from "../libraries.js";
 import { defaultDownloadSettings } from "../naming.js";
 import { materializeSourceAdmissionPolicy, parseSourceAdmissionSnapshotV1, type SourceAdmissionSnapshotV1 } from "../source-admission.js";
-import { SOURCE_PROFILE_DEFINITIONS, SOURCE_PROFILE_IDS } from "../source-profiles.js";
+import {
+  defaultTemplateParameters,
+  SOURCE_PROFILE_DEFINITIONS,
+  SOURCE_PROFILE_IDS,
+} from "../source-profiles.js";
 import type { Store, UserPrefs } from "../store.js";
 import type { UserData, UserRecord } from "../users.js";
 import { calendarFeedHandler, registerFollowRoutes, type FollowDeps } from "./follows.js";
@@ -102,6 +106,15 @@ const mount = async (options: {
       settings: () => settings,
       mediaConnections: () => [],
       remoteLibraries: () => [],
+      sourceProfiles: () => (["recommended", "providerPriority", "travel"] as const).map((template) => ({
+        id: SOURCE_PROFILE_IDS[template],
+        revision: 1,
+        template,
+        nameKey: `sourceProfile.${template}`,
+        ...(template === "recommended" ? {} : { parameters: defaultTemplateParameters(template) }),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      })),
       prefs: () => ({ uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en" }) as UserPrefs,
       userData: () => ({} as UserData),
     } as unknown as Store,

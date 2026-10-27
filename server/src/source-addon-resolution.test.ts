@@ -49,7 +49,7 @@ const snapshot = (options: SnapshotOptions = {}): SourceAdmissionSnapshotV1 => {
     };
   return {
     schemaVersion: 1,
-    profile: { id: SOURCE_PROFILE_IDS.providerPriority, revision: 1 },
+    profile: { id: SOURCE_PROFILE_IDS.providerPriority, revision: 1, template: "providerPriority" },
     operation: "downloadToLibrary",
     providerKeys,
     policy: materializeSourceAdmissionPolicy(source, providerKeys, {}),

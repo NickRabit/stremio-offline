@@ -13,7 +13,7 @@ import type { UserRecord } from "../users.js";
 
 type SourceProfileSelectionStore = Pick<
   Store,
-  "addons" | "libraries" | "remoteLibraries" | "mediaConnections" | "prefs" | "userData"
+  "addons" | "libraries" | "remoteLibraries" | "mediaConnections" | "prefs" | "sourceProfiles" | "userData"
 >;
 
 export interface SourceProfileSelectionDeps {
@@ -51,6 +51,7 @@ export function materializeOwnerSourceAdmission(
   const preferences = deps.store.prefs(owner.id);
   return materializeSourceAdmission(reference, {
     viewer: viewerOfProfileAccount(owner),
+    profiles: deps.store.sourceProfiles(),
     addons: deps.store.addons(),
     libraries: deps.store.libraries(),
     remoteLibraries: deps.store.remoteLibraries(),

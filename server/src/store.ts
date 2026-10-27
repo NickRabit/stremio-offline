@@ -11,6 +11,16 @@ import { newLibraryId, type DepartedLibrary, type LibraryRecord, type RootGrant 
 import { log } from "./logger.js";
 import type { ProgressSeries } from "./progress-series.js";
 import type { MediaConnectionRecord, RemoteLibraryRecord } from "./media-server-types.js";
+import {
+  buildTemplatePolicy,
+  defaultTemplateParameters,
+  parseTemplateParameters,
+  SOURCE_PROFILE_DEFINITIONS,
+  SOURCE_PROFILE_IDS,
+  type ProviderPriorityParameters,
+  type SourceProfileTemplate,
+  type TravelParameters,
+} from "./source-profiles.js";
 import { claimLegacyData, emptyUserData, type EnvReset, envResetApplied, envResetPending, findUser, type MigratableState, migrateUsers, newUserId, type UserData, type UserRecord } from "./users.js";
 
 /** `state.json` shape version. 2 is the libraries shape, 3 the accounts one; a state
@@ -100,6 +110,18 @@ export type MemberSettings = Pick<PublicSettings, "secureMode" | "realDebridConf
 
 export const memberSettings = (settings: PublicSettings): MemberSettings =>
   ({ secureMode: settings.secureMode, realDebridConfigured: settings.realDebridConfigured });
+
+export interface StoredSourceProfile {
+  id: string;
+  revision: number;
+  template: SourceProfileTemplate;
+  nameKey?: string;
+  name?: string;
+  parameters?: TravelParameters | ProviderPriorityParameters;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface State { schemaVersion?: number;
   /** The configured libraries, in display order. A migrated install has exactly one. */
   libraries?: LibraryRecord[];
@@ -128,6 +150,8 @@ export interface State { schemaVersion?: number;
   mediaConnections?: MediaConnectionRecord[];
   /** Remote libraries attached to those connections. */
   remoteLibraries?: RemoteLibraryRecord[];
+  sourceProfiles?: StoredSourceProfile[];
+  deletedSourceProfileIds?: string[];
   /** Secret-vault references whose ciphertext file is waiting to be deleted. Internal
    *  only: it never leaves the process except as a store write, and never names a token. */
   mediaSecretCleanup?: string[] }
@@ -186,9 +210,11 @@ export class Store {
   }
   async load() {
     await mkdir(path.dirname(this.filename), { recursive: true });
+    let stateRead = false;
     try {
       const loaded = JSON.parse(await readFile(this.filename, "utf8")) as Partial<State>;
       this.persisted = true;
+      stateRead = true;
       this.mediaState = Object.prototype.hasOwnProperty.call(loaded, "mediaConnections")
         || Object.prototype.hasOwnProperty.call(loaded, "mediaSecretCleanup");
       const fresh = initialState(this.downloadDir);
@@ -200,6 +226,7 @@ export class Store {
       this.state = { ...fresh, ...loaded, settings: { ...fresh.settings, ...storedSettings } };
       if (!this.state.libraries?.length) this.state.libraries = fresh.libraries;
       this.state.addons = this.state.addons.map((addon) => ({ ...addon, globalSearch: addon.globalSearch !== false, downloadSettings: normalizeDownloadSettings(addon.downloadSettings) }));
+      this.normalizeSourceProfiles();
       // After `migrate`, which still reads the personal keys off the flat settings object.
       // The cast is that moment: on disk the settings are both halves in one object.
       const migration = migrateUsers(this.state as unknown as MigratableState);
@@ -212,6 +239,7 @@ export class Store {
       }
     }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    if (!stateRead) this.normalizeSourceProfiles();
   }
   addons() { return this.state.addons; }
   settings() { return this.state.settings; }
@@ -291,6 +319,7 @@ export class Store {
   libraries() { return this.state.libraries ?? []; }
   mediaConnections(): MediaConnectionRecord[] { return structuredClone(this.state.mediaConnections ?? []); }
   remoteLibraries(): RemoteLibraryRecord[] { return structuredClone(this.state.remoteLibraries ?? []); }
+  sourceProfiles(): readonly StoredSourceProfile[] { return this.state.sourceProfiles ?? []; }
   mediaSecretCleanup(): string[] { return [...(this.state.mediaSecretCleanup ?? [])]; }
   /** True once a state file has actually been read or written here. A missing or corrupt
    *  file leaves it false, so a reconciliation step must not treat an empty in-memory state
@@ -301,6 +330,112 @@ export class Store {
   hasMediaServerState(): boolean { return this.mediaState; }
   grants() { return this.state.grants ?? []; }
   departed() { return this.state.departed ?? []; }
+  private normalizeSourceProfiles(): void {
+    const rawProfiles: unknown = this.state.sourceProfiles;
+    if (rawProfiles !== undefined && !Array.isArray(rawProfiles)) {
+      log("ERROR", "The stored source profile catalogue is not a list", {
+        file: path.basename(this.filename),
+      });
+    }
+    const candidates = Array.isArray(rawProfiles) ? rawProfiles : [];
+    const seen = new Set<string>();
+    const profiles: StoredSourceProfile[] = [];
+    for (const candidate of candidates) {
+      try {
+        const profile = this.parseStoredSourceProfile(candidate);
+        if (seen.has(profile.id)) {
+          log("ERROR", "A stored source profile was dropped", {
+            id: profile.id,
+            reason: "duplicate id",
+          });
+          continue;
+        }
+        seen.add(profile.id);
+        profiles.push(profile);
+      } catch {
+        log("ERROR", "A stored source profile was dropped", {
+          id: candidate !== null && typeof candidate === "object"
+            && typeof (candidate as { id?: unknown }).id === "string"
+            ? (candidate as { id: string }).id
+            : undefined,
+          reason: "invalid record",
+        });
+      }
+    }
+
+    const deleted = new Set((this.state.deletedSourceProfileIds ?? [])
+      .filter((id): id is string => typeof id === "string"));
+    for (const definition of SOURCE_PROFILE_DEFINITIONS) {
+      if (seen.has(definition.id) || deleted.has(definition.id)) continue;
+      const template = definition.id === SOURCE_PROFILE_IDS.recommended
+        ? "recommended"
+        : definition.id === SOURCE_PROFILE_IDS.travel ? "travel" : "providerPriority";
+      const now = new Date().toISOString();
+      const parameters = defaultTemplateParameters(template);
+      profiles.push({
+        id: definition.id,
+        revision: 1,
+        template,
+        nameKey: definition.nameKey,
+        ...(parameters === undefined ? {} : { parameters }),
+        createdAt: now,
+        updatedAt: now,
+      });
+      seen.add(definition.id);
+    }
+    this.state.sourceProfiles = profiles;
+  }
+  private parseStoredSourceProfile(input: unknown): StoredSourceProfile {
+    if (input === null || typeof input !== "object" || Array.isArray(input)) throw new Error("invalid profile");
+    const profile = input as Record<string, unknown>;
+    const id = profile.id;
+    const revision = profile.revision;
+    const template = profile.template;
+    const nameKey = profile.nameKey;
+    const name = profile.name;
+    const createdAt = profile.createdAt;
+    const updatedAt = profile.updatedAt;
+    if (typeof id !== "string"
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
+      || typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 1
+      || (template !== "recommended" && template !== "travel" && template !== "providerPriority")
+      || typeof createdAt !== "string" || createdAt.length === 0
+      || typeof updatedAt !== "string" || updatedAt.length === 0) {
+      throw new Error("invalid profile");
+    }
+
+    const builtInTemplate = id === SOURCE_PROFILE_IDS.recommended
+      ? "recommended"
+      : id === SOURCE_PROFILE_IDS.travel
+        ? "travel"
+        : id === SOURCE_PROFILE_IDS.providerPriority ? "providerPriority" : undefined;
+    if (builtInTemplate !== undefined && (template !== builtInTemplate || typeof nameKey !== "string" || name !== undefined)) {
+      throw new Error("invalid built-in profile");
+    }
+    if (builtInTemplate === undefined && (template === "recommended"
+      || typeof name !== "string" || name.trim().length === 0 || name.length > 60 || nameKey !== undefined)) {
+      throw new Error("invalid custom profile");
+    }
+
+    let parameters: TravelParameters | ProviderPriorityParameters | undefined;
+    if (template === "recommended") {
+      if (profile.parameters !== undefined) throw new Error("invalid recommended parameters");
+      parseTemplateParameters(template, profile.parameters);
+    } else {
+      parameters = parseTemplateParameters(template, profile.parameters);
+    }
+    buildTemplatePolicy(template, parameters);
+    return {
+      id,
+      revision,
+      template,
+      ...(typeof nameKey === "string" ? { nameKey } : {}),
+      ...(typeof name === "string" ? { name } : {}),
+      ...(parameters === undefined ? {} : { parameters: structuredClone(parameters) }),
+      createdAt,
+      updatedAt,
+    };
+  }
   private chain: Promise<void> = Promise.resolve();
   /** Writes run one after another, or two concurrent saves would fight over the same .tmp file.
    *

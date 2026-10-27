@@ -49,7 +49,7 @@ import {
   parseTravelContinuationCursorV1,
   type TravelContinuationCursorV1,
 } from "./source-travel.js";
-import { isExecutableDownloadProfile, SOURCE_PROFILE_IDS } from "./source-profiles.js";
+import { isExecutableDownloadProfile } from "./source-profiles.js";
 import type {
   ProviderPriorityProfileResolution,
   ProviderPriorityProfileResolverInput,
@@ -194,7 +194,7 @@ export interface DownloadOwnerScope {
 const isTravelSnapshot = (
   snapshot: SourceAdmissionSnapshotV1 | undefined,
 ): snapshot is SourceAdmissionSnapshotV1 =>
-  snapshot?.profile.id === SOURCE_PROFILE_IDS.travel && snapshot.profile.revision === 1;
+  snapshot?.profile.template === "travel";
 
 export const isExecutableDownloadSnapshot = (
   snapshot: SourceAdmissionSnapshotV1 | undefined,
@@ -2134,7 +2134,7 @@ export class DownloadQueue {
     if (!isExecutableDownloadSnapshot(snapshot)) throw new SourceAdmissionRuntimeUnavailable();
     const startedAt = this.now();
 
-    if (snapshot.profile.id === SOURCE_PROFILE_IDS.travel) {
+    if (snapshot.profile.template === "travel") {
       if (!this.travelResolver) throw new SourceAdmissionRuntimeUnavailable();
       const outcome = await this.travelResolver({
         source: job.source,
@@ -2206,7 +2206,7 @@ export class DownloadQueue {
       return this.stageSelectedProfileSource(job, outcome, controller, startedAt);
     }
 
-    if (snapshot.profile.id !== SOURCE_PROFILE_IDS.providerPriority || !this.providerPriorityResolver) {
+    if (snapshot.profile.template !== "providerPriority" || !this.providerPriorityResolver) {
       throw new SourceAdmissionRuntimeUnavailable();
     }
     const outcome = await this.providerPriorityResolver({

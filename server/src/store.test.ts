@@ -3,11 +3,12 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { defaultInstanceSettings, defaultPrefs, publicSettings, Store } from "./store.js";
+import { defaultInstanceSettings, defaultPrefs, publicSettings, Store, type StoredSourceProfile } from "./store.js";
 import { automaticMetadataEnabled } from "./libraries.js";
 import type { AddonRecord } from "./types.js";
 import { PERSONAL_SETTINGS } from "./users.js";
 import { verifyPassword } from "./auth.js";
+import { defaultTemplateParameters, SOURCE_PROFILE_IDS } from "./source-profiles.js";
 
 const legacyAddon = () => ({
   key: "provider-1", manifestUrl: "https://example.com/manifest.json", role: "source" as const,
@@ -111,6 +112,81 @@ test("a fresh install starts in English", async () => {
     assert.equal(store.prefs(undefined).audioLanguage, "en");
     assert.equal(store.prefs(undefined).subtitleLanguage, "en");
     assert.equal(store.prefs(undefined).downloadTitleLanguage, "ui");
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("the built-in source profiles seed once and deleted built-ins stay deleted", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-store-profiles-"));
+  try {
+    const file = path.join(directory, "state.json");
+    const first = new Store(directory);
+    await first.load();
+    assert.deepEqual(
+      first.sourceProfiles().map((profile) => [profile.id, profile.template, profile.revision]),
+      [
+        [SOURCE_PROFILE_IDS.recommended, "recommended", 1],
+        [SOURCE_PROFILE_IDS.providerPriority, "providerPriority", 1],
+        [SOURCE_PROFILE_IDS.travel, "travel", 1],
+      ],
+    );
+    await assert.rejects(readFile(file, "utf8"));
+
+    await first.update((state) => { state.settings.addonRefreshHours = 7; });
+    const persisted = JSON.parse(await readFile(file, "utf8")) as { sourceProfiles?: StoredSourceProfile[] };
+    assert.equal(persisted.sourceProfiles?.length, 3);
+
+    const second = new Store(directory);
+    await second.load();
+    assert.deepEqual(second.sourceProfiles(), first.sourceProfiles());
+    const bytes = await readFile(file, "utf8");
+    const third = new Store(directory);
+    await third.load();
+    assert.equal(await readFile(file, "utf8"), bytes);
+
+    await third.update((state) => {
+      state.sourceProfiles = state.sourceProfiles?.filter((profile) => profile.id !== SOURCE_PROFILE_IDS.travel);
+      state.deletedSourceProfileIds = [SOURCE_PROFILE_IDS.travel];
+    });
+    const fourth = new Store(directory);
+    await fourth.load();
+    assert.equal(fourth.sourceProfiles().some((profile) => profile.id === SOURCE_PROFILE_IDS.travel), false);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("invalid and duplicate stored source profiles are dropped and missing built-ins are restored", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-store-profile-repair-"));
+  try {
+    const duplicate: StoredSourceProfile = {
+      id: "7d429129-3be3-4e78-a4fa-3e518b752e33",
+      revision: 1,
+      template: "travel",
+      name: "Duplicate",
+      parameters: defaultTemplateParameters("travel"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    await writeFile(path.join(directory, "state.json"), JSON.stringify({
+      addons: [],
+      defaultsInstalled: false,
+      settings: {},
+      sourceProfiles: [
+        duplicate,
+        { ...duplicate, name: "Dropped duplicate" },
+        {
+          ...duplicate,
+          id: "be5dc85d-7495-426b-9a99-e12f6ee2cfb3",
+          name: "Invalid",
+          parameters: { ...defaultTemplateParameters("travel"), unexpected: true },
+        },
+      ],
+    }));
+
+    const store = new Store(directory);
+    await store.load();
+    assert.deepEqual(
+      store.sourceProfiles().map((profile) => profile.name ?? profile.nameKey),
+      ["Duplicate", "sourceProfile.recommended", "sourceProfile.providerPriority", "sourceProfile.travel"],
+    );
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 

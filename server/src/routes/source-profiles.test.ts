@@ -7,7 +7,8 @@ import { messageKeyOf } from "../errors.js";
 import type { LibraryRecord } from "../libraries.js";
 import type { MediaConnectionRecord, RemoteLibraryRecord } from "../media-server-types.js";
 import { defaultDownloadSettings } from "../naming.js";
-import type { Store } from "../store.js";
+import { defaultTemplateParameters, SOURCE_PROFILE_IDS } from "../source-profiles.js";
+import type { Store, StoredSourceProfile } from "../store.js";
 import type { AddonRecord } from "../types.js";
 import type { UserRecord } from "../users.js";
 import { registerSourceProfilesRoutes, type SourceProfilesDeps } from "./source-profiles.js";
@@ -15,6 +16,7 @@ import { registerSourceProfilesRoutes, type SourceProfilesDeps } from "./source-
 const ADMIN = "usr_00000001";
 const MEMBER = "usr_00000002";
 const OTHER = "usr_00000003";
+const NO_PATH = "usr_00000004";
 
 interface Harness {
   base: string;
@@ -24,6 +26,7 @@ interface Harness {
     libraries: LibraryRecord[];
     mediaConnections: MediaConnectionRecord[];
     remoteLibraries: RemoteLibraryRecord[];
+    sourceProfiles: StoredSourceProfile[];
   };
   close(): Promise<void>;
 }
@@ -113,6 +116,7 @@ const mount = async (options: {
   addons?: AddonRecord[];
   libraries?: LibraryRecord[];
   remoteLibraries?: RemoteLibraryRecord[];
+  profiles?: StoredSourceProfile[];
 } = {}): Promise<Harness> => {
   const state: Harness["state"] = {
     users: [
@@ -124,6 +128,15 @@ const mount = async (options: {
     libraries: options.libraries ?? [],
     mediaConnections: [connection],
     remoteLibraries: options.remoteLibraries ?? [],
+    sourceProfiles: options.profiles ?? (["recommended", "providerPriority", "travel"] as const).map((template) => ({
+      id: SOURCE_PROFILE_IDS[template],
+      revision: 1,
+      template,
+      nameKey: `sourceProfile.${template}`,
+      ...(template === "recommended" ? {} : { parameters: defaultTemplateParameters(template) }),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    })),
   };
   const currentUser = (req: express.Request) => {
     const name = req.header("x-user");
@@ -135,6 +148,7 @@ const mount = async (options: {
       libraries: () => state.libraries,
       remoteLibraries: () => state.remoteLibraries,
       mediaConnections: () => state.mediaConnections,
+      sourceProfiles: () => state.sourceProfiles,
     } as unknown as Store,
     needsSetup: () => false,
     currentSession: () => undefined,
@@ -196,9 +210,9 @@ test("GET /api/source-profiles returns the fixed catalogue for an administrator"
     "7e15d713-965c-4636-9ed3-3a112c521fe1",
   ]);
   assert.deepEqual(profiles.map((profile) => Object.keys(profile).sort()), [
-    ["id", "nameKey", "operations", "policy", "revision"],
-    ["id", "nameKey", "operations", "policy", "revision"],
-    ["id", "nameKey", "operations", "policy", "revision"],
+    ["id", "nameKey", "operations", "policy", "revision", "template"],
+    ["id", "nameKey", "operations", "policy", "revision", "template"],
+    ["id", "nameKey", "operations", "policy", "revision", "template"],
   ]);
   assert.deepEqual(profiles.map((profile) => profile.operations), [
     ["play", "downloadToDevice"],
@@ -318,6 +332,47 @@ test("GET /api/source-profiles never reveals same-name provider identity", async
   assert.doesNotMatch(text, /manifest-/);
 });
 
+test("GET /api/source-profiles lists a selected-scope variant only to accounts that can use its addons", async (t) => {
+  const selected: StoredSourceProfile = {
+    id: "ea85fb58-c0bb-4166-94f2-ce025ed09c77",
+    revision: 3,
+    template: "travel",
+    name: "Selected Travel",
+    parameters: {
+      ...defaultTemplateParameters("travel"),
+      scope: { mode: "selected", addonKeys: ["member-only", "other-only"] },
+    },
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-03T00:00:00.000Z",
+  };
+  const harness = await mount({
+    addons: [
+      addon("member-only", { allowedUsers: [MEMBER] }),
+      addon("other-only", { allowedUsers: [OTHER] }),
+    ],
+    profiles: [selected],
+  });
+  harness.state.users = [account(ADMIN, "admin"), account(MEMBER, "user"), account(NO_PATH, "user")];
+  t.after(harness.close);
+
+  const response = await api(harness.base, MEMBER);
+  const text = await response.text();
+  const member = JSON.parse(text) as {
+    profiles: Array<Record<string, unknown>>;
+  };
+  assert.equal(member.profiles.length, 1);
+  assert.equal(member.profiles[0]?.id, selected.id);
+  assert.equal(member.profiles[0]?.name, "Selected Travel");
+  assert.equal(member.profiles[0]?.template, "travel");
+  assert.equal(member.profiles[0]?.revision, 3);
+  assert.deepEqual(
+    (member.profiles[0]?.policy as { scope: unknown }).scope,
+    { mode: "selected", providerKeys: ["addon:member-only"] },
+  );
+  assert.doesNotMatch(text, /other-only/);
+  assert.deepEqual(await (await api(harness.base, NO_PATH)).json(), { profiles: [] });
+});
+
 test("GET /api/source-profiles refuses absent and disabled accounts", async (t) => {
   const harness = await mount({ addons: [addon("stream")] });
   t.after(harness.close);
@@ -343,6 +398,7 @@ const SOURCE_PROFILES_EXPECTED = [
     id: "39de76cc-0ca0-4a5e-95ad-08927fb45410",
     nameKey: "sourceProfile.recommended",
     revision: 1,
+    template: "recommended",
     operations: ["play", "downloadToDevice"],
     policy: {
       schemaVersion: 1,
@@ -366,6 +422,7 @@ const SOURCE_PROFILES_EXPECTED = [
     id: "390a8b1a-85f6-4ded-9d7e-701a299720bb",
     nameKey: "sourceProfile.providerPriority",
     revision: 1,
+    template: "providerPriority",
     operations: ["play", "downloadToLibrary", "downloadToDevice"],
     policy: {
       schemaVersion: 1,
@@ -389,6 +446,7 @@ const SOURCE_PROFILES_EXPECTED = [
     id: "7e15d713-965c-4636-9ed3-3a112c521fe1",
     nameKey: "sourceProfile.travel",
     revision: 1,
+    template: "travel",
     operations: ["play", "downloadToLibrary", "downloadToDevice"],
     policy: {
       schemaVersion: 1,

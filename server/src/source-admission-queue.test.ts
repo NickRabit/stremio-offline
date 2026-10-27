@@ -15,7 +15,13 @@ import {
 } from "./source-admission.js";
 import { defaultDownloadSettings } from "./naming.js";
 import { relativeWithin, type LibraryRecord } from "./libraries.js";
-import { SOURCE_PROFILE_DEFINITIONS, SOURCE_PROFILE_IDS } from "./source-profiles.js";
+import {
+  buildTemplatePolicy,
+  defaultTemplateParameters,
+  SOURCE_PROFILE_DEFINITIONS,
+  SOURCE_PROFILE_IDS,
+  type TravelParameters,
+} from "./source-profiles.js";
 import {
   TravelVerificationError,
   type TravelContinuationCursorV1,
@@ -76,6 +82,29 @@ const providerPrioritySnapshot = (): SourceAdmissionSnapshotV1 =>
   fixedSnapshot(SOURCE_PROFILE_IDS.providerPriority);
 const nonTravelSnapshot = (): SourceAdmissionSnapshotV1 =>
   fixedSnapshot(SOURCE_PROFILE_IDS.recommended);
+
+const storedTravelSnapshot = (
+  id = "f29694e1-6b59-4d0b-8ac6-f6d26dc5f27b",
+  parameters: TravelParameters = {
+    ...defaultTemplateParameters("travel"),
+    scope: { mode: "selected", addonKeys: ["queue-private-token"] },
+    providerOrder: { addonKeys: ["queue-private-token"] },
+    heightPixels: { min: 720 },
+  },
+): SourceAdmissionSnapshotV1 => {
+  const providerKeys = [PROVIDER_ONE];
+  return parseSourceAdmissionSnapshotV1({
+    schemaVersion: 1,
+    profile: { id, revision: 1, template: "travel" },
+    operation: "downloadToLibrary",
+    providerKeys,
+    policy: materializeSourceAdmissionPolicy(
+      buildTemplatePolicy("travel", parameters),
+      providerKeys,
+      { audioLanguage: "English", subtitleLanguage: "cs" },
+    ),
+  });
+};
 
 const selection = (addonKey: string): DownloadSelection => ({
   addonKeys: [addonKey],
@@ -353,6 +382,69 @@ const selectedProviderPriority = (
   ...(options.subtitle === undefined ? {} : { subtitle: options.subtitle }),
   ...(options.subtitleAddonIdentity === undefined ? {} : { subtitleAddonIdentity: options.subtitleAddonIdentity }),
   searchStatus: "complete",
+});
+
+test("a stored Travel variant runs through the Travel resolver", async () => {
+  const { directory, data, downloads } = await setup();
+  const source = await countingServer();
+  const queue = openQueue(data, downloads);
+  let resolverCalls = 0;
+  queue.setTravelResolver(async () => {
+    resolverCalls += 1;
+    return selectedTravel(source.url);
+  });
+  await queue.load();
+  try {
+    const added = await queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt-stored-travel", selection: selection("queue-private-token") },
+      { kind: "movie", title: "Film" },
+      QUEUE_OWNER,
+      undefined,
+      storedTravelSnapshot(),
+    );
+    assert.ok(added);
+    await waitFor(queue, () => queue.get(added.id)?.status === "completed");
+    assert.equal(resolverCalls, 1);
+  } finally {
+    await queue.stop();
+    source.server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("an old Travel queue snapshot without a template still loads and runs", async () => {
+  const { directory, data, downloads, state } = await setup();
+  const source = await countingServer();
+  const snapshot = structuredClone(storedTravelSnapshot(SOURCE_PROFILE_IDS.travel)) as unknown as {
+    profile: { template?: string };
+  };
+  delete snapshot.profile.template;
+  await writeFile(state, JSON.stringify([{
+    ...rawLazyJob(snapshot),
+    id: "old-travel-snapshot",
+    source: {
+      type: "movie",
+      videoId: "tt-old-travel",
+      tried: [],
+      selection: selection("queue-private-token"),
+    },
+  }]));
+  const queue = openQueue(data, downloads);
+  let resolverCalls = 0;
+  queue.setTravelResolver(async () => {
+    resolverCalls += 1;
+    return selectedTravel(source.url);
+  });
+  try {
+    await queue.load();
+    await waitFor(queue, () => queue.get("old-travel-snapshot")?.status === "completed");
+    assert.equal(resolverCalls, 1);
+  } finally {
+    await queue.stop();
+    source.server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("a completed Travel job migrates its legacy identity without resolving again after restart", async () => {

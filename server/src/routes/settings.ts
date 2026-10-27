@@ -63,6 +63,7 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
   const offeredDownloadProfiles = (state: State, actor: UserRecord | undefined) => actor
     ? sourceProfilesForViewer({
         viewer: viewerOfProfileAccount(actor),
+        profiles: state.sourceProfiles ?? [],
         addons: state.addons,
         libraries: state.libraries ?? [],
         remoteLibraries: state.remoteLibraries ?? [],

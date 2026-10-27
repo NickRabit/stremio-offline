@@ -6,11 +6,15 @@ import { visibleLibraries, type LibraryRecord } from "./libraries.js";
 import { remoteLibraryVisibleTo } from "./media-server-access.js";
 import type { MediaConnectionRecord, RemoteLibraryRecord } from "./media-server-types.js";
 import {
+  buildTemplatePolicy,
   isExecutableDownloadProfile,
-  SOURCE_PROFILE_DEFINITIONS,
+  parseTemplateParameters,
+  SOURCE_PROFILE_IDS,
   type SourceOperation,
-  type SourceProfileDefinition,
+  type ProviderPriorityParameters,
+  type SourceProfileTemplate,
   type SourceProfileViewer,
+  type TravelParameters,
 } from "./source-profiles.js";
 import {
   parseSourcePolicyV1,
@@ -18,6 +22,7 @@ import {
   type SourcePolicyCriterion,
   type SourcePolicyV1,
 } from "./source-policy.js";
+import type { StoredSourceProfile } from "./store.js";
 import type { AddonRecord } from "./types.js";
 
 export interface SourceProfileReference {
@@ -32,6 +37,7 @@ export interface SourceAdmissionPreferences {
 
 export interface SourceAdmissionContext {
   viewer: SourceProfileViewer;
+  profiles: readonly StoredSourceProfile[];
   addons: readonly AddonRecord[];
   libraries: readonly LibraryRecord[];
   remoteLibraries: readonly RemoteLibraryRecord[];
@@ -43,7 +49,7 @@ export interface SourceAdmissionContext {
 
 export interface SourceAdmissionSnapshotV1 {
   schemaVersion: 1;
-  profile: { id: string; revision: number };
+  profile: { id: string; revision: number; template: SourceProfileTemplate };
   operation: SourceOperation;
   providerKeys: string[];
   policy: SourcePolicyV1;
@@ -261,45 +267,71 @@ export function materializeSourceAdmissionPolicy(
   });
 }
 
-const validateFixedPolicy = (
-  profileId: string,
-  profileRevision: number,
+const templateOfBuiltIn = (id: string): SourceProfileTemplate | undefined =>
+  id === SOURCE_PROFILE_IDS.recommended
+    ? "recommended"
+    : id === SOURCE_PROFILE_IDS.travel
+      ? "travel"
+      : id === SOURCE_PROFILE_IDS.providerPriority ? "providerPriority" : undefined;
+
+const parametersFromPolicy = (
+  template: SourceProfileTemplate,
+  policy: SourcePolicyV1,
+): TravelParameters | ProviderPriorityParameters | undefined => {
+  if (template === "recommended") return undefined;
+  const audioMode = policy.constraints.audio.mode;
+  const subtitleMode = policy.constraints.subtitles.mode;
+  if (template === "travel") {
+    const min = policy.constraints.heightPixels?.min;
+    const max = policy.constraints.heightPixels?.max;
+    if (min === undefined) return failValidation();
+    const parameters: TravelParameters = {
+      scope: { mode: "allAvailable" },
+      providerOrder: { from: "viewer" },
+      audioMode,
+      subtitleMode,
+      heightPixels: max === undefined ? { min } : { min, max },
+    };
+    return parameters;
+  }
+  const size = policy.criteria.find((criterion) => criterion.kind === "size");
+  if (size?.kind !== "size") return failValidation();
+  if (audioMode === "strict" || subtitleMode === "required") return failValidation();
+  const parameters: ProviderPriorityParameters = {
+    scope: { mode: "allAvailable" },
+    providerOrder: { from: "viewer" },
+    sizeDirection: size.direction,
+    transfer: policy.constraints.sourceKinds.filter(
+      (kind): kind is "http" | "torrent" => kind === "http" || kind === "torrent",
+    ),
+    audioMode,
+    subtitleMode,
+  };
+  return parameters;
+};
+
+const validateTemplatePolicy = (
+  template: SourceProfileTemplate,
   operation: SourceOperation,
   selectedProviderKeys: readonly string[],
   policy: SourcePolicyV1,
 ): void => {
-  const definition = SOURCE_PROFILE_DEFINITIONS.find((candidate) =>
-    candidate.id === profileId);
-  if (!definition) return;
-  if (definition.revision !== profileRevision || !definition.operations.includes(operation)) {
-    return failValidation();
-  }
-
-  const languageCode = (definitionRef: LanguageRef, snapshotRef: LanguageRef): string | undefined => {
-    if (!("preference" in definitionRef)) return undefined;
-    return "code" in snapshotRef ? snapshotRef.code : failValidation();
-  };
-  const audioLanguage = languageCode(
-    definition.policy.constraints.audio.preferred,
-    policy.constraints.audio.preferred,
-  );
-  const definitionSubtitles = definition.policy.constraints.subtitles;
-  let subtitleLanguage: string | undefined;
-  if (definitionSubtitles.mode !== "off") {
-    const snapshotPreferred = policy.constraints.subtitles.preferred;
-    if (definitionSubtitles.preferred === undefined
-      || policy.constraints.subtitles.mode === "off"
-      || snapshotPreferred === undefined) {
-      return failValidation();
-    }
-    subtitleLanguage = languageCode(definitionSubtitles.preferred, snapshotPreferred);
-  }
+  const parameters = parametersFromPolicy(template, policy);
+  parseTemplateParameters(template, parameters);
+  const built = buildTemplatePolicy(template, parameters);
+  const audioLanguage = "code" in policy.constraints.audio.preferred
+    ? policy.constraints.audio.preferred.code
+    : failValidation();
+  const subtitleReference = policy.constraints.subtitles.preferred;
+  const subtitleLanguage = policy.constraints.subtitles.mode === "off"
+    ? undefined
+    : subtitleReference && "code" in subtitleReference ? subtitleReference.code : failValidation();
 
   const expected = materializeSourceAdmissionPolicy(
-    definition.policy,
+    built,
     selectedProviderKeys,
     {
-      ...(audioLanguage === undefined ? {} : { audioLanguage }),
+      audioLanguage,
       ...(subtitleLanguage === undefined ? {} : { subtitleLanguage }),
     },
   );
@@ -311,11 +343,11 @@ const declaresStream = (addon: AddonRecord): boolean =>
     typeof resource === "string" ? resource === "stream" : resource.name === "stream");
 
 const availableProviderKeys = (
-  definition: SourceProfileDefinition,
+  policy: SourcePolicyV1,
   context: SourceAdmissionContext,
   operation: SourceOperation,
 ): string[] => {
-  const kinds = new Set(definition.policy.constraints.sourceKinds);
+  const kinds = new Set(policy.constraints.sourceKinds);
   const viewer = { id: context.viewer.id, role: context.viewer.role };
   const keys: string[] = [];
 
@@ -346,21 +378,33 @@ const availableProviderKeys = (
   return operation === "downloadToLibrary" ? keys.filter((key) => key.startsWith("addon:")) : keys;
 };
 
-const definitionFor = (reference: SourceProfileReference): SourceProfileDefinition => {
-  const definition = SOURCE_PROFILE_DEFINITIONS.find((candidate) => candidate.id === reference.profileId);
-  if (!definition) throw new SourceAdmissionRejected("profileUnknown");
-  if (definition.revision !== reference.revision) throw new SourceAdmissionRejected("profileRevisionStale");
-  return definition;
+const policyFor = (profile: StoredSourceProfile): SourcePolicyV1 =>
+  buildTemplatePolicy(
+    profile.template,
+    profile.template === "recommended" ? undefined : profile.parameters as
+      TravelParameters | ProviderPriorityParameters,
+  );
+
+const definitionFor = (
+  reference: SourceProfileReference,
+  profiles: readonly StoredSourceProfile[],
+): { profile: StoredSourceProfile; policy: SourcePolicyV1 } => {
+  const profile = profiles.find((candidate) => candidate.id === reference.profileId);
+  if (!profile) throw new SourceAdmissionRejected("profileUnknown");
+  if (profile.revision !== reference.revision) throw new SourceAdmissionRejected("profileRevisionStale");
+  return { profile, policy: policyFor(profile) };
 };
 
 const supportsOperation = (
-  definition: SourceProfileDefinition,
+  profile: StoredSourceProfile,
   context: SourceAdmissionContext,
 ): SourceOperation => {
-  if (!definition.operations.includes(context.operation)) {
+  if (context.operation !== "play"
+    && context.operation !== "downloadToLibrary"
+    && context.operation !== "downloadToDevice") {
     throw new SourceAdmissionRejected("operationUnsupported");
   }
-  if (context.operation === "downloadToLibrary" && !isExecutableDownloadProfile(definition)) {
+  if (context.operation === "downloadToLibrary" && !isExecutableDownloadProfile(profile)) {
     throw new SourceAdmissionRejected("operationUnsupported");
   }
   if (context.viewer.disabled) throw new SourceAdmissionRejected("operationForbidden");
@@ -373,21 +417,39 @@ const supportsOperation = (
   return context.operation;
 };
 
+const explicitProviderOrder = (
+  selected: readonly string[],
+  policy: SourcePolicyV1,
+): string[] => {
+  const criterion = policy.criteria.find((candidate) =>
+    candidate.kind === "providerOrder" && "keys" in candidate);
+  if (!criterion || criterion.kind !== "providerOrder" || !("keys" in criterion)) return [...selected];
+  const selectedSet = new Set(selected);
+  const ordered = criterion.keys.filter((key) => selectedSet.has(key));
+  const seen = new Set(ordered);
+  return [...ordered, ...selected.filter((key) => !seen.has(key))];
+};
+
 export function materializeSourceAdmission(
   referenceInput: SourceProfileReference,
   context: SourceAdmissionContext,
 ): SourceAdmissionSnapshotV1 {
   const reference = parseSourceProfileReference(referenceInput);
-  const definition = definitionFor(reference);
-  const operation = supportsOperation(definition, context);
-  const available = availableProviderKeys(definition, context, operation);
-  const selected = sourceAdmissionProviderScope(definition.policy.scope, available);
+  const { profile, policy: storedPolicy } = definitionFor(reference, context.profiles);
+  const operation = supportsOperation(profile, context);
+  const available = availableProviderKeys(storedPolicy, context, operation);
+  const scoped = sourceAdmissionProviderScope(storedPolicy.scope, available);
+  const selected = explicitProviderOrder(scoped, storedPolicy);
   if (selected.length === 0) throw new SourceAdmissionRejected("providerScopeUnavailable");
 
-  const policy = materializeSourceAdmissionPolicy(definition.policy, selected, context.preferences);
+  const policy = materializeSourceAdmissionPolicy(storedPolicy, selected, context.preferences);
   return parseSourceAdmissionSnapshotV1({
     schemaVersion: 1,
-    profile: { id: reference.profileId, revision: reference.revision },
+    profile: {
+      id: reference.profileId,
+      revision: reference.revision,
+      template: profile.template,
+    },
     operation,
     providerKeys: selected,
     policy,
@@ -399,11 +461,19 @@ export function parseSourceAdmissionSnapshotV1(input: unknown): SourceAdmissionS
     const snapshot = objectValue(input, ["schemaVersion", "profile", "operation", "providerKeys", "policy"]);
     if (snapshot.schemaVersion !== 1) return failValidation();
 
-    const profile = objectValue(snapshot.profile, ["id", "revision"]);
+    const profile = objectValue(snapshot.profile, ["id", "revision"], ["template"]);
     const profileId = dataProperty(profile, "id")?.value;
     const profileRevision = dataProperty(profile, "revision")?.value;
     if (typeof profileId !== "string" || profileId.length === 0
       || typeof profileRevision !== "number" || !Number.isSafeInteger(profileRevision) || profileRevision <= 0) {
+      return failValidation();
+    }
+    const suppliedTemplate = dataProperty(profile, "template")?.value;
+    const inferredTemplate = profileRevision === 1 ? templateOfBuiltIn(profileId) : undefined;
+    const profileTemplate = suppliedTemplate === undefined
+      ? inferredTemplate ?? failValidation()
+      : suppliedTemplate;
+    if (profileTemplate !== "recommended" && profileTemplate !== "travel" && profileTemplate !== "providerPriority") {
       return failValidation();
     }
     const parsedOperation = operation(snapshot.operation);
@@ -428,11 +498,11 @@ export function parseSourceAdmissionSnapshotV1(input: unknown): SourceAdmissionS
         if ("from" in criterion || !sameKeys(selectedProviderKeys, criterion.keys)) return failValidation();
       }
     }
-    validateFixedPolicy(profileId, profileRevision, parsedOperation, selectedProviderKeys, policy);
+    validateTemplatePolicy(profileTemplate, parsedOperation, selectedProviderKeys, policy);
 
     return {
       schemaVersion: 1,
-      profile: { id: profileId, revision: profileRevision },
+      profile: { id: profileId, revision: profileRevision, template: profileTemplate },
       operation: parsedOperation,
       providerKeys: selectedProviderKeys,
       policy,
