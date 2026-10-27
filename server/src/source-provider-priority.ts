@@ -48,6 +48,7 @@ export type ProviderPrioritySelectionResult =
     readonly info?: MediaInfo;
     readonly checkedCandidates: number;
     readonly temporaryFailures: number;
+    readonly truncated: boolean;
   }
   | {
     readonly status: "noMatch";
@@ -69,7 +70,9 @@ interface InspectedStream extends PreparedStream {
   readonly info: MediaInfo;
 }
 
-const validSnapshot = (snapshot: SourceAdmissionSnapshotV1): SourceAdmissionSnapshotV1 => {
+export function validateProviderPriorityDownloadSnapshot(
+  snapshot: SourceAdmissionSnapshotV1,
+): SourceAdmissionSnapshotV1 {
   let parsed: SourceAdmissionSnapshotV1;
   try {
     parsed = parseSourceAdmissionSnapshotV1(snapshot);
@@ -82,7 +85,7 @@ const validSnapshot = (snapshot: SourceAdmissionSnapshotV1): SourceAdmissionSnap
     throw new ProviderPrioritySnapshotError();
   }
   return parsed;
-};
+}
 
 const directHttpUrl = (value: unknown): value is string => {
   if (typeof value !== "string" || value.trim() === "") return false;
@@ -105,7 +108,7 @@ const realMedia = (info: MediaInfo | undefined): info is MediaInfo => {
 export async function selectProviderPriorityDownloadSource(
   input: SelectProviderPriorityDownloadInput,
 ): Promise<ProviderPrioritySelectionResult> {
-  const snapshot = validSnapshot(input.snapshot);
+  const snapshot = validateProviderPriorityDownloadSnapshot(input.snapshot);
   if (!input.shouldContinue()) return { status: "cancelled" };
   const authorized = new Set(snapshot.providerKeys.filter((key) => key.startsWith("addon:")));
   const tried = new Set(input.tried);
@@ -206,6 +209,7 @@ export async function selectProviderPriorityDownloadSource(
       info: selected.info,
       checkedCandidates,
       temporaryFailures,
+      truncated,
     };
   }
 
@@ -224,6 +228,7 @@ export async function selectProviderPriorityDownloadSource(
         candidate: selected.candidate,
         checkedCandidates,
         temporaryFailures,
+        truncated,
       };
     }
   }
