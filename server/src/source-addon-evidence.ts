@@ -3,6 +3,7 @@ import { normalizeLanguage } from "./language.js";
 import type { MediaInfo, Track } from "./probe.js";
 import { streamLanguages, streamSize } from "./ranking.js";
 import type { SourceEvidenceCandidateV1, SourceFact } from "./source-evidence.js";
+import type { ReleaseKind } from "./source-policy.js";
 import type { StreamItem, SubtitleItem } from "./types.js";
 
 export interface ListedAddonSourceEvidenceInput {
@@ -114,6 +115,26 @@ const optionalString = (value: unknown): string | undefined =>
 const validVideoSize = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 
+const listingReleaseKind = (text: string): ReleaseKind | undefined => {
+  // Short tags count only in capitals: "Cam" or "ts" in a title is a word, not a release.
+  if (/\b(?:HDCAM|CAMRIP)\b/i.test(text) || /\bCAM\b/.test(text)) return "cam";
+  if (/\b(?:HDTS|TELESYNC|TELECINE)\b/i.test(text) || /\b(?:TS|TC)\b/.test(text)) return "telesync";
+  if (/\b(?:SCREENER|DVDSCR)\b/i.test(text) || /\bSCR\b/.test(text)) return "screener";
+  return undefined;
+};
+
+export function releaseKindFromListing(stream: StreamItem): SourceFact<ReleaseKind | null> {
+  const kind = listingReleaseKind([
+    stream.name,
+    stream.title,
+    stream.description,
+    stream.behaviorHints?.filename,
+  ].filter((value): value is string => typeof value === "string").join(" "));
+  return kind === undefined
+    ? { evidence: "listed", value: null }
+    : { evidence: "listed", value: kind };
+}
+
 const urlOnlyListingFacts = (input: ListedAddonSourceEvidenceInput): unknown => {
   const stream = input.stream;
   const behaviorHints = stream.behaviorHints;
@@ -205,6 +226,7 @@ export function listedAddonSourceEvidence(
     bytes: unknown(),
     durationSeconds: unknown(),
     heightPixels: unknown(),
+    releaseKind: releaseKindFromListing(input.stream),
     sampleOrTrailer: unknown(),
   };
 
@@ -273,6 +295,7 @@ export function inspectedAddonSourceEvidence(
       bytes: unknown(),
       durationSeconds: inspectedNumber(info.duration),
       heightPixels: inspectedNumber(info.video?.height),
+      releaseKind: candidate.facts.releaseKind,
       sampleOrTrailer: unknown(),
     },
     ...(candidate.hints === undefined ? {} : { hints: { ...candidate.hints } }),

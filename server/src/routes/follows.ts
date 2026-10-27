@@ -328,7 +328,12 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
           throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
         }
         const admission = profileReference.present
-          ? materializeSourceProfileAdmission(deps, currentUser(req), profileReference.reference)
+          ? materializeSourceProfileAdmission(
+              deps,
+              currentUser(req),
+              profileReference.reference,
+              follow.type === "movie" ? "movie" : "episode",
+            )
           : undefined;
         const sourceProfile = admission
           ? sourceProfileSnapshotForAdmission(store.sourceProfiles(), admission.profile)

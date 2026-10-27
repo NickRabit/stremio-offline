@@ -19,6 +19,7 @@ import { publicAddon } from "../security.js";
 import { assertStillAdmin, ForbiddenError } from "../roles.js";
 import {
   declaresStream,
+  RULE_PRESETS,
   SOURCE_PROFILE_IDS,
   sourceProfilesForViewer,
   viewerOfProfileAccount,
@@ -26,6 +27,7 @@ import {
   type SourceProfileTemplate,
   type TravelParameters,
 } from "../source-profiles.js";
+import type { DownloadRules } from "../download-rules.js";
 import { memberSettings, publicSettings, type InstanceSettings, type Settings, type State, type StoredSourceProfile, type UserPrefs } from "../store.js";
 import { verifyTmdbKey } from "../tmdb.js";
 import { clearTrailerCache } from "../trailers.js";
@@ -60,8 +62,9 @@ const BUILT_IN_PROFILE_NAMES: Record<SourceProfileTemplate, string> = {
   recommended: "Recommended",
   providerPriority: "Addon order, verified",
   travel: "Travel (small files)",
+  rules: "Download rules",
 };
-const BUILT_IN_PROFILE_IDS = new Set<string>(Object.values(SOURCE_PROFILE_IDS));
+const BUILT_IN_PROFILE_IDS = new Set<string>(RULE_PRESETS.map((preset) => preset.id));
 
 const sameParameters = (
   left: StoredSourceProfile["parameters"],
@@ -80,13 +83,25 @@ const remapProfileAddonKeys = (
   installedKeys: ReadonlySet<string>,
 ): StoredSourceProfile | undefined => {
   if (profile.parameters === undefined) return structuredClone(profile);
-  const parameters = structuredClone(profile.parameters) as TravelParameters | ProviderPriorityParameters;
-  if (parameters.scope.mode === "selected") {
-    parameters.scope.addonKeys = parameters.scope.addonKeys.filter((key) => installedKeys.has(key));
-    if (!parameters.scope.addonKeys.length) return undefined;
-  }
-  if ("addonKeys" in parameters.providerOrder) {
-    parameters.providerOrder.addonKeys = parameters.providerOrder.addonKeys.filter((key) => installedKeys.has(key));
+  const parameters = structuredClone(profile.parameters);
+  if (profile.template !== "rules") {
+    const legacy = parameters as TravelParameters | ProviderPriorityParameters;
+    if ("scope" in legacy && legacy.scope.mode === "selected") {
+      legacy.scope.addonKeys = legacy.scope.addonKeys.filter((key) => installedKeys.has(key));
+      if (!legacy.scope.addonKeys.length) return undefined;
+    }
+    if ("providerOrder" in legacy && "addonKeys" in legacy.providerOrder) {
+      legacy.providerOrder.addonKeys = legacy.providerOrder.addonKeys.filter((key) => installedKeys.has(key));
+    }
+  } else {
+    const rules = parameters as DownloadRules;
+    if (rules.addons.scope !== "all") {
+      rules.addons.scope.selected = rules.addons.scope.selected.filter((key) => installedKeys.has(key));
+      if (!rules.addons.scope.selected.length) return undefined;
+    }
+    if (rules.addons.order !== "viewer") {
+      rules.addons.order.explicit = rules.addons.order.explicit.filter((key) => installedKeys.has(key));
+    }
   }
   return { ...structuredClone(profile), parameters };
 };
@@ -203,12 +218,20 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       uiLanguage, audioLanguage, subtitleLanguage, downloadTitleLanguage,
       mergeByName, streamSort, trackProgress, showResumeRow,
       tileSize, catalogTileShape, libraryTileShape, favoritesTileShape, resumeTileShape, followingTileShape, homeTileShape, searchTileShape, startView, libraryShelf,
-      homeLayout, downloadSourceProfile,
+      homeLayout, downloadSourceProfile, followSourceProfile,
       ...instance
     } = flat;
     return {
       instance,
-      prefs: { uiLanguage, audioLanguage, subtitleLanguage, downloadTitleLanguage, mergeByName, streamSort, trackProgress, showResumeRow, tileSize, catalogTileShape, libraryTileShape, favoritesTileShape, resumeTileShape, followingTileShape, homeTileShape, searchTileShape, startView, libraryShelf, ...(homeLayout ? { homeLayout } : {}), ...(downloadSourceProfile ? { downloadSourceProfile } : {}) },
+      prefs: {
+        uiLanguage, audioLanguage, subtitleLanguage, downloadTitleLanguage,
+        mergeByName, streamSort, trackProgress, showResumeRow, tileSize,
+        catalogTileShape, libraryTileShape, favoritesTileShape, resumeTileShape,
+        followingTileShape, homeTileShape, searchTileShape, startView, libraryShelf,
+        ...(homeLayout ? { homeLayout } : {}),
+        ...(downloadSourceProfile ? { downloadSourceProfile } : {}),
+        ...(followSourceProfile ? { followSourceProfile } : {}),
+      },
     };
   };
 
@@ -314,24 +337,27 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
         );
         profileIdMap = restored.idMap;
         sourceProfileSummary = restored.summary;
-        const requested = split.prefs.downloadSourceProfile;
-        if (requested !== undefined) {
-          const mapped = profileIdMap.get(requested);
-          if (mapped) split.prefs.downloadSourceProfile = mapped;
-          else delete split.prefs.downloadSourceProfile;
+        for (const key of ["downloadSourceProfile", "followSourceProfile"] as const) {
+          const requested = split.prefs[key];
+          if (requested !== undefined) {
+            const mapped = profileIdMap.get(requested);
+            if (mapped) split.prefs[key] = mapped;
+            else delete split.prefs[key];
+          }
         }
       }
-      if (split.prefs.downloadSourceProfile && !offeredDownloadProfiles(state, actor).some((profile) => profile.id === split.prefs.downloadSourceProfile)) {
-        delete split.prefs.downloadSourceProfile;
+      const offered = new Set(offeredDownloadProfiles(state, actor).map((profile) => profile.id));
+      for (const key of ["downloadSourceProfile", "followSourceProfile"] as const) {
+        if (split.prefs[key] && !offered.has(split.prefs[key])) delete split.prefs[key];
       }
       const userId = accountIdOf(req);
       if (userId) mutateData(state, userId, (data) => { data.prefs = { ...data.prefs, ...split.prefs }; });
       if (backup.sourceProfiles !== undefined) {
         const live = new Set((state.sourceProfiles ?? []).map((profile) => profile.id));
         for (const data of state.userData ? Object.values(state.userData) : []) {
-          const selected = data.prefs.downloadSourceProfile;
-          if (typeof selected === "string" && selected && !live.has(selected)) {
-            delete data.prefs.downloadSourceProfile;
+          for (const key of ["downloadSourceProfile", "followSourceProfile"] as const) {
+            const selected = data.prefs[key];
+            if (typeof selected === "string" && selected && !live.has(selected)) delete data.prefs[key];
           }
         }
       }
@@ -399,7 +425,11 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       throw new AppError("A Home layout must list an order, the hidden rows and the feeds.", "err.homeLayoutShape", 400);
     }
     const postedProfile = req.body.downloadSourceProfile;
+    const postedFollowProfile = req.body.followSourceProfile;
     if (postedProfile !== undefined && postedProfile !== null && typeof postedProfile !== "string") {
+      throw new AppError("This source profile is not available to this account.", "err.sourceProfileUnavailable", 400);
+    }
+    if (postedFollowProfile !== undefined && postedFollowProfile !== null && typeof postedFollowProfile !== "string") {
       throw new AppError("This source profile is not available to this account.", "err.sourceProfileUnavailable", 400);
     }
     await store.update((state) => {
@@ -409,7 +439,11 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       // The body is one flat object; each key goes to the half that owns it. Only the keys the
       // body names are written, so a preference nobody touched keeps the value it had.
       const prefs: Record<string, unknown> = { ...(userId ? state.userData?.[userId]?.prefs : undefined) };
-      if (postedProfile && !offeredDownloadProfiles(state, actor).some((profile) => profile.id === postedProfile)) {
+      const offered = offeredDownloadProfiles(state, actor);
+      if (postedProfile && !offered.some((profile) => profile.id === postedProfile)) {
+        throw new AppError("This source profile is not available to this account.", "err.sourceProfileUnavailable", 400);
+      }
+      if (postedFollowProfile && !offered.some((profile) => profile.id === postedFollowProfile)) {
         throw new AppError("This source profile is not available to this account.", "err.sourceProfileUnavailable", 400);
       }
       if (req.body.concurrentDownloads !== undefined) state.settings.concurrentDownloads = Math.max(1, Math.min(8, Number(req.body.concurrentDownloads) || 1));
@@ -487,6 +521,10 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       if (postedProfile !== undefined) {
         if (postedProfile) prefs.downloadSourceProfile = postedProfile;
         else delete prefs.downloadSourceProfile;
+      }
+      if (postedFollowProfile !== undefined) {
+        if (postedFollowProfile) prefs.followSourceProfile = postedFollowProfile;
+        else delete prefs.followSourceProfile;
       }
       if (realDebridToken !== undefined) state.settings.realDebridToken = realDebridToken;
       if (tmdbApiKey !== undefined) state.settings.tmdbApiKey = tmdbApiKey;

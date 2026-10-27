@@ -1031,6 +1031,7 @@ export interface FollowDeps {
   admitSourceProfile?: (
     ownerUserId: string,
     sourceProfile: FollowSourceProfile,
+    mediaKind: "episode" | "movie",
   ) => SourceAdmissionSnapshotV1;
   tickMs?: number;
   concurrency?: number;
@@ -1338,7 +1339,11 @@ export class FollowService {
       try {
         const admit = this.deps.admitSourceProfile;
         if (!admit) throw new SourceAdmissionRejected("profileUnknown");
-        sourceAdmission = reuse?.sourceAdmission ?? admit(before.ownerUserId, sourceProfile);
+        sourceAdmission = reuse?.sourceAdmission ?? admit(
+          before.ownerUserId,
+          sourceProfile,
+          before.type === "movie" ? "movie" : "episode",
+        );
       } catch (error) {
         if (!(error instanceof SourceAdmissionRejected)) throw error;
         await this.setDownload(followId, episodeKey, {

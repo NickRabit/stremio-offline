@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createSettingsBackup, parseSettingsBackup, remapBackupLibraries } from "./backup.js";
 import { defaultDownloadSettings } from "./naming.js";
-import { defaultTemplateParameters } from "./source-profiles.js";
+import { RULE_PRESETS } from "./source-profiles.js";
 import { defaultSettings, type StoredSourceProfile } from "./store.js";
 import type { LibraryRecord } from "./libraries.js";
 
@@ -11,7 +11,7 @@ const library = (over: Partial<LibraryRecord> & { id: string; root: string }): L
 });
 
 test("a backup keeps the settings, the order and the addon's sensitive URL", () => {
-  const settings = { ...defaultSettings(), concurrentDownloads: 4, audioLanguage: "sk", realDebridToken: "rd-secret", libraryScanPauseOnDownload: true, catalogTileShape: "wide" as const, libraryTileShape: "wide" as const, favoritesTileShape: "poster" as const, resumeTileShape: "wide" as const, followingTileShape: "poster" as const, homeTileShape: "poster" as const, startView: "home" as const, libraryShelf: "favorites" as const, homeLayout: { order: ["resume", "favorites"], hidden: ["recent"], feeds: [] } };
+  const settings = { ...defaultSettings(), concurrentDownloads: 4, audioLanguage: "sk", realDebridToken: "rd-secret", libraryScanPauseOnDownload: true, catalogTileShape: "wide" as const, libraryTileShape: "wide" as const, favoritesTileShape: "poster" as const, resumeTileShape: "wide" as const, followingTileShape: "poster" as const, homeTileShape: "poster" as const, startView: "home" as const, libraryShelf: "favorites" as const, homeLayout: { order: ["resume", "favorites"], hidden: ["recent"], feeds: [] }, downloadSourceProfile: "download-profile", followSourceProfile: "follow-profile" };
   const backup = createSettingsBackup(settings, [{
     key: "secret-key", manifestUrl: "https://example.com/token/abc/manifest.json", role: "source", enabled: false, globalSearch: false,
     addedAt: "2026-01-01T00:00:00.000Z", downloadSettings: defaultDownloadSettings(),
@@ -28,6 +28,8 @@ test("a backup keeps the settings, the order and the addon's sensitive URL", () 
   assert.equal(parseSettingsBackup(backup).settings.homeTileShape, "poster", "the Home tile shape survives a backup round trip");
   assert.equal(parseSettingsBackup(backup).settings.startView, "home", "the start page survives a backup round trip");
   assert.equal(parseSettingsBackup(backup).settings.libraryShelf, "favorites", "the library shelf survives a backup round trip");
+  assert.equal(parseSettingsBackup(backup).settings.downloadSourceProfile, "download-profile");
+  assert.equal(parseSettingsBackup(backup).settings.followSourceProfile, "follow-profile");
   assert.deepEqual(parseSettingsBackup(backup).settings.homeLayout, { order: ["resume", "favorites"], hidden: ["recent"], feeds: [] }, "the personal Home layout survives a backup round trip");
   assert.equal(backup.addons[0].manifestUrl, "https://example.com/token/abc/manifest.json");
   assert.equal(backup.addons[0].globalSearch, false);
@@ -215,12 +217,9 @@ test("a version 4 backup carries source profiles and their tombstones", () => {
   const profile: StoredSourceProfile = {
     id: "00000000-0000-4000-8000-000000000101",
     revision: 3,
-    template: "travel",
+    template: "rules",
     name: "Small files",
-    parameters: {
-      ...defaultTemplateParameters("travel"),
-      heightPixels: { min: 720, max: 2160 },
-    },
+    parameters: { ...RULE_PRESETS[0]!.rules, resolution: { min: 720, max: 2160 } },
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-02-01T00:00:00.000Z",
   };
@@ -242,9 +241,9 @@ test("a version 4 backup refuses a revision that cannot be incremented safely", 
   const profile: StoredSourceProfile = {
     id: "00000000-0000-4000-8000-000000000103",
     revision: Number.MAX_SAFE_INTEGER,
-    template: "travel",
+    template: "rules",
     name: "Too many edits",
-    parameters: defaultTemplateParameters("travel"),
+    parameters: RULE_PRESETS[0]!.rules,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-02-01T00:00:00.000Z",
   };

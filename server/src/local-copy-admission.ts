@@ -75,6 +75,7 @@ const unknownFacts = (size: number): SourceEvidenceFactsV1 => ({
   bytes: inspectedFact(size),
   durationSeconds: unknownFact(),
   heightPixels: unknownFact(),
+  releaseKind: unknownFact(),
   sampleOrTrailer: unknownFact(),
 });
 
@@ -96,6 +97,7 @@ const inspectedFacts = (
   heightPixels: info.video?.height !== undefined && Number.isFinite(info.video.height)
     ? inspectedFact(info.video.height)
     : unknownFact(),
+  releaseKind: unknownFact(),
   sampleOrTrailer: unknownFact(),
 });
 

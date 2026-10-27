@@ -1,4 +1,9 @@
 import { allowedAddons } from "./addons.js";
+import {
+  parseDownloadRules,
+  rulesPolicy,
+  type DownloadRules,
+} from "./download-rules.js";
 import { mayDownloadToDevice, mayDownloadToLibrary } from "./downloads.js";
 import { visibleLibraries, type LibraryRecord, type Viewer } from "./libraries.js";
 import { remoteLibraryVisibleTo } from "./media-server-access.js";
@@ -12,10 +17,14 @@ export const SOURCE_PROFILE_IDS = Object.freeze({
   recommended: "39de76cc-0ca0-4a5e-95ad-08927fb45410",
   providerPriority: "390a8b1a-85f6-4ded-9d7e-701a299720bb",
   travel: "7e15d713-965c-4636-9ed3-3a112c521fe1",
+  balanced: "88302ead-d701-4282-9059-777d47ed913c",
+  best: "a02923f1-3457-478e-94b2-a0051f233de9",
+  smaller: "2cb9cd41-d5dc-45cd-b765-a0f98149a5b1",
+  myLanguage: "f57e4033-dafe-4d7c-88de-4def19014aac",
 } as const);
 
 export type SourceOperation = "play" | "downloadToLibrary" | "downloadToDevice";
-export type SourceProfileTemplate = "recommended" | "travel" | "providerPriority";
+export type SourceProfileTemplate = "recommended" | "travel" | "providerPriority" | "rules";
 
 export interface TravelParameters {
   scope: { mode: "allAvailable" } | { mode: "selected"; addonKeys: string[] };
@@ -38,6 +47,7 @@ interface TemplateParameters {
   recommended: undefined;
   travel: TravelParameters;
   providerPriority: ProviderPriorityParameters;
+  rules: DownloadRules;
 }
 
 export interface SourceProfileDefinition {
@@ -97,28 +107,93 @@ const DEFAULT_PROVIDER_PRIORITY_PARAMETERS: ProviderPriorityParameters = {
   subtitleMode: "optional",
 };
 
+const commonPresetRules = {
+  addons: { scope: "all", order: "viewer" },
+  torrents: true,
+  subtitles: "ifAvailable",
+  skipCinema: true,
+} as const;
+
+export interface RulePreset {
+  readonly id: string;
+  readonly nameKey: string;
+  readonly template: "rules";
+  readonly rules: DownloadRules;
+}
+
+const preset = (
+  id: string,
+  nameKey: string,
+  rules: DownloadRules,
+): RulePreset => deepFreeze({
+  id,
+  nameKey,
+  template: "rules",
+  rules: parseDownloadRules(rules),
+});
+
+export const RULE_PRESETS: readonly RulePreset[] = Object.freeze([
+  preset(SOURCE_PROFILE_IDS.balanced, "rules.preset.balanced", {
+    ...commonPresetRules,
+    resolution: { min: 720, max: 1080 },
+    audio: { mode: "prefer", fallback: null },
+    maxSizeGb: { episode: 4, movie: 15 },
+    preference: ["language", "resolutionHigher", "addonOrder", "smaller"],
+  }),
+  preset(SOURCE_PROFILE_IDS.best, "rules.preset.best", {
+    ...commonPresetRules,
+    resolution: { min: 1080, max: 2160 },
+    audio: { mode: "prefer", fallback: null },
+    maxSizeGb: { episode: null, movie: null },
+    preference: ["resolutionHigher", "language", "larger", "addonOrder"],
+  }),
+  preset(SOURCE_PROFILE_IDS.smaller, "rules.preset.smaller", {
+    ...commonPresetRules,
+    resolution: { min: 480, max: 720 },
+    audio: { mode: "prefer", fallback: null },
+    maxSizeGb: { episode: 1.5, movie: 5 },
+    preference: ["language", "smaller", "addonOrder"],
+  }),
+  preset(SOURCE_PROFILE_IDS.myLanguage, "rules.preset.myLanguage", {
+    ...commonPresetRules,
+    resolution: { min: 720, max: 1080 },
+    audio: { mode: "only", fallback: null },
+    maxSizeGb: { episode: 4, movie: 15 },
+    preference: ["resolutionHigher", "addonOrder", "smaller"],
+  }),
+]);
+
+export function rulesForPreset(id: keyof Pick<typeof SOURCE_PROFILE_IDS,
+  "balanced" | "best" | "smaller" | "myLanguage">): DownloadRules {
+  const found = RULE_PRESETS.find((candidate) => candidate.id === SOURCE_PROFILE_IDS[id]);
+  if (!found) throw new Error(`Missing ${id} download rules preset.`);
+  return structuredClone(found.rules);
+}
+
 type ParametersFor<T extends SourceProfileTemplate> = TemplateParameters[T];
 
 export function defaultTemplateParameters(template: "recommended"): undefined;
 export function defaultTemplateParameters(template: "travel"): TravelParameters;
 export function defaultTemplateParameters(template: "providerPriority"): ProviderPriorityParameters;
+export function defaultTemplateParameters(template: "rules"): DownloadRules;
 export function defaultTemplateParameters(template: SourceProfileTemplate): ParametersFor<SourceProfileTemplate>;
 export function defaultTemplateParameters(
   template: SourceProfileTemplate,
-): TravelParameters | ProviderPriorityParameters | undefined {
+): DownloadRules | TravelParameters | ProviderPriorityParameters | undefined {
   if (template === "recommended") return undefined;
+  if (template === "rules") return rulesForPreset("balanced");
   return structuredClone(template === "travel"
     ? DEFAULT_TRAVEL_PARAMETERS
     : DEFAULT_PROVIDER_PRIORITY_PARAMETERS);
 }
 
-const deepFreeze = <T>(value: T): T => {
+function deepFreeze<T>(value: T): T {
   if (value && typeof value === "object" && !Object.isFrozen(value)) {
     Object.freeze(value);
     for (const child of Object.values(value)) deepFreeze(child);
   }
   return value;
-};
+}
 
 const definition = (
   id: string,
@@ -342,28 +417,37 @@ export function parseTemplateParameters(
   input: unknown,
 ): ProviderPriorityParameters;
 export function parseTemplateParameters(
-  template: SourceProfileTemplate,
+  template: "rules",
   input: unknown,
-): TravelParameters | ProviderPriorityParameters | undefined;
+): DownloadRules;
 export function parseTemplateParameters(
   template: SourceProfileTemplate,
   input: unknown,
-): TravelParameters | ProviderPriorityParameters | undefined {
+): DownloadRules | TravelParameters | ProviderPriorityParameters | undefined;
+export function parseTemplateParameters(
+  template: SourceProfileTemplate,
+  input: unknown,
+): DownloadRules | TravelParameters | ProviderPriorityParameters | undefined {
   try {
     if (template === "recommended") {
       if (input !== undefined) return failParameters();
       return undefined;
     }
+    if (template === "rules") return parseDownloadRules(input);
     return template === "travel"
       ? parseTravelParameters(input)
       : parseProviderPriorityParameters(input);
   } catch (error) {
     if (error instanceof SourceProfileParametersValidationError) throw error;
+    if (error instanceof Error && error.name === "DownloadRulesValidationError") {
+      throw new SourceProfileParametersValidationError();
+    }
     throw new SourceProfileParametersValidationError();
   }
 }
 
 const recipeFor = (template: SourceProfileTemplate): SourceProfileDefinition => {
+  if (template === "rules") throw new Error("The rules template has no fixed recipe.");
   const id = SOURCE_PROFILE_IDS[template];
   const recipe = SOURCE_PROFILE_DEFINITIONS.find((profile) => profile.id === id);
   if (!recipe) throw new Error(`Missing ${template} source profile recipe.`);
@@ -372,8 +456,15 @@ const recipeFor = (template: SourceProfileTemplate): SourceProfileDefinition => 
 
 export function buildTemplatePolicy(
   template: SourceProfileTemplate,
-  parameters?: TravelParameters | ProviderPriorityParameters,
+  parameters?: DownloadRules | TravelParameters | ProviderPriorityParameters,
+  kind: "episode" | "movie" = "episode",
 ): SourcePolicyV1 {
+  if (template === "rules") {
+    return rulesPolicy(
+      parseTemplateParameters(template, parameters ?? defaultTemplateParameters(template)),
+      kind,
+    );
+  }
   const recipe = recipeFor(template);
   if (template === "recommended") {
     parseTemplateParameters(template, parameters);
@@ -454,9 +545,61 @@ export const declaresStream = (addon: AddonRecord): boolean =>
   (addon.manifest.resources ?? []).some((resource) =>
     typeof resource === "string" ? resource === "stream" : resource.name === "stream");
 
+export function rulesForLegacyVariant(
+  template: Exclude<SourceProfileTemplate, "recommended" | "rules">,
+  parameters: TravelParameters | ProviderPriorityParameters,
+): DownloadRules {
+  const parsed = template === "travel"
+    ? parseTemplateParameters("travel", parameters)
+    : parseTemplateParameters("providerPriority", parameters);
+  const addons: DownloadRules["addons"] = {
+    scope: parsed.scope.mode === "allAvailable"
+      ? "all"
+      : { selected: [...parsed.scope.addonKeys] },
+    order: "from" in parsed.providerOrder
+      ? "viewer"
+      : { explicit: [...parsed.providerOrder.addonKeys] },
+  };
+  if (template === "travel") {
+    const travel = parsed as TravelParameters;
+    const nearest = (value: number): Exclude<DownloadRules["resolution"]["min"], null> =>
+      [360, 480, 720, 1080, 2160].reduce<number>((best, candidate) =>
+        Math.abs(candidate - value) < Math.abs(best - value) ? candidate : best, 360) as
+        Exclude<DownloadRules["resolution"]["min"], null>;
+    return parseDownloadRules({
+      addons,
+      torrents: false,
+      resolution: {
+        min: nearest(travel.heightPixels.min),
+        max: travel.heightPixels.max === undefined
+          ? null
+          : nearest(travel.heightPixels.max),
+      },
+      audio: { mode: travel.audioMode === "strict" ? "only" : "prefer", fallback: null },
+      subtitles: travel.subtitleMode === "optional" ? "ifAvailable" : travel.subtitleMode,
+      maxSizeGb: { episode: null, movie: null },
+      skipCinema: false,
+      preference: ["language", "smaller", "addonOrder"],
+    });
+  }
+  const provider = parsed as ProviderPriorityParameters;
+  return parseDownloadRules({
+    addons,
+    torrents: provider.transfer.includes("torrent"),
+    resolution: { min: null, max: null },
+    audio: { mode: "prefer", fallback: null },
+    subtitles: provider.subtitleMode,
+    maxSizeGb: { episode: null, movie: null },
+    skipCinema: false,
+    preference: ["addonOrder", "language", provider.sizeDirection === "asc" ? "smaller" : "larger"],
+  });
+}
+
 export const isExecutableDownloadProfile = (
   profile: { template: SourceProfileTemplate },
-): boolean => profile.template === "travel" || profile.template === "providerPriority";
+): boolean => profile.template === "travel"
+  || profile.template === "providerPriority"
+  || profile.template === "rules";
 
 const copyPolicy = (policy: SourcePolicyV1): SourcePolicyV1 => structuredClone(policy);
 
@@ -474,11 +617,7 @@ export function sourceProfilesForViewer(catalogue: SourceProfileCatalogue): Publ
     .some((library) => remoteLibraryVisibleTo(catalogue.mediaConnections, library, viewer));
 
   return catalogue.profiles.flatMap((profile) => {
-    const storedPolicy = buildTemplatePolicy(
-      profile.template,
-      profile.template === "recommended" ? undefined : profile.parameters as
-        TravelParameters | ProviderPriorityParameters,
-    );
+    const storedPolicy = buildTemplatePolicy(profile.template, profile.parameters);
     let policy = copyPolicy(storedPolicy);
     let addonPath = hasAddonPath;
     if (policy.scope.mode === "selected") {

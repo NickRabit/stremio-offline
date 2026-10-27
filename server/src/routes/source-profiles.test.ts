@@ -7,7 +7,8 @@ import { messageKeyOf } from "../errors.js";
 import type { LibraryRecord } from "../libraries.js";
 import type { MediaConnectionRecord, RemoteLibraryRecord } from "../media-server-types.js";
 import { defaultDownloadSettings } from "../naming.js";
-import { defaultTemplateParameters, SOURCE_PROFILE_IDS } from "../source-profiles.js";
+import { defaultTemplateParameters, RULE_PRESETS, SOURCE_PROFILE_IDS } from "../source-profiles.js";
+import { rulesPolicy } from "../download-rules.js";
 import type { Store, StoredSourceProfile } from "../store.js";
 import type { AddonRecord } from "../types.js";
 import type { UserRecord } from "../users.js";
@@ -128,12 +129,12 @@ const mount = async (options: {
     libraries: options.libraries ?? [],
     mediaConnections: [connection],
     remoteLibraries: options.remoteLibraries ?? [],
-    sourceProfiles: options.profiles ?? (["recommended", "providerPriority", "travel"] as const).map((template) => ({
-      id: SOURCE_PROFILE_IDS[template],
+    sourceProfiles: options.profiles ?? RULE_PRESETS.map((preset) => ({
+      id: preset.id,
       revision: 1,
-      template,
-      nameKey: `sourceProfile.${template}`,
-      ...(template === "recommended" ? {} : { parameters: defaultTemplateParameters(template) }),
+      template: preset.template,
+      nameKey: preset.nameKey,
+      parameters: preset.rules,
       createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T00:00:00.000Z",
     })),
@@ -205,17 +206,20 @@ test("GET /api/source-profiles returns the fixed catalogue for an administrator"
   assert.deepEqual(Object.keys(body), ["profiles"]);
   const profiles = body.profiles as Array<Record<string, unknown>>;
   assert.deepEqual(profiles.map((profile) => profile.id), [
-    "39de76cc-0ca0-4a5e-95ad-08927fb45410",
-    "390a8b1a-85f6-4ded-9d7e-701a299720bb",
-    "7e15d713-965c-4636-9ed3-3a112c521fe1",
+    SOURCE_PROFILE_IDS.balanced,
+    SOURCE_PROFILE_IDS.best,
+    SOURCE_PROFILE_IDS.smaller,
+    SOURCE_PROFILE_IDS.myLanguage,
   ]);
   assert.deepEqual(profiles.map((profile) => Object.keys(profile).sort()), [
     ["id", "nameKey", "operations", "policy", "revision", "template"],
     ["id", "nameKey", "operations", "policy", "revision", "template"],
     ["id", "nameKey", "operations", "policy", "revision", "template"],
+    ["id", "nameKey", "operations", "policy", "revision", "template"],
   ]);
   assert.deepEqual(profiles.map((profile) => profile.operations), [
-    ["play", "downloadToDevice"],
+    ["play", "downloadToLibrary", "downloadToDevice"],
+    ["play", "downloadToLibrary", "downloadToDevice"],
     ["play", "downloadToLibrary", "downloadToDevice"],
     ["play", "downloadToLibrary", "downloadToDevice"],
   ]);
@@ -262,12 +266,14 @@ test("GET /api/source-profiles filters current operation grants", async (t) => {
     ["play"],
     ["play"],
     ["play"],
+    ["play"],
   ]);
 
   member.permissions.downloadToLibrary = true;
   const withLibrary = await api(harness.base, MEMBER);
   assert.deepEqual(((await withLibrary.json()) as { profiles: Array<{ operations: string[] }> }).profiles.map((profile) => profile.operations), [
-    ["play"],
+    ["play", "downloadToLibrary"],
+    ["play", "downloadToLibrary"],
     ["play", "downloadToLibrary"],
     ["play", "downloadToLibrary"],
   ]);
@@ -275,7 +281,8 @@ test("GET /api/source-profiles filters current operation grants", async (t) => {
   member.permissions.downloadToDevice = true;
   const withDevice = await api(harness.base, MEMBER);
   assert.deepEqual(((await withDevice.json()) as { profiles: Array<{ operations: string[] }> }).profiles.map((profile) => profile.operations), [
-    ["play", "downloadToDevice"],
+    ["play", "downloadToLibrary", "downloadToDevice"],
+    ["play", "downloadToLibrary", "downloadToDevice"],
     ["play", "downloadToLibrary", "downloadToDevice"],
     ["play", "downloadToLibrary", "downloadToDevice"],
   ]);
@@ -298,12 +305,14 @@ test("GET /api/source-profiles reports only paths the current member can use", a
     ["play", "downloadToDevice"],
     ["play", "downloadToDevice"],
     ["play", "downloadToDevice"],
+    ["play", "downloadToDevice"],
   ]);
 
   harness.state.libraries = [];
   harness.state.remoteLibraries = [remoteLibrary];
   const remote = (await (await api(harness.base, MEMBER)).json()) as { profiles: Array<{ operations: string[] }> };
   assert.deepEqual(remote.profiles.map((profile) => profile.operations), [
+    ["play", "downloadToDevice"],
     ["play", "downloadToDevice"],
     ["play", "downloadToDevice"],
     ["play", "downloadToDevice"],
@@ -327,7 +336,7 @@ test("GET /api/source-profiles never reveals same-name provider identity", async
   const response = await api(harness.base, MEMBER);
   const { text, body } = await rawBody(response);
   assert.equal(response.status, 200);
-  assert.equal((body.profiles as unknown[]).length, 3);
+  assert.equal((body.profiles as unknown[]).length, 4);
   assert.doesNotMatch(text, /private-key-one|private-key-two|Same display name/);
   assert.doesNotMatch(text, /manifest-/);
 });
@@ -393,77 +402,11 @@ test("the catalogue route registers no mutation methods", async (t) => {
   }
 });
 
-const SOURCE_PROFILES_EXPECTED = [
-  {
-    id: "39de76cc-0ca0-4a5e-95ad-08927fb45410",
-    nameKey: "sourceProfile.recommended",
-    revision: 1,
-    template: "recommended",
-    operations: ["play", "downloadToDevice"],
-    policy: {
-      schemaVersion: 1,
-      scope: { mode: "allAvailable" },
-      constraints: {
-        sourceKinds: ["localFile", "mediaServerOriginal", "http", "torrent"],
-        audio: { mode: "preferred", preferred: { preference: "audio" } },
-        subtitles: { mode: "optional", preferred: { preference: "subtitle" } },
-      },
-      criteria: [
-        { kind: "providerClass", order: ["local", "remote", "addon"] },
-        { kind: "audioTier" },
-        { kind: "providerOrder", from: "viewer" },
-        { kind: "size", direction: "desc" },
-      ],
-      nextEpisode: "profile",
-      existingLocalCopy: "meetsRequirements",
-    },
-  },
-  {
-    id: "390a8b1a-85f6-4ded-9d7e-701a299720bb",
-    nameKey: "sourceProfile.providerPriority",
-    revision: 1,
-    template: "providerPriority",
-    operations: ["play", "downloadToLibrary", "downloadToDevice"],
-    policy: {
-      schemaVersion: 1,
-      scope: { mode: "allAvailable" },
-      constraints: {
-        sourceKinds: ["localFile", "mediaServerOriginal", "http", "torrent"],
-        audio: { mode: "preferred", preferred: { preference: "audio" } },
-        subtitles: { mode: "optional", preferred: { preference: "subtitle" } },
-      },
-      criteria: [
-        { kind: "providerClass", order: ["local", "remote", "addon"] },
-        { kind: "providerOrder", from: "viewer" },
-        { kind: "audioTier" },
-        { kind: "size", direction: "desc" },
-      ],
-      nextEpisode: "profile",
-      existingLocalCopy: "meetsRequirements",
-    },
-  },
-  {
-    id: "7e15d713-965c-4636-9ed3-3a112c521fe1",
-    nameKey: "sourceProfile.travel",
-    revision: 1,
-    template: "travel",
-    operations: ["play", "downloadToLibrary", "downloadToDevice"],
-    policy: {
-      schemaVersion: 1,
-      scope: { mode: "allAvailable" },
-      constraints: {
-        sourceKinds: ["localFile", "http", "mediaServerOriginal"],
-        audio: { mode: "preferred", preferred: { preference: "audio" } },
-        subtitles: { mode: "optional", preferred: { preference: "subtitle" } },
-        heightPixels: { min: 480 },
-      },
-      criteria: [
-        { kind: "audioTier" },
-        { kind: "size", direction: "asc" },
-        { kind: "providerOrder", from: "viewer" },
-      ],
-      nextEpisode: "profile",
-      existingLocalCopy: "meetsRequirements",
-    },
-  },
-] as const;
+const SOURCE_PROFILES_EXPECTED = RULE_PRESETS.map((preset) => ({
+  id: preset.id,
+  nameKey: preset.nameKey,
+  revision: 1,
+  template: preset.template,
+  operations: ["play", "downloadToLibrary", "downloadToDevice"],
+  policy: rulesPolicy(preset.rules, "episode"),
+}));

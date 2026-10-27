@@ -48,6 +48,7 @@ export function materializeOwnerSourceAdmission(
   deps: SourceProfileSelectionDeps,
   owner: Pick<UserRecord, "id" | "role" | "permissions" | "disabled">,
   referenceInput: unknown,
+  mediaKind: "episode" | "movie",
 ): SourceAdmissionSnapshotV1 {
   const reference = parseSourceProfileReference(referenceInput);
   const preferences = deps.store.prefs(owner.id);
@@ -64,6 +65,7 @@ export function materializeOwnerSourceAdmission(
       subtitleLanguage: preferences.subtitleLanguage,
     },
     operation: "downloadToLibrary",
+    mediaKind,
   });
 }
 
@@ -71,6 +73,7 @@ export function materializeOwnerSourceProfileAdmission(
   deps: SourceProfileSelectionDeps,
   owner: Pick<UserRecord, "id" | "role" | "permissions" | "disabled">,
   definition: unknown,
+  mediaKind: "episode" | "movie",
 ): SourceAdmissionSnapshotV1 {
   const preferences = deps.store.prefs(owner.id);
   return materializeSourceAdmissionDefinition(definition, {
@@ -86,6 +89,7 @@ export function materializeOwnerSourceProfileAdmission(
       subtitleLanguage: preferences.subtitleLanguage,
     },
     operation: "downloadToLibrary",
+    mediaKind,
   });
 }
 
@@ -108,10 +112,11 @@ export function materializeSourceProfileAdmission(
   deps: SourceProfileSelectionDeps,
   owner: Pick<UserRecord, "id" | "role" | "permissions" | "disabled"> | undefined,
   referenceInput: unknown,
+  mediaKind: "episode" | "movie",
 ): SourceAdmissionSnapshotV1 {
   if (!owner) throw new AppError("This account may not download to the library.", "err.downloadLibraryNotAllowed", 403);
   try {
-    return materializeOwnerSourceAdmission(deps, owner, referenceInput);
+    return materializeOwnerSourceAdmission(deps, owner, referenceInput, mediaKind);
   } catch (error) {
     if (error instanceof SourceAdmissionValidationError) throw invalidSourceProfileReference();
     if (error instanceof SourceAdmissionRejected) throw sourceAdmissionError(error.code);

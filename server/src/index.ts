@@ -2075,12 +2075,12 @@ const followService = new FollowService({
     addons: store.addons(),
     libraries: store.libraries(),
   }, { targetSettings: selection.targetSettings }),
-  admitSourceProfile: (ownerUserId, reference) => {
+  admitSourceProfile: (ownerUserId, reference, mediaKind) => {
     const owner = findUserById(store.users(), ownerUserId);
     if (!owner) throw new SourceAdmissionRejected("operationForbidden");
     return reference.template === undefined
-      ? materializeOwnerSourceAdmission({ store }, owner, reference)
-      : materializeOwnerSourceProfileAdmission({ store }, owner, reference);
+      ? materializeOwnerSourceAdmission({ store }, owner, reference, mediaKind)
+      : materializeOwnerSourceProfileAdmission({ store }, owner, reference, mediaKind);
   },
   // Retention deletes a single library file through the same operations queue that waits for
   // playback, an unreachable disk and active downloads. Only a key that names a real library

@@ -237,6 +237,7 @@ export const PERSONAL_SETTINGS = [
   "libraryShelf",
   "homeLayout",
   "downloadSourceProfile",
+  "followSourceProfile",
 ] as const;
 
 export interface UserMigration { migrated: boolean; userId?: string }

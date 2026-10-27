@@ -15,6 +15,7 @@ import { materializeSourceAdmissionPolicy, parseSourceAdmissionSnapshotV1, Sourc
 import {
   buildTemplatePolicy,
   defaultTemplateParameters,
+  RULE_PRESETS,
   SOURCE_PROFILE_DEFINITIONS,
   SOURCE_PROFILE_IDS,
 } from "../source-profiles.js";
@@ -61,6 +62,7 @@ const profileAdmission = (profileId: string): SourceAdmissionSnapshotV1 => {
 const sourceAdmissionFor = (
   sourceProfile: FollowSourceProfile,
   profiles: readonly StoredSourceProfile[],
+  mediaKind: "episode" | "movie" = "episode",
 ): SourceAdmissionSnapshotV1 => {
   const live = profiles.find((profile) => profile.id === sourceProfile.profileId);
   const template = sourceProfile.template ?? live?.template;
@@ -77,7 +79,7 @@ const sourceAdmissionFor = (
     operation: "downloadToLibrary",
     providerKeys,
     policy: materializeSourceAdmissionPolicy(
-      buildTemplatePolicy(template, parameters),
+      buildTemplatePolicy(template, parameters, mediaKind),
       providerKeys,
       { audioLanguage: "en", subtitleLanguage: "en" },
     ),
@@ -134,7 +136,8 @@ const mount = async (options: {
     }),
     queue,
     mayDownload: (ownerUserId) => Boolean(Object.values(users).find((entry) => entry.id === ownerUserId)?.permissions.downloadToLibrary),
-    admitSourceProfile: (_ownerUserId, sourceProfile) => sourceAdmissionFor(sourceProfile, sourceProfiles),
+    admitSourceProfile: (_ownerUserId, sourceProfile, mediaKind) =>
+      sourceAdmissionFor(sourceProfile, sourceProfiles, mediaKind),
   });
   const libraries: LibraryRecord[] = options.libraries ?? [{ id: "lib_shows", name: "Shows", type: "series", root: dir, enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: false }];
   const settings = options.settings ?? {};
@@ -374,6 +377,64 @@ test("a follow stores and exposes an executable source profile reference", async
     assert.deepEqual(view.autoDownload?.selection.addonKeys, ["stream-addon", "admin-addon"]);
     assert.equal(view.autoDownload?.selection.audioLanguage, "en");
     assert.equal(JSON.stringify(view).includes("sourceAdmission"), false);
+  } finally { await h.close(); }
+});
+
+test("a film follow materializes a rules profile with its movie size limit", async () => {
+  const balanced = RULE_PRESETS.find((preset) => preset.id === SOURCE_PROFILE_IDS.balanced)!;
+  const h = await mount({
+    libraries: [{
+      id: "lib_films",
+      name: "Films",
+      type: "movie",
+      root: "/tmp",
+      enabled: true,
+      order: 0,
+      addedAt: "2026-01-01T00:00:00.000Z",
+      writeArtwork: false,
+    }],
+    sourceProfiles: [{
+      id: balanced.id,
+      revision: 1,
+      template: "rules",
+      nameKey: balanced.nameKey,
+      parameters: balanced.rules,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    }],
+  });
+  try {
+    const film = await (await api(h.base, "/api/follows", {
+      method: "POST", as: "A", body: { type: "movie", id: "tt9", name: "Film" },
+    })).json() as { id: string };
+    const configured = await api(h.base, `/api/follows/${film.id}`, {
+      method: "PATCH", as: "A",
+      body: {
+        autoDownload: {
+          startMode: "new",
+          selection: { profile: { profileId: balanced.id, revision: 1 } },
+        },
+      },
+    });
+    assert.equal(configured.status, 200, await configured.text());
+    await h.store.update(film.id, (current) => {
+      current.autoDownload!.enabledAt = "2023-01-01T00:00:00.000Z";
+    });
+    await h.store.recordCheck(film.id, {
+      episodes: [{
+        key: "1:1",
+        videoId: "tt9:1:1",
+        season: 1,
+        episode: 1,
+        released: "2024-03-01T00:00:00.000Z",
+        firstSeenAt: "2024-01-01T00:00:00.000Z",
+      }],
+      now: Date.now(),
+    });
+    await h.service.admit(film.id);
+    const admission = h.jobs.find((job) => job.sourceAdmission?.profile.template === "rules")?.sourceAdmission;
+    assert.deepEqual(admission?.profile, { id: balanced.id, revision: 1, template: "rules" });
+    assert.deepEqual(admission?.policy.constraints.bytes, { max: 15_000_000_000 });
   } finally { await h.close(); }
 });
 

@@ -3,14 +3,10 @@ import type express from "express";
 import { AppError } from "../errors.js";
 import { ForbiddenError } from "../roles.js";
 import {
-  buildTemplatePolicy,
   declaresStream,
-  parseTemplateParameters,
-  SOURCE_PROFILE_IDS,
-  type ProviderPriorityParameters,
-  type SourceProfileTemplate,
-  type TravelParameters,
+  RULE_PRESETS,
 } from "../source-profiles.js";
+import { parseDownloadRules, type DownloadRules } from "../download-rules.js";
 import type { State, StoredSourceProfile } from "../store.js";
 import { asyncRoute, type RouteContext } from "./context.js";
 
@@ -26,10 +22,7 @@ export interface AdminSourceProfilesHandlers {
   delete: express.RequestHandler;
 }
 
-type MutableTemplate = Exclude<SourceProfileTemplate, "recommended">;
-type MutableParameters = TravelParameters | ProviderPriorityParameters;
-
-const BUILT_IN_IDS: ReadonlySet<string> = new Set(Object.values(SOURCE_PROFILE_IDS));
+const PRESET_IDS: ReadonlySet<string> = new Set(RULE_PRESETS.map((preset) => preset.id));
 
 const invalidProfile = (): AppError =>
   new AppError("The profile settings are not valid.", "err.sourceProfileInvalid", 400);
@@ -93,17 +86,9 @@ const assertNameAvailable = (
   }
 };
 
-const createTemplate = (value: unknown): MutableTemplate => {
-  if (value !== "travel" && value !== "providerPriority") throw invalidProfile();
-  return value;
-};
-
-const parametersFor = (
-  template: SourceProfileTemplate,
-  value: unknown,
-): MutableParameters | undefined => {
+const rulesFor = (value: unknown): DownloadRules => {
   try {
-    return parseTemplateParameters(template, value);
+    return parseDownloadRules(value);
   } catch {
     throw invalidProfile();
   }
@@ -111,12 +96,11 @@ const parametersFor = (
 
 const assertAddonKeys = (
   state: State,
-  parameters: MutableParameters | undefined,
+  rules: DownloadRules,
 ): void => {
-  if (parameters === undefined) return;
   const keys = [
-    ...(parameters.scope.mode === "selected" ? parameters.scope.addonKeys : []),
-    ...("addonKeys" in parameters.providerOrder ? parameters.providerOrder.addonKeys : []),
+    ...(rules.addons.scope === "all" ? [] : rules.addons.scope.selected),
+    ...(rules.addons.order === "viewer" ? [] : rules.addons.order.explicit),
   ];
   const streamAddons = new Set(
     state.addons.filter(declaresStream).map((addon) => addon.key),
@@ -158,20 +142,18 @@ export function registerAdminSourceProfilesRoutes(
     assertAdmin(deps.currentUser(req));
     let created: StoredSourceProfile | undefined;
     await deps.store.update((state) => {
-      const body = plainObject(req.body, ["template", "name", "parameters"]);
-      const template = createTemplate(body.template);
+      const body = plainObject(req.body, ["name", "rules"]);
       const name = profileName(body.name);
       const profiles = state.sourceProfiles ?? [];
       assertNameAvailable(profiles, name);
-      const parameters = parametersFor(template, body.parameters) as MutableParameters;
+      const parameters = rulesFor(body.rules);
       assertAddonKeys(state, parameters);
-      buildTemplatePolicy(template, parameters);
 
       const now = timestamp();
       created = {
         id: freshProfileId(state, newProfileId),
         revision: 1,
-        template,
+        template: "rules",
         name,
         parameters: structuredClone(parameters),
         createdAt: now,
@@ -189,7 +171,7 @@ export function registerAdminSourceProfilesRoutes(
       const profiles = state.sourceProfiles ?? [];
       const source = profiles.find((profile) => profile.id === req.params.id);
       if (!source) throw profileUnavailable();
-      if (source.template === "recommended") throw builtInProfile();
+      if (source.template !== "rules" || source.parameters === undefined) throw builtInProfile();
       const body = plainObject(req.body, ["name"]);
       const name = profileName(body.name);
       assertNameAvailable(profiles, name);
@@ -217,10 +199,9 @@ export function registerAdminSourceProfilesRoutes(
     await deps.store.update((state) => {
       const profile = (state.sourceProfiles ?? []).find((candidate) => candidate.id === req.params.id);
       if (!profile) throw profileUnavailable();
-      const body = plainObject(req.body, ["revision"], ["name", "parameters"]);
+      const body = plainObject(req.body, ["revision"], ["name", "rules"]);
       if (body.revision !== profile.revision) throw staleRevision();
-      if (BUILT_IN_IDS.has(profile.id) && profile.template === "recommended") throw builtInProfile();
-      if (BUILT_IN_IDS.has(profile.id) && Object.hasOwn(body, "name")) throw builtInProfile();
+      if (PRESET_IDS.has(profile.id) && Object.hasOwn(body, "name")) throw builtInProfile();
 
       let name = profile.name;
       if (Object.hasOwn(body, "name")) {
@@ -229,10 +210,10 @@ export function registerAdminSourceProfilesRoutes(
       }
 
       let parameters = profile.parameters;
-      if (Object.hasOwn(body, "parameters")) {
-        parameters = parametersFor(profile.template, body.parameters) as MutableParameters;
+      if (Object.hasOwn(body, "rules")) {
+        if (profile.template !== "rules") throw builtInProfile();
+        parameters = rulesFor(body.rules);
         assertAddonKeys(state, parameters);
-        buildTemplatePolicy(profile.template, parameters);
       }
 
       if (!Number.isSafeInteger(profile.revision + 1)) throw invalidProfile();
@@ -256,12 +237,13 @@ export function registerAdminSourceProfilesRoutes(
         ? Number(req.query.revision)
         : NaN;
       if (revision !== profile.revision) throw staleRevision();
-      if (BUILT_IN_IDS.has(profile.id)) throw builtInProfile();
+      if (PRESET_IDS.has(profile.id)) throw builtInProfile();
 
       state.sourceProfiles = profiles.filter((candidate) => candidate.id !== profile.id);
       state.deletedSourceProfileIds = [...(state.deletedSourceProfileIds ?? []), profile.id];
       for (const data of Object.values(state.userData ?? {})) {
         if (data.prefs.downloadSourceProfile === profile.id) delete data.prefs.downloadSourceProfile;
+        if (data.prefs.followSourceProfile === profile.id) delete data.prefs.followSourceProfile;
       }
     });
     res.status(204).end();

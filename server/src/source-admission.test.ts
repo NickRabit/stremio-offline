@@ -7,6 +7,7 @@ import {
   materializeSourceAdmission,
   materializeSourceAdmissionPolicy,
   parseSourceAdmissionSnapshotV1,
+  parseSourceProfileSnapshot,
   parseSourceProfileReference,
   sourceAdmissionProviderScope,
   SourceAdmissionRejected,
@@ -16,6 +17,7 @@ import {
 } from "./source-admission.js";
 import {
   defaultTemplateParameters,
+  RULE_PRESETS,
   SOURCE_PROFILE_DEFINITIONS,
   SOURCE_PROFILE_IDS,
   viewerOfProfileAccount,
@@ -125,10 +127,11 @@ const storedBuiltIns = (): StoredSourceProfile[] =>
 
 const context = (
   user = account(),
-  options: Partial<Omit<SourceAdmissionContext, "viewer" | "preferences" | "operation">> & {
+  options: Partial<Omit<SourceAdmissionContext, "viewer" | "preferences" | "operation" | "mediaKind">> & {
     audioLanguage?: string;
     subtitleLanguage?: string;
     operation?: SourceAdmissionContext["operation"];
+    mediaKind?: SourceAdmissionContext["mediaKind"];
   } = {},
 ): SourceAdmissionContext => ({
   viewer: viewerOfProfileAccount(user),
@@ -143,6 +146,7 @@ const context = (
     subtitleLanguage: options.subtitleLanguage ?? "en",
   },
   operation: options.operation ?? "play",
+  mediaKind: options.mediaKind ?? "episode",
 });
 
 const reference = (profileId: string, revision = 1) => ({ profileId, revision });
@@ -246,6 +250,49 @@ test("current grants and enabled stream addons alone select addon providers", ()
     snapshot.policy.criteria.find((criterion) => criterion.kind === "providerOrder"),
     { kind: "providerOrder", keys: ["addon:private-key-one"] },
   );
+});
+
+test("rules profiles admit by media kind and their policies round-trip", () => {
+  const preset = RULE_PRESETS[0]!;
+  const profile: StoredSourceProfile = {
+    id: preset.id,
+    revision: 1,
+    template: "rules",
+    nameKey: preset.nameKey,
+    parameters: preset.rules,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const source = addon("rule-addon", { allowedUsers: [MEMBER] });
+  const episode = materializeSourceAdmission(reference(profile.id), context(account(), {
+    profiles: [profile],
+    addons: [source],
+    operation: "downloadToLibrary",
+    mediaKind: "episode",
+  }));
+  assert.deepEqual(episode.profile, { id: profile.id, revision: 1, template: "rules" });
+  assert.deepEqual(episode.policy.constraints.bytes, { max: 4_000_000_000 });
+  assert.deepEqual(parseSourceAdmissionSnapshotV1(structuredClone(episode)), episode);
+
+  const movie = materializeSourceAdmission(reference(profile.id), context(account(), {
+    profiles: [profile],
+    addons: [source],
+    operation: "downloadToLibrary",
+    mediaKind: "movie",
+  }));
+  assert.deepEqual(movie.policy.constraints.bytes, { max: 15_000_000_000 });
+
+  assert.deepEqual(parseSourceProfileSnapshot({
+    profileId: profile.id,
+    revision: 1,
+    template: "rules",
+    parameters: preset.rules,
+  }), {
+    profileId: profile.id,
+    revision: 1,
+    template: "rules",
+    parameters: preset.rules,
+  });
 });
 
 test("provider order keeps instance class order and the viewer addon overlay", () => {

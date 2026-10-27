@@ -4,6 +4,7 @@ import { defaultDownloadSettings } from "./naming.js";
 import {
   buildTemplatePolicy,
   defaultTemplateParameters,
+  RULE_PRESETS,
   SOURCE_PROFILE_DEFINITIONS,
   SOURCE_PROFILE_IDS,
   sourceProfilesForViewer,
@@ -115,12 +116,12 @@ const catalogue = (
 });
 
 const storedBuiltIns = (): StoredSourceProfile[] =>
-  (["recommended", "providerPriority", "travel"] as const).map((template) => ({
-    id: SOURCE_PROFILE_IDS[template],
+  RULE_PRESETS.map((preset) => ({
+    id: preset.id,
     revision: 1,
-    template,
-    nameKey: `sourceProfile.${template}`,
-    ...(template === "recommended" ? {} : { parameters: defaultTemplateParameters(template) }),
+    template: preset.template,
+    nameKey: preset.nameKey,
+    parameters: preset.rules,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
   }));
@@ -158,6 +159,10 @@ test("fixed profile definitions parse and keep stable identities", () => {
     recommended: "39de76cc-0ca0-4a5e-95ad-08927fb45410",
     providerPriority: "390a8b1a-85f6-4ded-9d7e-701a299720bb",
     travel: "7e15d713-965c-4636-9ed3-3a112c521fe1",
+    balanced: "88302ead-d701-4282-9059-777d47ed913c",
+    best: "a02923f1-3457-478e-94b2-a0051f233de9",
+    smaller: "2cb9cd41-d5dc-45cd-b765-a0f98149a5b1",
+    myLanguage: "f57e4033-dafe-4d7c-88de-4def19014aac",
   });
   for (const profile of SOURCE_PROFILE_DEFINITIONS) {
     assert.deepEqual(parseSourcePolicyV1(structuredClone(profile.policy)), profile.policy);
@@ -216,7 +221,7 @@ test("projection returns fresh policies and operation lists on every read", () =
 
   first[0]!.operations.length = 0;
   first[0]!.policy.constraints.sourceKinds.length = 0;
-  assert.deepEqual(second[0]?.operations, ["play", "downloadToDevice"]);
+  assert.deepEqual(second[0]?.operations, ["play", "downloadToLibrary", "downloadToDevice"]);
   assert.deepEqual(second[0]?.policy.constraints.sourceKinds, [
     "localFile",
     "mediaServerOriginal",
@@ -239,9 +244,10 @@ test("administrators see every profile and operation available from their grante
   }));
 
   assert.deepEqual(operationIds(profiles), [
-    { id: SOURCE_PROFILE_IDS.recommended, operations: ["play", "downloadToDevice"] },
-    { id: SOURCE_PROFILE_IDS.providerPriority, operations: ["play", "downloadToLibrary", "downloadToDevice"] },
-    { id: SOURCE_PROFILE_IDS.travel, operations: ["play", "downloadToLibrary", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.balanced, operations: ["play", "downloadToLibrary", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.best, operations: ["play", "downloadToLibrary", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.smaller, operations: ["play", "downloadToLibrary", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.myLanguage, operations: ["play", "downloadToLibrary", "downloadToDevice"] },
   ]);
 });
 
@@ -251,9 +257,10 @@ test("a local path alone supports playback and a device copy, never a library se
   }));
 
   assert.deepEqual(operationIds(profiles), [
-    { id: SOURCE_PROFILE_IDS.recommended, operations: ["play", "downloadToDevice"] },
-    { id: SOURCE_PROFILE_IDS.providerPriority, operations: ["play", "downloadToDevice"] },
-    { id: SOURCE_PROFILE_IDS.travel, operations: ["play", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.balanced, operations: ["play", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.best, operations: ["play", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.smaller, operations: ["play", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.myLanguage, operations: ["play", "downloadToDevice"] },
   ]);
 });
 
@@ -263,9 +270,10 @@ test("a remote path alone supports playback and a device copy, never an automati
   }));
 
   assert.deepEqual(operationIds(profiles), [
-    { id: SOURCE_PROFILE_IDS.recommended, operations: ["play", "downloadToDevice"] },
-    { id: SOURCE_PROFILE_IDS.providerPriority, operations: ["play", "downloadToDevice"] },
-    { id: SOURCE_PROFILE_IDS.travel, operations: ["play", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.balanced, operations: ["play", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.best, operations: ["play", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.smaller, operations: ["play", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.myLanguage, operations: ["play", "downloadToDevice"] },
   ]);
 });
 
@@ -275,9 +283,10 @@ test("an addon path supports every operation for a member with both download gra
   }));
 
   assert.deepEqual(operationIds(profiles), [
-    { id: SOURCE_PROFILE_IDS.recommended, operations: ["play", "downloadToDevice"] },
-    { id: SOURCE_PROFILE_IDS.providerPriority, operations: ["play", "downloadToLibrary", "downloadToDevice"] },
-    { id: SOURCE_PROFILE_IDS.travel, operations: ["play", "downloadToLibrary", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.balanced, operations: ["play", "downloadToLibrary", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.best, operations: ["play", "downloadToLibrary", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.smaller, operations: ["play", "downloadToLibrary", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.myLanguage, operations: ["play", "downloadToLibrary", "downloadToDevice"] },
   ]);
 });
 
@@ -310,12 +319,14 @@ test("operation grants are applied independently to an available addon path", ()
     ["play"],
     ["play"],
     ["play"],
+    ["play"],
   ]);
 
   input.viewer.permissions = { downloadToLibrary: true, downloadToDevice: false };
   const playAndLibrary = sourceProfilesForViewer(input);
   assert.deepEqual(playAndLibrary.map((profile) => profile.operations), [
-    ["play"],
+    ["play", "downloadToLibrary"],
+    ["play", "downloadToLibrary"],
     ["play", "downloadToLibrary"],
     ["play", "downloadToLibrary"],
   ]);
@@ -323,7 +334,8 @@ test("operation grants are applied independently to an available addon path", ()
   input.viewer.permissions = { downloadToLibrary: true, downloadToDevice: true };
   const all = sourceProfilesForViewer(input);
   assert.deepEqual(all.map((profile) => profile.operations), [
-    ["play", "downloadToDevice"],
+    ["play", "downloadToLibrary", "downloadToDevice"],
+    ["play", "downloadToLibrary", "downloadToDevice"],
     ["play", "downloadToLibrary", "downloadToDevice"],
     ["play", "downloadToLibrary", "downloadToDevice"],
   ]);
@@ -341,7 +353,7 @@ test("grant changes and same-name providers do not expose provider identity", ()
   const input = catalogue(account(MEMBER, "user"), { addons: [visible, hidden] });
 
   const before = sourceProfilesForViewer(input);
-  assert.equal(before.length, 3);
+  assert.equal(before.length, 4);
   assert.doesNotMatch(JSON.stringify(before), /private-key|Same name|manifest\.json/);
 
   visible.enabled = false;

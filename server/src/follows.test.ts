@@ -932,6 +932,7 @@ test("a follow admits from its frozen profile definition after the live catalogu
       mediaConnections: [],
       preferences: { audioLanguage: "en", subtitleLanguage: "en" },
       operation: "downloadToLibrary",
+      mediaKind: "episode",
     }),
   });
   const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule({

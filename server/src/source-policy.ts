@@ -6,6 +6,7 @@ export type AudioMode = "strict" | "listed" | "preferred";
 export type SubtitleMode = "off" | "optional" | "required";
 export type NextEpisodePolicy = "profile" | "sameProviderThenNearestSize";
 export type ExistingLocalCopyPolicy = "any" | "meetsRequirements";
+export type ReleaseKind = "cam" | "telesync" | "screener";
 
 export type LanguageRef =
   | { code: string }
@@ -39,6 +40,7 @@ export interface SourcePolicyConstraints {
   bytes?: SourcePolicyRange;
   durationSeconds?: SourcePolicyRange;
   heightPixels?: SourcePolicyRange;
+  excludeReleaseKinds?: ReleaseKind[];
 }
 
 export type SourcePolicyCriterion =
@@ -213,7 +215,7 @@ const parseConstraints = (value: unknown): SourcePolicyConstraints => {
   const constraints = objectValue(
     value,
     ["sourceKinds", "audio", "subtitles"],
-    ["bytes", "durationSeconds", "heightPixels"],
+    ["bytes", "durationSeconds", "heightPixels", "excludeReleaseKinds"],
   );
   const kinds = arrayValue(constraints.sourceKinds, 4).map(sourceKind);
   if (kinds.length === 0 || new Set(kinds).size !== kinds.length) return fail();
@@ -228,6 +230,12 @@ const parseConstraints = (value: unknown): SourcePolicyConstraints => {
   }
   if (Object.hasOwn(constraints, "heightPixels")) {
     parsed.heightPixels = parseRange(constraints.heightPixels, 1);
+  }
+  if (Object.hasOwn(constraints, "excludeReleaseKinds")) {
+    const releaseKinds = arrayValue(constraints.excludeReleaseKinds, 3)
+      .map((kind) => enumValue(kind, ["cam", "telesync", "screener"] as const));
+    if (new Set(releaseKinds).size !== releaseKinds.length) return fail();
+    parsed.excludeReleaseKinds = releaseKinds;
   }
   return parsed;
 };

@@ -1,6 +1,6 @@
 import { normalizeLanguage } from "./language.js";
 import type { SourceAdmissionSnapshotV1 } from "./source-admission.js";
-import type { ProviderClass, SourceKind } from "./source-policy.js";
+import type { ProviderClass, ReleaseKind, SourceKind } from "./source-policy.js";
 import type { SourceOperation } from "./source-profiles.js";
 
 export type SourceEvidenceLevel = "listed" | "providerMetadata" | "inspected";
@@ -23,6 +23,7 @@ export interface SourceEvidenceFactsV1 {
   readonly bytes: SourceFact<number>;
   readonly durationSeconds: SourceFact<number>;
   readonly heightPixels: SourceFact<number>;
+  readonly releaseKind: SourceFact<ReleaseKind | null>;
   readonly sampleOrTrailer: SourceFact<boolean>;
 }
 
@@ -53,6 +54,7 @@ export type SourceEvidenceReason =
   | { readonly code: "sourceUnavailable" }
   | { readonly code: "notOwnedLocalCopy" }
   | { readonly code: "sampleOrTrailer" }
+  | { readonly code: "releaseKindExcluded" }
   | { readonly code: "durationTooShort" }
   | { readonly code: "numericOutsideBounds"; readonly field: SourceNumericField }
   | { readonly code: "inspectionRequired"; readonly field: SourceNumericField | "audio" | "subtitles" }
@@ -224,6 +226,12 @@ export function evaluateSourceCandidate(
   const sample = candidate.facts.sampleOrTrailer;
   if (sample.evidence !== "unknown" && authoritative(sample.evidence) && sample.value) {
     return excluded({ code: "sampleOrTrailer" });
+  }
+
+  const releaseKind = candidate.facts.releaseKind;
+  if (releaseKind.evidence !== "unknown" && releaseKind.value !== null
+    && policy.constraints.excludeReleaseKinds?.includes(releaseKind.value)) {
+    return excluded({ code: "releaseKindExcluded" });
   }
 
   const duration = candidate.facts.durationSeconds;

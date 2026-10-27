@@ -11,11 +11,12 @@ import { newLibraryId, type DepartedLibrary, type LibraryRecord, type RootGrant 
 import { log } from "./logger.js";
 import type { ProgressSeries } from "./progress-series.js";
 import type { MediaConnectionRecord, RemoteLibraryRecord } from "./media-server-types.js";
+import type { DownloadRules } from "./download-rules.js";
 import {
   buildTemplatePolicy,
-  defaultTemplateParameters,
   parseTemplateParameters,
-  SOURCE_PROFILE_DEFINITIONS,
+  RULE_PRESETS,
+  rulesForLegacyVariant,
   SOURCE_PROFILE_IDS,
   type ProviderPriorityParameters,
   type SourceProfileTemplate,
@@ -85,6 +86,8 @@ export interface UserPrefs {
   homeLayout?: HomeLayout;
   /** The source profile one account prefers for a new download. Absent means no default. */
   downloadSourceProfile?: string;
+  /** The source profile one account prefers for a new follow. Absent means no default. */
+  followSourceProfile?: string;
 }
 
 /** The flat shape of the settings file and of the settings backup: the instance's half and
@@ -117,7 +120,7 @@ export interface StoredSourceProfile {
   template: SourceProfileTemplate;
   nameKey?: string;
   name?: string;
-  parameters?: TravelParameters | ProviderPriorityParameters;
+  parameters?: DownloadRules | TravelParameters | ProviderPriorityParameters;
   createdAt: string;
   updatedAt: string;
 }
@@ -211,6 +214,7 @@ export class Store {
   async load() {
     await mkdir(path.dirname(this.filename), { recursive: true });
     let stateRead = false;
+    let sourceProfilesChanged = false;
     try {
       const loaded = JSON.parse(await readFile(this.filename, "utf8")) as Partial<State>;
       this.persisted = true;
@@ -226,12 +230,14 @@ export class Store {
       this.state = { ...fresh, ...loaded, settings: { ...fresh.settings, ...storedSettings } };
       if (!this.state.libraries?.length) this.state.libraries = fresh.libraries;
       this.state.addons = this.state.addons.map((addon) => ({ ...addon, globalSearch: addon.globalSearch !== false, downloadSettings: normalizeDownloadSettings(addon.downloadSettings) }));
-      this.normalizeSourceProfiles();
+      sourceProfilesChanged = this.normalizeSourceProfiles();
       // After `migrate`, which still reads the personal keys off the flat settings object.
       // The cast is that moment: on disk the settings are both halves in one object.
       const migration = migrateUsers(this.state as unknown as MigratableState);
-      if (migration.migrated) {
-        log("INFO", "The account was moved into the list of users", { userId: migration.userId });
+      if (migration.migrated || sourceProfilesChanged) {
+        if (migration.migrated) {
+          log("INFO", "The account was moved into the list of users", { userId: migration.userId });
+        }
         // Written out now. The old shape stays readable for one release, and leaving it on
         // disk would mean the next boot migrating an account whose sessions are already
         // keyed by an id the file does not have.
@@ -331,7 +337,7 @@ export class Store {
   hasMediaServerState(): boolean { return this.mediaState; }
   grants() { return this.state.grants ?? []; }
   departed() { return this.state.departed ?? []; }
-  private normalizeSourceProfiles(): void {
+  private normalizeSourceProfiles(): boolean {
     const rawProfiles: unknown = this.state.sourceProfiles;
     if (rawProfiles !== undefined && !Array.isArray(rawProfiles)) {
       log("ERROR", "The stored source profile catalogue is not a list", {
@@ -341,9 +347,34 @@ export class Store {
     const candidates = Array.isArray(rawProfiles) ? rawProfiles : [];
     const seen = new Set<string>();
     const profiles: StoredSourceProfile[] = [];
+    const legacyIds = new Set<string>([
+      SOURCE_PROFILE_IDS.recommended,
+      SOURCE_PROFILE_IDS.providerPriority,
+      SOURCE_PROFILE_IDS.travel,
+    ]);
+    let changed = false;
     for (const candidate of candidates) {
       try {
-        const profile = this.parseStoredSourceProfile(candidate);
+        let profile = this.parseStoredSourceProfile(candidate);
+        if (legacyIds.has(profile.id)) {
+          changed = true;
+          continue;
+        }
+        if (profile.template === "travel" || profile.template === "providerPriority") {
+          const template = profile.template;
+          profile = {
+            ...profile,
+            revision: profile.revision + 1,
+            template: "rules",
+            parameters: rulesForLegacyVariant(
+              template,
+              profile.parameters as TravelParameters | ProviderPriorityParameters,
+            ),
+            updatedAt: new Date().toISOString(),
+          };
+          delete profile.nameKey;
+          changed = true;
+        }
         if (seen.has(profile.id)) {
           log("ERROR", "A stored source profile was dropped", {
             id: profile.id,
@@ -366,25 +397,44 @@ export class Store {
 
     const deleted = new Set((this.state.deletedSourceProfileIds ?? [])
       .filter((id): id is string => typeof id === "string"));
-    for (const definition of SOURCE_PROFILE_DEFINITIONS) {
+    for (const id of legacyIds) {
+      if (!deleted.has(id)) {
+        deleted.add(id);
+        changed = true;
+      }
+    }
+    const remap = new Map<string, string>([
+      [SOURCE_PROFILE_IDS.travel, SOURCE_PROFILE_IDS.smaller],
+      [SOURCE_PROFILE_IDS.providerPriority, SOURCE_PROFILE_IDS.balanced],
+      [SOURCE_PROFILE_IDS.recommended, SOURCE_PROFILE_IDS.balanced],
+    ]);
+    for (const data of Object.values(this.state.userData ?? {})) {
+      for (const key of ["downloadSourceProfile", "followSourceProfile"] as const) {
+        const selected = data.prefs[key];
+        const mapped = typeof selected === "string" ? remap.get(selected) : undefined;
+        if (mapped) {
+          data.prefs[key] = mapped;
+          changed = true;
+        }
+      }
+    }
+    for (const definition of RULE_PRESETS) {
       if (seen.has(definition.id) || deleted.has(definition.id)) continue;
-      const template = definition.id === SOURCE_PROFILE_IDS.recommended
-        ? "recommended"
-        : definition.id === SOURCE_PROFILE_IDS.travel ? "travel" : "providerPriority";
       const now = new Date().toISOString();
-      const parameters = defaultTemplateParameters(template);
       profiles.push({
         id: definition.id,
         revision: 1,
-        template,
+        template: "rules",
         nameKey: definition.nameKey,
-        ...(parameters === undefined ? {} : { parameters }),
+        parameters: structuredClone(definition.rules),
         createdAt: now,
         updatedAt: now,
       });
       seen.add(definition.id);
     }
     this.state.sourceProfiles = profiles;
+    this.state.deletedSourceProfileIds = [...deleted];
+    return changed;
   }
   private parseStoredSourceProfile(input: unknown): StoredSourceProfile {
     if (input === null || typeof input !== "object" || Array.isArray(input)) throw new Error("invalid profile");
@@ -399,26 +449,31 @@ export class Store {
     if (typeof id !== "string"
       || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
       || typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 1
-      || (template !== "recommended" && template !== "travel" && template !== "providerPriority")
+      || (template !== "recommended" && template !== "travel"
+        && template !== "providerPriority" && template !== "rules")
       || typeof createdAt !== "string" || createdAt.length === 0
       || typeof updatedAt !== "string" || updatedAt.length === 0) {
       throw new Error("invalid profile");
     }
 
+    const preset = RULE_PRESETS.find((candidate) => candidate.id === id);
     const builtInTemplate = id === SOURCE_PROFILE_IDS.recommended
       ? "recommended"
       : id === SOURCE_PROFILE_IDS.travel
         ? "travel"
-        : id === SOURCE_PROFILE_IDS.providerPriority ? "providerPriority" : undefined;
+        : id === SOURCE_PROFILE_IDS.providerPriority
+          ? "providerPriority"
+          : preset?.template;
     if (builtInTemplate !== undefined && (template !== builtInTemplate || typeof nameKey !== "string" || name !== undefined)) {
       throw new Error("invalid built-in profile");
     }
+    if (preset !== undefined && nameKey !== preset.nameKey) throw new Error("invalid built-in profile");
     if (builtInTemplate === undefined && (template === "recommended"
       || typeof name !== "string" || name.trim().length === 0 || name.length > 60 || nameKey !== undefined)) {
       throw new Error("invalid custom profile");
     }
 
-    let parameters: TravelParameters | ProviderPriorityParameters | undefined;
+    let parameters: DownloadRules | TravelParameters | ProviderPriorityParameters | undefined;
     if (template === "recommended") {
       if (profile.parameters !== undefined) throw new Error("invalid recommended parameters");
       parseTemplateParameters(template, profile.parameters);

@@ -15,7 +15,7 @@ import type { RemoteDownloadReference } from "../media-server-download.js";
 import type { ResourceOwner } from "../media-resources.js";
 import { defaultDownloadSettings, type MediaInfo } from "../naming.js";
 import type { SourceAdmissionSnapshotV1 } from "../source-admission.js";
-import { defaultTemplateParameters, SOURCE_PROFILE_IDS, type SourceProfileTemplate } from "../source-profiles.js";
+import { defaultTemplateParameters, RULE_PRESETS, SOURCE_PROFILE_IDS, type SourceProfileTemplate } from "../source-profiles.js";
 import type { Store, StoredSourceProfile, UserPrefs } from "../store.js";
 import type { AddonDownloadSettings, DownloadTargetSettings, StreamItem } from "../types.js";
 import type { UserRecord } from "../users.js";
@@ -609,6 +609,43 @@ test("a stored Travel variant admits through bulk with its explicit order and he
   assert.deepEqual(snapshot.profile, { id: profile.id, revision: 1, template: "travel" });
   assert.deepEqual(snapshot.providerKeys, ["addon:alpha", "addon:beta"]);
   assert.deepEqual(snapshot.policy.constraints.heightPixels, { min: 720 });
+});
+
+test("bulk admission materializes every rule preset with the episode size limit", async (t) => {
+  const profiles = RULE_PRESETS.map((preset) => ({
+    id: preset.id,
+    revision: 1,
+    template: preset.template,
+    nameKey: preset.nameKey,
+    parameters: preset.rules,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  })) satisfies StoredSourceProfile[];
+  const harness = await mount([streamAddon("rule-addon", { allowedUsers: [BOB] })], {
+    viewer: ordinary,
+    profiles,
+  });
+  t.after(harness.close);
+
+  for (const preset of RULE_PRESETS) {
+    const response = await api(harness.base, "/api/downloads/bulk", {
+      method: "POST",
+      body: {
+        title: "Show",
+        episodes: episodes(1),
+        selection: profileSelection(preset.id),
+      },
+    });
+    assert.equal(response.status, 201, await response.text());
+    const snapshot = harness.pending.at(-1)!.sourceAdmission!;
+    assert.deepEqual(snapshot.profile, { id: preset.id, revision: 1, template: "rules" });
+    assert.deepEqual(
+      snapshot.policy.constraints.bytes,
+      preset.rules.maxSizeGb.episode === null
+        ? undefined
+        : { max: preset.rules.maxSizeGb.episode * 1_000_000_000 },
+    );
+  }
 });
 
 test("a stored profile revision bump rejects a stale bulk submission", async (t) => {

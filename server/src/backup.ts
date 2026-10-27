@@ -8,13 +8,10 @@ import { normalizeRefreshHours } from "./addon-refresh.js";
 import { parseHomeLayout } from "./home.js";
 import { sameFile, toPosix, type LibraryRecord, type LibraryType } from "./libraries.js";
 import {
-  buildTemplatePolicy,
-  parseTemplateParameters,
+  RULE_PRESETS,
   SOURCE_PROFILE_IDS,
-  type ProviderPriorityParameters,
-  type SourceProfileTemplate,
-  type TravelParameters,
 } from "./source-profiles.js";
+import { parseDownloadRules } from "./download-rules.js";
 import type { StoredSourceProfile } from "./store.js";
 
 export const BACKUP_FORMAT = "stremio-offline-settings";
@@ -129,6 +126,7 @@ function parseSettings(value: unknown): Settings {
   const startView = String(source.startView ?? "");
   const libraryShelf = String(source.libraryShelf ?? "");
   const downloadSourceProfile = typeof source.downloadSourceProfile === "string" ? source.downloadSourceProfile : "";
+  const followSourceProfile = typeof source.followSourceProfile === "string" ? source.followSourceProfile : "";
   // A personal Home arrangement rides in the backup like every other personal setting; a
   // shape that is not the three arrays is dropped rather than failing the whole import.
   const homeLayout = parseHomeLayout(source.homeLayout);
@@ -157,6 +155,7 @@ function parseSettings(value: unknown): Settings {
     libraryShelf: LIBRARY_SHELVES.has(libraryShelf) ? libraryShelf as Settings["libraryShelf"] : fallback.libraryShelf,
     ...(homeLayout ? { homeLayout } : {}),
     ...(downloadSourceProfile ? { downloadSourceProfile } : {}),
+    ...(followSourceProfile ? { followSourceProfile } : {}),
     // Whatever the backup names here is another instance's id; the import maps it onto a local
     // library by root or name, and falls back to the default when it cannot.
     defaultMovieLibrary: typeof source.defaultMovieLibrary === "string" ? source.defaultMovieLibrary : "",
@@ -206,7 +205,11 @@ export function parseSettingsBackup(value: unknown): Omit<SettingsBackup, "expor
 }
 
 const PROFILE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const PROFILE_TEMPLATES = new Set<SourceProfileTemplate>(["recommended", "travel", "providerPriority"]);
+const LEGACY_PROFILE_IDS = new Set<string>([
+  SOURCE_PROFILE_IDS.recommended,
+  SOURCE_PROFILE_IDS.travel,
+  SOURCE_PROFILE_IDS.providerPriority,
+]);
 
 function readSourceProfiles(value: unknown): BackupSourceProfiles {
   try {
@@ -232,7 +235,7 @@ function readSourceProfile(value: unknown): StoredSourceProfile {
   const profile = object(value);
   const id = profile.id;
   const revision = profile.revision;
-  const template = profile.template as SourceProfileTemplate;
+  const template = profile.template;
   const nameKey = profile.nameKey;
   const name = profile.name;
   const createdAt = profile.createdAt;
@@ -240,42 +243,33 @@ function readSourceProfile(value: unknown): StoredSourceProfile {
   if (typeof id !== "string" || !PROFILE_ID.test(id)
     || typeof revision !== "number" || !Number.isSafeInteger(revision)
     || revision < 1 || revision > Number.MAX_SAFE_INTEGER - 1
-    || !PROFILE_TEMPLATES.has(template)
+    || template !== "rules"
+    || LEGACY_PROFILE_IDS.has(id)
     || typeof createdAt !== "string" || createdAt.length === 0
     || typeof updatedAt !== "string" || updatedAt.length === 0) {
     throw new Error("invalid source profile");
   }
 
-  const builtInTemplate = id === SOURCE_PROFILE_IDS.recommended
-    ? "recommended"
-    : id === SOURCE_PROFILE_IDS.travel
-      ? "travel"
-      : id === SOURCE_PROFILE_IDS.providerPriority ? "providerPriority" : undefined;
-  if (builtInTemplate !== undefined && (template !== builtInTemplate || typeof nameKey !== "string" || name !== undefined)) {
+  const preset = RULE_PRESETS.find((candidate) => candidate.id === id);
+  if (preset !== undefined && (typeof nameKey !== "string" || name !== undefined)) {
     throw new Error("invalid built-in source profile");
   }
-  if (builtInTemplate === "recommended" && revision !== 1) {
-    throw new Error("invalid recommended source profile");
+  if (preset !== undefined && nameKey !== preset.nameKey) {
+    throw new Error("invalid built-in source profile");
   }
-  if (builtInTemplate === undefined && (template === "recommended"
-    || typeof name !== "string" || name.trim().length === 0 || name.length > 60 || nameKey !== undefined)) {
+  if (preset === undefined
+    && (typeof name !== "string" || name.trim().length === 0 || name.length > 60 || nameKey !== undefined)) {
     throw new Error("invalid custom source profile");
   }
 
-  let parameters: TravelParameters | ProviderPriorityParameters | undefined;
-  if (template === "recommended") {
-    parseTemplateParameters(template, profile.parameters);
-  } else {
-    parameters = parseTemplateParameters(template, profile.parameters);
-  }
-  buildTemplatePolicy(template, parameters);
+  const parameters = parseDownloadRules(profile.parameters);
   return {
     id,
     revision,
     template,
     ...(typeof nameKey === "string" ? { nameKey } : {}),
     ...(typeof name === "string" ? { name } : {}),
-    ...(parameters === undefined ? {} : { parameters: structuredClone(parameters) }),
+    parameters: structuredClone(parameters),
     createdAt,
     updatedAt,
   };

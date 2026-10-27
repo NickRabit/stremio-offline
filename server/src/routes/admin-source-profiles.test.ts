@@ -11,10 +11,10 @@ import { DownloadQueue, type DownloadSelection } from "../downloads.js";
 import { ForbiddenError, roleMiddleware } from "../roles.js";
 import { RestrictedError, restrictedMiddleware } from "../restricted.js";
 import {
-  defaultTemplateParameters,
+  RULE_PRESETS,
   SOURCE_PROFILE_IDS,
-  type TravelParameters,
 } from "../source-profiles.js";
+import type { DownloadRules } from "../download-rules.js";
 import { Store, type StoredSourceProfile } from "../store.js";
 import type { AddonRecord } from "../types.js";
 import { emptyUserData, type UserRecord } from "../users.js";
@@ -76,17 +76,17 @@ const addon = (
   },
 });
 
-const travelParameters = (): TravelParameters => ({
-  ...defaultTemplateParameters("travel"),
-  scope: { mode: "selected", addonKeys: [ADDON] },
+const ruleParameters = (): DownloadRules => ({
+  ...RULE_PRESETS[0]!.rules,
+  addons: { scope: { selected: [ADDON] }, order: "viewer" },
 });
 
 const variant = (over: Partial<StoredSourceProfile> = {}): StoredSourceProfile => ({
   id: VARIANT,
   revision: 1,
-  template: "travel",
-  name: "Travel primary",
-  parameters: travelParameters(),
+  template: "rules",
+  name: "Rules primary",
+  parameters: ruleParameters(),
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
   ...over,
@@ -286,7 +286,7 @@ test("ordinary users are refused by the role gate and by every handler", async (
     api(harness.base, "/api/admin/source-profiles", {
       user: MEMBER,
       method: "POST",
-      body: { template: "travel", name: "Other", parameters: travelParameters() },
+      body: { name: "Other", rules: ruleParameters() },
     }),
     api(harness.base, `/api/admin/source-profiles/${VARIANT}/duplicate`, {
       user: MEMBER,
@@ -336,7 +336,7 @@ test("restricted mode refuses every source profile mutation", async (t) => {
     api(harness.base, "/api/admin/source-profiles", {
       user: ADMIN,
       method: "POST",
-      body: { template: "travel", name: "Other", parameters: travelParameters() },
+      body: { name: "Other", rules: ruleParameters() },
     }),
     api(harness.base, `/api/admin/source-profiles/${VARIANT}/duplicate`, {
       user: ADMIN,
@@ -346,7 +346,7 @@ test("restricted mode refuses every source profile mutation", async (t) => {
     api(harness.base, `/api/admin/source-profiles/${VARIANT}`, {
       user: ADMIN,
       method: "PATCH",
-      body: { revision: 1, parameters: travelParameters() },
+      body: { revision: 1, rules: ruleParameters() },
     }),
     api(harness.base, `/api/admin/source-profiles/${VARIANT}?revision=1`, {
       user: ADMIN,
@@ -359,23 +359,24 @@ test("restricted mode refuses every source profile mutation", async (t) => {
   }
 });
 
-test("an administrator creates a Travel variant that members can see and bulk-admit", async (t) => {
+test("an administrator creates a rules profile that members can see and bulk-admit", async (t) => {
   const harness = await mount({
     addons: [addon(ADDON, { allowedUsers: [MEMBER] })],
     downloads: true,
   });
   t.after(harness.close);
-  const parameters = travelParameters();
-  parameters.heightPixels = { min: 720, max: 2160 };
+  const parameters = ruleParameters();
+  parameters.resolution = { min: 720, max: 2160 };
 
   const created = await api(harness.base, "/api/admin/source-profiles", {
     user: ADMIN,
     method: "POST",
-    body: { template: "travel", name: "  Travel 720  ", parameters },
+    body: { name: "  Rules 720  ", rules: parameters },
   });
   assert.equal(created.status, 201);
   const profile = await created.json() as StoredSourceProfile;
-  assert.equal(profile.name, "Travel 720");
+  assert.equal(profile.name, "Rules 720");
+  assert.equal(profile.template, "rules");
   assert.equal(profile.revision, 1);
   assert.match(profile.id, /^[0-9a-f-]{36}$/);
   assert.deepEqual(profile.parameters, parameters);
@@ -392,7 +393,7 @@ test("an administrator creates a Travel variant that members can see and bulk-ad
   const visible = (await publicList.json() as {
     profiles: Array<{ id: string; name?: string; parameters?: unknown }>;
   }).profiles.find((candidate) => candidate.id === profile.id);
-  assert.equal(visible?.name, "Travel 720");
+  assert.equal(visible?.name, "Rules 720");
   assert.equal("parameters" in (visible ?? {}), false);
 
   const bulk = await api(harness.base, "/api/downloads/bulk", {
@@ -408,7 +409,7 @@ test("an administrator creates a Travel variant that members can see and bulk-ad
   assert.equal(harness.pending.length, 1);
   assert.deepEqual(
     (harness.pending[0]?.sourceAdmission as { profile: unknown }).profile,
-    { id: profile.id, revision: 1, template: "travel" },
+    { id: profile.id, revision: 1, template: "rules" },
   );
 });
 
@@ -416,36 +417,35 @@ test("invalid create attempts leave the profile catalogue unchanged", async (t) 
   const harness = await mount({ variants: [variant()] });
   t.after(harness.close);
   const before = JSON.stringify(harness.store.sourceProfiles());
-  const badParameters: TravelParameters = {
-    ...travelParameters(),
-    heightPixels: { min: 100 },
+  const badParameters: DownloadRules = {
+    ...ruleParameters(),
+    resolution: { min: 1080, max: 720 },
   };
 
   const cases = [
     {
-      body: { template: "travel", name: "Invalid", parameters: badParameters },
+      body: { name: "Invalid", rules: badParameters },
       status: 400,
       key: "err.sourceProfileInvalid",
     },
     {
       body: {
-        template: "travel",
         name: "Unknown addon",
-        parameters: {
-          ...travelParameters(),
-          scope: { mode: "selected", addonKeys: ["missing"] },
+        rules: {
+          ...ruleParameters(),
+          addons: { scope: { selected: ["missing"] }, order: "viewer" },
         },
       },
       status: 400,
       key: "err.sourceProfileInvalid",
     },
     {
-      body: { template: "travel", name: " travel PRIMARY ", parameters: travelParameters() },
+      body: { name: " rules PRIMARY ", rules: ruleParameters() },
       status: 409,
       key: "err.sourceProfileNameTaken",
     },
     {
-      body: { template: "recommended", name: "Recommended copy" },
+      body: { template: "rules", name: "Template copy", rules: ruleParameters() },
       status: 400,
       key: "err.sourceProfileInvalid",
     },
@@ -473,23 +473,23 @@ test("PATCH enforces the revision guard and makes older bulk references stale", 
   const stale = await api(harness.base, `/api/admin/source-profiles/${VARIANT}`, {
     user: ADMIN,
     method: "PATCH",
-    body: { revision: 2, parameters: travelParameters() },
+    body: { revision: 2, rules: ruleParameters() },
   });
   assert.equal(stale.status, 409);
   assert.equal(await messageKey(stale), "err.sourceProfileRevisionStale");
   assert.equal(harness.store.sourceProfiles().find((profile) => profile.id === VARIANT)?.revision, 1);
 
-  const parameters = travelParameters();
-  parameters.heightPixels = { min: 720 };
+  const parameters = ruleParameters();
+  parameters.resolution = { min: 720, max: 1080 };
   const patched = await api(harness.base, `/api/admin/source-profiles/${VARIANT}`, {
     user: ADMIN,
     method: "PATCH",
-    body: { revision: 1, name: "Travel updated", parameters },
+    body: { revision: 1, name: "Rules updated", rules: parameters },
   });
   assert.equal(patched.status, 200);
   const updated = await patched.json() as StoredSourceProfile;
   assert.equal(updated.revision, 2);
-  assert.equal(updated.name, "Travel updated");
+  assert.equal(updated.name, "Rules updated");
   assert.deepEqual(updated.parameters, parameters);
   assert.notEqual(updated.updatedAt, "2026-01-01T00:00:00.000Z");
 
@@ -514,7 +514,7 @@ test("PATCH never advances a profile revision beyond the safe-integer limit", as
   const safe = await api(harness.base, `/api/admin/source-profiles/${VARIANT}`, {
     user: ADMIN,
     method: "PATCH",
-    body: { revision: Number.MAX_SAFE_INTEGER - 1, parameters: travelParameters() },
+    body: { revision: Number.MAX_SAFE_INTEGER - 1, rules: ruleParameters() },
   });
   assert.equal(safe.status, 200);
   assert.equal((await safe.json() as StoredSourceProfile).revision, Number.MAX_SAFE_INTEGER);
@@ -526,7 +526,7 @@ test("PATCH never advances a profile revision beyond the safe-integer limit", as
   const unsafe = await api(harness.base, `/api/admin/source-profiles/${VARIANT}`, {
     user: ADMIN,
     method: "PATCH",
-    body: { revision: Number.MAX_SAFE_INTEGER, parameters: travelParameters() },
+    body: { revision: Number.MAX_SAFE_INTEGER, rules: ruleParameters() },
   });
   assert.equal(unsafe.status, 400);
   assert.equal(await messageKey(unsafe), "err.sourceProfileInvalid");
@@ -536,23 +536,20 @@ test("PATCH never advances a profile revision beyond the safe-integer limit", as
 test("built-in profiles allow parameter edits but protect their names, identity and deletion", async (t) => {
   const harness = await mount();
   t.after(harness.close);
-  const parameters = {
-    ...defaultTemplateParameters("travel"),
-    heightPixels: { min: 1080 },
-  };
+  const parameters = { ...ruleParameters(), resolution: { min: 1080, max: 1080 } };
 
-  const edited = await api(harness.base, `/api/admin/source-profiles/${SOURCE_PROFILE_IDS.travel}`, {
+  const edited = await api(harness.base, `/api/admin/source-profiles/${SOURCE_PROFILE_IDS.balanced}`, {
     user: ADMIN,
     method: "PATCH",
-    body: { revision: 1, parameters },
+    body: { revision: 1, rules: parameters },
   });
   assert.equal(edited.status, 200);
-  const travel = await edited.json() as StoredSourceProfile;
-  assert.equal(travel.revision, 2);
-  assert.deepEqual(travel.parameters, parameters);
-  assert.equal(travel.nameKey, "sourceProfile.travel");
+  const balanced = await edited.json() as StoredSourceProfile;
+  assert.equal(balanced.revision, 2);
+  assert.deepEqual(balanced.parameters, parameters);
+  assert.equal(balanced.nameKey, "rules.preset.balanced");
 
-  const rename = await api(harness.base, `/api/admin/source-profiles/${SOURCE_PROFILE_IDS.travel}`, {
+  const rename = await api(harness.base, `/api/admin/source-profiles/${SOURCE_PROFILE_IDS.balanced}`, {
     user: ADMIN,
     method: "PATCH",
     body: { revision: 2, name: "Renamed" },
@@ -562,19 +559,12 @@ test("built-in profiles allow parameter edits but protect their names, identity 
 
   const remove = await api(
     harness.base,
-    `/api/admin/source-profiles/${SOURCE_PROFILE_IDS.travel}?revision=2`,
+    `/api/admin/source-profiles/${SOURCE_PROFILE_IDS.balanced}?revision=2`,
     { user: ADMIN, method: "DELETE" },
   );
   assert.equal(remove.status, 400);
   assert.equal(await messageKey(remove), "err.sourceProfileBuiltIn");
 
-  const recommended = await api(
-    harness.base,
-    `/api/admin/source-profiles/${SOURCE_PROFILE_IDS.recommended}`,
-    { user: ADMIN, method: "PATCH", body: { revision: 1 } },
-  );
-  assert.equal(recommended.status, 400);
-  assert.equal(await messageKey(recommended), "err.sourceProfileBuiltIn");
 });
 
 test("deleting a variant clears preferences while follows and queued snapshots keep their references", async (t) => {
@@ -586,6 +576,7 @@ test("deleting a variant clears preferences while follows and queued snapshots k
   await harness.store.update((state) => {
     state.userData![MEMBER]!.prefs.downloadSourceProfile = VARIANT;
     state.userData![OTHER]!.prefs.downloadSourceProfile = VARIANT;
+    state.userData![OTHER]!.prefs.followSourceProfile = VARIANT;
   });
 
   const followStore = new (await import("../follows.js")).FollowStore(harness.dataDir);
@@ -617,6 +608,7 @@ test("deleting a variant clears preferences while follows and queued snapshots k
     { store: harness.store },
     harness.store.users().find((user) => user.id === MEMBER),
     { profileId: VARIANT, revision: 1 },
+    "episode",
   );
   const queue = new DownloadQueue(() => 1, () => 1, harness.dataDir, path.join(harness.dataDir, "downloads"));
   queue.setResolver(async () => undefined);
@@ -651,6 +643,10 @@ test("deleting a variant clears preferences while follows and queued snapshots k
     Object.hasOwn(harness.store.userData(OTHER).prefs, "downloadSourceProfile"),
     false,
   );
+  assert.equal(
+    Object.hasOwn(harness.store.userData(OTHER).prefs, "followSourceProfile"),
+    false,
+  );
   assert.deepEqual(followStore.get(follow.id)?.autoDownload?.sourceProfile, {
     profileId: VARIANT,
     revision: 1,
@@ -677,29 +673,29 @@ test("deleting a variant clears preferences while follows and queued snapshots k
   assert.equal(reloaded.sourceProfiles().some((profile) => profile.id === VARIANT), false);
 });
 
-test("duplicating a built-in creates an equivalent variant with a fresh id", async (t) => {
+test("duplicating a preset creates an equivalent rules profile with a fresh id", async (t) => {
   const duplicateId = "962eac3f-b7eb-49c8-b9df-27d76f9d2ce1";
   const harness = await mount({ profileIds: [duplicateId] });
   t.after(harness.close);
 
   const response = await api(
     harness.base,
-    `/api/admin/source-profiles/${SOURCE_PROFILE_IDS.providerPriority}/duplicate`,
+    `/api/admin/source-profiles/${SOURCE_PROFILE_IDS.balanced}/duplicate`,
     {
       user: ADMIN,
       method: "POST",
-      body: { name: "Provider backup" },
+    body: { name: "Balanced backup" },
     },
   );
   assert.equal(response.status, 201);
   const duplicate = await response.json() as StoredSourceProfile;
   assert.equal(duplicate.id, duplicateId);
-  assert.notEqual(duplicate.id, SOURCE_PROFILE_IDS.providerPriority);
-  assert.equal(duplicate.template, "providerPriority");
-  assert.equal(duplicate.name, "Provider backup");
+  assert.notEqual(duplicate.id, SOURCE_PROFILE_IDS.balanced);
+  assert.equal(duplicate.template, "rules");
+  assert.equal(duplicate.name, "Balanced backup");
   assert.equal(duplicate.nameKey, undefined);
   assert.equal(duplicate.revision, 1);
-  assert.deepEqual(duplicate.parameters, defaultTemplateParameters("providerPriority"));
+  assert.deepEqual(duplicate.parameters, RULE_PRESETS[0]!.rules);
 
   const unknown = await api(harness.base, "/api/admin/source-profiles/missing", {
     user: ADMIN,

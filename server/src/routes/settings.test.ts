@@ -14,7 +14,7 @@ import { defaultInstanceSettings, defaultPrefs, type State, type Store, type Sto
 import type { AddonRecord } from "../types.js";
 import { emptyUserData, type Role, type UserData, type UserRecord } from "../users.js";
 import { homeCatalogRowId, homeFeedSelectionKey } from "../home.js";
-import { defaultTemplateParameters, SOURCE_PROFILE_IDS } from "../source-profiles.js";
+import { RULE_PRESETS, SOURCE_PROFILE_IDS } from "../source-profiles.js";
 import { registerSettingsRoutes, type SettingsDeps } from "./settings.js";
 
 const ADA = "usr_00000001";
@@ -62,12 +62,12 @@ const mount = async (): Promise<Harness> => {
     ] as UserRecord[],
     addons: [],
     libraries: [],
-    sourceProfiles: (["recommended", "providerPriority", "travel"] as const).map((template) => ({
-      id: SOURCE_PROFILE_IDS[template],
+    sourceProfiles: RULE_PRESETS.map((preset) => ({
+      id: preset.id,
       revision: 1,
-      template,
-      nameKey: `sourceProfile.${template}`,
-      ...(template === "recommended" ? {} : { parameters: defaultTemplateParameters(template) }),
+      template: preset.template,
+      nameKey: preset.nameKey,
+      parameters: preset.rules,
       createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T00:00:00.000Z",
     })),
@@ -564,13 +564,13 @@ test("PATCH /api/settings stores an offered download source profile and clears i
   harness.state.addons.push(sourceAddon());
 
   const stored = await api(harness.base, "/api/settings", {
-    method: "PATCH", user: "ada", body: { downloadSourceProfile: SOURCE_PROFILE_IDS.travel },
+    method: "PATCH", user: "ada", body: { downloadSourceProfile: SOURCE_PROFILE_IDS.balanced },
   });
   assert.equal(stored.status, 200);
-  assert.equal(harness.state.userData?.[ADA]?.prefs.downloadSourceProfile, SOURCE_PROFILE_IDS.travel);
-  assert.equal((await stored.json() as Record<string, unknown>).downloadSourceProfile, SOURCE_PROFILE_IDS.travel);
+  assert.equal(harness.state.userData?.[ADA]?.prefs.downloadSourceProfile, SOURCE_PROFILE_IDS.balanced);
+  assert.equal((await stored.json() as Record<string, unknown>).downloadSourceProfile, SOURCE_PROFILE_IDS.balanced);
   const read = await (await api(harness.base, "/api/settings", { user: "ada" })).json() as Record<string, unknown>;
-  assert.equal(read.downloadSourceProfile, SOURCE_PROFILE_IDS.travel);
+  assert.equal(read.downloadSourceProfile, SOURCE_PROFILE_IDS.balanced);
 
   const cleared = await api(harness.base, "/api/settings", {
     method: "PATCH", user: "ada", body: { downloadSourceProfile: null },
@@ -584,16 +584,43 @@ test("PATCH /api/settings refuses an unavailable download source profile without
   const harness = await mount();
   t.after(harness.close);
   harness.state.addons.push(sourceAddon());
-  harness.state.userData![ADA]!.prefs.downloadSourceProfile = SOURCE_PROFILE_IDS.travel;
+  harness.state.userData![ADA]!.prefs.downloadSourceProfile = SOURCE_PROFILE_IDS.balanced;
 
-  for (const downloadSourceProfile of [SOURCE_PROFILE_IDS.recommended, "unknown-profile", 42]) {
+  for (const downloadSourceProfile of [SOURCE_PROFILE_IDS.travel, "unknown-profile", 42]) {
     const response = await api(harness.base, "/api/settings", {
       method: "PATCH", user: "ada", body: { downloadSourceProfile },
     });
     assert.equal(response.status, 400, JSON.stringify(downloadSourceProfile));
     assert.equal((await response.json() as { messageKey?: string }).messageKey, "err.sourceProfileUnavailable");
-    assert.equal(harness.state.userData?.[ADA]?.prefs.downloadSourceProfile, SOURCE_PROFILE_IDS.travel);
+    assert.equal(harness.state.userData?.[ADA]?.prefs.downloadSourceProfile, SOURCE_PROFILE_IDS.balanced);
   }
+});
+
+test("PATCH /api/settings validates, stores and clears the follow source profile", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.state.addons.push(sourceAddon());
+
+  const stored = await api(harness.base, "/api/settings", {
+    method: "PATCH", user: "ada", body: { followSourceProfile: SOURCE_PROFILE_IDS.balanced },
+  });
+  assert.equal(stored.status, 200);
+  assert.equal(harness.state.userData?.[ADA]?.prefs.followSourceProfile, SOURCE_PROFILE_IDS.balanced);
+
+  for (const followSourceProfile of [SOURCE_PROFILE_IDS.travel, "unknown-profile", 42]) {
+    const refused = await api(harness.base, "/api/settings", {
+      method: "PATCH", user: "ada", body: { followSourceProfile },
+    });
+    assert.equal(refused.status, 400);
+    assert.equal(await (refused.json() as Promise<{ messageKey?: string }>).then((body) => body.messageKey), "err.sourceProfileUnavailable");
+    assert.equal(harness.state.userData?.[ADA]?.prefs.followSourceProfile, SOURCE_PROFILE_IDS.balanced);
+  }
+
+  const cleared = await api(harness.base, "/api/settings", {
+    method: "PATCH", user: "ada", body: { followSourceProfile: null },
+  });
+  assert.equal(cleared.status, 200);
+  assert.equal("followSourceProfile" in (harness.state.userData?.[ADA]?.prefs ?? {}), false);
 });
 
 test("GET /api/settings keeps each account's download source profile private", async (t) => {
@@ -601,7 +628,7 @@ test("GET /api/settings keeps each account's download source profile private", a
   t.after(harness.close);
   harness.state.addons.push(sourceAddon());
   await api(harness.base, "/api/settings", {
-    method: "PATCH", user: "ada", body: { downloadSourceProfile: SOURCE_PROFILE_IDS.travel },
+    method: "PATCH", user: "ada", body: { downloadSourceProfile: SOURCE_PROFILE_IDS.balanced },
   });
 
   const bob = await (await api(harness.base, "/api/settings", { user: "bob" })).json() as Record<string, unknown>;
@@ -609,7 +636,7 @@ test("GET /api/settings keeps each account's download source profile private", a
   assert.equal("downloadSourceProfile" in bob, false);
 });
 
-test("an exported download source profile survives import only while it is still offered", async (t) => {
+test("exported download and follow source profiles survive import only while offered", async (t) => {
   const originalFlag = process.env.ALLOW_PRIVATE_ADDONS;
   process.env.ALLOW_PRIVATE_ADDONS = "1";
   t.after(() => { if (originalFlag === undefined) delete process.env.ALLOW_PRIVATE_ADDONS; else process.env.ALLOW_PRIVATE_ADDONS = originalFlag; });
@@ -626,24 +653,31 @@ test("an exported download source profile survives import only while it is still
   t.after(source.close);
   source.state.addons.push(sourceAddon(manifestUrl));
   await api(source.base, "/api/settings", {
-    method: "PATCH", user: "ada", body: { downloadSourceProfile: SOURCE_PROFILE_IDS.travel },
+    method: "PATCH", user: "ada", body: { downloadSourceProfile: SOURCE_PROFILE_IDS.balanced },
+  });
+  await api(source.base, "/api/settings", {
+    method: "PATCH", user: "ada", body: { followSourceProfile: SOURCE_PROFILE_IDS.balanced },
   });
   const backup = await (await api(source.base, "/api/settings/export", { user: "ada" })).json() as {
-    settings: { downloadSourceProfile?: string };
+    settings: { downloadSourceProfile?: string; followSourceProfile?: string };
   };
-  assert.equal(backup.settings.downloadSourceProfile, SOURCE_PROFILE_IDS.travel);
+  assert.equal(backup.settings.downloadSourceProfile, SOURCE_PROFILE_IDS.balanced);
+  assert.equal(backup.settings.followSourceProfile, SOURCE_PROFILE_IDS.balanced);
 
   const valid = await mount();
   t.after(valid.close);
   assert.equal((await api(valid.base, "/api/settings/import", { method: "POST", user: "ada", body: backup })).status, 200);
-  assert.equal(valid.state.userData?.[ADA]?.prefs.downloadSourceProfile, SOURCE_PROFILE_IDS.travel);
+  assert.equal(valid.state.userData?.[ADA]?.prefs.downloadSourceProfile, SOURCE_PROFILE_IDS.balanced);
+  assert.equal(valid.state.userData?.[ADA]?.prefs.followSourceProfile, SOURCE_PROFILE_IDS.balanced);
 
   const unknownBackup = structuredClone(backup);
   unknownBackup.settings.downloadSourceProfile = "unknown-profile";
+  unknownBackup.settings.followSourceProfile = "unknown-profile";
   const unknown = await mount();
   t.after(unknown.close);
   assert.equal((await api(unknown.base, "/api/settings/import", { method: "POST", user: "ada", body: unknownBackup })).status, 200);
   assert.equal("downloadSourceProfile" in (unknown.state.userData?.[ADA]?.prefs ?? {}), false);
+  assert.equal("followSourceProfile" in (unknown.state.userData?.[ADA]?.prefs ?? {}), false);
 });
 
 test("a version 4 export and import preserves variant definitions and tombstones", async (t) => {
@@ -651,7 +685,7 @@ test("a version 4 export and import preserves variant definitions and tombstones
   t.after(source.close);
   const profile = storedVariant({
     revision: 3,
-    parameters: { ...defaultTemplateParameters("travel"), heightPixels: { min: 720 } },
+    parameters: { ...RULE_PRESETS[0]!.rules, resolution: { min: 720, max: 2160 } },
   });
   source.state.sourceProfiles!.push(profile);
   source.state.deletedSourceProfileIds = [PROFILE_TWO];
@@ -682,7 +716,7 @@ test("an imported variant with a differing local ID collision gets a fresh ID an
   harness.state.sourceProfiles!.push(local);
   harness.state.userData![ADA]!.prefs.downloadSourceProfile = PROFILE_ONE;
   const imported = storedVariant({
-    parameters: { ...defaultTemplateParameters("travel"), heightPixels: { min: 1080 } },
+    parameters: { ...RULE_PRESETS[0]!.rules, resolution: { min: 720, max: 2160 } },
   });
 
   const response = await api(harness.base, "/api/settings/import", {
@@ -745,29 +779,29 @@ test("an identical imported variant reuses the local profile and is counted as r
   assert.equal(summary.sourceProfiles.reused, 1);
 });
 
-test("a differing imported built-in becomes a named local variant and the admin default follows it", async (t) => {
+test("a differing imported preset becomes a named local profile and the admin default follows it", async (t) => {
   const harness = await mount();
   t.after(harness.close);
   const manifestUrl = await sourceManifestUrl(t);
-  const builtIn = harness.state.sourceProfiles!.find((profile) => profile.id === SOURCE_PROFILE_IDS.travel)!;
+  const builtIn = harness.state.sourceProfiles!.find((profile) => profile.id === SOURCE_PROFILE_IDS.balanced)!;
   const imported: StoredSourceProfile = {
     ...builtIn,
     revision: 2,
-    parameters: { ...defaultTemplateParameters("travel"), heightPixels: { min: 1080 } },
+    parameters: { ...RULE_PRESETS[0]!.rules, resolution: { min: 720, max: 2160 } },
   };
 
   const response = await api(harness.base, "/api/settings/import", {
     method: "POST",
     user: "ada",
     body: sourceProfilesBackup([imported], [], {
-      settings: { downloadSourceProfile: SOURCE_PROFILE_IDS.travel },
+      settings: { downloadSourceProfile: SOURCE_PROFILE_IDS.balanced },
       addons: [backupSourceAddon(manifestUrl)],
     }),
   });
   assert.equal(response.status, 200);
-  assert.deepEqual(harness.state.sourceProfiles?.find((profile) => profile.id === SOURCE_PROFILE_IDS.travel), builtIn);
+  assert.deepEqual(harness.state.sourceProfiles?.find((profile) => profile.id === SOURCE_PROFILE_IDS.balanced), builtIn);
   const variant = harness.state.sourceProfiles?.find((profile) =>
-    profile.id !== SOURCE_PROFILE_IDS.travel && profile.name === "Travel (small files) (imported)");
+    profile.id !== SOURCE_PROFILE_IDS.balanced && profile.name === "Download rules (imported)");
   assert.ok(variant);
   assert.equal(variant.nameKey, undefined);
   assert.equal(variant.revision, 2);
@@ -801,8 +835,8 @@ test("an imported selected scope with no installed addons is dormant and named i
   const dormant = storedVariant({
     name: "Locked to an addon",
     parameters: {
-      ...defaultTemplateParameters("travel"),
-      scope: { mode: "selected", addonKeys: ["missing-addon"] },
+      ...RULE_PRESETS[0]!.rules,
+      addons: { scope: { selected: ["missing-addon"] }, order: "viewer" },
     },
   });
 
@@ -840,7 +874,7 @@ test("another user's dangling profile default is cleared while a surviving defau
   const harness = await mount();
   t.after(harness.close);
   harness.state.userData![CAROL]!.prefs.downloadSourceProfile = PROFILE_THREE;
-  harness.state.userData![BOB]!.prefs.downloadSourceProfile = SOURCE_PROFILE_IDS.travel;
+  harness.state.userData![BOB]!.prefs.downloadSourceProfile = SOURCE_PROFILE_IDS.balanced;
 
   const response = await api(harness.base, "/api/settings/import", {
     method: "POST",
@@ -849,7 +883,7 @@ test("another user's dangling profile default is cleared while a surviving defau
   });
   assert.equal(response.status, 200);
   assert.equal("downloadSourceProfile" in (harness.state.userData?.[CAROL]?.prefs ?? {}), false);
-  assert.equal(harness.state.userData?.[BOB]?.prefs.downloadSourceProfile, SOURCE_PROFILE_IDS.travel);
+  assert.equal(harness.state.userData?.[BOB]?.prefs.downloadSourceProfile, SOURCE_PROFILE_IDS.balanced);
 });
 
 test("PATCH /api/settings refuses an ordinary user an instance key and writes nothing", async (t) => {
@@ -921,9 +955,9 @@ const PROFILE_THREE = "00000000-0000-4000-8000-000000000103";
 const storedVariant = (over: Partial<StoredSourceProfile> = {}): StoredSourceProfile => ({
   id: PROFILE_ONE,
   revision: 1,
-  template: "travel",
+  template: "rules",
   name: "Small files",
-  parameters: defaultTemplateParameters("travel"),
+  parameters: RULE_PRESETS[0]!.rules,
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
   ...over,

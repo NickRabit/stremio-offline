@@ -10,6 +10,7 @@ import {
 import {
   inspectedAddonSourceEvidence,
   listedAddonSourceEvidence,
+  releaseKindFromListing,
   type ListedAddonSourceEvidenceInput,
 } from "./source-addon-evidence.js";
 import {
@@ -239,6 +240,78 @@ test("listing claims stay hints and cannot settle numeric hard bounds", () => {
       { code: "inspectionRequired", field: "heightPixels" },
     ],
   });
+});
+
+test("release kinds come from whole listing tokens and unknown text stays listed as null", () => {
+  const cases = [
+    ["HDCAM", "cam"],
+    ["Show.S01E01.1080p.TS", "telesync"],
+    ["Toast", null],
+    ["DVDSCR", "screener"],
+    ["HDTS", "telesync"],
+    ["The Cam Girl 2024 1080p", null],
+    ["Movie.2024.CAM.x264", "cam"],
+    ["hdcam rip", "cam"],
+    ["Its ts mode", null],
+    ["DTS-HD 5.1", null],
+  ] as const;
+  for (const [title, expected] of cases) {
+    assert.deepEqual(releaseKindFromListing({ url: SECRET_URL, title }), {
+      evidence: "listed",
+      value: expected,
+    });
+  }
+  assert.deepEqual(releaseKindFromListing({ url: SECRET_URL, title: "Not a TSomething" }), {
+    evidence: "listed",
+    value: null,
+  });
+});
+
+test("admission rejects an excluded listed release kind and lets an unknown pass", () => {
+  const providerKeys = ["addon:one"];
+  const original = travelDefinition.policy;
+  const policy = parseSourcePolicyV1({
+    ...structuredClone(original),
+    constraints: {
+      ...structuredClone(original.constraints),
+      sourceKinds: ["http"],
+      excludeReleaseKinds: ["cam", "telesync", "screener"],
+    },
+  });
+  const snapshot: SourceAdmissionSnapshotV1 = {
+    schemaVersion: 1,
+    profile: { id: "custom-rules", revision: 1, template: "rules" },
+    operation: "downloadToLibrary",
+    providerKeys,
+    policy: materializeSourceAdmissionPolicy(policy, providerKeys, {
+      audioLanguage: "en",
+      subtitleLanguage: "en",
+    }),
+  };
+  const blocked = addon({ url: SECRET_URL, title: "HDCAM" });
+  assert.deepEqual(evaluateSourceCandidate(snapshot, blocked), {
+    status: "excluded",
+    reasons: [{ code: "releaseKindExcluded" }],
+  });
+
+  const unknownPolicy = parseSourcePolicyV1({
+    ...structuredClone(original),
+    constraints: {
+      ...structuredClone(original.constraints),
+      sourceKinds: ["http"],
+    },
+  });
+  const unknownSnapshot: SourceAdmissionSnapshotV1 = {
+    schemaVersion: 1,
+    profile: { id: "custom-rules", revision: 1, template: "rules" },
+    operation: "downloadToLibrary",
+    providerKeys,
+    policy: materializeSourceAdmissionPolicy(unknownPolicy, providerKeys, {
+      audioLanguage: "en",
+      subtitleLanguage: "en",
+    }),
+  };
+  assert.notEqual(evaluateSourceCandidate(unknownSnapshot, blocked).status, "excluded");
 });
 
 test("listing keeps language provenance and inspection replaces only verifiable facts", () => {
