@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import express from "express";
 import type { DownloadQueue } from "../downloads.js";
 import { messageKeyOf } from "../errors.js";
@@ -10,7 +10,7 @@ import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { MediaServerAuthority, MediaServerManager } from "../media-server-manager.js";
 import { prepareMediaServerConfiguration } from "../media-server-store.js";
 import { assertStillAdmin, ForbiddenError } from "../roles.js";
-import { defaultInstanceSettings, defaultPrefs, type State, type Store, type UserPrefs } from "../store.js";
+import { defaultInstanceSettings, defaultPrefs, type State, type Store, type StoredSourceProfile, type UserPrefs } from "../store.js";
 import type { AddonRecord } from "../types.js";
 import { emptyUserData, type Role, type UserData, type UserRecord } from "../users.js";
 import { homeCatalogRowId, homeFeedSelectionKey } from "../home.js";
@@ -126,6 +126,8 @@ const mount = async (): Promise<Harness> => {
       addons: () => state.addons,
       users: () => state.users,
       libraries: () => state.libraries,
+      sourceProfiles: () => state.sourceProfiles ?? [],
+      deletedSourceProfileIds: () => state.deletedSourceProfileIds ?? [],
       update: async (mutate: (value: State) => void) => {
         writes += 1;
         if (holding) {
@@ -644,6 +646,212 @@ test("an exported download source profile survives import only while it is still
   assert.equal("downloadSourceProfile" in (unknown.state.userData?.[ADA]?.prefs ?? {}), false);
 });
 
+test("a version 4 export and import preserves variant definitions and tombstones", async (t) => {
+  const source = await mount();
+  t.after(source.close);
+  const profile = storedVariant({
+    revision: 3,
+    parameters: { ...defaultTemplateParameters("travel"), heightPixels: { min: 720 } },
+  });
+  source.state.sourceProfiles!.push(profile);
+  source.state.deletedSourceProfileIds = [PROFILE_TWO];
+
+  const backup = await (await api(source.base, "/api/settings/export", { user: "ada" })).json() as {
+    version: number;
+    sourceProfiles: { profiles: StoredSourceProfile[]; deletedIds: string[] };
+  };
+  assert.equal(backup.version, 4);
+  assert.ok(backup.sourceProfiles.profiles.some((candidate) => candidate.id === profile.id));
+  assert.deepEqual(backup.sourceProfiles.deletedIds, [PROFILE_TWO]);
+
+  const target = await mount();
+  t.after(target.close);
+  const response = await api(target.base, "/api/settings/import", { method: "POST", user: "ada", body: backup });
+  assert.equal(response.status, 200);
+  const imported = target.state.sourceProfiles?.find((candidate) => candidate.id === profile.id);
+  assert.equal(imported?.revision, 3);
+  assert.deepEqual(imported?.parameters, profile.parameters);
+  assert.ok(target.state.deletedSourceProfileIds?.includes(PROFILE_TWO));
+});
+
+test("an imported variant with a differing local ID collision gets a fresh ID and the admin default follows it", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const manifestUrl = await sourceManifestUrl(t);
+  const local = storedVariant();
+  harness.state.sourceProfiles!.push(local);
+  harness.state.userData![ADA]!.prefs.downloadSourceProfile = PROFILE_ONE;
+  const imported = storedVariant({
+    parameters: { ...defaultTemplateParameters("travel"), heightPixels: { min: 1080 } },
+  });
+
+  const response = await api(harness.base, "/api/settings/import", {
+    method: "POST",
+    user: "ada",
+    body: sourceProfilesBackup([imported], [], {
+      settings: { downloadSourceProfile: PROFILE_ONE },
+      addons: [backupSourceAddon(manifestUrl)],
+    }),
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(harness.state.sourceProfiles?.find((candidate) => candidate.id === PROFILE_ONE), local);
+  const restored = harness.state.sourceProfiles?.find((candidate) =>
+    candidate.id !== PROFILE_ONE && candidate.name?.startsWith(local.name ?? "") && candidate.revision === imported.revision);
+  assert.ok(restored);
+  assert.notEqual(restored.id, imported.id);
+  assert.deepEqual(restored.parameters, imported.parameters);
+  assert.equal(harness.state.userData?.[ADA]?.prefs.downloadSourceProfile, restored.id);
+  const summary = await response.json() as { sourceProfiles: { imported: number; reused: number } };
+  assert.equal(summary.sourceProfiles.imported, 1);
+  assert.equal(summary.sourceProfiles.reused, 0);
+});
+
+test("a backup ID in the local tombstones gets a fresh ID and leaves the tombstone in place", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const manifestUrl = await sourceManifestUrl(t);
+  harness.state.deletedSourceProfileIds = [PROFILE_ONE];
+  harness.state.userData![ADA]!.prefs.downloadSourceProfile = PROFILE_ONE;
+
+  const response = await api(harness.base, "/api/settings/import", {
+    method: "POST",
+    user: "ada",
+    body: sourceProfilesBackup([storedVariant()], [], {
+      settings: { downloadSourceProfile: PROFILE_ONE },
+      addons: [backupSourceAddon(manifestUrl)],
+    }),
+  });
+  assert.equal(response.status, 200);
+  assert.ok(harness.state.deletedSourceProfileIds?.includes(PROFILE_ONE));
+  const restored = harness.state.sourceProfiles?.find((candidate) => candidate.name === "Small files" && candidate.id !== PROFILE_ONE);
+  assert.ok(restored);
+  assert.equal(harness.state.userData?.[ADA]?.prefs.downloadSourceProfile, restored.id);
+});
+
+test("an identical imported variant reuses the local profile and is counted as reused", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.state.sourceProfiles!.push(storedVariant());
+
+  const response = await api(harness.base, "/api/settings/import", {
+    method: "POST",
+    user: "ada",
+    body: sourceProfilesBackup([storedVariant()]),
+  });
+  assert.equal(response.status, 200);
+  assert.equal(harness.state.sourceProfiles?.filter((candidate) => candidate.id === PROFILE_ONE).length, 1);
+  const summary = await response.json() as { sourceProfiles: { imported: number; reused: number } };
+  assert.equal(summary.sourceProfiles.imported, 0);
+  assert.equal(summary.sourceProfiles.reused, 1);
+});
+
+test("a differing imported built-in becomes a named local variant and the admin default follows it", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const manifestUrl = await sourceManifestUrl(t);
+  const builtIn = harness.state.sourceProfiles!.find((profile) => profile.id === SOURCE_PROFILE_IDS.travel)!;
+  const imported: StoredSourceProfile = {
+    ...builtIn,
+    revision: 2,
+    parameters: { ...defaultTemplateParameters("travel"), heightPixels: { min: 1080 } },
+  };
+
+  const response = await api(harness.base, "/api/settings/import", {
+    method: "POST",
+    user: "ada",
+    body: sourceProfilesBackup([imported], [], {
+      settings: { downloadSourceProfile: SOURCE_PROFILE_IDS.travel },
+      addons: [backupSourceAddon(manifestUrl)],
+    }),
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(harness.state.sourceProfiles?.find((profile) => profile.id === SOURCE_PROFILE_IDS.travel), builtIn);
+  const variant = harness.state.sourceProfiles?.find((profile) =>
+    profile.id !== SOURCE_PROFILE_IDS.travel && profile.name === "Travel (small files) (imported)");
+  assert.ok(variant);
+  assert.equal(variant.nameKey, undefined);
+  assert.equal(variant.revision, 2);
+  assert.deepEqual(variant.parameters, imported.parameters);
+  assert.equal(harness.state.userData?.[ADA]?.prefs.downloadSourceProfile, variant.id);
+});
+
+test("two imported variants with the same name get distinct stored names", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const first = storedVariant({ id: PROFILE_ONE, name: "Same name" });
+  const second = storedVariant({ id: PROFILE_TWO, name: "Same name" });
+
+  const response = await api(harness.base, "/api/settings/import", {
+    method: "POST",
+    user: "ada",
+    body: sourceProfilesBackup([first, second]),
+  });
+  assert.equal(response.status, 200);
+  const names = harness.state.sourceProfiles
+    ?.filter((profile) => profile.id === PROFILE_ONE || profile.id === PROFILE_TWO)
+    .map((profile) => profile.name);
+  assert.deepEqual(names, ["Same name", "Same name (imported)"]);
+  const summary = await response.json() as { sourceProfiles: { renamed: number } };
+  assert.equal(summary.sourceProfiles.renamed, 1);
+});
+
+test("an imported selected scope with no installed addons is dormant and named in the answer", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const dormant = storedVariant({
+    name: "Locked to an addon",
+    parameters: {
+      ...defaultTemplateParameters("travel"),
+      scope: { mode: "selected", addonKeys: ["missing-addon"] },
+    },
+  });
+
+  const response = await api(harness.base, "/api/settings/import", {
+    method: "POST",
+    user: "ada",
+    body: sourceProfilesBackup([dormant]),
+  });
+  assert.equal(response.status, 200);
+  assert.equal(harness.state.sourceProfiles?.some((candidate) => candidate.id === dormant.id), false);
+  const summary = await response.json() as { sourceProfiles: { imported: number; dormant: string[] } };
+  assert.deepEqual(summary.sourceProfiles.dormant, ["Locked to an addon"]);
+  assert.equal(summary.sourceProfiles.imported, 0);
+});
+
+test("a version 3 import leaves the source profile catalogue and tombstones untouched", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.state.sourceProfiles!.push(storedVariant());
+  harness.state.deletedSourceProfileIds = [PROFILE_TWO];
+  const profiles = structuredClone(harness.state.sourceProfiles);
+  const tombstones = structuredClone(harness.state.deletedSourceProfileIds);
+
+  const response = await api(harness.base, "/api/settings/import", {
+    method: "POST",
+    user: "ada",
+    body: backupFile(),
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(harness.state.sourceProfiles, profiles);
+  assert.deepEqual(harness.state.deletedSourceProfileIds, tombstones);
+});
+
+test("another user's dangling profile default is cleared while a surviving default is kept", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.state.userData![CAROL]!.prefs.downloadSourceProfile = PROFILE_THREE;
+  harness.state.userData![BOB]!.prefs.downloadSourceProfile = SOURCE_PROFILE_IDS.travel;
+
+  const response = await api(harness.base, "/api/settings/import", {
+    method: "POST",
+    user: "ada",
+    body: sourceProfilesBackup(),
+  });
+  assert.equal(response.status, 200);
+  assert.equal("downloadSourceProfile" in (harness.state.userData?.[CAROL]?.prefs ?? {}), false);
+  assert.equal(harness.state.userData?.[BOB]?.prefs.downloadSourceProfile, SOURCE_PROFILE_IDS.travel);
+});
+
 test("PATCH /api/settings refuses an ordinary user an instance key and writes nothing", async (t) => {
   const harness = await mount();
   t.after(harness.close);
@@ -707,6 +915,51 @@ const backupFile = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
+const PROFILE_ONE = "00000000-0000-4000-8000-000000000101";
+const PROFILE_TWO = "00000000-0000-4000-8000-000000000102";
+const PROFILE_THREE = "00000000-0000-4000-8000-000000000103";
+const storedVariant = (over: Partial<StoredSourceProfile> = {}): StoredSourceProfile => ({
+  id: PROFILE_ONE,
+  revision: 1,
+  template: "travel",
+  name: "Small files",
+  parameters: defaultTemplateParameters("travel"),
+  createdAt: "2026-01-01T00:00:00.000Z",
+  updatedAt: "2026-01-01T00:00:00.000Z",
+  ...over,
+});
+const sourceProfilesBackup = (
+  profiles: StoredSourceProfile[] = [],
+  deletedIds: string[] = [],
+  over: Record<string, unknown> = {},
+) => backupFile({
+  version: 4,
+  sourceProfiles: { profiles, deletedIds },
+  ...over,
+});
+
+const sourceManifestUrl = async (t: TestContext) => {
+  const originalFlag = process.env.ALLOW_PRIVATE_ADDONS;
+  process.env.ALLOW_PRIVATE_ADDONS = "1";
+  t.after(() => { if (originalFlag === undefined) delete process.env.ALLOW_PRIVATE_ADDONS; else process.env.ALLOW_PRIVATE_ADDONS = originalFlag; });
+  const manifests = createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" })
+      .end(JSON.stringify({ id: "source", name: "Source", version: "1.0.0", resources: ["stream"], types: ["movie"], catalogs: [] }));
+  });
+  manifests.listen(0, "127.0.0.1");
+  await once(manifests, "listening");
+  t.after(() => new Promise<void>((resolve) => manifests.close(() => resolve())));
+  return `http://127.0.0.1:${(manifests.address() as AddressInfo).port}/manifest.json`;
+};
+
+const backupSourceAddon = (manifestUrl: string) => ({
+  manifestUrl,
+  role: "source",
+  enabled: true,
+  globalSearch: true,
+  addedAt: "2026-01-01T00:00:00.000Z",
+});
+
 test("GET /api/settings/export is the administrator's file and carries metadata only", async (t) => {
   const harness = await mount();
   t.after(harness.close);
@@ -715,7 +968,7 @@ test("GET /api/settings/export is the administrator's file and carries metadata 
   const response = await api(harness.base, "/api/settings/export", { user: "ada" });
   assert.equal(response.status, 200);
   const body = await response.json() as { version: number; mediaServers: { connections: Array<Record<string, unknown>>; libraries: Array<Record<string, unknown>> } };
-  assert.equal(body.version, 3);
+  assert.equal(body.version, 4);
   assert.equal(body.mediaServers.connections.length, 1);
   assert.equal(body.mediaServers.libraries.length, 1);
   assert.equal(JSON.stringify(body.mediaServers).includes("secretRef"), false, "no credential reaches the file");

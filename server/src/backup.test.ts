@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createSettingsBackup, parseSettingsBackup, remapBackupLibraries } from "./backup.js";
 import { defaultDownloadSettings } from "./naming.js";
-import { defaultSettings } from "./store.js";
+import { defaultTemplateParameters } from "./source-profiles.js";
+import { defaultSettings, type StoredSourceProfile } from "./store.js";
 import type { LibraryRecord } from "./libraries.js";
 
 const library = (over: Partial<LibraryRecord> & { id: string; root: string }): LibraryRecord => ({
@@ -49,7 +50,7 @@ test("a backup distinguishes same-name providers by URL and omits installation-l
     },
   ];
   const backup = createSettingsBackup(defaultSettings(), addons);
-  assert.equal(backup.version, 3);
+  assert.equal(backup.version, 4);
   assert.deepEqual(backup.addons.map((addon) => addon.manifestUrl), [
     "https://alpha.example/manifest.json",
     "https://beta.example/manifest.json",
@@ -105,7 +106,7 @@ test("a backup carries the libraries and a rule that names one survives a round 
   }];
 
   const backup = createSettingsBackup(settings, addons, [films, series]);
-  assert.equal(backup.version, 3);
+  assert.equal(backup.version, 4);
   assert.deepEqual(backup.libraries, [
     { id: films.id, name: "Films", type: "movie", root: "/downloads/Films" },
     { id: series.id, name: "Series", type: "series", root: "/downloads/Series" },
@@ -165,7 +166,7 @@ test("a version 1 backup still imports, with no libraries and no rules", () => {
   assert.equal(remapped.addons[0]!.downloadSettings.movie.subfolder, "Filmy", "the old rules are kept");
 });
 
-test("a version 3 backup carries the media-server metadata and strips everything else", () => {
+test("a version 4 backup carries the media-server metadata and strips everything else", () => {
   const connectionId = `mconn_${"1".repeat(32)}`;
   const mediaServers = {
     version: 1,
@@ -182,7 +183,7 @@ test("a version 3 backup carries the media-server metadata and strips everything
     }],
   };
   const backup = createSettingsBackup(defaultSettings(), [], [], mediaServers);
-  assert.equal(backup.version, 3);
+  assert.equal(backup.version, 4);
   assert.deepEqual(Object.keys(backup.mediaServers!.connections[0]!).sort(),
     ["accountId", "allowLan", "allowLoopback", "baseUrl", "id", "name", "provider", "serverId"]);
   assert.deepEqual(Object.keys(backup.mediaServers!.libraries[0]!).sort(),
@@ -208,4 +209,38 @@ test("a version 1 or 2 backup carries no media-server configuration at all", () 
     const parsed = parseSettingsBackup({ format: "stremio-offline-settings", version, settings: {}, addons: [] });
     assert.equal("mediaServers" in parsed, false, `a version ${version} file leaves the remote configuration alone`);
   }
+});
+
+test("a version 4 backup carries source profiles and their tombstones", () => {
+  const profile: StoredSourceProfile = {
+    id: "00000000-0000-4000-8000-000000000101",
+    revision: 3,
+    template: "travel",
+    name: "Small files",
+    parameters: {
+      ...defaultTemplateParameters("travel"),
+      heightPixels: { min: 720, max: 2160 },
+    },
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-02-01T00:00:00.000Z",
+  };
+  const tombstone = "00000000-0000-4000-8000-000000000102";
+  const backup = createSettingsBackup(defaultSettings(), [], [], undefined, {
+    profiles: [profile],
+    deletedIds: [tombstone],
+  });
+
+  assert.equal(backup.version, 4);
+  assert.deepEqual(backup.sourceProfiles, { profiles: [profile], deletedIds: [tombstone] });
+  assert.deepEqual(parseSettingsBackup(JSON.parse(JSON.stringify(backup))).sourceProfiles, {
+    profiles: [profile],
+    deletedIds: [tombstone],
+  });
+});
+
+test("an unknown backup version is still refused", () => {
+  assert.throws(
+    () => parseSettingsBackup({ format: "stremio-offline-settings", version: 5, settings: {}, addons: [] }),
+    /not a Stremio Offline settings backup/,
+  );
 });

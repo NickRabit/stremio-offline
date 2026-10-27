@@ -320,6 +320,7 @@ export class Store {
   mediaConnections(): MediaConnectionRecord[] { return structuredClone(this.state.mediaConnections ?? []); }
   remoteLibraries(): RemoteLibraryRecord[] { return structuredClone(this.state.remoteLibraries ?? []); }
   sourceProfiles(): readonly StoredSourceProfile[] { return this.state.sourceProfiles ?? []; }
+  deletedSourceProfileIds(): readonly string[] { return this.state.deletedSourceProfileIds ?? []; }
   mediaSecretCleanup(): string[] { return [...(this.state.mediaSecretCleanup ?? [])]; }
   /** True once a state file has actually been read or written here. A missing or corrupt
    *  file leaves it false, so a reconciliation step must not treat an empty in-memory state

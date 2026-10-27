@@ -7,14 +7,23 @@ import { AppError } from "./errors.js";
 import { normalizeRefreshHours } from "./addon-refresh.js";
 import { parseHomeLayout } from "./home.js";
 import { sameFile, toPosix, type LibraryRecord, type LibraryType } from "./libraries.js";
+import {
+  buildTemplatePolicy,
+  parseTemplateParameters,
+  SOURCE_PROFILE_IDS,
+  type ProviderPriorityParameters,
+  type SourceProfileTemplate,
+  type TravelParameters,
+} from "./source-profiles.js";
+import type { StoredSourceProfile } from "./store.js";
 
 export const BACKUP_FORMAT = "stremio-offline-settings";
 /** 2 adds the library roster, so a rule that names a library survives the trip to another
  *  instance by root and then by name. 3 adds the media-server metadata, so the attached
- *  connections and their libraries travel with the settings while no credential does.
- *  Version 1 and 2 files still import. */
-export const BACKUP_VERSION = 3;
-const READABLE_VERSIONS = [1, 2, 3];
+ *  connections and their libraries travel with the settings while no credential does. 4 adds
+ *  source profiles and tombstones. Older files still import. */
+export const BACKUP_VERSION = 4;
+const READABLE_VERSIONS = [1, 2, 3, 4];
 const ROLES = new Set<AddonRole>(["catalog", "source", "both"]);
 const STREAM_SORTS = new Set(["recommended", "size-desc", "size-asc", "addon"]);
 const TILE_SIZES = new Set(["compact", "small", "medium", "large"]);
@@ -40,6 +49,11 @@ export interface BackupLibrary { id: string; name: string; type: LibraryType; ro
 /** What one library reference had to become on the way in. */
 export interface LibraryRemap { what: string; addon?: string; from: string; to?: string }
 
+export interface BackupSourceProfiles {
+  profiles: StoredSourceProfile[];
+  deletedIds: string[];
+}
+
 export interface SettingsBackup {
   format: typeof BACKUP_FORMAT;
   version: number;
@@ -51,6 +65,9 @@ export interface SettingsBackup {
    *  An older file carries none, and an import then leaves the current remote configuration
    *  exactly as it is. */
   mediaServers?: MediaServerConfigurationExport;
+  /** Present from version 4 on: all source profiles and tombstones from the exporting
+   *  instance. Versions 1 to 3 leave the importing catalogue exactly as it is. */
+  sourceProfiles?: BackupSourceProfiles;
 }
 
 const object = (value: unknown): Record<string, unknown> => {
@@ -63,6 +80,10 @@ export function createSettingsBackup(
   addons: AddonRecord[],
   libraries: LibraryRecord[] = [],
   mediaServers: unknown = { version: 1, connections: [], libraries: [] },
+  sourceProfiles: { profiles: readonly StoredSourceProfile[]; deletedIds: readonly string[] } = {
+    profiles: [],
+    deletedIds: [],
+  },
 ): SettingsBackup {
   return {
     format: BACKUP_FORMAT,
@@ -77,6 +98,10 @@ export function createSettingsBackup(
       ...(homeCatalogs !== undefined ? { homeCatalogs: [...homeCatalogs] } : {}),
       addedAt, downloadSettings: structuredClone(downloadSettings),
     })),
+    sourceProfiles: {
+      profiles: structuredClone([...sourceProfiles.profiles]),
+      deletedIds: [...sourceProfiles.deletedIds],
+    },
   };
 }
 
@@ -150,6 +175,7 @@ export function parseSettingsBackup(value: unknown): Omit<SettingsBackup, "expor
   // before a single manifest is fetched or anything is written. A file from before then
   // carries none, and the import leaves the current remote configuration alone.
   const mediaServers = version >= 3 ? readMediaServerConfiguration(root.mediaServers) : undefined;
+  const sourceProfiles = version >= 4 ? readSourceProfiles(root.sourceProfiles) : undefined;
   const addons = root.addons.map((raw, index): BackupAddon => {
     const item = object(raw);
     const manifestUrl = typeof item.manifestUrl === "string" ? item.manifestUrl.trim() : "";
@@ -175,6 +201,82 @@ export function parseSettingsBackup(value: unknown): Omit<SettingsBackup, "expor
     libraries: Array.isArray(root.libraries) ? root.libraries.map(parseLibrary) : [],
     addons,
     ...(mediaServers === undefined ? {} : { mediaServers }),
+    ...(sourceProfiles === undefined ? {} : { sourceProfiles }),
+  };
+}
+
+const PROFILE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const PROFILE_TEMPLATES = new Set<SourceProfileTemplate>(["recommended", "travel", "providerPriority"]);
+
+function readSourceProfiles(value: unknown): BackupSourceProfiles {
+  try {
+    const source = object(value);
+    if (!Array.isArray(source.profiles) || !Array.isArray(source.deletedIds)) {
+      throw new Error("invalid source profiles");
+    }
+    const profiles = source.profiles.map(readSourceProfile);
+    if (new Set(profiles.map((profile) => profile.id)).size !== profiles.length) {
+      throw new Error("duplicate source profile id");
+    }
+    const deletedIds = [...new Set(source.deletedIds.map((id) => {
+      if (typeof id !== "string" || !PROFILE_ID.test(id)) throw new Error("invalid source profile tombstone");
+      return id;
+    }))];
+    return { profiles, deletedIds };
+  } catch {
+    throw new AppError("The source profiles in the backup are not valid.", "err.backupFormat");
+  }
+}
+
+function readSourceProfile(value: unknown): StoredSourceProfile {
+  const profile = object(value);
+  const id = profile.id;
+  const revision = profile.revision;
+  const template = profile.template as SourceProfileTemplate;
+  const nameKey = profile.nameKey;
+  const name = profile.name;
+  const createdAt = profile.createdAt;
+  const updatedAt = profile.updatedAt;
+  if (typeof id !== "string" || !PROFILE_ID.test(id)
+    || typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 1
+    || !PROFILE_TEMPLATES.has(template)
+    || typeof createdAt !== "string" || createdAt.length === 0
+    || typeof updatedAt !== "string" || updatedAt.length === 0) {
+    throw new Error("invalid source profile");
+  }
+
+  const builtInTemplate = id === SOURCE_PROFILE_IDS.recommended
+    ? "recommended"
+    : id === SOURCE_PROFILE_IDS.travel
+      ? "travel"
+      : id === SOURCE_PROFILE_IDS.providerPriority ? "providerPriority" : undefined;
+  if (builtInTemplate !== undefined && (template !== builtInTemplate || typeof nameKey !== "string" || name !== undefined)) {
+    throw new Error("invalid built-in source profile");
+  }
+  if (builtInTemplate === "recommended" && revision !== 1) {
+    throw new Error("invalid recommended source profile");
+  }
+  if (builtInTemplate === undefined && (template === "recommended"
+    || typeof name !== "string" || name.trim().length === 0 || name.length > 60 || nameKey !== undefined)) {
+    throw new Error("invalid custom source profile");
+  }
+
+  let parameters: TravelParameters | ProviderPriorityParameters | undefined;
+  if (template === "recommended") {
+    parseTemplateParameters(template, profile.parameters);
+  } else {
+    parameters = parseTemplateParameters(template, profile.parameters);
+  }
+  buildTemplatePolicy(template, parameters);
+  return {
+    id,
+    revision,
+    template,
+    ...(typeof nameKey === "string" ? { nameKey } : {}),
+    ...(typeof name === "string" ? { name } : {}),
+    ...(parameters === undefined ? {} : { parameters: structuredClone(parameters) }),
+    createdAt,
+    updatedAt,
   };
 }
 

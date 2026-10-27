@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type express from "express";
 import { addonIdentity } from "../addon-identity.js";
 import { normalizeRefreshHours } from "../addon-refresh.js";
@@ -16,8 +17,16 @@ import type { LibraryMetaStore } from "../library-meta-store.js";
 import { currentLevel, log, parseLevel, setLevel } from "../logger.js";
 import { publicAddon } from "../security.js";
 import { assertStillAdmin, ForbiddenError } from "../roles.js";
-import { sourceProfilesForViewer, viewerOfProfileAccount } from "../source-profiles.js";
-import { memberSettings, publicSettings, type InstanceSettings, type Settings, type State, type UserPrefs } from "../store.js";
+import {
+  declaresStream,
+  SOURCE_PROFILE_IDS,
+  sourceProfilesForViewer,
+  viewerOfProfileAccount,
+  type ProviderPriorityParameters,
+  type SourceProfileTemplate,
+  type TravelParameters,
+} from "../source-profiles.js";
+import { memberSettings, publicSettings, type InstanceSettings, type Settings, type State, type StoredSourceProfile, type UserPrefs } from "../store.js";
 import { verifyTmdbKey } from "../tmdb.js";
 import { clearTrailerCache } from "../trailers.js";
 import type { MetaItem } from "../types.js";
@@ -39,6 +48,119 @@ export interface SettingsDeps extends RouteContext {
   queue: DownloadQueue;
   streamCache: { clear(): void };
 }
+
+interface SourceProfileImportSummary {
+  imported: number;
+  reused: number;
+  renamed: number;
+  dormant: string[];
+}
+
+const BUILT_IN_PROFILE_NAMES: Record<SourceProfileTemplate, string> = {
+  recommended: "Recommended",
+  providerPriority: "Addon order, verified",
+  travel: "Travel (small files)",
+};
+const BUILT_IN_PROFILE_IDS = new Set<string>(Object.values(SOURCE_PROFILE_IDS));
+
+const sameParameters = (
+  left: StoredSourceProfile["parameters"],
+  right: StoredSourceProfile["parameters"],
+): boolean => JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+
+const sameProfileDefinition = (left: StoredSourceProfile, right: StoredSourceProfile): boolean =>
+  left.template === right.template
+  && left.revision === right.revision
+  && sameParameters(left.parameters, right.parameters)
+  && left.name === right.name
+  && left.nameKey === right.nameKey;
+
+const remapProfileAddonKeys = (
+  profile: StoredSourceProfile,
+  installedKeys: ReadonlySet<string>,
+): StoredSourceProfile | undefined => {
+  if (profile.parameters === undefined) return structuredClone(profile);
+  const parameters = structuredClone(profile.parameters) as TravelParameters | ProviderPriorityParameters;
+  if (parameters.scope.mode === "selected") {
+    parameters.scope.addonKeys = parameters.scope.addonKeys.filter((key) => installedKeys.has(key));
+    if (!parameters.scope.addonKeys.length) return undefined;
+  }
+  if ("addonKeys" in parameters.providerOrder) {
+    parameters.providerOrder.addonKeys = parameters.providerOrder.addonKeys.filter((key) => installedKeys.has(key));
+  }
+  return { ...structuredClone(profile), parameters };
+};
+
+const importedProfileName = (
+  base: string,
+  forceSuffix: boolean,
+  profiles: readonly StoredSourceProfile[],
+): { name: string; renamed: boolean } => {
+  for (let suffix = forceSuffix ? 1 : 0; ; suffix += 1) {
+    const tail = suffix === 0 ? "" : ` (imported${suffix === 1 ? "" : ` ${suffix}`})`;
+    const name = suffix === 0 ? base : `${base.slice(0, 60 - tail.length).trimEnd()}${tail}`;
+    if (!profiles.some((profile) => profile.name?.toLowerCase() === name.toLowerCase())) {
+      return { name, renamed: suffix > 0 };
+    }
+  }
+};
+
+const restoreSourceProfiles = (
+  state: State,
+  profiles: readonly StoredSourceProfile[],
+  deletedIds: readonly string[],
+): {
+  idMap: Map<string, string>;
+  summary: SourceProfileImportSummary;
+} => {
+  const localProfiles = [...(state.sourceProfiles ?? [])];
+  const tombstones = new Set([...(state.deletedSourceProfileIds ?? []), ...deletedIds]);
+  const installedKeys = new Set(state.addons.filter(declaresStream).map((addon) => addon.key));
+  const idMap = new Map<string, string>();
+  const summary: SourceProfileImportSummary = { imported: 0, reused: 0, renamed: 0, dormant: [] };
+
+  for (const original of profiles) {
+    const sourceName = original.name ?? BUILT_IN_PROFILE_NAMES[original.template];
+    const mapped = remapProfileAddonKeys(original, installedKeys);
+    if (mapped === undefined) {
+      summary.dormant.push(sourceName);
+      continue;
+    }
+
+    const collision = localProfiles.find((profile) => profile.id === mapped.id);
+    const builtInId = BUILT_IN_PROFILE_IDS.has(mapped.id);
+    const builtInEqual = builtInId && collision !== undefined
+      && collision.revision === mapped.revision
+      && sameParameters(collision.parameters, mapped.parameters);
+    if (builtInEqual || (collision !== undefined && sameProfileDefinition(collision, mapped))) {
+      idMap.set(original.id, collision.id);
+      summary.reused += 1;
+      continue;
+    }
+
+    const preserveId = collision === undefined && !tombstones.has(mapped.id);
+    let id = preserveId ? mapped.id : randomUUID();
+    const used = new Set([...localProfiles.map((profile) => profile.id), ...tombstones, ...idMap.values()]);
+    while (used.has(id)) id = randomUUID();
+    const builtInVariant = builtInId && !builtInEqual;
+    const named = importedProfileName(
+      builtInVariant ? BUILT_IN_PROFILE_NAMES[mapped.template] : mapped.name!,
+      builtInVariant,
+      localProfiles,
+    );
+    const imported: StoredSourceProfile = { ...structuredClone(mapped), id, name: named.name };
+    if (builtInVariant) delete imported.nameKey;
+    localProfiles.push(imported);
+    idMap.set(original.id, id);
+    summary.imported += 1;
+    if (named.renamed) summary.renamed += 1;
+  }
+
+  const live = new Set(localProfiles.map((profile) => profile.id));
+  state.sourceProfiles = localProfiles;
+  state.deletedSourceProfileIds = [...tombstones].filter((id) => !live.has(id));
+  return { idMap, summary };
+};
 
 export function registerSettingsRoutes(app: express.Application, deps: SettingsDeps): void {
   const { store, STREAM_SORTS, accountIdOf, currentUser, invalidateLibrary, mediaServers, metaCache, metaStore, mutateData, prefsOf, queue, requireAccess, stopContentAccess, streamCache } = deps;
@@ -99,7 +221,13 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
     await metaStore.flush();
     const mediaServersView = mediaServers.exportConfiguration(authority);
     res.setHeader("content-disposition", `attachment; filename=stremio-offline-settings-${new Date().toISOString().slice(0, 10)}.json`);
-    res.json(createSettingsBackup({ ...store.settings(), ...prefsOf(req) }, store.addons(), store.libraries(), mediaServersView));
+    res.json(createSettingsBackup(
+      { ...store.settings(), ...prefsOf(req) },
+      store.addons(),
+      store.libraries(),
+      mediaServersView,
+      { profiles: store.sourceProfiles(), deletedIds: store.deletedSourceProfileIds() },
+    ));
   }));
   app.post("/api/settings/import", asyncRoute(async (req, res) => {
     // Captured before the manifests are fetched: read again inside the mutator it would
@@ -149,6 +277,7 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
     // The list as it is on either side of the write, read from the state the write lands on:
     // the sweep below needs the transition that really happened, not an earlier read.
     let before: Array<{ key: string; enabled: boolean; identity: string }> = [];
+    let sourceProfileSummary: SourceProfileImportSummary = { imported: 0, reused: 0, renamed: 0, dormant: [] };
     const applySettings = (state: State) => {
       // Every manifest was fetched before this point, which is ample time for the gate's
       // answer to go stale.
@@ -176,11 +305,36 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       state.settings = split.instance;
       state.addons = loaded;
       state.defaultsInstalled = true;
+      let profileIdMap = new Map<string, string>();
+      if (backup.sourceProfiles !== undefined) {
+        const restored = restoreSourceProfiles(
+          state,
+          backup.sourceProfiles.profiles,
+          backup.sourceProfiles.deletedIds,
+        );
+        profileIdMap = restored.idMap;
+        sourceProfileSummary = restored.summary;
+        const requested = split.prefs.downloadSourceProfile;
+        if (requested !== undefined) {
+          const mapped = profileIdMap.get(requested);
+          if (mapped) split.prefs.downloadSourceProfile = mapped;
+          else delete split.prefs.downloadSourceProfile;
+        }
+      }
       if (split.prefs.downloadSourceProfile && !offeredDownloadProfiles(state, actor).some((profile) => profile.id === split.prefs.downloadSourceProfile)) {
         delete split.prefs.downloadSourceProfile;
       }
       const userId = accountIdOf(req);
       if (userId) mutateData(state, userId, (data) => { data.prefs = { ...data.prefs, ...split.prefs }; });
+      if (backup.sourceProfiles !== undefined) {
+        const live = new Set((state.sourceProfiles ?? []).map((profile) => profile.id));
+        for (const data of state.userData ? Object.values(state.userData) : []) {
+          const selected = data.prefs.downloadSourceProfile;
+          if (typeof selected === "string" && selected && !live.has(selected)) {
+            delete data.prefs.downloadSourceProfile;
+          }
+        }
+      }
     };
     if (mediaServersToRestore === undefined) {
       await store.update(applySettings);
@@ -200,8 +354,18 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
         await stopContentAccess({ addonKey: addon.key });
       }
     }
-    log("INFO", "Settings backup imported", { addons: loaded.length, version: backup.version, remapped: parsed.remaps.length });
-    res.json({ settings: settingsView(req), addons: store.addons().map(publicAddon), remapped: parsed.remaps.length });
+    log("INFO", "Settings backup imported", {
+      addons: loaded.length,
+      version: backup.version,
+      remapped: parsed.remaps.length,
+      sourceProfiles: sourceProfileSummary,
+    });
+    res.json({
+      settings: settingsView(req),
+      addons: store.addons().map(publicAddon),
+      remapped: parsed.remaps.length,
+      sourceProfiles: sourceProfileSummary,
+    });
   }));
   app.patch("/api/settings", asyncRoute(async (req, res) => {
     // The path is open to an ordinary user, the instance keys are not: a body that names
