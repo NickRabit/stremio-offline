@@ -3,7 +3,7 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { test, type TestContext } from "node:test";
 import express from "express";
-import { applyAddonManifestRefreshes } from "../addon-identity.js";
+import { addonIdentity, applyAddonManifestRefreshes } from "../addon-identity.js";
 import type { RefreshOutcome } from "../addon-refresh.js";
 import { messageKeyOf } from "../errors.js";
 import { defaultDownloadSettings } from "../naming.js";
@@ -460,6 +460,20 @@ test("refresh identity updates are shared with the automatic refresh path", () =
 
   assert.deepEqual(changed, ["alpha"]);
   assert.equal(records[0]?.manifest.version, "2.0.0");
+});
+
+test("a manifest id change updates the effective addon identity", () => {
+  const records = [addon("alpha")];
+  const previousIdentity = addonIdentity(records[0]!);
+  const changed = applyAddonManifestRefreshes(records, [{
+    key: "alpha",
+    changed: true,
+    manifest: { ...records[0]!.manifest, id: "alpha-renamed" },
+  }]);
+
+  assert.notEqual(addonIdentity(records[0]!), previousIdentity);
+  assert.deepEqual(changed, ["alpha"]);
+  assert.equal(records[0]?.manifest.id, "alpha-renamed");
 });
 
 test("URL and role reconfiguration sweep only when the stored identity changes", async (t) => {

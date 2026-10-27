@@ -11,6 +11,7 @@ export const addonIdentity = (
 ): string =>
   createHash("sha256").update(JSON.stringify([
     addon.manifestUrl,
+    addon.manifest.id,
     addon.manifest.version,
     addon.role,
     addon.manifest.resources ?? [],

@@ -1,4 +1,5 @@
 import { streamCandidates, streamListings, type StreamListing } from "./addons.js";
+import { addonIdentity } from "./addon-identity.js";
 import type { AddonRecord, StreamItem } from "./types.js";
 
 const DEFAULT_TTL_MS = 5 * 60_000;
@@ -90,7 +91,7 @@ export class StreamListingCache {
   }
 
   private key(type: string, id: string, addon: AddonRecord): string {
-    return JSON.stringify([type, id, addon.key, addon.manifestUrl, addon.manifest.version]);
+    return JSON.stringify([type, id, addon.key, addonIdentity(addon)]);
   }
 
   private fetchOnce(addon: AddonRecord, type: string, id: string): Promise<StreamListing> {

@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { addonIdentity } from "./addon-identity.js";
+import { DebridError } from "./debrid.js";
 import { AppError } from "./errors.js";
 import {
   materializeSourceAdmissionPolicy,
@@ -193,6 +194,27 @@ const publicationServer = () => new Promise<{ server: Server; videoUrl: string; 
     if (request.url?.endsWith(".vtt")) {
       response.writeHead(200, { "content-type": "text/vtt" });
       response.end("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nSubtitle\n");
+      return;
+    }
+    response.writeHead(200, { "content-type": "video/mp4", "content-length": "1" });
+    response.end("x");
+  });
+  server.listen(0, "127.0.0.1", () => {
+    const address = server.address() as { port: number };
+    const origin = `http://127.0.0.1:${address.port}`;
+    resolve({
+      server,
+      videoUrl: `${origin}/film.mp4`,
+      subtitleUrl: `${origin}/film.cs.vtt`,
+    });
+  });
+});
+
+const missingSubtitleServer = () => new Promise<{ server: Server; videoUrl: string; subtitleUrl: string }>((resolve) => {
+  const server = createServer((request, response) => {
+    if (request.url?.endsWith(".vtt")) {
+      response.writeHead(404);
+      response.end();
       return;
     }
     response.writeHead(200, { "content-type": "video/mp4", "content-length": "1" });
@@ -1228,6 +1250,82 @@ test("a selected Travel source transfers over HTTP and persists no cursor beside
     await queue.stop();
     server.close();
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("an unavailable optional subtitle does not pause valid Provider priority or Travel jobs", async () => {
+  for (const profile of ["Provider priority", "Travel"] as const) {
+    await test(profile, async () => {
+      const { directory, data, downloads } = await setup();
+      const { server, videoUrl, subtitleUrl } = await missingSubtitleServer();
+      const configured = library(downloads);
+      const streamAddon = identityAddon();
+      const subtitleAddon: AddonRecord = {
+        ...identityAddon(),
+        key: "subtitle-provider",
+        manifestUrl: "https://subtitles.example/manifest.json",
+        role: "both",
+        manifest: {
+          id: "subtitles",
+          name: "Subtitles",
+          version: "1",
+          resources: ["subtitles"],
+        },
+      };
+      const addons = [streamAddon, subtitleAddon];
+      const queue = openQueue(data, downloads, {
+        ownerAllowed: (job) => ownerMayDownload({ owner: queueOwner, addons, libraries: [configured] }, job),
+      });
+      const subtitle = { addonKey: subtitleAddon.key, url: subtitleUrl, lang: "cs", name: "Film.cs.vtt" };
+      const resolution = {
+        checkedCandidates: 1,
+        audioLanguage: "en",
+        audioEvidence: "probe" as const,
+        subtitleLanguage: "cs",
+        subtitleSource: "addon" as const,
+      };
+      if (profile === "Provider priority") {
+        queue.setProviderPriorityResolver(async () => selectedProviderPriority(videoUrl, {
+          streamAddonIdentity: addonIdentity(streamAddon),
+          subtitle,
+          subtitleAddonIdentity: addonIdentity(subtitleAddon),
+          resolution,
+        }));
+      } else {
+        const selected = selectedTravel(videoUrl, "Film", addonIdentity(streamAddon));
+        queue.setTravelResolver(async () => ({
+          ...selected,
+          subtitle,
+          subtitleAddonIdentity: addonIdentity(subtitleAddon),
+          resolution,
+        }));
+      }
+      await queue.load();
+      try {
+        const admission = profile === "Provider priority" ? providerPrioritySnapshot() : travelSnapshot();
+        const added = await queue.addPending(
+          "Film",
+          { type: "movie", videoId: `tt-optional-subtitle-${profile}`, selection: selection("queue-private-token") },
+          { kind: "movie", title: "Film" },
+          QUEUE_OWNER,
+          undefined,
+          admission,
+        );
+        assert.ok(added);
+        await waitFor(queue, () => queue.get(added.id)?.status === "completed");
+
+        const job = internalJobs(queue)[0]!;
+        assert.equal(job.pauseReason, undefined);
+        assert.equal(job.subtitle, undefined);
+        assert.equal(job.sourceSubtitleAddonIdentity, undefined);
+        const published = path.join(downloads, job.target.slice(LIBRARY_ID.length + 1));
+        assert.equal(await readFile(published, "utf8"), "x");
+      } finally {
+        await queue.stop();
+        server.close();
+        await rm(directory, { recursive: true, force: true });
+      }
+    });
   }
 });
 
@@ -2861,6 +2959,62 @@ test("a selected Provider priority torrent waits for Real-Debrid and then comple
     assert.equal(stream?.infoHash, hash);
     assert.equal(stream?.url, ready.url);
     assertPublicViewIsClean(queue.get(added.id)! as unknown as Record<string, unknown>);
+  } finally {
+    await queue.stop();
+    ready.server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a profile episode torrent missing its admitted Real-Debrid file falls back to the next source", async () => {
+  const { directory, data, downloads } = await setup();
+  const ready = await countingServer();
+  const hash = "6".repeat(40);
+  const calls: Array<{ fileIdx?: number; exactFile?: boolean }> = [];
+  let resolutions = 0;
+  const queue = openQueue(data, downloads, {
+    retryDelay: () => 0,
+    debrid: {
+      configured: () => true,
+      advance: async (input) => {
+        calls.push(input);
+        throw new DebridError("Real-Debrid did not contain the selected file.");
+      },
+    },
+  });
+  queue.setProviderPriorityResolver(async () => {
+    resolutions += 1;
+    if (resolutions === 2) {
+      assert.equal(internalJobs(queue)[0]?.sourceFallbackAttempts, 1);
+      return selectedProviderPriority(ready.url);
+    }
+    return selectedProviderPriority({
+      infoHash: hash,
+      fileIdx: 3,
+      addonKey: "queue-private-token",
+      addonName: "Travel fixture",
+      name: "Show.S01E01.mp4",
+      behaviorHints: { filename: "Show.S01E01.mp4", videoSize: 1 },
+    });
+  });
+  await queue.load();
+  try {
+    const added = await queue.addPending(
+      "Show",
+      { type: "series", videoId: "tt-provider-missing-file", selection: selection("queue-private-token") },
+      { kind: "episode", title: "Show", season: 1, episode: 1 },
+      QUEUE_OWNER,
+      undefined,
+      providerPrioritySnapshot(),
+    );
+    assert.ok(added);
+    await waitFor(queue, () => queue.get(added.id)?.status === "completed");
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.fileIdx, 3);
+    assert.equal(calls[0]?.exactFile, true);
+    assert.equal(resolutions, 2);
+    assert.equal(ready.requests(), 1);
   } finally {
     await queue.stop();
     ready.server.close();

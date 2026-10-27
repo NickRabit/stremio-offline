@@ -167,12 +167,12 @@ export async function unrestrictLink(token: string, link: string, fetchImpl: Fet
   return body;
 }
 
-export function videoFileIds(files: DebridFile[] | undefined, fileIdx?: number): string {
+export function videoFileIds(files: DebridFile[] | undefined, fileIdx?: number, exactFile = false): string {
   const list = files ?? [];
-  if (fileIdx != null && list[fileIdx]) return String(list[fileIdx].id);
   if (fileIdx != null) {
-    const byId = list.find((file) => file.id === fileIdx + 1);
-    if (byId) return String(byId.id);
+    const wanted = list[fileIdx] ?? list.find((file) => file.id === fileIdx + 1);
+    if (wanted) return String(wanted.id);
+    if (exactFile) throw new DebridError("Real-Debrid does not contain the selected file.");
   }
   const videos = list.filter((file) => VIDEO_EXT.test(file.path));
   if (videos.length) return videos.map((file) => file.id).join(",");
@@ -180,7 +180,16 @@ export function videoFileIds(files: DebridFile[] | undefined, fileIdx?: number):
   return "all";
 }
 
-export function linkForFile(info: DebridTorrent, fileIdx?: number): string {
+export function linkForFile(info: DebridTorrent, fileIdx?: number, exactFile = false): string {
+  if (exactFile && fileIdx != null) {
+    const wanted = (info.files ?? [])[fileIdx] ?? (info.files ?? []).find((file) => file.id === fileIdx + 1);
+    if (!wanted) throw new DebridError("Real-Debrid does not contain the selected file.");
+    const index = (info.files ?? []).filter((file) => file.selected).findIndex((file) => file.id === wanted.id);
+    if (index < 0 || !info.links?.[index]) {
+      throw new DebridError("Real-Debrid did not provide a link for the selected file.");
+    }
+    return info.links[index]!;
+  }
   const links = (info.links ?? []).filter(Boolean);
   if (!links.length) throw new DebridError("The Real-Debrid torrent has no link.");
   const selected = (info.files ?? []).filter((file) => file.selected);
@@ -203,12 +212,17 @@ export type DebridAdvance =
   | { ready: true; url: string; filename?: string; torrentId: string }
   | { ready: false; torrentId: string; progress?: number; status: string };
 
+export interface AdvanceTorrentOptions {
+  exactFile?: boolean;
+}
+
 export async function advanceTorrent(
   token: string,
   infoHash: string,
   fileIdx: number | undefined,
   torrentId: string | undefined,
   fetchImpl: FetchLike = guardedFetch,
+  options: AdvanceTorrentOptions = {},
 ): Promise<DebridAdvance> {
   let id = torrentId;
   if (!id) id = await addMagnet(token, magnetFromHash(infoHash), fetchImpl);
@@ -222,12 +236,12 @@ export async function advanceTorrent(
   // to wait for a later poll — which is also why it lives here and not behind
   // the `!torrentId` branch above.
   if (info.status === "waiting_files_selection" && info.files?.length) {
-    await selectFiles(token, id, videoFileIds(info.files, fileIdx), fetchImpl);
+    await selectFiles(token, id, videoFileIds(info.files, fileIdx, options.exactFile), fetchImpl);
     info = await torrentInfo(token, id, fetchImpl);
     if (FAILED.has(info.status)) throw new DebridError("Real-Debrid torrent selhal.", 400, info.status);
   }
   if (info.status === "downloaded" && info.links?.length) {
-    const unrestricted = await unrestrictLink(token, linkForFile(info, fileIdx), fetchImpl);
+    const unrestricted = await unrestrictLink(token, linkForFile(info, fileIdx, options.exactFile), fetchImpl);
     return { ready: true, url: unrestricted.download, filename: unrestricted.filename, torrentId: id };
   }
   return { ready: false, torrentId: id, progress: Number(info.progress) || 0, status: info.status };

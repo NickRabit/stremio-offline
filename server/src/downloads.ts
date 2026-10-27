@@ -310,7 +310,7 @@ export type ProviderPriorityProfileResolver = (
 ) => Promise<ProviderPriorityProfileResolution>;
 export interface DebridEngine {
   configured: () => boolean;
-  advance: (input: { infoHash: string; fileIdx?: number; torrentId?: string }) => Promise<DebridAdvance>;
+  advance: (input: { infoHash: string; fileIdx?: number; torrentId?: string; exactFile?: boolean }) => Promise<DebridAdvance>;
 }
 
 /** The backend a queued remote copy runs on. It is the only way such a job may open bytes or
@@ -1631,7 +1631,13 @@ export class DownloadQueue {
         await this.save();
         return;
       }
-      const result = await this.debrid.advance({ infoHash, fileIdx: job.stream?.fileIdx, torrentId: job.debrid?.torrentId });
+      const exactFile = isExecutableDownloadSnapshot(job.sourceAdmission) && typeof job.stream?.fileIdx === "number";
+      const result = await this.debrid.advance({
+        infoHash,
+        fileIdx: job.stream?.fileIdx,
+        torrentId: job.debrid?.torrentId,
+        ...(exactFile ? { exactFile: true } : {}),
+      });
       if (!await this.debridMayContinue(job)) return;
       job.debrid = { torrentId: result.torrentId, progress: result.ready ? 100 : result.progress, status: result.ready ? "downloaded" : result.status };
       job.updatedAt = new Date().toISOString();
@@ -2299,6 +2305,7 @@ export class DownloadQueue {
     }
     job.stream = staged.stream;
     job.subtitle = staged.subtitle;
+    delete job.sourceSubtitleAddonIdentity;
     job.resolution = staged.resolution;
     job.targetSettings = settings;
     job.target = staged.target;
@@ -2347,6 +2354,7 @@ export class DownloadQueue {
       if (controller.signal.aborted) throw error;
       if (job.source?.selection?.subtitleMode === "required") throw error;
       job.subtitle = undefined;
+      delete job.sourceSubtitleAddonIdentity;
       if (job.resolution) job.resolution.subtitleStatus = "missing";
       log("WARN", "Optional subtitles could not be downloaded", { id: job.id, reason: error instanceof Error ? error.message : String(error) });
     }

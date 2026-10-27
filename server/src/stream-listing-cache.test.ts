@@ -231,6 +231,32 @@ test("provider manifest revisions do not reuse another definition's listing", as
   assert.equal(calls, 3);
 });
 
+test("a provider resource change with the same version and URL fetches a new listing", async () => {
+  const first = provider("alpha");
+  let calls = 0;
+  const cache = new StreamListingCache({
+    fetch: async (addon) => {
+      calls += 1;
+      return success(addon);
+    },
+  });
+
+  await cache.list([first], "movie", "tt1");
+  const changed = {
+    ...first,
+    manifest: {
+      ...first.manifest,
+      resources: [
+        { name: "stream", types: ["movie", "series"] },
+        { name: "subtitles", types: ["movie"] },
+      ],
+    },
+  };
+  await cache.list([changed], "movie", "tt1");
+
+  assert.equal(calls, 2);
+});
+
 test("an in-flight listing is stored under the identity captured when it started", async () => {
   const alpha = provider("alpha");
   const originalUrl = alpha.manifestUrl;

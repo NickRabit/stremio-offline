@@ -273,7 +273,7 @@ test("an external subtitle revocation aborts active lazy lookup without pausing 
   const subtitle = {
     key: "subtitle-a",
     enabled: false,
-    manifest: { resources: [{ name: "subtitles", types: ["movie"] }] },
+    manifest: { id: "subtitle-a", resources: [{ name: "subtitles", types: ["movie"] }] },
   } as AddonRecord;
   const checking = job("checking", "usr_a", {
     status: "checking",

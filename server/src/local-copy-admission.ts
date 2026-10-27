@@ -57,6 +57,9 @@ interface OwnerScope {
 interface PresentCopy extends LocalCopy {
   absolute: string;
   actualSize: number;
+  ino: number;
+  dev: number;
+  mtimeMs: number;
 }
 
 const unknownFact = <T>(): SourceFact<T> => ({ evidence: "unknown" });
@@ -178,7 +181,14 @@ export async function findAdequateExistingLocalCopy(
     try {
       const info = await stat(resolved.absolute);
       if (!info.isFile() || info.size <= 0) return undefined;
-      return { ...copy, absolute: resolved.absolute, actualSize: info.size };
+      return {
+        ...copy,
+        absolute: resolved.absolute,
+        actualSize: info.size,
+        ino: info.ino,
+        dev: info.dev,
+        mtimeMs: info.mtimeMs,
+      };
     } catch {
       return undefined;
     }
@@ -207,7 +217,11 @@ export async function findAdequateExistingLocalCopy(
     } catch {
       return false;
     }
-    if (!firstInfo.isFile() || firstInfo.size !== copy.actualSize) return false;
+    if (!firstInfo.isFile()
+      || firstInfo.size !== copy.actualSize
+      || firstInfo.ino !== copy.ino
+      || firstInfo.dev !== copy.dev
+      || firstInfo.mtimeMs !== copy.mtimeMs) return false;
 
     let finalResolved: ResolvedPath | undefined;
     try {
@@ -223,7 +237,11 @@ export async function findAdequateExistingLocalCopy(
     } catch {
       return false;
     }
-    if (!finalInfo.isFile() || finalInfo.size !== copy.actualSize) return false;
+    if (!finalInfo.isFile()
+      || finalInfo.size !== copy.actualSize
+      || finalInfo.ino !== copy.ino
+      || finalInfo.dev !== copy.dev
+      || finalInfo.mtimeMs !== copy.mtimeMs) return false;
 
     const finalScope = currentScope();
     return finalScope !== undefined

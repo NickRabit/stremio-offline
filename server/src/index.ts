@@ -2391,7 +2391,14 @@ queue.onCompleted = async (job) => {
 };
 queue.setDebrid({
   configured: () => Boolean(store.settings().realDebridToken),
-  advance: (input) => advanceTorrent(store.settings().realDebridToken, input.infoHash, input.fileIdx, input.torrentId),
+  advance: (input) => advanceTorrent(
+    store.settings().realDebridToken,
+    input.infoHash,
+    input.fileIdx,
+    input.torrentId,
+    undefined,
+    { exactFile: input.exactFile },
+  ),
 });
 await stats.load();
 await imageStats.load();

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -456,6 +456,43 @@ test("revocation or deletion during a deferred probe prevents a skip", async () 
     assert.equal(await result, false);
   } finally {
     await deleted.cleanup();
+  }
+});
+
+test("a same-size replacement during a deferred probe is not adequate", async () => {
+  const harness = await setup("series");
+  const release = deferred();
+  try {
+    const file = await harness.write("Show/S01E01.mkv");
+    bindSeries(harness);
+    let probing = false;
+    const result = findAdequateExistingLocalCopy(
+      { ownerUserId: OWNER_ID, type: "series", videoId: "tt1:1:1", sourceAdmission: snapshot({ height: 480 }) },
+      {
+        users: () => harness.state.users,
+        libraries: () => harness.state.libraries,
+        libraryFiles: async () => harness.state.files ??= await harness.scan(),
+        libraryUnits: async () => titleUnits(await (harness.state.files ??= await harness.scan()), "series"),
+        qualifiedMeta: () => harness.state.records,
+        mayDownloadToLibrary: (user) => user.role === "admin" || user.permissions.downloadToLibrary,
+        probe: async () => {
+          probing = true;
+          await release.promise;
+          return videoInfo({ height: 1_080 });
+        },
+      },
+    );
+    const originalStat = await stat(file);
+    while (!probing) await new Promise((resolve) => setTimeout(resolve, 5));
+    await rename(file, `${file}.original`);
+    await writeFile(file, Buffer.alloc(originalStat.size));
+    const replacementStat = await stat(file);
+    assert.notEqual(replacementStat.ino, originalStat.ino);
+    release.release();
+    assert.equal(await result, undefined);
+  } finally {
+    release.release();
+    await harness.cleanup();
   }
 });
 
