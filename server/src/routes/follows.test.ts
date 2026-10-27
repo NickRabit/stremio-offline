@@ -271,6 +271,29 @@ test("an automatic rule stores an explicit, concrete target", async () => {
   } finally { await h.close(); }
 });
 
+test("PATCH /api/follows/:id refuses a selection rule the server cannot express and leaves the stored rule unchanged", async () => {
+  const h = await mount();
+  try {
+    const follow = await (await api(h.base, "/api/follows", { method: "POST", as: "A", body: { type: "series", id: "tt1", name: "Show" } })).json() as { id: string };
+    const selection = { addonKeys: ["stream-addon"], sourceStrategy: "largest", audioLanguage: "en", audioMode: "strict", subtitleMode: "off" };
+    const stored = await api(h.base, `/api/follows/${follow.id}`, {
+      method: "PATCH", as: "A",
+      body: { autoDownload: { startMode: "new", selection } },
+    });
+    assert.equal(stored.status, 200, await stored.clone().text());
+    const before = structuredClone(h.store.get(follow.id)?.autoDownload);
+    assert.equal(before?.selection.sourceStrategy, "largest");
+
+    const refused = await api(h.base, `/api/follows/${follow.id}`, {
+      method: "PATCH", as: "A",
+      body: { autoDownload: { startMode: "new", selection: { ...selection, sourceStrategy: "smallest" } } },
+    });
+    assert.equal(refused.status, 400);
+    assert.equal(await keyOf(refused), "err.selectionUpgradeRequired");
+    assert.deepEqual(h.store.get(follow.id)?.autoDownload, before);
+  } finally { await h.close(); }
+});
+
 test("a follow stores and exposes an executable source profile reference", async () => {
   const h = await mount();
   try {

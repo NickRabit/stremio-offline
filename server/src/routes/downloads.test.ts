@@ -389,7 +389,7 @@ test("POST /api/downloads/bulk refuses addons the caller may not use and queues 
   assert.deepEqual(harness.pending.map((source) => source.selection?.addonKeys), [["open"]], "the disallowed key never reaches the queue");
 });
 
-test("characterization: a legacy bulk submission drops duplicate provider keys and coerces an unknown strategy", async (t) => {
+test("characterization: a legacy bulk submission drops duplicate provider keys", async (t) => {
   const harness = await mount(
     [streamAddon("open", { allowedUsers: [BOB] }), streamAddon("shut")],
     { viewer: ordinary },
@@ -403,7 +403,7 @@ test("characterization: a legacy bulk submission drops duplicate provider keys a
       episodes: episodes(1),
       selection: {
         addonKeys: ["shut", "open", "open"],
-        sourceStrategy: "smallest",
+        sourceStrategy: "largest",
         audioLanguage: "en-US",
       },
     },
@@ -411,10 +411,51 @@ test("characterization: a legacy bulk submission drops duplicate provider keys a
   assert.equal(response.status, 201, await response.text());
   const queued = harness.pending[0]!.selection!;
   assert.deepEqual(queued.addonKeys, ["open"]);
-  assert.equal(queued.sourceStrategy, "priority");
+  assert.equal(queued.sourceStrategy, "largest");
   assert.equal(queued.audioLanguage, "en");
   assert.equal(queued.audioMode, "listed");
   assert.equal(queued.subtitleMode, "off");
+});
+
+test("POST /api/downloads/bulk refuses a selection rule this server cannot express", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const cases = [
+    { sourceStrategy: "smallest" },
+    { audioMode: "best" },
+    { subtitleMode: 3 },
+  ];
+  for (const extra of cases) {
+    const response = await api(harness.base, "/api/downloads/bulk", {
+      method: "POST",
+      body: {
+        title: "Show",
+        episodes: episodes(1),
+        selection: { addonKeys: ["stream-addon"], audioLanguage: "en", ...extra },
+      },
+    });
+    assert.equal(response.status, 400, JSON.stringify(extra));
+    assert.equal(await keyOf(response), "err.selectionUpgradeRequired", JSON.stringify(extra));
+  }
+  assert.deepEqual(harness.pending, [], "nothing is queued");
+});
+
+test("POST /api/downloads/bulk keeps today's defaults when legacy selection modes are omitted", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/downloads/bulk", {
+    method: "POST",
+    body: {
+      title: "Show",
+      episodes: episodes(1),
+      selection: { addonKeys: ["stream-addon"], audioLanguage: "en" },
+    },
+  });
+  assert.equal(response.status, 201, await response.text());
+  const queued = harness.pending[0]?.selection;
+  assert.equal(queued?.sourceStrategy, "priority");
+  assert.equal(queued?.audioMode, "listed");
+  assert.equal(queued?.subtitleMode, "off");
 });
 
 test("profile bulk materializes Travel in the user's addon order with frozen language preferences", async (t) => {

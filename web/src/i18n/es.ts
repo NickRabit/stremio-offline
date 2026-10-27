@@ -979,6 +979,7 @@ export const es: Catalog = {
   "err.missingDownloadSources": "Elija al menos un complemento de origen.",
   "err.missingAudioLanguage": "Elija un idioma de audio.",
   "err.missingSubtitleLanguage": "Elija un idioma de subtítulos.",
+  "err.selectionUpgradeRequired": "Esta regla de descarga necesita una versión más reciente del servidor. Actualice el servidor o elija otra regla.",
   "err.invalidSourceProfileReference": "La selección del perfil de origen no es válida.",
   "err.sourceProfileUnavailable": "Ese perfil de origen no está disponible.",
   "err.sourceProfileRevisionStale": "Esta revisión del perfil de origen ya no está disponible.",

@@ -979,6 +979,7 @@ export const sk: Catalog = {
   "err.missingDownloadSources": "Vyberte aspoň jeden zdrojový doplnok.",
   "err.missingAudioLanguage": "Vyberte jazyk zvuku.",
   "err.missingSubtitleLanguage": "Vyberte jazyk titulkov.",
+  "err.selectionUpgradeRequired": "Toto pravidlo sťahovania vyžaduje novšiu verziu servera. Aktualizujte server alebo zvoľte iné pravidlo.",
   "err.invalidSourceProfileReference": "Výber zdrojového profilu nie je platný.",
   "err.sourceProfileUnavailable": "Tento zdrojový profil nie je dostupný.",
   "err.sourceProfileRevisionStale": "Táto revízia zdrojového profilu už nie je dostupná.",
