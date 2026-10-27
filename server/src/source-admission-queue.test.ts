@@ -19,7 +19,10 @@ import {
   TravelVerificationError,
   type TravelContinuationCursorV1,
 } from "./source-travel.js";
-import type { TravelProfileResolution } from "./source-profile-resolver.js";
+import type {
+  ProviderPriorityProfileResolution,
+  TravelProfileResolution,
+} from "./source-profile-resolver.js";
 import {
   DownloadQueue,
   ownerMayDownload,
@@ -28,7 +31,7 @@ import {
   type DownloadSelection,
   type QueueHooks,
 } from "./downloads.js";
-import type { AddonRecord } from "./types.js";
+import type { AddonRecord, StreamItem } from "./types.js";
 import type { UserRecord } from "./users.js";
 
 process.env.ALLOW_PRIVATE_ADDONS = "1";
@@ -68,6 +71,8 @@ const fixedSnapshot = (profileId: string): SourceAdmissionSnapshotV1 => {
 };
 
 const travelSnapshot = (): SourceAdmissionSnapshotV1 => fixedSnapshot(SOURCE_PROFILE_IDS.travel);
+const providerPrioritySnapshot = (): SourceAdmissionSnapshotV1 =>
+  fixedSnapshot(SOURCE_PROFILE_IDS.providerPriority);
 const nonTravelSnapshot = (): SourceAdmissionSnapshotV1 =>
   fixedSnapshot(SOURCE_PROFILE_IDS.recommended);
 
@@ -251,6 +256,7 @@ const emptyObservations = {
 } as const;
 
 type SelectedTravel = Extract<TravelProfileResolution, { status: "selected" }>;
+type SelectedProviderPriority = Extract<ProviderPriorityProfileResolution, { status: "selected" }>;
 
 const queueOwner: UserRecord = {
   id: QUEUE_OWNER,
@@ -300,6 +306,31 @@ const selectedTravel = (
   searchStatus: "complete",
   retryable: false,
   observations: emptyObservations,
+});
+
+const selectedProviderPriority = (
+  stream: string | StreamItem,
+  options: Partial<Pick<
+    SelectedProviderPriority,
+    "streamAddonIdentity" | "subtitle" | "subtitleAddonIdentity" | "resolution"
+  >> = {},
+): SelectedProviderPriority => ({
+  status: "selected",
+  stream: typeof stream === "string"
+    ? {
+      url: stream,
+      addonKey: "queue-private-token",
+      addonName: "Travel fixture",
+      name: "Film.mp4",
+      behaviorHints: { filename: "Film.mp4", videoSize: 1 },
+    }
+    : stream,
+  resolution: options.resolution ?? { checkedCandidates: 1, audioLanguage: "en", audioEvidence: "probe" },
+  settings: defaultDownloadSettings(),
+  streamAddonIdentity: options.streamAddonIdentity ?? "a".repeat(64),
+  ...(options.subtitle === undefined ? {} : { subtitle: options.subtitle }),
+  ...(options.subtitleAddonIdentity === undefined ? {} : { subtitleAddonIdentity: options.subtitleAddonIdentity }),
+  searchStatus: "complete",
 });
 
 test("a completed Travel job migrates its legacy identity without resolving again after restart", async () => {
@@ -512,6 +543,7 @@ test("malformed or misplaced Travel cursors make the queue unreadable without ch
     { name: "malformed cursor", admission: validSnapshot, cursor: { ...travelCursor(), extra: true } },
     { name: "legacy job", cursor: travelCursor() },
     { name: "non-Travel snapshot", admission: validNonTravelSnapshot, cursor: travelCursor() },
+    { name: "Provider priority snapshot", admission: providerPrioritySnapshot(), cursor: travelCursor() },
     { name: "selected stream", admission: validSnapshot, cursor: travelCursor(), stream: { url: "http://127.0.0.1/private" } },
     {
       name: "budget attempts over limit",
@@ -699,6 +731,35 @@ test("malformed legacy private values remain unreadable without rewriting", asyn
       assert.equal(await readFile(state, "utf8"), bytes, `${entry.name} leaves the queue bytes intact`);
       await assert.rejects(
         queue.addPending("Other", { type: "movie", videoId: `tt-malformed-legacy-${index}` }),
+        (error: AppError) => error.messageKey === "err.queueUnreadable" && error.status === 503,
+      );
+    } finally {
+      await queue.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+});
+
+test("Provider priority state refuses Travel-only legacy field aliases", async () => {
+  const stream = {
+    url: "http://127.0.0.1/private.mp4",
+    addonKey: "queue-private-token",
+    name: "Film.mp4",
+  };
+  for (const fields of [
+    { stream, travelStreamAddonIdentity: "a".repeat(64) },
+    { travelSourceFallbackAttempts: 1 },
+  ]) {
+    const { directory, data, downloads, state } = await setup();
+    const bytes = JSON.stringify([{ ...rawLazyJob(providerPrioritySnapshot()), ...fields }], null, 2);
+    await writeFile(state, bytes);
+    const queue = openQueue(data, downloads);
+    try {
+      await queue.load();
+      assert.deepEqual(queue.list(), []);
+      assert.equal(await readFile(state, "utf8"), bytes);
+      await assert.rejects(
+        queue.addPending("Other", { type: "movie", videoId: "tt-provider-legacy-alias" }),
         (error: AppError) => error.messageKey === "err.queueUnreadable" && error.status === 503,
       );
     } finally {
@@ -1985,24 +2046,39 @@ test("restart migrates a selected Travel row, discards its old URL and partial, 
   }
 });
 
-test("a non-Travel snapshot remains fail-closed without a Travel resolver", async () => {
+test("a Recommended snapshot remains fail-closed even when profile resolvers are wired", async () => {
   const { directory, data, downloads, state } = await setup();
-  const snapshot = fixedSnapshot(SOURCE_PROFILE_IDS.providerPriority);
+  const snapshot = nonTravelSnapshot();
   await writeFile(state, JSON.stringify([{
     ...rawLazyJob(snapshot),
     ownerUserId: "usr_00000016",
   }], null, 2));
   let legacyResolutions = 0;
+  let profileResolutions = 0;
   const queue = openQueue(data, downloads);
   queue.setResolver(async () => {
     legacyResolutions += 1;
     return undefined;
+  });
+  queue.setTravelResolver(async () => {
+    profileResolutions += 1;
+    return { status: "noMatch", retryable: false, observations: emptyObservations };
+  });
+  queue.setProviderPriorityResolver(async () => {
+    profileResolutions += 1;
+    return {
+      status: "noMatch",
+      checkedCandidates: 0,
+      temporaryFailures: 0,
+      truncated: false,
+    };
   });
   try {
     await queue.load();
     await waitFor(queue, () => queue.get("job-source-admission")?.status === "failed");
     assert.equal(queue.get("job-source-admission")?.errorKey, "err.noMatchingSource");
     assert.equal(legacyResolutions, 0);
+    assert.equal(profileResolutions, 0);
   } finally {
     await queue.stop();
     await rm(directory, { recursive: true, force: true });
@@ -2281,6 +2357,834 @@ test("a failed local-copy lookup fails open and persists the profile job", async
     assert.equal(queue.list().length, 1);
   } finally {
     await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Provider priority downloads a direct HTTP source through its own resolver", async () => {
+  const { directory, data, downloads } = await setup();
+  const { server, url } = await countingServer();
+  let providerResolutions = 0;
+  let travelResolutions = 0;
+  let legacyResolutions = 0;
+  let debridCalls = 0;
+  const queue = openQueue(data, downloads, {
+    debrid: {
+      configured: () => true,
+      advance: async () => {
+        debridCalls += 1;
+        throw new Error("a direct URL must not reach Real-Debrid");
+      },
+    },
+  });
+  queue.setResolver(async () => {
+    legacyResolutions += 1;
+    return undefined;
+  });
+  queue.setTravelResolver(async () => {
+    travelResolutions += 1;
+    return { status: "noMatch", retryable: false, observations: emptyObservations };
+  });
+  queue.setProviderPriorityResolver(async () => {
+    providerResolutions += 1;
+    return selectedProviderPriority({
+      url,
+      infoHash: "a".repeat(40),
+      addonKey: "queue-private-token",
+      addonName: "Travel fixture",
+      name: "Film.mp4",
+      behaviorHints: { filename: "Film.mp4", videoSize: 1 },
+    });
+  });
+  await queue.load();
+  try {
+    const added = await queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt-provider-http", selection: selection("queue-private-token") },
+      { kind: "movie", title: "Film" },
+      QUEUE_OWNER,
+      undefined,
+      providerPrioritySnapshot(),
+    );
+    assert.ok(added);
+    await waitFor(queue, () => queue.get(added.id)?.status === "completed");
+    assert.equal(providerResolutions, 1);
+    assert.equal(travelResolutions, 0);
+    assert.equal(legacyResolutions, 0);
+    assert.equal(debridCalls, 0);
+    assertPublicViewIsClean(queue.get(added.id)! as unknown as Record<string, unknown>);
+    assert.equal(JSON.stringify(queue.snapshot()).includes(url), false);
+    assert.match(String(internalJobs(queue)[0]?.target), new RegExp(`^${LIBRARY_ID}/Film/`));
+  } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Provider priority no-match with truncation alone fails without retrying", async () => {
+  const { directory, data, downloads } = await setup();
+  let resolutions = 0;
+  const queue = openQueue(data, downloads);
+  queue.setProviderPriorityResolver(async () => {
+    resolutions += 1;
+    return {
+      status: "noMatch",
+      checkedCandidates: 3,
+      temporaryFailures: 0,
+      truncated: true,
+    };
+  });
+  await queue.load();
+  try {
+    const added = await queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt-provider-no-match", selection: selection("queue-private-token") },
+      { kind: "movie", title: "Film" },
+      QUEUE_OWNER,
+      undefined,
+      providerPrioritySnapshot(),
+    );
+    assert.ok(added);
+    await waitFor(queue, () => queue.get(added.id)?.status === "failed");
+    assert.equal(resolutions, 1);
+    assert.equal(queue.get(added.id)?.errorKey, "err.noMatchingSource");
+    assertPublicViewIsClean(queue.get(added.id)! as unknown as Record<string, unknown>);
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Provider priority temporary lookup failures use three bounded retries", async () => {
+  const { directory, data, downloads } = await setup();
+  let resolutions = 0;
+  const delays: number[] = [];
+  const queue = openQueue(data, downloads, {
+    retryDelay: (retryCount) => {
+      delays.push(retryCount);
+      return 0;
+    },
+  });
+  queue.setProviderPriorityResolver(async () => {
+    resolutions += 1;
+    return {
+      status: "noMatch",
+      checkedCandidates: 2,
+      temporaryFailures: 1,
+      truncated: false,
+    };
+  });
+  await queue.load();
+  try {
+    const added = await queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt-provider-temporary", selection: selection("queue-private-token") },
+      { kind: "movie", title: "Film" },
+      QUEUE_OWNER,
+      undefined,
+      providerPrioritySnapshot(),
+    );
+    assert.ok(added);
+    await waitFor(queue, () => queue.get(added.id)?.status === "failed");
+    assert.equal(resolutions, 4);
+    assert.deepEqual(delays, [1, 2, 3]);
+    assert.equal(queue.get(added.id)?.errorKey, "err.noMatchingSource");
+    assert.equal(internalJobs(queue)[0]?.retryCount, 3);
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a failed Provider priority HTTP source falls back to the next selection", async () => {
+  const { directory, data, downloads } = await setup();
+  const failed = await countingServer(404);
+  const good = await countingServer();
+  let resolutions = 0;
+  const queue = openQueue(data, downloads, { retryDelay: () => 0 });
+  queue.setProviderPriorityResolver(async (input) => {
+    resolutions += 1;
+    if (resolutions === 2) {
+      assert.deepEqual(input.source.tried, [failed.url]);
+      assert.equal(internalJobs(queue)[0]?.sourceFallbackAttempts, 1);
+      return selectedProviderPriority(good.url);
+    }
+    return selectedProviderPriority(failed.url);
+  });
+  await queue.load();
+  try {
+    const added = await queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt-provider-fallback", selection: selection("queue-private-token") },
+      { kind: "movie", title: "Film" },
+      QUEUE_OWNER,
+      undefined,
+      providerPrioritySnapshot(),
+    );
+    assert.ok(added);
+    await waitFor(queue, () => queue.get(added.id)?.status === "completed");
+    assert.equal(resolutions, 2);
+    assert.equal(failed.requests(), 1);
+    assert.equal(good.requests(), 1);
+    assert.equal(internalJobs(queue)[0]?.sourceFallbackAttempts, undefined);
+  } finally {
+    await queue.stop();
+    failed.server.close();
+    good.server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Provider priority rotating signed URLs consume one finite fallback budget", async () => {
+  const { directory, data, downloads, state } = await setup();
+  let requests = 0;
+  const server = createServer((_request, response) => {
+    requests += 1;
+    response.writeHead(404, { "content-type": "video/mp4" });
+    response.end();
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address() as { port: number };
+  const sourceUrl = `http://127.0.0.1:${address.port}/film.mp4`;
+  let resolutions = 0;
+  const queue = openQueue(data, downloads, { retryDelay: () => 0 });
+  queue.setProviderPriorityResolver(async () => {
+    resolutions += 1;
+    return selectedProviderPriority(`${sourceUrl}?signature=${resolutions}`);
+  });
+  await queue.load();
+  try {
+    const added = await queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt-provider-rotating", selection: selection("queue-private-token") },
+      { kind: "movie", title: "Film" },
+      QUEUE_OWNER,
+      undefined,
+      providerPrioritySnapshot(),
+    );
+    assert.ok(added);
+    await waitFor(queue, () => queue.get(added.id)?.status === "failed");
+    assert.equal(resolutions, SOURCE_FALLBACK_ATTEMPT_LIMIT);
+    assert.equal(requests, SOURCE_FALLBACK_ATTEMPT_LIMIT);
+    assert.equal(internalJobs(queue)[0]?.sourceFallbackAttempts, SOURCE_FALLBACK_ATTEMPT_LIMIT);
+    await waitFor(queue, async () => {
+      const stored = (await readJobs(state)).find((job) => job.id === added.id);
+      return stored?.sourceFallbackAttempts === SOURCE_FALLBACK_ATTEMPT_LIMIT;
+    });
+    assert.equal(queue.get(added.id)?.errorKey, "err.noMatchingSource");
+    assertPublicViewIsClean(queue.get(added.id)! as unknown as Record<string, unknown>);
+  } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("restart refreshes an unfinished Provider priority selection and keeps its budget", async () => {
+  const { directory, data, downloads, state } = await setup();
+  const stale = await countingServer();
+  const fresh = await countingServer();
+  const snapshot = providerPrioritySnapshot();
+  const target = `${LIBRARY_ID}/Film/Film.mp4`;
+  const partial = path.join(downloads, "Film", "Film.mp4.part");
+  await mkdir(path.dirname(partial), { recursive: true });
+  await writeFile(partial, "stale");
+  await writeFile(state, JSON.stringify([{
+    ...rawLazyJob(snapshot),
+    id: "provider-restart",
+    ownerUserId: QUEUE_OWNER,
+    status: "downloading",
+    sourceFallbackAttempts: 2,
+    stream: {
+      url: stale.url,
+      addonKey: "queue-private-token",
+      addonName: "Travel fixture",
+      name: "Film.mp4",
+      behaviorHints: { filename: "Film.mp4", videoSize: 1 },
+    },
+    sourceStreamAddonIdentity: "a".repeat(64),
+    targetSettings: defaultDownloadSettings().movie,
+    target,
+    libraryId: LIBRARY_ID,
+    received: 5,
+    total: 10,
+    segments: [{ start: 0, end: 9, received: 5 }],
+    debrid: { torrentId: "old", status: "downloaded" },
+    debridStartedAt: "2026-01-01T00:00:00.000Z",
+  }], null, 2));
+  const entered = deferred();
+  const release = deferred();
+  let resolutions = 0;
+  const queue = openQueue(data, downloads);
+  queue.setProviderPriorityResolver(async (input) => {
+    resolutions += 1;
+    assert.deepEqual(input.snapshot, snapshot);
+    assert.equal(internalJobs(queue)[0]?.sourceFallbackAttempts, 2);
+    entered.release();
+    await release.promise;
+    return selectedProviderPriority(fresh.url);
+  });
+  await queue.load();
+  try {
+    await entered.promise;
+    const job = internalJobs(queue)[0]!;
+    assert.deepEqual(job.sourceAdmission, snapshot);
+    assert.equal(job.stream, undefined);
+    assert.equal(job.sourceStreamAddonIdentity, undefined);
+    assert.equal(job.debrid, undefined);
+    assert.equal(job.segments, undefined);
+    assert.equal(job.sourceFallbackAttempts, 2);
+    assert.equal(await fileAbsent(partial), true);
+    release.release();
+    await waitFor(queue, () => queue.get("provider-restart")?.status === "completed");
+    assert.equal(resolutions, 1);
+    assert.equal(stale.requests(), 0);
+    assert.equal(fresh.requests(), 1);
+  } finally {
+    release.release();
+    await queue.stop();
+    stale.server.close();
+    fresh.server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("completed Provider priority rows survive restart with their history", async () => {
+  const { directory, data, downloads } = await setup();
+  const source = await countingServer();
+  const first = openQueue(data, downloads);
+  let completions = 0;
+  first.onCompleted = () => { completions += 1; };
+  first.setProviderPriorityResolver(async () => selectedProviderPriority(source.url));
+  await first.load();
+  let id = "";
+  let completedAt: string | undefined;
+  try {
+    const added = await first.addPending(
+      "Film",
+      { type: "movie", videoId: "tt-provider-completed", selection: selection("queue-private-token") },
+      { kind: "movie", title: "Film" },
+      QUEUE_OWNER,
+      undefined,
+      providerPrioritySnapshot(),
+    );
+    assert.ok(added);
+    id = added.id;
+    await waitFor(first, () => first.get(id)?.status === "completed");
+    completedAt = first.get(id)?.completedAt;
+    await first.stop();
+
+    let resolutions = 0;
+    const reopened = openQueue(data, downloads, { ownerAllowed: () => false });
+    reopened.onCompleted = () => { completions += 1; };
+    reopened.setProviderPriorityResolver(async () => {
+      resolutions += 1;
+      return selectedProviderPriority(source.url);
+    });
+    try {
+      await reopened.load();
+      const restored = reopened.get(id)!;
+      assert.equal(restored.status, "completed");
+      assert.equal(restored.completedAt, completedAt);
+      assert.equal(restored.received, 1);
+      assert.equal(reopened.history().length, 1);
+      assert.equal(completions, 1);
+      assert.equal(resolutions, 0);
+      assertPublicViewIsClean(restored as unknown as Record<string, unknown>);
+    } finally {
+      await reopened.stop();
+    }
+  } finally {
+    await first.stop();
+    source.server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Provider priority identity or grant loss during transfer pauses without publication", async () => {
+  for (const loss of ["identity", "grant"] as const) {
+    await test(`during transfer: ${loss}`, async () => {
+      const { directory, data, downloads } = await setup();
+      const { server, url, entered, release } = await gatedBodyServer();
+      const configured = library(downloads);
+      const addons = [identityAddon()];
+      const selectedIdentity = addonIdentity(addons[0]!);
+      let resolutions = 0;
+      const queue = openQueue(data, downloads, {
+        ownerAllowed: (job) => ownerMayDownload({
+          owner: queueOwner,
+          addons,
+          libraries: [configured],
+        }, job),
+      });
+      queue.setProviderPriorityResolver(async () => {
+        resolutions += 1;
+        return selectedProviderPriority(url, { streamAddonIdentity: selectedIdentity });
+      });
+      await queue.load();
+      try {
+        const added = await queue.addPending(
+          "Film",
+          { type: "movie", videoId: `tt-provider-transfer-${loss}`, selection: selection("queue-private-token") },
+          { kind: "movie", title: "Film" },
+          QUEUE_OWNER,
+          undefined,
+          providerPrioritySnapshot(),
+        );
+        assert.ok(added);
+        await entered;
+        addons[0] = loss === "identity"
+          ? { ...addons[0]!, manifest: { ...addons[0]!.manifest, version: "2" } }
+          : { ...addons[0]!, allowedUsers: [] };
+        release();
+
+        await waitFor(queue, () => queue.get(added.id)?.status === "paused");
+        const job = internalJobs(queue)[0]!;
+        assert.equal(job.pauseReason, "permission");
+        assert.equal(job.sourceFallbackAttempts, undefined);
+        assert.equal(resolutions, 1);
+        if (job.target) {
+          assert.equal(await fileAbsent(path.join(downloads, job.target.slice(LIBRARY_ID.length + 1))), true);
+        }
+      } finally {
+        release();
+        await queue.stop();
+        server.close();
+        await rm(directory, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+test("Provider priority identity or grant loss at final rename withdraws publication", async () => {
+  for (const loss of ["identity", "grant"] as const) {
+    await test(`during rename: ${loss}`, async () => {
+      const { directory, data, downloads } = await setup();
+      const { server, videoUrl } = await publicationServer();
+      const configured = library(downloads);
+      const addons = [identityAddon()];
+      const selectedIdentity = addonIdentity(addons[0]!);
+      const renameEntered = deferred();
+      const releaseRename = deferred();
+      let resolutions = 0;
+      const queue = openQueue(data, downloads, {
+        ownerAllowed: (job) => ownerMayDownload({
+          owner: queueOwner,
+          addons,
+          libraries: [configured],
+        }, job),
+        renamePublication: async (from, to) => {
+          renameEntered.release();
+          await releaseRename.promise;
+          await rename(from, to);
+        },
+      });
+      queue.setProviderPriorityResolver(async () => {
+        resolutions += 1;
+        return selectedProviderPriority(videoUrl, { streamAddonIdentity: selectedIdentity });
+      });
+      await queue.load();
+      try {
+        const added = await queue.addPending(
+          "Film",
+          { type: "movie", videoId: `tt-provider-rename-${loss}`, selection: selection("queue-private-token") },
+          { kind: "movie", title: "Film" },
+          QUEUE_OWNER,
+          undefined,
+          providerPrioritySnapshot(),
+        );
+        assert.ok(added);
+        await renameEntered.promise;
+        const target = internalJobs(queue)[0]!.target;
+        assert.ok(target);
+        const published = path.join(downloads, target.slice(LIBRARY_ID.length + 1));
+        addons[0] = loss === "identity"
+          ? { ...addons[0]!, manifest: { ...addons[0]!.manifest, resources: [] } }
+          : { ...addons[0]!, allowedUsers: [] };
+        releaseRename.release();
+
+        await waitFor(queue, async () =>
+          queue.get(added.id)?.status === "paused" && await fileAbsent(published));
+        assert.equal(queue.get(added.id)?.pauseReason, "permission");
+        assert.equal(internalJobs(queue)[0]?.sourceFallbackAttempts, undefined);
+        assert.equal(resolutions, 1);
+      } finally {
+        releaseRename.release();
+        await queue.stop();
+        server.close();
+        await rm(directory, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+test("a selected Provider priority torrent waits for Real-Debrid and then completes", async () => {
+  const { directory, data, downloads } = await setup();
+  const ready = await countingServer();
+  const hash = "1".repeat(40);
+  const calls: Array<{ infoHash: string; fileIdx?: number }> = [];
+  const queue = openQueue(data, downloads, {
+    debrid: {
+      configured: () => true,
+      advance: async (input) => {
+        calls.push(input);
+        return { ready: true, url: ready.url, torrentId: "torrent-1", filename: "Film.mp4" };
+      },
+    },
+  });
+  queue.setProviderPriorityResolver(async () => selectedProviderPriority({
+    infoHash: hash,
+    fileIdx: 0,
+    addonKey: "queue-private-token",
+    addonName: "Travel fixture",
+    name: "Film.mp4",
+    behaviorHints: { filename: "Film.mp4", videoSize: 1 },
+  }));
+  await queue.load();
+  try {
+    const added = await queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt-provider-torrent", selection: selection("queue-private-token") },
+      { kind: "movie", title: "Film" },
+      QUEUE_OWNER,
+      undefined,
+      providerPrioritySnapshot(),
+    );
+    assert.ok(added);
+    await waitFor(queue, () => queue.get(added.id)?.status === "completed");
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.infoHash, hash);
+    assert.equal(calls[0]?.fileIdx, 0);
+    assert.equal(ready.requests(), 1);
+    const stream = internalJobs(queue)[0]?.stream;
+    assert.equal(stream?.infoHash, hash);
+    assert.equal(stream?.url, ready.url);
+    assertPublicViewIsClean(queue.get(added.id)! as unknown as Record<string, unknown>);
+  } finally {
+    await queue.stop();
+    ready.server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("failed Provider priority torrents try the next source within the finite budget", async () => {
+  for (const failure of ["terminal", "wrong-episode"] as const) {
+    await test(failure, async () => {
+      const { directory, data, downloads } = await setup();
+      const { server, videoUrl } = await publicationServer();
+      const good = await countingServer();
+      let resolutions = 0;
+      const firstHash = failure === "terminal" ? "2".repeat(40) : "3".repeat(40);
+      const queue = openQueue(data, downloads, {
+        retryDelay: () => 0,
+        debrid: {
+          configured: () => true,
+          advance: async () => {
+            if (failure === "terminal") throw new Error("torrent is unavailable");
+            return {
+              ready: true,
+              url: videoUrl,
+              torrentId: "wrong-episode",
+              filename: "Show.S01E02.mp4",
+            };
+          },
+        },
+      });
+      queue.setProviderPriorityResolver(async (input) => {
+        resolutions += 1;
+        if (resolutions === 2) {
+          assert.ok(input.source.tried.includes(`torrent:${firstHash}:0`));
+          assert.equal(internalJobs(queue)[0]?.sourceFallbackAttempts, 1);
+          return selectedProviderPriority(good.url);
+        }
+        return selectedProviderPriority({
+          infoHash: firstHash,
+          fileIdx: 0,
+          addonKey: "queue-private-token",
+          addonName: "Travel fixture",
+          name: "Show.S01E01.mp4",
+          behaviorHints: { filename: "Show.S01E01.mp4", videoSize: 1 },
+        });
+      });
+      await queue.load();
+      try {
+        const added = await queue.addPending(
+          "Show",
+          { type: "series", videoId: `tt-provider-${failure}`, selection: selection("queue-private-token") },
+          { kind: "episode", title: "Show", season: 1, episode: 1 },
+          QUEUE_OWNER,
+          undefined,
+          providerPrioritySnapshot(),
+        );
+        assert.ok(added);
+        await waitFor(queue, () => queue.get(added.id)?.status === "completed");
+        assert.equal(resolutions, 2);
+        assert.equal(good.requests(), 1);
+      } finally {
+        await queue.stop();
+        good.server.close();
+        server.close();
+        await rm(directory, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+test("Provider priority terminal torrent failures exhaust the shared fallback budget", async () => {
+  const { directory, data, downloads } = await setup();
+  let resolutions = 0;
+  let advances = 0;
+  const queue = openQueue(data, downloads, {
+    debrid: {
+      configured: () => true,
+      advance: async () => {
+        advances += 1;
+        throw new Error("torrent is unavailable");
+      },
+    },
+  });
+  queue.setProviderPriorityResolver(async () => {
+    resolutions += 1;
+    return selectedProviderPriority({
+      infoHash: resolutions.toString(16).padStart(40, "0"),
+      fileIdx: 0,
+      addonKey: "queue-private-token",
+      addonName: "Travel fixture",
+      name: "Film.mp4",
+      behaviorHints: { filename: "Film.mp4", videoSize: 1 },
+    });
+  });
+  await queue.load();
+  try {
+    const added = await queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt-provider-torrent-budget", selection: selection("queue-private-token") },
+      { kind: "movie", title: "Film" },
+      QUEUE_OWNER,
+      undefined,
+      providerPrioritySnapshot(),
+    );
+    assert.ok(added);
+    await waitFor(queue, () => queue.get(added.id)?.status === "failed");
+    assert.equal(resolutions, SOURCE_FALLBACK_ATTEMPT_LIMIT);
+    assert.equal(advances, SOURCE_FALLBACK_ATTEMPT_LIMIT);
+    assert.equal(internalJobs(queue)[0]?.sourceFallbackAttempts, SOURCE_FALLBACK_ATTEMPT_LIMIT);
+    assert.equal(queue.get(added.id)?.errorKey, "err.noMatchingSource");
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("identity loss during a deferred Real-Debrid answer discards the late result", async () => {
+  const { directory, data, downloads } = await setup();
+  const ready = await countingServer();
+  const configured = library(downloads);
+  const addons = [identityAddon()];
+  const selectedIdentity = addonIdentity(addons[0]!);
+  const entered = deferred();
+  const release = deferred();
+  const hash = "4".repeat(40);
+  let resolutions = 0;
+  const queue = openQueue(data, downloads, {
+    ownerAllowed: (job) => ownerMayDownload({
+      owner: queueOwner,
+      addons,
+      libraries: [configured],
+    }, job),
+    debrid: {
+      configured: () => true,
+      advance: async () => {
+        entered.release();
+        await release.promise;
+        return { ready: true, url: ready.url, torrentId: "late", filename: "Film.mp4" };
+      },
+    },
+  });
+  queue.setProviderPriorityResolver(async () => {
+    resolutions += 1;
+    return selectedProviderPriority({
+      infoHash: hash,
+      fileIdx: 0,
+      addonKey: "queue-private-token",
+      addonName: "Travel fixture",
+      name: "Film.mp4",
+      behaviorHints: { filename: "Film.mp4", videoSize: 1 },
+    }, { streamAddonIdentity: selectedIdentity });
+  });
+  await queue.load();
+  try {
+    const added = await queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt-provider-deferred", selection: selection("queue-private-token") },
+      { kind: "movie", title: "Film" },
+      QUEUE_OWNER,
+      undefined,
+      providerPrioritySnapshot(),
+    );
+    assert.ok(added);
+    await entered.promise;
+    addons[0] = { ...addons[0]!, manifest: { ...addons[0]!.manifest, version: "2" } };
+    release.release();
+    await waitFor(queue, () => queue.get(added.id)?.status === "paused");
+    assert.equal(queue.get(added.id)?.pauseReason, "permission");
+    assert.equal(resolutions, 1);
+    assert.equal(internalJobs(queue)[0]?.stream?.url, undefined);
+    assert.equal(internalJobs(queue)[0]?.sourceFallbackAttempts, undefined);
+    assert.equal(ready.requests(), 0);
+  } finally {
+    release.release();
+    await queue.stop();
+    ready.server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("an invalid Real-Debrid ready URL falls back to the next Provider priority source", async () => {
+  const { directory, data, downloads } = await setup();
+  const good = await countingServer();
+  let resolutions = 0;
+  const hash = "5".repeat(40);
+  const queue = openQueue(data, downloads, {
+    retryDelay: () => 0,
+    debrid: {
+      configured: () => true,
+      advance: async () => ({
+        ready: true,
+        url: "file:///tmp/provider-private.mp4",
+        torrentId: "invalid-url",
+        filename: "Film.mp4",
+      }),
+    },
+  });
+  queue.setProviderPriorityResolver(async (input) => {
+    resolutions += 1;
+    if (resolutions === 2) {
+      assert.ok(input.source.tried.includes(`torrent:${hash}:0`));
+      return selectedProviderPriority(good.url);
+    }
+    return selectedProviderPriority({
+      infoHash: hash,
+      fileIdx: 0,
+      addonKey: "queue-private-token",
+      addonName: "Travel fixture",
+      name: "Film.mp4",
+      behaviorHints: { filename: "Film.mp4", videoSize: 1 },
+    });
+  });
+  await queue.load();
+  try {
+    const added = await queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt-provider-invalid-ready", selection: selection("queue-private-token") },
+      { kind: "movie", title: "Film" },
+      QUEUE_OWNER,
+      undefined,
+      providerPrioritySnapshot(),
+    );
+    assert.ok(added);
+    await waitFor(queue, () => queue.get(added.id)?.status === "completed");
+    assert.equal(resolutions, 2);
+    assert.equal(good.requests(), 1);
+    assert.equal(internalJobs(queue)[0]?.stream?.url, good.url);
+  } finally {
+    await queue.stop();
+    good.server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a Provider priority torrent fails closed when Real-Debrid is no longer configured", async () => {
+  const { directory, data, downloads, state } = await setup();
+  const hash = "6".repeat(40);
+  await writeFile(state, JSON.stringify([{
+    ...rawLazyJob(providerPrioritySnapshot()),
+    id: "provider-no-debrid",
+    ownerUserId: QUEUE_OWNER,
+    status: "waiting",
+    stream: {
+      infoHash: hash,
+      fileIdx: 0,
+      addonKey: "queue-private-token",
+      addonName: "Travel fixture",
+      name: "Film.mp4",
+      behaviorHints: { filename: "Film.mp4", videoSize: 1 },
+    },
+    sourceStreamAddonIdentity: "a".repeat(64),
+    targetSettings: defaultDownloadSettings().movie,
+    target: `${LIBRARY_ID}/Film/Film.mp4`,
+    libraryId: LIBRARY_ID,
+    debrid: {},
+    debridStartedAt: new Date().toISOString(),
+  }], null, 2));
+  const queue = openQueue(data, downloads, {
+    debrid: {
+      configured: () => false,
+      advance: async () => {
+        throw new Error("must not advance");
+      },
+    },
+  });
+  queue.setProviderPriorityResolver(async () => selectedProviderPriority({
+    infoHash: hash,
+    fileIdx: 0,
+    addonKey: "queue-private-token",
+    addonName: "Travel fixture",
+    name: "Film.mp4",
+    behaviorHints: { filename: "Film.mp4", videoSize: 1 },
+  }));
+  try {
+    await queue.load();
+    await waitFor(queue, () => queue.get("provider-no-debrid")?.status === "failed");
+    assert.equal(queue.get("provider-no-debrid")?.errorKey, "err.debridTokenMissing");
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("an explicit retry of Provider priority no-match resolves with a fresh budget", async () => {
+  const { directory, data, downloads } = await setup();
+  const { server, url, requests } = await countingServer();
+  let resolutions = 0;
+  const queue = openQueue(data, downloads);
+  queue.setProviderPriorityResolver(async (input) => {
+    resolutions += 1;
+    if (resolutions === 1) {
+      return {
+        status: "noMatch",
+        checkedCandidates: 1,
+        temporaryFailures: 0,
+        truncated: false,
+      };
+    }
+    assert.deepEqual(input.source.tried, []);
+    assert.equal(internalJobs(queue)[0]?.sourceFallbackAttempts, undefined);
+    return selectedProviderPriority(url);
+  });
+  await queue.load();
+  try {
+    const added = await queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt-provider-explicit-retry", selection: selection("queue-private-token") },
+      { kind: "movie", title: "Film" },
+      QUEUE_OWNER,
+      undefined,
+      providerPrioritySnapshot(),
+    );
+    assert.ok(added);
+    await waitFor(queue, () => queue.get(added.id)?.status === "failed");
+    internalJobs(queue)[0]!.sourceFallbackAttempts = SOURCE_FALLBACK_ATTEMPT_LIMIT;
+    internalJobs(queue)[0]!.source!.tried.push("http://127.0.0.1/stale");
+    await queue.retry(added.id);
+    await waitFor(queue, () => queue.get(added.id)?.status === "completed");
+    assert.equal(resolutions, 2);
+    assert.equal(requests(), 1);
+    assert.equal(internalJobs(queue)[0]?.sourceFallbackAttempts, undefined);
+  } finally {
+    await queue.stop();
+    server.close();
     await rm(directory, { recursive: true, force: true });
   }
 });

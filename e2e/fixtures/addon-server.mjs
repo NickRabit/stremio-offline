@@ -39,6 +39,8 @@ const prepareTravelVideo = () => {
 
 export const TRAVEL_VIDEO_ID = "tt-e2e-travel-episode";
 export const TRAVEL_SOURCE_SECRET = "travel-signed-source-canary";
+export const PROVIDER_PRIORITY_VIDEO_ID = "tt-e2e-provider-priority-episode";
+export const PROVIDER_PRIORITY_SOURCE_SECRET = "provider-priority-signed-source-canary";
 
 export const MOVIE = {
   id: "tt-e2e-movie",
@@ -101,6 +103,11 @@ const streamsFor = (id, provider = MANIFEST.id) => id === TRAVEL_VIDEO_ID ? [{
   title: `English \u{1F1EC}\u{1F1E7} 720p\nSRCSEL Travel fixture`,
   url: `http://127.0.0.1:${port}/travel-video.mp4?token=${TRAVEL_SOURCE_SECRET}`,
   behaviorHints: { filename: "SRCSEL Travel fixture S01E01.mp4", videoSize: 12_000_000 },
+}] : id === PROVIDER_PRIORITY_VIDEO_ID ? [{
+  name: "Provider priority 480p",
+  title: `English \u{1F1EC}\u{1F1E7} 480p\nSRCSEL Provider priority fixture`,
+  url: `http://127.0.0.1:${port}/travel-video.mp4?token=${PROVIDER_PRIORITY_SOURCE_SECRET}`,
+  behaviorHints: { filename: "SRCSEL Provider priority fixture S01E01.mp4", videoSize: 12_000_000 },
 }] : id === "tt-e2e-proxy" ? [{
   name: "Proxy fixture", title: "Movie query-canary", url: `http://127.0.0.1:${port}/proxy-fixture.mp4?token=query-canary`,
   behaviorHints: { proxyHeaders: { request: { Authorization: "Bearer header-canary" } } },

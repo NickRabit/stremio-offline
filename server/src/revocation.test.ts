@@ -200,7 +200,7 @@ test("an addon revocation aborts an active legacy lookup without pausing a queue
   assert.deepEqual(h.paused, ["checking"]);
 });
 
-test("an addon identity sweep pauses only the selected Travel jobs whose identity changed", async () => {
+test("an addon identity sweep pauses only selected profile jobs whose identity changed", async () => {
   const account = {
     id: "usr_a",
     username: "a",
@@ -225,6 +225,11 @@ test("an addon identity sweep pauses only the selected Travel jobs whose identit
   const addonState = [sourceAddon];
   const travelAdmission = {
     profile: { id: SOURCE_PROFILE_IDS.travel, revision: 1 },
+    operation: "downloadToLibrary",
+  } as DownloadJob["sourceAdmission"];
+  const providerPriorityAdmission = {
+    profile: { id: SOURCE_PROFILE_IDS.providerPriority, revision: 1 },
+    operation: "downloadToLibrary",
   } as DownloadJob["sourceAdmission"];
   const selected = { url: "https://media.example/film.mp4", addonKey: sourceAddon.key };
   const legacy = job("legacy", account.id, { stream: selected });
@@ -238,16 +243,30 @@ test("an addon identity sweep pauses only the selected Travel jobs whose identit
     sourceAdmission: travelAdmission,
     sourceStreamAddonIdentity: "b".repeat(64),
   });
-  const h = harness([legacy, fresh, stale]);
+  const providerFresh = job("provider-fresh", account.id, {
+    stream: selected,
+    sourceAdmission: providerPriorityAdmission,
+    sourceStreamAddonIdentity: addonIdentity(sourceAddon),
+  });
+  const providerStale = job("provider-stale", account.id, {
+    stream: selected,
+    sourceAdmission: providerPriorityAdmission,
+    sourceStreamAddonIdentity: "c".repeat(64),
+  });
+  const h = harness([legacy, fresh, stale, providerFresh, providerStale]);
   h.deps.source = { ...h.deps.source, users: () => [account], addons: () => addonState };
 
   await h.revocations.stopContent({ addonKey: sourceAddon.key });
-  assert.deepEqual(h.paused, ["stale"]);
+  assert.deepEqual(h.paused, ["stale", "provider-stale"]);
 
   h.paused.length = 0;
   addonState[0] = { ...sourceAddon, enabled: false };
   await h.revocations.stopContent({ addonKey: sourceAddon.key });
-  assert.deepEqual(h.paused, ["legacy", "fresh", "stale"], "existing addon removal sweeps still reach every job");
+  assert.deepEqual(
+    h.paused,
+    ["legacy", "fresh", "stale", "provider-fresh", "provider-stale"],
+    "existing addon removal sweeps still reach every job",
+  );
 });
 
 test("an external subtitle revocation aborts active lazy lookup without pausing a queued unrelated job", async () => {

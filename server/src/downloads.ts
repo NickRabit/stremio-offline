@@ -51,6 +51,8 @@ import {
 } from "./source-travel.js";
 import { SOURCE_PROFILE_IDS } from "./source-profiles.js";
 import type {
+  ProviderPriorityProfileResolution,
+  ProviderPriorityProfileResolverInput,
   TravelProfileResolution,
   TravelProfileResolverInput,
 } from "./source-profile-resolver.js";
@@ -194,9 +196,17 @@ const isTravelSnapshot = (
 ): snapshot is SourceAdmissionSnapshotV1 =>
   snapshot?.profile.id === SOURCE_PROFILE_IDS.travel && snapshot.profile.revision === 1;
 
+export const isExecutableDownloadSnapshot = (
+  snapshot: SourceAdmissionSnapshotV1 | undefined,
+): snapshot is SourceAdmissionSnapshotV1 =>
+  snapshot?.operation === "downloadToLibrary"
+  && snapshot.profile.revision === 1
+  && (snapshot.profile.id === SOURCE_PROFILE_IDS.travel
+    || snapshot.profile.id === SOURCE_PROFILE_IDS.providerPriority);
+
 export const isSelectedProfileJob = (
   job: Pick<DownloadJob, "sourceAdmission" | "stream">,
-): boolean => isTravelSnapshot(job.sourceAdmission) && job.stream !== undefined;
+): boolean => isExecutableDownloadSnapshot(job.sourceAdmission) && job.stream !== undefined;
 
 /** The library a job writes into, where it is named. A resolved job carries it on `libraryId`;
  *  an unresolved one names it in its qualified target, in the rule it was queued with, or --
@@ -256,7 +266,7 @@ export function ownerMayDownload(scope: DownloadOwnerScope, job: { stream?: Stre
     const addon = scope.addons.find((item) => item.key === addonKey);
     if (!addon?.enabled || !addonAllowed(addon, viewer)) return false;
   }
-  if (isTravelSnapshot(job.sourceAdmission) && job.stream) {
+  if (isExecutableDownloadSnapshot(job.sourceAdmission) && job.stream) {
     const streamAddon = job.stream.addonKey
       ? scope.addons.find((item) => item.key === job.stream!.addonKey)
       : undefined;
@@ -295,6 +305,9 @@ export type StreamResolver = (source: NonNullable<DownloadJob["source"]>, ownerU
 export type TravelProfileResolver = (
   input: TravelProfileResolverInput,
 ) => Promise<TravelProfileResolution>;
+export type ProviderPriorityProfileResolver = (
+  input: ProviderPriorityProfileResolverInput,
+) => Promise<ProviderPriorityProfileResolution>;
 export interface DebridEngine {
   configured: () => boolean;
   advance: (input: { infoHash: string; fileIdx?: number; torrentId?: string }) => Promise<DebridAdvance>;
@@ -416,18 +429,22 @@ const PRIVATE_STATE_ALIASES = [
   ["sourceFallbackAttempts", "travelSourceFallbackAttempts"],
 ] as const;
 
-const normalizePrivateStateAliases = (rawJob: Record<string, unknown>): void => {
+const normalizePrivateStateAliases = (
+  rawJob: Record<string, unknown>,
+  snapshot: SourceAdmissionSnapshotV1 | undefined,
+): void => {
   for (const [canonical, legacy] of PRIVATE_STATE_ALIASES) {
     const hasCanonical = Object.hasOwn(rawJob, canonical);
     const hasLegacy = Object.hasOwn(rawJob, legacy);
     if (hasCanonical && hasLegacy) throw new Error(`The ${canonical} state is ambiguous.`);
     if (!hasLegacy) continue;
+    if (!isTravelSnapshot(snapshot)) throw new Error(`The ${legacy} state is Travel-only.`);
     rawJob[canonical] = rawJob[legacy];
     delete rawJob[legacy];
   }
 };
 
-const validateTravelAddonIdentities = (
+const validateSelectedAddonIdentities = (
   rawJob: Record<string, unknown>,
   snapshot: SourceAdmissionSnapshotV1 | undefined,
 ): void => {
@@ -437,23 +454,23 @@ const validateTravelAddonIdentities = (
 
   const stream = rawJob.stream;
   const subtitle = rawJob.subtitle;
-  if (!isTravelSnapshot(snapshot)
+  if (!isExecutableDownloadSnapshot(snapshot)
     || stream === null
     || typeof stream !== "object"
     || typeof (stream as { addonKey?: unknown }).addonKey !== "string"
     || !isAddonIdentity(rawJob.sourceStreamAddonIdentity)) {
-    throw new Error("The Travel addon identity is misplaced or malformed.");
+    throw new Error("The selected addon identity is misplaced or malformed.");
   }
 
   const subtitleAddonKey = subtitle !== null && typeof subtitle === "object"
     ? (subtitle as { addonKey?: unknown }).addonKey
     : undefined;
   if (subtitleAddonKey === undefined) {
-    if (hasSubtitleIdentity) throw new Error("The Travel subtitle addon identity is misplaced.");
+    if (hasSubtitleIdentity) throw new Error("The selected subtitle addon identity is misplaced.");
     return;
   }
   if (typeof subtitleAddonKey !== "string" || !isAddonIdentity(rawJob.sourceSubtitleAddonIdentity)) {
-    throw new Error("The Travel subtitle addon identity is misplaced or malformed.");
+    throw new Error("The selected subtitle addon identity is misplaced or malformed.");
   }
 };
 
@@ -591,6 +608,7 @@ export class DownloadQueue {
   private admitting = new Set<string>();
   private resolver?: StreamResolver;
   private travelResolver?: TravelProfileResolver;
+  private providerPriorityResolver?: ProviderPriorityProfileResolver;
   private retrySourceHook?: (source: { type: string; videoId: string }) => void;
   private halt?: QueueHalt;
   private readonly stateFile: string;
@@ -676,6 +694,7 @@ export class DownloadQueue {
   /** index.ts owns source selection for lazy jobs, because it needs the addons and the settings. */
   setResolver(resolver: StreamResolver) { this.resolver = resolver; }
   setTravelResolver(resolver: TravelProfileResolver) { this.travelResolver = resolver; }
+  setProviderPriorityResolver(resolver: ProviderPriorityProfileResolver) { this.providerPriorityResolver = resolver; }
   setRetrySourceHook(hook: (source: { type: string; videoId: string }) => void) { this.retrySourceHook = hook; }
   setDebrid(engine: DebridEngine) { this.debrid = engine; }
   /** Wired after construction because the follow service that answers these is built later. */
@@ -725,12 +744,12 @@ export class DownloadQueue {
           for (const [index, rawJob] of (parsed as unknown[]).entries()) {
             if (rawJob === null || typeof rawJob !== "object") continue;
             const row = rawJob as Record<string, unknown>;
-            normalizePrivateStateAliases(row);
             const snapshot = Object.hasOwn(rawJob, "sourceAdmission")
               ? parseDownloadSourceAdmission((rawJob as { sourceAdmission: unknown }).sourceAdmission)
               : undefined;
+            normalizePrivateStateAliases(row, snapshot);
             if (snapshot) canonicalSnapshots.push({ index, snapshot });
-            validateTravelAddonIdentities(row, snapshot);
+            validateSelectedAddonIdentities(row, snapshot);
             const cursor = Object.hasOwn(rawJob, "travelCursor")
               ? parseTravelContinuationCursorV1((rawJob as { travelCursor: unknown }).travelCursor)
               : undefined;
@@ -742,9 +761,9 @@ export class DownloadQueue {
             }
             if (Object.hasOwn(rawJob, "sourceFallbackAttempts")) {
               const attempts = (rawJob as { sourceFallbackAttempts: unknown }).sourceFallbackAttempts;
-              if (!isTravelSnapshot(snapshot) || typeof attempts !== "number" || !Number.isSafeInteger(attempts) || attempts < 0
+              if (!isExecutableDownloadSnapshot(snapshot) || typeof attempts !== "number" || !Number.isSafeInteger(attempts) || attempts < 0
                 || attempts > SOURCE_FALLBACK_ATTEMPT_LIMIT) {
-                throw new Error("The Travel source fallback count is invalid.");
+                throw new Error("The selected source fallback count is invalid.");
               }
               canonicalSourceFallbackAttempts.push({ index, attempts });
             }
@@ -846,7 +865,7 @@ export class DownloadQueue {
     }
     for (const job of this.jobs) {
       if (job.status === "completed") continue;
-      if (isTravelSnapshot(job.sourceAdmission) && job.stream) {
+      if (isExecutableDownloadSnapshot(job.sourceAdmission) && job.stream) {
         await this.discardProfileSelection(job, false);
         if (job.status !== "paused" && job.status !== "failed") job.status = "queued";
       }
@@ -986,8 +1005,10 @@ export class DownloadQueue {
     const abandoned = job.target ? this.jobPath(job) : undefined;
     const subtitleFiles = this.subtitleFiles(job);
     const failedUrl = markTried ? job.stream?.url : undefined;
+    const failedTorrent = markTried && job.stream?.infoHash ? torrentKey(job.stream) : undefined;
     this.clearLazyChoice(job);
     if (failedUrl && job.source && !job.source.tried.includes(failedUrl)) job.source.tried.push(failedUrl);
+    if (failedTorrent && job.source && !job.source.tried.includes(failedTorrent)) job.source.tried.push(failedTorrent);
     delete job.travelCursor;
     delete job.travelTemporaryFailures;
     delete job.travelBudgetAttempts;
@@ -1526,6 +1547,28 @@ export class DownloadQueue {
       await this.save();
       return;
     }
+    if (isExecutableDownloadSnapshot(job.sourceAdmission) && job.stream) {
+      job.sourceFallbackAttempts = (job.sourceFallbackAttempts ?? 0) + 1;
+      if (job.sourceFallbackAttempts >= SOURCE_FALLBACK_ATTEMPT_LIMIT) {
+        await this.failProfileSourceFallback(job, true);
+        log("ERROR", "The selected torrent exhausted its source fallback budget", {
+          id: job.id, title: job.title, reason: message, tried: job.source.tried.length,
+        });
+        await this.save();
+        return;
+      }
+      await this.discardProfileSelection(job, true);
+      job.status = "queued";
+      this.setError(job, `Source failed (${message}), trying the next one\u2026`, "err.sourceFailedTryingNext", { reason: message });
+      job.updatedAt = new Date(this.now()).toISOString();
+      log("WARN", "The selected torrent failed, trying the next source", {
+        id: job.id, title: job.title, reason: message, tried: job.source.tried.length,
+        fallback: job.sourceFallbackAttempts,
+      });
+      await this.save();
+      this.pump();
+      return;
+    }
     if (job.stream) job.source.tried.push(torrentKey(job.stream));
     job.stream = undefined;
     job.subtitle = undefined;
@@ -1596,6 +1639,10 @@ export class DownloadQueue {
         const filename = result.filename ?? job.stream?.behaviorHints?.filename;
         if (this.debridWrongEpisode(job, filename)) {
           await this.debridSourceFailed(job, "Real-Debrid resolved a different episode.", "err.debridWrongEpisode");
+          return;
+        }
+        if (isExecutableDownloadSnapshot(job.sourceAdmission) && !isHttpDownloadUrl(result.url)) {
+          await this.debridSourceFailed(job, "Real-Debrid returned an invalid download URL.", "err.noMatchingSource");
           return;
         }
         job.stream = {
@@ -1945,88 +1992,35 @@ export class DownloadQueue {
 
   /** The addons are asked for streams only here, right before one particular episode is downloaded,
    *  so adding a whole season in bulk does not set off an avalanche of requests at once. */
-  private async resolveTravel(job: DownloadJob, controller: AbortController): Promise<boolean> {
-    if (!job.source) throw new SourceError("The job has neither a source nor a rule for finding one.");
-    if (!isTravelSnapshot(job.sourceAdmission) || !this.travelResolver) {
-      throw new SourceAdmissionRuntimeUnavailable();
+  private async stageSelectedProfileSource(
+    job: DownloadJob,
+    outcome: Extract<TravelProfileResolution | ProviderPriorityProfileResolution, { status: "selected" }>,
+    controller: AbortController,
+    startedAt: number,
+  ): Promise<boolean> {
+    if (!job.source || !job.sourceAdmission) {
+      throw new SourceError("The job has neither a source nor a rule for finding one.");
     }
-
-    const startedAt = this.now();
-    const outcome = await this.travelResolver({
-      source: job.source,
-      snapshot: job.sourceAdmission,
-      ownerUserId: this.ownerOf(job),
-      signal: controller.signal,
-      ...(job.travelCursor === undefined ? {} : { cursor: job.travelCursor }),
-    });
-    controller.signal.throwIfAborted();
-
-    if (outcome.status === "accessDenied") {
-      this.pauseForPermission(job);
-      return false;
+    const snapshot = job.sourceAdmission;
+    const hasUrl = outcome.stream.url !== undefined && outcome.stream.url !== "";
+    if (isTravelSnapshot(snapshot) && outcome.stream.infoHash !== undefined) {
+      throw new SourceError("No matching source was found.", "err.noMatchingSource");
     }
-    if (outcome.status === "cancelled") {
-      this.pauseForPermission(job);
-      return false;
-    }
-    if (outcome.status === "noMatch") {
-      delete job.travelCursor;
-      delete job.travelTemporaryFailures;
-      delete job.travelBudgetAttempts;
-      job.status = "failed";
-      job.speed = 0;
-      this.setError(job, "No matching source was found.", "err.noMatchingSource");
-      return false;
-    }
-    if (outcome.status === "budgetExhausted" || outcome.status === "temporaryFailure") {
-      const temporaryFailure = outcome.status === "temporaryFailure";
-      const failures = temporaryFailure ? (job.travelTemporaryFailures ?? 0) + 1 : undefined;
-      const budgetAttempts = temporaryFailure ? job.travelBudgetAttempts : (job.travelBudgetAttempts ?? 0) + 1;
-      if ((failures !== undefined && failures > TRAVEL_TEMPORARY_FAILURE_LIMIT)
-        || (budgetAttempts !== undefined && budgetAttempts > TRAVEL_BUDGET_ATTEMPT_LIMIT)) {
-        delete job.travelCursor;
-        delete job.travelTemporaryFailures;
-        delete job.travelBudgetAttempts;
-        job.status = "failed";
-        job.speed = 0;
-        this.setError(job, "No matching source was found.", "err.noMatchingSource");
-        await this.save();
-        return false;
+    if (hasUrl) {
+      if (!isHttpDownloadUrl(outcome.stream.url)) {
+        throw new SourceError("No matching source was found.", "err.noMatchingSource");
       }
-      const previousCursor = job.travelCursor;
-      const previousFailures = job.travelTemporaryFailures;
-      const previousBudgetAttempts = job.travelBudgetAttempts;
-      const previousStatus = job.status;
-      const previousNotBefore = job.notBefore;
-      const wait = this.retryDelay(failures ?? 1);
-      await this.persist({
-        apply: () => {
-          job.travelCursor = outcome.cursor;
-          if (failures === undefined) delete job.travelTemporaryFailures;
-          else job.travelTemporaryFailures = failures;
-          if (budgetAttempts === undefined) delete job.travelBudgetAttempts;
-          else job.travelBudgetAttempts = budgetAttempts;
-          job.status = "queued";
-          job.notBefore = this.now() + wait;
-          this.setError(job);
-        },
-        revert: () => {
-          if (previousCursor === undefined) delete job.travelCursor;
-          else job.travelCursor = previousCursor;
-          if (previousFailures === undefined) delete job.travelTemporaryFailures;
-          else job.travelTemporaryFailures = previousFailures;
-          if (previousBudgetAttempts === undefined) delete job.travelBudgetAttempts;
-          else job.travelBudgetAttempts = previousBudgetAttempts;
-          job.status = previousStatus;
-          job.notBefore = previousNotBefore;
-        },
-      });
-      return false;
+    } else if (typeof outcome.stream.infoHash !== "string"
+      || outcome.stream.infoHash.trim() === "") {
+      throw new SourceError("No matching source was found.", "err.noMatchingSource");
     }
-
-    if (outcome.stream.infoHash !== undefined
-      || !isHttpDownloadUrl(outcome.stream.url)
-      || (outcome.subtitle !== undefined && !isHttpDownloadUrl(outcome.subtitle.url))) {
+    if (!hasUrl && this.kindOf(job) === "series"
+      && (typeof outcome.stream.fileIdx !== "number"
+        || !Number.isSafeInteger(outcome.stream.fileIdx)
+        || outcome.stream.fileIdx < 0)) {
+      throw new SourceError("No matching source was found.", "err.noMatchingSource");
+    }
+    if (outcome.subtitle !== undefined && !isHttpDownloadUrl(outcome.subtitle.url)) {
       throw new SourceError("No matching source was found.", "err.noMatchingSource");
     }
     if (isRemoteDownloadSource(outcome.stream)
@@ -2137,10 +2131,114 @@ export class DownloadQueue {
     return true;
   }
 
+  private async resolveProfile(job: DownloadJob, controller: AbortController): Promise<boolean> {
+    if (!job.source) throw new SourceError("The job has neither a source nor a rule for finding one.");
+    const snapshot = job.sourceAdmission;
+    if (!isExecutableDownloadSnapshot(snapshot)) throw new SourceAdmissionRuntimeUnavailable();
+    const startedAt = this.now();
+
+    if (snapshot.profile.id === SOURCE_PROFILE_IDS.travel) {
+      if (!this.travelResolver) throw new SourceAdmissionRuntimeUnavailable();
+      const outcome = await this.travelResolver({
+        source: job.source,
+        snapshot,
+        ownerUserId: this.ownerOf(job),
+        signal: controller.signal,
+        ...(job.travelCursor === undefined ? {} : { cursor: job.travelCursor }),
+      });
+      controller.signal.throwIfAborted();
+
+      if (outcome.status === "accessDenied" || outcome.status === "cancelled") {
+        this.pauseForPermission(job);
+        return false;
+      }
+      if (outcome.status === "noMatch") {
+        delete job.travelCursor;
+        delete job.travelTemporaryFailures;
+        delete job.travelBudgetAttempts;
+        job.status = "failed";
+        job.speed = 0;
+        this.setError(job, "No matching source was found.", "err.noMatchingSource");
+        return false;
+      }
+      if (outcome.status === "budgetExhausted" || outcome.status === "temporaryFailure") {
+        const temporaryFailure = outcome.status === "temporaryFailure";
+        const failures = temporaryFailure ? (job.travelTemporaryFailures ?? 0) + 1 : undefined;
+        const budgetAttempts = temporaryFailure ? job.travelBudgetAttempts : (job.travelBudgetAttempts ?? 0) + 1;
+        if ((failures !== undefined && failures > TRAVEL_TEMPORARY_FAILURE_LIMIT)
+          || (budgetAttempts !== undefined && budgetAttempts > TRAVEL_BUDGET_ATTEMPT_LIMIT)) {
+          delete job.travelCursor;
+          delete job.travelTemporaryFailures;
+          delete job.travelBudgetAttempts;
+          job.status = "failed";
+          job.speed = 0;
+          this.setError(job, "No matching source was found.", "err.noMatchingSource");
+          await this.save();
+          return false;
+        }
+        const previousCursor = job.travelCursor;
+        const previousFailures = job.travelTemporaryFailures;
+        const previousBudgetAttempts = job.travelBudgetAttempts;
+        const previousStatus = job.status;
+        const previousNotBefore = job.notBefore;
+        const wait = this.retryDelay(failures ?? 1);
+        await this.persist({
+          apply: () => {
+            job.travelCursor = outcome.cursor;
+            if (failures === undefined) delete job.travelTemporaryFailures;
+            else job.travelTemporaryFailures = failures;
+            if (budgetAttempts === undefined) delete job.travelBudgetAttempts;
+            else job.travelBudgetAttempts = budgetAttempts;
+            job.status = "queued";
+            job.notBefore = this.now() + wait;
+            this.setError(job);
+          },
+          revert: () => {
+            if (previousCursor === undefined) delete job.travelCursor;
+            else job.travelCursor = previousCursor;
+            if (previousFailures === undefined) delete job.travelTemporaryFailures;
+            else job.travelTemporaryFailures = previousFailures;
+            if (previousBudgetAttempts === undefined) delete job.travelBudgetAttempts;
+            else job.travelBudgetAttempts = previousBudgetAttempts;
+            job.status = previousStatus;
+            job.notBefore = previousNotBefore;
+          },
+        });
+        return false;
+      }
+      return this.stageSelectedProfileSource(job, outcome, controller, startedAt);
+    }
+
+    if (snapshot.profile.id !== SOURCE_PROFILE_IDS.providerPriority || !this.providerPriorityResolver) {
+      throw new SourceAdmissionRuntimeUnavailable();
+    }
+    const outcome = await this.providerPriorityResolver({
+      source: job.source,
+      snapshot,
+      ownerUserId: this.ownerOf(job),
+      signal: controller.signal,
+    });
+    controller.signal.throwIfAborted();
+    if (outcome.status === "accessDenied" || outcome.status === "cancelled") {
+      this.pauseForPermission(job);
+      return false;
+    }
+    if (outcome.status === "noMatch") {
+      if (outcome.temporaryFailures > 0) {
+        throw new AppError("No matching source was found.", "err.noMatchingSource", 503);
+      }
+      job.status = "failed";
+      job.speed = 0;
+      this.setError(job, "No matching source was found.", "err.noMatchingSource");
+      return false;
+    }
+    return this.stageSelectedProfileSource(job, outcome, controller, startedAt);
+  }
+
   private async resolve(job: DownloadJob, controller: AbortController): Promise<boolean> {
     if (!job.source) throw new SourceError("The job has neither a source nor a rule for finding one.");
     if (job.sourceAdmission) {
-      return this.resolveTravel(job, controller);
+      return this.resolveProfile(job, controller);
     }
     if (!this.resolver) throw new SourceError("Source selection is unavailable.");
     const startedAt = this.now();
@@ -2303,7 +2401,7 @@ export class DownloadQueue {
     const libraryRefusal = await this.libraryKindRefusal(job);
     if (!this.publicationLive(job, signal)) return { status: "stopped" };
     if (libraryRefusal) return { status: "library", error: libraryRefusal };
-    if (!isTravelSnapshot(job.sourceAdmission)) return { status: "allowed" };
+    if (!isExecutableDownloadSnapshot(job.sourceAdmission) || !job.stream) return { status: "allowed" };
     const refusal = await this.ownerRefusal(job);
     if (!this.publicationLive(job, signal)) return { status: "stopped" };
     if (refusal?.reason === "library") return { status: "library", error: refusal.error };

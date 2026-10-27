@@ -15,7 +15,7 @@ import { applyAddonManifestRefreshes } from "./addon-identity.js";
 import { DeviceTransfers } from "./device-transfers.js";
 import { ClientLogStore } from "./client-logs.js";
 import { createSourceResolver, type SourceResolverDeps } from "./source-resolver.js";
-import { createTravelProfileResolver } from "./source-profile-resolver.js";
+import { createProviderPriorityProfileResolver, createTravelProfileResolver } from "./source-profile-resolver.js";
 import { ImageStats, useImageStats } from "./image-stats.js";
 import { MosaicCache } from "./mosaic.js";
 import { ProviderStats, useProviderStats } from "./provider-stats.js";
@@ -383,6 +383,7 @@ const queueResolverDeps: SourceResolverDeps = {
 };
 queue.setResolver(createSourceResolver(queueResolverDeps));
 queue.setTravelResolver(createTravelProfileResolver(queueResolverDeps));
+queue.setProviderPriorityResolver(createProviderPriorityProfileResolver(queueResolverDeps));
 await playback.load();
 
 /** With no account at all and no fallback credentials, nothing can be done. */
