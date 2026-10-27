@@ -82,6 +82,7 @@ import type { AddonRecord, MetaItem, StreamItem } from "./types.js";
 import { createLibraryActions } from "./library-actions.js";
 import { LibraryOps } from "./library-ops.js";
 import { registerAddonsRoutes } from "./routes/addons.js";
+import { registerAdminSourceProfilesRoutes } from "./routes/admin-source-profiles.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerCatalogRoutes } from "./routes/catalog.js";
 import { registerContentRoutes } from "./routes/content.js";
@@ -783,6 +784,7 @@ const routeContext: RouteContext = {
 registerAuthRoutes(app, routeContext);
 registerUsersRoutes(app, { ...routeContext, deleteUserAccess, permissionsChanged });
 registerSourceProfilesRoutes(app, routeContext);
+registerAdminSourceProfilesRoutes(app, routeContext);
 
 /** The page only ever holds our own id, so anything it hands back is turned into the
  *  real address again before it is stored or downloaded. */
