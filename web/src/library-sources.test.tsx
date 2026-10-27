@@ -36,9 +36,19 @@ const seen: Array<{ path: string; signal: AbortSignal | null | undefined }> = []
 let root: Root;
 let host: HTMLDivElement;
 let latest: LibrarySourcesState | null = null;
+const subscriberRoots = new Set<Root>();
 
 function Harness(options: LibrarySourcesOptions) {
   latest = useLibrarySources(options);
+  return null;
+}
+
+function ObservedHarness({ options: current, record }: {
+  options: LibrarySourcesOptions;
+  record: (state: LibrarySourcesState) => void;
+}) {
+  const state = useLibrarySources(current);
+  record(state);
   return null;
 }
 
@@ -69,6 +79,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  for (const subscriberRoot of subscriberRoots) act(() => subscriberRoot.unmount());
+  subscriberRoots.clear();
   act(() => root.unmount());
   host.remove();
   vi.unstubAllGlobals();
@@ -80,6 +92,30 @@ const options = (over: Partial<LibrarySourcesOptions> = {}): LibrarySourcesOptio
 const render = async (over: Partial<LibrarySourcesOptions> = {}) => {
   await act(async () => { root.render(<Harness {...options(over)}/>); });
   await flush();
+};
+const mountSubscriber = () => {
+  const subscriberHost = document.createElement("div");
+  document.body.appendChild(subscriberHost);
+  let subscriberRoot: Root | null = createRoot(subscriberHost);
+  subscriberRoots.add(subscriberRoot);
+  let state: LibrarySourcesState | null = null;
+  return {
+    latest: () => state,
+    render: async (over: Partial<LibrarySourcesOptions> = {}) => {
+      if (!subscriberRoot) throw new Error("Subscriber was unmounted");
+      await act(async () => {
+        subscriberRoot!.render(<ObservedHarness options={options(over)} record={(next) => { state = next; }}/>);
+      });
+      await flush();
+    },
+    unmount: () => {
+      if (!subscriberRoot) return;
+      act(() => subscriberRoot!.unmount());
+      subscriberRoots.delete(subscriberRoot);
+      subscriberRoot = null;
+      subscriberHost.remove();
+    },
+  };
 };
 const groupsOf = (kind: LibrarySourceGroup["kind"]) => (latest?.groups ?? []).filter((group) => group.kind === kind);
 const ids = (streams: Stream[]) => streams.map((row) => row.sourceId).sort();
@@ -249,6 +285,76 @@ describe("useLibrarySources", () => {
     expect(calls.addon.filter((url) => url.searchParams.get("addon") === "a")).toHaveLength(2);
     expect(calls.addon.filter((url) => url.searchParams.get("addon") === "b")).toHaveLength(1);
     expect(calls.remote).toHaveLength(1);
+  });
+
+  it("characterizes duplicated request fan-out for two open subscribers of one subject", async () => {
+    const providerReplies = [deferred<Response>(), deferred<Response>()];
+    let providerReply = 0;
+    providers = () => providerReplies[providerReply++]!.promise;
+    const first = mountSubscriber();
+    const second = mountSubscriber();
+
+    await first.render({ open: true });
+    await second.render({ open: true });
+    expect(calls.providers).toHaveLength(2);
+    expect(calls.addon).toHaveLength(0);
+    expect(calls.local).toHaveLength(2);
+    expect(calls.remote).toHaveLength(2);
+    expect(calls.libraries).toHaveLength(0);
+
+    await act(async () => {
+      for (const reply of providerReplies) reply.resolve(json([{ key: "a", name: "Alpha" }, { key: "b", name: "Beta" }]));
+    });
+    await flush();
+
+    expect(calls.providers.map((url) => url.pathname)).toEqual([
+      "/api/stream-sources/movie/tt5000",
+      "/api/stream-sources/movie/tt5000",
+    ]);
+    expect(calls.addon).toHaveLength(4);
+    expect(calls.addon.filter((url) => url.searchParams.get("addon") === "a")).toHaveLength(2);
+    expect(calls.addon.filter((url) => url.searchParams.get("addon") === "b")).toHaveLength(2);
+    expect(calls.local.map((url) => url.pathname)).toEqual([
+      "/api/local-streams/movie/tt5000",
+      "/api/local-streams/movie/tt5000",
+    ]);
+    expect(calls.remote.map((url) => url.pathname)).toEqual([
+      "/api/remote-libraries/rlib_b/streams/movie/tt5000",
+      "/api/remote-libraries/rlib_b/streams/movie/tt5000",
+    ]);
+    expect(ids(first.latest()!.streams)).toEqual(["addon-a", "addon-b", "local-1", "other-rlib_b"]);
+    expect(ids(second.latest()!.streams)).toEqual(["addon-a", "addon-b", "local-1", "other-rlib_b"]);
+  });
+
+  it("keeps only the remaining subscriber's addon requests live when one unmounts", async () => {
+    const addonReplies: Array<ReturnType<typeof deferred<Response>>> = [];
+    addonStreams = () => {
+      const reply = deferred<Response>();
+      addonReplies.push(reply);
+      return reply.promise;
+    };
+    const first = mountSubscriber();
+    const second = mountSubscriber();
+
+    await first.render({ open: true });
+    await second.render({ open: true });
+    const addonSignals = seen.filter((entry) => entry.path.startsWith("/api/streams/")).map((entry) => entry.signal!);
+    expect(calls.addon).toHaveLength(4);
+    expect(addonSignals).toHaveLength(4);
+
+    first.unmount();
+    expect(addonSignals.slice(0, 2).every((signal) => signal.aborted)).toBe(true);
+    expect(addonSignals.slice(2).every((signal) => !signal.aborted)).toBe(true);
+
+    await act(async () => {
+      addonReplies[0]!.resolve(json([stream("aborted-a")]));
+      addonReplies[1]!.resolve(json([stream("aborted-b")]));
+      addonReplies[2]!.resolve(json([stream("remaining-a")]));
+      addonReplies[3]!.resolve(json([stream("remaining-b")]));
+    });
+    await flush();
+
+    expect(ids(second.latest()!.streams)).toEqual(["local-1", "other-rlib_b", "remaining-a", "remaining-b"]);
   });
 
   it("keeps every answered group when the chooser closes and opens again", async () => {
