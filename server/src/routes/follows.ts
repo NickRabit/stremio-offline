@@ -11,6 +11,7 @@ import type { DownloadTargetSettings, MetaItem } from "../types.js";
 import { feedTokenMatches, type FollowDefaults, type UserData, type UserRecord } from "../users.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 import { createSelectionParser } from "./downloads.js";
+import { legacySelectionFromAdmission, materializeSourceProfileAdmission, profileSelectionReference } from "./source-profile-selection.js";
 
 export interface FollowDeps extends RouteContext {
   follows: FollowService;
@@ -95,7 +96,7 @@ const followView = (follow: Follow, now: number): FollowView => {
       latest = episode;
     }
   }
-  const { episodes: _episodes, poster, ...rest } = follow;
+  const { episodes: _episodes, poster, autoDownload, ...rest } = follow;
   return {
     ...rest,
     // Stored as the provider's address; the page only ever loads our own proxy.
@@ -104,6 +105,7 @@ const followView = (follow: Follow, now: number): FollowView => {
     downloads: downloadsSummary(follow),
     ...(next ? { nextEpisode: episodeView(next) } : {}),
     ...(latest ? { latestEpisode: episodeView(latest) } : {}),
+    ...(autoDownload ? { autoDownload } : {}),
     // A film is one record; the dialog and the card read its release and download from here.
     ...(follow.type === "movie" && follow.episodes["1:1"] ? { movie: movieView(follow.episodes["1:1"]) } : {}),
   };
@@ -307,7 +309,19 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
           graceDays = Number(item.graceDays);
           if (!Number.isInteger(graceDays) || graceDays < 0 || graceDays > 30) throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
         }
-        const selection = await parseSelection(req, { selection: item.selection, target: item.target, metaType: follow.type, parentId: follow.metaId });
+        const profileReference = profileSelectionReference(item.selection);
+        if (profileReference.present && graceDays !== undefined && graceDays > 0) {
+          throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
+        }
+        const admission = profileReference.present
+          ? materializeSourceProfileAdmission(deps, currentUser(req), profileReference.reference)
+          : undefined;
+        const selection = await parseSelection(req, {
+          selection: admission ? legacySelectionFromAdmission(admission) : item.selection,
+          target: item.target,
+          metaType: follow.type,
+          parentId: follow.metaId,
+        });
         const libraries = store.libraries();
         const targetSettings = pinnedTarget(selection, libraries, defaultDownloadLibrary, follow.type === "movie" ? "movie" : "series");
         // The rule may name a library that is gone, in which case the pinned target is the
@@ -322,7 +336,16 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
           ...(startEpisode != null ? { startEpisode } : {}),
           ...(aheadCount != null ? { aheadCount } : {}),
           ...(graceDays ? { graceDays } : {}),
-          selection: { ...selection, targetSettings },
+          selection: admission
+            ? {
+                ...legacySelectionFromAdmission(admission),
+                titleLanguage: selection.titleLanguage,
+                targetSettings,
+              }
+            : { ...selection, targetSettings },
+          ...(admission ? {
+            sourceProfile: { profileId: admission.profile.id, revision: admission.profile.revision },
+          } : {}),
         };
         await follows.setAutoDownload(follow.id, owner.id, value);
       }
@@ -397,7 +420,11 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
         ...(episode.dateUncertain ? { dateUncertain: true } : {}),
         ...(episode.ambiguous ? { ambiguous: true } : {}),
         eligibility: downloadEligibility(follow, episode, now, watched),
-        ...(episode.download ? { download: episode.download } : {}),
+        ...(episode.download ? {
+          download: Object.fromEntries(
+            Object.entries(episode.download).filter(([key]) => key !== "sourceAdmission"),
+          ),
+        } : {}),
       }))
       .sort((left, right) => left.season - right.season || left.episode - right.episode);
     res.json({ episodes });

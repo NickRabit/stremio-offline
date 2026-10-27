@@ -6,6 +6,7 @@ import { visibleLibraries, type LibraryRecord } from "./libraries.js";
 import { remoteLibraryVisibleTo } from "./media-server-access.js";
 import type { MediaConnectionRecord, RemoteLibraryRecord } from "./media-server-types.js";
 import {
+  isExecutableDownloadProfile,
   SOURCE_PROFILE_DEFINITIONS,
   type SourceOperation,
   type SourceProfileDefinition,
@@ -359,6 +360,9 @@ const supportsOperation = (
   if (!definition.operations.includes(context.operation)) {
     throw new SourceAdmissionRejected("operationUnsupported");
   }
+  if (context.operation === "downloadToLibrary" && !isExecutableDownloadProfile(definition)) {
+    throw new SourceAdmissionRejected("operationUnsupported");
+  }
   if (context.viewer.disabled) throw new SourceAdmissionRejected("operationForbidden");
   if (context.operation === "downloadToLibrary" && !mayDownloadToLibrary(context.viewer)) {
     throw new SourceAdmissionRejected("operationForbidden");
@@ -437,4 +441,12 @@ export function parseSourceAdmissionSnapshotV1(input: unknown): SourceAdmissionS
     if (error instanceof SourceAdmissionValidationError) throw error;
     throw new SourceAdmissionValidationError();
   }
+}
+
+export function parseDownloadSourceAdmissionSnapshotV1(input: unknown): SourceAdmissionSnapshotV1 {
+  const snapshot = parseSourceAdmissionSnapshotV1(input);
+  if (snapshot.operation !== "downloadToLibrary") {
+    throw new SourceAdmissionValidationError();
+  }
+  return snapshot;
 }

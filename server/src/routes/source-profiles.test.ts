@@ -201,7 +201,7 @@ test("GET /api/source-profiles returns the fixed catalogue for an administrator"
     ["id", "nameKey", "operations", "policy", "revision"],
   ]);
   assert.deepEqual(profiles.map((profile) => profile.operations), [
-    ["play", "downloadToLibrary", "downloadToDevice"],
+    ["play", "downloadToDevice"],
     ["play", "downloadToLibrary", "downloadToDevice"],
     ["play", "downloadToLibrary", "downloadToDevice"],
   ]);
@@ -253,7 +253,7 @@ test("GET /api/source-profiles filters current operation grants", async (t) => {
   member.permissions.downloadToLibrary = true;
   const withLibrary = await api(harness.base, MEMBER);
   assert.deepEqual(((await withLibrary.json()) as { profiles: Array<{ operations: string[] }> }).profiles.map((profile) => profile.operations), [
-    ["play", "downloadToLibrary"],
+    ["play"],
     ["play", "downloadToLibrary"],
     ["play", "downloadToLibrary"],
   ]);
@@ -261,7 +261,7 @@ test("GET /api/source-profiles filters current operation grants", async (t) => {
   member.permissions.downloadToDevice = true;
   const withDevice = await api(harness.base, MEMBER);
   assert.deepEqual(((await withDevice.json()) as { profiles: Array<{ operations: string[] }> }).profiles.map((profile) => profile.operations), [
-    ["play", "downloadToLibrary", "downloadToDevice"],
+    ["play", "downloadToDevice"],
     ["play", "downloadToLibrary", "downloadToDevice"],
     ["play", "downloadToLibrary", "downloadToDevice"],
   ]);
@@ -343,7 +343,7 @@ const SOURCE_PROFILES_EXPECTED = [
     id: "39de76cc-0ca0-4a5e-95ad-08927fb45410",
     nameKey: "sourceProfile.recommended",
     revision: 1,
-    operations: ["play", "downloadToLibrary", "downloadToDevice"],
+    operations: ["play", "downloadToDevice"],
     policy: {
       schemaVersion: 1,
       scope: { mode: "allAvailable" },

@@ -7,6 +7,8 @@ import type { DownloadSelection } from "./downloads.js";
 import type { AppError } from "./errors.js";
 import { activityItems, aheadWindow, calendarFeed, calendarItems, downloadEligibility, effectiveSelection, FollowService, FollowStore, followStaggerMs, graceUntil, movieEpisode, normalizeFollowEpisodes, reconcileReleaseDates, seasonsForReconcile, undatedCalendarItems, type EpisodeDownload, type Follow, type FollowAutoDownload, type FollowDeps, type FollowEpisode, type FollowJob, type FollowQueue } from "./follows.js";
 import type { MediaInfo } from "./naming.js";
+import { materializeSourceAdmissionPolicy, parseSourceAdmissionSnapshotV1, SourceAdmissionRejected, type SourceAdmissionSnapshotV1 } from "./source-admission.js";
+import { SOURCE_PROFILE_DEFINITIONS, SOURCE_PROFILE_IDS } from "./source-profiles.js";
 import type { MetaItem } from "./types.js";
 
 const temp = () => mkdtempSync(path.join(tmpdir(), "follows-"));
@@ -21,6 +23,22 @@ const episode = (season: number, number: number, videoId: string, released?: str
 });
 const loaded = async (dir: string) => { const store = new FollowStore(dir); await store.load(); return store; };
 const messageKeyOf = (error: unknown) => (error as { messageKey?: string }).messageKey;
+const profileAdmission = (profileId: string = SOURCE_PROFILE_IDS.travel): SourceAdmissionSnapshotV1 => {
+  const definition = SOURCE_PROFILE_DEFINITIONS.find((candidate) => candidate.id === profileId);
+  assert.ok(definition);
+  const providerKeys = ["addon:addon"];
+  return parseSourceAdmissionSnapshotV1({
+    schemaVersion: 1,
+    profile: { id: profileId, revision: definition.revision },
+    operation: "downloadToLibrary",
+    providerKeys,
+    policy: materializeSourceAdmissionPolicy(
+      definition.policy,
+      providerKeys,
+      { audioLanguage: "en", subtitleLanguage: "en" },
+    ),
+  });
+};
 
 interface FakeJob {
   id: string;
@@ -35,20 +53,24 @@ interface FakeJob {
  *  asked to do, and can be told to complete, fail, drop or refuse a job. */
 const fakeQueue = () => {
   const jobs: FakeJob[] = [];
-  const added: Array<{ title: string; source: { type: string; videoId: string; selection?: DownloadSelection }; ownerUserId: string; follow: { followId: string; episodeKey: string; intent: string } }> = [];
+  const added: Array<{ title: string; source: { type: string; videoId: string; selection?: DownloadSelection }; ownerUserId: string; follow: { followId: string; episodeKey: string; intent: string }; sourceAdmission?: SourceAdmissionSnapshotV1 }> = [];
   const retried: string[] = [];
   const retriedWith: DownloadSelection[] = [];
   const removed: string[] = [];
   const hooks: { remove?: (job: FakeJob) => Promise<void> } = {};
+  let beforeAdd: (() => void) | undefined;
   let nextId = 1;
   let failAdd = false;
   const queue: FollowQueue = {
-    addPending: async (title, source, _media: MediaInfo | undefined, ownerUserId, follow) => {
+    addPending: async (title, source, _media: MediaInfo | undefined, ownerUserId, follow, sourceAdmission) => {
+      const check = beforeAdd;
+      beforeAdd = undefined;
+      check?.();
       if (failAdd) { failAdd = false; throw new Error("addPending failed"); }
       if (jobs.some((job) => job.source?.type === source.type && job.source?.videoId === source.videoId && job.status !== "completed" && job.status !== "failed")) return undefined;
       const job: FakeJob = { id: `job-${nextId++}`, status: "queued", follow, source: { type: source.type, videoId: source.videoId } };
       jobs.push(job);
-      added.push({ title, source, ownerUserId, follow });
+      added.push({ title, source, ownerUserId, follow, ...(sourceAdmission ? { sourceAdmission } : {}) });
       return { id: job.id };
     },
     findActiveEpisode: (_ownerUserId, type, videoId) => jobs.find((job) => job.source?.type === type && job.source?.videoId === videoId && job.status !== "completed" && job.status !== "failed"),
@@ -66,6 +88,7 @@ const fakeQueue = () => {
   };
   return {
     queue, jobs, added, retried, retriedWith, removed, hooks,
+    beforeNextAdd: (check: () => void) => { beforeAdd = check; },
     failNextAdd: () => { failAdd = true; },
     complete: (id: string) => { const job = jobs.find((item) => item.id === id); if (job) job.status = "completed"; },
     fail: (id: string, errorKey?: string) => { const job = jobs.find((item) => item.id === id); if (job) { job.status = "failed"; job.errorKey = errorKey; } },
@@ -835,6 +858,169 @@ test("a vanished accepted job goes to attention and only an explicit retry re-qu
   assert.equal(download.intent, `${id}:1:1:2`);
   assert.equal(q.added.length, 2, "exactly one new job");
   assert.equal(q.added[1].follow.intent, `${id}:1:1:2`);
+});
+
+test("a profile admission is reserved with its snapshot before the queue receives it", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const snapshot = profileAdmission();
+  const service = buildService(store, q, { admitSourceProfile: () => snapshot });
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule({
+    sourceProfile: { profileId: SOURCE_PROFILE_IDS.travel, revision: 1 },
+  }));
+
+  q.beforeNextAdd(() => {
+    const download = store.get(id)!.episodes["1:1"].download!;
+    assert.equal(download.state, "reserved");
+    assert.deepEqual(download.sourceAdmission, snapshot);
+  });
+  await service.admit(id);
+
+  assert.deepEqual(q.added[0]?.sourceAdmission, snapshot);
+  assert.deepEqual(store.get(id)!.episodes["1:1"].download?.sourceAdmission, snapshot);
+});
+
+test("automatic re-admission keeps the frozen profile while an explicit retry uses the current one", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  let now = NOW;
+  const travel = profileAdmission();
+  const providerPriority = profileAdmission(SOURCE_PROFILE_IDS.providerPriority);
+  const service = buildService(store, q, {
+    now: () => now,
+    admitSourceProfile: (_ownerUserId, reference) =>
+      reference.profileId === SOURCE_PROFILE_IDS.providerPriority ? providerPriority : travel,
+  });
+  q.hooks.remove = (job) => service.jobRemoving(job, "user");
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule({
+    sourceProfile: { profileId: SOURCE_PROFILE_IDS.travel, revision: 1 },
+  }));
+
+  await service.admit(id);
+  q.fail(q.jobs[0].id, "err.noMatchingSource");
+  await service.sync();
+
+  const current = store.get(id)!.autoDownload!;
+  await service.setAutoDownload(id, "u1", {
+    ...current,
+    sourceProfile: { profileId: SOURCE_PROFILE_IDS.providerPriority, revision: 1 },
+  });
+  q.fail(q.jobs[0].id, "err.noMatchingSource");
+  await service.sync();
+  await q.queue.remove(q.jobs[0].id);
+
+  now += 6 * 60 * 60_000;
+  await service.sync();
+  assert.deepEqual(q.added[1]?.sourceAdmission, travel, "the cleared automatic job keeps the original rules");
+
+  q.fail(q.jobs[0].id, "err.noMatchingSource");
+  await service.sync();
+  await q.queue.remove(q.jobs[0].id);
+  await service.retryEpisode(id, "u1", "1:1");
+  assert.deepEqual(q.added[2]?.sourceAdmission, providerPriority, "an explicit retry asks for the current rules");
+});
+
+test("a refused profile admission leaves the episode in attention and queues nothing", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const service = buildService(store, q, {
+    admitSourceProfile: () => { throw new SourceAdmissionRejected("providerScopeUnavailable"); },
+  });
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule({
+    sourceProfile: { profileId: SOURCE_PROFILE_IDS.travel, revision: 1 },
+  }));
+
+  await service.admit(id);
+
+  const download = store.get(id)!.episodes["1:1"].download!;
+  assert.equal(download.state, "attention");
+  assert.equal(download.reasonKey, "err.sourceProviderScopeUnavailable");
+  assert.equal(download.sourceAdmission, undefined);
+  assert.deepEqual(q.added, []);
+});
+
+test("a malformed stored episode snapshot affects only that episode", async (t) => {
+  const dir = temp();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const valid = profileAdmission();
+  const untouched: EpisodeDownload = {
+    state: "queued",
+    intent: "f1:1:2:1",
+    generation: 1,
+    jobId: "job-good",
+    attempts: 0,
+    updatedAt: RELEASED,
+    sourceAdmission: valid,
+  };
+  writeFileSync(file(dir), JSON.stringify({
+    version: 1,
+    follows: [{
+      id: "f1", ownerUserId: "u1", type: "series", metaId: "tt1", name: "Show",
+      createdAt: "2024-01-01T00:00:00.000Z", updatedAt: "2024-01-01T00:00:00.000Z",
+      enabled: true, revision: 1, nextCheckAt: "2024-01-01T00:00:00.000Z", failures: 0,
+      autoDownload: rule({ sourceProfile: { profileId: SOURCE_PROFILE_IDS.travel, revision: 1 } }),
+      episodes: {
+        "1:1": {
+          ...episode(1, 1, "v1", RELEASED),
+          download: {
+            state: "queued", intent: "f1:1:1:1", generation: 1, jobId: "job-bad",
+            attempts: 0, updatedAt: RELEASED, sourceAdmission: { schemaVersion: 2 },
+          },
+        },
+        "1:2": { ...episode(1, 2, "v2", RELEASED), download: untouched },
+      },
+    }],
+  }));
+
+  const store = await loaded(dir);
+  const broken = store.get("f1")!.episodes["1:1"].download!;
+  assert.equal(broken.state, "attention");
+  assert.equal(broken.reasonKey, "err.followJobMissing");
+  assert.equal(broken.sourceAdmission, undefined);
+  assert.deepEqual(store.get("f1")!.episodes["1:2"].download, untouched);
+});
+
+test("a malformed stored source profile falls back only when a legacy selection exists", async (t) => {
+  const dir = temp();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const base = {
+    ownerUserId: "u1", type: "series", metaId: "tt1", name: "Show",
+    createdAt: "2024-01-01T00:00:00.000Z", updatedAt: "2024-01-01T00:00:00.000Z",
+    enabled: true, revision: 1, nextCheckAt: "2024-01-01T00:00:00.000Z", failures: 0,
+    episodes: {},
+  };
+  writeFileSync(file(dir), JSON.stringify({
+    version: 1,
+    follows: [
+      {
+        ...base,
+        id: "f1",
+        autoDownload: {
+          enabledAt: "2024-01-01T00:00:00.000Z",
+          startMode: "new",
+          sourceProfile: { profileId: SOURCE_PROFILE_IDS.travel, revision: "2" },
+          selection: selection(),
+        },
+      },
+      {
+        ...base,
+        id: "f2",
+        autoDownload: {
+          enabledAt: "2024-01-01T00:00:00.000Z",
+          startMode: "new",
+          sourceProfile: { profileId: SOURCE_PROFILE_IDS.travel, revision: "2" },
+        },
+      },
+    ],
+  }));
+
+  const store = await loaded(dir);
+  assert.equal(store.get("f1")!.autoDownload?.sourceProfile, undefined);
+  assert.deepEqual(store.get("f1")!.autoDownload?.selection, selection());
+  assert.equal(store.get("f1")!.autoDownload?.blockedKey, undefined);
+
+  assert.equal(store.get("f2")!.autoDownload?.sourceProfile, undefined);
+  assert.equal(store.get("f2")!.autoDownload?.blockedKey, "err.sourceProfileUnavailable");
 });
 
 test("removing a job records a skip that is never re-admitted", async (t) => {

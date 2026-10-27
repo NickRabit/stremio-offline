@@ -41,7 +41,7 @@ import { subtitleVtt } from "./subtitle-text.js";
 import type { DownloadSnapshot, DownloadStatus, PauseReason, PublicDownload, QueueHalt } from "./api-types.js";
 import type { ExistingLocalCopyReference } from "./local-copy-admission.js";
 import {
-  parseSourceAdmissionSnapshotV1,
+  parseDownloadSourceAdmissionSnapshotV1,
   SourceAdmissionValidationError,
   type SourceAdmissionSnapshotV1,
 } from "./source-admission.js";
@@ -49,7 +49,7 @@ import {
   parseTravelContinuationCursorV1,
   type TravelContinuationCursorV1,
 } from "./source-travel.js";
-import { SOURCE_PROFILE_IDS } from "./source-profiles.js";
+import { isExecutableDownloadProfile, SOURCE_PROFILE_IDS } from "./source-profiles.js";
 import type {
   ProviderPriorityProfileResolution,
   ProviderPriorityProfileResolverInput,
@@ -199,10 +199,7 @@ const isTravelSnapshot = (
 export const isExecutableDownloadSnapshot = (
   snapshot: SourceAdmissionSnapshotV1 | undefined,
 ): snapshot is SourceAdmissionSnapshotV1 =>
-  snapshot?.operation === "downloadToLibrary"
-  && snapshot.profile.revision === 1
-  && (snapshot.profile.id === SOURCE_PROFILE_IDS.travel
-    || snapshot.profile.id === SOURCE_PROFILE_IDS.providerPriority);
+  snapshot?.operation === "downloadToLibrary" && isExecutableDownloadProfile(snapshot.profile);
 
 export const isSelectedProfileJob = (
   job: Pick<DownloadJob, "sourceAdmission" | "stream">,
@@ -411,12 +408,6 @@ class SourceAdmissionRuntimeUnavailable extends SourceError {
     this.name = "SourceAdmissionRuntimeUnavailable";
   }
 }
-
-const parseDownloadSourceAdmission = (input: unknown): SourceAdmissionSnapshotV1 => {
-  const snapshot = parseSourceAdmissionSnapshotV1(input);
-  if (snapshot.operation !== "downloadToLibrary") throw new SourceAdmissionValidationError();
-  return snapshot;
-};
 
 const supportsTravelCursor = (
   job: Pick<DownloadJob, "sourceAdmission" | "stream" | "source">,
@@ -745,7 +736,7 @@ export class DownloadQueue {
             if (rawJob === null || typeof rawJob !== "object") continue;
             const row = rawJob as Record<string, unknown>;
             const snapshot = Object.hasOwn(rawJob, "sourceAdmission")
-              ? parseDownloadSourceAdmission((rawJob as { sourceAdmission: unknown }).sourceAdmission)
+              ? parseDownloadSourceAdmissionSnapshotV1((rawJob as { sourceAdmission: unknown }).sourceAdmission)
               : undefined;
             normalizePrivateStateAliases(row, snapshot);
             if (snapshot) canonicalSnapshots.push({ index, snapshot });
@@ -1284,7 +1275,7 @@ export class DownloadQueue {
     if (this.unreadable) throw new AppError("The download queue file could not be read.", "err.queueUnreadable", 503);
     const sourceAdmission = sourceAdmissionInput === undefined
       ? undefined
-      : parseDownloadSourceAdmission(sourceAdmissionInput);
+      : parseDownloadSourceAdmissionSnapshotV1(sourceAdmissionInput);
     // A remote library id is not a local target: it cannot be smuggled in as the pinned library.
     const pinned = source.selection?.targetSettings?.libraryId;
     if (pinned !== undefined && REMOTE_LIBRARY_ID.test(pinned)) throw remoteDownloadRefused();

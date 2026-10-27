@@ -7,8 +7,16 @@ import { renameWithRetry } from "./fs-retry.js";
 import { parseLibraryPath, type Viewer } from "./libraries.js";
 import { log } from "./logger.js";
 import type { MediaInfo } from "./naming.js";
+import {
+  parseDownloadSourceAdmissionSnapshotV1,
+  parseSourceProfileReference,
+  SourceAdmissionRejected,
+  SourceAdmissionValidationError,
+  type SourceAdmissionSnapshotV1,
+} from "./source-admission.js";
 import type { MetaItem } from "./types.js";
 import type { FollowDefaults } from "./users.js";
+import { sourceAdmissionError } from "./routes/source-profile-selection.js";
 
 export interface FollowEpisode {
   key: string;
@@ -39,6 +47,7 @@ export interface FollowAutoDownload {
   /** With `ahead`: how many regular episodes after the watched marker stay ready, 1..10. */
   aheadCount?: number;
   selection: DownloadSelection;
+  sourceProfile?: { profileId: string; revision: number };
   /** Days after release during which only the preferred audio is admitted, 0..30. */
   graceDays?: number;
   /** Delete downloaded episodes this long after the owner watched past them; absent keeps them. */
@@ -67,6 +76,7 @@ export interface EpisodeDownload {
   removedAt?: string;
   removedReason?: "retention";
   reasonKey?: string;
+  sourceAdmission?: SourceAdmissionSnapshotV1;
   updatedAt: string;
 }
 
@@ -673,6 +683,44 @@ export function activityItems(follows: Follow[], limit: number): ActivityItem[] 
   return items.slice(0, Math.max(0, limit));
 }
 
+const sanitizeLoadedFollow = (follow: Follow): void => {
+  const auto = follow.autoDownload as unknown;
+  if (auto && typeof auto === "object" && !Array.isArray(auto) && Object.hasOwn(auto, "sourceProfile")) {
+    const record = auto as Record<string, unknown>;
+    try {
+      record.sourceProfile = parseSourceProfileReference(record.sourceProfile);
+    } catch (error) {
+      if (!(error instanceof SourceAdmissionValidationError)) throw error;
+      delete record.sourceProfile;
+      if (!Object.hasOwn(record, "selection")) record.blockedKey = "err.sourceProfileUnavailable";
+      log("WARN", "A followed series source profile could not be read", { follow: follow.id });
+    }
+  }
+
+  if (!follow.episodes || typeof follow.episodes !== "object") return;
+  for (const [episodeKey, episode] of Object.entries(follow.episodes)) {
+    const download = episode?.download as unknown;
+    if (!download || typeof download !== "object" || Array.isArray(download)
+      || !Object.hasOwn(download, "sourceAdmission")) continue;
+    const record = download as Record<string, unknown>;
+    try {
+      record.sourceAdmission = parseDownloadSourceAdmissionSnapshotV1(record.sourceAdmission);
+    } catch (error) {
+      if (!(error instanceof SourceAdmissionValidationError)) throw error;
+      delete record.sourceAdmission;
+      delete record.jobId;
+      delete record.nextAttemptAt;
+      record.state = "attention";
+      record.reasonKey = "err.followJobMissing";
+      record.updatedAt = new Date().toISOString();
+      log("WARN", "A followed episode source admission could not be read", {
+        follow: follow.id,
+        episode: episodeKey,
+      });
+    }
+  }
+};
+
 /** The followed series, on disk in `<dataDir>/follows.json`. A file that cannot be read
  *  is left where it is: writing over it would throw away series nobody can follow again. */
 export class FollowStore {
@@ -704,6 +752,7 @@ export class FollowStore {
     try {
       const parsed = JSON.parse(raw) as FollowFile;
       if (!parsed || typeof parsed !== "object" || parsed.version !== 1 || !Array.isArray(parsed.follows)) throw new Error("not a version 1 follow file");
+      for (const follow of parsed.follows) sanitizeLoadedFollow(follow);
       this.follows = parsed.follows;
       this.unreadable = false;
     } catch (error) {
@@ -866,6 +915,7 @@ export interface FollowQueue {
     media: MediaInfo | undefined,
     ownerUserId: string,
     follow: { followId: string; episodeKey: string; intent: string },
+    sourceAdmission?: SourceAdmissionSnapshotV1,
   ): Promise<{ id: string } | undefined>;
   findActiveEpisode(ownerUserId: string, type: string, videoId: string): { id: string } | undefined;
   adopt(id: string, follow: { followId: string; episodeKey: string; intent: string }): Promise<void>;
@@ -898,6 +948,10 @@ export interface FollowDeps {
   queue: FollowQueue;
   /** The owner may queue into this selection's library right now. */
   mayDownload: (ownerUserId: string, selection: DownloadSelection) => boolean;
+  admitSourceProfile?: (
+    ownerUserId: string,
+    reference: { profileId: string; revision: number },
+  ) => SourceAdmissionSnapshotV1;
   tickMs?: number;
   concurrency?: number;
 }
@@ -1178,26 +1232,54 @@ export class FollowService {
       if (download && (download.state !== "reserved" || jobs.has(download.intent))) continue;
       if (admitted >= ADMIT_PER_CALL) return;
       if (this.outstanding() >= OUTSTANDING_LIMIT) return;
-      await this.enqueueLocked(followId, revision, episode.key, download?.generation ?? 1);
+      await this.enqueueLocked(followId, revision, episode.key, download?.generation ?? 1, download?.sourceAdmission);
       admitted += 1;
     }
   }
 
   /** The admission of one episode: reserve, queue the lazy job, then link or fall to attention. */
-  private async enqueueLocked(followId: string, revision: number, episodeKey: string, generation: number): Promise<void> {
+  private async enqueueLocked(
+    followId: string,
+    revision: number,
+    episodeKey: string,
+    generation: number,
+    reuse?: SourceAdmissionSnapshotV1,
+  ): Promise<void> {
     const before = this.admittable(followId, revision);
     const episode = before?.episodes[episodeKey];
     if (!before || !episode) return;
     const intent = this.intentOf(followId, episodeKey, generation);
-    await this.setDownload(followId, episodeKey, { state: "reserved", intent, generation, attempts: 0, updatedAt: "" });
+    const sourceProfile = before.autoDownload!.sourceProfile;
+    let sourceAdmission: SourceAdmissionSnapshotV1 | undefined;
+    if (sourceProfile) {
+      try {
+        const admit = this.deps.admitSourceProfile;
+        if (!admit) throw new SourceAdmissionRejected("profileUnknown");
+        sourceAdmission = reuse ?? admit(before.ownerUserId, sourceProfile);
+      } catch (error) {
+        if (!(error instanceof SourceAdmissionRejected)) throw error;
+        await this.setDownload(followId, episodeKey, {
+          state: "attention", intent, generation, attempts: 0,
+          reasonKey: sourceAdmissionError(error.code).messageKey, updatedAt: "",
+        });
+        return;
+      }
+    }
+    await this.setDownload(followId, episodeKey, {
+      state: "reserved", intent, generation, attempts: 0, ...(sourceAdmission ? { sourceAdmission } : {}), updatedAt: "",
+    });
     let follow = this.admittable(followId, revision);
     if (!follow) return;
+    const selection = follow.autoDownload!.sourceProfile
+      ? follow.autoDownload!.selection
+      : effectiveSelection(follow.autoDownload!, episode, this.deps.now());
     const job = await this.deps.queue.addPending(
       this.jobTitle(follow, episode),
-      { type: follow.type, videoId: episode.videoId, selection: effectiveSelection(follow.autoDownload!, episode, this.deps.now()) },
+      { type: follow.type, videoId: episode.videoId, selection },
       this.episodeMedia(follow, episode),
       follow.ownerUserId,
       { followId, episodeKey, intent },
+      sourceAdmission,
     );
     follow = this.admittable(followId, revision);
     if (!follow) return;
@@ -1207,8 +1289,8 @@ export class FollowService {
     if (existing) await this.deps.queue.adopt(existing.id, { followId, episodeKey, intent });
     const linked = job ?? existing;
     await this.setDownload(followId, episodeKey, linked
-      ? { state: "queued", intent, generation, jobId: linked.id, attempts: 0, updatedAt: "" }
-      : { state: "attention", intent, generation, attempts: 0, reasonKey: "err.followJobMissing", updatedAt: "" });
+      ? { state: "queued", intent, generation, jobId: linked.id, attempts: 0, ...(sourceAdmission ? { sourceAdmission } : {}), updatedAt: "" }
+      : { state: "attention", intent, generation, attempts: 0, reasonKey: "err.followJobMissing", ...(sourceAdmission ? { sourceAdmission } : {}), updatedAt: "" });
   }
 
   /** Records a job's own verdict on the episode it was queued for. */
@@ -1281,7 +1363,7 @@ export class FollowService {
           await this.setDownload(follow.id, episodeKey, { ...download, ...(job.target ? { target: job.target } : {}), state: "completed", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
         } else if (!job && !download.jobId) {
           // The failed job was cleared from the queue on purpose; the episode is still wanted.
-          await this.enqueueLocked(follow.id, revision, episodeKey, download.generation + 1);
+          await this.enqueueLocked(follow.id, revision, episodeKey, download.generation + 1, download.sourceAdmission);
         } else {
           await this.setDownload(follow.id, episodeKey, { ...download, state: "attention", jobId: undefined, reasonKey: "err.followJobMissing", nextAttemptAt: undefined, updatedAt: "" });
         }
@@ -1379,6 +1461,7 @@ export class FollowService {
             ...(value.graceDays ? { graceDays: value.graceDays } : {}),
             ...(value.retention ? { retention: value.retention } : previous?.retention ? { retention: previous.retention } : {}),
             selection: value.selection,
+            ...(value.sourceProfile ? { sourceProfile: value.sourceProfile } : {}),
           };
         }
         current.revision += 1;

@@ -130,6 +130,11 @@ export const declaresStream = (addon: AddonRecord): boolean =>
   (addon.manifest.resources ?? []).some((resource) =>
     typeof resource === "string" ? resource === "stream" : resource.name === "stream");
 
+export const isExecutableDownloadProfile = (
+  profile: { id: string; revision: number },
+): boolean => profile.revision === 1
+  && (profile.id === SOURCE_PROFILE_IDS.travel || profile.id === SOURCE_PROFILE_IDS.providerPriority);
+
 const copyPolicy = (policy: SourcePolicyV1): SourcePolicyV1 => structuredClone(policy);
 
 export function sourceProfilesForViewer(catalogue: SourceProfileCatalogue): PublicSourceProfile[] {
@@ -155,7 +160,7 @@ export function sourceProfilesForViewer(catalogue: SourceProfileCatalogue): Publ
     const operations = profile.operations.filter((operation) => {
       if (operation === "play") return playPath;
       if (operation === "downloadToLibrary") {
-        return mayDownloadToLibrary(viewer) && addonDownloadPath;
+        return mayDownloadToLibrary(viewer) && addonDownloadPath && isExecutableDownloadProfile(profile);
       }
       return mayDownloadToDevice(viewer) && (addonDownloadPath || localPath || remotePath);
     });

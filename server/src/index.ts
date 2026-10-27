@@ -101,6 +101,8 @@ import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerUsersRoutes } from "./routes/users.js";
 import { registerSearchEverywhereRoutes, searchEverywhereEnabled } from "./routes/search-everywhere.js";
 import { registerSourceProfilesRoutes } from "./routes/source-profiles.js";
+import { materializeOwnerSourceAdmission } from "./routes/source-profile-selection.js";
+import { SourceAdmissionRejected } from "./source-admission.js";
 import { MediaServerManager, type MediaServerAuthority } from "./media-server-manager.js";
 import { remoteDownloadAccessible } from "./media-server-download.js";
 import { MediaServerPersonal } from "./media-server-personal.js";
@@ -2055,7 +2057,8 @@ const followService = new FollowService({
     return marker ? { season: marker.season, episode: marker.episode, updatedAt: marker.updatedAt } : undefined;
   },
   queue: {
-    addPending: (title, source, media, ownerUserId, follow) => queue.addPending(title, source, media, ownerUserId, follow),
+    addPending: (title, source, media, ownerUserId, follow, sourceAdmission) =>
+      queue.addPending(title, source, media, ownerUserId, follow, sourceAdmission),
     findActiveEpisode: (ownerUserId, type, videoId) => queue.findActiveEpisode(ownerUserId, type, videoId),
     adopt: (id, follow) => queue.adopt(id, follow),
     followJobs: () => queue.followJobs(),
@@ -2070,6 +2073,11 @@ const followService = new FollowService({
     addons: store.addons(),
     libraries: store.libraries(),
   }, { targetSettings: selection.targetSettings }),
+  admitSourceProfile: (ownerUserId, reference) => {
+    const owner = findUserById(store.users(), ownerUserId);
+    if (!owner) throw new SourceAdmissionRejected("operationForbidden");
+    return materializeOwnerSourceAdmission({ store }, owner, reference);
+  },
   // Retention deletes a single library file through the same operations queue that waits for
   // playback, an unreachable disk and active downloads. Only a key that names a real library
   // file is accepted; a folder, a sibling or an unqualified path is refused.

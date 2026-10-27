@@ -327,7 +327,7 @@ test("operation grants and source paths are checked inside admission", () => {
     downloadToDevice: true,
   });
   assert.throws(
-    () => materializeSourceAdmission(reference(SOURCE_PROFILE_IDS.recommended), context(noLibraryDownload, {
+    () => materializeSourceAdmission(reference(SOURCE_PROFILE_IDS.travel), context(noLibraryDownload, {
       addons: [writable],
       operation: "downloadToLibrary",
     })),
@@ -335,7 +335,7 @@ test("operation grants and source paths are checked inside admission", () => {
   );
 
   assert.throws(
-    () => materializeSourceAdmission(reference(SOURCE_PROFILE_IDS.recommended), context(account(), {
+    () => materializeSourceAdmission(reference(SOURCE_PROFILE_IDS.travel), context(account(), {
       libraries: [library("lib_00000001", [MEMBER])],
       remoteLibraries: [remoteLibrary(REMOTE_ONE, [MEMBER])],
       operation: "downloadToLibrary",
@@ -344,7 +344,7 @@ test("operation grants and source paths are checked inside admission", () => {
   );
 
   const librarySnapshot = materializeSourceAdmission(
-    reference(SOURCE_PROFILE_IDS.recommended),
+    reference(SOURCE_PROFILE_IDS.travel),
     context(account(), {
       addons: [writable],
       libraries: [library("lib_00000001", [MEMBER])],
@@ -353,6 +353,14 @@ test("operation grants and source paths are checked inside admission", () => {
     }),
   );
   assert.deepEqual(librarySnapshot.providerKeys, ["addon:writable"]);
+
+  assert.throws(
+    () => materializeSourceAdmission(reference(SOURCE_PROFILE_IDS.recommended), context(account(), {
+      addons: [writable],
+      operation: "downloadToLibrary",
+    })),
+    rejectionCode("operationUnsupported"),
+  );
 
   const disabledViewer = { ...account(), disabled: true };
   assert.throws(

@@ -156,6 +156,7 @@ const mount = async (
       mediaConnections: () => options.connections ?? [],
       remoteLibraries: () => options.remoteLibraries ?? [],
       settings: () => options.settings ?? {},
+      prefs: () => ({ uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", ...options.prefs }) as UserPrefs,
       userData: () => ({ addonOrder: options.addonOrder }),
     } as unknown as Store,
     needsSetup: () => false,
@@ -636,6 +637,22 @@ test("profile bulk distinguishes stale and unknown references without leaking th
     assert.equal((JSON.parse(text) as { messageKey?: string }).messageKey, item.key);
     assert.equal(text.includes(item.id), false);
   }
+  assert.deepEqual(harness.pending, []);
+});
+
+test("profile bulk refuses the Recommended profile for library downloads", async (t) => {
+  const harness = await mount([streamAddon("stream-addon")]);
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/downloads/bulk", {
+    method: "POST",
+    body: {
+      title: "Show",
+      episodes: episodes(1),
+      selection: profileSelection(SOURCE_PROFILE_IDS.recommended),
+    },
+  });
+  assert.equal(response.status, 400);
+  assert.equal(await keyOf(response), "err.sourceProfileOperationUnavailable");
   assert.deepEqual(harness.pending, []);
 });
 

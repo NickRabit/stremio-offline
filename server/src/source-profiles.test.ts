@@ -189,7 +189,7 @@ test("projection returns fresh policies and operation lists on every read", () =
 
   first[0]!.operations.length = 0;
   first[0]!.policy.constraints.sourceKinds.length = 0;
-  assert.deepEqual(second[0]?.operations, ["play", "downloadToLibrary", "downloadToDevice"]);
+  assert.deepEqual(second[0]?.operations, ["play", "downloadToDevice"]);
   assert.deepEqual(second[0]?.policy.constraints.sourceKinds, [
     "localFile",
     "mediaServerOriginal",
@@ -212,7 +212,7 @@ test("administrators see every profile and operation available from their grante
   }));
 
   assert.deepEqual(operationIds(profiles), [
-    { id: SOURCE_PROFILE_IDS.recommended, operations: ["play", "downloadToLibrary", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.recommended, operations: ["play", "downloadToDevice"] },
     { id: SOURCE_PROFILE_IDS.providerPriority, operations: ["play", "downloadToLibrary", "downloadToDevice"] },
     { id: SOURCE_PROFILE_IDS.travel, operations: ["play", "downloadToLibrary", "downloadToDevice"] },
   ]);
@@ -248,7 +248,7 @@ test("an addon path supports every operation for a member with both download gra
   }));
 
   assert.deepEqual(operationIds(profiles), [
-    { id: SOURCE_PROFILE_IDS.recommended, operations: ["play", "downloadToLibrary", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.recommended, operations: ["play", "downloadToDevice"] },
     { id: SOURCE_PROFILE_IDS.providerPriority, operations: ["play", "downloadToLibrary", "downloadToDevice"] },
     { id: SOURCE_PROFILE_IDS.travel, operations: ["play", "downloadToLibrary", "downloadToDevice"] },
   ]);
@@ -288,7 +288,7 @@ test("operation grants are applied independently to an available addon path", ()
   input.viewer.permissions = { downloadToLibrary: true, downloadToDevice: false };
   const playAndLibrary = sourceProfilesForViewer(input);
   assert.deepEqual(playAndLibrary.map((profile) => profile.operations), [
-    ["play", "downloadToLibrary"],
+    ["play"],
     ["play", "downloadToLibrary"],
     ["play", "downloadToLibrary"],
   ]);
@@ -296,7 +296,7 @@ test("operation grants are applied independently to an available addon path", ()
   input.viewer.permissions = { downloadToLibrary: true, downloadToDevice: true };
   const all = sourceProfilesForViewer(input);
   assert.deepEqual(all.map((profile) => profile.operations), [
-    ["play", "downloadToLibrary", "downloadToDevice"],
+    ["play", "downloadToDevice"],
     ["play", "downloadToLibrary", "downloadToDevice"],
     ["play", "downloadToLibrary", "downloadToDevice"],
   ]);
