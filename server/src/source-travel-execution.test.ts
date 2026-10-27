@@ -209,7 +209,7 @@ test("the 480px floor and actual audio and subtitle track metadata decide the re
     inspect: async (item) => {
       calls.push(item.url!);
       return item === small
-        ? mediaInfo({ height: 479, audio: ["cs"], subtitles: ["cs"] })
+        ? mediaInfo({ height: 431, audio: ["cs"], subtitles: ["cs"] })
         : mediaInfo({ height: 480, audio: ["en", "de"], subtitles: ["en"] });
     },
     shouldContinue: always,

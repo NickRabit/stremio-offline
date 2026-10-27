@@ -29,9 +29,12 @@ const baseRules = (overrides: Partial<DownloadRules> = {}): DownloadRules => par
   addons: { scope: "all", order: "viewer" },
   torrents: false,
   resolution: { min: null, max: null },
-  audio: { mode: "prefer", fallback: null },
+  audio: { mode: "prefer", language: "mine", fallback: null },
   subtitles: "off",
-  maxSizeGb: { episode: null, movie: null },
+  sizeGb: {
+    episode: { min: null, max: null },
+    movie: { min: null, max: null },
+  },
   skipCinema: false,
   preference: ["language"],
   ...overrides,
@@ -71,9 +74,12 @@ const stream = (
   ...(input.fileIdx === undefined ? {} : { fileIdx: input.fileIdx }),
 });
 
-const candidate = (item: StreamItem): SourceEvidenceCandidateV1 => {
+const candidate = (
+  item: StreamItem,
+  providerKey = "addon:one",
+): SourceEvidenceCandidateV1 => {
   const value = listedAddonSourceEvidence({
-    providerKey: "addon:one",
+    providerKey,
     stream: item,
     providerResponseIndex: 0,
     available: true,
@@ -140,7 +146,7 @@ test("strict audio probes claimed preferred language first", async () => {
   const result = await verifyRulesCandidates({
     snapshot: snapshot({
       resolution: { min: 720, max: 1080 },
-      audio: { mode: "only", fallback: null },
+      audio: { mode: "only", language: "mine", fallback: null },
       preference: ["resolutionHigher", "language"],
     }),
     candidates: [noClaim, other, preferred],
@@ -162,6 +168,60 @@ test("strict audio probes claimed preferred language first", async () => {
   assert.deepEqual(calls, ["en", "cs", "none"]);
 });
 
+test("an explicit only language excludes a verified source in another language", async () => {
+  const source = candidate(stream("Czech release 1080p"));
+  const result = await verifyRulesCandidates({
+    snapshot: snapshot({
+      resolution: { min: 720, max: 1080 },
+      audio: { mode: "only", language: "en", fallback: null },
+      preference: ["resolutionHigher"],
+    }),
+    candidates: [source],
+    inspect: async (value) => ({
+      status: "ok",
+      candidate: inspectedAddonSourceEvidence(value, media(1080, ["cs"])),
+    }),
+    shouldContinue: () => true,
+    scopeStamp: "explicit-only",
+    hasRealDebrid: false,
+  });
+  assert.equal(result.status, "noMatch");
+  assert.equal(result.observations.confirmedRejections, 1);
+});
+
+test("any audio stops after a verified English 1080p source", async () => {
+  const english = candidate(stream("English release 1080p"), "addon:one");
+  const possibleCzech = candidate(stream("Czech release"), "addon:two");
+  const calls: string[] = [];
+  const result = await verifyRulesCandidates({
+    snapshot: snapshot({
+      resolution: { min: 720, max: 1080 },
+      audio: { mode: "any", language: "mine", fallback: null },
+      preference: ["resolutionHigher"],
+    }, ["addon:one", "addon:two"]),
+    candidates: [possibleCzech, english],
+    inspect: async (source) => {
+      calls.push(source.providerKey);
+      return {
+        status: "ok",
+        candidate: inspectedAddonSourceEvidence(
+          source,
+          media(1080, [source.providerKey === "addon:one" ? "en" : "cs"]),
+        ),
+      };
+    },
+    shouldContinue: () => true,
+    scopeStamp: "any-audio-stop",
+    hasRealDebrid: false,
+  });
+
+  assert.equal(result.status, "selected");
+  assert.deepEqual(calls, ["addon:one"]);
+  if (result.status === "selected") {
+    assert.equal(result.selection.candidate.providerKey, "addon:one");
+  }
+});
+
 test("preferred audio does not treat a lower-ranked listing claim as a ceiling", async () => {
   const listedPreferred = candidate(stream("English release 1080p", { size: 100 }));
   const listedOther = candidate(stream("Czech release 1080p", { size: 200 }));
@@ -169,7 +229,7 @@ test("preferred audio does not treat a lower-ranked listing claim as a ceiling",
   const result = await verifyRulesCandidates({
     snapshot: snapshot({
       resolution: { min: 720, max: 1080 },
-      audio: { mode: "prefer", fallback: null },
+      audio: { mode: "prefer", language: "mine", fallback: null },
       preference: ["language", "smaller"],
     }),
     candidates: [listedOther, listedPreferred],
@@ -203,7 +263,7 @@ test("a grace-strict snapshot rejects fallback audio that the original preferred
   const strict = await verifyRulesCandidates({
     snapshot: snapshot({
       resolution: { min: 720, max: 1080 },
-      audio: { mode: "only", fallback: null },
+      audio: { mode: "only", language: "mine", fallback: null },
       preference: ["resolutionHigher"],
     }),
     candidates: [source],
@@ -217,7 +277,7 @@ test("a grace-strict snapshot rejects fallback audio that the original preferred
   const preferred = await verifyRulesCandidates({
     snapshot: snapshot({
       resolution: { min: 720, max: 1080 },
-      audio: { mode: "prefer", fallback: "cs" },
+      audio: { mode: "prefer", language: "mine", fallback: "cs" },
       preference: ["resolutionHigher"],
     }),
     candidates: [source],
@@ -264,7 +324,7 @@ test("a temporary failure keeps an unknown-height row in the search and preserve
   const input = {
     snapshot: snapshot({
       resolution: { min: 720, max: 1080 },
-      audio: { mode: "prefer", fallback: "cs" },
+      audio: { mode: "prefer", language: "mine", fallback: "cs" },
       preference: ["resolutionHigher"],
     }),
     candidates: [incumbent, unknown],
@@ -327,7 +387,10 @@ test("listing maximum size, range, release kind and source kind can exclude with
   const result = await verifyRulesCandidates({
     snapshot: snapshot({
       resolution: { min: 720, max: 1080 },
-      maxSizeGb: { episode: 1, movie: null },
+      sizeGb: {
+        episode: { min: null, max: 1 },
+        movie: { min: null, max: null },
+      },
       skipCinema: true,
     }),
     candidates: [tooLarge, tooLow, cinema],
@@ -349,7 +412,12 @@ test("unknown size passes, listed size within passes, and listed size over is ex
   const within = candidate(stream("English 720p copy", { size: 1_000_000_000 }));
   const over = candidate(stream("English 720p too large", { size: 1_000_000_001 }));
   const result = await verifyRulesCandidates({
-    snapshot: snapshot({ maxSizeGb: { episode: 1, movie: null } }),
+    snapshot: snapshot({
+      sizeGb: {
+        episode: { min: null, max: 1 },
+        movie: { min: null, max: null },
+      },
+    }),
     candidates: [over, within, unknown],
     inspect: async () => {
       throw new Error("sizes and unknown height without a height policy need no probe");
@@ -366,10 +434,36 @@ test("unknown size passes, listed size within passes, and listed size over is ex
   }
 });
 
+test("listed sizes below a rule minimum are excluded while unknown size still passes", async () => {
+  const tooSmall = candidate(stream("English copy", { size: 500_000_000 }));
+  const undefinedSize = candidate(stream("English release"));
+  const result = await verifyRulesCandidates({
+    snapshot: snapshot({
+      sizeGb: {
+        episode: { min: 1, max: null },
+        movie: { min: null, max: null },
+      },
+    }),
+    candidates: [tooSmall, undefinedSize],
+    inspect: async () => {
+      throw new Error("a rules source with no height bound needs no probe");
+    },
+    shouldContinue: () => true,
+    scopeStamp: "approximate-minimum-size",
+    hasRealDebrid: false,
+  });
+
+  assert.equal(result.status, "selected");
+  assert.equal(result.observations.probesUsed, 0);
+  if (result.status === "selected") {
+    assert.equal(result.selection.candidate.sourceId, undefinedSize.sourceId);
+  }
+});
+
 test("the sixteenth probe returns a cursor and the next attempt can select its 1080p", async () => {
   const streams = Array.from({ length: 16 }, (_entry, index) =>
     stream(`English 720p row ${index}`, { url: `https://media.example/row-${index}.mkv?token=${index}` }));
-  const candidates = streams.map(candidate);
+  const candidates = streams.map((item) => candidate(item));
   const firstCalls: string[] = [];
   const first = await verifyRulesCandidates({
     snapshot: snapshot({ resolution: { min: 720, max: 1080 }, preference: ["resolutionHigher"] }),
@@ -538,7 +632,7 @@ test("strict torrents need a listed preferred language and episodes need fileIdx
     snapshot: snapshot({
       torrents: true,
       resolution: { min: 720, max: 1080 },
-      audio: { mode: "only", fallback: null },
+      audio: { mode: "only", language: "mine", fallback: null },
     }),
     streams: [unclaimed, claimed],
     externalSubtitles: [],
@@ -583,7 +677,7 @@ test("strict torrents do not treat a blank field filled from the title as a lang
     snapshot: snapshot({
       torrents: true,
       resolution: { min: 720, max: 1080 },
-      audio: { mode: "only", fallback: null },
+      audio: { mode: "only", language: "mine", fallback: null },
     }),
     candidates: [value],
     inspect: async () => {

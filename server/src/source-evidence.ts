@@ -194,15 +194,13 @@ const approximateBytesAssessment = (
   candidate: SourceEvidenceCandidateV1,
   range: { min?: number; max?: number } | undefined,
 ): { status: "pass" } | { status: "needsInspection" } | { status: "excluded" } => {
-  if (!range || range.min !== undefined || range.max === undefined) {
-    return numericAssessment(candidate.facts.bytes, range);
-  }
+  if (!range) return { status: "pass" };
   const fact = candidate.facts.bytes;
   const bytes = fact.evidence !== "unknown" && Number.isFinite(fact.value)
     ? fact.value
     : candidate.hints?.bytes;
   if (bytes === undefined || !Number.isFinite(bytes) || bytes < 0) return { status: "pass" };
-  return bytes <= range.max ? { status: "pass" } : { status: "excluded" };
+  return inRange(bytes, range) ? { status: "pass" } : { status: "excluded" };
 };
 
 const excluded = (reason: SourceEvidenceReason): SourceEligibilityResult => ({

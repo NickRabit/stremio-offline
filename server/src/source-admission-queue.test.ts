@@ -3540,7 +3540,7 @@ test("a follow grace retry through the production adapter restores the preferred
   assert.ok(preset);
   const rules = parseDownloadRules({
     ...preset.rules,
-    audio: { mode: "prefer", fallback: "cs" },
+    audio: { mode: "prefer", language: "mine", fallback: "cs" },
   });
   const providerKeys = [PROVIDER_ONE];
   const admission = parseSourceAdmissionSnapshotV1({

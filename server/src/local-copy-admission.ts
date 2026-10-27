@@ -20,6 +20,7 @@ import {
 } from "./source-evidence.js";
 import type { SourceAdmissionSnapshotV1 } from "./source-admission.js";
 import type { UserRecord } from "./users.js";
+import { videoResolutionClass } from "./video-resolution.js";
 
 export const EXISTING_LOCAL_COPY_PROBE_LIMIT = 15;
 
@@ -94,9 +95,10 @@ const inspectedFacts = (
   durationSeconds: info.duration !== undefined && Number.isFinite(info.duration)
     ? inspectedFact(info.duration)
     : unknownFact(),
-  heightPixels: info.video?.height !== undefined && Number.isFinite(info.video.height)
-    ? inspectedFact(info.video.height)
-    : unknownFact(),
+  heightPixels: (() => {
+    const resolution = videoResolutionClass(info.video?.width, info.video?.height);
+    return resolution === undefined ? unknownFact() : inspectedFact(resolution);
+  })(),
   releaseKind: unknownFact(),
   sampleOrTrailer: unknownFact(),
 });

@@ -89,6 +89,7 @@ const travelWithNumericBounds = (): SourceAdmissionSnapshotV1 => {
 };
 
 const mediaInfo = (input: {
+  width?: number;
   height?: number;
   duration?: number;
   audio?: readonly (string | undefined)[];
@@ -96,7 +97,15 @@ const mediaInfo = (input: {
 }): MediaInfo => ({
   container: "matroska",
   ...(input.duration === undefined ? {} : { duration: input.duration }),
-  ...(input.height === undefined ? {} : { video: { codec: "h264", height: input.height } }),
+  ...(input.width === undefined && input.height === undefined
+    ? {}
+    : {
+        video: {
+          codec: "h264",
+          ...(input.width === undefined ? {} : { width: input.width }),
+          ...(input.height === undefined ? {} : { height: input.height }),
+        },
+      }),
   audioTracks: (input.audio ?? []).map((language, index) => ({
     index,
     codec: "aac",
@@ -397,6 +406,37 @@ test("listing keeps language provenance and inspection replaces only verifiable 
     assert.equal(unavailable.available, false);
     assert.equal(evaluateSourceCandidate(travelSnapshot(["addon:one"]), unavailable).status, "excluded");
   }
+});
+
+test("a probed 1920x800 source satisfies a 1080 resolution minimum", () => {
+  const providerKeys = ["addon:one"];
+  const policy = parseSourcePolicyV1({
+    ...structuredClone(travelDefinition.policy),
+    constraints: {
+      ...structuredClone(travelDefinition.policy.constraints),
+      heightPixels: { min: 1080 },
+    },
+  });
+  const snapshot: SourceAdmissionSnapshotV1 = {
+    schemaVersion: 1,
+    profile: { id: SOURCE_PROFILE_IDS.travel, revision: 1, template: "travel" },
+    operation: "downloadToLibrary",
+    providerKeys,
+    policy: materializeSourceAdmissionPolicy(
+      policy,
+      providerKeys,
+      { audioLanguage: "en", subtitleLanguage: "en" },
+    ),
+  };
+  const listed = addon({ url: SECRET_URL, title: "English film" });
+  const inspected = inspectedAddonSourceEvidence(listed, mediaInfo({
+    width: 1920,
+    height: 800,
+    duration: 3_600,
+    audio: ["en"],
+  }));
+  assert.deepEqual(inspected.facts.heightPixels, { evidence: "inspected", value: 1080 });
+  assert.equal(evaluateSourceCandidate(snapshot, inspected).status, "eligible");
 });
 
 test("Travel accepts inspected 480p over sixty seconds and rejects false quality or short samples", async () => {

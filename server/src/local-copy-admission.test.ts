@@ -29,6 +29,7 @@ const owner = (): UserRecord => ({
 });
 
 const videoInfo = (options: {
+  width?: number;
   height?: number;
   audio?: Array<string | undefined>;
   subtitles?: Array<string | undefined>;
@@ -36,7 +37,11 @@ const videoInfo = (options: {
 } = {}): MediaInfo => ({
   container: "matroska",
   duration: options.duration ?? 1_200,
-  video: { codec: "h264", width: 1_920, height: options.height ?? 1_080 },
+  video: {
+    codec: "h264",
+    width: options.width ?? 1_920,
+    height: options.height ?? 1_080,
+  },
   audioTracks: (options.audio ?? ["en"]).map((language, index) => ({
     index,
     codec: "aac",
@@ -226,9 +231,9 @@ test("480p and higher satisfy the height requirement while a smaller file does n
   try {
     await harness.write("Show/S01E01.mkv");
     bindSeries(harness);
-    harness.state.probeInfo = videoInfo({ height: 480 });
+    harness.state.probeInfo = videoInfo({ width: 854, height: 480 });
     assert.equal(await harness.has(snapshot({ height: 480 }), "tt1:1:1"), true);
-    harness.state.probeInfo = videoInfo({ height: 239 });
+    harness.state.probeInfo = videoInfo({ width: 426, height: 239 });
     assert.equal(await harness.has(snapshot({ height: 480 }), "tt1:1:1"), false);
   } finally {
     await harness.cleanup();
@@ -330,7 +335,7 @@ test("failed probes and unknown required facts do not establish adequacy", async
     assert.equal(await harness.has(snapshot({ height: 480 }), "tt1:1:1"), false);
 
     harness.state.probeInfo = videoInfo();
-    harness.state.probeInfo.video = { codec: "h264", width: 1_920 };
+    harness.state.probeInfo.video = { codec: "h264" };
     assert.equal(await harness.has(snapshot({ height: 480 }), "tt1:1:1"), false);
   } finally {
     await harness.cleanup();
@@ -524,7 +529,7 @@ test("candidate admission stays at 20 files and probing stays at 15", async () =
       await probed.write(`Film/copy-${String(index).padStart(2, "0")}.mkv`, 100 - index);
     }
     bindMovie(probed);
-    probed.state.probeInfo = videoInfo({ height: 240 });
+    probed.state.probeInfo = videoInfo({ width: 426, height: 240 });
     assert.equal(await probed.has(snapshot({ height: 480 }), "tt1"), false);
     assert.equal(probed.probeCalls.length, 15);
   } finally {

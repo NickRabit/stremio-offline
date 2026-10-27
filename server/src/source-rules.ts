@@ -11,6 +11,7 @@ import {
   parseSourceAdmissionSnapshotV1,
   type SourceAdmissionSnapshotV1,
 } from "./source-admission.js";
+import { rulesAudioMode } from "./download-rules.js";
 
 export const RULES_INSPECTION_BUDGET = 15;
 export const RULES_MAX_CURSOR_ENTRIES = 256;
@@ -405,8 +406,7 @@ const optimisticRanking = (
   }
   return {
     ...base,
-    audioTier: snapshot.policy.constraints.audio.mode === "strict"
-      || snapshot.policy.constraints.audio.mode === "preferred"
+    audioTier: rulesAudioMode(snapshot.policy) !== "any"
       ? "preferred"
       : base.audioTier,
     ...(heightPixels === undefined ? {} : { heightPixels }),
@@ -472,13 +472,13 @@ const torrentIsSelectable = (
   snapshot: SourceAdmissionSnapshotV1,
 ): boolean => {
   if (entry.evaluation.status === "excluded") return false;
-  if (snapshot.policy.constraints.audio.mode === "strict"
+  if (rulesAudioMode(snapshot.policy) === "only"
     && listingAudioTier(entry.candidate, snapshot) !== "preferred") return false;
   if (entry.evaluation.status === "eligible") return true;
   const reasons = entry.evaluation.reasons;
   return reasons.every((reason) =>
     (reason.code === "inspectionRequired" && reason.field === "heightPixels")
-    || (snapshot.policy.constraints.audio.mode === "strict"
+    || (rulesAudioMode(snapshot.policy) === "only"
       && reason.code === "inspectionRequired" && reason.field === "audio"));
 };
 
@@ -603,8 +603,8 @@ export async function verifyRulesCandidates(
     for (let visited = 0; visited < sorted.length; visited++) {
       const index = (nextIndex + visited) % sorted.length;
       if (!canBeat(index, incumbent)) continue;
-      const audioMode = snapshot.policy.constraints.audio.mode;
-      const claimRank = audioMode === "strict" || audioMode === "preferred"
+      const audioMode = rulesAudioMode(snapshot.policy);
+      const claimRank = audioMode !== "any"
         ? tierRank[listingAudioTier(sorted[index]!.candidate, snapshot)]
         : 0;
       if (!best || claimRank < best.claimRank) best = { index, claimRank };
@@ -742,7 +742,7 @@ export async function verifyRulesCandidates(
   if (input.hasRealDebrid) {
     const selectableTorrents = torrents.filter((entry) => torrentIsSelectable(entry, snapshot));
     const ranked = selectableTorrents.map((entry, responseOrder) => {
-      const audioTier = snapshot.policy.constraints.audio.mode === "strict"
+      const audioTier = rulesAudioMode(snapshot.policy) === "only"
         ? "preferred" as const
         : entry.evaluation.status === "eligible" ? entry.evaluation.audioTier : listingAudioTier(entry.candidate, snapshot);
       const subtitleTier = entry.evaluation.status === "eligible" ? entry.evaluation.subtitleTier : "unknown";

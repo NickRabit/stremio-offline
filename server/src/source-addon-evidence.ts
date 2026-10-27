@@ -5,6 +5,7 @@ import { streamLanguages, streamSize } from "./ranking.js";
 import type { SourceEvidenceCandidateV1, SourceFact } from "./source-evidence.js";
 import type { ReleaseKind } from "./source-policy.js";
 import type { StreamItem, SubtitleItem } from "./types.js";
+import { videoResolutionClass } from "./video-resolution.js";
 
 export interface ListedAddonSourceEvidenceInput {
   readonly providerKey: string;
@@ -316,7 +317,7 @@ export function inspectedAddonSourceEvidence(
       externalSubtitles: copiedTrackLanguages(candidate.facts.externalSubtitles),
       bytes: unknown(),
       durationSeconds: inspectedNumber(info.duration),
-      heightPixels: inspectedNumber(info.video?.height),
+      heightPixels: inspectedNumber(videoResolutionClass(info.video?.width, info.video?.height)),
       releaseKind: candidate.facts.releaseKind,
       sampleOrTrailer: unknown(),
     },

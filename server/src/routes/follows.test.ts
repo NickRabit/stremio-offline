@@ -596,7 +596,12 @@ test("a rules profile accepts grace only for preferred audio and admits with a s
   const only = RULE_PRESETS.find((preset) => preset.id === SOURCE_PROFILE_IDS.myLanguage)!;
   const preferRules = parseDownloadRules({
     ...balanced.rules,
-    audio: { mode: "prefer", fallback: "cs" },
+    audio: { mode: "prefer", language: "mine", fallback: "cs" },
+  });
+  const anyRules = parseDownloadRules({
+    ...balanced.rules,
+    audio: { mode: "any", language: "mine", fallback: null },
+    preference: ["resolutionHigher", "addonOrder", "smaller"],
   });
   const h = await mount({
     sourceProfiles: [
@@ -615,6 +620,15 @@ test("a rules profile accepts grace only for preferred audio and admits with a s
         template: "rules",
         nameKey: only.nameKey,
         parameters: only.rules,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        id: "any-rules-grace",
+        revision: 1,
+        template: "rules",
+        name: "Any audio",
+        parameters: anyRules,
         createdAt: "2026-01-01T00:00:00.000Z",
         updatedAt: "2026-01-01T00:00:00.000Z",
       },
@@ -681,6 +695,22 @@ test("a rules profile accepts grace only for preferred audio and admits with a s
     });
     assert.equal(refused.status, 400);
     assert.equal(await keyOf(refused), "err.followInvalid");
+
+    const anyRefused = await api(h.base, `/api/follows/${follow.id}`, {
+      method: "PATCH",
+      as: "A",
+      body: {
+        autoDownload: {
+          startMode: "from",
+          startSeason: 1,
+          startEpisode: 1,
+          graceDays: 7,
+          selection: { profile: { profileId: "any-rules-grace", revision: 1 } },
+        },
+      },
+    });
+    assert.equal(anyRefused.status, 400);
+    assert.equal(await keyOf(anyRefused), "err.followInvalid");
   } finally {
     await h.close();
   }

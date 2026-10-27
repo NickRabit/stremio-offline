@@ -67,7 +67,9 @@ export interface PublicSourceProfile {
   operations: SourceOperation[];
   sizeLimits?: {
     episodeBytes?: number;
+    episodeMinBytes?: number;
     movieBytes?: number;
+    movieMinBytes?: number;
   };
   policy: SourcePolicyV1;
 }
@@ -140,29 +142,41 @@ export const RULE_PRESETS: readonly RulePreset[] = Object.freeze([
   preset(SOURCE_PROFILE_IDS.balanced, "rules.preset.balanced", {
     ...commonPresetRules,
     resolution: { min: 720, max: 1080 },
-    audio: { mode: "prefer", fallback: null },
-    maxSizeGb: { episode: 4, movie: 15 },
+    audio: { mode: "prefer", language: "mine", fallback: null },
+    sizeGb: {
+      episode: { min: null, max: 4 },
+      movie: { min: null, max: 15 },
+    },
     preference: ["language", "resolutionHigher", "addonOrder", "smaller"],
   }),
   preset(SOURCE_PROFILE_IDS.best, "rules.preset.best", {
     ...commonPresetRules,
     resolution: { min: 1080, max: 2160 },
-    audio: { mode: "prefer", fallback: null },
-    maxSizeGb: { episode: null, movie: null },
+    audio: { mode: "prefer", language: "mine", fallback: null },
+    sizeGb: {
+      episode: { min: null, max: null },
+      movie: { min: null, max: null },
+    },
     preference: ["resolutionHigher", "language", "larger", "addonOrder"],
   }),
   preset(SOURCE_PROFILE_IDS.smaller, "rules.preset.smaller", {
     ...commonPresetRules,
     resolution: { min: 480, max: 720 },
-    audio: { mode: "prefer", fallback: null },
-    maxSizeGb: { episode: 1.5, movie: 5 },
+    audio: { mode: "prefer", language: "mine", fallback: null },
+    sizeGb: {
+      episode: { min: null, max: 1.5 },
+      movie: { min: null, max: 5 },
+    },
     preference: ["language", "smaller", "addonOrder"],
   }),
   preset(SOURCE_PROFILE_IDS.myLanguage, "rules.preset.myLanguage", {
     ...commonPresetRules,
     resolution: { min: 720, max: 1080 },
-    audio: { mode: "only", fallback: null },
-    maxSizeGb: { episode: 4, movie: 15 },
+    audio: { mode: "only", language: "mine", fallback: null },
+    sizeGb: {
+      episode: { min: null, max: 4 },
+      movie: { min: null, max: 15 },
+    },
     preference: ["resolutionHigher", "addonOrder", "smaller"],
   }),
 ]);
@@ -579,9 +593,16 @@ export function rulesForLegacyVariant(
           ? null
           : nearest(travel.heightPixels.max),
       },
-      audio: { mode: travel.audioMode === "strict" ? "only" : "prefer", fallback: null },
+      audio: {
+        mode: travel.audioMode === "strict" ? "only" : "prefer",
+        language: "mine",
+        fallback: null,
+      },
       subtitles: travel.subtitleMode === "optional" ? "ifAvailable" : travel.subtitleMode,
-      maxSizeGb: { episode: null, movie: null },
+      sizeGb: {
+        episode: { min: null, max: null },
+        movie: { min: null, max: null },
+      },
       skipCinema: false,
       preference: ["language", "smaller", "addonOrder"],
     });
@@ -591,9 +612,12 @@ export function rulesForLegacyVariant(
     addons,
     torrents: provider.transfer.includes("torrent"),
     resolution: { min: null, max: null },
-    audio: { mode: "prefer", fallback: null },
+    audio: { mode: "prefer", language: "mine", fallback: null },
     subtitles: provider.subtitleMode === "optional" ? "ifAvailable" : provider.subtitleMode,
-    maxSizeGb: { episode: null, movie: null },
+    sizeGb: {
+      episode: { min: null, max: null },
+      movie: { min: null, max: null },
+    },
     skipCinema: false,
     preference: ["addonOrder", "language", provider.sizeDirection === "asc" ? "smaller" : "larger"],
   });
@@ -661,8 +685,18 @@ export function sourceProfilesForViewer(catalogue: SourceProfileCatalogue): Publ
       ? (() => {
           const rules = parseDownloadRules(profile.parameters);
           return {
-            ...(rules.maxSizeGb.episode === null ? {} : { episodeBytes: rules.maxSizeGb.episode * 1_000_000_000 }),
-            ...(rules.maxSizeGb.movie === null ? {} : { movieBytes: rules.maxSizeGb.movie * 1_000_000_000 }),
+            ...(rules.sizeGb.episode.max === null
+              ? {}
+              : { episodeBytes: rules.sizeGb.episode.max * 1_000_000_000 }),
+            ...(rules.sizeGb.episode.min === null
+              ? {}
+              : { episodeMinBytes: rules.sizeGb.episode.min * 1_000_000_000 }),
+            ...(rules.sizeGb.movie.max === null
+              ? {}
+              : { movieBytes: rules.sizeGb.movie.max * 1_000_000_000 }),
+            ...(rules.sizeGb.movie.min === null
+              ? {}
+              : { movieMinBytes: rules.sizeGb.movie.min * 1_000_000_000 }),
           };
         })()
       : undefined;

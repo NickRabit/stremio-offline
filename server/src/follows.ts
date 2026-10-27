@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { rulesAudioMode } from "./download-rules.js";
 import type { DownloadSelection } from "./downloads.js";
 import { AppError } from "./errors.js";
 import { renameWithRetry } from "./fs-retry.js";
@@ -421,7 +422,7 @@ export function effectiveRulesAdmission(
 ): SourceAdmissionSnapshotV1 {
   if (admission.profile.template !== "rules") return admission;
   const until = graceUntilDays(graceDays, episode);
-  if (until === undefined || now >= until || admission.policy.constraints.audio.mode === "strict") {
+  if (until === undefined || now >= until || rulesAudioMode(admission.policy) !== "prefer") {
     return admission;
   }
   return {
@@ -1455,7 +1456,9 @@ export class FollowService {
     const attempts = download.attempts + 1;
     const follow = this.deps.store.get(followId);
     const episode = follow?.episodes[episodeKey];
-    const window = episode && download.sourceAdmission?.profile.template === "rules"
+    const ruleGrace = download.sourceAdmission?.profile.template === "rules"
+      && rulesAudioMode(download.sourceAdmission.policy) === "prefer";
+    const window = episode && ruleGrace
       ? graceUntilDays(download.sourceGraceDays, episode)
       : follow?.autoDownload && episode
       ? !follow.autoDownload.sourceProfile && download.legacyRule
