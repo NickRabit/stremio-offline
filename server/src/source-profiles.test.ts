@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import type { DownloadRules } from "./download-rules.js";
 import { defaultDownloadSettings } from "./naming.js";
 import {
   buildTemplatePolicy,
@@ -259,6 +260,29 @@ test("public rules expose separate film and episode size limits", () => {
   assert.deepEqual(balanced?.sizeLimits, {
     episodeBytes: 4_000_000_000,
     movieBytes: 15_000_000_000,
+  });
+});
+
+test("public rules expose minimum size limits without removing legacy maxima", () => {
+  const profile = storedBuiltIns()[0]!;
+  const profiles = sourceProfilesForViewer(catalogue(account(ADMIN, "admin"), {
+    addons: [addon("stream")],
+    profiles: [{
+      ...profile,
+      parameters: {
+        ...profile.parameters as DownloadRules,
+        sizeGb: {
+          episode: { min: 1, max: 4 },
+          movie: { min: 2, max: 15 },
+        },
+      },
+    }],
+  }));
+  assert.deepEqual(profiles[0]?.sizeLimits, {
+    episodeBytes: 4_000_000_000,
+    episodeMinBytes: 1_000_000_000,
+    movieBytes: 15_000_000_000,
+    movieMinBytes: 2_000_000_000,
   });
 });
 

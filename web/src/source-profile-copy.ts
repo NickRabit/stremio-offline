@@ -1,4 +1,4 @@
-import { localeTag, t, type Key } from "./i18n";
+import { languageName, localeTag, t, type Key } from "./i18n";
 import type { DownloadRules, SourceProfile } from "./types";
 
 const PRESET_NAMES = {
@@ -27,25 +27,84 @@ const resolutionSummary = (min: number | null | undefined, max: number | null | 
   return t("rules.summary.anyResolution");
 };
 
-const summary = (min: number | null | undefined, max: number | null | undefined,
-  audio: "prefer" | "only", maxGb: number | null | undefined, kind: "episode" | "movie") => [
+const audioSummary = (mode: DownloadRules["audio"]["mode"], language: string | undefined) => {
+  if (mode === "any") return t("rules.summary.anyLanguage");
+  if (language === undefined) {
+    return lowerFirst(t(mode === "prefer" ? "rules.audioPrefer" : "rules.audioOnly"));
+  }
+  return t(mode === "prefer" ? "rules.summary.preferLanguage" : "rules.summary.onlyLanguage", {
+    language: languageName(language),
+  });
+};
+
+const sizeSummary = (
+  min: number | null | undefined,
+  max: number | null | undefined,
+  kind: "episode" | "movie",
+) => {
+  if (min != null && max != null) {
+    return t(kind === "episode" ? "rules.summary.rangeEpisode" : "rules.summary.rangeMovie", {
+      min: number(min), max: number(max),
+    });
+  }
+  if (max != null) {
+    return t(kind === "episode" ? "rules.summary.upToEpisode" : "rules.summary.upToMovie", {
+      size: number(max),
+    });
+  }
+  if (min != null) {
+    return t(kind === "episode" ? "rules.summary.fromEpisode" : "rules.summary.fromMovie", {
+      size: number(min),
+    });
+  }
+  return "";
+};
+
+const summary = (
+  min: number | null | undefined,
+  max: number | null | undefined,
+  audio: DownloadRules["audio"]["mode"],
+  language: string | undefined,
+  sizeMin: number | null | undefined,
+  sizeMax: number | null | undefined,
+  kind: "episode" | "movie",
+) => [
   resolutionSummary(min, max),
-  lowerFirst(t(audio === "prefer" ? "rules.audioPrefer" : "rules.audioOnly")),
-  maxGb == null ? "" : t(kind === "episode" ? "rules.summary.upToEpisode" : "rules.summary.upToMovie", { size: number(maxGb) }),
+  audioSummary(audio, language),
+  sizeSummary(sizeMin, sizeMax, kind),
 ].filter(Boolean).join(" · ");
 
 export const rulesSummary = (rules: DownloadRules, kind: "episode" | "movie" = "episode") =>
-  summary(rules.resolution.min, rules.resolution.max, rules.audio.mode, rules.maxSizeGb[kind], kind);
+  summary(
+    rules.resolution.min,
+    rules.resolution.max,
+    rules.audio.mode,
+    rules.audio.language === "mine" ? undefined : rules.audio.language,
+    rules.sizeGb[kind].min,
+    rules.sizeGb[kind].max,
+    kind,
+  );
+
+export const profileAudioMode = (profile: SourceProfile): DownloadRules["audio"]["mode"] => {
+  if (profile.policy.constraints.audio.mode === "strict") return "only";
+  return profile.policy.criteria.some((criterion) => criterion.kind === "audioTier") ? "prefer" : "any";
+};
+
+export const profileAudioLanguage = (profile: SourceProfile): string | undefined => {
+  const preferred = profile.policy.constraints.audio.preferred;
+  return "code" in preferred ? preferred.code : undefined;
+};
 
 export const profileSummary = (profile: SourceProfile, kind: "episode" | "movie") => {
   const height = profile.policy.constraints.heightPixels;
-  const bytes = profile.sizeLimits
-    ? profile.sizeLimits[kind === "episode" ? "episodeBytes" : "movieBytes"]
-    : profile.policy.constraints.bytes?.max;
+  const limits = profile.sizeLimits;
+  const bytes = limits === undefined
+    ? profile.policy.constraints.bytes
+    : kind === "episode"
+      ? { min: limits.episodeMinBytes, max: limits.episodeBytes }
+      : { min: limits.movieMinBytes, max: limits.movieBytes };
   return summary(height?.min, height?.max,
-    profile.policy.constraints.audio.mode === "strict" ? "only" : "prefer",
-    bytes == null ? null : bytes / 1_000_000_000, kind);
+    profileAudioMode(profile), profileAudioLanguage(profile),
+    bytes?.min == null ? null : bytes.min / 1_000_000_000,
+    bytes?.max == null ? null : bytes.max / 1_000_000_000, kind);
 };
-
-export const profilePrefersAudio = (profile: SourceProfile) =>
-  profile.policy.constraints.audio.mode === "preferred";

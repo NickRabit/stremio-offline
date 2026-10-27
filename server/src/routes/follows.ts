@@ -1,6 +1,7 @@
 import type express from "express";
 import { randomBytes } from "node:crypto";
 import { allowedAddons } from "../addons.js";
+import { rulesAudioMode } from "../download-rules.js";
 import { ownerMayDownload, type DownloadSelection } from "../downloads.js";
 import { AppError } from "../errors.js";
 import { images } from "../images.js";
@@ -334,7 +335,7 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
           : undefined;
         if (admission && graceDays !== undefined && graceDays > 0
           && (admission.profile.template !== "rules"
-            || admission.policy.constraints.audio.mode !== "preferred")) {
+            || rulesAudioMode(admission.policy) !== "prefer")) {
           throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
         }
         const sourceProfile = admission

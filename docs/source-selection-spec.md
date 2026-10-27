@@ -468,6 +468,25 @@ intent, and recompute the effective selection from that snapshot and the current
 retry. Choosing new rules requires an explicit reconfigure/requeue action. A profile rename is
 cosmetic and cannot alter a job's rule digest.
 
+## Download rules (what administrators edit)
+
+Administrators edit one rule type, `DownloadRules` in `server/src/download-rules.ts`, which
+`rulesPolicy` turns into a `SourcePolicyV1` per media kind. The editor groups it as Sources
+(addons, addon order, torrents), Quality and size (resolution range, size range, skip cinema
+copies), Language (audio, subtitles) and an ordered preference list.
+
+- **Audio** is `any`, `prefer` or `only`, for the viewer's own language (`"mine"`, resolved at
+  admission) or a chosen language code. `any` is encoded as a preferred audio constraint with no
+  `audioTier` criterion, so language neither filters nor ranks; `rulesAudioMode(policy)` reads the
+  mode back. A fallback language and the Follow wait for audio exist only for `prefer`.
+- **Size** is a range per episode and per film, judged on the listed size only: a known size
+  outside the range excludes the offer, an unknown size passes.
+- **Resolution** compares classes, not raw pixel height. A probed video is classed by
+  `videoResolutionClass` (`server/src/video-resolution.ts`), which also looks at width, so a
+  1920x800 film is 1080p. Listing tags such as `1080p` are already classes.
+- Stored v1 rules (`maxSizeGb`, audio without a language) still parse and are normalised to v2,
+  so saved profiles, backups and frozen follow and queue snapshots keep working.
+
 ## Local libraries
 
 Owned local files are a provider class of their own, not an addon. They have no addon manifest,

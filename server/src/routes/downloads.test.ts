@@ -641,9 +641,9 @@ test("bulk admission materializes every rule preset with the episode size limit"
     assert.deepEqual(snapshot.profile, { id: preset.id, revision: 1, template: "rules" });
     assert.deepEqual(
       snapshot.policy.constraints.bytes,
-      preset.rules.maxSizeGb.episode === null
+      preset.rules.sizeGb.episode.max === null
         ? undefined
-        : { max: preset.rules.maxSizeGb.episode * 1_000_000_000 },
+        : { max: preset.rules.sizeGb.episode.max * 1_000_000_000 },
     );
   }
 });

@@ -2,10 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Bell, CalendarClock, FolderOpen, ListFilter, Trash2, X } from "lucide-react";
 import { api, describeError } from "./api";
 import { useDialogFocus } from "./dialog-focus";
-import { t, useI18n } from "./i18n";
+import { languageName, t, useI18n } from "./i18n";
 import { SaveTargetFields } from "./SaveTargetFields";
 import type { SaveTarget } from "./save-target";
-import { profilePrefersAudio, profileSummary, sourceProfileName } from "./source-profile-copy";
+import { profileAudioLanguage, profileAudioMode, profileSummary, sourceProfileName } from "./source-profile-copy";
 import type { FollowAutoDownload, FollowPreview, FollowStartMode, FollowView, LibraryView, ProfileSelection, SourceProfile } from "./types";
 
 interface Episode { id: string; season?: number; episode?: number; title?: string; released?: string }
@@ -68,6 +68,11 @@ export function SeriesDownloadDialog({ type, label, title, episodes, libraries, 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const selectedProfile = profiles.find((profile) => profile.id === profileId);
+  const waitsForAudio = selectedProfile !== undefined && profileAudioMode(selectedProfile) === "prefer";
+  const graceLanguage = selectedProfile === undefined ? undefined : profileAudioLanguage(selectedProfile);
+  const graceLabel = graceLanguage === undefined
+    ? t("rules.waitForAudio")
+    : t("rules.waitForAudioLanguage", { language: languageName(graceLanguage) });
   const defaultProfileId = follow ? followSourceProfileId : downloadSourceProfileId;
   const remember = follow ? onRememberFollowSourceProfile : onRememberDownloadSourceProfile;
   const showRemember = Boolean(remember) && Boolean(profileId) && profileId !== (defaultProfileId ?? "");
@@ -151,7 +156,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, libraries, 
             startMode,
             ...(startMode === "from" && startSeason != null && startEpisode != null ? { startSeason, startEpisode } : {}),
             ...(startMode === "ahead" ? { aheadCount } : {}),
-            graceDays: profilePrefersAudio(selectedProfile!) ? graceDays : 0,
+            graceDays: waitsForAudio ? graceDays : 0,
             selection,
             ...(target ? { target } : {}),
           },
@@ -186,7 +191,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, libraries, 
             {profilesState === "loading" && <p className="identify-hint">{t("common.loading")}</p>}
             {profilesState === "unavailable" && <p className="identify-hint follow-warning">{t("rules.unavailable")}</p>}
             {profilesState === "ready" && <div className="bulk-strategy rules-choice" role="radiogroup" aria-label={t("rules.title")}>{profiles.map((profile) => <label key={profile.id} className={profileId === profile.id ? "selected" : ""}><input type="radio" name="download-rules" value={profile.id} checked={profileId === profile.id} onChange={() => { setProfileId(profile.id); setRememberProfile(false); }}/><span><strong>{sourceProfileName(profile.nameKey, profile.name)}</strong><small>{profileSummary(profile, isMovie ? "movie" : "episode")}</small></span></label>)}</div>}
-            {follow && selectedProfile && profilePrefersAudio(selectedProfile) && <div className="bulk-language-grid rules-grace"><label><span>{t("rules.waitForAudio")}</span><select aria-label={t("rules.waitForAudio")} value={graceDays} onChange={(event) => setGraceDays(Number(event.target.value))}><option value={0}>{t("rules.waitNone")}</option>{[1, 2, 3, 7, 14].map((days) => <option key={days} value={days}>{t("rules.waitDays", { count: days })}</option>)}</select></label></div>}
+            {follow && waitsForAudio && <div className="bulk-language-grid rules-grace"><label><span>{graceLabel}</span><select aria-label={graceLabel} value={graceDays} onChange={(event) => setGraceDays(Number(event.target.value))}><option value={0}>{t("rules.waitNone")}</option>{[1, 2, 3, 7, 14].map((days) => <option key={days} value={days}>{t("rules.waitDays", { count: days })}</option>)}</select></label></div>}
             {showRemember && <label className="bulk-remember-profile"><input type="checkbox" aria-label={t(follow ? "rules.rememberForFollows" : "rules.rememberForDownloads")} checked={rememberProfile} onChange={(event) => setRememberProfile(event.target.checked)}/><span>{t(follow ? "rules.rememberForFollows" : "rules.rememberForDownloads")}</span></label>}
           </section>
           <section className="bulk-section"><div className="bulk-section-head"><FolderOpen/><div><h3>{t("saveTarget.where")}</h3><p>{t("saveTarget.whereHint")}</p></div></div><SaveTargetFields kind={isMovie ? "movie" : "series"} title={title} libraries={libraries} rule={undefined} value={target} onChange={setTarget}/></section>

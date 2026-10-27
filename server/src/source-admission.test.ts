@@ -3,6 +3,7 @@ import { test } from "node:test";
 import type { LibraryRecord } from "./libraries.js";
 import type { MediaConnectionRecord, RemoteLibraryRecord } from "./media-server-types.js";
 import { defaultDownloadSettings } from "./naming.js";
+import { parseDownloadRules, rulesPolicy } from "./download-rules.js";
 import {
   materializeSourceAdmission,
   materializeSourceAdmissionPolicy,
@@ -293,6 +294,33 @@ test("rules profiles admit by media kind and their policies round-trip", () => {
     template: "rules",
     parameters: preset.rules,
   });
+});
+
+test("a frozen snapshot built from v1 rules still validates with the same policy", () => {
+  const providerKeys = ["addon:legacy-rule"];
+  const legacyRules = parseDownloadRules({
+    addons: { scope: { selected: ["legacy-rule"] }, order: "viewer" },
+    torrents: true,
+    resolution: { min: 720, max: 1080 },
+    audio: { mode: "prefer", fallback: "cs" },
+    subtitles: "ifAvailable",
+    maxSizeGb: { episode: 4, movie: 15 },
+    skipCinema: false,
+    preference: ["language", "resolutionHigher", "addonOrder", "smaller"],
+  });
+  const policy = materializeSourceAdmissionPolicy(
+    rulesPolicy(legacyRules, "episode"),
+    providerKeys,
+    { audioLanguage: "en", subtitleLanguage: "en" },
+  );
+  const snapshot = parseSourceAdmissionSnapshotV1({
+    schemaVersion: 1,
+    profile: { id: "legacy-rules", revision: 1, template: "rules" },
+    operation: "downloadToLibrary",
+    providerKeys,
+    policy,
+  });
+  assert.deepEqual(snapshot.policy, policy);
 });
 
 test("provider order keeps instance class order and the viewer addon overlay", () => {

@@ -8,6 +8,8 @@ import {
 } from "./source-policy.js";
 
 export type RuleResolution = 360 | 480 | 720 | 1080 | 2160;
+export type RuleAudioMode = "any" | "prefer" | "only";
+export interface RuleSizeRange { min: number | null; max: number | null }
 export type RulePreference =
   | "language"
   | "resolutionHigher"
@@ -23,9 +25,13 @@ export interface DownloadRules {
   };
   torrents: boolean;
   resolution: { min: RuleResolution | null; max: RuleResolution | null };
-  audio: { mode: "prefer" | "only"; fallback: string | null };
+  audio: {
+    mode: RuleAudioMode;
+    language: "mine" | string;
+    fallback: string | null;
+  };
   subtitles: "off" | "ifAvailable" | "required";
-  maxSizeGb: { episode: number | null; movie: number | null };
+  sizeGb: { episode: RuleSizeRange; movie: RuleSizeRange };
   skipCinema: boolean;
   preference: RulePreference[];
 }
@@ -108,17 +114,32 @@ const sizeGb = (value: unknown): number | null => {
   return value;
 };
 
+const sizeRange = (value: unknown): RuleSizeRange => {
+  const range = objectValue(value, ["min", "max"]);
+  const min = sizeGb(range.min);
+  const max = sizeGb(range.max);
+  if (min !== null && max !== null && min > max) return fail();
+  return { min, max };
+};
+
+const languageCode = (value: unknown): string | null => {
+  if (value === null) return null;
+  const normalized = typeof value === "string" ? value.toLowerCase() : "";
+  if (!/^[a-z]{2}$/.test(normalized) || !Object.hasOwn(LANGUAGE_NAMES, normalized)) {
+    return fail();
+  }
+  return normalized;
+};
+
 const parser = (value: unknown): DownloadRules => {
-  const input = objectValue(value, [
-    "addons",
-    "torrents",
-    "resolution",
-    "audio",
-    "subtitles",
-    "maxSizeGb",
-    "skipCinema",
-    "preference",
-  ]);
+  const input = objectValue(
+    value,
+    ["addons", "torrents", "resolution", "audio", "subtitles", "skipCinema", "preference"],
+    ["sizeGb", "maxSizeGb"],
+  );
+  const hasSizeRange = Object.hasOwn(input, "sizeGb");
+  const hasLegacyMaximum = Object.hasOwn(input, "maxSizeGb");
+  if (hasSizeRange === hasLegacyMaximum) return fail();
   const addons = objectValue(input.addons, ["scope", "order"]);
   let scope: DownloadRules["addons"]["scope"];
   if (addons.scope === "all") {
@@ -140,21 +161,6 @@ const parser = (value: unknown): DownloadRules => {
   const max = resolution(bounds.max);
   if (min !== null && max !== null && min > max) return fail();
 
-  const audio = objectValue(input.audio, ["mode", "fallback"]);
-  const mode = enumValue(audio.mode, ["prefer", "only"] as const);
-  let fallback: string | null = null;
-  if (audio.fallback !== null) {
-    const normalized = typeof audio.fallback === "string"
-      ? audio.fallback.toLowerCase()
-      : "";
-    if (!/^[a-z]{2}$/.test(normalized) || !Object.hasOwn(LANGUAGE_NAMES, normalized)) {
-      return fail();
-    }
-    fallback = normalized;
-  }
-  if (mode === "only" && fallback !== null) return fail();
-
-  const sizes = objectValue(input.maxSizeGb, ["episode", "movie"]);
   const preferences = arrayValue(input.preference, 1, 4)
     .map((preference) => enumValue(preference, [
       "language",
@@ -171,16 +177,50 @@ const parser = (value: unknown): DownloadRules => {
   }
   if (typeof input.torrents !== "boolean" || typeof input.skipCinema !== "boolean") return fail();
 
+  let mode: RuleAudioMode;
+  let language: DownloadRules["audio"]["language"];
+  let fallback: string | null;
+  let sizes: DownloadRules["sizeGb"];
+  if (hasLegacyMaximum) {
+    const audio = objectValue(input.audio, ["mode", "fallback"]);
+    mode = enumValue(audio.mode, ["prefer", "only"] as const);
+    language = "mine";
+    fallback = languageCode(audio.fallback);
+    if (mode === "only" && fallback !== null) return fail();
+
+    const legacySizes = objectValue(input.maxSizeGb, ["episode", "movie"]);
+    sizes = {
+      episode: { min: null, max: sizeGb(legacySizes.episode) },
+      movie: { min: null, max: sizeGb(legacySizes.movie) },
+    };
+  } else {
+    const audio = objectValue(input.audio, ["mode", "language", "fallback"]);
+    mode = enumValue(audio.mode, ["any", "prefer", "only"] as const);
+    const rawLanguage = audio.language;
+    if (rawLanguage !== "mine" && typeof rawLanguage !== "string") return fail();
+    language = rawLanguage === "mine" ? "mine" : languageCode(rawLanguage) ?? fail();
+    fallback = languageCode(audio.fallback);
+    if (mode === "any" && (language !== "mine" || fallback !== null
+      || preferences.includes("language"))) {
+      return fail();
+    }
+    if (mode === "only" && fallback !== null) return fail();
+    if (language !== "mine" && fallback === language) return fail();
+
+    const ranges = objectValue(input.sizeGb, ["episode", "movie"]);
+    sizes = {
+      episode: sizeRange(ranges.episode),
+      movie: sizeRange(ranges.movie),
+    };
+  }
+
   const parsed: DownloadRules = {
     addons: { scope, order },
     torrents: input.torrents,
     resolution: { min, max },
-    audio: { mode, fallback },
+    audio: { mode, language, fallback },
     subtitles: enumValue(input.subtitles, ["off", "ifAvailable", "required"] as const),
-    maxSizeGb: {
-      episode: sizeGb(sizes.episode),
-      movie: sizeGb(sizes.movie),
-    },
+    sizeGb: sizes,
     skipCinema: input.skipCinema,
     preference: preferences,
   };
@@ -219,7 +259,8 @@ export function rulesPolicy(
 ): SourcePolicyV1 {
   const rules = parseDownloadRules(input);
   const criteria = rules.preference.map((preference) => criterionFor(preference, rules.addons.order));
-  if (!criteria.some((criterion) => criterion.kind === "audioTier")) {
+  if (rules.audio.mode !== "any"
+    && !criteria.some((criterion) => criterion.kind === "audioTier")) {
     criteria.push({ kind: "audioTier" });
   }
   if (!criteria.some((criterion) => criterion.kind === "providerOrder")) {
@@ -232,7 +273,13 @@ export function rulesPolicy(
         ...(rules.resolution.min === null ? {} : { min: rules.resolution.min }),
         ...(rules.resolution.max === null ? {} : { max: rules.resolution.max }),
       };
-  const maximum = rules.maxSizeGb[kind];
+  const size = rules.sizeGb[kind];
+  const bytes = size.min === null && size.max === null
+    ? undefined
+    : {
+        ...(size.min === null ? {} : { min: Math.round(size.min * 1_000_000_000) }),
+        ...(size.max === null ? {} : { max: Math.round(size.max * 1_000_000_000) }),
+      };
   return parseSourcePolicyV1({
     schemaVersion: 1,
     scope: rules.addons.scope === "all"
@@ -250,7 +297,9 @@ export function rulesPolicy(
       ],
       audio: {
         mode: rules.audio.mode === "only" ? "strict" : "preferred",
-        preferred: { preference: "audio" },
+        preferred: rules.audio.language === "mine"
+          ? { preference: "audio" }
+          : { code: rules.audio.language },
         ...(rules.audio.fallback === null ? {} : { fallback: { code: rules.audio.fallback } }),
       },
       subtitles: rules.subtitles === "off"
@@ -260,7 +309,7 @@ export function rulesPolicy(
             preferred: { preference: "subtitle" },
           },
       ...(height === undefined ? {} : { heightPixels: height }),
-      ...(maximum === null ? {} : { bytes: { max: Math.round(maximum * 1_000_000_000) } }),
+      ...(bytes === undefined ? {} : { bytes }),
       ...(rules.skipCinema
         ? { excludeReleaseKinds: ["cam", "telesync", "screener"] }
         : {}),
@@ -283,6 +332,15 @@ const preferenceFor = (criterion: SourcePolicyCriterion): RulePreference | undef
     default: return undefined;
   }
 };
+
+export function rulesAudioMode(policy: SourcePolicyV1): RuleAudioMode {
+  if (policy.constraints.audio.mode === "strict") return "only";
+  if (policy.constraints.audio.mode === "preferred"
+    && !policy.criteria.some((criterion) => criterion.kind === "audioTier")) {
+    return "any";
+  }
+  return "prefer";
+}
 
 const releaseKinds = (policy: SourcePolicyV1): ReleaseKind[] | undefined => {
   const kinds = policy.constraints.excludeReleaseKinds;
@@ -394,10 +452,15 @@ export function rulesFromPolicy(policy: SourcePolicyV1, kind: "episode" | "movie
   const audioFallback = policy.constraints.audio.fallback;
   if (audioFallback !== undefined && !("code" in audioFallback)) return fail();
   const height = policy.constraints.heightPixels;
-  const maximum = policy.constraints.bytes;
-  if (maximum?.min !== undefined) return fail();
-  const maximumGb = maximum?.max === undefined ? null : maximum.max / 1_000_000_000;
-  const audioMode = policy.constraints.audio.mode === "strict" ? "only" : "prefer";
+  const bytes = policy.constraints.bytes;
+  const sizeRange = (reported: boolean): RuleSizeRange => ({
+    min: reported && bytes?.min !== undefined
+      ? sizeGb(bytes.min / 1_000_000_000)
+      : null,
+    max: reported && bytes?.max !== undefined
+      ? sizeGb(bytes.max / 1_000_000_000)
+      : null,
+  });
   releaseKinds(policy);
   const rules = parseDownloadRules({
     addons: { scope, order },
@@ -407,19 +470,26 @@ export function rulesFromPolicy(policy: SourcePolicyV1, kind: "episode" | "movie
       max: height?.max === undefined ? null : resolution(height.max),
     },
     audio: {
-      mode: audioMode,
+      mode: rulesAudioMode(policy),
+      // A materialised policy always names a code; only an unmaterialised one can tell a chosen language from "mine".
+      language: policy.scope.mode === "allAvailable" && "code" in policy.constraints.audio.preferred
+        ? policy.constraints.audio.preferred.code
+        : "mine",
       fallback: audioFallback && "code" in audioFallback ? audioFallback.code : null,
     },
     subtitles: policy.constraints.subtitles.mode === "off"
       ? "off"
       : policy.constraints.subtitles.mode === "required" ? "required" : "ifAvailable",
-    maxSizeGb: {
-      episode: kind === "episode" ? sizeGb(maximumGb) : null,
-      movie: kind === "movie" ? sizeGb(maximumGb) : null,
+    sizeGb: {
+      episode: sizeRange(kind === "episode"),
+      movie: sizeRange(kind === "movie"),
     },
     skipCinema: policy.constraints.excludeReleaseKinds !== undefined,
     preference,
   });
-  if (!isDeepStrictEqual(materializeForComparison(rules, policy, kind), policy)) return fail();
+  const comparison = policy.scope.mode === "allAvailable"
+    ? rulesPolicy(rules, kind)
+    : materializeForComparison(rules, policy, kind);
+  if (!isDeepStrictEqual(comparison, policy)) return fail();
   return rules;
 }

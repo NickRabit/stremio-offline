@@ -19,6 +19,7 @@ import {
   type SourcePolicyConstraints,
   type SourcePolicyCriterion,
 } from "./source-policy.js";
+import type { SourceProfileTemplate } from "./source-profiles.js";
 
 const fact = <T>(value: T, evidence: SourceEvidenceLevel = "inspected"): SourceFact<T> => ({
   evidence,
@@ -71,11 +72,12 @@ const snapshot = (options: {
   heightPixels?: SourcePolicyConstraints["heightPixels"];
   criteria?: SourcePolicyCriterion[];
   existingLocalCopy?: ExistingLocalCopyPolicy;
+  template?: SourceProfileTemplate;
 } = {}): SourceAdmissionSnapshotV1 => {
   const providerKeys = options.providerKeys ?? ["addon:one", "addon:two", "local"];
   return {
     schemaVersion: 1,
-    profile: { id: "profile", revision: 1, template: "travel" },
+    profile: { id: "profile", revision: 1, template: options.template ?? "travel" },
     operation: "downloadToLibrary",
     providerKeys,
     policy: parseSourcePolicyV1({
@@ -189,6 +191,17 @@ test("a known zero is not treated as an unknown fact", () => {
     facts: { bytes: fact(0, "providerMetadata") },
   })).status, "eligible");
   assert.equal(evaluateSourceCandidate(profile, candidate()).status, "needsInspection");
+});
+
+test("rules size ranges exclude known listed sizes outside either bound and pass unknown sizes", () => {
+  const profile = snapshot({ template: "rules", bytes: { min: 1_000_000_000 } });
+  assert.deepEqual(evaluateSourceCandidate(profile, candidate({
+    hints: { bytes: 500_000_000 },
+  })), {
+    status: "excluded",
+    reasons: [{ code: "numericOutsideBounds", field: "bytes" }],
+  });
+  assert.equal(evaluateSourceCandidate(profile, candidate()).status, "eligible");
 });
 
 test("audio modes use listing and authoritative track evidence differently", () => {

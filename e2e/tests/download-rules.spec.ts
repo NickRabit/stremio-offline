@@ -147,15 +147,24 @@ test("an administrator creates, lists and deletes a download rule", async ({ pag
   await expect(section.getByText("Pravidla stahování", { exact: true })).toBeVisible();
   await section.getByRole("button", { name: "Přidat pravidla" }).click();
   const editor = page.getByRole("dialog", { name: "Nová pravidla stahování" });
+  for (const legend of ["Zdroje", "Kvalita a velikost", "Jazyk", "Čemu dát přednost"]) {
+    await expect(editor.getByText(legend, { exact: true })).toBeVisible();
+  }
   await editor.getByRole("textbox", { name: "Název" }).fill(RULES_NAME);
   await editor.getByRole("combobox", { name: "Rozlišení od" }).selectOption("480");
   await editor.getByRole("combobox", { name: "Rozlišení do" }).selectOption("480");
+  await editor.getByRole("combobox", { name: "Jazyk zvuku" }).selectOption("en");
+  await editor.getByRole("combobox", { name: "Záložní jazyk" }).selectOption("cs");
+  await editor.getByRole("spinbutton", { name: "Díl od" }).fill("1.2");
+  await editor.getByRole("spinbutton", { name: "Díl do" }).fill("4");
+  await editor.getByRole("spinbutton", { name: "Film od" }).fill("5");
+  await editor.getByRole("spinbutton", { name: "Film do" }).fill("15");
   await editor.getByRole("button", { name: "Uložit" }).click();
   await expect(editor).toHaveCount(0);
 
   const row = page.locator(".source-profile-row", { hasText: RULES_NAME });
   await expect(row).toBeVisible();
-  await expect(row).toContainText("480p · upřednostnit můj jazyk · do ~4 GB na díl");
+  await expect(row).toContainText("480p · přednost: Angličtina · ~1,2–4 GB na díl");
   await row.getByRole("button", { name: "Smazat", exact: true }).click();
   const confirmation = page.getByRole("dialog", { name: "Smazat pravidla stahování" });
   await expect(confirmation).toContainText(RULES_NAME);

@@ -61,6 +61,12 @@ data class SourceProfileDto(
 @Serializable
 data class SourceProfilePolicyDto(
   val constraints: SourceProfileConstraintsDto? = null,
+  val criteria: List<SourceProfileCriterionDto> = emptyList(),
+)
+
+@Serializable
+data class SourceProfileCriterionDto(
+  val kind: String = "",
 )
 
 @Serializable
@@ -73,6 +79,13 @@ data class SourceProfileConstraintsDto(
 @Serializable
 data class SourceProfileAudioDto(
   val mode: String = "",
+  val preferred: SourceProfileLanguageRefDto? = null,
+)
+
+@Serializable
+data class SourceProfileLanguageRefDto(
+  val code: String? = null,
+  val preference: String? = null,
 )
 
 @Serializable
@@ -81,14 +94,16 @@ data class SourceProfileRangeDto(
   val max: Long? = null,
 )
 
-/** One piece of the one-line rule summary: resolution, then audio prefer/only, then max size. */
+internal enum class AudioMode { ANY, PREFER, ONLY }
+
+/** One piece of the one-line rule summary: resolution, then audio, then size. */
 internal sealed interface RuleSummaryPart {
   data class Resolution(val min: Long?, val max: Long?) : RuleSummaryPart
-  data class Audio(val only: Boolean) : RuleSummaryPart
-  data class MaxBytes(val bytes: Long) : RuleSummaryPart
+  data class Audio(val mode: AudioMode, val language: String?) : RuleSummaryPart
+  data class Size(val minBytes: Long?, val maxBytes: Long?) : RuleSummaryPart
 }
 
-/** Resolution from `heightPixels`, audio from `preferred`/`strict`, and `bytes.max` when set. */
+/** Resolution from `heightPixels`, audio from mode/criteria/`preferred`, and `bytes` when set. */
 internal fun ruleSummaryParts(policy: SourceProfilePolicyDto?): List<RuleSummaryPart> {
   val constraints = policy?.constraints ?: return emptyList()
   val parts = mutableListOf<RuleSummaryPart>()
@@ -96,11 +111,19 @@ internal fun ruleSummaryParts(policy: SourceProfilePolicyDto?): List<RuleSummary
   if (height != null && (height.min != null || height.max != null)) {
     parts += RuleSummaryPart.Resolution(height.min, height.max)
   }
-  when (constraints.audio?.mode) {
-    "strict" -> parts += RuleSummaryPart.Audio(only = true)
-    "preferred" -> parts += RuleSummaryPart.Audio(only = false)
+  val audio = constraints.audio
+  val audioMode = when (audio?.mode) {
+    "strict" -> AudioMode.ONLY
+    "preferred" -> if (policy.criteria.any { it.kind == "audioTier" }) AudioMode.PREFER else AudioMode.ANY
+    else -> null
   }
-  constraints.bytes?.max?.let { parts += RuleSummaryPart.MaxBytes(it) }
+  if (audioMode != null) {
+    parts += RuleSummaryPart.Audio(audioMode, audio?.preferred?.code?.takeUnless { it.isBlank() })
+  }
+  val bytes = constraints.bytes
+  if (bytes != null && (bytes.min != null || bytes.max != null)) {
+    parts += RuleSummaryPart.Size(bytes.min, bytes.max)
+  }
   return parts
 }
 

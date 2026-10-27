@@ -25,7 +25,9 @@ import cz.stremiooffline.tv.data.ProgressEntryDto
 import cz.stremiooffline.tv.data.SettingsResponse
 import cz.stremiooffline.tv.data.SourceProfileAudioDto
 import cz.stremiooffline.tv.data.SourceProfileConstraintsDto
+import cz.stremiooffline.tv.data.SourceProfileCriterionDto
 import cz.stremiooffline.tv.data.SourceProfileDto
+import cz.stremiooffline.tv.data.SourceProfileLanguageRefDto
 import cz.stremiooffline.tv.data.SourceProfilePolicyDto
 import cz.stremiooffline.tv.data.SourceProfileRangeDto
 import cz.stremiooffline.tv.data.StreamSourceDto
@@ -254,9 +256,9 @@ class SeriesDownloadPanelTest {
   fun `choosing smaller files posts that rule and leaves the legacy rows out`() {
     val api = ready()
     api.sourceProfilesValue = listOf(
-      rule("balanced", nameKey = "rules.preset.balanced", min = 720, max = 1080, audio = "preferred", bytes = 4_000_000_000),
-      rule("best", nameKey = "rules.preset.best", min = 1080, max = 2160, audio = "preferred"),
-      rule("smaller", nameKey = "rules.preset.smaller", revision = 4, min = 480, max = 720, audio = "preferred", bytes = 1_500_000_000),
+      rule("balanced", nameKey = "rules.preset.balanced", min = 720, max = 1080, audio = "preferred", bytes = 4_000_000_000, criteria = listOf(SourceProfileCriterionDto("audioTier"))),
+      rule("best", nameKey = "rules.preset.best", min = 1080, max = 2160, audio = "preferred", criteria = listOf(SourceProfileCriterionDto("audioTier"))),
+      rule("smaller", nameKey = "rules.preset.smaller", revision = 4, min = 480, max = 720, audio = "preferred", bytes = 1_500_000_000, criteria = listOf(SourceProfileCriterionDto("audioTier"))),
       rule("mine", nameKey = "rules.preset.myLanguage", min = 720, max = 1080, audio = "strict", bytes = 4_000_000_000),
       rule("nightly", name = "Nightly", revision = 7, min = 480, audio = "strict"),
     )
@@ -452,6 +454,28 @@ class SeriesDownloadPanelTest {
   }
 
   @Test
+  fun `a chosen language is named on the rule summary`() {
+    val api = ready()
+    api.sourceProfilesValue = listOf(
+      rule(
+        "english",
+        name = "English prefer",
+        min = 720,
+        max = 1080,
+        audio = "preferred",
+        preferred = SourceProfileLanguageRefDto(code = "en"),
+        criteria = listOf(SourceProfileCriterionDto("audioTier")),
+      ),
+    )
+    mount(api)
+    openSettings(DownloadScope.Episode)
+    focusUp(TagSeriesDownloadRules)
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(seriesRuleTag("english"))
+      .assertTextContains("prefer English", substring = true)
+  }
+
+  @Test
   fun `Back walks the levels and leaves the remote on the opener`() {
     val api = ready()
     mount(api)
@@ -482,6 +506,8 @@ class SeriesDownloadPanelTest {
     min: Long? = null,
     max: Long? = null,
     audio: String? = null,
+    preferred: SourceProfileLanguageRefDto? = null,
+    criteria: List<SourceProfileCriterionDto> = emptyList(),
     bytes: Long? = null,
   ): SourceProfileDto {
     val policy = if (min == null && max == null && audio == null && bytes == null) {
@@ -489,10 +515,11 @@ class SeriesDownloadPanelTest {
     } else {
       SourceProfilePolicyDto(
         constraints = SourceProfileConstraintsDto(
-          audio = audio?.let(::SourceProfileAudioDto),
+          audio = audio?.let { SourceProfileAudioDto(mode = it, preferred = preferred) },
           heightPixels = if (min == null && max == null) null else SourceProfileRangeDto(min, max),
           bytes = bytes?.let { SourceProfileRangeDto(max = it) },
         ),
+        criteria = criteria,
       )
     }
     return SourceProfileDto(

@@ -714,7 +714,7 @@ test("effectiveRulesAdmission uses the frozen snapshot and returns to it at the 
   assert.ok(preset);
   const rules = parseDownloadRules({
     ...preset.rules,
-    audio: { mode: "prefer", fallback: "cs" },
+    audio: { mode: "prefer", language: "mine", fallback: "cs" },
   });
   const providerKeys = ["addon:addon"];
   const admission = parseSourceAdmissionSnapshotV1({
@@ -736,6 +736,35 @@ test("effectiveRulesAdmission uses the frozen snapshot and returns to it at the 
   assert.deepEqual(inside.policy.constraints.audio.preferred, { code: "en" });
   assert.equal(inside.policy.constraints.audio.fallback, undefined);
   assert.equal(effectiveRulesAdmission(admission, item, until, 7), admission);
+});
+
+test("effectiveRulesAdmission does not apply grace to any or only audio rules", () => {
+  const preset = RULE_PRESETS.find((candidate) => candidate.id === SOURCE_PROFILE_IDS.balanced);
+  assert.ok(preset);
+  const providerKeys = ["addon:addon"];
+  const released = "2024-05-25T00:00:00.000Z";
+  const item = episode(1, 1, "v1", released);
+  const inside = Date.parse(released) + 24 * 60 * 60_000;
+
+  for (const audioMode of ["any", "only"] as const) {
+    const rules = parseDownloadRules({
+      ...preset.rules,
+      audio: { mode: audioMode, language: "mine", fallback: null },
+      preference: audioMode === "any" ? ["resolutionHigher", "smaller"] : preset.rules.preference,
+    });
+    const admission = parseSourceAdmissionSnapshotV1({
+      schemaVersion: 1,
+      profile: { id: preset.id, revision: 1, template: "rules" },
+      operation: "downloadToLibrary",
+      providerKeys,
+      policy: materializeSourceAdmissionPolicy(
+        rulesPolicy(rules, "episode"),
+        providerKeys,
+        { audioLanguage: "en", subtitleLanguage: "en" },
+      ),
+    });
+    assert.equal(effectiveRulesAdmission(admission, item, inside, 7), admission);
+  }
 });
 
 test("admission inside the window passes the stripped selection, and the close restores it", async (t) => {
@@ -774,7 +803,7 @@ test("a rules follow retries inside the grace window as strict and after it with
   const balanced = RULE_PRESETS.find((preset) => preset.id === SOURCE_PROFILE_IDS.balanced)!;
   const rules = parseDownloadRules({
     ...balanced.rules,
-    audio: { mode: "prefer", fallback: "cs" },
+    audio: { mode: "prefer", language: "mine", fallback: "cs" },
   });
   const providerKeys = ["addon:addon"];
   const admission = parseSourceAdmissionSnapshotV1({

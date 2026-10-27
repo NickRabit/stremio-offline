@@ -25,6 +25,7 @@ import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.data.AddonDto
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
+import cz.stremiooffline.tv.data.AudioMode
 import cz.stremiooffline.tv.data.BulkMediaDto
 import cz.stremiooffline.tv.data.DownloadProfileRefDto
 import cz.stremiooffline.tv.data.DownloadSelectionDto
@@ -41,6 +42,7 @@ import cz.stremiooffline.tv.data.formatRuleGigabytes
 import cz.stremiooffline.tv.data.ruleSummaryParts
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
+import cz.stremiooffline.tv.ui.settings.contentLanguageLabel
 import cz.stremiooffline.tv.ui.theme.Tokens
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.android.awaitFrame
@@ -261,6 +263,7 @@ internal fun SeriesDownloadPanel(
       DownloadPanelScreen.Rules -> RuleRows(
         chosenId = chosenId,
         profiles = offered,
+        uiLanguage = settings.uiLanguage,
         openingFocus = openingFocus,
         rowFocuses = rowFocuses,
         onPick = { id ->
@@ -380,6 +383,7 @@ private fun ColumnScope.SettingsRows(
 private fun ColumnScope.RuleRows(
   chosenId: String?,
   profiles: List<SourceProfileDto>,
+  uiLanguage: String?,
   openingFocus: FocusRequester,
   rowFocuses: MutableMap<String, FocusRequester>,
   onPick: (String) -> Unit,
@@ -387,7 +391,7 @@ private fun ColumnScope.RuleRows(
   profiles.forEachIndexed { index, profile ->
     PanelOption(
       text = ruleName(profile),
-      supportingText = ruleSummary(profile.policy),
+      supportingText = ruleSummary(profile.policy, uiLanguage),
       selected = profile.id == chosenId,
       onClick = { onPick(profile.id) },
       modifier = Modifier.panelRow(rowFocuses, seriesRuleTag(profile.id), first = index == 0, opening = openingFocus),
@@ -462,7 +466,7 @@ private fun ruleName(profile: SourceProfileDto): String {
 
 /** `720p–1080p · prefer my language · up to ~4 GB per episode`, omitting a part the policy does not carry. */
 @Composable
-private fun ruleSummary(policy: SourceProfilePolicyDto?): String? {
+private fun ruleSummary(policy: SourceProfilePolicyDto?, uiLanguage: String?): String? {
   val parts = ruleSummaryParts(policy)
   if (parts.isEmpty()) return null
   val locale = LocalConfiguration.current.locales[0]
@@ -479,13 +483,40 @@ private fun ruleSummary(policy: SourceProfilePolicyDto?): String? {
         else ->
           stringResource(R.string.rules_resolution_at_most, part.max?.toString().orEmpty())
       }
-      is RuleSummaryPart.Audio -> stringResource(
-        if (part.only) R.string.rules_audio_only else R.string.rules_audio_prefer,
-      ).replaceFirstChar { it.lowercase(locale) }
-      is RuleSummaryPart.MaxBytes -> stringResource(
-        R.string.rules_summary_up_to_episode,
-        formatRuleGigabytes(part.bytes),
-      )
+      is RuleSummaryPart.Audio -> when (part.mode) {
+        AudioMode.ANY -> stringResource(R.string.rules_summary_any_language)
+        AudioMode.PREFER -> if (part.language == null) {
+          stringResource(R.string.rules_audio_prefer).replaceFirstChar { it.lowercase(locale) }
+        } else {
+          stringResource(
+            R.string.rules_summary_prefer_language,
+            contentLanguageLabel(part.language, uiLanguage),
+          )
+        }
+        AudioMode.ONLY -> if (part.language == null) {
+          stringResource(R.string.rules_audio_only).replaceFirstChar { it.lowercase(locale) }
+        } else {
+          stringResource(
+            R.string.rules_summary_only_language,
+            contentLanguageLabel(part.language, uiLanguage),
+          )
+        }
+      }
+      is RuleSummaryPart.Size -> when {
+        part.minBytes != null && part.maxBytes != null -> stringResource(
+          R.string.rules_summary_range_episode,
+          formatRuleGigabytes(part.minBytes),
+          formatRuleGigabytes(part.maxBytes),
+        )
+        part.maxBytes != null -> stringResource(
+          R.string.rules_summary_up_to_episode,
+          formatRuleGigabytes(part.maxBytes),
+        )
+        else -> stringResource(
+          R.string.rules_summary_from_episode,
+          formatRuleGigabytes(part.minBytes ?: 0L),
+        )
+      }
     }
   }
   var line = texts.first()

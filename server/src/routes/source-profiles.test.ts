@@ -409,12 +409,18 @@ const SOURCE_PROFILES_EXPECTED = RULE_PRESETS.map((preset) => ({
   template: preset.template,
   operations: ["play", "downloadToLibrary", "downloadToDevice"],
   sizeLimits: {
-    ...(preset.rules.maxSizeGb.episode === null
+    ...(preset.rules.sizeGb.episode.max === null
       ? {}
-      : { episodeBytes: preset.rules.maxSizeGb.episode * 1_000_000_000 }),
-    ...(preset.rules.maxSizeGb.movie === null
+      : { episodeBytes: preset.rules.sizeGb.episode.max * 1_000_000_000 }),
+    ...(preset.rules.sizeGb.episode.min === null
       ? {}
-      : { movieBytes: preset.rules.maxSizeGb.movie * 1_000_000_000 }),
+      : { episodeMinBytes: preset.rules.sizeGb.episode.min * 1_000_000_000 }),
+    ...(preset.rules.sizeGb.movie.max === null
+      ? {}
+      : { movieBytes: preset.rules.sizeGb.movie.max * 1_000_000_000 }),
+    ...(preset.rules.sizeGb.movie.min === null
+      ? {}
+      : { movieMinBytes: preset.rules.sizeGb.movie.min * 1_000_000_000 }),
   },
   policy: rulesPolicy(preset.rules, "episode"),
 }));

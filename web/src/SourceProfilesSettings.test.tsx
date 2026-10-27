@@ -14,8 +14,10 @@ const CUSTOM = "11111111-1111-4111-8111-111111111111";
 
 const rules = (over: Partial<DownloadRules> = {}): DownloadRules => ({
   addons: { scope: "all", order: "viewer" }, torrents: true,
-  resolution: { min: 720, max: 1080 }, audio: { mode: "prefer", fallback: null },
-  subtitles: "ifAvailable", maxSizeGb: { episode: 4, movie: 15 }, skipCinema: true,
+  resolution: { min: 720, max: 1080 }, audio: { mode: "prefer", language: "mine", fallback: null },
+  subtitles: "ifAvailable", sizeGb: {
+    episode: { min: null, max: 4 }, movie: { min: null, max: 15 },
+  }, skipCinema: true,
   preference: ["language", "resolutionHigher", "addonOrder", "smaller"], ...over,
 });
 const preset: AdminSourceProfile = {
@@ -109,6 +111,13 @@ it("lists preset and custom rules with summaries and protects the preset from de
   expect([...customRow.querySelectorAll("button")].map((button) => button.textContent)).toEqual(["Edit", "Duplicate", "Delete"]);
 });
 
+it("renders the sources, quality and language groups in order", async () => {
+  await mount();
+  await clickText("Add rules");
+  expect([...dialog().querySelectorAll("legend")].map((legend) => legend.textContent))
+    .toEqual(["Sources", "Quality and size", "Language", "What to prefer"]);
+});
+
 it("maps every editor field to the exact rules body", async () => {
   const posted: unknown[] = [];
   await mount([preset], (url, method, body) => {
@@ -129,13 +138,16 @@ it("maps every editor field to the exact rules body", async () => {
   await setSelect("Resolution from", "480");
   await setSelect("Resolution to", "2160");
   await setSelect("Audio", "prefer");
-  await setSelect("Fallback language", "en");
+  await setSelect("Audio language", "en");
+  await setSelect("Fallback language", "cs");
   await setSelect("Subtitles", "required");
-  await setInput("Episode GB", "2.5");
-  await setInput("Film GB", "12");
+  await setInput("Episode from", "1.2");
+  await setInput("Episode to", "2.5");
+  await setInput("Film from", "5");
+  await setInput("Film to", "12");
   await clickBox("Skip cinema copies (CAM, TS)");
   await clickText("Advanced", dialog());
-  await clickBox("My language");
+  await clickBox("English");
   await clickBox("Higher resolution");
   await clickBox("Addon order");
   await clickBox("Smaller file");
@@ -146,11 +158,71 @@ it("maps every editor field to the exact rules body", async () => {
     name: "Cinema",
     rules: {
       addons: { scope: { selected: ["first", "second"] }, order: { explicit: ["second", "first"] } },
-      torrents: false, resolution: { min: 480, max: 2160 }, audio: { mode: "prefer", fallback: "en" },
-      subtitles: "required", maxSizeGb: { episode: 2.5, movie: 12 }, skipCinema: false,
+      torrents: false, resolution: { min: 480, max: 2160 },
+      audio: { mode: "prefer", language: "en", fallback: "cs" },
+      subtitles: "required", sizeGb: {
+        episode: { min: 1.2, max: 2.5 }, movie: { min: 5, max: 12 },
+      }, skipCinema: false,
       preference: ["resolutionLower", "larger"],
     },
   }]);
+});
+
+it("switches to any language and keeps the preference order valid", async () => {
+  const anyCustom = {
+    ...custom,
+    parameters: rules({
+      audio: { mode: "prefer", language: "mine", fallback: "en" },
+      preference: ["language"],
+    }),
+  };
+  let patched: { rules: DownloadRules } | undefined;
+  await mount([anyCustom], (_url, method, body) => {
+    if (method === "PATCH") patched = body as { rules: DownloadRules };
+    return undefined;
+  });
+  await clickText("Edit", host.querySelector(`[data-profile-id="${CUSTOM}"]`)!);
+  await clickText("Advanced", dialog());
+  expect(dialog().querySelector('input[aria-label="My language"]')).not.toBeNull();
+
+  await setSelect("Audio", "any");
+  const language = dialog().querySelector<HTMLSelectElement>('select[aria-label="Audio language"]')!;
+  const fallback = dialog().querySelector<HTMLSelectElement>('select[aria-label="Fallback language"]')!;
+  expect(language.disabled).toBe(true);
+  expect(fallback.disabled).toBe(true);
+  expect(fallback.value).toBe("");
+  expect(dialog().querySelector('input[aria-label="My language"]')).toBeNull();
+
+  await clickText("Save", dialog());
+  expect(patched?.rules.audio).toEqual({ mode: "any", language: "mine", fallback: null });
+  expect(patched?.rules.preference).toEqual(["addonOrder"]);
+});
+
+it("clears a matching fallback when choosing an explicit language", async () => {
+  const posted: unknown[] = [];
+  await mount([preset], (url, method, body) => {
+    if (url === "/api/admin/source-profiles" && method === "POST") posted.push(body);
+    return undefined;
+  });
+  await clickText("Add rules");
+  await setInput("Name", "English");
+  await setSelect("Fallback language", "en");
+  await setSelect("Audio language", "en");
+  const fallback = dialog().querySelector<HTMLSelectElement>('select[aria-label="Fallback language"]')!;
+  expect(fallback.value).toBe("");
+  expect([...fallback.options].some((option) => option.value === "en")).toBe(false);
+  await clickText("Save", dialog());
+  expect((posted[0] as { rules: DownloadRules }).rules.audio)
+    .toEqual({ mode: "prefer", language: "en", fallback: null });
+});
+
+it("disables saving and shows an inline error when a size range is reversed", async () => {
+  await mount([custom]);
+  await clickText("Edit", host.querySelector(`[data-profile-id="${CUSTOM}"]`)!);
+  await setInput("Episode from", "10");
+  await setInput("Episode to", "4");
+  expect(dialog().querySelector<HTMLButtonElement>('button[type="submit"]')!.disabled).toBe(true);
+  expect(dialog().querySelector(".login-error")?.textContent).toBe("The download rule settings are invalid.");
 });
 
 it("clears and disables fallback for my-language-only audio", async () => {

@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   DownloadRulesValidationError,
   parseDownloadRules,
+  rulesAudioMode,
   rulesFromPolicy,
   rulesPolicy,
   type DownloadRules,
@@ -14,9 +15,12 @@ const rules = (overrides: Partial<DownloadRules> = {}): DownloadRules => ({
   addons: { scope: "all", order: "viewer" },
   torrents: true,
   resolution: { min: 720, max: 1080 },
-  audio: { mode: "prefer", fallback: null },
+  audio: { mode: "prefer", language: "mine", fallback: null },
   subtitles: "ifAvailable",
-  maxSizeGb: { episode: 4, movie: 15 },
+  sizeGb: {
+    episode: { min: null, max: 4 },
+    movie: { min: null, max: 15 },
+  },
   skipCinema: true,
   preference: ["language", "resolutionHigher", "addonOrder", "smaller"],
   ...overrides,
@@ -162,9 +166,12 @@ test("rulesFromPolicy maps materialized policies back to equivalent rules", () =
     addons: { scope: { selected: ["alpha", "beta"] }, order: { explicit: ["beta", "alpha"] } },
     torrents: false,
     resolution: { min: null, max: 720 },
-    audio: { mode: "prefer", fallback: "cs" },
+    audio: { mode: "prefer", language: "mine", fallback: "cs" },
     subtitles: "required",
-    maxSizeGb: { episode: null, movie: 5 },
+    sizeGb: {
+      episode: { min: null, max: null },
+      movie: { min: null, max: 5 },
+    },
     skipCinema: false,
     preference: ["larger", "resolutionLower", "addonOrder", "language"],
   });
@@ -178,11 +185,156 @@ test("rule validation is strict and rejects contradictory choices", () => {
   assert.throws(() => parseDownloadRules(rules({ resolution: { min: 1080, max: 720 } })), DownloadRulesValidationError);
   assert.throws(() => parseDownloadRules(rules({ preference: ["resolutionHigher", "resolutionLower"] })), DownloadRulesValidationError);
   assert.throws(() => parseDownloadRules(rules({ preference: ["smaller", "larger"] })), DownloadRulesValidationError);
-  assert.throws(() => parseDownloadRules(rules({ audio: { mode: "only", fallback: "cs" } })), DownloadRulesValidationError);
-  assert.throws(() => parseDownloadRules(rules({ maxSizeGb: { episode: 0, movie: null } })), DownloadRulesValidationError);
-  assert.throws(() => parseDownloadRules(rules({ maxSizeGb: { episode: 1.25, movie: null } })), DownloadRulesValidationError);
-  assert.throws(() => parseDownloadRules(rules({ audio: { mode: "prefer", fallback: "cze" } })), DownloadRulesValidationError);
+  assert.throws(() => parseDownloadRules(rules({
+    audio: { mode: "only", language: "mine", fallback: "cs" },
+  })), DownloadRulesValidationError);
+  assert.throws(() => parseDownloadRules(rules({
+    sizeGb: { episode: { min: 0, max: null }, movie: { min: null, max: null } },
+  })), DownloadRulesValidationError);
+  assert.throws(() => parseDownloadRules(rules({
+    sizeGb: { episode: { min: 1.25, max: null }, movie: { min: null, max: null } },
+  })), DownloadRulesValidationError);
+  assert.throws(() => parseDownloadRules(rules({
+    audio: { mode: "prefer", language: "mine", fallback: "cze" },
+  })), DownloadRulesValidationError);
   assert.throws(() => parseDownloadRules(rules({ preference: [] })), DownloadRulesValidationError);
   assert.throws(() => parseDownloadRules(rules({ preference: ["language", "language"] })), DownloadRulesValidationError);
   assert.throws(() => parseDownloadRules(rules({ addons: { scope: { selected: [] }, order: "viewer" } })), DownloadRulesValidationError);
+});
+
+test("v2 rules round-trip all audio modes with mine or an explicit language", () => {
+  const variants: DownloadRules[] = [
+    rules({ audio: { mode: "any", language: "mine", fallback: null }, preference: ["smaller"] }),
+    rules({ audio: { mode: "prefer", language: "mine", fallback: "en" } }),
+    rules({ audio: { mode: "prefer", language: "EN", fallback: "cs" } as DownloadRules["audio"] }),
+    rules({ audio: { mode: "only", language: "en", fallback: null } }),
+  ];
+  for (const variant of variants) {
+    const parsed = parseDownloadRules(variant);
+    assert.deepEqual(parseDownloadRules(parsed), parsed);
+    assert.equal(rulesAudioMode(rulesPolicy(parsed, "episode")), parsed.audio.mode);
+  }
+  assert.equal(parseDownloadRules(variants[2]).audio.language, "en");
+});
+
+test("v2 audio and size validation is strict", () => {
+  for (const invalid of [
+    rules({ audio: { mode: "any", language: "en", fallback: null }, preference: ["smaller"] }),
+    rules({ audio: { mode: "any", language: "mine", fallback: "en" }, preference: ["smaller"] }),
+    rules({ audio: { mode: "any", language: "mine", fallback: null }, preference: ["language"] }),
+    rules({ audio: { mode: "prefer", language: "english", fallback: null } }),
+    rules({ audio: { mode: "prefer", language: "en", fallback: "en" } }),
+    rules({ sizeGb: { episode: { min: 2, max: 1 }, movie: { min: null, max: null } } }),
+    rules({ sizeGb: { episode: { min: null, max: 201 }, movie: { min: null, max: null } } }),
+  ]) {
+    assert.throws(() => parseDownloadRules(invalid), DownloadRulesValidationError);
+  }
+});
+
+test("legacy v1 rules normalize to v2 and mixed shapes are rejected", () => {
+  const legacy = {
+    addons: { scope: "all", order: "viewer" },
+    torrents: true,
+    resolution: { min: 720, max: 1080 },
+    audio: { mode: "prefer", fallback: "cs" },
+    subtitles: "ifAvailable",
+    maxSizeGb: { episode: 4, movie: 15 },
+    skipCinema: true,
+    preference: ["language", "smaller"],
+  };
+  assert.deepEqual(parseDownloadRules(legacy), rules({
+    audio: { mode: "prefer", language: "mine", fallback: "cs" },
+    sizeGb: {
+      episode: { min: null, max: 4 },
+      movie: { min: null, max: 15 },
+    },
+    preference: ["language", "smaller"],
+  }));
+  assert.throws(() => parseDownloadRules({
+    ...legacy,
+    audio: { mode: "prefer", language: "mine", fallback: "cs" },
+  }), DownloadRulesValidationError);
+  assert.throws(() => parseDownloadRules({
+    ...rules(),
+    maxSizeGb: { episode: 4, movie: 15 },
+  }), DownloadRulesValidationError);
+});
+
+test("any audio omits audioTier and size ranges map to byte bounds", () => {
+  const any = rules({
+    audio: { mode: "any", language: "mine", fallback: null },
+    preference: ["resolutionHigher", "smaller"],
+    sizeGb: {
+      episode: { min: 1, max: 4 },
+      movie: { min: null, max: null },
+    },
+  });
+  const anyPolicy = rulesPolicy(any, "episode");
+  assert.equal(anyPolicy.criteria.some((criterion) => criterion.kind === "audioTier"), false);
+  assert.deepEqual(anyPolicy.constraints.audio.preferred, { preference: "audio" });
+  assert.deepEqual(anyPolicy.constraints.bytes, {
+    min: 1_000_000_000,
+    max: 4_000_000_000,
+  });
+
+  const explicit = rules({
+    audio: { mode: "only", language: "en", fallback: null },
+    preference: ["language"],
+  });
+  assert.deepEqual(rulesPolicy(explicit, "movie").constraints.audio.preferred, { code: "en" });
+});
+
+test("rulesFromPolicy equals canonical v2 rules for the selected media kind", () => {
+  const variants = [
+    rules({
+      audio: { mode: "any", language: "mine", fallback: null },
+      preference: ["resolutionHigher", "smaller"],
+      sizeGb: {
+        episode: { min: 1, max: 4 },
+        movie: { min: null, max: null },
+      },
+    }),
+    rules({
+      audio: { mode: "prefer", language: "mine", fallback: "cs" },
+      sizeGb: {
+        episode: { min: null, max: null },
+        movie: { min: 2, max: 8 },
+      },
+    }),
+    rules({
+      audio: { mode: "only", language: "en", fallback: null },
+      preference: ["resolutionHigher", "addonOrder", "smaller"],
+      sizeGb: {
+        episode: { min: 1, max: 3 },
+        movie: { min: null, max: null },
+      },
+    }),
+  ];
+  for (const variant of variants) {
+    const kind = variant.audio.mode === "prefer" ? "movie" : "episode";
+    assert.deepEqual(rulesFromPolicy(rulesPolicy(variant, kind), kind), variant);
+  }
+});
+
+test("non-canonical preferences round-trip through policy equivalence", () => {
+  const variants = [
+    rules({
+      audio: { mode: "any", language: "mine", fallback: null },
+      preference: ["resolutionHigher", "addonOrder"],
+    }),
+    rules({
+      audio: { mode: "prefer", language: "mine", fallback: null },
+      preference: ["resolutionHigher", "language"],
+    }),
+    rules({
+      audio: { mode: "only", language: "mine", fallback: null },
+      preference: ["resolutionHigher", "language"],
+    }),
+  ];
+  for (const variant of variants) {
+    for (const kind of ["episode", "movie"] as const) {
+      const policy = rulesPolicy(variant, kind);
+      assert.deepEqual(rulesPolicy(rulesFromPolicy(policy, kind), kind), policy);
+    }
+  }
 });
