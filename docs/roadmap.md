@@ -570,6 +570,18 @@ Recorded follow-ups, not part of this verification block:
   Keep this distinct from the title-detail chooser. Refine the interaction when
   the user supplies the next requirement.
 
+### Unified source selection and administrator-managed profiles
+
+Proposed, not implemented. The [architecture specification](source-selection-spec.md) separates
+provider acquisition, ranking and selection intent (including the remembered/current stream).
+Only administrators create, edit or delete instance-wide source-selection profiles; users select
+them. Existing follows and jobs retain versioned policy snapshots. The
+[test-first delivery plan](source-selection-tasks.md) requires characterization coverage before
+refactoring, then a first usable download/follow slice with server-defined recipes. Interactive
+acquisition, admin CRUD and remote automatic downloads have explicit dependencies rather than one
+serial release train. Local-copy checks cover only this application's libraries, not Jellyfin/Emby. These are source-selection recipes, separate from the
+account/household profiles below.
+
 ## Later
 
 ### Access and multi-instance
