@@ -6,20 +6,20 @@ import { copyText } from "./clipboard";
 import { FollowDialog } from "./FollowDialog";
 import { Heading } from "./settings-ui";
 import { TileArt } from "./TileArt";
-import { languageName, localeTag, serverText, t, useI18n } from "./i18n";
-import type { ActivityItem, Addon, CalendarEpisodeState, CalendarItem, UndatedCalendarItem, FollowView, LibraryView, NewEpisode, TileShape } from "./types";
+import { localeTag, serverText, t, useI18n } from "./i18n";
+import type { ActivityItem, CalendarEpisodeState, CalendarItem, UndatedCalendarItem, FollowView, LibraryView, NewEpisode, TileShape } from "./types";
 
 interface FollowingPageProps {
   follows: FollowView[];
   /** The new episodes the Overview tab leads with; the section draws them and opens the series. */
   newEpisodes: NewEpisode[];
-  languages: Array<{ code: string; name: string }>;
   libraries: LibraryView[];
-  addons: Addon[];
   shape: TileShape;
   onToggleShape: () => void;
-  audioLanguage: string;
-  subtitleLanguage: string;
+  downloadSourceProfileId?: string;
+  followSourceProfileId?: string;
+  onRememberDownloadSourceProfile?: (profileId: string | null) => Promise<void>;
+  onRememberFollowSourceProfile?: (profileId: string | null) => Promise<void>;
   onChanged: (id: string, follow: FollowView | null) => void;
   onOpenSeries: (item: { type: string; id: string; name: string; poster?: string }) => void;
   onNotify: (text: string) => void;
@@ -60,7 +60,7 @@ const LEGEND: CalendarEpisodeState[] = ["upcoming", "released", "queued", "waiti
 
 const DAY_MS = 24 * 60 * 60_000;
 
-export function FollowingPage({ follows, newEpisodes, canRetain = false, languages, libraries, addons, shape, onToggleShape, audioLanguage, subtitleLanguage, onChanged, onOpenSeries, onNotify }: FollowingPageProps) {
+export function FollowingPage({ follows, newEpisodes, canRetain = false, libraries, shape, onToggleShape, downloadSourceProfileId, followSourceProfileId, onRememberDownloadSourceProfile, onRememberFollowSourceProfile, onChanged, onOpenSeries, onNotify }: FollowingPageProps) {
   useI18n();
   const [tab, setTab] = useState<Tab>("overview");
   const [openId, setOpenId] = useState<string | null>(null);
@@ -90,8 +90,9 @@ export function FollowingPage({ follows, newEpisodes, canRetain = false, languag
       {tab === "calendar" && <CalendarTab onOpenSeries={onOpenSeries} onNotify={onNotify}/>}
       {tab === "activity" && <ActivityTab onNotify={onNotify}/>}
     </div>
-    {open && <FollowDialog follow={open} canRetain={canRetain} languages={languages} libraries={libraries} addons={addons}
-      audioLanguage={audioLanguage} subtitleLanguage={subtitleLanguage}
+    {open && <FollowDialog follow={open} canRetain={canRetain} libraries={libraries}
+      downloadSourceProfileId={downloadSourceProfileId} followSourceProfileId={followSourceProfileId}
+      onRememberDownloadSourceProfile={onRememberDownloadSourceProfile} onRememberFollowSourceProfile={onRememberFollowSourceProfile}
       onChanged={(updated) => onChanged(open.id, updated)} onClose={() => setOpenId(null)} onNotify={onNotify}/>}
   </section>;
 }
@@ -406,7 +407,7 @@ function ActivityTab({ onNotify }: { onNotify: (text: string) => void }) {
       return <div className="following-activity-row" key={`${item.followId}:${key}`}>
         <span className="following-activity-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <Film/>}</span>
         <span className="following-activity-copy"><strong>{`${item.name} · ${codeOf(item)}${item.title ? ` · ${item.title}` : ""}`}</strong>
-          <span className="following-activity-meta"><StatePill state={item.state}/>{item.reasonKey && item.state !== "skipped" ? <small>{serverText(item.reasonKey, "", item.reasonVars?.language === undefined ? item.reasonVars : { ...item.reasonVars, language: languageName(String(item.reasonVars.language)) })}</small> : null}{item.state === "waiting" && item.nextAttemptAt ? <small>{t("follow.nextAttempt", { time: formatWhen(item.nextAttemptAt) })}</small> : null}</span>
+          <span className="following-activity-meta"><StatePill state={item.state}/>{item.reasonKey && item.state !== "skipped" ? <small>{serverText(item.reasonKey, "")}</small> : null}{item.state === "waiting" && item.nextAttemptAt ? <small>{t("follow.nextAttempt", { time: formatWhen(item.nextAttemptAt) })}</small> : null}</span>
         </span>
         <small className="following-activity-time">{formatWhen(item.updatedAt)}</small>
         <span className="following-activity-actions">

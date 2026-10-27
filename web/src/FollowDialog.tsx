@@ -4,7 +4,7 @@ import { BellRing, Download, ListVideo, X } from "lucide-react";
 import { ApiError, api, describeError } from "./api";
 import { languageName, localeTag, serverText, t, useI18n } from "./i18n";
 import { SeriesDownloadDialog } from "./SeriesDownloadDialog";
-import type { Addon, FollowEpisodeRow, FollowView, LibraryView, Video } from "./types";
+import type { FollowEpisodeRow, FollowView, LibraryView, Video } from "./types";
 
 interface SetupEpisode { id: string; season?: number; episode?: number; title?: string; released?: string }
 
@@ -18,9 +18,6 @@ export const toEpisodes = (videos?: Video[]): SetupEpisode[] => (videos ?? []).f
 
 const pad2 = (value: number) => String(Math.max(0, Math.trunc(value))).padStart(2, "0");
 const episodeCode = (season: number, episode: number) => `S${pad2(season)}E${pad2(episode)}`;
-const reasonVars = (vars: Record<string, string | number> | undefined) => vars?.language === undefined
-  ? vars
-  : { ...vars, language: languageName(String(vars.language)) };
 const formatWhen = (value?: string) => value ? new Date(value).toLocaleString(localeTag(), { dateStyle: "short", timeStyle: "short" }) : "";
 /** A release is a calendar date kept as an instant inside that UTC day; see FollowingPage. */
 const formatDay = (value?: string) => value ? new Date(value).toLocaleDateString(localeTag(), { timeZone: "UTC" }) : "";
@@ -29,19 +26,21 @@ const futureGrace = (value?: string) => value && Date.parse(value) > Date.now() 
 /** An uncertain date is shown with the marker the calendar uses; without a date at all it says so. */
 const episodeDate = (row: { released?: string; dateUncertain?: boolean }) =>
   row.dateUncertain ? `≈ ${row.released ? formatDay(row.released) : t("following.dateUnknown")}` : formatDay(row.released);
+const reasonText = (reason: { reasonKey?: string; reasonVars?: Record<string, string | number>; messageKey?: string; params?: Record<string, string | number> }) => {
+  const key = reason.messageKey ?? reason.reasonKey;
+  return key ? serverText(key, key, reason.params ?? reason.reasonVars) : "";
+};
 
-export function FollowDialog({ follow, videos, languages, libraries, addons, audioLanguage, subtitleLanguage, canRetain = false, defaultSourceProfileId, onRememberSourceProfile, onChanged, onClose, onNotify }: {
+export function FollowDialog({ follow, videos, libraries, canRetain = false, downloadSourceProfileId, followSourceProfileId, onRememberDownloadSourceProfile, onRememberFollowSourceProfile, onChanged, onClose, onNotify }: {
   follow: FollowView;
   videos?: Video[];
-  languages: Array<{ code: string; name: string }>;
   libraries: LibraryView[];
-  addons: Addon[];
-  audioLanguage: string;
-  subtitleLanguage: string;
   /** Whether the account may delete watched episodes automatically; only administrators may. */
   canRetain?: boolean;
-  defaultSourceProfileId?: string;
-  onRememberSourceProfile?: (profileId: string | null) => Promise<void>;
+  downloadSourceProfileId?: string;
+  followSourceProfileId?: string;
+  onRememberDownloadSourceProfile?: (profileId: string | null) => Promise<void>;
+  onRememberFollowSourceProfile?: (profileId: string | null) => Promise<void>;
   onChanged: (follow: FollowView | null) => void;
   onClose: () => void;
   onNotify: (text: string) => void;
@@ -163,11 +162,11 @@ export function FollowDialog({ follow, videos, languages, libraries, addons, aud
             {isMovie && <p className="identify-hint">{movieLine}</p>}
             {isMovie && movie?.state && <div className="follow-episode-meta">
               <span className={`state-pill state-${movie.state}`}>{movie.state === "waiting" ? t("follow.stateWaiting") : movie.state === "completed" ? t("follow.stateCompleted") : movie.state === "skipped" ? t("follow.stateSkipped") : movie.state === "attention" ? t("follow.stateAttention") : t("follow.stateQueued")}</span>
-              {movie.state === "waiting" && movie.reasonKey === "err.waitingForPreferredAudio"
-                ? <small>{serverText(movie.reasonKey, movie.reasonKey, reasonVars(movie.reasonVars))}</small>
+              {(movie.messageKey || movie.reasonKey) && (movie.state === "waiting" || movie.state === "attention")
+                ? <small>{reasonText(movie)}</small>
                 : movie.state === "waiting" && futureGrace(movie.graceUntil)
-                ? <small>{t("follow.graceWaiting", { language: graceLanguage, date: formatDay(movie.graceUntil) })}</small>
-                : movie.state === "waiting" && movie.nextAttemptAt ? <small>{t("follow.nextAttempt", { time: formatWhen(movie.nextAttemptAt) })}</small> : null}
+                  ? <small>{t("follow.graceWaiting", { language: graceLanguage, date: formatDay(movie.graceUntil) })}</small>
+                  : movie.state === "waiting" && movie.nextAttemptAt ? <small>{t("follow.nextAttempt", { time: formatWhen(movie.nextAttemptAt) })}</small> : null}
               {(movie.state === "reserved" || movie.state === "queued" || movie.state === "waiting") && <button type="button" onClick={() => void runAction(() => api.skipFollowEpisode(current.id, "1:1"))}>{t("follow.skip")}</button>}
               {(movie.state === "waiting" || movie.state === "attention" || movie.state === "skipped") && <button type="button" onClick={() => void runAction(() => api.retryFollowEpisode(current.id, "1:1"))}>{t("follow.retry")}</button>}
             </div>}
@@ -203,12 +202,11 @@ export function FollowDialog({ follow, videos, languages, libraries, addons, aud
                 <div className="follow-episode-meta">
                   <small title={row.dateUncertain ? t("following.dateUncertainHint") : undefined}>{episodeDate(row)}</small>
                   {pillState && <span className={`state-pill state-${pillState}`}>{state === "waiting" ? t("follow.stateWaiting") : state === "completed" ? (row.download?.removedAt ? t("follow.removedAfterWatching") : t("follow.stateCompleted")) : state === "skipped" ? t("follow.stateSkipped") : state === "attention" ? t("follow.stateAttention") : state === "reserved" || state === "queued" ? t("follow.stateQueued") : t("follow.stateUpcoming")}</span>}
-                  {state === "waiting" && row.download?.reasonKey === "err.waitingForPreferredAudio"
-                    ? <small>{serverText(row.download.reasonKey, row.download.reasonKey, reasonVars(row.download.reasonVars))}</small>
+                  {(state === "waiting" || state === "attention") && (row.download?.messageKey || row.download?.reasonKey)
+                    ? <small>{reasonText(row.download)}</small>
                     : state === "waiting" && grace
-                    ? <small>{t("follow.graceWaiting", { language: graceLanguage, date: formatDay(grace) })}</small>
-                    : state === "waiting" && row.download?.nextAttemptAt ? <small>{t("follow.nextAttempt", { time: formatWhen(row.download.nextAttemptAt) })}</small> : null}
-                  {state === "attention" && row.download?.reasonKey && <small>{serverText(row.download.reasonKey, row.download.reasonKey, reasonVars(row.download.reasonVars))}</small>}
+                      ? <small>{t("follow.graceWaiting", { language: graceLanguage, date: formatDay(grace) })}</small>
+                      : state === "waiting" && row.download?.nextAttemptAt ? <small>{t("follow.nextAttempt", { time: formatWhen(row.download.nextAttemptAt) })}</small> : null}
                 </div>
                 {(canSkip || canRetry) && <span className="follow-episode-actions">
                   {canSkip && <button type="button" onClick={() => void runAction(() => api.skipFollowEpisode(current.id, row.key))}>{t("follow.skip")}</button>}
@@ -222,10 +220,12 @@ export function FollowDialog({ follow, videos, languages, libraries, addons, aud
       </div>
     </div>
     {setupOpen && <SeriesDownloadDialog type={current.type} label={current.name} title={current.name} episodes={setupEpisodes}
-      audioLanguage={audioLanguage} subtitleLanguage={subtitleLanguage} languages={languages} libraries={libraries} addons={addons}
+      libraries={libraries}
       canRetain={canRetain}
-      defaultSourceProfileId={defaultSourceProfileId}
-      onRememberSourceProfile={onRememberSourceProfile}
+      downloadSourceProfileId={downloadSourceProfileId}
+      followSourceProfileId={followSourceProfileId}
+      onRememberDownloadSourceProfile={onRememberDownloadSourceProfile}
+      onRememberFollowSourceProfile={onRememberFollowSourceProfile}
       follow={{ followId: current.id, ...(current.autoDownload ? { initial: current.autoDownload } : {}) }}
       onClose={closeSetup}/>}
   </>;

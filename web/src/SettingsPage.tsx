@@ -209,7 +209,7 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
           <select aria-label={t("settings.segments")} disabled={restricted || !admin} value={settings.downloadSegments ?? 1} onChange={(event) => void onSave({ downloadSegments: Number(event.target.value) })}>
             {[1,2,3,4,6,8].map((value) => <option key={value} value={value}>{value}</option>)}
           </select></SettingControl>}</section>
-      {admin && !restricted && <SourceProfilesSettings />}
+      {admin && !restricted && <SourceProfilesSettings languages={languages}/>}
       </>}
       {tab === "services" && <>
       {admin && <TmdbSettings configured={settings.tmdbConfigured} onSave={onSave} onError={onError} restricted={restricted || !admin}/>}

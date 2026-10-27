@@ -2,6 +2,8 @@ import type { Locale } from "./i18n";
 import type { DownloadSnapshot as ServerDownloadSnapshot, PublicDownload } from "../../server/src/api-types";
 import type { HomeLayout } from "../../server/src/home";
 import type { MediaServerConfigurationExport } from "../../server/src/media-server-store";
+import type { DownloadRules as ServerDownloadRules, RulePreference, RuleResolution } from "../../server/src/download-rules";
+import type { SourcePolicyV1 } from "../../server/src/source-policy";
 export type { FavoriteCatalogItem, FavoriteItem, FavoriteLibraryItem, FavoriteRemoteItem } from "../../server/src/favorites";
 export type { RemoteHomeCard, ResumeCard } from "../../server/src/home";
 /** What the interface offers: the kind of title. The server keeps answering the card kinds an
@@ -266,6 +268,8 @@ export interface RemoteStreamContext { libraryId: string; itemId: string; mediaS
 export interface QueueHalt { reason: "storage"; at: string; message: string; messageKey?: string }
 /** One queued job as the server hands it out; the shape lives with the queue it describes. */
 export type Download = PublicDownload;
+export type DownloadRules = ServerDownloadRules;
+export type { RulePreference, RuleResolution };
 export type SubtitleMode = "off" | "optional" | "required";
 export type AudioMode = "strict" | "listed" | "preferred";
 export type DownloadSourceStrategy = "priority" | "largest";
@@ -276,9 +280,9 @@ export interface SourceProfile {
   template: SourceProfileTemplate;
   revision: number;
   operations: Array<"play" | "downloadToLibrary" | "downloadToDevice">;
-  policy: unknown;
+  policy: SourcePolicyV1;
 }
-export type SourceProfileTemplate = "recommended" | "travel" | "providerPriority";
+export type SourceProfileTemplate = "recommended" | "travel" | "providerPriority" | "rules";
 export type SourceProfileScope = { mode: "allAvailable" } | { mode: "selected"; addonKeys: string[] };
 export type SourceProfileProviderOrder = { from: "viewer" } | { addonKeys: string[] };
 export interface TravelParameters {
@@ -303,7 +307,7 @@ export interface AdminSourceProfile {
   template: SourceProfileTemplate;
   nameKey?: string;
   name?: string;
-  parameters?: TravelParameters | ProviderPriorityParameters;
+  parameters?: DownloadRules;
   createdAt: string;
   updatedAt: string;
 }
@@ -425,8 +429,10 @@ export interface Settings {
   libraryShelf: LibraryShelf;
   /** This account's own Home arrangement. Absent means it has never arranged one. */
   homeLayout?: HomeLayout;
-  /** This account's default source profile for a new download. Absent means no default. */
+  /** This account's default download rules for a new manual download. */
   downloadSourceProfile?: string;
+  /** This account's default download rules for a new follow. */
+  followSourceProfile?: string;
   realDebridConfigured: boolean; tmdbConfigured: boolean;
 }
 /** The instance keys the settings endpoints leave out for an ordinary account, which is told
@@ -438,7 +444,7 @@ type AdminOnlySetting =
 /** What GET and PATCH /api/settings answer. An administrator receives every key; everybody
  *  else is missing the ones above, and the interface keeps its own defaults for them. */
 export type SettingsView = Omit<Settings, AdminOnlySetting> & Partial<Pick<Settings, AdminOnlySetting>>;
-export type SettingsPatch = Partial<Omit<Settings, "realDebridConfigured" | "tmdbConfigured" | "homeLayout" | "downloadSourceProfile">> & { homeLayout?: HomeLayout | null; downloadSourceProfile?: string | null; realDebridToken?: string; tmdbApiKey?: string };
+export type SettingsPatch = Partial<Omit<Settings, "realDebridConfigured" | "tmdbConfigured" | "homeLayout" | "downloadSourceProfile" | "followSourceProfile">> & { homeLayout?: HomeLayout | null; downloadSourceProfile?: string | null; followSourceProfile?: string | null; realDebridToken?: string; tmdbApiKey?: string };
 /** The media-server metadata a version 3 backup adds: the server's own metadata-only export,
  *  reused so a credential, generation or grant can never reach a settings file. */
 export type SettingsBackupMediaServers = MediaServerConfigurationExport;
@@ -699,6 +705,8 @@ export interface FollowEpisodeDownload {
   removedReason?: "retention";
   reasonKey?: string;
   reasonVars?: Record<string, string | number>;
+  messageKey?: string;
+  params?: Record<string, string | number>;
   updatedAt: string;
 }
 export type FollowEligibility = "eligible" | "upcoming" | "outside" | "attention-no-date" | "attention-ambiguous";
@@ -714,7 +722,7 @@ export interface FollowDownloads { queued: number; waiting: number; completed: n
 /** A followed film's single record, as the follow view carries it. */
 export interface FollowMovie {
   released?: string; releaseKind?: "digital" | "physical" | "theatrical" | "catalog"; theatricalAt?: string; dateUncertain?: boolean;
-  state?: CalendarEpisodeState; reasonKey?: string; reasonVars?: Record<string, string | number>; nextAttemptAt?: string; graceUntil?: string;
+  state?: CalendarEpisodeState; reasonKey?: string; reasonVars?: Record<string, string | number>; messageKey?: string; params?: Record<string, string | number>; nextAttemptAt?: string; graceUntil?: string;
 }
 export interface FollowView {
   movie?: FollowMovie;
@@ -737,7 +745,7 @@ export type CalendarEpisodeState = "upcoming" | "released" | FollowDownloadState
 export interface CalendarItem {
   followId: string; type: string; metaId: string; name: string; poster?: string;
   videoId: string; season: number; episode: number; title?: string; released: string;
-  state: CalendarEpisodeState; reasonKey?: string; reasonVars?: Record<string, string | number>; nextAttemptAt?: string; ambiguous?: boolean;
+  state: CalendarEpisodeState; reasonKey?: string; nextAttemptAt?: string; ambiguous?: boolean;
   dateUncertain?: boolean; releasedSource?: "addon" | "tmdb";
 }
 /** A calendar item with no date: the calendar lists these apart, under its grid. */
@@ -746,7 +754,7 @@ export type UndatedCalendarItem = Omit<CalendarItem, "released">;
 export interface ActivityItem {
   followId: string; type: string; metaId: string; name: string; poster?: string;
   season: number; episode: number; title?: string; state: FollowDownloadState;
-  reasonKey?: string; reasonVars?: Record<string, string | number>; nextAttemptAt?: string; jobId?: string; updatedAt: string;
+  reasonKey?: string; nextAttemptAt?: string; jobId?: string; updatedAt: string;
 }
 /** How many episodes a proposed start rule would queue right now. */
 export interface FollowPreview { count: number; episodes: Array<{ key: string; season: number; episode: number; title?: string }> }

@@ -42,7 +42,7 @@ const render = async (value: FollowView = follow, overrides: Partial<FollowEpiso
     return Promise.resolve(json(value));
   });
   await act(async () => {
-    root.render(<FollowDialog follow={value} languages={[{ code: "en", name: "English" }]} libraries={[]} addons={[]} audioLanguage="en" subtitleLanguage="en" onChanged={() => undefined} onClose={() => undefined} onNotify={() => undefined}/>);
+    root.render(<FollowDialog follow={value} libraries={[]} onChanged={() => undefined} onClose={() => undefined} onNotify={() => undefined}/>);
   });
   await act(async () => { await Promise.resolve(); });
 };
@@ -104,7 +104,7 @@ describe("FollowDialog", () => {
 
   it("a waiting episode inside the window says it is waiting for the preferred audio", async () => {
     await render({ ...follow, autoDownload: { ...follow.autoDownload!, graceDays: 7 } }, [
-      { key: "1:2", season: 1, episode: 2, title: "Waiting", released: "2024-01-08", eligibility: "eligible", download: { state: "waiting", intent: "b", generation: 1, attempts: 1, nextAttemptAt: "2099-01-01T00:00:00.000Z", graceUntil: "2099-01-01T00:00:00.000Z", reasonKey: "err.followDownloadFailed", updatedAt: "" } },
+      { key: "1:2", season: 1, episode: 2, title: "Waiting", released: "2024-01-08", eligibility: "eligible", download: { state: "waiting", intent: "b", generation: 1, attempts: 1, nextAttemptAt: "2099-01-01T00:00:00.000Z", graceUntil: "2099-01-01T00:00:00.000Z", updatedAt: "" } },
     ]);
     const row = rowFor("S01E02")!;
     expect(row.textContent).toContain("waiting for English until");
@@ -116,6 +116,12 @@ describe("FollowDialog", () => {
       { key: "1:2", season: 1, episode: 2, title: "Waiting", released: "2024-01-08", eligibility: "eligible", download: { state: "waiting", intent: "b", generation: 1, attempts: 1, nextAttemptAt: "2099-01-01T00:00:00.000Z", graceUntil: "2099-01-01T00:00:00.000Z", reasonKey: "err.waitingForPreferredAudio", reasonVars: { language: "en" }, updatedAt: "" } },
     ]);
     expect(rowFor("S01E02")!.textContent).toContain("Waiting for English audio");
+  it("renders a waiting reason with the server's message parameters", async () => {
+    await render(follow, [{
+      key: "1:2", season: 1, episode: 2, title: "Waiting", released: "2024-01-08", eligibility: "eligible",
+      download: { state: "waiting", intent: "b", generation: 1, attempts: 1, messageKey: "follow.graceWaiting", params: { language: "Czech", date: "tomorrow" }, updatedAt: "" },
+    }]);
+    expect(rowFor("S01E02")?.textContent).toContain("waiting for Czech until tomorrow");
   });
 
   it("a waiting film inside the window says it is waiting for the preferred audio", async () => {

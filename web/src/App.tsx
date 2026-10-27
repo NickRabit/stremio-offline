@@ -1462,6 +1462,14 @@ export function App() {
       return next;
     });
   };
+  const rememberFollowSourceProfile = async (followSourceProfile: string | null) => {
+    const saved = await api.updateSettings({ followSourceProfile });
+    setSettings((current: AppSettings) => {
+      const next = { ...current, ...saved };
+      if (followSourceProfile === null) delete next.followSourceProfile;
+      return next;
+    });
+  };
   // An empty path with more than one library configured is the library list; a
   // single-library install still opens straight into the tree.
   const libraryList = browsePath === "" && libraries.length > 1;
@@ -3765,7 +3773,7 @@ export function App() {
         onLoadMore={() => void loadFavorites(favoritesFilter, favorites.length)}/>}
       {view === "downloads" && <Downloads jobs={downloads} deviceTransfers={deviceTransfers} libraries={libraries} halt={queueHalt} admin={session!.role === "admin"} refresh={loadDownloads} onError={fail} onReveal={revealInLibrary} prefs={views.downloads} onPrefs={persistDownloadPrefs}/>}
       {view === "stats" && <StatsPanel key={statsReset} onError={fail}/>}
-      {view === "following" && <FollowingPage canRetain={session!.role === "admin"} follows={follows} newEpisodes={newEpisodes} languages={languages} libraries={libraries} addons={addons} shape={settings.followingTileShape} onToggleShape={() => void toggleShape("followingTileShape")} audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} onChanged={applyFollowChange} onOpenSeries={(item) => void openFromCatalog(item)} onNotify={notify}/>}
+      {view === "following" && <FollowingPage canRetain={session!.role === "admin"} follows={follows} newEpisodes={newEpisodes} libraries={libraries} shape={settings.followingTileShape} onToggleShape={() => void toggleShape("followingTileShape")} downloadSourceProfileId={settings.downloadSourceProfile} followSourceProfileId={settings.followSourceProfile} onRememberDownloadSourceProfile={rememberSourceProfile} onRememberFollowSourceProfile={rememberFollowSourceProfile} onChanged={applyFollowChange} onOpenSeries={(item) => void openFromCatalog(item)} onNotify={notify}/>}
       {view === "settings" && <SettingsPage build={buildInfo} restricted={restricted} settings={settings} search={searchState} onSearch={(next) => { if (!next.saveHistory || !next.recent.length) recordIntent.current = null; setSearchState(next); }} languages={languages} libraries={libraries} session={session!} onSession={setSession} onSave={saveSettings} onLibrariesChanged={refreshLibraries} onImported={async (backup) => {
         const restored = await api.importSettings(backup);
         setSettings(restored.settings);
@@ -3881,12 +3889,14 @@ export function App() {
     {identifyFrom && <IdentifyDialog path={identifyFrom}
       onClose={() => setIdentifyFrom(null)}
       onApplied={() => { setAppliedSuggestion(identifyFrom); setIdentifyFrom(null); void loadBrowse(browsePath); }}/>}
-    {bulkDownload && <SeriesDownloadDialog type={bulkDownload.type} label={bulkDownload.label} title={bulkDownload.title} episodes={bulkDownload.episodes} audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} languages={languages} libraries={libraries} addons={addons} canRetain={session!.role === "admin"} defaultSourceProfileId={settings.downloadSourceProfile} onRememberSourceProfile={rememberSourceProfile} onClose={() => setBulkDownload(null)} onSubmit={submitBulkDownload}/>}
-    {followDialogOpen && detailFollow && <FollowDialog follow={detailFollow} videos={selected?.videos} languages={languages} libraries={libraries} addons={addons} audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} canRetain={session!.role === "admin"} defaultSourceProfileId={settings.downloadSourceProfile} onRememberSourceProfile={rememberSourceProfile} onChanged={(updated) => applyFollowChange(detailFollow.id, updated)} onClose={() => setFollowDialogOpen(false)} onNotify={notify}/>}
-    {followStart && <SeriesDownloadDialog type={followStart.type || "series"} label={followStart.name} title={followStart.name} episodes={followStart.type === "movie" ? [{ id: followStart.id }] : toEpisodes(followStart.videos)} audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} languages={languages} libraries={libraries} addons={addons}
+    {bulkDownload && <SeriesDownloadDialog type={bulkDownload.type} label={bulkDownload.label} title={bulkDownload.title} episodes={bulkDownload.episodes} libraries={libraries} canRetain={session!.role === "admin"} downloadSourceProfileId={settings.downloadSourceProfile} followSourceProfileId={settings.followSourceProfile} onRememberDownloadSourceProfile={rememberSourceProfile} onRememberFollowSourceProfile={rememberFollowSourceProfile} onClose={() => setBulkDownload(null)} onSubmit={submitBulkDownload}/>}
+    {followDialogOpen && detailFollow && <FollowDialog follow={detailFollow} videos={selected?.videos} libraries={libraries} canRetain={session!.role === "admin"} downloadSourceProfileId={settings.downloadSourceProfile} followSourceProfileId={settings.followSourceProfile} onRememberDownloadSourceProfile={rememberSourceProfile} onRememberFollowSourceProfile={rememberFollowSourceProfile} onChanged={(updated) => applyFollowChange(detailFollow.id, updated)} onClose={() => setFollowDialogOpen(false)} onNotify={notify}/>}
+    {followStart && <SeriesDownloadDialog type={followStart.type || "series"} label={followStart.name} title={followStart.name} episodes={followStart.type === "movie" ? [{ id: followStart.id }] : toEpisodes(followStart.videos)} libraries={libraries}
       canRetain={session!.role === "admin"}
-      defaultSourceProfileId={settings.downloadSourceProfile}
-      onRememberSourceProfile={rememberSourceProfile}
+      downloadSourceProfileId={settings.downloadSourceProfile}
+      followSourceProfileId={settings.followSourceProfile}
+      onRememberDownloadSourceProfile={rememberSourceProfile}
+      onRememberFollowSourceProfile={rememberFollowSourceProfile}
       follow={{ create: { metaId: followStart.id, name: followStart.name, poster: followStart.poster, ...(followStart.addonKey ? { addonKey: followStart.addonKey } : {}) }, onFollowed: (follow) => followed(followStart, follow) }} onClose={() => setFollowStart(null)}/>}
     {galleryIndex !== null && shownGallery[galleryIndex] && <MediaGallery images={shownGallery} index={galleryIndex} onIndex={setGalleryIndex} onClose={closeGallery}/>}
     {(message || error) && <div className={`toast ${error ? "error" : ""}`}>{error || message}<button onClick={() => {setError("");setMessage("");}}><X/></button></div>}
