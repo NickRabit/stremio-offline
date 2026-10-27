@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createWriteStream, existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import os from "node:os";
@@ -1937,7 +1937,8 @@ test("an account removal that cannot be saved stops a direct transfer before ret
   try {
     const added = await queue.add("Film", { url: `http://127.0.0.1:${port}/film.mp4` });
     const partial = `${queuedFile(downloads, added.target)}.part`;
-    await waitFor(queue, () => queue.get(added.id)?.received === first.length && existsSync(partial));
+    await waitFor(queue, () => queue.get(added.id)?.received === first.length
+      && existsSync(partial) && statSync(partial).size === first.length);
     failing = true;
     await assert.rejects(queue.removeMatching(() => true), (error: AppError) => error.messageKey === "err.queueNotSaved");
     await waitFor(queue, () => closed, 5_000);
