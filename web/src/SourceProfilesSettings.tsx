@@ -33,8 +33,10 @@ const addonRows = (addons: readonly Addon[]) => addons.filter(providesStreams)
 
 const blankRules = (): DownloadRules => ({
   addons: { scope: "all", order: "viewer" }, torrents: true,
-  resolution: { min: 720, max: 1080 }, audio: { mode: "prefer", fallback: null },
-  subtitles: "ifAvailable", maxSizeGb: { episode: 4, movie: 15 }, skipCinema: true,
+  resolution: { min: 720, max: 1080 }, audio: { mode: "prefer", language: "mine", fallback: null },
+  subtitles: "ifAvailable", sizeGb: {
+    episode: { min: null, max: 4 }, movie: { min: null, max: 15 },
+  }, skipCinema: true,
   preference: ["language", "resolutionHigher", "addonOrder", "smaller"],
 });
 const draftFrom = (profile: AdminSourceProfile): Draft => ({
@@ -44,13 +46,16 @@ const draftFrom = (profile: AdminSourceProfile): Draft => ({
 const nameOk = (name: string) => name.trim().length >= 1 && name.trim().length <= 60;
 const validSize = (value: number | null) => value === null
   || Number.isFinite(value) && value >= 0.1 && value <= 200 && Math.round(value * 10) === value * 10;
+const validRange = (range: DownloadRules["sizeGb"]["episode"]) =>
+  validSize(range.min) && validSize(range.max)
+  && (range.min === null || range.max === null || range.min <= range.max);
 const canSave = (draft: Draft, builtIn: boolean) => {
   const { rules } = draft;
   return (builtIn || nameOk(draft.name))
     && (rules.addons.scope === "all" || rules.addons.scope.selected.length > 0)
     && (rules.resolution.min === null || rules.resolution.max === null || rules.resolution.min <= rules.resolution.max)
     && (rules.audio.mode === "prefer" || rules.audio.fallback === null)
-    && validSize(rules.maxSizeGb.episode) && validSize(rules.maxSizeGb.movie)
+    && validRange(rules.sizeGb.episode) && validRange(rules.sizeGb.movie)
     && rules.preference.length >= 1 && rules.preference.length <= 4
     && !(rules.preference.includes("resolutionHigher") && rules.preference.includes("resolutionLower"))
     && !(rules.preference.includes("smaller") && rules.preference.includes("larger"));
@@ -232,6 +237,33 @@ export function SourceProfilesSettings({ languages }: { languages: Array<{ code:
       : draft.rules.preference.length < 4 ? [...draft.rules.preference, preference] : draft.rules.preference;
     updateRules({ ...draft.rules, preference: preferenceOrder });
   };
+  const setAudioMode = (mode: DownloadRules["audio"]["mode"]) => {
+    if (!draft) return;
+    let preference = draft.rules.preference;
+    let audio = draft.rules.audio;
+    if (mode === "any") {
+      preference = preference.filter((item) => item !== "language");
+      if (!preference.length) preference = ["addonOrder"];
+      audio = { mode, language: "mine", fallback: null };
+    } else if (mode === "only") {
+      audio = { ...audio, mode, fallback: null };
+    } else {
+      audio = { ...audio, mode };
+    }
+    updateRules({ ...draft.rules, audio, preference });
+  };
+  const setAudioLanguage = (language: "mine" | string) => {
+    if (!draft) return;
+    const fallback = language !== "mine" && draft.rules.audio.fallback === language
+      ? null
+      : draft.rules.audio.fallback;
+    updateRules({ ...draft.rules, audio: { ...draft.rules.audio, language, fallback } });
+  };
+  // A rule for a chosen language names it; "my language" stays generic.
+  const preferenceLabel = (preference: RulePreference) =>
+    preference === "language" && draft && draft.rules.audio.language !== "mine"
+      ? languageName(draft.rules.audio.language)
+      : t(PREFERENCE_LABEL[preference]);
   const preferenceDisabled = (preference: RulePreference) => {
     if (!draft || draft.rules.preference.includes(preference)) return false;
     if (draft.rules.preference.length >= 4) return true;
@@ -271,7 +303,7 @@ export function SourceProfilesSettings({ languages }: { languages: Array<{ code:
       {!session.builtIn && <label className="manifest-field"><span>{t("rules.name")}</span>
         <input value={draft.name} maxLength={60} autoComplete="off" aria-label={t("rules.name")} onChange={(event) => updateDraft({ ...draft, name: event.target.value })}/>
       </label>}
-      <fieldset className="rules-fieldset"><legend>{t("rules.requirements")}</legend>
+      <fieldset className="rules-fieldset"><legend>{t("rules.sources")}</legend>
         <div className="bulk-strategy" role="radiogroup" aria-label={t("rules.addons")}>
           <label className={draft.rules.addons.scope === "all" ? "selected" : ""}><input type="radio" name="download-rules-scope" value="all" checked={draft.rules.addons.scope === "all"} onChange={() => setScope("all")}/><span><strong>{t("rules.addonsAll")}</strong></span></label>
           <label className={draft.rules.addons.scope !== "all" ? "selected" : ""}><input type="radio" name="download-rules-scope" value="selected" checked={draft.rules.addons.scope !== "all"} onChange={() => setScope("selected")}/><span><strong>{t("rules.addonsSelected")}</strong></span></label>
@@ -289,27 +321,37 @@ export function SourceProfilesSettings({ languages }: { languages: Array<{ code:
           <button type="button" className="icon-button" aria-label={t("rules.moveDown", { name: row.name })} disabled={index === orderedRows.length - 1} onClick={() => updateRules({ ...draft.rules, addons: { ...draft.rules.addons, order: { explicit: move(explicit, index, 1) } } })}><ArrowDown/></button>
         </span></div>)}</div>}
         <label className="rules-check"><input type="checkbox" aria-label={t("rules.allowTorrents")} checked={draft.rules.torrents} onChange={(event) => updateRules({ ...draft.rules, torrents: event.target.checked })}/><span>{t("rules.allowTorrents")}</span></label>
+      </fieldset>
+      <fieldset className="rules-fieldset"><legend>{t("rules.qualitySize")}</legend>
         <div className="bulk-language-grid">
           <label><span>{t("rules.resolutionFrom")}</span><select aria-label={t("rules.resolutionFrom")} value={draft.rules.resolution.min ?? ""} onChange={(event) => updateRules({ ...draft.rules, resolution: { ...draft.rules.resolution, min: event.target.value ? Number(event.target.value) as RuleResolution : null } })}><option value="">{t("rules.resolutionAny")}</option>{RESOLUTIONS.map((height) => <option key={height} value={height}>{t("rules.resolutionValue", { height })}</option>)}</select></label>
           <label><span>{t("rules.resolutionTo")}</span><select aria-label={t("rules.resolutionTo")} value={draft.rules.resolution.max ?? ""} onChange={(event) => updateRules({ ...draft.rules, resolution: { ...draft.rules.resolution, max: event.target.value ? Number(event.target.value) as RuleResolution : null } })}><option value="">{t("rules.resolutionAny")}</option>{RESOLUTIONS.map((height) => <option key={height} value={height}>{t("rules.resolutionValue", { height })}</option>)}</select></label>
-          <label><span>{t("rules.audio")}</span><select aria-label={t("rules.audio")} value={draft.rules.audio.mode} onChange={(event) => { const mode = event.target.value as DownloadRules["audio"]["mode"]; updateRules({ ...draft.rules, audio: { mode, fallback: mode === "only" ? null : draft.rules.audio.fallback } }); }}><option value="prefer">{t("rules.audioPrefer")}</option><option value="only">{t("rules.audioOnly")}</option></select></label>
-          <label><span>{t("rules.fallbackLanguage")}</span><select aria-label={t("rules.fallbackLanguage")} disabled={draft.rules.audio.mode === "only"} value={draft.rules.audio.fallback ?? ""} onChange={(event) => updateRules({ ...draft.rules, audio: { ...draft.rules.audio, fallback: event.target.value || null } })}><option value="">{t("rules.fallbackNone")}</option>{languages.map(({ code }) => <option key={code} value={code}>{languageName(code)}</option>)}</select></label>
+        </div>
+        <span className="rules-subheading">{t("rules.sizeRange")}</span>
+        <div className="bulk-language-grid">
+          <label><span>{t("rules.sizeEpisodeFrom")}</span><input type="number" min="0.1" max="200" step="0.1" aria-label={t("rules.sizeEpisodeFrom")} value={draft.rules.sizeGb.episode.min ?? ""} onChange={(event) => updateRules({ ...draft.rules, sizeGb: { ...draft.rules.sizeGb, episode: { ...draft.rules.sizeGb.episode, min: event.target.value ? Number(event.target.value) : null } } })}/></label>
+          <label><span>{t("rules.sizeEpisodeTo")}</span><input type="number" min="0.1" max="200" step="0.1" aria-label={t("rules.sizeEpisodeTo")} value={draft.rules.sizeGb.episode.max ?? ""} onChange={(event) => updateRules({ ...draft.rules, sizeGb: { ...draft.rules.sizeGb, episode: { ...draft.rules.sizeGb.episode, max: event.target.value ? Number(event.target.value) : null } } })}/></label>
+          <label><span>{t("rules.sizeMovieFrom")}</span><input type="number" min="0.1" max="200" step="0.1" aria-label={t("rules.sizeMovieFrom")} value={draft.rules.sizeGb.movie.min ?? ""} onChange={(event) => updateRules({ ...draft.rules, sizeGb: { ...draft.rules.sizeGb, movie: { ...draft.rules.sizeGb.movie, min: event.target.value ? Number(event.target.value) : null } } })}/></label>
+          <label><span>{t("rules.sizeMovieTo")}</span><input type="number" min="0.1" max="200" step="0.1" aria-label={t("rules.sizeMovieTo")} value={draft.rules.sizeGb.movie.max ?? ""} onChange={(event) => updateRules({ ...draft.rules, sizeGb: { ...draft.rules.sizeGb, movie: { ...draft.rules.sizeGb.movie, max: event.target.value ? Number(event.target.value) : null } } })}/></label>
+        </div>
+        {!validRange(draft.rules.sizeGb.episode) || !validRange(draft.rules.sizeGb.movie) ? <p className="login-error" role="alert">{t("err.sourceProfileInvalid")}</p> : null}
+        <label className="rules-check"><input type="checkbox" aria-label={t("rules.skipCinema")} checked={draft.rules.skipCinema} onChange={(event) => updateRules({ ...draft.rules, skipCinema: event.target.checked })}/><span>{t("rules.skipCinema")}</span></label>
+      </fieldset>
+      <fieldset className="rules-fieldset"><legend>{t("rules.language")}</legend>
+        <div className="bulk-language-grid">
+          <label><span>{t("rules.audio")}</span><select aria-label={t("rules.audio")} value={draft.rules.audio.mode} onChange={(event) => setAudioMode(event.target.value as DownloadRules["audio"]["mode"])}><option value="any">{t("rules.audioAny")}</option><option value="prefer">{t("rules.audioModePrefer")}</option><option value="only">{t("rules.audioModeOnly")}</option></select></label>
+          <label><span>{t("rules.audioLanguage")}</span><select aria-label={t("rules.audioLanguage")} disabled={draft.rules.audio.mode === "any"} value={draft.rules.audio.language} onChange={(event) => setAudioLanguage(event.target.value)}><option value="mine">{t("rules.audioLanguageMine")}</option>{languages.map(({ code }) => <option key={code} value={code}>{languageName(code)}</option>)}</select></label>
+          <label><span>{t("rules.fallbackLanguage")}</span><select aria-label={t("rules.fallbackLanguage")} disabled={draft.rules.audio.mode !== "prefer"} value={draft.rules.audio.fallback ?? ""} onChange={(event) => updateRules({ ...draft.rules, audio: { ...draft.rules.audio, fallback: event.target.value || null } })}><option value="">{t("rules.fallbackNone")}</option>{languages.filter(({ code }) => draft.rules.audio.language === "mine" || code !== draft.rules.audio.language).map(({ code }) => <option key={code} value={code}>{languageName(code)}</option>)}</select></label>
           <label><span>{t("rules.subtitles")}</span><select aria-label={t("rules.subtitles")} value={draft.rules.subtitles} onChange={(event) => updateRules({ ...draft.rules, subtitles: event.target.value as DownloadRules["subtitles"] })}><option value="off">{t("rules.subtitlesOff")}</option><option value="ifAvailable">{t("rules.subtitlesIfAvailable")}</option><option value="required">{t("rules.subtitlesRequired")}</option></select></label>
         </div>
-        <span className="rules-subheading">{t("rules.sizeApprox")}</span>
-        <div className="bulk-language-grid">
-          <label><span>{t("rules.sizeEpisodeGb")}</span><input type="number" min="0.1" max="200" step="0.1" aria-label={t("rules.sizeEpisodeGb")} value={draft.rules.maxSizeGb.episode ?? ""} onChange={(event) => updateRules({ ...draft.rules, maxSizeGb: { ...draft.rules.maxSizeGb, episode: event.target.value ? Number(event.target.value) : null } })}/></label>
-          <label><span>{t("rules.sizeMovieGb")}</span><input type="number" min="0.1" max="200" step="0.1" aria-label={t("rules.sizeMovieGb")} value={draft.rules.maxSizeGb.movie ?? ""} onChange={(event) => updateRules({ ...draft.rules, maxSizeGb: { ...draft.rules.maxSizeGb, movie: event.target.value ? Number(event.target.value) : null } })}/></label>
-        </div>
-        <label className="rules-check"><input type="checkbox" aria-label={t("rules.skipCinema")} checked={draft.rules.skipCinema} onChange={(event) => updateRules({ ...draft.rules, skipCinema: event.target.checked })}/><span>{t("rules.skipCinema")}</span></label>
       </fieldset>
       <fieldset className="rules-fieldset"><legend>{t("rules.preferSection")}</legend>
         <button type="button" className="rules-advanced-toggle" aria-expanded={advanced} onClick={() => setAdvanced((value) => !value)}>{t("rules.advanced")}</button>
         {advanced && <><span className="rules-subheading">{t("rules.preferenceOrder")}</span>
-          <div className="rules-preference-choices">{PREFERENCES.map((preference) => <label key={preference}><input type="checkbox" aria-label={t(PREFERENCE_LABEL[preference])} checked={draft.rules.preference.includes(preference)} disabled={preferenceDisabled(preference)} onChange={() => togglePreference(preference)}/><span>{t(PREFERENCE_LABEL[preference])}</span></label>)}</div>
-          <div className="rules-order-list">{draft.rules.preference.map((preference, index) => <div key={preference}><span><b>{index + 1}</b> {t(PREFERENCE_LABEL[preference])}</span><span>
-            <button type="button" className="icon-button" aria-label={t("rules.moveUp", { name: t(PREFERENCE_LABEL[preference]) })} disabled={index === 0} onClick={() => updateRules({ ...draft.rules, preference: move(draft.rules.preference, index, -1) })}><ArrowUp/></button>
-            <button type="button" className="icon-button" aria-label={t("rules.moveDown", { name: t(PREFERENCE_LABEL[preference]) })} disabled={index === draft.rules.preference.length - 1} onClick={() => updateRules({ ...draft.rules, preference: move(draft.rules.preference, index, 1) })}><ArrowDown/></button>
+          <div className="rules-preference-choices">{PREFERENCES.filter((preference) => preference !== "language" || draft.rules.audio.mode !== "any").map((preference) => <label key={preference}><input type="checkbox" aria-label={preferenceLabel(preference)} checked={draft.rules.preference.includes(preference)} disabled={preferenceDisabled(preference)} onChange={() => togglePreference(preference)}/><span>{preferenceLabel(preference)}</span></label>)}</div>
+          <div className="rules-order-list">{draft.rules.preference.map((preference, index) => <div key={preference}><span><b>{index + 1}</b> {preferenceLabel(preference)}</span><span>
+            <button type="button" className="icon-button" aria-label={t("rules.moveUp", { name: preferenceLabel(preference) })} disabled={index === 0} onClick={() => updateRules({ ...draft.rules, preference: move(draft.rules.preference, index, -1) })}><ArrowUp/></button>
+            <button type="button" className="icon-button" aria-label={t("rules.moveDown", { name: preferenceLabel(preference) })} disabled={index === draft.rules.preference.length - 1} onClick={() => updateRules({ ...draft.rules, preference: move(draft.rules.preference, index, 1) })}><ArrowDown/></button>
           </span></div>)}</div>
         </>}
       </fieldset>

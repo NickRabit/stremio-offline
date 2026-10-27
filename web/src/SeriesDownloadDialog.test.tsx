@@ -7,24 +7,35 @@ import type { FollowAutoDownload, SourceProfile } from "./types";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
-const profile = (id: string, nameKey: string, audio: "preferred" | "strict" = "preferred"): SourceProfile => ({
+const profile = (
+  id: string,
+  nameKey: string,
+  audio: "preferred" | "strict" = "preferred",
+  preferred: { preference: "audio" } | { code: string } = { preference: "audio" },
+  audioTier = true,
+): SourceProfile => ({
   id, nameKey, template: "rules", revision: 3, operations: ["downloadToLibrary"],
   sizeLimits: { episodeBytes: 4_000_000_000, movieBytes: 15_000_000_000 },
   policy: {
     schemaVersion: 1, scope: { mode: "allAvailable" },
     constraints: {
       sourceKinds: ["localFile", "mediaServerOriginal", "http", "torrent"],
-      audio: { mode: audio, preferred: { preference: "audio" } },
+      audio: { mode: audio, preferred },
       subtitles: { mode: "optional", preferred: { preference: "subtitle" } },
       heightPixels: { min: 720, max: 1080 }, bytes: { max: 4_000_000_000 },
     },
-    criteria: [{ kind: "audioTier" }, { kind: "providerOrder", from: "viewer" }],
+    criteria: [
+      ...(audioTier ? [{ kind: "audioTier" as const }] : []),
+      { kind: "providerOrder", from: "viewer" },
+    ],
     nextEpisode: "profile", existingLocalCopy: "meetsRequirements",
   },
 });
 const balanced = profile("balanced", "rules.preset.balanced");
 const best = profile("best", "rules.preset.best");
 const myLanguage = profile("my-language", "rules.preset.myLanguage", "strict");
+const anyLanguage = profile("any-language", "rules.preset.smaller", "preferred", { preference: "audio" }, false);
+const english = profile("english", "rules.preset.best", "preferred", { code: "en" });
 
 let fetchMock: ReturnType<typeof vi.fn>;
 let root: Root;
@@ -107,10 +118,16 @@ describe("SeriesDownloadDialog", () => {
   });
 
   it("shows grace only for preferred audio and sends graceDays", async () => {
-    setupFetch([balanced, myLanguage]);
+    setupFetch([balanced, myLanguage, anyLanguage]);
     await renderDialog({ follow: { followId: "f1" } });
     expect(host.querySelector('select[aria-label="Wait for audio in my language"]')).toBeNull();
-    await act(async () => { host.querySelector<HTMLInputElement>('input[name="download-rules"][value="balanced"]')!.click(); });
+    await act(async () => {
+      host.querySelector<HTMLInputElement>('input[name="download-rules"][value="any-language"]')!.click();
+    });
+    expect(host.querySelector('select[aria-label="Wait for audio in my language"]')).toBeNull();
+    await act(async () => {
+      host.querySelector<HTMLInputElement>('input[name="download-rules"][value="balanced"]')!.click();
+    });
     const grace = host.querySelector<HTMLSelectElement>('select[aria-label="Wait for audio in my language"]')!;
     expect(grace.value).toBe("2");
     await act(async () => { grace.value = "7"; grace.dispatchEvent(new Event("change", { bubbles: true })); });
@@ -119,6 +136,12 @@ describe("SeriesDownloadDialog", () => {
     const body = JSON.parse(String((patch[1] as RequestInit).body));
     expect(body.autoDownload.graceDays).toBe(7);
     expect(body.autoDownload.selection).toEqual({ profile: { profileId: "balanced", revision: 3 } });
+  });
+
+  it("names the chosen language in the grace label", async () => {
+    setupFetch([english, balanced]);
+    await renderDialog({ follow: { followId: "f1" }, followSourceProfileId: "english" });
+    expect(host.querySelector('select[aria-label="Wait for audio in English"]')).not.toBeNull();
   });
 
   it("shows the legacy note and saves the preselected profile", async () => {
