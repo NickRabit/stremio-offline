@@ -18,7 +18,9 @@ import cz.stremiooffline.tv.data.GlobalSearchLibraryDto
 import cz.stremiooffline.tv.data.GlobalSearchMemberPageDto
 import cz.stremiooffline.tv.data.GlobalSearchSnapshotDto
 import cz.stremiooffline.tv.data.GlobalSearchStartDto
+import cz.stremiooffline.tv.data.RecentSearchDto
 import cz.stremiooffline.tv.data.SearchScope
+import cz.stremiooffline.tv.data.SearchStateDto
 import cz.stremiooffline.tv.data.SearchableCatalogDto
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
@@ -51,6 +53,10 @@ data class GlobalSearchState(
   val order: List<String> = emptyList(),
   val unidentifiedOrder: List<String> = emptyList(),
   val previousQuery: Boolean = false,
+  /** The account's recent searches, newest first; empty while none are kept or the read failed. */
+  val recent: List<RecentSearchDto> = emptyList(),
+  /** False once the account has switched history saving off: nothing is recorded then. */
+  val saveHistory: Boolean = true,
   @StringRes val error: Int? = null,
   val loading: Boolean = false,
   val focusAnchor: String? = null,
@@ -127,6 +133,7 @@ class GlobalSearchViewModel(
 ) : ViewModel() {
 
   private val fixedSources = sources
+  private val keepsHistory = library == null && sources == null
 
   var state by mutableStateOf(GlobalSearchState(sources = fixedSources.orEmpty()))
     private set
@@ -146,7 +153,30 @@ class GlobalSearchViewModel(
     val trimmed = query.trim()
     if (trimmed.isEmpty()) return
     restartDepth = 0
-    startSearch(trimmed, freshLayout = true)
+    startSearch(trimmed, freshLayout = true, record = keepsHistory)
+  }
+
+  fun refreshRecent() {
+    if (!keepsHistory) return
+    viewModelScope.launch { loadRecent() }
+  }
+
+  fun forget(query: String) {
+    if (!keepsHistory) return
+    val trimmed = query.trim()
+    if (trimmed.isEmpty()) return
+    state = state.copy(recent = state.recent.filterNot { it.query == trimmed })
+    viewModelScope.launch {
+      val next = try {
+        api.forgetSearch(trimmed)
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (_: ApiError) {
+        loadRecent()
+        return@launch
+      }
+      applySearchState(next)
+    }
   }
 
   fun setSources(sources: Set<SourceClass>) {
@@ -272,7 +302,7 @@ class GlobalSearchViewModel(
     super.onCleared()
   }
 
-  private fun startSearch(query: String, freshLayout: Boolean) {
+  private fun startSearch(query: String, freshLayout: Boolean, record: Boolean = false) {
     if (freshLayout) interacted = false
     val currentGeneration = ++generation
     startJob?.cancel()
@@ -304,6 +334,7 @@ class GlobalSearchViewModel(
         if (currentGeneration != generation) return@launch
         sessionId = answer.id
         applySnapshot(answer.snapshot, freshLayout)
+        if (record) noteQuery(query)
         launchPoll(currentGeneration, 0)
       } catch (cancelled: CancellationException) {
         throw cancelled
@@ -311,6 +342,35 @@ class GlobalSearchViewModel(
         handleError(error, currentGeneration, query)
       }
     }
+  }
+
+  private fun noteQuery(query: String) {
+    viewModelScope.launch {
+      if (state.saveHistory) {
+        try {
+          api.recordSearch(query)
+        } catch (cancelled: CancellationException) {
+          throw cancelled
+        } catch (_: ApiError) {
+        }
+      }
+      loadRecent()
+    }
+  }
+
+  private suspend fun loadRecent() {
+    val next = try {
+      api.searchState()
+    } catch (cancelled: CancellationException) {
+      throw cancelled
+    } catch (_: ApiError) {
+      return
+    }
+    applySearchState(next)
+  }
+
+  private fun applySearchState(next: SearchStateDto) {
+    state = state.copy(recent = next.recent, saveHistory = next.saveHistory)
   }
 
   private fun launchPoll(currentGeneration: Int, wait: Long) {
