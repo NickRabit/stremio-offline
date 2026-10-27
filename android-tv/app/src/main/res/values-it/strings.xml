@@ -241,6 +241,10 @@
   <string name="bulk_source_strategy">Selezione della fonte</string>
   <string name="bulk_strategy_largest">File corrispondente più grande</string>
   <string name="bulk_strategy_priority">Componente aggiuntivo preferito per primo</string>
+  <string name="source_profile_travel">In viaggio (file piccoli)</string>
+  <string name="source_profile_travel_hint">Il file più piccolo da almeno 480p nella tua lingua. Adatto a connessioni lente o a consumo limitato.</string>
+  <string name="source_profile_provider_priority">Ordine dei componenti aggiuntivi, verificato</string>
+  <string name="source_profile_provider_priority_hint">Prova i componenti aggiuntivi nell\'ordine scelto e prende il primo file di cui è riuscito a verificare la corrispondenza con la tua lingua.</string>
   <string name="bulk_sources">Fonti</string>
   <string name="save_adding">Aggiunta…</string>
   <string name="save_target_default_library">Libreria predefinita</string>

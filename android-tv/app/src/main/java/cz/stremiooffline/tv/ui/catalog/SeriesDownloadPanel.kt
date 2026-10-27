@@ -26,10 +26,12 @@ import cz.stremiooffline.tv.data.AddonDto
 import cz.stremiooffline.tv.data.ApiError
 import cz.stremiooffline.tv.data.ApiFailure
 import cz.stremiooffline.tv.data.BulkMediaDto
+import cz.stremiooffline.tv.data.DownloadProfileRefDto
 import cz.stremiooffline.tv.data.DownloadSelectionDto
 import cz.stremiooffline.tv.data.DownloadTargetDto
 import cz.stremiooffline.tv.data.LibraryDto
 import cz.stremiooffline.tv.data.SettingsResponse
+import cz.stremiooffline.tv.data.SourceProfileDto
 import cz.stremiooffline.tv.data.StreamSourceDto
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.data.VideoDto
@@ -60,6 +62,8 @@ fun seriesAudioFallbackTag(code: String): String = "series_audio_fallback_$code"
 fun seriesSubtitleModeTag(mode: String): String = "series_subtitle_mode_$mode"
 fun seriesSubtitleTag(code: String): String = "series_subtitle_$code"
 fun seriesSubtitleFallbackTag(code: String): String = "series_subtitle_fallback_$code"
+
+private const val SOURCE_PROFILE_STRATEGY_PREFIX = "profile:"
 
 /** Which list the panel shows: the scopes, the settings, or one nested list of them. */
 private enum class DownloadPanelScreen { Scope, Settings, Audio, Subtitles, Strategy, Sources, Library }
@@ -98,6 +102,8 @@ internal fun SeriesDownloadPanel(
   var subtitle by remember { mutableStateOf(startSubtitle) }
   var subtitleFallback by remember { mutableStateOf(if (startSubtitle == "en") "" else "en") }
   var strategy by remember { mutableStateOf("largest") }
+  var strategyTouched by remember { mutableStateOf(false) }
+  var sourceProfiles by remember { mutableStateOf<List<SourceProfileDto>>(emptyList()) }
   var sourceAddons by remember { mutableStateOf<List<StreamSourceDto>>(emptyList()) }
   var chosenAddons by remember { mutableStateOf<List<String>>(emptyList()) }
   var languageCodes by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -137,7 +143,25 @@ internal fun SeriesDownloadPanel(
       emptyList()
     }
   }
+  LaunchedEffect(Unit) {
+    sourceProfiles = try {
+      api.sourceProfiles()
+    } catch (cancelled: CancellationException) {
+      throw cancelled
+    } catch (_: ApiError) {
+      emptyList()
+    }
+  }
 
+  val offeredProfiles = sourceProfiles.filter(::isOfferedSourceProfile)
+  LaunchedEffect(offeredProfiles, settings.downloadSourceProfile) {
+    if (strategyTouched) return@LaunchedEffect
+    strategy = offeredProfiles.firstOrNull { it.id == settings.downloadSourceProfile }
+      ?.let { sourceProfileStrategy(it.id) }
+      ?: "largest"
+  }
+  val selectedProfile = offeredProfiles.firstOrNull { sourceProfileStrategy(it.id) == strategy }
+  val profileManaged = selectedProfile != null
   val episodes = chosenScope?.let { scopeEpisodes(videos, it, selected, today) }.orEmpty()
   val writableLibraries = libraries.filter { it.canWrite && (it.type == type || it.type == "mixed") }
   // The web's `ruleTarget`: the first chosen addon's own rule first, then the library the account
@@ -151,22 +175,24 @@ internal fun SeriesDownloadPanel(
   val libraryName = writableLibraries.firstOrNull { it.id == targetLibrary }?.name
     ?: stringResource(R.string.save_target_default_library)
 
-  val selection = DownloadSelectionDto(
-    addonKeys = chosenAddons,
-    sourceStrategy = strategy,
-    audioLanguage = audio,
-    fallbackAudioLanguage = audioFallback.takeIf { it.isNotBlank() && it != audio },
-    audioMode = "listed",
-    subtitleMode = subtitleMode,
-    subtitleLanguage = subtitle.takeIf { subtitleMode != "off" },
-    fallbackSubtitleLanguage = subtitleFallback.takeIf { subtitleMode != "off" && it.isNotBlank() && it != subtitle },
-  )
+  val selection = selectedProfile?.let {
+    DownloadSelectionDto(profile = DownloadProfileRefDto(it.id, it.revision))
+  } ?: DownloadSelectionDto(
+      addonKeys = chosenAddons,
+      sourceStrategy = strategy,
+      audioLanguage = audio,
+      fallbackAudioLanguage = audioFallback.takeIf { it.isNotBlank() && it != audio },
+      audioMode = "listed",
+      subtitleMode = subtitleMode,
+      subtitleLanguage = subtitle.takeIf { subtitleMode != "off" },
+      fallbackSubtitleLanguage = subtitleFallback.takeIf { subtitleMode != "off" && it.isNotBlank() && it != subtitle },
+    )
   val genericText = stringResource(R.string.tv_err_generic)
   val notAllowedText = stringResource(R.string.err_download_library_not_allowed)
-  val canSubmit = episodes.isNotEmpty() && chosenAddons.isNotEmpty() && !busy
+  val canSubmit = episodes.isNotEmpty() && (selectedProfile != null || chosenAddons.isNotEmpty()) && !busy
 
   fun submit() {
-    if (busy || episodes.isEmpty() || chosenAddons.isEmpty()) return
+    if (busy || episodes.isEmpty() || (selectedProfile == null && chosenAddons.isEmpty())) return
     busy = true
     posted = true
     error = null
@@ -211,14 +237,18 @@ internal fun SeriesDownloadPanel(
     awaitFrame()
     val restore = restoreTo
     restoreTo = null
-    val target = restore?.let { rowFocuses[it] } ?: openingFocus
+    val target = restore?.let { rowFocuses[it] ?: openingFocus } ?: openingFocus
     runCatching { target.requestFocus() }
   }
   // The add row is disabled while it posts, so the remote it was holding is parked on the first
   // settings row and given back once the refusal is on screen.
   LaunchedEffect(busy) {
     awaitFrame()
-    val target = if (busy) rowFocuses[TagSeriesDownloadAudio] ?: openingFocus else addFocus.takeIf { posted }
+    val target = if (busy) {
+      rowFocuses[TagSeriesDownloadAudio] ?: rowFocuses[TagSeriesDownloadStrategy] ?: openingFocus
+    } else {
+      addFocus.takeIf { posted }
+    }
     if (target != null) runCatching { target.requestFocus() }
   }
 
@@ -254,9 +284,10 @@ internal fun SeriesDownloadPanel(
         summary = pluralStringResource(R.plurals.bulk_episode_count, episodes.size, episodes.size) + " → " + libraryName,
         audioValue = Languages.label(audio) + (audioFallback.takeIf { it.isNotBlank() }?.let { " → " + Languages.label(it) } ?: ""),
         subtitleValue = subtitleModeLabel(subtitleMode) + (subtitle.takeIf { subtitleMode != "off" }?.let { " → " + Languages.label(it) } ?: ""),
-        strategyValue = strategyLabel(strategy),
+        strategyValue = strategyLabel(strategy, offeredProfiles),
         sourcesValue = "${chosenAddons.size}/${sourceAddons.size}",
         libraryValue = libraryName,
+        profileManaged = profileManaged,
         busy = busy,
         canSubmit = canSubmit,
         error = error,
@@ -292,9 +323,17 @@ internal fun SeriesDownloadPanel(
       )
       DownloadPanelScreen.Strategy -> StrategyRows(
         strategy = strategy,
+        profiles = offeredProfiles,
         openingFocus = openingFocus,
         rowFocuses = rowFocuses,
-        onPick = { strategy = it },
+        onPick = {
+          strategyTouched = true
+          strategy = it
+          if (it.startsWith(SOURCE_PROFILE_STRATEGY_PREFIX)) {
+            restoreTo = TagSeriesDownloadStrategy
+            screen = DownloadPanelScreen.Settings
+          }
+        },
       )
       DownloadPanelScreen.Sources -> SourceRows(
         sourceAddons = sourceAddons,
@@ -352,6 +391,7 @@ private fun ColumnScope.SettingsRows(
   strategyValue: String,
   sourcesValue: String,
   libraryValue: String,
+  profileManaged: Boolean,
   busy: Boolean,
   canSubmit: Boolean,
   error: String?,
@@ -367,14 +407,18 @@ private fun ColumnScope.SettingsRows(
     maxLines = 1,
     modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp).testTag(TagSeriesDownloadSummary),
   )
-  SettingRow(stringResource(R.string.bulk_audio), audioValue, { onOpen(DownloadPanelScreen.Audio) },
-    Modifier.panelRow(rowFocuses, TagSeriesDownloadAudio, first = true, opening = openingFocus))
-  SettingRow(stringResource(R.string.bulk_subtitles), subtitleValue, { onOpen(DownloadPanelScreen.Subtitles) },
-    Modifier.panelRow(rowFocuses, TagSeriesDownloadSubtitles, first = false, opening = null))
+  if (!profileManaged) {
+    SettingRow(stringResource(R.string.bulk_audio), audioValue, { onOpen(DownloadPanelScreen.Audio) },
+      Modifier.panelRow(rowFocuses, TagSeriesDownloadAudio, first = true, opening = openingFocus))
+    SettingRow(stringResource(R.string.bulk_subtitles), subtitleValue, { onOpen(DownloadPanelScreen.Subtitles) },
+      Modifier.panelRow(rowFocuses, TagSeriesDownloadSubtitles, first = false, opening = null))
+  }
   SettingRow(stringResource(R.string.bulk_source_strategy), strategyValue, { onOpen(DownloadPanelScreen.Strategy) },
-    Modifier.panelRow(rowFocuses, TagSeriesDownloadStrategy, first = false, opening = null))
-  SettingRow(stringResource(R.string.bulk_sources), sourcesValue, { onOpen(DownloadPanelScreen.Sources) },
-    Modifier.panelRow(rowFocuses, TagSeriesDownloadSources, first = false, opening = null))
+    Modifier.panelRow(rowFocuses, TagSeriesDownloadStrategy, first = profileManaged, opening = if (profileManaged) openingFocus else null))
+  if (!profileManaged) {
+    SettingRow(stringResource(R.string.bulk_sources), sourcesValue, { onOpen(DownloadPanelScreen.Sources) },
+      Modifier.panelRow(rowFocuses, TagSeriesDownloadSources, first = false, opening = null))
+  }
   SettingRow(stringResource(R.string.nav_library), libraryValue, { onOpen(DownloadPanelScreen.Library) },
     Modifier.panelRow(rowFocuses, TagSeriesDownloadLibrary, first = false, opening = null))
   FocusButton(
@@ -491,16 +535,27 @@ private fun ColumnScope.SettingsSubtitleRows(
 @Composable
 private fun ColumnScope.StrategyRows(
   strategy: String,
+  profiles: List<SourceProfileDto>,
   openingFocus: FocusRequester,
   rowFocuses: MutableMap<String, FocusRequester>,
   onPick: (String) -> Unit,
 ) {
   listOf("largest", "priority").forEachIndexed { index, value ->
     PanelOption(
-      text = strategyLabel(value),
+      text = strategyLabel(value, profiles),
       selected = value == strategy,
       onClick = { onPick(value) },
       modifier = Modifier.panelRow(rowFocuses, seriesStrategyTag(value), first = index == 0, opening = openingFocus),
+    )
+  }
+  profiles.forEach { profile ->
+    val value = sourceProfileStrategy(profile.id)
+    PanelOption(
+      text = sourceProfileName(profile),
+      supportingText = sourceProfileHint(profile),
+      selected = value == strategy,
+      onClick = { onPick(value) },
+      modifier = Modifier.panelRow(rowFocuses, seriesStrategyTag(value), first = false, opening = null),
     )
   }
 }
@@ -578,6 +633,7 @@ private fun Modifier.panelRow(
   opening: FocusRequester?,
 ): Modifier {
   val row = if (first && opening != null) opening else focuses.getOrPut(tag) { FocusRequester() }
+  focuses[tag] = row
   return testTag(tag).focusRequester(row)
 }
 
@@ -591,8 +647,37 @@ private fun subtitleModeLabel(mode: String): String = stringResource(
 )
 
 @Composable
-private fun strategyLabel(strategy: String): String =
-  stringResource(if (strategy == "priority") R.string.bulk_strategy_priority else R.string.bulk_strategy_largest)
+private fun strategyLabel(strategy: String, profiles: List<SourceProfileDto>): String {
+  val profile = profiles.firstOrNull { sourceProfileStrategy(it.id) == strategy }
+  return profile?.let { sourceProfileName(it) }
+    ?: stringResource(if (strategy == "priority") R.string.bulk_strategy_priority else R.string.bulk_strategy_largest)
+}
+
+private fun sourceProfileStrategy(id: String): String = SOURCE_PROFILE_STRATEGY_PREFIX + id
+
+private fun isOfferedSourceProfile(profile: SourceProfileDto): Boolean =
+  "downloadToLibrary" in profile.operations &&
+    (sourceProfileNameKey(profile) != null || !profile.name.isNullOrBlank())
+
+private fun sourceProfileNameKey(profile: SourceProfileDto): Int? = when (profile.nameKey) {
+  "sourceProfile.travel" -> R.string.source_profile_travel
+  "sourceProfile.providerPriority" -> R.string.source_profile_provider_priority
+  else -> null
+}
+
+private fun sourceProfileHintKey(profile: SourceProfileDto): Int? = when (profile.nameKey) {
+  "sourceProfile.travel" -> R.string.source_profile_travel_hint
+  "sourceProfile.providerPriority" -> R.string.source_profile_provider_priority_hint
+  else -> null
+}
+
+@Composable
+private fun sourceProfileName(profile: SourceProfileDto): String =
+  sourceProfileNameKey(profile)?.let { stringResource(it) } ?: profile.name.orEmpty()
+
+@Composable
+private fun sourceProfileHint(profile: SourceProfileDto): String? =
+  sourceProfileHintKey(profile)?.let { stringResource(it) }
 
 /** The languages the account's server offers, with the chosen one always in the list. */
 private fun languageOptions(codes: List<String>, chosen: String): List<String> =

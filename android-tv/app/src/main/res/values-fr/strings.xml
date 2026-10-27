@@ -241,6 +241,10 @@
   <string name="bulk_source_strategy">Sélection des sources</string>
   <string name="bulk_strategy_largest">Le plus grand fichier correspondant</string>
   <string name="bulk_strategy_priority">Module complémentaire préféré en premier</string>
+  <string name="source_profile_travel">En déplacement (fichiers légers)</string>
+  <string name="source_profile_travel_hint">Le plus petit fichier d’au moins 480p dans votre langue. Adapté aux connexions lentes ou limitées.</string>
+  <string name="source_profile_provider_priority">Ordre des modules complémentaires, vérifié</string>
+  <string name="source_profile_provider_priority_hint">Essaie les modules complémentaires dans votre ordre et prend le premier fichier dont la correspondance avec votre langue a pu être vérifiée.</string>
   <string name="bulk_sources">Sources</string>
   <string name="save_adding">Ajout…</string>
   <string name="save_target_default_library">Bibliothèque par défaut</string>

@@ -32,6 +32,7 @@ data class SettingsResponse(
   val subtitleLanguage: String? = null,
   val streamSort: String? = null,
   val realDebridConfigured: Boolean = false,
+  val downloadSourceProfile: String? = null,
 )
 
 /** One content language `GET /api/languages` offers. The name is the server's Czech label

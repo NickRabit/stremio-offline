@@ -241,6 +241,10 @@
   <string name="bulk_source_strategy">Selección de fuente</string>
   <string name="bulk_strategy_largest">Archivo coincidente más grande</string>
   <string name="bulk_strategy_priority">Complemento preferido primero</string>
+  <string name="source_profile_travel">Viaje (archivos pequeños)</string>
+  <string name="source_profile_travel_hint">El archivo más pequeño de al menos 480p en su idioma. Ideal para conexiones lentas o con límite de datos.</string>
+  <string name="source_profile_provider_priority">Orden de complementos, verificado</string>
+  <string name="source_profile_provider_priority_hint">Prueba los complementos en su orden y toma el primer archivo cuya coincidencia con su idioma haya podido verificar.</string>
   <string name="bulk_sources">Fuentes</string>
   <string name="save_adding">Añadiendo…</string>
   <string name="save_target_default_library">Biblioteca predeterminada</string>

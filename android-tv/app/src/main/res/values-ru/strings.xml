@@ -247,6 +247,10 @@
   <string name="bulk_source_strategy">Выбор источника</string>
   <string name="bulk_strategy_largest">Самый большой соответствующий файл</string>
   <string name="bulk_strategy_priority">Предпочтительный аддон в первую очередь</string>
+  <string name="source_profile_travel">В поездку (небольшие файлы)</string>
+  <string name="source_profile_travel_hint">Самый маленький файл не ниже 480p на вашем языке. Подходит для медленного или лимитированного подключения.</string>
+  <string name="source_profile_provider_priority">Порядок дополнений, с проверкой</string>
+  <string name="source_profile_provider_priority_hint">Проверяет дополнения в вашем порядке и берёт первый файл, соответствие языка которого удалось подтвердить.</string>
   <string name="bulk_sources">Источники</string>
   <string name="save_adding">Добавление…</string>
   <string name="save_target_default_library">Библиотека по умолчанию</string>

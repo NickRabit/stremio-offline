@@ -33,15 +33,31 @@ data class BulkEpisodeDto(
 /** The lazy rules `POST /api/downloads/bulk` reads off the selection the web sends. */
 @Serializable
 data class DownloadSelectionDto(
-  val addonKeys: List<String>,
-  val sourceStrategy: String,
-  val audioLanguage: String,
+  val addonKeys: List<String> = emptyList(),
+  val sourceStrategy: String = "",
+  val audioLanguage: String = "",
   val fallbackAudioLanguage: String? = null,
-  val audioMode: String,
-  val subtitleMode: String,
+  val audioMode: String = "",
+  val subtitleMode: String = "",
   val subtitleLanguage: String? = null,
   val fallbackSubtitleLanguage: String? = null,
+  val profile: DownloadProfileRefDto? = null,
 )
+
+@Serializable
+data class DownloadProfileRefDto(val profileId: String, val revision: Int)
+
+@Serializable
+data class SourceProfileDto(
+  val id: String = "",
+  val nameKey: String? = null,
+  val name: String? = null,
+  val revision: Int = 0,
+  val operations: List<String> = emptyList(),
+)
+
+@Serializable
+data class SourceProfilesResponseDto(val profiles: List<SourceProfileDto> = emptyList())
 
 /** The parent title a bulk body carries; the route reads the id, the type and the poster. */
 @Serializable

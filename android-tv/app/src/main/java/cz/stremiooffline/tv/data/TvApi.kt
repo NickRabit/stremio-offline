@@ -69,6 +69,7 @@ interface CatalogApi : SearchHistoryApi {
   suspend fun localStreams(type: String, id: String): List<StreamDto>
   suspend fun addons(): List<AddonDto>
   suspend fun settings(): SettingsResponse
+  suspend fun sourceProfiles(): List<SourceProfileDto>
   /** The content languages `GET /api/languages` offers, codes only. */
   suspend fun languages(): List<LanguageDto>
   /** Writes exactly one personal preference; the server refuses an instance key in the body. */

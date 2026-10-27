@@ -247,6 +247,10 @@
   <string name="bulk_source_strategy">Výběr zdroje</string>
   <string name="bulk_strategy_largest">Největší vyhovující soubor</string>
   <string name="bulk_strategy_priority">Nejdřív preferovaný doplněk</string>
+  <string name="source_profile_travel">Na cesty (malé soubory)</string>
+  <string name="source_profile_travel_hint">Nejmenší soubor alespoň 480p ve vašem jazyce. Hodí se pro pomalé nebo měřené připojení.</string>
+  <string name="source_profile_provider_priority">Pořadí doplňků, ověřeně</string>
+  <string name="source_profile_provider_priority_hint">Zkouší doplňky ve vašem pořadí a vezme první soubor, u kterého ověřil, že odpovídá vašemu jazyku.</string>
   <string name="bulk_sources">Zdroje</string>
   <string name="save_adding">Přidávám…</string>
   <string name="save_target_default_library">Výchozí knihovna</string>
