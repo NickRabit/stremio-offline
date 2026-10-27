@@ -46,6 +46,7 @@ export interface RulesProfileResolverInput {
   readonly ownerUserId: string | undefined;
   readonly signal: AbortSignal;
   readonly cursor?: RulesContinuationCursorV1;
+  readonly finalTemporaryAttempt?: boolean;
 }
 
 type TravelUnselectedOutcome = Exclude<TravelAddonStreamOutcome, { status: "selected" }>;
@@ -400,7 +401,7 @@ export function createTravelProfileResolver(
 export function createRulesProfileResolver(
   deps: SourceResolverDeps,
 ): (input: RulesProfileResolverInput) => Promise<RulesProfileResolution> {
-  return async ({ source, snapshot, ownerUserId, signal, cursor }) => {
+  return async ({ source, snapshot, ownerUserId, signal, cursor, finalTemporaryAttempt }) => {
     const acquired = await acquireProfileAddons(deps, {
       source,
       snapshot,
@@ -422,6 +423,7 @@ export function createRulesProfileResolver(
       scopeStamp: acquired.scopeStamp,
       hasRealDebrid: deps.hasRealDebrid(),
       ...(cursor === undefined ? {} : { cursor }),
+      ...(finalTemporaryAttempt === undefined ? {} : { finalTemporaryAttempt }),
       tried: source.tried,
     });
     if (outcome.status !== "selected") return outcome;

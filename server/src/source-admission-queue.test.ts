@@ -3577,6 +3577,73 @@ test("a rules budget cursor is persisted, retryable, and eventually fails at its
   }
 });
 
+test("the rules temporary-failure limit stages a verified incumbent on the final attempt", async () => {
+  const { directory, data, downloads, state } = await setup();
+  const source = await countingServer();
+  const cursor = rulesCursor(1, [], [{
+    continuationKey: "a".repeat(64),
+    audioTier: "preferred",
+    heightPixels: 720,
+    subtitleTier: "unknown",
+  }]);
+  await writeFile(state, JSON.stringify([{
+    ...rawLazyJob(rulesSnapshot()),
+    ownerUserId: QUEUE_OWNER,
+    rulesCursor: cursor,
+    rulesTemporaryFailures: 3,
+  }], null, 2));
+  const queue = openQueue(data, downloads);
+  let calls = 0;
+  queue.setRulesResolver(async (input) => {
+    calls += 1;
+    assert.equal(input.finalTemporaryAttempt, true);
+    return selectedRules(source.url);
+  });
+  try {
+    await queue.load();
+    await waitFor(queue, () => queue.get("job-source-admission")?.status === "completed");
+    assert.equal(calls, 1);
+    assert.equal(source.requests(), 1);
+    assert.equal(internalJobs(queue)[0]?.stream?.url, source.url);
+  } finally {
+    await queue.stop();
+    source.server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("the rules temporary-failure limit still fails without a verified incumbent", async () => {
+  const { directory, data, downloads, state } = await setup();
+  await writeFile(state, JSON.stringify([{
+    ...rawLazyJob(rulesSnapshot()),
+    ownerUserId: QUEUE_OWNER,
+    rulesCursor: rulesCursor(1),
+    rulesTemporaryFailures: 3,
+  }], null, 2));
+  const queue = openQueue(data, downloads);
+  let calls = 0;
+  queue.setRulesResolver(async (input) => {
+    calls += 1;
+    assert.equal(input.finalTemporaryAttempt, true);
+    return {
+      status: "temporaryFailure",
+      retryable: true,
+      observations: { ...emptyObservations, temporaryFailures: 1 },
+      cursor: input.cursor!,
+    };
+  });
+  try {
+    await queue.load();
+    await waitFor(queue, () => queue.get("job-source-admission")?.status === "failed");
+    assert.equal(calls, 1);
+    assert.equal(queue.get("job-source-admission")?.errorKey, "err.noMatchingSource");
+    assert.equal(internalJobs(queue)[0]?.rulesCursor, undefined);
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("load accepts a rules cursor only on an unresolved rules job", async () => {
   const { directory, data, downloads, state } = await setup();
   const cursor = rulesCursor(3, [0], [{

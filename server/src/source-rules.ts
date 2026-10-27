@@ -48,6 +48,7 @@ export interface VerifyRulesCandidatesInput {
   readonly scopeStamp: unknown;
   readonly hasRealDebrid: boolean;
   readonly cursor?: RulesContinuationCursorV1;
+  readonly finalTemporaryAttempt?: boolean;
 }
 
 export interface RulesObservationSummary {
@@ -404,7 +405,10 @@ const optimisticRanking = (
   }
   return {
     ...base,
-    audioTier: snapshot.policy.constraints.audio.mode === "strict" ? "preferred" : base.audioTier,
+    audioTier: snapshot.policy.constraints.audio.mode === "strict"
+      || snapshot.policy.constraints.audio.mode === "preferred"
+      ? "preferred"
+      : base.audioTier,
     ...(heightPixels === undefined ? {} : { heightPixels }),
   };
 };
@@ -485,7 +489,8 @@ export async function verifyRulesCandidates(
     || input.snapshot === null || typeof input.snapshot !== "object"
     || !Array.isArray(input.candidates) || input.candidates.length > MAX_CANDIDATES
     || typeof input.inspect !== "function" || typeof input.shouldContinue !== "function"
-    || typeof input.hasRealDebrid !== "boolean") {
+    || typeof input.hasRealDebrid !== "boolean"
+    || (input.finalTemporaryAttempt !== undefined && typeof input.finalTemporaryAttempt !== "boolean")) {
     return invalid();
   }
   let snapshot: SourceAdmissionSnapshotV1;
@@ -565,6 +570,7 @@ export async function verifyRulesCandidates(
 
   let nextIndex = sameCursor !== undefined && sorted.length > 0 ? sameCursor.nextIndex : 0;
   const inspectedThisAttempt = new Set<number>();
+  const temporarilyFailed = new Set<number>();
   const unresolved = new Set<number>();
   let probesUsed = 0;
   let confirmedRejections = 0;
@@ -585,13 +591,20 @@ export async function verifyRulesCandidates(
     const optimistic = optimisticRanking(sorted[index]!.candidate, snapshot, index);
     return comparePreference(snapshot, optimistic, incumbent) < 0;
   };
+  const canStillBeat = (index: number, incumbent: RankedCandidate | undefined): boolean => {
+    if (!isAvailable(index) && !temporarilyFailed.has(index)) return false;
+    if (!incumbent) return true;
+    const optimistic = optimisticRanking(sorted[index]!.candidate, snapshot, index);
+    return comparePreference(snapshot, optimistic, incumbent) < 0;
+  };
   const nextProbe = (incumbent: RankedCandidate | undefined): number | undefined => {
     if (sorted.length === 0) return undefined;
     let best: { index: number; claimRank: number } | undefined;
     for (let visited = 0; visited < sorted.length; visited++) {
       const index = (nextIndex + visited) % sorted.length;
       if (!canBeat(index, incumbent)) continue;
-      const claimRank = snapshot.policy.constraints.audio.mode === "strict"
+      const audioMode = snapshot.policy.constraints.audio.mode;
+      const claimRank = audioMode === "strict" || audioMode === "preferred"
         ? tierRank[listingAudioTier(sorted[index]!.candidate, snapshot)]
         : 0;
       if (!best || claimRank < best.claimRank) best = { index, claimRank };
@@ -642,6 +655,7 @@ export async function verifyRulesCandidates(
     }
     if (result?.status === "temporaryFailure") {
       temporaryFailures++;
+      temporarilyFailed.add(index);
       unresolved.add(index);
       continue;
     }
@@ -672,11 +686,12 @@ export async function verifyRulesCandidates(
     } else {
       unresolved.add(index);
       temporaryFailures++;
+      temporarilyFailed.add(index);
     }
   }
 
   const incumbent = rankedVerified()[0];
-  const remainingPotential = sorted.some((_entry, index) => canBeat(index, incumbent));
+  const remainingPotential = sorted.some((_entry, index) => canStillBeat(index, incumbent));
   const observationsValue = observations({
     probesUsed,
     confirmedRejections,
@@ -703,6 +718,9 @@ export async function verifyRulesCandidates(
   }
   if (unresolved.size > 0) {
     if (temporaryFailures > 0) {
+      if (incumbent && input.finalTemporaryAttempt === true) {
+        return selected(incumbent, observationsValue);
+      }
       return {
         status: "temporaryFailure",
         retryable: true,

@@ -162,6 +162,38 @@ test("strict audio probes claimed preferred language first", async () => {
   assert.deepEqual(calls, ["en", "cs", "none"]);
 });
 
+test("preferred audio does not treat a lower-ranked listing claim as a ceiling", async () => {
+  const listedPreferred = candidate(stream("English release 1080p", { size: 100 }));
+  const listedOther = candidate(stream("Czech release 1080p", { size: 200 }));
+  const calls: string[] = [];
+  const result = await verifyRulesCandidates({
+    snapshot: snapshot({
+      resolution: { min: 720, max: 1080 },
+      audio: { mode: "prefer", fallback: null },
+      preference: ["language", "smaller"],
+    }),
+    candidates: [listedOther, listedPreferred],
+    inspect: async (source) => {
+      const actualAudio = source.sourceId === listedPreferred.sourceId ? "cs" : "en";
+      calls.push(actualAudio);
+      return {
+        status: "ok",
+        candidate: inspectedAddonSourceEvidence(source, media(1080, [actualAudio])),
+      };
+    },
+    shouldContinue: () => true,
+    scopeStamp: "preferred-audio-ceiling",
+    hasRealDebrid: false,
+  });
+
+  assert.equal(result.status, "selected");
+  assert.deepEqual(calls, ["cs", "en"]);
+  if (result.status === "selected") {
+    assert.equal(result.selection.candidate.sourceId, listedOther.sourceId);
+    assert.equal(result.selection.audioTier, "preferred");
+  }
+});
+
 test("a grace-strict snapshot rejects fallback audio that the original preferred snapshot accepts", async () => {
   const source = candidate(stream("Czech release 720p"));
   const inspect = async (value: SourceEvidenceCandidateV1) => ({
@@ -223,6 +255,48 @@ test("an unknown-height row is probed while it can beat a verified 720p", async 
   assert.equal(result.status, "selected");
   assert.deepEqual(calls, ["720", "unknown"]);
   if (result.status === "selected") assert.equal(result.selection.heightPixels, 1080);
+});
+
+test("a temporary failure keeps an unknown-height row in the search and preserves the incumbent", async () => {
+  const incumbent = candidate(stream("Czech release 720p"));
+  const unknown = candidate(stream("Czech episode"));
+  const calls: string[] = [];
+  const input = {
+    snapshot: snapshot({
+      resolution: { min: 720, max: 1080 },
+      audio: { mode: "prefer", fallback: "cs" },
+      preference: ["resolutionHigher"],
+    }),
+    candidates: [incumbent, unknown],
+    inspect: async (source: SourceEvidenceCandidateV1) => {
+      calls.push(source.sourceId);
+      if (source.sourceId === unknown.sourceId) return { status: "temporaryFailure" as const };
+      return {
+        status: "ok" as const,
+        candidate: inspectedAddonSourceEvidence(source, media(720, ["cs"])),
+      };
+    },
+    shouldContinue: () => true,
+    scopeStamp: "temporary-height-retry",
+    hasRealDebrid: false,
+  };
+
+  const first = await verifyRulesCandidates(input);
+  assert.equal(first.status, "temporaryFailure");
+  assert.deepEqual(calls, [incumbent.sourceId, unknown.sourceId]);
+  if (first.status !== "temporaryFailure") return;
+  assert.equal(first.cursor.verified.length, 1);
+  assert.equal(first.cursor.verified[0]?.heightPixels, 720);
+
+  const finalAttempt = await verifyRulesCandidates({
+    ...input,
+    cursor: first.cursor,
+    finalTemporaryAttempt: true,
+  });
+  assert.equal(finalAttempt.status, "selected");
+  if (finalAttempt.status === "selected") {
+    assert.equal(finalAttempt.selection.candidate.sourceId, incumbent.sourceId);
+  }
 });
 
 test("a worse size hint is not probed after the verified height reaches the maximum", async () => {

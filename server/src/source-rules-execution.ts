@@ -29,6 +29,7 @@ export interface VerifyRulesAddonStreamsInput {
   readonly scopeStamp: unknown;
   readonly hasRealDebrid: boolean;
   readonly cursor?: RulesContinuationCursorV1;
+  readonly finalTemporaryAttempt?: boolean;
   readonly tried?: readonly string[];
 }
 
@@ -193,6 +194,9 @@ export async function verifyRulesAddonStreams(
     scopeStamp: input.scopeStamp,
     hasRealDebrid: input.hasRealDebrid,
     ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+    ...(input.finalTemporaryAttempt === undefined
+      ? {}
+      : { finalTemporaryAttempt: input.finalTemporaryAttempt }),
   });
   if (outcome.status !== "selected") return outcome;
 

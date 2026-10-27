@@ -2322,6 +2322,9 @@ export class DownloadQueue {
         ownerUserId: this.ownerOf(job),
         signal: controller.signal,
         ...(job.rulesCursor === undefined ? {} : { cursor: job.rulesCursor }),
+        ...((job.rulesTemporaryFailures ?? 0) >= RULES_TEMPORARY_FAILURE_LIMIT
+          ? { finalTemporaryAttempt: true }
+          : {}),
       });
       controller.signal.throwIfAborted();
 
