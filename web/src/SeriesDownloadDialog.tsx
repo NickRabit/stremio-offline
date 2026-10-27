@@ -5,6 +5,7 @@ import { api, describeError } from "./api";
 import { languageName, t, useI18n } from "./i18n";
 import { SaveTargetFields } from "./SaveTargetFields";
 import type { SaveTarget } from "./save-target";
+import { sourceProfileCopy, type SourceProfileNameKey } from "./source-profile-copy";
 import type { Addon, AudioMode, DownloadSelection, DownloadSourceStrategy, FollowAutoDownload, FollowDefaults, FollowPreview, FollowStartMode, FollowView, LibraryView, ProfileSelection, SourceProfile, SubtitleMode } from "./types";
 
 interface Episode { id: string; season?: number; episode?: number; title?: string; released?: string }
@@ -13,14 +14,7 @@ type SourceChoice = DownloadSourceStrategy | `profile:${string}`;
 const PROFILE_VALUE_PREFIX = "profile:";
 const profileValue = (id: string): SourceChoice => `${PROFILE_VALUE_PREFIX}${id}`;
 const isProfileValue = (value: SourceChoice): value is `profile:${string}` => value.startsWith(PROFILE_VALUE_PREFIX);
-const SOURCE_PROFILE_COPY = {
-  "sourceProfile.recommended": { name: "sourceProfile.recommended" },
-  "sourceProfile.providerPriority": { name: "sourceProfile.providerPriority", hint: "sourceProfile.providerPriorityHint" },
-  "sourceProfile.travel": { name: "sourceProfile.travel", hint: "sourceProfile.travelHint" },
-} as const;
-type SourceProfileNameKey = keyof typeof SOURCE_PROFILE_COPY;
 type UsableSourceProfile = SourceProfile & { nameKey: SourceProfileNameKey };
-const profileCopy = (key: string) => SOURCE_PROFILE_COPY[key as SourceProfileNameKey];
 
 /** What a proposed start would fetch at once, worked out from the episodes on screen while
  *  the follow does not exist yet and the server cannot be asked. */
@@ -151,7 +145,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
     api.sourceProfiles().then((items) => {
       if (stale) return;
       const usable = items.filter((profile): profile is UsableSourceProfile => Boolean(
-        profile.operations.includes("downloadToLibrary") && profileCopy(profile.nameKey),
+        profile.operations.includes("downloadToLibrary") && sourceProfileCopy(profile.nameKey),
       ));
       setProfiles(usable);
       if (initial?.sourceProfile) {
@@ -352,7 +346,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
               <span><strong>{t(strategy === "largest" ? "bulk.strategyLargest" : "bulk.strategyPriority")}</strong><small>{t(strategy === "largest" ? "bulk.strategyLargestHint" : "bulk.strategyPriorityHint")}</small></span>
             </label>)}
             {profiles.map((profile) => {
-              const copy = profileCopy(profile.nameKey);
+              const copy = sourceProfileCopy(profile.nameKey);
               const value = profileValue(profile.id);
               return <label key={profile.id} className={sourceChoice === value ? "selected" : ""}>
                 <input type="radio" name="source-strategy" value={value} checked={sourceChoice === value} onChange={() => chooseSource(value)}/>

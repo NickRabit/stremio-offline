@@ -10,6 +10,7 @@ import { HomeLayoutSettings } from "./HomeLayoutSettings";
 import { Heading, SettingControl, SettingsSectionHead } from "./settings-ui";
 import { LOCALES, LOCALE_NAMES, languageName, localeTag, t, useI18n, type Key, type Locale } from "./i18n";
 import type { BuildInfo, LibraryView, SearchState, Session, Settings as AppSettings, SettingsPatch } from "./types";
+import { SourceProfilesSettings } from "./SourceProfilesSettings";
 import { UserManager } from "./UserManager";
 
 export function TmdbSettings({ configured, onSave, onError, restricted = false }: { configured: boolean; onSave: (patch: SettingsPatch) => Promise<void>; onError: (error: unknown) => void; restricted?: boolean }) {
@@ -208,6 +209,7 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
           <select aria-label={t("settings.segments")} disabled={restricted || !admin} value={settings.downloadSegments ?? 1} onChange={(event) => void onSave({ downloadSegments: Number(event.target.value) })}>
             {[1,2,3,4,6,8].map((value) => <option key={value} value={value}>{value}</option>)}
           </select></SettingControl>}</section>
+      {admin && !restricted && <SourceProfilesSettings />}
       </>}
       {tab === "services" && <>
       {admin && <TmdbSettings configured={settings.tmdbConfigured} onSave={onSave} onError={onError} restricted={restricted || !admin}/>}

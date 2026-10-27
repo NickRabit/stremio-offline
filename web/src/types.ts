@@ -276,6 +276,35 @@ export interface SourceProfile {
   operations: Array<"play" | "downloadToLibrary" | "downloadToDevice">;
   policy: unknown;
 }
+export type SourceProfileTemplate = "recommended" | "travel" | "providerPriority";
+export type SourceProfileScope = { mode: "allAvailable" } | { mode: "selected"; addonKeys: string[] };
+export type SourceProfileProviderOrder = { from: "viewer" } | { addonKeys: string[] };
+export interface TravelParameters {
+  scope: SourceProfileScope;
+  providerOrder: SourceProfileProviderOrder;
+  audioMode: "listed" | "preferred" | "strict";
+  subtitleMode: "off" | "optional" | "required";
+  heightPixels: { min: number; max?: number };
+}
+export interface ProviderPriorityParameters {
+  scope: SourceProfileScope;
+  providerOrder: SourceProfileProviderOrder;
+  sizeDirection: "asc" | "desc";
+  transfer: Array<"http" | "torrent">;
+  audioMode: "listed" | "preferred";
+  subtitleMode: "off" | "optional";
+}
+/** An administrator's stored profile, including variants the public catalogue hides behind a name. */
+export interface AdminSourceProfile {
+  id: string;
+  revision: number;
+  template: SourceProfileTemplate;
+  nameKey?: string;
+  name?: string;
+  parameters?: TravelParameters | ProviderPriorityParameters;
+  createdAt: string;
+  updatedAt: string;
+}
 export interface SourceProfileReference {
   profileId: string;
   revision: number;
