@@ -16,6 +16,8 @@ const packageDirOf = (name, fromDir) => {
 
 const seen = new Map();
 const visit = (name, fromDir) => {
+  // Workspace packages are first-party and covered by the repository licence.
+  if (name.startsWith("@stremio-offline/")) return;
   const dir = packageDirOf(name, fromDir);
   const manifest = JSON.parse(readFileSync(path.join(dir, "package.json"), "utf8"));
   const key = `${manifest.name}@${manifest.version}`;

@@ -1,32 +1,14 @@
-import { bingeGroupLanguages, guessLanguages, leavesLanguageBlank } from "./languages";
+import { sourceLanguages, sourceSize, sourceText } from "@stremio-offline/source-selection";
 import type { Stream } from "./types";
 
-/** Everything the addon wrote about the source. It sends neither language nor size as data; they tend to be in here. */
-export const streamText = (stream: Stream) =>
-  [stream.name, stream.title, stream.description, stream.behaviorHints?.filename].filter(Boolean).join(" ");
-
-const UNITS: Record<string, number> = { tb: 1e12, gb: 1e9, mb: 1e6, kb: 1e3, t: 1e12, g: 1e9 };
-// Torrentio does not send the size in behaviorHints at all, only in the text as "💾 35.09 GB",
-// and Luna abbreviates it to "2.2G". The bitrate sits in the same line ("2 Mb/s"), one unit away
-// from a megabyte, and taking it for the size turned a 2.2 GB film into 2 MB.
-const SIZE = /(\d+(?:[.,]\d+)?)\s*(TB|GB|MB|KB|T|G)\b(?!\s*(?:\/\s*s|ps|it)\b)/gi;
+export const streamText = (stream: Stream): string => sourceText(stream);
 
 export function streamSize(stream: Stream): number | undefined {
-  const hinted = stream.behaviorHints?.videoSize;
-  if (typeof hinted === "number" && hinted > 0) return hinted;
-  const matches = [...streamText(stream).matchAll(SIZE)];
-  const match = matches[matches.length - 1];
-  if (!match) return undefined;
-  const value = Number(match[1].replace(",", "."));
-  const unit = UNITS[match[2].toLowerCase()];
-  return Number.isFinite(value) && unit ? Math.round(value * unit) : undefined;
+  return sourceSize(stream);
 }
 
-/** `titleLanguage` stands in only for a source whose addon admitted it found no language. */
 export function streamLanguages(stream: Stream, titleLanguage?: string): string[] {
-  const found = [...new Set([...guessLanguages(streamText(stream)), ...bingeGroupLanguages(stream.behaviorHints?.bingeGroup)])];
-  if (found.length || !titleLanguage || !leavesLanguageBlank(stream.behaviorHints?.bingeGroup)) return found;
-  return [titleLanguage];
+  return sourceLanguages(stream, titleLanguage);
 }
 
 export type StreamSort = "recommended" | "size-desc" | "size-asc" | "addon";

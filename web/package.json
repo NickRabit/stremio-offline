@@ -12,6 +12,7 @@
     "build:desktop": "vite build --config vite.desktop.config.ts"
   },
   "dependencies": {
+    "@stremio-offline/source-selection": "*",
     "hls.js": "1.6.13",
     "lucide-react": "0.468.0",
     "react": "19.1.0",
