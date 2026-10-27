@@ -28,7 +28,10 @@ const episodeDate = (row: { released?: string; dateUncertain?: boolean }) =>
   row.dateUncertain ? `≈ ${row.released ? formatDay(row.released) : t("following.dateUnknown")}` : formatDay(row.released);
 const reasonText = (reason: { reasonKey?: string; reasonVars?: Record<string, string | number>; messageKey?: string; params?: Record<string, string | number> }) => {
   const key = reason.messageKey ?? reason.reasonKey;
-  return key ? serverText(key, key, reason.params ?? reason.reasonVars) : "";
+  const vars = reason.params ?? reason.reasonVars;
+  // The server names a language by its code; the sentence wants its name.
+  const named = vars?.language === undefined ? vars : { ...vars, language: languageName(String(vars.language)) };
+  return key ? serverText(key, key, named) : "";
 };
 
 export function FollowDialog({ follow, videos, libraries, canRetain = false, downloadSourceProfileId, followSourceProfileId, onRememberDownloadSourceProfile, onRememberFollowSourceProfile, onChanged, onClose, onNotify }: {

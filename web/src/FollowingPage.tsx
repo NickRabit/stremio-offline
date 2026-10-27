@@ -6,7 +6,7 @@ import { copyText } from "./clipboard";
 import { FollowDialog } from "./FollowDialog";
 import { Heading } from "./settings-ui";
 import { TileArt } from "./TileArt";
-import { localeTag, serverText, t, useI18n } from "./i18n";
+import { languageName, localeTag, serverText, t, useI18n } from "./i18n";
 import type { ActivityItem, CalendarEpisodeState, CalendarItem, UndatedCalendarItem, FollowView, LibraryView, NewEpisode, TileShape } from "./types";
 
 interface FollowingPageProps {
@@ -407,7 +407,7 @@ function ActivityTab({ onNotify }: { onNotify: (text: string) => void }) {
       return <div className="following-activity-row" key={`${item.followId}:${key}`}>
         <span className="following-activity-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <Film/>}</span>
         <span className="following-activity-copy"><strong>{`${item.name} · ${codeOf(item)}${item.title ? ` · ${item.title}` : ""}`}</strong>
-          <span className="following-activity-meta"><StatePill state={item.state}/>{item.reasonKey && item.state !== "skipped" ? <small>{serverText(item.reasonKey, "")}</small> : null}{item.state === "waiting" && item.nextAttemptAt ? <small>{t("follow.nextAttempt", { time: formatWhen(item.nextAttemptAt) })}</small> : null}</span>
+          <span className="following-activity-meta"><StatePill state={item.state}/>{item.reasonKey && item.state !== "skipped" ? <small>{serverText(item.reasonKey, "", item.reasonVars?.language === undefined ? item.reasonVars : { ...item.reasonVars, language: languageName(String(item.reasonVars.language)) })}</small> : null}{item.state === "waiting" && item.nextAttemptAt ? <small>{t("follow.nextAttempt", { time: formatWhen(item.nextAttemptAt) })}</small> : null}</span>
         </span>
         <small className="following-activity-time">{formatWhen(item.updatedAt)}</small>
         <span className="following-activity-actions">

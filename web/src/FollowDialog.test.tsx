@@ -116,6 +116,8 @@ describe("FollowDialog", () => {
       { key: "1:2", season: 1, episode: 2, title: "Waiting", released: "2024-01-08", eligibility: "eligible", download: { state: "waiting", intent: "b", generation: 1, attempts: 1, nextAttemptAt: "2099-01-01T00:00:00.000Z", graceUntil: "2099-01-01T00:00:00.000Z", reasonKey: "err.waitingForPreferredAudio", reasonVars: { language: "en" }, updatedAt: "" } },
     ]);
     expect(rowFor("S01E02")!.textContent).toContain("Waiting for English audio");
+  });
+
   it("renders a waiting reason with the server's message parameters", async () => {
     await render(follow, [{
       key: "1:2", season: 1, episode: 2, title: "Waiting", released: "2024-01-08", eligibility: "eligible",

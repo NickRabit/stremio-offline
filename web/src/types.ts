@@ -745,7 +745,7 @@ export type CalendarEpisodeState = "upcoming" | "released" | FollowDownloadState
 export interface CalendarItem {
   followId: string; type: string; metaId: string; name: string; poster?: string;
   videoId: string; season: number; episode: number; title?: string; released: string;
-  state: CalendarEpisodeState; reasonKey?: string; nextAttemptAt?: string; ambiguous?: boolean;
+  state: CalendarEpisodeState; reasonKey?: string; reasonVars?: Record<string, string | number>; nextAttemptAt?: string; ambiguous?: boolean;
   dateUncertain?: boolean; releasedSource?: "addon" | "tmdb";
 }
 /** A calendar item with no date: the calendar lists these apart, under its grid. */
@@ -754,7 +754,7 @@ export type UndatedCalendarItem = Omit<CalendarItem, "released">;
 export interface ActivityItem {
   followId: string; type: string; metaId: string; name: string; poster?: string;
   season: number; episode: number; title?: string; state: FollowDownloadState;
-  reasonKey?: string; nextAttemptAt?: string; jobId?: string; updatedAt: string;
+  reasonKey?: string; reasonVars?: Record<string, string | number>; nextAttemptAt?: string; jobId?: string; updatedAt: string;
 }
 /** How many episodes a proposed start rule would queue right now. */
 export interface FollowPreview { count: number; episodes: Array<{ key: string; season: number; episode: number; title?: string }> }
