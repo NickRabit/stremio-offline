@@ -44,6 +44,7 @@ import cz.stremiooffline.tv.data.SearchableCatalogDto
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.ui.catalog.CatalogDetailArgs
 import cz.stremiooffline.tv.ui.catalog.MicIcon
+import cz.stremiooffline.tv.ui.catalog.RecentSearches
 import cz.stremiooffline.tv.ui.catalog.SearchScopePanel
 import cz.stremiooffline.tv.ui.catalog.VoiceLauncher
 import cz.stremiooffline.tv.ui.catalog.rememberVoiceSearch
@@ -156,6 +157,9 @@ fun GlobalSearchScreen(
     awaitFrame()
     runCatching { fieldFocus.requestFocus() }
   }
+  LaunchedEffect(viewModel) {
+    viewModel.refreshRecent()
+  }
   if (onBack != null) BackHandler { onBack() }
   BackHandler(enabled = stripExpanded) { stripExpanded = false }
   LaunchedEffect(scopePanel) {
@@ -256,18 +260,34 @@ fun GlobalSearchScreen(
       )
     }
 
-    GlobalSearchResults(
-      search = viewModel,
-      remoteApi = api,
-      onOpenCatalog = onOpenCatalog,
-      onOpenRemote = onOpenRemote,
-      onOpenLibrary = onOpenLibrary,
-      imageUrl = imageUrl,
-      modifier = Modifier.weight(1f),
-      gridFocus = gridFocus,
-      restoreToken = resultRestore,
-      clearFocusSignal = clearFocusSignal,
-    )
+    val showRecent = libraryScope == null && !state.submitted && draft.isBlank() && state.recent.isNotEmpty()
+    if (showRecent) {
+      Box(Modifier.weight(1f).fillMaxWidth()) {
+        RecentSearches(
+          items = state.recent,
+          fieldFocus = fieldFocus,
+          onPick = { picked ->
+            draft = picked
+            viewModel.submit(picked)
+          },
+          onForget = viewModel::forget,
+          firstRowUp = null,
+        )
+      }
+    } else {
+      GlobalSearchResults(
+        search = viewModel,
+        remoteApi = api,
+        onOpenCatalog = onOpenCatalog,
+        onOpenRemote = onOpenRemote,
+        onOpenLibrary = onOpenLibrary,
+        imageUrl = imageUrl,
+        modifier = Modifier.weight(1f),
+        gridFocus = gridFocus,
+        restoreToken = resultRestore,
+        clearFocusSignal = clearFocusSignal,
+      )
+    }
   }
 
   if (scopePanel) {

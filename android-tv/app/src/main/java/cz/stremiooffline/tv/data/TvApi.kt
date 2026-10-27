@@ -35,8 +35,20 @@ interface DetailApi {
   suspend fun setFavorite(path: String, favorite: Boolean): FavoriteToggleDto
 }
 
+/** The account's search history, shared by catalogue and global search. */
+interface SearchHistoryApi {
+  /** The account's recent searches and whether the server keeps them. */
+  suspend fun searchState(): SearchStateDto
+  /** Records one committed query; the server trims, dedupes and ignores it while saving is off. */
+  suspend fun recordSearch(query: String)
+  /** Drops one query from the history, answering the state that is left. */
+  suspend fun forgetSearch(query: String): SearchStateDto
+  /** Empties the history, answering the state that is left. */
+  suspend fun clearSearchHistory(): SearchStateDto
+}
+
 /** The catalogue calls: browse, search, metadata, streams, the watchlist and To library. */
-interface CatalogApi {
+interface CatalogApi : SearchHistoryApi {
   suspend fun catalogs(): List<CatalogDto>
   /** The libraries this account may see, each carrying whether it may queue a download there. */
   suspend fun libraries(): List<LibraryDto>
@@ -50,14 +62,6 @@ interface CatalogApi {
     throw ApiError(ApiFailure.Generic)
   suspend fun pageCatalogSearch(id: String): Int = throw ApiError(ApiFailure.Generic)
   suspend fun deleteCatalogSearch(id: String): Unit = throw ApiError(ApiFailure.Generic)
-  /** The account's recent searches and whether the server keeps them. */
-  suspend fun searchState(): SearchStateDto
-  /** Records one committed query; the server trims, dedupes and ignores it while saving is off. */
-  suspend fun recordSearch(query: String)
-  /** Drops one query from the history, answering the state that is left. */
-  suspend fun forgetSearch(query: String): SearchStateDto
-  /** Empties the history, answering the state that is left. */
-  suspend fun clearSearchHistory(): SearchStateDto
   suspend fun meta(type: String, id: String, language: String?): MetaDto
   suspend fun streamSources(type: String, id: String): List<StreamSourceDto>
   suspend fun streams(type: String, id: String, addon: String? = null): List<StreamDto>
@@ -89,7 +93,7 @@ interface CatalogApi {
   ): BulkDownloadResult
 }
 
-interface GlobalSearchApi {
+interface GlobalSearchApi : SearchHistoryApi {
   suspend fun searchEverywhereEnabled(): Boolean
   suspend fun searchable(): List<SearchableCatalogDto>
   suspend fun startGlobalSearch(body: GlobalSearchStartDto): GlobalSearchStartResultDto

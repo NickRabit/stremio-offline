@@ -9,6 +9,8 @@ import cz.stremiooffline.tv.data.GlobalSearchLibraryDto
 import cz.stremiooffline.tv.data.GlobalSearchPollDto
 import cz.stremiooffline.tv.data.GlobalSearchSnapshotDto
 import cz.stremiooffline.tv.data.GlobalSearchStartResultDto
+import cz.stremiooffline.tv.data.RecentSearchDto
+import cz.stremiooffline.tv.data.SearchStateDto
 import cz.stremiooffline.tv.ui.FakeTvApi
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -219,18 +221,100 @@ class GlobalSearchViewModelTest {
   }
 
   @Test
-  fun `global search never touches catalog history`() = runTest(dispatcher) {
+  fun `a submitted query is recorded once its first answer arrives`() = runTest(dispatcher) {
     val api = FakeTvApi()
     val viewModel = viewModel(api)
     viewModel.setActive(true)
     viewModel.submit("matrix")
     runCurrent()
 
+    assertEquals(listOf("matrix"), api.recordedSearches)
+    assertEquals(listOf("matrix"), viewModel.state.recent.map { it.query })
+    viewModel.setActive(false)
+  }
+
+  @Test
+  fun `a failed start records nothing`() = runTest(dispatcher) {
+    val api = FakeTvApi()
+    api.globalStartHandler = { throw ApiError(ApiFailure.Generic) }
+    val viewModel = viewModel(api)
+
+    viewModel.submit("matrix")
+    runCurrent()
+
+    assertTrue(api.recordedSearches.isEmpty())
+  }
+
+  @Test
+  fun `a filter change re-runs without recording again`() = runTest(dispatcher) {
+    val api = FakeTvApi()
+    val viewModel = viewModel(api)
+
+    viewModel.submit("matrix")
+    runCurrent()
+    viewModel.setKind(KindFilter.Movies)
+    runCurrent()
+
+    assertEquals(listOf("matrix"), api.recordedSearches)
+    assertEquals(2, api.globalStartCalls.size)
+  }
+
+  @Test
+  fun `nothing is recorded while saving is off`() = runTest(dispatcher) {
+    val api = FakeTvApi()
+    api.searchStateValue = SearchStateDto(saveHistory = false)
+    val viewModel = viewModel(api)
+
+    viewModel.refreshRecent()
+    runCurrent()
+    viewModel.submit("matrix")
+    runCurrent()
+
+    assertTrue(api.recordedSearches.isEmpty())
+  }
+
+  @Test
+  fun `forget drops the row and asks the server`() = runTest(dispatcher) {
+    val api = FakeTvApi()
+    api.searchStateValue = SearchStateDto(
+      recent = listOf(RecentSearchDto("a", "now"), RecentSearchDto("b", "then")),
+    )
+    val viewModel = viewModel(api)
+    viewModel.refreshRecent()
+    runCurrent()
+
+    viewModel.forget("a")
+    runCurrent()
+
+    assertEquals(listOf("a"), api.forgottenSearches)
+    assertEquals(listOf("b"), viewModel.state.recent.map { it.query })
+  }
+
+  @Test
+  fun `a library scope never touches history`() = runTest(dispatcher) {
+    val api = FakeTvApi()
+    api.searchStateValue = SearchStateDto(recent = listOf(RecentSearchDto("a", "now")))
+    val library = GlobalSearchViewModel(
+      api,
+      "library",
+      library = GlobalSearchLibraryDto("lib_ab12cd34", path = "Shows"),
+    ).also { running = it }
+    val fixedSources = GlobalSearchViewModel(
+      api,
+      "sources",
+      sources = setOf(SourceClass.Local),
+    ).also { running = it }
+
+    for (viewModel in listOf(library, fixedSources)) {
+      viewModel.refreshRecent()
+      viewModel.submit("matrix")
+      viewModel.forget("a")
+      runCurrent()
+    }
+
     assertEquals(0, api.searchStateCalls)
     assertTrue(api.recordedSearches.isEmpty())
     assertTrue(api.forgottenSearches.isEmpty())
-    assertEquals(0, api.clearHistoryCalls)
-    viewModel.setActive(false)
   }
 
   @Test

@@ -5,8 +5,12 @@ package cz.stremiooffline.tv.ui.search
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -27,14 +31,19 @@ import cz.stremiooffline.tv.data.GlobalSearchPollDto
 import cz.stremiooffline.tv.data.GlobalSearchSnapshotDto
 import cz.stremiooffline.tv.data.GlobalSearchSourceDto
 import cz.stremiooffline.tv.data.GlobalSearchStartResultDto
+import cz.stremiooffline.tv.data.RecentSearchDto
 import cz.stremiooffline.tv.data.RemoteItemDetailDto
 import cz.stremiooffline.tv.data.RemoteItemDto
 import cz.stremiooffline.tv.data.SearchScope
+import cz.stremiooffline.tv.data.SearchStateDto
 import cz.stremiooffline.tv.data.SearchableCatalogDto
 import cz.stremiooffline.tv.ui.FakeTvApi
+import cz.stremiooffline.tv.ui.catalog.TagSearchRecentList
 import cz.stremiooffline.tv.ui.catalog.TagSearchScopeAll
 import cz.stremiooffline.tv.ui.catalog.TagSearchScopePanel
 import cz.stremiooffline.tv.ui.catalog.VoiceLauncher
+import cz.stremiooffline.tv.ui.catalog.recentRemoveTag
+import cz.stremiooffline.tv.ui.catalog.recentSearchTag
 import cz.stremiooffline.tv.ui.catalog.scopeAddonTag
 import cz.stremiooffline.tv.ui.detail.RemoteDetailData
 import kotlinx.coroutines.CompletableDeferred
@@ -136,6 +145,10 @@ class GlobalSearchScreenTest {
     compose.waitForIdle()
   }
 
+  private fun focused(tag: String): Boolean =
+    compose.onAllNodes(isFocused()).fetchSemanticsNodes()
+      .any { it.config.getOrElse(SemanticsProperties.TestTag) { "" } == tag }
+
   private fun focus(tag: String) {
     compose.onNodeWithTag(tag).performSemanticsAction(SemanticsActions.RequestFocus)
     compose.waitForIdle()
@@ -148,6 +161,9 @@ class GlobalSearchScreenTest {
     compose.onNodeWithTag(TagGlobalSearchInput).performImeAction()
     compose.waitForIdle()
   }
+
+  private fun recent(vararg queries: String): List<RecentSearchDto> =
+    queries.map { RecentSearchDto(it, "now") }
 
   private fun searchable(
     addonKey: String,
@@ -192,6 +208,108 @@ class GlobalSearchScreenTest {
     compose.onNodeWithTag(TagGlobalSearchInput).performImeAction()
     compose.waitForIdle()
     assertEquals("matrix", api.globalStartCalls.single().query)
+  }
+
+  @Test
+  fun `recent searches show on an empty field`() {
+    val api = FakeTvApi()
+    api.searchStateValue = SearchStateDto(recent = recent("Heat", "Ronin"))
+    mount(api)
+
+    compose.onNodeWithText("Recent search").assertIsDisplayed()
+    compose.onNodeWithTag(recentSearchTag("Heat")).assertIsDisplayed()
+    compose.onNodeWithTag(recentSearchTag("Ronin")).assertIsDisplayed()
+  }
+
+  @Test
+  fun `OK on a recent search submits it`() {
+    val api = FakeTvApi()
+    api.searchStateValue = SearchStateDto(recent = recent("Heat", "Ronin"))
+    mount(api)
+
+    focus(recentSearchTag("Heat"))
+    press(Key.DirectionCenter)
+
+    assertEquals("Heat", api.globalStartCalls.single().query)
+    compose.onNodeWithTag(TagSearchRecentList).assertDoesNotExist()
+  }
+
+  @Test
+  fun `the cross forgets one recent search`() {
+    val api = FakeTvApi()
+    api.searchStateValue = SearchStateDto(recent = recent("Heat", "Ronin"))
+    mount(api)
+
+    focus(recentSearchTag("Heat"))
+    press(Key.DirectionRight)
+    compose.onNodeWithTag(recentRemoveTag("Heat")).assertIsFocused()
+    press(Key.DirectionCenter)
+
+    assertEquals(listOf("Heat"), api.forgottenSearches)
+    compose.onNodeWithTag(recentSearchTag("Heat")).assertDoesNotExist()
+    compose.onNodeWithTag(recentSearchTag("Ronin")).assertExists()
+  }
+
+  @Test
+  fun `typing hides the recent list`() {
+    val api = FakeTvApi()
+    api.searchStateValue = SearchStateDto(recent = recent("Heat", "Ronin"))
+    mount(api)
+
+    focus(TagGlobalSearchField)
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagGlobalSearchInput).performTextInput("mat")
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagSearchRecentList).assertDoesNotExist()
+  }
+
+  @Test
+  fun `Down from the field reaches the first recent search`() {
+    val api = FakeTvApi()
+    api.searchStateValue = SearchStateDto(recent = recent("Heat", "Ronin"))
+    mount(api)
+
+    focus(TagGlobalSearchField)
+    for (attempt in 1..3) {
+      if (focused(recentSearchTag("Heat"))) break
+      press(Key.DirectionDown)
+    }
+    compose.onNodeWithTag(recentSearchTag("Heat")).assertIsFocused()
+
+    press(Key.DirectionUp)
+
+    compose.onNodeWithTag(recentSearchTag("Heat")).assertIsNotFocused()
+    compose.onNodeWithTag(TagGlobalSearchField).assertIsNotFocused()
+  }
+
+  @Test
+  fun `a submitted search is remembered`() {
+    val api = FakeTvApi()
+    mount(api)
+
+    search("matrix")
+
+    assertEquals(listOf("matrix"), api.recordedSearches)
+  }
+
+  @Test
+  fun `a library-scoped search keeps no history`() {
+    val api = FakeTvApi()
+    api.searchStateValue = SearchStateDto(recent = recent("Heat", "Ronin"))
+    val scope = LibrarySearchScope(
+      library = GlobalSearchLibraryDto("lib1", path = "Shows"),
+      sources = listOf("local"),
+      title = "Films  ›  Shows",
+    )
+    mount(api, libraryScope = scope)
+
+    compose.onNodeWithTag(TagSearchRecentList).assertDoesNotExist()
+    assertEquals(0, api.searchStateCalls)
+
+    search("matrix")
+
+    assertTrue(api.recordedSearches.isEmpty())
   }
 
   @Test

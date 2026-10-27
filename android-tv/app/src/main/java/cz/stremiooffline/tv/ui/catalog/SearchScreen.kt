@@ -258,12 +258,14 @@ private sealed interface RecentFocus {
 
 /** The account's recent searches under the field: OK runs one, its button drops it. */
 @Composable
-private fun RecentSearches(
+internal fun RecentSearches(
   items: List<RecentSearchDto>,
   fieldFocus: FocusRequester,
   onPick: (String) -> Unit,
   onForget: (String) -> Unit,
   modifier: Modifier = Modifier,
+  /** Where Up from the first row goes; null leaves it to the geometry. */
+  firstRowUp: FocusRequester? = fieldFocus,
 ) {
   val rowFocuses = remember { mutableMapOf<String, FocusRequester>() }
   val removeFocuses = remember { mutableMapOf<String, FocusRequester>() }
@@ -296,8 +298,7 @@ private fun RecentSearches(
           query = entry.query,
           rowFocus = rowFocuses.getOrPut(entry.query) { FocusRequester() },
           removeFocus = removeFocuses.getOrPut(entry.query) { FocusRequester() },
-          // The first row walks back to the field; the others step up to the row above.
-          upFocus = if (index == 0) fieldFocus else null,
+          upFocus = if (index == 0) firstRowUp else null,
           onClick = { onPick(entry.query) },
           onRemove = {
             val at = items.indexOfFirst { it.query == entry.query }
