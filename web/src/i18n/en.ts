@@ -1025,6 +1025,7 @@ export const en = {
   "err.missingDownloadSources": "Pick at least one source addon.",
   "err.missingAudioLanguage": "Pick an audio language.",
   "err.missingSubtitleLanguage": "Pick a subtitle language.",
+  "err.selectionUpgradeRequired": "This download rule needs a newer server version. Update the server or choose another rule.",
   "err.invalidSourceProfileReference": "The source profile selection is invalid.",
   "err.sourceProfileUnavailable": "That source profile is unavailable.",
   "err.sourceProfileRevisionStale": "This source profile revision is no longer available.",

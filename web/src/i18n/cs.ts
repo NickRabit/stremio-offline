@@ -1020,6 +1020,7 @@ export const cs: Catalog = {
   "err.missingDownloadSources": "Vyberte alespoň jeden zdrojový doplněk.",
   "err.missingAudioLanguage": "Vyberte jazyk zvuku.",
   "err.missingSubtitleLanguage": "Vyberte jazyk titulků.",
+  "err.selectionUpgradeRequired": "Toto pravidlo stahování vyžaduje novější verzi serveru. Aktualizujte server nebo zvolte jiné pravidlo.",
   "err.invalidSourceProfileReference": "Výběr zdrojového profilu není platný.",
   "err.sourceProfileUnavailable": "Tento zdrojový profil není dostupný.",
   "err.sourceProfileRevisionStale": "Tato revize zdrojového profilu už není dostupná.",

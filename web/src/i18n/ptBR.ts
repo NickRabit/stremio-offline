@@ -979,6 +979,7 @@ export const ptBR: Catalog = {
   "err.missingDownloadSources": "Escolha pelo menos um complemento de origem.",
   "err.missingAudioLanguage": "Escolha um idioma de áudio.",
   "err.missingSubtitleLanguage": "Escolha um idioma de legenda.",
+  "err.selectionUpgradeRequired": "Esta regra de download precisa de uma versão mais recente do servidor. Atualize o servidor ou escolha outra regra.",
   "err.invalidSourceProfileReference": "A seleção do perfil de origem é inválida.",
   "err.sourceProfileUnavailable": "Esse perfil de origem não está disponível.",
   "err.sourceProfileRevisionStale": "Esta revisão do perfil de origem não está mais disponível.",

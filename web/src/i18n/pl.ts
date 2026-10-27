@@ -979,6 +979,7 @@ export const pl: Catalog = {
   "err.missingDownloadSources": "Wybierz co najmniej jeden dodatek źródłowy.",
   "err.missingAudioLanguage": "Wybierz język dźwięku.",
   "err.missingSubtitleLanguage": "Wybierz język napisów.",
+  "err.selectionUpgradeRequired": "Ta reguła pobierania wymaga nowszej wersji serwera. Zaktualizuj serwer lub wybierz inną regułę.",
   "err.invalidSourceProfileReference": "Wybór profilu źródłowego jest nieprawidłowy.",
   "err.sourceProfileUnavailable": "Ten profil źródłowy jest niedostępny.",
   "err.sourceProfileRevisionStale": "Ta wersja profilu źródłowego nie jest już dostępna.",

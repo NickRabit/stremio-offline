@@ -979,6 +979,7 @@ export const it: Catalog = {
   "err.missingDownloadSources": "Scegli almeno un componente aggiuntivo di origine.",
   "err.missingAudioLanguage": "Scegli una lingua audio.",
   "err.missingSubtitleLanguage": "Scegli una lingua per i sottotitoli.",
+  "err.selectionUpgradeRequired": "Questa regola di download richiede una versione più recente del server. Aggiorna il server o scegli un'altra regola.",
   "err.invalidSourceProfileReference": "La selezione del profilo di origine non è valida.",
   "err.sourceProfileUnavailable": "Quel profilo di origine non è disponibile.",
   "err.sourceProfileRevisionStale": "Questa revisione del profilo di origine non è più disponibile.",

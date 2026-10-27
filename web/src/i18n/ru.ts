@@ -979,6 +979,7 @@ export const ru: Catalog = {
   "err.missingDownloadSources": "Выберите хотя бы один исходный аддон.",
   "err.missingAudioLanguage": "Выберите язык аудио.",
   "err.missingSubtitleLanguage": "Выберите язык субтитров.",
+  "err.selectionUpgradeRequired": "Этому правилу загрузки нужна более новая версия сервера. Обновите сервер или выберите другое правило.",
   "err.invalidSourceProfileReference": "Выбор профиля источника недопустим.",
   "err.sourceProfileUnavailable": "Этот профиль источника недоступен.",
   "err.sourceProfileRevisionStale": "Эта редакция профиля источника больше не доступна.",

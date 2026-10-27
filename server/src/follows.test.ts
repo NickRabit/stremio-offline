@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import express from "express";
 import type { DownloadSelection } from "./downloads.js";
 import type { AppError } from "./errors.js";
 import { activityItems, aheadWindow, calendarFeed, calendarItems, downloadEligibility, effectiveSelection, FollowService, FollowStore, followStaggerMs, graceUntil, movieEpisode, normalizeFollowEpisodes, reconcileReleaseDates, seasonsForReconcile, undatedCalendarItems, type EpisodeDownload, type Follow, type FollowAutoDownload, type FollowDeps, type FollowEpisode, type FollowJob, type FollowQueue } from "./follows.js";
 import type { MediaInfo } from "./naming.js";
+import { registerFollowRoutes, type FollowDeps as FollowRouteDeps } from "./routes/follows.js";
 import { materializeSourceAdmissionPolicy, parseSourceAdmissionSnapshotV1, SourceAdmissionRejected, type SourceAdmissionSnapshotV1 } from "./source-admission.js";
 import { SOURCE_PROFILE_DEFINITIONS, SOURCE_PROFILE_IDS } from "./source-profiles.js";
 import type { MetaItem } from "./types.js";
@@ -1091,7 +1095,155 @@ test("changing the rules retries waiting episodes at once with the new selection
   assert.equal(q.added.length, 4);
 });
 
-test("known defect: a retry after a follow edit uses the edited selection instead of the admitted one", async (t) => {
+test("an automatic retry keeps the legacy selection and grace window frozen at admission", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const released = "2026-05-01T00:00:00.000Z";
+  let now = Date.parse(released) + 60 * 60_000;
+  const service = buildService(store, q, { now: () => now });
+  const admitted = rule({
+    graceDays: 3,
+    selection: {
+      ...selection(), addonKeys: ["czech"], audioLanguage: "cs",
+      fallbackAudioLanguage: "en", audioMode: "preferred",
+    },
+  });
+  const id = await seedSeries(store, [episode(1, 1, "v1", released)], admitted);
+
+  await service.admit(id);
+  const current = store.get(id)!.autoDownload!;
+  await service.setAutoDownload(id, "u1", {
+    ...current,
+    selection: { ...selection(), addonKeys: ["english"], audioLanguage: "en" },
+    graceDays: undefined,
+  });
+  q.fail(q.jobs[0].id, "err.noMatchingSource");
+  await service.sync();
+
+  now = Date.parse(released) + 2 * 60 * 60_000;
+  await service.sync();
+  const expectedInside = { ...admitted.selection, audioMode: "listed" as const };
+  delete expectedInside.fallbackAudioLanguage;
+  assert.deepEqual(q.retriedWith.at(-1), expectedInside);
+
+  q.fail(q.jobs[0].id, "err.noMatchingSource");
+  await service.sync();
+  now = Date.parse(released) + 3 * DAY;
+  await service.sync();
+  assert.deepEqual(q.retriedWith.at(-1), admitted.selection, "the frozen base rule returns when its window closes");
+
+  const download = store.get(id)!.episodes["1:1"].download!;
+  assert.deepEqual(download.legacyRule, { selection: admitted.selection, graceDays: 3 });
+});
+
+test("an explicit legacy retry uses and stores the current rule", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const service = buildService(store, q);
+  const original = rule({
+    graceDays: 3,
+    selection: { ...selection(), addonKeys: ["czech"], audioLanguage: "cs" },
+  });
+  const replacement = {
+    ...selection(), addonKeys: ["english"], audioLanguage: "en",
+  };
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], original);
+
+  await service.admit(id);
+  q.fail(q.jobs[0].id, "err.noMatchingSource");
+  await service.sync();
+  const current = store.get(id)!.autoDownload!;
+  await service.setAutoDownload(id, "u1", { ...current, selection: replacement, graceDays: undefined });
+  q.fail(q.jobs[0].id, "err.noMatchingSource");
+  await service.sync();
+
+  await service.retryEpisode(id, "u1", "1:1");
+  assert.deepEqual(q.retriedWith.at(-1), replacement);
+  assert.deepEqual(store.get(id)!.episodes["1:1"].download?.legacyRule, { selection: replacement });
+});
+
+test("a legacy episode stored before this change retries with the current rule", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  let now = NOW;
+  const service = buildService(store, q, { now: () => now });
+  const replacement = { ...selection(), addonKeys: ["current"], audioLanguage: "de" };
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule());
+
+  await service.admit(id);
+  await store.update(id, (current) => {
+    delete current.episodes["1:1"].download?.legacyRule;
+    current.autoDownload!.selection = replacement;
+  });
+  q.fail(q.jobs[0].id, "err.noMatchingSource");
+  await service.sync();
+  now += 60 * 60_000;
+  await service.sync();
+  assert.deepEqual(q.retriedWith.at(-1), replacement);
+});
+
+test("a malformed stored legacy rule is dropped without damaging the episode", async (t) => {
+  const { dir, store } = await withStore(t);
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule());
+  await store.update(id, (current) => {
+    current.episodes["1:1"].download = {
+      state: "queued",
+      intent: "f1:1:1:1",
+      generation: 1,
+      jobId: "job-1",
+      attempts: 0,
+      updatedAt: RELEASED,
+      legacyRule: { selection: selection(), graceDays: 31 },
+    } as unknown as EpisodeDownload;
+  });
+
+  const restarted = await loaded(dir);
+  const download = restarted.get(id)!.episodes["1:1"].download!;
+  assert.equal(download.state, "queued");
+  assert.equal(download.jobId, "job-1");
+  assert.equal(download.legacyRule, undefined);
+});
+
+test("the episodes API does not expose a legacy rule", async (t) => {
+  const { store } = await withStore(t);
+  const follow = await store.create({ ownerUserId: "u1", type: "series", metaId: "tt1", name: "Show" }, NOW);
+  await store.update(follow.id, (current) => {
+    current.episodes["1:1"] = {
+      ...episode(1, 1, "v1", RELEASED),
+      download: {
+        state: "queued", intent: `${follow.id}:1:1:1`, generation: 1,
+        jobId: "job-1", attempts: 0, updatedAt: RELEASED,
+        legacyRule: { selection: selection(), graceDays: 3 },
+      },
+    };
+  });
+  const app = express();
+  registerFollowRoutes(app, {
+    store: {},
+    currentUser: () => ({ id: "u1", role: "user" }),
+    follows: {},
+    followStore: store,
+    dataOf: () => ({}),
+    markersOf: () => ({}),
+    prefsOf: () => ({}),
+    cachedMeta: async () => null,
+    defaultDownloadLibrary: () => undefined,
+  } as unknown as FollowRouteDeps);
+  const server = app.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  try {
+    const { port } = server.address() as AddressInfo;
+    const response = await fetch(`http://127.0.0.1:${port}/api/follows/${follow.id}/episodes`);
+    assert.equal(response.status, 200);
+    const body = await response.text();
+    assert.doesNotMatch(body, /legacyRule/);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("an edit while waiting retries explicitly with the current selection", async (t) => {
   const { store } = await withStore(t);
   const q = fakeQueue();
   const service = buildService(store, q);
@@ -1109,9 +1261,10 @@ test("known defect: a retry after a follow edit uses the edited selection instea
   await service.setAutoDownload(id, "u1", { startMode: "new", selection: replacement });
 
   assert.deepEqual(q.added[0].source.selection?.addonKeys, ["admitted"], "admission scored the unchanged selection");
-  assert.deepEqual(q.retriedWith.at(-1)?.addonKeys, ["replacement"], "today the retry follows the live rule");
+  assert.deepEqual(q.retriedWith.at(-1)?.addonKeys, ["replacement"], "the explicit edit retries with the live rule");
   assert.deepEqual(q.retriedWith.at(-1)?.targetSettings, target, "the edited rule kept its target");
   assert.deepEqual(store.get(id)!.autoDownload?.retention, { afterWatchedDays: 7 }, "the edit kept retention");
+  assert.deepEqual(store.get(id)!.episodes["1:1"].download?.legacyRule?.selection.addonKeys, ["replacement"]);
 });
 
 test("switching automatic downloads off frees the shared budget for other follows", async (t) => {

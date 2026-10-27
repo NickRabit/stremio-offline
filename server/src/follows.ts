@@ -58,6 +58,11 @@ export interface FollowAutoDownload {
 
 export type EpisodeDownloadState = "reserved" | "queued" | "waiting" | "completed" | "skipped" | "attention";
 
+export interface LegacyDownloadRule {
+  selection: DownloadSelection;
+  graceDays?: number;
+}
+
 export interface EpisodeDownload {
   state: EpisodeDownloadState;
   /** `${followId}:${episodeKey}:${generation}`, matched against the queue across restarts. */
@@ -77,6 +82,7 @@ export interface EpisodeDownload {
   removedReason?: "retention";
   reasonKey?: string;
   sourceAdmission?: SourceAdmissionSnapshotV1;
+  legacyRule?: LegacyDownloadRule;
   updatedAt: string;
 }
 
@@ -374,23 +380,43 @@ export function downloadEligibility(follow: Follow, episode: FollowEpisode, now:
 /** The instant a follow's preferred-audio window closes, or nothing when it never waits. The
  *  clock runs from the episode's release, so a date the provider has not given leaves no window. */
 export function graceUntil(auto: FollowAutoDownload, episode: FollowEpisode): number | undefined {
-  const days = auto.graceDays;
+  return graceUntilDays(auto.graceDays, episode);
+}
+
+const graceUntilDays = (days: number | undefined, episode: FollowEpisode): number | undefined => {
   if (!days || days <= 0 || !episode.released) return undefined;
   const released = Date.parse(episode.released);
   return Number.isFinite(released) ? released + days * DAY_MS : undefined;
+};
+
+/** Applies the preferred-audio window to a rule frozen when an episode was admitted. */
+export function effectiveLegacySelection(rule: LegacyDownloadRule, episode: FollowEpisode, now: number): DownloadSelection {
+  const until = graceUntilDays(rule.graceDays, episode);
+  if (until === undefined || now >= until) return rule.selection;
+  const stripped: DownloadSelection = { ...rule.selection };
+  delete stripped.fallbackAudioLanguage;
+  if (stripped.audioMode === "preferred") stripped.audioMode = "listed";
+  return stripped;
 }
 
 /** The selection a follow hands to the queue right now: inside the window the fallback audio is
  *  dropped and a preferred mode softens to listed, so only the preferred language is accepted.
  *  A strict mode stays strict, and the window's end restores the saved rules unchanged. */
 export function effectiveSelection(auto: FollowAutoDownload, episode: FollowEpisode, now: number): DownloadSelection {
-  const until = graceUntil(auto, episode);
-  if (until === undefined || now >= until) return auto.selection;
-  const stripped: DownloadSelection = { ...auto.selection };
-  delete stripped.fallbackAudioLanguage;
-  if (stripped.audioMode === "preferred") stripped.audioMode = "listed";
-  return stripped;
+  return effectiveLegacySelection(auto, episode, now);
 }
+
+const legacyRuleFrom = (auto: FollowAutoDownload): LegacyDownloadRule | undefined => {
+  if (auto.sourceProfile) return undefined;
+  return {
+    selection: {
+      ...auto.selection,
+      addonKeys: [...auto.selection.addonKeys],
+      ...(auto.selection.targetSettings ? { targetSettings: { ...auto.selection.targetSettings } } : {}),
+    },
+    ...(auto.graceDays !== undefined ? { graceDays: auto.graceDays } : {}),
+  };
+};
 
 const FOLLOW_ADDON_LIMIT = 50;
 /** How far a calendar window may reach: a page reads two months, not a library dump. */
@@ -700,23 +726,53 @@ const sanitizeLoadedFollow = (follow: Follow): void => {
   if (!follow.episodes || typeof follow.episodes !== "object") return;
   for (const [episodeKey, episode] of Object.entries(follow.episodes)) {
     const download = episode?.download as unknown;
-    if (!download || typeof download !== "object" || Array.isArray(download)
-      || !Object.hasOwn(download, "sourceAdmission")) continue;
+    if (!download || typeof download !== "object" || Array.isArray(download)) continue;
     const record = download as Record<string, unknown>;
-    try {
-      record.sourceAdmission = parseDownloadSourceAdmissionSnapshotV1(record.sourceAdmission);
-    } catch (error) {
-      if (!(error instanceof SourceAdmissionValidationError)) throw error;
-      delete record.sourceAdmission;
-      delete record.jobId;
-      delete record.nextAttemptAt;
-      record.state = "attention";
-      record.reasonKey = "err.followJobMissing";
-      record.updatedAt = new Date().toISOString();
-      log("WARN", "A followed episode source admission could not be read", {
-        follow: follow.id,
-        episode: episodeKey,
-      });
+    if (Object.hasOwn(record, "sourceAdmission")) {
+      try {
+        record.sourceAdmission = parseDownloadSourceAdmissionSnapshotV1(record.sourceAdmission);
+      } catch (error) {
+        if (!(error instanceof SourceAdmissionValidationError)) throw error;
+        delete record.sourceAdmission;
+        delete record.jobId;
+        delete record.nextAttemptAt;
+        record.state = "attention";
+        record.reasonKey = "err.followJobMissing";
+        record.updatedAt = new Date().toISOString();
+        log("WARN", "A followed episode source admission could not be read", {
+          follow: follow.id,
+          episode: episodeKey,
+        });
+      }
+    }
+    if (Object.hasOwn(record, "legacyRule")) {
+      const value = record.legacyRule;
+      const rule = value && typeof value === "object" && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : undefined;
+      const loadedSelection = rule?.selection;
+      const selection = loadedSelection && typeof loadedSelection === "object" && !Array.isArray(loadedSelection)
+        ? loadedSelection as Record<string, unknown>
+        : undefined;
+      const validSelection = selection
+        && Array.isArray(selection.addonKeys)
+        && (selection.sourceStrategy === "largest" || selection.sourceStrategy === "priority")
+        && typeof selection.audioLanguage === "string"
+        && selection.audioLanguage.length > 0;
+      const validGrace = rule && (!Object.hasOwn(rule, "graceDays")
+        || (Number.isInteger(rule.graceDays) && Number(rule.graceDays) >= 0 && Number(rule.graceDays) <= 30));
+      if (validSelection && validGrace) {
+        record.legacyRule = {
+          selection: loadedSelection,
+          ...(Object.hasOwn(rule, "graceDays") ? { graceDays: rule.graceDays } : {}),
+        };
+      } else {
+        delete record.legacyRule;
+        log("WARN", "A followed episode legacy rule could not be read", {
+          follow: follow.id,
+          episode: episodeKey,
+        });
+      }
     }
   }
 };
@@ -923,6 +979,11 @@ export interface FollowQueue {
   get(id: string): { id: string; status: string; errorKey?: string } | undefined;
   retry(id: string, selection?: DownloadSelection): Promise<unknown>;
   remove(id: string): Promise<void>;
+}
+
+interface AdmissionReuse {
+  sourceAdmission?: SourceAdmissionSnapshotV1;
+  legacyRule?: LegacyDownloadRule;
 }
 
 export interface FollowDeps {
@@ -1232,7 +1293,9 @@ export class FollowService {
       if (download && (download.state !== "reserved" || jobs.has(download.intent))) continue;
       if (admitted >= ADMIT_PER_CALL) return;
       if (this.outstanding() >= OUTSTANDING_LIMIT) return;
-      await this.enqueueLocked(followId, revision, episode.key, download?.generation ?? 1, download?.sourceAdmission);
+      await this.enqueueLocked(followId, revision, episode.key, download?.generation ?? 1, download
+        ? { sourceAdmission: download.sourceAdmission, legacyRule: download.legacyRule }
+        : undefined);
       admitted += 1;
     }
   }
@@ -1243,7 +1306,7 @@ export class FollowService {
     revision: number,
     episodeKey: string,
     generation: number,
-    reuse?: SourceAdmissionSnapshotV1,
+    reuse?: AdmissionReuse,
   ): Promise<void> {
     const before = this.admittable(followId, revision);
     const episode = before?.episodes[episodeKey];
@@ -1251,11 +1314,12 @@ export class FollowService {
     const intent = this.intentOf(followId, episodeKey, generation);
     const sourceProfile = before.autoDownload!.sourceProfile;
     let sourceAdmission: SourceAdmissionSnapshotV1 | undefined;
+    let legacyRule: LegacyDownloadRule | undefined;
     if (sourceProfile) {
       try {
         const admit = this.deps.admitSourceProfile;
         if (!admit) throw new SourceAdmissionRejected("profileUnknown");
-        sourceAdmission = reuse ?? admit(before.ownerUserId, sourceProfile);
+        sourceAdmission = reuse?.sourceAdmission ?? admit(before.ownerUserId, sourceProfile);
       } catch (error) {
         if (!(error instanceof SourceAdmissionRejected)) throw error;
         await this.setDownload(followId, episodeKey, {
@@ -1264,15 +1328,21 @@ export class FollowService {
         });
         return;
       }
+    } else {
+      legacyRule = reuse?.legacyRule ?? legacyRuleFrom(before.autoDownload!);
     }
+    const frozen = {
+      ...(sourceAdmission ? { sourceAdmission } : {}),
+      ...(legacyRule ? { legacyRule } : {}),
+    };
     await this.setDownload(followId, episodeKey, {
-      state: "reserved", intent, generation, attempts: 0, ...(sourceAdmission ? { sourceAdmission } : {}), updatedAt: "",
+      state: "reserved", intent, generation, attempts: 0, ...frozen, updatedAt: "",
     });
     let follow = this.admittable(followId, revision);
     if (!follow) return;
     const selection = follow.autoDownload!.sourceProfile
       ? follow.autoDownload!.selection
-      : effectiveSelection(follow.autoDownload!, episode, this.deps.now());
+      : effectiveLegacySelection(legacyRule!, episode, this.deps.now());
     const job = await this.deps.queue.addPending(
       this.jobTitle(follow, episode),
       { type: follow.type, videoId: episode.videoId, selection },
@@ -1289,8 +1359,8 @@ export class FollowService {
     if (existing) await this.deps.queue.adopt(existing.id, { followId, episodeKey, intent });
     const linked = job ?? existing;
     await this.setDownload(followId, episodeKey, linked
-      ? { state: "queued", intent, generation, jobId: linked.id, attempts: 0, ...(sourceAdmission ? { sourceAdmission } : {}), updatedAt: "" }
-      : { state: "attention", intent, generation, attempts: 0, reasonKey: "err.followJobMissing", ...(sourceAdmission ? { sourceAdmission } : {}), updatedAt: "" });
+      ? { state: "queued", intent, generation, jobId: linked.id, attempts: 0, ...frozen, updatedAt: "" }
+      : { state: "attention", intent, generation, attempts: 0, reasonKey: "err.followJobMissing", ...frozen, updatedAt: "" });
   }
 
   /** Records a job's own verdict on the episode it was queued for. */
@@ -1311,7 +1381,11 @@ export class FollowService {
     const attempts = download.attempts + 1;
     const follow = this.deps.store.get(followId);
     const episode = follow?.episodes[episodeKey];
-    const window = follow?.autoDownload && episode ? graceUntil(follow.autoDownload, episode) : undefined;
+    const window = follow?.autoDownload && episode
+      ? !follow.autoDownload.sourceProfile && download.legacyRule
+        ? graceUntilDays(download.legacyRule.graceDays, episode)
+        : graceUntil(follow.autoDownload, episode)
+      : undefined;
     const grace = window !== undefined && window > now ? window : undefined;
     const ladder = now + downloadLadderMs(attempts);
     await this.setDownload(followId, episodeKey, {
@@ -1356,14 +1430,20 @@ export class FollowService {
         if (!follow.enabled || !this.mayQueue(follow)) continue;
         const job = jobs.get(download.intent);
         if (job && job.status === "failed") {
-          await this.deps.queue.retry(job.id, effectiveSelection(follow.autoDownload!, follow.episodes[episodeKey], now));
+          const selection = !follow.autoDownload!.sourceProfile && download.legacyRule
+            ? effectiveLegacySelection(download.legacyRule, follow.episodes[episodeKey], now)
+            : effectiveSelection(follow.autoDownload!, follow.episodes[episodeKey], now);
+          await this.deps.queue.retry(job.id, selection);
           if (!this.fresh(follow.id, revision)) return;
           await this.setDownload(follow.id, episodeKey, { ...download, state: "queued", jobId: job.id, reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
         } else if (job && job.status === "completed") {
           await this.setDownload(follow.id, episodeKey, { ...download, ...(job.target ? { target: job.target } : {}), state: "completed", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
         } else if (!job && !download.jobId) {
           // The failed job was cleared from the queue on purpose; the episode is still wanted.
-          await this.enqueueLocked(follow.id, revision, episodeKey, download.generation + 1, download.sourceAdmission);
+          await this.enqueueLocked(follow.id, revision, episodeKey, download.generation + 1, {
+            sourceAdmission: download.sourceAdmission,
+            legacyRule: download.legacyRule,
+          });
         } else {
           await this.setDownload(follow.id, episodeKey, { ...download, state: "attention", jobId: undefined, reasonKey: "err.followJobMissing", nextAttemptAt: undefined, updatedAt: "" });
         }
@@ -1488,7 +1568,10 @@ export class FollowService {
       if (job && job.status === "failed") {
         await this.deps.queue.retry(job.id, effectiveSelection(follow.autoDownload!, episode, this.deps.now()));
         if (!this.admittable(followId, revision)) return;
-        await this.setDownload(followId, episode.key, { ...download, state: "queued", attempts: 0, reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
+        await this.setDownload(followId, episode.key, {
+          ...download, state: "queued", attempts: 0, reasonKey: undefined, nextAttemptAt: undefined,
+          legacyRule: legacyRuleFrom(follow.autoDownload!), updatedAt: "",
+        });
       } else if (!job) {
         await this.enqueueLocked(followId, revision, episode.key, download.generation + 1);
       }
@@ -1520,7 +1603,10 @@ export class FollowService {
       if (job && job.status === "failed") {
         await this.deps.queue.retry(job.id, follow.autoDownload ? effectiveSelection(follow.autoDownload, follow.episodes[episodeKey], this.deps.now()) : undefined);
         if (!this.fresh(followId, revision)) return;
-        await this.setDownload(followId, episodeKey, { ...download, state: "queued", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
+        await this.setDownload(followId, episodeKey, {
+          ...download, state: "queued", reasonKey: undefined, nextAttemptAt: undefined,
+          legacyRule: follow.autoDownload ? legacyRuleFrom(follow.autoDownload) : undefined, updatedAt: "",
+        });
         return;
       }
       if (!follow.autoDownload) return;

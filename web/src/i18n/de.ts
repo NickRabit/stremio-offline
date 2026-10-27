@@ -979,6 +979,7 @@ export const de: Catalog = {
   "err.missingDownloadSources": "Wählen Sie mindestens ein Quell-Add-on aus.",
   "err.missingAudioLanguage": "Wählen Sie eine Audiosprache.",
   "err.missingSubtitleLanguage": "Wählen Sie eine Untertitelsprache.",
+  "err.selectionUpgradeRequired": "Diese Download-Regel benötigt eine neuere Serverversion. Aktualisieren Sie den Server oder wählen Sie eine andere Regel.",
   "err.invalidSourceProfileReference": "Die Auswahl des Quellprofils ist ungültig.",
   "err.sourceProfileUnavailable": "Dieses Quellprofil ist nicht verfügbar.",
   "err.sourceProfileRevisionStale": "Diese Revision des Quellprofils ist nicht mehr verfügbar.",

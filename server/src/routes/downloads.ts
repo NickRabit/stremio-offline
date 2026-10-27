@@ -2,7 +2,7 @@ import { stat } from "node:fs/promises";
 import type express from "express";
 import { allowedAddons } from "../addons.js";
 import type { DeviceTransfers } from "../device-transfers.js";
-import { NoLibraryForKindError, isRemoteDownloadSource, ownerMayDownload, remoteDownloadRefused, remoteDownloadStream, type AudioMode, type DownloadQueue, type DownloadSelection, type SubtitleMode } from "../downloads.js";
+import { NoLibraryForKindError, isRemoteDownloadSource, ownerMayDownload, remoteDownloadRefused, remoteDownloadStream, type DownloadQueue, type DownloadSelection } from "../downloads.js";
 import { AppError } from "../errors.js";
 import { normalizeLanguage } from "../language.js";
 import { log } from "../logger.js";
@@ -111,6 +111,14 @@ const automaticRemoteTargetFor = (deps: SelectionDeps) =>
     return target;
   };
 
+/** Absent or null keeps the legacy default. A present value outside the set this server can
+ *  run is a newer rule, and is refused instead of being weakened into that default. */
+const acceptedSelectionMode = <T extends string>(value: unknown, allowed: readonly T[], fallback: T): T => {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value === "string" && (allowed as readonly string[]).includes(value)) return value as T;
+  throw new AppError("This download rule needs a newer server.", "err.selectionUpgradeRequired", 400);
+};
+
 /** Parses the lazy download body of a series into a `DownloadSelection`: the addon keys the
  *  caller may use, the strategy, the audio and subtitle rules, the title language and a
  *  concrete target. Shared so the bulk route and a follow's automatic rule cannot drift. */
@@ -134,12 +142,12 @@ export function createSelectionParser(deps: SelectionDeps): (req: express.Reques
       ? [...new Set(rawSelection.addonKeys.map(String))].filter((key) => usable.some((addon) => addon.key === key && addon.enabled && addon.role !== "catalog"))
       : [];
     if (!addonKeys.length) throw new AppError("Pick at least one stream addon.", "err.missingDownloadSources");
-    const sourceStrategy = String(rawSelection.sourceStrategy) === "largest" ? "largest" : "priority";
+    const sourceStrategy = acceptedSelectionMode(rawSelection.sourceStrategy, ["largest", "priority"] as const, "priority");
     const audioLanguage = normalizeLanguage(String(rawSelection.audioLanguage ?? ""));
     if (!audioLanguage) throw new AppError("Pick an audio language.", "err.missingAudioLanguage");
     const fallbackAudioLanguage = normalizeLanguage(String(rawSelection.fallbackAudioLanguage ?? ""));
-    const audioMode: AudioMode = ["strict", "preferred"].includes(String(rawSelection.audioMode)) ? String(rawSelection.audioMode) as AudioMode : "listed";
-    const subtitleMode: SubtitleMode = ["optional", "required"].includes(String(rawSelection.subtitleMode)) ? String(rawSelection.subtitleMode) as SubtitleMode : "off";
+    const audioMode = acceptedSelectionMode(rawSelection.audioMode, ["listed", "strict", "preferred"] as const, "listed");
+    const subtitleMode = acceptedSelectionMode(rawSelection.subtitleMode, ["off", "optional", "required"] as const, "off");
     const subtitleLanguage = subtitleMode === "off" ? undefined : normalizeLanguage(String(rawSelection.subtitleLanguage ?? ""));
     if (subtitleMode !== "off" && !subtitleLanguage) throw new AppError("Pick a subtitle language.", "err.missingSubtitleLanguage");
     const fallbackSubtitleLanguage = subtitleMode === "off" ? undefined : normalizeLanguage(String(rawSelection.fallbackSubtitleLanguage ?? ""));

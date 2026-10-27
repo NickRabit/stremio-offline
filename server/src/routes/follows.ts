@@ -422,7 +422,7 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
         eligibility: downloadEligibility(follow, episode, now, watched),
         ...(episode.download ? {
           download: Object.fromEntries(
-            Object.entries(episode.download).filter(([key]) => key !== "sourceAdmission"),
+            Object.entries(episode.download).filter(([key]) => key !== "sourceAdmission" && key !== "legacyRule"),
           ),
         } : {}),
       }))
