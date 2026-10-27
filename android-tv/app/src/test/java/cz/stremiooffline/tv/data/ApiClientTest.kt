@@ -233,7 +233,11 @@ class ApiClientTest {
       MockResponse().setBody(
         """{"profiles":[{"id":"travel","name":"Small files","revision":1,""" +
           """"operations":["play","downloadToLibrary"],"template":{"quality":480},""" +
-          """"policy":{"schemaVersion":1},"future":{"nested":true}}],"next":null}""",
+          """"policy":{"schemaVersion":1,"scope":{"mode":"allAvailable"},""" +
+          """"constraints":{"sourceKinds":["http"],"audio":{"mode":"strict","preferred":{"preference":"audio"},"extra":true},""" +
+          """"subtitles":{"mode":"off"},"heightPixels":{"min":480,"max":720},"bytes":{"max":4000000000},""" +
+          """"excludeReleaseKinds":["cam"]},"criteria":[],"nextEpisode":"profile",""" +
+          """"existingLocalCopy":"meetsRequirements","futurePolicy":1},"future":{"nested":true}}],"next":null}""",
       ),
     )
 
@@ -245,6 +249,10 @@ class ApiClientTest {
     assertEquals("Small files", profiles.single().name)
     assertEquals(1, profiles.single().revision)
     assertEquals(listOf("play", "downloadToLibrary"), profiles.single().operations)
+    assertEquals("strict", profiles.single().policy?.constraints?.audio?.mode)
+    assertEquals(480L, profiles.single().policy?.constraints?.heightPixels?.min)
+    assertEquals(720L, profiles.single().policy?.constraints?.heightPixels?.max)
+    assertEquals(4_000_000_000L, profiles.single().policy?.constraints?.bytes?.max)
   }
 
   @Test

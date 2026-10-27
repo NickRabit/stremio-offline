@@ -111,6 +111,30 @@ class DownloadApiTest {
     assertEquals(1, answer.skipped)
   }
 
+  @Test
+  fun `a rule selection is only the profile id and revision`() = runTest {
+    server.enqueue(MockResponse().setBody("""{"added":1,"skipped":0}"""))
+
+    client(start()).downloadBulk(
+      title = "Show",
+      type = "series",
+      episodes = listOf(BulkEpisodeDto("e1", 1, 1, "Pilot")),
+      selection = DownloadSelectionDto(profile = DownloadProfileRefDto("smaller", 4)),
+      media = BulkMediaDto(id = "tt1", metaType = "series", poster = "p.jpg"),
+      target = DownloadTargetDto("shows"),
+    )
+
+    val request = server.takeRequest()
+    assertEquals("/api/downloads/bulk", request.path)
+    assertEquals(
+      """{"title":"Show","type":"series",""" +
+        """"episodes":[{"id":"e1","season":1,"episode":1,"title":"Pilot"}],""" +
+        """"selection":{"profile":{"profileId":"smaller","revision":4}},""" +
+        """"media":{"id":"tt1","metaType":"series","poster":"p.jpg"},"target":{"libraryId":"shows"}}""",
+      request.body.readUtf8(),
+    )
+  }
+
   private fun start(): ServerAddress {
     server.start()
     return ServerAddress.parse(server.url("/").toString())!!
