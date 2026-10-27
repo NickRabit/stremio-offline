@@ -205,6 +205,34 @@ describe("SeriesDownloadDialog", () => {
     expect(host.querySelector('input[name="source-strategy"][value="profile:unknown-name"]')).toBeNull();
   });
 
+  it("offers and submits a named custom source profile without a translated hint", async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    fetchMock.mockImplementation(async (url: string) => {
+      const body = String(url) === "/api/source-profiles"
+        ? { profiles: [{
+            id: "kids-720",
+            name: "Kids 720p",
+            revision: 3,
+            template: "travel",
+            operations: ["downloadToLibrary"],
+            policy: {},
+          }] }
+        : [{ key: "first", name: "First" }];
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    await act(async () => { root.render(<SeriesDownloadDialog type="series" label="Season 1" title="Show" libraries={[]} addons={[]} episodes={[{ id: "tt1:1:1" }]} audioLanguage="cs" subtitleLanguage="cs" languages={[{ code: "cs", name: "Čeština" }]} onClose={() => undefined} onSubmit={onSubmit}/>); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    const option = host.querySelector<HTMLInputElement>('input[name="source-strategy"][value="profile:kids-720"]');
+    expect(option).not.toBeNull();
+    expect(option!.closest("label")?.textContent).toBe("Kids 720p");
+    await act(async () => { option!.click(); });
+    const add = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Add to queue"))!;
+    await act(async () => { add.click(); await Promise.resolve(); });
+
+    expect(onSubmit).toHaveBeenCalledWith({ profile: { profileId: "kids-720", revision: 3 } }, undefined);
+  });
+
   it("keeps the legacy source choices when source profiles fail to load", async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     fetchMock.mockImplementation(async (url: string) => {

@@ -1145,7 +1145,7 @@ export const es: Catalog = {
   "settings.sourceProfiles.transferHttp": "HTTP",
   "settings.sourceProfiles.transferTorrent": "Torrents de Real-Debrid",
   "settings.sourceProfiles.transferRequired": "Elige al menos uno.",
-  "settings.sourceProfiles.effect": "El cambio se aplica a las descargas nuevas y a los episodios posteriores de las series seguidas. Las descargas que ya están en la cola conservan sus reglas originales.",
+  "settings.sourceProfiles.effect": "Los cambios se aplican a las descargas nuevas y a las series seguidas configuradas posteriormente. Las series seguidas que ya usan este perfil y las descargas que ya están en la cola conservan sus reglas actuales hasta que se vuelva a guardar su configuración.",
   "settings.sourceProfiles.deleteTitle": "Eliminar perfil",
   "settings.sourceProfiles.deleteFallback": "Quienes lo tenían como predeterminado vuelven a elegir.",
   "settings.sourceProfiles.reload": "Cargar de nuevo",

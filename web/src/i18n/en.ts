@@ -1195,7 +1195,7 @@ export const en = {
   "settings.sourceProfiles.transferHttp": "HTTP",
   "settings.sourceProfiles.transferTorrent": "Real-Debrid torrents",
   "settings.sourceProfiles.transferRequired": "Choose at least one.",
-  "settings.sourceProfiles.effect": "The change applies to new downloads and to later episodes of followed series. Downloads already in the queue keep their original rules.",
+  "settings.sourceProfiles.effect": "Changes apply to new downloads and to follows set up afterwards. Follows already using this profile and downloads already in the queue keep their current rules until their setup is saved again.",
   "settings.sourceProfiles.deleteTitle": "Delete profile",
   "settings.sourceProfiles.deleteFallback": "People who had it as their default choose again.",
   "settings.sourceProfiles.reload": "Load again",

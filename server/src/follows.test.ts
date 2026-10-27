@@ -8,11 +8,12 @@ import { test } from "node:test";
 import express from "express";
 import type { DownloadSelection } from "./downloads.js";
 import type { AppError } from "./errors.js";
-import { activityItems, aheadWindow, calendarFeed, calendarItems, downloadEligibility, effectiveSelection, FollowService, FollowStore, followStaggerMs, graceUntil, movieEpisode, normalizeFollowEpisodes, reconcileReleaseDates, seasonsForReconcile, undatedCalendarItems, type EpisodeDownload, type Follow, type FollowAutoDownload, type FollowDeps, type FollowEpisode, type FollowJob, type FollowQueue } from "./follows.js";
+import { activityItems, aheadWindow, calendarFeed, calendarItems, downloadEligibility, effectiveSelection, FollowService, FollowStore, followStaggerMs, graceUntil, movieEpisode, normalizeFollowEpisodes, reconcileReleaseDates, seasonsForReconcile, undatedCalendarItems, type EpisodeDownload, type Follow, type FollowAutoDownload, type FollowDeps, type FollowEpisode, type FollowJob, type FollowQueue, type FollowSourceProfile } from "./follows.js";
 import type { MediaInfo } from "./naming.js";
 import { registerFollowRoutes, type FollowDeps as FollowRouteDeps } from "./routes/follows.js";
-import { materializeSourceAdmissionPolicy, parseSourceAdmissionSnapshotV1, SourceAdmissionRejected, type SourceAdmissionSnapshotV1 } from "./source-admission.js";
-import { SOURCE_PROFILE_DEFINITIONS, SOURCE_PROFILE_IDS } from "./source-profiles.js";
+import { materializeSourceAdmissionDefinition, materializeSourceAdmissionPolicy, parseSourceAdmissionSnapshotV1, SourceAdmissionRejected, type SourceAdmissionSnapshotV1 } from "./source-admission.js";
+import { defaultTemplateParameters, SOURCE_PROFILE_DEFINITIONS, SOURCE_PROFILE_IDS, type ProviderPriorityParameters, type TravelParameters } from "./source-profiles.js";
+import type { StoredSourceProfile } from "./store.js";
 import type { MetaItem } from "./types.js";
 
 const temp = () => mkdtempSync(path.join(tmpdir(), "follows-"));
@@ -43,6 +44,16 @@ const profileAdmission = (profileId: string = SOURCE_PROFILE_IDS.travel): Source
     ),
   });
 };
+const sourceProfileSnapshot = (
+  template: "travel" | "providerPriority" = "travel",
+  parameters: TravelParameters | ProviderPriorityParameters = defaultTemplateParameters("travel"),
+  revision = 1,
+): FollowSourceProfile => ({
+  profileId: SOURCE_PROFILE_IDS[template],
+  revision,
+  template,
+  parameters,
+});
 
 interface FakeJob {
   id: string;
@@ -870,7 +881,7 @@ test("a profile admission is reserved with its snapshot before the queue receive
   const snapshot = profileAdmission();
   const service = buildService(store, q, { admitSourceProfile: () => snapshot });
   const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule({
-    sourceProfile: { profileId: SOURCE_PROFILE_IDS.travel, revision: 1 },
+    sourceProfile: sourceProfileSnapshot(),
   }));
 
   q.beforeNextAdd(() => {
@@ -882,6 +893,71 @@ test("a profile admission is reserved with its snapshot before the queue receive
 
   assert.deepEqual(q.added[0]?.sourceAdmission, snapshot);
   assert.deepEqual(store.get(id)!.episodes["1:1"].download?.sourceAdmission, snapshot);
+});
+
+test("a follow admits from its frozen profile definition after the live catalogue changes", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const original = sourceProfileSnapshot("travel", {
+    ...defaultTemplateParameters("travel"),
+    heightPixels: { min: 720 },
+  });
+  const liveProfiles: StoredSourceProfile[] = [{
+    id: original.profileId,
+    revision: 1,
+    template: "travel",
+    name: "Kids 720p",
+    parameters: original.parameters,
+    createdAt: "2024-01-01T00:00:00.000Z",
+    updatedAt: "2024-01-01T00:00:00.000Z",
+  }];
+  const addon = {
+    key: "addon",
+    enabled: true,
+    globalSearch: true,
+    allowedUsers: ["u1"],
+    role: "source" as const,
+    addedAt: "2024-01-01T00:00:00.000Z",
+    manifestUrl: "https://addon.example/manifest.json",
+    manifest: { id: "addon", name: "Addon", version: "1", resources: [{ name: "stream" }] },
+    downloadSettings: { movie: { subfolder: "", layout: "structured" as const }, series: { subfolder: "", layout: "structured" as const } },
+  };
+  const service = buildService(store, q, {
+    admitSourceProfile: (_ownerUserId, definition) => materializeSourceAdmissionDefinition(definition, {
+      viewer: { id: "u1", role: "user", permissions: { downloadToLibrary: true, downloadToDevice: true } },
+      profiles: liveProfiles,
+      addons: [addon],
+      libraries: [],
+      remoteLibraries: [],
+      mediaConnections: [],
+      preferences: { audioLanguage: "en", subtitleLanguage: "en" },
+      operation: "downloadToLibrary",
+    }),
+  });
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule({
+    sourceProfile: original,
+  }));
+
+  await service.admit(id);
+  liveProfiles.splice(0, 1, {
+    ...liveProfiles[0]!,
+    revision: 2,
+    parameters: { ...defaultTemplateParameters("travel"), heightPixels: { min: 1080 } },
+  });
+  await store.recordCheck(id, { episodes: [episode(1, 2, "v2", RELEASED)], now: NOW });
+  await service.admit(id);
+
+  assert.deepEqual(q.added[1]?.sourceAdmission?.policy.constraints.heightPixels, { min: 720 });
+  assert.equal(store.get(id)!.episodes["1:2"].download?.state, "queued");
+  assert.equal(q.added[1]?.sourceAdmission?.profile.revision, 1);
+
+  liveProfiles.splice(0, 1);
+  await store.recordCheck(id, { episodes: [episode(1, 3, "v3", RELEASED)], now: NOW });
+  await service.admit(id);
+
+  assert.deepEqual(q.added[2]?.sourceAdmission?.policy.constraints.heightPixels, { min: 720 });
+  assert.equal(store.get(id)!.episodes["1:3"].download?.state, "queued");
+  assert.equal(q.added[2]?.sourceAdmission?.profile.revision, 1);
 });
 
 test("automatic re-admission keeps the frozen profile while an explicit retry uses the current one", async (t) => {
@@ -897,7 +973,7 @@ test("automatic re-admission keeps the frozen profile while an explicit retry us
   });
   q.hooks.remove = (job) => service.jobRemoving(job, "user");
   const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule({
-    sourceProfile: { profileId: SOURCE_PROFILE_IDS.travel, revision: 1 },
+    sourceProfile: sourceProfileSnapshot(),
   }));
 
   await service.admit(id);
@@ -907,7 +983,7 @@ test("automatic re-admission keeps the frozen profile while an explicit retry us
   const current = store.get(id)!.autoDownload!;
   await service.setAutoDownload(id, "u1", {
     ...current,
-    sourceProfile: { profileId: SOURCE_PROFILE_IDS.providerPriority, revision: 1 },
+    sourceProfile: sourceProfileSnapshot("providerPriority", defaultTemplateParameters("providerPriority")),
   });
   q.fail(q.jobs[0].id, "err.noMatchingSource");
   await service.sync();
@@ -931,7 +1007,7 @@ test("a refused profile admission leaves the episode in attention and queues not
     admitSourceProfile: () => { throw new SourceAdmissionRejected("providerScopeUnavailable"); },
   });
   const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule({
-    sourceProfile: { profileId: SOURCE_PROFILE_IDS.travel, revision: 1 },
+    sourceProfile: sourceProfileSnapshot(),
   }));
 
   await service.admit(id);
@@ -962,7 +1038,7 @@ test("a malformed stored episode snapshot affects only that episode", async (t) 
       id: "f1", ownerUserId: "u1", type: "series", metaId: "tt1", name: "Show",
       createdAt: "2024-01-01T00:00:00.000Z", updatedAt: "2024-01-01T00:00:00.000Z",
       enabled: true, revision: 1, nextCheckAt: "2024-01-01T00:00:00.000Z", failures: 0,
-      autoDownload: rule({ sourceProfile: { profileId: SOURCE_PROFILE_IDS.travel, revision: 1 } }),
+      autoDownload: rule({ sourceProfile: sourceProfileSnapshot() }),
       episodes: {
         "1:1": {
           ...episode(1, 1, "v1", RELEASED),
@@ -982,6 +1058,84 @@ test("a malformed stored episode snapshot affects only that episode", async (t) 
   assert.equal(broken.reasonKey, "err.followJobMissing");
   assert.equal(broken.sourceAdmission, undefined);
   assert.deepEqual(store.get("f1")!.episodes["1:2"].download, untouched);
+});
+
+test("loading an old reference-only follow fills its profile snapshot from a matching catalogue entry", async (t) => {
+  const dir = temp();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const parameters = { ...defaultTemplateParameters("travel"), heightPixels: { min: 720 } };
+  const profile: StoredSourceProfile = {
+    id: SOURCE_PROFILE_IDS.travel,
+    revision: 3,
+    template: "travel",
+    nameKey: "sourceProfile.travel",
+    parameters,
+    createdAt: "2024-01-01T00:00:00.000Z",
+    updatedAt: "2024-02-01T00:00:00.000Z",
+  };
+  writeFileSync(file(dir), JSON.stringify({
+    version: 1,
+    follows: [{
+      id: "f1",
+      ownerUserId: "u1",
+      type: "series",
+      metaId: "tt1",
+      name: "Show",
+      createdAt: "2024-01-01T00:00:00.000Z",
+      updatedAt: "2024-01-01T00:00:00.000Z",
+      enabled: true,
+      revision: 1,
+      nextCheckAt: "2024-01-01T00:00:00.000Z",
+      failures: 0,
+      autoDownload: rule({ sourceProfile: { profileId: profile.id, revision: 3 } }),
+      episodes: {},
+    }],
+  }));
+
+  const store = new FollowStore(dir);
+  await store.load([profile]);
+  assert.deepEqual(store.get("f1")?.autoDownload?.sourceProfile, {
+    profileId: profile.id,
+    revision: 3,
+    template: "travel",
+    parameters,
+  });
+});
+
+test("loading an old reference-only follow leaves it as a reference when its revision no longer matches", async (t) => {
+  const dir = temp();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const profile: StoredSourceProfile = {
+    id: SOURCE_PROFILE_IDS.travel,
+    revision: 3,
+    template: "travel",
+    nameKey: "sourceProfile.travel",
+    parameters: defaultTemplateParameters("travel"),
+    createdAt: "2024-01-01T00:00:00.000Z",
+    updatedAt: "2024-02-01T00:00:00.000Z",
+  };
+  writeFileSync(file(dir), JSON.stringify({
+    version: 1,
+    follows: [{
+      id: "f1",
+      ownerUserId: "u1",
+      type: "series",
+      metaId: "tt1",
+      name: "Show",
+      createdAt: "2024-01-01T00:00:00.000Z",
+      updatedAt: "2024-01-01T00:00:00.000Z",
+      enabled: true,
+      revision: 1,
+      nextCheckAt: "2024-01-01T00:00:00.000Z",
+      failures: 0,
+      autoDownload: rule({ sourceProfile: { profileId: profile.id, revision: 2 } }),
+      episodes: {},
+    }],
+  }));
+
+  const store = new FollowStore(dir);
+  await store.load([profile]);
+  assert.deepEqual(store.get("f1")?.autoDownload?.sourceProfile, { profileId: profile.id, revision: 2 });
 });
 
 test("a malformed stored source profile falls back only when a legacy selection exists", async (t) => {

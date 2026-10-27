@@ -1145,7 +1145,7 @@ export const it: Catalog = {
   "settings.sourceProfiles.transferHttp": "HTTP",
   "settings.sourceProfiles.transferTorrent": "Torrent Real-Debrid",
   "settings.sourceProfiles.transferRequired": "Scegline almeno uno.",
-  "settings.sourceProfiles.effect": "La modifica vale per i nuovi download e per gli episodi successivi delle serie seguite. I download già in coda mantengono le regole originali.",
+  "settings.sourceProfiles.effect": "Le modifiche valgono per i nuovi download e per le serie seguite configurate successivamente. Le serie seguite che usano già questo profilo e i download già in coda mantengono le regole attuali finché la loro configurazione non viene salvata di nuovo.",
   "settings.sourceProfiles.deleteTitle": "Elimina profilo",
   "settings.sourceProfiles.deleteFallback": "Chi lo aveva come predefinito sceglie di nuovo.",
   "settings.sourceProfiles.reload": "Carica di nuovo",

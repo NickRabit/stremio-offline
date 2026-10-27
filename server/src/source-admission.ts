@@ -30,6 +30,11 @@ export interface SourceProfileReference {
   revision: number;
 }
 
+export interface SourceProfileSnapshot extends SourceProfileReference {
+  template?: SourceProfileTemplate;
+  parameters?: TravelParameters | ProviderPriorityParameters;
+}
+
 export interface SourceAdmissionPreferences {
   audioLanguage?: string;
   subtitleLanguage?: string;
@@ -173,6 +178,46 @@ const referenceValue = (value: unknown): SourceProfileReference => {
 export function parseSourceProfileReference(input: unknown): SourceProfileReference {
   try {
     return referenceValue(input);
+  } catch (error) {
+    if (error instanceof SourceAdmissionValidationError) throw error;
+    throw new SourceAdmissionValidationError();
+  }
+}
+
+export function parseSourceProfileSnapshot(input: unknown): SourceProfileSnapshot {
+  try {
+    const snapshot = objectValue(
+      input,
+      ["profileId", "revision"],
+      ["template", "parameters"],
+    );
+    const profileId = dataProperty(snapshot, "profileId")?.value;
+    const revision = dataProperty(snapshot, "revision")?.value;
+    if (typeof profileId !== "string" || profileId.length === 0
+      || typeof revision !== "number" || !Number.isSafeInteger(revision) || revision <= 0) {
+      return failValidation();
+    }
+    const suppliedTemplate = dataProperty(snapshot, "template")?.value;
+    if (suppliedTemplate === undefined) {
+      if (Object.hasOwn(snapshot, "parameters")) return failValidation();
+      return { profileId, revision };
+    }
+    if (suppliedTemplate !== "recommended"
+      && suppliedTemplate !== "travel"
+      && suppliedTemplate !== "providerPriority") {
+      return failValidation();
+    }
+    const template = suppliedTemplate;
+    const parameters = parseTemplateParameters(
+      template,
+      dataProperty(snapshot, "parameters")?.value,
+    );
+    return {
+      profileId,
+      revision,
+      template,
+      ...(parameters === undefined ? {} : { parameters: structuredClone(parameters) }),
+    };
   } catch (error) {
     if (error instanceof SourceAdmissionValidationError) throw error;
     throw new SourceAdmissionValidationError();
@@ -396,7 +441,7 @@ const definitionFor = (
 };
 
 const supportsOperation = (
-  profile: StoredSourceProfile,
+  template: SourceProfileTemplate,
   context: SourceAdmissionContext,
 ): SourceOperation => {
   if (context.operation !== "play"
@@ -404,7 +449,7 @@ const supportsOperation = (
     && context.operation !== "downloadToDevice") {
     throw new SourceAdmissionRejected("operationUnsupported");
   }
-  if (context.operation === "downloadToLibrary" && !isExecutableDownloadProfile(profile)) {
+  if (context.operation === "downloadToLibrary" && !isExecutableDownloadProfile({ template })) {
     throw new SourceAdmissionRejected("operationUnsupported");
   }
   if (context.viewer.disabled) throw new SourceAdmissionRejected("operationForbidden");
@@ -415,6 +460,31 @@ const supportsOperation = (
     throw new SourceAdmissionRejected("operationForbidden");
   }
   return context.operation;
+};
+
+const materializeAdmission = (
+  profile: { profileId: string; revision: number; template: SourceProfileTemplate },
+  storedPolicy: SourcePolicyV1,
+  context: SourceAdmissionContext,
+): SourceAdmissionSnapshotV1 => {
+  const operation = supportsOperation(profile.template, context);
+  const available = availableProviderKeys(storedPolicy, context, operation);
+  const scoped = sourceAdmissionProviderScope(storedPolicy.scope, available);
+  const selected = explicitProviderOrder(scoped, storedPolicy);
+  if (selected.length === 0) throw new SourceAdmissionRejected("providerScopeUnavailable");
+
+  const policy = materializeSourceAdmissionPolicy(storedPolicy, selected, context.preferences);
+  return parseSourceAdmissionSnapshotV1({
+    schemaVersion: 1,
+    profile: {
+      id: profile.profileId,
+      revision: profile.revision,
+      template: profile.template,
+    },
+    operation,
+    providerKeys: selected,
+    policy,
+  });
 };
 
 const explicitProviderOrder = (
@@ -436,24 +506,24 @@ export function materializeSourceAdmission(
 ): SourceAdmissionSnapshotV1 {
   const reference = parseSourceProfileReference(referenceInput);
   const { profile, policy: storedPolicy } = definitionFor(reference, context.profiles);
-  const operation = supportsOperation(profile, context);
-  const available = availableProviderKeys(storedPolicy, context, operation);
-  const scoped = sourceAdmissionProviderScope(storedPolicy.scope, available);
-  const selected = explicitProviderOrder(scoped, storedPolicy);
-  if (selected.length === 0) throw new SourceAdmissionRejected("providerScopeUnavailable");
+  return materializeAdmission({
+    profileId: profile.id,
+    revision: profile.revision,
+    template: profile.template,
+  }, storedPolicy, context);
+}
 
-  const policy = materializeSourceAdmissionPolicy(storedPolicy, selected, context.preferences);
-  return parseSourceAdmissionSnapshotV1({
-    schemaVersion: 1,
-    profile: {
-      id: reference.profileId,
-      revision: reference.revision,
-      template: profile.template,
-    },
-    operation,
-    providerKeys: selected,
-    policy,
-  });
+export function materializeSourceAdmissionDefinition(
+  definitionInput: unknown,
+  context: SourceAdmissionContext,
+): SourceAdmissionSnapshotV1 {
+  const definition = parseSourceProfileSnapshot(definitionInput);
+  if (definition.template === undefined) throw new SourceAdmissionValidationError();
+  return materializeAdmission({
+    profileId: definition.profileId,
+    revision: definition.revision,
+    template: definition.template,
+  }, buildTemplatePolicy(definition.template, definition.parameters), context);
 }
 
 export function parseSourceAdmissionSnapshotV1(input: unknown): SourceAdmissionSnapshotV1 {

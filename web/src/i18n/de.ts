@@ -1145,7 +1145,7 @@ export const de: Catalog = {
   "settings.sourceProfiles.transferHttp": "HTTP",
   "settings.sourceProfiles.transferTorrent": "Real-Debrid-Torrents",
   "settings.sourceProfiles.transferRequired": "Mindestens eine auswählen.",
-  "settings.sourceProfiles.effect": "Die Änderung gilt für neue Downloads und für spätere Folgen gefolgter Serien. Downloads, die schon in der Warteschlange sind, behalten ihre ursprünglichen Regeln.",
+  "settings.sourceProfiles.effect": "Änderungen gelten für neue Downloads und für danach eingerichtete Folgen. Folgen, die dieses Profil bereits verwenden, und Downloads, die sich schon in der Warteschlange befinden, behalten ihre aktuellen Regeln, bis ihre Einrichtung erneut gespeichert wird.",
   "settings.sourceProfiles.deleteTitle": "Profil löschen",
   "settings.sourceProfiles.deleteFallback": "Personen, die es als Standard hatten, wählen erneut.",
   "settings.sourceProfiles.reload": "Erneut laden",

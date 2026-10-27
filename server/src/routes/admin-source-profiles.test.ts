@@ -507,6 +507,32 @@ test("PATCH enforces the revision guard and makes older bulk references stale", 
   assert.deepEqual(harness.pending, []);
 });
 
+test("PATCH never advances a profile revision beyond the safe-integer limit", async (t) => {
+  const harness = await mount({ variants: [variant({ revision: Number.MAX_SAFE_INTEGER - 1 })] });
+  t.after(harness.close);
+
+  const safe = await api(harness.base, `/api/admin/source-profiles/${VARIANT}`, {
+    user: ADMIN,
+    method: "PATCH",
+    body: { revision: Number.MAX_SAFE_INTEGER - 1, parameters: travelParameters() },
+  });
+  assert.equal(safe.status, 200);
+  assert.equal((await safe.json() as StoredSourceProfile).revision, Number.MAX_SAFE_INTEGER);
+
+  const reloaded = new Store(harness.dataDir, path.join(harness.dataDir, "downloads"));
+  await reloaded.load();
+  assert.equal(reloaded.sourceProfiles().find((profile) => profile.id === VARIANT)?.revision, Number.MAX_SAFE_INTEGER);
+
+  const unsafe = await api(harness.base, `/api/admin/source-profiles/${VARIANT}`, {
+    user: ADMIN,
+    method: "PATCH",
+    body: { revision: Number.MAX_SAFE_INTEGER, parameters: travelParameters() },
+  });
+  assert.equal(unsafe.status, 400);
+  assert.equal(await messageKey(unsafe), "err.sourceProfileInvalid");
+  assert.equal(harness.store.sourceProfiles().find((profile) => profile.id === VARIANT)?.revision, Number.MAX_SAFE_INTEGER);
+});
+
 test("built-in profiles allow parameter edits but protect their names, identity and deletion", async (t) => {
   const harness = await mount();
   t.after(harness.close);

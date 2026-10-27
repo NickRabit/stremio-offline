@@ -14,7 +14,10 @@ type SourceChoice = DownloadSourceStrategy | `profile:${string}`;
 const PROFILE_VALUE_PREFIX = "profile:";
 const profileValue = (id: string): SourceChoice => `${PROFILE_VALUE_PREFIX}${id}`;
 const isProfileValue = (value: SourceChoice): value is `profile:${string}` => value.startsWith(PROFILE_VALUE_PREFIX);
-type UsableSourceProfile = SourceProfile & { nameKey: SourceProfileNameKey };
+type UsableSourceProfile = SourceProfile & (
+  | { nameKey: SourceProfileNameKey; name?: string }
+  | { name: string; nameKey?: never }
+);
 
 /** What a proposed start would fetch at once, worked out from the episodes on screen while
  *  the follow does not exist yet and the server cannot be asked. */
@@ -145,7 +148,8 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
     api.sourceProfiles().then((items) => {
       if (stale) return;
       const usable = items.filter((profile): profile is UsableSourceProfile => Boolean(
-        profile.operations.includes("downloadToLibrary") && sourceProfileCopy(profile.nameKey),
+        profile.operations.includes("downloadToLibrary")
+          && (sourceProfileCopy(profile.nameKey) !== undefined || profile.name?.trim()),
       ));
       setProfiles(usable);
       if (initial?.sourceProfile) {
@@ -350,7 +354,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
               const value = profileValue(profile.id);
               return <label key={profile.id} className={sourceChoice === value ? "selected" : ""}>
                 <input type="radio" name="source-strategy" value={value} checked={sourceChoice === value} onChange={() => chooseSource(value)}/>
-                <span><strong>{t(copy.name)}</strong>{"hint" in copy && <small>{t(copy.hint)}</small>}</span>
+                <span><strong>{copy ? t(copy.name) : profile.name}</strong>{copy && "hint" in copy && <small>{t(copy.hint)}</small>}</span>
               </label>;
             })}
           </div>

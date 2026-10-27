@@ -7,17 +7,18 @@ import path from "node:path";
 import { test } from "node:test";
 import express from "express";
 import { messageKeyOf } from "../errors.js";
-import { FollowService, FollowStore } from "../follows.js";
+import { FollowService, FollowStore, type FollowSourceProfile } from "../follows.js";
 import { defaultDownloadLibrary } from "../downloads.js";
 import type { DefaultLibrarySettings, LibraryRecord } from "../libraries.js";
 import { defaultDownloadSettings } from "../naming.js";
-import { materializeSourceAdmissionPolicy, parseSourceAdmissionSnapshotV1, type SourceAdmissionSnapshotV1 } from "../source-admission.js";
+import { materializeSourceAdmissionPolicy, parseSourceAdmissionSnapshotV1, SourceAdmissionRejected, type SourceAdmissionSnapshotV1 } from "../source-admission.js";
 import {
+  buildTemplatePolicy,
   defaultTemplateParameters,
   SOURCE_PROFILE_DEFINITIONS,
   SOURCE_PROFILE_IDS,
 } from "../source-profiles.js";
-import type { Store, UserPrefs } from "../store.js";
+import type { Store, StoredSourceProfile, UserPrefs } from "../store.js";
 import type { UserData, UserRecord } from "../users.js";
 import { calendarFeedHandler, registerFollowRoutes, type FollowDeps } from "./follows.js";
 
@@ -30,7 +31,15 @@ const account = (id: string, role: "admin" | "user", downloadToLibrary = true): 
   permissions: { downloadToLibrary, downloadToDevice: true }, permissionsVersion: 0,
 } as unknown as UserRecord);
 
-interface Harness { base: string; store: FollowStore; users: Record<string, UserRecord>; close(): Promise<void> }
+interface Harness {
+  base: string;
+  store: FollowStore;
+  service: FollowService;
+  sourceProfiles: StoredSourceProfile[];
+  jobs: Array<{ id: string; status: string; follow?: { followId: string; episodeKey: string; intent: string }; sourceAdmission?: SourceAdmissionSnapshotV1 }>;
+  users: Record<string, UserRecord>;
+  close(): Promise<void>;
+}
 
 const profileAdmission = (profileId: string): SourceAdmissionSnapshotV1 => {
   const definition = SOURCE_PROFILE_DEFINITIONS.find((candidate) => candidate.id === profileId);
@@ -49,23 +58,59 @@ const profileAdmission = (profileId: string): SourceAdmissionSnapshotV1 => {
   });
 };
 
+const sourceAdmissionFor = (
+  sourceProfile: FollowSourceProfile,
+  profiles: readonly StoredSourceProfile[],
+): SourceAdmissionSnapshotV1 => {
+  const live = profiles.find((profile) => profile.id === sourceProfile.profileId);
+  const template = sourceProfile.template ?? live?.template;
+  const parameters = sourceProfile.template === undefined ? live?.parameters : sourceProfile.parameters;
+  if (sourceProfile.template === undefined && !live) throw new SourceAdmissionRejected("profileUnknown");
+  if (sourceProfile.template === undefined && live?.revision !== sourceProfile.revision) {
+    throw new SourceAdmissionRejected("profileRevisionStale");
+  }
+  assert.ok(template);
+  const providerKeys = ["addon:stream-addon", "addon:admin-addon"];
+  return parseSourceAdmissionSnapshotV1({
+    schemaVersion: 1,
+    profile: { id: sourceProfile.profileId, revision: sourceProfile.revision, template },
+    operation: "downloadToLibrary",
+    providerKeys,
+    policy: materializeSourceAdmissionPolicy(
+      buildTemplatePolicy(template, parameters),
+      providerKeys,
+      { audioLanguage: "en", subtitleLanguage: "en" },
+    ),
+  });
+};
+
 /** Real express over a real store: the routes take everything from the context, and the
  *  account each request speaks for is named by a header so one server can hold two. */
 const mount = async (options: {
   libraries?: LibraryRecord[];
   settings?: DefaultLibrarySettings;
   addons?: unknown[];
+  sourceProfiles?: StoredSourceProfile[];
   defaultDownloadLibrary?: (kind: "movie" | "series") => LibraryRecord | undefined;
 } = {}): Promise<Harness> => {
   const dir = mkdtempSync(path.join(tmpdir(), "routes-follows-"));
   const store = new FollowStore(dir);
   await store.load();
   const users: Record<string, UserRecord> = { A: account(ADA, "admin"), B: account(BOB, "user"), C: account(CARL, "user", false) };
-  const jobs: Array<{ id: string; status: string; follow?: { followId: string; episodeKey: string; intent: string }; source?: { type: string; videoId: string } }> = [];
+  const sourceProfiles = options.sourceProfiles ?? (["recommended", "providerPriority", "travel"] as const).map((template) => ({
+    id: SOURCE_PROFILE_IDS[template],
+    revision: 1,
+    template,
+    nameKey: `sourceProfile.${template}`,
+    ...(template === "recommended" ? {} : { parameters: defaultTemplateParameters(template) }),
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  }));
+  const jobs: Array<{ id: string; status: string; follow?: { followId: string; episodeKey: string; intent: string }; source?: { type: string; videoId: string }; sourceAdmission?: SourceAdmissionSnapshotV1 }> = [];
   let nextId = 1;
   const queue = {
-    addPending: async (_title: string, source: { type: string; videoId: string }, _media: unknown, _ownerUserId: string, follow: { followId: string; episodeKey: string; intent: string }) => {
-      const job = { id: `job-${nextId++}`, status: "queued", follow, source: { type: source.type, videoId: source.videoId } };
+    addPending: async (_title: string, source: { type: string; videoId: string }, _media: unknown, _ownerUserId: string, follow: { followId: string; episodeKey: string; intent: string }, sourceAdmission?: SourceAdmissionSnapshotV1) => {
+      const job = { id: `job-${nextId++}`, status: "queued", follow, source: { type: source.type, videoId: source.videoId }, sourceAdmission };
       jobs.push(job);
       return { id: job.id };
     },
@@ -89,7 +134,7 @@ const mount = async (options: {
     }),
     queue,
     mayDownload: (ownerUserId) => Boolean(Object.values(users).find((entry) => entry.id === ownerUserId)?.permissions.downloadToLibrary),
-    admitSourceProfile: (_ownerUserId, reference) => profileAdmission(reference.profileId),
+    admitSourceProfile: (_ownerUserId, sourceProfile) => sourceAdmissionFor(sourceProfile, sourceProfiles),
   });
   const libraries: LibraryRecord[] = options.libraries ?? [{ id: "lib_shows", name: "Shows", type: "series", root: dir, enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: false }];
   const settings = options.settings ?? {};
@@ -106,15 +151,7 @@ const mount = async (options: {
       settings: () => settings,
       mediaConnections: () => [],
       remoteLibraries: () => [],
-      sourceProfiles: () => (["recommended", "providerPriority", "travel"] as const).map((template) => ({
-        id: SOURCE_PROFILE_IDS[template],
-        revision: 1,
-        template,
-        nameKey: `sourceProfile.${template}`,
-        ...(template === "recommended" ? {} : { parameters: defaultTemplateParameters(template) }),
-        createdAt: "2026-01-01T00:00:00.000Z",
-        updatedAt: "2026-01-01T00:00:00.000Z",
-      })),
+      sourceProfiles: () => sourceProfiles,
       prefs: () => ({ uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en" }) as UserPrefs,
       userData: () => ({} as UserData),
     } as unknown as Store,
@@ -161,6 +198,9 @@ const mount = async (options: {
   return {
     base: `http://127.0.0.1:${port}`,
     store,
+    service,
+    sourceProfiles,
+    jobs,
     users,
     close: async () => {
       server.closeAllConnections();
@@ -334,6 +374,105 @@ test("a follow stores and exposes an executable source profile reference", async
     assert.deepEqual(view.autoDownload?.selection.addonKeys, ["stream-addon", "admin-addon"]);
     assert.equal(view.autoDownload?.selection.audioLanguage, "en");
     assert.equal(JSON.stringify(view).includes("sourceAdmission"), false);
+  } finally { await h.close(); }
+});
+
+test("a follow keeps its variant snapshot through edits and deletion until its setup is saved again", async () => {
+  const variantId = "4ecf83c6-2228-4a5c-81e5-97a85c3f946f";
+  const originalParameters = {
+    ...defaultTemplateParameters("travel"),
+    heightPixels: { min: 720 },
+  };
+  const currentParameters = {
+    ...defaultTemplateParameters("travel"),
+    heightPixels: { min: 1080 },
+  };
+  const variant: StoredSourceProfile = {
+    id: variantId,
+    revision: 1,
+    template: "travel",
+    name: "Kids 720p",
+    parameters: originalParameters,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const h = await mount({ sourceProfiles: [variant] });
+  try {
+    const follow = await (await api(h.base, "/api/follows", {
+      method: "POST", as: "A", body: { type: "series", id: "tt1", name: "Show" },
+    })).json() as { id: string };
+    await h.store.recordCheck(follow.id, {
+      episodes: [{ key: "1:1", videoId: "tt1:1:1", season: 1, episode: 1, released: "2024-03-01T00:00:00.000Z", firstSeenAt: "2024-01-01T00:00:00.000Z" }],
+      now: Date.parse("2024-04-01T00:00:00.000Z"),
+    });
+
+    const configured = await api(h.base, `/api/follows/${follow.id}`, {
+      method: "PATCH",
+      as: "A",
+      body: {
+        autoDownload: {
+          startMode: "from",
+          startSeason: 1,
+          startEpisode: 1,
+          selection: { profile: { profileId: variantId, revision: 1 } },
+        },
+      },
+    });
+    assert.equal(configured.status, 200, await configured.clone().text());
+    const configuredView = await configured.json() as { autoDownload: { sourceProfile: Record<string, unknown> } };
+    assert.deepEqual(configuredView.autoDownload.sourceProfile, { profileId: variantId, revision: 1 });
+    assert.deepEqual(h.store.get(follow.id)?.autoDownload?.sourceProfile, {
+      profileId: variantId,
+      revision: 1,
+      template: "travel",
+      parameters: originalParameters,
+    });
+
+    h.sourceProfiles.splice(0, 1, {
+      ...variant,
+      revision: 2,
+      parameters: currentParameters,
+      updatedAt: "2026-02-01T00:00:00.000Z",
+    });
+    await h.store.recordCheck(follow.id, {
+      episodes: [{ key: "1:2", videoId: "tt1:1:2", season: 1, episode: 2, released: "2024-03-02T00:00:00.000Z", firstSeenAt: "2024-01-01T00:00:00.000Z" }],
+      now: Date.parse("2024-04-01T00:00:00.000Z"),
+    });
+    await h.service.admit(follow.id);
+    assert.equal(h.jobs.find((job) => job.follow?.episodeKey === "1:2")?.sourceAdmission?.policy.constraints.heightPixels?.min, 720);
+    assert.equal(h.store.get(follow.id)?.episodes["1:2"].download?.state, "queued");
+
+    const resaved = await api(h.base, `/api/follows/${follow.id}`, {
+      method: "PATCH",
+      as: "A",
+      body: {
+        autoDownload: {
+          startMode: "from",
+          startSeason: 1,
+          startEpisode: 1,
+          selection: { profile: { profileId: variantId, revision: 2 } },
+        },
+      },
+    });
+    assert.equal(resaved.status, 200, await resaved.clone().text());
+    const resavedView = await resaved.json() as { autoDownload: { sourceProfile: Record<string, unknown> } };
+    assert.deepEqual(resavedView.autoDownload.sourceProfile, { profileId: variantId, revision: 2 });
+    assert.deepEqual(h.store.get(follow.id)?.autoDownload?.sourceProfile, {
+      profileId: variantId,
+      revision: 2,
+      template: "travel",
+      parameters: currentParameters,
+    });
+
+    h.sourceProfiles.splice(0, 1);
+    await h.store.recordCheck(follow.id, {
+      episodes: [{ key: "1:3", videoId: "tt1:1:3", season: 1, episode: 3, released: "2024-03-03T00:00:00.000Z", firstSeenAt: "2024-01-01T00:00:00.000Z" }],
+      now: Date.parse("2024-04-01T00:00:00.000Z"),
+    });
+    await h.service.admit(follow.id);
+    assert.equal(h.jobs.find((job) => job.follow?.episodeKey === "1:3")?.sourceAdmission?.policy.constraints.heightPixels?.min, 1080);
+    assert.equal(h.store.get(follow.id)?.episodes["1:3"].download?.state, "queued");
+    assert.notEqual(h.store.get(follow.id)?.episodes["1:3"].download?.reasonKey, "err.sourceProfileUnavailable");
   } finally { await h.close(); }
 });
 

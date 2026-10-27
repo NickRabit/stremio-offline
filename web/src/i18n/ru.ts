@@ -1145,7 +1145,7 @@ export const ru: Catalog = {
   "settings.sourceProfiles.transferHttp": "HTTP",
   "settings.sourceProfiles.transferTorrent": "Торренты Real-Debrid",
   "settings.sourceProfiles.transferRequired": "Выберите хотя бы один.",
-  "settings.sourceProfiles.effect": "Изменение действует на новые загрузки и на следующие серии отслеживаемых сериалов. Загрузки, которые уже в очереди, сохраняют исходные правила.",
+  "settings.sourceProfiles.effect": "Изменения действуют для новых загрузок и для отслеживаемых сериалов, настроенных позже. Отслеживаемые сериалы, которые уже используют этот профиль, и загрузки, уже находящиеся в очереди, сохраняют текущие правила, пока их настройки не будут сохранены снова.",
   "settings.sourceProfiles.deleteTitle": "Удалить профиль",
   "settings.sourceProfiles.deleteFallback": "Те, у кого он был по умолчанию, выбирают снова.",
   "settings.sourceProfiles.reload": "Загрузить снова",

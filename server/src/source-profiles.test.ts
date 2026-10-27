@@ -347,3 +347,32 @@ test("grant changes and same-name providers do not expose provider identity", ()
   visible.enabled = false;
   assert.deepEqual(sourceProfilesForViewer(input), []);
 });
+
+test("an allAvailable profile filters every explicit addon order to the viewer's grants", () => {
+  const profile: StoredSourceProfile = {
+    id: "00000000-0000-4000-8000-000000000301",
+    revision: 1,
+    template: "travel",
+    name: "Visible only",
+    parameters: {
+      ...defaultTemplateParameters("travel"),
+      scope: { mode: "allAvailable" },
+      providerOrder: { addonKeys: ["visible", "hidden"] },
+    },
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const profiles = sourceProfilesForViewer(catalogue(account(MEMBER, "user"), {
+    profiles: [profile],
+    addons: [
+      addon("visible", { allowedUsers: [MEMBER] }),
+      addon("hidden", { allowedUsers: [OTHER] }),
+    ],
+  }));
+
+  assert.equal(profiles.length, 1);
+  assert.deepEqual(profiles[0]?.policy.criteria.filter((criterion) => criterion.kind === "providerOrder"), [
+    { kind: "providerOrder", keys: ["addon:visible"] },
+  ]);
+  assert.equal(JSON.stringify(profiles).includes("addon:hidden"), false);
+});

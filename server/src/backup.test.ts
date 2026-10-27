@@ -238,6 +238,26 @@ test("a version 4 backup carries source profiles and their tombstones", () => {
   });
 });
 
+test("a version 4 backup refuses a revision that cannot be incremented safely", () => {
+  const profile: StoredSourceProfile = {
+    id: "00000000-0000-4000-8000-000000000103",
+    revision: Number.MAX_SAFE_INTEGER,
+    template: "travel",
+    name: "Too many edits",
+    parameters: defaultTemplateParameters("travel"),
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-02-01T00:00:00.000Z",
+  };
+  assert.throws(() => parseSettingsBackup({
+    format: "stremio-offline-settings",
+    version: 4,
+    settings: {},
+    addons: [],
+    mediaServers: { version: 1, connections: [], libraries: [] },
+    sourceProfiles: { profiles: [profile], deletedIds: [] },
+  }), /source profiles in the backup are not valid/);
+});
+
 test("an unknown backup version is still refused", () => {
   assert.throws(
     () => parseSettingsBackup({ format: "stremio-offline-settings", version: 5, settings: {}, addons: [] }),

@@ -235,6 +235,7 @@ export function registerAdminSourceProfilesRoutes(
         buildTemplatePolicy(profile.template, parameters);
       }
 
+      if (!Number.isSafeInteger(profile.revision + 1)) throw invalidProfile();
       profile.revision += 1;
       if (name !== undefined) profile.name = name;
       if (parameters !== undefined) profile.parameters = structuredClone(parameters);

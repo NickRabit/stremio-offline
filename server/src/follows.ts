@@ -9,11 +9,13 @@ import { log } from "./logger.js";
 import type { MediaInfo } from "./naming.js";
 import {
   parseDownloadSourceAdmissionSnapshotV1,
-  parseSourceProfileReference,
+  parseSourceProfileSnapshot,
   SourceAdmissionRejected,
   SourceAdmissionValidationError,
   type SourceAdmissionSnapshotV1,
+  type SourceProfileSnapshot,
 } from "./source-admission.js";
+import type { StoredSourceProfile } from "./store.js";
 import type { MetaItem } from "./types.js";
 import type { FollowDefaults } from "./users.js";
 import { sourceAdmissionError } from "./routes/source-profile-selection.js";
@@ -47,7 +49,7 @@ export interface FollowAutoDownload {
   /** With `ahead`: how many regular episodes after the watched marker stay ready, 1..10. */
   aheadCount?: number;
   selection: DownloadSelection;
-  sourceProfile?: { profileId: string; revision: number };
+  sourceProfile?: FollowSourceProfile;
   /** Days after release during which only the preferred audio is admitted, 0..30. */
   graceDays?: number;
   /** Delete downloaded episodes this long after the owner watched past them; absent keeps them. */
@@ -55,6 +57,8 @@ export interface FollowAutoDownload {
   /** The catalogue key of the reason nothing is admitted, while the owner may not download. */
   blockedKey?: string;
 }
+
+export type FollowSourceProfile = SourceProfileSnapshot;
 
 export type EpisodeDownloadState = "reserved" | "queued" | "waiting" | "completed" | "skipped" | "attention";
 
@@ -709,12 +713,27 @@ export function activityItems(follows: Follow[], limit: number): ActivityItem[] 
   return items.slice(0, Math.max(0, limit));
 }
 
-const sanitizeLoadedFollow = (follow: Follow): void => {
+const sanitizeLoadedFollow = (
+  follow: Follow,
+  sourceProfiles: readonly StoredSourceProfile[],
+): void => {
   const auto = follow.autoDownload as unknown;
   if (auto && typeof auto === "object" && !Array.isArray(auto) && Object.hasOwn(auto, "sourceProfile")) {
     const record = auto as Record<string, unknown>;
     try {
-      record.sourceProfile = parseSourceProfileReference(record.sourceProfile);
+      const sourceProfile = parseSourceProfileSnapshot(record.sourceProfile);
+      const stored = sourceProfile.template === undefined
+        ? sourceProfiles.find((profile) =>
+            profile.id === sourceProfile.profileId && profile.revision === sourceProfile.revision)
+        : undefined;
+      record.sourceProfile = stored
+        ? {
+            profileId: stored.id,
+            revision: stored.revision,
+            template: stored.template,
+            ...(stored.parameters === undefined ? {} : { parameters: structuredClone(stored.parameters) }),
+          }
+        : sourceProfile;
     } catch (error) {
       if (!(error instanceof SourceAdmissionValidationError)) throw error;
       delete record.sourceProfile;
@@ -789,7 +808,7 @@ export class FollowStore {
 
   get unavailable(): boolean { return this.unreadable; }
 
-  async load(): Promise<void> {
+  async load(sourceProfiles: readonly StoredSourceProfile[] = []): Promise<void> {
     await mkdir(path.dirname(this.file), { recursive: true });
     let raw: string;
     try {
@@ -808,7 +827,7 @@ export class FollowStore {
     try {
       const parsed = JSON.parse(raw) as FollowFile;
       if (!parsed || typeof parsed !== "object" || parsed.version !== 1 || !Array.isArray(parsed.follows)) throw new Error("not a version 1 follow file");
-      for (const follow of parsed.follows) sanitizeLoadedFollow(follow);
+      for (const follow of parsed.follows) sanitizeLoadedFollow(follow, sourceProfiles);
       this.follows = parsed.follows;
       this.unreadable = false;
     } catch (error) {
@@ -1011,7 +1030,7 @@ export interface FollowDeps {
   mayDownload: (ownerUserId: string, selection: DownloadSelection) => boolean;
   admitSourceProfile?: (
     ownerUserId: string,
-    reference: { profileId: string; revision: number },
+    sourceProfile: FollowSourceProfile,
   ) => SourceAdmissionSnapshotV1;
   tickMs?: number;
   concurrency?: number;

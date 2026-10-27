@@ -11,7 +11,7 @@ import type { DownloadTargetSettings, MetaItem } from "../types.js";
 import { feedTokenMatches, type FollowDefaults, type UserData, type UserRecord } from "../users.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 import { createSelectionParser } from "./downloads.js";
-import { legacySelectionFromAdmission, materializeSourceProfileAdmission, profileSelectionReference } from "./source-profile-selection.js";
+import { legacySelectionFromAdmission, materializeSourceProfileAdmission, profileSelectionReference, sourceProfileSnapshotForAdmission } from "./source-profile-selection.js";
 
 export interface FollowDeps extends RouteContext {
   follows: FollowService;
@@ -28,6 +28,9 @@ export interface FollowDeps extends RouteContext {
 
 interface FollowEpisodeView { season: number; episode: number; title?: string; released?: string; releasedSource?: "addon" | "tmdb"; dateUncertain?: boolean }
 interface FollowDownloads { queued: number; waiting: number; completed: number; skipped: number; attention: number }
+type FollowAutoDownloadView = Omit<FollowAutoDownload, "sourceProfile"> & {
+  sourceProfile?: { profileId: string; revision: number };
+};
 /** The delays a follow may delete watched episodes after. */
 const RETENTION_DAYS = [1, 7, 30] as const;
 interface FollowView {
@@ -49,7 +52,7 @@ interface FollowView {
   episodeCount: number;
   nextEpisode?: FollowEpisodeView;
   latestEpisode?: FollowEpisodeView;
-  autoDownload?: FollowAutoDownload;
+  autoDownload?: FollowAutoDownloadView;
   downloads: FollowDownloads;
   movie?: { released?: string; releaseKind?: FollowEpisode["releaseKind"]; theatricalAt?: string; dateUncertain?: boolean; state?: string; reasonKey?: string; nextAttemptAt?: string; graceUntil?: string };
 }
@@ -97,6 +100,17 @@ const followView = (follow: Follow, now: number): FollowView => {
     }
   }
   const { episodes: _episodes, poster, autoDownload, ...rest } = follow;
+  const autoDownloadView: FollowAutoDownloadView | undefined = autoDownload
+    ? {
+        ...autoDownload,
+        ...(autoDownload.sourceProfile
+          ? { sourceProfile: {
+              profileId: autoDownload.sourceProfile.profileId,
+              revision: autoDownload.sourceProfile.revision,
+            } }
+          : {}),
+      }
+    : undefined;
   return {
     ...rest,
     // Stored as the provider's address; the page only ever loads our own proxy.
@@ -105,7 +119,7 @@ const followView = (follow: Follow, now: number): FollowView => {
     downloads: downloadsSummary(follow),
     ...(next ? { nextEpisode: episodeView(next) } : {}),
     ...(latest ? { latestEpisode: episodeView(latest) } : {}),
-    ...(autoDownload ? { autoDownload } : {}),
+    ...(autoDownloadView ? { autoDownload: autoDownloadView } : {}),
     // A film is one record; the dialog and the card read its release and download from here.
     ...(follow.type === "movie" && follow.episodes["1:1"] ? { movie: movieView(follow.episodes["1:1"]) } : {}),
   };
@@ -316,6 +330,9 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
         const admission = profileReference.present
           ? materializeSourceProfileAdmission(deps, currentUser(req), profileReference.reference)
           : undefined;
+        const sourceProfile = admission
+          ? sourceProfileSnapshotForAdmission(store.sourceProfiles(), admission.profile)
+          : undefined;
         const selection = await parseSelection(req, {
           selection: admission ? legacySelectionFromAdmission(admission) : item.selection,
           target: item.target,
@@ -343,9 +360,7 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
                 targetSettings,
               }
             : { ...selection, targetSettings },
-          ...(admission ? {
-            sourceProfile: { profileId: admission.profile.id, revision: admission.profile.revision },
-          } : {}),
+          ...(sourceProfile ? { sourceProfile } : {}),
         };
         await follows.setAutoDownload(follow.id, owner.id, value);
       }

@@ -57,6 +57,7 @@ test("secret GETs match DENIED_GETS and ordinary GETs do not", () => {
   assert.equal(isDeniedGet("GET", "/libraries"), false, "the list stays readable, minus the roots");
   assert.equal(isDeniedGet("GET", "/media-servers"), true, "the admin inventory names remote addresses and account ids");
   assert.equal(isDeniedGet("GET", "/media-servers/export"), true, "the remote export names server addresses too");
+  assert.equal(isDeniedGet("GET", "/admin/source-profiles"), true, "the administrator catalogue carries raw profile definitions");
   assert.equal(isDeniedGet("GET", "/media-servers/mconn_00000000000000000000000000000001/libraries"), true);
   assert.equal(isDeniedGet("GET", "/media-servers/mconn_00000000000000000000000000000001"), false, "there is no such admin GET");
   assert.equal(isDeniedGet("GET", "/media-servers-other"), false, "the pattern does not widen to a prefix");
@@ -69,7 +70,7 @@ test("deny rules see the path the router matched: case and one trailing slash", 
   for (const path of ["/media-servers", "/media-servers/", "/MEDIA-SERVERS", "/Media-Servers/"]) {
     assert.equal(isDeniedGet("GET", path), true, path);
   }
-  for (const path of ["/settings/export/", "/SETTINGS/EXPORT", "/logs/", "/LOGS", "/libraries/browse/", "/addons/abc/export/"]) {
+  for (const path of ["/settings/export/", "/SETTINGS/EXPORT", "/logs/", "/LOGS", "/libraries/browse/", "/addons/abc/export/", "/admin/source-profiles/", "/ADMIN/SOURCE-PROFILES"]) {
     assert.equal(isDeniedGet("GET", path), true, path);
   }
   assert.equal(isDeniedGet("GET", `/media-servers/${"mconn_0".padEnd(38, "0")}/libraries/`), true);
@@ -192,6 +193,7 @@ test("middleware fail-closes writes and secret GETs when the flag is on", (t) =>
   assert.ok(invoke("GET", "/settings/export") instanceof RestrictedError);
   assert.ok(invoke("GET", "/logs") instanceof RestrictedError);
   assert.ok(invoke("GET", "/diagnostics") instanceof RestrictedError);
+  assert.ok(invoke("GET", "/admin/source-profiles") instanceof RestrictedError);
   assert.equal(invoke("GET", "/addons"), undefined);
   assert.equal(invoke("GET", "/catalogs"), undefined);
   assert.equal(invoke("GET", "/downloads"), undefined);
@@ -270,6 +272,7 @@ test("index.ts route catalogue: implicit deny passes, orphan allow/deny regexes 
   assert.ok((byKind.get("IMPLICIT_DENY") ?? []).some((route) => route.path === "/api/addons/refresh" && route.method === "POST"));
   assert.ok((byKind.get("IMPLICIT_DENY") ?? []).some((route) => route.path === "/api/addons/:key/refresh" && route.method === "POST"));
   assert.ok((byKind.get("DENIED_GETS") ?? []).some((route) => route.path === "/api/addons/:key/export"));
+  assert.ok((byKind.get("DENIED_GETS") ?? []).some((route) => route.path === "/api/admin/source-profiles"));
   assert.ok((byKind.get("ALLOWED_MUTATIONS") ?? []).some((route) => route.path === "/api/downloads" && route.method === "POST"));
   assert.ok((byKind.get("IGNORE") ?? []).some((route) => route.path === "/api/proxy"));
   assert.ok((byKind.get("IGNORE") ?? []).some((route) => route.path === "/{*path}"));

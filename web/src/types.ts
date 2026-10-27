@@ -271,7 +271,9 @@ export type AudioMode = "strict" | "listed" | "preferred";
 export type DownloadSourceStrategy = "priority" | "largest";
 export interface SourceProfile {
   id: string;
-  nameKey: string;
+  nameKey?: string;
+  name?: string;
+  template: SourceProfileTemplate;
   revision: number;
   operations: Array<"play" | "downloadToLibrary" | "downloadToDevice">;
   policy: unknown;

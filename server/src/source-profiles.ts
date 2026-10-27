@@ -494,6 +494,10 @@ export function sourceProfilesForViewer(catalogue: SourceProfileCatalogue): Publ
       });
       addonPath = selected.length > 0;
     }
+    policy.criteria = policy.criteria.map((criterion) =>
+      criterion.kind === "providerOrder" && "keys" in criterion
+        ? { kind: "providerOrder", keys: criterion.keys.filter((key) => usableAddonKeys.has(key)) }
+        : criterion);
 
     const kinds = new Set(policy.constraints.sourceKinds);
     const addonDownloadPath = addonPath && (kinds.has("http") || kinds.has("torrent"));

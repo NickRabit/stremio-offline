@@ -1145,7 +1145,7 @@ export const ptBR: Catalog = {
   "settings.sourceProfiles.transferHttp": "HTTP",
   "settings.sourceProfiles.transferTorrent": "Torrents do Real-Debrid",
   "settings.sourceProfiles.transferRequired": "Escolha pelo menos um.",
-  "settings.sourceProfiles.effect": "A mudança vale para novos downloads e para episódios seguintes das séries seguidas. Downloads que já estão na fila mantêm as regras originais.",
+  "settings.sourceProfiles.effect": "As alterações valem para novos downloads e para séries seguidas configuradas depois. Séries seguidas que já usam este perfil e downloads que já estão na fila mantêm as regras atuais até que sua configuração seja salva novamente.",
   "settings.sourceProfiles.deleteTitle": "Excluir perfil",
   "settings.sourceProfiles.deleteFallback": "Quem o tinha como padrão escolhe de novo.",
   "settings.sourceProfiles.reload": "Carregar de novo",

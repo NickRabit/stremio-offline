@@ -1145,7 +1145,7 @@ export const sk: Catalog = {
   "settings.sourceProfiles.transferHttp": "HTTP",
   "settings.sourceProfiles.transferTorrent": "Torrenty Real-Debrid",
   "settings.sourceProfiles.transferRequired": "Vyberte aspoň jeden.",
-  "settings.sourceProfiles.effect": "Zmena platí pre nové sťahovania a ďalšie diely sledovaných seriálov. Sťahovania, ktoré už sú vo fronte, si ponechajú pôvodné pravidlá.",
+  "settings.sourceProfiles.effect": "Zmena platí pre nové sťahovania a pre sledovania nastavené neskôr. Sledovania, ktoré tento profil už používajú, a sťahovania, ktoré už sú vo fronte, si ponechajú doterajšie pravidlá, kým sa ich nastavenie znova neuloží.",
   "settings.sourceProfiles.deleteTitle": "Odstrániť profil",
   "settings.sourceProfiles.deleteFallback": "Ľudia, ktorí ho mali ako predvolený, si ho zvolia znova.",
   "settings.sourceProfiles.reload": "Načítať znova",

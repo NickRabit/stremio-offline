@@ -1,14 +1,16 @@
 import { AppError } from "../errors.js";
 import {
   materializeSourceAdmission,
+  materializeSourceAdmissionDefinition,
   parseSourceProfileReference,
   SourceAdmissionRejected,
   SourceAdmissionValidationError,
   type SourceAdmissionRejectionCode,
   type SourceAdmissionSnapshotV1,
+  type SourceProfileSnapshot,
 } from "../source-admission.js";
 import { viewerOfProfileAccount } from "../source-profiles.js";
-import type { Store } from "../store.js";
+import type { Store, StoredSourceProfile } from "../store.js";
 import type { UserRecord } from "../users.js";
 
 type SourceProfileSelectionStore = Pick<
@@ -63,6 +65,43 @@ export function materializeOwnerSourceAdmission(
     },
     operation: "downloadToLibrary",
   });
+}
+
+export function materializeOwnerSourceProfileAdmission(
+  deps: SourceProfileSelectionDeps,
+  owner: Pick<UserRecord, "id" | "role" | "permissions" | "disabled">,
+  definition: unknown,
+): SourceAdmissionSnapshotV1 {
+  const preferences = deps.store.prefs(owner.id);
+  return materializeSourceAdmissionDefinition(definition, {
+    viewer: viewerOfProfileAccount(owner),
+    profiles: deps.store.sourceProfiles(),
+    addons: deps.store.addons(),
+    libraries: deps.store.libraries(),
+    remoteLibraries: deps.store.remoteLibraries(),
+    mediaConnections: deps.store.mediaConnections(),
+    addonOrder: deps.store.userData(owner.id).addonOrder,
+    preferences: {
+      audioLanguage: preferences.audioLanguage,
+      subtitleLanguage: preferences.subtitleLanguage,
+    },
+    operation: "downloadToLibrary",
+  });
+}
+
+export function sourceProfileSnapshotForAdmission(
+  profiles: readonly StoredSourceProfile[],
+  profile: SourceAdmissionSnapshotV1["profile"],
+): SourceProfileSnapshot {
+  const stored = profiles.find((candidate) => candidate.id === profile.id);
+  if (!stored) throw new SourceAdmissionRejected("profileUnknown");
+  if (stored.revision !== profile.revision) throw new SourceAdmissionRejected("profileRevisionStale");
+  return {
+    profileId: stored.id,
+    revision: stored.revision,
+    template: stored.template,
+    ...(stored.parameters === undefined ? {} : { parameters: structuredClone(stored.parameters) }),
+  };
 }
 
 export function materializeSourceProfileAdmission(

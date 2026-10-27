@@ -62,7 +62,7 @@ const torrentio = addon("torrentio", "Torrentio", ["stream"]);
 const comet = addon("comet", "Comet", ["stream"]);
 const cinemeta = addon("cinemeta", "Cinemeta", ["catalog"]);
 
-const EFFECT = "The change applies to new downloads and to later episodes of followed series. Downloads already in the queue keep their original rules.";
+const EFFECT = "Changes apply to new downloads and to follows set up afterwards. Follows already using this profile and downloads already in the queue keep their current rules until their setup is saved again.";
 const FALLBACK = "People who had it as their default choose again.";
 const STALE = "This source profile revision is no longer available.";
 

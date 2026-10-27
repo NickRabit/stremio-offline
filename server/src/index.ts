@@ -102,7 +102,7 @@ import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerUsersRoutes } from "./routes/users.js";
 import { registerSearchEverywhereRoutes, searchEverywhereEnabled } from "./routes/search-everywhere.js";
 import { registerSourceProfilesRoutes } from "./routes/source-profiles.js";
-import { materializeOwnerSourceAdmission } from "./routes/source-profile-selection.js";
+import { materializeOwnerSourceAdmission, materializeOwnerSourceProfileAdmission } from "./routes/source-profile-selection.js";
 import { SourceAdmissionRejected } from "./source-admission.js";
 import { MediaServerManager, type MediaServerAuthority } from "./media-server-manager.js";
 import { remoteDownloadAccessible } from "./media-server-download.js";
@@ -167,7 +167,7 @@ await store.load();
 await mediaServers.initialize();
 await metaStore.load();
 await externalIds.load();
-await followStore.load();
+await followStore.load(store.sourceProfiles());
 await seen.load();
 if (libraryMigration.migrated) log("INFO", "State migrated to libraries", { libraryId: libraryMigration.libraryId, paths: libraryMigration.paths, artwork: libraryMigration.artwork });
 if (libraryMigration.metadata) log("INFO", "Library metadata moved out of the state", { rows: libraryMigration.metadata });
@@ -2078,7 +2078,9 @@ const followService = new FollowService({
   admitSourceProfile: (ownerUserId, reference) => {
     const owner = findUserById(store.users(), ownerUserId);
     if (!owner) throw new SourceAdmissionRejected("operationForbidden");
-    return materializeOwnerSourceAdmission({ store }, owner, reference);
+    return reference.template === undefined
+      ? materializeOwnerSourceAdmission({ store }, owner, reference)
+      : materializeOwnerSourceProfileAdmission({ store }, owner, reference);
   },
   // Retention deletes a single library file through the same operations queue that waits for
   // playback, an unreachable disk and active downloads. Only a key that names a real library

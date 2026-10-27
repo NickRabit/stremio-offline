@@ -238,7 +238,8 @@ function readSourceProfile(value: unknown): StoredSourceProfile {
   const createdAt = profile.createdAt;
   const updatedAt = profile.updatedAt;
   if (typeof id !== "string" || !PROFILE_ID.test(id)
-    || typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 1
+    || typeof revision !== "number" || !Number.isSafeInteger(revision)
+    || revision < 1 || revision > Number.MAX_SAFE_INTEGER - 1
     || !PROFILE_TEMPLATES.has(template)
     || typeof createdAt !== "string" || createdAt.length === 0
     || typeof updatedAt !== "string" || updatedAt.length === 0) {
