@@ -826,7 +826,8 @@ export class DownloadQueue {
       log("WARN", "Remote downloads that could not be re-proved were refused", { count: refused.length, ids: refused.map((job) => job.id) });
     }
     for (const job of this.jobs) {
-      if (isTravelSnapshot(job.sourceAdmission) && job.stream && job.status !== "completed") {
+      if (job.status === "completed") continue;
+      if (isTravelSnapshot(job.sourceAdmission) && job.stream) {
         await this.discardProfileSelection(job, false);
         if (job.status !== "paused" && job.status !== "failed") job.status = "queued";
       }

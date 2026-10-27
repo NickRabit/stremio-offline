@@ -13,7 +13,7 @@ import {
   type SourceAdmissionSnapshotV1,
 } from "./source-admission.js";
 import { defaultDownloadSettings } from "./naming.js";
-import type { LibraryRecord } from "./libraries.js";
+import { relativeWithin, type LibraryRecord } from "./libraries.js";
 import { SOURCE_PROFILE_DEFINITIONS, SOURCE_PROFILE_IDS } from "./source-profiles.js";
 import {
   TravelVerificationError,
@@ -294,6 +294,60 @@ const selectedTravel = (
   searchStatus: "complete",
   retryable: false,
   observations: emptyObservations,
+});
+
+test("a completed Travel job remains completed after restart without a resolver or current grant", async () => {
+  const { directory, data, downloads } = await setup();
+  const source = await countingServer();
+  const first = openQueue(data, downloads);
+  let completions = 0;
+  first.onCompleted = () => { completions += 1; };
+  first.setTravelResolver(async () => selectedTravel(source.url));
+  await first.load();
+  try {
+    const added = await first.addPending(
+      "Film",
+      { type: "movie", videoId: "tt-completed-restart", selection: selection("queue-private-token") },
+      { kind: "movie", title: "Film" },
+      QUEUE_OWNER,
+      undefined,
+      travelSnapshot(),
+    );
+    assert.ok(added);
+    await waitFor(first, () => first.get(added.id)?.status === "completed");
+    await first.stop();
+    const completed = first.get(added.id)!;
+    const target = path.join(downloads, relativeWithin(LIBRARY_ID, completed.target));
+    const before = await stat(target);
+    const requests = source.requests();
+    const reopened = openQueue(data, downloads, { ownerAllowed: () => false });
+    reopened.onCompleted = () => { completions += 1; };
+    try {
+      await reopened.load();
+      const restored = reopened.get(added.id)!;
+      assert.equal(restored.status, "completed");
+      assert.equal(restored.completedAt, completed.completedAt);
+      assert.equal(restored.updatedAt, completed.updatedAt);
+      assert.equal(restored.target, completed.target);
+      assert.equal(restored.libraryId, completed.libraryId);
+      assert.equal(restored.received, 1);
+      assert.equal(restored.total, 1);
+      assert.equal(restored.error, undefined);
+      assert.equal(reopened.history().length, 1);
+      assert.equal(completions, 1, "restart does not emit completion again");
+      assert.equal(source.requests(), requests, "restart does not request the source again");
+      assert.deepEqual(internalJobs(reopened)[0]?.sourceAdmission, travelSnapshot());
+      assertPublicViewIsClean(restored as unknown as Record<string, unknown>);
+      assert.equal(await readFile(target, "utf8"), "x");
+      assert.equal((await stat(target)).mtimeMs, before.mtimeMs);
+    } finally {
+      await reopened.stop();
+    }
+  } finally {
+    await first.stop();
+    source.server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("a lazy job durably stores a detached materialized Travel snapshot without exposing it", async () => {
