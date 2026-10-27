@@ -57,6 +57,8 @@ export const USER_ALLOWED: Rule[] = [
   { method: "POST", pattern: /^\/follows$/ },
   { method: "GET", pattern: /^\/follows\/defaults$/ },
   { method: "PUT", pattern: /^\/follows\/defaults$/ },
+  // The source profiles this account may choose; the answer is already projected to its own addons.
+  { method: "GET", pattern: /^\/source-profiles$/ },
   { method: "GET", pattern: /^\/follows\/calendar$/ },
   { method: "GET", pattern: /^\/follows\/calendar-feed$/ },
   { method: "POST", pattern: /^\/follows\/calendar-feed$/ },

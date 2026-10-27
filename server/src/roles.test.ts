@@ -48,6 +48,7 @@ const ALLOWED: Array<[string, string]> = [
   ["POST", "/follows"],
   ["GET", "/follows/defaults"],
   ["PUT", "/follows/defaults"],
+  ["GET", "/source-profiles"],
   ["GET", "/follows/calendar"],
   ["GET", "/follows/calendar-feed"],
   ["POST", "/follows/calendar-feed"],
