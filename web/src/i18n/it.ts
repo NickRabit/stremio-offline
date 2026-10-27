@@ -1501,6 +1501,8 @@ export const it: Catalog = {
   "err.followJobMissing": "Il download è scomparso dalla coda. Riprova per rimetterlo in coda.",
   "err.followSkipped": "Saltato.",
   "err.followDownloadFailed": "Il download non è riuscito.",
+  "err.waitingForPreferredAudio": "In attesa dell'audio in {language}",
+  "err.checkedSources": "{count} fonti controllate, nessuna corrisponde ancora",
   "err.noSpace": "Nessuno spazio rimasto sul disco.",
   "err.quotaSpent": "La quota del disco è esaurita.",
   "err.storageUnresponsive": "Lo spazio di archiviazione non risponde.",

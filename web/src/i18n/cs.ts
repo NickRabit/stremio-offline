@@ -1554,6 +1554,8 @@ export const cs: Catalog = {
   "err.followJobMissing": "Stahování zmizelo z fronty. Opakováním ho zařadíte znovu.",
   "err.followSkipped": "Přeskočeno.",
   "err.followDownloadFailed": "Stahování selhalo.",
+  "err.waitingForPreferredAudio": "Čeká na zvukovou stopu: {language}",
+  "err.checkedSources": "Zkontrolováno zdrojů: {count}, zatím žádný nevyhovuje",
   "err.noSpace": "Na disku není místo.",
   "err.quotaSpent": "Vyčerpaná disková kvóta.",
   "err.storageUnresponsive": "Úložiště neodpovídá.",

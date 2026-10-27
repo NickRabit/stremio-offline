@@ -1501,6 +1501,8 @@ export const de: Catalog = {
   "err.followJobMissing": "Der Download ist aus der Warteschlange verschwunden. Versuchen Sie es erneut, um ihn wieder einzureihen.",
   "err.followSkipped": "Übersprungen.",
   "err.followDownloadFailed": "Der Download ist fehlgeschlagen.",
+  "err.waitingForPreferredAudio": "Wartet auf Audiospur: {language}",
+  "err.checkedSources": "{count} Quellen geprüft, noch keine passende",
   "err.noSpace": "Auf der Festplatte ist kein Speicherplatz mehr vorhanden.",
   "err.quotaSpent": "Das Festplattenkontingent ist aufgebraucht.",
   "err.storageUnresponsive": "Der Speicher reagiert nicht.",

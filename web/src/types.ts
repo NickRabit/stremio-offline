@@ -698,6 +698,7 @@ export interface FollowEpisodeDownload {
   removedAt?: string;
   removedReason?: "retention";
   reasonKey?: string;
+  reasonVars?: Record<string, string | number>;
   updatedAt: string;
 }
 export type FollowEligibility = "eligible" | "upcoming" | "outside" | "attention-no-date" | "attention-ambiguous";
@@ -713,7 +714,7 @@ export interface FollowDownloads { queued: number; waiting: number; completed: n
 /** A followed film's single record, as the follow view carries it. */
 export interface FollowMovie {
   released?: string; releaseKind?: "digital" | "physical" | "theatrical" | "catalog"; theatricalAt?: string; dateUncertain?: boolean;
-  state?: CalendarEpisodeState; reasonKey?: string; nextAttemptAt?: string; graceUntil?: string;
+  state?: CalendarEpisodeState; reasonKey?: string; reasonVars?: Record<string, string | number>; nextAttemptAt?: string; graceUntil?: string;
 }
 export interface FollowView {
   movie?: FollowMovie;
@@ -736,7 +737,7 @@ export type CalendarEpisodeState = "upcoming" | "released" | FollowDownloadState
 export interface CalendarItem {
   followId: string; type: string; metaId: string; name: string; poster?: string;
   videoId: string; season: number; episode: number; title?: string; released: string;
-  state: CalendarEpisodeState; reasonKey?: string; nextAttemptAt?: string; ambiguous?: boolean;
+  state: CalendarEpisodeState; reasonKey?: string; reasonVars?: Record<string, string | number>; nextAttemptAt?: string; ambiguous?: boolean;
   dateUncertain?: boolean; releasedSource?: "addon" | "tmdb";
 }
 /** A calendar item with no date: the calendar lists these apart, under its grid. */
@@ -745,7 +746,7 @@ export type UndatedCalendarItem = Omit<CalendarItem, "released">;
 export interface ActivityItem {
   followId: string; type: string; metaId: string; name: string; poster?: string;
   season: number; episode: number; title?: string; state: FollowDownloadState;
-  reasonKey?: string; nextAttemptAt?: string; jobId?: string; updatedAt: string;
+  reasonKey?: string; reasonVars?: Record<string, string | number>; nextAttemptAt?: string; jobId?: string; updatedAt: string;
 }
 /** How many episodes a proposed start rule would queue right now. */
 export interface FollowPreview { count: number; episodes: Array<{ key: string; season: number; episode: number; title?: string }> }

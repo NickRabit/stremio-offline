@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import express from "express";
+import { parseDownloadRules } from "../download-rules.js";
 import { messageKeyOf } from "../errors.js";
 import { FollowService, FollowStore, type FollowSourceProfile } from "../follows.js";
 import { defaultDownloadLibrary } from "../downloads.js";
@@ -37,7 +38,14 @@ interface Harness {
   store: FollowStore;
   service: FollowService;
   sourceProfiles: StoredSourceProfile[];
-  jobs: Array<{ id: string; status: string; follow?: { followId: string; episodeKey: string; intent: string }; sourceAdmission?: SourceAdmissionSnapshotV1 }>;
+  jobs: Array<{
+    id: string;
+    status: string;
+    errorKey?: string;
+    errorVars?: Record<string, string | number>;
+    follow?: { followId: string; episodeKey: string; intent: string };
+    sourceAdmission?: SourceAdmissionSnapshotV1;
+  }>;
   users: Record<string, UserRecord>;
   close(): Promise<void>;
 }
@@ -108,7 +116,15 @@ const mount = async (options: {
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
   }));
-  const jobs: Array<{ id: string; status: string; follow?: { followId: string; episodeKey: string; intent: string }; source?: { type: string; videoId: string }; sourceAdmission?: SourceAdmissionSnapshotV1 }> = [];
+  const jobs: Array<{
+    id: string;
+    status: string;
+    errorKey?: string;
+    errorVars?: Record<string, string | number>;
+    follow?: { followId: string; episodeKey: string; intent: string };
+    source?: { type: string; videoId: string };
+    sourceAdmission?: SourceAdmissionSnapshotV1;
+  }> = [];
   let nextId = 1;
   const queue = {
     addPending: async (_title: string, source: { type: string; videoId: string }, _media: unknown, _ownerUserId: string, follow: { followId: string; episodeKey: string; intent: string }, sourceAdmission?: SourceAdmissionSnapshotV1) => {
@@ -573,6 +589,101 @@ test("a follow refuses stale, non-executable and graced source profiles", async 
     assert.equal(await keyOf(graced), "err.followInvalid");
     assert.equal(h.store.get(follow.id)?.autoDownload, undefined);
   } finally { await h.close(); }
+});
+
+test("a rules profile accepts grace only for preferred audio and admits with a strict snapshot", async () => {
+  const balanced = RULE_PRESETS.find((preset) => preset.id === SOURCE_PROFILE_IDS.balanced)!;
+  const only = RULE_PRESETS.find((preset) => preset.id === SOURCE_PROFILE_IDS.myLanguage)!;
+  const preferRules = parseDownloadRules({
+    ...balanced.rules,
+    audio: { mode: "prefer", fallback: "cs" },
+  });
+  const h = await mount({
+    sourceProfiles: [
+      {
+        id: balanced.id,
+        revision: 1,
+        template: "rules",
+        nameKey: balanced.nameKey,
+        parameters: preferRules,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        id: only.id,
+        revision: 1,
+        template: "rules",
+        nameKey: only.nameKey,
+        parameters: only.rules,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    ],
+  });
+  try {
+    const follow = await (await api(h.base, "/api/follows", {
+      method: "POST", as: "A", body: { type: "series", id: "tt-rules-grace", name: "Show" },
+    })).json() as { id: string };
+    await h.store.recordCheck(follow.id, {
+      episodes: [{
+        key: "1:1",
+        videoId: "tt-rules-grace:1:1",
+        season: 1,
+        episode: 1,
+        released: new Date(Date.now() - 24 * 60 * 60_000).toISOString(),
+        firstSeenAt: "2024-01-01T00:00:00.000Z",
+      }],
+      now: Date.now(),
+    });
+    const accepted = await api(h.base, `/api/follows/${follow.id}`, {
+      method: "PATCH",
+      as: "A",
+      body: {
+        autoDownload: {
+          startMode: "from",
+          startSeason: 1,
+          startEpisode: 1,
+          graceDays: 7,
+          selection: { profile: { profileId: balanced.id, revision: 1 } },
+        },
+      },
+    });
+    assert.equal(accepted.status, 200, await accepted.clone().text());
+    const frozen = h.store.get(follow.id)?.episodes["1:1"].download;
+    assert.equal(frozen?.sourceAdmission?.policy.constraints.audio.mode, "preferred");
+    assert.deepEqual(frozen?.sourceAdmission?.policy.constraints.audio.fallback, { code: "cs" });
+    assert.equal(frozen?.sourceGraceDays, 7);
+    const jobAdmission = h.jobs.find((job) => job.follow?.episodeKey === "1:1")?.sourceAdmission;
+    assert.equal(jobAdmission?.policy.constraints.audio.mode, "strict");
+    assert.equal(jobAdmission?.policy.constraints.audio.fallback, undefined);
+    const job = h.jobs.find((candidate) => candidate.follow?.episodeKey === "1:1")!;
+    job.status = "failed";
+    job.errorKey = "err.checkedSources";
+    await h.service.sync();
+    const waiting = h.store.get(follow.id)?.episodes["1:1"].download;
+    assert.equal(waiting?.state, "waiting");
+    assert.equal(waiting?.reasonKey, "err.waitingForPreferredAudio");
+    assert.deepEqual(waiting?.reasonVars, { language: "en" });
+    assert.ok(waiting?.graceUntil);
+
+    const refused = await api(h.base, `/api/follows/${follow.id}`, {
+      method: "PATCH",
+      as: "A",
+      body: {
+        autoDownload: {
+          startMode: "from",
+          startSeason: 1,
+          startEpisode: 1,
+          graceDays: 7,
+          selection: { profile: { profileId: only.id, revision: 1 } },
+        },
+      },
+    });
+    assert.equal(refused.status, 400);
+    assert.equal(await keyOf(refused), "err.followInvalid");
+  } finally {
+    await h.close();
+  }
 });
 
 test("a follow episode view never exposes its admission snapshot", async () => {

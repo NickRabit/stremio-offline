@@ -1501,6 +1501,8 @@ export const sk: Catalog = {
   "err.followJobMissing": "Sťahovanie zmizlo z frontu. Opakovaním ho zaradíte znova.",
   "err.followSkipped": "Preskočené.",
   "err.followDownloadFailed": "Sťahovanie zlyhalo.",
+  "err.waitingForPreferredAudio": "Čaká na zvukovú stopu: {language}",
+  "err.checkedSources": "Skontrolovaných zdrojov: {count}, zatiaľ žiadny nevyhovuje",
   "err.noSpace": "Na disku nezostalo žiadne miesto.",
   "err.quotaSpent": "Disková kvóta je vyčerpaná.",
   "err.storageUnresponsive": "Úložisko nereaguje.",

@@ -1501,6 +1501,8 @@ export const ru: Catalog = {
   "err.followJobMissing": "Загрузка исчезла из очереди. Повторите, чтобы поставить её в очередь снова.",
   "err.followSkipped": "Пропущено.",
   "err.followDownloadFailed": "Не удалось скачать.",
+  "err.waitingForPreferredAudio": "Ожидание аудиодорожки: {language}",
+  "err.checkedSources": "Проверено источников: {count}, подходящих пока нет",
   "err.noSpace": "На диске не осталось места.",
   "err.quotaSpent": "Дисковая квота исчерпана.",
   "err.storageUnresponsive": "Хранилище не отвечает.",

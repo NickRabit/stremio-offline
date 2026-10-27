@@ -1501,6 +1501,8 @@ export const pl: Catalog = {
   "err.followJobMissing": "Pobieranie zniknęło z kolejki. Ponów, aby dodać je z powrotem.",
   "err.followSkipped": "Pominięto.",
   "err.followDownloadFailed": "Pobieranie nie powiodło się.",
+  "err.waitingForPreferredAudio": "Oczekiwanie na ścieżkę audio: {language}",
+  "err.checkedSources": "Sprawdzono {count} źródeł, żadne jeszcze nie pasuje",
   "err.noSpace": "Brak wolnego miejsca na dysku.",
   "err.quotaSpent": "Limit dysku został wyczerpany.",
   "err.storageUnresponsive": "Magazyn nie odpowiada.",

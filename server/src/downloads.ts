@@ -49,10 +49,16 @@ import {
   parseTravelContinuationCursorV1,
   type TravelContinuationCursorV1,
 } from "./source-travel.js";
+import {
+  parseRulesContinuationCursorV1,
+  type RulesContinuationCursorV1,
+} from "./source-rules.js";
 import { isExecutableDownloadProfile } from "./source-profiles.js";
 import type {
   ProviderPriorityProfileResolution,
   ProviderPriorityProfileResolverInput,
+  RulesProfileResolution,
+  RulesProfileResolverInput,
   TravelProfileResolution,
   TravelProfileResolverInput,
 } from "./source-profile-resolver.js";
@@ -100,12 +106,15 @@ export interface DownloadJob {
   source?: { type: string; videoId: string; tried: string[]; selection?: DownloadSelection };
   sourceAdmission?: SourceAdmissionSnapshotV1;
   travelCursor?: TravelContinuationCursorV1;
+  rulesCursor?: RulesContinuationCursorV1;
   /** Hashes of the addon records that supplied the selected stream and subtitle. */
   sourceStreamAddonIdentity?: string;
   sourceSubtitleAddonIdentity?: string;
   sourceFallbackAttempts?: number;
   travelTemporaryFailures?: number;
   travelBudgetAttempts?: number;
+  rulesTemporaryFailures?: number;
+  rulesBudgetAttempts?: number;
   /** Present when a followed series queued the job, so the follow can be reconciled
    *  with the queue across restarts. */
   follow?: { followId: string; episodeKey: string; intent: string };
@@ -305,6 +314,9 @@ export type TravelProfileResolver = (
 export type ProviderPriorityProfileResolver = (
   input: ProviderPriorityProfileResolverInput,
 ) => Promise<ProviderPriorityProfileResolution>;
+export type RulesProfileResolver = (
+  input: RulesProfileResolverInput,
+) => Promise<RulesProfileResolution>;
 export interface DebridEngine {
   configured: () => boolean;
   advance: (input: { infoHash: string; fileIdx?: number; torrentId?: string; exactFile?: boolean }) => Promise<DebridAdvance>;
@@ -413,6 +425,11 @@ const supportsTravelCursor = (
   job: Pick<DownloadJob, "sourceAdmission" | "stream" | "source">,
   snapshot: SourceAdmissionSnapshotV1 | undefined = job.sourceAdmission,
 ): boolean => isTravelSnapshot(snapshot) && job.stream === undefined && Boolean(job.source);
+
+const supportsRulesCursor = (
+  job: Pick<DownloadJob, "sourceAdmission" | "stream" | "source">,
+  snapshot: SourceAdmissionSnapshotV1 | undefined = job.sourceAdmission,
+): boolean => snapshot?.profile.template === "rules" && job.stream === undefined && Boolean(job.source);
 
 const PRIVATE_STATE_ALIASES = [
   ["sourceStreamAddonIdentity", "travelStreamAddonIdentity"],
@@ -529,6 +546,8 @@ const REMOTE_REVALIDATE_TIMEOUT_MS = 5_000;
 export const SOURCE_FALLBACK_ATTEMPT_LIMIT = 8;
 const TRAVEL_TEMPORARY_FAILURE_LIMIT = 3;
 const TRAVEL_BUDGET_ATTEMPT_LIMIT = 1_000;
+const RULES_TEMPORARY_FAILURE_LIMIT = 3;
+const RULES_BUDGET_ATTEMPT_LIMIT = 1_000;
 
 const boundedMs = (value: number | undefined, fallback: number, max: number): number =>
   typeof value === "number" && Number.isFinite(value) && value >= 1 ? Math.min(Math.floor(value), max) : fallback;
@@ -600,6 +619,7 @@ export class DownloadQueue {
   private resolver?: StreamResolver;
   private travelResolver?: TravelProfileResolver;
   private providerPriorityResolver?: ProviderPriorityProfileResolver;
+  private rulesResolver?: RulesProfileResolver;
   private retrySourceHook?: (source: { type: string; videoId: string }) => void;
   private halt?: QueueHalt;
   private readonly stateFile: string;
@@ -686,6 +706,7 @@ export class DownloadQueue {
   setResolver(resolver: StreamResolver) { this.resolver = resolver; }
   setTravelResolver(resolver: TravelProfileResolver) { this.travelResolver = resolver; }
   setProviderPriorityResolver(resolver: ProviderPriorityProfileResolver) { this.providerPriorityResolver = resolver; }
+  setRulesResolver(resolver: RulesProfileResolver) { this.rulesResolver = resolver; }
   setRetrySourceHook(hook: (source: { type: string; videoId: string }) => void) { this.retrySourceHook = hook; }
   setDebrid(engine: DebridEngine) { this.debrid = engine; }
   /** Wired after construction because the follow service that answers these is built later. */
@@ -728,9 +749,12 @@ export class DownloadQueue {
       if (isList) {
         const canonicalSnapshots: Array<{ index: number; snapshot: SourceAdmissionSnapshotV1 }> = [];
         const canonicalCursors: Array<{ index: number; cursor: TravelContinuationCursorV1 }> = [];
+        const canonicalRulesCursors: Array<{ index: number; cursor: RulesContinuationCursorV1 }> = [];
         const canonicalSourceFallbackAttempts: Array<{ index: number; attempts: number }> = [];
         const canonicalTemporaryFailures: Array<{ index: number; failures: number }> = [];
         const canonicalBudgetAttempts: Array<{ index: number; attempts: number }> = [];
+        const canonicalRulesTemporaryFailures: Array<{ index: number; failures: number }> = [];
+        const canonicalRulesBudgetAttempts: Array<{ index: number; attempts: number }> = [];
         try {
           for (const [index, rawJob] of (parsed as unknown[]).entries()) {
             if (rawJob === null || typeof rawJob !== "object") continue;
@@ -749,6 +773,15 @@ export class DownloadQueue {
                 throw new Error("The Travel continuation cursor is misplaced.");
               }
               canonicalCursors.push({ index, cursor });
+            }
+            const rulesCursor = Object.hasOwn(rawJob, "rulesCursor")
+              ? parseRulesContinuationCursorV1((rawJob as { rulesCursor: unknown }).rulesCursor)
+              : undefined;
+            if (rulesCursor !== undefined) {
+              if (!supportsRulesCursor(rawJob as DownloadJob, snapshot)) {
+                throw new Error("The rules continuation cursor is misplaced.");
+              }
+              canonicalRulesCursors.push({ index, cursor: rulesCursor });
             }
             if (Object.hasOwn(rawJob, "sourceFallbackAttempts")) {
               const attempts = (rawJob as { sourceFallbackAttempts: unknown }).sourceFallbackAttempts;
@@ -773,6 +806,22 @@ export class DownloadQueue {
                 throw new Error("The Travel budget-attempt count is invalid.");
               }
               canonicalBudgetAttempts.push({ index, attempts });
+            }
+            if (Object.hasOwn(rawJob, "rulesTemporaryFailures")) {
+              const failures = (rawJob as { rulesTemporaryFailures: unknown }).rulesTemporaryFailures;
+              if (rulesCursor === undefined || typeof failures !== "number" || !Number.isSafeInteger(failures) || failures < 0
+                || failures > RULES_TEMPORARY_FAILURE_LIMIT) {
+                throw new Error("The rules temporary-failure count is invalid.");
+              }
+              canonicalRulesTemporaryFailures.push({ index, failures });
+            }
+            if (Object.hasOwn(rawJob, "rulesBudgetAttempts")) {
+              const attempts = (rawJob as { rulesBudgetAttempts: unknown }).rulesBudgetAttempts;
+              if (rulesCursor === undefined || typeof attempts !== "number" || !Number.isSafeInteger(attempts) || attempts < 0
+                || attempts > RULES_BUDGET_ATTEMPT_LIMIT) {
+                throw new Error("The rules budget-attempt count is invalid.");
+              }
+              canonicalRulesBudgetAttempts.push({ index, attempts });
             }
             if (Object.hasOwn(rawJob, "reusedLocalCopy")) {
               const row = rawJob as Record<string, unknown>;
@@ -801,9 +850,12 @@ export class DownloadQueue {
         const jobs = parsed as DownloadJob[];
         for (const { index, snapshot } of canonicalSnapshots) jobs[index]!.sourceAdmission = snapshot;
         for (const { index, cursor } of canonicalCursors) jobs[index]!.travelCursor = cursor;
+        for (const { index, cursor } of canonicalRulesCursors) jobs[index]!.rulesCursor = cursor;
         for (const { index, attempts } of canonicalSourceFallbackAttempts) jobs[index]!.sourceFallbackAttempts = attempts;
         for (const { index, failures } of canonicalTemporaryFailures) jobs[index]!.travelTemporaryFailures = failures;
         for (const { index, attempts } of canonicalBudgetAttempts) jobs[index]!.travelBudgetAttempts = attempts;
+        for (const { index, failures } of canonicalRulesTemporaryFailures) jobs[index]!.rulesTemporaryFailures = failures;
+        for (const { index, attempts } of canonicalRulesBudgetAttempts) jobs[index]!.rulesBudgetAttempts = attempts;
         this.jobs = jobs;
       } else {
         try {
@@ -1003,6 +1055,9 @@ export class DownloadQueue {
     delete job.travelCursor;
     delete job.travelTemporaryFailures;
     delete job.travelBudgetAttempts;
+    delete job.rulesCursor;
+    delete job.rulesTemporaryFailures;
+    delete job.rulesBudgetAttempts;
     job.received = 0;
     job.total = undefined;
     job.segments = undefined;
@@ -1492,9 +1547,21 @@ export class DownloadQueue {
 
   /** A lazy job may be retried under new rules: the selection is swapped before the next
    *  resolve, so a follow whose settings changed does not leave a stale failed copy behind. */
-  async retry(id: string, selection?: DownloadSelection) {
+  async retry(
+    id: string,
+    selection?: DownloadSelection,
+    sourceAdmission?: SourceAdmissionSnapshotV1,
+  ) {
     const job = this.require(id);
     if (job.status !== "failed") throw new AppError("Only a failed download can be retried.", "err.retryOnlyFailed");
+    const rulesAdmission = sourceAdmission === undefined
+      ? undefined
+      : parseDownloadSourceAdmissionSnapshotV1(sourceAdmission);
+    if (rulesAdmission !== undefined
+      && (rulesAdmission.profile.template !== "rules"
+        || job.sourceAdmission?.profile.template !== "rules")) {
+      throw new SourceAdmissionValidationError();
+    }
     const pinned = job.sourceAdmission === undefined ? selection?.targetSettings?.libraryId : undefined;
     if (pinned !== undefined && REMOTE_LIBRARY_ID.test(pinned)) throw remoteDownloadRefused();
     if (job.sourceAdmission && job.stream) await this.discardProfileSelection(job, true);
@@ -1502,6 +1569,9 @@ export class DownloadQueue {
     delete job.sourceFallbackAttempts;
     delete job.travelTemporaryFailures;
     delete job.travelBudgetAttempts;
+    delete job.rulesCursor;
+    delete job.rulesTemporaryFailures;
+    delete job.rulesBudgetAttempts;
     job.retryCount = 0;
     job.notBefore = undefined;
     if (job.source) {
@@ -1510,6 +1580,7 @@ export class DownloadQueue {
       if (!job.stream) { job.target = ""; job.received = 0; job.total = undefined; }
     }
     if (job.source && !job.stream) this.retrySourceHook?.({ type: job.source.type, videoId: job.source.videoId });
+    if (rulesAdmission !== undefined) job.sourceAdmission = rulesAdmission;
     return this.resume(id);
   }
 
@@ -1748,6 +1819,29 @@ export class DownloadQueue {
     });
   }
 
+  async setRulesCursor(id: string, cursor?: RulesContinuationCursorV1): Promise<void> {
+    const job = this.require(id);
+    const canonical = cursor === undefined ? undefined : parseRulesContinuationCursorV1(cursor);
+    if ((job.status !== "queued" && job.status !== "checking") || !supportsRulesCursor(job)) {
+      throw new Error("A rules continuation cursor requires a queued rules snapshot job.");
+    }
+    const previous = job.rulesCursor;
+    const previousBudgetAttempts = job.rulesBudgetAttempts;
+    await this.persist({
+      apply: () => {
+        if (canonical === undefined) delete job.rulesCursor;
+        else job.rulesCursor = canonical;
+        delete job.rulesBudgetAttempts;
+      },
+      revert: () => {
+        if (previous === undefined) delete job.rulesCursor;
+        else job.rulesCursor = previous;
+        if (previousBudgetAttempts === undefined) delete job.rulesBudgetAttempts;
+        else job.rulesBudgetAttempts = previousBudgetAttempts;
+      },
+    });
+  }
+
   /** The key travels with the text so the interface can render a stored failure in
    *  whatever language is set now, not the one that was set when it failed. */
   private setError(job: DownloadJob, message?: string, key?: string, vars?: Record<string, string | number>) {
@@ -1774,10 +1868,12 @@ export class DownloadQueue {
     const {
       stream, source, subtitle: _subtitle, remoteDownload: _remoteDownload, notBefore: _notBefore,
       debrid, segments, sourceAdmission: _sourceAdmission, travelCursor: _travelCursor,
+      rulesCursor: _rulesCursor,
       sourceStreamAddonIdentity: _sourceStreamAddonIdentity,
       sourceSubtitleAddonIdentity: _sourceSubtitleAddonIdentity,
       sourceFallbackAttempts: _sourceFallbackAttempts,
-      travelTemporaryFailures: _travelTemporaryFailures, travelBudgetAttempts: _travelBudgetAttempts, ...rest
+      travelTemporaryFailures: _travelTemporaryFailures, travelBudgetAttempts: _travelBudgetAttempts,
+      rulesTemporaryFailures: _rulesTemporaryFailures, rulesBudgetAttempts: _rulesBudgetAttempts, ...rest
     } = job;
     return {
       ...rest,
@@ -1991,7 +2087,7 @@ export class DownloadQueue {
    *  so adding a whole season in bulk does not set off an avalanche of requests at once. */
   private async stageSelectedProfileSource(
     job: DownloadJob,
-    outcome: Extract<TravelProfileResolution | ProviderPriorityProfileResolution, { status: "selected" }>,
+    outcome: Extract<TravelProfileResolution | ProviderPriorityProfileResolution | RulesProfileResolution, { status: "selected" }>,
     controller: AbortController,
     startedAt: number,
   ): Promise<boolean> {
@@ -2069,6 +2165,9 @@ export class DownloadQueue {
       cursor: job.travelCursor,
       temporaryFailures: job.travelTemporaryFailures,
       budgetAttempts: job.travelBudgetAttempts,
+      rulesCursor: job.rulesCursor,
+      rulesTemporaryFailures: job.rulesTemporaryFailures,
+      rulesBudgetAttempts: job.rulesBudgetAttempts,
     };
     try {
       await this.persist({
@@ -2085,6 +2184,9 @@ export class DownloadQueue {
           delete job.travelCursor;
           delete job.travelTemporaryFailures;
           delete job.travelBudgetAttempts;
+          delete job.rulesCursor;
+          delete job.rulesTemporaryFailures;
+          delete job.rulesBudgetAttempts;
         },
         revert: () => {
           job.stream = previous.stream;
@@ -2103,6 +2205,12 @@ export class DownloadQueue {
           else job.travelTemporaryFailures = previous.temporaryFailures;
           if (previous.budgetAttempts === undefined) delete job.travelBudgetAttempts;
           else job.travelBudgetAttempts = previous.budgetAttempts;
+          if (previous.rulesCursor === undefined) delete job.rulesCursor;
+          else job.rulesCursor = previous.rulesCursor;
+          if (previous.rulesTemporaryFailures === undefined) delete job.rulesTemporaryFailures;
+          else job.rulesTemporaryFailures = previous.rulesTemporaryFailures;
+          if (previous.rulesBudgetAttempts === undefined) delete job.rulesBudgetAttempts;
+          else job.rulesBudgetAttempts = previous.rulesBudgetAttempts;
         },
       });
     } catch (error) {
@@ -2197,6 +2305,96 @@ export class DownloadQueue {
             else job.travelTemporaryFailures = previousFailures;
             if (previousBudgetAttempts === undefined) delete job.travelBudgetAttempts;
             else job.travelBudgetAttempts = previousBudgetAttempts;
+            job.status = previousStatus;
+            job.notBefore = previousNotBefore;
+          },
+        });
+        return false;
+      }
+      return this.stageSelectedProfileSource(job, outcome, controller, startedAt);
+    }
+
+    if (snapshot.profile.template === "rules") {
+      if (!this.rulesResolver) throw new SourceAdmissionRuntimeUnavailable();
+      const outcome = await this.rulesResolver({
+        source: job.source,
+        snapshot,
+        ownerUserId: this.ownerOf(job),
+        signal: controller.signal,
+        ...(job.rulesCursor === undefined ? {} : { cursor: job.rulesCursor }),
+      });
+      controller.signal.throwIfAborted();
+
+      if (outcome.status === "accessDenied" || outcome.status === "cancelled") {
+        this.pauseForPermission(job);
+        return false;
+      }
+      if (outcome.status === "noMatch") {
+        delete job.rulesCursor;
+        delete job.rulesTemporaryFailures;
+        delete job.rulesBudgetAttempts;
+        job.status = "failed";
+        job.speed = 0;
+        if (outcome.observations.probesUsed > 0) {
+          this.setError(
+            job,
+            `Checked ${outcome.observations.probesUsed} sources, none matched yet`,
+            "err.checkedSources",
+            { count: outcome.observations.probesUsed },
+          );
+        } else {
+          this.setError(job, "No matching source was found.", "err.noMatchingSource");
+        }
+        return false;
+      }
+      if (outcome.status === "budgetExhausted" || outcome.status === "temporaryFailure") {
+        const temporaryFailure = outcome.status === "temporaryFailure";
+        const failures = temporaryFailure ? (job.rulesTemporaryFailures ?? 0) + 1 : undefined;
+        const budgetAttempts = temporaryFailure ? job.rulesBudgetAttempts : (job.rulesBudgetAttempts ?? 0) + 1;
+        if ((failures !== undefined && failures > RULES_TEMPORARY_FAILURE_LIMIT)
+          || (budgetAttempts !== undefined && budgetAttempts > RULES_BUDGET_ATTEMPT_LIMIT)) {
+          delete job.rulesCursor;
+          delete job.rulesTemporaryFailures;
+          delete job.rulesBudgetAttempts;
+          job.status = "failed";
+          job.speed = 0;
+          if (budgetAttempts !== undefined) {
+            this.setError(
+              job,
+              `Checked ${outcome.observations.probesUsed} sources, none matched yet`,
+              "err.checkedSources",
+              { count: outcome.observations.probesUsed },
+            );
+          } else {
+            this.setError(job, "No matching source was found.", "err.noMatchingSource");
+          }
+          await this.save();
+          return false;
+        }
+        const previousCursor = job.rulesCursor;
+        const previousFailures = job.rulesTemporaryFailures;
+        const previousBudgetAttempts = job.rulesBudgetAttempts;
+        const previousStatus = job.status;
+        const previousNotBefore = job.notBefore;
+        const wait = this.retryDelay(failures ?? 1);
+        await this.persist({
+          apply: () => {
+            job.rulesCursor = outcome.cursor;
+            if (failures === undefined) delete job.rulesTemporaryFailures;
+            else job.rulesTemporaryFailures = failures;
+            if (budgetAttempts === undefined) delete job.rulesBudgetAttempts;
+            else job.rulesBudgetAttempts = budgetAttempts;
+            job.status = "queued";
+            job.notBefore = this.now() + wait;
+            this.setError(job);
+          },
+          revert: () => {
+            if (previousCursor === undefined) delete job.rulesCursor;
+            else job.rulesCursor = previousCursor;
+            if (previousFailures === undefined) delete job.rulesTemporaryFailures;
+            else job.rulesTemporaryFailures = previousFailures;
+            if (previousBudgetAttempts === undefined) delete job.rulesBudgetAttempts;
+            else job.rulesBudgetAttempts = previousBudgetAttempts;
             job.status = previousStatus;
             job.notBefore = previousNotBefore;
           },

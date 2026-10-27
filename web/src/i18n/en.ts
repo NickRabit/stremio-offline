@@ -1560,6 +1560,8 @@ export const en = {
   "err.followJobMissing": "The download disappeared from the queue. Retry it to queue it again.",
   "err.followSkipped": "Skipped.",
   "err.followDownloadFailed": "The download failed.",
+  "err.waitingForPreferredAudio": "Waiting for {language} audio",
+  "err.checkedSources": "Checked {count} sources, none matched yet",
   "err.noSpace": "No space left on the disk.",
   "err.quotaSpent": "The disk quota is used up.",
   "err.storageUnresponsive": "The storage is not responding.",

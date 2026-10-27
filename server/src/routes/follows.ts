@@ -54,7 +54,7 @@ interface FollowView {
   latestEpisode?: FollowEpisodeView;
   autoDownload?: FollowAutoDownloadView;
   downloads: FollowDownloads;
-  movie?: { released?: string; releaseKind?: FollowEpisode["releaseKind"]; theatricalAt?: string; dateUncertain?: boolean; state?: string; reasonKey?: string; nextAttemptAt?: string; graceUntil?: string };
+  movie?: { released?: string; releaseKind?: FollowEpisode["releaseKind"]; theatricalAt?: string; dateUncertain?: boolean; state?: string; reasonKey?: string; reasonVars?: Record<string, string | number>; nextAttemptAt?: string; graceUntil?: string };
 }
 
 const episodeView = (episode: FollowEpisode): FollowEpisodeView => ({
@@ -130,7 +130,7 @@ const movieView = (episode: FollowEpisode) => ({
   ...(episode.releaseKind ? { releaseKind: episode.releaseKind } : {}),
   ...(episode.theatricalAt ? { theatricalAt: episode.theatricalAt } : {}),
   ...(episode.dateUncertain ? { dateUncertain: true } : {}),
-  ...(episode.download ? { state: episode.download.state, ...(episode.download.reasonKey ? { reasonKey: episode.download.reasonKey } : {}), ...(episode.download.nextAttemptAt ? { nextAttemptAt: episode.download.nextAttemptAt } : {}), ...(episode.download.graceUntil ? { graceUntil: episode.download.graceUntil } : {}) } : {}),
+  ...(episode.download ? { state: episode.download.state, ...(episode.download.reasonKey ? { reasonKey: episode.download.reasonKey } : {}), ...(episode.download.reasonVars ? { reasonVars: episode.download.reasonVars } : {}), ...(episode.download.nextAttemptAt ? { nextAttemptAt: episode.download.nextAttemptAt } : {}), ...(episode.download.graceUntil ? { graceUntil: episode.download.graceUntil } : {}) } : {}),
 });
 
 /** The pinned destination a follow stores. An explicit choice is already concrete; a rule
@@ -324,9 +324,6 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
           if (!Number.isInteger(graceDays) || graceDays < 0 || graceDays > 30) throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
         }
         const profileReference = profileSelectionReference(item.selection);
-        if (profileReference.present && graceDays !== undefined && graceDays > 0) {
-          throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
-        }
         const admission = profileReference.present
           ? materializeSourceProfileAdmission(
               deps,
@@ -335,6 +332,11 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
               follow.type === "movie" ? "movie" : "episode",
             )
           : undefined;
+        if (admission && graceDays !== undefined && graceDays > 0
+          && (admission.profile.template !== "rules"
+            || admission.policy.constraints.audio.mode !== "preferred")) {
+          throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
+        }
         const sourceProfile = admission
           ? sourceProfileSnapshotForAdmission(store.sourceProfiles(), admission.profile)
           : undefined;
@@ -442,7 +444,8 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
         eligibility: downloadEligibility(follow, episode, now, watched),
         ...(episode.download ? {
           download: Object.fromEntries(
-            Object.entries(episode.download).filter(([key]) => key !== "sourceAdmission" && key !== "legacyRule"),
+            Object.entries(episode.download).filter(([key]) =>
+              key !== "sourceAdmission" && key !== "sourceGraceDays" && key !== "legacyRule"),
           ),
         } : {}),
       }))

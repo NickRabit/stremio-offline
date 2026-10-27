@@ -1501,6 +1501,8 @@ export const ptBR: Catalog = {
   "err.followJobMissing": "O download desapareceu da fila. Tente de novo para colocá-lo na fila outra vez.",
   "err.followSkipped": "Ignorado.",
   "err.followDownloadFailed": "O download falhou.",
+  "err.waitingForPreferredAudio": "Aguardando o áudio em {language}",
+  "err.checkedSources": "{count} fontes verificadas, nenhuma corresponde ainda",
   "err.noSpace": "Não há mais espaço no disco.",
   "err.quotaSpent": "A cota de disco está esgotada.",
   "err.storageUnresponsive": "O armazenamento não está respondendo.",

@@ -18,16 +18,23 @@ import { relativeWithin, type LibraryRecord } from "./libraries.js";
 import {
   buildTemplatePolicy,
   defaultTemplateParameters,
+  RULE_PRESETS,
   SOURCE_PROFILE_DEFINITIONS,
   SOURCE_PROFILE_IDS,
   type TravelParameters,
 } from "./source-profiles.js";
+import { rulesPolicy } from "./download-rules.js";
 import {
   TravelVerificationError,
   type TravelContinuationCursorV1,
 } from "./source-travel.js";
+import {
+  RULES_INSPECTION_BUDGET,
+  type RulesContinuationCursorV1,
+} from "./source-rules.js";
 import type {
   ProviderPriorityProfileResolution,
+  RulesProfileResolution,
   TravelProfileResolution,
 } from "./source-profile-resolver.js";
 import {
@@ -48,6 +55,7 @@ const QUEUE_OWNER = "usr_00000031";
 const PROVIDER_ONE = "addon:queue-private-token";
 const PROVIDER_TWO = "addon:second-provider";
 const TRAVEL_BUDGET_ATTEMPT_LIMIT = 1_000;
+const RULES_BUDGET_ATTEMPT_LIMIT = 1_000;
 
 const travelCursor = (
   nextIndex = 2,
@@ -58,6 +66,19 @@ const travelCursor = (
   listingFingerprint: "b".repeat(64),
   nextIndex,
   rejectedIndices,
+});
+
+const rulesCursor = (
+  nextIndex = 2,
+  rejectedIndices: number[] = [0, 1],
+  verified: RulesContinuationCursorV1["verified"] = [],
+): RulesContinuationCursorV1 => ({
+  schemaVersion: 1,
+  scopeFingerprint: "c".repeat(64),
+  listingFingerprint: "d".repeat(64),
+  nextIndex,
+  rejectedIndices,
+  verified,
 });
 
 const fixedSnapshot = (profileId: string): SourceAdmissionSnapshotV1 => {
@@ -80,6 +101,22 @@ const fixedSnapshot = (profileId: string): SourceAdmissionSnapshotV1 => {
 const travelSnapshot = (): SourceAdmissionSnapshotV1 => fixedSnapshot(SOURCE_PROFILE_IDS.travel);
 const providerPrioritySnapshot = (): SourceAdmissionSnapshotV1 =>
   fixedSnapshot(SOURCE_PROFILE_IDS.providerPriority);
+const rulesSnapshot = (): SourceAdmissionSnapshotV1 => {
+  const preset = RULE_PRESETS.find((candidate) => candidate.id === SOURCE_PROFILE_IDS.balanced);
+  assert.ok(preset);
+  const providerKeys = [PROVIDER_TWO, PROVIDER_ONE];
+  return parseSourceAdmissionSnapshotV1({
+    schemaVersion: 1,
+    profile: { id: preset.id, revision: 1, template: "rules" },
+    operation: "downloadToLibrary",
+    providerKeys,
+    policy: materializeSourceAdmissionPolicy(
+      rulesPolicy(preset.rules, "movie"),
+      providerKeys,
+      { audioLanguage: "English", subtitleLanguage: "cs" },
+    ),
+  });
+};
 const nonTravelSnapshot = (): SourceAdmissionSnapshotV1 =>
   fixedSnapshot(SOURCE_PROFILE_IDS.recommended);
 
@@ -190,6 +227,9 @@ const assertPublicViewIsClean = (view: Record<string, unknown>) => {
   assert.equal(Object.hasOwn(view, "travelSubtitleAddonIdentity"), false);
   assert.equal(Object.hasOwn(view, "travelSourceFallbackAttempts"), false);
   assert.equal(Object.hasOwn(view, "travelBudgetAttempts"), false);
+  assert.equal(Object.hasOwn(view, "rulesCursor"), false);
+  assert.equal(Object.hasOwn(view, "rulesTemporaryFailures"), false);
+  assert.equal(Object.hasOwn(view, "rulesBudgetAttempts"), false);
   assert.equal(Object.hasOwn(view, "policy"), false);
   const text = JSON.stringify(view);
   assert.doesNotMatch(text, /queue-private-token/);
@@ -202,6 +242,7 @@ const assertPublicViewIsClean = (view: Record<string, unknown>) => {
   assert.doesNotMatch(text, /travelSubtitleAddonIdentity/);
   assert.doesNotMatch(text, /travelSourceFallbackAttempts/);
   assert.doesNotMatch(text, /travelBudgetAttempts/);
+  assert.doesNotMatch(text, /rulesCursor/);
   assert.doesNotMatch(text, /"policy"/);
 };
 
@@ -382,6 +423,23 @@ const selectedProviderPriority = (
   ...(options.subtitle === undefined ? {} : { subtitle: options.subtitle }),
   ...(options.subtitleAddonIdentity === undefined ? {} : { subtitleAddonIdentity: options.subtitleAddonIdentity }),
   searchStatus: "complete",
+});
+
+const selectedRules = (url: string): RulesProfileResolution => ({
+  status: "selected",
+  stream: {
+    url,
+    addonKey: "queue-private-token",
+    addonName: "Rules fixture",
+    name: "Film.mp4",
+    behaviorHints: { filename: "Film.mp4", videoSize: 1 },
+  },
+  resolution: { checkedCandidates: 1, audioLanguage: "en", audioEvidence: "probe" },
+  settings: defaultDownloadSettings(),
+  streamAddonIdentity: "a".repeat(64),
+  searchStatus: "complete",
+  retryable: false,
+  observations: emptyObservations,
 });
 
 test("a stored Travel variant runs through the Travel resolver", async () => {
@@ -3431,6 +3489,243 @@ test("an explicit retry of Provider priority no-match resolves with a fresh budg
   } finally {
     await queue.stop();
     server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a rules snapshot runs only through the rules resolver and stages a verified HTTP source", async () => {
+  const { directory, data, downloads } = await setup();
+  const source = await countingServer();
+  const queue = openQueue(data, downloads);
+  const calls = { rules: 0, travel: 0, provider: 0 };
+  queue.setRulesResolver(async () => {
+    calls.rules += 1;
+    return selectedRules(source.url);
+  });
+  queue.setTravelResolver(async () => {
+    calls.travel += 1;
+    return selectedTravel(source.url);
+  });
+  queue.setProviderPriorityResolver(async () => {
+    calls.provider += 1;
+    return selectedProviderPriority(source.url);
+  });
+  await queue.load();
+  try {
+    const added = await queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt-rules-http", selection: selection("queue-private-token") },
+      { kind: "movie", title: "Film" },
+      QUEUE_OWNER,
+      undefined,
+      rulesSnapshot(),
+    );
+    assert.ok(added);
+    await waitFor(queue, () => queue.get(added.id)?.status === "completed");
+    assert.deepEqual(calls, { rules: 1, travel: 0, provider: 0 });
+    assert.equal(internalJobs(queue)[0]?.rulesCursor, undefined);
+    assertPublicViewIsClean(queue.get(added.id)! as unknown as Record<string, unknown>);
+  } finally {
+    await queue.stop();
+    source.server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a rules budget cursor is persisted, retryable, and eventually fails at its bound", async () => {
+  const { directory, data, downloads } = await setup();
+  let clock = 10_000;
+  const queue = openQueue(data, downloads, {
+    now: () => clock,
+    retryDelay: () => 100,
+  });
+  let calls = 0;
+  queue.setRulesResolver(async (input) => {
+    calls += 1;
+    assert.deepEqual(input.cursor?.nextIndex, calls === 1 ? undefined : RULES_INSPECTION_BUDGET);
+    return {
+      status: "budgetExhausted",
+      retryable: true,
+      observations: { ...emptyObservations, probesUsed: RULES_INSPECTION_BUDGET },
+      cursor: rulesCursor(RULES_INSPECTION_BUDGET, [0, 1]),
+    };
+  });
+  await queue.load();
+  try {
+    const added = await queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt-rules-budget", selection: selection("queue-private-token") },
+      { kind: "movie", title: "Film" },
+      QUEUE_OWNER,
+      undefined,
+      rulesSnapshot(),
+    );
+    assert.ok(added);
+    await waitFor(queue, () => internalJobs(queue)[0]?.rulesBudgetAttempts === 1);
+    assert.deepEqual(internalJobs(queue)[0]?.rulesCursor, rulesCursor(RULES_INSPECTION_BUDGET, [0, 1]));
+
+    internalJobs(queue)[0]!.rulesBudgetAttempts = RULES_BUDGET_ATTEMPT_LIMIT;
+    internalJobs(queue)[0]!.notBefore = clock;
+    queue.changed();
+    await waitFor(queue, () => queue.get(added.id)?.status === "failed");
+    assert.equal(queue.get(added.id)?.errorKey, "err.checkedSources");
+    assert.equal(internalJobs(queue)[0]?.rulesCursor, undefined);
+    assert.equal(internalJobs(queue)[0]?.rulesBudgetAttempts, undefined);
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("load accepts a rules cursor only on an unresolved rules job", async () => {
+  const { directory, data, downloads, state } = await setup();
+  const cursor = rulesCursor(3, [0], [{
+    continuationKey: "a".repeat(64),
+    audioTier: "preferred",
+    heightPixels: 720,
+    subtitleTier: "unknown",
+  }]);
+  await writeFile(state, JSON.stringify([{
+    ...rawLazyJob(rulesSnapshot()),
+    rulesCursor: cursor,
+    rulesBudgetAttempts: 7,
+  }], null, 2));
+  const queue = openQueue(data, downloads);
+  const entered = deferred();
+  queue.setRulesResolver(async (input) => {
+    assert.deepEqual(input.cursor, cursor);
+    entered.release();
+    return {
+      status: "temporaryFailure",
+      retryable: true,
+      observations: { ...emptyObservations, temporaryFailures: 1 },
+      cursor,
+    };
+  });
+  try {
+    await queue.load();
+    await entered.promise;
+    assert.deepEqual(internalJobs(queue)[0]?.rulesCursor, cursor);
+    assert.equal(internalJobs(queue)[0]?.rulesBudgetAttempts, 7);
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("explicit retry clears rules cursor state and tried sources", async () => {
+  const { directory, data, downloads } = await setup();
+  const source = await countingServer();
+  let calls = 0;
+  const queue = openQueue(data, downloads);
+  queue.setRulesResolver(async (input) => {
+    calls += 1;
+    if (calls === 1) {
+      return {
+        status: "noMatch",
+        retryable: false,
+        observations: { ...emptyObservations, probesUsed: 1 },
+      };
+    }
+    assert.equal(input.cursor, undefined);
+    assert.deepEqual(input.source.tried, []);
+    return selectedRules(source.url);
+  });
+  await queue.load();
+  try {
+    const added = await queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt-rules-retry", selection: selection("queue-private-token") },
+      { kind: "movie", title: "Film" },
+      QUEUE_OWNER,
+      undefined,
+      rulesSnapshot(),
+    );
+    assert.ok(added);
+    await waitFor(queue, () => queue.get(added.id)?.status === "failed");
+    const job = internalJobs(queue)[0]!;
+    job.rulesCursor = rulesCursor();
+    job.rulesBudgetAttempts = 9;
+    job.rulesTemporaryFailures = 2;
+    job.source!.tried.push("http://127.0.0.1/stale");
+    await queue.retry(added.id);
+    await waitFor(queue, () => queue.get(added.id)?.status === "completed");
+    assert.equal(job.rulesCursor, undefined);
+    assert.equal(job.rulesBudgetAttempts, undefined);
+    assert.equal(job.rulesTemporaryFailures, undefined);
+  } finally {
+    await queue.stop();
+    source.server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a selected rules torrent uses the existing exact-file debrid path", async () => {
+  const { directory, data, downloads } = await setup();
+  const ready = await countingServer();
+  const hash = "7".repeat(40);
+  const calls: Array<{ infoHash: string; fileIdx?: number; exactFile?: boolean }> = [];
+  const queue = openQueue(data, downloads, {
+    debrid: {
+      configured: () => true,
+      advance: async (input) => {
+        calls.push(input);
+        return { ready: true, url: ready.url, torrentId: "rules-torrent", filename: "Film.mp4" };
+      },
+    },
+  });
+  queue.setRulesResolver(async () => ({
+    ...selectedRules(ready.url),
+    stream: {
+      infoHash: hash,
+      fileIdx: 0,
+      addonKey: "queue-private-token",
+      addonName: "Rules fixture",
+      name: "Film.mp4",
+      behaviorHints: { filename: "Film.mp4", videoSize: 1 },
+    },
+    resolution: { checkedCandidates: 0, audioLanguage: "en", audioEvidence: "listing" },
+  }));
+  await queue.load();
+  try {
+    const added = await queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt-rules-torrent", selection: selection("queue-private-token") },
+      { kind: "movie", title: "Film" },
+      QUEUE_OWNER,
+      undefined,
+      rulesSnapshot(),
+    );
+    assert.ok(added);
+    await waitFor(queue, () => queue.get(added.id)?.status === "completed");
+    assert.deepEqual(calls, [{ infoHash: hash, fileIdx: 0, torrentId: undefined, exactFile: true }]);
+  } finally {
+    await queue.stop();
+    ready.server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a rules job with no rules resolver fails closed", async () => {
+  const { directory, data, downloads } = await setup();
+  const queue = openQueue(data, downloads);
+  queue.setTravelResolver(async () => selectedTravel("http://127.0.0.1/not-used.mp4"));
+  queue.setProviderPriorityResolver(async () => selectedProviderPriority("http://127.0.0.1/not-used.mp4"));
+  await queue.load();
+  try {
+    const added = await queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt-rules-missing-runtime", selection: selection("queue-private-token") },
+      { kind: "movie", title: "Film" },
+      QUEUE_OWNER,
+      undefined,
+      rulesSnapshot(),
+    );
+    assert.ok(added);
+    await waitFor(queue, () => queue.get(added.id)?.status === "failed");
+    assert.equal(queue.get(added.id)?.errorKey, "err.noMatchingSource");
+  } finally {
+    await queue.stop();
     await rm(directory, { recursive: true, force: true });
   }
 });

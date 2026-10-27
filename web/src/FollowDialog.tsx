@@ -18,6 +18,9 @@ export const toEpisodes = (videos?: Video[]): SetupEpisode[] => (videos ?? []).f
 
 const pad2 = (value: number) => String(Math.max(0, Math.trunc(value))).padStart(2, "0");
 const episodeCode = (season: number, episode: number) => `S${pad2(season)}E${pad2(episode)}`;
+const reasonVars = (vars: Record<string, string | number> | undefined) => vars?.language === undefined
+  ? vars
+  : { ...vars, language: languageName(String(vars.language)) };
 const formatWhen = (value?: string) => value ? new Date(value).toLocaleString(localeTag(), { dateStyle: "short", timeStyle: "short" }) : "";
 /** A release is a calendar date kept as an instant inside that UTC day; see FollowingPage. */
 const formatDay = (value?: string) => value ? new Date(value).toLocaleDateString(localeTag(), { timeZone: "UTC" }) : "";
@@ -160,7 +163,9 @@ export function FollowDialog({ follow, videos, languages, libraries, addons, aud
             {isMovie && <p className="identify-hint">{movieLine}</p>}
             {isMovie && movie?.state && <div className="follow-episode-meta">
               <span className={`state-pill state-${movie.state}`}>{movie.state === "waiting" ? t("follow.stateWaiting") : movie.state === "completed" ? t("follow.stateCompleted") : movie.state === "skipped" ? t("follow.stateSkipped") : movie.state === "attention" ? t("follow.stateAttention") : t("follow.stateQueued")}</span>
-              {movie.state === "waiting" && futureGrace(movie.graceUntil)
+              {movie.state === "waiting" && movie.reasonKey === "err.waitingForPreferredAudio"
+                ? <small>{serverText(movie.reasonKey, movie.reasonKey, reasonVars(movie.reasonVars))}</small>
+                : movie.state === "waiting" && futureGrace(movie.graceUntil)
                 ? <small>{t("follow.graceWaiting", { language: graceLanguage, date: formatDay(movie.graceUntil) })}</small>
                 : movie.state === "waiting" && movie.nextAttemptAt ? <small>{t("follow.nextAttempt", { time: formatWhen(movie.nextAttemptAt) })}</small> : null}
               {(movie.state === "reserved" || movie.state === "queued" || movie.state === "waiting") && <button type="button" onClick={() => void runAction(() => api.skipFollowEpisode(current.id, "1:1"))}>{t("follow.skip")}</button>}
@@ -198,10 +203,12 @@ export function FollowDialog({ follow, videos, languages, libraries, addons, aud
                 <div className="follow-episode-meta">
                   <small title={row.dateUncertain ? t("following.dateUncertainHint") : undefined}>{episodeDate(row)}</small>
                   {pillState && <span className={`state-pill state-${pillState}`}>{state === "waiting" ? t("follow.stateWaiting") : state === "completed" ? (row.download?.removedAt ? t("follow.removedAfterWatching") : t("follow.stateCompleted")) : state === "skipped" ? t("follow.stateSkipped") : state === "attention" ? t("follow.stateAttention") : state === "reserved" || state === "queued" ? t("follow.stateQueued") : t("follow.stateUpcoming")}</span>}
-                  {state === "waiting" && grace
+                  {state === "waiting" && row.download?.reasonKey === "err.waitingForPreferredAudio"
+                    ? <small>{serverText(row.download.reasonKey, row.download.reasonKey, reasonVars(row.download.reasonVars))}</small>
+                    : state === "waiting" && grace
                     ? <small>{t("follow.graceWaiting", { language: graceLanguage, date: formatDay(grace) })}</small>
                     : state === "waiting" && row.download?.nextAttemptAt ? <small>{t("follow.nextAttempt", { time: formatWhen(row.download.nextAttemptAt) })}</small> : null}
-                  {state === "attention" && row.download?.reasonKey && <small>{serverText(row.download.reasonKey, row.download.reasonKey)}</small>}
+                  {state === "attention" && row.download?.reasonKey && <small>{serverText(row.download.reasonKey, row.download.reasonKey, reasonVars(row.download.reasonVars))}</small>}
                 </div>
                 {(canSkip || canRetry) && <span className="follow-episode-actions">
                   {canSkip && <button type="button" onClick={() => void runAction(() => api.skipFollowEpisode(current.id, row.key))}>{t("follow.skip")}</button>}

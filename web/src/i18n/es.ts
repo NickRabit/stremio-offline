@@ -1501,6 +1501,8 @@ export const es: Catalog = {
   "err.followJobMissing": "La descarga desapareció de la cola. Reinténtalo para volver a ponerla en cola.",
   "err.followSkipped": "Omitido.",
   "err.followDownloadFailed": "La descarga falló.",
+  "err.waitingForPreferredAudio": "Esperando audio en {language}",
+  "err.checkedSources": "{count} fuentes comprobadas; aún ninguna coincide",
   "err.noSpace": "No queda espacio en el disco.",
   "err.quotaSpent": "La cuota de disco está agotada.",
   "err.storageUnresponsive": "El almacenamiento no responde.",

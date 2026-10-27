@@ -1501,6 +1501,8 @@ export const fr: Catalog = {
   "err.followJobMissing": "Le téléchargement a disparu de la file d'attente. Réessayez pour le remettre en file.",
   "err.followSkipped": "Ignoré.",
   "err.followDownloadFailed": "Le téléchargement a échoué.",
+  "err.waitingForPreferredAudio": "En attente de la piste audio {language}",
+  "err.checkedSources": "{count} sources vérifiées, aucune ne correspond encore",
   "err.noSpace": "Il ne reste plus d'espace sur le disque.",
   "err.quotaSpent": "Le quota de disque est épuisé.",
   "err.storageUnresponsive": "Le stockage ne répond pas.",

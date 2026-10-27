@@ -111,6 +111,13 @@ describe("FollowDialog", () => {
     expect(row.textContent).not.toContain("next attempt");
   });
 
+  it("a persisted preferred-audio wait reason renders its language variable", async () => {
+    await render({ ...follow, autoDownload: { ...follow.autoDownload!, graceDays: 7 } }, [
+      { key: "1:2", season: 1, episode: 2, title: "Waiting", released: "2024-01-08", eligibility: "eligible", download: { state: "waiting", intent: "b", generation: 1, attempts: 1, nextAttemptAt: "2099-01-01T00:00:00.000Z", graceUntil: "2099-01-01T00:00:00.000Z", reasonKey: "err.waitingForPreferredAudio", reasonVars: { language: "en" }, updatedAt: "" } },
+    ]);
+    expect(rowFor("S01E02")!.textContent).toContain("Waiting for English audio");
+  });
+
   it("a waiting film inside the window says it is waiting for the preferred audio", async () => {
     await render({ ...follow, type: "movie", metaId: "tt9", name: "Film", autoDownload: { ...follow.autoDownload!, graceDays: 7 }, movie: { released: "2026-11-20T23:59:59.999Z", releaseKind: "digital", state: "waiting", nextAttemptAt: "2026-11-21T10:00:00.000Z", graceUntil: "2026-11-27T23:59:59.999Z" } }, []);
     expect(host.textContent).toContain("waiting for English until");

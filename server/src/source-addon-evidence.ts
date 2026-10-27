@@ -115,6 +115,25 @@ const optionalString = (value: unknown): string | undefined =>
 const validVideoSize = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 
+export function heightFromListing(stream: StreamItem): number | undefined {
+  const text = [
+    stream.name,
+    stream.title,
+    stream.description,
+    stream.behaviorHints?.filename,
+  ].filter((value): value is string => typeof value === "string").join(" ");
+  const matches = [
+    /(?:\b2160p\b|\b4k\b|\buhd\b)/i.test(text) ? 2160 : undefined,
+    /\b1440p\b/i.test(text) ? 1440 : undefined,
+    /(?:\b1080p\b|\bfhd\b)/i.test(text) ? 1080 : undefined,
+    /(?:\b720p\b|(?<![\w-])HD(?![\w-]))/i.test(text) ? 720 : undefined,
+    /\b576p\b/i.test(text) ? 576 : undefined,
+    /(?:\b480p\b|(?<![\w-])SD(?![\w-]))/i.test(text) ? 480 : undefined,
+    /\b360p\b/i.test(text) ? 360 : undefined,
+  ].filter((value): value is number => value !== undefined);
+  return matches.length ? Math.max(...matches) : undefined;
+}
+
 const listingReleaseKind = (text: string): ReleaseKind | undefined => {
   // Short tags count only in capitals: "Cam" or "ts" in a title is a word, not a release.
   if (/\b(?:HDCAM|CAMRIP)\b/i.test(text) || /\bCAM\b/.test(text)) return "cam";
@@ -213,9 +232,10 @@ export function listedAddonSourceEvidence(
     : undefined;
   const audioLanguages = addonAudioLanguages(input.stream, titleLanguage);
   const bytes = addonStreamSize(input.stream);
+  const heightPixels = heightFromListing(input.stream);
   const hints = bytes !== undefined && Number.isFinite(bytes) && bytes >= 0
-    ? { bytes }
-    : undefined;
+    ? { bytes, ...(heightPixels === undefined ? {} : { heightPixels }) }
+    : heightPixels === undefined ? undefined : { heightPixels };
   const facts: SourceEvidenceCandidateV1["facts"] = {
     audio: {
       listed: audioLanguages,
@@ -225,7 +245,9 @@ export function listedAddonSourceEvidence(
     externalSubtitles: subtitleLanguages(input.stream, input.externalSubtitles ?? []),
     bytes: unknown(),
     durationSeconds: unknown(),
-    heightPixels: unknown(),
+    heightPixels: heightPixels === undefined
+      ? unknown()
+      : { evidence: "listed", value: heightPixels },
     releaseKind: releaseKindFromListing(input.stream),
     sampleOrTrailer: unknown(),
   };

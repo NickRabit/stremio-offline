@@ -179,10 +179,30 @@ const numericAssessment = (
   range: { min?: number; max?: number } | undefined,
 ): { status: "pass" } | { status: "needsInspection" } | { status: "excluded" } => {
   if (!range) return { status: "pass" };
-  if (fact.evidence === "unknown" || fact.evidence === "listed" || !Number.isFinite(fact.value)) {
+  if (fact.evidence === "unknown" || !Number.isFinite(fact.value)) {
     return { status: "needsInspection" };
   }
+  if (fact.evidence === "listed") {
+    return inRange(fact.value, range)
+      ? { status: "needsInspection" }
+      : { status: "excluded" };
+  }
   return inRange(fact.value, range) ? { status: "pass" } : { status: "excluded" };
+};
+
+const approximateBytesAssessment = (
+  candidate: SourceEvidenceCandidateV1,
+  range: { min?: number; max?: number } | undefined,
+): { status: "pass" } | { status: "needsInspection" } | { status: "excluded" } => {
+  if (!range || range.min !== undefined || range.max === undefined) {
+    return numericAssessment(candidate.facts.bytes, range);
+  }
+  const fact = candidate.facts.bytes;
+  const bytes = fact.evidence !== "unknown" && Number.isFinite(fact.value)
+    ? fact.value
+    : candidate.hints?.bytes;
+  if (bytes === undefined || !Number.isFinite(bytes) || bytes < 0) return { status: "pass" };
+  return bytes <= range.max ? { status: "pass" } : { status: "excluded" };
 };
 
 const excluded = (reason: SourceEvidenceReason): SourceEligibilityResult => ({
@@ -246,7 +266,9 @@ export function evaluateSourceCandidate(
     ["heightPixels", candidate.facts.heightPixels, policy.constraints.heightPixels],
   ] as const;
   for (const [field, fact, range] of numeric) {
-    const assessment = numericAssessment(fact, range);
+    const assessment = field === "bytes" && snapshot.profile.template === "rules"
+      ? approximateBytesAssessment(candidate, range)
+      : numericAssessment(fact, range);
     if (assessment.status === "excluded") return excluded({ code: "numericOutsideBounds", field });
     if (assessment.status === "needsInspection") needsInspection.push({ code: "inspectionRequired", field });
   }
@@ -316,7 +338,7 @@ const compareNumeric = (
   return direction === "asc" ? difference : -difference;
 };
 
-const rankingBytes = (candidate: SourceEvidenceCandidateV1): SourceFact<number> => {
+export const rankingBytes = (candidate: SourceEvidenceCandidateV1): SourceFact<number> => {
   if (candidate.facts.bytes.evidence !== "unknown") return candidate.facts.bytes;
   const hint = candidate.hints?.bytes;
   return typeof hint === "number" && Number.isFinite(hint) && hint >= 0
@@ -327,7 +349,7 @@ const rankingBytes = (candidate: SourceEvidenceCandidateV1): SourceFact<number> 
 const compareIdentifiers = (left: string, right: string): number =>
   left < right ? -1 : left > right ? 1 : 0;
 
-const compareFinalTie = (
+export const compareFinalTie = (
   snapshot: SourceAdmissionSnapshotV1,
   left: EligibleSourceCandidate,
   right: EligibleSourceCandidate,
