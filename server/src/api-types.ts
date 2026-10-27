@@ -85,6 +85,8 @@ export interface PublicDownload {
   updatedAt: string;
   startedAt?: string;
   completedAt?: string;
+  /** The completed job points at a file that was already in a library. */
+  reusedLocalCopy?: true;
   /** A lazy job whose source is picked only when the queue reaches it. */
   pending: boolean;
   debridProgress?: number;

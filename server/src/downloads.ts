@@ -39,6 +39,7 @@ import { readMediaBytes } from "./media-playlist.js";
 import { preserveDamaged, readStateFile } from "./state-file.js";
 import { subtitleVtt } from "./subtitle-text.js";
 import type { DownloadSnapshot, DownloadStatus, PauseReason, PublicDownload, QueueHalt } from "./api-types.js";
+import type { ExistingLocalCopyReference } from "./local-copy-admission.js";
 import {
   parseSourceAdmissionSnapshotV1,
   SourceAdmissionValidationError,
@@ -139,6 +140,8 @@ export interface DownloadJob {
    *  fail the same way, so every further attempt runs over one stream. */
   rangesIgnored?: boolean;
   createdAt: string; updatedAt: string; startedAt?: string; completedAt?: string;
+  /** Set only when a queued profile job finishes by pointing at an adequate existing file. */
+  reusedLocalCopy?: true;
 }
 
 /** Queueing onto the NAS is a right an administrator hands out. The role is what grants an
@@ -314,6 +317,13 @@ export interface ExistingLocalCopyAdmission {
   sourceAdmission: SourceAdmissionSnapshotV1;
 }
 
+export interface QueuedExistingLocalCopyLookup {
+  ownerUserId: string | undefined;
+  source: Pick<NonNullable<DownloadJob["source"]>, "type" | "videoId" | "selection">;
+  media: MediaInfo | undefined;
+  sourceAdmission: SourceAdmissionSnapshotV1;
+}
+
 export interface QueueHooks {
   now?: () => number;
   /** Every configured library, so a qualified target can be turned back into a root. */
@@ -360,6 +370,10 @@ export interface QueueHooks {
   ownerAllowed?: (job: DownloadJob) => boolean | Promise<boolean>;
   /** A profile admission may skip a bulk download when an acceptable local copy already exists. */
   existingLocalCopy?: (input: ExistingLocalCopyAdmission) => boolean | Promise<boolean>;
+  /** A queued profile job may finish by reference when an adequate local copy appeared while it waited. */
+  existingLocalCopyForQueue?: (
+    input: QueuedExistingLocalCopyLookup,
+  ) => ExistingLocalCopyReference | undefined | Promise<ExistingLocalCopyReference | undefined>;
   /** Whether an account can see a library. Lets a duplicate in another account's finished
    *  job be reported only when the asker could find that file anyway. */
   ownerSeesLibrary?: (ownerUserId: string | undefined, libraryId: string) => boolean;
@@ -529,6 +543,11 @@ export async function volumeSpace(target: string) {
   }
 }
 
+interface QueueWriteChange {
+  apply: () => void | Promise<void>;
+  revert: () => void;
+}
+
 export class DownloadQueue {
   private jobs: DownloadJob[] = [];
   private active = new Map<string, AbortController>();
@@ -582,6 +601,7 @@ export class DownloadQueue {
   private readonly legacyOwnerId?: () => string | undefined;
   private readonly ownerAllowed?: (job: DownloadJob) => boolean | Promise<boolean>;
   private readonly existingLocalCopy?: QueueHooks["existingLocalCopy"];
+  private readonly existingLocalCopyForQueue?: QueueHooks["existingLocalCopyForQueue"];
   private readonly ownerSeesLibrary?: (ownerUserId: string | undefined, libraryId: string) => boolean;
   private readonly remoteDownload?: RemoteDownloadBackend;
   private readonly remoteRevalidateMs: number;
@@ -627,6 +647,7 @@ export class DownloadQueue {
     this.legacyOwnerId = hooks.legacyOwnerId;
     this.ownerAllowed = hooks.ownerAllowed;
     this.existingLocalCopy = hooks.existingLocalCopy;
+    this.existingLocalCopyForQueue = hooks.existingLocalCopyForQueue;
     this.ownerSeesLibrary = hooks.ownerSeesLibrary;
     this.remoteDownload = hooks.remoteDownload;
     this.remoteRevalidateMs = boundedMs(hooks.remoteRevalidateMs, REMOTE_REVALIDATE_MS, REMOTE_REVALIDATE_MS);
@@ -723,6 +744,19 @@ export class DownloadQueue {
                 throw new Error("The Travel budget-attempt count is invalid.");
               }
               canonicalBudgetAttempts.push({ index, attempts });
+            }
+            if (Object.hasOwn(rawJob, "reusedLocalCopy")) {
+              const row = rawJob as Record<string, unknown>;
+              const source = row.source as Record<string, unknown> | undefined;
+              const target = typeof row.target === "string" ? parseLibraryPath(row.target) : undefined;
+              if (row.reusedLocalCopy !== true || row.status !== "completed"
+                || !Object.hasOwn(row, "sourceAdmission")
+                || !source || typeof source !== "object" || Array.isArray(source)
+                || typeof source.type !== "string" || typeof source.videoId !== "string"
+                || Object.hasOwn(row, "stream")
+                || !target || typeof row.libraryId !== "string" || target.libraryId !== row.libraryId) {
+                throw new Error("The reused local-copy marker is misplaced.");
+              }
             }
           }
         } catch (error) {
@@ -1609,7 +1643,7 @@ export class DownloadQueue {
 
   /** Finished jobs, for seeding the statistics from the queue. */
   history() {
-    return this.jobs.filter((job) => job.status === "completed").map((job) => ({
+    return this.jobs.filter((job) => job.status === "completed" && !job.reusedLocalCopy).map((job) => ({
       // A remote copy has no meaningful address, and its marker is not one: only a local
       // source's URL is reported.
       at: job.updatedAt, bytes: job.received, url: job.remoteDownload ? undefined : job.stream?.url, addonKey: job.stream?.addonKey,
@@ -1681,17 +1715,23 @@ export class DownloadQueue {
       travelSourceFallbackAttempts: _travelSourceFallbackAttempts,
       travelTemporaryFailures: _travelTemporaryFailures, travelBudgetAttempts: _travelBudgetAttempts, ...rest
     } = job;
-    return { ...rest, ownerUserId: this.ownerOf(job), pending: !stream && Boolean(source), debridProgress: debrid?.progress, segments: segments?.length };
+    return {
+      ...rest,
+      ownerUserId: this.ownerOf(job),
+      pending: job.status !== "completed" && !stream && Boolean(source),
+      debridProgress: debrid?.progress,
+      segments: segments?.length,
+    };
   }
   /** Saves have to run one after another: concurrent writes share one .tmp and the second
    *  rename then has nothing to move. Each write reports its own failure, while the chain
    *  itself swallows it so stop() and later writes carry on. A change handed in is made only
    *  when this write's turn comes and undone before the next write runs, so no other write
    *  ever stores a change whose own write failed. */
-  private write(change?: { apply: () => void; revert: () => void }): Promise<void> {
+  private write(change?: QueueWriteChange): Promise<void> {
     const run = this.saveChain.then(async () => {
       if (this.unreadable) return;
-      change?.apply();
+      await change?.apply();
       try {
         const tmp = `${this.stateFile}.tmp`;
         await this.writeState(tmp, JSON.stringify(this.jobs, null, 2));
@@ -1713,7 +1753,7 @@ export class DownloadQueue {
 
   /** A save an admission waits on: the change lands with its own write or not at all, and
    *  the caller hears the failure. */
-  private async persist(change: { apply: () => void; revert: () => void }): Promise<void> {
+  private async persist(change: QueueWriteChange): Promise<void> {
     try {
       await this.write(change);
     } catch (error) {
@@ -2560,6 +2600,142 @@ export class DownloadQueue {
     return clear;
   }
 
+  private localCopyCompletionLive(job: DownloadJob, controller: AbortController): boolean {
+    return !this.stopped
+      && !controller.signal.aborted
+      && this.active.get(job.id) === controller
+      && this.jobs.includes(job)
+      && job.status === "checking"
+      && !this.pauseRequested.has(job.id);
+  }
+
+  private async completeFromExistingLocalCopy(
+    job: DownloadJob,
+    copy: ExistingLocalCopyReference,
+    controller: AbortController,
+    prove: () => ExistingLocalCopyReference | undefined | Promise<ExistingLocalCopyReference | undefined>,
+  ): Promise<boolean> {
+    const qualified = parseLibraryPath(copy.key);
+    if (!qualified || qualified.libraryId !== copy.libraryId
+      || !Number.isSafeInteger(copy.actualSize) || copy.actualSize <= 0) return false;
+
+    let completed = false;
+    let previous: {
+      target: string;
+      libraryId: string | undefined;
+      status: DownloadStatus;
+      completedAt: string | undefined;
+      updatedAt: string;
+      received: number;
+      total: number | undefined;
+      speed: number;
+      reusedLocalCopy: true | undefined;
+      retryCount: number | undefined;
+      pauseReason: PauseReason | undefined;
+      pausedAt: string | undefined;
+      libraryGone: boolean | undefined;
+      notBefore: number | undefined;
+      error: string | undefined;
+      errorKey: string | undefined;
+      errorVars: Record<string, string | number> | undefined;
+      travelCursor: TravelContinuationCursorV1 | undefined;
+      travelSourceFallbackAttempts: number | undefined;
+      travelTemporaryFailures: number | undefined;
+      travelBudgetAttempts: number | undefined;
+    } | undefined;
+
+    await this.persist({
+      apply: async () => {
+        if (!this.localCopyCompletionLive(job, controller)) return;
+        let fresh: ExistingLocalCopyReference | undefined;
+        try {
+          fresh = await prove();
+        } catch {
+          return;
+        }
+        if (!fresh || fresh.key !== copy.key || fresh.libraryId !== copy.libraryId
+          || fresh.actualSize !== copy.actualSize) return;
+        if (!this.localCopyCompletionLive(job, controller)) return;
+        previous = {
+          target: job.target,
+          libraryId: job.libraryId,
+          status: job.status,
+          completedAt: job.completedAt,
+          updatedAt: job.updatedAt,
+          received: job.received,
+          total: job.total,
+          speed: job.speed,
+          reusedLocalCopy: job.reusedLocalCopy,
+          retryCount: job.retryCount,
+          pauseReason: job.pauseReason,
+          pausedAt: job.pausedAt,
+          libraryGone: job.libraryGone,
+          notBefore: job.notBefore,
+          error: job.error,
+          errorKey: job.errorKey,
+          errorVars: job.errorVars,
+          travelCursor: job.travelCursor,
+          travelSourceFallbackAttempts: job.travelSourceFallbackAttempts,
+          travelTemporaryFailures: job.travelTemporaryFailures,
+          travelBudgetAttempts: job.travelBudgetAttempts,
+        };
+        const at = new Date(this.now()).toISOString();
+        job.target = copy.key;
+        job.libraryId = copy.libraryId;
+        job.status = "completed";
+        job.completedAt = at;
+        job.updatedAt = at;
+        job.received = 0;
+        job.total = copy.actualSize;
+        job.speed = 0;
+        job.reusedLocalCopy = true;
+        job.retryCount = undefined;
+        job.pauseReason = undefined;
+        job.pausedAt = undefined;
+        job.libraryGone = undefined;
+        job.notBefore = undefined;
+        this.setError(job);
+        job.travelCursor = undefined;
+        job.travelSourceFallbackAttempts = undefined;
+        job.travelTemporaryFailures = undefined;
+        job.travelBudgetAttempts = undefined;
+        completed = true;
+      },
+      revert: () => {
+        if (!previous) return;
+        job.target = previous.target;
+        job.libraryId = previous.libraryId;
+        job.status = previous.status;
+        job.completedAt = previous.completedAt;
+        job.updatedAt = previous.updatedAt;
+        job.received = previous.received;
+        job.total = previous.total;
+        job.speed = previous.speed;
+        job.reusedLocalCopy = previous.reusedLocalCopy;
+        job.retryCount = previous.retryCount;
+        job.pauseReason = previous.pauseReason;
+        job.pausedAt = previous.pausedAt;
+        job.libraryGone = previous.libraryGone;
+        job.notBefore = previous.notBefore;
+        job.error = previous.error;
+        job.errorKey = previous.errorKey;
+        job.errorVars = previous.errorVars;
+        job.travelCursor = previous.travelCursor;
+        job.travelSourceFallbackAttempts = previous.travelSourceFallbackAttempts;
+        job.travelTemporaryFailures = previous.travelTemporaryFailures;
+        job.travelBudgetAttempts = previous.travelBudgetAttempts;
+      },
+    });
+    if (!completed) return false;
+
+    log("INFO", "Download finished from an existing library file", {
+      id: job.id, title: job.title, target: job.target, libraryId: job.libraryId, size: job.total,
+    });
+    try { await this.onCompleted?.(job); }
+    catch (error) { log("WARN", "The library could not be refreshed after completion", { id: job.id, reason: error instanceof Error ? error.message : String(error) }); }
+    return true;
+  }
+
   private async download(job: DownloadJob) {
     const controller = new AbortController(); this.active.set(job.id, controller); job.status = job.stream ? "downloading" : "checking"; job.startedAt ??= new Date(this.now()).toISOString(); this.setError(job); job.pauseReason = undefined; job.updatedAt = new Date().toISOString(); log("INFO", "Download started", { id: job.id, title: job.title, target: job.target || "(to be chosen)", previousBytes: job.received }); await this.save();
     let retryScheduled = false;
@@ -2567,10 +2743,6 @@ export class DownloadQueue {
     let stalled = false;
     let remoteStopped = false;
     try {
-      if (job.sourceAdmission && job.travelSourceFallbackAttempts === TRAVEL_SOURCE_FALLBACK_ATTEMPT_LIMIT) {
-        await this.failTravelSourceFallback(job, false);
-        return;
-      }
       // The owner is read afresh before any work: the right to queue may be gone since the
       // job was added, and nothing about the request that added it can speak for it now.
       const refused = await this.ownerRefusal(job);
@@ -2583,6 +2755,35 @@ export class DownloadQueue {
       // against the live records before a single byte, and a refusal pauses rather than fails.
       if (job.remoteDownload && this.remoteRefused(job)) {
         this.pauseForPermission(job);
+        return;
+      }
+      if (job.sourceAdmission && job.source && !job.stream && this.existingLocalCopyForQueue) {
+        const lookup = this.existingLocalCopyForQueue;
+        const input: QueuedExistingLocalCopyLookup = {
+          ownerUserId: this.ownerOf(job),
+          source: job.source,
+          media: job.media,
+          sourceAdmission: job.sourceAdmission,
+        };
+        let copy: ExistingLocalCopyReference | undefined;
+        try {
+          copy = await lookup(input);
+        } catch {
+          // A local-copy lookup failure leaves the normal resolver path available.
+        }
+        if (!this.localCopyCompletionLive(job, controller)) return;
+        if (copy && await this.completeFromExistingLocalCopy(job, copy, controller, () => lookup(input))) return;
+        if (!this.localCopyCompletionLive(job, controller)) return;
+        // A permission refusal remains a pause even when the lookup could not establish a copy.
+        const refusedAfterLookup = await this.ownerRefusal(job);
+        controller.signal.throwIfAborted();
+        if (refusedAfterLookup) {
+          this.pauseForRefusal(job, refusedAfterLookup);
+          return;
+        }
+      }
+      if (job.sourceAdmission && job.travelSourceFallbackAttempts === TRAVEL_SOURCE_FALLBACK_ATTEMPT_LIMIT) {
+        await this.failTravelSourceFallback(job, false);
         return;
       }
       if (!job.stream) {

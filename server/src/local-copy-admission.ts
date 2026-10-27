@@ -30,6 +30,12 @@ export interface ExistingLocalCopyInput {
   sourceAdmission: SourceAdmissionSnapshotV1;
 }
 
+export interface ExistingLocalCopyReference {
+  key: string;
+  libraryId: string;
+  actualSize: number;
+}
+
 export interface ExistingLocalCopyDeps {
   users: () => readonly UserRecord[];
   libraries: () => readonly LibraryRecord[];
@@ -110,10 +116,10 @@ const evidenceCandidate = (
   facts,
 });
 
-export async function hasAdequateExistingLocalCopy(
+export async function findAdequateExistingLocalCopy(
   input: ExistingLocalCopyInput,
   deps: ExistingLocalCopyDeps,
-): Promise<boolean> {
+): Promise<ExistingLocalCopyReference | undefined> {
   const stat = deps.stat ?? statPath;
   const resolve = deps.resolveLibraryPath ?? resolveConfiguredLibraryPath;
   const sidecars = deps.subtitleSidecars ?? readSubtitleSidecars;
@@ -130,17 +136,17 @@ export async function hasAdequateExistingLocalCopy(
   };
 
   const initialScope = currentScope();
-  if (!initialScope) return false;
+  if (!initialScope) return undefined;
 
   let files: FoundFile[];
   let units: TitleUnit[];
   try {
     [files, units] = await Promise.all([deps.libraryFiles(), deps.libraryUnits()]);
   } catch {
-    return false;
+    return undefined;
   }
   const afterWalkScope = currentScope();
-  if (!afterWalkScope) return false;
+  if (!afterWalkScope) return undefined;
 
   const candidates = (libraries: LibraryRecord[], records: Record<string, LibraryMetaRecord>) =>
     localCopies({
@@ -282,9 +288,11 @@ export async function hasAdequateExistingLocalCopy(
         evidenceCandidate(copy, index, unknownFacts(copy.actualSize)),
         "existingLocalCopy",
       );
-      if (evaluation.status === "eligible" && await remainsPresent(copy)) return true;
+      if (evaluation.status === "eligible" && await remainsPresent(copy)) {
+        return { key: copy.key, libraryId: copy.libraryId, actualSize: copy.actualSize };
+      }
     }
-    return false;
+    return undefined;
   }
 
   let probed = 0;
@@ -309,11 +317,20 @@ export async function hasAdequateExistingLocalCopy(
     );
     if (evaluation.status !== "eligible") continue;
     if (input.sourceAdmission.policy.constraints.subtitles.mode === "required") {
-      if (await remainsAdequateWithRequiredSubtitles(copy, index, info)) return true;
+      if (await remainsAdequateWithRequiredSubtitles(copy, index, info)) {
+        return { key: copy.key, libraryId: copy.libraryId, actualSize: copy.actualSize };
+      }
     } else if (await remainsPresent(copy)) {
-      return true;
+      return { key: copy.key, libraryId: copy.libraryId, actualSize: copy.actualSize };
     }
   }
 
-  return false;
+  return undefined;
+}
+
+export async function hasAdequateExistingLocalCopy(
+  input: ExistingLocalCopyInput,
+  deps: ExistingLocalCopyDeps,
+): Promise<boolean> {
+  return await findAdequateExistingLocalCopy(input, deps) !== undefined;
 }

@@ -70,7 +70,11 @@ import { migrateStateFile } from "./library-migrate.js";
 import { LibraryMetaStore } from "./library-meta-store.js";
 import { LibrarySeenStore } from "./library-seen.js";
 import { localCopies } from "./local-sources.js";
-import { hasAdequateExistingLocalCopy } from "./local-copy-admission.js";
+import {
+  findAdequateExistingLocalCopy,
+  hasAdequateExistingLocalCopy,
+  type ExistingLocalCopyDeps,
+} from "./local-copy-admission.js";
 import { artworks } from "./artwork-cache.js";
 import { FileSnapCache, preheatFileSnaps } from "./byte-cache.js";
 import { RemoteImageCache } from "./remote-image-cache.js";
@@ -277,6 +281,15 @@ const remoteDownloadBackend: RemoteDownloadBackend = {
   open: (job, args, signal) => mediaServers.openDownloadOriginal(jobAuthority(job), job.remoteDownload!, args, signal),
   revalidate: (job, signal) => mediaServers.revalidateDownloadOriginal(jobAuthority(job), job.remoteDownload!, signal),
 };
+const existingLocalCopyDeps = (): ExistingLocalCopyDeps => ({
+  users: () => store.users(),
+  libraries: () => store.libraries(),
+  libraryFiles: () => libraryFiles(),
+  libraryUnits: () => libraryUnits(),
+  qualifiedMeta: () => metaStore.qualifiedMeta(),
+  mayDownloadToLibrary,
+  probe,
+});
 const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () => store.settings().parallelPerProvider ?? 1, undefined, undefined, {
   segments: () => store.settings().downloadSegments ?? 1,
   libraries: () => store.libraries(),
@@ -286,15 +299,12 @@ const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () =
   existingLocalCopy: ({ ownerUserId, source, sourceAdmission }) =>
     hasAdequateExistingLocalCopy(
       { ownerUserId, type: source.type, videoId: source.videoId, sourceAdmission },
-      {
-        users: () => store.users(),
-        libraries: () => store.libraries(),
-        libraryFiles,
-        libraryUnits,
-        qualifiedMeta: () => metaStore.qualifiedMeta(),
-        mayDownloadToLibrary,
-        probe,
-      },
+      existingLocalCopyDeps(),
+    ),
+  existingLocalCopyForQueue: ({ ownerUserId, source, sourceAdmission }) =>
+    findAdequateExistingLocalCopy(
+      { ownerUserId, type: source.type, videoId: source.videoId, sourceAdmission },
+      existingLocalCopyDeps(),
     ),
   remoteDownload: remoteDownloadBackend,
   ownerSeesLibrary: (ownerUserId, libraryId) => {
@@ -2374,7 +2384,7 @@ const noteQueueCompletion = async (job: Readonly<DownloadJob>) => {
 // A finished job records itself on the follow that queued it. The follow writes after the
 // library work above, and a failure there is logged rather than past the queue.
 queue.onCompleted = async (job) => {
-  await noteQueueCompletion(job);
+  if (!job.reusedLocalCopy) await noteQueueCompletion(job);
   try { await followService.jobCompleted(job); }
   catch (error) { log("WARN", "The follow could not record a finished download", { id: job.id, reason: error instanceof Error ? error.message : String(error) }); }
 };

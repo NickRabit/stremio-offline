@@ -7,7 +7,7 @@ import type { FoundFile } from "./library.js";
 import { libraryPath, type LibraryRecord } from "./libraries.js";
 import { listVideos } from "./library.js";
 import { titleUnits, type LibraryMetaRecord } from "./library-match.js";
-import { hasAdequateExistingLocalCopy } from "./local-copy-admission.js";
+import { findAdequateExistingLocalCopy, hasAdequateExistingLocalCopy } from "./local-copy-admission.js";
 import type { MediaInfo } from "./probe.js";
 import { parseSourceAdmissionSnapshotV1, type SourceAdmissionSnapshotV1 } from "./source-admission.js";
 import type { AudioMode, ExistingLocalCopyPolicy, SubtitleMode } from "./source-policy.js";
@@ -143,6 +143,22 @@ const setup = async (type: "movie" | "series" = "movie") => {
         },
       },
     );
+  const find = (admission: SourceAdmissionSnapshotV1, videoId: string) =>
+    findAdequateExistingLocalCopy(
+      { ownerUserId: OWNER_ID, type, videoId, sourceAdmission: admission },
+      {
+        users: () => state.users,
+        libraries: () => state.libraries,
+        libraryFiles: files,
+        libraryUnits: units,
+        qualifiedMeta: () => state.records,
+        mayDownloadToLibrary: (user) => user.role === "admin" || user.permissions.downloadToLibrary,
+        probe: async (file) => {
+          probeCalls.push(file);
+          return state.probeInfo;
+        },
+      },
+    );
 
   return {
     root,
@@ -150,6 +166,7 @@ const setup = async (type: "movie" | "series" = "movie") => {
     probeCalls,
     write,
     has,
+    find,
     scan,
     file: (relative: string) => path.join(root, relative),
     cleanup: () => rm(root, { recursive: true, force: true }),
@@ -170,6 +187,22 @@ test("an exact episode in an HTTP-only profile scope is adequate without probing
     await harness.write("Show/S01E01.mkv");
     bindSeries(harness);
     assert.equal(await harness.has(snapshot({ existingLocalCopy: "any" }), "tt1:1:1"), true);
+    assert.deepEqual(harness.probeCalls, []);
+  } finally {
+    await harness.cleanup();
+  }
+});
+
+test("an adequate local copy returns its qualified key, library and actual size", async () => {
+  const harness = await setup("series");
+  try {
+    await harness.write("Show/S01E01.mkv", 1234);
+    bindSeries(harness);
+    assert.deepEqual(await harness.find(snapshot({ existingLocalCopy: "any" }), "tt1:1:1"), {
+      key: libraryPath(LIBRARY_ID, "Show/S01E01.mkv"),
+      libraryId: LIBRARY_ID,
+      actualSize: 1234,
+    });
     assert.deepEqual(harness.probeCalls, []);
   } finally {
     await harness.cleanup();
@@ -246,7 +279,7 @@ test("a required sidecar is checked as a file again after the video revalidation
     const releaseFinalRead = deferred();
     let reads = 0;
     let probes = 0;
-    const result = hasAdequateExistingLocalCopy(
+    const result = findAdequateExistingLocalCopy(
       {
         ownerUserId: OWNER_ID,
         type: "series",
@@ -281,7 +314,7 @@ test("a required sidecar is checked as a file again after the video revalidation
     await unlink(sidecar);
     releaseFinalRead.release();
 
-    assert.equal(await result, false);
+    assert.equal(await result, undefined);
     assert.equal(probes, 1);
   } finally {
     await harness.cleanup();
@@ -368,7 +401,7 @@ test("revocation or deletion during a deferred probe prevents a skip", async () 
     const release = deferred();
     let probing = false;
     const validSnapshot = snapshot({ height: 480 });
-    const result = hasAdequateExistingLocalCopy(
+    const result = findAdequateExistingLocalCopy(
       { ownerUserId: OWNER_ID, type: "series", videoId: "tt1:1:1", sourceAdmission: validSnapshot },
       {
         users: () => revoked.state.users,
@@ -388,7 +421,7 @@ test("revocation or deletion during a deferred probe prevents a skip", async () 
     while (!probing) await new Promise((resolve) => setTimeout(resolve, 5));
     revoked.state.users[0]!.disabled = true;
     release.release();
-    assert.equal(await result, false);
+    assert.equal(await result, undefined);
   } finally {
     await revoked.cleanup();
   }
