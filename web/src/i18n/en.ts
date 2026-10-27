@@ -595,6 +595,7 @@ export const en = {
   "sourceProfile.providerPriorityHint": "Tries addons in your order and takes the first file it could check matches your language.",
   "sourceProfile.recommended": "Recommended",
   "bulk.profileUnavailable": "The profile this follow used is no longer available. Choose another one.",
+  "bulk.rememberProfile": "Use as my default choice",
   "bulk.sources": "Sources",
   "bulk.sourcesHint": "Choose which addons may be used. You can exclude any addon by clearing its checkbox.",
   "bulk.moveSourceUp": "Move {name} up",

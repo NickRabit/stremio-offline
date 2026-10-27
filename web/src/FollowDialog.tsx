@@ -27,7 +27,7 @@ const futureGrace = (value?: string) => value && Date.parse(value) > Date.now() 
 const episodeDate = (row: { released?: string; dateUncertain?: boolean }) =>
   row.dateUncertain ? `≈ ${row.released ? formatDay(row.released) : t("following.dateUnknown")}` : formatDay(row.released);
 
-export function FollowDialog({ follow, videos, languages, libraries, addons, audioLanguage, subtitleLanguage, canRetain = false, onChanged, onClose, onNotify }: {
+export function FollowDialog({ follow, videos, languages, libraries, addons, audioLanguage, subtitleLanguage, canRetain = false, defaultSourceProfileId, onRememberSourceProfile, onChanged, onClose, onNotify }: {
   follow: FollowView;
   videos?: Video[];
   languages: Array<{ code: string; name: string }>;
@@ -37,6 +37,8 @@ export function FollowDialog({ follow, videos, languages, libraries, addons, aud
   subtitleLanguage: string;
   /** Whether the account may delete watched episodes automatically; only administrators may. */
   canRetain?: boolean;
+  defaultSourceProfileId?: string;
+  onRememberSourceProfile?: (profileId: string | null) => Promise<void>;
   onChanged: (follow: FollowView | null) => void;
   onClose: () => void;
   onNotify: (text: string) => void;
@@ -215,6 +217,8 @@ export function FollowDialog({ follow, videos, languages, libraries, addons, aud
     {setupOpen && <SeriesDownloadDialog type={current.type} label={current.name} title={current.name} episodes={setupEpisodes}
       audioLanguage={audioLanguage} subtitleLanguage={subtitleLanguage} languages={languages} libraries={libraries} addons={addons}
       canRetain={canRetain}
+      defaultSourceProfileId={defaultSourceProfileId}
+      onRememberSourceProfile={onRememberSourceProfile}
       follow={{ followId: current.id, ...(current.autoDownload ? { initial: current.autoDownload } : {}) }}
       onClose={closeSetup}/>}
   </>;

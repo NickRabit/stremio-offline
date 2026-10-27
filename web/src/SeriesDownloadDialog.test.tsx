@@ -50,6 +50,142 @@ describe("SeriesDownloadDialog", () => {
     expect(onSubmit).toHaveBeenCalledWith({ profile: { profileId: "travel", revision: 1 } }, undefined);
   });
 
+  it("opens on an offered remembered source profile", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      const body = String(url) === "/api/source-profiles"
+        ? { profiles: [{ id: "travel", nameKey: "sourceProfile.travel", revision: 1, operations: ["downloadToLibrary"], policy: {} }] }
+        : [{ key: "first", name: "First" }];
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    await act(async () => { root.render(<SeriesDownloadDialog type="series" label="Season 1" title="Show" libraries={[]} addons={[]} episodes={[{ id: "tt1:1:1" }]} audioLanguage="cs" subtitleLanguage="cs" languages={[{ code: "cs", name: "Čeština" }]} defaultSourceProfileId="travel" onClose={() => undefined} onSubmit={vi.fn()}/>); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(host.querySelector<HTMLInputElement>('input[name="source-strategy"][value="profile:travel"]')!.checked).toBe(true);
+    expect(host.textContent).not.toContain("The profile this follow used is no longer available");
+  });
+
+  it("uses today's source choice without a warning when the remembered profile is not offered", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      const body = String(url) === "/api/source-profiles"
+        ? { profiles: [{ id: "provider", nameKey: "sourceProfile.providerPriority", revision: 1, operations: ["downloadToLibrary"], policy: {} }] }
+        : [{ key: "first", name: "First" }];
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    await act(async () => { root.render(<SeriesDownloadDialog type="series" label="Season 1" title="Show" libraries={[]} addons={[]} episodes={[{ id: "tt1:1:1" }]} audioLanguage="cs" subtitleLanguage="cs" languages={[{ code: "cs", name: "Čeština" }]} defaultSourceProfileId="travel" onClose={() => undefined} onSubmit={vi.fn()}/>); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(host.querySelector<HTMLInputElement>('input[name="source-strategy"][value="largest"]')!.checked).toBe(true);
+    expect(host.textContent).not.toContain("The profile this follow used is no longer available");
+  });
+
+  it("shows the default checkbox only for a different choice and does not remember an unticked one", async () => {
+    const onRememberSourceProfile = vi.fn().mockResolvedValue(undefined);
+    fetchMock.mockImplementation(async (url: string) => {
+      const body = String(url) === "/api/source-profiles"
+        ? { profiles: [
+            { id: "travel", nameKey: "sourceProfile.travel", revision: 1, operations: ["downloadToLibrary"], policy: {} },
+            { id: "provider", nameKey: "sourceProfile.providerPriority", revision: 1, operations: ["downloadToLibrary"], policy: {} },
+          ] }
+        : [{ key: "first", name: "First" }];
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    await act(async () => { root.render(<SeriesDownloadDialog type="series" label="Season 1" title="Show" libraries={[]} addons={[]} episodes={[{ id: "tt1:1:1" }]} audioLanguage="cs" subtitleLanguage="cs" languages={[{ code: "cs", name: "Čeština" }]} defaultSourceProfileId="travel" onRememberSourceProfile={onRememberSourceProfile} onClose={() => undefined} onSubmit={vi.fn()}/>); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(host.querySelector(".bulk-remember-profile")).toBeNull();
+
+    await act(async () => { host.querySelector<HTMLInputElement>('input[name="source-strategy"][value="profile:provider"]')!.click(); });
+    expect(host.querySelector(".bulk-remember-profile")).not.toBeNull();
+    const add = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Add to queue"))!;
+    await act(async () => { add.click(); await Promise.resolve(); });
+
+    expect(onRememberSourceProfile).not.toHaveBeenCalled();
+  });
+
+  it("remembers a ticked source profile after a successful submit", async () => {
+    const onRememberSourceProfile = vi.fn().mockResolvedValue(undefined);
+    fetchMock.mockImplementation(async (url: string) => {
+      const body = String(url) === "/api/source-profiles"
+        ? { profiles: [
+            { id: "travel", nameKey: "sourceProfile.travel", revision: 1, operations: ["downloadToLibrary"], policy: {} },
+            { id: "provider", nameKey: "sourceProfile.providerPriority", revision: 1, operations: ["downloadToLibrary"], policy: {} },
+          ] }
+        : [{ key: "first", name: "First" }];
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    await act(async () => { root.render(<SeriesDownloadDialog type="series" label="Season 1" title="Show" libraries={[]} addons={[]} episodes={[{ id: "tt1:1:1" }]} audioLanguage="cs" subtitleLanguage="cs" languages={[{ code: "cs", name: "Čeština" }]} defaultSourceProfileId="travel" onRememberSourceProfile={onRememberSourceProfile} onClose={() => undefined} onSubmit={vi.fn()}/>); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { host.querySelector<HTMLInputElement>('input[name="source-strategy"][value="profile:provider"]')!.click(); });
+    await act(async () => { host.querySelector<HTMLInputElement>(".bulk-remember-profile input")!.click(); });
+    const add = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Add to queue"))!;
+    await act(async () => { add.click(); await Promise.resolve(); });
+
+    expect(onRememberSourceProfile).toHaveBeenCalledWith("provider");
+  });
+
+  it("remembers a legacy choice as no default", async () => {
+    const onRememberSourceProfile = vi.fn().mockResolvedValue(undefined);
+    fetchMock.mockImplementation(async (url: string) => {
+      const body = String(url) === "/api/source-profiles"
+        ? { profiles: [{ id: "travel", nameKey: "sourceProfile.travel", revision: 1, operations: ["downloadToLibrary"], policy: {} }] }
+        : [{ key: "first", name: "First" }];
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    await act(async () => { root.render(<SeriesDownloadDialog type="series" label="Season 1" title="Show" libraries={[]} addons={[]} episodes={[{ id: "tt1:1:1" }]} audioLanguage="cs" subtitleLanguage="cs" languages={[{ code: "cs", name: "Čeština" }]} defaultSourceProfileId="travel" onRememberSourceProfile={onRememberSourceProfile} onClose={() => undefined} onSubmit={vi.fn()}/>); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { host.querySelector<HTMLInputElement>('input[name="source-strategy"][value="largest"]')!.click(); });
+    await act(async () => { host.querySelector<HTMLInputElement>(".bulk-remember-profile input")!.click(); });
+    const add = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Add to queue"))!;
+    await act(async () => { add.click(); await Promise.resolve(); });
+
+    expect(onRememberSourceProfile).toHaveBeenCalledWith(null);
+  });
+
+  it("ignores a failed attempt to remember the source choice and still closes", async () => {
+    const onRememberSourceProfile = vi.fn().mockRejectedValue(new Error("offline"));
+    const onClose = vi.fn();
+    fetchMock.mockImplementation(async (url: string) => {
+      const body = String(url) === "/api/source-profiles"
+        ? { profiles: [
+            { id: "travel", nameKey: "sourceProfile.travel", revision: 1, operations: ["downloadToLibrary"], policy: {} },
+            { id: "provider", nameKey: "sourceProfile.providerPriority", revision: 1, operations: ["downloadToLibrary"], policy: {} },
+          ] }
+        : [{ key: "first", name: "First" }];
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    await act(async () => { root.render(<SeriesDownloadDialog type="series" label="Season 1" title="Show" libraries={[]} addons={[]} episodes={[{ id: "tt1:1:1" }]} audioLanguage="cs" subtitleLanguage="cs" languages={[{ code: "cs", name: "Čeština" }]} defaultSourceProfileId="travel" onRememberSourceProfile={onRememberSourceProfile} onClose={onClose} onSubmit={vi.fn()}/>); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { host.querySelector<HTMLInputElement>('input[name="source-strategy"][value="profile:provider"]')!.click(); });
+    await act(async () => { host.querySelector<HTMLInputElement>(".bulk-remember-profile input")!.click(); });
+    const add = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Add to queue"))!;
+    await act(async () => { add.click(); await Promise.resolve(); await Promise.resolve(); });
+
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("keeps a follow's initial source profile ahead of the default one", async () => {
+    const initial: FollowAutoDownload = {
+      enabledAt: "2024-01-01T00:00:00.000Z",
+      startMode: "new",
+      selection: { addonKeys: ["first"], sourceStrategy: "priority", audioLanguage: "cs", subtitleMode: "off" },
+      sourceProfile: { profileId: "provider", revision: 1 },
+    };
+    fetchMock.mockImplementation(async (url: string) => {
+      const body = String(url) === "/api/source-profiles"
+        ? { profiles: [
+            { id: "travel", nameKey: "sourceProfile.travel", revision: 1, operations: ["downloadToLibrary"], policy: {} },
+            { id: "provider", nameKey: "sourceProfile.providerPriority", revision: 1, operations: ["downloadToLibrary"], policy: {} },
+          ] }
+        : [{ key: "first", name: "First" }];
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    await act(async () => { root.render(<SeriesDownloadDialog type="series" label="Show" title="Show" libraries={[]} addons={[]} episodes={[{ id: "tt1:1:1" }]} audioLanguage="cs" subtitleLanguage="cs" languages={[{ code: "cs", name: "Čeština" }]} follow={{ followId: "f1", initial }} defaultSourceProfileId="travel" onClose={() => undefined}/>); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(host.querySelector<HTMLInputElement>('input[name="source-strategy"][value="profile:provider"]')!.checked).toBe(true);
+    expect(host.querySelector<HTMLInputElement>('input[name="source-strategy"][value="profile:travel"]')!.checked).toBe(false);
+  });
+
   it("offers only source profiles that can download to the library and have a known name", async () => {
     fetchMock.mockImplementation(async (url: string) => {
       const body = String(url) === "/api/source-profiles"

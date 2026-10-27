@@ -560,6 +560,7 @@ export const fr: Catalog = {
   "sourceProfile.providerPriorityHint": "Essaie les modules complémentaires dans votre ordre et prend le premier fichier dont la correspondance avec votre langue a pu être vérifiée.",
   "sourceProfile.recommended": "Recommandé",
   "bulk.profileUnavailable": "Le profil utilisé par ce suivi n’est plus disponible. Choisissez-en un autre.",
+  "bulk.rememberProfile": "Utiliser comme choix par défaut",
   "bulk.sources": "Sources",
   "bulk.sourcesHint": "Choisissez quels modules complémentaires peuvent être utilisés. Vous pouvez exclure n’importe quel module complémentaire en décochant sa case.",
   "bulk.moveSourceUp": "Déplacez {name} vers le haut",

@@ -560,6 +560,7 @@ export const ptBR: Catalog = {
   "sourceProfile.providerPriorityHint": "Tenta os complementos na sua ordem e usa o primeiro arquivo cuja correspondência com o seu idioma foi possível verificar.",
   "sourceProfile.recommended": "Recomendado",
   "bulk.profileUnavailable": "O perfil usado por este acompanhamento não está mais disponível. Escolha outro.",
+  "bulk.rememberProfile": "Usar como minha escolha padrão",
   "bulk.sources": "Fontes",
   "bulk.sourcesHint": "Escolha quais complementos podem ser usados. Você pode excluir qualquer complemento desmarcando sua caixa de seleção.",
   "bulk.moveSourceUp": "Mover {name} para cima",

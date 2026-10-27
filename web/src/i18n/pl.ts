@@ -560,6 +560,7 @@ export const pl: Catalog = {
   "sourceProfile.providerPriorityHint": "Próbuje dodatków w Twojej kolejności i wybiera pierwszy plik, którego zgodność z Twoim językiem udało się sprawdzić.",
   "sourceProfile.recommended": "Polecany",
   "bulk.profileUnavailable": "Profil używany przez tę obserwację nie jest już dostępny. Wybierz inny.",
+  "bulk.rememberProfile": "Użyj jako mojego domyślnego wyboru",
   "bulk.sources": "Źródła",
   "bulk.sourcesHint": "Wybierz, które dodatki mogą być używane. Możesz wykluczyć dowolny dodatek, usuwając jego pole wyboru.",
   "bulk.moveSourceUp": "Przesuń {name} w górę",

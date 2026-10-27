@@ -47,7 +47,7 @@ const localPreview = (episodes: Episode[], startMode: FollowStartMode, startSeas
 
 const pad2 = (value: number) => String(Math.max(0, Math.trunc(value))).padStart(2, "0");
 
-export function SeriesDownloadDialog({ type, label, title, episodes, audioLanguage, subtitleLanguage, languages, libraries, addons, follow, canRetain = false, onClose, onSubmit }: {
+export function SeriesDownloadDialog({ type, label, title, episodes, audioLanguage, subtitleLanguage, languages, libraries, addons, follow, canRetain = false, defaultSourceProfileId, onRememberSourceProfile, onClose, onSubmit }: {
   type: string;
   label: string;
   title: string;
@@ -59,6 +59,8 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
   addons: Addon[];
   /** Administrators may delete watched episodes automatically; nobody else sees the choice. */
   canRetain?: boolean;
+  defaultSourceProfileId?: string;
+  onRememberSourceProfile?: (profileId: string | null) => Promise<void>;
   /** Set when the dialog edits a follow's automatic rule instead of queueing a batch. Without
    *  `followId` it is the first step of following: how to follow comes first, and the follow
    *  is created only when the person confirms. */
@@ -76,6 +78,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
   const [chosen, setChosen] = useState<string[]>([]);
   const [profiles, setProfiles] = useState<UsableSourceProfile[]>([]);
   const [profileUnavailable, setProfileUnavailable] = useState(false);
+  const [rememberSourceProfile, setRememberSourceProfile] = useState(false);
   const profilesRequested = useRef(false);
   // A follow keeps its sources in the order the owner set, so priority is the default there.
   const [sourceChoice, setSourceChoice] = useState<SourceChoice>(() => initial?.sourceProfile
@@ -106,6 +109,8 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const profileManaged = isProfileValue(sourceChoice);
+  const chosenProfileId = profileManaged ? sourceChoice.slice(PROFILE_VALUE_PREFIX.length) : null;
+  const showRememberSourceProfile = Boolean(onRememberSourceProfile) && chosenProfileId !== (defaultSourceProfileId ?? null);
   const selectedProfile = profileManaged
     ? profiles.find((profile) => profile.id === sourceChoice.slice(PROFILE_VALUE_PREFIX.length))
     : undefined;
@@ -149,10 +154,14 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
         profile.operations.includes("downloadToLibrary") && profileCopy(profile.nameKey),
       ));
       setProfiles(usable);
-      if (initial?.sourceProfile && !usable.some((profile) => profile.id === initial.sourceProfile?.profileId)) profileMissing();
+      if (initial?.sourceProfile) {
+        if (!usable.some((profile) => profile.id === initial.sourceProfile?.profileId)) profileMissing();
+      } else if (!touched.current && defaultSourceProfileId && usable.some((profile) => profile.id === defaultSourceProfileId)) {
+        setSourceChoice(profileValue(defaultSourceProfileId));
+      }
     }).catch(() => { if (!stale && initial?.sourceProfile) setSourceChoice("priority"); });
     return () => { stale = true; };
-  }, [downloading, initial]);
+  }, [downloading, initial, defaultSourceProfileId]);
 
   // Create mode opens with the choices of the previous follow. The source list decides which
   // addon keys are still usable, so the answer waits for it before it is applied.
@@ -176,7 +185,9 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
     if (defaults.selection) {
       const keys = defaults.selection.addonKeys.filter((key) => sources.some((item) => item.key === key));
       if (keys.length) setChosen(keys);
-      setSourceChoice(defaults.selection.sourceStrategy);
+      if (!defaultSourceProfileId || !profiles.some((profile) => profile.id === defaultSourceProfileId)) {
+        setSourceChoice(defaults.selection.sourceStrategy);
+      }
       setAudio(defaults.selection.audioLanguage);
       setAudioFallback(defaults.selection.fallbackAudioLanguage ?? (defaults.selection.audioLanguage === "en" ? "" : "en"));
       setAudioMode(defaults.selection.audioMode);
@@ -185,7 +196,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
       setSubtitleFallback(defaults.selection.fallbackSubtitleLanguage ?? (defaults.selection.subtitleLanguage !== "en" ? "en" : ""));
     }
     if (defaults.target) setTarget({ libraryId: defaults.target.libraryId, subfolder: defaults.target.subfolder ?? "", layout: defaults.target.layout ?? "structured" });
-  }, [defaults, sources]);
+  }, [defaults, sources, profiles, defaultSourceProfileId]);
 
   useEffect(() => {
     if (!follow) return;
@@ -272,6 +283,9 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
       } else if (onSubmit) {
         await onSubmit(selection, target ?? undefined);
       }
+      if (rememberSourceProfile && showRememberSourceProfile) {
+        void Promise.resolve().then(() => onRememberSourceProfile?.(chosenProfileId)).catch(() => undefined);
+      }
       // Remembering the choices is a courtesy; a refusal here must never block the follow.
       if (creating && followMode === "download" && !profileSelection) void api.saveFollowDefaults({
         mode: "download", startMode, ...(startMode === "ahead" ? { aheadCount } : {}), graceDays,
@@ -346,6 +360,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
               </label>;
             })}
           </div>
+          {showRememberSourceProfile && <label className="bulk-remember-profile"><input type="checkbox" checked={rememberSourceProfile} onChange={(event) => setRememberSourceProfile(event.target.checked)}/><span>{t("bulk.rememberProfile")}</span></label>}
           {!profileManaged && <fieldset className="bulk-sources"><legend>{t("bulk.sources")}</legend><p className="identify-hint">{t("bulk.sourcesHint")}</p>
             {orderedSources.map((source) => { const index = chosen.indexOf(source.key); return <div key={source.key} className={index >= 0 ? "selected" : ""}>
               <label><input type="checkbox" checked={index >= 0} onChange={() => toggle(source.key)}/>{sourceChoice === "priority" && index >= 0 && <b>{index + 1}</b>}<span>{source.name}</span></label>

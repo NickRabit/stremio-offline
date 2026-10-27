@@ -560,6 +560,7 @@ export const de: Catalog = {
   "sourceProfile.providerPriorityHint": "Probiert die Add-ons in Ihrer Reihenfolge und nimmt die erste Datei, bei der die Übereinstimmung mit Ihrer Sprache geprüft werden konnte.",
   "sourceProfile.recommended": "Empfohlen",
   "bulk.profileUnavailable": "Das von diesem Abonnement verwendete Profil ist nicht mehr verfügbar. Wählen Sie ein anderes.",
+  "bulk.rememberProfile": "Als meine Standardauswahl verwenden",
   "bulk.sources": "Quellen",
   "bulk.sourcesHint": "Wählen Sie aus, welche Addons verwendet werden dürfen. Sie können jedes Add-on ausschließen, indem Sie das entsprechende Kontrollkästchen deaktivieren.",
   "bulk.moveSourceUp": "Verschiebe {name} nach oben",

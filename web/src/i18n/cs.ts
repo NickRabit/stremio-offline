@@ -590,6 +590,7 @@ export const cs: Catalog = {
   "sourceProfile.providerPriorityHint": "Zkouší doplňky ve vašem pořadí a vezme první soubor, u kterého ověřil, že odpovídá vašemu jazyku.",
   "sourceProfile.recommended": "Doporučený",
   "bulk.profileUnavailable": "Profil, který toto sledování používalo, už není k dispozici. Vyberte jiný.",
+  "bulk.rememberProfile": "Použít jako můj výchozí výběr",
   "bulk.sources": "Zdroje",
   "bulk.sourcesHint": "Vyberte doplňky, které se smějí použít. Libovolný doplněk lze vyřadit zrušením zaškrtnutí.",
   "bulk.moveSourceUp": "Posunout {name} výš",

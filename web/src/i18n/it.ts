@@ -560,6 +560,7 @@ export const it: Catalog = {
   "sourceProfile.providerPriorityHint": "Prova i componenti aggiuntivi nell'ordine scelto e prende il primo file di cui è riuscito a verificare la corrispondenza con la tua lingua.",
   "sourceProfile.recommended": "Consigliato",
   "bulk.profileUnavailable": "Il profilo usato da questo seguito non è più disponibile. Scegline un altro.",
+  "bulk.rememberProfile": "Usa come scelta predefinita",
   "bulk.sources": "Fonti",
   "bulk.sourcesHint": "Scegli quali componenti aggiuntivi possono essere utilizzati. Puoi escludere qualsiasi componente aggiuntivo deselezionando la relativa casella di controllo.",
   "bulk.moveSourceUp": "Sposta {name} in alto",

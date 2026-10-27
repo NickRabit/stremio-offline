@@ -560,6 +560,7 @@ export const es: Catalog = {
   "sourceProfile.providerPriorityHint": "Prueba los complementos en su orden y toma el primer archivo cuya coincidencia con su idioma haya podido verificar.",
   "sourceProfile.recommended": "Recomendado",
   "bulk.profileUnavailable": "El perfil que usaba este seguimiento ya no está disponible. Elija otro.",
+  "bulk.rememberProfile": "Usar como mi elección predeterminada",
   "bulk.sources": "Fuentes",
   "bulk.sourcesHint": "Elija qué complementos se pueden utilizar. Puede excluir cualquier complemento desactivando su casilla de verificación.",
   "bulk.moveSourceUp": "Mover {name} hacia arriba",
