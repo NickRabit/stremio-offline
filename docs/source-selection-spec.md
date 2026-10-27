@@ -583,21 +583,26 @@ authorization/snapshots are stable. Administrator CRUD remains a required later 
    shared profile. New installations use instance defaults. New templates are optional explicit
    choices for existing users. Default profile selection and deliberate resume-policy corrections
    are not hidden inside an extraction. Persist migration version/backup and prove restart/idempotency.
-7. Deleted IDs are never reused. Settings backup moves to version 4 with portable provider
-   identities (see Provider adapters). Preserve an imported profile ID if it is unused locally.
+7. Deleted IDs are never reused. Persist deleted profile IDs as tombstones across restarts and
+   settings import. Settings backup moves to version 4 with portable provider identities (see
+   Provider adapters). Preserve an imported profile ID only if it is absent from both active
+   profiles and tombstones on the importing instance. Treat a tombstoned ID as a collision and
+   mint a new ID for the imported profile; an older backup must not revive a deleted ID.
    An identical definition has the same revision, operations, canonical policy and stored display
    metadata. If an ID collides with that exact definition, reuse the local profile; if revision or
    definition differs, keep the local profile and mint a new ID for the imported one, including
-   collisions between seeded templates. Build an old-to-new profile ID map. Historical admission
-   snapshots retain their original ID, revision and rules. In the same serialized settings-store
-   transaction that publishes profiles, rewrite every affected `UserData.prefs`
-   default through that map. Clear a reference to a removed or unresolved profile so resolution
-   falls back to the operation-compatible instance default; never leave a dangling ID. The backup
-   restores only the exporting admin's personal defaults to the importing admin; existing users
-   retain their own defaults, subject to this remap. Preserve all historical snapshots and list
-   dormant provider references that could not map. Test import failure/restart and rollback; an older binary
-   must refuse an unsupported new schema rather than overwrite it. Retain the pre-migration backup
-   for rollback.
+   collisions between seeded templates. Build an old-to-new profile ID map. If imported and local
+   profiles have the same display name, distinguish them with a localized presentation-only
+   "imported" suffix and identify both in the import summary; keep stored names unchanged.
+   Historical admission snapshots retain their original ID, revision and rules. In the same
+   serialized settings-store transaction that publishes profiles, rewrite every affected
+   `UserData.prefs` default through that map. Clear a reference to a removed or unresolved
+   profile so resolution falls back to the operation-compatible instance default; never leave a
+   dangling ID. The backup restores only the exporting admin's personal defaults to the importing
+   admin; existing users retain their own defaults, subject to this remap. Preserve historical
+   snapshots and list dormant provider references that could not map. Test import failure, restart
+   and rollback; an older binary must refuse an unsupported new schema rather than overwrite it.
+   Retain the pre-migration backup for rollback.
 8. Add remote automatic candidates after the background policy/admission pipeline and relevant
    remote tests are stable. Interactive fan-out, Kotlin migration and the complete editor are not
    prerequisites; shared server access/cache guarantees are.

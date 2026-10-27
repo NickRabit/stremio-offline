@@ -152,7 +152,8 @@ requests local/pure; do not double live provider traffic for a shadow rollout.
   protected admin mapping section; keep versions 1 to 3. Inspect raw persisted policies for secrets,
   not only their public projections. Build an old-to-new remote connection/library ID map during
   import; it is not returned by the current `prepareMediaServerConfiguration`. Imported remote
-  libraries remain disabled without grants or credentials until an admin reconnects them.
+  connections and libraries remain disabled. They have no grants or credentials until an admin
+  reconnects them.
 
 Add tests **before implementation** for ordinary-user raw POST/PATCH/DELETE/duplicate attempts,
 restricted mode, spoofed owner, hidden providers, stale revisions, concurrent delete/edit,
@@ -160,11 +161,16 @@ transaction failure/restart, last-profile replacement, import reference collisio
 schemas. Test editing/deleting a profile while jobs run; existing jobs and follow snapshots must
 keep their rules. Test explicit follow reconfiguration versus concurrent episode admission, plus
 waiting and reserved intents with no job: retries must recover the original admitted snapshot.
-Verify export includes
-only the acting admin's personal defaults, import assigns them to the importing admin, and profile
-ID collisions/removal remap or clear every existing user's affected default in the same transaction.
+Verify export includes only the acting admin's personal defaults, import assigns them to the
+importing admin, and profile ID collisions/removal remap or clear every existing user's affected
+default in the same transaction.
 Cover equal seeded IDs with differing revisions or definitions: retain the local definition,
 mint an ID for the imported one, remap live defaults and leave historical snapshots unchanged.
+Persist deleted profile IDs as tombstones. Import a backup containing a previously deleted ID:
+mint a new ID, preserve the tombstone and historical snapshots, and remap live defaults through
+the old-to-new map. Test restart and repeated import. When two definitions share a display name,
+verify that the UI distinguishes the imported one without changing either stored name and that
+the import summary identifies both.
 Inspect raw JSON, errors and rendered labels after revocation for hidden provider keys/names/counts.
 Cover empty authorized profile scope, operation changes, a deletion rewriting every affected
 personal default in the same transaction, per-user legacy mode and settings import/restart without
