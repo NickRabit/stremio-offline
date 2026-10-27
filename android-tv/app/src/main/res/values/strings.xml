@@ -242,6 +242,11 @@
   <string name="rules_resolution_at_least">%1$sp+</string>
   <string name="rules_resolution_at_most">≤%1$sp</string>
   <string name="rules_summary_up_to_episode">up to ~%1$s GB per episode</string>
+  <string name="rules_summary_any_language">any language</string>
+  <string name="rules_summary_prefer_language">prefer %1$s</string>
+  <string name="rules_summary_only_language">%1$s only</string>
+  <string name="rules_summary_range_episode">~%1$s–%2$s GB per episode</string>
+  <string name="rules_summary_from_episode">from ~%1$s GB per episode</string>
   <string name="rules_summary_join">%1$s · %2$s</string>
   <string name="save_adding">Adding…</string>
   <string name="save_target_default_library">Default library</string>

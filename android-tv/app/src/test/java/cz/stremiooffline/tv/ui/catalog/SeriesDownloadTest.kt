@@ -1,8 +1,13 @@
 package cz.stremiooffline.tv.ui.catalog
 
+import cz.stremiooffline.tv.data.ApiJson
+import cz.stremiooffline.tv.data.AudioMode
 import cz.stremiooffline.tv.data.RuleSummaryPart
 import cz.stremiooffline.tv.data.SourceProfileAudioDto
 import cz.stremiooffline.tv.data.SourceProfileConstraintsDto
+import cz.stremiooffline.tv.data.SourceProfileCriterionDto
+import cz.stremiooffline.tv.data.SourceProfileDto
+import cz.stremiooffline.tv.data.SourceProfileLanguageRefDto
 import cz.stremiooffline.tv.data.SourceProfilePolicyDto
 import cz.stremiooffline.tv.data.SourceProfileRangeDto
 import cz.stremiooffline.tv.data.VideoDto
@@ -80,17 +85,18 @@ class SeriesDownloadTest {
         heightPixels = SourceProfileRangeDto(min = 480, max = 720),
         bytes = SourceProfileRangeDto(max = 1_500_000_000),
       ),
+      criteria = listOf(SourceProfileCriterionDto("audioTier")),
     )
     assertEquals(
       listOf(
         RuleSummaryPart.Resolution(480, 720),
-        RuleSummaryPart.Audio(only = false),
-        RuleSummaryPart.MaxBytes(1_500_000_000),
+        RuleSummaryPart.Audio(AudioMode.PREFER, language = null),
+        RuleSummaryPart.Size(minBytes = null, maxBytes = 1_500_000_000),
       ),
       ruleSummaryParts(smaller),
     )
     assertEquals(
-      listOf(RuleSummaryPart.Resolution(null, 720), RuleSummaryPart.Audio(only = true)),
+      listOf(RuleSummaryPart.Resolution(null, 720), RuleSummaryPart.Audio(AudioMode.ONLY, language = null)),
       ruleSummaryParts(
         SourceProfilePolicyDto(
           SourceProfileConstraintsDto(
@@ -107,5 +113,72 @@ class SeriesDownloadTest {
     assertEquals("1.5", formatRuleGigabytes(1_500_000_000))
     assertEquals("4", formatRuleGigabytes(4_000_000_000))
     assertEquals("0.1", formatRuleGigabytes(100_000_000))
+  }
+
+  @Test
+  fun `preferred audio without an audioTier criterion is any language`() {
+    assertEquals(
+      listOf(RuleSummaryPart.Audio(AudioMode.ANY, language = null)),
+      ruleSummaryParts(
+        SourceProfilePolicyDto(
+          SourceProfileConstraintsDto(audio = SourceProfileAudioDto("preferred")),
+        ),
+      ),
+    )
+  }
+
+  @Test
+  fun `a chosen English language is prefer or only from the audio mode`() {
+    val english = SourceProfileLanguageRefDto(code = "en")
+    assertEquals(
+      listOf(RuleSummaryPart.Audio(AudioMode.PREFER, language = "en")),
+      ruleSummaryParts(
+        SourceProfilePolicyDto(
+          SourceProfileConstraintsDto(audio = SourceProfileAudioDto("preferred", english)),
+          criteria = listOf(SourceProfileCriterionDto("audioTier")),
+        ),
+      ),
+    )
+    assertEquals(
+      listOf(RuleSummaryPart.Audio(AudioMode.ONLY, language = "en")),
+      ruleSummaryParts(
+        SourceProfilePolicyDto(
+          SourceProfileConstraintsDto(audio = SourceProfileAudioDto("strict", english)),
+        ),
+      ),
+    )
+  }
+
+  @Test
+  fun `a size part is added for a min, a max, or both`() {
+    assertEquals(
+      listOf(RuleSummaryPart.Size(500_000_000, 4_000_000_000)),
+      ruleSummaryParts(
+        SourceProfilePolicyDto(
+          SourceProfileConstraintsDto(bytes = SourceProfileRangeDto(min = 500_000_000, max = 4_000_000_000)),
+        ),
+      ),
+    )
+    assertEquals(
+      listOf(RuleSummaryPart.Size(500_000_000, null)),
+      ruleSummaryParts(
+        SourceProfilePolicyDto(
+          SourceProfileConstraintsDto(bytes = SourceProfileRangeDto(min = 500_000_000)),
+        ),
+      ),
+    )
+  }
+
+  @Test
+  fun `a profile json carries preferred code, criteria and a bytes min`() {
+    val profile = ApiJson.decodeFromString(
+      SourceProfileDto.serializer(),
+      """{"id":"p1","policy":{"constraints":{"audio":{"mode":"preferred","preferred":{"code":"en"}},""" +
+        """"bytes":{"min":500000000,"max":4000000000}},"criteria":[{"kind":"audioTier"},""" +
+        """{"kind":"size","direction":"asc"}]},"unused":true}""",
+    )
+    assertEquals("en", profile.policy?.constraints?.audio?.preferred?.code)
+    assertEquals(listOf("audioTier", "size"), profile.policy?.criteria?.map { it.kind })
+    assertEquals(500_000_000L, profile.policy?.constraints?.bytes?.min)
   }
 }

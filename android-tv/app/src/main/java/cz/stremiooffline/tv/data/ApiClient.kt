@@ -54,6 +54,9 @@ sealed interface MeResult {
   data class SignedIn(val username: String, val language: String?) : MeResult
 }
 
+/** The decoder typed GETs share, including `GET /api/source-profiles`. Unknown keys stay ignored. */
+internal val ApiJson = Json { ignoreUnknownKeys = true }
+
 /** The typed API of one Stremio Offline server. No call retries on its own. */
 class ApiClient(
   private val address: ServerAddress,
@@ -61,7 +64,7 @@ class ApiClient(
   baseClient: OkHttpClient = OkHttpClient(),
 ) : TvApi {
 
-  private val json = Json { ignoreUnknownKeys = true }
+  private val json = ApiJson
   private val catalogSearchJson = Json { ignoreUnknownKeys = true; explicitNulls = false; encodeDefaults = false }
   /** A track change that also turns the server's own subtitle off sends the explicit null. */
   private val trackJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }

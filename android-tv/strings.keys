@@ -232,6 +232,11 @@ rules.resolutionRange
 rules.resolutionAtLeast
 rules.resolutionAtMost
 rules.summary.upToEpisode
+rules.summary.anyLanguage
+rules.summary.preferLanguage
+rules.summary.onlyLanguage
+rules.summary.rangeEpisode
+rules.summary.fromEpisode
 rules.summaryJoin
 save.adding
 saveTarget.defaultLibrary
