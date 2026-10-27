@@ -310,6 +310,74 @@ test("the Stage 3 catalogue migrates once to four rule presets", async () => {
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
+test("legacy variants migrate safely and a dropped variant clears every default that names it", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-store-provider-migration-"));
+  const providerVariant = "b14dc73e-c131-45ca-a8d8-a9c70e45a288";
+  const brokenVariant = "d957f2bf-93ab-4742-8e81-90963a9c1939";
+  const user = "usr_00000001";
+  const now = "2026-01-01T00:00:00.000Z";
+  try {
+    await writeFile(path.join(directory, "state.json"), JSON.stringify({
+      addons: [],
+      defaultsInstalled: true,
+      settings: {},
+      users: [{
+        id: user,
+        username: "owner",
+        passwordHash: "scrypt$aa$bb",
+        secret: "secret",
+        role: "admin",
+        createdAt: now,
+        permissions: { downloadToLibrary: true, downloadToDevice: true },
+        permissionsVersion: 0,
+      }],
+      userData: {
+        [user]: {
+          prefs: {
+            downloadSourceProfile: brokenVariant,
+            followSourceProfile: brokenVariant,
+          },
+          favorites: [], watchlist: {}, progress: {}, watchedSeries: {},
+        },
+      },
+      sourceProfiles: [
+        {
+          id: providerVariant,
+          revision: 1,
+          template: "providerPriority",
+          name: "Provider first",
+          parameters: defaultTemplateParameters("providerPriority"),
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: brokenVariant,
+          revision: 1,
+          template: "providerPriority",
+          name: "Broken",
+          parameters: {
+            ...defaultTemplateParameters("providerPriority"),
+            subtitleMode: "unsupported",
+          },
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    }));
+
+    const store = new Store(directory);
+    await store.load();
+    const migrated = store.sourceProfiles().find((profile) => profile.id === providerVariant);
+    assert.equal(migrated?.template, "rules");
+    assert.equal(migrated?.parameters && "subtitles" in migrated.parameters
+      ? migrated.parameters.subtitles
+      : undefined, "ifAvailable");
+    assert.equal(store.sourceProfiles().some((profile) => profile.id === brokenVariant), false);
+    assert.equal(Object.hasOwn(store.prefs(user), "downloadSourceProfile"), false);
+    assert.equal(Object.hasOwn(store.prefs(user), "followSourceProfile"), false);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test("a stored language survives a reload", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-store-"));
   try {

@@ -563,3 +563,35 @@ test("strict torrents need a listed preferred language and episodes need fileIdx
   });
   assert.equal(missingFile.status, "noMatch");
 });
+
+test("strict torrents do not treat a blank field filled from the title as a language claim", async () => {
+  const torrent: StreamItem = {
+    infoHash: "e".repeat(40),
+    fileIdx: 1,
+    name: "1080p",
+    behaviorHints: { bingeGroup: "Torrentio||1080p|" },
+  };
+  const value = listedAddonSourceEvidence({
+    providerKey: "addon:one",
+    stream: torrent,
+    providerResponseIndex: 0,
+    available: true,
+    titleLanguage: "en",
+  });
+  assert.ok(value);
+  const result = await verifyRulesCandidates({
+    snapshot: snapshot({
+      torrents: true,
+      resolution: { min: 720, max: 1080 },
+      audio: { mode: "only", fallback: null },
+    }),
+    candidates: [value],
+    inspect: async () => {
+      throw new Error("a torrent does not get inspected");
+    },
+    shouldContinue: () => true,
+    scopeStamp: "strict-torrent-title-fallback",
+    hasRealDebrid: true,
+  });
+  assert.equal(result.status, "noMatch");
+});

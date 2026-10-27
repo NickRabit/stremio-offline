@@ -65,6 +65,10 @@ export interface PublicSourceProfile {
   revision: number;
   template: SourceProfileTemplate;
   operations: SourceOperation[];
+  sizeLimits?: {
+    episodeBytes?: number;
+    movieBytes?: number;
+  };
   policy: SourcePolicyV1;
 }
 
@@ -588,7 +592,7 @@ export function rulesForLegacyVariant(
     torrents: provider.transfer.includes("torrent"),
     resolution: { min: null, max: null },
     audio: { mode: "prefer", fallback: null },
-    subtitles: provider.subtitleMode,
+    subtitles: provider.subtitleMode === "optional" ? "ifAvailable" : provider.subtitleMode,
     maxSizeGb: { episode: null, movie: null },
     skipCinema: false,
     preference: ["addonOrder", "language", provider.sizeDirection === "asc" ? "smaller" : "larger"],
@@ -653,6 +657,15 @@ export function sourceProfilesForViewer(catalogue: SourceProfileCatalogue): Publ
     });
     if (!operations.length) return [];
 
+    const sizeLimits = profile.template === "rules"
+      ? (() => {
+          const rules = parseDownloadRules(profile.parameters);
+          return {
+            ...(rules.maxSizeGb.episode === null ? {} : { episodeBytes: rules.maxSizeGb.episode * 1_000_000_000 }),
+            ...(rules.maxSizeGb.movie === null ? {} : { movieBytes: rules.maxSizeGb.movie * 1_000_000_000 }),
+          };
+        })()
+      : undefined;
     return [{
       id: profile.id,
       ...(profile.nameKey === undefined ? {} : { nameKey: profile.nameKey }),
@@ -660,6 +673,7 @@ export function sourceProfilesForViewer(catalogue: SourceProfileCatalogue): Publ
       revision: profile.revision,
       template: profile.template,
       operations,
+      ...(sizeLimits === undefined ? {} : { sizeLimits }),
       policy,
     }];
   });

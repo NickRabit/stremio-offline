@@ -23,7 +23,7 @@ import {
   SOURCE_PROFILE_IDS,
   type TravelParameters,
 } from "./source-profiles.js";
-import { rulesPolicy } from "./download-rules.js";
+import { parseDownloadRules, rulesPolicy } from "./download-rules.js";
 import {
   TravelVerificationError,
   type TravelContinuationCursorV1,
@@ -45,6 +45,8 @@ import {
   type DownloadSelection,
   type QueueHooks,
 } from "./downloads.js";
+import { FollowService, FollowStore, type FollowEpisode } from "./follows.js";
+import { createFollowQueueAdapter } from "./follow-queue.js";
 import type { AddonRecord, StreamItem } from "./types.js";
 import type { UserRecord } from "./users.js";
 
@@ -3528,6 +3530,97 @@ test("a rules snapshot runs only through the rules resolver and stages a verifie
   } finally {
     await queue.stop();
     source.server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a follow grace retry through the production adapter restores the preferred-audio snapshot", async () => {
+  const { directory, data, downloads } = await setup();
+  const preset = RULE_PRESETS.find((candidate) => candidate.id === SOURCE_PROFILE_IDS.balanced);
+  assert.ok(preset);
+  const rules = parseDownloadRules({
+    ...preset.rules,
+    audio: { mode: "prefer", fallback: "cs" },
+  });
+  const providerKeys = [PROVIDER_ONE];
+  const admission = parseSourceAdmissionSnapshotV1({
+    schemaVersion: 1,
+    profile: { id: preset.id, revision: 1, template: "rules" },
+    operation: "downloadToLibrary",
+    providerKeys,
+    policy: materializeSourceAdmissionPolicy(
+      rulesPolicy(rules, "episode"),
+      providerKeys,
+      { audioLanguage: "en", subtitleLanguage: "cs" },
+    ),
+  });
+  const released = "2026-09-01T00:00:00.000Z";
+  let now = Date.parse(released) + 24 * 60 * 60_000;
+  const followStore = new FollowStore(path.join(directory, "follows"));
+  await followStore.load();
+  const follow = await followStore.create({
+    ownerUserId: QUEUE_OWNER,
+    type: "series",
+    metaId: "tt-grace",
+    name: "Show",
+  }, now);
+  const episode: FollowEpisode = {
+    key: "1:1",
+    videoId: "tt-grace:1:1",
+    season: 1,
+    episode: 1,
+    released,
+    firstSeenAt: released,
+  };
+  await followStore.recordCheck(follow.id, { episodes: [episode], now });
+  await followStore.update(follow.id, (current) => {
+    current.autoDownload = {
+      enabledAt: "2026-08-01T00:00:00.000Z",
+      startMode: "from",
+      startSeason: 1,
+      startEpisode: 1,
+      selection: selection(PROVIDER_ONE),
+      sourceProfile: {
+        profileId: preset.id,
+        revision: 1,
+        template: "rules",
+        parameters: rules,
+      },
+      graceDays: 7,
+    };
+  });
+
+  const queue = openQueue(data, downloads);
+  const seen: SourceAdmissionSnapshotV1[] = [];
+  queue.setRulesResolver(async (input) => {
+    seen.push(structuredClone(input.snapshot));
+    return { status: "noMatch", retryable: false, observations: emptyObservations };
+  });
+  await queue.load();
+  const service = new FollowService({
+    store: followStore,
+    now: () => now,
+    owner: () => ({ id: QUEUE_OWNER, role: "user" }),
+    queue: createFollowQueueAdapter(queue),
+    mayDownload: () => true,
+    meta: async () => null,
+    admitSourceProfile: () => admission,
+  });
+  try {
+    await service.admit(follow.id);
+    const jobId = followStore.get(follow.id)?.episodes["1:1"]?.download?.jobId;
+    assert.ok(jobId);
+    await waitFor(queue, () => queue.get(jobId)?.status === "failed");
+    assert.equal(seen[0]?.policy.constraints.audio.mode, "strict");
+
+    await service.sync();
+    now = Date.parse(released) + 8 * 24 * 60 * 60_000;
+    await service.sync();
+    await waitFor(queue, () => seen.length >= 2 && queue.get(jobId)?.status === "failed");
+    assert.equal(seen[1]?.policy.constraints.audio.mode, "preferred");
+    assert.deepEqual(seen[1]?.policy.constraints.audio.fallback, { code: "cs" });
+  } finally {
+    await queue.stop();
     await rm(directory, { recursive: true, force: true });
   }
 });

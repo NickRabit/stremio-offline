@@ -251,6 +251,17 @@ test("administrators see every profile and operation available from their grante
   ]);
 });
 
+test("public rules expose separate film and episode size limits", () => {
+  const profiles = sourceProfilesForViewer(catalogue(account(ADMIN, "admin"), {
+    addons: [addon("stream")],
+  }));
+  const balanced = profiles.find((profile) => profile.id === SOURCE_PROFILE_IDS.balanced);
+  assert.deepEqual(balanced?.sizeLimits, {
+    episodeBytes: 4_000_000_000,
+    movieBytes: 15_000_000_000,
+  });
+});
+
 test("a local path alone supports playback and a device copy, never a library self-copy", () => {
   const profiles = sourceProfilesForViewer(catalogue(account(MEMBER, "user"), {
     libraries: [library([MEMBER])],

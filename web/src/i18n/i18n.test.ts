@@ -112,6 +112,15 @@ describe("catalogues", () => {
       expect({ locale, found }).toEqual({ locale, found: [] });
     }
   });
+
+  it("describe an invalid follow as generic invalid settings", () => {
+    expect(catalogues.en["err.followInvalid"]).toBe("The follow settings are not valid.");
+    expect(catalogues.cs["err.followInvalid"]).toBe("Nastavení sledování není platné.");
+    for (const [locale, catalog] of Object.entries(catalogues)) {
+      expect(String(catalog["err.followInvalid"]).toLowerCase(), locale)
+        .not.toMatch(/series|serial|seriál/);
+    }
+  });
 });
 
 /** A key the server can send that the catalogue does not carry falls back to the server's

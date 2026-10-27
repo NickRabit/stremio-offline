@@ -1485,7 +1485,7 @@ export const pl: Catalog = {
   "err.libraryOpsUnreadable": "Nie udało się odczytać pliku operacji biblioteki.",
   "err.followMetaUnavailable": "Nie udało się wczytać szczegółów serialu.",
   "err.followCooldown": "Sprawdzono chwilę temu, spróbuj ponownie za moment.",
-  "err.followInvalid": "Obserwowanemu serialowi brakuje typu, identyfikatora lub nazwy.",
+  "err.followInvalid": "Ustawienia obserwowania nie są prawidłowe.",
   "err.followRetentionAdmin": "Tylko administrator może automatycznie usuwać obejrzane odcinki.",
   "err.noMatchingSource": "Nie znaleziono pasującego źródła.",
   "err.followNoReleaseDate": "Odcinek nie ma daty premiery, więc nie jest pobierany automatycznie.",

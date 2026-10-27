@@ -280,6 +280,7 @@ export interface SourceProfile {
   template: SourceProfileTemplate;
   revision: number;
   operations: Array<"play" | "downloadToLibrary" | "downloadToDevice">;
+  sizeLimits?: { episodeBytes?: number; movieBytes?: number };
   policy: SourcePolicyV1;
 }
 export type SourceProfileTemplate = "recommended" | "travel" | "providerPriority" | "rules";

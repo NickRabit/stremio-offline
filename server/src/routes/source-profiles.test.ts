@@ -212,10 +212,10 @@ test("GET /api/source-profiles returns the fixed catalogue for an administrator"
     SOURCE_PROFILE_IDS.myLanguage,
   ]);
   assert.deepEqual(profiles.map((profile) => Object.keys(profile).sort()), [
-    ["id", "nameKey", "operations", "policy", "revision", "template"],
-    ["id", "nameKey", "operations", "policy", "revision", "template"],
-    ["id", "nameKey", "operations", "policy", "revision", "template"],
-    ["id", "nameKey", "operations", "policy", "revision", "template"],
+    ["id", "nameKey", "operations", "policy", "revision", "sizeLimits", "template"],
+    ["id", "nameKey", "operations", "policy", "revision", "sizeLimits", "template"],
+    ["id", "nameKey", "operations", "policy", "revision", "sizeLimits", "template"],
+    ["id", "nameKey", "operations", "policy", "revision", "sizeLimits", "template"],
   ]);
   assert.deepEqual(profiles.map((profile) => profile.operations), [
     ["play", "downloadToLibrary", "downloadToDevice"],
@@ -408,5 +408,13 @@ const SOURCE_PROFILES_EXPECTED = RULE_PRESETS.map((preset) => ({
   revision: 1,
   template: preset.template,
   operations: ["play", "downloadToLibrary", "downloadToDevice"],
+  sizeLimits: {
+    ...(preset.rules.maxSizeGb.episode === null
+      ? {}
+      : { episodeBytes: preset.rules.maxSizeGb.episode * 1_000_000_000 }),
+    ...(preset.rules.maxSizeGb.movie === null
+      ? {}
+      : { movieBytes: preset.rules.maxSizeGb.movie * 1_000_000_000 }),
+  },
   policy: rulesPolicy(preset.rules, "episode"),
 }));

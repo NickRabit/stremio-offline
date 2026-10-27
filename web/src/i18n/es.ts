@@ -1485,7 +1485,7 @@ export const es: Catalog = {
   "err.libraryOpsUnreadable": "No se pudo leer el archivo de operaciones de la biblioteca.",
   "err.followMetaUnavailable": "No se pudieron cargar los detalles de la serie.",
   "err.followCooldown": "Se comprobó hace un momento, inténtalo de nuevo en breve.",
-  "err.followInvalid": "A la serie seguida le falta un tipo, un id o un nombre.",
+  "err.followInvalid": "La configuración de seguimiento no es válida.",
   "err.followRetentionAdmin": "Solo un administrador puede eliminar automáticamente los episodios vistos.",
   "err.noMatchingSource": "No se encontró ninguna fuente compatible.",
   "err.followNoReleaseDate": "El episodio no tiene fecha de emisión, por lo que no se descarga automáticamente.",

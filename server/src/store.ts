@@ -353,6 +353,7 @@ export class Store {
       SOURCE_PROFILE_IDS.travel,
     ]);
     let changed = false;
+    const dropped = new Set<string>();
     for (const candidate of candidates) {
       try {
         let profile = this.parseStoredSourceProfile(candidate);
@@ -385,11 +386,13 @@ export class Store {
         seen.add(profile.id);
         profiles.push(profile);
       } catch {
+        const id = candidate !== null && typeof candidate === "object"
+          && typeof (candidate as { id?: unknown }).id === "string"
+          ? (candidate as { id: string }).id
+          : undefined;
+        if (id !== undefined) dropped.add(id);
         log("ERROR", "A stored source profile was dropped", {
-          id: candidate !== null && typeof candidate === "object"
-            && typeof (candidate as { id?: unknown }).id === "string"
-            ? (candidate as { id: string }).id
-            : undefined,
+          id,
           reason: "invalid record",
         });
       }
@@ -411,6 +414,11 @@ export class Store {
     for (const data of Object.values(this.state.userData ?? {})) {
       for (const key of ["downloadSourceProfile", "followSourceProfile"] as const) {
         const selected = data.prefs[key];
+        if (typeof selected === "string" && dropped.has(selected)) {
+          delete data.prefs[key];
+          changed = true;
+          continue;
+        }
         const mapped = typeof selected === "string" ? remap.get(selected) : undefined;
         if (mapped) {
           data.prefs[key] = mapped;

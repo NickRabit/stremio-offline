@@ -1485,7 +1485,7 @@ export const ptBR: Catalog = {
   "err.libraryOpsUnreadable": "Não foi possível ler o arquivo de operações da biblioteca.",
   "err.followMetaUnavailable": "Não foi possível carregar os detalhes da série.",
   "err.followCooldown": "Verificado há um momento, tente novamente em breve.",
-  "err.followInvalid": "A série seguida está sem um tipo, um id ou um nome.",
+  "err.followInvalid": "As configurações de acompanhamento não são válidas.",
   "err.followRetentionAdmin": "Somente um administrador pode excluir automaticamente episódios assistidos.",
   "err.noMatchingSource": "Nenhuma fonte compatível foi encontrada.",
   "err.followNoReleaseDate": "O episódio não tem data de lançamento, por isso não é baixado automaticamente.",

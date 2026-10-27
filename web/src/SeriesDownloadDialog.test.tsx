@@ -9,6 +9,7 @@ const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 const profile = (id: string, nameKey: string, audio: "preferred" | "strict" = "preferred"): SourceProfile => ({
   id, nameKey, template: "rules", revision: 3, operations: ["downloadToLibrary"],
+  sizeLimits: { episodeBytes: 4_000_000_000, movieBytes: 15_000_000_000 },
   policy: {
     schemaVersion: 1, scope: { mode: "allAvailable" },
     constraints: {
@@ -202,6 +203,7 @@ describe("SeriesDownloadDialog", () => {
     expect(host.querySelector("h2")?.textContent).toBe("Follow film");
     await act(async () => { host.querySelector<HTMLInputElement>('input[name="follow-mode"][value="download"]')!.click(); });
     await flush();
+    expect(host.textContent).toContain("720p–1080p · prefer my language · up to ~15 GB per film");
     expect(host.querySelector('input[name="follow-start"]')).toBeNull();
     expect(host.querySelector('select[aria-label="After watching"]')).toBeNull();
   });

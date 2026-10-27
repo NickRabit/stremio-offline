@@ -1485,7 +1485,7 @@ export const de: Catalog = {
   "err.libraryOpsUnreadable": "Die Datei mit den Bibliotheksvorgängen konnte nicht gelesen werden.",
   "err.followMetaUnavailable": "Die Seriendetails konnten nicht geladen werden.",
   "err.followCooldown": "Erst kürzlich geprüft, versuchen Sie es in Kürze erneut.",
-  "err.followInvalid": "Der gefolgten Serie fehlt ein Typ, eine ID oder ein Name.",
+  "err.followInvalid": "Die Einstellungen für die Nachverfolgung sind nicht gültig.",
   "err.followRetentionAdmin": "Nur ein Administrator kann angesehene Folgen automatisch löschen.",
   "err.noMatchingSource": "Es wurde keine passende Quelle gefunden.",
   "err.followNoReleaseDate": "Die Episode hat kein Veröffentlichungsdatum und wird daher nicht automatisch geladen.",

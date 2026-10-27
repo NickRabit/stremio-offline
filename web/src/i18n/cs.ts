@@ -1538,7 +1538,7 @@ export const cs: Catalog = {
   "err.libraryOpsUnreadable": "Soubor operací s knihovnou se nepodařilo načíst.",
   "err.followMetaUnavailable": "Podrobnosti seriálu se nepodařilo načíst.",
   "err.followCooldown": "Kontrola proběhla před chvílí, zkuste to za moment.",
-  "err.followInvalid": "Sledovanému seriálu chybí typ, id nebo název.",
+  "err.followInvalid": "Nastavení sledování není platné.",
   "err.followRetentionAdmin": "Automaticky mazat zhlédnuté díly může jen administrátor.",
   "err.noMatchingSource": "Nenašel se žádný vyhovující zdroj.",
   "err.followNoReleaseDate": "Díl nemá datum vydání, proto se automaticky nestahuje.",

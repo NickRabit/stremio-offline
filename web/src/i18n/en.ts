@@ -1544,7 +1544,7 @@ export const en = {
   "err.libraryOpsUnreadable": "The library operations file could not be read.",
   "err.followMetaUnavailable": "The series details could not be loaded.",
   "err.followCooldown": "Checked a moment ago, try again shortly.",
-  "err.followInvalid": "The followed series is missing a type, an id or a name.",
+  "err.followInvalid": "The follow settings are not valid.",
   "err.followRetentionAdmin": "Only an administrator can delete watched episodes automatically.",
   "err.noMatchingSource": "No matching source was found.",
   "err.followNoReleaseDate": "The episode has no release date, so it is not downloaded automatically.",

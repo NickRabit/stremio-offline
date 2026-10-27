@@ -230,7 +230,7 @@ export function listedAddonSourceEvidence(
   const titleLanguage = typeof input.titleLanguage === "string"
     ? normalizeLanguage(input.titleLanguage)
     : undefined;
-  const audioLanguages = addonAudioLanguages(input.stream, titleLanguage);
+  const audioLanguages = addonAudioLanguages(input.stream, identity.kind === "torrent" ? undefined : titleLanguage);
   const bytes = addonStreamSize(input.stream);
   const heightPixels = heightFromListing(input.stream);
   const hints = bytes !== undefined && Number.isFinite(bytes) && bytes >= 0

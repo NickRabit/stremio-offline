@@ -42,6 +42,7 @@ import { tmdbGallery, tmdbMeta, tmdbMovieReleases, tmdbSeasonAirDates, type Tmdb
 import { createLibraryCandidates } from "./library-candidates.js";
 import { ExternalIdStore } from "./external-ids.js";
 import { FollowService, FollowStore } from "./follows.js";
+import { createFollowQueueAdapter } from "./follow-queue.js";
 import { currentLevel, flushLog, initLogger, log, parseLevel, startLogMaintenance, setLevel } from "./logger.js";
 import { resolveListenTarget, startServer, utilityParentPort } from "./server-start.js";
 import { loopbackHostCheck } from "./host-check.js";
@@ -2063,16 +2064,7 @@ const followService = new FollowService({
     const marker = (store.userData(ownerUserId).watchedSeries as Record<string, WatchedMarker> | undefined)?.[metaId];
     return marker ? { season: marker.season, episode: marker.episode, updatedAt: marker.updatedAt } : undefined;
   },
-  queue: {
-    addPending: (title, source, media, ownerUserId, follow, sourceAdmission) =>
-      queue.addPending(title, source, media, ownerUserId, follow, sourceAdmission),
-    findActiveEpisode: (ownerUserId, type, videoId) => queue.findActiveEpisode(ownerUserId, type, videoId),
-    adopt: (id, follow) => queue.adopt(id, follow),
-    followJobs: () => queue.followJobs(),
-    get: (id) => queue.get(id),
-    retry: (id, selection) => queue.retry(id, selection),
-    remove: (id) => queue.remove(id),
-  },
+  queue: createFollowQueueAdapter(queue),
   // The owner may queue into the pinned library right now: the account, its rights, the
   // addons and the library are read again on every ask, never from when the rule was saved.
   mayDownload: (ownerUserId, selection) => ownerMayDownload({

@@ -39,7 +39,9 @@ export const rulesSummary = (rules: DownloadRules, kind: "episode" | "movie" = "
 
 export const profileSummary = (profile: SourceProfile, kind: "episode" | "movie") => {
   const height = profile.policy.constraints.heightPixels;
-  const bytes = profile.policy.constraints.bytes?.max;
+  const bytes = profile.sizeLimits
+    ? profile.sizeLimits[kind === "episode" ? "episodeBytes" : "movieBytes"]
+    : profile.policy.constraints.bytes?.max;
   return summary(height?.min, height?.max,
     profile.policy.constraints.audio.mode === "strict" ? "only" : "prefer",
     bytes == null ? null : bytes / 1_000_000_000, kind);
