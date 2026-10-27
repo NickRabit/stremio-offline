@@ -6,6 +6,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { addonAllowed } from "./addons.js";
+import { addonIdentity, isAddonIdentity } from "./addon-identity.js";
 import type { AddonDownloadSettings, AddonRecord, StreamItem, SubtitleItem } from "./types.js";
 import { defaultDownloadSettings, fitTargetName, joinTarget, nameExtension, streamExtension, targetPath, type MediaInfo } from "./naming.js";
 import { torrentKey } from "./download-selection.js";
@@ -38,6 +39,23 @@ import { readMediaBytes } from "./media-playlist.js";
 import { preserveDamaged, readStateFile } from "./state-file.js";
 import { subtitleVtt } from "./subtitle-text.js";
 import type { DownloadSnapshot, DownloadStatus, PauseReason, PublicDownload, QueueHalt } from "./api-types.js";
+import type { ExistingLocalCopyReference } from "./local-copy-admission.js";
+import {
+  parseDownloadSourceAdmissionSnapshotV1,
+  SourceAdmissionValidationError,
+  type SourceAdmissionSnapshotV1,
+} from "./source-admission.js";
+import {
+  parseTravelContinuationCursorV1,
+  type TravelContinuationCursorV1,
+} from "./source-travel.js";
+import { isExecutableDownloadProfile, SOURCE_PROFILE_IDS } from "./source-profiles.js";
+import type {
+  ProviderPriorityProfileResolution,
+  ProviderPriorityProfileResolverInput,
+  TravelProfileResolution,
+  TravelProfileResolverInput,
+} from "./source-profile-resolver.js";
 
 export type { DownloadStatus, PauseReason, QueueHalt };
 export type SubtitleMode = "off" | "optional" | "required";
@@ -80,6 +98,14 @@ export interface DownloadJob {
    *  the administrator the state migrated into. */
   ownerUserId?: string;
   source?: { type: string; videoId: string; tried: string[]; selection?: DownloadSelection };
+  sourceAdmission?: SourceAdmissionSnapshotV1;
+  travelCursor?: TravelContinuationCursorV1;
+  /** Hashes of the addon records that supplied the selected stream and subtitle. */
+  sourceStreamAddonIdentity?: string;
+  sourceSubtitleAddonIdentity?: string;
+  sourceFallbackAttempts?: number;
+  travelTemporaryFailures?: number;
+  travelBudgetAttempts?: number;
   /** Present when a followed series queued the job, so the follow can be reconciled
    *  with the queue across restarts. */
   follow?: { followId: string; episodeKey: string; intent: string };
@@ -116,6 +142,8 @@ export interface DownloadJob {
    *  fail the same way, so every further attempt runs over one stream. */
   rangesIgnored?: boolean;
   createdAt: string; updatedAt: string; startedAt?: string; completedAt?: string;
+  /** Set only when a queued profile job finishes by pointing at an adequate existing file. */
+  reusedLocalCopy?: true;
 }
 
 /** Queueing onto the NAS is a right an administrator hands out. The role is what grants an
@@ -163,6 +191,20 @@ export interface DownloadOwnerScope {
   remoteAccess?: RemoteAccessSource;
 }
 
+const isTravelSnapshot = (
+  snapshot: SourceAdmissionSnapshotV1 | undefined,
+): snapshot is SourceAdmissionSnapshotV1 =>
+  snapshot?.profile.id === SOURCE_PROFILE_IDS.travel && snapshot.profile.revision === 1;
+
+export const isExecutableDownloadSnapshot = (
+  snapshot: SourceAdmissionSnapshotV1 | undefined,
+): snapshot is SourceAdmissionSnapshotV1 =>
+  snapshot?.operation === "downloadToLibrary" && isExecutableDownloadProfile(snapshot.profile);
+
+export const isSelectedProfileJob = (
+  job: Pick<DownloadJob, "sourceAdmission" | "stream">,
+): boolean => isExecutableDownloadSnapshot(job.sourceAdmission) && job.stream !== undefined;
+
 /** The library a job writes into, where it is named. A resolved job carries it on `libraryId`;
  *  an unresolved one names it in its qualified target, in the rule it was queued with, or --
  *  for a lazy job that has not picked a source yet -- only in the selection it will resolve
@@ -170,6 +212,19 @@ export interface DownloadOwnerScope {
 export const jobLibraryId = (job: Pick<DownloadJob, "libraryId" | "target" | "targetSettings" | "source">): string | undefined =>
   job.libraryId ?? (job.target ? parseLibraryPath(job.target)?.libraryId : undefined)
     ?? job.targetSettings?.libraryId ?? job.source?.selection?.targetSettings.libraryId;
+
+const knownKindOf = (
+  job: Pick<DownloadJob, "media" | "source">,
+): "movie" | "series" | undefined => {
+  if (job.media?.kind === "episode") return "series";
+  if (job.media?.kind === "movie") return "movie";
+  if (job.source?.type === "series") return "series";
+  if (job.source?.type === "movie") return "movie";
+  return undefined;
+};
+
+const libraryAcceptsKind = (library: LibraryRecord, kind: "movie" | "series"): boolean =>
+  library.type === "mixed" || library.type === kind;
 
 /** The library a rule that names no library lands in. The door, a follow's automatic rule and
  *  the queue all resolve it through this one function, so all three name the same library:
@@ -182,11 +237,11 @@ export const defaultDownloadLibrary = (libraries: LibraryRecord[], settings: Def
  * The owner-bound check, answered from the current state every time it is asked because a
  * queued job outlives the request that queued it: the account must still exist and may queue,
  * the source addon must be allowed to it and enabled, and the target library must be visible
- * to it, enabled and writable. A part whose subject is not chosen yet is left to the moment it
- * is known -- a lazy job has no source until the resolver picks one, and a library that has
- * been removed is waited for -- so the check is asked again once they are.
+ * to it, enabled, writable and accepting the job's kind. A part whose subject is not chosen yet
+ * is left to the moment it is known -- a lazy job has no source until the resolver picks one,
+ * and a library that has been removed is waited for -- so the check is asked again once they are.
  */
-export function ownerMayDownload(scope: DownloadOwnerScope, job: { stream?: StreamItem; subtitle?: SubtitleItem; remoteDownload?: RemoteDownloadReference; libraryId?: string; target?: string; targetSettings?: DownloadTargetSettings; source?: DownloadJob["source"] }): boolean {
+export function ownerMayDownload(scope: DownloadOwnerScope, job: { stream?: StreamItem; subtitle?: SubtitleItem; remoteDownload?: RemoteDownloadReference; media?: MediaInfo; libraryId?: string; target?: string; targetSettings?: DownloadTargetSettings; source?: DownloadJob["source"]; sourceAdmission?: SourceAdmissionSnapshotV1; sourceStreamAddonIdentity?: string; sourceSubtitleAddonIdentity?: string }): boolean {
   const owner = scope.owner;
   if (!owner || owner.disabled || !mayDownloadToLibrary(owner)) return false;
   // A raw sealed address is never a queued source: a remote copy is identified by its own
@@ -199,33 +254,60 @@ export function ownerMayDownload(scope: DownloadOwnerScope, job: { stream?: Stre
     if (!remote || !remoteDownloadAccessible(remote, job.remoteDownload, owner.id)) return false;
   }
   const viewer: Viewer = { id: owner.id, role: owner.role };
-  // Both addons, not only the video's: an external subtitle is commonly chosen from a
-  // different one, and it is fetched on resume -- arbitrarily long after a withdrawal.
-  for (const addonKey of [job.stream?.addonKey, job.subtitle?.addonKey]) {
+  // Both resolved addons, or every selected source while a lazy job is still unresolved.
+  const addonKeys = job.stream || !job.source?.selection
+    ? [job.stream?.addonKey, job.subtitle?.addonKey]
+    : [...job.source.selection.addonKeys, job.subtitle?.addonKey];
+  for (const addonKey of new Set(addonKeys)) {
     if (!addonKey) continue;
     const addon = scope.addons.find((item) => item.key === addonKey);
     if (!addon?.enabled || !addonAllowed(addon, viewer)) return false;
+  }
+  if (isExecutableDownloadSnapshot(job.sourceAdmission) && job.stream) {
+    const streamAddon = job.stream.addonKey
+      ? scope.addons.find((item) => item.key === job.stream!.addonKey)
+      : undefined;
+    if (!streamAddon
+      || !isAddonIdentity(job.sourceStreamAddonIdentity)
+      || addonIdentity(streamAddon) !== job.sourceStreamAddonIdentity) return false;
+    const subtitleKey = job.subtitle?.addonKey;
+    if (subtitleKey === undefined) {
+      if (job.sourceSubtitleAddonIdentity !== undefined) return false;
+    } else {
+      const subtitleAddon = scope.addons.find((item) => item.key === subtitleKey);
+      if (!subtitleAddon
+        || !isAddonIdentity(job.sourceSubtitleAddonIdentity)
+        || addonIdentity(subtitleAddon) !== job.sourceSubtitleAddonIdentity) return false;
+    }
   }
   const libraryId = jobLibraryId({ libraryId: job.libraryId, target: job.target ?? "", targetSettings: job.targetSettings, source: job.source });
   if (libraryId !== undefined && REMOTE_LIBRARY_ID.test(libraryId)) return false;
   const library = libraryId ? scope.libraries.find((item) => item.id === libraryId) : undefined;
   if (job.remoteDownload && !library) return false;
   if (library && (!libraryVisible(library, viewer) || !library.enabled || Boolean(library.readOnly))) return false;
+  const kind = knownKindOf({ media: job.media, source: job.source });
+  if (library && kind && !libraryAcceptsKind(library, kind)) return false;
   return true;
 }
 
 /** The owner travels with the source: a job is picked up long after the request that queued
  *  it, and choosing between candidates means asking addons. Which addons may be asked is the
  *  owner's business, so the resolver cannot be given the source alone. */
-export type StreamResolver = (source: NonNullable<DownloadJob["source"]>, ownerUserId: string | undefined) => Promise<{
+export type StreamResolver = (source: NonNullable<DownloadJob["source"]>, ownerUserId: string | undefined, signal: AbortSignal) => Promise<{
   stream: StreamItem;
   settings: AddonDownloadSettings;
   subtitle?: SubtitleItem;
   resolution?: DownloadResolution;
 } | undefined>;
+export type TravelProfileResolver = (
+  input: TravelProfileResolverInput,
+) => Promise<TravelProfileResolution>;
+export type ProviderPriorityProfileResolver = (
+  input: ProviderPriorityProfileResolverInput,
+) => Promise<ProviderPriorityProfileResolution>;
 export interface DebridEngine {
   configured: () => boolean;
-  advance: (input: { infoHash: string; fileIdx?: number; torrentId?: string }) => Promise<DebridAdvance>;
+  advance: (input: { infoHash: string; fileIdx?: number; torrentId?: string; exactFile?: boolean }) => Promise<DebridAdvance>;
 }
 
 /** The backend a queued remote copy runs on. It is the only way such a job may open bytes or
@@ -236,6 +318,20 @@ export interface RemoteDownloadBackend {
   current(job: DownloadJob): boolean;
   open(job: DownloadJob, args: { method: "GET" | "HEAD"; range?: string }, signal: AbortSignal): Promise<Response>;
   revalidate(job: DownloadJob, signal: AbortSignal): Promise<void>;
+}
+
+export interface ExistingLocalCopyAdmission {
+  ownerUserId: string | undefined;
+  source: Pick<NonNullable<DownloadJob["source"]>, "type" | "videoId" | "selection">;
+  media: MediaInfo | undefined;
+  sourceAdmission: SourceAdmissionSnapshotV1;
+}
+
+export interface QueuedExistingLocalCopyLookup {
+  ownerUserId: string | undefined;
+  source: Pick<NonNullable<DownloadJob["source"]>, "type" | "videoId" | "selection">;
+  media: MediaInfo | undefined;
+  sourceAdmission: SourceAdmissionSnapshotV1;
 }
 
 export interface QueueHooks {
@@ -254,6 +350,8 @@ export interface QueueHooks {
   libraryRetryMs?: number;
   freeSpace?: (dir: string) => Promise<{ freeBytes?: number; totalBytes?: number }>;
   createWriteStream?: (file: string, options: { flags: string }) => NodeJS.WritableStream;
+  /** Replaces only the final video rename, so tests can hold publication open. */
+  renamePublication?: (from: string, to: string) => Promise<void>;
   /** Writes the queue's own state file; tests use it to fail one particular write. */
   writeState?: (file: string, data: string) => Promise<void>;
   stallInitialMs?: number;
@@ -280,6 +378,12 @@ export interface QueueHooks {
    *  A refusal pauses the job instead of failing it, so its place is kept for when the
    *  permission comes back. Absent in a queue built without accounts: nothing gates it. */
   ownerAllowed?: (job: DownloadJob) => boolean | Promise<boolean>;
+  /** A profile admission may skip a bulk download when an acceptable local copy already exists. */
+  existingLocalCopy?: (input: ExistingLocalCopyAdmission) => boolean | Promise<boolean>;
+  /** A queued profile job may finish by reference when an adequate local copy appeared while it waited. */
+  existingLocalCopyForQueue?: (
+    input: QueuedExistingLocalCopyLookup,
+  ) => ExistingLocalCopyReference | undefined | Promise<ExistingLocalCopyReference | undefined>;
   /** Whether an account can see a library. Lets a duplicate in another account's finished
    *  job be reported only when the asker could find that file anyway. */
   ownerSeesLibrary?: (ownerUserId: string | undefined, libraryId: string) => boolean;
@@ -292,6 +396,84 @@ export interface QueueHooks {
 
 const exists = async (file: string) => { try { await stat(file); return true; } catch { return false; } };
 const MiB = 1024 ** 2;
+
+const SOURCE_ADMISSION_RUNTIME_UNAVAILABLE = {
+  message: "The admitted source profile cannot run in the legacy download runtime.",
+  key: "err.noMatchingSource",
+};
+
+class SourceAdmissionRuntimeUnavailable extends SourceError {
+  constructor() {
+    super(SOURCE_ADMISSION_RUNTIME_UNAVAILABLE.message, SOURCE_ADMISSION_RUNTIME_UNAVAILABLE.key);
+    this.name = "SourceAdmissionRuntimeUnavailable";
+  }
+}
+
+const supportsTravelCursor = (
+  job: Pick<DownloadJob, "sourceAdmission" | "stream" | "source">,
+  snapshot: SourceAdmissionSnapshotV1 | undefined = job.sourceAdmission,
+): boolean => isTravelSnapshot(snapshot) && job.stream === undefined && Boolean(job.source);
+
+const PRIVATE_STATE_ALIASES = [
+  ["sourceStreamAddonIdentity", "travelStreamAddonIdentity"],
+  ["sourceSubtitleAddonIdentity", "travelSubtitleAddonIdentity"],
+  ["sourceFallbackAttempts", "travelSourceFallbackAttempts"],
+] as const;
+
+const normalizePrivateStateAliases = (
+  rawJob: Record<string, unknown>,
+  snapshot: SourceAdmissionSnapshotV1 | undefined,
+): void => {
+  for (const [canonical, legacy] of PRIVATE_STATE_ALIASES) {
+    const hasCanonical = Object.hasOwn(rawJob, canonical);
+    const hasLegacy = Object.hasOwn(rawJob, legacy);
+    if (hasCanonical && hasLegacy) throw new Error(`The ${canonical} state is ambiguous.`);
+    if (!hasLegacy) continue;
+    if (!isTravelSnapshot(snapshot)) throw new Error(`The ${legacy} state is Travel-only.`);
+    rawJob[canonical] = rawJob[legacy];
+    delete rawJob[legacy];
+  }
+};
+
+const validateSelectedAddonIdentities = (
+  rawJob: Record<string, unknown>,
+  snapshot: SourceAdmissionSnapshotV1 | undefined,
+): void => {
+  const hasStreamIdentity = Object.hasOwn(rawJob, "sourceStreamAddonIdentity");
+  const hasSubtitleIdentity = Object.hasOwn(rawJob, "sourceSubtitleAddonIdentity");
+  if (!hasStreamIdentity && !hasSubtitleIdentity) return;
+
+  const stream = rawJob.stream;
+  const subtitle = rawJob.subtitle;
+  if (!isExecutableDownloadSnapshot(snapshot)
+    || stream === null
+    || typeof stream !== "object"
+    || typeof (stream as { addonKey?: unknown }).addonKey !== "string"
+    || !isAddonIdentity(rawJob.sourceStreamAddonIdentity)) {
+    throw new Error("The selected addon identity is misplaced or malformed.");
+  }
+
+  const subtitleAddonKey = subtitle !== null && typeof subtitle === "object"
+    ? (subtitle as { addonKey?: unknown }).addonKey
+    : undefined;
+  if (subtitleAddonKey === undefined) {
+    if (hasSubtitleIdentity) throw new Error("The selected subtitle addon identity is misplaced.");
+    return;
+  }
+  if (typeof subtitleAddonKey !== "string" || !isAddonIdentity(rawJob.sourceSubtitleAddonIdentity)) {
+    throw new Error("The selected subtitle addon identity is misplaced or malformed.");
+  }
+};
+
+const isHttpDownloadUrl = (value: unknown): value is string => {
+  if (typeof value !== "string" || value.trim() === "") return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+};
 
 /** What a job paused on a missing permission carries: the interface translates the key, and
  *  the English text is the fallback for a client that does not know it. */
@@ -344,6 +526,9 @@ export const LIBRARY_WAIT_MS = 30 * 60_000;
  *  download is never re-checked harder than a remote film being watched. */
 const REMOTE_REVALIDATE_MS = 30_000;
 const REMOTE_REVALIDATE_TIMEOUT_MS = 5_000;
+export const SOURCE_FALLBACK_ATTEMPT_LIMIT = 8;
+const TRAVEL_TEMPORARY_FAILURE_LIMIT = 3;
+const TRAVEL_BUDGET_ATTEMPT_LIMIT = 1_000;
 
 const boundedMs = (value: number | undefined, fallback: number, max: number): number =>
   typeof value === "number" && Number.isFinite(value) && value >= 1 ? Math.min(Math.floor(value), max) : fallback;
@@ -357,6 +542,23 @@ class RemotePermissionLost extends Error {
   }
 }
 
+class PublicationWithdrawalError extends Error {
+  constructor(readonly cleanupError: unknown) {
+    super(cleanupError instanceof Error ? cleanupError.message : String(cleanupError));
+    this.name = "PublicationWithdrawalError";
+  }
+}
+
+type PublicationGate =
+  | { status: "allowed" }
+  | { status: "permission" }
+  | { status: "stopped" }
+  | { status: "library"; error: LibraryUnavailableError };
+
+type OwnerRefusal =
+  | { reason: "permission" }
+  | { reason: "library"; error: LibraryUnavailableError };
+
 export async function volumeSpace(target: string) {
   try {
     const info = await statfs(target);
@@ -366,11 +568,18 @@ export async function volumeSpace(target: string) {
   }
 }
 
+interface QueueWriteChange {
+  apply: () => void | Promise<void>;
+  revert: () => void;
+}
+
 export class DownloadQueue {
   private jobs: DownloadJob[] = [];
   private active = new Map<string, AbortController>();
   /** The transfers still in flight, so stop() can wait for their last state write. */
   private running = new Set<Promise<void>>();
+  /** The transfer for each job, so a targeted pause can wait for exactly the work it aborts. */
+  private runningById = new Map<string, Promise<void>>();
   private stopped = false;
   private pauseRequested = new Set<string>();
   private pumpScheduled = false;
@@ -389,6 +598,9 @@ export class DownloadQueue {
    *  is taken back out before anything started transferring it. */
   private admitting = new Set<string>();
   private resolver?: StreamResolver;
+  private travelResolver?: TravelProfileResolver;
+  private providerPriorityResolver?: ProviderPriorityProfileResolver;
+  private retrySourceHook?: (source: { type: string; videoId: string }) => void;
   private halt?: QueueHalt;
   private readonly stateFile: string;
   private readonly downloadDir: string;
@@ -401,6 +613,7 @@ export class DownloadQueue {
   private readonly now: () => number;
   private readonly freeSpace: (dir: string) => Promise<{ freeBytes?: number; totalBytes?: number }>;
   private readonly createWriteStream: (file: string, options: { flags: string }) => NodeJS.WritableStream;
+  private readonly renamePublication: (from: string, to: string) => Promise<void>;
   private readonly writeState: (file: string, data: string) => Promise<void>;
   private readonly stallInitialMs: number;
   private readonly stallTransferMs: number;
@@ -413,6 +626,8 @@ export class DownloadQueue {
   private readonly debridTimeoutMs: number;
   private readonly legacyOwnerId?: () => string | undefined;
   private readonly ownerAllowed?: (job: DownloadJob) => boolean | Promise<boolean>;
+  private readonly existingLocalCopy?: QueueHooks["existingLocalCopy"];
+  private readonly existingLocalCopyForQueue?: QueueHooks["existingLocalCopyForQueue"];
   private readonly ownerSeesLibrary?: (ownerUserId: string | undefined, libraryId: string) => boolean;
   private readonly remoteDownload?: RemoteDownloadBackend;
   private readonly remoteRevalidateMs: number;
@@ -444,6 +659,7 @@ export class DownloadQueue {
     this.now = hooks.now ?? Date.now;
     this.freeSpace = hooks.freeSpace ?? volumeSpace;
     this.createWriteStream = hooks.createWriteStream ?? fsCreateWriteStream;
+    this.renamePublication = hooks.renamePublication ?? rename;
     this.writeState = hooks.writeState ?? ((file, data) => writeFile(file, data, { mode: 0o600 }));
     this.stallInitialMs = hooks.stallInitialMs ?? 15_000;
     this.stallTransferMs = hooks.stallTransferMs ?? 30_000;
@@ -456,6 +672,8 @@ export class DownloadQueue {
     this.debridTimeoutMs = hooks.debridTimeoutMs ?? 72 * 60 * 60_000;
     this.legacyOwnerId = hooks.legacyOwnerId;
     this.ownerAllowed = hooks.ownerAllowed;
+    this.existingLocalCopy = hooks.existingLocalCopy;
+    this.existingLocalCopyForQueue = hooks.existingLocalCopyForQueue;
     this.ownerSeesLibrary = hooks.ownerSeesLibrary;
     this.remoteDownload = hooks.remoteDownload;
     this.remoteRevalidateMs = boundedMs(hooks.remoteRevalidateMs, REMOTE_REVALIDATE_MS, REMOTE_REVALIDATE_MS);
@@ -466,6 +684,9 @@ export class DownloadQueue {
 
   /** index.ts owns source selection for lazy jobs, because it needs the addons and the settings. */
   setResolver(resolver: StreamResolver) { this.resolver = resolver; }
+  setTravelResolver(resolver: TravelProfileResolver) { this.travelResolver = resolver; }
+  setProviderPriorityResolver(resolver: ProviderPriorityProfileResolver) { this.providerPriorityResolver = resolver; }
+  setRetrySourceHook(hook: (source: { type: string; videoId: string }) => void) { this.retrySourceHook = hook; }
   setDebrid(engine: DebridEngine) { this.debrid = engine; }
   /** Wired after construction because the follow service that answers these is built later. */
   setRemovalGuard(guard: (job: Readonly<DownloadJob>, reason: "user" | "account") => Promise<void>) { this.beforeRemove = guard; }
@@ -505,7 +726,85 @@ export class DownloadQueue {
         isList = Array.isArray(parsed);
       } catch { isList = false; }
       if (isList) {
-        this.jobs = parsed as DownloadJob[];
+        const canonicalSnapshots: Array<{ index: number; snapshot: SourceAdmissionSnapshotV1 }> = [];
+        const canonicalCursors: Array<{ index: number; cursor: TravelContinuationCursorV1 }> = [];
+        const canonicalSourceFallbackAttempts: Array<{ index: number; attempts: number }> = [];
+        const canonicalTemporaryFailures: Array<{ index: number; failures: number }> = [];
+        const canonicalBudgetAttempts: Array<{ index: number; attempts: number }> = [];
+        try {
+          for (const [index, rawJob] of (parsed as unknown[]).entries()) {
+            if (rawJob === null || typeof rawJob !== "object") continue;
+            const row = rawJob as Record<string, unknown>;
+            const snapshot = Object.hasOwn(rawJob, "sourceAdmission")
+              ? parseDownloadSourceAdmissionSnapshotV1((rawJob as { sourceAdmission: unknown }).sourceAdmission)
+              : undefined;
+            normalizePrivateStateAliases(row, snapshot);
+            if (snapshot) canonicalSnapshots.push({ index, snapshot });
+            validateSelectedAddonIdentities(row, snapshot);
+            const cursor = Object.hasOwn(rawJob, "travelCursor")
+              ? parseTravelContinuationCursorV1((rawJob as { travelCursor: unknown }).travelCursor)
+              : undefined;
+            if (cursor !== undefined) {
+              if (!supportsTravelCursor(rawJob as DownloadJob, snapshot)) {
+                throw new Error("The Travel continuation cursor is misplaced.");
+              }
+              canonicalCursors.push({ index, cursor });
+            }
+            if (Object.hasOwn(rawJob, "sourceFallbackAttempts")) {
+              const attempts = (rawJob as { sourceFallbackAttempts: unknown }).sourceFallbackAttempts;
+              if (!isExecutableDownloadSnapshot(snapshot) || typeof attempts !== "number" || !Number.isSafeInteger(attempts) || attempts < 0
+                || attempts > SOURCE_FALLBACK_ATTEMPT_LIMIT) {
+                throw new Error("The selected source fallback count is invalid.");
+              }
+              canonicalSourceFallbackAttempts.push({ index, attempts });
+            }
+            if (Object.hasOwn(rawJob, "travelTemporaryFailures")) {
+              const failures = (rawJob as { travelTemporaryFailures: unknown }).travelTemporaryFailures;
+              if (cursor === undefined || typeof failures !== "number" || !Number.isSafeInteger(failures) || failures < 0
+                || failures > TRAVEL_TEMPORARY_FAILURE_LIMIT) {
+                throw new Error("The Travel temporary-failure count is invalid.");
+              }
+              canonicalTemporaryFailures.push({ index, failures });
+            }
+            if (Object.hasOwn(rawJob, "travelBudgetAttempts")) {
+              const attempts = (rawJob as { travelBudgetAttempts: unknown }).travelBudgetAttempts;
+              if (cursor === undefined || typeof attempts !== "number" || !Number.isSafeInteger(attempts) || attempts < 0
+                || attempts > TRAVEL_BUDGET_ATTEMPT_LIMIT) {
+                throw new Error("The Travel budget-attempt count is invalid.");
+              }
+              canonicalBudgetAttempts.push({ index, attempts });
+            }
+            if (Object.hasOwn(rawJob, "reusedLocalCopy")) {
+              const row = rawJob as Record<string, unknown>;
+              const source = row.source as Record<string, unknown> | undefined;
+              const target = typeof row.target === "string" ? parseLibraryPath(row.target) : undefined;
+              if (row.reusedLocalCopy !== true || row.status !== "completed"
+                || !Object.hasOwn(row, "sourceAdmission")
+                || !source || typeof source !== "object" || Array.isArray(source)
+                || typeof source.type !== "string" || typeof source.videoId !== "string"
+                || Object.hasOwn(row, "stream")
+                || !target || typeof row.libraryId !== "string" || target.libraryId !== row.libraryId) {
+                throw new Error("The reused local-copy marker is misplaced.");
+              }
+            }
+          }
+        } catch (error) {
+          this.unreadable = true;
+          log("ERROR", "The queue contains an invalid private source state", {
+            file: this.stateFile,
+            reason: error instanceof SourceAdmissionValidationError
+              ? "invalid source admission snapshot"
+              : "private source state could not be validated",
+          });
+          return;
+        }
+        const jobs = parsed as DownloadJob[];
+        for (const { index, snapshot } of canonicalSnapshots) jobs[index]!.sourceAdmission = snapshot;
+        for (const { index, cursor } of canonicalCursors) jobs[index]!.travelCursor = cursor;
+        for (const { index, attempts } of canonicalSourceFallbackAttempts) jobs[index]!.sourceFallbackAttempts = attempts;
+        for (const { index, failures } of canonicalTemporaryFailures) jobs[index]!.travelTemporaryFailures = failures;
+        for (const { index, attempts } of canonicalBudgetAttempts) jobs[index]!.travelBudgetAttempts = attempts;
+        this.jobs = jobs;
       } else {
         try {
           const preserved = await preserveDamaged(this.stateFile, state.raw);
@@ -555,6 +854,14 @@ export class DownloadQueue {
       this.jobs = this.jobs.filter((job) => !refused.includes(job));
       log("WARN", "Remote downloads that could not be re-proved were refused", { count: refused.length, ids: refused.map((job) => job.id) });
     }
+    for (const job of this.jobs) {
+      if (job.status === "completed") continue;
+      if (isExecutableDownloadSnapshot(job.sourceAdmission) && job.stream) {
+        await this.discardProfileSelection(job, false);
+        if (job.status !== "paused" && job.status !== "failed") job.status = "queued";
+      }
+      if (job.sourceAdmission && job.stream) this.failSourceAdmission(job);
+    }
     if (this.jobs.some((job) => job.status === "paused" && job.pauseReason === "storage")) {
       this.halt = { reason: "storage", at: new Date().toISOString(), message: "No space left on the disk.", messageKey: "err.noSpace" };
       this.ensureSpaceWatch();
@@ -600,15 +907,18 @@ export class DownloadQueue {
    *  because a library that never comes back must not strand a queue for ever. */
   private async resolveLibrary(kind: "movie" | "series", settings: DownloadTargetSettings) {
     const wanted = settings.libraryId;
-    if (!wanted) return this.defaultLibrary(kind);
+    if (!wanted) {
+      const fallback = this.defaultLibrary(kind);
+      return fallback && libraryAcceptsKind(fallback, kind) ? fallback : undefined;
+    }
     const named = (await this.libraryState?.(wanted)) ?? this.libraries().find((library) => library.id === wanted);
     if (!named) throw new LibraryUnavailableError(wanted, true);
-    if (!libraryUsable(named)) throw new LibraryUnavailableError(named.id);
+    if (!libraryUsable(named) || !libraryAcceptsKind(named, kind)) throw new LibraryUnavailableError(named.id);
     return named;
   }
 
   private kindOf(job: DownloadJob): "movie" | "series" {
-    return job.media?.kind === "episode" ? "series" : "movie";
+    return knownKindOf(job) ?? "movie";
   }
 
   /** The file name is chosen when the download can actually start, so a name picked while a
@@ -635,17 +945,81 @@ export class DownloadQueue {
     this.watchLibraries();
   }
 
+  private async currentLibrary(libraryId: string): Promise<LibraryRecord | undefined> {
+    return (await this.libraryState?.(libraryId)) ?? this.libraries().find((library) => library.id === libraryId);
+  }
+
+  private async libraryKindRefusal(job: DownloadJob): Promise<LibraryUnavailableError | undefined> {
+    const libraryId = jobLibraryId(job);
+    if (!libraryId) return undefined;
+    const library = await this.currentLibrary(libraryId);
+    if (!library || libraryAcceptsKind(library, this.kindOf(job))) return undefined;
+    return new LibraryUnavailableError(library.id);
+  }
+
   /** The owner-bound check as the queue asks it: the answer comes from the account, the
    *  addons and the libraries as they are now, never from the request that queued the job.
    *  A refusal pauses the job rather than failing it, because the work is not wrong and the
    *  queue position is worth keeping for when the permission comes back. */
-  private async ownerRefused(job: DownloadJob): Promise<boolean> {
-    return this.ownerAllowed ? !await this.ownerAllowed(job) : false;
+  private async ownerRefusal(job: DownloadJob): Promise<OwnerRefusal | undefined> {
+    const libraryRefusal = await this.libraryKindRefusal(job);
+    if (libraryRefusal) return { reason: "library", error: libraryRefusal };
+    return this.ownerAllowed && !await this.ownerAllowed(job) ? { reason: "permission" } : undefined;
+  }
+
+  private pauseForRefusal(job: DownloadJob, refusal: OwnerRefusal) {
+    if (refusal.reason === "library") this.pauseForLibrary(job, refusal.error);
+    else this.pauseForPermission(job);
+  }
+
+  private async permissionStillHeld(job: DownloadJob, signal: AbortSignal): Promise<boolean> {
+    const refusal = await this.ownerRefusal(job);
+    signal.throwIfAborted();
+    if (!refusal) return true;
+    this.pauseForRefusal(job, refusal);
+    return false;
+  }
+
+  private clearLazyChoice(job: DownloadJob) {
+    if (job.target) this.targetsInFlight.delete(job.target);
+    job.stream = undefined;
+    job.subtitle = undefined;
+    job.resolution = undefined;
+    delete job.sourceStreamAddonIdentity;
+    delete job.sourceSubtitleAddonIdentity;
+    job.target = "";
+    job.targetSettings = undefined;
+    job.libraryId = undefined;
+  }
+
+  private async discardProfileSelection(job: DownloadJob, markTried: boolean) {
+    const abandoned = job.target ? this.jobPath(job) : undefined;
+    const subtitleFiles = this.subtitleFiles(job);
+    const failedUrl = markTried ? job.stream?.url : undefined;
+    const failedTorrent = markTried && job.stream?.infoHash ? torrentKey(job.stream) : undefined;
+    this.clearLazyChoice(job);
+    if (failedUrl && job.source && !job.source.tried.includes(failedUrl)) job.source.tried.push(failedUrl);
+    if (failedTorrent && job.source && !job.source.tried.includes(failedTorrent)) job.source.tried.push(failedTorrent);
+    delete job.travelCursor;
+    delete job.travelTemporaryFailures;
+    delete job.travelBudgetAttempts;
+    job.received = 0;
+    job.total = undefined;
+    job.segments = undefined;
+    job.rangesIgnored = undefined;
+    job.retryCount = undefined;
+    job.notBefore = undefined;
+    job.debrid = undefined;
+    job.debridStartedAt = undefined;
+    if (abandoned) await unlink(`${abandoned}.part`).catch(() => undefined);
+    if (subtitleFiles) await unlink(subtitleFiles.partial).catch(() => undefined);
   }
 
   private pauseForPermission(job: DownloadJob) {
+    const clearChoice = job.status === "checking" && Boolean(job.source);
     job.status = "paused";
     job.pauseReason = "permission";
+    if (clearChoice) this.clearLazyChoice(job);
     job.speed = 0;
     this.setError(job, PERMISSION_PAUSE.message, PERMISSION_PAUSE.key);
     job.updatedAt = new Date().toISOString();
@@ -669,14 +1043,14 @@ export class DownloadQueue {
     let woke = false;
     for (const job of waiting) {
       const waited = job.libraryId!;
-      const named = (await this.libraryState?.(waited)) ?? this.libraries().find((item) => item.id === waited);
-      if (named && !libraryUsable(named)) continue;
+      const kind = this.kindOf(job);
+      const named = await this.currentLibrary(waited);
+      if (named && (!libraryUsable(named) || !libraryAcceptsKind(named, kind))) continue;
       // A library whose record is gone gets a deadline: the folder keeps its identity, so a
       // re-add brings this same library back and the job continues there. Past the deadline
       // nothing is coming, and a queue that waits for ever is not honest either.
       const expired = !named && job.libraryGone && this.now() - Date.parse(job.pausedAt ?? "") >= this.libraryWaitMs;
       if (!named && !expired) continue;
-      const kind = this.kindOf(job);
       // A library the user picked is never swapped for the default: once the deadline for a
       // removed one passes, the job fails where it is instead of landing somewhere unasked for.
       if (!named && (job.targetSettings?.explicit || job.remoteDownload)) {
@@ -692,7 +1066,8 @@ export class DownloadQueue {
         woke = true;
         continue;
       }
-      const library = named ?? this.defaultLibrary(kind);
+      const fallback = named ?? this.defaultLibrary(kind);
+      const library = fallback && libraryAcceptsKind(fallback, kind) ? fallback : undefined;
       // The deadline passed and no library takes this kind either: the job has nowhere to go,
       // so it fails instead of landing in the download directory. The rest of the queue carries on.
       if (!library) {
@@ -709,6 +1084,7 @@ export class DownloadQueue {
         continue;
       }
       if (!named) log("WARN", "The library a download waited for did not come back, using the default", { id: job.id, title: job.title, library: waited });
+      if (job.sourceAdmission && job.stream) await this.discardProfileSelection(job, false);
       await this.ensureTarget(job, library);
       job.libraryId = library.id;
       job.libraryGone = undefined;
@@ -888,15 +1264,53 @@ export class DownloadQueue {
   }
 
   /** A lazy job: both target and source are filled in when the download starts. A duplicate episode is not added. */
-  async addPending(title: string, source: { type: string; videoId: string; selection?: DownloadSelection }, media?: MediaInfo, ownerUserId?: string, follow?: DownloadJob["follow"]) {
+  async addPending(
+    title: string,
+    source: { type: string; videoId: string; selection?: DownloadSelection },
+    media?: MediaInfo,
+    ownerUserId?: string,
+    follow?: DownloadJob["follow"],
+    sourceAdmissionInput?: unknown,
+  ) {
     if (this.unreadable) throw new AppError("The download queue file could not be read.", "err.queueUnreadable", 503);
+    const sourceAdmission = sourceAdmissionInput === undefined
+      ? undefined
+      : parseDownloadSourceAdmissionSnapshotV1(sourceAdmissionInput);
     // A remote library id is not a local target: it cannot be smuggled in as the pinned library.
     const pinned = source.selection?.targetSettings?.libraryId;
     if (pinned !== undefined && REMOTE_LIBRARY_ID.test(pinned)) throw remoteDownloadRefused();
     return this.admit(async () => {
       if (this.jobs.some((job) => job.source?.videoId === source.videoId && job.source?.type === source.type && job.status !== "completed" && job.status !== "failed" && this.ownedBy(job, ownerUserId))) return undefined;
+      if (sourceAdmission !== undefined) {
+        let adequate = false;
+        try {
+          adequate = await this.existingLocalCopy?.({
+            ownerUserId,
+            source,
+            media,
+            sourceAdmission,
+          }) === true;
+        } catch {
+          // A lookup that cannot prove a local copy adequate must not block the download.
+        }
+        if (adequate) return undefined;
+      }
       const now = new Date().toISOString();
-      const job: DownloadJob = { id: crypto.randomUUID(), ownerUserId, title, media, source: { ...source, tried: [] }, ...(follow ? { follow } : {}), status: "queued", target: "", received: 0, speed: 0, createdAt: now, updatedAt: now };
+      const job: DownloadJob = {
+        id: crypto.randomUUID(),
+        ownerUserId,
+        title,
+        media,
+        source: { ...source, tried: [] },
+        ...(follow ? { follow } : {}),
+        ...(sourceAdmission === undefined ? {} : { sourceAdmission }),
+        status: "queued",
+        target: "",
+        received: 0,
+        speed: 0,
+        createdAt: now,
+        updatedAt: now,
+      };
       await this.admitJob(job);
       this.pump();
       return this.publicJob(job);
@@ -988,27 +1402,64 @@ export class DownloadQueue {
     return hit.length;
   }
 
+  /** Pauses queued and running jobs whose kind the library no longer accepts. The current
+   *  library record decides, and compatible jobs keep their place and continue. */
+  async pauseIncompatibleLibraryJobs(libraryId: string): Promise<number> {
+    const library = await this.currentLibrary(libraryId);
+    if (!library || library.type === "mixed") return 0;
+    const incompatible = library.type === "movie" ? "series" : "movie";
+    const running: DownloadStatus[] = ["queued", "waiting", "checking", "downloading"];
+    const hit = this.jobs.filter((job) => running.includes(job.status)
+      && jobLibraryId(job) === library.id
+      && this.kindOf(job) === incompatible);
+    for (const job of hit) {
+      this.clearDebrid(job.id);
+      if (this.active.has(job.id)) this.pauseRequested.add(job.id);
+      this.pauseForLibrary(job, new LibraryUnavailableError(library.id));
+      this.active.get(job.id)?.abort();
+    }
+    if (!hit.length) return 0;
+    await this.save();
+    this.pump();
+    await Promise.all(hit.map((job) => this.runningById.get(job.id)).filter((run): run is Promise<void> => run !== undefined));
+    return hit.length;
+  }
+
   /** Drops every unfinished job the predicate names, its partial file with it. What is
    *  completed stays: it is in the library and belongs to nobody's access any more. */
   async removeMatching(match: (job: DownloadJob) => boolean): Promise<number> {
-    const ids = this.jobs.filter((job) => job.status !== "completed" && match(job)).map((job) => job.id);
-    for (const id of ids) await this.remove(id, "account");
-    return ids.length;
+    const jobs = this.jobs.filter((job) => job.status !== "completed" && match(job));
+    for (const job of jobs) {
+      this.clearDebrid(job.id);
+      if (this.active.has(job.id)) this.pauseRequested.add(job.id);
+      this.pauseForPermission(job);
+      this.active.get(job.id)?.abort();
+    }
+    if (!jobs.length) return 0;
+    await this.save();
+    for (const job of jobs) await this.remove(job.id, "account");
+    return jobs.length;
   }
 
   async resume(id: string) {
     const job = this.require(id);
     if (!(["paused", "failed"] as DownloadStatus[]).includes(job.status)) throw new AppError("This item cannot be resumed.", "err.cannotResume");
+    const pausedLibraryId = job.libraryId;
+    const storageRoot = this.locate(job)?.root;
+    if (job.sourceAdmission && job.stream) await this.discardProfileSelection(job, job.status === "failed");
     // Read again here rather than trusted from when the job was paused: the right may have
     // gone while it waited, and the answer is what decides.
-    if (await this.ownerRefused(job)) {
-      this.pauseForPermission(job);
+    const refusal = await this.ownerRefusal(job);
+    if (refusal) {
+      this.pauseForRefusal(job, refusal);
       await this.save();
       return;
     }
-    if (job.pauseReason === "library" && job.libraryId) {
-      const library = (await this.libraryState?.(job.libraryId)) ?? this.libraries().find((item) => item.id === job.libraryId);
-      if (!library || !libraryUsable(library)) throw new AppError("The library this download goes to is not available right now.", "err.libraryNotWritable");
+    if (job.pauseReason === "library" && pausedLibraryId) {
+      const library = await this.currentLibrary(pausedLibraryId);
+      if (!library || !libraryUsable(library) || !libraryAcceptsKind(library, this.kindOf(job))) {
+        throw new AppError("The library this download goes to is not available right now.", "err.libraryNotWritable");
+      }
       await this.ensureTarget(job, library);
     } else if (!job.target && job.stream) {
       // A direct job that failed before it had anywhere to go, because no library took its kind.
@@ -1021,8 +1472,7 @@ export class DownloadQueue {
       job.libraryId = library.id;
     }
     if (this.halt || job.pauseReason === "storage") {
-      const root = this.locate(job)?.root;
-      const space = root ? await this.freeSpace(root) : {};
+      const space = storageRoot ? await this.freeSpace(storageRoot) : {};
       if (!this.hasRoom(space)) throw new AppError(this.halt?.message ?? "No space left on the disk.", this.halt?.messageKey ?? "err.noSpace");
       this.releaseStorageHalt();
     }
@@ -1045,15 +1495,21 @@ export class DownloadQueue {
   async retry(id: string, selection?: DownloadSelection) {
     const job = this.require(id);
     if (job.status !== "failed") throw new AppError("Only a failed download can be retried.", "err.retryOnlyFailed");
-    const pinned = selection?.targetSettings?.libraryId;
+    const pinned = job.sourceAdmission === undefined ? selection?.targetSettings?.libraryId : undefined;
     if (pinned !== undefined && REMOTE_LIBRARY_ID.test(pinned)) throw remoteDownloadRefused();
+    if (job.sourceAdmission && job.stream) await this.discardProfileSelection(job, true);
+    delete job.travelCursor;
+    delete job.sourceFallbackAttempts;
+    delete job.travelTemporaryFailures;
+    delete job.travelBudgetAttempts;
     job.retryCount = 0;
     job.notBefore = undefined;
     if (job.source) {
-      if (selection && !job.stream) job.source.selection = selection;
+      if (selection && !job.stream && job.sourceAdmission === undefined) job.source.selection = selection;
       job.source.tried = [];
       if (!job.stream) { job.target = ""; job.received = 0; job.total = undefined; }
     }
+    if (job.source && !job.stream) this.retrySourceHook?.({ type: job.source.type, videoId: job.source.videoId });
     return this.resume(id);
   }
 
@@ -1082,10 +1538,34 @@ export class DownloadQueue {
       await this.save();
       return;
     }
+    if (isExecutableDownloadSnapshot(job.sourceAdmission) && job.stream) {
+      job.sourceFallbackAttempts = (job.sourceFallbackAttempts ?? 0) + 1;
+      if (job.sourceFallbackAttempts >= SOURCE_FALLBACK_ATTEMPT_LIMIT) {
+        await this.failProfileSourceFallback(job, true);
+        log("ERROR", "The selected torrent exhausted its source fallback budget", {
+          id: job.id, title: job.title, reason: message, tried: job.source.tried.length,
+        });
+        await this.save();
+        return;
+      }
+      await this.discardProfileSelection(job, true);
+      job.status = "queued";
+      this.setError(job, `Source failed (${message}), trying the next one\u2026`, "err.sourceFailedTryingNext", { reason: message });
+      job.updatedAt = new Date(this.now()).toISOString();
+      log("WARN", "The selected torrent failed, trying the next source", {
+        id: job.id, title: job.title, reason: message, tried: job.source.tried.length,
+        fallback: job.sourceFallbackAttempts,
+      });
+      await this.save();
+      this.pump();
+      return;
+    }
     if (job.stream) job.source.tried.push(torrentKey(job.stream));
     job.stream = undefined;
     job.subtitle = undefined;
     job.resolution = undefined;
+    delete job.sourceStreamAddonIdentity;
+    delete job.sourceSubtitleAddonIdentity;
     job.target = "";
     job.debrid = undefined;
     job.debridStartedAt = undefined;
@@ -1109,11 +1589,24 @@ export class DownloadQueue {
       || (media.season != null && marker.season != null && marker.season !== media.season);
   }
 
+  private async debridMayContinue(job: DownloadJob): Promise<boolean> {
+    if (!this.jobs.includes(job) || job.status !== "waiting") return false;
+    const refusal = await this.ownerRefusal(job);
+    if (!refusal) return this.jobs.includes(job) && job.status === "waiting";
+    this.clearDebrid(job.id);
+    if (this.jobs.includes(job) && job.status === "waiting") {
+      this.pauseForRefusal(job, refusal);
+      await this.save();
+    }
+    return false;
+  }
+
   private async pollDebrid(id: string) {
     const job = this.jobs.find((item) => item.id === id);
     if (!job || job.status !== "waiting" || this.debridBusy.has(id)) return;
     this.debridBusy.add(id);
     try {
+      if (!await this.debridMayContinue(job)) return;
       if (this.now() - Date.parse(job.debridStartedAt ?? job.createdAt) > this.debridTimeoutMs) {
         await this.debridSourceFailed(job, "Real-Debrid did not finish the torrent in time.", "err.debridTimeout");
         return;
@@ -1129,13 +1622,24 @@ export class DownloadQueue {
         await this.save();
         return;
       }
-      const result = await this.debrid.advance({ infoHash, fileIdx: job.stream?.fileIdx, torrentId: job.debrid?.torrentId });
+      const exactFile = isExecutableDownloadSnapshot(job.sourceAdmission) && typeof job.stream?.fileIdx === "number";
+      const result = await this.debrid.advance({
+        infoHash,
+        fileIdx: job.stream?.fileIdx,
+        torrentId: job.debrid?.torrentId,
+        ...(exactFile ? { exactFile: true } : {}),
+      });
+      if (!await this.debridMayContinue(job)) return;
       job.debrid = { torrentId: result.torrentId, progress: result.ready ? 100 : result.progress, status: result.ready ? "downloaded" : result.status };
       job.updatedAt = new Date().toISOString();
       if (result.ready) {
         const filename = result.filename ?? job.stream?.behaviorHints?.filename;
         if (this.debridWrongEpisode(job, filename)) {
           await this.debridSourceFailed(job, "Real-Debrid resolved a different episode.", "err.debridWrongEpisode");
+          return;
+        }
+        if (isExecutableDownloadSnapshot(job.sourceAdmission) && !isHttpDownloadUrl(result.url)) {
+          await this.debridSourceFailed(job, "Real-Debrid returned an invalid download URL.", "err.noMatchingSource");
           return;
         }
         job.stream = {
@@ -1153,6 +1657,7 @@ export class DownloadQueue {
       await this.saveSoon();
       this.scheduleDebrid(job.id, this.debridPollMs);
     } catch (error) {
+      if (!await this.debridMayContinue(job)) return;
       this.setError(job, error instanceof Error ? error.message : String(error));
       job.updatedAt = new Date().toISOString();
       if (isRetryableDebridFailure(error)) {
@@ -1202,7 +1707,7 @@ export class DownloadQueue {
 
   /** Finished jobs, for seeding the statistics from the queue. */
   history() {
-    return this.jobs.filter((job) => job.status === "completed").map((job) => ({
+    return this.jobs.filter((job) => job.status === "completed" && !job.reusedLocalCopy).map((job) => ({
       // A remote copy has no meaningful address, and its marker is not one: only a local
       // source's URL is reported.
       at: job.updatedAt, bytes: job.received, url: job.remoteDownload ? undefined : job.stream?.url, addonKey: job.stream?.addonKey,
@@ -1219,27 +1724,78 @@ export class DownloadQueue {
     });
   }
   changed() { this.pump(); }
+
+  async setTravelCursor(id: string, cursor?: TravelContinuationCursorV1): Promise<void> {
+    const job = this.require(id);
+    const canonical = cursor === undefined ? undefined : parseTravelContinuationCursorV1(cursor);
+    if ((job.status !== "queued" && job.status !== "checking") || !supportsTravelCursor(job)) {
+      throw new Error("A Travel continuation cursor requires a queued Travel snapshot job.");
+    }
+    const previous = job.travelCursor;
+    const previousBudgetAttempts = job.travelBudgetAttempts;
+    await this.persist({
+      apply: () => {
+        if (canonical === undefined) delete job.travelCursor;
+        else job.travelCursor = canonical;
+        delete job.travelBudgetAttempts;
+      },
+      revert: () => {
+        if (previous === undefined) delete job.travelCursor;
+        else job.travelCursor = previous;
+        if (previousBudgetAttempts === undefined) delete job.travelBudgetAttempts;
+        else job.travelBudgetAttempts = previousBudgetAttempts;
+      },
+    });
+  }
+
   /** The key travels with the text so the interface can render a stored failure in
    *  whatever language is set now, not the one that was set when it failed. */
   private setError(job: DownloadJob, message?: string, key?: string, vars?: Record<string, string | number>) {
     job.error = message; job.errorKey = key; job.errorVars = vars;
   }
 
+  private failSourceAdmission(job: DownloadJob) {
+    job.status = "failed";
+    job.speed = 0;
+    this.setError(job, SOURCE_ADMISSION_RUNTIME_UNAVAILABLE.message, SOURCE_ADMISSION_RUNTIME_UNAVAILABLE.key);
+    job.updatedAt = new Date(this.now()).toISOString();
+  }
+
+  private async failProfileSourceFallback(job: DownloadJob, markTried: boolean) {
+    await this.discardProfileSelection(job, markTried);
+    job.status = "failed";
+    job.speed = 0;
+    this.setError(job, "No matching source was found.", "err.noMatchingSource");
+  }
+
   private require(id: string) { const job = this.jobs.find((item) => item.id === id); if (!job) throw new AppError("The item was not found.", "err.itemNotFound"); return job; }
   /** Source addresses (often carrying tokens) must not reach the interface; only the lazy flag goes out. */
   private publicJob(job: DownloadJob): Omit<PublicDownload, "order"> {
-    const { stream, source, subtitle: _subtitle, remoteDownload: _remoteDownload, notBefore: _notBefore, debrid, segments, ...rest } = job;
-    return { ...rest, ownerUserId: this.ownerOf(job), pending: !stream && Boolean(source), debridProgress: debrid?.progress, segments: segments?.length };
+    const {
+      stream, source, subtitle: _subtitle, remoteDownload: _remoteDownload, notBefore: _notBefore,
+      debrid, segments, sourceAdmission: _sourceAdmission, travelCursor: _travelCursor,
+      sourceStreamAddonIdentity: _sourceStreamAddonIdentity,
+      sourceSubtitleAddonIdentity: _sourceSubtitleAddonIdentity,
+      sourceFallbackAttempts: _sourceFallbackAttempts,
+      travelTemporaryFailures: _travelTemporaryFailures, travelBudgetAttempts: _travelBudgetAttempts, ...rest
+    } = job;
+    return {
+      ...rest,
+      ownerUserId: this.ownerOf(job),
+      pending: job.status !== "completed" && !stream && Boolean(source),
+      debridProgress: debrid?.progress,
+      segments: segments?.length,
+    };
   }
   /** Saves have to run one after another: concurrent writes share one .tmp and the second
    *  rename then has nothing to move. Each write reports its own failure, while the chain
    *  itself swallows it so stop() and later writes carry on. A change handed in is made only
    *  when this write's turn comes and undone before the next write runs, so no other write
    *  ever stores a change whose own write failed. */
-  private write(change?: { apply: () => void; revert: () => void }): Promise<void> {
+  private write(change?: QueueWriteChange): Promise<void> {
     const run = this.saveChain.then(async () => {
       if (this.unreadable) return;
-      change?.apply();
+      await change?.apply();
       try {
         const tmp = `${this.stateFile}.tmp`;
         await this.writeState(tmp, JSON.stringify(this.jobs, null, 2));
@@ -1261,7 +1817,7 @@ export class DownloadQueue {
 
   /** A save an admission waits on: the change lands with its own write or not at all, and
    *  the caller hears the failure. */
-  private async persist(change: { apply: () => void; revert: () => void }): Promise<void> {
+  private async persist(change: QueueWriteChange): Promise<void> {
     try {
       await this.write(change);
     } catch (error) {
@@ -1415,7 +1971,12 @@ export class DownloadQueue {
         const key = this.provider(job); taken.set(key, (taken.get(key) ?? 0) + 1);
         const run = this.download(job);
         this.running.add(run);
-        void run.then(() => this.running.delete(run), () => this.running.delete(run));
+        this.runningById.set(job.id, run);
+        const done = () => {
+          this.running.delete(run);
+          if (this.runningById.get(job.id) === run) this.runningById.delete(job.id);
+        };
+        void run.then(done, done);
       }
       const waiting = this.jobs.filter((item) => item.status === "queued" && !this.active.has(item.id) && (item.notBefore ?? 0) > now);
       if (waiting.length) {
@@ -1428,16 +1989,269 @@ export class DownloadQueue {
 
   /** The addons are asked for streams only here, right before one particular episode is downloaded,
    *  so adding a whole season in bulk does not set off an avalanche of requests at once. */
-  private async resolve(job: DownloadJob) {
+  private async stageSelectedProfileSource(
+    job: DownloadJob,
+    outcome: Extract<TravelProfileResolution | ProviderPriorityProfileResolution, { status: "selected" }>,
+    controller: AbortController,
+    startedAt: number,
+  ): Promise<boolean> {
+    if (!job.source || !job.sourceAdmission) {
+      throw new SourceError("The job has neither a source nor a rule for finding one.");
+    }
+    const snapshot = job.sourceAdmission;
+    const hasUrl = outcome.stream.url !== undefined && outcome.stream.url !== "";
+    if (isTravelSnapshot(snapshot) && outcome.stream.infoHash !== undefined) {
+      throw new SourceError("No matching source was found.", "err.noMatchingSource");
+    }
+    if (hasUrl) {
+      if (!isHttpDownloadUrl(outcome.stream.url)) {
+        throw new SourceError("No matching source was found.", "err.noMatchingSource");
+      }
+    } else if (typeof outcome.stream.infoHash !== "string"
+      || outcome.stream.infoHash.trim() === "") {
+      throw new SourceError("No matching source was found.", "err.noMatchingSource");
+    }
+    if (!hasUrl && this.kindOf(job) === "series"
+      && (typeof outcome.stream.fileIdx !== "number"
+        || !Number.isSafeInteger(outcome.stream.fileIdx)
+        || outcome.stream.fileIdx < 0)) {
+      throw new SourceError("No matching source was found.", "err.noMatchingSource");
+    }
+    if (outcome.subtitle !== undefined && !isHttpDownloadUrl(outcome.subtitle.url)) {
+      throw new SourceError("No matching source was found.", "err.noMatchingSource");
+    }
+    if (isRemoteDownloadSource(outcome.stream)
+      || (outcome.subtitle && isRemoteMediaStream({ url: outcome.subtitle.url }))) {
+      throw new SourceError("This library is read-only.", "library.readOnly");
+    }
+
+    const settings = job.source.selection?.targetSettings;
+    if (!settings) throw new SourceError("No matching source was found.", "err.noMatchingSource");
+    const kind = this.kindOf(job);
+    const staged: DownloadJob = {
+      ...job,
+      stream: outcome.stream,
+      subtitle: outcome.subtitle,
+      resolution: outcome.resolution,
+      sourceStreamAddonIdentity: outcome.streamAddonIdentity,
+      sourceSubtitleAddonIdentity: outcome.subtitleAddonIdentity,
+      targetSettings: settings,
+    };
+    const library = await this.resolveLibrary(kind, settings);
+    controller.signal.throwIfAborted();
+    if (!library) throw new NoLibraryForKindError(kind);
+    staged.libraryId = library.id;
+    try {
+      await this.ensureTarget(staged, library);
+      controller.signal.throwIfAborted();
+    } catch (error) {
+      if (staged.target) this.targetsInFlight.delete(staged.target);
+      throw error;
+    }
+
+    const refused = await this.ownerRefusal(staged);
+    controller.signal.throwIfAborted();
+    if (refused) {
+      if (staged.target) this.targetsInFlight.delete(staged.target);
+      this.pauseForRefusal(job, refused);
+      return false;
+    }
+
+    const previous = {
+      stream: job.stream,
+      subtitle: job.subtitle,
+      resolution: job.resolution,
+      streamIdentity: job.sourceStreamAddonIdentity,
+      subtitleIdentity: job.sourceSubtitleAddonIdentity,
+      targetSettings: job.targetSettings,
+      target: job.target,
+      libraryId: job.libraryId,
+      cursor: job.travelCursor,
+      temporaryFailures: job.travelTemporaryFailures,
+      budgetAttempts: job.travelBudgetAttempts,
+    };
+    try {
+      await this.persist({
+        apply: () => {
+          job.stream = staged.stream;
+          job.subtitle = staged.subtitle;
+          job.resolution = staged.resolution;
+          job.sourceStreamAddonIdentity = staged.sourceStreamAddonIdentity;
+          if (staged.sourceSubtitleAddonIdentity === undefined) delete job.sourceSubtitleAddonIdentity;
+          else job.sourceSubtitleAddonIdentity = staged.sourceSubtitleAddonIdentity;
+          job.targetSettings = staged.targetSettings;
+          job.target = staged.target;
+          job.libraryId = staged.libraryId;
+          delete job.travelCursor;
+          delete job.travelTemporaryFailures;
+          delete job.travelBudgetAttempts;
+        },
+        revert: () => {
+          job.stream = previous.stream;
+          job.subtitle = previous.subtitle;
+          job.resolution = previous.resolution;
+          if (previous.streamIdentity === undefined) delete job.sourceStreamAddonIdentity;
+          else job.sourceStreamAddonIdentity = previous.streamIdentity;
+          if (previous.subtitleIdentity === undefined) delete job.sourceSubtitleAddonIdentity;
+          else job.sourceSubtitleAddonIdentity = previous.subtitleIdentity;
+          job.targetSettings = previous.targetSettings;
+          job.target = previous.target;
+          job.libraryId = previous.libraryId;
+          if (previous.cursor === undefined) delete job.travelCursor;
+          else job.travelCursor = previous.cursor;
+          if (previous.temporaryFailures === undefined) delete job.travelTemporaryFailures;
+          else job.travelTemporaryFailures = previous.temporaryFailures;
+          if (previous.budgetAttempts === undefined) delete job.travelBudgetAttempts;
+          else job.travelBudgetAttempts = previous.budgetAttempts;
+        },
+      });
+    } catch (error) {
+      if (staged.target) this.targetsInFlight.delete(staged.target);
+      throw error;
+    }
+    if (job.target) this.targetsInFlight.delete(job.target);
+
+    const refusedAfterSave = await this.ownerRefusal(job);
+    if (controller.signal.aborted || refusedAfterSave) {
+      await this.discardProfileSelection(job, false);
+      if (refusedAfterSave) this.pauseForRefusal(job, refusedAfterSave);
+      await this.save();
+      return false;
+    }
+    log("INFO", "Download source selected", {
+      id: job.id, title: job.title, addon: outcome.stream.addonName, target: job.target,
+      library: library.id, attempt: job.source.tried.length + 1, selectionMs: this.now() - startedAt,
+      checkedCandidates: outcome.resolution.checkedCandidates, audioLanguage: outcome.resolution.audioLanguage,
+      fallbackAudio: outcome.resolution.fallbackUsed, subtitleStatus: outcome.resolution.subtitleStatus,
+      searchStatus: outcome.searchStatus,
+    });
+    return true;
+  }
+
+  private async resolveProfile(job: DownloadJob, controller: AbortController): Promise<boolean> {
     if (!job.source) throw new SourceError("The job has neither a source nor a rule for finding one.");
+    const snapshot = job.sourceAdmission;
+    if (!isExecutableDownloadSnapshot(snapshot)) throw new SourceAdmissionRuntimeUnavailable();
+    const startedAt = this.now();
+
+    if (snapshot.profile.id === SOURCE_PROFILE_IDS.travel) {
+      if (!this.travelResolver) throw new SourceAdmissionRuntimeUnavailable();
+      const outcome = await this.travelResolver({
+        source: job.source,
+        snapshot,
+        ownerUserId: this.ownerOf(job),
+        signal: controller.signal,
+        ...(job.travelCursor === undefined ? {} : { cursor: job.travelCursor }),
+      });
+      controller.signal.throwIfAborted();
+
+      if (outcome.status === "accessDenied" || outcome.status === "cancelled") {
+        this.pauseForPermission(job);
+        return false;
+      }
+      if (outcome.status === "noMatch") {
+        delete job.travelCursor;
+        delete job.travelTemporaryFailures;
+        delete job.travelBudgetAttempts;
+        job.status = "failed";
+        job.speed = 0;
+        this.setError(job, "No matching source was found.", "err.noMatchingSource");
+        return false;
+      }
+      if (outcome.status === "budgetExhausted" || outcome.status === "temporaryFailure") {
+        const temporaryFailure = outcome.status === "temporaryFailure";
+        const failures = temporaryFailure ? (job.travelTemporaryFailures ?? 0) + 1 : undefined;
+        const budgetAttempts = temporaryFailure ? job.travelBudgetAttempts : (job.travelBudgetAttempts ?? 0) + 1;
+        if ((failures !== undefined && failures > TRAVEL_TEMPORARY_FAILURE_LIMIT)
+          || (budgetAttempts !== undefined && budgetAttempts > TRAVEL_BUDGET_ATTEMPT_LIMIT)) {
+          delete job.travelCursor;
+          delete job.travelTemporaryFailures;
+          delete job.travelBudgetAttempts;
+          job.status = "failed";
+          job.speed = 0;
+          this.setError(job, "No matching source was found.", "err.noMatchingSource");
+          await this.save();
+          return false;
+        }
+        const previousCursor = job.travelCursor;
+        const previousFailures = job.travelTemporaryFailures;
+        const previousBudgetAttempts = job.travelBudgetAttempts;
+        const previousStatus = job.status;
+        const previousNotBefore = job.notBefore;
+        const wait = this.retryDelay(failures ?? 1);
+        await this.persist({
+          apply: () => {
+            job.travelCursor = outcome.cursor;
+            if (failures === undefined) delete job.travelTemporaryFailures;
+            else job.travelTemporaryFailures = failures;
+            if (budgetAttempts === undefined) delete job.travelBudgetAttempts;
+            else job.travelBudgetAttempts = budgetAttempts;
+            job.status = "queued";
+            job.notBefore = this.now() + wait;
+            this.setError(job);
+          },
+          revert: () => {
+            if (previousCursor === undefined) delete job.travelCursor;
+            else job.travelCursor = previousCursor;
+            if (previousFailures === undefined) delete job.travelTemporaryFailures;
+            else job.travelTemporaryFailures = previousFailures;
+            if (previousBudgetAttempts === undefined) delete job.travelBudgetAttempts;
+            else job.travelBudgetAttempts = previousBudgetAttempts;
+            job.status = previousStatus;
+            job.notBefore = previousNotBefore;
+          },
+        });
+        return false;
+      }
+      return this.stageSelectedProfileSource(job, outcome, controller, startedAt);
+    }
+
+    if (snapshot.profile.id !== SOURCE_PROFILE_IDS.providerPriority || !this.providerPriorityResolver) {
+      throw new SourceAdmissionRuntimeUnavailable();
+    }
+    const outcome = await this.providerPriorityResolver({
+      source: job.source,
+      snapshot,
+      ownerUserId: this.ownerOf(job),
+      signal: controller.signal,
+    });
+    controller.signal.throwIfAborted();
+    if (outcome.status === "accessDenied" || outcome.status === "cancelled") {
+      this.pauseForPermission(job);
+      return false;
+    }
+    if (outcome.status === "noMatch") {
+      if (outcome.temporaryFailures > 0) {
+        throw new AppError("No matching source was found.", "err.noMatchingSource", 503);
+      }
+      job.status = "failed";
+      job.speed = 0;
+      this.setError(job, "No matching source was found.", "err.noMatchingSource");
+      return false;
+    }
+    return this.stageSelectedProfileSource(job, outcome, controller, startedAt);
+  }
+
+  private async resolve(job: DownloadJob, controller: AbortController): Promise<boolean> {
+    if (!job.source) throw new SourceError("The job has neither a source nor a rule for finding one.");
+    if (job.sourceAdmission) {
+      return this.resolveProfile(job, controller);
+    }
     if (!this.resolver) throw new SourceError("Source selection is unavailable.");
     const startedAt = this.now();
-    const resolved = await this.resolver(job.source, this.ownerOf(job));
+    const resolved = await this.resolver(job.source, this.ownerOf(job), controller.signal);
+    controller.signal.throwIfAborted();
     const selectionMs = this.now() - startedAt;
     // A torrent is a resolved source too: it has an infoHash and no URL yet, and the queue turns
     // it into a Real-Debrid wait. Only a stream with neither -- or none at all -- means nothing
     // was found.
     if (!resolved?.stream || (!resolved.stream.url && !resolved.stream.infoHash)) {
+      const refused = await this.ownerRefusal(job);
+      controller.signal.throwIfAborted();
+      if (refused) {
+        this.pauseForRefusal(job, refused);
+        return false;
+      }
       const selection = job.source.selection;
       const requested = selection
         ? selection.audioMode === "preferred"
@@ -1449,29 +2263,60 @@ export class DownloadQueue {
         ? `Every available source failed (${job.source.tried.length}).`
         : requested, "err.noMatchingSource");
     }
-    job.stream = resolved.stream;
-    job.subtitle = resolved.subtitle;
-    job.resolution = resolved.resolution;
-    if (isRemoteDownloadSource(job.stream) || (job.subtitle && isRemoteMediaStream({ url: job.subtitle.url }))) {
-      job.stream = undefined; job.subtitle = undefined; job.resolution = undefined;
+    if (isRemoteDownloadSource(resolved.stream) || (resolved.subtitle && isRemoteMediaStream({ url: resolved.subtitle.url }))) {
       throw new SourceError("This library is read-only.", "library.readOnly");
     }
     const settings = job.source.selection?.targetSettings ?? (job.media?.kind === "episode" ? resolved.settings.series : resolved.settings.movie);
-    job.targetSettings = settings;
     const kind = this.kindOf(job);
+    const staged: DownloadJob = {
+      ...job,
+      stream: resolved.stream,
+      subtitle: resolved.subtitle,
+      resolution: resolved.resolution,
+      targetSettings: settings,
+    };
     const library = await this.resolveLibrary(kind, settings);
+    controller.signal.throwIfAborted();
     // No library takes this kind, so there is nowhere to put the file. The job is already
     // mid-pump, so it fails rather than reaching ensureTarget with nowhere to write.
     if (!library) throw new NoLibraryForKindError(kind);
-    await this.ensureTarget(job, library);
+    try {
+      await this.ensureTarget(staged, library);
+      controller.signal.throwIfAborted();
+    } catch (error) {
+      if (staged.target) this.targetsInFlight.delete(staged.target);
+      throw error;
+    }
+    const refused = await this.ownerRefusal(staged);
+    controller.signal.throwIfAborted();
+    if (refused) {
+      if (staged.target) this.targetsInFlight.delete(staged.target);
+      this.pauseForRefusal(job, refused);
+      return false;
+    }
+    job.stream = staged.stream;
+    job.subtitle = staged.subtitle;
+    delete job.sourceSubtitleAddonIdentity;
+    job.resolution = staged.resolution;
+    job.targetSettings = settings;
+    job.target = staged.target;
     job.libraryId = library.id;
+    if (job.target) this.targetsInFlight.delete(job.target);
     await this.save();
+    const refusedAfterSave = await this.ownerRefusal(job);
+    if (controller.signal.aborted || refusedAfterSave) {
+      this.clearLazyChoice(job);
+      if (refusedAfterSave) this.pauseForRefusal(job, refusedAfterSave);
+      await this.save();
+      return false;
+    }
     log("INFO", "Download source selected", {
       id: job.id, title: job.title, addon: resolved.stream.addonName, target: job.target, library: library?.id, attempt: job.source.tried.length + 1,
       selectionMs, checkedCandidates: resolved.resolution?.checkedCandidates,
       audioLanguage: resolved.resolution?.audioLanguage, fallbackAudio: resolved.resolution?.fallbackUsed,
       subtitleStatus: resolved.resolution?.subtitleStatus,
     });
+    return true;
   }
 
   private subtitleFiles(job: DownloadJob) {
@@ -1500,6 +2345,7 @@ export class DownloadQueue {
       if (controller.signal.aborted) throw error;
       if (job.source?.selection?.subtitleMode === "required") throw error;
       job.subtitle = undefined;
+      delete job.sourceSubtitleAddonIdentity;
       if (job.resolution) job.resolution.subtitleStatus = "missing";
       log("WARN", "Optional subtitles could not be downloaded", { id: job.id, reason: error instanceof Error ? error.message : String(error) });
     }
@@ -1542,32 +2388,123 @@ export class DownloadQueue {
     } catch { /* already gone */ }
   }
 
-  private async commit(job: DownloadJob, partial: string, target: string) {
+  private publicationLive(job: DownloadJob, signal: AbortSignal): boolean {
+    return !signal.aborted
+      && this.jobs.includes(job)
+      && job.status === "downloading"
+      && !this.pauseRequested.has(job.id);
+  }
+
+  private async publicationGate(job: DownloadJob, signal: AbortSignal): Promise<PublicationGate> {
+    if (!this.publicationLive(job, signal)) return { status: "stopped" };
+    const libraryRefusal = await this.libraryKindRefusal(job);
+    if (!this.publicationLive(job, signal)) return { status: "stopped" };
+    if (libraryRefusal) return { status: "library", error: libraryRefusal };
+    if (!isExecutableDownloadSnapshot(job.sourceAdmission) || !job.stream) return { status: "allowed" };
+    const refusal = await this.ownerRefusal(job);
+    if (!this.publicationLive(job, signal)) return { status: "stopped" };
+    if (refusal?.reason === "library") return { status: "library", error: refusal.error };
+    if (refusal) return { status: "permission" };
+    return { status: "allowed" };
+  }
+
+  private failPublicationWithdrawal(job: DownloadJob) {
+    if (job.status !== "paused") job.status = "failed";
+  }
+
+  private async unlinkIfPresent(file: string): Promise<void> {
+    try {
+      await unlink(file);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+
+  private async clearEmptyReservation(file: string | undefined): Promise<void> {
+    if (!file) return;
+    try {
+      if ((await stat(file)).size === 0) await unlink(file);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+
+  private async withdrawPublication(
+    reserved: string | undefined,
+    subtitleTarget: string | undefined,
+    videoPublished: boolean,
+    subtitlePublished: boolean,
+  ): Promise<void> {
+    let cleanupError: unknown;
+    const attempt = async (work: () => Promise<void>) => {
+      try {
+        await work();
+      } catch (error) {
+        cleanupError ??= error;
+      }
+    };
+    if (videoPublished && reserved) await attempt(() => this.unlinkIfPresent(reserved));
+    if (subtitlePublished && subtitleTarget) await attempt(() => this.unlinkIfPresent(subtitleTarget));
+    if (!videoPublished) await attempt(() => this.clearEmptyReservation(reserved));
+    if (cleanupError !== undefined) throw new PublicationWithdrawalError(cleanupError);
+  }
+
+  private async commit(
+    job: DownloadJob,
+    partial: string,
+    target: string,
+    signal: AbortSignal,
+  ): Promise<boolean> {
     // A remote copy re-checks the owner and the grant one last time before the file is published.
     if (job.remoteDownload && this.remoteRefused(job)) throw new RemotePermissionLost();
+    let reserved: string | undefined;
+    let subtitleTarget: string | undefined;
+    let videoPublished = false;
+    let subtitlePublished = false;
+    const continuePublication = async (): Promise<boolean> => {
+      const gate = await this.publicationGate(job, signal);
+      if (gate.status === "allowed") return true;
+      await this.withdrawPublication(reserved, subtitleTarget, videoPublished, subtitlePublished);
+      if (gate.status === "library" && this.publicationLive(job, signal)) this.pauseForLibrary(job, gate.error);
+      if (gate.status === "permission" && this.publicationLive(job, signal)) this.pauseForPermission(job);
+      return false;
+    };
+    if (!await continuePublication()) return false;
     // The partial subtitle was written beside the name the episode had while it downloaded;
     // the reservation may move the episode to "(2)", and the subtitle follows it there.
     const written = this.subtitleFiles(job);
-    const reserved = await this.reserveTarget(job, target);
+    reserved = await this.reserveTarget(job, target);
+    if (!await continuePublication()) return false;
     try {
       const published = this.subtitleFiles(job);
       const files = written && published ? { partial: written.partial, target: published.target } : undefined;
+      subtitleTarget = files?.target;
       const moveSubtitle = Boolean(files && await exists(files.partial));
-      if (moveSubtitle && files) await rename(files.partial, files.target);
+      if (!await continuePublication()) return false;
+      if (moveSubtitle && files) {
+        await rename(files.partial, files.target);
+        subtitlePublished = true;
+        if (!await continuePublication()) return false;
+      }
       try {
-        await rename(partial, reserved);
+        await this.renamePublication(partial, reserved);
+        videoPublished = true;
       } catch (error) {
         if (moveSubtitle && files) await rename(files.target, files.partial).catch(() => undefined);
         throw error;
       }
+      if (!await continuePublication()) return false;
     } catch (error) {
       await this.dropPlaceholder(reserved);
       throw error;
     }
-    job.status = "completed"; job.completedAt = new Date(this.now()).toISOString(); job.speed = 0; job.retryCount = 0; job.segments = undefined; this.setError(job);
+    job.status = "completed"; job.completedAt = new Date(this.now()).toISOString(); job.speed = 0; job.retryCount = 0; job.segments = undefined;
+    delete job.sourceFallbackAttempts;
+    this.setError(job);
     log("INFO", "Download finished", { id: job.id, received: job.received, target: job.target, audioLanguage: job.resolution?.audioLanguage, subtitleLanguage: job.resolution?.subtitleLanguage });
     try { await this.onCompleted?.(job); }
     catch (error) { log("WARN", "The library could not be refreshed after completion", { id: job.id, reason: error instanceof Error ? error.message : String(error) }); }
+    return true;
   }
 
   /** A file is split only when the source serves byte ranges and the whole size is known.
@@ -1719,7 +2656,7 @@ export class DownloadQueue {
     if (!written) throw new IncompleteDownloadError(0, undefined);
 
     job.received = written; job.total = written;
-    await this.commit(job, partial, target);
+    if (!await this.commit(job, partial, target, controller.signal)) return;
     await this.save();
   }
 
@@ -1780,6 +2717,142 @@ export class DownloadQueue {
     return clear;
   }
 
+  private localCopyCompletionLive(job: DownloadJob, controller: AbortController): boolean {
+    return !this.stopped
+      && !controller.signal.aborted
+      && this.active.get(job.id) === controller
+      && this.jobs.includes(job)
+      && job.status === "checking"
+      && !this.pauseRequested.has(job.id);
+  }
+
+  private async completeFromExistingLocalCopy(
+    job: DownloadJob,
+    copy: ExistingLocalCopyReference,
+    controller: AbortController,
+    prove: () => ExistingLocalCopyReference | undefined | Promise<ExistingLocalCopyReference | undefined>,
+  ): Promise<boolean> {
+    const qualified = parseLibraryPath(copy.key);
+    if (!qualified || qualified.libraryId !== copy.libraryId
+      || !Number.isSafeInteger(copy.actualSize) || copy.actualSize <= 0) return false;
+
+    let completed = false;
+    let previous: {
+      target: string;
+      libraryId: string | undefined;
+      status: DownloadStatus;
+      completedAt: string | undefined;
+      updatedAt: string;
+      received: number;
+      total: number | undefined;
+      speed: number;
+      reusedLocalCopy: true | undefined;
+      retryCount: number | undefined;
+      pauseReason: PauseReason | undefined;
+      pausedAt: string | undefined;
+      libraryGone: boolean | undefined;
+      notBefore: number | undefined;
+      error: string | undefined;
+      errorKey: string | undefined;
+      errorVars: Record<string, string | number> | undefined;
+      travelCursor: TravelContinuationCursorV1 | undefined;
+      sourceFallbackAttempts: number | undefined;
+      travelTemporaryFailures: number | undefined;
+      travelBudgetAttempts: number | undefined;
+    } | undefined;
+
+    await this.persist({
+      apply: async () => {
+        if (!this.localCopyCompletionLive(job, controller)) return;
+        let fresh: ExistingLocalCopyReference | undefined;
+        try {
+          fresh = await prove();
+        } catch {
+          return;
+        }
+        if (!fresh || fresh.key !== copy.key || fresh.libraryId !== copy.libraryId
+          || fresh.actualSize !== copy.actualSize) return;
+        if (!this.localCopyCompletionLive(job, controller)) return;
+        previous = {
+          target: job.target,
+          libraryId: job.libraryId,
+          status: job.status,
+          completedAt: job.completedAt,
+          updatedAt: job.updatedAt,
+          received: job.received,
+          total: job.total,
+          speed: job.speed,
+          reusedLocalCopy: job.reusedLocalCopy,
+          retryCount: job.retryCount,
+          pauseReason: job.pauseReason,
+          pausedAt: job.pausedAt,
+          libraryGone: job.libraryGone,
+          notBefore: job.notBefore,
+          error: job.error,
+          errorKey: job.errorKey,
+          errorVars: job.errorVars,
+          travelCursor: job.travelCursor,
+          sourceFallbackAttempts: job.sourceFallbackAttempts,
+          travelTemporaryFailures: job.travelTemporaryFailures,
+          travelBudgetAttempts: job.travelBudgetAttempts,
+        };
+        const at = new Date(this.now()).toISOString();
+        job.target = copy.key;
+        job.libraryId = copy.libraryId;
+        job.status = "completed";
+        job.completedAt = at;
+        job.updatedAt = at;
+        job.received = 0;
+        job.total = copy.actualSize;
+        job.speed = 0;
+        job.reusedLocalCopy = true;
+        job.retryCount = undefined;
+        job.pauseReason = undefined;
+        job.pausedAt = undefined;
+        job.libraryGone = undefined;
+        job.notBefore = undefined;
+        this.setError(job);
+        job.travelCursor = undefined;
+        job.sourceFallbackAttempts = undefined;
+        job.travelTemporaryFailures = undefined;
+        job.travelBudgetAttempts = undefined;
+        completed = true;
+      },
+      revert: () => {
+        if (!previous) return;
+        job.target = previous.target;
+        job.libraryId = previous.libraryId;
+        job.status = previous.status;
+        job.completedAt = previous.completedAt;
+        job.updatedAt = previous.updatedAt;
+        job.received = previous.received;
+        job.total = previous.total;
+        job.speed = previous.speed;
+        job.reusedLocalCopy = previous.reusedLocalCopy;
+        job.retryCount = previous.retryCount;
+        job.pauseReason = previous.pauseReason;
+        job.pausedAt = previous.pausedAt;
+        job.libraryGone = previous.libraryGone;
+        job.notBefore = previous.notBefore;
+        job.error = previous.error;
+        job.errorKey = previous.errorKey;
+        job.errorVars = previous.errorVars;
+        job.travelCursor = previous.travelCursor;
+        job.sourceFallbackAttempts = previous.sourceFallbackAttempts;
+        job.travelTemporaryFailures = previous.travelTemporaryFailures;
+        job.travelBudgetAttempts = previous.travelBudgetAttempts;
+      },
+    });
+    if (!completed) return false;
+
+    log("INFO", "Download finished from an existing library file", {
+      id: job.id, title: job.title, target: job.target, libraryId: job.libraryId, size: job.total,
+    });
+    try { await this.onCompleted?.(job); }
+    catch (error) { log("WARN", "The library could not be refreshed after completion", { id: job.id, reason: error instanceof Error ? error.message : String(error) }); }
+    return true;
+  }
+
   private async download(job: DownloadJob) {
     const controller = new AbortController(); this.active.set(job.id, controller); job.status = job.stream ? "downloading" : "checking"; job.startedAt ??= new Date(this.now()).toISOString(); this.setError(job); job.pauseReason = undefined; job.updatedAt = new Date().toISOString(); log("INFO", "Download started", { id: job.id, title: job.title, target: job.target || "(to be chosen)", previousBytes: job.received }); await this.save();
     let retryScheduled = false;
@@ -1787,25 +2860,58 @@ export class DownloadQueue {
     let stalled = false;
     let remoteStopped = false;
     try {
+      // The owner is read afresh before any work: the right to queue may be gone since the
+      // job was added, and nothing about the request that added it can speak for it now.
+      const refused = await this.ownerRefusal(job);
+      controller.signal.throwIfAborted();
+      if (refused) {
+        this.pauseForRefusal(job, refused);
+        return;
+      }
       // A remote copy has no session to fall back on: the durable reference is re-checked
       // against the live records before a single byte, and a refusal pauses rather than fails.
       if (job.remoteDownload && this.remoteRefused(job)) {
         this.pauseForPermission(job);
         return;
       }
-      // The owner is read afresh before any work: the right to queue may be gone since the
-      // job was added, and nothing about the request that added it can speak for it now.
-      if (await this.ownerRefused(job)) {
-        this.pauseForPermission(job);
+      if (job.sourceAdmission && job.source && !job.stream && this.existingLocalCopyForQueue) {
+        const lookup = this.existingLocalCopyForQueue;
+        const input: QueuedExistingLocalCopyLookup = {
+          ownerUserId: this.ownerOf(job),
+          source: job.source,
+          media: job.media,
+          sourceAdmission: job.sourceAdmission,
+        };
+        let copy: ExistingLocalCopyReference | undefined;
+        try {
+          copy = await lookup(input);
+        } catch {
+          // A local-copy lookup failure leaves the normal resolver path available.
+        }
+        if (!this.localCopyCompletionLive(job, controller)) return;
+        if (copy && await this.completeFromExistingLocalCopy(job, copy, controller, () => lookup(input))) return;
+        if (!this.localCopyCompletionLive(job, controller)) return;
+        // A permission refusal remains a pause even when the lookup could not establish a copy.
+        const refusedAfterLookup = await this.ownerRefusal(job);
+        controller.signal.throwIfAborted();
+        if (refusedAfterLookup) {
+          this.pauseForRefusal(job, refusedAfterLookup);
+          return;
+        }
+      }
+      if (job.sourceAdmission && job.sourceFallbackAttempts === SOURCE_FALLBACK_ATTEMPT_LIMIT) {
+        await this.failProfileSourceFallback(job, false);
         return;
       }
       if (!job.stream) {
-        await this.resolve(job);
+        if (!await this.resolve(job, controller)) return;
         if (controller.signal.aborted) throw new Error("The download was stopped.");
         // The lazy resolve is where this matters most: the enqueue validated a selection, not
         // the addon the resolver eventually picks, and the owner may have lost that one.
-        if (await this.ownerRefused(job)) {
-          this.pauseForPermission(job);
+        const refused = await this.ownerRefusal(job);
+        controller.signal.throwIfAborted();
+        if (refused) {
+          this.pauseForRefusal(job, refused);
           return;
         }
       }
@@ -1828,6 +2934,7 @@ export class DownloadQueue {
       // The provider is known only after a source is picked. If it is busy, the job goes back to
       // the queue; the next pump puts it in the right bucket and leaves it alone until that frees up.
       if (this.busy(this.provider(job), job.id) >= this.providerLimit(job, Math.max(1, Math.min(8, this.perProvider())))) {
+        if (job.sourceAdmission) await this.discardProfileSelection(job, false);
         job.status = "queued";
         log("INFO", "The provider is busy, the job will wait", { id: job.id, title: job.title, provider: this.provider(job) });
         return;
@@ -1841,7 +2948,10 @@ export class DownloadQueue {
       const target = path.join(located.root, located.relative);
       const partial = `${target}.part`;
       await mkdir(path.dirname(target), { recursive: true });
+      if (job.sourceAdmission) await unlink(partial).catch(() => undefined);
+      if (job.sourceAdmission && !await this.permissionStillHeld(job, controller.signal)) return;
       await this.prepareSubtitle(job, controller);
+      if (job.sourceAdmission && !await this.permissionStillHeld(job, controller.signal)) return;
 
       // A playlist is a list of segments, not a file. Transferring it byte for
       // byte saves the list; the video has to be assembled instead.
@@ -1890,6 +3000,7 @@ export class DownloadQueue {
       // A remote original is fetched over one authenticated sequential stream: no range probe
       // and no segment plan, whatever the account's segment preference says.
       const plan = job.remoteDownload ? undefined : await this.segmentPlan(job, stream, offset, controller);
+      if (job.sourceAdmission && !await this.permissionStillHeld(job, controller.signal)) return;
       if (plan) {
         job.segments = plan;
         start(segmentedBytes(plan));
@@ -1926,6 +3037,10 @@ export class DownloadQueue {
           await response.body?.cancel().catch(() => undefined);
           throw new HttpSourceError(response.status, `The source answered HTTP ${response.status}.`, wait);
         }
+        if (job.sourceAdmission && !await this.permissionStillHeld(job, controller.signal)) {
+          await response.body.cancel().catch(() => undefined);
+          return;
+        }
         log("INFO", "Source connected", { id: job.id, httpStatus: response.status, contentLength: response.headers.get("content-length"), contentRange: response.headers.get("content-range") });
         const range = parseContentRange(response.headers.get("content-range"));
         let resumed = false;
@@ -1959,9 +3074,30 @@ export class DownloadQueue {
       const expected = expectedSize(job.total, hinted);
       if (!expected || job.received !== expected) throw new IncompleteDownloadError(job.received, expected);
       if (job.remoteDownload && this.remoteRefused(job)) throw new RemotePermissionLost();
-      await this.commit(job, partial, target);
+      if (job.sourceAdmission) {
+        const refusedAtCommit = await this.ownerRefusal(job);
+        controller.signal.throwIfAborted();
+        if (refusedAtCommit) {
+          this.pauseForRefusal(job, refusedAtCommit);
+          return;
+        }
+      }
+      if (!await this.commit(job, partial, target, controller.signal)) return;
     } catch (error) {
+      if (error instanceof SourceAdmissionRuntimeUnavailable) {
+        this.failSourceAdmission(job);
+        log("ERROR", "Download failed", { id: job.id, reason: SOURCE_ADMISSION_RUNTIME_UNAVAILABLE.message });
+        return;
+      }
       job.speed = 0;
+      if (error instanceof PublicationWithdrawalError) {
+        if (this.jobs.includes(job)) this.failPublicationWithdrawal(job);
+        this.setError(job, "The revoked download could not be removed from the library.", "err.revokedDownloadCleanupFailed");
+        log("ERROR", "A revoked download could not withdraw its published files", {
+          id: job.id, title: job.title, reason: error.message,
+        });
+        return;
+      }
       const nativeDenied = isMediaServerError(error) && (error.code === "forbidden" || error.code === "unsupported-policy");
       if (isMediaServerError(error) && typeof error.status === "number") error = new HttpSourceError(error.status, error.message, error.retryAfterMs);
       // The rule's library went away while the job waited for its source, or is gone now.
@@ -1979,6 +3115,18 @@ export class DownloadQueue {
         log("ERROR", "Download failed", { id: job.id, title: job.title, reason: error.message });
         return;
       }
+      const libraryRefusal = await this.libraryKindRefusal(job);
+      if (libraryRefusal) {
+        this.pauseForLibrary(job, libraryRefusal);
+        return;
+      }
+      if (job.sourceAdmission) {
+        const refusal = await this.ownerRefusal(job);
+        if (refusal) {
+          this.pauseForRefusal(job, refusal);
+          return;
+        }
+      }
       // A remote copy whose owner, grant or target went away mid-transfer pauses with its
       // partial file kept: the work is not wrong, only the right behind it is gone. A native
       // download-policy refusal counts too -- it is a denial to obey, not a source to retry.
@@ -1993,7 +3141,28 @@ export class DownloadQueue {
         job.status = "paused";
         job.pauseReason ??= "user";
       } else if (kind === "storage") {
+        if (job.sourceAdmission && job.stream) await this.discardProfileSelection(job, false);
         await this.haltForStorage(storageMessage(error));
+      } else if (job.sourceAdmission && job.stream) {
+        job.sourceFallbackAttempts = (job.sourceFallbackAttempts ?? 0) + 1;
+        if (job.sourceFallbackAttempts >= SOURCE_FALLBACK_ATTEMPT_LIMIT) {
+          await this.failProfileSourceFallback(job, true);
+          log("ERROR", "Download failed", {
+            id: job.id, title: job.title, reason: message, received: job.received, total: job.total,
+          });
+        } else {
+          await this.discardProfileSelection(job, true);
+          job.status = "queued";
+          const wait = this.retryDelay(1);
+          job.notBefore = this.now() + wait;
+          this.setError(job, `Source failed (${message}), trying the next one\u2026`, "err.sourceFailedTryingNext", { reason: message });
+          retryScheduled = true;
+          log("WARN", "The profile source failed, trying the next one", {
+            id: job.id, title: job.title, reason: message, tried: job.source?.tried.length,
+          });
+          if (this.retryTimer) clearTimeout(this.retryTimer);
+          this.retryTimer = setTimeout(() => { this.retryTimer = undefined; this.pump(); }, wait);
+        }
       } else if (kind === "transient" && error instanceof HttpSourceError && error.httpStatus === 200 && job.segments) {
         // The source promised ranges and then answered one with the whole file. The plan cannot
         // work, so it is dropped rather than retried; what is left is a single stream, which this
@@ -2035,7 +3204,7 @@ export class DownloadQueue {
         if (job.target && abandoned) await unlink(`${abandoned}.part`).catch(() => undefined);
         const subtitleFiles = this.subtitleFiles(job);
         if (subtitleFiles) await unlink(subtitleFiles.partial).catch(() => undefined);
-        job.stream = undefined; job.subtitle = undefined; job.resolution = undefined; job.target = ""; job.received = 0; job.total = undefined; job.segments = undefined; job.rangesIgnored = undefined; job.retryCount = 0; job.notBefore = undefined;
+        job.stream = undefined; job.subtitle = undefined; job.resolution = undefined; delete job.sourceStreamAddonIdentity; delete job.sourceSubtitleAddonIdentity; job.target = ""; job.received = 0; job.total = undefined; job.segments = undefined; job.rangesIgnored = undefined; job.retryCount = 0; job.notBefore = undefined;
         job.status = "queued"; this.setError(job, `Source failed (${message}), trying the next one\u2026`, "err.sourceFailedTryingNext", { reason: message });
         retryScheduled = true; log("WARN", "The source failed, trying the next one", { id: job.id, title: job.title, reason: message, tried: job.source.tried.length });
         if (this.retryTimer) clearTimeout(this.retryTimer);

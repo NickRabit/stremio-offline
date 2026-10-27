@@ -14,12 +14,26 @@ import { defaultInstanceSettings, defaultPrefs, type State, type Store, type Use
 import type { AddonRecord } from "../types.js";
 import { emptyUserData, type Role, type UserData, type UserRecord } from "../users.js";
 import { homeCatalogRowId, homeFeedSelectionKey } from "../home.js";
+import { SOURCE_PROFILE_IDS } from "../source-profiles.js";
 import { registerSettingsRoutes, type SettingsDeps } from "./settings.js";
 
 const ADA = "usr_00000001";
 const BOB = "usr_00000002";
 const CAROL = "usr_00000003";
 const STREAM_SORTS = new Set(["recommended", "size-desc", "size-asc", "addon"]);
+const sourceAddon = (manifestUrl = "https://source.example/manifest.json"): AddonRecord => ({
+  key: "source",
+  manifestUrl,
+  role: "source",
+  enabled: true,
+  globalSearch: true,
+  addedAt: "2026-01-01T00:00:00.000Z",
+  manifest: { id: "source", name: "Source", version: "1.0.0", resources: [{ name: "stream" }] },
+  downloadSettings: {
+    movie: { subfolder: "", layout: "flat" },
+    series: { subfolder: "", layout: "flat" },
+  },
+});
 
 interface Harness {
   base: string;
@@ -378,7 +392,7 @@ test("an import keeps the grants and the keys of the addons this instance alread
   const kept = {
     key: "alpha-key", manifestUrl: alphaUrl, role: "both", enabled: true, globalSearch: true,
     addedAt: "2026-01-01T00:00:00.000Z", allowedUsers: [CAROL],
-    manifest: { id: "alpha", name: "Addon alpha", version: "1.0.0" },
+    manifest: { id: "alpha", name: "Addon alpha", version: "1.0.0", resources: ["stream"] },
     downloadSettings: { movie: { subfolder: "", layout: "flat" }, series: { subfolder: "", layout: "flat" } },
   };
   const dropped = { ...kept, key: "beta-key", manifestUrl: betaUrl, manifest: { id: "beta", name: "Addon beta", version: "1.0.0" } };
@@ -407,6 +421,70 @@ test("an import keeps the grants and the keys of the addons this instance alread
   assert.equal(restored?.key, "alpha-key", "the key a grant and a personal order both point at was replaced");
   // The addon the backup does not carry is gone for everybody, which no counter records.
   assert.deepEqual(stopped, [{ addonKey: "beta-key" }]);
+});
+
+test("an import sweeps a preserved addon key when its effective identity changes", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const originalFlag = process.env.ALLOW_PRIVATE_ADDONS;
+  process.env.ALLOW_PRIVATE_ADDONS = "1";
+  t.after(() => { if (originalFlag === undefined) delete process.env.ALLOW_PRIVATE_ADDONS; else process.env.ALLOW_PRIVATE_ADDONS = originalFlag; });
+  const manifests = createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" })
+      .end(JSON.stringify({
+        id: "alpha",
+        name: "Addon alpha",
+        version: "2.0.0",
+        resources: ["subtitles"],
+        types: ["movie"],
+        catalogs: [],
+      }));
+  });
+  manifests.listen(0, "127.0.0.1");
+  await once(manifests, "listening");
+  t.after(() => new Promise<void>((resolve) => manifests.close(() => resolve())));
+  const alphaUrl = `http://127.0.0.1:${(manifests.address() as AddressInfo).port}/alpha/manifest.json`;
+
+  harness.state.addons = [{
+    key: "alpha-key",
+    manifestUrl: alphaUrl,
+    role: "both",
+    enabled: true,
+    globalSearch: true,
+    addedAt: "2026-01-01T00:00:00.000Z",
+    allowedUsers: [CAROL],
+    manifest: { id: "alpha", name: "Addon alpha", version: "1.0.0", resources: ["stream"] },
+    downloadSettings: { movie: { subfolder: "", layout: "flat" }, series: { subfolder: "", layout: "flat" } },
+  }] as State["addons"];
+  const stopped: Array<{ addonKey?: string }> = [];
+  harness.onStopContent = (opts) => { stopped.push(opts); };
+  const importBackup = () => api(harness.base, "/api/settings/import", {
+    method: "POST",
+    user: "ada",
+    body: {
+      format: "stremio-offline-settings",
+      version: 2,
+      exportedAt: new Date().toISOString(),
+      settings: { concurrentDownloads: 3 },
+      addons: [{
+        manifestUrl: alphaUrl,
+        role: "both",
+        enabled: true,
+        globalSearch: true,
+        addedAt: "2026-01-01T00:00:00.000Z",
+      }],
+      libraries: [],
+    },
+  });
+
+  assert.equal((await importBackup()).status, 200);
+  assert.equal(harness.state.addons[0]?.key, "alpha-key");
+  assert.deepEqual(harness.state.addons[0]?.allowedUsers, [CAROL]);
+  assert.deepEqual(stopped, [{ addonKey: "alpha-key" }]);
+
+  stopped.length = 0;
+  assert.equal((await importBackup()).status, 200);
+  assert.deepEqual(stopped, [], "an unchanged identity pauses nothing");
 });
 
 test("an import carries the grant list the state holds when the write lands", async (t) => {
@@ -467,6 +545,94 @@ test("PATCH /api/settings lets an ordinary user change only their own preference
   assert.equal(harness.state.userData?.[CAROL]?.prefs.uiLanguage, "cs");
   assert.equal(harness.state.userData?.[ADA]?.prefs.tileSize, "medium", "the other people keep theirs");
   assert.equal("tileSize" in harness.state.settings, false, "a personal key never reaches the instance half");
+});
+
+test("PATCH /api/settings stores an offered download source profile and clears it with null", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.state.addons.push(sourceAddon());
+
+  const stored = await api(harness.base, "/api/settings", {
+    method: "PATCH", user: "ada", body: { downloadSourceProfile: SOURCE_PROFILE_IDS.travel },
+  });
+  assert.equal(stored.status, 200);
+  assert.equal(harness.state.userData?.[ADA]?.prefs.downloadSourceProfile, SOURCE_PROFILE_IDS.travel);
+  assert.equal((await stored.json() as Record<string, unknown>).downloadSourceProfile, SOURCE_PROFILE_IDS.travel);
+  const read = await (await api(harness.base, "/api/settings", { user: "ada" })).json() as Record<string, unknown>;
+  assert.equal(read.downloadSourceProfile, SOURCE_PROFILE_IDS.travel);
+
+  const cleared = await api(harness.base, "/api/settings", {
+    method: "PATCH", user: "ada", body: { downloadSourceProfile: null },
+  });
+  assert.equal(cleared.status, 200);
+  assert.equal("downloadSourceProfile" in (harness.state.userData?.[ADA]?.prefs ?? {}), false);
+  assert.equal("downloadSourceProfile" in (await cleared.json() as Record<string, unknown>), false);
+});
+
+test("PATCH /api/settings refuses an unavailable download source profile without changing the stored one", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.state.addons.push(sourceAddon());
+  harness.state.userData![ADA]!.prefs.downloadSourceProfile = SOURCE_PROFILE_IDS.travel;
+
+  for (const downloadSourceProfile of [SOURCE_PROFILE_IDS.recommended, "unknown-profile", 42]) {
+    const response = await api(harness.base, "/api/settings", {
+      method: "PATCH", user: "ada", body: { downloadSourceProfile },
+    });
+    assert.equal(response.status, 400, JSON.stringify(downloadSourceProfile));
+    assert.equal((await response.json() as { messageKey?: string }).messageKey, "err.sourceProfileUnavailable");
+    assert.equal(harness.state.userData?.[ADA]?.prefs.downloadSourceProfile, SOURCE_PROFILE_IDS.travel);
+  }
+});
+
+test("GET /api/settings keeps each account's download source profile private", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.state.addons.push(sourceAddon());
+  await api(harness.base, "/api/settings", {
+    method: "PATCH", user: "ada", body: { downloadSourceProfile: SOURCE_PROFILE_IDS.travel },
+  });
+
+  const bob = await (await api(harness.base, "/api/settings", { user: "bob" })).json() as Record<string, unknown>;
+
+  assert.equal("downloadSourceProfile" in bob, false);
+});
+
+test("an exported download source profile survives import only while it is still offered", async (t) => {
+  const originalFlag = process.env.ALLOW_PRIVATE_ADDONS;
+  process.env.ALLOW_PRIVATE_ADDONS = "1";
+  t.after(() => { if (originalFlag === undefined) delete process.env.ALLOW_PRIVATE_ADDONS; else process.env.ALLOW_PRIVATE_ADDONS = originalFlag; });
+  const manifests = createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" })
+      .end(JSON.stringify({ id: "source", name: "Source", version: "1.0.0", resources: ["stream"], types: ["movie"], catalogs: [] }));
+  });
+  manifests.listen(0, "127.0.0.1");
+  await once(manifests, "listening");
+  t.after(() => new Promise<void>((resolve) => manifests.close(() => resolve())));
+  const manifestUrl = `http://127.0.0.1:${(manifests.address() as AddressInfo).port}/manifest.json`;
+
+  const source = await mount();
+  t.after(source.close);
+  source.state.addons.push(sourceAddon(manifestUrl));
+  await api(source.base, "/api/settings", {
+    method: "PATCH", user: "ada", body: { downloadSourceProfile: SOURCE_PROFILE_IDS.travel },
+  });
+  const backup = await (await api(source.base, "/api/settings/export", { user: "ada" })).json() as {
+    settings: { downloadSourceProfile?: string };
+  };
+  assert.equal(backup.settings.downloadSourceProfile, SOURCE_PROFILE_IDS.travel);
+
+  const valid = await mount();
+  t.after(valid.close);
+  assert.equal((await api(valid.base, "/api/settings/import", { method: "POST", user: "ada", body: backup })).status, 200);
+  assert.equal(valid.state.userData?.[ADA]?.prefs.downloadSourceProfile, SOURCE_PROFILE_IDS.travel);
+
+  const unknownBackup = structuredClone(backup);
+  unknownBackup.settings.downloadSourceProfile = "unknown-profile";
+  const unknown = await mount();
+  t.after(unknown.close);
+  assert.equal((await api(unknown.base, "/api/settings/import", { method: "POST", user: "ada", body: unknownBackup })).status, 200);
+  assert.equal("downloadSourceProfile" in (unknown.state.userData?.[ADA]?.prefs ?? {}), false);
 });
 
 test("PATCH /api/settings refuses an ordinary user an instance key and writes nothing", async (t) => {

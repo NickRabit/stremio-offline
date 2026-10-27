@@ -67,7 +67,7 @@ import { resolveStartView } from "./start-view";
 import { useLibrarySources } from "./library-sources";
 import { streamGroupLabel } from "./source-rows";
 import { playbackIdentity } from "./playback-identity";
-import type { Addon, BuildInfo, BrowseItem, BrowseLibrary, BrowseResult, DeviceTransfer, DownloadsViewPrefs, FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem, FavoriteRemoteItem, FollowView, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, LibraryViewPrefs, MediaServerProvider, NewEpisode, ProgressEntry, RemoteLibrary, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, Stream, Subtitle, Trailer, Video, SearchState } from "./types";
+import type { Addon, BuildInfo, BrowseItem, BrowseLibrary, BrowseResult, DeviceTransfer, DownloadsViewPrefs, FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem, FavoriteRemoteItem, FollowView, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, LibraryViewPrefs, MediaServerProvider, NewEpisode, ProfileSelection, ProgressEntry, RemoteLibrary, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, Stream, Subtitle, Trailer, Video, SearchState } from "./types";
 
 /** The library choices this browser kept before they moved onto the account. Read once and
  *  handed to the visible libraries; private mode may forbid storage, hence the try/catch. */
@@ -1454,6 +1454,14 @@ export function App() {
     if (Object.keys(optimistic).length) setSettings((current: AppSettings) => ({ ...current, ...optimistic }));
     try { const saved = await api.updateSettings(patch); setSettings((current: AppSettings) => ({ ...current, ...saved })); notify(t("settings.saved")); } catch (e) { fail(e); }
   };
+  const rememberSourceProfile = async (downloadSourceProfile: string | null) => {
+    const saved = await api.updateSettings({ downloadSourceProfile });
+    setSettings((current: AppSettings) => {
+      const next = { ...current, ...saved };
+      if (downloadSourceProfile === null) delete next.downloadSourceProfile;
+      return next;
+    });
+  };
   // An empty path with more than one library configured is the library list; a
   // single-library install still opens straight into the tree.
   const libraryList = browsePath === "" && libraries.length > 1;
@@ -2673,7 +2681,7 @@ export function App() {
     });
   };
 
-  const submitBulkDownload = async (selection: DownloadSelection, target?: SaveTarget) => {
+  const submitBulkDownload = async (selection: DownloadSelection | ProfileSelection, target?: SaveTarget) => {
     if (!bulkDownload) return;
     const result = await api.downloadBulk(bulkDownload.title, bulkDownload.type, bulkDownload.episodes, selection, bulkDownload.media, target);
     setScanEpoch((value) => value + 1);
@@ -3873,10 +3881,12 @@ export function App() {
     {identifyFrom && <IdentifyDialog path={identifyFrom}
       onClose={() => setIdentifyFrom(null)}
       onApplied={() => { setAppliedSuggestion(identifyFrom); setIdentifyFrom(null); void loadBrowse(browsePath); }}/>}
-    {bulkDownload && <SeriesDownloadDialog type={bulkDownload.type} label={bulkDownload.label} title={bulkDownload.title} episodes={bulkDownload.episodes} audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} languages={languages} libraries={libraries} addons={addons} canRetain={session!.role === "admin"} onClose={() => setBulkDownload(null)} onSubmit={submitBulkDownload}/>}
-    {followDialogOpen && detailFollow && <FollowDialog follow={detailFollow} videos={selected?.videos} languages={languages} libraries={libraries} addons={addons} audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} canRetain={session!.role === "admin"} onChanged={(updated) => applyFollowChange(detailFollow.id, updated)} onClose={() => setFollowDialogOpen(false)} onNotify={notify}/>}
+    {bulkDownload && <SeriesDownloadDialog type={bulkDownload.type} label={bulkDownload.label} title={bulkDownload.title} episodes={bulkDownload.episodes} audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} languages={languages} libraries={libraries} addons={addons} canRetain={session!.role === "admin"} defaultSourceProfileId={settings.downloadSourceProfile} onRememberSourceProfile={rememberSourceProfile} onClose={() => setBulkDownload(null)} onSubmit={submitBulkDownload}/>}
+    {followDialogOpen && detailFollow && <FollowDialog follow={detailFollow} videos={selected?.videos} languages={languages} libraries={libraries} addons={addons} audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} canRetain={session!.role === "admin"} defaultSourceProfileId={settings.downloadSourceProfile} onRememberSourceProfile={rememberSourceProfile} onChanged={(updated) => applyFollowChange(detailFollow.id, updated)} onClose={() => setFollowDialogOpen(false)} onNotify={notify}/>}
     {followStart && <SeriesDownloadDialog type={followStart.type || "series"} label={followStart.name} title={followStart.name} episodes={followStart.type === "movie" ? [{ id: followStart.id }] : toEpisodes(followStart.videos)} audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} languages={languages} libraries={libraries} addons={addons}
       canRetain={session!.role === "admin"}
+      defaultSourceProfileId={settings.downloadSourceProfile}
+      onRememberSourceProfile={rememberSourceProfile}
       follow={{ create: { metaId: followStart.id, name: followStart.name, poster: followStart.poster, ...(followStart.addonKey ? { addonKey: followStart.addonKey } : {}) }, onFollowed: (follow) => followed(followStart, follow) }} onClose={() => setFollowStart(null)}/>}
     {galleryIndex !== null && shownGallery[galleryIndex] && <MediaGallery images={shownGallery} index={galleryIndex} onIndex={setGalleryIndex} onClose={closeGallery}/>}
     {(message || error) && <div className={`toast ${error ? "error" : ""}`}>{error || message}<button onClick={() => {setError("");setMessage("");}}><X/></button></div>}

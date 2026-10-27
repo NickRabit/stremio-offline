@@ -269,6 +269,20 @@ export type Download = PublicDownload;
 export type SubtitleMode = "off" | "optional" | "required";
 export type AudioMode = "strict" | "listed" | "preferred";
 export type DownloadSourceStrategy = "priority" | "largest";
+export interface SourceProfile {
+  id: string;
+  nameKey: string;
+  revision: number;
+  operations: Array<"play" | "downloadToLibrary" | "downloadToDevice">;
+  policy: unknown;
+}
+export interface SourceProfileReference {
+  profileId: string;
+  revision: number;
+}
+export interface ProfileSelection {
+  profile: SourceProfileReference;
+}
 export interface DownloadSelection {
   addonKeys: string[];
   sourceStrategy: DownloadSourceStrategy;
@@ -380,6 +394,8 @@ export interface Settings {
   libraryShelf: LibraryShelf;
   /** This account's own Home arrangement. Absent means it has never arranged one. */
   homeLayout?: HomeLayout;
+  /** This account's default source profile for a new download. Absent means no default. */
+  downloadSourceProfile?: string;
   realDebridConfigured: boolean; tmdbConfigured: boolean;
 }
 /** The instance keys the settings endpoints leave out for an ordinary account, which is told
@@ -391,7 +407,7 @@ type AdminOnlySetting =
 /** What GET and PATCH /api/settings answer. An administrator receives every key; everybody
  *  else is missing the ones above, and the interface keeps its own defaults for them. */
 export type SettingsView = Omit<Settings, AdminOnlySetting> & Partial<Pick<Settings, AdminOnlySetting>>;
-export type SettingsPatch = Partial<Omit<Settings, "realDebridConfigured" | "tmdbConfigured" | "homeLayout">> & { homeLayout?: HomeLayout | null; realDebridToken?: string; tmdbApiKey?: string };
+export type SettingsPatch = Partial<Omit<Settings, "realDebridConfigured" | "tmdbConfigured" | "homeLayout" | "downloadSourceProfile">> & { homeLayout?: HomeLayout | null; downloadSourceProfile?: string | null; realDebridToken?: string; tmdbApiKey?: string };
 /** The media-server metadata a version 3 backup adds: the server's own metadata-only export,
  *  reused so a credential, generation or grant can never reach a settings file. */
 export type SettingsBackupMediaServers = MediaServerConfigurationExport;
@@ -628,6 +644,7 @@ export interface FollowAutoDownload {
   startEpisode?: number;
   aheadCount?: number;
   selection: DownloadSelection;
+  sourceProfile?: SourceProfileReference;
   /** Days after release during which only the preferred audio is accepted. */
   graceDays?: number;
   /** Delete downloaded episodes this long after the owner watched past them; absent keeps them. */

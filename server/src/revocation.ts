@@ -1,7 +1,8 @@
 import { addonAllowed } from "./addons.js";
+import { addonIdentity } from "./addon-identity.js";
 import type { AirPlayAccess } from "./airplay-access.js";
 import { readSession } from "./auth.js";
-import { jobLibraryId, mayDownloadToDevice, mayDownloadToLibrary, type DownloadJob } from "./downloads.js";
+import { isSelectedProfileJob, jobLibraryId, mayDownloadToDevice, mayDownloadToLibrary, type DownloadJob } from "./downloads.js";
 import { libraryVisible, parseLibraryPath, type LibraryRecord, type Viewer } from "./libraries.js";
 import { log } from "./logger.js";
 import { remoteContentAccessible, remoteLibraryVisibleTo, type RemoteAccessSource } from "./media-server-access.js";
@@ -156,6 +157,15 @@ export interface RevocationDeps {
 export interface StopContentOptions { userId?: string; libraryId?: string; addonKey?: string; connectionId?: string }
 
 interface Content { addonKey?: string; libraryId?: string; remote?: RemoteContentRef }
+
+const supportsAddonResource = (addon: AddonRecord, resource: string, type: string): boolean => {
+  const declared = addon.manifest.resources ?? [];
+  return declared.some((entry) => {
+    const name = typeof entry === "string" ? entry : entry.name;
+    if (name !== resource) return false;
+    return typeof entry === "string" || !entry.types?.length || entry.types.includes(type);
+  });
+};
 
 export class Revocations {
   constructor(private deps: RevocationDeps) {}
@@ -329,9 +339,7 @@ export class Revocations {
     for (const active of this.deps.activeMedia) if (active.device && active.owner.userId === userId) active.res.destroy();
   }
 
-  /** A job whose source or target is the withdrawn content. A lazy job has no source yet:
-   *  the queue asks its own owner-bound check when it resolves one, so it is left alone
-   *  here rather than guessed at. */
+  /** A job whose source or target is the withdrawn content. */
   private jobTouches(job: DownloadJob, opts: StopContentOptions): boolean {
     if (opts.userId !== undefined && this.deps.queue.ownerOf(job) !== opts.userId) return false;
     // A remote copy names its own connection, which a local library id never does.
@@ -340,10 +348,40 @@ export class Revocations {
       const libraryId = jobLibraryId(job);
       if (libraryId === opts.libraryId) return true;
     }
+    if (opts.addonKey === undefined) return false;
     // The subtitle counts as much as the video: it is commonly chosen from another addon and
     // is fetched on resume, which can be long after that addon was taken away.
-    return opts.addonKey !== undefined
-      && (job.stream?.addonKey === opts.addonKey || job.subtitle?.addonKey === opts.addonKey);
+    const streamTouches = job.stream?.addonKey === opts.addonKey;
+    const subtitleTouches = job.subtitle?.addonKey === opts.addonKey;
+    if (streamTouches || subtitleTouches) {
+      const ownerId = this.deps.queue.ownerOf(job);
+      const owner = ownerId ? findUserById(this.deps.source.users(), ownerId) : undefined;
+      const addon = this.deps.source.addons().find((item) => item.key === opts.addonKey);
+      const stillAvailable = addon?.enabled
+        && owner !== undefined
+        && !owner.disabled
+        && addonAllowed(addon, { id: owner.id, role: owner.role });
+      if (stillAvailable) {
+        if (!isSelectedProfileJob(job)) return false;
+        const captured = streamTouches
+          ? job.sourceStreamAddonIdentity
+          : job.sourceSubtitleAddonIdentity;
+        return captured !== addonIdentity(addon);
+      }
+      return true;
+    }
+    if (!job.stream && job.source) {
+      if (!job.source.selection) return job.status === "checking";
+      if (job.source.selection?.addonKeys.includes(opts.addonKey)) return true;
+      if (job.status === "checking" && job.source.selection && job.source.selection.subtitleMode !== "off") {
+        const addon = this.deps.source.addons().find((item) => item.key === opts.addonKey);
+        // A deleted record can no longer say what it offered; only an active lookup is charged.
+        return !addon
+          || supportsAddonResource(addon, "subtitles", job.source.type)
+          || supportsAddonResource(addon, "meta", job.source.type);
+      }
+    }
+    return false;
   }
 
   private async pauseJobs(match: (job: DownloadJob) => boolean, userId?: string) {

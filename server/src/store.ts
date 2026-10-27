@@ -73,6 +73,8 @@ export interface UserPrefs {
   /** One account's own Home: the row order it placed, the rows it hid and the extra feeds it
    *  added. Absent means the instance's default Home. */
   homeLayout?: HomeLayout;
+  /** The source profile one account prefers for a new download. Absent means no default. */
+  downloadSourceProfile?: string;
 }
 
 /** The flat shape of the settings file and of the settings backup: the instance's half and

@@ -368,6 +368,47 @@ export function streamCandidates(addons: AddonRecord[], type: string, id: string
   return addons.filter((a) => a.enabled && a.role !== "catalog" && supports(a, "stream", type, id));
 }
 
+export type StreamListing =
+  | { addonKey: string; status: "success"; items: StreamItem[] }
+  | { addonKey: string; status: "failure" };
+
+function mapStreams(response: unknown, addon: AddonRecord): StreamItem[] {
+  if (typeof response !== "object" || response === null || Array.isArray(response)) {
+    throw new Error("The addon stream response was not an object.");
+  }
+  if (!Object.hasOwn(response, "streams")) return [];
+  const streams = (response as { streams?: unknown }).streams;
+  if (!Array.isArray(streams)) throw new Error("The addon streams field was not an array.");
+  return streams.map((stream) => {
+    if (typeof stream !== "object" || stream === null || Array.isArray(stream)) {
+      throw new Error("The addon stream listing contained a non-object item.");
+    }
+    return { ...stream, addonKey: addon.key, addonName: addon.manifest.name };
+  });
+}
+
+export async function streamListings(
+  addons: AddonRecord[],
+  type: string,
+  id: string,
+  interactive = false,
+  signal?: AbortSignal,
+): Promise<StreamListing[]> {
+  const candidates = streamCandidates(addons, type, id);
+  const results = await Promise.allSettled(candidates.map(async (addon) => {
+    const response = await jsonFetch<unknown>(resourceUrl(addon, "stream", type, id), STREAM_TIMEOUT_MS, interactive, signal);
+    return mapStreams(response, addon);
+  }));
+  if (!signal?.aborted) {
+    results.forEach((result, index) => {
+      if (result.status === "rejected") log("WARN", "Addon request failed", { operation: "streams", addon: candidates[index].manifest.name, type, id, reason: reasonOf(result.reason) });
+    });
+  }
+  return results.map((result, index) => result.status === "fulfilled"
+    ? { addonKey: candidates[index].key, status: "success", items: result.value }
+    : { addonKey: candidates[index].key, status: "failure" });
+}
+
 export async function streams(
   addons: AddonRecord[],
   type: string,
@@ -376,16 +417,9 @@ export async function streams(
   interactive = false,
   signal?: AbortSignal,
 ): Promise<StreamItem[]> {
-  const candidates = streamCandidates(addons, type, id).filter((a) => !addonKey || a.key === addonKey);
-  const results = await Promise.allSettled(candidates.map(async (addon) => {
-    const response = await jsonFetch<{ streams?: StreamItem[] }>(resourceUrl(addon, "stream", type, id), STREAM_TIMEOUT_MS, interactive, signal);
-    return (response.streams ?? []).map((stream) => ({ ...stream, addonKey: addon.key, addonName: addon.manifest.name }));
-  }));
+  const listings = await streamListings(addons.filter((addon) => !addonKey || addon.key === addonKey), type, id, interactive, signal);
   if (signal?.aborted) return [];
-  results.forEach((result, index) => {
-    if (result.status === "rejected") log("WARN", "Addon request failed", { operation: "streams", addon: candidates[index].manifest.name, type, id, reason: reasonOf(result.reason) });
-  });
-  return results.flatMap((result) => result.status === "fulfilled" ? result.value : []);
+  return listings.flatMap((listing) => listing.status === "success" ? listing.items : []);
 }
 
 const IMDB_TARGET_TTL_MS = 6 * 60 * 60_000;

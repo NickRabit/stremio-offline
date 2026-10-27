@@ -1,4 +1,5 @@
 import type express from "express";
+import { addonIdentity } from "../addon-identity.js";
 import { normalizeRefreshHours } from "../addon-refresh.js";
 import { allowedAddons, loadAddon } from "../addons.js";
 import { createSettingsBackup, parseSettingsBackup, remapBackupLibraries } from "../backup.js";
@@ -15,11 +16,12 @@ import type { LibraryMetaStore } from "../library-meta-store.js";
 import { currentLevel, log, parseLevel, setLevel } from "../logger.js";
 import { publicAddon } from "../security.js";
 import { assertStillAdmin, ForbiddenError } from "../roles.js";
+import { sourceProfilesForViewer, viewerOfProfileAccount } from "../source-profiles.js";
 import { memberSettings, publicSettings, type InstanceSettings, type Settings, type State, type UserPrefs } from "../store.js";
 import { verifyTmdbKey } from "../tmdb.js";
 import { clearTrailerCache } from "../trailers.js";
-import type { MetaItem, StreamItem } from "../types.js";
-import { PERSONAL_SETTINGS, type UserData } from "../users.js";
+import type { MetaItem } from "../types.js";
+import { PERSONAL_SETTINGS, type UserData, type UserRecord } from "../users.js";
 import { asyncRoute, type RouteContext } from "./context.js";
 
 /** The instance settings, one person's own preferences and the backup that carries both. */
@@ -35,7 +37,7 @@ export interface SettingsDeps extends RouteContext {
   mutateData(state: State, id: string, mutate: (data: UserData) => void): void;
   prefsOf(req?: express.Request): UserPrefs;
   queue: DownloadQueue;
-  streamCache: Map<string, { at: number; items: StreamItem[] }>;
+  streamCache: { clear(): void };
 }
 
 export function registerSettingsRoutes(app: express.Application, deps: SettingsDeps): void {
@@ -58,6 +60,15 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
     const instance = publicSettings(store.settings());
     return { ...(currentUser(req)?.role === "admin" ? instance : memberSettings(instance)), ...prefsOf(req) };
   };
+  const offeredDownloadProfiles = (state: State, actor: UserRecord | undefined) => actor
+    ? sourceProfilesForViewer({
+        viewer: viewerOfProfileAccount(actor),
+        addons: state.addons,
+        libraries: state.libraries ?? [],
+        remoteLibraries: state.remoteLibraries ?? [],
+        mediaConnections: state.mediaConnections ?? [],
+      }).filter((profile) => profile.operations.includes("downloadToLibrary"))
+    : [];
   app.get("/api/settings", (req, res) => res.json(settingsView(req)));
 
   /** The backup file carries both halves of the settings in one flat object, the way the
@@ -69,12 +80,12 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       uiLanguage, audioLanguage, subtitleLanguage, downloadTitleLanguage,
       mergeByName, streamSort, trackProgress, showResumeRow,
       tileSize, catalogTileShape, libraryTileShape, favoritesTileShape, resumeTileShape, followingTileShape, homeTileShape, searchTileShape, startView, libraryShelf,
-      homeLayout,
+      homeLayout, downloadSourceProfile,
       ...instance
     } = flat;
     return {
       instance,
-      prefs: { uiLanguage, audioLanguage, subtitleLanguage, downloadTitleLanguage, mergeByName, streamSort, trackProgress, showResumeRow, tileSize, catalogTileShape, libraryTileShape, favoritesTileShape, resumeTileShape, followingTileShape, homeTileShape, searchTileShape, startView, libraryShelf, ...(homeLayout ? { homeLayout } : {}) },
+      prefs: { uiLanguage, audioLanguage, subtitleLanguage, downloadTitleLanguage, mergeByName, streamSort, trackProgress, showResumeRow, tileSize, catalogTileShape, libraryTileShape, favoritesTileShape, resumeTileShape, followingTileShape, homeTileShape, searchTileShape, startView, libraryShelf, ...(homeLayout ? { homeLayout } : {}), ...(downloadSourceProfile ? { downloadSourceProfile } : {}) },
     };
   };
 
@@ -136,12 +147,16 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
     }
     // The list as it is on either side of the write, read from the state the write lands on:
     // the sweep below needs the transition that really happened, not an earlier read.
-    let before: Array<{ key: string; enabled: boolean }> = [];
+    let before: Array<{ key: string; enabled: boolean; identity: string }> = [];
     const applySettings = (state: State) => {
       // Every manifest was fetched before this point, which is ample time for the gate's
       // answer to go stale.
       assertStillAdmin(state.users ?? [], actor);
-      before = state.addons.map((addon) => ({ key: addon.key, enabled: addon.enabled }));
+      before = state.addons.map((addon) => ({
+        key: addon.key,
+        enabled: addon.enabled,
+        identity: addonIdentity(addon),
+      }));
       // A backup carries the instance's configuration, not its accounts: the ids in a grant
       // list belong to this install and would mean nothing in a backup taken from another. So
       // the grants are not read from the file -- they are kept from the record this state holds
@@ -160,6 +175,9 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       state.settings = split.instance;
       state.addons = loaded;
       state.defaultsInstalled = true;
+      if (split.prefs.downloadSourceProfile && !offeredDownloadProfiles(state, actor).some((profile) => profile.id === split.prefs.downloadSourceProfile)) {
+        delete split.prefs.downloadSourceProfile;
+      }
       const userId = accountIdOf(req);
       if (userId) mutateData(state, userId, (data) => { data.prefs = { ...data.prefs, ...split.prefs }; });
     };
@@ -177,7 +195,9 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
     // already running on them, which no counter records.
     for (const addon of before) {
       const after = store.addons().find((item) => item.key === addon.key);
-      if (addon.enabled && (!after || !after.enabled)) await stopContentAccess({ addonKey: addon.key });
+      if (addon.enabled && (!after || !after.enabled || addon.identity !== addonIdentity(after))) {
+        await stopContentAccess({ addonKey: addon.key });
+      }
     }
     log("INFO", "Settings backup imported", { addons: loaded.length, version: backup.version, remapped: parsed.remaps.length });
     res.json({ settings: settingsView(req), addons: store.addons().map(publicAddon), remapped: parsed.remaps.length });
@@ -213,6 +233,10 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       && (!postedLayout || postedLayout.order.length > HOME_LAYOUT_ROW_LIMIT || postedLayout.hidden.length > HOME_LAYOUT_ROW_LIMIT || postedLayout.feeds.length > HOME_LAYOUT_FEED_LIMIT)) {
       throw new AppError("A Home layout must list an order, the hidden rows and the feeds.", "err.homeLayoutShape", 400);
     }
+    const postedProfile = req.body.downloadSourceProfile;
+    if (postedProfile !== undefined && postedProfile !== null && typeof postedProfile !== "string") {
+      throw new AppError("This source profile is not available to this account.", "err.sourceProfileUnavailable", 400);
+    }
     await store.update((state) => {
       // Only when the body reaches the instance half: an ordinary account writing its own
       // preferences is not making an administrator's change and must not be asked to be one.
@@ -220,6 +244,9 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       // The body is one flat object; each key goes to the half that owns it. Only the keys the
       // body names are written, so a preference nobody touched keeps the value it had.
       const prefs: Record<string, unknown> = { ...(userId ? state.userData?.[userId]?.prefs : undefined) };
+      if (postedProfile && !offeredDownloadProfiles(state, actor).some((profile) => profile.id === postedProfile)) {
+        throw new AppError("This source profile is not available to this account.", "err.sourceProfileUnavailable", 400);
+      }
       if (req.body.concurrentDownloads !== undefined) state.settings.concurrentDownloads = Math.max(1, Math.min(8, Number(req.body.concurrentDownloads) || 1));
       if (req.body.parallelPerProvider !== undefined) state.settings.parallelPerProvider = Math.max(1, Math.min(8, Number(req.body.parallelPerProvider) || 1));
       if (req.body.downloadSegments !== undefined) state.settings.downloadSegments = Math.max(1, Math.min(8, Number(req.body.downloadSegments) || 1));
@@ -291,6 +318,10 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
             feeds: [...new Set(parsed.feeds.filter((key) => valid.has(key)))].slice(0, HOME_LAYOUT_FEED_LIMIT),
           };
         }
+      }
+      if (postedProfile !== undefined) {
+        if (postedProfile) prefs.downloadSourceProfile = postedProfile;
+        else delete prefs.downloadSourceProfile;
       }
       if (realDebridToken !== undefined) state.settings.realDebridToken = realDebridToken;
       if (tmdbApiKey !== undefined) state.settings.tmdbApiKey = tmdbApiKey;

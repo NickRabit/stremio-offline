@@ -11,6 +11,8 @@ import { FollowService, FollowStore } from "../follows.js";
 import { defaultDownloadLibrary } from "../downloads.js";
 import type { DefaultLibrarySettings, LibraryRecord } from "../libraries.js";
 import { defaultDownloadSettings } from "../naming.js";
+import { materializeSourceAdmissionPolicy, parseSourceAdmissionSnapshotV1, type SourceAdmissionSnapshotV1 } from "../source-admission.js";
+import { SOURCE_PROFILE_DEFINITIONS, SOURCE_PROFILE_IDS } from "../source-profiles.js";
 import type { Store, UserPrefs } from "../store.js";
 import type { UserData, UserRecord } from "../users.js";
 import { calendarFeedHandler, registerFollowRoutes, type FollowDeps } from "./follows.js";
@@ -25,6 +27,23 @@ const account = (id: string, role: "admin" | "user", downloadToLibrary = true): 
 } as unknown as UserRecord);
 
 interface Harness { base: string; store: FollowStore; users: Record<string, UserRecord>; close(): Promise<void> }
+
+const profileAdmission = (profileId: string): SourceAdmissionSnapshotV1 => {
+  const definition = SOURCE_PROFILE_DEFINITIONS.find((candidate) => candidate.id === profileId);
+  assert.ok(definition);
+  const providerKeys = ["addon:admin-addon"];
+  return parseSourceAdmissionSnapshotV1({
+    schemaVersion: 1,
+    profile: { id: profileId, revision: definition.revision },
+    operation: "downloadToLibrary",
+    providerKeys,
+    policy: materializeSourceAdmissionPolicy(
+      definition.policy,
+      providerKeys,
+      { audioLanguage: "en", subtitleLanguage: "en" },
+    ),
+  });
+};
 
 /** Real express over a real store: the routes take everything from the context, and the
  *  account each request speaks for is named by a header so one server can hold two. */
@@ -66,17 +85,26 @@ const mount = async (options: {
     }),
     queue,
     mayDownload: (ownerUserId) => Boolean(Object.values(users).find((entry) => entry.id === ownerUserId)?.permissions.downloadToLibrary),
+    admitSourceProfile: (_ownerUserId, reference) => profileAdmission(reference.profileId),
   });
   const libraries: LibraryRecord[] = options.libraries ?? [{ id: "lib_shows", name: "Shows", type: "series", root: dir, enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z", writeArtwork: false }];
   const settings = options.settings ?? {};
   const addons = options.addons ?? [
-    { key: "stream-addon", enabled: true, role: "source", allowedUsers: [BOB], manifest: { id: "stream-addon", name: "Stream" }, downloadSettings: defaultDownloadSettings() },
-    { key: "admin-addon", enabled: true, role: "source", allowedUsers: [ADA], manifest: { id: "admin-addon", name: "Admin" }, downloadSettings: defaultDownloadSettings() },
+    { key: "stream-addon", enabled: true, role: "source", allowedUsers: [BOB], manifest: { id: "stream-addon", name: "Stream", resources: [{ name: "stream" }] }, downloadSettings: defaultDownloadSettings() },
+    { key: "admin-addon", enabled: true, role: "source", allowedUsers: [ADA], manifest: { id: "admin-addon", name: "Admin", resources: [{ name: "stream" }] }, downloadSettings: defaultDownloadSettings() },
   ];
   const userData: Record<string, UserData> = {};
   const keyOfReq = (req: express.Request | undefined) => users[String(req?.header("x-as") ?? "A")]?.id ?? ADA;
   const deps: FollowDeps = {
-    store: { addons: () => addons, libraries: () => libraries, settings: () => settings } as unknown as Store,
+    store: {
+      addons: () => addons,
+      libraries: () => libraries,
+      settings: () => settings,
+      mediaConnections: () => [],
+      remoteLibraries: () => [],
+      prefs: () => ({ uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en" }) as UserPrefs,
+      userData: () => ({} as UserData),
+    } as unknown as Store,
     needsSetup: () => false,
     currentSession: () => undefined,
     currentUser: (req) => users[String(req.header("x-as") ?? "A")],
@@ -234,12 +262,112 @@ test("an automatic rule stores an explicit, concrete target", async () => {
       method: "PATCH", as: "A",
       body: { autoDownload: { startMode: "new", selection: { addonKeys: ["stream-addon"], audioLanguage: "en" } } },
     });
-    assert.equal(response.status, 200);
+    assert.equal(response.status, 200, await response.clone().text());
     const view = await response.json() as { autoDownload?: { enabledAt: string; startMode: string; selection: { addonKeys: string[]; targetSettings: Record<string, unknown> } } };
     assert.ok(view.autoDownload?.enabledAt);
     assert.equal(view.autoDownload?.startMode, "new");
     assert.deepEqual(view.autoDownload?.selection.addonKeys, ["stream-addon"]);
     assert.deepEqual(view.autoDownload?.selection.targetSettings, { libraryId: "lib_shows", subfolder: "", layout: "structured", explicit: true });
+  } finally { await h.close(); }
+});
+
+test("a follow stores and exposes an executable source profile reference", async () => {
+  const h = await mount();
+  try {
+    const follow = await (await api(h.base, "/api/follows", {
+      method: "POST", as: "A", body: { type: "series", id: "tt1", name: "Show" },
+    })).json() as { id: string };
+    const response = await api(h.base, `/api/follows/${follow.id}`, {
+      method: "PATCH",
+      as: "A",
+      body: {
+        autoDownload: {
+          startMode: "new",
+          selection: { profile: { profileId: SOURCE_PROFILE_IDS.travel, revision: 1 } },
+        },
+      },
+    });
+    assert.equal(response.status, 200, await response.clone().text());
+    const view = await response.json() as {
+      autoDownload?: {
+        sourceProfile?: { profileId: string; revision: number };
+        selection: { addonKeys: string[]; audioLanguage: string };
+      };
+    };
+    assert.deepEqual(view.autoDownload?.sourceProfile, { profileId: SOURCE_PROFILE_IDS.travel, revision: 1 });
+    assert.deepEqual(view.autoDownload?.selection.addonKeys, ["stream-addon", "admin-addon"]);
+    assert.equal(view.autoDownload?.selection.audioLanguage, "en");
+    assert.equal(JSON.stringify(view).includes("sourceAdmission"), false);
+  } finally { await h.close(); }
+});
+
+test("a follow refuses stale, non-executable and graced source profiles", async () => {
+  const h = await mount();
+  try {
+    const follow = await (await api(h.base, "/api/follows", {
+      method: "POST", as: "A", body: { type: "series", id: "tt1", name: "Show" },
+    })).json() as { id: string };
+    const body = (selection: unknown, graceDays?: number) => ({
+      autoDownload: {
+        startMode: "new",
+        ...(graceDays === undefined ? {} : { graceDays }),
+        selection,
+      },
+    });
+
+    const stale = await api(h.base, `/api/follows/${follow.id}`, {
+      method: "PATCH", as: "A",
+      body: body({ profile: { profileId: SOURCE_PROFILE_IDS.travel, revision: 2 } }),
+    });
+    assert.equal(stale.status, 409);
+    assert.equal(await keyOf(stale), "err.sourceProfileRevisionStale");
+
+    const recommended = await api(h.base, `/api/follows/${follow.id}`, {
+      method: "PATCH", as: "A",
+      body: body({ profile: { profileId: SOURCE_PROFILE_IDS.recommended, revision: 1 } }),
+    });
+    assert.equal(recommended.status, 400);
+    assert.equal(await keyOf(recommended), "err.sourceProfileOperationUnavailable");
+
+    const graced = await api(h.base, `/api/follows/${follow.id}`, {
+      method: "PATCH", as: "A",
+      body: body({ profile: { profileId: SOURCE_PROFILE_IDS.travel, revision: 1 } }, 3),
+    });
+    assert.equal(graced.status, 400);
+    assert.equal(await keyOf(graced), "err.followInvalid");
+    assert.equal(h.store.get(follow.id)?.autoDownload, undefined);
+  } finally { await h.close(); }
+});
+
+test("a follow episode view never exposes its admission snapshot", async () => {
+  const h = await mount();
+  try {
+    const follow = await (await api(h.base, "/api/follows", {
+      method: "POST", as: "A", body: { type: "series", id: "tt1", name: "Show" },
+    })).json() as { id: string };
+    const snapshot = profileAdmission(SOURCE_PROFILE_IDS.travel);
+    await h.store.update(follow.id, (current) => {
+      current.episodes["1:1"] = {
+        key: "1:1",
+        videoId: "tt1:1:1",
+        season: 1,
+        episode: 1,
+        firstSeenAt: "2024-01-01T00:00:00.000Z",
+        download: {
+          state: "queued",
+          intent: `${follow.id}:1:1:1`,
+          generation: 1,
+          jobId: "job-1",
+          attempts: 0,
+          sourceAdmission: snapshot,
+          updatedAt: "2024-01-01T00:00:00.000Z",
+        },
+      };
+    });
+
+    const response = await api(h.base, `/api/follows/${follow.id}/episodes`, { as: "A" });
+    assert.equal(response.status, 200);
+    assert.doesNotMatch(await response.text(), /sourceAdmission/);
   } finally { await h.close(); }
 });
 

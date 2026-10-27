@@ -134,6 +134,8 @@ export async function selectDownloadSource(input: {
   selection: DownloadSelection;
   tried: string[];
   inspect: (stream: StreamItem) => Promise<MediaInfo | undefined>;
+  /** Asked before each probe and again when it settles. False discards an answer in flight. */
+  shouldContinue?: (stream: StreamItem) => boolean;
 }): Promise<Choice | undefined> {
   const { selection } = input;
   const priority = new Map(selection.addonKeys.map((key, index) => [key, index]));
@@ -160,11 +162,13 @@ export async function selectDownloadSource(input: {
   let checkedCandidates = 0;
 
   for (const stream of candidates) {
+    if (input.shouldContinue && !input.shouldContinue(stream)) return undefined;
     if (checkedCandidates >= MAX_PROBED_CANDIDATES) {
       log("WARN", "Gave up looking for a source after the probe limit", { limit: MAX_PROBED_CANDIDATES, remaining: candidates.length - checkedCandidates });
       break;
     }
     const info = await input.inspect(stream).catch(() => undefined);
+    if (input.shouldContinue && !input.shouldContinue(stream)) return undefined;
     checkedCandidates += 1;
     if (!info?.video || !info.audioTracks.length) continue;
     if (info.duration !== undefined && info.duration < MIN_STREAM_DURATION_SECONDS) continue;

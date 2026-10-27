@@ -27,6 +27,9 @@ interface Harness {
   viewed: Array<{ id: string; health: LibraryHealth; stats: { titles: number; files: number; bytes: number }; admin: boolean; canDownload: boolean }>;
   enqueued: unknown[];
   invalidated: string[];
+  /** The library type visible when the queue was asked to pause incompatible jobs. */
+  queuePauses: Array<{ libraryId: string; type: string }>;
+  contentStops: Array<{ libraryId?: string; userId?: string }>;
   /** Every library id the first-seen index was asked to forget, in order. */
   seenForgotten: string[];
   stored: () => LibraryRecord[];
@@ -69,6 +72,8 @@ const mount = async (
   const enqueued: unknown[] = [];
   const invalidated: string[] = [];
   const seenForgotten: string[] = [];
+  const queuePauses: Harness["queuePauses"] = [];
+  const contentStops: Harness["contentStops"] = [];
   // A write can be held, so two requests can both read the state before either mutator runs.
   let held: Array<() => void> = [];
   let holding = false;
@@ -100,7 +105,7 @@ const mount = async (
     stopOwnedPlayback: async () => undefined,
     stopUserSessions: async () => undefined,
     requireAccess: () => undefined,
-    stopContentAccess: async () => undefined,
+    stopContentAccess: async (scope) => { contentStops.push(scope); },
     grantRows: async () => mergeGrants(env, state.grants).map((grant) => ({ ...grant, writable: true })),
     healthOf: (record) => ({ unreachable: record.id === "alpha", readOnly: record.id === "beta", realRoot: record.root, caseInsensitive: false }),
     invalidateAutoScan: (libraryId) => { invalidated.push(libraryId); },
@@ -111,6 +116,10 @@ const mount = async (
       viewed.push({ id: record.id, health, stats: totals, admin, canDownload });
       return { id: record.id, name: record.name, unreachable: health.unreachable, readOnly: health.readOnly,
         writable: record.enabled && !health.readOnly && canDownload, ...totals };
+    },
+    pauseIncompatibleLibraryJobs: async (libraryId) => {
+      queuePauses.push({ libraryId, type: state.libraries.find((record) => record.id === libraryId)?.type ?? "" });
+      return 0;
     },
     progressOf: () => ({}),
     refreshLibraryHealth: async () => new Map(),
@@ -138,6 +147,8 @@ const mount = async (
     viewed,
     enqueued,
     invalidated,
+    queuePauses,
+    contentStops,
     stored: () => state.libraries,
     seenForgotten,
     settings: () => state.settings,
@@ -230,6 +241,24 @@ test("PATCH /api/libraries/:id sets visibleTo and collapses duplicates", async (
   const response = await api(harness.base, "/api/libraries/alpha", { method: "PATCH", body: { visibleTo: [BOB, BOB] } });
   assert.equal(response.status, 200);
   assert.deepEqual(harness.stored()[0]!.visibleTo, [BOB]);
+});
+
+test("a committed type change pauses incompatible jobs without revoking content access", async (t) => {
+  const harness = await mount([library("alpha", 0)]);
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/libraries/alpha", { method: "PATCH", body: { type: "movie" } });
+  assert.equal(response.status, 200);
+  assert.deepEqual(harness.queuePauses, [{ libraryId: "alpha", type: "movie" }], "the queue sees the type it must check");
+  assert.deepEqual(harness.contentStops, [], "a type edit leaves playback and read access alone");
+});
+
+test("an unrelated edit or a widening type change does not pause jobs", async (t) => {
+  const harness = await mount([{ ...library("alpha", 0), type: "series" }]);
+  t.after(harness.close);
+  assert.equal((await api(harness.base, "/api/libraries/alpha", { method: "PATCH", body: { name: "Renamed" } })).status, 200);
+  assert.equal((await api(harness.base, "/api/libraries/alpha", { method: "PATCH", body: { type: "mixed" } })).status, 200);
+  assert.deepEqual(harness.queuePauses, []);
+  assert.deepEqual(harness.contentStops, []);
 });
 
 test("PATCH /api/libraries/:id refuses an account that does not exist", async (t) => {

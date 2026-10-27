@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { addonIdentity } from "./addon-identity.js";
 import { AirPlayAccess } from "./airplay-access.js";
 import { createSession } from "./auth.js";
 import type { DownloadJob, DownloadSelection } from "./downloads.js";
@@ -9,7 +10,9 @@ import type { RemoteDownloadReference } from "./media-server-download.js";
 import type { MediaConnectionRecord, RemoteLibraryRecord } from "./media-server-types.js";
 import { accessLost, contentOf, Revocations, type AccessSource, type ActiveTransfer, type RevocationDeps } from "./revocation.js";
 import type { DeviceDownloadTicket } from "./media-resources.js";
+import type { AddonRecord } from "./types.js";
 import type { UserRecord } from "./users.js";
+import { SOURCE_PROFILE_IDS } from "./source-profiles.js";
 
 const owner = (userId: string, sid = `${userId}-phone`): ResourceOwner =>
   ({ userId, sid, expiresAt: Number.MAX_SAFE_INTEGER });
@@ -19,6 +22,14 @@ const job = (id: string, ownerUserId: string, extra: Partial<DownloadJob> = {}):
   ownerUserId, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z",
   ...extra,
 } as DownloadJob);
+
+const selectionFor = (addonKeys: string[], subtitleMode: DownloadSelection["subtitleMode"] = "off"): DownloadSelection => ({
+  addonKeys,
+  sourceStrategy: "priority",
+  audioLanguage: "en",
+  subtitleMode,
+  targetSettings: { subfolder: "", layout: "structured" },
+});
 
 function harness(jobs: DownloadJob[] = []) {
   const resources = new MediaResources();
@@ -164,6 +175,121 @@ test("a library revocation reaches a lazy job that names the library only in its
   await h.revocations.stopContent({ libraryId: "lib_x" });
 
   assert.deepEqual(h.paused, ["lazy"], "only the job bound to the revoked library pauses");
+});
+
+test("an addon revocation reaches an unresolved job that selected it", async () => {
+  const lazy = job("lazy", "usr_a", { target: "", source: { type: "movie", videoId: "tt1", tried: [], selection: selectionFor(["source-a"]) } });
+  const h = harness([lazy, job("other", "usr_a")]);
+
+  await h.revocations.stopContent({ userId: "usr_a", addonKey: "source-a" });
+
+  assert.deepEqual(h.paused, ["lazy"]);
+});
+
+test("an addon revocation aborts an active legacy lookup without pausing a queued one", async () => {
+  const checking = job("checking", "usr_a", {
+    status: "checking", target: "", source: { type: "movie", videoId: "tt1", tried: [] },
+  });
+  const queued = job("queued", "usr_a", {
+    target: "", source: { type: "movie", videoId: "tt2", tried: [] },
+  });
+  const h = harness([checking, queued]);
+
+  await h.revocations.stopContent({ userId: "usr_a", addonKey: "source-a" });
+
+  assert.deepEqual(h.paused, ["checking"]);
+});
+
+test("an addon identity sweep pauses only selected profile jobs whose identity changed", async () => {
+  const account = {
+    id: "usr_a",
+    username: "a",
+    passwordHash: "scrypt$aa$bb",
+    secret: "secret",
+    role: "user",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    permissions: { downloadToLibrary: true, downloadToDevice: true },
+    permissionsVersion: 0,
+  } satisfies UserRecord;
+  const sourceAddon: AddonRecord = {
+    key: "source-a",
+    manifestUrl: "https://source.example/manifest.json",
+    role: "source",
+    enabled: true,
+    globalSearch: true,
+    allowedUsers: [account.id],
+    addedAt: "2026-01-01T00:00:00.000Z",
+    downloadSettings: { movie: { subfolder: "", layout: "flat" }, series: { subfolder: "", layout: "flat" } },
+    manifest: { id: "source-a", name: "Source", version: "1", resources: ["stream"] },
+  };
+  const addonState = [sourceAddon];
+  const travelAdmission = {
+    profile: { id: SOURCE_PROFILE_IDS.travel, revision: 1 },
+    operation: "downloadToLibrary",
+  } as DownloadJob["sourceAdmission"];
+  const providerPriorityAdmission = {
+    profile: { id: SOURCE_PROFILE_IDS.providerPriority, revision: 1 },
+    operation: "downloadToLibrary",
+  } as DownloadJob["sourceAdmission"];
+  const selected = { url: "https://media.example/film.mp4", addonKey: sourceAddon.key };
+  const legacy = job("legacy", account.id, { stream: selected });
+  const fresh = job("fresh", account.id, {
+    stream: selected,
+    sourceAdmission: travelAdmission,
+    sourceStreamAddonIdentity: addonIdentity(sourceAddon),
+  });
+  const stale = job("stale", account.id, {
+    stream: selected,
+    sourceAdmission: travelAdmission,
+    sourceStreamAddonIdentity: "b".repeat(64),
+  });
+  const providerFresh = job("provider-fresh", account.id, {
+    stream: selected,
+    sourceAdmission: providerPriorityAdmission,
+    sourceStreamAddonIdentity: addonIdentity(sourceAddon),
+  });
+  const providerStale = job("provider-stale", account.id, {
+    stream: selected,
+    sourceAdmission: providerPriorityAdmission,
+    sourceStreamAddonIdentity: "c".repeat(64),
+  });
+  const h = harness([legacy, fresh, stale, providerFresh, providerStale]);
+  h.deps.source = { ...h.deps.source, users: () => [account], addons: () => addonState };
+
+  await h.revocations.stopContent({ addonKey: sourceAddon.key });
+  assert.deepEqual(h.paused, ["stale", "provider-stale"]);
+
+  h.paused.length = 0;
+  addonState[0] = { ...sourceAddon, enabled: false };
+  await h.revocations.stopContent({ addonKey: sourceAddon.key });
+  assert.deepEqual(
+    h.paused,
+    ["legacy", "fresh", "stale", "provider-fresh", "provider-stale"],
+    "existing addon removal sweeps still reach every job",
+  );
+});
+
+test("an external subtitle revocation aborts active lazy lookup without pausing a queued unrelated job", async () => {
+  const subtitle = {
+    key: "subtitle-a",
+    enabled: false,
+    manifest: { id: "subtitle-a", resources: [{ name: "subtitles", types: ["movie"] }] },
+  } as AddonRecord;
+  const checking = job("checking", "usr_a", {
+    status: "checking",
+    target: "",
+    source: { type: "movie", videoId: "tt1", tried: [], selection: selectionFor(["source-b"], "required") },
+  });
+  const queued = job("queued", "usr_a", {
+    target: "",
+    source: { type: "movie", videoId: "tt2", tried: [], selection: selectionFor(["source-b"], "required") },
+  });
+  const h = harness([checking, queued]);
+  h.deps.source = { ...h.deps.source, addons: () => [subtitle] };
+
+  await h.revocations.stopContent({ userId: "usr_a", addonKey: "subtitle-a" });
+
+  assert.deepEqual(h.paused, ["checking"]);
 });
 
 test("a queue that cannot save the removal does not stop an account from being deleted", async () => {

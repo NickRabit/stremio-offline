@@ -49,6 +49,20 @@ test("ownerMayDownload refuses a remote source even for an administrator", () =>
   assert.equal(ownerMayDownload(scope, { libraryId: `rlib_${"a".repeat(32)}` }), false, "a remote library id is never a target");
 });
 
+test("ownerMayDownload checks the destination type once the job kind is known", () => {
+  const scope = { owner: admin, addons: [], libraries: [{ ...library("/tmp/remote-boundary"), type: "movie" as const }] };
+  const stream = { url: "https://example.test/a.mp4" } as StreamItem;
+  assert.equal(ownerMayDownload(scope, { libraryId: LIBRARY_ID, stream, media: { kind: "movie" } }), true);
+  assert.equal(ownerMayDownload(scope, { libraryId: LIBRARY_ID, stream, media: { kind: "episode" } }), false);
+  assert.equal(ownerMayDownload(scope, {
+    libraryId: LIBRARY_ID,
+    stream,
+    source: { type: "series", videoId: "tt1", tried: [] },
+  }), false, "a pending source supplies the kind before media is resolved");
+  assert.equal(ownerMayDownload(scope, { libraryId: LIBRARY_ID, stream }), true,
+    "a partial request without a kind keeps its previous answer");
+});
+
 test("the queue refuses a remote stream before any admission or queue effect", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "stremio-remote-boundary-"));
   const downloads = path.join(dir, "downloads");

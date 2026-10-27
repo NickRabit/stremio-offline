@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { addMagnet, advanceTorrent, DebridError, isRetryableDebridFailure, magnetFromHash, RD_API, RD_MAX_JSON_BYTES, resolveIfReady, videoFileIds, verifyRealDebridToken, type FetchLike } from "./debrid.js";
+import { addMagnet, advanceTorrent, DebridError, isRetryableDebridFailure, linkForFile, magnetFromHash, RD_API, RD_MAX_JSON_BYTES, resolveIfReady, videoFileIds, verifyRealDebridToken, type FetchLike } from "./debrid.js";
 import { messageKeyOf } from "./errors.js";
 
 const json = (body: unknown, status = 200) =>
@@ -97,6 +97,36 @@ test("file selection prefers the addon fileIdx, then video files", () => {
   assert.equal(videoFileIds(files, 1), "2");
   assert.equal(videoFileIds(files), "2");
   assert.equal(videoFileIds([{ id: 9, path: "/a.bin", bytes: 1, selected: 0 }]), "9");
+  assert.equal(videoFileIds(files, 99), "2");
+});
+
+test("an exact file lookup never falls back to another Real-Debrid file", () => {
+  assert.equal(videoFileIds(files, 1, true), "2");
+  assert.throws(
+    () => videoFileIds(files, 99, true),
+    (error: unknown) => error instanceof DebridError && !isRetryableDebridFailure(error),
+  );
+
+  const torrent = {
+    id: "rd1",
+    status: "downloaded",
+    files: [
+      { id: 4, path: "/Sample.nfo", bytes: 20, selected: 1 },
+      { id: 9, path: "/Episode.mkv", bytes: 100, selected: 1 },
+    ],
+    links: ["https://real-debrid.com/d/sample", "https://real-debrid.com/d/episode"],
+  };
+  assert.equal(linkForFile(torrent, 1, true), "https://real-debrid.com/d/episode");
+  assert.equal(linkForFile({ ...torrent, links: ["", "https://real-debrid.com/d/episode"] }, 1, true), "https://real-debrid.com/d/episode");
+  assert.equal(linkForFile(torrent, 99), "https://real-debrid.com/d/episode");
+  assert.throws(
+    () => linkForFile(torrent, 99, true),
+    (error: unknown) => error instanceof DebridError && !isRetryableDebridFailure(error),
+  );
+  assert.throws(
+    () => linkForFile({ ...torrent, links: ["https://real-debrid.com/d/sample"] }, 1, true),
+    (error: unknown) => error instanceof DebridError && !isRetryableDebridFailure(error),
+  );
 });
 
 const fakeRd = (info: { status: string; links?: string[]; files?: typeof files }) => {
@@ -118,6 +148,22 @@ test("a cached torrent is unrestricted without waiting", async () => {
   const result = await advanceTorrent("token", HASH, 1, undefined, fetchImpl);
   assert.deepEqual(result, { ready: true, url: "https://cdn.example/file.mkv", filename: "Movie.mkv", torrentId: "rd1" });
   assert.equal(calls.includes("POST /torrents/selectFiles/rd1"), false);
+});
+
+test("advanceTorrent exact misses do not select or unrestrict another file", async () => {
+  const waiting = fakeRd({ status: "waiting_files_selection" });
+  await assert.rejects(
+    advanceTorrent("token", HASH, 99, undefined, waiting.fetchImpl, { exactFile: true }),
+    (error: unknown) => error instanceof DebridError && !isRetryableDebridFailure(error),
+  );
+  assert.equal(waiting.calls.some((call) => call.includes("selectFiles")), false);
+
+  const downloaded = fakeRd({ status: "downloaded", links: ["https://real-debrid.com/d/ABC"] });
+  await assert.rejects(
+    advanceTorrent("token", HASH, 99, undefined, downloaded.fetchImpl, { exactFile: true }),
+    (error: unknown) => error instanceof DebridError && !isRetryableDebridFailure(error),
+  );
+  assert.equal(downloaded.calls.some((call) => call.includes("unrestrict")), false);
 });
 
 test("an uncached torrent stays waiting after files are selected", async () => {

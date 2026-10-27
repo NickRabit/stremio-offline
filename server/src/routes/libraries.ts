@@ -31,6 +31,7 @@ export interface LibrariesDeps extends RouteContext {
   libraryGrants(): RootGrant[];
   libraryStats(read?: { stale?: boolean }): Promise<Map<string, { titles: number; files: number; bytes: number }>>;
   libraryView(library: LibraryRecord, health: LibraryHealth, stats: { titles: number; files: number; bytes: number }, admin: boolean, canDownload: boolean): Record<string, unknown>;
+  pauseIncompatibleLibraryJobs(libraryId: string): Promise<number>;
   progressOf(data: UserData): Record<string, { path?: string }>;
   refreshLibraryHealth(): Promise<Map<string, LibraryHealth>>;
   libraryProbe: LibraryProbe;
@@ -43,7 +44,7 @@ export interface LibrariesDeps extends RouteContext {
 const runUnlocked = <T,>(work: () => Promise<T>): Promise<T> => work();
 
 export function registerLibrariesRoutes(app: express.Application, deps: LibrariesDeps): void {
-  const { store, currentUser, grantRows, healthOf, invalidateAutoScan, invalidateLibrary, libraryGrants, libraryStats, libraryView, progressOf, refreshLibraryHealth, libraryProbe, metaStore, seen, libraryOps, stopContentAccess } = deps;
+  const { store, currentUser, grantRows, healthOf, invalidateAutoScan, invalidateLibrary, libraryGrants, libraryStats, libraryView, pauseIncompatibleLibraryJobs, progressOf, refreshLibraryHealth, libraryProbe, metaStore, seen, libraryOps, stopContentAccess } = deps;
 
   /** The same check the module makes, raised as the failure the interface renders. */
   async function requireLibraryRoot(value: unknown, opts: { create?: boolean; exceptId?: string } = {}): Promise<string> {
@@ -394,6 +395,9 @@ export function registerLibrariesRoutes(app: express.Application, deps: Librarie
         after = changed;
       });
     });
+    if (before.type !== after.type && after.type !== "mixed") {
+      await pauseIncompatibleLibraryJobs(after.id);
+    }
     await sweepLibraryLoss(before, after);
     invalidateLibrary();
     // Only a real change to either switch drops the fingerprint: re-enabling a library whose

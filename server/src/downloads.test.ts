@@ -1,16 +1,29 @@
 import assert from "node:assert/strict";
-import { createWriteStream, existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { createWriteStream, existsSync, mkdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
 import test from "node:test";
-import { DownloadQueue, isPlaylist } from "./downloads.js";
+import {
+  DownloadQueue,
+  isPlaylist,
+  SOURCE_FALLBACK_ATTEMPT_LIMIT,
+  type DownloadJob,
+  type QueuedExistingLocalCopyLookup,
+} from "./downloads.js";
+import type { DebridAdvance } from "./debrid.js";
 import { AppError } from "./errors.js";
 import { relativeWithin, type LibraryRecord } from "./libraries.js";
 import { defaultDownloadSettings } from "./naming.js";
 import { torrentKey } from "./download-selection.js";
+import { SOURCE_PROFILE_DEFINITIONS, SOURCE_PROFILE_IDS } from "./source-profiles.js";
+import {
+  materializeSourceAdmissionPolicy,
+  parseSourceAdmissionSnapshotV1,
+  type SourceAdmissionSnapshotV1,
+} from "./source-admission.js";
 
 const MB = 1024 * 1024;
 const GiB = 1024 ** 3;
@@ -38,7 +51,44 @@ const waitFor = async (queue: DownloadQueue, predicate: () => boolean, ms = 15_0
   throw new Error(`timeout: ${JSON.stringify(queue.snapshot())}`);
 };
 
+const deferred = () => {
+  let release!: () => void;
+  const promise = new Promise<void>((resolve) => { release = resolve; });
+  return { promise, release };
+};
+
 const LIBRARY_ID = "lib_d10ad10a";
+const queueAdmission = (): SourceAdmissionSnapshotV1 => parseSourceAdmissionSnapshotV1({
+  schemaVersion: 1,
+  profile: { id: "queue-local-copy-test", revision: 1 },
+  operation: "downloadToLibrary",
+  providerKeys: ["addon:http-only"],
+  policy: {
+    schemaVersion: 1,
+    scope: { mode: "selected", providerKeys: ["addon:http-only"] },
+    constraints: {
+      sourceKinds: ["http"],
+      audio: { mode: "preferred", preferred: { code: "en" } },
+      subtitles: { mode: "off" },
+    },
+    criteria: [{ kind: "providerOrder", keys: ["addon:http-only"] }],
+    nextEpisode: "profile",
+    existingLocalCopy: "meetsRequirements",
+  },
+});
+const travelProfile = SOURCE_PROFILE_DEFINITIONS.find((definition) => definition.id === SOURCE_PROFILE_IDS.travel);
+assert.ok(travelProfile);
+const travelQueueAdmission = (): SourceAdmissionSnapshotV1 => parseSourceAdmissionSnapshotV1({
+  schemaVersion: 1,
+  profile: { id: SOURCE_PROFILE_IDS.travel, revision: 1 },
+  operation: "downloadToLibrary",
+  providerKeys: ["addon:http-only"],
+  policy: materializeSourceAdmissionPolicy(
+    travelProfile.policy,
+    ["addon:http-only"],
+    { audioLanguage: "English", subtitleLanguage: "cs" },
+  ),
+});
 /** A queue refuses a download no library accepts, so every test queue has one library rooted
  *  at the download directory -- the shape a migrated install has. */
 const downloadLibrary = (root: string): LibraryRecord => ({
@@ -502,6 +552,122 @@ test("a mixed library takes both kinds", async () => {
   }
 });
 
+test("a type change pauses a queued incompatible job while a compatible transfer continues", async () => {
+  const size = 4096;
+  const filmStarted = deferred();
+  const releaseFilm = deferred();
+  let episodeRequests = 0;
+  const { server, port } = await listen(async (req, res) => {
+    res.writeHead(200, { "content-length": String(size), "content-type": "video/mp4" });
+    if (req.url === "/film.mp4") {
+      res.write(Buffer.alloc(1, 1));
+      filmStarted.release();
+      await releaseFilm.promise;
+      res.end(Buffer.alloc(size - 1, 1));
+      return;
+    }
+    episodeRequests += 1;
+    res.end(Buffer.alloc(size, 2));
+  });
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
+  const downloads = path.join(directory, "downloads");
+  const configured = downloadLibrary(downloads);
+  let type: LibraryRecord["type"] = "mixed";
+  const current = () => [{ ...configured, type }];
+  const queue = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloads, {
+    libraries: current,
+    defaultLibrary: () => current()[0],
+    libraryState: async (libraryId) => current().find((library) => library.id === libraryId),
+  });
+  await queue.load();
+  try {
+    const film = await queue.add("Film", { url: `http://127.0.0.1:${port}/film.mp4` }, { kind: "movie", title: "Film" });
+    await filmStarted.promise;
+    const episode = await queue.add("Show", { url: `http://127.0.0.1:${port}/episode.mp4` }, { kind: "episode", title: "Show", season: 1, episode: 1 });
+    assert.equal(queue.get(film.id)?.status, "downloading");
+    assert.equal(queue.get(episode.id)?.status, "queued");
+
+    type = "movie";
+    assert.equal(await queue.pauseIncompatibleLibraryJobs(configured.id), 1);
+    assert.equal(queue.get(episode.id)?.status, "paused");
+    assert.equal(queue.get(episode.id)?.pauseReason, "library");
+    assert.equal(queue.get(film.id)?.status, "downloading", "the compatible transfer was not stopped");
+    assert.equal(episodeRequests, 0, "the incompatible job never started transferring");
+
+    const destination = queue.get(episode.id)!.target;
+    releaseFilm.release();
+    await waitFor(queue, () => queue.get(film.id)?.status === "completed");
+    type = "series";
+    await queue.resume(episode.id);
+    assert.equal(queue.get(episode.id)?.target, destination, "resuming keeps the chosen destination");
+    await waitFor(queue, () => queue.list().every((job) => job.status === "completed"));
+    assert.equal(episodeRequests, 1);
+    assert.equal((await stat(queuedFile(downloads, destination))).size, size);
+  } finally {
+    releaseFilm.release();
+    await queue.stop();
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a type change aborts an active transfer, then its restored library resumes in place", async () => {
+  const size = 4096;
+  const firstStarted = deferred();
+  const releaseFirst = deferred();
+  let requests = 0;
+  const { server, port } = await listen(async (_req, res) => {
+    requests += 1;
+    res.writeHead(200, { "content-length": String(size), "content-type": "video/mp4" });
+    if (requests === 1) {
+      res.write(Buffer.alloc(1, 3));
+      firstStarted.release();
+      await releaseFirst.promise;
+      res.end(Buffer.alloc(size - 1, 3));
+      return;
+    }
+    res.end(Buffer.alloc(size, 3));
+  });
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
+  const downloads = path.join(directory, "downloads");
+  const configured = downloadLibrary(downloads);
+  let type: LibraryRecord["type"] = "mixed";
+  const current = () => [{ ...configured, type }];
+  const queue = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloads, {
+    libraries: current,
+    defaultLibrary: () => current()[0],
+    libraryState: async (libraryId) => current().find((library) => library.id === libraryId),
+  });
+  await queue.load();
+  try {
+    const episode = await queue.add("Show", { url: `http://127.0.0.1:${port}/episode.mp4` }, { kind: "episode", title: "Show", season: 1, episode: 1 });
+    await firstStarted.promise;
+    assert.equal(queue.get(episode.id)?.status, "downloading");
+
+    type = "movie";
+    assert.equal(await queue.pauseIncompatibleLibraryJobs(configured.id), 1);
+    assert.equal(queue.get(episode.id)?.status, "paused");
+    assert.equal(queue.get(episode.id)?.pauseReason, "library");
+    assert.equal(queue.transferring(), false, "the callback waited for the aborted transfer to stop");
+
+    const destination = queue.get(episode.id)!.target;
+    type = "series";
+    releaseFirst.release();
+    await queue.resume(episode.id);
+    await waitFor(queue, () => queue.get(episode.id)?.status === "completed");
+    assert.equal(queue.get(episode.id)?.target, destination);
+    assert.equal(requests, 2);
+    assert.equal((await stat(queuedFile(downloads, destination))).size, size);
+  } finally {
+    releaseFirst.release();
+    await queue.stop();
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("a job whose library never comes back fails when no library takes its kind", async () => {
   const size = 4096;
   const { server, port } = await listen((_req, res) => {
@@ -912,6 +1078,83 @@ test("an episode published under (2) takes its subtitles along", async () => {
 });
 
 const HASH = "59e11cef8c2152ac73681092844ebd3db19025bc";
+
+test("a restored waiting job with a revoked owner makes no Real-Debrid request", async () => {
+  let advances = 0;
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
+  const data = path.join(directory, "data");
+  const downloads = path.join(directory, "downloads");
+  await mkdir(data, { recursive: true });
+  await writeFile(path.join(data, "downloads.json"), JSON.stringify([{
+    id: "revoked-wait", title: "Film", stream: { infoHash: HASH, fileIdx: 0 },
+    status: "waiting", target: `${LIBRARY_ID}/Film/Film.mkv`, received: 0, speed: 0,
+    debrid: {}, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  }]));
+  const library = downloadLibrary(downloads);
+  const queue = new DownloadQueue(() => 1, () => 1, data, downloads, {
+    libraries: () => [library], defaultLibrary: () => library,
+    ownerAllowed: () => false,
+    debridPollMs: 0,
+    debrid: {
+      configured: () => true,
+      advance: async () => { advances += 1; return { ready: false, torrentId: "rd1", status: "downloading" }; },
+    },
+  });
+  try {
+    await queue.load();
+    await waitFor(queue, () => queue.list()[0]?.status === "paused");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(advances, 0, "a restored waiting job must not reach Real-Debrid after revocation");
+    assert.equal(queue.list()[0].pauseReason, "permission");
+    assert.equal(queue.list()[0].retryCount, undefined, "permission refusal does not spend a retry");
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("revocation while a Real-Debrid advance is pending discards its ready result", async () => {
+  let allowed = true;
+  let advances = 0;
+  let requests = 0;
+  let started!: () => void;
+  let finish!: (result: DebridAdvance) => void;
+  const advanceStarted = new Promise<void>((resolve) => { started = resolve; });
+  const pending = new Promise<DebridAdvance>((resolve) => { finish = resolve; });
+  const { server, port } = await listen((_req, res) => {
+    requests += 1;
+    res.writeHead(200, { "content-length": "1" });
+    res.end(Buffer.from([1]));
+  });
+  const { directory, queue } = await tempQueue({
+    ownerAllowed: () => allowed,
+    debridPollMs: 0,
+    debrid: {
+      configured: () => true,
+      advance: async () => {
+        advances += 1;
+        started();
+        return pending;
+      },
+    },
+  });
+  try {
+    await queue.add("Film", { infoHash: HASH, fileIdx: 0 });
+    await advanceStarted;
+    allowed = false;
+    finish({ ready: true, torrentId: "rd1", url: `http://127.0.0.1:${port}/film.mp4`, filename: "Film.mkv" });
+    await waitFor(queue, () => queue.list()[0]?.status === "paused");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(advances, 1, "the discarded result must not schedule another advance");
+    assert.equal(requests, 0, "the ready link must not start an HTTP download");
+    assert.equal(queue.list()[0].pauseReason, "permission");
+    assert.equal(queue.list()[0].debridProgress, undefined, "the returned result is not applied");
+  } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("a torrent waits on Real-Debrid then downloads over HTTP without taking a slot", async () => {
   const payload = Buffer.alloc(32 * 1024, 7);
@@ -1664,6 +1907,56 @@ test("a playlist is told apart from a file, whatever the segments are named", ()
   assert.equal(isPlaylist("not a url"), false);
 });
 
+test("an account removal that cannot be saved stops a direct transfer before returning", async () => {
+  const size = 8192;
+  const first = Buffer.alloc(2048, 1);
+  let release!: () => void;
+  let finished!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const responseFinished = new Promise<void>((resolve) => { finished = resolve; });
+  const { server, port } = await listen(async (_req, res) => {
+    res.writeHead(200, { "content-length": String(size), "content-type": "video/mp4" });
+    res.write(first);
+    await gate;
+    if (!res.destroyed) res.end(Buffer.alloc(size - first.length, 2));
+    finished();
+  });
+  let failing = false;
+  let closed = false;
+  const { directory, queue, downloads } = await tempQueue({
+    writeState: async (file, data) => {
+      if (failing) throw Object.assign(new Error("no space left"), { code: "ENOSPC" });
+      await writeFile(file, data);
+    },
+    createWriteStream: (file, options) => {
+      const stream = createWriteStream(file, options);
+      stream.once("close", () => { closed = true; });
+      return stream;
+    },
+  });
+  try {
+    const added = await queue.add("Film", { url: `http://127.0.0.1:${port}/film.mp4` });
+    const partial = `${queuedFile(downloads, added.target)}.part`;
+    await waitFor(queue, () => queue.get(added.id)?.received === first.length
+      && existsSync(partial) && statSync(partial).size === first.length);
+    failing = true;
+    await assert.rejects(queue.removeMatching(() => true), (error: AppError) => error.messageKey === "err.queueNotSaved");
+    await waitFor(queue, () => closed, 5_000);
+    const stoppedAt = (await stat(partial)).size;
+    release();
+    await responseFinished;
+    assert.equal((await stat(partial)).size, stoppedAt, "no bytes may flow after account removal refuses the job");
+    assert.equal(stoppedAt, first.length, "the gated second half must never reach the partial file");
+    assert.equal(queue.get(added.id)?.status, "paused");
+    assert.equal(queue.get(added.id)?.pauseReason, "permission");
+  } finally {
+    release();
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("a removal guard that throws refuses the removal and keeps the row", async () => {
   const { directory, queue } = await tempQueue({ beforeRemove: async () => { throw new Error("no removal"); } });
   try {
@@ -1737,6 +2030,26 @@ test("a lazy job that finds no source fails with the no-matching-source key", as
     await queue.addPending("Show", { type: "series", videoId: "tt1:1:1" }, { kind: "episode", title: "Show", season: 1, episode: 1 });
     await waitFor(queue, () => queue.list()[0]?.status === "failed");
     assert.equal(queue.list()[0].errorKey, "err.noMatchingSource");
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("explicit retry signals the failed lazy source once before resolving it again", async () => {
+  const { directory, queue } = await tempQueue();
+  const retried: Array<{ type: string; videoId: string }> = [];
+  let resolutions = 0;
+  queue.setResolver(async () => { resolutions += 1; return undefined; });
+  queue.setRetrySourceHook((source) => retried.push(source));
+  try {
+    await queue.addPending("Show", { type: "series", videoId: "tt1:1:1" }, { kind: "episode", title: "Show", season: 1, episode: 1 });
+    await waitFor(queue, () => queue.list()[0]?.status === "failed");
+    assert.deepEqual(retried, []);
+
+    await queue.retry(queue.list()[0].id);
+    await waitFor(queue, () => resolutions === 2 && queue.list()[0]?.status === "failed");
+    assert.deepEqual(retried, [{ type: "series", videoId: "tt1:1:1" }]);
   } finally {
     await queue.stop();
     await rm(directory, { recursive: true, force: true });
@@ -1947,6 +2260,7 @@ test("a lazy torrent job that is waiting resumes polling after a restart", async
   const boot = async () => {
     const queue = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloads, {
       libraries: () => [downloadLibrary(downloads)], defaultLibrary: () => downloadLibrary(downloads),
+      ownerAllowed: () => true,
       debridPollMs: 20,
       debrid: {
         configured: () => true,
@@ -2202,6 +2516,449 @@ test("adopt writes the follow and it survives a save and a load", async () => {
     }
   } finally {
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a queued profile job completes by reference from a copy that appeared after admission", async () => {
+  let requests = 0;
+  const { server, port } = await listen((_req, res) => {
+    requests += 1;
+    res.writeHead(200, { "content-length": "64", "content-type": "video/mp4" });
+    res.end(Buffer.alloc(64));
+  });
+  const relative = `${LIBRARY_ID}/Film/Existing.mkv`;
+  const completed: Readonly<DownloadJob>[] = [];
+  let admissionLookups = 0;
+  let resolverCalls = 0;
+  let progressBytes = 0;
+  const queueAdmissions: QueuedExistingLocalCopyLookup[] = [];
+  const { directory, queue, downloads } = await tempQueue({
+    existingLocalCopy: async () => {
+      admissionLookups += 1;
+      return false;
+    },
+    existingLocalCopyForQueue: async (input) => {
+      queueAdmissions.push(input);
+      return { key: relative, libraryId: LIBRARY_ID, actualSize: 321 };
+    },
+  });
+  const existing = queuedFile(downloads, relative);
+  await mkdir(path.dirname(existing), { recursive: true });
+  await writeFile(existing, Buffer.alloc(321, 7));
+  const before = await stat(existing);
+  queue.setResolver(async () => {
+    resolverCalls += 1;
+    return {
+      stream: { name: "fallback.mkv", url: `http://127.0.0.1:${port}/fallback.mkv` },
+      settings: defaultDownloadSettings(),
+    };
+  });
+  queue.onProgress = (_job, bytes) => { progressBytes += bytes; };
+  queue.onCompleted = async (job) => { completed.push(job); };
+  try {
+    const follow = { followId: "follow-1", episodeKey: "1:1", intent: "follow-1:1:1" };
+    const queued = await queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt-existing" },
+      { kind: "movie", title: "Film", id: "tt-existing" },
+      "usr_00000001",
+      follow,
+      queueAdmission(),
+    );
+    assert.ok(queued);
+    await waitFor(queue, () => queue.get(queued.id)?.status === "completed");
+    const job = queue.get(queued.id)!;
+    assert.equal(admissionLookups, 1);
+    assert.equal(queueAdmissions[0]?.ownerUserId, "usr_00000001");
+    assert.deepEqual(queueAdmissions[0]?.source, { type: "movie", videoId: "tt-existing", tried: [] });
+    assert.equal(resolverCalls, 0, "the resolver is not called");
+    assert.equal(requests, 0, "no source bytes are requested");
+    assert.equal(progressBytes, 0, "no transferred byte is recorded");
+    assert.equal(job.target, relative);
+    assert.equal(job.libraryId, LIBRARY_ID);
+    assert.equal(job.status, "completed");
+    assert.ok(job.completedAt);
+    assert.equal(job.received, 0);
+    assert.equal(job.total, 321);
+    assert.equal(job.speed, 0);
+    assert.equal(job.reusedLocalCopy, true);
+    assert.equal(queue.list()[0]?.reusedLocalCopy, true);
+    assert.equal(job.pending, false);
+    assert.equal(queue.list()[0]?.pending, false);
+    assert.equal(Object.hasOwn(queue.list()[0]!, "source"), false);
+    assert.equal(Object.hasOwn(queue.list()[0]!, "sourceAdmission"), false);
+    assert.deepEqual(queue.history(), [], "a reused row is not download statistics");
+    assert.equal(completed.length, 1);
+    assert.equal(completed[0]?.media?.id, "tt-existing");
+    assert.deepEqual(completed[0]?.follow, follow);
+    const after = await stat(existing);
+    assert.equal(after.size, before.size);
+    assert.equal(after.mtimeMs, before.mtimeMs, "the existing file is untouched");
+    assert.deepEqual(await readFile(existing), Buffer.alloc(321, 7));
+
+    const stored = JSON.parse(await readFile(path.join(directory, "data", "downloads.json"), "utf8")) as Array<Record<string, unknown>>;
+    assert.equal(stored[0]?.reusedLocalCopy, true);
+    assert.equal(stored[0]?.completedAt, job.completedAt);
+    assert.equal(stored[0]?.received, 0);
+    assert.equal(stored[0]?.total, 321);
+    await queue.stop();
+
+    const reopened = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloads, {
+      libraries: () => [downloadLibrary(downloads)],
+      defaultLibrary: () => downloadLibrary(downloads),
+    });
+    await reopened.load();
+    try {
+      assert.equal(reopened.get(queued.id)?.status, "completed");
+      assert.equal(reopened.get(queued.id)?.reusedLocalCopy, true);
+      assert.equal(reopened.get(queued.id)?.pending, false);
+      assert.deepEqual(reopened.history(), []);
+    } finally {
+      await reopened.stop();
+    }
+  } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("reuse clears exhausted Travel continuation state instead of failing the queued job", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
+  const data = path.join(directory, "data");
+  const downloads = path.join(directory, "downloads");
+  await mkdir(data, { recursive: true });
+  const selection = {
+    addonKeys: ["addon:http-only"],
+    sourceStrategy: "priority" as const,
+    audioLanguage: "en",
+    audioMode: "preferred" as const,
+    subtitleMode: "off" as const,
+    targetSettings: defaultDownloadSettings().movie,
+  };
+  await writeFile(path.join(data, "downloads.json"), JSON.stringify([{
+    id: "travel-reuse",
+    title: "Film",
+    ownerUserId: "usr_00000001",
+    media: { kind: "movie", title: "Film", id: "tt-travel" },
+    source: { type: "movie", videoId: "tt-travel", tried: [], selection },
+    sourceAdmission: travelQueueAdmission(),
+    travelCursor: {
+      schemaVersion: 1,
+      scopeFingerprint: "a".repeat(64),
+      listingFingerprint: "b".repeat(64),
+      nextIndex: 2,
+      rejectedIndices: [0, 1],
+    },
+    sourceFallbackAttempts: SOURCE_FALLBACK_ATTEMPT_LIMIT,
+    travelTemporaryFailures: 2,
+    travelBudgetAttempts: 3,
+    retryCount: 1,
+    pauseReason: "user",
+    status: "queued",
+    target: "",
+    received: 0,
+    speed: 0,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  }]));
+  const library = downloadLibrary(downloads);
+  const queue = new DownloadQueue(() => 1, () => 1, data, downloads, {
+    libraries: () => [library],
+    defaultLibrary: () => library,
+    existingLocalCopyForQueue: async () => ({
+      key: `${LIBRARY_ID}/Film/Existing.mkv`,
+      libraryId: LIBRARY_ID,
+      actualSize: 77,
+    }),
+  });
+  try {
+    await queue.load();
+    await waitFor(queue, () => queue.get("travel-reuse")?.status === "completed");
+    const job = queue.get("travel-reuse")!;
+    assert.equal(job.reusedLocalCopy, true);
+    assert.equal(job.retryCount, undefined);
+    assert.equal(job.pauseReason, undefined);
+    assert.equal(job.error, undefined);
+    const stored = JSON.parse(await readFile(path.join(data, "downloads.json"), "utf8")) as Array<Record<string, unknown>>;
+    for (const key of [
+      "travelCursor", "sourceFallbackAttempts", "travelTemporaryFailures", "travelBudgetAttempts",
+      "retryCount", "pauseReason", "error", "errorKey", "errorVars",
+    ]) assert.equal(Object.hasOwn(stored[0]!, key), false, `${key} must be cleared`);
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a copy revoked while an earlier write is pending is re-proved before reuse", async () => {
+  const firstProofEntered = deferred();
+  const releaseFirstProof = deferred();
+  const heldWriteEntered = deferred();
+  const releaseHeldWrite = deferred();
+  let holdNextWrite = false;
+  let copyPresent = true;
+  let proofCalls = 0;
+  let completed = 0;
+  const relative = `${LIBRARY_ID}/Film/RevokedWhileWriting.mkv`;
+  const { directory, queue, downloads } = await tempQueue({
+    writeState: async (file, data) => {
+      if (holdNextWrite) {
+        holdNextWrite = false;
+        heldWriteEntered.release();
+        await releaseHeldWrite.promise;
+      }
+      await writeFile(file, data);
+    },
+    existingLocalCopyForQueue: async () => {
+      proofCalls += 1;
+      if (proofCalls === 1) {
+        firstProofEntered.release();
+        await releaseFirstProof.promise;
+      }
+      return copyPresent ? { key: relative, libraryId: LIBRARY_ID, actualSize: 41 } : undefined;
+    },
+  });
+  const existing = queuedFile(downloads, relative);
+  await mkdir(path.dirname(existing), { recursive: true });
+  await writeFile(existing, Buffer.alloc(41));
+  queue.onCompleted = async () => { completed += 1; };
+  try {
+    const job = await queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt-revoked-while-writing" },
+      { kind: "movie", title: "Film", id: "tt-revoked-while-writing" },
+      "usr_00000001",
+      undefined,
+      queueAdmission(),
+    );
+    assert.ok(job);
+    await firstProofEntered.promise;
+
+    holdNextWrite = true;
+    const adopted = queue.adopt(job.id, { followId: "held", episodeKey: "1:1", intent: "held" });
+    await heldWriteEntered.promise;
+    releaseFirstProof.release();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(proofCalls, 1, "the completion proof waits behind the earlier write");
+
+    copyPresent = false;
+    await unlink(existing);
+    releaseHeldWrite.release();
+    await adopted;
+    await waitFor(queue, () => queue.get(job.id)?.status !== "checking");
+    assert.equal(proofCalls, 2, "the stale reference is checked again inside the serialized write");
+    assert.notEqual(queue.get(job.id)?.status, "completed");
+    assert.equal(queue.get(job.id)?.reusedLocalCopy, undefined);
+    assert.equal(completed, 0);
+
+    await queue.stop();
+    const stored = JSON.parse(await readFile(path.join(directory, "data", "downloads.json"), "utf8")) as Array<Record<string, unknown>>;
+    assert.notEqual(stored[0]?.status, "completed");
+    assert.equal(Object.hasOwn(stored[0]!, "reusedLocalCopy"), false);
+  } finally {
+    releaseFirstProof.release();
+    releaseHeldWrite.release();
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a cancellation during the queued local-copy lookup prevents reuse completion", async () => {
+  const entered = deferred();
+  const release = deferred();
+  let resolverCalls = 0;
+  const relative = `${LIBRARY_ID}/Film/Cancelled.mkv`;
+  const { directory, queue, downloads } = await tempQueue({
+    existingLocalCopyForQueue: async () => {
+      entered.release();
+      await release.promise;
+      return { key: relative, libraryId: LIBRARY_ID, actualSize: 16 };
+    },
+  });
+  queue.setResolver(async () => {
+    resolverCalls += 1;
+    return undefined;
+  });
+  try {
+    const job = await queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt-cancelled" },
+      { kind: "movie", title: "Film", id: "tt-cancelled" },
+      "usr_00000001",
+      undefined,
+      queueAdmission(),
+    );
+    assert.ok(job);
+    await entered.promise;
+    const paused = queue.pause(job.id);
+    release.release();
+    await paused;
+    assert.equal(queue.get(job.id)?.status, "paused");
+    assert.equal(queue.get(job.id)?.reusedLocalCopy, undefined);
+    assert.equal(resolverCalls, 0, "a cancelled lookup does not fall through to source resolution");
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("no queued local-copy proof and a legacy job both keep the normal resolver path", async () => {
+  const size = 128;
+  const { server, port } = await listen((_req, res) => {
+    res.writeHead(200, { "content-length": String(size), "content-type": "video/mp4" });
+    res.end(Buffer.alloc(size));
+  });
+  let lookups = 0;
+  let resolverCalls = 0;
+  const { directory, queue } = await tempQueue({
+    existingLocalCopyForQueue: async () => {
+      lookups += 1;
+      return undefined;
+    },
+  });
+  queue.setTravelResolver(async () => {
+    resolverCalls += 1;
+    return {
+      status: "selected",
+      stream: { name: "resolved.mkv", url: `http://127.0.0.1:${port}/resolved.mkv` },
+      settings: defaultDownloadSettings(),
+      resolution: { checkedCandidates: 1 },
+      streamAddonIdentity: "a".repeat(64),
+      searchStatus: "complete",
+      retryable: false,
+      observations: {
+        probesUsed: 1,
+        confirmedRejections: 0,
+        temporaryFailures: 0,
+        accessDenials: 0,
+        unresolvedCandidates: 0,
+      },
+    };
+  });
+  try {
+    const selection = {
+      addonKeys: ["addon:http-only"],
+      sourceStrategy: "priority" as const,
+      audioLanguage: "en",
+      audioMode: "preferred" as const,
+      subtitleMode: "off" as const,
+      targetSettings: defaultDownloadSettings().movie,
+    };
+    const profile = await queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt-no-copy", selection },
+      { kind: "movie", title: "Film", id: "tt-no-copy" },
+      "usr_00000001",
+      undefined,
+      travelQueueAdmission(),
+    );
+    assert.ok(profile);
+    await waitFor(queue, () => queue.get(profile.id)?.status === "completed");
+    assert.equal(lookups, 1);
+    assert.equal(resolverCalls, 1);
+    assert.equal(queue.get(profile.id)?.reusedLocalCopy, undefined);
+    assert.equal(queue.history().length, 1, "a normal download is still statistics");
+
+    const legacy = await queue.addPending("Legacy", { type: "movie", videoId: "tt-legacy" }, undefined, "usr_00000001");
+    assert.ok(legacy);
+    await waitFor(queue, () => queue.get(legacy.id)?.status === "failed");
+    assert.equal(lookups, 1, "a legacy queued job never asks for a local-copy reference");
+  } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a failed reuse completion write leaves no completed job in memory", async () => {
+  let failing = false;
+  const entered = deferred();
+  const release = deferred();
+  const relative = `${LIBRARY_ID}/Film/WriteFails.mkv`;
+  const { directory, queue, downloads } = await tempQueue({
+    writeState: async (file, data) => {
+      if (failing) throw Object.assign(new Error("no space left"), { code: "ENOSPC" });
+      await writeFile(file, data);
+    },
+    existingLocalCopyForQueue: async () => {
+      entered.release();
+      await release.promise;
+      return { key: relative, libraryId: LIBRARY_ID, actualSize: 32 };
+    },
+  });
+  try {
+    const job = await queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt-write-fails" },
+      { kind: "movie", title: "Film", id: "tt-write-fails" },
+      "usr_00000001",
+      undefined,
+      queueAdmission(),
+    );
+    assert.ok(job);
+    await entered.promise;
+    failing = true;
+    release.release();
+    await waitFor(queue, () => queue.get(job.id)?.status !== "checking");
+    assert.notEqual(queue.get(job.id)?.status, "completed");
+    assert.equal(queue.get(job.id)?.reusedLocalCopy, undefined);
+    const stored = JSON.parse(await readFile(path.join(directory, "data", "downloads.json"), "utf8")) as Array<Record<string, unknown>>;
+    assert.notEqual(stored[0]?.status, "completed");
+    assert.equal(Object.hasOwn(stored[0]!, "reusedLocalCopy"), false);
+  } finally {
+    failing = false;
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a misplaced durable reuse marker makes the queue unreadable", async () => {
+  const malformed = [
+    { reusedLocalCopy: false },
+    { status: "queued" },
+    { target: "Film/Film.mkv" },
+    { libraryId: "lib_ffffffff" },
+    { stream: { name: "Film.mkv", url: "http://example.invalid/film.mkv" } },
+  ];
+  for (const patch of malformed) {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
+    const data = path.join(directory, "data");
+    const downloads = path.join(directory, "downloads");
+    await mkdir(data, { recursive: true });
+    const state = path.join(data, "downloads.json");
+    await writeFile(state, JSON.stringify([{
+      id: "invalid-reuse",
+      title: "Film",
+      ownerUserId: "usr_00000001",
+      source: { type: "movie", videoId: "tt-invalid", tried: [] },
+      sourceAdmission: queueAdmission(),
+      status: "completed",
+      target: `${LIBRARY_ID}/Film/Existing.mkv`,
+      libraryId: LIBRARY_ID,
+      received: 0,
+      total: 1,
+      speed: 0,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      completedAt: "2026-01-01T00:00:00.000Z",
+      reusedLocalCopy: true,
+      ...patch,
+    }]));
+    const original = await readFile(state, "utf8");
+    const queue = new DownloadQueue(() => 1, () => 1, data, downloads, {
+      libraries: () => [downloadLibrary(downloads)],
+      defaultLibrary: () => downloadLibrary(downloads),
+    });
+    try {
+      await queue.load();
+      assert.deepEqual(queue.list(), []);
+      await assert.rejects(queue.add("Film", { url: "http://127.0.0.1:1/film.mkv" }), (error: AppError) => error.messageKey === "err.queueUnreadable");
+      assert.equal(await readFile(state, "utf8"), original, "the invalid private state is not overwritten");
+    } finally {
+      await queue.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
   }
 });
 

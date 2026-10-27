@@ -7,13 +7,15 @@ import path from "node:path";
 import { constants } from "node:fs";
 import { access, mkdir, readdir, realpath, rm, stat, statfs, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { addonAllowed, allowedAddons, fetchCatalogPage, loadAddon, metadata, orderFor, orderedForUser, searchAll, searchableCatalogs, streams, subtitles, type MetaProvider } from "./addons.js";
+import { addonAllowed, allowedAddons, fetchCatalogPage, loadAddon, metadata, orderFor, orderedForUser, searchAll, searchableCatalogs, subtitles, type MetaProvider } from "./addons.js";
+import { StreamListingCache } from "./stream-listing-cache.js";
 import { autoRefreshEnabled, refreshDue, refreshManifests, type RefreshOutcome } from "./addon-refresh.js";
-import { rankStreams } from "./ranking.js";
-import { defaultDownloadLibrary, DownloadQueue, ownerMayDownload, type DownloadJob, type RemoteDownloadBackend } from "./downloads.js";
+import { defaultDownloadLibrary, DownloadQueue, mayDownloadToLibrary, ownerMayDownload, type DownloadJob, type RemoteDownloadBackend } from "./downloads.js";
+import { applyAddonManifestRefreshes } from "./addon-identity.js";
 import { DeviceTransfers } from "./device-transfers.js";
 import { ClientLogStore } from "./client-logs.js";
-import { selectDownloadSource, selectTorrentSource } from "./download-selection.js";
+import { createSourceResolver, type SourceResolverDeps } from "./source-resolver.js";
+import { createProviderPriorityProfileResolver, createTravelProfileResolver } from "./source-profile-resolver.js";
 import { ImageStats, useImageStats } from "./image-stats.js";
 import { MosaicCache } from "./mosaic.js";
 import { ProviderStats, useProviderStats } from "./provider-stats.js";
@@ -68,6 +70,11 @@ import { migrateStateFile } from "./library-migrate.js";
 import { LibraryMetaStore } from "./library-meta-store.js";
 import { LibrarySeenStore } from "./library-seen.js";
 import { localCopies } from "./local-sources.js";
+import {
+  findAdequateExistingLocalCopy,
+  hasAdequateExistingLocalCopy,
+  type ExistingLocalCopyDeps,
+} from "./local-copy-admission.js";
 import { artworks } from "./artwork-cache.js";
 import { FileSnapCache, preheatFileSnaps } from "./byte-cache.js";
 import { RemoteImageCache } from "./remote-image-cache.js";
@@ -93,6 +100,9 @@ import { registerPlaybackRoutes } from "./routes/playback.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerUsersRoutes } from "./routes/users.js";
 import { registerSearchEverywhereRoutes, searchEverywhereEnabled } from "./routes/search-everywhere.js";
+import { registerSourceProfilesRoutes } from "./routes/source-profiles.js";
+import { materializeOwnerSourceAdmission } from "./routes/source-profile-selection.js";
+import { SourceAdmissionRejected } from "./source-admission.js";
 import { MediaServerManager, type MediaServerAuthority } from "./media-server-manager.js";
 import { remoteDownloadAccessible } from "./media-server-download.js";
 import { MediaServerPersonal } from "./media-server-personal.js";
@@ -273,12 +283,31 @@ const remoteDownloadBackend: RemoteDownloadBackend = {
   open: (job, args, signal) => mediaServers.openDownloadOriginal(jobAuthority(job), job.remoteDownload!, args, signal),
   revalidate: (job, signal) => mediaServers.revalidateDownloadOriginal(jobAuthority(job), job.remoteDownload!, signal),
 };
+const existingLocalCopyDeps = (): ExistingLocalCopyDeps => ({
+  users: () => store.users(),
+  libraries: () => store.libraries(),
+  libraryFiles: () => libraryFiles(),
+  libraryUnits: () => libraryUnits(),
+  qualifiedMeta: () => metaStore.qualifiedMeta(),
+  mayDownloadToLibrary,
+  probe,
+});
 const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () => store.settings().parallelPerProvider ?? 1, undefined, undefined, {
   segments: () => store.settings().downloadSegments ?? 1,
   libraries: () => store.libraries(),
   defaultLibrary: downloadDefaultLibrary,
   legacyOwnerId: migratedAdminId,
   ownerAllowed: ownerMayUseQueue,
+  existingLocalCopy: ({ ownerUserId, source, sourceAdmission }) =>
+    hasAdequateExistingLocalCopy(
+      { ownerUserId, type: source.type, videoId: source.videoId, sourceAdmission },
+      existingLocalCopyDeps(),
+    ),
+  existingLocalCopyForQueue: ({ ownerUserId, source, sourceAdmission }) =>
+    findAdequateExistingLocalCopy(
+      { ownerUserId, type: source.type, videoId: source.videoId, sourceAdmission },
+      existingLocalCopyDeps(),
+    ),
   remoteDownload: remoteDownloadBackend,
   ownerSeesLibrary: (ownerUserId, libraryId) => {
     const owner = ownerUserId ? findUserById(store.users(), ownerUserId) : undefined;
@@ -340,59 +369,23 @@ if (!store.defaultsInstalled()) {
     state.defaultsInstalled = defaults.every((item) => state.addons.some((addon) => addon.manifestUrl === item.url));
   });
 }
-// Source pick for lazy queue jobs: the addons are asked at download time and the
-// answer is held for a while, so repeated attempts at one episode do not hammer them.
-const streamCache = new Map<string, { at: number; items: StreamItem[] }>();
-/** The allowed set is part of the key, not a filter over the answer: the candidates are
- *  merged from whichever addons were asked, so one account's cache entry would otherwise
- *  hand another account sources it may not use -- and, worse, they would already have been
- *  contacted on its behalf. */
-const cachedStreams = async (sources: AddonRecord[], type: string, id: string) => {
-  const key = `${type}:${id}:${sources.map((addon) => addon.key).join(",")}`;
-  const hit = streamCache.get(key);
-  if (hit && Date.now() - hit.at < 5 * 60_000) return hit.items;
-  const items = await streams(sources, type, id);
-  if (streamCache.size > 100) streamCache.clear();
-  streamCache.set(key, { at: Date.now(), items });
-  return items;
+// Source pick for lazy queue jobs: successful provider listings are held per
+// provider so another job can reuse them without reviving a failed request.
+const streamCache = new StreamListingCache();
+queue.setRetrySourceHook(({ type, videoId }) => streamCache.invalidate(type, videoId));
+const queueResolverDeps: SourceResolverDeps = {
+  users: () => store.users(),
+  addons: () => store.addons(),
+  prefs: (ownerUserId) => store.prefs(ownerUserId),
+  hasRealDebrid: () => Boolean(store.settings().realDebridToken),
+  serverReady,
+  listStreams: (addons, type, id) => streamCache.list(addons, type, id),
+  listSubtitles: (addons, type, id, signal) => subtitles(addons, type, id, false, signal),
+  inspect: (stream, signal) => playback.inspect(stream, signal),
 };
-queue.setResolver(async (source, ownerUserId) => {
-  // Narrowed before a single request goes out. Checking the chosen stream afterwards is too
-  // late twice over: the addons have already been asked on this account's behalf, and the
-  // external subtitle that comes back with the choice is never checked at all.
-  const owner = ownerUserId ? findUserById(store.users(), ownerUserId) : undefined;
-  // A job whose owner is gone resolves against nothing rather than against everything.
-  if (ownerUserId && !owner) return undefined;
-  const usable = owner ? allowedAddons(store.addons(), { id: owner.id, role: owner.role }) : store.addons();
-  const priority = new Map(usable.map((addon, index) => [addon.key, index]));
-  const listed = await cachedStreams(usable, source.type, source.videoId);
-  const candidates = listed.filter((stream) => stream.url);
-  if (source.selection) {
-    await serverReady;
-    const external = source.selection.subtitleMode === "off" ? [] : await subtitles(usable, source.type, source.videoId);
-    const selected = await selectDownloadSource({ candidates, subtitles: external, selection: source.selection, tried: source.tried, inspect: (stream) => playback.inspect(stream) });
-    if (selected) {
-      const addon = usable.find((item) => item.key === selected.stream.addonKey);
-      return { ...selected, settings: addon?.downloadSettings ?? defaultDownloadSettings() };
-    }
-    // HTTP always wins, so a torrent is considered only when no direct source was chosen and
-    // Real-Debrid is there to fetch it.
-    if (store.settings().realDebridToken) {
-      const torrent = selectTorrentSource({ candidates: listed, subtitles: external, selection: source.selection, tried: source.tried, episode: source.type === "series" });
-      if (torrent) {
-        const addon = usable.find((item) => item.key === torrent.stream.addonKey);
-        return { ...torrent, settings: addon?.downloadSettings ?? defaultDownloadSettings() };
-      }
-    }
-    return undefined;
-  }
-  // The queue picks a source with no request in hand, so the language is the owner's.
-  const ranked = rankStreams(candidates, store.prefs(ownerUserId).audioLanguage, priority);
-  const next = ranked.find((stream) => !source.tried.includes(stream.url!));
-  if (!next) return undefined;
-  const addon = usable.find((item) => item.key === next.addonKey);
-  return { stream: next, settings: addon?.downloadSettings ?? defaultDownloadSettings() };
-});
+queue.setResolver(createSourceResolver(queueResolverDeps));
+queue.setTravelResolver(createTravelProfileResolver(queueResolverDeps));
+queue.setProviderPriorityResolver(createProviderPriorityProfileResolver(queueResolverDeps));
 await playback.load();
 
 /** With no account at all and no fallback credentials, nothing can be done. */
@@ -789,6 +782,7 @@ const routeContext: RouteContext = {
 };
 registerAuthRoutes(app, routeContext);
 registerUsersRoutes(app, { ...routeContext, deleteUserAccess, permissionsChanged });
+registerSourceProfilesRoutes(app, routeContext);
 
 /** The page only ever holds our own id, so anything it hands back is turned into the
  *  real address again before it is stored or downloaded. */
@@ -857,12 +851,11 @@ app.get("/api/status", (_req, res) => res.json({
 const storeRefreshed = async (outcomes: RefreshOutcome[]) => {
   const updated = outcomes.filter((outcome) => outcome.changed && outcome.manifest);
   if (!updated.length) return;
+  const identityChanged: string[] = [];
   await store.update((state) => {
-    for (const outcome of updated) {
-      const addon = state.addons.find((a) => a.key === outcome.key);
-      if (addon && outcome.manifest) addon.manifest = outcome.manifest;
-    }
+    identityChanged.push(...applyAddonManifestRefreshes(state.addons, updated));
   });
+  for (const addonKey of identityChanged) await stopContentAccess({ addonKey });
   for (const outcome of updated) log("INFO", "Addon manifest updated", { name: outcome.name, from: outcome.previousVersion, to: outcome.version });
 };
 // The automatic round is a background chore: it never blocks the boot, it asks only
@@ -2064,7 +2057,8 @@ const followService = new FollowService({
     return marker ? { season: marker.season, episode: marker.episode, updatedAt: marker.updatedAt } : undefined;
   },
   queue: {
-    addPending: (title, source, media, ownerUserId, follow) => queue.addPending(title, source, media, ownerUserId, follow),
+    addPending: (title, source, media, ownerUserId, follow, sourceAdmission) =>
+      queue.addPending(title, source, media, ownerUserId, follow, sourceAdmission),
     findActiveEpisode: (ownerUserId, type, videoId) => queue.findActiveEpisode(ownerUserId, type, videoId),
     adopt: (id, follow) => queue.adopt(id, follow),
     followJobs: () => queue.followJobs(),
@@ -2079,6 +2073,11 @@ const followService = new FollowService({
     addons: store.addons(),
     libraries: store.libraries(),
   }, { targetSettings: selection.targetSettings }),
+  admitSourceProfile: (ownerUserId, reference) => {
+    const owner = findUserById(store.users(), ownerUserId);
+    if (!owner) throw new SourceAdmissionRejected("operationForbidden");
+    return materializeOwnerSourceAdmission({ store }, owner, reference);
+  },
   // Retention deletes a single library file through the same operations queue that waits for
   // playback, an unreachable disk and active downloads. Only a key that names a real library
   // file is accepted; a folder, a sibling or an unqualified path is refused.
@@ -2394,13 +2393,20 @@ const noteQueueCompletion = async (job: Readonly<DownloadJob>) => {
 // A finished job records itself on the follow that queued it. The follow writes after the
 // library work above, and a failure there is logged rather than past the queue.
 queue.onCompleted = async (job) => {
-  await noteQueueCompletion(job);
+  if (!job.reusedLocalCopy) await noteQueueCompletion(job);
   try { await followService.jobCompleted(job); }
   catch (error) { log("WARN", "The follow could not record a finished download", { id: job.id, reason: error instanceof Error ? error.message : String(error) }); }
 };
 queue.setDebrid({
   configured: () => Boolean(store.settings().realDebridToken),
-  advance: (input) => advanceTorrent(store.settings().realDebridToken, input.infoHash, input.fileIdx, input.torrentId),
+  advance: (input) => advanceTorrent(
+    store.settings().realDebridToken,
+    input.infoHash,
+    input.fileIdx,
+    input.torrentId,
+    undefined,
+    { exactFile: input.exactFile },
+  ),
 });
 await stats.load();
 await imageStats.load();
@@ -2598,7 +2604,7 @@ const libraryOps = new LibraryOps({
 });
 await libraryOps.load();
 
-registerLibrariesRoutes(app, { ...routeContext, grantRows, healthOf, invalidateAutoScan: (libraryId) => libraryAutoScan.invalidate(libraryId), invalidateLibrary, libraryGrants, libraryStats, libraryView, progressOf, refreshLibraryHealth, libraryProbe, metaStore, seen, libraryOps });
+registerLibrariesRoutes(app, { ...routeContext, grantRows, healthOf, invalidateAutoScan: (libraryId) => libraryAutoScan.invalidate(libraryId), invalidateLibrary, libraryGrants, libraryStats, libraryView, pauseIncompatibleLibraryJobs: (libraryId) => queue.pauseIncompatibleLibraryJobs(libraryId), progressOf, refreshLibraryHealth, libraryProbe, metaStore, seen, libraryOps });
 
 const curate = registerCurateRoutes(app, { ...routeContext, candidates: libraryCandidates, invalidateLibrary, libraryAutoScan, libraryOps, libraryPathBusy, libraryScan, libraryTarget, libraryUnits, matchLibraryItem, metaStore, ownRecord, ownerOf, prefsOf, proxyImage: (url) => images.proxied(url), refreshLibraryHealth, scheduleMetaBackfill, wirePath });
 

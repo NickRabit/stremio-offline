@@ -17,6 +17,7 @@ import type { ResourceOwner } from "../media-resources.js";
 import type { UserPrefs } from "../store.js";
 import type { DownloadTargetSettings, MetaItem, StreamItem } from "../types.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
+import { legacySelectionFromAdmission, materializeSourceProfileAdmission, profileSelectionReference } from "./source-profile-selection.js";
 
 export interface DownloadsDeps extends RouteContext {
   queue: DownloadQueue;
@@ -247,7 +248,9 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
   // Adding episodes in bulk: the jobs are lazy, streams are asked for at download time.
   app.post("/api/downloads/bulk", asyncRoute(async (req, res) => {
     const owner = currentUser(req);
-    assertMayQueue(req);
+    const profileReference = profileSelectionReference(req.body.selection);
+    // A profile admission answers its own operation check, including a distinct 403.
+    if (!profileReference.present) assertMayQueue(req);
     const explicit = await explicitTarget(req, req.body.target, "series");
     const title = String(req.body.title ?? "").trim() || "Show";
     const type = String(req.body.type ?? "series");
@@ -260,7 +263,16 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
     if (episodes.length > 500) throw new AppError("At most 500 episodes at a time.", "err.tooManyEpisodes");
     // Every job this route adds carries `media.kind: "episode"`, so the queue reads it as a
     // series whatever `metaType` the body claims for the title; the door has to agree.
-    const selection = await parseSelection(req, { selection: req.body.selection, target: req.body.target, metaType, parentId, kind: "series" });
+    const sourceAdmission = !profileReference.present
+      ? undefined
+      : materializeSourceProfileAdmission(deps, owner, profileReference.reference);
+    const validatedSelection = await parseSelection(req, {
+      selection: sourceAdmission === undefined ? req.body.selection : legacySelectionFromAdmission(sourceAdmission),
+      target: req.body.target,
+      metaType,
+      parentId,
+      kind: "series",
+    });
     let added = 0, skipped = 0;
     for (const episode of episodes) {
       const videoId = String(episode.id ?? "").trim();
@@ -270,7 +282,18 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
       const episodeTitle = episode.title ? String(episode.title) : undefined;
       const jobTitle = `${title} · ${episodeTitle ?? (season != null ? `S${String(season).padStart(2, "0")}E${String(number ?? 0).padStart(2, "0")}` : `Episode ${number ?? "?"}`)}`;
       const media: MediaInfo = { kind: "episode", title, season, episode: number, episodeTitle, id: parentId, metaType, poster };
-      const job = await queue.addPending(jobTitle, { type, videoId, selection }, media, owner?.id);
+      let jobSelection = validatedSelection;
+      let jobAdmission = sourceAdmission;
+      if (profileReference.present) {
+        jobAdmission = materializeSourceProfileAdmission(deps, owner, profileReference.reference);
+        jobSelection = {
+          ...legacySelectionFromAdmission(jobAdmission),
+          titleLanguage: validatedSelection.titleLanguage,
+          targetSettings: validatedSelection.targetSettings,
+        };
+        assertMayQueue(req, { libraryId: jobSelection.targetSettings.libraryId ?? defaultDownloadLibrary("series")?.id });
+      }
+      const job = await queue.addPending(jobTitle, { type, videoId, selection: jobSelection }, media, owner?.id, undefined, jobAdmission);
       if (job) added += 1; else skipped += 1;
     }
     log("INFO", "Bulk addition to the queue", { title, added, skipped });
