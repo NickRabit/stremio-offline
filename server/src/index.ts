@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { addonAllowed, allowedAddons, fetchCatalogPage, loadAddon, metadata, orderFor, orderedForUser, searchAll, searchableCatalogs, subtitles, type MetaProvider } from "./addons.js";
 import { StreamListingCache } from "./stream-listing-cache.js";
 import { autoRefreshEnabled, refreshDue, refreshManifests, type RefreshOutcome } from "./addon-refresh.js";
-import { defaultDownloadLibrary, DownloadQueue, ownerMayDownload, type DownloadJob, type RemoteDownloadBackend } from "./downloads.js";
+import { defaultDownloadLibrary, DownloadQueue, mayDownloadToLibrary, ownerMayDownload, type DownloadJob, type RemoteDownloadBackend } from "./downloads.js";
 import { applyAddonManifestRefreshes } from "./addon-identity.js";
 import { DeviceTransfers } from "./device-transfers.js";
 import { ClientLogStore } from "./client-logs.js";
@@ -70,6 +70,7 @@ import { migrateStateFile } from "./library-migrate.js";
 import { LibraryMetaStore } from "./library-meta-store.js";
 import { LibrarySeenStore } from "./library-seen.js";
 import { localCopies } from "./local-sources.js";
+import { hasAdequateExistingLocalCopy } from "./local-copy-admission.js";
 import { artworks } from "./artwork-cache.js";
 import { FileSnapCache, preheatFileSnaps } from "./byte-cache.js";
 import { RemoteImageCache } from "./remote-image-cache.js";
@@ -282,6 +283,19 @@ const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () =
   defaultLibrary: downloadDefaultLibrary,
   legacyOwnerId: migratedAdminId,
   ownerAllowed: ownerMayUseQueue,
+  existingLocalCopy: ({ ownerUserId, source, sourceAdmission }) =>
+    hasAdequateExistingLocalCopy(
+      { ownerUserId, type: source.type, videoId: source.videoId, sourceAdmission },
+      {
+        users: () => store.users(),
+        libraries: () => store.libraries(),
+        libraryFiles,
+        libraryUnits,
+        qualifiedMeta: () => metaStore.qualifiedMeta(),
+        mayDownloadToLibrary,
+        probe,
+      },
+    ),
   remoteDownload: remoteDownloadBackend,
   ownerSeesLibrary: (ownerUserId, libraryId) => {
     const owner = ownerUserId ? findUserById(store.users(), ownerUserId) : undefined;

@@ -107,6 +107,7 @@ const mount = async (
     prefs?: Partial<UserPrefs>;
     onCachedMeta?: () => void | Promise<void>;
     onPending?: (count: number) => void | Promise<void>;
+    skipPending?: (count: number) => boolean;
   } = {},
 ): Promise<Harness> => {
   const jobs = options.jobs ?? [{ id: "job-1", ownerUserId: ADA }, { id: "job-2", ownerUserId: ADA }];
@@ -137,6 +138,7 @@ const mount = async (
       assert.equal(follow, undefined);
       pending.push({ ...source, ownerUserId, sourceAdmission });
       await options.onPending?.(pending.length);
+      if (options.skipPending?.(pending.length)) return undefined;
       return { id: "job-1" };
     },
     pause: async (id: string) => { require("pause", id); },
@@ -458,6 +460,25 @@ test("profile bulk materializes Travel in the user's addon order with frozen lan
   assert.equal(queued.selection?.audioLanguage, "cs");
   assert.equal(queued.selection?.subtitleLanguage, "en");
   assert.deepEqual(queued.selection?.targetSettings, { subfolder: "Travel", layout: "flat" });
+});
+
+test("profile bulk reports queue skips separately from added jobs", async (t) => {
+  const harness = await mount([streamAddon("stream-addon", { allowedUsers: [BOB] })], {
+    viewer: ordinary,
+    skipPending: (count) => count === 1,
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/downloads/bulk", {
+    method: "POST",
+    body: {
+      title: "Show",
+      episodes: episodes(2),
+      selection: profileSelection(SOURCE_PROFILE_IDS.travel),
+    },
+  });
+  assert.equal(response.status, 201);
+  assert.deepEqual(await response.json(), { added: 1, skipped: 1 });
 });
 
 test("profile bulk materializes Provider Priority and keeps the request target separate", async (t) => {

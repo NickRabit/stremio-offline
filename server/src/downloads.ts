@@ -307,6 +307,13 @@ export interface RemoteDownloadBackend {
   revalidate(job: DownloadJob, signal: AbortSignal): Promise<void>;
 }
 
+export interface ExistingLocalCopyAdmission {
+  ownerUserId: string | undefined;
+  source: Pick<NonNullable<DownloadJob["source"]>, "type" | "videoId" | "selection">;
+  media: MediaInfo | undefined;
+  sourceAdmission: SourceAdmissionSnapshotV1;
+}
+
 export interface QueueHooks {
   now?: () => number;
   /** Every configured library, so a qualified target can be turned back into a root. */
@@ -351,6 +358,8 @@ export interface QueueHooks {
    *  A refusal pauses the job instead of failing it, so its place is kept for when the
    *  permission comes back. Absent in a queue built without accounts: nothing gates it. */
   ownerAllowed?: (job: DownloadJob) => boolean | Promise<boolean>;
+  /** A profile admission may skip a bulk download when an acceptable local copy already exists. */
+  existingLocalCopy?: (input: ExistingLocalCopyAdmission) => boolean | Promise<boolean>;
   /** Whether an account can see a library. Lets a duplicate in another account's finished
    *  job be reported only when the asker could find that file anyway. */
   ownerSeesLibrary?: (ownerUserId: string | undefined, libraryId: string) => boolean;
@@ -572,6 +581,7 @@ export class DownloadQueue {
   private readonly debridTimeoutMs: number;
   private readonly legacyOwnerId?: () => string | undefined;
   private readonly ownerAllowed?: (job: DownloadJob) => boolean | Promise<boolean>;
+  private readonly existingLocalCopy?: QueueHooks["existingLocalCopy"];
   private readonly ownerSeesLibrary?: (ownerUserId: string | undefined, libraryId: string) => boolean;
   private readonly remoteDownload?: RemoteDownloadBackend;
   private readonly remoteRevalidateMs: number;
@@ -616,6 +626,7 @@ export class DownloadQueue {
     this.debridTimeoutMs = hooks.debridTimeoutMs ?? 72 * 60 * 60_000;
     this.legacyOwnerId = hooks.legacyOwnerId;
     this.ownerAllowed = hooks.ownerAllowed;
+    this.existingLocalCopy = hooks.existingLocalCopy;
     this.ownerSeesLibrary = hooks.ownerSeesLibrary;
     this.remoteDownload = hooks.remoteDownload;
     this.remoteRevalidateMs = boundedMs(hooks.remoteRevalidateMs, REMOTE_REVALIDATE_MS, REMOTE_REVALIDATE_MS);
@@ -1204,6 +1215,20 @@ export class DownloadQueue {
     if (pinned !== undefined && REMOTE_LIBRARY_ID.test(pinned)) throw remoteDownloadRefused();
     return this.admit(async () => {
       if (this.jobs.some((job) => job.source?.videoId === source.videoId && job.source?.type === source.type && job.status !== "completed" && job.status !== "failed" && this.ownedBy(job, ownerUserId))) return undefined;
+      if (sourceAdmission !== undefined) {
+        let adequate = false;
+        try {
+          adequate = await this.existingLocalCopy?.({
+            ownerUserId,
+            source,
+            media,
+            sourceAdmission,
+          }) === true;
+        } catch {
+          // A lookup that cannot prove a local copy adequate must not block the download.
+        }
+        if (adequate) return undefined;
+      }
       const now = new Date().toISOString();
       const job: DownloadJob = {
         id: crypto.randomUUID(),

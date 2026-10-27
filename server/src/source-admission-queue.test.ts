@@ -1957,3 +1957,149 @@ test("a failed queue write leaves no snapshot-bearing job in memory or on disk",
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("a profile bulk admission skips when the local-copy hook reports an adequate file", async () => {
+  const { directory, data, downloads, state } = await setup();
+  const seen: Array<{
+    ownerUserId: string | undefined;
+    source: { type: string; videoId: string };
+    media: unknown;
+    sourceAdmission: SourceAdmissionSnapshotV1;
+  }> = [];
+  const admission = travelSnapshot();
+  const queue = openQueue(data, downloads, {
+    existingLocalCopy: async (input) => {
+      seen.push(input);
+      return true;
+    },
+  });
+  await queue.load();
+  try {
+    const before = await readFile(state, "utf8");
+    const media = { kind: "movie" as const, title: "Film", id: "tt00000011" };
+    const job = await queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt00000011", selection: selection("addon:legacy") },
+      media,
+      QUEUE_OWNER,
+      undefined,
+      admission,
+    );
+    assert.equal(job, undefined);
+    assert.deepEqual(seen, [{
+      ownerUserId: QUEUE_OWNER,
+      source: { type: "movie", videoId: "tt00000011", selection: selection("addon:legacy") },
+      media,
+      sourceAdmission: admission,
+    }]);
+    assert.deepEqual(internalJobs(queue), []);
+    assert.equal(await readFile(state, "utf8"), before);
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("concurrent identical profile admissions run their local-copy checks one at a time", async () => {
+  const { directory, data, downloads } = await setup();
+  const firstEntered = deferred();
+  const releaseFirst = deferred();
+  let calls = 0;
+  let active = 0;
+  let peak = 0;
+  const queue = openQueue(data, downloads, {
+    existingLocalCopy: async () => {
+      calls += 1;
+      active += 1;
+      peak = Math.max(peak, active);
+      if (calls === 1) {
+        firstEntered.release();
+        await releaseFirst.promise;
+      }
+      active -= 1;
+      return true;
+    },
+  });
+  await queue.load();
+  try {
+    const first = queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt00000012" },
+      undefined,
+      QUEUE_OWNER,
+      undefined,
+      travelSnapshot(),
+    );
+    await firstEntered.promise;
+    const second = queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt00000012" },
+      undefined,
+      QUEUE_OWNER,
+      undefined,
+      travelSnapshot(),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(calls, 1);
+    releaseFirst.release();
+    assert.deepEqual(await Promise.all([first, second]), [undefined, undefined]);
+    assert.equal(calls, 2);
+    assert.equal(peak, 1);
+    assert.deepEqual(internalJobs(queue), []);
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("legacy admission never runs the local-copy hook", async () => {
+  const { directory, data, downloads } = await setup();
+  let calls = 0;
+  const queue = openQueue(data, downloads, {
+    existingLocalCopy: async () => {
+      calls += 1;
+      return true;
+    },
+  });
+  queue.setResolver(async () => undefined);
+  await queue.load();
+  try {
+    const job = await queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt00000013" },
+      undefined,
+      QUEUE_OWNER,
+    );
+    assert.ok(job);
+    assert.equal(calls, 0);
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a failed local-copy lookup fails open and persists the profile job", async () => {
+  const { directory, data, downloads } = await setup();
+  const queue = openQueue(data, downloads, {
+    existingLocalCopy: async () => {
+      throw new Error("library unavailable");
+    },
+  });
+  queue.setResolver(async () => undefined);
+  await queue.load();
+  try {
+    const job = await queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt00000014" },
+      undefined,
+      QUEUE_OWNER,
+      undefined,
+      travelSnapshot(),
+    );
+    assert.ok(job);
+    assert.equal(queue.list().length, 1);
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
