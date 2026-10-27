@@ -5,9 +5,22 @@ import { api, describeError } from "./api";
 import { languageName, t, useI18n } from "./i18n";
 import { SaveTargetFields } from "./SaveTargetFields";
 import type { SaveTarget } from "./save-target";
-import type { Addon, AudioMode, DownloadSelection, DownloadSourceStrategy, FollowAutoDownload, FollowDefaults, FollowPreview, FollowStartMode, FollowView, LibraryView, SubtitleMode } from "./types";
+import type { Addon, AudioMode, DownloadSelection, DownloadSourceStrategy, FollowAutoDownload, FollowDefaults, FollowPreview, FollowStartMode, FollowView, LibraryView, ProfileSelection, SourceProfile, SubtitleMode } from "./types";
 
 interface Episode { id: string; season?: number; episode?: number; title?: string; released?: string }
+
+type SourceChoice = DownloadSourceStrategy | `profile:${string}`;
+const PROFILE_VALUE_PREFIX = "profile:";
+const profileValue = (id: string): SourceChoice => `${PROFILE_VALUE_PREFIX}${id}`;
+const isProfileValue = (value: SourceChoice): value is `profile:${string}` => value.startsWith(PROFILE_VALUE_PREFIX);
+const SOURCE_PROFILE_COPY = {
+  "sourceProfile.recommended": { name: "sourceProfile.recommended" },
+  "sourceProfile.providerPriority": { name: "sourceProfile.providerPriority", hint: "sourceProfile.providerPriorityHint" },
+  "sourceProfile.travel": { name: "sourceProfile.travel", hint: "sourceProfile.travelHint" },
+} as const;
+type SourceProfileNameKey = keyof typeof SOURCE_PROFILE_COPY;
+type UsableSourceProfile = SourceProfile & { nameKey: SourceProfileNameKey };
+const profileCopy = (key: string) => SOURCE_PROFILE_COPY[key as SourceProfileNameKey];
 
 /** What a proposed start would fetch at once, worked out from the episodes on screen while
  *  the follow does not exist yet and the server cannot be asked. */
@@ -51,7 +64,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
    *  is created only when the person confirms. */
   follow?: { followId?: string; initial?: FollowAutoDownload; create?: { metaId: string; name: string; poster?: string; addonKey?: string }; onFollowed?: (follow: FollowView) => void };
   onClose: () => void;
-  onSubmit?: (selection: DownloadSelection, target?: SaveTarget) => Promise<void>;
+  onSubmit?: (selection: DownloadSelection | ProfileSelection, target?: SaveTarget) => Promise<void>;
 }) {
   const dialog = useRef<HTMLDivElement>(null);
   useDialogFocus(dialog);
@@ -61,8 +74,13 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
   const startSubtitle = initial?.selection.subtitleLanguage ?? subtitleLanguage;
   const [sources, setSources] = useState<Array<{ key: string; name: string }>>([]);
   const [chosen, setChosen] = useState<string[]>([]);
+  const [profiles, setProfiles] = useState<UsableSourceProfile[]>([]);
+  const [profileUnavailable, setProfileUnavailable] = useState(false);
+  const profilesRequested = useRef(false);
   // A follow keeps its sources in the order the owner set, so priority is the default there.
-  const [sourceStrategy, setSourceStrategy] = useState<DownloadSourceStrategy>(follow ? initial?.selection.sourceStrategy ?? "priority" : "largest");
+  const [sourceChoice, setSourceChoice] = useState<SourceChoice>(() => initial?.sourceProfile
+    ? profileValue(initial.sourceProfile.profileId)
+    : follow ? initial?.selection.sourceStrategy ?? "priority" : "largest");
   const [audio, setAudio] = useState(startAudio);
   const [audioFallback, setAudioFallback] = useState(initial?.selection.fallbackAudioLanguage ?? (startAudio === "en" ? "" : "en"));
   const [audioMode, setAudioMode] = useState<AudioMode>(initial?.selection.audioMode ?? "listed");
@@ -87,6 +105,10 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
   const downloading = !creating || followMode === "download";
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const profileManaged = isProfileValue(sourceChoice);
+  const selectedProfile = profileManaged
+    ? profiles.find((profile) => profile.id === sourceChoice.slice(PROFILE_VALUE_PREFIX.length))
+    : undefined;
   /** Set by any control the user changes: a defaults answer that lands later is then dropped. */
   const touched = useRef(false);
   const [defaults, setDefaults] = useState<FollowDefaults | null>(null);
@@ -110,6 +132,28 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
     return () => { cancelled = true; };
   }, [type, episodes, initial]);
 
+  useEffect(() => {
+    if (!downloading || profilesRequested.current) return;
+    profilesRequested.current = true;
+    let stale = false;
+    const profileMissing = () => {
+      if (stale) return;
+      if (initial?.sourceProfile) {
+        setSourceChoice("priority");
+        setProfileUnavailable(true);
+      }
+    };
+    api.sourceProfiles().then((items) => {
+      if (stale) return;
+      const usable = items.filter((profile): profile is UsableSourceProfile => Boolean(
+        profile.operations.includes("downloadToLibrary") && profileCopy(profile.nameKey),
+      ));
+      setProfiles(usable);
+      if (initial?.sourceProfile && !usable.some((profile) => profile.id === initial.sourceProfile?.profileId)) profileMissing();
+    }).catch(() => { if (!stale && initial?.sourceProfile) setSourceChoice("priority"); });
+    return () => { stale = true; };
+  }, [downloading, initial]);
+
   // Create mode opens with the choices of the previous follow. The source list decides which
   // addon keys are still usable, so the answer waits for it before it is applied.
   useEffect(() => {
@@ -132,7 +176,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
     if (defaults.selection) {
       const keys = defaults.selection.addonKeys.filter((key) => sources.some((item) => item.key === key));
       if (keys.length) setChosen(keys);
-      setSourceStrategy(defaults.selection.sourceStrategy);
+      setSourceChoice(defaults.selection.sourceStrategy);
       setAudio(defaults.selection.audioLanguage);
       setAudioFallback(defaults.selection.fallbackAudioLanguage ?? (defaults.selection.audioLanguage === "en" ? "" : "en"));
       setAudioMode(defaults.selection.audioMode);
@@ -158,6 +202,10 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
   }, [follow, episodes, startMode, startSeason, startEpisode, aheadCount]);
 
   const toggle = (key: string) => setChosen((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key]);
+  const chooseSource = (choice: SourceChoice) => {
+    setSourceChoice(choice);
+    setProfileUnavailable(false);
+  };
   const move = (key: string, direction: -1 | 1) => setChosen((current) => {
     const index = current.indexOf(key); const next = index + direction;
     if (index < 0 || next < 0 || next >= current.length) return current;
@@ -184,7 +232,11 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
   };
 
   const submit = async () => {
-    if (downloading && !chosen.length) return;
+    if (downloading && !profileManaged && !chosen.length) return;
+    const profileSelection: ProfileSelection | null = selectedProfile
+      ? { profile: { profileId: selectedProfile.id, revision: selectedProfile.revision } }
+      : null;
+    if (profileManaged && !profileSelection) return;
     setBusy(true); setError("");
     try {
       if (follow?.create && followMode === "notify") {
@@ -193,14 +245,15 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
         onClose();
         return;
       }
-      const selection: DownloadSelection = {
-        addonKeys: chosen, sourceStrategy, audioLanguage: audio,
+      const legacySelection: DownloadSelection = {
+        addonKeys: chosen, sourceStrategy: isProfileValue(sourceChoice) ? "priority" : sourceChoice, audioLanguage: audio,
         fallbackAudioLanguage: audioFallback && audioFallback !== audio ? audioFallback : undefined,
         audioMode,
         subtitleMode,
         subtitleLanguage: subtitleMode === "off" ? undefined : subtitle,
         fallbackSubtitleLanguage: subtitleMode !== "off" && subtitleFallback !== subtitle ? subtitleFallback || undefined : undefined,
       };
+      const selection: DownloadSelection | ProfileSelection = profileSelection ?? legacySelection;
       if (follow) {
         const created = follow.create ? await api.follow({ type, id: follow.create.metaId, name: follow.create.name, poster: follow.create.poster, ...(follow.create.addonKey ? { addonKey: follow.create.addonKey } : {}) }) : undefined;
         const followId = created?.id ?? follow.followId!;
@@ -210,7 +263,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
             startMode,
             ...(startMode === "from" && startSeason != null && startEpisode != null ? { startSeason, startEpisode } : {}),
             ...(startMode === "ahead" ? { aheadCount } : {}),
-            graceDays,
+            graceDays: profileSelection ? 0 : graceDays,
             selection,
             ...(target ? { target } : {}),
           },
@@ -220,14 +273,14 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
         await onSubmit(selection, target ?? undefined);
       }
       // Remembering the choices is a courtesy; a refusal here must never block the follow.
-      if (creating && followMode === "download") void api.saveFollowDefaults({
+      if (creating && followMode === "download" && !profileSelection) void api.saveFollowDefaults({
         mode: "download", startMode, ...(startMode === "ahead" ? { aheadCount } : {}), graceDays,
         selection: {
-          addonKeys: selection.addonKeys, sourceStrategy: selection.sourceStrategy, audioLanguage: selection.audioLanguage,
-          ...(selection.fallbackAudioLanguage ? { fallbackAudioLanguage: selection.fallbackAudioLanguage } : {}),
-          audioMode, subtitleMode: selection.subtitleMode,
-          ...(selection.subtitleLanguage ? { subtitleLanguage: selection.subtitleLanguage } : {}),
-          ...(selection.fallbackSubtitleLanguage ? { fallbackSubtitleLanguage: selection.fallbackSubtitleLanguage } : {}),
+          addonKeys: legacySelection.addonKeys, sourceStrategy: legacySelection.sourceStrategy, audioLanguage: legacySelection.audioLanguage,
+          ...(legacySelection.fallbackAudioLanguage ? { fallbackAudioLanguage: legacySelection.fallbackAudioLanguage } : {}),
+          audioMode, subtitleMode: legacySelection.subtitleMode,
+          ...(legacySelection.subtitleLanguage ? { subtitleLanguage: legacySelection.subtitleLanguage } : {}),
+          ...(legacySelection.fallbackSubtitleLanguage ? { fallbackSubtitleLanguage: legacySelection.fallbackSubtitleLanguage } : {}),
         },
         ...(target ? { target } : {}),
       }).catch(() => undefined);
@@ -278,21 +331,30 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
         {downloading && <>
         <section className="bulk-section">
           <div className="bulk-section-head"><ListFilter/><div><h3>{t("bulk.sourceStrategy")}</h3><p>{t("bulk.sourceStrategyHint")}</p></div></div>
+          {profileUnavailable && <p className="identify-hint follow-warning">{t("bulk.profileUnavailable")}</p>}
           <div className="bulk-strategy" role="radiogroup" aria-label={t("bulk.sourceStrategy")}>
-            {(["largest", "priority"] as DownloadSourceStrategy[]).map((strategy) => <label key={strategy} className={sourceStrategy === strategy ? "selected" : ""}>
-              <input type="radio" name="source-strategy" value={strategy} checked={sourceStrategy === strategy} onChange={() => setSourceStrategy(strategy)}/>
+            {(["largest", "priority"] as DownloadSourceStrategy[]).map((strategy) => <label key={strategy} className={sourceChoice === strategy ? "selected" : ""}>
+              <input type="radio" name="source-strategy" value={strategy} checked={sourceChoice === strategy} onChange={() => chooseSource(strategy)}/>
               <span><strong>{t(strategy === "largest" ? "bulk.strategyLargest" : "bulk.strategyPriority")}</strong><small>{t(strategy === "largest" ? "bulk.strategyLargestHint" : "bulk.strategyPriorityHint")}</small></span>
             </label>)}
+            {profiles.map((profile) => {
+              const copy = profileCopy(profile.nameKey);
+              const value = profileValue(profile.id);
+              return <label key={profile.id} className={sourceChoice === value ? "selected" : ""}>
+                <input type="radio" name="source-strategy" value={value} checked={sourceChoice === value} onChange={() => chooseSource(value)}/>
+                <span><strong>{t(copy.name)}</strong>{"hint" in copy && <small>{t(copy.hint)}</small>}</span>
+              </label>;
+            })}
           </div>
-          <fieldset className="bulk-sources"><legend>{t("bulk.sources")}</legend><p className="identify-hint">{t("bulk.sourcesHint")}</p>
+          {!profileManaged && <fieldset className="bulk-sources"><legend>{t("bulk.sources")}</legend><p className="identify-hint">{t("bulk.sourcesHint")}</p>
             {orderedSources.map((source) => { const index = chosen.indexOf(source.key); return <div key={source.key} className={index >= 0 ? "selected" : ""}>
-              <label><input type="checkbox" checked={index >= 0} onChange={() => toggle(source.key)}/>{sourceStrategy === "priority" && index >= 0 && <b>{index + 1}</b>}<span>{source.name}</span></label>
-              {index >= 0 && sourceStrategy === "priority" && <span><button className="icon-button" aria-label={t("bulk.moveSourceUp", { name: source.name })} disabled={index === 0} onClick={() => move(source.key, -1)}><ArrowUp/></button><button className="icon-button" aria-label={t("bulk.moveSourceDown", { name: source.name })} disabled={index === chosen.length - 1} onClick={() => move(source.key, 1)}><ArrowDown/></button></span>}
+              <label><input type="checkbox" checked={index >= 0} onChange={() => toggle(source.key)}/>{sourceChoice === "priority" && index >= 0 && <b>{index + 1}</b>}<span>{source.name}</span></label>
+              {index >= 0 && sourceChoice === "priority" && <span><button className="icon-button" aria-label={t("bulk.moveSourceUp", { name: source.name })} disabled={index === 0} onClick={() => move(source.key, -1)}><ArrowUp/></button><button className="icon-button" aria-label={t("bulk.moveSourceDown", { name: source.name })} disabled={index === chosen.length - 1} onClick={() => move(source.key, 1)}><ArrowDown/></button></span>}
             </div>})}
             {!sources.length && !error && <p className="identify-hint" aria-live="polite">{t("common.loading")}</p>}
-          </fieldset>
+          </fieldset>}
         </section>
-        <section className="bulk-section">
+        {!profileManaged && <section className="bulk-section">
           <div className="bulk-section-head"><Languages/><div><h3>{t("bulk.audioSettings")}</h3><p>{t("bulk.audioSettingsHint")}</p></div></div>
           <div className="bulk-language-grid bulk-audio-grid">
             <label><span>{t("bulk.audioMode")}</span><select value={audioMode} onChange={(event) => setAudioMode(event.target.value as AudioMode)}>
@@ -311,8 +373,8 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
             </select></label>
           </div>
           <p className="identify-hint">{t("follow.graceHint")}</p></>}
-        </section>
-        <section className="bulk-section">
+        </section>}
+        {!profileManaged && <section className="bulk-section">
           <div className="bulk-section-head"><Subtitles/><div><h3>{t("bulk.subtitleSettings")}</h3><p>{t("bulk.subtitleSettingsHint")}</p></div></div>
           <div className="bulk-language-grid bulk-subtitle-grid">
             <label><span>{t("bulk.subtitles")}</span><select value={subtitleMode} onChange={(event) => setSubtitleMode(event.target.value as SubtitleMode)}><option value="off">{t("bulk.subtitlesOff")}</option><option value="optional">{t("bulk.subtitlesOptional")}</option><option value="required">{t("bulk.subtitlesRequired")}</option></select></label>
@@ -320,7 +382,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
             <label><span>{t("bulk.subtitleFallback")}</span><select disabled={subtitleMode === "off"} value={subtitleFallback} onChange={(event) => setSubtitleFallback(event.target.value)}><option value="">{t("bulk.noFallback")}</option>{languageOptions()}</select></label>
           </div>
           {subtitleMode === "optional" && <p className="identify-hint bulk-subtitle-hint">{t("bulk.subtitlePriorityHint")}</p>}
-        </section>
+        </section>}
         <section className="bulk-section">
           <div className="bulk-section-head"><FolderOpen/><div><h3>{t("saveTarget.where")}</h3><p>{t("saveTarget.whereHint")}</p></div></div>
           <SaveTargetFields kind={isMovie ? "movie" : "series"} title={title} libraries={libraries} rule={rule} value={target} onChange={setTarget}/>
@@ -338,7 +400,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, audioLangua
         </>}
         {error && <p className="login-error" role="alert">{error}</p>}
       </div>
-      <footer className="dialog-foot"><p className="identify-hint">{creating && !downloading ? t(isMovie ? "follow.movieNotifyHint" : "follow.modeNotifyHint") : follow ? t("follow.setupHint") : t("bulk.queueHint")}</p><button type="button" disabled={busy} onClick={onClose}>{t("common.cancel")}</button><button type="button" className="primary" disabled={busy || (downloading && (!chosen.length || !sources.length || startMissing))} onClick={() => void submit()}>{busy ? t("save.adding") : creating ? t(downloading ? "follow.followAndDownload" : "follow.followSave") : follow ? t("follow.setupSave") : t("bulk.add")}</button></footer>
+      <footer className="dialog-foot"><p className="identify-hint">{creating && !downloading ? t(isMovie ? "follow.movieNotifyHint" : "follow.modeNotifyHint") : follow ? t("follow.setupHint") : t("bulk.queueHint")}</p><button type="button" disabled={busy} onClick={onClose}>{t("common.cancel")}</button><button type="button" className="primary" disabled={busy || (downloading && (startMissing || (profileManaged ? !selectedProfile : (!chosen.length || !sources.length))))} onClick={() => void submit()}>{busy ? t("save.adding") : creating ? t(downloading ? "follow.followAndDownload" : "follow.followSave") : follow ? t("follow.setupSave") : t("bulk.add")}</button></footer>
     </div>
   </div>;
 }

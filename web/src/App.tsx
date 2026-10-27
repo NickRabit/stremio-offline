@@ -67,7 +67,7 @@ import { resolveStartView } from "./start-view";
 import { useLibrarySources } from "./library-sources";
 import { streamGroupLabel } from "./source-rows";
 import { playbackIdentity } from "./playback-identity";
-import type { Addon, BuildInfo, BrowseItem, BrowseLibrary, BrowseResult, DeviceTransfer, DownloadsViewPrefs, FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem, FavoriteRemoteItem, FollowView, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, LibraryViewPrefs, MediaServerProvider, NewEpisode, ProgressEntry, RemoteLibrary, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, Stream, Subtitle, Trailer, Video, SearchState } from "./types";
+import type { Addon, BuildInfo, BrowseItem, BrowseLibrary, BrowseResult, DeviceTransfer, DownloadsViewPrefs, FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem, FavoriteRemoteItem, FollowView, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, LibraryViewPrefs, MediaServerProvider, NewEpisode, ProfileSelection, ProgressEntry, RemoteLibrary, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, Stream, Subtitle, Trailer, Video, SearchState } from "./types";
 
 /** The library choices this browser kept before they moved onto the account. Read once and
  *  handed to the visible libraries; private mode may forbid storage, hence the try/catch. */
@@ -2673,7 +2673,7 @@ export function App() {
     });
   };
 
-  const submitBulkDownload = async (selection: DownloadSelection, target?: SaveTarget) => {
+  const submitBulkDownload = async (selection: DownloadSelection | ProfileSelection, target?: SaveTarget) => {
     if (!bulkDownload) return;
     const result = await api.downloadBulk(bulkDownload.title, bulkDownload.type, bulkDownload.episodes, selection, bulkDownload.media, target);
     setScanEpoch((value) => value + 1);

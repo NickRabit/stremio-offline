@@ -269,6 +269,20 @@ export type Download = PublicDownload;
 export type SubtitleMode = "off" | "optional" | "required";
 export type AudioMode = "strict" | "listed" | "preferred";
 export type DownloadSourceStrategy = "priority" | "largest";
+export interface SourceProfile {
+  id: string;
+  nameKey: string;
+  revision: number;
+  operations: Array<"play" | "downloadToLibrary" | "downloadToDevice">;
+  policy: unknown;
+}
+export interface SourceProfileReference {
+  profileId: string;
+  revision: number;
+}
+export interface ProfileSelection {
+  profile: SourceProfileReference;
+}
 export interface DownloadSelection {
   addonKeys: string[];
   sourceStrategy: DownloadSourceStrategy;
@@ -628,6 +642,7 @@ export interface FollowAutoDownload {
   startEpisode?: number;
   aheadCount?: number;
   selection: DownloadSelection;
+  sourceProfile?: SourceProfileReference;
   /** Days after release during which only the preferred audio is accepted. */
   graceDays?: number;
   /** Delete downloaded episodes this long after the owner watched past them; absent keeps them. */
