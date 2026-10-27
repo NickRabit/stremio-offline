@@ -1,19 +1,21 @@
 import { AppError } from "../errors.js";
 import {
   materializeSourceAdmission,
+  materializeSourceAdmissionDefinition,
   parseSourceProfileReference,
   SourceAdmissionRejected,
   SourceAdmissionValidationError,
   type SourceAdmissionRejectionCode,
   type SourceAdmissionSnapshotV1,
+  type SourceProfileSnapshot,
 } from "../source-admission.js";
 import { viewerOfProfileAccount } from "../source-profiles.js";
-import type { Store } from "../store.js";
+import type { Store, StoredSourceProfile } from "../store.js";
 import type { UserRecord } from "../users.js";
 
 type SourceProfileSelectionStore = Pick<
   Store,
-  "addons" | "libraries" | "remoteLibraries" | "mediaConnections" | "prefs" | "userData"
+  "addons" | "libraries" | "remoteLibraries" | "mediaConnections" | "prefs" | "sourceProfiles" | "userData"
 >;
 
 export interface SourceProfileSelectionDeps {
@@ -46,11 +48,13 @@ export function materializeOwnerSourceAdmission(
   deps: SourceProfileSelectionDeps,
   owner: Pick<UserRecord, "id" | "role" | "permissions" | "disabled">,
   referenceInput: unknown,
+  mediaKind: "episode" | "movie",
 ): SourceAdmissionSnapshotV1 {
   const reference = parseSourceProfileReference(referenceInput);
   const preferences = deps.store.prefs(owner.id);
   return materializeSourceAdmission(reference, {
     viewer: viewerOfProfileAccount(owner),
+    profiles: deps.store.sourceProfiles(),
     addons: deps.store.addons(),
     libraries: deps.store.libraries(),
     remoteLibraries: deps.store.remoteLibraries(),
@@ -61,17 +65,58 @@ export function materializeOwnerSourceAdmission(
       subtitleLanguage: preferences.subtitleLanguage,
     },
     operation: "downloadToLibrary",
+    mediaKind,
   });
+}
+
+export function materializeOwnerSourceProfileAdmission(
+  deps: SourceProfileSelectionDeps,
+  owner: Pick<UserRecord, "id" | "role" | "permissions" | "disabled">,
+  definition: unknown,
+  mediaKind: "episode" | "movie",
+): SourceAdmissionSnapshotV1 {
+  const preferences = deps.store.prefs(owner.id);
+  return materializeSourceAdmissionDefinition(definition, {
+    viewer: viewerOfProfileAccount(owner),
+    profiles: deps.store.sourceProfiles(),
+    addons: deps.store.addons(),
+    libraries: deps.store.libraries(),
+    remoteLibraries: deps.store.remoteLibraries(),
+    mediaConnections: deps.store.mediaConnections(),
+    addonOrder: deps.store.userData(owner.id).addonOrder,
+    preferences: {
+      audioLanguage: preferences.audioLanguage,
+      subtitleLanguage: preferences.subtitleLanguage,
+    },
+    operation: "downloadToLibrary",
+    mediaKind,
+  });
+}
+
+export function sourceProfileSnapshotForAdmission(
+  profiles: readonly StoredSourceProfile[],
+  profile: SourceAdmissionSnapshotV1["profile"],
+): SourceProfileSnapshot {
+  const stored = profiles.find((candidate) => candidate.id === profile.id);
+  if (!stored) throw new SourceAdmissionRejected("profileUnknown");
+  if (stored.revision !== profile.revision) throw new SourceAdmissionRejected("profileRevisionStale");
+  return {
+    profileId: stored.id,
+    revision: stored.revision,
+    template: stored.template,
+    ...(stored.parameters === undefined ? {} : { parameters: structuredClone(stored.parameters) }),
+  };
 }
 
 export function materializeSourceProfileAdmission(
   deps: SourceProfileSelectionDeps,
   owner: Pick<UserRecord, "id" | "role" | "permissions" | "disabled"> | undefined,
   referenceInput: unknown,
+  mediaKind: "episode" | "movie",
 ): SourceAdmissionSnapshotV1 {
   if (!owner) throw new AppError("This account may not download to the library.", "err.downloadLibraryNotAllowed", 403);
   try {
-    return materializeOwnerSourceAdmission(deps, owner, referenceInput);
+    return materializeOwnerSourceAdmission(deps, owner, referenceInput, mediaKind);
   } catch (error) {
     if (error instanceof SourceAdmissionValidationError) throw invalidSourceProfileReference();
     if (error instanceof SourceAdmissionRejected) throw sourceAdmissionError(error.code);

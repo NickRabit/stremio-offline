@@ -273,7 +273,7 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
     // series whatever `metaType` the body claims for the title; the door has to agree.
     const sourceAdmission = !profileReference.present
       ? undefined
-      : materializeSourceProfileAdmission(deps, owner, profileReference.reference);
+      : materializeSourceProfileAdmission(deps, owner, profileReference.reference, "episode");
     const validatedSelection = await parseSelection(req, {
       selection: sourceAdmission === undefined ? req.body.selection : legacySelectionFromAdmission(sourceAdmission),
       target: req.body.target,
@@ -293,7 +293,7 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
       let jobSelection = validatedSelection;
       let jobAdmission = sourceAdmission;
       if (profileReference.present) {
-        jobAdmission = materializeSourceProfileAdmission(deps, owner, profileReference.reference);
+        jobAdmission = materializeSourceProfileAdmission(deps, owner, profileReference.reference, "episode");
         jobSelection = {
           ...legacySelectionFromAdmission(jobAdmission),
           titleLanguage: validatedSelection.titleLanguage,

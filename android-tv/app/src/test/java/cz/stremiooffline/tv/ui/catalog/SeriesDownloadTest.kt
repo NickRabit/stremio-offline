@@ -1,6 +1,13 @@
 package cz.stremiooffline.tv.ui.catalog
 
+import cz.stremiooffline.tv.data.RuleSummaryPart
+import cz.stremiooffline.tv.data.SourceProfileAudioDto
+import cz.stremiooffline.tv.data.SourceProfileConstraintsDto
+import cz.stremiooffline.tv.data.SourceProfilePolicyDto
+import cz.stremiooffline.tv.data.SourceProfileRangeDto
 import cz.stremiooffline.tv.data.VideoDto
+import cz.stremiooffline.tv.data.formatRuleGigabytes
+import cz.stremiooffline.tv.data.ruleSummaryParts
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -63,5 +70,42 @@ class SeriesDownloadTest {
   fun `a video without a season and number is not an episode`() {
     val videos = listOf(VideoDto(id = "part1", released = "2020-01-01"), video("s1e1", 1, 1))
     assertEquals(listOf("s1e1"), scopeEpisodes(videos, DownloadScope.All, null, today).map { it.id })
+  }
+
+  @Test
+  fun `a rule summary is the resolution, the audio mode and the max size`() {
+    val smaller = SourceProfilePolicyDto(
+      SourceProfileConstraintsDto(
+        audio = SourceProfileAudioDto("preferred"),
+        heightPixels = SourceProfileRangeDto(min = 480, max = 720),
+        bytes = SourceProfileRangeDto(max = 1_500_000_000),
+      ),
+    )
+    assertEquals(
+      listOf(
+        RuleSummaryPart.Resolution(480, 720),
+        RuleSummaryPart.Audio(only = false),
+        RuleSummaryPart.MaxBytes(1_500_000_000),
+      ),
+      ruleSummaryParts(smaller),
+    )
+    assertEquals(
+      listOf(RuleSummaryPart.Resolution(null, 720), RuleSummaryPart.Audio(only = true)),
+      ruleSummaryParts(
+        SourceProfilePolicyDto(
+          SourceProfileConstraintsDto(
+            audio = SourceProfileAudioDto("strict"),
+            heightPixels = SourceProfileRangeDto(max = 720),
+          ),
+        ),
+      ),
+    )
+    assertEquals(
+      emptyList<RuleSummaryPart>(),
+      ruleSummaryParts(SourceProfilePolicyDto(SourceProfileConstraintsDto(audio = SourceProfileAudioDto("listed")))),
+    )
+    assertEquals("1.5", formatRuleGigabytes(1_500_000_000))
+    assertEquals("4", formatRuleGigabytes(4_000_000_000))
+    assertEquals("0.1", formatRuleGigabytes(100_000_000))
   }
 }

@@ -13,6 +13,7 @@ import {
   type SelectProviderPriorityDownloadInput,
 } from "./source-provider-priority.js";
 import {
+  buildTemplatePolicy,
   SOURCE_PROFILE_DEFINITIONS,
   SOURCE_PROFILE_IDS,
 } from "./source-profiles.js";
@@ -347,6 +348,35 @@ test("torrent fallback preserves provider priority before listed audio", async (
   assert.equal(result.status, "selected");
   assert.equal(result.stream, high);
   assert.equal(result.checkedCandidates, 0);
+});
+
+test("a stored Provider priority variant excludes torrents and prefers the smaller HTTP file", async () => {
+  const providerKeys = ["addon:one"];
+  const variant = parseSourceAdmissionSnapshotV1({
+    schemaVersion: 1,
+    profile: { id: "fb0c7e77-e13e-4d14-9986-04b37fb72d95", revision: 1, template: "providerPriority" },
+    operation: "downloadToLibrary",
+    providerKeys,
+    policy: materializeSourceAdmissionPolicy(
+      buildTemplatePolicy("providerPriority", {
+        scope: { mode: "allAvailable" },
+        providerOrder: { from: "viewer" },
+        sizeDirection: "asc",
+        transfer: ["http"],
+        audioMode: "preferred",
+        subtitleMode: "optional",
+      }),
+      providerKeys,
+      { audioLanguage: "en", subtitleLanguage: "en" },
+    ),
+  });
+  const large = stream("one", "https://media.example/large.mkv", { size: 300 });
+  const small = stream("one", "https://media.example/small.mkv", { size: 10 });
+  const torrent = { addonKey: "one", infoHash: HASH_A } satisfies StreamItem;
+  const result = await select(variant, [large, torrent, small], { hasRealDebrid: true });
+
+  assert.equal(result.status, "selected");
+  assert.equal(result.stream, small);
 });
 
 test("a cancelled torrent-only selection publishes no source", async () => {

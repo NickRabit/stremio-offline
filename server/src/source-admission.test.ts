@@ -7,6 +7,7 @@ import {
   materializeSourceAdmission,
   materializeSourceAdmissionPolicy,
   parseSourceAdmissionSnapshotV1,
+  parseSourceProfileSnapshot,
   parseSourceProfileReference,
   sourceAdmissionProviderScope,
   SourceAdmissionRejected,
@@ -15,11 +16,14 @@ import {
   type SourceAdmissionSnapshotV1,
 } from "./source-admission.js";
 import {
+  defaultTemplateParameters,
+  RULE_PRESETS,
   SOURCE_PROFILE_DEFINITIONS,
   SOURCE_PROFILE_IDS,
   viewerOfProfileAccount,
 } from "./source-profiles.js";
 import { parseSourcePolicyV1, type SourcePolicyV1 } from "./source-policy.js";
+import type { StoredSourceProfile } from "./store.js";
 import type { AddonRecord } from "./types.js";
 import type { UserRecord } from "./users.js";
 
@@ -110,15 +114,28 @@ const remoteLibrary = (id: string, allowedUsers: string[], enabled = true): Remo
   showInContinueWatching: true,
 });
 
+const storedBuiltIns = (): StoredSourceProfile[] =>
+  (["recommended", "providerPriority", "travel"] as const).map((template) => ({
+    id: SOURCE_PROFILE_IDS[template],
+    revision: 1,
+    template,
+    nameKey: `sourceProfile.${template}`,
+    ...(template === "recommended" ? {} : { parameters: defaultTemplateParameters(template) }),
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  }));
+
 const context = (
   user = account(),
-  options: Partial<Omit<SourceAdmissionContext, "viewer" | "preferences" | "operation">> & {
+  options: Partial<Omit<SourceAdmissionContext, "viewer" | "preferences" | "operation" | "mediaKind">> & {
     audioLanguage?: string;
     subtitleLanguage?: string;
     operation?: SourceAdmissionContext["operation"];
+    mediaKind?: SourceAdmissionContext["mediaKind"];
   } = {},
 ): SourceAdmissionContext => ({
   viewer: viewerOfProfileAccount(user),
+  profiles: options.profiles ?? storedBuiltIns(),
   addons: options.addons ?? [],
   libraries: options.libraries ?? [],
   remoteLibraries: options.remoteLibraries ?? [],
@@ -129,6 +146,7 @@ const context = (
     subtitleLanguage: options.subtitleLanguage ?? "en",
   },
   operation: options.operation ?? "play",
+  mediaKind: options.mediaKind ?? "episode",
 });
 
 const reference = (profileId: string, revision = 1) => ({ profileId, revision });
@@ -232,6 +250,49 @@ test("current grants and enabled stream addons alone select addon providers", ()
     snapshot.policy.criteria.find((criterion) => criterion.kind === "providerOrder"),
     { kind: "providerOrder", keys: ["addon:private-key-one"] },
   );
+});
+
+test("rules profiles admit by media kind and their policies round-trip", () => {
+  const preset = RULE_PRESETS[0]!;
+  const profile: StoredSourceProfile = {
+    id: preset.id,
+    revision: 1,
+    template: "rules",
+    nameKey: preset.nameKey,
+    parameters: preset.rules,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const source = addon("rule-addon", { allowedUsers: [MEMBER] });
+  const episode = materializeSourceAdmission(reference(profile.id), context(account(), {
+    profiles: [profile],
+    addons: [source],
+    operation: "downloadToLibrary",
+    mediaKind: "episode",
+  }));
+  assert.deepEqual(episode.profile, { id: profile.id, revision: 1, template: "rules" });
+  assert.deepEqual(episode.policy.constraints.bytes, { max: 4_000_000_000 });
+  assert.deepEqual(parseSourceAdmissionSnapshotV1(structuredClone(episode)), episode);
+
+  const movie = materializeSourceAdmission(reference(profile.id), context(account(), {
+    profiles: [profile],
+    addons: [source],
+    operation: "downloadToLibrary",
+    mediaKind: "movie",
+  }));
+  assert.deepEqual(movie.policy.constraints.bytes, { max: 15_000_000_000 });
+
+  assert.deepEqual(parseSourceProfileSnapshot({
+    profileId: profile.id,
+    revision: 1,
+    template: "rules",
+    parameters: preset.rules,
+  }), {
+    profileId: profile.id,
+    revision: 1,
+    template: "rules",
+    parameters: preset.rules,
+  });
 });
 
 test("provider order keeps instance class order and the viewer addon overlay", () => {
@@ -480,9 +541,7 @@ test("Travel snapshot parsing rematerializes only its mutable provider and langu
     assert.ok(ranking?.kind === "size");
     ranking.direction = "desc";
   });
-  reject((value) => { value.policy.constraints.audio.mode = "listed"; });
   reject((value) => { value.policy.existingLocalCopy = "any"; });
-  reject((value) => { value.profile.revision = 2; });
 });
 
 for (const [name, profileId] of [
@@ -565,7 +624,6 @@ for (const [name, profileId] of [
       ranking.keys.reverse();
     });
     reject((value) => { value.policy.constraints.subtitles.mode = "required"; });
-    reject((value) => { value.profile.revision = definition.revision + 1; });
   });
 }
 
@@ -583,7 +641,11 @@ test("snapshots are JSON-safe deep copies and leak no provider configuration", (
   );
 
   assert.deepEqual(Object.keys(first).sort(), ["operation", "policy", "profile", "providerKeys", "schemaVersion"]);
-  assert.deepEqual(first.profile, { id: SOURCE_PROFILE_IDS.recommended, revision: 1 });
+  assert.deepEqual(first.profile, {
+    id: SOURCE_PROFILE_IDS.recommended,
+    revision: 1,
+    template: "recommended",
+  });
   const text = JSON.stringify(first);
   for (const secret of [
     "Secret display name",
@@ -631,10 +693,11 @@ test("snapshot parsing round-trips and validates provenance without resolving pr
   assert.notEqual(parsed.policy, snapshot.policy);
 
   const historical = structuredClone(snapshot);
-  historical.profile = { id: "deleted-profile", revision: 99 };
+  historical.profile = { id: "deleted-profile", revision: 99, template: "recommended" };
   assert.deepEqual(parseSourceAdmissionSnapshotV1(historical).profile, {
     id: "deleted-profile",
     revision: 99,
+    template: "recommended",
   });
 });
 
@@ -693,6 +756,26 @@ test("snapshot parsing rejects malformed, symbolic and mismatched data generical
   });
   expectValidationError(() => parseSourceAdmissionSnapshotV1(accessor));
   assert.equal(accessorRead, false);
+});
+
+test("template snapshot validation accepts historical built-ins and rejects illegal policies", () => {
+  const legacy = structuredClone(materializeSourceAdmission(
+    reference(SOURCE_PROFILE_IDS.travel),
+    context(account(), { addons: [addon("travel-source")], operation: "downloadToLibrary" }),
+  )) as unknown as SourceAdmissionSnapshotV1 & { profile: { template?: string } };
+  delete (legacy.profile as { template?: string }).template;
+  assert.equal(parseSourceAdmissionSnapshotV1(legacy).profile.template, "travel");
+
+  const illegalTravel = structuredClone(parseSourceAdmissionSnapshotV1(legacy));
+  illegalTravel.policy.constraints.heightPixels = { min: 1 };
+  expectValidationError(() => parseSourceAdmissionSnapshotV1(illegalTravel));
+
+  const illegalProvider = structuredClone(materializeSourceAdmission(
+    reference(SOURCE_PROFILE_IDS.providerPriority),
+    context(account(), { addons: [addon("priority-source")], operation: "downloadToLibrary" }),
+  ));
+  illegalProvider.policy.constraints.heightPixels = { min: 480 };
+  expectValidationError(() => parseSourceAdmissionSnapshotV1(illegalProvider));
 });
 
 test("a provider revoked between admissions disappears without reordering survivors", () => {

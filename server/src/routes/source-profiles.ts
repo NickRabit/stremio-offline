@@ -14,6 +14,7 @@ export function registerSourceProfilesRoutes(app: express.Application, deps: Sou
     res.json({
       profiles: sourceProfilesForViewer({
         viewer: viewerOfProfileAccount(user),
+        profiles: deps.store.sourceProfiles(),
         addons: deps.store.addons(),
         libraries: deps.store.libraries(),
         remoteLibraries: deps.store.remoteLibraries(),

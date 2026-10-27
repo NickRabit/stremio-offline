@@ -11,7 +11,7 @@ import type { DownloadTargetSettings, MetaItem } from "../types.js";
 import { feedTokenMatches, type FollowDefaults, type UserData, type UserRecord } from "../users.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
 import { createSelectionParser } from "./downloads.js";
-import { legacySelectionFromAdmission, materializeSourceProfileAdmission, profileSelectionReference } from "./source-profile-selection.js";
+import { legacySelectionFromAdmission, materializeSourceProfileAdmission, profileSelectionReference, sourceProfileSnapshotForAdmission } from "./source-profile-selection.js";
 
 export interface FollowDeps extends RouteContext {
   follows: FollowService;
@@ -28,6 +28,9 @@ export interface FollowDeps extends RouteContext {
 
 interface FollowEpisodeView { season: number; episode: number; title?: string; released?: string; releasedSource?: "addon" | "tmdb"; dateUncertain?: boolean }
 interface FollowDownloads { queued: number; waiting: number; completed: number; skipped: number; attention: number }
+type FollowAutoDownloadView = Omit<FollowAutoDownload, "sourceProfile"> & {
+  sourceProfile?: { profileId: string; revision: number };
+};
 /** The delays a follow may delete watched episodes after. */
 const RETENTION_DAYS = [1, 7, 30] as const;
 interface FollowView {
@@ -49,9 +52,9 @@ interface FollowView {
   episodeCount: number;
   nextEpisode?: FollowEpisodeView;
   latestEpisode?: FollowEpisodeView;
-  autoDownload?: FollowAutoDownload;
+  autoDownload?: FollowAutoDownloadView;
   downloads: FollowDownloads;
-  movie?: { released?: string; releaseKind?: FollowEpisode["releaseKind"]; theatricalAt?: string; dateUncertain?: boolean; state?: string; reasonKey?: string; nextAttemptAt?: string; graceUntil?: string };
+  movie?: { released?: string; releaseKind?: FollowEpisode["releaseKind"]; theatricalAt?: string; dateUncertain?: boolean; state?: string; reasonKey?: string; reasonVars?: Record<string, string | number>; nextAttemptAt?: string; graceUntil?: string };
 }
 
 const episodeView = (episode: FollowEpisode): FollowEpisodeView => ({
@@ -97,6 +100,17 @@ const followView = (follow: Follow, now: number): FollowView => {
     }
   }
   const { episodes: _episodes, poster, autoDownload, ...rest } = follow;
+  const autoDownloadView: FollowAutoDownloadView | undefined = autoDownload
+    ? {
+        ...autoDownload,
+        ...(autoDownload.sourceProfile
+          ? { sourceProfile: {
+              profileId: autoDownload.sourceProfile.profileId,
+              revision: autoDownload.sourceProfile.revision,
+            } }
+          : {}),
+      }
+    : undefined;
   return {
     ...rest,
     // Stored as the provider's address; the page only ever loads our own proxy.
@@ -105,7 +119,7 @@ const followView = (follow: Follow, now: number): FollowView => {
     downloads: downloadsSummary(follow),
     ...(next ? { nextEpisode: episodeView(next) } : {}),
     ...(latest ? { latestEpisode: episodeView(latest) } : {}),
-    ...(autoDownload ? { autoDownload } : {}),
+    ...(autoDownloadView ? { autoDownload: autoDownloadView } : {}),
     // A film is one record; the dialog and the card read its release and download from here.
     ...(follow.type === "movie" && follow.episodes["1:1"] ? { movie: movieView(follow.episodes["1:1"]) } : {}),
   };
@@ -116,7 +130,7 @@ const movieView = (episode: FollowEpisode) => ({
   ...(episode.releaseKind ? { releaseKind: episode.releaseKind } : {}),
   ...(episode.theatricalAt ? { theatricalAt: episode.theatricalAt } : {}),
   ...(episode.dateUncertain ? { dateUncertain: true } : {}),
-  ...(episode.download ? { state: episode.download.state, ...(episode.download.reasonKey ? { reasonKey: episode.download.reasonKey } : {}), ...(episode.download.nextAttemptAt ? { nextAttemptAt: episode.download.nextAttemptAt } : {}), ...(episode.download.graceUntil ? { graceUntil: episode.download.graceUntil } : {}) } : {}),
+  ...(episode.download ? { state: episode.download.state, ...(episode.download.reasonKey ? { reasonKey: episode.download.reasonKey } : {}), ...(episode.download.reasonVars ? { reasonVars: episode.download.reasonVars } : {}), ...(episode.download.nextAttemptAt ? { nextAttemptAt: episode.download.nextAttemptAt } : {}), ...(episode.download.graceUntil ? { graceUntil: episode.download.graceUntil } : {}) } : {}),
 });
 
 /** The pinned destination a follow stores. An explicit choice is already concrete; a rule
@@ -310,11 +324,21 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
           if (!Number.isInteger(graceDays) || graceDays < 0 || graceDays > 30) throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
         }
         const profileReference = profileSelectionReference(item.selection);
-        if (profileReference.present && graceDays !== undefined && graceDays > 0) {
+        const admission = profileReference.present
+          ? materializeSourceProfileAdmission(
+              deps,
+              currentUser(req),
+              profileReference.reference,
+              follow.type === "movie" ? "movie" : "episode",
+            )
+          : undefined;
+        if (admission && graceDays !== undefined && graceDays > 0
+          && (admission.profile.template !== "rules"
+            || admission.policy.constraints.audio.mode !== "preferred")) {
           throw new AppError("The followed series is missing a type, an id or a name.", "err.followInvalid");
         }
-        const admission = profileReference.present
-          ? materializeSourceProfileAdmission(deps, currentUser(req), profileReference.reference)
+        const sourceProfile = admission
+          ? sourceProfileSnapshotForAdmission(store.sourceProfiles(), admission.profile)
           : undefined;
         const selection = await parseSelection(req, {
           selection: admission ? legacySelectionFromAdmission(admission) : item.selection,
@@ -343,9 +367,7 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
                 targetSettings,
               }
             : { ...selection, targetSettings },
-          ...(admission ? {
-            sourceProfile: { profileId: admission.profile.id, revision: admission.profile.revision },
-          } : {}),
+          ...(sourceProfile ? { sourceProfile } : {}),
         };
         await follows.setAutoDownload(follow.id, owner.id, value);
       }
@@ -422,7 +444,8 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
         eligibility: downloadEligibility(follow, episode, now, watched),
         ...(episode.download ? {
           download: Object.fromEntries(
-            Object.entries(episode.download).filter(([key]) => key !== "sourceAdmission" && key !== "legacyRule"),
+            Object.entries(episode.download).filter(([key]) =>
+              key !== "sourceAdmission" && key !== "sourceGraceDays" && key !== "legacyRule"),
           ),
         } : {}),
       }))

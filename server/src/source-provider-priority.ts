@@ -12,7 +12,6 @@ import {
   rankEligibleSources,
   type SourceEvidenceCandidateV1,
 } from "./source-evidence.js";
-import { SOURCE_PROFILE_IDS } from "./source-profiles.js";
 import { torrentKey } from "./download-selection.js";
 import type { StreamItem, SubtitleItem } from "./types.js";
 
@@ -79,8 +78,7 @@ export function validateProviderPriorityDownloadSnapshot(
   } catch {
     throw new ProviderPrioritySnapshotError();
   }
-  if (parsed.profile.id !== SOURCE_PROFILE_IDS.providerPriority
-    || parsed.profile.revision !== 1
+  if (parsed.profile.template !== "providerPriority"
     || parsed.operation !== "downloadToLibrary") {
     throw new ProviderPrioritySnapshotError();
   }

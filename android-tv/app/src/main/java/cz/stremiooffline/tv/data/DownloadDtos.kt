@@ -54,7 +54,63 @@ data class SourceProfileDto(
   val name: String? = null,
   val revision: Int = 0,
   val operations: List<String> = emptyList(),
+  /** The public policy fields a rule summary reads. The rest of the profile is ignored. */
+  val policy: SourceProfilePolicyDto? = null,
 )
+
+@Serializable
+data class SourceProfilePolicyDto(
+  val constraints: SourceProfileConstraintsDto? = null,
+)
+
+@Serializable
+data class SourceProfileConstraintsDto(
+  val audio: SourceProfileAudioDto? = null,
+  val heightPixels: SourceProfileRangeDto? = null,
+  val bytes: SourceProfileRangeDto? = null,
+)
+
+@Serializable
+data class SourceProfileAudioDto(
+  val mode: String = "",
+)
+
+@Serializable
+data class SourceProfileRangeDto(
+  val min: Long? = null,
+  val max: Long? = null,
+)
+
+/** One piece of the one-line rule summary: resolution, then audio prefer/only, then max size. */
+internal sealed interface RuleSummaryPart {
+  data class Resolution(val min: Long?, val max: Long?) : RuleSummaryPart
+  data class Audio(val only: Boolean) : RuleSummaryPart
+  data class MaxBytes(val bytes: Long) : RuleSummaryPart
+}
+
+/** Resolution from `heightPixels`, audio from `preferred`/`strict`, and `bytes.max` when set. */
+internal fun ruleSummaryParts(policy: SourceProfilePolicyDto?): List<RuleSummaryPart> {
+  val constraints = policy?.constraints ?: return emptyList()
+  val parts = mutableListOf<RuleSummaryPart>()
+  val height = constraints.heightPixels
+  if (height != null && (height.min != null || height.max != null)) {
+    parts += RuleSummaryPart.Resolution(height.min, height.max)
+  }
+  when (constraints.audio?.mode) {
+    "strict" -> parts += RuleSummaryPart.Audio(only = true)
+    "preferred" -> parts += RuleSummaryPart.Audio(only = false)
+  }
+  constraints.bytes?.max?.let { parts += RuleSummaryPart.MaxBytes(it) }
+  return parts
+}
+
+/** Gigabytes to one decimal, the unit the rules store (`bytes / 1e9`). Whole numbers drop the decimal. */
+internal fun formatRuleGigabytes(bytes: Long): String {
+  val tenths = if (bytes <= 0L) 0L else (bytes + 50_000_000L) / 100_000_000L
+  val whole = tenths / 10
+  val fraction = (tenths % 10).toInt()
+  return if (fraction == 0) whole.toString() else "$whole.$fraction"
+}
 
 @Serializable
 data class SourceProfilesResponseDto(val profiles: List<SourceProfileDto> = emptyList())

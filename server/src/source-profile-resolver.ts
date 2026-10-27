@@ -17,6 +17,11 @@ import type {
   TravelContinuationCursorV1,
   TravelObservationSummary,
 } from "./source-travel.js";
+import type { RulesContinuationCursorV1 } from "./source-rules.js";
+import {
+  verifyRulesAddonStreams,
+  type RulesAddonStreamOutcome,
+} from "./source-rules-execution.js";
 import type { AddonDownloadSettings, AddonRecord, StreamItem, SubtitleItem } from "./types.js";
 import { findUserById, type UserRecord } from "./users.js";
 
@@ -33,6 +38,15 @@ export interface ProviderPriorityProfileResolverInput {
   readonly snapshot: SourceAdmissionSnapshotV1;
   readonly ownerUserId: string | undefined;
   readonly signal: AbortSignal;
+}
+
+export interface RulesProfileResolverInput {
+  readonly source: NonNullable<DownloadJob["source"]>;
+  readonly snapshot: SourceAdmissionSnapshotV1;
+  readonly ownerUserId: string | undefined;
+  readonly signal: AbortSignal;
+  readonly cursor?: RulesContinuationCursorV1;
+  readonly finalTemporaryAttempt?: boolean;
 }
 
 type TravelUnselectedOutcome = Exclude<TravelAddonStreamOutcome, { status: "selected" }>;
@@ -68,6 +82,32 @@ export type ProviderPriorityProfileResolution =
   | {
     readonly status: "cancelled";
   };
+
+type RulesUnselectedOutcome = Exclude<RulesAddonStreamOutcome, { status: "selected" }>;
+
+export type RulesProfileResolution =
+  | RulesUnselectedOutcome
+  | (Extract<RulesAddonStreamOutcome, { status: "selected" }> & {
+    readonly settings: AddonDownloadSettings;
+    readonly streamAddonIdentity: string;
+    readonly subtitleAddonIdentity?: string;
+  });
+
+const rulesAccessDenied = (): RulesUnselectedOutcome => ({
+  status: "accessDenied",
+  retryable: false,
+  observations: emptyObservations(),
+});
+
+const rulesCancelled = (): RulesUnselectedOutcome => ({
+  status: "cancelled",
+  retryable: false,
+  observations: emptyObservations(),
+});
+
+const rulesUnavailable = (
+  acquired: Extract<AcquiredProfileAddons, { status: "accessDenied" | "cancelled" }>,
+): RulesUnselectedOutcome => acquired.status === "cancelled" ? rulesCancelled() : rulesAccessDenied();
 
 interface LiveAuthorization {
   readonly owner: UserRecord;
@@ -354,6 +394,48 @@ export function createTravelProfileResolver(
 
     const finalized = acquired.finalize(outcome);
     if (!finalized) return travelUnavailable({ status: signal.aborted ? "cancelled" : "accessDenied" });
+    return { ...outcome, ...finalized };
+  };
+}
+
+export function createRulesProfileResolver(
+  deps: SourceResolverDeps,
+): (input: RulesProfileResolverInput) => Promise<RulesProfileResolution> {
+  return async ({ source, snapshot, ownerUserId, signal, cursor, finalTemporaryAttempt }) => {
+    const acquired = await acquireProfileAddons(deps, {
+      source,
+      snapshot,
+      ownerUserId,
+      signal,
+    });
+    if (acquired.status !== "ready") return rulesUnavailable(acquired);
+
+    const outcome = await verifyRulesAddonStreams({
+      snapshot,
+      streams: acquired.streams,
+      externalSubtitles: acquired.externalSubtitles.filter((subtitle) => httpUrl(subtitle.url)),
+      ...(source.selection?.titleLanguage === undefined
+        ? {}
+        : { titleLanguage: source.selection.titleLanguage }),
+      episode: source.type === "series",
+      inspect: (stream) => deps.inspect(stream, signal),
+      shouldContinue: acquired.shouldContinue,
+      scopeStamp: acquired.scopeStamp,
+      hasRealDebrid: deps.hasRealDebrid(),
+      ...(cursor === undefined ? {} : { cursor }),
+      ...(finalTemporaryAttempt === undefined ? {} : { finalTemporaryAttempt }),
+      tried: source.tried,
+    });
+    if (outcome.status !== "selected") return outcome;
+    if (outcome.stream.infoHash !== undefined && !deps.hasRealDebrid()) {
+      return rulesAccessDenied();
+    }
+
+    const finalized = acquired.finalize({
+      stream: outcome.stream,
+      ...(outcome.subtitle === undefined ? {} : { subtitle: outcome.subtitle }),
+    });
+    if (!finalized) return signal.aborted ? rulesCancelled() : rulesAccessDenied();
     return { ...outcome, ...finalized };
   };
 }

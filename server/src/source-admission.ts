@@ -6,23 +6,39 @@ import { visibleLibraries, type LibraryRecord } from "./libraries.js";
 import { remoteLibraryVisibleTo } from "./media-server-access.js";
 import type { MediaConnectionRecord, RemoteLibraryRecord } from "./media-server-types.js";
 import {
+  buildTemplatePolicy,
   isExecutableDownloadProfile,
-  SOURCE_PROFILE_DEFINITIONS,
+  parseTemplateParameters,
+  SOURCE_PROFILE_IDS,
   type SourceOperation,
-  type SourceProfileDefinition,
+  type ProviderPriorityParameters,
+  type SourceProfileTemplate,
   type SourceProfileViewer,
+  type TravelParameters,
 } from "./source-profiles.js";
+import {
+  parseDownloadRules,
+  rulesFromPolicy,
+  rulesPolicy,
+  type DownloadRules,
+} from "./download-rules.js";
 import {
   parseSourcePolicyV1,
   type LanguageRef,
   type SourcePolicyCriterion,
   type SourcePolicyV1,
 } from "./source-policy.js";
+import type { StoredSourceProfile } from "./store.js";
 import type { AddonRecord } from "./types.js";
 
 export interface SourceProfileReference {
   profileId: string;
   revision: number;
+}
+
+export interface SourceProfileSnapshot extends SourceProfileReference {
+  template?: SourceProfileTemplate;
+  parameters?: DownloadRules | TravelParameters | ProviderPriorityParameters;
 }
 
 export interface SourceAdmissionPreferences {
@@ -32,6 +48,7 @@ export interface SourceAdmissionPreferences {
 
 export interface SourceAdmissionContext {
   viewer: SourceProfileViewer;
+  profiles: readonly StoredSourceProfile[];
   addons: readonly AddonRecord[];
   libraries: readonly LibraryRecord[];
   remoteLibraries: readonly RemoteLibraryRecord[];
@@ -39,11 +56,12 @@ export interface SourceAdmissionContext {
   addonOrder?: readonly string[];
   preferences: SourceAdmissionPreferences;
   operation: SourceOperation;
+  mediaKind: "episode" | "movie";
 }
 
 export interface SourceAdmissionSnapshotV1 {
   schemaVersion: 1;
-  profile: { id: string; revision: number };
+  profile: { id: string; revision: number; template: SourceProfileTemplate };
   operation: SourceOperation;
   providerKeys: string[];
   policy: SourcePolicyV1;
@@ -173,6 +191,46 @@ export function parseSourceProfileReference(input: unknown): SourceProfileRefere
   }
 }
 
+export function parseSourceProfileSnapshot(input: unknown): SourceProfileSnapshot {
+  try {
+    const snapshot = objectValue(
+      input,
+      ["profileId", "revision"],
+      ["template", "parameters"],
+    );
+    const profileId = dataProperty(snapshot, "profileId")?.value;
+    const revision = dataProperty(snapshot, "revision")?.value;
+    if (typeof profileId !== "string" || profileId.length === 0
+      || typeof revision !== "number" || !Number.isSafeInteger(revision) || revision <= 0) {
+      return failValidation();
+    }
+    const suppliedTemplate = dataProperty(snapshot, "template")?.value;
+    if (suppliedTemplate === undefined) {
+      if (Object.hasOwn(snapshot, "parameters")) return failValidation();
+      return { profileId, revision };
+    }
+    if (suppliedTemplate !== "recommended"
+      && suppliedTemplate !== "travel"
+      && suppliedTemplate !== "providerPriority"
+      && suppliedTemplate !== "rules") {
+      return failValidation();
+    }
+    const template = suppliedTemplate;
+    const parameters = template === "rules"
+      ? parseDownloadRules(dataProperty(snapshot, "parameters")?.value)
+      : parseTemplateParameters(template, dataProperty(snapshot, "parameters")?.value);
+    return {
+      profileId,
+      revision,
+      template,
+      ...(parameters === undefined ? {} : { parameters: structuredClone(parameters) }),
+    };
+  } catch (error) {
+    if (error instanceof SourceAdmissionValidationError) throw error;
+    throw new SourceAdmissionValidationError();
+  }
+}
+
 export function sourceAdmissionProviderScope(
   scope: SourcePolicyV1["scope"],
   availableProviderKeys: readonly string[],
@@ -261,45 +319,82 @@ export function materializeSourceAdmissionPolicy(
   });
 }
 
-const validateFixedPolicy = (
-  profileId: string,
-  profileRevision: number,
+const templateOfBuiltIn = (id: string): SourceProfileTemplate | undefined =>
+  id === SOURCE_PROFILE_IDS.recommended
+    ? "recommended"
+    : id === SOURCE_PROFILE_IDS.travel
+      ? "travel"
+      : id === SOURCE_PROFILE_IDS.providerPriority
+        ? "providerPriority"
+        : ([SOURCE_PROFILE_IDS.balanced, SOURCE_PROFILE_IDS.best,
+            SOURCE_PROFILE_IDS.smaller, SOURCE_PROFILE_IDS.myLanguage] as readonly string[]).includes(id)
+          ? "rules"
+          : undefined;
+
+const parametersFromPolicy = (
+  template: SourceProfileTemplate,
+  policy: SourcePolicyV1,
+): TravelParameters | ProviderPriorityParameters | undefined => {
+  if (template === "recommended") return undefined;
+  const audioMode = policy.constraints.audio.mode;
+  const subtitleMode = policy.constraints.subtitles.mode;
+  if (template === "travel") {
+    const min = policy.constraints.heightPixels?.min;
+    const max = policy.constraints.heightPixels?.max;
+    if (min === undefined) return failValidation();
+    const parameters: TravelParameters = {
+      scope: { mode: "allAvailable" },
+      providerOrder: { from: "viewer" },
+      audioMode,
+      subtitleMode,
+      heightPixels: max === undefined ? { min } : { min, max },
+    };
+    return parameters;
+  }
+  const size = policy.criteria.find((criterion) => criterion.kind === "size");
+  if (size?.kind !== "size") return failValidation();
+  if (audioMode === "strict" || subtitleMode === "required") return failValidation();
+  const parameters: ProviderPriorityParameters = {
+    scope: { mode: "allAvailable" },
+    providerOrder: { from: "viewer" },
+    sizeDirection: size.direction,
+    transfer: policy.constraints.sourceKinds.filter(
+      (kind): kind is "http" | "torrent" => kind === "http" || kind === "torrent",
+    ),
+    audioMode,
+    subtitleMode,
+  };
+  return parameters;
+};
+
+const validateTemplatePolicy = (
+  template: SourceProfileTemplate,
   operation: SourceOperation,
   selectedProviderKeys: readonly string[],
   policy: SourcePolicyV1,
+  mediaKind: "episode" | "movie",
 ): void => {
-  const definition = SOURCE_PROFILE_DEFINITIONS.find((candidate) =>
-    candidate.id === profileId);
-  if (!definition) return;
-  if (definition.revision !== profileRevision || !definition.operations.includes(operation)) {
-    return failValidation();
+  let built: SourcePolicyV1;
+  if (template === "rules") {
+    built = rulesPolicy(parseDownloadRules(rulesFromPolicy(policy, mediaKind)), mediaKind);
+  } else {
+    const parameters = parametersFromPolicy(template, policy);
+    parseTemplateParameters(template, parameters);
+    built = buildTemplatePolicy(template, parameters);
   }
-
-  const languageCode = (definitionRef: LanguageRef, snapshotRef: LanguageRef): string | undefined => {
-    if (!("preference" in definitionRef)) return undefined;
-    return "code" in snapshotRef ? snapshotRef.code : failValidation();
-  };
-  const audioLanguage = languageCode(
-    definition.policy.constraints.audio.preferred,
-    policy.constraints.audio.preferred,
-  );
-  const definitionSubtitles = definition.policy.constraints.subtitles;
-  let subtitleLanguage: string | undefined;
-  if (definitionSubtitles.mode !== "off") {
-    const snapshotPreferred = policy.constraints.subtitles.preferred;
-    if (definitionSubtitles.preferred === undefined
-      || policy.constraints.subtitles.mode === "off"
-      || snapshotPreferred === undefined) {
-      return failValidation();
-    }
-    subtitleLanguage = languageCode(definitionSubtitles.preferred, snapshotPreferred);
-  }
+  const audioLanguage = "code" in policy.constraints.audio.preferred
+    ? policy.constraints.audio.preferred.code
+    : failValidation();
+  const subtitleReference = policy.constraints.subtitles.preferred;
+  const subtitleLanguage = policy.constraints.subtitles.mode === "off"
+    ? undefined
+    : subtitleReference && "code" in subtitleReference ? subtitleReference.code : failValidation();
 
   const expected = materializeSourceAdmissionPolicy(
-    definition.policy,
+    built,
     selectedProviderKeys,
     {
-      ...(audioLanguage === undefined ? {} : { audioLanguage }),
+      audioLanguage,
       ...(subtitleLanguage === undefined ? {} : { subtitleLanguage }),
     },
   );
@@ -311,11 +406,11 @@ const declaresStream = (addon: AddonRecord): boolean =>
     typeof resource === "string" ? resource === "stream" : resource.name === "stream");
 
 const availableProviderKeys = (
-  definition: SourceProfileDefinition,
+  policy: SourcePolicyV1,
   context: SourceAdmissionContext,
   operation: SourceOperation,
 ): string[] => {
-  const kinds = new Set(definition.policy.constraints.sourceKinds);
+  const kinds = new Set(policy.constraints.sourceKinds);
   const viewer = { id: context.viewer.id, role: context.viewer.role };
   const keys: string[] = [];
 
@@ -346,21 +441,32 @@ const availableProviderKeys = (
   return operation === "downloadToLibrary" ? keys.filter((key) => key.startsWith("addon:")) : keys;
 };
 
-const definitionFor = (reference: SourceProfileReference): SourceProfileDefinition => {
-  const definition = SOURCE_PROFILE_DEFINITIONS.find((candidate) => candidate.id === reference.profileId);
-  if (!definition) throw new SourceAdmissionRejected("profileUnknown");
-  if (definition.revision !== reference.revision) throw new SourceAdmissionRejected("profileRevisionStale");
-  return definition;
+const policyFor = (
+  profile: StoredSourceProfile,
+  mediaKind: "episode" | "movie",
+): SourcePolicyV1 => buildTemplatePolicy(profile.template, profile.parameters, mediaKind);
+
+const definitionFor = (
+  reference: SourceProfileReference,
+  profiles: readonly StoredSourceProfile[],
+  mediaKind: "episode" | "movie",
+): { profile: StoredSourceProfile; policy: SourcePolicyV1 } => {
+  const profile = profiles.find((candidate) => candidate.id === reference.profileId);
+  if (!profile) throw new SourceAdmissionRejected("profileUnknown");
+  if (profile.revision !== reference.revision) throw new SourceAdmissionRejected("profileRevisionStale");
+  return { profile, policy: policyFor(profile, mediaKind) };
 };
 
 const supportsOperation = (
-  definition: SourceProfileDefinition,
+  template: SourceProfileTemplate,
   context: SourceAdmissionContext,
 ): SourceOperation => {
-  if (!definition.operations.includes(context.operation)) {
+  if (context.operation !== "play"
+    && context.operation !== "downloadToLibrary"
+    && context.operation !== "downloadToDevice") {
     throw new SourceAdmissionRejected("operationUnsupported");
   }
-  if (context.operation === "downloadToLibrary" && !isExecutableDownloadProfile(definition)) {
+  if (context.operation === "downloadToLibrary" && !isExecutableDownloadProfile({ template })) {
     throw new SourceAdmissionRejected("operationUnsupported");
   }
   if (context.viewer.disabled) throw new SourceAdmissionRejected("operationForbidden");
@@ -373,25 +479,72 @@ const supportsOperation = (
   return context.operation;
 };
 
+const materializeAdmission = (
+  profile: { profileId: string; revision: number; template: SourceProfileTemplate },
+  storedPolicy: SourcePolicyV1,
+  context: SourceAdmissionContext,
+): SourceAdmissionSnapshotV1 => {
+  const operation = supportsOperation(profile.template, context);
+  const available = availableProviderKeys(storedPolicy, context, operation);
+  const scoped = sourceAdmissionProviderScope(storedPolicy.scope, available);
+  const selected = explicitProviderOrder(scoped, storedPolicy);
+  if (selected.length === 0) throw new SourceAdmissionRejected("providerScopeUnavailable");
+
+  const policy = materializeSourceAdmissionPolicy(storedPolicy, selected, context.preferences);
+  return parseSourceAdmissionSnapshotV1({
+    schemaVersion: 1,
+    profile: {
+      id: profile.profileId,
+      revision: profile.revision,
+      template: profile.template,
+    },
+    operation,
+    providerKeys: selected,
+    policy,
+  });
+};
+
+const explicitProviderOrder = (
+  selected: readonly string[],
+  policy: SourcePolicyV1,
+): string[] => {
+  const criterion = policy.criteria.find((candidate) =>
+    candidate.kind === "providerOrder" && "keys" in candidate);
+  if (!criterion || criterion.kind !== "providerOrder" || !("keys" in criterion)) return [...selected];
+  const selectedSet = new Set(selected);
+  const ordered = criterion.keys.filter((key) => selectedSet.has(key));
+  const seen = new Set(ordered);
+  return [...ordered, ...selected.filter((key) => !seen.has(key))];
+};
+
 export function materializeSourceAdmission(
   referenceInput: SourceProfileReference,
   context: SourceAdmissionContext,
 ): SourceAdmissionSnapshotV1 {
   const reference = parseSourceProfileReference(referenceInput);
-  const definition = definitionFor(reference);
-  const operation = supportsOperation(definition, context);
-  const available = availableProviderKeys(definition, context, operation);
-  const selected = sourceAdmissionProviderScope(definition.policy.scope, available);
-  if (selected.length === 0) throw new SourceAdmissionRejected("providerScopeUnavailable");
+  const { profile, policy: storedPolicy } = definitionFor(
+    reference,
+    context.profiles,
+    context.mediaKind,
+  );
+  return materializeAdmission({
+    profileId: profile.id,
+    revision: profile.revision,
+    template: profile.template,
+  }, storedPolicy, context);
+}
 
-  const policy = materializeSourceAdmissionPolicy(definition.policy, selected, context.preferences);
-  return parseSourceAdmissionSnapshotV1({
-    schemaVersion: 1,
-    profile: { id: reference.profileId, revision: reference.revision },
-    operation,
-    providerKeys: selected,
-    policy,
-  });
+export function materializeSourceAdmissionDefinition(
+  definitionInput: unknown,
+  context: SourceAdmissionContext,
+): SourceAdmissionSnapshotV1 {
+  const definition = parseSourceProfileSnapshot(definitionInput);
+  if (definition.template === undefined) throw new SourceAdmissionValidationError();
+  return materializeAdmission({
+    profileId: definition.profileId,
+    revision: definition.revision,
+    template: definition.template,
+  }, buildTemplatePolicy(definition.template, definition.parameters, context.mediaKind), context);
 }
 
 export function parseSourceAdmissionSnapshotV1(input: unknown): SourceAdmissionSnapshotV1 {
@@ -399,11 +552,20 @@ export function parseSourceAdmissionSnapshotV1(input: unknown): SourceAdmissionS
     const snapshot = objectValue(input, ["schemaVersion", "profile", "operation", "providerKeys", "policy"]);
     if (snapshot.schemaVersion !== 1) return failValidation();
 
-    const profile = objectValue(snapshot.profile, ["id", "revision"]);
+    const profile = objectValue(snapshot.profile, ["id", "revision"], ["template"]);
     const profileId = dataProperty(profile, "id")?.value;
     const profileRevision = dataProperty(profile, "revision")?.value;
     if (typeof profileId !== "string" || profileId.length === 0
       || typeof profileRevision !== "number" || !Number.isSafeInteger(profileRevision) || profileRevision <= 0) {
+      return failValidation();
+    }
+    const suppliedTemplate = dataProperty(profile, "template")?.value;
+    const inferredTemplate = profileRevision === 1 ? templateOfBuiltIn(profileId) : undefined;
+    const profileTemplate = suppliedTemplate === undefined
+      ? inferredTemplate ?? failValidation()
+      : suppliedTemplate;
+    if (profileTemplate !== "recommended" && profileTemplate !== "travel"
+      && profileTemplate !== "providerPriority" && profileTemplate !== "rules") {
       return failValidation();
     }
     const parsedOperation = operation(snapshot.operation);
@@ -428,11 +590,23 @@ export function parseSourceAdmissionSnapshotV1(input: unknown): SourceAdmissionS
         if ("from" in criterion || !sameKeys(selectedProviderKeys, criterion.keys)) return failValidation();
       }
     }
-    validateFixedPolicy(profileId, profileRevision, parsedOperation, selectedProviderKeys, policy);
+    if (profileTemplate === "rules") {
+      const valid = (["episode", "movie"] as const).some((mediaKind) => {
+        try {
+          validateTemplatePolicy(profileTemplate, parsedOperation, selectedProviderKeys, policy, mediaKind);
+          return true;
+        } catch {
+          return false;
+        }
+      });
+      if (!valid) return failValidation();
+    } else {
+      validateTemplatePolicy(profileTemplate, parsedOperation, selectedProviderKeys, policy, "episode");
+    }
 
     return {
       schemaVersion: 1,
-      profile: { id: profileId, revision: profileRevision },
+      profile: { id: profileId, revision: profileRevision, template: profileTemplate },
       operation: parsedOperation,
       providerKeys: selectedProviderKeys,
       policy,

@@ -9,7 +9,7 @@ import { listVideos } from "./library.js";
 import { titleUnits, type LibraryMetaRecord } from "./library-match.js";
 import { findAdequateExistingLocalCopy, hasAdequateExistingLocalCopy } from "./local-copy-admission.js";
 import type { MediaInfo } from "./probe.js";
-import { parseSourceAdmissionSnapshotV1, type SourceAdmissionSnapshotV1 } from "./source-admission.js";
+import { type SourceAdmissionSnapshotV1 } from "./source-admission.js";
 import type { AudioMode, ExistingLocalCopyPolicy, SubtitleMode } from "./source-policy.js";
 import type { UserRecord } from "./users.js";
 
@@ -56,9 +56,9 @@ const snapshot = (options: {
   audio?: string;
   subtitleMode?: SubtitleMode;
   subtitle?: string;
-} = {}): SourceAdmissionSnapshotV1 => parseSourceAdmissionSnapshotV1({
+} = {}): SourceAdmissionSnapshotV1 => ({
   schemaVersion: 1,
-  profile: { id: "local-copy-test", revision: 1 },
+  profile: { id: "local-copy-test", revision: 1, template: "travel" },
   operation: "downloadToLibrary",
   providerKeys: [HTTP_PROVIDER],
   policy: {

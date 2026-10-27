@@ -9,7 +9,9 @@ import {
 } from "./source-admission.js";
 import {
   inspectedAddonSourceEvidence,
+  heightFromListing,
   listedAddonSourceEvidence,
+  releaseKindFromListing,
   type ListedAddonSourceEvidenceInput,
 } from "./source-addon-evidence.js";
 import {
@@ -75,7 +77,7 @@ const travelWithNumericBounds = (): SourceAdmissionSnapshotV1 => {
   });
   return {
     schemaVersion: 1,
-    profile: { id: SOURCE_PROFILE_IDS.travel, revision: 1 },
+    profile: { id: SOURCE_PROFILE_IDS.travel, revision: 1, template: "travel" },
     operation: "downloadToLibrary",
     providerKeys,
     policy: materializeSourceAdmissionPolicy(
@@ -215,16 +217,16 @@ test("continuation identity ignores rotated addresses and distinguishes listing 
   }
 });
 
-test("listing claims stay hints and cannot settle numeric hard bounds", () => {
+test("listing height hints still require a probe inside numeric hard bounds", () => {
   const source = addon({
     url: "https://media.example/movie.mkv",
     title: "720p sample 3.2 GB",
     behaviorHints: { videoSize: 8_000_000_000 },
   });
-  assert.deepEqual(source.hints, { bytes: 8_000_000_000 });
+  assert.deepEqual(source.hints, { bytes: 8_000_000_000, heightPixels: 720 });
   assert.deepEqual(source.facts.bytes, { evidence: "unknown" });
   assert.deepEqual(source.facts.durationSeconds, { evidence: "unknown" });
-  assert.deepEqual(source.facts.heightPixels, { evidence: "unknown" });
+  assert.deepEqual(source.facts.heightPixels, { evidence: "listed", value: 720 });
   assert.deepEqual(source.facts.sampleOrTrailer, { evidence: "unknown" });
 
   assert.deepEqual(evaluateSourceCandidate(travelSnapshot(["addon:one"]), source), {
@@ -239,6 +241,104 @@ test("listing claims stay hints and cannot settle numeric hard bounds", () => {
       { code: "inspectionRequired", field: "heightPixels" },
     ],
   });
+});
+
+test("listing text maps known height tokens and leaves the others unknown", () => {
+  const cases = [
+    ["Movie.2160p", 2160],
+    ["Movie 4K", 2160],
+    ["Movie UHD", 2160],
+    ["Movie.1440p", 1440],
+    ["Movie.1080p", 1080],
+    ["Movie FHD", 1080],
+    ["Movie 720p", 720],
+    ["Movie HD", 720],
+    ["Movie.HDCAM", undefined],
+    ["DTS-HD 5.1", undefined],
+    ["Movie.576p", 576],
+    ["Movie 480p", 480],
+    ["Movie SD", 480],
+    ["Movie.360p", 360],
+  ] as const;
+  for (const [title, expected] of cases) {
+    assert.equal(heightFromListing({ title }), expected, title);
+  }
+  assert.deepEqual(
+    evaluateSourceCandidate(travelSnapshot(), addon({ url: SECRET_URL, title: "English 360p" })),
+    { status: "excluded", reasons: [{ code: "numericOutsideBounds", field: "heightPixels" }] },
+  );
+});
+
+test("release kinds come from whole listing tokens and unknown text stays listed as null", () => {
+  const cases = [
+    ["HDCAM", "cam"],
+    ["Show.S01E01.1080p.TS", "telesync"],
+    ["Toast", null],
+    ["DVDSCR", "screener"],
+    ["HDTS", "telesync"],
+    ["The Cam Girl 2024 1080p", null],
+    ["Movie.2024.CAM.x264", "cam"],
+    ["hdcam rip", "cam"],
+    ["Its ts mode", null],
+    ["DTS-HD 5.1", null],
+  ] as const;
+  for (const [title, expected] of cases) {
+    assert.deepEqual(releaseKindFromListing({ url: SECRET_URL, title }), {
+      evidence: "listed",
+      value: expected,
+    });
+  }
+  assert.deepEqual(releaseKindFromListing({ url: SECRET_URL, title: "Not a TSomething" }), {
+    evidence: "listed",
+    value: null,
+  });
+});
+
+test("admission rejects an excluded listed release kind and lets an unknown pass", () => {
+  const providerKeys = ["addon:one"];
+  const original = travelDefinition.policy;
+  const policy = parseSourcePolicyV1({
+    ...structuredClone(original),
+    constraints: {
+      ...structuredClone(original.constraints),
+      sourceKinds: ["http"],
+      excludeReleaseKinds: ["cam", "telesync", "screener"],
+    },
+  });
+  const snapshot: SourceAdmissionSnapshotV1 = {
+    schemaVersion: 1,
+    profile: { id: "custom-rules", revision: 1, template: "rules" },
+    operation: "downloadToLibrary",
+    providerKeys,
+    policy: materializeSourceAdmissionPolicy(policy, providerKeys, {
+      audioLanguage: "en",
+      subtitleLanguage: "en",
+    }),
+  };
+  const blocked = addon({ url: SECRET_URL, title: "HDCAM" });
+  assert.deepEqual(evaluateSourceCandidate(snapshot, blocked), {
+    status: "excluded",
+    reasons: [{ code: "releaseKindExcluded" }],
+  });
+
+  const unknownPolicy = parseSourcePolicyV1({
+    ...structuredClone(original),
+    constraints: {
+      ...structuredClone(original.constraints),
+      sourceKinds: ["http"],
+    },
+  });
+  const unknownSnapshot: SourceAdmissionSnapshotV1 = {
+    schemaVersion: 1,
+    profile: { id: "custom-rules", revision: 1, template: "rules" },
+    operation: "downloadToLibrary",
+    providerKeys,
+    policy: materializeSourceAdmissionPolicy(unknownPolicy, providerKeys, {
+      audioLanguage: "en",
+      subtitleLanguage: "en",
+    }),
+  };
+  assert.notEqual(evaluateSourceCandidate(unknownSnapshot, blocked).status, "excluded");
 });
 
 test("listing keeps language provenance and inspection replaces only verifiable facts", () => {
@@ -363,7 +463,7 @@ test("adapter output keeps its identity in a fresh immutable copy and preserves 
   assert.equal(inspected.providerKey, source.providerKey);
   assert.equal(inspected.providerResponseIndex, source.providerResponseIndex);
   assert.deepEqual(inspected.capabilities, ["downloadToLibrary"]);
-  assert.deepEqual(inspected.hints, { bytes: 4_000_000_000 });
+  assert.deepEqual(inspected.hints, { bytes: 4_000_000_000, heightPixels: 1080 });
   assert.deepEqual(inspected.facts.bytes, { evidence: "unknown" });
   assert.deepEqual(inspected.facts.sampleOrTrailer, { evidence: "unknown" });
   assert.doesNotMatch(JSON.stringify(inspected), /private|token|top-secret|example/i);

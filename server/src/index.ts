@@ -15,7 +15,11 @@ import { applyAddonManifestRefreshes } from "./addon-identity.js";
 import { DeviceTransfers } from "./device-transfers.js";
 import { ClientLogStore } from "./client-logs.js";
 import { createSourceResolver, type SourceResolverDeps } from "./source-resolver.js";
-import { createProviderPriorityProfileResolver, createTravelProfileResolver } from "./source-profile-resolver.js";
+import {
+  createProviderPriorityProfileResolver,
+  createRulesProfileResolver,
+  createTravelProfileResolver,
+} from "./source-profile-resolver.js";
 import { ImageStats, useImageStats } from "./image-stats.js";
 import { MosaicCache } from "./mosaic.js";
 import { ProviderStats, useProviderStats } from "./provider-stats.js";
@@ -38,6 +42,7 @@ import { tmdbGallery, tmdbMeta, tmdbMovieReleases, tmdbSeasonAirDates, type Tmdb
 import { createLibraryCandidates } from "./library-candidates.js";
 import { ExternalIdStore } from "./external-ids.js";
 import { FollowService, FollowStore } from "./follows.js";
+import { createFollowQueueAdapter } from "./follow-queue.js";
 import { currentLevel, flushLog, initLogger, log, parseLevel, startLogMaintenance, setLevel } from "./logger.js";
 import { resolveListenTarget, startServer, utilityParentPort } from "./server-start.js";
 import { loopbackHostCheck } from "./host-check.js";
@@ -82,6 +87,7 @@ import type { AddonRecord, MetaItem, StreamItem } from "./types.js";
 import { createLibraryActions } from "./library-actions.js";
 import { LibraryOps } from "./library-ops.js";
 import { registerAddonsRoutes } from "./routes/addons.js";
+import { registerAdminSourceProfilesRoutes } from "./routes/admin-source-profiles.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerCatalogRoutes } from "./routes/catalog.js";
 import { registerContentRoutes } from "./routes/content.js";
@@ -101,7 +107,7 @@ import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerUsersRoutes } from "./routes/users.js";
 import { registerSearchEverywhereRoutes, searchEverywhereEnabled } from "./routes/search-everywhere.js";
 import { registerSourceProfilesRoutes } from "./routes/source-profiles.js";
-import { materializeOwnerSourceAdmission } from "./routes/source-profile-selection.js";
+import { materializeOwnerSourceAdmission, materializeOwnerSourceProfileAdmission } from "./routes/source-profile-selection.js";
 import { SourceAdmissionRejected } from "./source-admission.js";
 import { MediaServerManager, type MediaServerAuthority } from "./media-server-manager.js";
 import { remoteDownloadAccessible } from "./media-server-download.js";
@@ -166,7 +172,7 @@ await store.load();
 await mediaServers.initialize();
 await metaStore.load();
 await externalIds.load();
-await followStore.load();
+await followStore.load(store.sourceProfiles());
 await seen.load();
 if (libraryMigration.migrated) log("INFO", "State migrated to libraries", { libraryId: libraryMigration.libraryId, paths: libraryMigration.paths, artwork: libraryMigration.artwork });
 if (libraryMigration.metadata) log("INFO", "Library metadata moved out of the state", { rows: libraryMigration.metadata });
@@ -386,6 +392,7 @@ const queueResolverDeps: SourceResolverDeps = {
 queue.setResolver(createSourceResolver(queueResolverDeps));
 queue.setTravelResolver(createTravelProfileResolver(queueResolverDeps));
 queue.setProviderPriorityResolver(createProviderPriorityProfileResolver(queueResolverDeps));
+queue.setRulesResolver(createRulesProfileResolver(queueResolverDeps));
 await playback.load();
 
 /** With no account at all and no fallback credentials, nothing can be done. */
@@ -783,6 +790,7 @@ const routeContext: RouteContext = {
 registerAuthRoutes(app, routeContext);
 registerUsersRoutes(app, { ...routeContext, deleteUserAccess, permissionsChanged });
 registerSourceProfilesRoutes(app, routeContext);
+registerAdminSourceProfilesRoutes(app, routeContext);
 
 /** The page only ever holds our own id, so anything it hands back is turned into the
  *  real address again before it is stored or downloaded. */
@@ -2056,16 +2064,7 @@ const followService = new FollowService({
     const marker = (store.userData(ownerUserId).watchedSeries as Record<string, WatchedMarker> | undefined)?.[metaId];
     return marker ? { season: marker.season, episode: marker.episode, updatedAt: marker.updatedAt } : undefined;
   },
-  queue: {
-    addPending: (title, source, media, ownerUserId, follow, sourceAdmission) =>
-      queue.addPending(title, source, media, ownerUserId, follow, sourceAdmission),
-    findActiveEpisode: (ownerUserId, type, videoId) => queue.findActiveEpisode(ownerUserId, type, videoId),
-    adopt: (id, follow) => queue.adopt(id, follow),
-    followJobs: () => queue.followJobs(),
-    get: (id) => queue.get(id),
-    retry: (id, selection) => queue.retry(id, selection),
-    remove: (id) => queue.remove(id),
-  },
+  queue: createFollowQueueAdapter(queue),
   // The owner may queue into the pinned library right now: the account, its rights, the
   // addons and the library are read again on every ask, never from when the rule was saved.
   mayDownload: (ownerUserId, selection) => ownerMayDownload({
@@ -2073,10 +2072,12 @@ const followService = new FollowService({
     addons: store.addons(),
     libraries: store.libraries(),
   }, { targetSettings: selection.targetSettings }),
-  admitSourceProfile: (ownerUserId, reference) => {
+  admitSourceProfile: (ownerUserId, reference, mediaKind) => {
     const owner = findUserById(store.users(), ownerUserId);
     if (!owner) throw new SourceAdmissionRejected("operationForbidden");
-    return materializeOwnerSourceAdmission({ store }, owner, reference);
+    return reference.template === undefined
+      ? materializeOwnerSourceAdmission({ store }, owner, reference, mediaKind)
+      : materializeOwnerSourceProfileAdmission({ store }, owner, reference, mediaKind);
   },
   // Retention deletes a single library file through the same operations queue that waits for
   // playback, an unreachable disk and active downloads. Only a key that names a real library

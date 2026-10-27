@@ -9,11 +9,14 @@ import { log } from "./logger.js";
 import type { MediaInfo } from "./naming.js";
 import {
   parseDownloadSourceAdmissionSnapshotV1,
-  parseSourceProfileReference,
+  parseSourceProfileSnapshot,
   SourceAdmissionRejected,
   SourceAdmissionValidationError,
   type SourceAdmissionSnapshotV1,
+  type SourceProfileSnapshot,
 } from "./source-admission.js";
+import { parseSourcePolicyV1 } from "./source-policy.js";
+import type { StoredSourceProfile } from "./store.js";
 import type { MetaItem } from "./types.js";
 import type { FollowDefaults } from "./users.js";
 import { sourceAdmissionError } from "./routes/source-profile-selection.js";
@@ -47,7 +50,7 @@ export interface FollowAutoDownload {
   /** With `ahead`: how many regular episodes after the watched marker stay ready, 1..10. */
   aheadCount?: number;
   selection: DownloadSelection;
-  sourceProfile?: { profileId: string; revision: number };
+  sourceProfile?: FollowSourceProfile;
   /** Days after release during which only the preferred audio is admitted, 0..30. */
   graceDays?: number;
   /** Delete downloaded episodes this long after the owner watched past them; absent keeps them. */
@@ -55,6 +58,8 @@ export interface FollowAutoDownload {
   /** The catalogue key of the reason nothing is admitted, while the owner may not download. */
   blockedKey?: string;
 }
+
+export type FollowSourceProfile = SourceProfileSnapshot;
 
 export type EpisodeDownloadState = "reserved" | "queued" | "waiting" | "completed" | "skipped" | "attention";
 
@@ -81,7 +86,9 @@ export interface EpisodeDownload {
   removedAt?: string;
   removedReason?: "retention";
   reasonKey?: string;
+  reasonVars?: Record<string, string | number>;
   sourceAdmission?: SourceAdmissionSnapshotV1;
+  sourceGraceDays?: number;
   legacyRule?: LegacyDownloadRule;
   updatedAt: string;
 }
@@ -406,6 +413,32 @@ export function effectiveSelection(auto: FollowAutoDownload, episode: FollowEpis
   return effectiveLegacySelection(auto, episode, now);
 }
 
+export function effectiveRulesAdmission(
+  admission: SourceAdmissionSnapshotV1,
+  episode: FollowEpisode,
+  now: number,
+  graceDays: number | undefined,
+): SourceAdmissionSnapshotV1 {
+  if (admission.profile.template !== "rules") return admission;
+  const until = graceUntilDays(graceDays, episode);
+  if (until === undefined || now >= until || admission.policy.constraints.audio.mode === "strict") {
+    return admission;
+  }
+  return {
+    ...admission,
+    policy: parseSourcePolicyV1({
+      ...structuredClone(admission.policy),
+      constraints: {
+        ...structuredClone(admission.policy.constraints),
+        audio: {
+          mode: "strict",
+          preferred: structuredClone(admission.policy.constraints.audio.preferred),
+        },
+      },
+    }),
+  };
+}
+
 const legacyRuleFrom = (auto: FollowAutoDownload): LegacyDownloadRule | undefined => {
   if (auto.sourceProfile) return undefined;
   return {
@@ -519,6 +552,7 @@ export interface CalendarItem {
   released: string;
   state: CalendarEpisodeState;
   reasonKey?: string;
+  reasonVars?: Record<string, string | number>;
   nextAttemptAt?: string;
   ambiguous?: boolean;
   dateUncertain?: boolean;
@@ -547,6 +581,7 @@ export function calendarItems(follows: Follow[], from: number, to: number, now: 
         released: episode.released,
         state: download ? download.state : released > now ? "upcoming" : "released",
         ...(download?.reasonKey ? { reasonKey: download.reasonKey } : {}),
+        ...(download?.reasonVars ? { reasonVars: download.reasonVars } : {}),
         ...(download?.nextAttemptAt ? { nextAttemptAt: download.nextAttemptAt } : {}),
         ...(episode.ambiguous ? { ambiguous: true } : {}),
         ...(episode.dateUncertain ? { dateUncertain: true } : {}),
@@ -576,6 +611,7 @@ export function undatedCalendarItems(follows: Follow[], limit: number): Calendar
         ...(episode.title ? { title: episode.title } : {}),
         state: download ? download.state : "upcoming",
         ...(download?.reasonKey ? { reasonKey: download.reasonKey } : {}),
+        ...(download?.reasonVars ? { reasonVars: download.reasonVars } : {}),
         ...(download?.nextAttemptAt ? { nextAttemptAt: download.nextAttemptAt } : {}),
         ...(episode.ambiguous ? { ambiguous: true } : {}),
         dateUncertain: true,
@@ -679,6 +715,7 @@ export interface ActivityItem {
   title?: string;
   state: EpisodeDownloadState;
   reasonKey?: string;
+  reasonVars?: Record<string, string | number>;
   nextAttemptAt?: string;
   jobId?: string;
   updatedAt: string;
@@ -699,6 +736,7 @@ export function activityItems(follows: Follow[], limit: number): ActivityItem[] 
         ...(episode.title ? { title: episode.title } : {}),
         state: download.state,
         ...(download.reasonKey ? { reasonKey: download.reasonKey } : {}),
+        ...(download.reasonVars ? { reasonVars: download.reasonVars } : {}),
         ...(download.nextAttemptAt ? { nextAttemptAt: download.nextAttemptAt } : {}),
         ...(download.jobId ? { jobId: download.jobId } : {}),
         updatedAt: download.updatedAt,
@@ -709,12 +747,27 @@ export function activityItems(follows: Follow[], limit: number): ActivityItem[] 
   return items.slice(0, Math.max(0, limit));
 }
 
-const sanitizeLoadedFollow = (follow: Follow): void => {
+const sanitizeLoadedFollow = (
+  follow: Follow,
+  sourceProfiles: readonly StoredSourceProfile[],
+): void => {
   const auto = follow.autoDownload as unknown;
   if (auto && typeof auto === "object" && !Array.isArray(auto) && Object.hasOwn(auto, "sourceProfile")) {
     const record = auto as Record<string, unknown>;
     try {
-      record.sourceProfile = parseSourceProfileReference(record.sourceProfile);
+      const sourceProfile = parseSourceProfileSnapshot(record.sourceProfile);
+      const stored = sourceProfile.template === undefined
+        ? sourceProfiles.find((profile) =>
+            profile.id === sourceProfile.profileId && profile.revision === sourceProfile.revision)
+        : undefined;
+      record.sourceProfile = stored
+        ? {
+            profileId: stored.id,
+            revision: stored.revision,
+            template: stored.template,
+            ...(stored.parameters === undefined ? {} : { parameters: structuredClone(stored.parameters) }),
+          }
+        : sourceProfile;
     } catch (error) {
       if (!(error instanceof SourceAdmissionValidationError)) throw error;
       delete record.sourceProfile;
@@ -789,7 +842,7 @@ export class FollowStore {
 
   get unavailable(): boolean { return this.unreadable; }
 
-  async load(): Promise<void> {
+  async load(sourceProfiles: readonly StoredSourceProfile[] = []): Promise<void> {
     await mkdir(path.dirname(this.file), { recursive: true });
     let raw: string;
     try {
@@ -808,7 +861,7 @@ export class FollowStore {
     try {
       const parsed = JSON.parse(raw) as FollowFile;
       if (!parsed || typeof parsed !== "object" || parsed.version !== 1 || !Array.isArray(parsed.follows)) throw new Error("not a version 1 follow file");
-      for (const follow of parsed.follows) sanitizeLoadedFollow(follow);
+      for (const follow of parsed.follows) sanitizeLoadedFollow(follow, sourceProfiles);
       this.follows = parsed.follows;
       this.unreadable = false;
     } catch (error) {
@@ -958,6 +1011,7 @@ export interface FollowJob {
   id: string;
   status: string;
   errorKey?: string;
+  errorVars?: Record<string, string | number>;
   /** The library key the job wrote, once it has one. */
   target?: string;
   follow?: { followId: string; episodeKey: string; intent: string };
@@ -976,13 +1030,18 @@ export interface FollowQueue {
   findActiveEpisode(ownerUserId: string, type: string, videoId: string): { id: string } | undefined;
   adopt(id: string, follow: { followId: string; episodeKey: string; intent: string }): Promise<void>;
   followJobs(): FollowJob[];
-  get(id: string): { id: string; status: string; errorKey?: string } | undefined;
-  retry(id: string, selection?: DownloadSelection): Promise<unknown>;
+  get(id: string): { id: string; status: string; errorKey?: string; errorVars?: Record<string, string | number> } | undefined;
+  retry(
+    id: string,
+    selection?: DownloadSelection,
+    sourceAdmission?: SourceAdmissionSnapshotV1,
+  ): Promise<unknown>;
   remove(id: string): Promise<void>;
 }
 
 interface AdmissionReuse {
   sourceAdmission?: SourceAdmissionSnapshotV1;
+  sourceGraceDays?: number;
   legacyRule?: LegacyDownloadRule;
 }
 
@@ -1011,7 +1070,8 @@ export interface FollowDeps {
   mayDownload: (ownerUserId: string, selection: DownloadSelection) => boolean;
   admitSourceProfile?: (
     ownerUserId: string,
-    reference: { profileId: string; revision: number },
+    sourceProfile: FollowSourceProfile,
+    mediaKind: "episode" | "movie",
   ) => SourceAdmissionSnapshotV1;
   tickMs?: number;
   concurrency?: number;
@@ -1294,7 +1354,11 @@ export class FollowService {
       if (admitted >= ADMIT_PER_CALL) return;
       if (this.outstanding() >= OUTSTANDING_LIMIT) return;
       await this.enqueueLocked(followId, revision, episode.key, download?.generation ?? 1, download
-        ? { sourceAdmission: download.sourceAdmission, legacyRule: download.legacyRule }
+        ? {
+          sourceAdmission: download.sourceAdmission,
+          sourceGraceDays: download.sourceGraceDays,
+          legacyRule: download.legacyRule,
+        }
         : undefined);
       admitted += 1;
     }
@@ -1314,12 +1378,18 @@ export class FollowService {
     const intent = this.intentOf(followId, episodeKey, generation);
     const sourceProfile = before.autoDownload!.sourceProfile;
     let sourceAdmission: SourceAdmissionSnapshotV1 | undefined;
+    let sourceGraceDays: number | undefined;
     let legacyRule: LegacyDownloadRule | undefined;
     if (sourceProfile) {
       try {
         const admit = this.deps.admitSourceProfile;
         if (!admit) throw new SourceAdmissionRejected("profileUnknown");
-        sourceAdmission = reuse?.sourceAdmission ?? admit(before.ownerUserId, sourceProfile);
+        sourceAdmission = reuse?.sourceAdmission ?? admit(
+          before.ownerUserId,
+          sourceProfile,
+          before.type === "movie" ? "movie" : "episode",
+        );
+        sourceGraceDays = reuse?.sourceGraceDays ?? before.autoDownload!.graceDays;
       } catch (error) {
         if (!(error instanceof SourceAdmissionRejected)) throw error;
         await this.setDownload(followId, episodeKey, {
@@ -1333,6 +1403,7 @@ export class FollowService {
     }
     const frozen = {
       ...(sourceAdmission ? { sourceAdmission } : {}),
+      ...(sourceGraceDays ? { sourceGraceDays } : {}),
       ...(legacyRule ? { legacyRule } : {}),
     };
     await this.setDownload(followId, episodeKey, {
@@ -1343,13 +1414,16 @@ export class FollowService {
     const selection = follow.autoDownload!.sourceProfile
       ? follow.autoDownload!.selection
       : effectiveLegacySelection(legacyRule!, episode, this.deps.now());
+    const jobAdmission = sourceAdmission === undefined
+      ? undefined
+      : effectiveRulesAdmission(sourceAdmission, episode, this.deps.now(), sourceGraceDays);
     const job = await this.deps.queue.addPending(
       this.jobTitle(follow, episode),
       { type: follow.type, videoId: episode.videoId, selection },
       this.episodeMedia(follow, episode),
       follow.ownerUserId,
       { followId, episodeKey, intent },
-      sourceAdmission,
+      jobAdmission,
     );
     follow = this.admittable(followId, revision);
     if (!follow) return;
@@ -1369,11 +1443,11 @@ export class FollowService {
     const download = follow?.episodes[episodeKey]?.download;
     if (!follow || !download) return;
     if (job.status === "completed") {
-      await this.setDownload(followId, episodeKey, { ...download, ...(job.target ? { target: job.target } : {}), state: "completed", jobId: job.id, reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
+      await this.setDownload(followId, episodeKey, { ...download, ...(job.target ? { target: job.target } : {}), state: "completed", jobId: job.id, reasonKey: undefined, reasonVars: undefined, nextAttemptAt: undefined, updatedAt: "" });
     } else if (job.status === "failed") {
       await this.setWaiting(followId, episodeKey, { ...download, jobId: job.id }, job, now);
     } else {
-      await this.setDownload(followId, episodeKey, { ...download, state: "queued", jobId: job.id, reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
+      await this.setDownload(followId, episodeKey, { ...download, state: "queued", jobId: job.id, reasonKey: undefined, reasonVars: undefined, nextAttemptAt: undefined, updatedAt: "" });
     }
   }
 
@@ -1381,16 +1455,28 @@ export class FollowService {
     const attempts = download.attempts + 1;
     const follow = this.deps.store.get(followId);
     const episode = follow?.episodes[episodeKey];
-    const window = follow?.autoDownload && episode
+    const window = episode && download.sourceAdmission?.profile.template === "rules"
+      ? graceUntilDays(download.sourceGraceDays, episode)
+      : follow?.autoDownload && episode
       ? !follow.autoDownload.sourceProfile && download.legacyRule
         ? graceUntilDays(download.legacyRule.graceDays, episode)
         : graceUntil(follow.autoDownload, episode)
       : undefined;
     const grace = window !== undefined && window > now ? window : undefined;
     const ladder = now + downloadLadderMs(attempts);
+    const effectiveAdmission = episode && download.sourceAdmission?.profile.template === "rules"
+      ? effectiveRulesAdmission(download.sourceAdmission, episode, now, download.sourceGraceDays)
+      : undefined;
+    const preferredAudio = effectiveAdmission?.policy.constraints.audio;
+    const preferred = preferredAudio?.mode === "strict" && "code" in preferredAudio.preferred
+      ? preferredAudio.preferred.code
+      : undefined;
     await this.setDownload(followId, episodeKey, {
       ...download, state: "waiting", attempts,
-      reasonKey: job.errorKey ?? "err.followDownloadFailed",
+      reasonKey: preferred === undefined
+        ? job.errorKey ?? "err.followDownloadFailed"
+        : "err.waitingForPreferredAudio",
+      reasonVars: preferred === undefined ? job.errorVars : { language: preferred },
       nextAttemptAt: new Date(grace !== undefined ? Math.min(ladder, grace) : ladder).toISOString(),
       graceUntil: grace !== undefined ? new Date(grace).toISOString() : undefined,
       updatedAt: "",
@@ -1417,7 +1503,7 @@ export class FollowService {
         if (download.state === "queued") {
           const job = jobs.get(download.intent);
           if (!job) await this.setDownload(follow.id, episodeKey, { ...download, state: "attention", jobId: undefined, reasonKey: "err.followJobMissing", nextAttemptAt: undefined, updatedAt: "" });
-          else if (job.status === "completed") await this.setDownload(follow.id, episodeKey, { ...download, ...(job.target ? { target: job.target } : {}), state: "completed", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
+          else if (job.status === "completed") await this.setDownload(follow.id, episodeKey, { ...download, ...(job.target ? { target: job.target } : {}), state: "completed", reasonKey: undefined, reasonVars: undefined, nextAttemptAt: undefined, updatedAt: "" });
           else if (job.status === "failed") await this.setWaiting(follow.id, episodeKey, download, job, now);
           continue;
         }
@@ -1433,15 +1519,24 @@ export class FollowService {
           const selection = !follow.autoDownload!.sourceProfile && download.legacyRule
             ? effectiveLegacySelection(download.legacyRule, follow.episodes[episodeKey], now)
             : effectiveSelection(follow.autoDownload!, follow.episodes[episodeKey], now);
-          await this.deps.queue.retry(job.id, selection);
+          const retryAdmission = download.sourceAdmission?.profile.template === "rules"
+            ? effectiveRulesAdmission(
+              download.sourceAdmission,
+              follow.episodes[episodeKey],
+              now,
+              download.sourceGraceDays,
+            )
+            : undefined;
+          await this.deps.queue.retry(job.id, selection, retryAdmission);
           if (!this.fresh(follow.id, revision)) return;
-          await this.setDownload(follow.id, episodeKey, { ...download, state: "queued", jobId: job.id, reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
+          await this.setDownload(follow.id, episodeKey, { ...download, state: "queued", jobId: job.id, reasonKey: undefined, reasonVars: undefined, nextAttemptAt: undefined, updatedAt: "" });
         } else if (job && job.status === "completed") {
-          await this.setDownload(follow.id, episodeKey, { ...download, ...(job.target ? { target: job.target } : {}), state: "completed", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
+          await this.setDownload(follow.id, episodeKey, { ...download, ...(job.target ? { target: job.target } : {}), state: "completed", reasonKey: undefined, reasonVars: undefined, nextAttemptAt: undefined, updatedAt: "" });
         } else if (!job && !download.jobId) {
           // The failed job was cleared from the queue on purpose; the episode is still wanted.
           await this.enqueueLocked(follow.id, revision, episodeKey, download.generation + 1, {
             sourceAdmission: download.sourceAdmission,
+            sourceGraceDays: download.sourceGraceDays,
             legacyRule: download.legacyRule,
           });
         } else {
@@ -1566,14 +1661,22 @@ export class FollowService {
       if (download.state !== "waiting" && !lost) continue;
       const job = download.jobId ? this.deps.queue.get(download.jobId) : undefined;
       if (job && job.status === "failed") {
-        await this.deps.queue.retry(job.id, effectiveSelection(follow.autoDownload!, episode, this.deps.now()));
+        const now = this.deps.now();
+        const retryAdmission = download.sourceAdmission?.profile.template === "rules"
+          ? effectiveRulesAdmission(download.sourceAdmission, episode, now, download.sourceGraceDays)
+          : undefined;
+        await this.deps.queue.retry(job.id, effectiveSelection(follow.autoDownload!, episode, now), retryAdmission);
         if (!this.admittable(followId, revision)) return;
         await this.setDownload(followId, episode.key, {
-          ...download, state: "queued", attempts: 0, reasonKey: undefined, nextAttemptAt: undefined,
+          ...download, state: "queued", attempts: 0, reasonKey: undefined, reasonVars: undefined, nextAttemptAt: undefined,
           legacyRule: legacyRuleFrom(follow.autoDownload!), updatedAt: "",
         });
       } else if (!job) {
-        await this.enqueueLocked(followId, revision, episode.key, download.generation + 1);
+        await this.enqueueLocked(followId, revision, episode.key, download.generation + 1, {
+          sourceAdmission: download.sourceAdmission,
+          sourceGraceDays: download.sourceGraceDays,
+          legacyRule: download.legacyRule,
+        });
       }
     }
   }
@@ -1601,10 +1704,23 @@ export class FollowService {
       if (!["waiting", "attention", "skipped"].includes(download.state)) return;
       const job = download.jobId ? this.deps.queue.get(download.jobId) : undefined;
       if (job && job.status === "failed") {
-        await this.deps.queue.retry(job.id, follow.autoDownload ? effectiveSelection(follow.autoDownload, follow.episodes[episodeKey], this.deps.now()) : undefined);
+        const now = this.deps.now();
+        const retryAdmission = download.sourceAdmission?.profile.template === "rules"
+          ? effectiveRulesAdmission(
+            download.sourceAdmission,
+            follow.episodes[episodeKey],
+            now,
+            download.sourceGraceDays,
+          )
+          : undefined;
+        await this.deps.queue.retry(
+          job.id,
+          follow.autoDownload ? effectiveSelection(follow.autoDownload, follow.episodes[episodeKey], now) : undefined,
+          retryAdmission,
+        );
         if (!this.fresh(followId, revision)) return;
         await this.setDownload(followId, episodeKey, {
-          ...download, state: "queued", reasonKey: undefined, nextAttemptAt: undefined,
+          ...download, state: "queued", reasonKey: undefined, reasonVars: undefined, nextAttemptAt: undefined,
           legacyRule: follow.autoDownload ? legacyRuleFrom(follow.autoDownload) : undefined, updatedAt: "",
         });
         return;
@@ -1615,7 +1731,11 @@ export class FollowService {
         return;
       }
       // An explicit retry does not re-apply the start rule: the episode was asked for.
-      await this.enqueueLocked(followId, revision, episodeKey, download.generation + 1);
+      await this.enqueueLocked(followId, revision, episodeKey, download.generation + 1, {
+        sourceAdmission: download.sourceAdmission,
+        sourceGraceDays: download.sourceGraceDays,
+        legacyRule: download.legacyRule,
+      });
     });
   }
 
@@ -1624,7 +1744,7 @@ export class FollowService {
       const ref = job.follow;
       const download = ref ? this.deps.store.get(ref.followId)?.episodes[ref.episodeKey]?.download : undefined;
       if (!ref || !download || download.intent !== ref.intent || download.state === "completed") return;
-      await this.setDownload(ref.followId, ref.episodeKey, { ...download, ...(job.target ? { target: job.target } : {}), state: "completed", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
+      await this.setDownload(ref.followId, ref.episodeKey, { ...download, ...(job.target ? { target: job.target } : {}), state: "completed", reasonKey: undefined, reasonVars: undefined, nextAttemptAt: undefined, updatedAt: "" });
     });
   }
 
@@ -1638,7 +1758,7 @@ export class FollowService {
       if (download.state === "skipped") return;
       if (job.status === "completed") {
         if (download.state === "completed") return;
-        await this.setDownload(ref.followId, ref.episodeKey, { ...download, ...(job.target ? { target: job.target } : {}), state: "completed", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
+        await this.setDownload(ref.followId, ref.episodeKey, { ...download, ...(job.target ? { target: job.target } : {}), state: "completed", reasonKey: undefined, reasonVars: undefined, nextAttemptAt: undefined, updatedAt: "" });
         return;
       }
       if (job.status === "failed") {
@@ -1663,7 +1783,7 @@ export class FollowService {
         if (!ref || job.status !== "completed") continue;
         const download = this.deps.store.get(ref.followId)?.episodes[ref.episodeKey]?.download;
         if (!download || download.intent !== ref.intent || download.state === "completed") continue;
-        await this.setDownload(ref.followId, ref.episodeKey, { ...download, ...(job.target ? { target: job.target } : {}), state: "completed", reasonKey: undefined, nextAttemptAt: undefined, updatedAt: "" });
+        await this.setDownload(ref.followId, ref.episodeKey, { ...download, ...(job.target ? { target: job.target } : {}), state: "completed", reasonKey: undefined, reasonVars: undefined, nextAttemptAt: undefined, updatedAt: "" });
       }
     });
   }

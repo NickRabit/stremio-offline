@@ -3,11 +3,12 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { defaultInstanceSettings, defaultPrefs, publicSettings, Store } from "./store.js";
+import { defaultInstanceSettings, defaultPrefs, publicSettings, Store, type StoredSourceProfile } from "./store.js";
 import { automaticMetadataEnabled } from "./libraries.js";
 import type { AddonRecord } from "./types.js";
 import { PERSONAL_SETTINGS } from "./users.js";
 import { verifyPassword } from "./auth.js";
+import { defaultTemplateParameters, SOURCE_PROFILE_IDS } from "./source-profiles.js";
 
 const legacyAddon = () => ({
   key: "provider-1", manifestUrl: "https://example.com/manifest.json", role: "source" as const,
@@ -114,6 +115,269 @@ test("a fresh install starts in English", async () => {
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
+test("the download-rule presets seed once and deleted presets stay deleted", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-store-profiles-"));
+  try {
+    const file = path.join(directory, "state.json");
+    const first = new Store(directory);
+    await first.load();
+    assert.deepEqual(
+      first.sourceProfiles().map((profile) => [profile.id, profile.template, profile.revision]),
+      [
+        [SOURCE_PROFILE_IDS.balanced, "rules", 1],
+        [SOURCE_PROFILE_IDS.best, "rules", 1],
+        [SOURCE_PROFILE_IDS.smaller, "rules", 1],
+        [SOURCE_PROFILE_IDS.myLanguage, "rules", 1],
+      ],
+    );
+    await assert.rejects(readFile(file, "utf8"));
+
+    await first.update((state) => { state.settings.addonRefreshHours = 7; });
+    const persisted = JSON.parse(await readFile(file, "utf8")) as { sourceProfiles?: StoredSourceProfile[] };
+    assert.equal(persisted.sourceProfiles?.length, 4);
+
+    const second = new Store(directory);
+    await second.load();
+    assert.deepEqual(second.sourceProfiles(), first.sourceProfiles());
+    const bytes = await readFile(file, "utf8");
+    const third = new Store(directory);
+    await third.load();
+    assert.equal(await readFile(file, "utf8"), bytes);
+
+    await third.update((state) => {
+      state.sourceProfiles = state.sourceProfiles?.filter((profile) => profile.id !== SOURCE_PROFILE_IDS.balanced);
+      state.deletedSourceProfileIds = [SOURCE_PROFILE_IDS.balanced];
+    });
+    const fourth = new Store(directory);
+    await fourth.load();
+    assert.equal(fourth.sourceProfiles().some((profile) => profile.id === SOURCE_PROFILE_IDS.balanced), false);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("invalid and duplicate stored source profiles are dropped and missing built-ins are restored", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-store-profile-repair-"));
+  try {
+    const duplicate: StoredSourceProfile = {
+      id: "7d429129-3be3-4e78-a4fa-3e518b752e33",
+      revision: 1,
+      template: "travel",
+      name: "Duplicate",
+      parameters: defaultTemplateParameters("travel"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    await writeFile(path.join(directory, "state.json"), JSON.stringify({
+      addons: [],
+      defaultsInstalled: false,
+      settings: {},
+      sourceProfiles: [
+        duplicate,
+        { ...duplicate, name: "Dropped duplicate" },
+        {
+          ...duplicate,
+          id: "be5dc85d-7495-426b-9a99-e12f6ee2cfb3",
+          name: "Invalid",
+          parameters: { ...defaultTemplateParameters("travel"), unexpected: true },
+        },
+      ],
+    }));
+
+    const store = new Store(directory);
+    await store.load();
+    assert.deepEqual(
+      store.sourceProfiles().map((profile) => profile.name ?? profile.nameKey),
+      [
+        "Duplicate",
+        "rules.preset.balanced",
+        "rules.preset.best",
+        "rules.preset.smaller",
+        "rules.preset.myLanguage",
+      ],
+    );
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("the Stage 3 catalogue migrates once to four rule presets", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-store-rules-migration-"));
+  const variantId = "7d429129-3be3-4e78-a4fa-3e518b752e33";
+  const now = "2026-01-01T00:00:00.000Z";
+  const user = (id: string, username: string) => ({
+    id, username, passwordHash: "scrypt$aa$bb", secret: `secret-${id}`, role: "user",
+    createdAt: now, permissions: { downloadToLibrary: true, downloadToDevice: false },
+    permissionsVersion: 0,
+  });
+  try {
+    await writeFile(path.join(directory, "state.json"), JSON.stringify({
+      addons: [],
+      defaultsInstalled: true,
+      settings: {},
+      users: [user("usr_00000001", "one"), user("usr_00000002", "two")],
+      userData: {
+        usr_00000001: {
+          prefs: { downloadSourceProfile: SOURCE_PROFILE_IDS.travel },
+          favorites: [], watchlist: {}, progress: {}, watchedSeries: {},
+        },
+        usr_00000002: {
+          prefs: { downloadSourceProfile: SOURCE_PROFILE_IDS.providerPriority },
+          favorites: [], watchlist: {}, progress: {}, watchedSeries: {},
+        },
+      },
+      sourceProfiles: [
+        {
+          id: SOURCE_PROFILE_IDS.recommended,
+          revision: 1,
+          template: "recommended",
+          nameKey: "sourceProfile.recommended",
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: SOURCE_PROFILE_IDS.providerPriority,
+          revision: 1,
+          template: "providerPriority",
+          nameKey: "sourceProfile.providerPriority",
+          parameters: defaultTemplateParameters("providerPriority"),
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: SOURCE_PROFILE_IDS.travel,
+          revision: 1,
+          template: "travel",
+          nameKey: "sourceProfile.travel",
+          parameters: defaultTemplateParameters("travel"),
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: variantId,
+          revision: 3,
+          template: "travel",
+          name: "Road downloads",
+          parameters: defaultTemplateParameters("travel"),
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    }));
+
+    const first = new Store(directory);
+    await first.load();
+    assert.deepEqual(
+      first.sourceProfiles().map((profile) => profile.id).sort(),
+      [
+        SOURCE_PROFILE_IDS.balanced,
+        SOURCE_PROFILE_IDS.best,
+        SOURCE_PROFILE_IDS.smaller,
+        SOURCE_PROFILE_IDS.myLanguage,
+        variantId,
+      ].sort(),
+    );
+    assert.deepEqual(
+      first.sourceProfiles().find((profile) => profile.id === variantId),
+      {
+        id: variantId,
+        revision: 4,
+        template: "rules",
+        name: "Road downloads",
+        parameters: {
+          addons: { scope: "all", order: "viewer" },
+          torrents: false,
+          resolution: { min: 480, max: null },
+          audio: { mode: "prefer", fallback: null },
+          subtitles: "ifAvailable",
+          maxSizeGb: { episode: null, movie: null },
+          skipCinema: false,
+          preference: ["language", "smaller", "addonOrder"],
+        },
+        createdAt: now,
+        updatedAt: first.sourceProfiles().find((profile) => profile.id === variantId)?.updatedAt,
+      },
+    );
+    for (const id of [
+      SOURCE_PROFILE_IDS.recommended,
+      SOURCE_PROFILE_IDS.providerPriority,
+      SOURCE_PROFILE_IDS.travel,
+    ]) assert.ok(first.deletedSourceProfileIds().includes(id));
+    assert.equal(first.prefs("usr_00000001").downloadSourceProfile, SOURCE_PROFILE_IDS.smaller);
+    assert.equal(first.prefs("usr_00000002").downloadSourceProfile, SOURCE_PROFILE_IDS.balanced);
+
+    const bytes = await readFile(path.join(directory, "state.json"), "utf8");
+    const second = new Store(directory);
+    await second.load();
+    assert.equal(await readFile(path.join(directory, "state.json"), "utf8"), bytes);
+    assert.equal(second.sourceProfiles().find((profile) => profile.id === variantId)?.revision, 4);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("legacy variants migrate safely and a dropped variant clears every default that names it", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-store-provider-migration-"));
+  const providerVariant = "b14dc73e-c131-45ca-a8d8-a9c70e45a288";
+  const brokenVariant = "d957f2bf-93ab-4742-8e81-90963a9c1939";
+  const user = "usr_00000001";
+  const now = "2026-01-01T00:00:00.000Z";
+  try {
+    await writeFile(path.join(directory, "state.json"), JSON.stringify({
+      addons: [],
+      defaultsInstalled: true,
+      settings: {},
+      users: [{
+        id: user,
+        username: "owner",
+        passwordHash: "scrypt$aa$bb",
+        secret: "secret",
+        role: "admin",
+        createdAt: now,
+        permissions: { downloadToLibrary: true, downloadToDevice: true },
+        permissionsVersion: 0,
+      }],
+      userData: {
+        [user]: {
+          prefs: {
+            downloadSourceProfile: brokenVariant,
+            followSourceProfile: brokenVariant,
+          },
+          favorites: [], watchlist: {}, progress: {}, watchedSeries: {},
+        },
+      },
+      sourceProfiles: [
+        {
+          id: providerVariant,
+          revision: 1,
+          template: "providerPriority",
+          name: "Provider first",
+          parameters: defaultTemplateParameters("providerPriority"),
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: brokenVariant,
+          revision: 1,
+          template: "providerPriority",
+          name: "Broken",
+          parameters: {
+            ...defaultTemplateParameters("providerPriority"),
+            subtitleMode: "unsupported",
+          },
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    }));
+
+    const store = new Store(directory);
+    await store.load();
+    const migrated = store.sourceProfiles().find((profile) => profile.id === providerVariant);
+    assert.equal(migrated?.template, "rules");
+    assert.equal(migrated?.parameters && "subtitles" in migrated.parameters
+      ? migrated.parameters.subtitles
+      : undefined, "ifAvailable");
+    assert.equal(store.sourceProfiles().some((profile) => profile.id === brokenVariant), false);
+    assert.equal(Object.hasOwn(store.prefs(user), "downloadSourceProfile"), false);
+    assert.equal(Object.hasOwn(store.prefs(user), "followSourceProfile"), false);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test("a stored language survives a reload", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-store-"));
   try {
@@ -196,7 +460,7 @@ test("the personal settings are the keys PERSONAL_SETTINGS names, both ways roun
   const listed = [...PERSONAL_SETTINGS].sort();
   // Legacy page-size keys stay personal so saved values can be migrated; none has a default.
   // `homeLayout` and `downloadSourceProfile` are absent until the person chooses them.
-  const optional: string[] = ["homeLayout", "downloadSourceProfile", "catalogTileSize", "libraryTileSize", "favoritesTileSize", "resumeTileSize", "followingTileSize"];
+  const optional: string[] = ["homeLayout", "downloadSourceProfile", "followSourceProfile", "catalogTileSize", "libraryTileSize", "favoritesTileSize", "resumeTileSize", "followingTileSize"];
   assert.deepEqual([...new Set([...keys, ...optional])].sort(), listed);
   const defaults = new Set(keys);
   for (const key of PERSONAL_SETTINGS) {

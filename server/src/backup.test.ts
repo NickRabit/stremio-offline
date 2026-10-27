@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createSettingsBackup, parseSettingsBackup, remapBackupLibraries } from "./backup.js";
 import { defaultDownloadSettings } from "./naming.js";
-import { defaultSettings } from "./store.js";
+import { RULE_PRESETS } from "./source-profiles.js";
+import { defaultSettings, type StoredSourceProfile } from "./store.js";
 import type { LibraryRecord } from "./libraries.js";
 
 const library = (over: Partial<LibraryRecord> & { id: string; root: string }): LibraryRecord => ({
@@ -10,7 +11,7 @@ const library = (over: Partial<LibraryRecord> & { id: string; root: string }): L
 });
 
 test("a backup keeps the settings, the order and the addon's sensitive URL", () => {
-  const settings = { ...defaultSettings(), concurrentDownloads: 4, audioLanguage: "sk", realDebridToken: "rd-secret", libraryScanPauseOnDownload: true, catalogTileShape: "wide" as const, libraryTileShape: "wide" as const, favoritesTileShape: "poster" as const, resumeTileShape: "wide" as const, followingTileShape: "poster" as const, homeTileShape: "poster" as const, startView: "home" as const, libraryShelf: "favorites" as const, homeLayout: { order: ["resume", "favorites"], hidden: ["recent"], feeds: [] } };
+  const settings = { ...defaultSettings(), concurrentDownloads: 4, audioLanguage: "sk", realDebridToken: "rd-secret", libraryScanPauseOnDownload: true, catalogTileShape: "wide" as const, libraryTileShape: "wide" as const, favoritesTileShape: "poster" as const, resumeTileShape: "wide" as const, followingTileShape: "poster" as const, homeTileShape: "poster" as const, startView: "home" as const, libraryShelf: "favorites" as const, homeLayout: { order: ["resume", "favorites"], hidden: ["recent"], feeds: [] }, downloadSourceProfile: "download-profile", followSourceProfile: "follow-profile" };
   const backup = createSettingsBackup(settings, [{
     key: "secret-key", manifestUrl: "https://example.com/token/abc/manifest.json", role: "source", enabled: false, globalSearch: false,
     addedAt: "2026-01-01T00:00:00.000Z", downloadSettings: defaultDownloadSettings(),
@@ -27,6 +28,8 @@ test("a backup keeps the settings, the order and the addon's sensitive URL", () 
   assert.equal(parseSettingsBackup(backup).settings.homeTileShape, "poster", "the Home tile shape survives a backup round trip");
   assert.equal(parseSettingsBackup(backup).settings.startView, "home", "the start page survives a backup round trip");
   assert.equal(parseSettingsBackup(backup).settings.libraryShelf, "favorites", "the library shelf survives a backup round trip");
+  assert.equal(parseSettingsBackup(backup).settings.downloadSourceProfile, "download-profile");
+  assert.equal(parseSettingsBackup(backup).settings.followSourceProfile, "follow-profile");
   assert.deepEqual(parseSettingsBackup(backup).settings.homeLayout, { order: ["resume", "favorites"], hidden: ["recent"], feeds: [] }, "the personal Home layout survives a backup round trip");
   assert.equal(backup.addons[0].manifestUrl, "https://example.com/token/abc/manifest.json");
   assert.equal(backup.addons[0].globalSearch, false);
@@ -49,7 +52,7 @@ test("a backup distinguishes same-name providers by URL and omits installation-l
     },
   ];
   const backup = createSettingsBackup(defaultSettings(), addons);
-  assert.equal(backup.version, 3);
+  assert.equal(backup.version, 4);
   assert.deepEqual(backup.addons.map((addon) => addon.manifestUrl), [
     "https://alpha.example/manifest.json",
     "https://beta.example/manifest.json",
@@ -105,7 +108,7 @@ test("a backup carries the libraries and a rule that names one survives a round 
   }];
 
   const backup = createSettingsBackup(settings, addons, [films, series]);
-  assert.equal(backup.version, 3);
+  assert.equal(backup.version, 4);
   assert.deepEqual(backup.libraries, [
     { id: films.id, name: "Films", type: "movie", root: "/downloads/Films" },
     { id: series.id, name: "Series", type: "series", root: "/downloads/Series" },
@@ -165,7 +168,7 @@ test("a version 1 backup still imports, with no libraries and no rules", () => {
   assert.equal(remapped.addons[0]!.downloadSettings.movie.subfolder, "Filmy", "the old rules are kept");
 });
 
-test("a version 3 backup carries the media-server metadata and strips everything else", () => {
+test("a version 4 backup carries the media-server metadata and strips everything else", () => {
   const connectionId = `mconn_${"1".repeat(32)}`;
   const mediaServers = {
     version: 1,
@@ -182,7 +185,7 @@ test("a version 3 backup carries the media-server metadata and strips everything
     }],
   };
   const backup = createSettingsBackup(defaultSettings(), [], [], mediaServers);
-  assert.equal(backup.version, 3);
+  assert.equal(backup.version, 4);
   assert.deepEqual(Object.keys(backup.mediaServers!.connections[0]!).sort(),
     ["accountId", "allowLan", "allowLoopback", "baseUrl", "id", "name", "provider", "serverId"]);
   assert.deepEqual(Object.keys(backup.mediaServers!.libraries[0]!).sort(),
@@ -208,4 +211,55 @@ test("a version 1 or 2 backup carries no media-server configuration at all", () 
     const parsed = parseSettingsBackup({ format: "stremio-offline-settings", version, settings: {}, addons: [] });
     assert.equal("mediaServers" in parsed, false, `a version ${version} file leaves the remote configuration alone`);
   }
+});
+
+test("a version 4 backup carries source profiles and their tombstones", () => {
+  const profile: StoredSourceProfile = {
+    id: "00000000-0000-4000-8000-000000000101",
+    revision: 3,
+    template: "rules",
+    name: "Small files",
+    parameters: { ...RULE_PRESETS[0]!.rules, resolution: { min: 720, max: 2160 } },
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-02-01T00:00:00.000Z",
+  };
+  const tombstone = "00000000-0000-4000-8000-000000000102";
+  const backup = createSettingsBackup(defaultSettings(), [], [], undefined, {
+    profiles: [profile],
+    deletedIds: [tombstone],
+  });
+
+  assert.equal(backup.version, 4);
+  assert.deepEqual(backup.sourceProfiles, { profiles: [profile], deletedIds: [tombstone] });
+  assert.deepEqual(parseSettingsBackup(JSON.parse(JSON.stringify(backup))).sourceProfiles, {
+    profiles: [profile],
+    deletedIds: [tombstone],
+  });
+});
+
+test("a version 4 backup refuses a revision that cannot be incremented safely", () => {
+  const profile: StoredSourceProfile = {
+    id: "00000000-0000-4000-8000-000000000103",
+    revision: Number.MAX_SAFE_INTEGER,
+    template: "rules",
+    name: "Too many edits",
+    parameters: RULE_PRESETS[0]!.rules,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-02-01T00:00:00.000Z",
+  };
+  assert.throws(() => parseSettingsBackup({
+    format: "stremio-offline-settings",
+    version: 4,
+    settings: {},
+    addons: [],
+    mediaServers: { version: 1, connections: [], libraries: [] },
+    sourceProfiles: { profiles: [profile], deletedIds: [] },
+  }), /source profiles in the backup are not valid/);
+});
+
+test("an unknown backup version is still refused", () => {
+  assert.throws(
+    () => parseSettingsBackup({ format: "stremio-offline-settings", version: 5, settings: {}, addons: [] }),
+    /not a Stremio Offline settings backup/,
+  );
 });

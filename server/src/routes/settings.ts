@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type express from "express";
 import { addonIdentity } from "../addon-identity.js";
 import { normalizeRefreshHours } from "../addon-refresh.js";
@@ -16,8 +17,18 @@ import type { LibraryMetaStore } from "../library-meta-store.js";
 import { currentLevel, log, parseLevel, setLevel } from "../logger.js";
 import { publicAddon } from "../security.js";
 import { assertStillAdmin, ForbiddenError } from "../roles.js";
-import { sourceProfilesForViewer, viewerOfProfileAccount } from "../source-profiles.js";
-import { memberSettings, publicSettings, type InstanceSettings, type Settings, type State, type UserPrefs } from "../store.js";
+import {
+  declaresStream,
+  RULE_PRESETS,
+  SOURCE_PROFILE_IDS,
+  sourceProfilesForViewer,
+  viewerOfProfileAccount,
+  type ProviderPriorityParameters,
+  type SourceProfileTemplate,
+  type TravelParameters,
+} from "../source-profiles.js";
+import type { DownloadRules } from "../download-rules.js";
+import { memberSettings, publicSettings, type InstanceSettings, type Settings, type State, type StoredSourceProfile, type UserPrefs } from "../store.js";
 import { verifyTmdbKey } from "../tmdb.js";
 import { clearTrailerCache } from "../trailers.js";
 import type { MetaItem } from "../types.js";
@@ -39,6 +50,132 @@ export interface SettingsDeps extends RouteContext {
   queue: DownloadQueue;
   streamCache: { clear(): void };
 }
+
+interface SourceProfileImportSummary {
+  imported: number;
+  reused: number;
+  renamed: number;
+  dormant: string[];
+}
+
+const BUILT_IN_PROFILE_NAMES: Record<SourceProfileTemplate, string> = {
+  recommended: "Recommended",
+  providerPriority: "Addon order, verified",
+  travel: "Travel (small files)",
+  rules: "Download rules",
+};
+const BUILT_IN_PROFILE_IDS = new Set<string>(RULE_PRESETS.map((preset) => preset.id));
+
+const sameParameters = (
+  left: StoredSourceProfile["parameters"],
+  right: StoredSourceProfile["parameters"],
+): boolean => JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+
+const sameProfileDefinition = (left: StoredSourceProfile, right: StoredSourceProfile): boolean =>
+  left.template === right.template
+  && left.revision === right.revision
+  && sameParameters(left.parameters, right.parameters)
+  && left.name === right.name
+  && left.nameKey === right.nameKey;
+
+const remapProfileAddonKeys = (
+  profile: StoredSourceProfile,
+  installedKeys: ReadonlySet<string>,
+): StoredSourceProfile | undefined => {
+  if (profile.parameters === undefined) return structuredClone(profile);
+  const parameters = structuredClone(profile.parameters);
+  if (profile.template !== "rules") {
+    const legacy = parameters as TravelParameters | ProviderPriorityParameters;
+    if ("scope" in legacy && legacy.scope.mode === "selected") {
+      legacy.scope.addonKeys = legacy.scope.addonKeys.filter((key) => installedKeys.has(key));
+      if (!legacy.scope.addonKeys.length) return undefined;
+    }
+    if ("providerOrder" in legacy && "addonKeys" in legacy.providerOrder) {
+      legacy.providerOrder.addonKeys = legacy.providerOrder.addonKeys.filter((key) => installedKeys.has(key));
+    }
+  } else {
+    const rules = parameters as DownloadRules;
+    if (rules.addons.scope !== "all") {
+      rules.addons.scope.selected = rules.addons.scope.selected.filter((key) => installedKeys.has(key));
+      if (!rules.addons.scope.selected.length) return undefined;
+    }
+    if (rules.addons.order !== "viewer") {
+      rules.addons.order.explicit = rules.addons.order.explicit.filter((key) => installedKeys.has(key));
+    }
+  }
+  return { ...structuredClone(profile), parameters };
+};
+
+const importedProfileName = (
+  base: string,
+  forceSuffix: boolean,
+  profiles: readonly StoredSourceProfile[],
+): { name: string; renamed: boolean } => {
+  for (let suffix = forceSuffix ? 1 : 0; ; suffix += 1) {
+    const tail = suffix === 0 ? "" : ` (imported${suffix === 1 ? "" : ` ${suffix}`})`;
+    const name = suffix === 0 ? base : `${base.slice(0, 60 - tail.length).trimEnd()}${tail}`;
+    if (!profiles.some((profile) => profile.name?.toLowerCase() === name.toLowerCase())) {
+      return { name, renamed: suffix > 0 };
+    }
+  }
+};
+
+const restoreSourceProfiles = (
+  state: State,
+  profiles: readonly StoredSourceProfile[],
+  deletedIds: readonly string[],
+): {
+  idMap: Map<string, string>;
+  summary: SourceProfileImportSummary;
+} => {
+  const localProfiles = [...(state.sourceProfiles ?? [])];
+  const tombstones = new Set([...(state.deletedSourceProfileIds ?? []), ...deletedIds]);
+  const installedKeys = new Set(state.addons.filter(declaresStream).map((addon) => addon.key));
+  const idMap = new Map<string, string>();
+  const summary: SourceProfileImportSummary = { imported: 0, reused: 0, renamed: 0, dormant: [] };
+
+  for (const original of profiles) {
+    const sourceName = original.name ?? BUILT_IN_PROFILE_NAMES[original.template];
+    const mapped = remapProfileAddonKeys(original, installedKeys);
+    if (mapped === undefined) {
+      summary.dormant.push(sourceName);
+      continue;
+    }
+
+    const collision = localProfiles.find((profile) => profile.id === mapped.id);
+    const builtInId = BUILT_IN_PROFILE_IDS.has(mapped.id);
+    const builtInEqual = builtInId && collision !== undefined
+      && collision.revision === mapped.revision
+      && sameParameters(collision.parameters, mapped.parameters);
+    if (builtInEqual || (collision !== undefined && sameProfileDefinition(collision, mapped))) {
+      idMap.set(original.id, collision.id);
+      summary.reused += 1;
+      continue;
+    }
+
+    const preserveId = collision === undefined && !tombstones.has(mapped.id);
+    let id = preserveId ? mapped.id : randomUUID();
+    const used = new Set([...localProfiles.map((profile) => profile.id), ...tombstones, ...idMap.values()]);
+    while (used.has(id)) id = randomUUID();
+    const builtInVariant = builtInId && !builtInEqual;
+    const named = importedProfileName(
+      builtInVariant ? BUILT_IN_PROFILE_NAMES[mapped.template] : mapped.name!,
+      builtInVariant,
+      localProfiles,
+    );
+    const imported: StoredSourceProfile = { ...structuredClone(mapped), id, name: named.name };
+    if (builtInVariant) delete imported.nameKey;
+    localProfiles.push(imported);
+    idMap.set(original.id, id);
+    summary.imported += 1;
+    if (named.renamed) summary.renamed += 1;
+  }
+
+  const live = new Set(localProfiles.map((profile) => profile.id));
+  state.sourceProfiles = localProfiles;
+  state.deletedSourceProfileIds = [...tombstones].filter((id) => !live.has(id));
+  return { idMap, summary };
+};
 
 export function registerSettingsRoutes(app: express.Application, deps: SettingsDeps): void {
   const { store, STREAM_SORTS, accountIdOf, currentUser, invalidateLibrary, mediaServers, metaCache, metaStore, mutateData, prefsOf, queue, requireAccess, stopContentAccess, streamCache } = deps;
@@ -63,6 +200,7 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
   const offeredDownloadProfiles = (state: State, actor: UserRecord | undefined) => actor
     ? sourceProfilesForViewer({
         viewer: viewerOfProfileAccount(actor),
+        profiles: state.sourceProfiles ?? [],
         addons: state.addons,
         libraries: state.libraries ?? [],
         remoteLibraries: state.remoteLibraries ?? [],
@@ -80,12 +218,20 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       uiLanguage, audioLanguage, subtitleLanguage, downloadTitleLanguage,
       mergeByName, streamSort, trackProgress, showResumeRow,
       tileSize, catalogTileShape, libraryTileShape, favoritesTileShape, resumeTileShape, followingTileShape, homeTileShape, searchTileShape, startView, libraryShelf,
-      homeLayout, downloadSourceProfile,
+      homeLayout, downloadSourceProfile, followSourceProfile,
       ...instance
     } = flat;
     return {
       instance,
-      prefs: { uiLanguage, audioLanguage, subtitleLanguage, downloadTitleLanguage, mergeByName, streamSort, trackProgress, showResumeRow, tileSize, catalogTileShape, libraryTileShape, favoritesTileShape, resumeTileShape, followingTileShape, homeTileShape, searchTileShape, startView, libraryShelf, ...(homeLayout ? { homeLayout } : {}), ...(downloadSourceProfile ? { downloadSourceProfile } : {}) },
+      prefs: {
+        uiLanguage, audioLanguage, subtitleLanguage, downloadTitleLanguage,
+        mergeByName, streamSort, trackProgress, showResumeRow, tileSize,
+        catalogTileShape, libraryTileShape, favoritesTileShape, resumeTileShape,
+        followingTileShape, homeTileShape, searchTileShape, startView, libraryShelf,
+        ...(homeLayout ? { homeLayout } : {}),
+        ...(downloadSourceProfile ? { downloadSourceProfile } : {}),
+        ...(followSourceProfile ? { followSourceProfile } : {}),
+      },
     };
   };
 
@@ -98,7 +244,13 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
     await metaStore.flush();
     const mediaServersView = mediaServers.exportConfiguration(authority);
     res.setHeader("content-disposition", `attachment; filename=stremio-offline-settings-${new Date().toISOString().slice(0, 10)}.json`);
-    res.json(createSettingsBackup({ ...store.settings(), ...prefsOf(req) }, store.addons(), store.libraries(), mediaServersView));
+    res.json(createSettingsBackup(
+      { ...store.settings(), ...prefsOf(req) },
+      store.addons(),
+      store.libraries(),
+      mediaServersView,
+      { profiles: store.sourceProfiles(), deletedIds: store.deletedSourceProfileIds() },
+    ));
   }));
   app.post("/api/settings/import", asyncRoute(async (req, res) => {
     // Captured before the manifests are fetched: read again inside the mutator it would
@@ -148,6 +300,7 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
     // The list as it is on either side of the write, read from the state the write lands on:
     // the sweep below needs the transition that really happened, not an earlier read.
     let before: Array<{ key: string; enabled: boolean; identity: string }> = [];
+    let sourceProfileSummary: SourceProfileImportSummary = { imported: 0, reused: 0, renamed: 0, dormant: [] };
     const applySettings = (state: State) => {
       // Every manifest was fetched before this point, which is ample time for the gate's
       // answer to go stale.
@@ -175,11 +328,39 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       state.settings = split.instance;
       state.addons = loaded;
       state.defaultsInstalled = true;
-      if (split.prefs.downloadSourceProfile && !offeredDownloadProfiles(state, actor).some((profile) => profile.id === split.prefs.downloadSourceProfile)) {
-        delete split.prefs.downloadSourceProfile;
+      let profileIdMap = new Map<string, string>();
+      if (backup.sourceProfiles !== undefined) {
+        const restored = restoreSourceProfiles(
+          state,
+          backup.sourceProfiles.profiles,
+          backup.sourceProfiles.deletedIds,
+        );
+        profileIdMap = restored.idMap;
+        sourceProfileSummary = restored.summary;
+        for (const key of ["downloadSourceProfile", "followSourceProfile"] as const) {
+          const requested = split.prefs[key];
+          if (requested !== undefined) {
+            const mapped = profileIdMap.get(requested);
+            if (mapped) split.prefs[key] = mapped;
+            else delete split.prefs[key];
+          }
+        }
+      }
+      const offered = new Set(offeredDownloadProfiles(state, actor).map((profile) => profile.id));
+      for (const key of ["downloadSourceProfile", "followSourceProfile"] as const) {
+        if (split.prefs[key] && !offered.has(split.prefs[key])) delete split.prefs[key];
       }
       const userId = accountIdOf(req);
       if (userId) mutateData(state, userId, (data) => { data.prefs = { ...data.prefs, ...split.prefs }; });
+      if (backup.sourceProfiles !== undefined) {
+        const live = new Set((state.sourceProfiles ?? []).map((profile) => profile.id));
+        for (const data of state.userData ? Object.values(state.userData) : []) {
+          for (const key of ["downloadSourceProfile", "followSourceProfile"] as const) {
+            const selected = data.prefs[key];
+            if (typeof selected === "string" && selected && !live.has(selected)) delete data.prefs[key];
+          }
+        }
+      }
     };
     if (mediaServersToRestore === undefined) {
       await store.update(applySettings);
@@ -199,8 +380,18 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
         await stopContentAccess({ addonKey: addon.key });
       }
     }
-    log("INFO", "Settings backup imported", { addons: loaded.length, version: backup.version, remapped: parsed.remaps.length });
-    res.json({ settings: settingsView(req), addons: store.addons().map(publicAddon), remapped: parsed.remaps.length });
+    log("INFO", "Settings backup imported", {
+      addons: loaded.length,
+      version: backup.version,
+      remapped: parsed.remaps.length,
+      sourceProfiles: sourceProfileSummary,
+    });
+    res.json({
+      settings: settingsView(req),
+      addons: store.addons().map(publicAddon),
+      remapped: parsed.remaps.length,
+      sourceProfiles: sourceProfileSummary,
+    });
   }));
   app.patch("/api/settings", asyncRoute(async (req, res) => {
     // The path is open to an ordinary user, the instance keys are not: a body that names
@@ -234,7 +425,11 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       throw new AppError("A Home layout must list an order, the hidden rows and the feeds.", "err.homeLayoutShape", 400);
     }
     const postedProfile = req.body.downloadSourceProfile;
+    const postedFollowProfile = req.body.followSourceProfile;
     if (postedProfile !== undefined && postedProfile !== null && typeof postedProfile !== "string") {
+      throw new AppError("This source profile is not available to this account.", "err.sourceProfileUnavailable", 400);
+    }
+    if (postedFollowProfile !== undefined && postedFollowProfile !== null && typeof postedFollowProfile !== "string") {
       throw new AppError("This source profile is not available to this account.", "err.sourceProfileUnavailable", 400);
     }
     await store.update((state) => {
@@ -244,7 +439,11 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       // The body is one flat object; each key goes to the half that owns it. Only the keys the
       // body names are written, so a preference nobody touched keeps the value it had.
       const prefs: Record<string, unknown> = { ...(userId ? state.userData?.[userId]?.prefs : undefined) };
-      if (postedProfile && !offeredDownloadProfiles(state, actor).some((profile) => profile.id === postedProfile)) {
+      const offered = offeredDownloadProfiles(state, actor);
+      if (postedProfile && !offered.some((profile) => profile.id === postedProfile)) {
+        throw new AppError("This source profile is not available to this account.", "err.sourceProfileUnavailable", 400);
+      }
+      if (postedFollowProfile && !offered.some((profile) => profile.id === postedFollowProfile)) {
         throw new AppError("This source profile is not available to this account.", "err.sourceProfileUnavailable", 400);
       }
       if (req.body.concurrentDownloads !== undefined) state.settings.concurrentDownloads = Math.max(1, Math.min(8, Number(req.body.concurrentDownloads) || 1));
@@ -322,6 +521,10 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       if (postedProfile !== undefined) {
         if (postedProfile) prefs.downloadSourceProfile = postedProfile;
         else delete prefs.downloadSourceProfile;
+      }
+      if (postedFollowProfile !== undefined) {
+        if (postedFollowProfile) prefs.followSourceProfile = postedFollowProfile;
+        else delete prefs.followSourceProfile;
       }
       if (realDebridToken !== undefined) state.settings.realDebridToken = realDebridToken;
       if (tmdbApiKey !== undefined) state.settings.tmdbApiKey = tmdbApiKey;

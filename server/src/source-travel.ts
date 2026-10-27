@@ -6,7 +6,6 @@ import {
   type SourceEvidenceCandidateV1,
 } from "./source-evidence.js";
 import type { SourceAdmissionSnapshotV1 } from "./source-admission.js";
-import { SOURCE_PROFILE_IDS } from "./source-profiles.js";
 
 export const TRAVEL_INSPECTION_BUDGET = 15;
 export const TRAVEL_MAX_REJECTED_INDICES = 256;
@@ -299,8 +298,7 @@ export async function verifyTravelCandidates(
   if (input === null || typeof input !== "object"
     || input.snapshot === null || typeof input.snapshot !== "object"
     || input.snapshot.profile === null || typeof input.snapshot.profile !== "object"
-    || input.snapshot.profile.id !== SOURCE_PROFILE_IDS.travel
-    || input.snapshot.profile.revision !== 1
+    || input.snapshot.profile.template !== "travel"
     || input.snapshot.operation !== "downloadToLibrary"
     || !Array.isArray(input.candidates) || input.candidates.length > MAX_CANDIDATES
     || typeof input.inspect !== "function" || typeof input.shouldContinue !== "function") {

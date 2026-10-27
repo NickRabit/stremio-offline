@@ -49,6 +49,7 @@ const facts = (overrides: Partial<SourceEvidenceFactsV1> = {}): SourceEvidenceFa
   bytes: unknown(),
   durationSeconds: unknown(),
   heightPixels: unknown(),
+  releaseKind: unknown(),
   sampleOrTrailer: unknown(),
   ...overrides,
 });
@@ -121,7 +122,7 @@ const snapshotWithKinds = (
   });
   return {
     schemaVersion: 1,
-    profile: { id: SOURCE_PROFILE_IDS.travel, revision: 1 },
+    profile: { id: SOURCE_PROFILE_IDS.travel, revision: 1, template: "travel" },
     operation: "downloadToLibrary",
     providerKeys,
     policy: materializeSourceAdmissionPolicy(

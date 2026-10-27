@@ -15,8 +15,8 @@ import type { RemoteDownloadReference } from "../media-server-download.js";
 import type { ResourceOwner } from "../media-resources.js";
 import { defaultDownloadSettings, type MediaInfo } from "../naming.js";
 import type { SourceAdmissionSnapshotV1 } from "../source-admission.js";
-import { SOURCE_PROFILE_IDS } from "../source-profiles.js";
-import type { Store, UserPrefs } from "../store.js";
+import { defaultTemplateParameters, RULE_PRESETS, SOURCE_PROFILE_IDS, type SourceProfileTemplate } from "../source-profiles.js";
+import type { Store, StoredSourceProfile, UserPrefs } from "../store.js";
 import type { AddonDownloadSettings, DownloadTargetSettings, StreamItem } from "../types.js";
 import type { UserRecord } from "../users.js";
 import { registerDownloadRoutes, type DownloadsDeps } from "./downloads.js";
@@ -108,6 +108,7 @@ const mount = async (
     onCachedMeta?: () => void | Promise<void>;
     onPending?: (count: number) => void | Promise<void>;
     skipPending?: (count: number) => boolean;
+    profiles?: StoredSourceProfile[];
   } = {},
 ): Promise<Harness> => {
   const jobs = options.jobs ?? [{ id: "job-1", ownerUserId: ADA }, { id: "job-2", ownerUserId: ADA }];
@@ -121,6 +122,15 @@ const mount = async (
   const moves: Array<{ id: string; direction: number }> = [];
   const viewed: Array<{ id?: string; media?: MediaInfo; target?: string }> = [];
   const pending: Array<{ selection?: DownloadSelection; ownerUserId?: string; sourceAdmission?: SourceAdmissionSnapshotV1 }> = [];
+  const profiles = options.profiles ?? (["recommended", "providerPriority", "travel"] as const).map((template) => ({
+    id: SOURCE_PROFILE_IDS[template],
+    revision: 1,
+    template,
+    nameKey: `sourceProfile.${template}`,
+    ...(template === "recommended" ? {} : { parameters: defaultTemplateParameters(template) }),
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  }));
   /** What the queue does with an id it does not hold, so a foreign job can be compared with one. */
   const require = (name: string, id: string) => {
     if (!jobs.some((job) => job.id === id)) throw new AppError("The item was not found.", "err.itemNotFound");
@@ -158,6 +168,7 @@ const mount = async (
       settings: () => options.settings ?? {},
       prefs: () => ({ uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", ...options.prefs }) as UserPrefs,
       userData: () => ({ addonOrder: options.addonOrder }),
+      sourceProfiles: () => profiles,
     } as unknown as Store,
     needsSetup: () => false,
     currentSession: () => undefined,
@@ -488,7 +499,7 @@ test("profile bulk materializes Travel in the user's addon order with frozen lan
 
   const queued = harness.pending[0]!;
   const snapshot = queued.sourceAdmission!;
-  assert.deepEqual(snapshot.profile, { id: SOURCE_PROFILE_IDS.travel, revision: 1 });
+  assert.deepEqual(snapshot.profile, { id: SOURCE_PROFILE_IDS.travel, revision: 1, template: "travel" });
   assert.equal(snapshot.operation, "downloadToLibrary");
   assert.deepEqual(snapshot.providerKeys, ["addon:beta", "addon:alpha"]);
   assert.deepEqual(snapshot.policy.constraints.audio, { mode: "preferred", preferred: { code: "cs" } });
@@ -557,6 +568,154 @@ test("profile bulk materializes Provider Priority and keeps the request target s
     libraryId: shows.id,
     explicit: true,
   });
+});
+
+test("a stored Travel variant admits through bulk with its explicit order and height", async (t) => {
+  const profile: StoredSourceProfile = {
+    id: "6202fb7a-ddf0-4e95-b9c7-202a9c62b35f",
+    revision: 1,
+    template: "travel",
+    name: "Travel 720",
+    parameters: {
+      scope: { mode: "selected", addonKeys: ["beta", "alpha"] },
+      providerOrder: { addonKeys: ["alpha", "beta"] },
+      audioMode: "preferred",
+      subtitleMode: "optional",
+      heightPixels: { min: 720 },
+    },
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const harness = await mount([
+    streamAddon("alpha", { allowedUsers: [BOB] }),
+    streamAddon("beta", { allowedUsers: [BOB] }),
+  ], {
+    viewer: ordinary,
+    addonOrder: ["beta", "alpha"],
+    profiles: [profile],
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/downloads/bulk", {
+    method: "POST",
+    body: {
+      title: "Show",
+      episodes: episodes(1),
+      selection: profileSelection(profile.id),
+    },
+  });
+  assert.equal(response.status, 201, await response.text());
+  const snapshot = harness.pending[0]!.sourceAdmission!;
+  assert.deepEqual(snapshot.profile, { id: profile.id, revision: 1, template: "travel" });
+  assert.deepEqual(snapshot.providerKeys, ["addon:alpha", "addon:beta"]);
+  assert.deepEqual(snapshot.policy.constraints.heightPixels, { min: 720 });
+});
+
+test("bulk admission materializes every rule preset with the episode size limit", async (t) => {
+  const profiles = RULE_PRESETS.map((preset) => ({
+    id: preset.id,
+    revision: 1,
+    template: preset.template,
+    nameKey: preset.nameKey,
+    parameters: preset.rules,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  })) satisfies StoredSourceProfile[];
+  const harness = await mount([streamAddon("rule-addon", { allowedUsers: [BOB] })], {
+    viewer: ordinary,
+    profiles,
+  });
+  t.after(harness.close);
+
+  for (const preset of RULE_PRESETS) {
+    const response = await api(harness.base, "/api/downloads/bulk", {
+      method: "POST",
+      body: {
+        title: "Show",
+        episodes: episodes(1),
+        selection: profileSelection(preset.id),
+      },
+    });
+    assert.equal(response.status, 201, await response.text());
+    const snapshot = harness.pending.at(-1)!.sourceAdmission!;
+    assert.deepEqual(snapshot.profile, { id: preset.id, revision: 1, template: "rules" });
+    assert.deepEqual(
+      snapshot.policy.constraints.bytes,
+      preset.rules.maxSizeGb.episode === null
+        ? undefined
+        : { max: preset.rules.maxSizeGb.episode * 1_000_000_000 },
+    );
+  }
+});
+
+test("a stored profile revision bump rejects a stale bulk submission", async (t) => {
+  const profile: StoredSourceProfile = {
+    id: "755d1c85-c935-47c9-8e23-92b72b942120",
+    revision: 2,
+    template: "travel",
+    name: "Travel second revision",
+    parameters: defaultTemplateParameters("travel"),
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-02T00:00:00.000Z",
+  };
+  const harness = await mount([streamAddon("stream-addon", { allowedUsers: [BOB] })], {
+    viewer: ordinary,
+    profiles: [profile],
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/downloads/bulk", {
+    method: "POST",
+    body: { title: "Show", episodes: episodes(1), selection: profileSelection(profile.id, 1) },
+  });
+  assert.equal(response.status, 409);
+  assert.equal(await keyOf(response), "err.sourceProfileRevisionStale");
+  assert.deepEqual(harness.pending, []);
+});
+
+test("a stored Provider priority variant admits HTTP-only ascending policy", async (t) => {
+  const profile: StoredSourceProfile = {
+    id: "e79b34cb-eec4-4d61-b4ca-b4e12786ad17",
+    revision: 1,
+    template: "providerPriority",
+    name: "Smallest HTTP",
+    parameters: {
+      scope: { mode: "allAvailable" },
+      providerOrder: { from: "viewer" },
+      sizeDirection: "asc",
+      transfer: ["http"],
+      audioMode: "preferred",
+      subtitleMode: "optional",
+    },
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const harness = await mount([streamAddon("stream-addon", { allowedUsers: [BOB] })], {
+    viewer: ordinary,
+    profiles: [profile],
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/downloads/bulk", {
+    method: "POST",
+    body: { title: "Show", episodes: episodes(1), selection: profileSelection(profile.id) },
+  });
+  assert.equal(response.status, 201, await response.text());
+  const snapshot = harness.pending[0]!.sourceAdmission!;
+  assert.deepEqual(snapshot.profile, {
+    id: profile.id,
+    revision: 1,
+    template: "providerPriority",
+  });
+  assert.deepEqual(snapshot.policy.constraints.sourceKinds, [
+    "localFile",
+    "mediaServerOriginal",
+    "http",
+  ]);
+  assert.deepEqual(
+    snapshot.policy.criteria.find((criterion) => criterion.kind === "size"),
+    { kind: "size", direction: "asc" },
+  );
 });
 
 test("profile bulk re-admits each job and drops providers revoked before it is queued", async (t) => {

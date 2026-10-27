@@ -34,8 +34,8 @@ const stubMatchMedia = (width: number) => vi.stubGlobal("matchMedia", (query: st
 
 const render = async (follows: FollowView[], over: Partial<Parameters<typeof FollowingPage>[0]> = {}) => {
   await act(async () => {
-    root.render(<FollowingPage follows={follows} newEpisodes={[]} languages={[]} libraries={[]} addons={[]}
-      shape="poster" onToggleShape={() => undefined} audioLanguage="en" subtitleLanguage="en" onChanged={() => undefined} onOpenSeries={() => undefined} onNotify={() => undefined} {...over}/>);
+    root.render(<FollowingPage follows={follows} newEpisodes={[]} libraries={[]}
+      shape="poster" onToggleShape={() => undefined} onChanged={() => undefined} onOpenSeries={() => undefined} onNotify={() => undefined} {...over}/>);
   });
 };
 

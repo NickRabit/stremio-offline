@@ -11,7 +11,6 @@ import {
   type EligibleSourceCandidate,
 } from "./source-evidence.js";
 import {
-  parseSourceAdmissionSnapshotV1,
   type SourceAdmissionSnapshotV1,
 } from "./source-admission.js";
 import {
@@ -38,6 +37,7 @@ const facts = (overrides: Partial<SourceEvidenceFactsV1> = {}): SourceEvidenceFa
   bytes: unknown(),
   durationSeconds: unknown(),
   heightPixels: unknown(),
+  releaseKind: unknown(),
   sampleOrTrailer: unknown(),
   ...overrides,
 });
@@ -73,9 +73,9 @@ const snapshot = (options: {
   existingLocalCopy?: ExistingLocalCopyPolicy;
 } = {}): SourceAdmissionSnapshotV1 => {
   const providerKeys = options.providerKeys ?? ["addon:one", "addon:two", "local"];
-  return parseSourceAdmissionSnapshotV1({
+  return {
     schemaVersion: 1,
-    profile: { id: "profile", revision: 1 },
+    profile: { id: "profile", revision: 1, template: "travel" },
     operation: "downloadToLibrary",
     providerKeys,
     policy: parseSourcePolicyV1({
@@ -93,7 +93,7 @@ const snapshot = (options: {
       nextEpisode: "profile",
       existingLocalCopy: options.existingLocalCopy ?? "meetsRequirements",
     }),
-  });
+  };
 };
 
 const best = (items: EligibleSourceCandidate[]): EligibleSourceCandidate => {

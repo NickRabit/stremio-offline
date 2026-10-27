@@ -4,38 +4,32 @@ import path from "node:path";
 import {
   cleanupJourney,
   E2E_LIBRARY,
+  profileByNameKey,
   sourceRequests,
   type Job,
-  type Profile,
   resetFixture,
 } from "./source-selection-journey";
 
-const PROVIDER_PRIORITY_PROFILE_ID = "390a8b1a-85f6-4ded-9d7e-701a299720bb";
 const PRIMARY_PROVIDER = "com.linvo.cinemeta";
+const TITLE_PREFIX = "SRCSEL provider fixture smaller";
 const VIDEO_ID = "tt-e2e-provider-priority-episode";
-const TITLE = "SRCSEL Provider priority E2E journey";
 const SOURCE_SECRET = "provider-priority-signed-source-canary";
 
 test.afterEach(async ({ request }) => {
-  await cleanupJourney(request, TITLE);
+  await cleanupJourney(request, TITLE_PREFIX);
 });
 
-test("the fixed Provider priority profile downloads through the bulk queue journey", async ({ request }) => {
+test("the Smaller preset downloads through the bulk queue journey", async ({ request }) => {
   expect((await resetFixture(request)).ok()).toBe(true);
-  const listed = await request.get("/api/source-profiles");
-  expect(listed.status(), await listed.text()).toBe(200);
-  const { profiles } = await listed.json() as { profiles: Profile[] };
-  const providerPriority = profiles.find((profile) => profile.id === PROVIDER_PRIORITY_PROFILE_ID);
-  expect(providerPriority, "the fixed Provider priority profile is not available").toBeDefined();
-  expect(providerPriority!.operations).toContain("downloadToLibrary");
+  const smaller = await profileByNameKey(request, "rules.preset.smaller");
 
   const queued = await request.post("/api/downloads/bulk", {
     data: {
-      title: TITLE,
+      title: TITLE_PREFIX,
       type: "series",
-      media: { id: "tt-e2e-provider-priority", metaType: "series" },
-      episodes: [{ id: VIDEO_ID, season: 1, episode: 1, title: "Provider priority journey" }],
-      selection: { profile: { profileId: providerPriority!.id, revision: providerPriority!.revision } },
+      media: { id: "tt-e2e-provider-rules", metaType: "series" },
+      episodes: [{ id: VIDEO_ID, season: 1, episode: 1, title: "Provider journey" }],
+      selection: { profile: { profileId: smaller.id, revision: smaller.revision } },
     },
   });
   expect(queued.status(), await queued.text()).toBe(201);
@@ -53,15 +47,14 @@ test("the fixed Provider priority profile downloads through the bulk queue journ
       "sourceStreamAddonIdentity",
       "sourceSubtitleAddonIdentity",
       "sourceFallbackAttempts",
-      "travelCursor",
-      "travelTemporaryFailures",
-      "travelBudgetAttempts",
-      "travel-video.mp4",
+      "rulesCursor",
+      "rulesTemporaryFailures",
+      "rulesBudgetAttempts",
       SOURCE_SECRET,
     ]) {
       if (serialized.includes(value)) privateQueueData.add(value);
     }
-    job = queue.jobs.find((item) => item.title.startsWith(TITLE));
+    job = queue.jobs.find((item) => item.title.startsWith(TITLE_PREFIX));
     return job?.status === "completed" || job?.status === "failed" ? job.status : job?.status;
   }, {
     timeout: 60_000,
@@ -80,6 +73,6 @@ test("the fixed Provider priority profile downloads through the bulk queue journ
   const target = path.resolve(E2E_LIBRARY, job!.target);
   expect(path.relative(E2E_LIBRARY, target).split(path.sep)).not.toContain("..");
   await expect.poll(() => stat(target).then((info) => info.isFile() && info.size > 0, () => false), {
-    message: "the completed Provider priority download is not a nonempty file",
+    message: "the completed rules download is not a nonempty file",
   }).toBe(true);
 });

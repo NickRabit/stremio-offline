@@ -208,6 +208,19 @@ test("a zero-byte minimum is accepted and all nested values are copied", () => {
   assert.notEqual((parsed.criteria[0] as { order: string[] }).order, (input.criteria[0] as { order: string[] }).order);
 });
 
+test("release-kind exclusions parse strictly and stay unique", () => {
+  const input: any = recommended();
+  input.constraints.excludeReleaseKinds = ["cam", "telesync", "screener"];
+  assert.deepEqual(
+    parseSourcePolicyV1(input).constraints.excludeReleaseKinds,
+    ["cam", "telesync", "screener"],
+  );
+  input.constraints.excludeReleaseKinds = ["cam", "cam"];
+  assert.throws(() => parseSourcePolicyV1(input), SourcePolicyValidationError);
+  input.constraints.excludeReleaseKinds = ["cam-rip"];
+  assert.throws(() => parseSourcePolicyV1(input), SourcePolicyValidationError);
+});
+
 const valid = recommended;
 
 const invalidCases: Array<{ name: string; value: () => unknown }> = [

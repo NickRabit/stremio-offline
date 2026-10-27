@@ -224,11 +224,11 @@ test("an addon identity sweep pauses only selected profile jobs whose identity c
   };
   const addonState = [sourceAddon];
   const travelAdmission = {
-    profile: { id: SOURCE_PROFILE_IDS.travel, revision: 1 },
+    profile: { id: SOURCE_PROFILE_IDS.travel, revision: 1, template: "travel" },
     operation: "downloadToLibrary",
   } as DownloadJob["sourceAdmission"];
   const providerPriorityAdmission = {
-    profile: { id: SOURCE_PROFILE_IDS.providerPriority, revision: 1 },
+    profile: { id: SOURCE_PROFILE_IDS.providerPriority, revision: 1, template: "providerPriority" },
     operation: "downloadToLibrary",
   } as DownloadJob["sourceAdmission"];
   const selected = { url: "https://media.example/film.mp4", addonKey: sourceAddon.key };

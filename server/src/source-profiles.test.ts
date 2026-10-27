@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { defaultDownloadSettings } from "./naming.js";
 import {
+  buildTemplatePolicy,
+  defaultTemplateParameters,
+  RULE_PRESETS,
   SOURCE_PROFILE_DEFINITIONS,
   SOURCE_PROFILE_IDS,
   sourceProfilesForViewer,
@@ -11,6 +14,7 @@ import {
 import { parseSourcePolicyV1 } from "./source-policy.js";
 import type { LibraryRecord } from "./libraries.js";
 import type { MediaConnectionRecord, RemoteLibraryRecord } from "./media-server-types.js";
+import type { StoredSourceProfile } from "./store.js";
 import type { AddonRecord } from "./types.js";
 import type { UserRecord } from "./users.js";
 
@@ -101,14 +105,26 @@ const remoteLibrary = (allowedUsers: string[]): RemoteLibraryRecord => ({
 
 const catalogue = (
   user: UserRecord,
-  source: Partial<Pick<SourceProfileCatalogue, "addons" | "libraries" | "remoteLibraries" | "mediaConnections">> = {},
+  source: Partial<Pick<SourceProfileCatalogue, "profiles" | "addons" | "libraries" | "remoteLibraries" | "mediaConnections">> = {},
 ): SourceProfileCatalogue => ({
   viewer: viewerOfProfileAccount(user),
+  profiles: source.profiles ?? storedBuiltIns(),
   addons: source.addons ?? [],
   libraries: source.libraries ?? [],
   remoteLibraries: source.remoteLibraries ?? [],
   mediaConnections: source.mediaConnections ?? [connection],
 });
+
+const storedBuiltIns = (): StoredSourceProfile[] =>
+  RULE_PRESETS.map((preset) => ({
+    id: preset.id,
+    revision: 1,
+    template: preset.template,
+    nameKey: preset.nameKey,
+    parameters: preset.rules,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  }));
 
 const operationIds = (profiles: ReturnType<typeof sourceProfilesForViewer>) =>
   profiles.map((profile) => ({ id: profile.id, operations: profile.operations }));
@@ -143,6 +159,10 @@ test("fixed profile definitions parse and keep stable identities", () => {
     recommended: "39de76cc-0ca0-4a5e-95ad-08927fb45410",
     providerPriority: "390a8b1a-85f6-4ded-9d7e-701a299720bb",
     travel: "7e15d713-965c-4636-9ed3-3a112c521fe1",
+    balanced: "88302ead-d701-4282-9059-777d47ed913c",
+    best: "a02923f1-3457-478e-94b2-a0051f233de9",
+    smaller: "2cb9cd41-d5dc-45cd-b765-a0f98149a5b1",
+    myLanguage: "f57e4033-dafe-4d7c-88de-4def19014aac",
   });
   for (const profile of SOURCE_PROFILE_DEFINITIONS) {
     assert.deepEqual(parseSourcePolicyV1(structuredClone(profile.policy)), profile.policy);
@@ -173,6 +193,18 @@ test("fixed profile definitions parse and keep stable identities", () => {
   ]);
 });
 
+test("template defaults reproduce every built-in policy", () => {
+  for (const template of ["recommended", "travel", "providerPriority"] as const) {
+    const definition = SOURCE_PROFILE_DEFINITIONS.find((candidate) =>
+      candidate.id === SOURCE_PROFILE_IDS[template]);
+    assert.ok(definition);
+    assert.deepEqual(
+      buildTemplatePolicy(template, defaultTemplateParameters(template)),
+      definition.policy,
+    );
+  }
+});
+
 test("projection returns fresh policies and operation lists on every read", () => {
   const input = catalogue(account(ADMIN, "admin"), {
     addons: [addon("stream")],
@@ -189,7 +221,7 @@ test("projection returns fresh policies and operation lists on every read", () =
 
   first[0]!.operations.length = 0;
   first[0]!.policy.constraints.sourceKinds.length = 0;
-  assert.deepEqual(second[0]?.operations, ["play", "downloadToDevice"]);
+  assert.deepEqual(second[0]?.operations, ["play", "downloadToLibrary", "downloadToDevice"]);
   assert.deepEqual(second[0]?.policy.constraints.sourceKinds, [
     "localFile",
     "mediaServerOriginal",
@@ -212,10 +244,22 @@ test("administrators see every profile and operation available from their grante
   }));
 
   assert.deepEqual(operationIds(profiles), [
-    { id: SOURCE_PROFILE_IDS.recommended, operations: ["play", "downloadToDevice"] },
-    { id: SOURCE_PROFILE_IDS.providerPriority, operations: ["play", "downloadToLibrary", "downloadToDevice"] },
-    { id: SOURCE_PROFILE_IDS.travel, operations: ["play", "downloadToLibrary", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.balanced, operations: ["play", "downloadToLibrary", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.best, operations: ["play", "downloadToLibrary", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.smaller, operations: ["play", "downloadToLibrary", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.myLanguage, operations: ["play", "downloadToLibrary", "downloadToDevice"] },
   ]);
+});
+
+test("public rules expose separate film and episode size limits", () => {
+  const profiles = sourceProfilesForViewer(catalogue(account(ADMIN, "admin"), {
+    addons: [addon("stream")],
+  }));
+  const balanced = profiles.find((profile) => profile.id === SOURCE_PROFILE_IDS.balanced);
+  assert.deepEqual(balanced?.sizeLimits, {
+    episodeBytes: 4_000_000_000,
+    movieBytes: 15_000_000_000,
+  });
 });
 
 test("a local path alone supports playback and a device copy, never a library self-copy", () => {
@@ -224,9 +268,10 @@ test("a local path alone supports playback and a device copy, never a library se
   }));
 
   assert.deepEqual(operationIds(profiles), [
-    { id: SOURCE_PROFILE_IDS.recommended, operations: ["play", "downloadToDevice"] },
-    { id: SOURCE_PROFILE_IDS.providerPriority, operations: ["play", "downloadToDevice"] },
-    { id: SOURCE_PROFILE_IDS.travel, operations: ["play", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.balanced, operations: ["play", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.best, operations: ["play", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.smaller, operations: ["play", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.myLanguage, operations: ["play", "downloadToDevice"] },
   ]);
 });
 
@@ -236,9 +281,10 @@ test("a remote path alone supports playback and a device copy, never an automati
   }));
 
   assert.deepEqual(operationIds(profiles), [
-    { id: SOURCE_PROFILE_IDS.recommended, operations: ["play", "downloadToDevice"] },
-    { id: SOURCE_PROFILE_IDS.providerPriority, operations: ["play", "downloadToDevice"] },
-    { id: SOURCE_PROFILE_IDS.travel, operations: ["play", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.balanced, operations: ["play", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.best, operations: ["play", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.smaller, operations: ["play", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.myLanguage, operations: ["play", "downloadToDevice"] },
   ]);
 });
 
@@ -248,9 +294,10 @@ test("an addon path supports every operation for a member with both download gra
   }));
 
   assert.deepEqual(operationIds(profiles), [
-    { id: SOURCE_PROFILE_IDS.recommended, operations: ["play", "downloadToDevice"] },
-    { id: SOURCE_PROFILE_IDS.providerPriority, operations: ["play", "downloadToLibrary", "downloadToDevice"] },
-    { id: SOURCE_PROFILE_IDS.travel, operations: ["play", "downloadToLibrary", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.balanced, operations: ["play", "downloadToLibrary", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.best, operations: ["play", "downloadToLibrary", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.smaller, operations: ["play", "downloadToLibrary", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.myLanguage, operations: ["play", "downloadToLibrary", "downloadToDevice"] },
   ]);
 });
 
@@ -283,12 +330,14 @@ test("operation grants are applied independently to an available addon path", ()
     ["play"],
     ["play"],
     ["play"],
+    ["play"],
   ]);
 
   input.viewer.permissions = { downloadToLibrary: true, downloadToDevice: false };
   const playAndLibrary = sourceProfilesForViewer(input);
   assert.deepEqual(playAndLibrary.map((profile) => profile.operations), [
-    ["play"],
+    ["play", "downloadToLibrary"],
+    ["play", "downloadToLibrary"],
     ["play", "downloadToLibrary"],
     ["play", "downloadToLibrary"],
   ]);
@@ -296,7 +345,8 @@ test("operation grants are applied independently to an available addon path", ()
   input.viewer.permissions = { downloadToLibrary: true, downloadToDevice: true };
   const all = sourceProfilesForViewer(input);
   assert.deepEqual(all.map((profile) => profile.operations), [
-    ["play", "downloadToDevice"],
+    ["play", "downloadToLibrary", "downloadToDevice"],
+    ["play", "downloadToLibrary", "downloadToDevice"],
     ["play", "downloadToLibrary", "downloadToDevice"],
     ["play", "downloadToLibrary", "downloadToDevice"],
   ]);
@@ -314,9 +364,38 @@ test("grant changes and same-name providers do not expose provider identity", ()
   const input = catalogue(account(MEMBER, "user"), { addons: [visible, hidden] });
 
   const before = sourceProfilesForViewer(input);
-  assert.equal(before.length, 3);
+  assert.equal(before.length, 4);
   assert.doesNotMatch(JSON.stringify(before), /private-key|Same name|manifest\.json/);
 
   visible.enabled = false;
   assert.deepEqual(sourceProfilesForViewer(input), []);
+});
+
+test("an allAvailable profile filters every explicit addon order to the viewer's grants", () => {
+  const profile: StoredSourceProfile = {
+    id: "00000000-0000-4000-8000-000000000301",
+    revision: 1,
+    template: "travel",
+    name: "Visible only",
+    parameters: {
+      ...defaultTemplateParameters("travel"),
+      scope: { mode: "allAvailable" },
+      providerOrder: { addonKeys: ["visible", "hidden"] },
+    },
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const profiles = sourceProfilesForViewer(catalogue(account(MEMBER, "user"), {
+    profiles: [profile],
+    addons: [
+      addon("visible", { allowedUsers: [MEMBER] }),
+      addon("hidden", { allowedUsers: [OTHER] }),
+    ],
+  }));
+
+  assert.equal(profiles.length, 1);
+  assert.deepEqual(profiles[0]?.policy.criteria.filter((criterion) => criterion.kind === "providerOrder"), [
+    { kind: "providerOrder", keys: ["addon:visible"] },
+  ]);
+  assert.equal(JSON.stringify(profiles).includes("addon:hidden"), false);
 });

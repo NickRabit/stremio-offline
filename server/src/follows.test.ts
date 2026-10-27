@@ -8,11 +8,13 @@ import { test } from "node:test";
 import express from "express";
 import type { DownloadSelection } from "./downloads.js";
 import type { AppError } from "./errors.js";
-import { activityItems, aheadWindow, calendarFeed, calendarItems, downloadEligibility, effectiveSelection, FollowService, FollowStore, followStaggerMs, graceUntil, movieEpisode, normalizeFollowEpisodes, reconcileReleaseDates, seasonsForReconcile, undatedCalendarItems, type EpisodeDownload, type Follow, type FollowAutoDownload, type FollowDeps, type FollowEpisode, type FollowJob, type FollowQueue } from "./follows.js";
+import { activityItems, aheadWindow, calendarFeed, calendarItems, downloadEligibility, effectiveRulesAdmission, effectiveSelection, FollowService, FollowStore, followStaggerMs, graceUntil, movieEpisode, normalizeFollowEpisodes, reconcileReleaseDates, seasonsForReconcile, undatedCalendarItems, type EpisodeDownload, type Follow, type FollowAutoDownload, type FollowDeps, type FollowEpisode, type FollowJob, type FollowQueue, type FollowSourceProfile } from "./follows.js";
 import type { MediaInfo } from "./naming.js";
 import { registerFollowRoutes, type FollowDeps as FollowRouteDeps } from "./routes/follows.js";
-import { materializeSourceAdmissionPolicy, parseSourceAdmissionSnapshotV1, SourceAdmissionRejected, type SourceAdmissionSnapshotV1 } from "./source-admission.js";
-import { SOURCE_PROFILE_DEFINITIONS, SOURCE_PROFILE_IDS } from "./source-profiles.js";
+import { materializeSourceAdmissionDefinition, materializeSourceAdmissionPolicy, parseSourceAdmissionSnapshotV1, SourceAdmissionRejected, type SourceAdmissionSnapshotV1 } from "./source-admission.js";
+import { parseDownloadRules, rulesPolicy } from "./download-rules.js";
+import { defaultTemplateParameters, RULE_PRESETS, SOURCE_PROFILE_DEFINITIONS, SOURCE_PROFILE_IDS, type ProviderPriorityParameters, type TravelParameters } from "./source-profiles.js";
+import type { StoredSourceProfile } from "./store.js";
 import type { MetaItem } from "./types.js";
 
 const temp = () => mkdtempSync(path.join(tmpdir(), "follows-"));
@@ -43,6 +45,16 @@ const profileAdmission = (profileId: string = SOURCE_PROFILE_IDS.travel): Source
     ),
   });
 };
+const sourceProfileSnapshot = (
+  template: "travel" | "providerPriority" = "travel",
+  parameters: TravelParameters | ProviderPriorityParameters = defaultTemplateParameters("travel"),
+  revision = 1,
+): FollowSourceProfile => ({
+  profileId: SOURCE_PROFILE_IDS[template],
+  revision,
+  template,
+  parameters,
+});
 
 interface FakeJob {
   id: string;
@@ -60,6 +72,7 @@ const fakeQueue = () => {
   const added: Array<{ title: string; source: { type: string; videoId: string; selection?: DownloadSelection }; ownerUserId: string; follow: { followId: string; episodeKey: string; intent: string }; sourceAdmission?: SourceAdmissionSnapshotV1 }> = [];
   const retried: string[] = [];
   const retriedWith: DownloadSelection[] = [];
+  const retriedAdmissions: SourceAdmissionSnapshotV1[] = [];
   const removed: string[] = [];
   const hooks: { remove?: (job: FakeJob) => Promise<void> } = {};
   let beforeAdd: (() => void) | undefined;
@@ -81,7 +94,13 @@ const fakeQueue = () => {
     adopt: async (id, follow) => { const job = jobs.find((item) => item.id === id); if (job) job.follow = follow; },
     followJobs: () => jobs.map((job) => ({ id: job.id, status: job.status, ...(job.errorKey ? { errorKey: job.errorKey } : {}), ...(job.target ? { target: job.target } : {}), ...(job.follow ? { follow: job.follow } : {}) })),
     get: (id) => { const job = jobs.find((item) => item.id === id); return job ? { id: job.id, status: job.status, ...(job.errorKey ? { errorKey: job.errorKey } : {}) } : undefined; },
-    retry: async (id, selection) => { retried.push(id); if (selection) retriedWith.push(selection); const job = jobs.find((item) => item.id === id); if (job) job.status = "queued"; },
+    retry: async (id, selection, sourceAdmission) => {
+      retried.push(id);
+      if (selection) retriedWith.push(selection);
+      if (sourceAdmission) retriedAdmissions.push(sourceAdmission);
+      const job = jobs.find((item) => item.id === id);
+      if (job) job.status = "queued";
+    },
     remove: async (id) => {
       const index = jobs.findIndex((job) => job.id === id);
       if (index < 0) throw new Error("not found");
@@ -91,7 +110,7 @@ const fakeQueue = () => {
     },
   };
   return {
-    queue, jobs, added, retried, retriedWith, removed, hooks,
+    queue, jobs, added, retried, retriedWith, retriedAdmissions, removed, hooks,
     beforeNextAdd: (check: () => void) => { beforeAdd = check; },
     failNextAdd: () => { failAdd = true; },
     complete: (id: string) => { const job = jobs.find((item) => item.id === id); if (job) job.status = "completed"; },
@@ -690,6 +709,35 @@ test("effectiveSelection keeps a strict mode strict and an undated episode uncha
   assert.equal(effectiveSelection(noWindow, dated, NOW), noWindow.selection, "no window leaves the selection alone");
 });
 
+test("effectiveRulesAdmission uses the frozen snapshot and returns to it at the grace deadline", () => {
+  const preset = RULE_PRESETS.find((candidate) => candidate.id === SOURCE_PROFILE_IDS.balanced);
+  assert.ok(preset);
+  const rules = parseDownloadRules({
+    ...preset.rules,
+    audio: { mode: "prefer", fallback: "cs" },
+  });
+  const providerKeys = ["addon:addon"];
+  const admission = parseSourceAdmissionSnapshotV1({
+    schemaVersion: 1,
+    profile: { id: preset.id, revision: 1, template: "rules" },
+    operation: "downloadToLibrary",
+    providerKeys,
+    policy: materializeSourceAdmissionPolicy(
+      rulesPolicy(rules, "episode"),
+      providerKeys,
+      { audioLanguage: "en", subtitleLanguage: "en" },
+    ),
+  });
+  const released = "2024-05-25T00:00:00.000Z";
+  const item = episode(1, 1, "v1", released);
+  const until = Date.parse(released) + 7 * DAY;
+  const inside = effectiveRulesAdmission(admission, item, until - 1, 7);
+  assert.equal(inside.policy.constraints.audio.mode, "strict");
+  assert.deepEqual(inside.policy.constraints.audio.preferred, { code: "en" });
+  assert.equal(inside.policy.constraints.audio.fallback, undefined);
+  assert.equal(effectiveRulesAdmission(admission, item, until, 7), admission);
+});
+
 test("admission inside the window passes the stripped selection, and the close restores it", async (t) => {
   const { store } = await withStore(t);
   const q = fakeQueue();
@@ -718,6 +766,59 @@ test("admission inside the window passes the stripped selection, and the close r
   assert.equal(retried.audioMode, "preferred");
   download = store.get(id)!.episodes["1:1"].download!;
   assert.equal(download.state, "queued");
+});
+
+test("a rules follow retries inside the grace window as strict and after it with the frozen fallback", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const balanced = RULE_PRESETS.find((preset) => preset.id === SOURCE_PROFILE_IDS.balanced)!;
+  const rules = parseDownloadRules({
+    ...balanced.rules,
+    audio: { mode: "prefer", fallback: "cs" },
+  });
+  const providerKeys = ["addon:addon"];
+  const admission = parseSourceAdmissionSnapshotV1({
+    schemaVersion: 1,
+    profile: { id: balanced.id, revision: 1, template: "rules" },
+    operation: "downloadToLibrary",
+    providerKeys,
+    policy: materializeSourceAdmissionPolicy(
+      rulesPolicy(rules, "episode"),
+      providerKeys,
+      { audioLanguage: "en", subtitleLanguage: "en" },
+    ),
+  });
+  let now = NOW;
+  const service = buildService(store, q, {
+    now: () => now,
+    admitSourceProfile: () => admission,
+  });
+  const released = "2024-05-30T00:00:00.000Z";
+  const id = await seedSeries(store, [episode(1, 1, "v1", released)], rule({
+    graceDays: 30,
+    sourceProfile: {
+      profileId: balanced.id,
+      revision: 1,
+      template: "rules",
+      parameters: rules,
+    },
+  }));
+
+  await service.admit(id);
+  assert.equal(q.added[0]?.sourceAdmission?.policy.constraints.audio.mode, "strict");
+  assert.equal(q.added[0]?.sourceAdmission?.policy.constraints.audio.fallback, undefined);
+  q.fail(q.jobs[0]!.id, "err.checkedSources");
+  await service.sync();
+  const waiting = store.get(id)!.episodes["1:1"].download!;
+  assert.equal(waiting.reasonKey, "err.waitingForPreferredAudio");
+  assert.deepEqual(waiting.reasonVars, { language: "en" });
+
+  now = Date.parse(released) + 30 * DAY + 1;
+  await service.sync();
+  const retried = q.retriedAdmissions.at(-1)!;
+  assert.deepEqual(retried, admission);
+  assert.equal(retried.policy.constraints.audio.mode, "preferred");
+  assert.deepEqual(retried.policy.constraints.audio.fallback, { code: "cs" });
 });
 
 test("admission queues in season order and stops at the caps", async (t) => {
@@ -870,7 +971,7 @@ test("a profile admission is reserved with its snapshot before the queue receive
   const snapshot = profileAdmission();
   const service = buildService(store, q, { admitSourceProfile: () => snapshot });
   const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule({
-    sourceProfile: { profileId: SOURCE_PROFILE_IDS.travel, revision: 1 },
+    sourceProfile: sourceProfileSnapshot(),
   }));
 
   q.beforeNextAdd(() => {
@@ -884,7 +985,73 @@ test("a profile admission is reserved with its snapshot before the queue receive
   assert.deepEqual(store.get(id)!.episodes["1:1"].download?.sourceAdmission, snapshot);
 });
 
-test("automatic re-admission keeps the frozen profile while an explicit retry uses the current one", async (t) => {
+test("a follow admits from its frozen profile definition after the live catalogue changes", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const original = sourceProfileSnapshot("travel", {
+    ...defaultTemplateParameters("travel"),
+    heightPixels: { min: 720 },
+  });
+  const liveProfiles: StoredSourceProfile[] = [{
+    id: original.profileId,
+    revision: 1,
+    template: "travel",
+    name: "Kids 720p",
+    parameters: original.parameters,
+    createdAt: "2024-01-01T00:00:00.000Z",
+    updatedAt: "2024-01-01T00:00:00.000Z",
+  }];
+  const addon = {
+    key: "addon",
+    enabled: true,
+    globalSearch: true,
+    allowedUsers: ["u1"],
+    role: "source" as const,
+    addedAt: "2024-01-01T00:00:00.000Z",
+    manifestUrl: "https://addon.example/manifest.json",
+    manifest: { id: "addon", name: "Addon", version: "1", resources: [{ name: "stream" }] },
+    downloadSettings: { movie: { subfolder: "", layout: "structured" as const }, series: { subfolder: "", layout: "structured" as const } },
+  };
+  const service = buildService(store, q, {
+    admitSourceProfile: (_ownerUserId, definition) => materializeSourceAdmissionDefinition(definition, {
+      viewer: { id: "u1", role: "user", permissions: { downloadToLibrary: true, downloadToDevice: true } },
+      profiles: liveProfiles,
+      addons: [addon],
+      libraries: [],
+      remoteLibraries: [],
+      mediaConnections: [],
+      preferences: { audioLanguage: "en", subtitleLanguage: "en" },
+      operation: "downloadToLibrary",
+      mediaKind: "episode",
+    }),
+  });
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule({
+    sourceProfile: original,
+  }));
+
+  await service.admit(id);
+  liveProfiles.splice(0, 1, {
+    ...liveProfiles[0]!,
+    revision: 2,
+    parameters: { ...defaultTemplateParameters("travel"), heightPixels: { min: 1080 } },
+  });
+  await store.recordCheck(id, { episodes: [episode(1, 2, "v2", RELEASED)], now: NOW });
+  await service.admit(id);
+
+  assert.deepEqual(q.added[1]?.sourceAdmission?.policy.constraints.heightPixels, { min: 720 });
+  assert.equal(store.get(id)!.episodes["1:2"].download?.state, "queued");
+  assert.equal(q.added[1]?.sourceAdmission?.profile.revision, 1);
+
+  liveProfiles.splice(0, 1);
+  await store.recordCheck(id, { episodes: [episode(1, 3, "v3", RELEASED)], now: NOW });
+  await service.admit(id);
+
+  assert.deepEqual(q.added[2]?.sourceAdmission?.policy.constraints.heightPixels, { min: 720 });
+  assert.equal(store.get(id)!.episodes["1:3"].download?.state, "queued");
+  assert.equal(q.added[2]?.sourceAdmission?.profile.revision, 1);
+});
+
+test("automatic re-admission and explicit retry keep the frozen admitted profile", async (t) => {
   const { store } = await withStore(t);
   const q = fakeQueue();
   let now = NOW;
@@ -897,7 +1064,7 @@ test("automatic re-admission keeps the frozen profile while an explicit retry us
   });
   q.hooks.remove = (job) => service.jobRemoving(job, "user");
   const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule({
-    sourceProfile: { profileId: SOURCE_PROFILE_IDS.travel, revision: 1 },
+    sourceProfile: sourceProfileSnapshot(),
   }));
 
   await service.admit(id);
@@ -907,7 +1074,7 @@ test("automatic re-admission keeps the frozen profile while an explicit retry us
   const current = store.get(id)!.autoDownload!;
   await service.setAutoDownload(id, "u1", {
     ...current,
-    sourceProfile: { profileId: SOURCE_PROFILE_IDS.providerPriority, revision: 1 },
+    sourceProfile: sourceProfileSnapshot("providerPriority", defaultTemplateParameters("providerPriority")),
   });
   q.fail(q.jobs[0].id, "err.noMatchingSource");
   await service.sync();
@@ -921,7 +1088,7 @@ test("automatic re-admission keeps the frozen profile while an explicit retry us
   await service.sync();
   await q.queue.remove(q.jobs[0].id);
   await service.retryEpisode(id, "u1", "1:1");
-  assert.deepEqual(q.added[2]?.sourceAdmission, providerPriority, "an explicit retry asks for the current rules");
+  assert.deepEqual(q.added[2]?.sourceAdmission, travel, "an explicit retry keeps the admitted rules");
 });
 
 test("a refused profile admission leaves the episode in attention and queues nothing", async (t) => {
@@ -931,7 +1098,7 @@ test("a refused profile admission leaves the episode in attention and queues not
     admitSourceProfile: () => { throw new SourceAdmissionRejected("providerScopeUnavailable"); },
   });
   const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule({
-    sourceProfile: { profileId: SOURCE_PROFILE_IDS.travel, revision: 1 },
+    sourceProfile: sourceProfileSnapshot(),
   }));
 
   await service.admit(id);
@@ -962,7 +1129,7 @@ test("a malformed stored episode snapshot affects only that episode", async (t) 
       id: "f1", ownerUserId: "u1", type: "series", metaId: "tt1", name: "Show",
       createdAt: "2024-01-01T00:00:00.000Z", updatedAt: "2024-01-01T00:00:00.000Z",
       enabled: true, revision: 1, nextCheckAt: "2024-01-01T00:00:00.000Z", failures: 0,
-      autoDownload: rule({ sourceProfile: { profileId: SOURCE_PROFILE_IDS.travel, revision: 1 } }),
+      autoDownload: rule({ sourceProfile: sourceProfileSnapshot() }),
       episodes: {
         "1:1": {
           ...episode(1, 1, "v1", RELEASED),
@@ -982,6 +1149,84 @@ test("a malformed stored episode snapshot affects only that episode", async (t) 
   assert.equal(broken.reasonKey, "err.followJobMissing");
   assert.equal(broken.sourceAdmission, undefined);
   assert.deepEqual(store.get("f1")!.episodes["1:2"].download, untouched);
+});
+
+test("loading an old reference-only follow fills its profile snapshot from a matching catalogue entry", async (t) => {
+  const dir = temp();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const parameters = { ...defaultTemplateParameters("travel"), heightPixels: { min: 720 } };
+  const profile: StoredSourceProfile = {
+    id: SOURCE_PROFILE_IDS.travel,
+    revision: 3,
+    template: "travel",
+    nameKey: "sourceProfile.travel",
+    parameters,
+    createdAt: "2024-01-01T00:00:00.000Z",
+    updatedAt: "2024-02-01T00:00:00.000Z",
+  };
+  writeFileSync(file(dir), JSON.stringify({
+    version: 1,
+    follows: [{
+      id: "f1",
+      ownerUserId: "u1",
+      type: "series",
+      metaId: "tt1",
+      name: "Show",
+      createdAt: "2024-01-01T00:00:00.000Z",
+      updatedAt: "2024-01-01T00:00:00.000Z",
+      enabled: true,
+      revision: 1,
+      nextCheckAt: "2024-01-01T00:00:00.000Z",
+      failures: 0,
+      autoDownload: rule({ sourceProfile: { profileId: profile.id, revision: 3 } }),
+      episodes: {},
+    }],
+  }));
+
+  const store = new FollowStore(dir);
+  await store.load([profile]);
+  assert.deepEqual(store.get("f1")?.autoDownload?.sourceProfile, {
+    profileId: profile.id,
+    revision: 3,
+    template: "travel",
+    parameters,
+  });
+});
+
+test("loading an old reference-only follow leaves it as a reference when its revision no longer matches", async (t) => {
+  const dir = temp();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const profile: StoredSourceProfile = {
+    id: SOURCE_PROFILE_IDS.travel,
+    revision: 3,
+    template: "travel",
+    nameKey: "sourceProfile.travel",
+    parameters: defaultTemplateParameters("travel"),
+    createdAt: "2024-01-01T00:00:00.000Z",
+    updatedAt: "2024-02-01T00:00:00.000Z",
+  };
+  writeFileSync(file(dir), JSON.stringify({
+    version: 1,
+    follows: [{
+      id: "f1",
+      ownerUserId: "u1",
+      type: "series",
+      metaId: "tt1",
+      name: "Show",
+      createdAt: "2024-01-01T00:00:00.000Z",
+      updatedAt: "2024-01-01T00:00:00.000Z",
+      enabled: true,
+      revision: 1,
+      nextCheckAt: "2024-01-01T00:00:00.000Z",
+      failures: 0,
+      autoDownload: rule({ sourceProfile: { profileId: profile.id, revision: 2 } }),
+      episodes: {},
+    }],
+  }));
+
+  const store = new FollowStore(dir);
+  await store.load([profile]);
+  assert.deepEqual(store.get("f1")?.autoDownload?.sourceProfile, { profileId: profile.id, revision: 2 });
 });
 
 test("a malformed stored source profile falls back only when a legacy selection exists", async (t) => {
