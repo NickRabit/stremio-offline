@@ -231,12 +231,12 @@ test("an addon identity sweep pauses only the selected Travel jobs whose identit
   const fresh = job("fresh", account.id, {
     stream: selected,
     sourceAdmission: travelAdmission,
-    travelStreamAddonIdentity: addonIdentity(sourceAddon),
+    sourceStreamAddonIdentity: addonIdentity(sourceAddon),
   });
   const stale = job("stale", account.id, {
     stream: selected,
     sourceAdmission: travelAdmission,
-    travelStreamAddonIdentity: "b".repeat(64),
+    sourceStreamAddonIdentity: "b".repeat(64),
   });
   const h = harness([legacy, fresh, stale]);
   h.deps.source = { ...h.deps.source, users: () => [account], addons: () => addonState };

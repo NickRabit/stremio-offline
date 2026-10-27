@@ -98,10 +98,10 @@ export interface DownloadJob {
   source?: { type: string; videoId: string; tried: string[]; selection?: DownloadSelection };
   sourceAdmission?: SourceAdmissionSnapshotV1;
   travelCursor?: TravelContinuationCursorV1;
-  /** Hashes of the addon records that supplied the selected Travel stream and subtitle. */
-  travelStreamAddonIdentity?: string;
-  travelSubtitleAddonIdentity?: string;
-  travelSourceFallbackAttempts?: number;
+  /** Hashes of the addon records that supplied the selected stream and subtitle. */
+  sourceStreamAddonIdentity?: string;
+  sourceSubtitleAddonIdentity?: string;
+  sourceFallbackAttempts?: number;
   travelTemporaryFailures?: number;
   travelBudgetAttempts?: number;
   /** Present when a followed series queued the job, so the follow can be reconciled
@@ -194,7 +194,7 @@ const isTravelSnapshot = (
 ): snapshot is SourceAdmissionSnapshotV1 =>
   snapshot?.profile.id === SOURCE_PROFILE_IDS.travel && snapshot.profile.revision === 1;
 
-export const isSelectedTravelJob = (
+export const isSelectedProfileJob = (
   job: Pick<DownloadJob, "sourceAdmission" | "stream">,
 ): boolean => isTravelSnapshot(job.sourceAdmission) && job.stream !== undefined;
 
@@ -234,7 +234,7 @@ export const defaultDownloadLibrary = (libraries: LibraryRecord[], settings: Def
  * is left to the moment it is known -- a lazy job has no source until the resolver picks one,
  * and a library that has been removed is waited for -- so the check is asked again once they are.
  */
-export function ownerMayDownload(scope: DownloadOwnerScope, job: { stream?: StreamItem; subtitle?: SubtitleItem; remoteDownload?: RemoteDownloadReference; media?: MediaInfo; libraryId?: string; target?: string; targetSettings?: DownloadTargetSettings; source?: DownloadJob["source"]; sourceAdmission?: SourceAdmissionSnapshotV1; travelStreamAddonIdentity?: string; travelSubtitleAddonIdentity?: string }): boolean {
+export function ownerMayDownload(scope: DownloadOwnerScope, job: { stream?: StreamItem; subtitle?: SubtitleItem; remoteDownload?: RemoteDownloadReference; media?: MediaInfo; libraryId?: string; target?: string; targetSettings?: DownloadTargetSettings; source?: DownloadJob["source"]; sourceAdmission?: SourceAdmissionSnapshotV1; sourceStreamAddonIdentity?: string; sourceSubtitleAddonIdentity?: string }): boolean {
   const owner = scope.owner;
   if (!owner || owner.disabled || !mayDownloadToLibrary(owner)) return false;
   // A raw sealed address is never a queued source: a remote copy is identified by its own
@@ -261,16 +261,16 @@ export function ownerMayDownload(scope: DownloadOwnerScope, job: { stream?: Stre
       ? scope.addons.find((item) => item.key === job.stream!.addonKey)
       : undefined;
     if (!streamAddon
-      || !isAddonIdentity(job.travelStreamAddonIdentity)
-      || addonIdentity(streamAddon) !== job.travelStreamAddonIdentity) return false;
+      || !isAddonIdentity(job.sourceStreamAddonIdentity)
+      || addonIdentity(streamAddon) !== job.sourceStreamAddonIdentity) return false;
     const subtitleKey = job.subtitle?.addonKey;
     if (subtitleKey === undefined) {
-      if (job.travelSubtitleAddonIdentity !== undefined) return false;
+      if (job.sourceSubtitleAddonIdentity !== undefined) return false;
     } else {
       const subtitleAddon = scope.addons.find((item) => item.key === subtitleKey);
       if (!subtitleAddon
-        || !isAddonIdentity(job.travelSubtitleAddonIdentity)
-        || addonIdentity(subtitleAddon) !== job.travelSubtitleAddonIdentity) return false;
+        || !isAddonIdentity(job.sourceSubtitleAddonIdentity)
+        || addonIdentity(subtitleAddon) !== job.sourceSubtitleAddonIdentity) return false;
     }
   }
   const libraryId = jobLibraryId({ libraryId: job.libraryId, target: job.target ?? "", targetSettings: job.targetSettings, source: job.source });
@@ -410,12 +410,29 @@ const supportsTravelCursor = (
   snapshot: SourceAdmissionSnapshotV1 | undefined = job.sourceAdmission,
 ): boolean => isTravelSnapshot(snapshot) && job.stream === undefined && Boolean(job.source);
 
+const PRIVATE_STATE_ALIASES = [
+  ["sourceStreamAddonIdentity", "travelStreamAddonIdentity"],
+  ["sourceSubtitleAddonIdentity", "travelSubtitleAddonIdentity"],
+  ["sourceFallbackAttempts", "travelSourceFallbackAttempts"],
+] as const;
+
+const normalizePrivateStateAliases = (rawJob: Record<string, unknown>): void => {
+  for (const [canonical, legacy] of PRIVATE_STATE_ALIASES) {
+    const hasCanonical = Object.hasOwn(rawJob, canonical);
+    const hasLegacy = Object.hasOwn(rawJob, legacy);
+    if (hasCanonical && hasLegacy) throw new Error(`The ${canonical} state is ambiguous.`);
+    if (!hasLegacy) continue;
+    rawJob[canonical] = rawJob[legacy];
+    delete rawJob[legacy];
+  }
+};
+
 const validateTravelAddonIdentities = (
   rawJob: Record<string, unknown>,
   snapshot: SourceAdmissionSnapshotV1 | undefined,
 ): void => {
-  const hasStreamIdentity = Object.hasOwn(rawJob, "travelStreamAddonIdentity");
-  const hasSubtitleIdentity = Object.hasOwn(rawJob, "travelSubtitleAddonIdentity");
+  const hasStreamIdentity = Object.hasOwn(rawJob, "sourceStreamAddonIdentity");
+  const hasSubtitleIdentity = Object.hasOwn(rawJob, "sourceSubtitleAddonIdentity");
   if (!hasStreamIdentity && !hasSubtitleIdentity) return;
 
   const stream = rawJob.stream;
@@ -424,7 +441,7 @@ const validateTravelAddonIdentities = (
     || stream === null
     || typeof stream !== "object"
     || typeof (stream as { addonKey?: unknown }).addonKey !== "string"
-    || !isAddonIdentity(rawJob.travelStreamAddonIdentity)) {
+    || !isAddonIdentity(rawJob.sourceStreamAddonIdentity)) {
     throw new Error("The Travel addon identity is misplaced or malformed.");
   }
 
@@ -435,7 +452,7 @@ const validateTravelAddonIdentities = (
     if (hasSubtitleIdentity) throw new Error("The Travel subtitle addon identity is misplaced.");
     return;
   }
-  if (typeof subtitleAddonKey !== "string" || !isAddonIdentity(rawJob.travelSubtitleAddonIdentity)) {
+  if (typeof subtitleAddonKey !== "string" || !isAddonIdentity(rawJob.sourceSubtitleAddonIdentity)) {
     throw new Error("The Travel subtitle addon identity is misplaced or malformed.");
   }
 };
@@ -501,7 +518,7 @@ export const LIBRARY_WAIT_MS = 30 * 60_000;
  *  download is never re-checked harder than a remote film being watched. */
 const REMOTE_REVALIDATE_MS = 30_000;
 const REMOTE_REVALIDATE_TIMEOUT_MS = 5_000;
-export const TRAVEL_SOURCE_FALLBACK_ATTEMPT_LIMIT = 8;
+export const SOURCE_FALLBACK_ATTEMPT_LIMIT = 8;
 const TRAVEL_TEMPORARY_FAILURE_LIMIT = 3;
 const TRAVEL_BUDGET_ATTEMPT_LIMIT = 1_000;
 
@@ -707,11 +724,13 @@ export class DownloadQueue {
         try {
           for (const [index, rawJob] of (parsed as unknown[]).entries()) {
             if (rawJob === null || typeof rawJob !== "object") continue;
+            const row = rawJob as Record<string, unknown>;
+            normalizePrivateStateAliases(row);
             const snapshot = Object.hasOwn(rawJob, "sourceAdmission")
               ? parseDownloadSourceAdmission((rawJob as { sourceAdmission: unknown }).sourceAdmission)
               : undefined;
             if (snapshot) canonicalSnapshots.push({ index, snapshot });
-            validateTravelAddonIdentities(rawJob as Record<string, unknown>, snapshot);
+            validateTravelAddonIdentities(row, snapshot);
             const cursor = Object.hasOwn(rawJob, "travelCursor")
               ? parseTravelContinuationCursorV1((rawJob as { travelCursor: unknown }).travelCursor)
               : undefined;
@@ -721,10 +740,10 @@ export class DownloadQueue {
               }
               canonicalCursors.push({ index, cursor });
             }
-            if (Object.hasOwn(rawJob, "travelSourceFallbackAttempts")) {
-              const attempts = (rawJob as { travelSourceFallbackAttempts: unknown }).travelSourceFallbackAttempts;
+            if (Object.hasOwn(rawJob, "sourceFallbackAttempts")) {
+              const attempts = (rawJob as { sourceFallbackAttempts: unknown }).sourceFallbackAttempts;
               if (!isTravelSnapshot(snapshot) || typeof attempts !== "number" || !Number.isSafeInteger(attempts) || attempts < 0
-                || attempts > TRAVEL_SOURCE_FALLBACK_ATTEMPT_LIMIT) {
+                || attempts > SOURCE_FALLBACK_ATTEMPT_LIMIT) {
                 throw new Error("The Travel source fallback count is invalid.");
               }
               canonicalSourceFallbackAttempts.push({ index, attempts });
@@ -772,7 +791,7 @@ export class DownloadQueue {
         const jobs = parsed as DownloadJob[];
         for (const { index, snapshot } of canonicalSnapshots) jobs[index]!.sourceAdmission = snapshot;
         for (const { index, cursor } of canonicalCursors) jobs[index]!.travelCursor = cursor;
-        for (const { index, attempts } of canonicalSourceFallbackAttempts) jobs[index]!.travelSourceFallbackAttempts = attempts;
+        for (const { index, attempts } of canonicalSourceFallbackAttempts) jobs[index]!.sourceFallbackAttempts = attempts;
         for (const { index, failures } of canonicalTemporaryFailures) jobs[index]!.travelTemporaryFailures = failures;
         for (const { index, attempts } of canonicalBudgetAttempts) jobs[index]!.travelBudgetAttempts = attempts;
         this.jobs = jobs;
@@ -956,8 +975,8 @@ export class DownloadQueue {
     job.stream = undefined;
     job.subtitle = undefined;
     job.resolution = undefined;
-    delete job.travelStreamAddonIdentity;
-    delete job.travelSubtitleAddonIdentity;
+    delete job.sourceStreamAddonIdentity;
+    delete job.sourceSubtitleAddonIdentity;
     job.target = "";
     job.targetSettings = undefined;
     job.libraryId = undefined;
@@ -1468,7 +1487,7 @@ export class DownloadQueue {
     if (pinned !== undefined && REMOTE_LIBRARY_ID.test(pinned)) throw remoteDownloadRefused();
     if (job.sourceAdmission && job.stream) await this.discardProfileSelection(job, true);
     delete job.travelCursor;
-    delete job.travelSourceFallbackAttempts;
+    delete job.sourceFallbackAttempts;
     delete job.travelTemporaryFailures;
     delete job.travelBudgetAttempts;
     job.retryCount = 0;
@@ -1511,8 +1530,8 @@ export class DownloadQueue {
     job.stream = undefined;
     job.subtitle = undefined;
     job.resolution = undefined;
-    delete job.travelStreamAddonIdentity;
-    delete job.travelSubtitleAddonIdentity;
+    delete job.sourceStreamAddonIdentity;
+    delete job.sourceSubtitleAddonIdentity;
     job.target = "";
     job.debrid = undefined;
     job.debridStartedAt = undefined;
@@ -1698,7 +1717,7 @@ export class DownloadQueue {
     job.updatedAt = new Date(this.now()).toISOString();
   }
 
-  private async failTravelSourceFallback(job: DownloadJob, markTried: boolean) {
+  private async failProfileSourceFallback(job: DownloadJob, markTried: boolean) {
     await this.discardProfileSelection(job, markTried);
     job.status = "failed";
     job.speed = 0;
@@ -1711,9 +1730,9 @@ export class DownloadQueue {
     const {
       stream, source, subtitle: _subtitle, remoteDownload: _remoteDownload, notBefore: _notBefore,
       debrid, segments, sourceAdmission: _sourceAdmission, travelCursor: _travelCursor,
-      travelStreamAddonIdentity: _travelStreamAddonIdentity,
-      travelSubtitleAddonIdentity: _travelSubtitleAddonIdentity,
-      travelSourceFallbackAttempts: _travelSourceFallbackAttempts,
+      sourceStreamAddonIdentity: _sourceStreamAddonIdentity,
+      sourceSubtitleAddonIdentity: _sourceSubtitleAddonIdentity,
+      sourceFallbackAttempts: _sourceFallbackAttempts,
       travelTemporaryFailures: _travelTemporaryFailures, travelBudgetAttempts: _travelBudgetAttempts, ...rest
     } = job;
     return {
@@ -2023,8 +2042,8 @@ export class DownloadQueue {
       stream: outcome.stream,
       subtitle: outcome.subtitle,
       resolution: outcome.resolution,
-      travelStreamAddonIdentity: outcome.streamAddonIdentity,
-      travelSubtitleAddonIdentity: outcome.subtitleAddonIdentity,
+      sourceStreamAddonIdentity: outcome.streamAddonIdentity,
+      sourceSubtitleAddonIdentity: outcome.subtitleAddonIdentity,
       targetSettings: settings,
     };
     const library = await this.resolveLibrary(kind, settings);
@@ -2051,8 +2070,8 @@ export class DownloadQueue {
       stream: job.stream,
       subtitle: job.subtitle,
       resolution: job.resolution,
-      streamIdentity: job.travelStreamAddonIdentity,
-      subtitleIdentity: job.travelSubtitleAddonIdentity,
+      streamIdentity: job.sourceStreamAddonIdentity,
+      subtitleIdentity: job.sourceSubtitleAddonIdentity,
       targetSettings: job.targetSettings,
       target: job.target,
       libraryId: job.libraryId,
@@ -2066,9 +2085,9 @@ export class DownloadQueue {
           job.stream = staged.stream;
           job.subtitle = staged.subtitle;
           job.resolution = staged.resolution;
-          job.travelStreamAddonIdentity = staged.travelStreamAddonIdentity;
-          if (staged.travelSubtitleAddonIdentity === undefined) delete job.travelSubtitleAddonIdentity;
-          else job.travelSubtitleAddonIdentity = staged.travelSubtitleAddonIdentity;
+          job.sourceStreamAddonIdentity = staged.sourceStreamAddonIdentity;
+          if (staged.sourceSubtitleAddonIdentity === undefined) delete job.sourceSubtitleAddonIdentity;
+          else job.sourceSubtitleAddonIdentity = staged.sourceSubtitleAddonIdentity;
           job.targetSettings = staged.targetSettings;
           job.target = staged.target;
           job.libraryId = staged.libraryId;
@@ -2080,10 +2099,10 @@ export class DownloadQueue {
           job.stream = previous.stream;
           job.subtitle = previous.subtitle;
           job.resolution = previous.resolution;
-          if (previous.streamIdentity === undefined) delete job.travelStreamAddonIdentity;
-          else job.travelStreamAddonIdentity = previous.streamIdentity;
-          if (previous.subtitleIdentity === undefined) delete job.travelSubtitleAddonIdentity;
-          else job.travelSubtitleAddonIdentity = previous.subtitleIdentity;
+          if (previous.streamIdentity === undefined) delete job.sourceStreamAddonIdentity;
+          else job.sourceStreamAddonIdentity = previous.streamIdentity;
+          if (previous.subtitleIdentity === undefined) delete job.sourceSubtitleAddonIdentity;
+          else job.sourceSubtitleAddonIdentity = previous.subtitleIdentity;
           job.targetSettings = previous.targetSettings;
           job.target = previous.target;
           job.libraryId = previous.libraryId;
@@ -2383,7 +2402,7 @@ export class DownloadQueue {
       throw error;
     }
     job.status = "completed"; job.completedAt = new Date(this.now()).toISOString(); job.speed = 0; job.retryCount = 0; job.segments = undefined;
-    delete job.travelSourceFallbackAttempts;
+    delete job.sourceFallbackAttempts;
     this.setError(job);
     log("INFO", "Download finished", { id: job.id, received: job.received, target: job.target, audioLanguage: job.resolution?.audioLanguage, subtitleLanguage: job.resolution?.subtitleLanguage });
     try { await this.onCompleted?.(job); }
@@ -2640,7 +2659,7 @@ export class DownloadQueue {
       errorKey: string | undefined;
       errorVars: Record<string, string | number> | undefined;
       travelCursor: TravelContinuationCursorV1 | undefined;
-      travelSourceFallbackAttempts: number | undefined;
+      sourceFallbackAttempts: number | undefined;
       travelTemporaryFailures: number | undefined;
       travelBudgetAttempts: number | undefined;
     } | undefined;
@@ -2676,7 +2695,7 @@ export class DownloadQueue {
           errorKey: job.errorKey,
           errorVars: job.errorVars,
           travelCursor: job.travelCursor,
-          travelSourceFallbackAttempts: job.travelSourceFallbackAttempts,
+          sourceFallbackAttempts: job.sourceFallbackAttempts,
           travelTemporaryFailures: job.travelTemporaryFailures,
           travelBudgetAttempts: job.travelBudgetAttempts,
         };
@@ -2697,7 +2716,7 @@ export class DownloadQueue {
         job.notBefore = undefined;
         this.setError(job);
         job.travelCursor = undefined;
-        job.travelSourceFallbackAttempts = undefined;
+        job.sourceFallbackAttempts = undefined;
         job.travelTemporaryFailures = undefined;
         job.travelBudgetAttempts = undefined;
         completed = true;
@@ -2722,7 +2741,7 @@ export class DownloadQueue {
         job.errorKey = previous.errorKey;
         job.errorVars = previous.errorVars;
         job.travelCursor = previous.travelCursor;
-        job.travelSourceFallbackAttempts = previous.travelSourceFallbackAttempts;
+        job.sourceFallbackAttempts = previous.sourceFallbackAttempts;
         job.travelTemporaryFailures = previous.travelTemporaryFailures;
         job.travelBudgetAttempts = previous.travelBudgetAttempts;
       },
@@ -2783,8 +2802,8 @@ export class DownloadQueue {
           return;
         }
       }
-      if (job.sourceAdmission && job.travelSourceFallbackAttempts === TRAVEL_SOURCE_FALLBACK_ATTEMPT_LIMIT) {
-        await this.failTravelSourceFallback(job, false);
+      if (job.sourceAdmission && job.sourceFallbackAttempts === SOURCE_FALLBACK_ATTEMPT_LIMIT) {
+        await this.failProfileSourceFallback(job, false);
         return;
       }
       if (!job.stream) {
@@ -3028,9 +3047,9 @@ export class DownloadQueue {
         if (job.sourceAdmission && job.stream) await this.discardProfileSelection(job, false);
         await this.haltForStorage(storageMessage(error));
       } else if (job.sourceAdmission && job.stream) {
-        job.travelSourceFallbackAttempts = (job.travelSourceFallbackAttempts ?? 0) + 1;
-        if (job.travelSourceFallbackAttempts >= TRAVEL_SOURCE_FALLBACK_ATTEMPT_LIMIT) {
-          await this.failTravelSourceFallback(job, true);
+        job.sourceFallbackAttempts = (job.sourceFallbackAttempts ?? 0) + 1;
+        if (job.sourceFallbackAttempts >= SOURCE_FALLBACK_ATTEMPT_LIMIT) {
+          await this.failProfileSourceFallback(job, true);
           log("ERROR", "Download failed", {
             id: job.id, title: job.title, reason: message, received: job.received, total: job.total,
           });
@@ -3088,7 +3107,7 @@ export class DownloadQueue {
         if (job.target && abandoned) await unlink(`${abandoned}.part`).catch(() => undefined);
         const subtitleFiles = this.subtitleFiles(job);
         if (subtitleFiles) await unlink(subtitleFiles.partial).catch(() => undefined);
-        job.stream = undefined; job.subtitle = undefined; job.resolution = undefined; delete job.travelStreamAddonIdentity; delete job.travelSubtitleAddonIdentity; job.target = ""; job.received = 0; job.total = undefined; job.segments = undefined; job.rangesIgnored = undefined; job.retryCount = 0; job.notBefore = undefined;
+        job.stream = undefined; job.subtitle = undefined; job.resolution = undefined; delete job.sourceStreamAddonIdentity; delete job.sourceSubtitleAddonIdentity; job.target = ""; job.received = 0; job.total = undefined; job.segments = undefined; job.rangesIgnored = undefined; job.retryCount = 0; job.notBefore = undefined;
         job.status = "queued"; this.setError(job, `Source failed (${message}), trying the next one\u2026`, "err.sourceFailedTryingNext", { reason: message });
         retryScheduled = true; log("WARN", "The source failed, trying the next one", { id: job.id, title: job.title, reason: message, tried: job.source.tried.length });
         if (this.retryTimer) clearTimeout(this.retryTimer);

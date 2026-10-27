@@ -9,7 +9,7 @@ import test from "node:test";
 import {
   DownloadQueue,
   isPlaylist,
-  TRAVEL_SOURCE_FALLBACK_ATTEMPT_LIMIT,
+  SOURCE_FALLBACK_ATTEMPT_LIMIT,
   type DownloadJob,
   type QueuedExistingLocalCopyLookup,
 } from "./downloads.js";
@@ -2649,7 +2649,7 @@ test("reuse clears exhausted Travel continuation state instead of failing the qu
       nextIndex: 2,
       rejectedIndices: [0, 1],
     },
-    travelSourceFallbackAttempts: TRAVEL_SOURCE_FALLBACK_ATTEMPT_LIMIT,
+    sourceFallbackAttempts: SOURCE_FALLBACK_ATTEMPT_LIMIT,
     travelTemporaryFailures: 2,
     travelBudgetAttempts: 3,
     retryCount: 1,
@@ -2681,7 +2681,7 @@ test("reuse clears exhausted Travel continuation state instead of failing the qu
     assert.equal(job.error, undefined);
     const stored = JSON.parse(await readFile(path.join(data, "downloads.json"), "utf8")) as Array<Record<string, unknown>>;
     for (const key of [
-      "travelCursor", "travelSourceFallbackAttempts", "travelTemporaryFailures", "travelBudgetAttempts",
+      "travelCursor", "sourceFallbackAttempts", "travelTemporaryFailures", "travelBudgetAttempts",
       "retryCount", "pauseReason", "error", "errorKey", "errorVars",
     ]) assert.equal(Object.hasOwn(stored[0]!, key), false, `${key} must be cleared`);
   } finally {

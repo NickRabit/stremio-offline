@@ -2,7 +2,7 @@ import { addonAllowed } from "./addons.js";
 import { addonIdentity } from "./addon-identity.js";
 import type { AirPlayAccess } from "./airplay-access.js";
 import { readSession } from "./auth.js";
-import { isSelectedTravelJob, jobLibraryId, mayDownloadToDevice, mayDownloadToLibrary, type DownloadJob } from "./downloads.js";
+import { isSelectedProfileJob, jobLibraryId, mayDownloadToDevice, mayDownloadToLibrary, type DownloadJob } from "./downloads.js";
 import { libraryVisible, parseLibraryPath, type LibraryRecord, type Viewer } from "./libraries.js";
 import { log } from "./logger.js";
 import { remoteContentAccessible, remoteLibraryVisibleTo, type RemoteAccessSource } from "./media-server-access.js";
@@ -362,10 +362,10 @@ export class Revocations {
         && !owner.disabled
         && addonAllowed(addon, { id: owner.id, role: owner.role });
       if (stillAvailable) {
-        if (!isSelectedTravelJob(job)) return false;
+        if (!isSelectedProfileJob(job)) return false;
         const captured = streamTouches
-          ? job.travelStreamAddonIdentity
-          : job.travelSubtitleAddonIdentity;
+          ? job.sourceStreamAddonIdentity
+          : job.sourceSubtitleAddonIdentity;
         return captured !== addonIdentity(addon);
       }
       return true;

@@ -23,7 +23,7 @@ import type { TravelProfileResolution } from "./source-profile-resolver.js";
 import {
   DownloadQueue,
   ownerMayDownload,
-  TRAVEL_SOURCE_FALLBACK_ATTEMPT_LIMIT,
+  SOURCE_FALLBACK_ATTEMPT_LIMIT,
   type DownloadJob,
   type DownloadSelection,
   type QueueHooks,
@@ -148,6 +148,9 @@ const rawLazyJob = (sourceAdmission: unknown = undefined): Record<string, unknow
 const assertPublicViewIsClean = (view: Record<string, unknown>) => {
   assert.equal(Object.hasOwn(view, "sourceAdmission"), false);
   assert.equal(Object.hasOwn(view, "travelCursor"), false);
+  assert.equal(Object.hasOwn(view, "sourceStreamAddonIdentity"), false);
+  assert.equal(Object.hasOwn(view, "sourceSubtitleAddonIdentity"), false);
+  assert.equal(Object.hasOwn(view, "sourceFallbackAttempts"), false);
   assert.equal(Object.hasOwn(view, "travelStreamAddonIdentity"), false);
   assert.equal(Object.hasOwn(view, "travelSubtitleAddonIdentity"), false);
   assert.equal(Object.hasOwn(view, "travelSourceFallbackAttempts"), false);
@@ -157,6 +160,9 @@ const assertPublicViewIsClean = (view: Record<string, unknown>) => {
   assert.doesNotMatch(text, /queue-private-token/);
   assert.doesNotMatch(text, /sourceAdmission/);
   assert.doesNotMatch(text, /travelCursor/);
+  assert.doesNotMatch(text, /sourceStreamAddonIdentity/);
+  assert.doesNotMatch(text, /sourceSubtitleAddonIdentity/);
+  assert.doesNotMatch(text, /sourceFallbackAttempts/);
   assert.doesNotMatch(text, /travelStreamAddonIdentity/);
   assert.doesNotMatch(text, /travelSubtitleAddonIdentity/);
   assert.doesNotMatch(text, /travelSourceFallbackAttempts/);
@@ -296,8 +302,8 @@ const selectedTravel = (
   observations: emptyObservations,
 });
 
-test("a completed Travel job remains completed after restart without a resolver or current grant", async () => {
-  const { directory, data, downloads } = await setup();
+test("a completed Travel job migrates its legacy identity without resolving again after restart", async () => {
+  const { directory, data, downloads, state } = await setup();
   const source = await countingServer();
   const first = openQueue(data, downloads);
   let completions = 0;
@@ -320,6 +326,15 @@ test("a completed Travel job remains completed after restart without a resolver 
     const target = path.join(downloads, relativeWithin(LIBRARY_ID, completed.target));
     const before = await stat(target);
     const requests = source.requests();
+    const legacy = await readJobs(state);
+    const completedRow = legacy.find((job) => job.id === added.id)!;
+    assert.equal(completedRow.sourceStreamAddonIdentity, "a".repeat(64));
+    completedRow.travelStreamAddonIdentity = completedRow.sourceStreamAddonIdentity;
+    delete completedRow.sourceStreamAddonIdentity;
+    completedRow.subtitle = { url: "http://127.0.0.1/subtitle.vtt", addonKey: "subtitle-provider", name: "Film.cs.vtt" };
+    completedRow.travelSubtitleAddonIdentity = "b".repeat(64);
+    await writeFile(state, JSON.stringify(legacy, null, 2));
+
     const reopened = openQueue(data, downloads, { ownerAllowed: () => false });
     reopened.onCompleted = () => { completions += 1; };
     try {
@@ -337,7 +352,14 @@ test("a completed Travel job remains completed after restart without a resolver 
       assert.equal(completions, 1, "restart does not emit completion again");
       assert.equal(source.requests(), requests, "restart does not request the source again");
       assert.deepEqual(internalJobs(reopened)[0]?.sourceAdmission, travelSnapshot());
+      assert.equal(internalJobs(reopened)[0]?.sourceStreamAddonIdentity, "a".repeat(64));
+      assert.equal(internalJobs(reopened)[0]?.sourceSubtitleAddonIdentity, "b".repeat(64));
       assertPublicViewIsClean(restored as unknown as Record<string, unknown>);
+      const stored = (await readJobs(state)).find((job) => job.id === added.id)!;
+      assert.equal(stored.sourceStreamAddonIdentity, "a".repeat(64));
+      assert.equal(stored.sourceSubtitleAddonIdentity, "b".repeat(64));
+      assert.equal(Object.hasOwn(stored, "travelStreamAddonIdentity"), false);
+      assert.equal(Object.hasOwn(stored, "travelSubtitleAddonIdentity"), false);
       assert.equal(await readFile(target, "utf8"), "x");
       assert.equal((await stat(target)).mtimeMs, before.mtimeMs);
     } finally {
@@ -570,8 +592,8 @@ test("malformed or misplaced Travel addon identities make the queue unreadable w
       ...rawLazyJob(entry.snapshot),
       ...(entry.stream === undefined ? {} : { stream: entry.stream }),
       ...(entry.subtitle === undefined ? {} : { subtitle: entry.subtitle }),
-      ...(entry.identity === undefined ? {} : { travelStreamAddonIdentity: entry.identity }),
-      ...(entry.subtitleIdentity === undefined ? {} : { travelSubtitleAddonIdentity: entry.subtitleIdentity }),
+      ...(entry.identity === undefined ? {} : { sourceStreamAddonIdentity: entry.identity }),
+      ...(entry.subtitleIdentity === undefined ? {} : { sourceSubtitleAddonIdentity: entry.subtitleIdentity }),
     }], null, 2);
     await writeFile(state, bytes);
     let resolutions = 0;
@@ -588,6 +610,95 @@ test("malformed or misplaced Travel addon identities make the queue unreadable w
       assert.equal(resolutions, 0);
       await assert.rejects(
         queue.addPending("Other", { type: "movie", videoId: `tt-identity-${index}` }),
+        (error: AppError) => error.messageKey === "err.queueUnreadable" && error.status === 503,
+      );
+    } finally {
+      await queue.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+});
+
+test("records carrying canonical and legacy private spellings are refused as ambiguous without rewriting", async () => {
+  const stream = {
+    url: "http://127.0.0.1/private.mp4",
+    addonKey: "queue-private-token",
+    name: "Film.mp4",
+  };
+  const subtitle = { addonKey: "subtitle-provider", url: "http://127.0.0.1/subtitle.srt" };
+  const cases: Array<{ name: string; fields: Record<string, unknown> }> = [
+    {
+      name: "stream identity",
+      fields: { stream, sourceStreamAddonIdentity: "a".repeat(64), travelStreamAddonIdentity: "a".repeat(64) },
+    },
+    {
+      name: "subtitle identity",
+      fields: {
+        stream,
+        subtitle,
+        sourceStreamAddonIdentity: "a".repeat(64),
+        sourceSubtitleAddonIdentity: "b".repeat(64),
+        travelSubtitleAddonIdentity: "b".repeat(64),
+      },
+    },
+    {
+      name: "source fallback",
+      fields: { sourceFallbackAttempts: 2, travelSourceFallbackAttempts: 2 },
+    },
+  ];
+
+  for (const [index, entry] of cases.entries()) {
+    const { directory, data, downloads, state } = await setup();
+    const bytes = JSON.stringify([{ ...rawLazyJob(travelSnapshot()), ...entry.fields }], null, 2);
+    await writeFile(state, bytes);
+    const queue = openQueue(data, downloads);
+    try {
+      await queue.load();
+      assert.deepEqual(queue.list(), [], entry.name);
+      assert.equal(await readFile(state, "utf8"), bytes, `${entry.name} leaves the queue bytes intact`);
+      await assert.rejects(
+        queue.addPending("Other", { type: "movie", videoId: `tt-ambiguous-${index}` }),
+        (error: AppError) => error.messageKey === "err.queueUnreadable" && error.status === 503,
+      );
+    } finally {
+      await queue.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+});
+
+test("malformed legacy private values remain unreadable without rewriting", async () => {
+  const stream = {
+    url: "http://127.0.0.1/private.mp4",
+    addonKey: "queue-private-token",
+    name: "Film.mp4",
+  };
+  const subtitle = { addonKey: "subtitle-provider", url: "http://127.0.0.1/subtitle.srt" };
+  const cases: Array<{ name: string; fields: Record<string, unknown> }> = [
+    { name: "stream identity", fields: { stream, travelStreamAddonIdentity: "not-a-hash" } },
+    {
+      name: "subtitle identity",
+      fields: {
+        stream,
+        subtitle,
+        sourceStreamAddonIdentity: "a".repeat(64),
+        travelSubtitleAddonIdentity: "not-a-hash",
+      },
+    },
+    { name: "source fallback", fields: { travelSourceFallbackAttempts: SOURCE_FALLBACK_ATTEMPT_LIMIT + 1 } },
+  ];
+
+  for (const [index, entry] of cases.entries()) {
+    const { directory, data, downloads, state } = await setup();
+    const bytes = JSON.stringify([{ ...rawLazyJob(travelSnapshot()), ...entry.fields }], null, 2);
+    await writeFile(state, bytes);
+    const queue = openQueue(data, downloads);
+    try {
+      await queue.load();
+      assert.deepEqual(queue.list(), [], entry.name);
+      assert.equal(await readFile(state, "utf8"), bytes, `${entry.name} leaves the queue bytes intact`);
+      await assert.rejects(
+        queue.addPending("Other", { type: "movie", videoId: `tt-malformed-legacy-${index}` }),
         (error: AppError) => error.messageKey === "err.queueUnreadable" && error.status === 503,
       );
     } finally {
@@ -1046,9 +1157,9 @@ test("a selected Travel source transfers over HTTP and persists no cursor beside
     const stored = (await readJobs(state)).find((entry) => entry.id === "job-source-admission")!;
     assert.equal(Object.hasOwn(stored, "travelCursor"), false);
     assert.equal(Object.hasOwn(stored, "travelBudgetAttempts"), false);
-    assert.equal(stored.travelStreamAddonIdentity, "a".repeat(64));
-    assert.match(String(stored.travelStreamAddonIdentity), /^[0-9a-f]{64}$/);
-    assert.equal(Object.hasOwn(stored, "travelSubtitleAddonIdentity"), false);
+    assert.equal(stored.sourceStreamAddonIdentity, "a".repeat(64));
+    assert.match(String(stored.sourceStreamAddonIdentity), /^[0-9a-f]{64}$/);
+    assert.equal(Object.hasOwn(stored, "sourceSubtitleAddonIdentity"), false);
     assert.equal((stored.stream as { url?: string }).url, url);
     assert.match(String(stored.target), new RegExp(`^${LIBRARY_ID}/Film/Film\\.mp4$`));
     assertPublicViewIsClean(queue.get("job-source-admission")! as unknown as Record<string, unknown>);
@@ -1078,7 +1189,7 @@ test("the live owner check refuses every effective Travel addon identity loss", 
       addonKey: original.key,
       name: "Film.mp4",
     },
-    travelStreamAddonIdentity: addonIdentity(original),
+    sourceStreamAddonIdentity: addonIdentity(original),
     targetSettings: defaultDownloadSettings().movie,
     libraryId: configured.id,
     target: `${configured.id}/Film/Film.mp4`,
@@ -1146,7 +1257,7 @@ test("a Travel stream identity change during transfer pauses without a fallback 
         const job = internalJobs(queue)[0]!;
         assert.equal(job.pauseReason, "permission");
         assert.equal(job.errorKey, "download.pausedNoPermission");
-        assert.equal(job.travelSourceFallbackAttempts, undefined);
+        assert.equal(job.sourceFallbackAttempts, undefined);
         assert.equal(resolutions, 1);
         assert.ok(job.target);
         assert.equal(await fileAbsent(path.join(downloads, job.target.slice(LIBRARY_ID.length + 1))), true);
@@ -1194,9 +1305,9 @@ test("an explicit retry after an identity refusal resolves against the current i
     await queue.resume(added.id);
     await waitFor(queue, () => queue.get(added.id)?.status === "completed");
     assert.equal(resolutions, 2);
-    assert.equal(internalJobs(queue)[0]?.travelStreamAddonIdentity, secondIdentity);
+    assert.equal(internalJobs(queue)[0]?.sourceStreamAddonIdentity, secondIdentity);
     const stored = (await readJobs(state)).find((job) => job.id === added.id)!;
-    assert.equal(stored.travelStreamAddonIdentity, secondIdentity);
+    assert.equal(stored.sourceStreamAddonIdentity, secondIdentity);
   } finally {
     release();
     await queue.stop();
@@ -1246,7 +1357,7 @@ test("a Travel identity change at final publication withdraws the file and spend
 
     await waitFor(queue, async () => queue.get(added.id)?.status === "paused" && await fileAbsent(published));
     assert.equal(queue.get(added.id)?.pauseReason, "permission");
-    assert.equal(internalJobs(queue)[0]?.travelSourceFallbackAttempts, undefined);
+    assert.equal(internalJobs(queue)[0]?.sourceFallbackAttempts, undefined);
     assert.equal(resolutions, 1);
   } finally {
     releaseRename.release();
@@ -1329,7 +1440,7 @@ test("a selected subtitle identity change at publication withdraws video and sub
       && await fileAbsent(published)
       && await fileAbsent(publishedSubtitle));
     assert.equal(queue.get(added.id)?.pauseReason, "permission");
-    assert.equal(internalJobs(queue)[0]?.travelSourceFallbackAttempts, undefined);
+    assert.equal(internalJobs(queue)[0]?.sourceFallbackAttempts, undefined);
     assert.equal(resolutions, 1);
   } finally {
     releaseRename.release();
@@ -1625,9 +1736,9 @@ test("selected Travel transfer fallbacks stay bounded across rotating URLs until
   const queue = openQueue(data, downloads, { retryDelay: () => 0 });
   queue.setTravelResolver(async (input) => {
     resolutions += 1;
-    if (resolutions === TRAVEL_SOURCE_FALLBACK_ATTEMPT_LIMIT + 1) {
+    if (resolutions === SOURCE_FALLBACK_ATTEMPT_LIMIT + 1) {
       assert.deepEqual(input.source.tried, [], "an explicit retry starts a fresh source history");
-      assert.equal(internalJobs(queue)[0]?.travelSourceFallbackAttempts, undefined);
+      assert.equal(internalJobs(queue)[0]?.sourceFallbackAttempts, undefined);
     }
     return selectedTravel(`${sourceUrl}?token=${resolutions}`);
   });
@@ -1648,27 +1759,27 @@ test("selected Travel transfer fallbacks stay bounded across rotating URLs until
     assert.ok(added);
 
     await waitFor(queue, () => queue.get(added.id)?.status === "failed");
-    assert.equal(resolutions, TRAVEL_SOURCE_FALLBACK_ATTEMPT_LIMIT);
-    assert.equal(requests, TRAVEL_SOURCE_FALLBACK_ATTEMPT_LIMIT);
+    assert.equal(resolutions, SOURCE_FALLBACK_ATTEMPT_LIMIT);
+    assert.equal(requests, SOURCE_FALLBACK_ATTEMPT_LIMIT);
     const failed = queue.get(added.id)!;
     assert.equal(failed.errorKey, "err.noMatchingSource");
     assertPublicViewIsClean(failed as unknown as Record<string, unknown>);
-    assert.equal(internalJobs(queue)[0]?.travelSourceFallbackAttempts, TRAVEL_SOURCE_FALLBACK_ATTEMPT_LIMIT);
+    assert.equal(internalJobs(queue)[0]?.sourceFallbackAttempts, SOURCE_FALLBACK_ATTEMPT_LIMIT);
     await waitFor(queue, async () => {
       const stored = (await readJobs(state)).find((entry) => entry.id === added.id);
       return stored?.status === "failed"
-        && stored.travelSourceFallbackAttempts === TRAVEL_SOURCE_FALLBACK_ATTEMPT_LIMIT;
+        && stored.sourceFallbackAttempts === SOURCE_FALLBACK_ATTEMPT_LIMIT;
     });
 
     await queue.retry(added.id);
-    await waitFor(queue, () => queue.get(added.id)?.status === "failed" && resolutions === TRAVEL_SOURCE_FALLBACK_ATTEMPT_LIMIT * 2);
-    assert.equal(resolutions, TRAVEL_SOURCE_FALLBACK_ATTEMPT_LIMIT * 2);
-    assert.equal(requests, TRAVEL_SOURCE_FALLBACK_ATTEMPT_LIMIT * 2);
-    assert.equal(internalJobs(queue)[0]?.travelSourceFallbackAttempts, TRAVEL_SOURCE_FALLBACK_ATTEMPT_LIMIT);
+    await waitFor(queue, () => queue.get(added.id)?.status === "failed" && resolutions === SOURCE_FALLBACK_ATTEMPT_LIMIT * 2);
+    assert.equal(resolutions, SOURCE_FALLBACK_ATTEMPT_LIMIT * 2);
+    assert.equal(requests, SOURCE_FALLBACK_ATTEMPT_LIMIT * 2);
+    assert.equal(internalJobs(queue)[0]?.sourceFallbackAttempts, SOURCE_FALLBACK_ATTEMPT_LIMIT);
     await waitFor(queue, async () => {
       const stored = (await readJobs(state)).find((entry) => entry.id === added.id);
       return stored?.status === "failed"
-        && stored.travelSourceFallbackAttempts === TRAVEL_SOURCE_FALLBACK_ATTEMPT_LIMIT;
+        && stored.sourceFallbackAttempts === SOURCE_FALLBACK_ATTEMPT_LIMIT;
     });
   } finally {
     await queue.stop();
@@ -1709,7 +1820,7 @@ test("a transient Travel transfer failure still selects a new source immediately
     await waitFor(queue, () => queue.get(added.id)?.status === "completed");
     assert.equal(requests, 2);
     assert.equal(resolutions, 2);
-    assert.equal(Object.hasOwn(internalJobs(queue)[0]!, "travelSourceFallbackAttempts"), false);
+    assert.equal(Object.hasOwn(internalJobs(queue)[0]!, "sourceFallbackAttempts"), false);
   } finally {
     await queue.stop();
     server.close();
@@ -1717,7 +1828,7 @@ test("a transient Travel transfer failure still selects a new source immediately
   }
 });
 
-test("a Travel source fallback count survives restart cleanup without transferring the old stream", async () => {
+test("a legacy Travel source fallback count migrates across restart without transferring the old stream", async () => {
   const { directory, data, downloads, state } = await setup();
   const oldSource = await countingServer();
   let resolutions = 0;
@@ -1745,16 +1856,19 @@ test("a Travel source fallback count survives restart cleanup without transferri
   try {
     await first.load();
     assert.equal(internalJobs(first)[0]?.stream, undefined);
-    assert.equal(internalJobs(first)[0]?.travelSourceFallbackAttempts, 3);
+    assert.equal(internalJobs(first)[0]?.sourceFallbackAttempts, 3);
     assert.equal(oldSource.requests(), 0);
     await first.stop();
+    const migrated = (await readJobs(state))[0]!;
+    assert.equal(migrated.sourceFallbackAttempts, 3);
+    assert.equal(Object.hasOwn(migrated, "travelSourceFallbackAttempts"), false);
 
     const reopened = openQueue(data, downloads);
     await reopened.load();
     try {
       assert.equal(internalJobs(reopened)[0]?.status, "failed");
-      assert.equal(internalJobs(reopened)[0]?.travelSourceFallbackAttempts, 3);
-      assert.equal((await readJobs(state))[0]?.travelSourceFallbackAttempts, 3);
+      assert.equal(internalJobs(reopened)[0]?.sourceFallbackAttempts, 3);
+      assert.equal((await readJobs(state))[0]?.sourceFallbackAttempts, 3);
       assertPublicViewIsClean(reopened.get("job-source-admission")! as unknown as Record<string, unknown>);
       assert.equal(oldSource.requests(), 0);
       assert.equal(resolutions, 0);
@@ -1774,7 +1888,7 @@ test("malformed or misplaced Travel source fallback counts make the queue unread
   const cases: Array<{ name: string; admission?: unknown; attempts: unknown }> = [
     { name: "negative count", admission: validSnapshot, attempts: -1 },
     { name: "fractional count", admission: validSnapshot, attempts: 1.5 },
-    { name: "count over limit", admission: validSnapshot, attempts: TRAVEL_SOURCE_FALLBACK_ATTEMPT_LIMIT + 1 },
+    { name: "count over limit", admission: validSnapshot, attempts: SOURCE_FALLBACK_ATTEMPT_LIMIT + 1 },
     { name: "string count", admission: validSnapshot, attempts: "2" },
     { name: "null count", admission: validSnapshot, attempts: null },
     { name: "legacy job", attempts: 1 },
@@ -1785,7 +1899,7 @@ test("malformed or misplaced Travel source fallback counts make the queue unread
     const { directory, data, downloads, state } = await setup();
     const bytes = JSON.stringify([{
       ...rawLazyJob(entry.admission),
-      travelSourceFallbackAttempts: entry.attempts,
+      sourceFallbackAttempts: entry.attempts,
     }], null, 2);
     await writeFile(state, bytes);
     let resolutions = 0;
@@ -1812,7 +1926,7 @@ test("malformed or misplaced Travel source fallback counts make the queue unread
   }
 });
 
-test("restart discards an old Travel URL and partial before resolving a fresh source", async () => {
+test("restart migrates a selected Travel row, discards its old URL and partial, and resolves fresh", async () => {
   const { directory, data, downloads, state } = await setup();
   const oldSource = await countingServer();
   const newSource = await countingServer();
@@ -1824,6 +1938,10 @@ test("restart discards an old Travel URL and partial before resolving a fresh so
     ...rawLazyJob(snapshot),
     ownerUserId: "usr_00000015",
     stream: { url: oldSource.url, addonKey: "queue-private-token", name: "Film.mp4", behaviorHints: { filename: "Film.mp4" } },
+    subtitle: { url: "http://127.0.0.1/old-subtitle.vtt", addonKey: "subtitle-provider", name: "Film.cs.vtt" },
+    travelStreamAddonIdentity: "a".repeat(64),
+    travelSubtitleAddonIdentity: "b".repeat(64),
+    travelSourceFallbackAttempts: 2,
     target: `${LIBRARY_ID}/Film/Film.mp4`,
     targetSettings: defaultDownloadSettings().movie,
     libraryId: LIBRARY_ID,
@@ -1838,6 +1956,8 @@ test("restart discards an old Travel URL and partial before resolving a fresh so
   queue.setTravelResolver(async (input) => {
     assert.equal(input.cursor, undefined);
     assert.deepEqual(input.source.tried, []);
+    assert.equal(internalJobs(queue)[0]?.sourceFallbackAttempts, 2);
+    assert.equal(Object.hasOwn(internalJobs(queue)[0]!, "travelSourceFallbackAttempts"), false);
     return selectedTravel(newSource.url);
   });
   try {
@@ -1849,6 +1969,11 @@ test("restart discards an old Travel URL and partial before resolving a fresh so
     assert.equal(await readFile(oldPartial, "utf8").catch(() => undefined), undefined);
     const stored = (await readJobs(state)).find((entry) => entry.id === "job-source-admission")!;
     assert.equal((stored.stream as { url?: string }).url, newSource.url);
+    assert.equal(stored.sourceStreamAddonIdentity, "a".repeat(64));
+    assert.equal(Object.hasOwn(stored, "sourceSubtitleAddonIdentity"), false);
+    assert.equal(Object.hasOwn(stored, "travelStreamAddonIdentity"), false);
+    assert.equal(Object.hasOwn(stored, "travelSubtitleAddonIdentity"), false);
+    assert.equal(Object.hasOwn(stored, "travelSourceFallbackAttempts"), false);
     assert.equal(Object.hasOwn(stored, "travelCursor"), false);
     assert.equal(stored.ownerUserId, "usr_00000015");
     assert.deepEqual(stored.sourceAdmission, snapshot);
