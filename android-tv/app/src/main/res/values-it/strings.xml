@@ -82,6 +82,13 @@
   <string name="sources_any_language">Qualsiasi</string>
   <string name="sources_of_total">%1$s di %2$s</string>
   <string name="sources_sort_recommended">Consigliato</string>
+  <string name="sources_rule_breaks">Non rispetta le regole: %1$s</string>
+  <string name="sources_rule_reason_language">altra lingua</string>
+  <string name="sources_rule_reason_resolution_low">risoluzione inferiore</string>
+  <string name="sources_rule_reason_resolution_high">risoluzione superiore</string>
+  <string name="sources_rule_reason_cinema">copia da cinema (CAM/TS)</string>
+  <string name="sources_rule_reason_subtitles">senza sottotitoli</string>
+  <string name="sources_rule_reason_sample">anteprima</string>
   <string name="sources_sort_largest">Prima il più grande</string>
   <string name="sources_sort_smallest">Prima il più piccolo</string>
   <string name="sources_sort_addon">Per priorità del componente aggiuntivo</string>

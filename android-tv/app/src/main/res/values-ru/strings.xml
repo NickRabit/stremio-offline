@@ -82,6 +82,13 @@
   <string name="sources_any_language">Любой</string>
   <string name="sources_of_total">%1$s из %2$s</string>
   <string name="sources_sort_recommended">Рекомендуется</string>
+  <string name="sources_rule_breaks">Не соответствует правилам: %1$s</string>
+  <string name="sources_rule_reason_language">другой язык</string>
+  <string name="sources_rule_reason_resolution_low">более низкое разрешение</string>
+  <string name="sources_rule_reason_resolution_high">более высокое разрешение</string>
+  <string name="sources_rule_reason_cinema">копия из кинотеатра (CAM/TS)</string>
+  <string name="sources_rule_reason_subtitles">без субтитров</string>
+  <string name="sources_rule_reason_sample">фрагмент</string>
   <string name="sources_sort_largest">Самый большой первый</string>
   <string name="sources_sort_smallest">Сначала самый маленький</string>
   <string name="sources_sort_addon">По приоритету аддонов</string>

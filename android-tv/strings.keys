@@ -81,6 +81,13 @@ sources.allAddons
 sources.anyLanguage
 sources.ofTotal
 sources.sortRecommended
+sources.ruleBreaks
+sources.ruleReason.language
+sources.ruleReason.resolutionLow
+sources.ruleReason.resolutionHigh
+sources.ruleReason.cinema
+sources.ruleReason.subtitles
+sources.ruleReason.sample
 sources.sortLargest
 sources.sortSmallest
 sources.sortAddon
