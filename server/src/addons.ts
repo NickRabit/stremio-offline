@@ -458,10 +458,21 @@ export async function streams(
 }
 
 const IMDB_TARGET_TTL_MS = 6 * 60 * 60_000;
+const IMDB_MISS_TTL_MS = 60_000;
+const IMDB_TARGET_CACHE_LIMIT = 2_000;
 const imdbTargets = new Map<string, { imdb: string | null; at: number }>();
 
 /** Test seam only: forgets the IMDb ids read from metadata. */
 export function resetImdbTargets() { imdbTargets.clear(); }
+
+const cacheImdbTarget = (key: string, imdb: string | null): void => {
+  if (!imdbTargets.has(key) && imdbTargets.size >= IMDB_TARGET_CACHE_LIMIT) {
+    const oldest = imdbTargets.keys().next().value;
+    if (oldest !== undefined) imdbTargets.delete(oldest);
+  }
+  imdbTargets.delete(key);
+  imdbTargets.set(key, { imdb, at: Date.now() });
+};
 
 /** The IMDb id a title of an addon with its own ids stands for: carried in the id itself
  *  (`mpa:webshare-index:tt2709692`) or named by the addon's metadata as `imdb_id`. */
@@ -470,7 +481,9 @@ async function imdbTitle(addons: AddonRecord[], type: string, id: string, intera
   if (carried) return carried;
   const key = `${type}:${id}`;
   const cached = imdbTargets.get(key);
-  if (cached && Date.now() - cached.at < IMDB_TARGET_TTL_MS) return cached.imdb;
+  if (cached && Date.now() - cached.at < (cached.imdb === null ? IMDB_MISS_TTL_MS : IMDB_TARGET_TTL_MS)) {
+    return cached.imdb;
+  }
   let imdb: string | null = null;
   for (const addon of addons.filter((a) => a.enabled && a.role !== "source" && supports(a, "meta", type, id))) {
     if (signal?.aborted) return null;
@@ -484,7 +497,7 @@ async function imdbTitle(addons: AddonRecord[], type: string, id: string, intera
     }
   }
   if (signal?.aborted) return null;
-  imdbTargets.set(key, { imdb, at: Date.now() });
+  cacheImdbTarget(key, imdb);
   return imdb;
 }
 

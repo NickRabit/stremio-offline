@@ -24,6 +24,7 @@ export interface AdminSourceProfilesHandlers {
 }
 
 const PRESET_IDS: ReadonlySet<string> = new Set(RULE_PRESETS.map((preset) => preset.id));
+const SOURCE_PROFILE_LIMIT = 50;
 
 const invalidProfile = (): AppError =>
   new AppError("The profile settings are not valid.", "err.sourceProfileInvalid", 400);
@@ -36,6 +37,10 @@ const profileUnavailable = (): AppError =>
 
 const staleRevision = (): AppError =>
   new AppError("This source profile revision is no longer available.", "err.sourceProfileRevisionStale", 409);
+
+const assertProfileCapacity = (profiles: readonly StoredSourceProfile[]): void => {
+  if (profiles.length >= SOURCE_PROFILE_LIMIT) throw invalidProfile();
+};
 
 const assertAdmin = (user: ReturnType<RouteContext["currentUser"]>) => {
   if (!user || user.disabled || user.role !== "admin") throw new ForbiddenError();
@@ -151,6 +156,7 @@ export function registerAdminSourceProfilesRoutes(
       const body = plainObject(req.body, ["name", "rules"]);
       const name = profileName(body.name);
       const profiles = state.sourceProfiles ?? [];
+      assertProfileCapacity(profiles);
       assertNameAvailable(profiles, name);
       const parameters = rulesFor(body.rules);
       assertAddonKeys(state, parameters);
@@ -178,6 +184,7 @@ export function registerAdminSourceProfilesRoutes(
       const source = profiles.find((profile) => profile.id === req.params.id);
       if (!source) throw profileUnavailable();
       if (source.template !== "rules" || source.parameters === undefined) throw builtInProfile();
+      assertProfileCapacity(profiles);
       const body = plainObject(req.body, ["name"]);
       const name = profileName(body.name);
       assertNameAvailable(profiles, name);

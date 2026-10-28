@@ -480,10 +480,13 @@ const torrentIsSelectable = (
     && listingAudioTier(entry.candidate, snapshot) !== "preferred") return false;
   if (entry.evaluation.status === "eligible") return true;
   const reasons = entry.evaluation.reasons;
-  return reasons.every((reason) =>
-    (reason.code === "inspectionRequired" && reason.field === "heightPixels")
-    || (rulesAudioMode(snapshot.policy) === "only"
-      && reason.code === "inspectionRequired" && reason.field === "audio"));
+  return reasons.every((reason) => {
+    if (reason.code !== "inspectionRequired") return false;
+    if (reason.field === "heightPixels") {
+      return entry.candidate.facts.heightPixels.evidence === "listed";
+    }
+    return reason.field === "audio" && rulesAudioMode(snapshot.policy) === "only";
+  });
 };
 
 export async function verifyRulesCandidates(
@@ -513,13 +516,16 @@ export async function verifyRulesCandidates(
   const http: Array<{
     candidate: SourceEvidenceCandidateV1;
     evaluation: ReturnType<typeof evaluateSourceCandidate>;
+    responseOrder: number;
   }> = [];
-  const torrents: typeof http = [];
+  const torrents: Array<Omit<(typeof http)[number], "responseOrder">> = [];
+  const httpIndexByKey = new Map<string, number>();
   for (const candidate of input.candidates) {
     const evaluation = evaluateSourceCandidate(snapshot, candidate);
     if (evaluation.status === "excluded") continue;
     if (candidate.sourceKind === "http" || candidate.sourceKind === "mediaServerOriginal") {
-      http.push({ candidate, evaluation });
+      httpIndexByKey.set(continuationKey(candidate), http.length);
+      http.push({ candidate, evaluation, responseOrder: http.length });
     }
     else if (candidate.sourceKind === "torrent") torrents.push({ candidate, evaluation });
   }
@@ -545,7 +551,7 @@ export async function verifyRulesCandidates(
       undefined,
       entry.evaluation.audioTier,
       entry.evaluation.subtitleTier,
-      http.indexOf(entry),
+      entry.responseOrder,
     ));
   }
   if (sameAttempt) {
@@ -558,7 +564,7 @@ export async function verifyRulesCandidates(
           saved,
           saved.audioTier,
           saved.subtitleTier,
-          http.findIndex((entry) => entry.candidate === candidate),
+          httpIndexByKey.get(saved.continuationKey) ?? -1,
         ));
       }
     }
@@ -566,7 +572,7 @@ export async function verifyRulesCandidates(
 
   const sorted = http.map((entry) => ({
     ...entry,
-    ranking: listingRanking(entry.candidate, snapshot, http.indexOf(entry)),
+    ranking: listingRanking(entry.candidate, snapshot, entry.responseOrder),
   })).sort((left, right) => comparePreference(snapshot, left.ranking, right.ranking)
     || left.ranking.responseOrder - right.ranking.responseOrder);
   const sameCursor = sameAttempt ? priorCursor : undefined;

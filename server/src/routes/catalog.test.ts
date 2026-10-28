@@ -1539,6 +1539,37 @@ test("GET /api/streams attaches a verdict for every admitting rules profile", as
   );
 });
 
+test("GET /api/streams passes cached title language into playback verdicts", async (t) => {
+  const records = [addon("rule-source", [], { role: "source", resources: ["stream"] })];
+  const metadataLookups: Array<{ type: string; id: string }> = [];
+  const harness = await mount(records, null, {
+    profiles: storedRulePresets(),
+    prefs: { audioLanguage: "cs" },
+    cachedMeta: async (type, id) => {
+      metadataLookups.push({ type, id });
+      return { id, type, name: "Czech title", language: "Czech" };
+    },
+  });
+  t.after(harness.close);
+
+  await withStubbedAddons(
+    () => json({ streams: [{
+      url: "https://cdn.example/movie-1080p.mp4",
+      name: "Provider 1080p release",
+      behaviorHints: { bingeGroup: "Provider||1080p|" },
+    }] }),
+    async () => {
+      const listed = await (await api(harness.base, "/api/streams/movie/tt1")).json() as Array<{
+        rules?: Record<string, { status: string; reasons: string[] }>;
+      }>;
+      const verdict = listed[0]?.rules?.[SOURCE_PROFILE_IDS.myLanguage];
+      assert.equal(verdict?.status, "meets");
+      assert.deepEqual(verdict?.reasons, []);
+    },
+  );
+  assert.deepEqual(metadataLookups, [{ type: "movie", id: "tt1" }]);
+});
+
 test("GET /api/streams exposes one videoFacts object for every rules profile", async (t) => {
   const records = [addon("rule-source", [], { role: "source", resources: ["stream"] })];
   const harness = await mount(records, null, { profiles: storedRulePresets() });
@@ -1637,6 +1668,7 @@ test("GET /api/local-streams mints one library entry per copy", async (t) => {
   assert.equal(entry.kind, "library");
   assert.equal(entry.playable, true);
   assert.equal(entry.localPath, "Heat (1995)/Heat 1995 1080p.mkv");
+  assert.equal(entry.libraryId, "lib_00000001");
   assert.equal(entry.libraryName, "Films");
   assert.equal((entry.behaviorHints as { videoSize?: number; filename?: string }).videoSize, 1234);
   assert.equal((entry.behaviorHints as { videoSize?: number; filename?: string }).filename, "Heat 1995 1080p.mkv");

@@ -3,7 +3,7 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { addonAllowed, addonMetadataLanguage, allowedAddons, fetchCatalogPage, metadata, orderedForUser, searchAll, searchableCatalogs, streamCandidates, subtitles, supportsSkip } from "./addons.js";
+import { addonAllowed, addonMetadataLanguage, allowedAddons, fetchCatalogPage, metadata, orderedForUser, resetImdbTargets, searchAll, searchableCatalogs, streamCandidates, subtitleTarget, subtitles, supportsSkip } from "./addons.js";
 import { flushLog, initLogger } from "./logger.js";
 import type { Viewer } from "./libraries.js";
 import { defaultDownloadSettings } from "./naming.js";
@@ -401,6 +401,58 @@ test("an id the subtitle addons already accept is asked as it is", async () => {
     assert.deepEqual(found.map((item) => item.lang), ["tt0096697:1:1"]);
   });
   assert.equal(calls.length, 1);
+});
+
+test("IMDb resolution caches hits for six hours and misses for sixty seconds", async (t) => {
+  resetImdbTargets();
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+  const calls = new Map<string, number>();
+  await withStubbedAddons((url) => {
+    const path = decodeURIComponent(new URL(url).pathname);
+    const id = /^\/meta\/movie\/(.+)\.json$/.exec(path)?.[1];
+    if (id) calls.set(id, (calls.get(id) ?? 0) + 1);
+    return json({
+      meta: {
+        id,
+        type: "movie",
+        name: id,
+        ...(id === "mpa:hit" ? { imdb_id: "tt1000001" } : {}),
+      },
+    });
+  }, async () => {
+    assert.equal(await subtitleTarget([prefixedMetaAddon()], "movie", "mpa:hit", false), "tt1000001");
+    t.mock.timers.tick(5 * 60 * 60_000);
+    assert.equal(await subtitleTarget([prefixedMetaAddon()], "movie", "mpa:hit", false), "tt1000001");
+    assert.equal(calls.get("mpa:hit"), 1);
+    t.mock.timers.tick(60 * 60_000 + 1);
+    assert.equal(await subtitleTarget([prefixedMetaAddon()], "movie", "mpa:hit", false), "tt1000001");
+    assert.equal(calls.get("mpa:hit"), 2);
+
+    assert.equal(await subtitleTarget([prefixedMetaAddon()], "movie", "mpa:miss", false), null);
+    t.mock.timers.tick(59_000);
+    assert.equal(await subtitleTarget([prefixedMetaAddon()], "movie", "mpa:miss", false), null);
+    assert.equal(calls.get("mpa:miss"), 1);
+    t.mock.timers.tick(1_001);
+    assert.equal(await subtitleTarget([prefixedMetaAddon()], "movie", "mpa:miss", false), null);
+    assert.equal(calls.get("mpa:miss"), 2);
+  });
+});
+
+test("IMDb resolution keeps at most two thousand entries and evicts the oldest", async () => {
+  resetImdbTargets();
+  const calls = new Map<string, number>();
+  await withStubbedAddons((url) => {
+    const id = decodeURIComponent(new URL(url).pathname).match(/\/meta\/movie\/(.+)\.json$/)?.[1];
+    if (id) calls.set(id, (calls.get(id) ?? 0) + 1);
+    return json({ meta: { id, type: "movie", name: id } });
+  }, async () => {
+    for (let index = 0; index < 2_001; index += 1) {
+      await subtitleTarget([prefixedMetaAddon()], "movie", `mpa:cache:${index}`, false);
+    }
+    assert.equal(calls.get("mpa:cache:0"), 1);
+    await subtitleTarget([prefixedMetaAddon()], "movie", "mpa:cache:0", false);
+    assert.equal(calls.get("mpa:cache:0"), 2);
+  });
 });
 
 test("a title whose metadata names no IMDb id asks no subtitle addon", async () => {

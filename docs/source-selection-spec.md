@@ -41,7 +41,7 @@ Baseline inspected: `cebf6fa6` on `main`. Recheck these seams on the implementat
 | Resume | `CatalogueTitleDetail.tsx`, `LibraryTitleDetail.tsx`, `source-progress.ts` | Remembered source has different precedence across entry points; App catalogue default ignores it |
 | Bulk/follow setup | `SeriesDownloadDialog.tsx`, `routes/downloads.ts`, `routes/follows.ts` | Shared dialog and parser; first-episode addon discovery; stored `addonKeys`; bulk defaults to `largest`, follow to `priority`; `POST /api/downloads` coerces an unknown `sourceStrategy` to `priority` and silently drops unknown or disallowed addon keys |
 | Automatic resolution | `server/src/index.ts`: `cachedStreams`, `queue.setResolver` | Five-minute cache of the merged list, flattened failures included, so an addon that failed once stays absent for that episode for five minutes; requests all allowed suitable addons before applying selected keys; only addon candidates are considered |
-| Local copies | `server/src/local-sources.ts`: `localCopies`; `GET /api/local-streams` | A binding lookup, not a provider query: files bound to the catalogue title, in library order then size descending, at most 20, visible libraries only, read from the last library walk. Rows carry `localPath` and `libraryName` but no `libraryId`. No audio, resolution or duration facts are stored, and download names carry no language, so most owned copies have unknown language |
+| Local copies | `server/src/local-sources.ts`: `localCopies`; `GET /api/local-streams` | A binding lookup, not a provider query: files bound to the catalogue title, in library order then size descending, at most 20, visible libraries only, read from the last library walk. Rows carry `localPath`, `libraryId` and `libraryName`. No audio, resolution or duration facts are stored, and download names carry no language, so most owned copies have unknown language |
 | Next episode | `App.tsx`: `playNextCatalogEpisode`, `playNextDetailEpisode`, `playLocal` | Three disjoint rules: an owned copy continues with the next file in its folder; an addon source picks from addon rows only (the next episode's owned copy is loaded but never chosen); a remote source stays on the same library and version name or stops |
 | Episode ownership | `downloads.ts`: `addPending`, `admitDirect` | Lazy episode jobs deduplicate only against active jobs and explicit saves only by source; nothing checks whether the episode already exists in a library, so a follow downloads it again under a `(2)` name |
 | Follow retries | `follows.ts`: `effectiveSelection`, `queue.retry` | Admission stores the grace-adjusted selection in the job; a reserved episode stores none; every retry recomputes the selection from the follow's current configuration and the current time |
@@ -499,7 +499,7 @@ The same rules drive both. Downloads admit the profile for `downloadToLibrary` (
 libraries; an existing local copy that meets the rules skips the download). Playback lists admit
 every rules profile for `play` and attach, per listed source, a verdict per profile
 (`rules: { <profileId>: { status, reasons, rank } }`, `server/src/source-rule-verdict.ts`) — the
-same evidence and evaluation, with the size range left out and no probing, so a fact only an
+same evidence and evaluation, including the size range, and no probing, so a fact only an
 inspection could establish leaves the source `unverified`. `rank` compares lexicographically across
 the addon, local and remote listings of one title.
 
