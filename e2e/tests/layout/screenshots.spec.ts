@@ -64,9 +64,10 @@ test.describe("screenshots", () => {
     await expect(detail.getByRole("button", { name: /E2E 1080p/ })).toBeVisible();
     await expect(detail.getByRole("button", { name: /E2E 720p/ })).toBeVisible();
     const localSource = detail.getByRole("button", { name: /Zkušební film \(2024\)\.mp4/ });
+    await expect(localSource).toBeVisible();
+    await settle(page);
     await localSource.click();
     await expect(localSource).toHaveAttribute("aria-pressed", "true");
-    await settle(page);
 
     await expect(page).toHaveScreenshot("title-detail.png", {
       fullPage: true,
