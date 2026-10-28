@@ -3,7 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { setLocale } from "./i18n";
 import { SourceProfilesSettings } from "./SourceProfilesSettings";
-import type { Addon, AdminSourceProfile, DownloadRules } from "./types";
+import type { Addon, AdminRemoteLibrary, AdminSourceProfile, DownloadRules } from "./types";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -11,6 +11,9 @@ const json = (body: unknown, status = 200) =>
 const STAMP = "2026-10-01T00:00:00.000Z";
 const BALANCED = "88302ead-d701-4282-9059-777d47ed913c";
 const CUSTOM = "11111111-1111-4111-8111-111111111111";
+const REMOTE_ONE = `rlib_${"1".repeat(32)}`;
+const REMOTE_TWO = `rlib_${"2".repeat(32)}`;
+const REMOTE_OFF = `rlib_${"3".repeat(32)}`;
 
 const rules = (over: Partial<DownloadRules> = {}): DownloadRules => ({
   addons: { scope: "all", order: "viewer" }, torrents: true,
@@ -32,6 +35,22 @@ const addon = (key: string, name: string): Addon => ({
   key, role: "source", enabled: true, globalSearch: false,
   manifest: { id: `org.${key}`, name, version: "1.0.0", resources: ["stream"] },
 });
+const remoteLibrary = (
+  id: string,
+  name: string,
+  order: number,
+  provider: AdminRemoteLibrary["provider"],
+  enabled = true,
+): AdminRemoteLibrary => ({
+  id, connectionId: `mconn_${id}`, remoteId: id, name, type: "movie",
+  enabled, order, showOnHome: true, showInContinueWatching: true, allowedUsers: [],
+  ...(provider ? { provider } : {}),
+});
+const remotes = [
+  remoteLibrary(REMOTE_TWO, "Series", 2, "emby"),
+  remoteLibrary(REMOTE_OFF, "Hidden", 0, "jellyfin", false),
+  remoteLibrary(REMOTE_ONE, "Films", 1, "jellyfin"),
+];
 
 let fetchMock: ReturnType<typeof vi.fn>;
 let root: Root;
@@ -85,7 +104,11 @@ const clickBox = async (label: string) => {
   expect(input, `checkbox ${label}`).toBeTruthy();
   await act(async () => { input.click(); });
 };
-const mount = async (profiles: AdminSourceProfile[] = [preset, custom], onWrite?: (url: string, method: string, body: unknown) => Response | undefined) => {
+const mount = async (
+  profiles: AdminSourceProfile[] = [preset, custom],
+  onWrite?: (url: string, method: string, body: unknown) => Response | undefined,
+  remoteLibraries: AdminRemoteLibrary[] | "fail" = remotes,
+) => {
   fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
     if (method !== "GET") {
@@ -94,6 +117,9 @@ const mount = async (profiles: AdminSourceProfile[] = [preset, custom], onWrite?
     }
     if (url === "/api/admin/source-profiles") return json({ profiles });
     if (url === "/api/addons") return json([addon("first", "First"), addon("second", "Second")]);
+    if (url === "/api/media-servers/libraries") {
+      return remoteLibraries === "fail" ? json({ error: "unavailable" }, 503) : json({ libraries: remoteLibraries });
+    }
     return json({});
   });
   await act(async () => { root.render(<SourceProfilesSettings languages={[{ code: "cs", name: "Čeština" }, { code: "en", name: "English" }]}/>); });
@@ -118,6 +144,39 @@ it("renders the sources, quality and language groups in order", async () => {
     .toEqual(["Sources", "Quality and size", "Language", "What to prefer"]);
 });
 
+it("renders local and enabled remote libraries before addons in both source lists", async () => {
+  await mount();
+  await clickText("Add rules");
+  await clickRadio("download-rules-scope", "selected");
+  const selectedLabels = [...dialog().querySelectorAll<HTMLInputElement>(".bulk-sources input[type=checkbox]")]
+    .map((input) => input.getAttribute("aria-label"));
+  expect(selectedLabels).toEqual([
+    "Local library (playback only)",
+    "Jellyfin · Films",
+    "Emby · Series",
+    "First",
+    "Second",
+  ]);
+
+  await clickRadio("download-rules-order", "explicit");
+  const orderedLabels = [...dialog().querySelectorAll(".rules-order-list > div")]
+    .map((row) => row.querySelector("span")?.textContent);
+  expect(orderedLabels).toEqual(selectedLabels);
+});
+
+it("keeps local and addon rows without an error banner when remote libraries fail to load", async () => {
+  await mount([preset], undefined, "fail");
+  expect(host.querySelector('[role="alert"]')).toBeNull();
+  await clickText("Add rules");
+  await clickRadio("download-rules-scope", "selected");
+  expect([...dialog().querySelectorAll<HTMLInputElement>(".bulk-sources input[type=checkbox]")]
+    .map((input) => input.getAttribute("aria-label"))).toEqual([
+    "Local library (playback only)",
+    "First",
+    "Second",
+  ]);
+});
+
 it("maps every editor field to the exact rules body", async () => {
   const posted: unknown[] = [];
   await mount([preset], (url, method, body) => {
@@ -130,8 +189,6 @@ it("maps every editor field to the exact rules body", async () => {
   await clickText("Add rules");
   await setInput("Name", "Cinema");
   await clickRadio("download-rules-scope", "selected");
-  await clickBox("First");
-  await clickBox("Second");
   await clickRadio("download-rules-order", "explicit");
   await clickLabel("Move Second up");
   await clickBox("Allow torrents through Real-Debrid");
@@ -157,7 +214,10 @@ it("maps every editor field to the exact rules body", async () => {
   expect(posted).toEqual([{
     name: "Cinema",
     rules: {
-      addons: { scope: { selected: ["first", "second"] }, order: { explicit: ["second", "first"] } },
+      addons: {
+        scope: { selected: ["local", `remote:${REMOTE_ONE}`, `remote:${REMOTE_TWO}`, "first", "second"] },
+        order: { explicit: ["local", `remote:${REMOTE_ONE}`, `remote:${REMOTE_TWO}`, "second", "first"] },
+      },
       torrents: false, resolution: { min: 480, max: 2160 },
       audio: { mode: "prefer", language: "en", fallback: "cs" },
       subtitles: "required", subtitleLanguage: "mine", sizeGb: {
@@ -166,6 +226,47 @@ it("maps every editor field to the exact rules body", async () => {
       preference: ["resolutionLower", "larger"],
     },
   }]);
+});
+
+it("unchecks a remote library and saves a scope without it", async () => {
+  const posted: Array<{ rules: DownloadRules }> = [];
+  await mount([preset], (url, method, body) => {
+    if (url === "/api/admin/source-profiles" && method === "POST") posted.push(body as { rules: DownloadRules });
+    return undefined;
+  });
+  await clickText("Add rules");
+  await setInput("Name", "No films");
+  await clickRadio("download-rules-scope", "selected");
+  await clickBox("Jellyfin · Films");
+  await clickText("Save", dialog());
+
+  expect(posted[0]?.rules.addons.scope).toEqual({
+    selected: ["local", `remote:${REMOTE_TWO}`, "first", "second"],
+  });
+});
+
+it("moves a remote library above an addon and saves the explicit order", async () => {
+  let patched: { rules: DownloadRules } | undefined;
+  const ordered = {
+    ...custom,
+    parameters: rules({
+      addons: {
+        scope: { selected: ["local", `remote:${REMOTE_ONE}`, "first"] },
+        order: { explicit: ["first", `remote:${REMOTE_ONE}`, "local"] },
+      },
+    }),
+  };
+  await mount([ordered], (_url, method, body) => {
+    if (method === "PATCH") patched = body as { rules: DownloadRules };
+    return undefined;
+  });
+  await clickText("Edit", host.querySelector(`[data-profile-id="${CUSTOM}"]`)!);
+  await clickLabel("Move Jellyfin · Films up");
+  await clickText("Save", dialog());
+
+  expect(patched?.rules.addons.order).toEqual({
+    explicit: [`remote:${REMOTE_ONE}`, "first", "local"],
+  });
 });
 
 it("renders subtitle language, disables it for off and resets it when subtitles are disabled", async () => {

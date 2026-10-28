@@ -26,10 +26,13 @@ const rule = (overrides: Partial<DownloadRules> = {}): DownloadRules => parseDow
   ...overrides,
 });
 
-const snapshot = (rules: DownloadRules): SourceAdmissionSnapshotV1 => {
+const snapshot = (
+  rules: DownloadRules,
+  providerKeys = providers,
+): SourceAdmissionSnapshotV1 => {
   const policy = materializeSourceAdmissionPolicy(
     rulesPolicy(rules, "movie"),
-    providers,
+    providerKeys,
     { audioLanguage: "cs", subtitleLanguage: "en" },
   );
   const { bytes: _ignored, ...constraints } = policy.constraints;
@@ -37,7 +40,7 @@ const snapshot = (rules: DownloadRules): SourceAdmissionSnapshotV1 => {
     schemaVersion: 1,
     profile: { id: "rules-profile", revision: 1, template: "rules" },
     operation: "play",
-    providerKeys: providers,
+    providerKeys,
     policy: { ...policy, constraints },
   };
 };
@@ -137,4 +140,27 @@ test("provider rank is local, then remote, then addon and ranks are padded equal
   assert.equal(new Set([localVerdict.rank.length, remoteVerdict.rank.length, addonVerdict.rank.length]).size, 1);
   assert.ok(localVerdict.rank[3]! < remoteVerdict.rank[3]!);
   assert.ok(remoteVerdict.rank[3]! < addonVerdict.rank[3]!);
+});
+
+test("an explicit mixed provider order determines the verdict ranks", () => {
+  const local = listedLocalCopyEvidence({ key: "lib_00000001/movie.mkv", size: 10 }, 0);
+  const remote = addon("remote", { url: "https://media.example/movie.mp4", name: "Original" }, "remote:remote-1");
+  const remoteCandidate: SourceEvidenceCandidateV1 = {
+    ...remote,
+    providerClass: "remote",
+    sourceKind: "mediaServerOriginal",
+  };
+  const addonCandidate = addon("addon", { url: "https://cdn.example/movie.mp4", name: "Original" });
+  const providerKeys = ["addon:a", "remote:remote-1", "local"];
+  const verdicts = ruleVerdicts(
+    snapshot(rule({
+      addons: { scope: "all", order: { explicit: ["a", "remote:remote-1", "local"] } },
+    }), providerKeys),
+    [local, remoteCandidate, addonCandidate],
+  );
+
+  assert.ok(verdicts.get(addonCandidate.sourceId)!.rank[3]!
+    < verdicts.get(remoteCandidate.sourceId)!.rank[3]!);
+  assert.ok(verdicts.get(remoteCandidate.sourceId)!.rank[3]!
+    < verdicts.get(local.sourceId)!.rank[3]!);
 });

@@ -91,13 +91,31 @@ const enumValue = <T extends string>(value: unknown, values: readonly T[]): T =>
   return value as T;
 };
 
-const addonKeys = (value: unknown, min: number, max: number): string[] => {
+const ruleKeys = (value: unknown, min: number, max: number): string[] => {
   const keys = arrayValue(value, min, max).map((key) => {
     if (typeof key !== "string" || key.trim().length === 0) return fail();
+    if (key.startsWith("remote:") && key.length === "remote:".length) return fail();
     return key;
   });
   if (new Set(keys).size !== keys.length) return fail();
   return keys;
+};
+
+const providerKeyForRuleKey = (key: string): string =>
+  key === "local" || key.startsWith("remote:") ? key : `addon:${key}`;
+
+const ruleKeyForProviderKey = (
+  key: string,
+  allowProviders: { remote: boolean; local: boolean },
+): string => {
+  if (key.startsWith("addon:") && key.length > "addon:".length) {
+    return key.slice("addon:".length);
+  }
+  if (key === "local" && allowProviders.local) return key;
+  if (key.startsWith("remote:") && key.length > "remote:".length && allowProviders.remote) {
+    return key;
+  }
+  return fail();
 };
 
 const resolution = (value: unknown): RuleResolution | null => {
@@ -147,14 +165,14 @@ const parser = (value: unknown): DownloadRules => {
     scope = "all";
   } else {
     const selected = objectValue(addons.scope, ["selected"]);
-    scope = { selected: addonKeys(selected.selected, 1, 50) };
+    scope = { selected: ruleKeys(selected.selected, 1, 50) };
   }
   let order: DownloadRules["addons"]["order"];
   if (addons.order === "viewer") {
     order = "viewer";
   } else {
     const explicit = objectValue(addons.order, ["explicit"]);
-    order = { explicit: addonKeys(explicit.explicit, 0, 50) };
+    order = { explicit: ruleKeys(explicit.explicit, 0, 50) };
   }
 
   const bounds = objectValue(input.resolution, ["min", "max"]);
@@ -259,7 +277,7 @@ const criterionFor = (
     case "addonOrder":
       return order === "viewer"
         ? { kind: "providerOrder", from: "viewer" }
-        : { kind: "providerOrder", keys: order.explicit.map((key) => `addon:${key}`) };
+        : { kind: "providerOrder", keys: order.explicit.map(providerKeyForRuleKey) };
   }
 };
 
@@ -296,7 +314,7 @@ export function rulesPolicy(
       ? { mode: "allAvailable" }
       : {
           mode: "selected",
-          providerKeys: rules.addons.scope.selected.map((key) => `addon:${key}`),
+          providerKeys: rules.addons.scope.selected.map(providerKeyForRuleKey),
         },
     constraints: {
       sourceKinds: [
@@ -409,6 +427,10 @@ export function rulesFromPolicy(
   kind: "episode" | "movie",
   options: { allowProviders?: { remote?: boolean; local?: boolean } } = {},
 ): DownloadRules {
+  const allowProviders = {
+    remote: options.allowProviders?.remote ?? true,
+    local: options.allowProviders?.local ?? true,
+  };
   const kinds: Array<SourcePolicyV1["constraints"]["sourceKinds"][number]> = [
     "localFile",
     "mediaServerOriginal",
@@ -428,21 +450,9 @@ export function rulesFromPolicy(
   if (policy.scope.mode === "allAvailable") {
     scope = "all";
   } else {
-    const remote = policy.scope.providerKeys.some((key) => key.startsWith("remote:"));
-    const local = policy.scope.providerKeys.includes("local");
-    if (remote && !options.allowProviders?.remote) return fail();
-    if (local && !options.allowProviders?.local) return fail();
-    if (policy.scope.providerKeys.some((key) =>
-      !key.startsWith("addon:")
-      && !(remote && key.startsWith("remote:"))
-      && !(local && key === "local"))) {
-      return fail();
-    }
-    scope = remote || local
-      ? "all"
-      : {
-          selected: policy.scope.providerKeys.map((key) => key.slice("addon:".length)),
-        };
+    scope = {
+      selected: policy.scope.providerKeys.map((key) => ruleKeyForProviderKey(key, allowProviders)),
+    };
   }
 
   const providerOrder = policy.criteria.find((criterion) => criterion.kind === "providerOrder");
@@ -451,13 +461,9 @@ export function rulesFromPolicy(
     if ("from" in providerOrder) {
       order = "viewer";
     } else {
-      if (providerOrder.keys.some((key) => !key.startsWith("addon:"))) {
-        order = "viewer";
-      } else {
-        order = {
-          explicit: providerOrder.keys.map((key) => key.slice("addon:".length)),
-        };
-      }
+      order = {
+        explicit: providerOrder.keys.map((key) => ruleKeyForProviderKey(key, allowProviders)),
+      };
     }
   }
 

@@ -95,12 +95,14 @@ const remapProfileAddonKeys = (
     }
   } else {
     const rules = parameters as DownloadRules;
+    const keepKey = (key: string) =>
+      key === "local" || key.startsWith("remote:") || installedKeys.has(key);
     if (rules.addons.scope !== "all") {
-      rules.addons.scope.selected = rules.addons.scope.selected.filter((key) => installedKeys.has(key));
+      rules.addons.scope.selected = rules.addons.scope.selected.filter(keepKey);
       if (!rules.addons.scope.selected.length) return undefined;
     }
     if (rules.addons.order !== "viewer") {
-      rules.addons.order.explicit = rules.addons.order.explicit.filter((key) => installedKeys.has(key));
+      rules.addons.order.explicit = rules.addons.order.explicit.filter(keepKey);
     }
   }
   return { ...structuredClone(profile), parameters };

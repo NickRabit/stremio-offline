@@ -105,7 +105,12 @@ const assertAddonKeys = (
   const streamAddons = new Set(
     state.addons.filter(declaresStream).map((addon) => addon.key),
   );
-  if (keys.some((key) => !streamAddons.has(key))) throw invalidProfile();
+  if (keys.some((key) =>
+    key !== "local"
+    && !key.startsWith("remote:")
+    && !streamAddons.has(key))) {
+    throw invalidProfile();
+  }
 };
 
 const freshProfileId = (

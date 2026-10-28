@@ -925,6 +925,35 @@ test("an imported selected scope with no installed addons is dormant and named i
   assert.equal(summary.sourceProfiles.imported, 0);
 });
 
+test("an imported rules profile keeps local and remote library keys without installed addons", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const libraryBound = storedVariant({
+    id: PROFILE_TWO,
+    parameters: {
+      ...RULE_PRESETS[0]!.rules,
+      addons: {
+        scope: { selected: ["local", "remote:missing-library"] },
+        order: { explicit: ["remote:missing-library", "local"] },
+      },
+    },
+  });
+
+  const response = await api(harness.base, "/api/settings/import", {
+    method: "POST",
+    user: "ada",
+    body: sourceProfilesBackup([libraryBound]),
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(
+    harness.state.sourceProfiles?.find((candidate) => candidate.id === PROFILE_TWO)?.parameters,
+    libraryBound.parameters,
+  );
+  const summary = await response.json() as { sourceProfiles: { imported: number; dormant: string[] } };
+  assert.equal(summary.sourceProfiles.imported, 1);
+  assert.deepEqual(summary.sourceProfiles.dormant, []);
+});
+
 test("a version 3 import leaves the source profile catalogue and tombstones untouched", async (t) => {
   const harness = await mount();
   t.after(harness.close);

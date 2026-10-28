@@ -181,6 +181,33 @@ test("rulesFromPolicy maps materialized policies back to equivalent rules", () =
   assert.deepEqual(materialize(rulesPolicy(extracted, "movie")), policy);
 });
 
+test("selected library and addon keys round-trip through provider keys", () => {
+  const mixed = rules({
+    addons: {
+      scope: { selected: ["local", "remote:R1", "a1"] },
+      order: { explicit: ["remote:R1", "a1", "local"] },
+    },
+    sizeGb: {
+      episode: { min: null, max: null },
+      movie: { min: null, max: 15 },
+    },
+  });
+  const parsed = parseDownloadRules(mixed);
+  const policy = rulesPolicy(parsed, "movie");
+
+  assert.deepEqual(policy.scope, {
+    mode: "selected",
+    providerKeys: ["local", "remote:R1", "addon:a1"],
+  });
+  assert.deepEqual(policy.criteria.find((criterion) => criterion.kind === "providerOrder"), {
+    kind: "providerOrder",
+    keys: ["remote:R1", "addon:a1", "local"],
+  });
+  assert.deepEqual(rulesFromPolicy(policy, "movie", {
+    allowProviders: { remote: true, local: true },
+  }), parsed);
+});
+
 test("rule validation is strict and rejects contradictory choices", () => {
   assert.throws(() => parseDownloadRules({ ...rules(), unexpected: true }), DownloadRulesValidationError);
   assert.throws(() => parseDownloadRules(rules({ resolution: { min: 1080, max: 720 } })), DownloadRulesValidationError);
@@ -201,6 +228,15 @@ test("rule validation is strict and rejects contradictory choices", () => {
   assert.throws(() => parseDownloadRules(rules({ preference: [] })), DownloadRulesValidationError);
   assert.throws(() => parseDownloadRules(rules({ preference: ["language", "language"] })), DownloadRulesValidationError);
   assert.throws(() => parseDownloadRules(rules({ addons: { scope: { selected: [] }, order: "viewer" } })), DownloadRulesValidationError);
+  assert.throws(() => parseDownloadRules(rules({
+    addons: { scope: { selected: ["remote:"] }, order: "viewer" },
+  })), DownloadRulesValidationError);
+  assert.throws(() => parseDownloadRules(rules({
+    addons: { scope: "all", order: { explicit: ["remote:"] } },
+  })), DownloadRulesValidationError);
+  assert.deepEqual(parseDownloadRules(rules({
+    addons: { scope: { selected: ["missing-addon", "remote:missing-library"] }, order: "viewer" },
+  })).addons.scope, { selected: ["missing-addon", "remote:missing-library"] });
 });
 
 test("subtitle language defaults, normalizes and validates in both input shapes", () => {

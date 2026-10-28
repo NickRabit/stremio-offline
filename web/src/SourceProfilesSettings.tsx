@@ -6,7 +6,8 @@ import { useDialogViewport } from "./dialog-viewport";
 import { languageName, t, type Key } from "./i18n";
 import { rulesSummary, sourceProfileName } from "./source-profile-copy";
 import { SettingsSectionHead } from "./settings-ui";
-import type { Addon, AdminSourceProfile, DownloadRules, RulePreference, RuleResolution } from "./types";
+import { providerLabel } from "./source-rows";
+import type { Addon, AdminRemoteLibrary, AdminSourceProfile, DownloadRules, RulePreference, RuleResolution } from "./types";
 
 const RESOLUTIONS: RuleResolution[] = [360, 480, 720, 1080, 2160];
 const PREFERENCES: RulePreference[] = ["language", "resolutionHigher", "resolutionLower", "smaller", "larger", "addonOrder"];
@@ -71,10 +72,15 @@ const move = <T,>(items: readonly T[], index: number, direction: -1 | 1): T[] =>
 };
 
 const readCatalogue = async () => {
-  const [profileAnswer, addons] = await Promise.all([api.adminSourceProfiles(), api.addons()]);
+  const [profileAnswer, addons, remoteLibraries] = await Promise.all([
+    api.adminSourceProfiles(),
+    api.addons(),
+    api.adminRemoteLibraries().catch(() => []),
+  ]);
   return {
     profiles: Array.isArray(profileAnswer?.profiles) ? profileAnswer.profiles.filter((profile) => profile.template === "rules") : [],
     addons: Array.isArray(addons) ? addons : [],
+    remoteLibraries: Array.isArray(remoteLibraries) ? remoteLibraries : [],
   };
 };
 
@@ -106,6 +112,7 @@ function DialogShell({ label, title, busy, onClose, onSubmit, children, footer }
 export function SourceProfilesSettings({ languages }: { languages: Array<{ code: string; name: string }> }) {
   const [profiles, setProfiles] = useState<AdminSourceProfile[]>([]);
   const [addons, setAddons] = useState<Addon[]>([]);
+  const [remoteLibraries, setRemoteLibraries] = useState<AdminRemoteLibrary[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -115,18 +122,29 @@ export function SourceProfilesSettings({ languages }: { languages: Array<{ code:
   const [advanced, setAdvanced] = useState(false);
   const [duplicate, setDuplicate] = useState<DuplicateSession | null>(null);
   const [remove, setRemove] = useState<DeleteSession | null>(null);
-  const rows = addonRows(addons);
+  const rows = [
+    { key: "local", name: t("rules.localLibrary") },
+    ...remoteLibraries.filter((library) => library.enabled)
+      .sort((left, right) => left.order - right.order)
+      .map((library) => ({
+        key: `remote:${library.id}`,
+        name: library.provider ? `${providerLabel(library.provider)} · ${library.name}` : library.name,
+      })),
+    ...addonRows(addons),
+  ];
   const keys = rows.map((row) => row.key);
 
   const refresh = async () => {
     const loaded = await readCatalogue();
-    setProfiles(loaded.profiles); setAddons(loaded.addons); setLoadError("");
+    setProfiles(loaded.profiles); setAddons(loaded.addons); setRemoteLibraries(loaded.remoteLibraries); setLoadError("");
     return loaded;
   };
   useEffect(() => {
     let stale = false;
     readCatalogue().then((loaded) => {
-      if (!stale) { setProfiles(loaded.profiles); setAddons(loaded.addons); setLoadError(""); }
+      if (!stale) {
+        setProfiles(loaded.profiles); setAddons(loaded.addons); setRemoteLibraries(loaded.remoteLibraries); setLoadError("");
+      }
     }).catch((error) => { if (!stale) setLoadError(describeError(error)); })
       .finally(() => { if (!stale) setLoading(false); });
     return () => { stale = true; };
@@ -204,14 +222,14 @@ export function SourceProfilesSettings({ languages }: { languages: Array<{ code:
   const orderedRows = explicit.map((key) => rows.find((row) => row.key === key) ?? { key, name: key });
   const setScope = (scope: "all" | "selected") => {
     if (!draft) return;
-    const selected = draft.rules.addons.scope === "all" ? [] : draft.rules.addons.scope.selected;
+    const selected = draft.rules.addons.scope === "all" ? keys : draft.rules.addons.scope.selected;
     const available = scope === "all" ? keys : selected;
     updateRules({ ...draft.rules, addons: {
       scope: scope === "all" ? "all" : { selected },
       order: draft.rules.addons.order === "viewer" ? "viewer" : { explicit: explicit.filter((key) => available.includes(key)) },
     } });
   };
-  const toggleAddon = (key: string) => {
+  const toggleProvider = (key: string) => {
     if (!draft || draft.rules.addons.scope === "all") return;
     const selected = draft.rules.addons.scope.selected.includes(key)
       ? draft.rules.addons.scope.selected.filter((item) => item !== key)
@@ -318,8 +336,8 @@ export function SourceProfilesSettings({ languages }: { languages: Array<{ code:
         </div>
         {draft.rules.addons.scope !== "all" && <div className="bulk-sources">{rows.map((row) => {
           const checked = draft.rules.addons.scope !== "all" && draft.rules.addons.scope.selected.includes(row.key);
-          return <div key={row.key} className={checked ? "selected" : ""}><label><input type="checkbox" aria-label={row.name} checked={checked} onChange={() => toggleAddon(row.key)}/><span>{row.name}</span></label></div>;
-        })}{!rows.length && <p className="identify-hint">{t("rules.noStreamAddons")}</p>}</div>}
+          return <div key={row.key} className={checked ? "selected" : ""}><label><input type="checkbox" aria-label={row.name} checked={checked} onChange={() => toggleProvider(row.key)}/><span>{row.name}</span></label></div>;
+        })}</div>}
         <div className="bulk-strategy" role="radiogroup" aria-label={t("rules.addonOrder")}>
           <label className={draft.rules.addons.order === "viewer" ? "selected" : ""}><input type="radio" name="download-rules-order" value="viewer" checked={draft.rules.addons.order === "viewer"} onChange={() => setOrder("viewer")}/><span><strong>{t("rules.orderViewer")}</strong></span></label>
           <label className={draft.rules.addons.order !== "viewer" ? "selected" : ""}><input type="radio" name="download-rules-order" value="explicit" checked={draft.rules.addons.order !== "viewer"} onChange={() => setOrder("explicit")}/><span><strong>{t("rules.orderCustom")}</strong></span></label>

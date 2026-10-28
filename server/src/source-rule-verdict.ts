@@ -119,9 +119,7 @@ const directionalRank = (
 };
 
 const providerOrder = (snapshot: SourceAdmissionSnapshotV1): Map<string, number> => {
-  const localAndRemote = snapshot.providerKeys.filter((key) => !key.startsWith("addon:"));
-  const addons = snapshot.providerKeys.filter((key) => key.startsWith("addon:"));
-  return new Map([...localAndRemote, ...addons].map((key, index) => [key, index]));
+  return new Map(snapshot.providerKeys.map((key, index) => [key, index]));
 };
 
 const playbackEvidence = (candidate: SourceEvidenceCandidateV1): SourceEvidenceCandidateV1 => {

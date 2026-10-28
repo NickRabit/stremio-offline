@@ -413,6 +413,27 @@ test("an administrator creates a rules profile that members can see and bulk-adm
   );
 });
 
+test("a rules profile may store local and remote library keys without installed addons", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const parameters = {
+    ...ruleParameters(),
+    addons: {
+      scope: { selected: ["local", "remote:missing-library"] },
+      order: { explicit: ["remote:missing-library", "local"] },
+    },
+  } satisfies DownloadRules;
+
+  const created = await api(harness.base, "/api/admin/source-profiles", {
+    user: ADMIN,
+    method: "POST",
+    body: { name: "Library sources", rules: parameters },
+  });
+
+  assert.equal(created.status, 201);
+  assert.deepEqual((await created.json() as StoredSourceProfile).parameters, parameters);
+});
+
 test("a coded subtitle rule survives materialization over the viewer preference", async (t) => {
   const parameters = ruleParameters();
   parameters.subtitleLanguage = "cs";
