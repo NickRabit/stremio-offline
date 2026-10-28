@@ -55,6 +55,25 @@ describe("SourceRows", () => {
     expect(row().querySelector("strong")!.textContent).toBe(t("tv.version"));
   });
 
+  it("explains the reasons a source breaks the default rules", () => {
+    render([addonRow({ rule: {
+      profileId: "balanced", status: "breaks", rank: [2],
+      reasons: ["language", "resolutionLow", "subtitles"],
+    } })]);
+    expect(row().textContent).toContain(t("sources.ruleBreaks", {
+      reasons: [
+        t("sources.ruleReason.language"),
+        t("sources.ruleReason.resolutionLow"),
+        t("sources.ruleReason.subtitles"),
+      ].join(", "),
+    }));
+  });
+
+  it("does not add a rule note to a source that meets them", () => {
+    render([addonRow({ rule: { profileId: "balanced", status: "meets", reasons: [], rank: [0] } })]);
+    expect(row().textContent).not.toContain(t("sources.ruleBreaks", { reasons: "" }));
+  });
+
   it("badges a torrent and a playable row by the transport the catalogue names them by", () => {
     render([addonRow({ sourceId: "t1", kind: "torrent", playable: false, addonName: undefined }), addonRow({ sourceId: "p1", playable: false, addonName: undefined })]);
     expect([...host.querySelectorAll("i")].map((node) => node.textContent)).toEqual(["RD", "EXT"]);
