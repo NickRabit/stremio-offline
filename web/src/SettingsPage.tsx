@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronRight, CirclePlay, Download, FileJson, HardDrive, Heart, KeyRound, Languages, Library, PackagePlus, Server, ShieldCheck, Trash2, Upload, Users } from "lucide-react";
+import { Check, ChevronRight, CirclePlay, Download, FileJson, HardDrive, Heart, KeyRound, Languages, Library, ListFilter, PackagePlus, Server, ShieldCheck, Trash2, Upload, Users } from "lucide-react";
 import { api } from "./api";
 import { DiagnosticsSection } from "./DiagnosticsPanel";
 import { AccountSettings } from "./Login";
@@ -11,6 +11,7 @@ import { Heading, SettingControl, SettingsSectionHead } from "./settings-ui";
 import { LOCALES, LOCALE_NAMES, languageName, localeTag, t, useI18n, type Key, type Locale } from "./i18n";
 import { sourceProfileName } from "./source-profile-copy";
 import type { BuildInfo, LibraryView, SearchState, Session, Settings as AppSettings, SettingsPatch, SourceProfile } from "./types";
+import { resolveSourceProfile } from "./SeriesDownloadDialog";
 import { SourceProfilesSettings } from "./SourceProfilesSettings";
 import { UserManager } from "./UserManager";
 
@@ -90,7 +91,7 @@ const refreshIntervalLabel = (hours: number) =>
   : hours === 168 ? t("settings.addonRefreshWeekly")
   : t("settings.addonRefreshHoursOption", { count: hours });
 
-const SETTINGS_TABS = ["libraries", "home", "playback", "downloads", "services", "account"] as const;
+const SETTINGS_TABS = ["libraries", "home", "playback", "sources", "downloads", "services", "account"] as const;
 type SettingsTab = (typeof SETTINGS_TABS)[number];
 /** One panel is rendered at a time, so the tab strip and the panel share a single id pair. */
 const SETTINGS_PANEL_ID = "settings-panel";
@@ -99,6 +100,7 @@ const SETTINGS_TAB_LABEL: Record<SettingsTab, Key> = {
   libraries: "settings.tab.libraries",
   home: "settings.tab.home",
   playback: "settings.tab.playback",
+  sources: "settings.tab.sources",
   downloads: "settings.tab.downloads",
   services: "settings.tab.services",
   account: "settings.tab.account",
@@ -113,7 +115,7 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
   // from an administrator too. The server is what enforces either; this is the interface
   // agreeing with it.
   const admin = session.role === "admin";
-  // An administrator keeps all six tabs; an ordinary account keeps the five that hold its own
+  // An administrator keeps all seven tabs; an ordinary account keeps the six that hold its own
   // preferences. The Services tab configures the instance, and a stored tab the account cannot
   // see falls back to the first visible one.
   const visibleTabs = SETTINGS_TABS.filter((id) => id !== "services" || admin);
@@ -222,7 +224,36 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
           <select aria-label={t("settings.segments")} disabled={restricted || !admin} value={settings.downloadSegments ?? 1} onChange={(event) => void onSave({ downloadSegments: Number(event.target.value) })}>
             {[1,2,3,4,6,8].map((value) => <option key={value} value={value}>{value}</option>)}
           </select></SettingControl>}</section>
-      {admin && !restricted && <SourceProfilesSettings languages={languages}/>}
+      </>}
+      {tab === "sources" && <>
+      <section className="panel settings-section source-defaults-section">
+        <SettingsSectionHead icon={<ListFilter/>} title={t("settings.defaultsTitle")} text={t("settings.defaultsHint")}/>
+        {ruleProfiles.length > 0 && <>
+          <SettingControl title={t("settings.defaultRulesPlayback")} text={t("settings.defaultRulesHint")}>
+            <select aria-label={t("settings.defaultRulesPlayback")} disabled={restricted} value={settings.defaultRulesProfileId ?? balancedProfile?.id ?? ""} onChange={(event) => void onSave({ defaultRulesProfileId: event.target.value })}>
+              {ruleProfiles.map((profile) => <option key={profile.id} value={profile.id}>{sourceProfileName(profile.nameKey, profile.name)}</option>)}
+            </select>
+          </SettingControl>
+          <SettingControl title={t("settings.defaultRulesDownloads")} text={t("settings.defaultRulesDownloadsHint")}>
+            <select aria-label={t("settings.defaultRulesDownloads")} disabled={restricted} value={resolveSourceProfile(ruleProfiles, settings.downloadSourceProfile, false)?.id ?? ""} onChange={(event) => void onSave({ downloadSourceProfile: event.target.value })}>
+              {ruleProfiles.map((profile) => <option key={profile.id} value={profile.id}>{sourceProfileName(profile.nameKey, profile.name)}</option>)}
+            </select>
+          </SettingControl>
+          <SettingControl title={t("settings.defaultRulesFollows")} text={t("settings.defaultRulesFollowsHint")}>
+            <select aria-label={t("settings.defaultRulesFollows")} disabled={restricted} value={resolveSourceProfile(ruleProfiles, settings.followSourceProfile, true)?.id ?? ""} onChange={(event) => void onSave({ followSourceProfile: event.target.value })}>
+              {ruleProfiles.map((profile) => <option key={profile.id} value={profile.id}>{sourceProfileName(profile.nameKey, profile.name)}</option>)}
+            </select>
+          </SettingControl>
+        </>}
+      </section>
+      <section className="panel settings-section source-order-section">
+        <SettingControl title={t("settings.streamSort")} text={t("settings.streamSortHint")}>
+          <select aria-label={t("settings.streamSort")} disabled={restricted} value={settings.streamSort} onChange={(event) => void onSave({ streamSort: event.target.value })}>
+            <option value="recommended">{t("sources.sortRecommended")}</option><option value="size-desc">{t("sources.sortLargest")}</option><option value="size-asc">{t("sources.sortSmallest")}</option><option value="addon">{t("sources.sortAddon")}</option>
+          </select>
+        </SettingControl>
+      </section>
+      {admin && !restricted && <SourceProfilesSettings languages={languages} titleKey="settings.sourceRulesTitle" hintKey="settings.sourceRulesHint"/>}
       </>}
       {tab === "services" && <>
       {admin && <TmdbSettings configured={settings.tmdbConfigured} onSave={onSave} onError={onError} restricted={restricted || !admin}/>}
@@ -235,11 +266,7 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
       </section>}
       </>}
       {tab === "playback" && <>
-      <section className="panel settings-section playback-section"><SettingsSectionHead icon={<CirclePlay/>} title={t("settings.playbackTitle")} text={t("settings.playbackText")}/><div className="playback-settings"><SettingControl title={t("settings.audioLanguage")} text={t("settings.audioLanguageHint")}><select aria-label={t("settings.audioLanguageLabel")} disabled={restricted} value={settings.audioLanguage} onChange={(event) => void onSave({ audioLanguage: event.target.value })}>{languageOptions}</select></SettingControl><SettingControl title={t("settings.subtitleLanguage")} text={t("settings.subtitleLanguageHint")}><select aria-label={t("settings.subtitleLanguageLabel")} disabled={restricted} value={settings.subtitleLanguage} onChange={(event) => void onSave({ subtitleLanguage: event.target.value })}>{languageOptions}</select></SettingControl></div><SettingControl title={t("settings.streamSort")} text={t("settings.streamSortHint")}><select aria-label={t("settings.streamSort")} disabled={restricted} value={settings.streamSort} onChange={(event) => void onSave({ streamSort: event.target.value })}><option value="recommended">{t("sources.sortRecommended")}</option><option value="size-desc">{t("sources.sortLargest")}</option><option value="size-asc">{t("sources.sortSmallest")}</option><option value="addon">{t("sources.sortAddon")}</option></select></SettingControl>{ruleProfiles.length > 0 && <SettingControl title={t("settings.defaultRules")} text={t("settings.defaultRulesHint")}>
-          <select aria-label={t("settings.defaultRules")} disabled={restricted} value={settings.defaultRulesProfileId ?? balancedProfile?.id ?? ""} onChange={(event) => void onSave({ defaultRulesProfileId: event.target.value })}>
-            {ruleProfiles.map((profile) => <option key={profile.id} value={profile.id}>{sourceProfileName(profile.nameKey, profile.name)}</option>)}
-          </select>
-        </SettingControl>}<SettingControl title={t("settings.trackProgress")} text={t("settings.trackProgressHint")}>
+      <section className="panel settings-section playback-section"><SettingsSectionHead icon={<CirclePlay/>} title={t("settings.playbackTitle")} text={t("settings.playbackText")}/><div className="playback-settings"><SettingControl title={t("settings.audioLanguage")} text={t("settings.audioLanguageHint")}><select aria-label={t("settings.audioLanguageLabel")} disabled={restricted} value={settings.audioLanguage} onChange={(event) => void onSave({ audioLanguage: event.target.value })}>{languageOptions}</select></SettingControl><SettingControl title={t("settings.subtitleLanguage")} text={t("settings.subtitleLanguageHint")}><select aria-label={t("settings.subtitleLanguageLabel")} disabled={restricted} value={settings.subtitleLanguage} onChange={(event) => void onSave({ subtitleLanguage: event.target.value })}>{languageOptions}</select></SettingControl></div><SettingControl title={t("settings.trackProgress")} text={t("settings.trackProgressHint")}>
           <select aria-label={t("settings.trackProgressLabel")} disabled={restricted} value={settings.trackProgress ? "1" : "0"} onChange={(event) => void onSave({ trackProgress: event.target.value === "1" })}>
             <option value="1">{t("settings.store")}</option><option value="0">{t("settings.doNotStore")}</option>
           </select></SettingControl>{!restricted && <SettingControl title={t("settings.history")} text={t("settings.historyHint")}>

@@ -137,6 +137,18 @@ it("lists preset and custom rules with summaries and protects the preset from de
   expect([...customRow.querySelectorAll("button")].map((button) => button.textContent)).toEqual(["Edit", "Duplicate", "Delete"]);
 });
 
+it("accepts the Sources heading without replacing the catalogue default", async () => {
+  await mount();
+  expect(host.querySelector(".settings-section-head")?.textContent).toContain("Download rules");
+  expect(host.querySelector(".settings-section-head")?.textContent).toContain("Rules people choose for manual downloads and follows.");
+  await act(async () => {
+    root.render(<SourceProfilesSettings languages={[]} titleKey="settings.sourceRulesTitle" hintKey="settings.sourceRulesHint"/>);
+  });
+  await flush();
+  expect(host.querySelector(".settings-section-head")?.textContent).toContain("Source selection rules");
+  expect(host.querySelector(".settings-section-head")?.textContent).toContain("The rules choose the source for playback, manual downloads and follows.");
+});
+
 it("renders the sources, quality and language groups in order", async () => {
   await mount();
   await clickText("Add rules");

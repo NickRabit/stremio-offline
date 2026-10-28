@@ -109,7 +109,11 @@ function DialogShell({ label, title, busy, onClose, onSubmit, children, footer }
   </div>;
 }
 
-export function SourceProfilesSettings({ languages }: { languages: Array<{ code: string; name: string }> }) {
+export function SourceProfilesSettings({ languages, titleKey = "rules.title", hintKey = "rules.hint" }: {
+  languages: Array<{ code: string; name: string }>;
+  titleKey?: Key;
+  hintKey?: Key;
+}) {
   const [profiles, setProfiles] = useState<AdminSourceProfile[]>([]);
   const [addons, setAddons] = useState<Addon[]>([]);
   const [remoteLibraries, setRemoteLibraries] = useState<AdminRemoteLibrary[]>([]);
@@ -301,7 +305,7 @@ export function SourceProfilesSettings({ languages }: { languages: Array<{ code:
   };
 
   return <section className="panel settings-section source-profiles-section">
-    <SettingsSectionHead icon={<ListFilter/>} title={t("rules.title")} text={t("rules.hint")}/>
+    <SettingsSectionHead icon={<ListFilter/>} title={t(titleKey)} text={t(hintKey)}/>
     {loading && <p className="identify-hint">{t("common.loading")}</p>}
     {loadError && <p className="login-error" role="alert">{loadError}</p>}
     {!loading && <ul className="source-profile-list">{profiles.map((profile) => {

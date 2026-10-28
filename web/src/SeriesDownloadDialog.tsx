@@ -29,6 +29,14 @@ const usableProfile = (profile: SourceProfile) => profile.template === "rules"
   && profile.operations.includes("downloadToLibrary")
   && Boolean(sourceProfileName(profile.nameKey, profile.name));
 
+export const resolveSourceProfile = (profiles: readonly SourceProfile[], preferredId: string | undefined, follow: boolean) => {
+  const offered = profiles.filter(usableProfile);
+  const preset = follow ? "rules.preset.myLanguage" : "rules.preset.balanced";
+  return offered.find((profile) => profile.id === preferredId)
+    ?? offered.find((profile) => profile.nameKey === preset)
+    ?? offered[0];
+};
+
 export function SeriesDownloadDialog({ type, label, title, episodes, libraries, follow, canRetain = false,
   downloadSourceProfileId, followSourceProfileId, onRememberDownloadSourceProfile, onRememberFollowSourceProfile,
   exactSource, onExactSave, onClose, onSubmit }: {
@@ -100,11 +108,9 @@ export function SeriesDownloadDialog({ type, label, title, episodes, libraries, 
       if (!offered.length) { setProfilesState("unavailable"); return; }
       const initialId = initial?.sourceProfile?.profileId;
       const modeDefault = follow ? followSourceProfileId : downloadSourceProfileId;
-      const preset = follow ? "rules.preset.myLanguage" : "rules.preset.balanced";
       const legacy = Boolean(follow?.followId && initial && !initial.sourceProfile);
       const chosen = legacy ? offered[0]! : offered.find((profile) => profile.id === initialId)
-        ?? offered.find((profile) => profile.id === modeDefault)
-        ?? offered.find((profile) => profile.nameKey === preset)
+        ?? resolveSourceProfile(offered, modeDefault, Boolean(follow))
         ?? offered[0]!;
       setProfileId(chosen.id);
       setProfilesState("ready");

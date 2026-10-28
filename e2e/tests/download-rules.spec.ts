@@ -141,10 +141,10 @@ test("an administrator creates, lists and deletes a download rule", async ({ pag
   await cleanupRules(request);
   await page.goto("/");
   await page.getByRole("button", { name: "Nastavení", exact: true }).click();
-  await page.getByRole("tab", { name: "Stahování", exact: true }).click();
+  await page.getByRole("tab", { name: "Zdroje", exact: true }).click();
 
   const section = page.locator(".source-profiles-section");
-  await expect(section.getByText("Pravidla stahování", { exact: true })).toBeVisible();
+  await expect(section.getByText("Pravidla výběru zdroje", { exact: true })).toBeVisible();
   await section.getByRole("button", { name: "Přidat pravidla" }).click();
   const editor = page.getByRole("dialog", { name: "Nová pravidla stahování" });
   for (const legend of ["Zdroje", "Kvalita a velikost", "Jazyk", "Čemu dát přednost"]) {
