@@ -189,10 +189,12 @@ fun PlayerOverlayShell(
   // The hidden state needs a focus target of its own: the video is not focusable, so without this
   // the remote went dead once the OSD was gone.
   LaunchedEffect(controls) {
+    awaitFrame()
     if (controls) runCatching { playFocus.requestFocus() } else runCatching { rootFocus.requestFocus() }
   }
   LaunchedEffect(reclaimFocus) {
     if (reclaimFocus == 0) return@LaunchedEffect
+    awaitFrame()
     if (controls) runCatching { playFocus.requestFocus() } else runCatching { rootFocus.requestFocus() }
   }
 

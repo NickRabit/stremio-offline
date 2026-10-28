@@ -61,6 +61,7 @@ import cz.stremiooffline.tv.catalog.Languages
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.FocusButtonKind
 import cz.stremiooffline.tv.ui.theme.Tokens
+import kotlinx.coroutines.android.awaitFrame
 import java.util.Locale
 
 const val TAG_OSD_SEEK_BACK = "osd_seek_back"
@@ -105,7 +106,10 @@ fun LoadingOverlay(title: String) {
 fun ErrorPanel(onRetry: () -> Unit, onBack: () -> Unit, onBackToSource: (() -> Unit)? = null) {
   val retryFocus = remember { FocusRequester() }
   androidx.activity.compose.BackHandler { onBack() }
-  androidx.compose.runtime.LaunchedEffect(Unit) { runCatching { retryFocus.requestFocus() } }
+  androidx.compose.runtime.LaunchedEffect(Unit) {
+    awaitFrame()
+    runCatching { retryFocus.requestFocus() }
+  }
   Box(
     Modifier
       .fillMaxSize()
@@ -354,9 +358,8 @@ private fun PlayButton(
       .background(Tokens.AccentGradient)
       .semantics { this.contentDescription = contentDescription }
       .focusRequester(focusRequester)
-      // Observes the button's own focus target, so it has to sit before `focusable()`.
+      // Observes the focus target supplied by clickable().
       .onFocusChanged { focused = it.isFocused }
-      .focusable()
       .clickable { onActivity(); onClick() }
       .semantics { this[OsdFocused] = focused },
     contentAlignment = Alignment.Center,
@@ -387,9 +390,8 @@ private fun RoundButton(
       .then(if (focused) Modifier.border(1.5.dp, Tokens.Accent2, CircleShape) else Modifier)
       .semantics { this.contentDescription = label }
       .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
-      // Observes the button's own focus target, so it has to sit before `focusable()`.
+      // Observes the focus target supplied by clickable().
       .onFocusChanged { focused = it.isFocused; onFocusChange?.invoke(it.isFocused) }
-      .focusable()
       .clickable { onActivity(); onClick() }
       .semantics { this[OsdFocused] = focused }
       .padding(horizontal = 16.dp, vertical = 9.dp),

@@ -296,8 +296,8 @@ internal fun RecentSearches(
       itemsIndexed(items, key = { _, entry -> entry.query }) { index, entry ->
         RecentSearchRow(
           query = entry.query,
-          rowFocus = rowFocuses.getOrPut(entry.query) { FocusRequester() },
-          removeFocus = removeFocuses.getOrPut(entry.query) { FocusRequester() },
+          rowFocus = remember(entry.query) { rowFocuses.getOrPut(entry.query) { FocusRequester() } },
+          removeFocus = remember(entry.query) { removeFocuses.getOrPut(entry.query) { FocusRequester() } },
           upFocus = if (index == 0) firstRowUp else null,
           onClick = { onPick(entry.query) },
           onRemove = {

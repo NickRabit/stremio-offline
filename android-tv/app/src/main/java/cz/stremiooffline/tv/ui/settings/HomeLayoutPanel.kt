@@ -184,7 +184,9 @@ fun HomeLayoutPanel(
       verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
       items(ready.rows, key = { it.id }) { row ->
-        val requester = rowFocuses.getOrPut(row.id) { if (row.id == firstId) firstFocus else FocusRequester() }
+        val requester = remember(row.id) {
+          rowFocuses.getOrPut(row.id) { if (row.id == firstId) firstFocus else FocusRequester() }
+        }
         HomeLayoutRowView(
           row = row,
           onOpen = { actionId = row.id },
