@@ -23,6 +23,9 @@ import { tmdbGallery } from "../tmdb.js";
 import type { MetaItem, StreamItem } from "../types.js";
 import { subtitleVtt } from "../subtitle-text.js";
 import { shiftVtt } from "../vtt.js";
+import { listedLocalCopyEvidence } from "../local-copy-admission.js";
+import { listedAddonSourceEvidence } from "../source-addon-evidence.js";
+import { defaultRuleSnapshot, ruleVerdicts } from "../source-rule-verdict.js";
 import { asyncRoute, routeDisconnectSignal, viewerOf, type RouteContext } from "./context.js";
 
 /** The language the player shows a subtitle under, which is what a file that is not Unicode
@@ -65,6 +68,12 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
    *  setting an ordinary account owns, so a list that ignores it makes that setting a lie. */
   const inOrder = (req: express.Request) =>
     orderedForUser(usable(req), orderFor(currentUser(req), (id) => store.userData(id).addonOrder));
+  const rulesFor = (req: express.Request, type: string) => defaultRuleSnapshot({
+    user: currentUser(req),
+    store,
+    preferences: prefsOf(req),
+    mediaKind: type === "series" ? "episode" : "movie",
+  });
 
   /** The binding key for a path the caller may see. A path in an invisible library reads
    *  exactly like one that carries no binding, which is what these two endpoints already
@@ -321,7 +330,25 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
         requireAccess(req, { addonKey });
       }
       if (disconnect.signal.aborted) return;
-      res.setHeader("cache-control", "private, no-store").json(mediaResources.listing(items, owner));
+      const snapshot = rulesFor(req, String(req.params.type));
+      const candidates = items.map((stream, providerResponseIndex) => {
+        const addonKey = stream.addonKey;
+        if (typeof addonKey !== "string" || addonKey.length === 0) return undefined;
+        return listedAddonSourceEvidence({
+          providerKey: `addon:${addonKey}`,
+          stream,
+          providerResponseIndex,
+          available: true,
+        });
+      });
+      const verdicts = snapshot
+        ? ruleVerdicts(snapshot, candidates.filter((candidate) => candidate !== undefined))
+        : new Map();
+      const listed = mediaResources.listing(items, owner);
+      res.setHeader("cache-control", "private, no-store").json(listed.map((stream, index) => {
+        const verdict = candidates[index] === undefined ? undefined : verdicts.get(candidates[index].sourceId);
+        return verdict === undefined ? stream : { ...stream, rule: verdict };
+      }));
     } catch (error) {
       if (disconnect.signal.aborted) return;
       throw error;
@@ -342,10 +369,17 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     })), owner);
     // The listing redacts long path segments as if they were an addon's secrets; the name of the
     // viewer's own file is not one, and it is what the row shows.
-    res.setHeader("cache-control", "private, no-store").json(listed.map((stream, index) => ({
-      ...stream, behaviorHints: { ...stream.behaviorHints, filename: posixBase(copies[index]!.key) },
-      localPath: copies[index]!.path, libraryName: copies[index]!.libraryName,
-    })));
+    const snapshot = rulesFor(req, String(req.params.type));
+    const candidates = copies.map((copy, index) => listedLocalCopyEvidence(copy, index));
+    const verdicts = snapshot ? ruleVerdicts(snapshot, candidates) : new Map();
+    res.setHeader("cache-control", "private, no-store").json(listed.map((stream, index) => {
+      const verdict = verdicts.get(candidates[index]!.sourceId);
+      return {
+        ...stream, behaviorHints: { ...stream.behaviorHints, filename: posixBase(copies[index]!.key) },
+        localPath: copies[index]!.path, libraryName: copies[index]!.libraryName,
+        ...(verdict === undefined ? {} : { rule: verdict }),
+      };
+    }));
   }));
   app.get("/api/subtitles/:type/:id", asyncRoute(async (req, res) => {
     const disconnect = routeDisconnectSignal(req, res);

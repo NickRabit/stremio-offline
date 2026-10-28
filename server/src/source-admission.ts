@@ -377,7 +377,9 @@ const validateTemplatePolicy = (
   let built: SourcePolicyV1;
   if (template === "rules") {
     built = rulesPolicy(parseDownloadRules(rulesFromPolicy(policy, mediaKind, {
-      allowRemoteProviders: operation === "downloadToLibrary",
+      allowProviders: operation === "downloadToLibrary"
+        ? { remote: true }
+        : { remote: true, local: true },
     })), mediaKind);
   } else {
     const parameters = parametersFromPolicy(template, policy);

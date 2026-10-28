@@ -15,13 +15,14 @@ import { MediaServerManager } from "../media-server-manager.js";
 import { remoteIdsMatch } from "../media-server-match.js";
 import { MediaServerPersonal } from "../media-server-personal.js";
 import type { MediaServerPlaybackReporter, PlaybackReport } from "../media-server-playing.js";
-import type { MediaServerProvider, ProviderItem, ProviderLibrary, RemoteAccountPolicy } from "../media-server-provider.js";
+import type { MediaServerProvider, ProviderItem, ProviderLibrary, ProviderVersion, RemoteAccountPolicy } from "../media-server-provider.js";
 import { MediaServerSources } from "../media-server-sources.js";
 import { MediaServerSecrets } from "../media-server-secrets.js";
 import type { MediaServerTransport } from "../media-server-security.js";
 import { MediaServerError, remoteProgressKey } from "../media-server-types.js";
 import { roleMiddleware } from "../roles.js";
 import { restrictedMiddleware } from "../restricted.js";
+import { SOURCE_PROFILE_IDS } from "../source-profiles.js";
 import { Store } from "../store.js";
 import { emptyUserData, type UserRecord } from "../users.js";
 import type { RouteContext } from "./context.js";
@@ -56,7 +57,7 @@ class FakeServer {
   matchCalls: Array<{ ids: unknown; type: string; nameHint?: string }> = [];
   detailOf: Record<string, ProviderItem> = { m1: movie("m1", "Alien") };
   ancestorsOf: Record<string, string[]> = { m1: ["lib-1"] };
-  versionsOf: Record<string, Array<{ id: string; name?: string; container?: string }>> = { m1: [{ id: "v1", name: "1080p" }] };
+  versionsOf: Record<string, ProviderVersion[]> = { m1: [{ id: "v1", name: "1080p" }] };
   errors: Record<string, MediaServerError> = {};
   nudge: { op: string; wait: Promise<void>; entered?: () => void } | undefined;
   artworkRequests: Array<Record<string, unknown>> = [];
@@ -305,6 +306,48 @@ test("a granted member can list and browse, and the list never carries grants or
     const detail = await api(harness.base, `/api/remote-libraries/${harness.libraryId}/items/m1`, { user: BOB });
     assert.equal(detail.status, 200);
     assert.equal(((await detail.json()) as { item: ProviderItem }).item.id, "m1");
+  });
+});
+
+test("GET /api/remote-libraries/:id/streams attaches the default rule verdict", async () => {
+  await withHarness(async (harness) => {
+    harness.server.items["lib-1"] = [{ ...movie("m1", "Alien"), providerIds: { imdb: "tt1" } }];
+    harness.server.detailOf.m1 = { ...movie("m1", "Alien"), providerIds: { imdb: "tt1" } };
+    harness.server.versionsOf.m1 = [{
+      id: "v1",
+      name: "Alien 1080p",
+      size: 8_000_000_000,
+      videoWidth: 1920,
+      videoHeight: 1080,
+      audioLanguages: ["cs"],
+      embeddedSubtitleLanguages: ["cs"],
+    }];
+
+    const response = await api(
+      harness.base,
+      `/api/remote-libraries/${harness.libraryId}/streams/movie/tt1`,
+      { user: BOB },
+    );
+    assert.equal(response.status, 200);
+    const body = await response.json() as {
+      streams: Array<{ rule?: { profileId: string; status: string; reasons: string[]; rank: number[] } }>;
+    };
+    assert.equal(body.streams[0]!.rule?.profileId, SOURCE_PROFILE_IDS.balanced);
+    assert.equal(body.streams[0]!.rule?.status, "meets");
+    assert.deepEqual(body.streams[0]!.rule?.reasons, []);
+    assert.ok(body.streams[0]!.rule!.rank.length > 1);
+
+    await harness.store.update((state) => {
+      state.sourceProfiles = [];
+      state.userData![BOB]!.prefs.defaultRulesProfileId = "deleted-rules-profile";
+    });
+    const noDefault = await api(
+      harness.base,
+      `/api/remote-libraries/${harness.libraryId}/streams/movie/tt1`,
+      { user: BOB },
+    );
+    const omitted = await noDefault.json() as { streams: Array<Record<string, unknown>> };
+    assert.equal("rule" in omitted.streams[0]!, false);
   });
 });
 

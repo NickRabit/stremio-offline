@@ -123,6 +123,25 @@ const evidenceCandidate = (
   facts,
 });
 
+export function listedLocalCopyEvidence(
+  copy: Pick<LocalCopy, "key" | "size">,
+  providerResponseIndex: number,
+): SourceEvidenceCandidateV1 {
+  return {
+    sourceId: copy.key,
+    providerKey: "local",
+    providerClass: "local",
+    sourceKind: "localFile",
+    capabilities: ["play"],
+    providerResponseIndex,
+    available: true,
+    facts: {
+      ...unknownFacts(copy.size),
+      bytes: { evidence: "listed", value: copy.size },
+    },
+  };
+}
+
 export async function findAdequateExistingLocalCopy(
   input: ExistingLocalCopyInput,
   deps: ExistingLocalCopyDeps,

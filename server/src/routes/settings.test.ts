@@ -623,6 +623,79 @@ test("PATCH /api/settings validates, stores and clears the follow source profile
   assert.equal("followSourceProfile" in (harness.state.userData?.[ADA]?.prefs ?? {}), false);
 });
 
+test("PATCH /api/settings round trips the default rules profile and rejects a non-rules profile", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.state.sourceProfiles!.push({
+    id: SOURCE_PROFILE_IDS.travel,
+    revision: 1,
+    template: "travel",
+    parameters: {
+      scope: { mode: "allAvailable" },
+      providerOrder: { from: "viewer" },
+      audioMode: "preferred",
+      subtitleMode: "optional",
+      heightPixels: { min: 720 },
+    },
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  });
+
+  const stored = await api(harness.base, "/api/settings", {
+    method: "PATCH",
+    user: "ada",
+    body: { defaultRulesProfileId: SOURCE_PROFILE_IDS.balanced },
+  });
+  assert.equal(stored.status, 200);
+  assert.equal(harness.state.userData?.[ADA]?.prefs.defaultRulesProfileId, SOURCE_PROFILE_IDS.balanced);
+  assert.equal((await stored.json() as Record<string, unknown>).defaultRulesProfileId, SOURCE_PROFILE_IDS.balanced);
+  const read = await (await api(harness.base, "/api/settings", { user: "ada" })).json() as Record<string, unknown>;
+  assert.equal(read.defaultRulesProfileId, SOURCE_PROFILE_IDS.balanced);
+
+  for (const defaultRulesProfileId of [SOURCE_PROFILE_IDS.travel, "unknown-profile", 42]) {
+    const response = await api(harness.base, "/api/settings", {
+      method: "PATCH",
+      user: "ada",
+      body: { defaultRulesProfileId },
+    });
+    assert.equal(response.status, 400);
+    assert.equal((await response.json() as { messageKey?: string }).messageKey, "err.sourceProfileUnavailable");
+    assert.equal(harness.state.userData?.[ADA]?.prefs.defaultRulesProfileId, SOURCE_PROFILE_IDS.balanced);
+  }
+
+  const cleared = await api(harness.base, "/api/settings", {
+    method: "PATCH",
+    user: "ada",
+    body: { defaultRulesProfileId: null },
+  });
+  assert.equal(cleared.status, 200);
+  assert.equal("defaultRulesProfileId" in (harness.state.userData?.[ADA]?.prefs ?? {}), false);
+});
+
+test("the default rules profile travels in a settings backup", async (t) => {
+  const source = await mount();
+  t.after(source.close);
+  await api(source.base, "/api/settings", {
+    method: "PATCH",
+    user: "ada",
+    body: { defaultRulesProfileId: SOURCE_PROFILE_IDS.balanced },
+  });
+
+  const backup = await (await api(source.base, "/api/settings/export", { user: "ada" })).json() as {
+    settings: { defaultRulesProfileId?: string };
+  };
+  assert.equal(backup.settings.defaultRulesProfileId, SOURCE_PROFILE_IDS.balanced);
+
+  const restored = await mount();
+  t.after(restored.close);
+  assert.equal((await api(restored.base, "/api/settings/import", {
+    method: "POST",
+    user: "ada",
+    body: backup,
+  })).status, 200);
+  assert.equal(restored.state.userData?.[ADA]?.prefs.defaultRulesProfileId, SOURCE_PROFILE_IDS.balanced);
+});
+
 test("GET /api/settings keeps each account's download source profile private", async (t) => {
   const harness = await mount();
   t.after(harness.close);

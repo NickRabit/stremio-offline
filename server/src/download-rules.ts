@@ -407,7 +407,7 @@ const materializeForComparison = (
 export function rulesFromPolicy(
   policy: SourcePolicyV1,
   kind: "episode" | "movie",
-  options: { allowRemoteProviders?: boolean } = {},
+  options: { allowProviders?: { remote?: boolean; local?: boolean } } = {},
 ): DownloadRules {
   const kinds: Array<SourcePolicyV1["constraints"]["sourceKinds"][number]> = [
     "localFile",
@@ -429,11 +429,16 @@ export function rulesFromPolicy(
     scope = "all";
   } else {
     const remote = policy.scope.providerKeys.some((key) => key.startsWith("remote:"));
-    if (remote && !options.allowRemoteProviders) return fail();
-    if (policy.scope.providerKeys.some((key) => !key.startsWith("addon:") && !(remote && key.startsWith("remote:")))) {
+    const local = policy.scope.providerKeys.includes("local");
+    if (remote && !options.allowProviders?.remote) return fail();
+    if (local && !options.allowProviders?.local) return fail();
+    if (policy.scope.providerKeys.some((key) =>
+      !key.startsWith("addon:")
+      && !(remote && key.startsWith("remote:"))
+      && !(local && key === "local"))) {
       return fail();
     }
-    scope = remote
+    scope = remote || local
       ? "all"
       : {
           selected: policy.scope.providerKeys.map((key) => key.slice("addon:".length)),

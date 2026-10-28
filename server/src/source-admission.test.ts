@@ -950,3 +950,47 @@ test("a rule download reaching only a remote library admits for every audio mode
     assert.equal(admitsRemoteProviders(snapshot), true);
   }
 });
+
+test("a rules profile admits local, remote and addon providers for playback in every audio mode", () => {
+  const base = RULE_PRESETS[0]!.rules;
+  const audios = [
+    { mode: "any", language: "mine", fallback: null },
+    { mode: "prefer", language: "mine", fallback: null },
+    { mode: "prefer", language: "de", fallback: null },
+    { mode: "only", language: "mine", fallback: null },
+  ] as const;
+  const profileFor = (audio: typeof audios[number]): StoredSourceProfile => ({
+    id: "playback-rule",
+    revision: 1,
+    template: "rules",
+    name: "Playback",
+    parameters: parseDownloadRules({
+      ...base,
+      audio,
+      preference: audio.mode === "any"
+        ? base.preference.filter((preference) => preference !== "language")
+        : base.preference,
+    }),
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  });
+
+  for (const audio of audios) {
+    const profile = profileFor(audio);
+    const input = context(account(), {
+      profiles: [profile],
+      addons: [addon("playback")],
+      libraries: [library("lib_00000001", [MEMBER])],
+      remoteLibraries: [remoteLibrary(REMOTE_ONE, [MEMBER])],
+      operation: "play",
+      audioLanguage: "cs",
+    });
+    const snapshot = materializeSourceAdmission(reference(profile.id), input);
+    assert.deepEqual(snapshot.providerKeys, ["local", `remote:${REMOTE_ONE}`, "addon:playback"], audio.mode);
+    assert.deepEqual(parseSourceAdmissionSnapshotV1(structuredClone(snapshot)), snapshot);
+
+    input.operation = "downloadToLibrary";
+    const download = materializeSourceAdmission(reference(profile.id), input);
+    assert.deepEqual(download.providerKeys, [`remote:${REMOTE_ONE}`, "addon:playback"], audio.mode);
+  }
+});

@@ -2,6 +2,21 @@
  *  compiles this file too, and it has no Node types. The queue annotates `publicJob`, `list`
  *  and `snapshot` with these, so a change to the wire shape has to reach this file as well. */
 
+export type SourceRuleReason =
+  | "language"
+  | "resolutionLow"
+  | "resolutionHigh"
+  | "cinema"
+  | "subtitles"
+  | "sample";
+
+export interface SourceRuleVerdict {
+  profileId: string;
+  status: "meets" | "unverified" | "breaks";
+  reasons: SourceRuleReason[];
+  rank: number[];
+}
+
 export type DownloadStatus = "queued" | "waiting" | "checking" | "downloading" | "paused" | "completed" | "failed";
 /** `library` is not a fault: the rule's library is switched off, read-only or away, and the job
  *  waits for it rather than landing somewhere the user did not ask for. `permission` is not a

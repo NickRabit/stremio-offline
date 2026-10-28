@@ -8,9 +8,12 @@ import { isRemoteMediaStream, openRemoteContent, remoteSecretStamp, sealRemoteCo
 import { READ_ONLY_MEDIA_CAPABILITIES, type RemoteLibraryRecord } from "./media-server-types.js";
 import { ResourceError, type MediaResources, type ResourceOwner } from "./media-resources.js";
 import { containerExtension, nameExtension } from "./naming.js";
+import { remoteSourceEvidence } from "./source-remote-evidence.js";
+import { defaultRuleSnapshot, ruleVerdicts } from "./source-rule-verdict.js";
 import type { Store } from "./store.js";
 import type { DownloadTargetSettings, PublicStream, StreamItem } from "./types.js";
 import type { UserRecord } from "./users.js";
+import type { SourceEvidenceCandidateV1 } from "./source-evidence.js";
 
 /** One verified item's versions and its sealed subtitles as public sources. */
 type SealedStreams = {
@@ -21,6 +24,7 @@ type SealedStreams = {
    *  destination this source projects is resolved from the same records the admission reads. */
   libraryId: string;
   kind: "movie" | "series";
+  candidate: SourceEvidenceCandidateV1;
 };
 
 /** The file name a copy of one version should carry: the display label with the version's own
@@ -89,11 +93,28 @@ export class MediaServerSources {
       copyKind,
       owner: { userId: owner.userId, sid: owner.sid, expiresAt: owner.expiresAt, secretStamp },
     };
-    return result.versions.map((version) => ({
+    return result.versions.map((version, providerResponseIndex) => ({
       libraryName: result.libraryName,
       downloadAllowed: result.downloadAllowed === true,
       libraryId: result.libraryId,
       kind: copyKind,
+      candidate: remoteSourceEvidence({
+        providerKey: `remote:${result.libraryId}`,
+        reference: canonicalRemoteDownloadReference({
+          schemaVersion: 1,
+          ownerUserId: owner.userId,
+          connectionId: result.connectionId,
+          libraryId: result.libraryId,
+          generation: result.generation,
+          provider: result.identity.provider,
+          serverId: result.identity.serverId,
+          accountId: result.identity.accountId,
+          itemId: result.identity.itemId,
+          mediaSourceId: version.id,
+        }),
+        version,
+        providerResponseIndex,
+      }),
       stream: {
         url: sealRemoteContent({ ...base, mediaSourceId: version.id }),
         name: version.name ?? result.item.name,
@@ -180,7 +201,20 @@ export class MediaServerSources {
   async matched(authority: MediaServerAuthority, owner: ResourceOwner, libraryId: string, type: string, catalogId: string, signal?: AbortSignal, nameHint?: string): Promise<PublicStream[]> {
     const results = await this.manager.matchedVersions(authority, libraryId, type, catalogId, signal, nameHint);
     const secretStamp = this.ownerStamp(owner, authority);
-    return this.listed(results.flatMap((result) => this.seal(result, owner, secretStamp)), owner);
+    const sealed = results.flatMap((result) => this.seal(result, owner, secretStamp));
+    const listed = this.listed(sealed, owner);
+    const snapshot = defaultRuleSnapshot({
+      user: this.currentUser(owner.userId),
+      store: this.store,
+      preferences: this.store.prefs(owner.userId),
+      mediaKind: type === "series" ? "episode" : "movie",
+    });
+    if (!snapshot) return listed;
+    const verdicts = ruleVerdicts(snapshot, sealed.map((entry) => entry.candidate));
+    return listed.map((stream, index) => {
+      const verdict = verdicts.get(sealed[index]!.candidate.sourceId);
+      return verdict === undefined ? stream : { ...stream, rule: verdict };
+    });
   }
 
   async downloadCandidates(input: {

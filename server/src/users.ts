@@ -238,6 +238,7 @@ export const PERSONAL_SETTINGS = [
   "homeLayout",
   "downloadSourceProfile",
   "followSourceProfile",
+  "defaultRulesProfileId",
 ] as const;
 
 export interface UserMigration { migrated: boolean; userId?: string }

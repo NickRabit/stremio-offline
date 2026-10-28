@@ -127,6 +127,7 @@ function parseSettings(value: unknown): Settings {
   const libraryShelf = String(source.libraryShelf ?? "");
   const downloadSourceProfile = typeof source.downloadSourceProfile === "string" ? source.downloadSourceProfile : "";
   const followSourceProfile = typeof source.followSourceProfile === "string" ? source.followSourceProfile : "";
+  const defaultRulesProfileId = typeof source.defaultRulesProfileId === "string" ? source.defaultRulesProfileId : "";
   // A personal Home arrangement rides in the backup like every other personal setting; a
   // shape that is not the three arrays is dropped rather than failing the whole import.
   const homeLayout = parseHomeLayout(source.homeLayout);
@@ -156,6 +157,7 @@ function parseSettings(value: unknown): Settings {
     ...(homeLayout ? { homeLayout } : {}),
     ...(downloadSourceProfile ? { downloadSourceProfile } : {}),
     ...(followSourceProfile ? { followSourceProfile } : {}),
+    ...(defaultRulesProfileId ? { defaultRulesProfileId } : {}),
     // Whatever the backup names here is another instance's id; the import maps it onto a local
     // library by root or name, and falls back to the default when it cannot.
     defaultMovieLibrary: typeof source.defaultMovieLibrary === "string" ? source.defaultMovieLibrary : "",

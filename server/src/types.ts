@@ -1,4 +1,5 @@
 import type { RemoteCapabilities } from "./media-server-types.js";
+import type { SourceRuleVerdict } from "./api-types.js";
 
 export type AddonRole = "catalog" | "source" | "both";
 export type DownloadLayout = "flat" | "structured";
@@ -143,6 +144,7 @@ export interface PublicStream {
   /** What a remote item may still be used for. Always read-only in this stage. */
   capabilities?: RemoteCapabilities;
   remoteItem?: PublicRemoteItem;
+  rule?: SourceRuleVerdict;
   behaviorHints: { filename?: string; videoSize?: number; bingeGroup?: string };
   subtitles: PublicSubtitle[];
 }
