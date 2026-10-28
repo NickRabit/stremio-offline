@@ -93,6 +93,11 @@ sources.ruleReason.provider
 sources.ruleReason.torrent
 sources.ruleReason.codec
 sources.ruleReason.hdr
+sources.codec.h264
+sources.codec.hevc
+sources.codec.av1
+sources.range.hdr
+sources.range.dolbyVision
 sources.sortLargest
 sources.sortSmallest
 sources.sortAddon

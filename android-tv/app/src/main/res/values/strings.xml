@@ -94,6 +94,11 @@
   <string name="sources_rule_reason_torrent">torrents not allowed</string>
   <string name="sources_rule_reason_codec">unwanted codec</string>
   <string name="sources_rule_reason_hdr">HDR / Dolby Vision</string>
+  <string name="sources_codec_h264">H.264</string>
+  <string name="sources_codec_hevc">HEVC</string>
+  <string name="sources_codec_av1">AV1</string>
+  <string name="sources_range_hdr">HDR</string>
+  <string name="sources_range_dolby_vision">Dolby Vision</string>
   <string name="sources_sort_largest">Largest first</string>
   <string name="sources_sort_smallest">Smallest first</string>
   <string name="sources_sort_addon">By addon priority</string>
