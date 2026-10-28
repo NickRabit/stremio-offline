@@ -38,7 +38,7 @@ for (const locale of locales) {
           const labelBox = label.getBoundingClientRect();
           return { label: label.textContent, fits: label.scrollWidth <= label.clientWidth + 1
             && labelBox.left >= buttonBox.left - 1 && labelBox.right <= buttonBox.right + 1 };
-        }).filter((entry): entry is { label: string | null; fits: boolean } => entry !== null),
+        }).filter((entry): entry is NonNullable<typeof entry> => entry !== null),
       }));
       expect(dimensions.scroll, `${locale.code} ${view} overflows the mobile viewport`).toBeLessThanOrEqual(dimensions.client + 1);
       expect(dimensions.navLabels.filter(({ fits }) => !fits), `${locale.code} navigation labels overflow`).toEqual([]);

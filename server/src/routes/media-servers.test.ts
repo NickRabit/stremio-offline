@@ -117,7 +117,7 @@ const transportFor = (server: FakeServer): MediaServerTransport => ({
     server.artworkRequests.push(args as unknown as Record<string, unknown>);
     const spec = server.artwork;
     if (!spec) throw new Error("no artwork response is configured");
-    return new Response(spec.bytes, { status: 200, headers: { "content-type": spec.contentType } });
+    return new Response(new Uint8Array(spec.bytes), { status: 200, headers: { "content-type": spec.contentType } });
   },
   requestOriginal: async () => { throw new Error("unused"); },
   noteRateLimit: () => undefined,

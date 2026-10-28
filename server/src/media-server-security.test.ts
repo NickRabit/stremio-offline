@@ -1932,7 +1932,7 @@ test("artwork rejects an empty body and bytes beyond the declared length", async
   const empty = stubbed(async () => new Response(null, { headers: { "content-type": "image/jpeg" } }));
   try { await assert.rejects(empty.requestArtwork({ itemId: "i", imageType: "Primary" }, "tok"), { code: "invalid-response" }); }
   finally { await empty.close(); }
-  const oversized = stubbed(async () => new Response(jpegBytes(32), { headers: { "content-type": "image/jpeg", "content-length": "16" } }));
+  const oversized = stubbed(async () => new Response(new Uint8Array(jpegBytes(32)), { headers: { "content-type": "image/jpeg", "content-length": "16" } }));
   try {
     const response = await oversized.requestArtwork({ itemId: "i", imageType: "Primary" }, "tok");
     await assert.rejects(readMedia(response.body), { code: "invalid-response" });
