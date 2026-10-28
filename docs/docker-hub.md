@@ -34,6 +34,31 @@ right to use.
 - A browser interface for computers, phones and tablets, plus separate desktop
   and Android TV clients that can connect to your server.
 
+## Screenshots
+
+| Home | Library |
+| --- | --- |
+| ![Home with continue watching, a row from the library and an addon catalog](https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.5/home.jpg) | ![Downloaded films in the library, with posters and descriptions](https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.5/library.jpg) |
+
+| Following with automatic downloads | Download queue |
+| --- | --- |
+| ![Following a series: start a few episodes ahead and pick download rules](https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.5/follow.jpg) | ![One film downloading, another waiting in the queue](https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.5/downloads.jpg) |
+
+![The player with subtitles](https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.5/player.jpg)
+
+| Android TV: Home | Android TV: title detail |
+| --- | --- |
+| ![The Android TV app's Home with the Tonight row](https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.5/tv-home.jpg) | ![A film's detail on Android TV with Play and Sources](https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.5/tv-detail.jpg) |
+
+<p>
+  <img src="https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.5/mobile-home.jpg" alt="Home on a phone" width="260">
+  <img src="https://raw.githubusercontent.com/NickRabit/stremio-offline/main/docs/images/v0.5/mobile-library.jpg" alt="The library on a phone" width="260">
+</p>
+
+The films and the series shown are Blender Foundation open movies (CC BY),
+*Pioneer One* (CC BY-SA) and public-domain classics, served by a small local
+test addon from the Internet Archive. The app ships with no content.
+
 ## Supported platforms and tags
 
 One image supports **linux/amd64** and **linux/arm64**. Docker selects the
