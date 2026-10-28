@@ -5,8 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { DownloadQueue, REMOTE_DOWNLOAD_MARKER, type RemoteDownloadBackend } from "./downloads.js";
+import { flushLog, initLogger, readLog } from "./logger.js";
 import { relativeWithin, type LibraryRecord } from "./libraries.js";
-import { isRemoteDownloadReference, type RemoteDownloadReference } from "./media-server-download.js";
+import { isRemoteDownloadReference, type RemoteDownloadReference, type RemoteDownloadSubtitle } from "./media-server-download.js";
 import { MediaServerError } from "./media-server-types.js";
 import { sealRemoteContent } from "./media-server-reference.js";
 import { defaultDownloadSettings } from "./naming.js";
@@ -65,6 +66,8 @@ interface RemoteState {
   statusByAttempt?: Record<string, number>;
   attempts: Record<string, number>;
   openError?: Error;
+  subtitleCalls: RemoteDownloadSubtitle[];
+  subtitleFailure?: number;
   activeOpens: number;
   maxActiveOpens: number;
 }
@@ -72,7 +75,7 @@ interface RemoteState {
 const state = (total: number): RemoteState => ({
   allowed: true, ignoreRange: false, body: bytes(total), calls: [], cancelled: 0,
   revalidations: 0, revalidateFailure: "none", attempts: {}, chunkDelayMs: 0,
-  activeOpens: 0, maxActiveOpens: 0,
+  subtitleCalls: [], activeOpens: 0, maxActiveOpens: 0,
 });
 
 const chunkStream = (buf: Buffer, start: number, end: number, remote: RemoteState, signal: AbortSignal): ReadableStream<Uint8Array> => {
@@ -150,6 +153,14 @@ const remoteBackend = (remote: RemoteState) => {
         signal.addEventListener("abort", () => reject(new Error("timed out")), { once: true });
       });
     },
+    readSubtitle: async (_job, subtitle) => {
+      remote.subtitleCalls.push(subtitle);
+      if (remote.subtitleFailure === subtitle.index) throw new Error("subtitle read failed");
+      return {
+        bytes: new TextEncoder().encode(`1\n00:00:01,000 --> 00:00:02,000\n${subtitle.language ?? "unknown"}\n`),
+        contentType: "application/x-subrip",
+      };
+    },
   };
   return backend;
 };
@@ -201,10 +212,22 @@ const harness = async (options: Options = {}) => {
   await queue.load();
   return {
     directory, downloads, queue, remote, root,
+    data: path.join(directory, "data"),
     setFree: (next: { freeBytes?: number; totalBytes?: number }) => { free = next; },
     file: (target: string) => path.join(downloads, relativeWithin(LIBRARY_ID, target)),
     stateFile: path.join(directory, "data", "downloads.json"),
   };
+};
+
+const withLog = async (data: string, body: () => Promise<void>) => {
+  const previous = { ...process.env };
+  try {
+    process.env.LOG_STDOUT = "0";
+    await initLogger(data);
+    await body();
+  } finally {
+    process.env = previous;
+  }
 };
 
 const close = async (h: { queue: DownloadQueue; directory: string }) => {
@@ -244,6 +267,82 @@ test("a remote original is copied byte for byte over one authenticated GET", asy
     assert.equal(await readFile(h.file(job.target)).then((buf) => buf.equals(h.remote.body)), true, "the bytes match the original");
     assert.deepEqual(h.remote.calls.map((call) => call.method), ["GET"], "no HEAD probe and no segment GET");
     assert.equal(h.remote.calls.length, 1, "one sequential GET despite the segment preference");
+  } finally { await close(h); }
+});
+
+test("a remote copy publishes every external subtitle beside the video", async () => {
+  const h = await harness({ total: 128 * 1024 });
+  try {
+    const ref = reference({ subtitles: [
+      { index: 2, language: "cs" },
+      { index: 5, language: "en" },
+    ] });
+    await h.queue.add("Movie", sealedStream(ref, h.remote.body.length), undefined, settings, OWNER, ref);
+    await waitFor(h.queue, () => h.queue.list()[0]?.status === "completed");
+    const job = h.queue.list()[0]!;
+    const directory = path.dirname(h.file(job.target));
+    assert.deepEqual(h.remote.subtitleCalls, ref.subtitles);
+    assert.match(await readFile(path.join(directory, "Movie.cs.srt"), "utf8"), /cs/);
+    assert.match(await readFile(path.join(directory, "Movie.en.srt"), "utf8"), /en/);
+    assert.equal(h.remote.calls.length, 1, "subtitles go through the manager backend, not a transfer URL");
+  } finally { await close(h); }
+});
+
+test("remote subtitle names use the existing copy suffix and omit unknown languages", async () => {
+  const h = await harness({ total: 128 * 1024 });
+  try {
+    const ref = reference({ subtitles: [
+      { index: 1, language: "cs" },
+      { index: 2, language: "cs" },
+      { index: 3 },
+    ] });
+    await h.queue.add("Movie", sealedStream(ref, h.remote.body.length), undefined, settings, OWNER, ref);
+    await waitFor(h.queue, () => h.queue.list()[0]?.status === "completed");
+    const job = h.queue.list()[0]!;
+    const directory = path.dirname(h.file(job.target));
+    await stat(path.join(directory, "Movie.cs.srt"));
+    await stat(path.join(directory, "Movie.cs (2).srt"));
+    await stat(path.join(directory, "Movie.srt"));
+  } finally { await close(h); }
+});
+
+test("a permission withdrawal after publication skips subtitles but keeps the completed video", async () => {
+  const h = await harness({ total: 128 * 1024 });
+  const privateQueue = h.queue as unknown as { renamePublication: (from: string, to: string) => Promise<void> };
+  const publish = privateQueue.renamePublication;
+  privateQueue.renamePublication = async (from, to) => {
+    await publish(from, to);
+    h.remote.allowed = false;
+  };
+  try {
+    await withLog(h.data, async () => {
+      const ref = reference({ subtitles: [{ index: 2, language: "cs" }] });
+      await h.queue.add("Movie", sealedStream(ref, h.remote.body.length), undefined, settings, OWNER, ref);
+      await waitFor(h.queue, () => h.queue.list()[0]?.status === "completed");
+      const job = h.queue.list()[0]!;
+      assert.equal(await stat(h.file(job.target)).then(() => true, () => false), true);
+      assert.equal(h.remote.subtitleCalls.length, 0);
+      assert.equal(await stat(path.join(path.dirname(h.file(job.target)), "Movie.cs.srt")).then(() => true, () => false), false);
+      await flushLog();
+      assert.match(await readLog({ level: "WARN", search: "Media-server subtitles were not copied" }), /WARN/);
+    });
+  } finally { await close(h); }
+});
+
+test("a failed subtitle read leaves the completed video and logs a warning", async () => {
+  const h = await harness({ total: 128 * 1024 });
+  try {
+    await withLog(h.data, async () => {
+      h.remote.subtitleFailure = 2;
+      const ref = reference({ subtitles: [{ index: 2, language: "cs" }] });
+      await h.queue.add("Movie", sealedStream(ref, h.remote.body.length), undefined, settings, OWNER, ref);
+      await waitFor(h.queue, () => h.queue.list()[0]?.status === "completed");
+      const job = h.queue.list()[0]!;
+      assert.equal(await readFile(h.file(job.target)).then((buf) => buf.equals(h.remote.body)), true);
+      assert.equal(await stat(path.join(path.dirname(h.file(job.target)), "Movie.cs.srt")).then(() => true, () => false), false);
+      await flushLog();
+      assert.match(await readLog({ level: "WARN", search: "subtitle could not be copied" }), /subtitle read failed/);
+    });
   } finally { await close(h); }
 });
 
@@ -321,10 +420,52 @@ test("a legacy sealed address and a restored segment plan are refused, never run
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
+test("a remote job persisted before subtitle indexes existed still loads and completes", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-remote-legacy-subtitles-"));
+  const downloads = path.join(directory, "downloads");
+  const data = path.join(directory, "data");
+  const root = library(downloads);
+  const remote = state(128 * 1024);
+  try {
+    const ref = reference();
+    await mkdir(data, { recursive: true });
+    await writeFile(path.join(data, "downloads.json"), JSON.stringify([{
+      id: "legacy-subtitle-state",
+      title: "Movie",
+      ownerUserId: OWNER,
+      status: "queued",
+      target: `${LIBRARY_ID}/Movie/Movie.mkv`,
+      received: 0,
+      speed: 0,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      remoteDownload: ref,
+      stream: { url: REMOTE_DOWNLOAD_MARKER, name: "Movie.mkv", behaviorHints: { videoSize: remote.body.length } },
+    }]));
+    const queue = new DownloadQueue(() => 1, () => 1, data, downloads, {
+      libraries: () => [root],
+      defaultLibrary: () => root,
+      remoteDownload: remoteBackend(remote),
+      freeSpace: async () => ({ freeBytes: 8 * 1024 ** 3, totalBytes: 16 * 1024 ** 3 }),
+    });
+    await queue.load();
+    try {
+      await waitFor(queue, () => queue.get("legacy-subtitle-state")?.status === "completed");
+      assert.equal(queue.list().length, 1);
+      assert.deepEqual(remote.subtitleCalls, []);
+      assert.equal(await readFile(path.join(downloads, "Movie", "Movie.mkv")).then((buf) => buf.equals(remote.body)), true);
+    } finally {
+      await queue.stop();
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("persisted remote state carries no seal, session or credential", async () => {
   const h = await harness({ total: 512 * 1024 });
   try {
-    const ref = reference();
+    const ref = reference({ subtitles: [{ index: 2, language: "cs" }, { index: 5, language: "en" }] });
     await h.queue.add("Movie", sealedStream(ref, h.remote.body.length), undefined, settings, OWNER, ref);
     await waitFor(h.queue, () => h.queue.list()[0]?.status === "completed");
     const raw = await readFile(h.stateFile, "utf8");
@@ -332,6 +473,7 @@ test("persisted remote state carries no seal, session or credential", async () =
     assert.equal(/sid|token|secretStamp|expiresAt|proxyHeaders/.test(raw), false, "no session or credential is persisted");
     assert.equal(raw.includes(REMOTE_DOWNLOAD_MARKER), true, "only the internal marker replaces the address");
     assert.equal(isRemoteDownloadReference(JSON.parse(raw)[0].remoteDownload), true);
+    assert.deepEqual(JSON.parse(raw)[0].remoteDownload.subtitles, ref.subtitles);
     assert.equal("stream" in h.queue.get(h.queue.list()[0]!.id)!, false, "the marker never reaches the public job");
   } finally { await close(h); }
 });

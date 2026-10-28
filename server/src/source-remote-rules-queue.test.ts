@@ -19,6 +19,10 @@ const LIBRARY_ID = "lib_51000001";
 const REMOTE_LIBRARY = `rlib_${"6".repeat(32)}`;
 const REMOTE_KEY = `remote:${REMOTE_LIBRARY}`;
 const BODY = Buffer.from("remote rules fixture bytes");
+const SUBTITLES = [
+  { index: 2, language: "cs" },
+  { index: 5, language: "en" },
+];
 
 const library = (root: string): LibraryRecord => ({
   id: LIBRARY_ID,
@@ -69,6 +73,7 @@ const reference = (): RemoteDownloadReference => ({
   accountId: "account-1",
   itemId: "episode-1",
   mediaSourceId: "version-1",
+  subtitles: SUBTITLES,
 });
 
 const stream = (): StreamItem => ({
@@ -97,7 +102,7 @@ const selectedRemote = (): RulesProfileResolution => ({
   },
 });
 
-const backend = (state: { allowed: boolean; opens: number; revalidations: number }): RemoteDownloadBackend => ({
+const backend = (state: { allowed: boolean; opens: number; revalidations: number; subtitles: number[] }): RemoteDownloadBackend => ({
   current: () => state.allowed,
   open: async (_job, _args, _signal) => {
     state.opens += 1;
@@ -107,6 +112,13 @@ const backend = (state: { allowed: boolean; opens: number; revalidations: number
     });
   },
   revalidate: async () => { state.revalidations += 1; },
+  readSubtitle: async (_job, subtitle) => {
+    state.subtitles.push(subtitle.index);
+    return {
+      bytes: new TextEncoder().encode(`1\n00:00:01,000 --> 00:00:02,000\n${subtitle.language ?? "unknown"}\n`),
+      contentType: "application/x-subrip",
+    };
+  },
 });
 
 const waitFor = async (queue: DownloadQueue, predicate: () => boolean, ms = 5_000) => {
@@ -159,7 +171,7 @@ const addRemoteJob = async (queue: DownloadQueue) => {
 
 test("a rules remote selection stages and completes through the remote-copy backend", async () => {
   const { directory, data, downloads } = await setup();
-  const state = { allowed: true, opens: 0, revalidations: 0 };
+  const state = { allowed: true, opens: 0, revalidations: 0, subtitles: [] as number[] };
   const queue = openQueue(data, downloads, backend(state));
   queue.setRulesResolver(async () => selectedRemote());
   await queue.load();
@@ -172,10 +184,14 @@ test("a rules remote selection stages and completes through the remote-copy back
     assert.equal(internal.stream?.url, REMOTE_DOWNLOAD_MARKER);
     assert.equal(internal.stream?.behaviorHints?.filename, "Show.S01E02.1080p.mkv");
     assert.equal(state.opens, 1);
+    assert.deepEqual(state.subtitles, [2, 5]);
     assert.equal(
       await readFile(path.join(downloads, relativeWithin(LIBRARY_ID, completed.target)), "utf8"),
       BODY.toString(),
     );
+    const directory = path.dirname(path.join(downloads, relativeWithin(LIBRARY_ID, completed.target)));
+    assert.match(await readFile(path.join(directory, "Show - S01E02.cs.srt"), "utf8"), /cs/);
+    assert.match(await readFile(path.join(directory, "Show - S01E02.en.srt"), "utf8"), /en/);
 
     await queue.stop();
     const reopened = openQueue(data, downloads, backend(state));
@@ -197,9 +213,37 @@ test("a rules remote selection stages and completes through the remote-copy back
   }
 });
 
+test("a rule naming a subtitle language copies only that external track", async () => {
+  const { directory, data, downloads } = await setup();
+  const state = { allowed: true, opens: 0, revalidations: 0, subtitles: [] as number[] };
+  const queue = openQueue(data, downloads, backend(state));
+  queue.setRulesResolver(async () => {
+    const selected = selectedRemote();
+    if (selected.status !== "selected") throw new Error("The remote fixture did not select a source.");
+    return {
+      ...selected,
+      resolution: { ...selected.resolution, subtitleLanguage: "en" },
+    };
+  });
+  await queue.load();
+  try {
+    const added = await addRemoteJob(queue);
+    await waitFor(queue, () => queue.get(added.id)?.status === "completed");
+    const internal = (queue as unknown as { jobs: DownloadJob[] }).jobs[0]!;
+    assert.deepEqual(internal.remoteDownload?.subtitles, [{ index: 5, language: "en" }]);
+    assert.deepEqual(state.subtitles, [5]);
+    const directory = path.dirname(path.join(downloads, relativeWithin(LIBRARY_ID, queue.get(added.id)!.target)));
+    await assert.rejects(readFile(path.join(directory, "Show - S01E02.cs.srt")));
+    assert.match(await readFile(path.join(directory, "Show - S01E02.en.srt"), "utf8"), /en/);
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("permission removed after admission pauses a staged rules remote copy before bytes", async () => {
   const { directory, data, downloads } = await setup();
-  const state = { allowed: true, opens: 0, revalidations: 0 };
+  const state = { allowed: true, opens: 0, revalidations: 0, subtitles: [] as number[] };
   let allowed = true;
   const queue = openQueue(data, downloads, backend(state), () => allowed);
   queue.setRulesResolver(async () => {
@@ -221,7 +265,7 @@ test("permission removed after admission pauses a staged rules remote copy befor
 
 test("a failed staged rules remote source is added to tried for the next selection", async () => {
   const { directory, data, downloads } = await setup();
-  const state = { allowed: true, opens: 0, revalidations: 0, fail: true };
+  const state = { allowed: true, opens: 0, revalidations: 0, subtitles: [] as number[], fail: true };
   const remote: RemoteDownloadBackend = {
     ...backend(state),
     open: async () => {

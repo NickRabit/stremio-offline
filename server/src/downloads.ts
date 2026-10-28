@@ -26,8 +26,8 @@ import { isRemoteMediaStream, openRemoteContent } from "./media-server-reference
 import { isMediaServerError, REMOTE_LIBRARY_ID } from "./media-server-types.js";
 import type { RemoteAccessSource } from "./media-server-access.js";
 import {
-  canonicalRemoteDownloadReference, isRemoteDownloadReference, remoteDownloadAccessible, remoteDownloadKey,
-  type RemoteDownloadReference,
+  canonicalRemoteDownloadReference, canonicalRemoteDownloadSubtitles, isRemoteDownloadReference,
+  remoteDownloadAccessible, remoteDownloadKey, type RemoteDownloadReference, type RemoteDownloadSubtitle,
 } from "./media-server-download.js";
 import { playlistArgs } from "./probe.js";
 import { defaultLibrary, libraryPath, libraryVisible, parseLibraryPath, relativeWithin, type DefaultLibrarySettings, type LibraryRecord, type Viewer } from "./libraries.js";
@@ -330,6 +330,7 @@ export interface RemoteDownloadBackend {
   current(job: DownloadJob): boolean;
   open(job: DownloadJob, args: { method: "GET" | "HEAD"; range?: string }, signal: AbortSignal): Promise<Response>;
   revalidate(job: DownloadJob, signal: AbortSignal): Promise<void>;
+  readSubtitle(job: DownloadJob, subtitle: RemoteDownloadSubtitle, signal: AbortSignal): Promise<{ bytes: Uint8Array; contentType: string }>;
 }
 
 export interface ExistingLocalCopyAdmission {
@@ -1197,7 +1198,12 @@ export class DownloadQueue {
    *  when a remote backend is wired; the seal is replaced by the internal marker and never
    *  stored. The reference can never come from a request body: the route derives it from the
    *  sealed source through the manager. */
-  private remoteAdmission(stream: StreamItem, remoteDownload: RemoteDownloadReference | undefined, ownerUserId: string | undefined): { stream: StreamItem; reference?: RemoteDownloadReference } {
+  private remoteAdmission(
+    stream: StreamItem,
+    remoteDownload: RemoteDownloadReference | undefined,
+    ownerUserId: string | undefined,
+    subtitleLanguage?: string,
+  ): { stream: StreamItem; reference?: RemoteDownloadReference } {
     const sealed = isRemoteDownloadSource(stream);
     const marker = stream.url === REMOTE_DOWNLOAD_MARKER;
     if (!sealed && !marker) {
@@ -1206,7 +1212,10 @@ export class DownloadQueue {
     }
     if (!remoteDownload || !isRemoteDownloadReference(remoteDownload) || !this.remoteDownload) throw remoteDownloadRefused();
     if (remoteDownload.ownerUserId !== ownerUserId) throw remoteDownloadRefused();
-    const reference = canonicalRemoteDownloadReference(remoteDownload);
+    const subtitles = subtitleLanguage === undefined
+      ? remoteDownload.subtitles
+      : canonicalRemoteDownloadSubtitles(remoteDownload.subtitles)?.filter((subtitle) => subtitle.language === subtitleLanguage);
+    const reference = canonicalRemoteDownloadReference({ ...remoteDownload, subtitles });
     if (sealed) {
       const opened = openRemoteContent(stream.url);
       if (!opened || opened.subtitleIndex !== undefined) throw remoteDownloadRefused();
@@ -2114,7 +2123,12 @@ export class DownloadQueue {
     let streamAddonIdentity: string | undefined;
     let subtitleAddonIdentity: string | undefined;
     if (remote) {
-      const admitted = this.remoteAdmission(outcome.stream, outcome.remoteDownload, this.ownerOf(job));
+      const admitted = this.remoteAdmission(
+        outcome.stream,
+        outcome.remoteDownload,
+        this.ownerOf(job),
+        outcome.resolution.subtitleLanguage,
+      );
       selectedStream = admitted.stream;
       remoteDownload = admitted.reference;
     } else {
@@ -2566,6 +2580,76 @@ export class DownloadQueue {
     return { target, partial: `${target}.part` };
   }
 
+  private async remoteSubtitleTarget(
+    root: string,
+    directory: string,
+    base: string,
+    language: string | undefined,
+    used: Set<string>,
+  ): Promise<string> {
+    const stem = language === undefined ? base : `${base}.${language}`;
+    for (let copy = 1; copy <= 999; copy += 1) {
+      const fitted = fitTargetName(root, directory, stem, ".srt", copy);
+      const relative = joinTarget(directory, fitted, ".srt", copy);
+      const target = path.join(root, relative);
+      if (used.has(target)) continue;
+      if (await exists(target) || await exists(`${target}.part`)) continue;
+      used.add(target);
+      return target;
+    }
+    throw new SourceError("Could not find a free subtitle file name.");
+  }
+
+  /** External subtitles are copied only after the video is published, through the same
+   *  owner-bound remote backend. The video stays complete when any subtitle or permission
+   *  prevents a sidecar. */
+  private async publishRemoteSubtitles(job: DownloadJob, signal: AbortSignal) {
+    const subtitles = job.remoteDownload?.subtitles;
+    const backend = this.remoteDownload;
+    const located = this.locate(job);
+    if (!subtitles?.length || !backend || !located) return;
+    if (this.remoteRefused(job)) {
+      log("WARN", "Media-server subtitles were not copied because the original is no longer permitted", {
+        id: job.id, title: job.title,
+      });
+      return;
+    }
+    const extension = path.extname(located.relative);
+    const stem = extension ? located.relative.slice(0, -extension.length) : located.relative;
+    const directory = path.dirname(stem);
+    const base = path.basename(stem);
+    const used = new Set<string>();
+    for (const subtitle of subtitles) {
+      try {
+        if (this.remoteRefused(job)) {
+          log("WARN", "Media-server subtitles were not copied because the original is no longer permitted", {
+            id: job.id, title: job.title,
+          });
+          return;
+        }
+        const asset = await backend.readSubtitle(job, subtitle, signal);
+        const target = await this.remoteSubtitleTarget(located.root, directory, base, subtitle.language, used);
+        const partial = `${target}.part`;
+        await mkdir(path.dirname(target), { recursive: true });
+        await writeFile(partial, asset.bytes, { mode: 0o600 });
+        try {
+          await rename(partial, target);
+        } catch (error) {
+          await unlink(partial).catch(() => undefined);
+          throw error;
+        }
+      } catch (error) {
+        log("WARN", "A media-server subtitle could not be copied", {
+          id: job.id,
+          title: job.title,
+          index: subtitle.index,
+          language: subtitle.language,
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
   private async prepareSubtitle(job: DownloadJob, controller: AbortController) {
     const files = this.subtitleFiles(job);
     if (!files || !job.subtitle?.url) return;
@@ -2736,6 +2820,7 @@ export class DownloadQueue {
       await this.dropPlaceholder(reserved);
       throw error;
     }
+    await this.publishRemoteSubtitles(job, signal);
     job.status = "completed"; job.completedAt = new Date(this.now()).toISOString(); job.speed = 0; job.retryCount = 0; job.segments = undefined;
     delete job.sourceFallbackAttempts;
     this.setError(job);
