@@ -1,4 +1,4 @@
-FROM node:22-trixie-slim AS build
+FROM node:25-trixie-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY packages/source-selection/package.json packages/source-selection/package.json
@@ -10,7 +10,7 @@ COPY server server
 COPY web web
 RUN npm run build
 
-FROM node:22-trixie-slim AS runtime
+FROM node:25-trixie-slim AS runtime
 # Stamped by the build script and by CI so a running server can say which image it is.
 ARG BUILD_TIME=""
 ARG GIT_COMMIT=""
