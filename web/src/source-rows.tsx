@@ -135,6 +135,7 @@ export function SourceRows({ rows, selected, onSelect, onPicked, probe, badgeOf,
       const remote = isRemoteStream(stream);
       const probed = probe?.(stream) ?? [];
       const languages = probed.length ? probed : streamLanguages(stream, titleLanguage);
+      const audioInFile = probed.length > 0 || Boolean(stream.audioLanguages?.length && !stream.audioLanguagesGuessed);
       const badge = local ? undefined : badgeOf?.(stream) || streamBadge(stream);
       const source = local ? stream.libraryName : remote ? [stream.provider ? providerLabel(stream.provider) : "", stream.libraryName].filter(Boolean).join(" · ") : stream.addonName;
       const line = source && source !== badge ? source : "";
@@ -153,7 +154,7 @@ export function SourceRows({ rows, selected, onSelect, onPicked, probe, badgeOf,
         </i>
         <span><strong>{streamLabel(stream)}</strong>{line && <small>{line}</small>}{ruleBreak && <small>{ruleBreak}</small>}</span>
         <span className="stream-meta">{size ? <b>{bytes(size)}</b> : null}
-          <small>{languages.map((code) => <em className="lang-badge" key={code} title={probed.length ? t("sources.audioInFile") : t("sources.languageGuess")}>{label(code)}</em>)}</small>
+          <small>{languages.map((code) => <em className="lang-badge" key={code} title={audioInFile ? t("sources.audioInFile") : t("sources.languageGuess")}>{label(code)}</em>)}</small>
         </span>
         {selected === stream && <Check aria-hidden="true"/>}
       </button>;

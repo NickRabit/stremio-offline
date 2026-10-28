@@ -8,7 +8,7 @@ import { isRemoteMediaStream, openRemoteContent, remoteSecretStamp, sealRemoteCo
 import { READ_ONLY_MEDIA_CAPABILITIES, type RemoteLibraryRecord } from "./media-server-types.js";
 import { ResourceError, type MediaResources, type ResourceOwner } from "./media-resources.js";
 import { containerExtension, nameExtension } from "./naming.js";
-import { remoteSourceEvidence } from "./source-remote-evidence.js";
+import { remoteAudioLanguages, remoteSourceEvidence, remoteSubtitleLanguages } from "./source-remote-evidence.js";
 import { ruleSnapshots, ruleVerdictsForProfiles } from "./source-rule-verdict.js";
 import type { Store } from "./store.js";
 import type { DownloadTargetSettings, PublicStream, StreamItem } from "./types.js";
@@ -93,44 +93,53 @@ export class MediaServerSources {
       copyKind,
       owner: { userId: owner.userId, sid: owner.sid, expiresAt: owner.expiresAt, secretStamp },
     };
-    return result.versions.map((version, providerResponseIndex) => ({
-      libraryName: result.libraryName,
-      downloadAllowed: result.downloadAllowed === true,
-      libraryId: result.libraryId,
-      kind: copyKind,
-      candidate: remoteSourceEvidence({
-        providerKey: `remote:${result.libraryId}`,
-        reference: canonicalRemoteDownloadReference({
-          schemaVersion: 1,
-          ownerUserId: owner.userId,
-          connectionId: result.connectionId,
-          libraryId: result.libraryId,
-          generation: result.generation,
-          provider: result.identity.provider,
-          serverId: result.identity.serverId,
-          accountId: result.identity.accountId,
-          itemId: result.identity.itemId,
-          mediaSourceId: version.id,
+    return result.versions.map((version, providerResponseIndex) => {
+      const audio = remoteAudioLanguages(version);
+      const subtitleLanguages = remoteSubtitleLanguages(version);
+      return {
+        libraryName: result.libraryName,
+        downloadAllowed: result.downloadAllowed === true,
+        libraryId: result.libraryId,
+        kind: copyKind,
+        candidate: remoteSourceEvidence({
+          providerKey: `remote:${result.libraryId}`,
+          reference: canonicalRemoteDownloadReference({
+            schemaVersion: 1,
+            ownerUserId: owner.userId,
+            connectionId: result.connectionId,
+            libraryId: result.libraryId,
+            generation: result.generation,
+            provider: result.identity.provider,
+            serverId: result.identity.serverId,
+            accountId: result.identity.accountId,
+            itemId: result.identity.itemId,
+            mediaSourceId: version.id,
+          }),
+          version,
+          providerResponseIndex,
         }),
-        version,
-        providerResponseIndex,
-      }),
-      stream: {
-        url: sealRemoteContent({ ...base, mediaSourceId: version.id }),
-        name: version.name ?? result.item.name,
-        behaviorHints: {
-          filename: copyFilename(version.name ?? result.item.name, version.container),
-          ...(version.size === undefined ? {} : { videoSize: version.size }),
+        stream: {
+          url: sealRemoteContent({ ...base, mediaSourceId: version.id }),
+          name: version.name ?? result.item.name,
+          behaviorHints: {
+            filename: copyFilename(version.name ?? result.item.name, version.container),
+            ...(version.size === undefined ? {} : { videoSize: version.size }),
+          },
+          ...(audio.languages.length ? {
+            audioLanguages: audio.languages,
+            ...(audio.guessed ? { audioLanguagesGuessed: true } : {}),
+          } : {}),
+          ...(subtitleLanguages.length ? { subtitleLanguages } : {}),
+          ...(version.externalSubtitles?.length ? {
+            subtitles: version.externalSubtitles.map((entry) => ({
+              url: sealRemoteContent({ ...base, mediaSourceId: version.id, subtitleIndex: entry.index }),
+              ...(entry.language ? { lang: entry.language } : {}),
+              ...(entry.title ? { title: entry.title } : {}),
+            })),
+          } : {}),
         },
-        ...(version.externalSubtitles?.length ? {
-          subtitles: version.externalSubtitles.map((entry) => ({
-            url: sealRemoteContent({ ...base, mediaSourceId: version.id, subtitleIndex: entry.index }),
-            ...(entry.language ? { lang: entry.language } : {}),
-            ...(entry.title ? { title: entry.title } : {}),
-          })),
-        } : {}),
-      },
-    }));
+      };
+    });
   }
 
   /** The destination a copy of this source takes when the caller names no target, when its library

@@ -309,7 +309,7 @@ test("a granted member can list and browse, and the list never carries grants or
   });
 });
 
-test("GET /api/remote-libraries/:id/streams attaches every admitting rules verdict", async () => {
+test("GET /api/remote-libraries/:id/streams attaches languages and every admitting rules verdict", async () => {
   await withHarness(async (harness) => {
     harness.server.items["lib-1"] = [{ ...movie("m1", "Alien"), providerIds: { imdb: "tt1" } }];
     harness.server.detailOf.m1 = { ...movie("m1", "Alien"), providerIds: { imdb: "tt1" } };
@@ -337,6 +337,8 @@ test("GET /api/remote-libraries/:id/streams attaches every admitting rules verdi
     assert.deepEqual(rules[SOURCE_PROFILE_IDS.balanced]!.reasons, []);
     assert.ok(rules[SOURCE_PROFILE_IDS.balanced]!.rank.length > 1);
     assert.ok(rules[SOURCE_PROFILE_IDS.best]!.profileId);
+    assert.deepEqual((body.streams[0] as typeof body.streams[0] & { audioLanguages?: string[] }).audioLanguages, ["cs"]);
+    assert.deepEqual((body.streams[0] as typeof body.streams[0] & { subtitleLanguages?: string[] }).subtitleLanguages, ["cs"]);
 
     await harness.store.update((state) => {
       state.sourceProfiles = [];
@@ -621,14 +623,22 @@ test("the admin library inventory lists every attachment with its provider", asy
 
 test("a granted member lists verified sources and their own item state without an address", async () => {
   await withHarness(async (harness) => {
+    harness.server.versionsOf.m1 = [{
+      id: "v1",
+      name: "1080p",
+      audioLanguages: ["eng"],
+      embeddedSubtitleLanguages: ["cze"],
+    }];
     const sources = await api(harness.base, `/api/remote-libraries/${harness.libraryId}/items/m1/sources`, { user: BOB });
     assert.equal(sources.status, 200);
-    const body = await sources.json() as { streams: Array<{ kind: string; provider?: string; libraryName?: string; remoteItem?: { itemId: string } }> };
+    const body = await sources.json() as { streams: Array<{ kind: string; provider?: string; libraryName?: string; remoteItem?: { itemId: string }; audioLanguages?: string[]; subtitleLanguages?: string[] }> };
     assert.equal(body.streams.length, 1);
     assert.equal(body.streams[0]!.kind, "remote");
     assert.equal(body.streams[0]!.provider, "jellyfin");
     assert.equal(body.streams[0]!.libraryName, "Films");
     assert.equal(body.streams[0]!.remoteItem?.itemId, "m1");
+    assert.deepEqual(body.streams[0]!.audioLanguages, ["en"]);
+    assert.deepEqual(body.streams[0]!.subtitleLanguages, ["cs"]);
     assert.equal(JSON.stringify(body).includes("media-server:"), false);
 
     const state = await api(harness.base, `/api/remote-libraries/${harness.libraryId}/items/m1/state`, { user: BOB });

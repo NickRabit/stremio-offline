@@ -86,6 +86,38 @@ describe("SourceRows", () => {
     expect([...host.querySelectorAll("i")].map((node) => node.textContent)).toEqual(["RD", "EXT"]);
   });
 
+  it("marks listed remote audio as in the file, keeps a guess labelled, and leaves addons unchanged", () => {
+    const remote = addonRow({
+      sourceId: "remote-1",
+      name: "Remote Rules Fixture S01E01",
+      provider: "jellyfin",
+      remoteItem: { libraryId: "rlib_a", itemId: "1", mediaSourceId: "v1", progressKey: "key" },
+      audioLanguages: ["cs", "en"],
+    });
+    const guessed = addonRow({
+      sourceId: "remote-2",
+      name: "Remote Rules Fixture S01E01 CZ",
+      provider: "jellyfin",
+      remoteItem: { libraryId: "rlib_a", itemId: "2", mediaSourceId: "v2", progressKey: "key-2" },
+      audioLanguages: ["cs"],
+      audioLanguagesGuessed: true,
+    });
+    const addon = addonRow({ name: "Remote Rules Fixture S01E01", title: "CZ dabing" });
+    render([remote, guessed, addon]);
+
+    const [inFile, guess, unchangedAddon] = [...host.querySelectorAll("button")];
+    const inFileBadges = [...inFile!.querySelectorAll(".lang-badge")];
+    expect(inFileBadges).toHaveLength(2);
+    expect(inFileBadges.map((badge) => badge.textContent)).toEqual(["CZ", "EN"]);
+    expect(inFileBadges.every((badge) => badge.getAttribute("title") === t("sources.audioInFile"))).toBe(true);
+    const guessedBadges = [...guess!.querySelectorAll(".lang-badge")];
+    expect(guessedBadges.map((badge) => badge.textContent)).toEqual(["CZ"]);
+    expect(guessedBadges[0]!.getAttribute("title")).toBe(t("sources.languageGuess"));
+    const addonBadges = [...unchangedAddon!.querySelectorAll(".lang-badge")];
+    expect(addonBadges.map((badge) => badge.textContent)).toEqual(["CZ"]);
+    expect(addonBadges[0]!.getAttribute("title")).toBe(t("sources.languageGuess"));
+  });
+
   it("keeps the focus on the same source when an earlier group inserts its rows", async () => {
     const named = (id: string, name: string): Stream => addonRow({ sourceId: id, name, addonKey: undefined, addonName: undefined, behaviorHints: undefined });
     const rows = [named("a", "Alpha"), named("b", "Beta"), named("c", "Gamma")];

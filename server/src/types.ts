@@ -87,6 +87,9 @@ export interface StreamItem {
   title?: string;
   description?: string;
   subtitles?: SubtitleItem[];
+  audioLanguages?: string[];
+  subtitleLanguages?: string[];
+  audioLanguagesGuessed?: true;
   behaviorHints?: {
     notWebReady?: boolean;
     filename?: string;
@@ -144,6 +147,9 @@ export interface PublicStream {
   /** What a remote item may still be used for. Always read-only in this stage. */
   capabilities?: RemoteCapabilities;
   remoteItem?: PublicRemoteItem;
+  audioLanguages?: string[];
+  subtitleLanguages?: string[];
+  audioLanguagesGuessed?: true;
   rules?: SourceRuleVerdicts;
   behaviorHints: { filename?: string; videoSize?: number; bingeGroup?: string };
   subtitles: PublicSubtitle[];

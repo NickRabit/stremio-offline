@@ -92,3 +92,16 @@ test("remote evidence leaves absent metadata unknown and uses a stable continuat
   assert.deepEqual(first.facts.externalSubtitles, { evidence: "unknown" });
   assert.deepEqual(first.facts.releaseKind, { evidence: "listed", value: null });
 });
+
+test("untagged remote audio is listed as a guess while its tracks stay unknown", () => {
+  const version = { id: "version-1", name: "Remote Rules Fixture S01E01 CZ", audioLanguages: ["und", undefined] };
+  const candidate = remoteSourceEvidence({
+    providerKey: `remote:${reference.libraryId}`,
+    reference,
+    version,
+    providerResponseIndex: 0,
+  });
+
+  assert.deepEqual(candidate.facts.audio.listed, { evidence: "listed", value: ["cs"] });
+  assert.deepEqual(candidate.facts.audio.tracks, { evidence: "unknown" });
+});

@@ -230,6 +230,38 @@ test("list mints verified public sources without leaking the internal address", 
   });
 });
 
+test("a listed version carries its known audio and subtitle languages", async () => {
+  await withHarness(async (harness) => {
+    harness.server.versionsOf["item-1"] = [{
+      id: "v1",
+      name: "Remote Rules Fixture S01E01",
+      audioLanguages: ["cze", "und", "eng", "cs", undefined],
+      embeddedSubtitleLanguages: ["und", "cze"],
+      externalSubtitles: [{ index: 2, language: "cze" }],
+    }];
+
+    const [listed] = await harness.sources.list(harness.adminAuthority, harness.owner, harness.libraryId, "item-1");
+    assert.deepEqual(listed!.audioLanguages, ["cs", "en"]);
+    assert.deepEqual(listed!.subtitleLanguages, ["cs"]);
+    assert.equal(listed!.audioLanguagesGuessed, undefined);
+  });
+});
+
+test("a listed version with untagged audio marks its name-based language as guessed", async () => {
+  await withHarness(async (harness) => {
+    harness.server.versionsOf["item-1"] = [{
+      id: "v1",
+      name: "Remote Rules Fixture S01E01 CZ",
+      audioLanguages: ["und", undefined],
+    }];
+
+    const [listed] = await harness.sources.list(harness.adminAuthority, harness.owner, harness.libraryId, "item-1");
+    assert.deepEqual(listed!.audioLanguages, ["cs"]);
+    assert.equal(listed!.audioLanguagesGuessed, true);
+    assert.equal(listed!.subtitleLanguages, undefined);
+  });
+});
+
 const openedRef = (harness: Harness, sourceId: string) => openRemoteContent(streamOf(harness, sourceId).url);
 
 test("a granted native account projects the copy and device capabilities on an original", async () => {

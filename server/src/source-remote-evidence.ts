@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { normalizeLanguage } from "./language.js";
 import { remoteDownloadKey, type RemoteDownloadReference } from "./media-server-download.js";
 import type { ProviderVersion } from "./media-server-provider.js";
-import { releaseKindFromListing } from "./source-addon-evidence.js";
+import { listedAudioLanguages, releaseKindFromListing } from "./source-addon-evidence.js";
 import type { SourceEvidenceCandidateV1, SourceFact } from "./source-evidence.js";
 import { videoResolutionClass } from "./video-resolution.js";
 
@@ -13,6 +13,24 @@ const languages = (values: readonly (string | undefined)[]): Array<string | unde
 
 const uniqueLanguages = (values: readonly (string | undefined)[]): string[] =>
   [...new Set(languages(values).filter((language): language is string => language !== undefined))];
+
+export function remoteAudioLanguages(version: ProviderVersion): { languages: string[]; guessed: boolean } {
+  const tagged = uniqueLanguages(version.audioLanguages ?? []);
+  if (tagged.length) return { languages: tagged, guessed: false };
+  if (!version.audioLanguages?.length) return { languages: [], guessed: false };
+
+  const guess = listedAudioLanguages({ name: version.name }, undefined);
+  return guess.evidence === "listed"
+    ? { languages: [...guess.value], guessed: true }
+    : { languages: [], guessed: false };
+}
+
+export function remoteSubtitleLanguages(version: ProviderVersion): string[] {
+  return uniqueLanguages([
+    ...(version.embeddedSubtitleLanguages ?? []),
+    ...(version.externalSubtitles ?? []).map((subtitle) => subtitle.language),
+  ]);
+}
 
 const continuationKey = (
   providerKey: string,
@@ -36,6 +54,8 @@ export function remoteSourceEvidence(input: {
   const audioTracks = version.audioLanguages === undefined
     ? undefined
     : languages(version.audioLanguages);
+  const knownAudioTracks = audioTracks === undefined ? [] : uniqueLanguages(audioTracks);
+  const audioLanguages = remoteAudioLanguages(version);
   const embeddedSubtitles = version.embeddedSubtitleLanguages === undefined
     ? undefined
     : languages(version.embeddedSubtitleLanguages);
@@ -57,10 +77,10 @@ export function remoteSourceEvidence(input: {
     available: true,
     facts: {
       audio: {
-        listed: audioTracks === undefined
-          ? unknown()
-          : { evidence: "providerMetadata", value: uniqueLanguages(audioTracks) },
-        tracks: audioTracks === undefined
+        listed: audioLanguages.languages.length
+          ? { evidence: audioLanguages.guessed ? "listed" : "providerMetadata", value: audioLanguages.languages }
+          : unknown(),
+        tracks: knownAudioTracks.length === 0 || audioTracks === undefined
           ? unknown()
           : { evidence: "providerMetadata", value: audioTracks },
       },

@@ -47,6 +47,10 @@ describe("streamLanguages", () => {
   it("never overrides what the addon did say", () => {
     expect(streamLanguages(stream({ name: "FullHD", behaviorHints: { bingeGroup: "Webshare|EN|1080p|" } }), "cs")).toEqual(["en"]);
   });
+
+  it("uses listed track languages ahead of a name guess", () => {
+    expect(streamLanguages(stream({ name: "Czech release", audioLanguages: ["en"] }), "cs")).toEqual(["en"]);
+  });
 });
 
 describe("streamSize", () => {
@@ -122,6 +126,11 @@ describe("arrangeStreams", () => {
   it("filters by language", () => {
     expect(names(arrangeStreams(all, filters({ language: "cs" }), "cs")).sort())
       .toEqual(["cz-big", "cz-small"]);
+  });
+
+  it("filters a remote row by the languages the server listed", () => {
+    const remote = stream({ name: "Remote Rules Fixture S01E01", audioLanguages: ["cs"] });
+    expect(names(arrangeStreams([remote], filters({ language: "cs" }), "en"))).toEqual([remote.name]);
   });
 
   it("puts the preferred language first, then the largest", () => {

@@ -176,7 +176,7 @@ export interface SourceRuleVerdict {
 }
 export interface Stream {
   sourceId: string; kind: "remote" | "library" | "torrent" | "unsupported"; playable: boolean; localPath?: string; libraryName?: string; name?: string; title?: string; description?: string;
-  subtitles?: Subtitle[]; addonKey?: string; addonName?: string;
+  subtitles?: Subtitle[]; audioLanguages?: string[]; subtitleLanguages?: string[]; audioLanguagesGuessed?: boolean; addonKey?: string; addonName?: string;
   behaviorHints?: { notWebReady?: boolean; filename?: string; videoSize?: number; bingeGroup?: string };
   /** The same source's handle in every session, minted by the server: a position stored with it
    *  resumes from this source again. */

@@ -8,6 +8,7 @@ export function streamSize(stream: Stream): number | undefined {
 }
 
 export function streamLanguages(stream: Stream, titleLanguage?: string): string[] {
+  if (stream.audioLanguages !== undefined) return stream.audioLanguages;
   return sourceLanguages(stream, titleLanguage);
 }
 
