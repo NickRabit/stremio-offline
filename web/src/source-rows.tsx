@@ -93,6 +93,8 @@ export interface SourceRowsProps {
 
 /** One row per source: its class, its name, where it comes from, its size and its languages.
  *  Its own template, so the catalogue list and the library chooser can never drift apart. */
+const RULE_REASONS = new Set(["language", "resolutionLow", "resolutionHigh", "cinema", "subtitles", "sample"]);
+
 export function SourceRows({ rows, selected, onSelect, onPicked, probe, badgeOf, titleLanguage, className, listRef, onScroll }: SourceRowsProps) {
   useI18n();
   // One row per source: two groups may hand out the very same source again, and a row React
@@ -112,9 +114,11 @@ export function SourceRows({ rows, selected, onSelect, onPicked, probe, badgeOf,
       const source = local ? stream.libraryName : remote ? [stream.provider ? providerLabel(stream.provider) : "", stream.libraryName].filter(Boolean).join(" · ") : stream.addonName;
       const line = source && source !== badge ? source : "";
       const size = streamSize(stream);
-      const ruleBreak = stream.rule?.status === "breaks"
-        ? t("sources.ruleBreaks", { reasons: stream.rule.reasons.map((reason) => t(`sources.ruleReason.${reason}`)).join(", ") })
-        : "";
+      // Only reasons the app can name; a break with none of them says nothing.
+      const ruleReasons = stream.rule?.status === "breaks"
+        ? stream.rule.reasons.filter((reason) => RULE_REASONS.has(reason)).map((reason) => t(`sources.ruleReason.${reason}`))
+        : [];
+      const ruleBreak = ruleReasons.length ? t("sources.ruleBreaks", { reasons: ruleReasons.join(", ") }) : "";
       return <button type="button" key={sourceRowKey(stream)} className={selected === stream ? "selected" : ""} aria-pressed={selected === stream}
         title={local ? t("sources.localHint") : remote ? t("sources.remoteHint") : undefined}
         onClick={() => { onPicked?.(); onSelect(stream); }}>
