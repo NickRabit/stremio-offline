@@ -63,7 +63,11 @@ test.describe("screenshots", () => {
     // The language menu's label is hidden on a short landscape, so the rows are the check.
     await expect(detail.getByRole("button", { name: /E2E 1080p/ })).toBeVisible();
     await expect(detail.getByRole("button", { name: /E2E 720p/ })).toBeVisible();
+    const localSource = detail.getByRole("button", { name: /Zkušební film \(2024\)\.mp4/ });
+    await expect(localSource).toBeVisible();
     await settle(page);
+    await localSource.click();
+    await expect(localSource).toHaveAttribute("aria-pressed", "true");
 
     await expect(page).toHaveScreenshot("title-detail.png", {
       fullPage: true,
