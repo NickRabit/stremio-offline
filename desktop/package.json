@@ -27,7 +27,7 @@
     "package:linux:x64": "npm run require-ffmpeg-linux && npm run build --prefix .. && npm run build && npm run build:renderer && npm run stage:local-backend && electron-builder --linux --x64 --publish never"
   },
   "devDependencies": {
-    "@electron/fuses": "1.8.0",
+    "@electron/fuses": "2.1.3",
     "@types/node": "22.15.30",
     "electron": "44.4.3",
     "electron-builder": "26.15.3",
