@@ -17,6 +17,8 @@ export interface SourceRuleVerdict {
   rank: number[];
 }
 
+export type SourceRuleVerdicts = Record<string, SourceRuleVerdict>;
+
 export type DownloadStatus = "queued" | "waiting" | "checking" | "downloading" | "paused" | "completed" | "failed";
 /** `library` is not a fault: the rule's library is switched off, read-only or away, and the job
  *  waits for it rather than landing somewhere the user did not ask for. `permission` is not a

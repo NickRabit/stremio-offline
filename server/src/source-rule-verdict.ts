@@ -15,7 +15,6 @@ import {
   type SourceFact,
 } from "./source-evidence.js";
 import {
-  SOURCE_PROFILE_IDS,
   viewerOfProfileAccount,
 } from "./source-profiles.js";
 import type { Store, UserPrefs } from "./store.js";
@@ -23,7 +22,7 @@ import type { UserRecord } from "./users.js";
 
 const UNKNOWN_RANK = Number.MAX_SAFE_INTEGER;
 
-export interface DefaultSourceRuleInput {
+export interface SourceRuleInput {
   user: UserRecord | undefined;
   store: Pick<Store,
     "addons" | "libraries" | "mediaConnections" | "remoteLibraries" | "sourceProfiles" | "userData">;
@@ -228,44 +227,40 @@ const rankFor = (
   return rank;
 };
 
-export function defaultRuleSnapshot(input: DefaultSourceRuleInput): SourceAdmissionSnapshotV1 | undefined {
-  if (!input.user) return undefined;
+export function ruleSnapshots(input: SourceRuleInput): SourceAdmissionSnapshotV1[] {
+  const user = input.user;
+  if (!user) return [];
   const profiles = input.store.sourceProfiles();
-  const preferred = input.preferences.defaultRulesProfileId === undefined
-    ? undefined
-    : profiles.find((profile) =>
-        profile.id === input.preferences.defaultRulesProfileId && profile.template === "rules");
-  const profile = preferred
-    ?? profiles.find((candidate) =>
-      candidate.id === SOURCE_PROFILE_IDS.balanced && candidate.template === "rules");
-  if (!profile) return undefined;
-  try {
-    const snapshot = materializeSourceAdmission(
-      { profileId: profile.id, revision: profile.revision },
-      {
-        viewer: viewerOfProfileAccount(input.user),
-        profiles,
-        addons: input.store.addons(),
-        libraries: input.store.libraries(),
-        remoteLibraries: input.store.remoteLibraries(),
-        mediaConnections: input.store.mediaConnections(),
-        addonOrder: input.store.userData(input.user.id).addonOrder,
-        preferences: {
-          audioLanguage: input.preferences.audioLanguage,
-          subtitleLanguage: input.preferences.subtitleLanguage,
+  return profiles.flatMap((profile) => {
+    if (profile.template !== "rules") return [];
+    try {
+      const snapshot = materializeSourceAdmission(
+        { profileId: profile.id, revision: profile.revision },
+        {
+          viewer: viewerOfProfileAccount(user),
+          profiles,
+          addons: input.store.addons(),
+          libraries: input.store.libraries(),
+          remoteLibraries: input.store.remoteLibraries(),
+          mediaConnections: input.store.mediaConnections(),
+          addonOrder: input.store.userData(user.id).addonOrder,
+          preferences: {
+            audioLanguage: input.preferences.audioLanguage,
+            subtitleLanguage: input.preferences.subtitleLanguage,
+          },
+          operation: "play",
+          mediaKind: input.mediaKind,
         },
-        operation: "play",
-        mediaKind: input.mediaKind,
-      },
-    );
-    const { bytes: _ignored, ...constraints } = snapshot.policy.constraints;
-    return {
-      ...snapshot,
-      policy: { ...snapshot.policy, constraints },
-    };
-  } catch {
-    return undefined;
-  }
+      );
+      const { bytes: _ignored, ...constraints } = snapshot.policy.constraints;
+      return [{
+        ...snapshot,
+        policy: { ...snapshot.policy, constraints },
+      }];
+    } catch {
+      return [];
+    }
+  });
 }
 
 export function ruleVerdicts(
@@ -295,4 +290,19 @@ export function ruleVerdicts(
     });
   }
   return verdicts;
+}
+
+export function ruleVerdictsForProfiles(
+  snapshots: readonly SourceAdmissionSnapshotV1[],
+  candidates: readonly SourceEvidenceCandidateV1[],
+): Map<string, Record<string, SourceRuleVerdict>> {
+  const bySource = new Map<string, Record<string, SourceRuleVerdict>>();
+  for (const snapshot of snapshots) {
+    for (const [sourceId, verdict] of ruleVerdicts(snapshot, candidates)) {
+      const rules = bySource.get(sourceId) ?? {};
+      rules[snapshot.profile.id] = verdict;
+      bySource.set(sourceId, rules);
+    }
+  }
+  return bySource;
 }

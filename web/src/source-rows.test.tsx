@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { SourceFilters, SourceRows } from "./source-rows";
 import { setLocale, t } from "./i18n";
-import type { Stream } from "./types";
+import type { SourceProfile, Stream } from "./types";
 
 const addonRow = (over: Partial<Stream> = {}): Stream => ({
   sourceId: "a1", kind: "remote", playable: true, name: "FullHD", addonKey: "cineshare", addonName: "Cineshare",
@@ -56,10 +56,12 @@ describe("SourceRows", () => {
   });
 
   it("explains the reasons a source breaks the default rules", () => {
-    render([addonRow({ rule: {
-      profileId: "balanced", status: "breaks", rank: [2],
-      reasons: ["language", "resolutionLow", "subtitles"],
-    } })]);
+    act(() => root.render(<SourceRows rows={[addonRow({ rules: {
+      balanced: {
+        profileId: "balanced", status: "breaks", rank: [2],
+        reasons: ["language", "resolutionLow", "subtitles"],
+      },
+    } })]} selected={null} onSelect={() => {}} ruleId="balanced"/>));
     expect(row().textContent).toContain(t("sources.ruleBreaks", {
       reasons: [
         t("sources.ruleReason.language"),
@@ -70,7 +72,9 @@ describe("SourceRows", () => {
   });
 
   it("does not add a rule note to a source that meets them", () => {
-    render([addonRow({ rule: { profileId: "balanced", status: "meets", reasons: [], rank: [0] } })]);
+    act(() => root.render(<SourceRows rows={[addonRow({ rules: {
+      balanced: { profileId: "balanced", status: "meets", reasons: [], rank: [0] },
+    } })]} selected={null} onSelect={() => {}} ruleId="balanced"/>));
     expect(row().textContent).not.toContain(t("sources.ruleBreaks", { reasons: "" }));
   });
 
@@ -118,14 +122,42 @@ describe("SourceFilters", () => {
     ],
   });
   const options = () => [...host.querySelector("select")!.querySelectorAll("option")].map((option) => option.textContent);
+  const sortOptions = () => {
+    const selects = host.querySelectorAll("select");
+    return [...selects[selects.length - 1]!.querySelectorAll("option")].map((option) => option.textContent);
+  };
+  const profiles: SourceProfile[] = [
+    { id: "balanced", nameKey: "rules.preset.balanced", template: "rules", revision: 1, operations: ["play"], policy: {} as SourceProfile["policy"] },
+    { id: "best", nameKey: "rules.preset.best", template: "rules", revision: 1, operations: ["play"], policy: {} as SourceProfile["policy"] },
+  ];
 
   it("offers no place that answered nothing", () => {
-    act(() => root.render(<SourceFilters visible addon={field("")} sort={{ value: "recommended", onChange: () => {} }}/>));
+    act(() => root.render(<SourceFilters visible addon={field("")} sort={{ value: "rule:balanced", onChange: () => {} }}/>));
     expect(options()).toEqual(["All (5)", "My Pleasure $$$ (5)"]);
   });
 
   it("keeps an empty place that is the current choice", () => {
-    act(() => root.render(<SourceFilters visible addon={field("remote:series")} sort={{ value: "recommended", onChange: () => {} }}/>));
+    act(() => root.render(<SourceFilters visible addon={field("remote:series")} sort={{ value: "rule:balanced", onChange: () => {} }}/>));
     expect(options()).toEqual(["All (5)", "My Pleasure $$$ (5)", "Jellyfin · Series (0)"]);
+  });
+
+  it("lists rule options before the fixed source orders", () => {
+    act(() => root.render(<SourceFilters visible addon={field("")} profiles={profiles} sort={{ value: "rule:balanced", onChange: () => {} }}/>));
+    expect(sortOptions()).toEqual([
+      t("rules.preset.balanced"),
+      t("rules.preset.best"),
+      t("sources.sortLargest"),
+      t("sources.sortSmallest"),
+      t("sources.sortAddon"),
+    ]);
+  });
+
+  it("does not repeat the stored fixed order while profiles are loading", () => {
+    act(() => root.render(<SourceFilters visible addon={field("")} sort={{ value: "size-asc", onChange: () => {} }}/>));
+    expect(sortOptions()).toEqual([
+      t("sources.sortLargest"),
+      t("sources.sortSmallest"),
+      t("sources.sortAddon"),
+    ]);
   });
 });

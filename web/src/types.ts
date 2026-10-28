@@ -187,7 +187,7 @@ export interface Stream {
   capabilities?: RemoteCapabilities;
   /** The remote identity a player reports position and favorites against; only a remote source carries one. */
   remoteItem?: RemoteStreamContext;
-  rule?: SourceRuleVerdict;
+  rules?: Record<string, SourceRuleVerdict>;
 }
 
 export type MediaServerProvider = "jellyfin" | "emby";

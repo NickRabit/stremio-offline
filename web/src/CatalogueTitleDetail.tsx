@@ -6,8 +6,8 @@ import { t, useI18n } from "./i18n";
 import { LibraryTitleDetail } from "./LibraryTitleDetail";
 import { useLibrarySources } from "./library-sources";
 import { titleLanguage } from "./languages";
-import { arrangeStreams, catalogSourceRows, isLocalStream } from "./streams";
-import type { Meta, Stream, Video } from "./types";
+import { arrangeStreams, catalogSourceRows, isLocalStream, resolveStreamSort } from "./streams";
+import type { Meta, SourceProfile, Stream, Video } from "./types";
 
 /** One catalogue title's detail: the same body the libraries draw, hosted for a title that only
  *  the catalogue knows. Its own rows are the streams the catalogue panel loads for that title;
@@ -53,7 +53,7 @@ export interface CatalogueTitleDetailProps {
    *  and the sites that know the title. The catalogue grows them itself, so they survive opening
    *  the full detail instead of being left behind in the panel. */
   chips?: ReactNode;
-  /** The viewer's audio language, which the source chooser's recommended order prefers. */
+  /** The viewer's audio language, which the legacy fallback order prefers. */
   preferredLanguage?: string;
   /** Told what this detail holds whenever it changes: the metadata it drew, the episode it is on,
    *  and whether a row of it can play yet. The chips and the saved position the caller draws
@@ -81,6 +81,8 @@ export interface CatalogueTitleDetailProps {
   addonPriority?: Map<string, number>;
   /** Whether torrent rows are offered: without a debrid service the catalogue hides them. */
   showTorrents?: boolean;
+  sourceProfiles?: SourceProfile[] | null;
+  defaultSort?: string;
 }
 
 /** One provider's answer: its rows, or the failure that kept them away. A provider that failed
@@ -97,7 +99,7 @@ const dedupe = (streams: Stream[]): Stream[] => {
 };
 
 export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
-  const { target, initialSources, libraryFirst = false, onGallery, chips, preferredLanguage, onRead, progress, resumeStableKey, onSourceChange, onClearProgress, watched, watchedLabel, onToggleWatched, onPlay, onSaveToLibrary, onSaveElsewhere, saveSupported, onDownloadToDevice, addonPriority, showTorrents = true } = props;
+  const { target, initialSources, libraryFirst = false, onGallery, chips, preferredLanguage, onRead, progress, resumeStableKey, onSourceChange, onClearProgress, watched, watchedLabel, onToggleWatched, onPlay, onSaveToLibrary, onSaveElsewhere, saveSupported, onDownloadToDevice, addonPriority, showTorrents = true, sourceProfiles = null, defaultSort = "recommended" } = props;
   const { locale } = useI18n();
   const { type, id, name } = target;
   const incomingId = catalogueStreamId(target);
@@ -222,14 +224,15 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
   // viewer's language, their addon order and size; torrents only where a debrid service plays them.
   const metaLanguage = titleLanguage(snapshot?.language);
   const offered = (stream: Stream) => showTorrents || stream.kind !== "torrent";
+  const resolvedSort = resolveStreamSort(defaultSort, sourceProfiles);
   const ordered = useMemo(() => {
     if (rows === null) return null;
     const own = [...local, ...rows.filter(isLocalStream)]
       .filter((stream, index, all) => all.findIndex((other) => (other.localPath ?? other.sourceId) === (stream.localPath ?? stream.sourceId)) === index);
     const addon = arrangeStreams(rows.filter((stream) => !isLocalStream(stream) && offered(stream)),
-      { addon: "", language: "", sort: "recommended" }, preferredLanguage ?? "", addonPriority, metaLanguage);
-    return catalogSourceRows(own, addon, "", "recommended");
-  }, [rows, local, preferredLanguage, addonPriority, metaLanguage, showTorrents]);
+      { addon: "", language: "", sort: resolvedSort }, preferredLanguage ?? "", addonPriority, metaLanguage);
+    return catalogSourceRows(own, addon, "", resolvedSort);
+  }, [rows, local, preferredLanguage, addonPriority, metaLanguage, showTorrents, resolvedSort]);
   const extra = useLibrarySources({
     scope: `catalogue:${type}:${streamId}`,
     open: chooserOpen || libraryFirst,
@@ -350,6 +353,8 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
       {...(waitingEpisode ? {} : { sourceGroups: { groups: showTorrents ? extra.groups : extra.groups.map((group) => ({ ...group, streams: group.streams.filter(offered) })), retry: extra.retry }, onOpenSources: () => setChooserOpen(true) })}
       nativeSourceLabel={t("sources.heading")}
       {...(preferredLanguage ? { preferredLanguage } : {})}
+      sourceProfiles={sourceProfiles}
+      defaultSort={defaultSort}
       {...(progress ? { progress } : {})}
       {...(onSourceChange ? { onSourceChange } : {})}
       {...(onClearProgress ? { onClearProgress } : {})}

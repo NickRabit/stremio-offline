@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, describeError } from "./api";
 import { t } from "./i18n";
-import { arrangeStreams, compareRuleRank, isLocalStream, streamLanguages, type StreamSort } from "./streams";
+import { arrangeStreams, compareRuleRank, isLocalStream, sortRuleId, streamLanguages, type StreamOrder } from "./streams";
 import type { CatalogueRef } from "./title-enrichment";
 import type { RemoteLibrary, Stream } from "./types";
 
@@ -81,7 +81,7 @@ export function addonPriority(entries: LibrarySourceEntry[]): Map<string, number
  * The rows the chooser shows: the detail's own versions and the viewer's copies first, then remote
  * libraries and addons in rule order. A named size sort ranks every class together.
  */
-export function librarySourceRows(entries: LibrarySourceEntry[], filter: string, language: string, sort: StreamSort,
+export function librarySourceRows(entries: LibrarySourceEntry[], filter: string, language: string, sort: StreamOrder,
   preferredLanguage: string, titleLanguage?: string, priority?: Map<string, number>): Stream[] {
   const rank = priority ?? addonPriority(entries);
   const kept = (filter ? entries.filter((entry) => entry.key === filter) : entries)
@@ -89,8 +89,14 @@ export function librarySourceRows(entries: LibrarySourceEntry[], filter: string,
   const of = (kind: LibrarySourceEntry["kind"]) => kept.filter((entry) => entry.kind === kind).flatMap((entry) => entry.streams);
   const native = of("native"), local = of("local"), remote = of("remote"), addon = of("addon");
   if (sort === "recommended") {
+    return [...native, ...local, ...remote, ...arrangeStreams(addon, { addon: "", language: "", sort }, preferredLanguage, rank, titleLanguage)];
+  }
+  const ruleId = sortRuleId(sort);
+  if (ruleId) {
     const external = [...remote, ...addon];
-    return [...native, ...local, ...(external.some((stream) => stream.rule) ? external.sort(compareRuleRank) : [...remote, ...arrangeStreams(addon, { addon: "", language: "", sort }, preferredLanguage, rank, titleLanguage)])];
+    return [...native, ...local, ...(external.some((stream) => stream.rules?.[ruleId])
+      ? external.sort((left, right) => compareRuleRank(left, right, ruleId))
+      : [...remote, ...arrangeStreams(addon, { addon: "", language: "", sort: "recommended" }, preferredLanguage, rank, titleLanguage)])];
   }
   if (sort === "addon") return [...native, ...local, ...remote, ...arrangeStreams(addon, { addon: "", language: "", sort }, preferredLanguage, rank, titleLanguage)];
   return arrangeStreams([...native, ...local, ...remote, ...addon], { addon: "", language: "", sort }, preferredLanguage, rank, titleLanguage);

@@ -1481,7 +1481,7 @@ const storedRulePresets = (): StoredSourceProfile[] => RULE_PRESETS.map((preset)
   updatedAt: "2026-01-01T00:00:00.000Z",
 }));
 
-test("GET /api/streams attaches the default rule verdict", async (t) => {
+test("GET /api/streams attaches a verdict for every admitting rules profile", async (t) => {
   const records = [addon("rule-source", [], { role: "source", resources: ["stream"] })];
   const harness = await mount(records, null, { profiles: storedRulePresets() });
   t.after(harness.close);
@@ -1490,17 +1490,19 @@ test("GET /api/streams attaches the default rule verdict", async (t) => {
     () => json({ streams: [{ url: "https://cdn.example/movie-1080p.mp4", name: "Czech 1080p" }] }),
     async () => {
       const listed = await (await api(harness.base, "/api/streams/movie/tt1")).json() as Array<{
-        rule?: { profileId: string; status: string; reasons: string[]; rank: number[] };
+        rules?: Record<string, { profileId: string; status: string; reasons: string[]; rank: number[] }>;
       }>;
-      assert.equal(listed[0]!.rule?.profileId, SOURCE_PROFILE_IDS.balanced);
-      assert.equal(listed[0]!.rule?.status, "meets");
-      assert.deepEqual(listed[0]!.rule?.reasons, []);
-      assert.ok(listed[0]!.rule!.rank.length > 1);
+      const rules = listed[0]!.rules!;
+      assert.deepEqual(Object.keys(rules).sort(), RULE_PRESETS.map((preset) => preset.id).sort());
+      assert.equal(rules[SOURCE_PROFILE_IDS.balanced]!.status, "meets");
+      assert.equal(rules[SOURCE_PROFILE_IDS.smaller]!.status, "breaks");
+      assert.deepEqual(rules[SOURCE_PROFILE_IDS.balanced]!.reasons, []);
+      assert.ok(rules[SOURCE_PROFILE_IDS.balanced]!.rank.length > 1);
     },
   );
 });
 
-test("a preference for a deleted rule profile without the balanced preset omits rule", async (t) => {
+test("a server with no admitting rules profile omits rules", async (t) => {
   const records = [addon("rule-source", [], { role: "source", resources: ["stream"] })];
   const harness = await mount(records, null, {
     profiles: [],
@@ -1512,7 +1514,7 @@ test("a preference for a deleted rule profile without the balanced preset omits 
     () => json({ streams: [{ url: "https://cdn.example/movie-1080p.mp4", name: "Czech 1080p" }] }),
     async () => {
       const listed = await (await api(harness.base, "/api/streams/movie/tt1")).json() as Array<Record<string, unknown>>;
-      assert.equal("rule" in listed[0]!, false);
+      assert.equal("rules" in listed[0]!, false);
     },
   );
 });
@@ -1559,7 +1561,7 @@ test("GET /api/local-streams mints one library entry per copy", async (t) => {
   assert.ok(entry.sourceId);
 });
 
-test("GET /api/local-streams attaches the default rule verdict", async (t) => {
+test("GET /api/local-streams attaches a verdict for every admitting rules profile", async (t) => {
   const harness = await mount([], null, {
     libraries: [library("lib_00000001")],
     profiles: storedRulePresets(),
@@ -1568,11 +1570,12 @@ test("GET /api/local-streams attaches the default rule verdict", async (t) => {
   t.after(harness.close);
 
   const listed = await (await api(harness.base, "/api/local-streams/movie/tt0113277")).json() as Array<{
-    rule?: { profileId: string; status: string; rank: number[] };
+    rules?: Record<string, { profileId: string; status: string; rank: number[] }>;
   }>;
-  assert.equal(listed[0]!.rule?.profileId, SOURCE_PROFILE_IDS.balanced);
-  assert.equal(listed[0]!.rule?.status, "unverified");
-  assert.ok(listed[0]!.rule!.rank.length > 1);
+  const rules = listed[0]!.rules!;
+  assert.deepEqual(Object.keys(rules).sort(), RULE_PRESETS.map((preset) => preset.id).sort());
+  assert.equal(rules[SOURCE_PROFILE_IDS.balanced]!.status, "unverified");
+  assert.ok(rules[SOURCE_PROFILE_IDS.balanced]!.rank.length > 1);
 });
 
 test("the local listing re-checks every library it is about to name", async (t) => {

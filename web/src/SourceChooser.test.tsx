@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { SourceChooser, type SourceChooserProps } from "./SourceChooser";
-import { setLocale } from "./i18n";
+import { setLocale, t } from "./i18n";
 import type { LibrarySourceGroup, LibrarySourcePanel } from "./library-sources";
-import type { Stream } from "./types";
+import type { SourceProfile, Stream } from "./types";
 
 /** A version of the viewer's own library: the file itself, already on the server's disk. */
 const file = (id: string, name: string, size?: number): Stream => ({
@@ -20,6 +20,10 @@ const addonGroup = (streams: Stream[], over: Partial<LibrarySourceGroup> = {}): 
   ({ key: "addon:torrentio", kind: "addon", name: "Torrentio", status: "loaded", streams, error: "", ...over });
 const ownCopies = (streams: Stream[], over: Partial<LibrarySourceGroup> = {}): LibrarySourceGroup =>
   ({ key: "local", kind: "local", name: "", status: "loaded", streams, error: "", ...over });
+const profiles: SourceProfile[] = [
+  { id: "balanced", nameKey: "rules.preset.balanced", template: "rules", revision: 1, operations: ["play"], policy: {} as SourceProfile["policy"] },
+  { id: "best", nameKey: "rules.preset.best", template: "rules", revision: 1, operations: ["play"], policy: {} as SourceProfile["policy"] },
+];
 
 let root: Root;
 let host: HTMLDivElement;
@@ -35,6 +39,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   host.remove();
+  vi.unstubAllGlobals();
 });
 
 const render = (over: Partial<SourceChooserProps> = {}) => {
@@ -76,6 +81,51 @@ describe("SourceChooser", () => {
     // its own size puts it.
     expect(rows().map((row) => row.textContent)).toEqual([expect.stringContaining("Large"), expect.stringContaining("Small")]);
     expect(rows()[1]!.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("switches between rule orders without fetching the sources again", () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    const balancedFirst = addon("a1", "Balanced first", 1_000);
+    balancedFirst.rules = {
+      balanced: { profileId: "balanced", status: "meets", reasons: [], rank: [0] },
+      best: { profileId: "best", status: "meets", reasons: [], rank: [1] },
+    };
+    const bestFirst = addon("a2", "Best first", 2_000);
+    bestFirst.rules = {
+      balanced: { profileId: "balanced", status: "meets", reasons: [], rank: [1] },
+      best: { profileId: "best", status: "meets", reasons: [], rank: [0] },
+    };
+    render({ lead: [], groups: [addonGroup([balancedFirst, bestFirst])], sourceProfiles: profiles, defaultSort: "rule:balanced" });
+    expect(rows().map((row) => row.querySelector("strong")!.textContent)).toEqual(["Balanced first", "Best first"]);
+    choose(selects()[1]!, "rule:best");
+    expect(rows().map((row) => row.querySelector("strong")!.textContent)).toEqual(["Best first", "Balanced first"]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("keeps a size sort independent of rule ranks", () => {
+    const rankedLarge = addon("a1", "Large", 8_000);
+    rankedLarge.rules = { balanced: { profileId: "balanced", status: "meets", reasons: [], rank: [0] } };
+    const rankedSmall = addon("a2", "Small", 100);
+    rankedSmall.rules = { balanced: { profileId: "balanced", status: "meets", reasons: [], rank: [1] } };
+    render({ lead: [], groups: [addonGroup([rankedSmall, rankedLarge])], sourceProfiles: profiles, defaultSort: "rule:balanced" });
+    expect(rows().map((row) => row.querySelector("strong")!.textContent)).toEqual(["Large", "Small"]);
+    choose(selects()[1]!, "size-asc");
+    expect(rows().map((row) => row.querySelector("strong")!.textContent)).toEqual(["Small", "Large"]);
+  });
+
+  it("moves the rule note with the active rule and keeps the default rule's note under size sorting", () => {
+    const row = addon("a1", "Choice", 1_000);
+    row.rules = {
+      balanced: { profileId: "balanced", status: "breaks", reasons: ["language"], rank: [2] },
+      best: { profileId: "best", status: "breaks", reasons: ["resolutionLow"], rank: [2] },
+    };
+    render({ lead: [], groups: [addonGroup([row])], sourceProfiles: profiles, defaultSort: "rule:balanced" });
+    expect(rows()[0]!.textContent).toContain(t("sources.ruleReason.language"));
+    choose(selects()[1]!, "rule:best");
+    expect(rows()[0]!.textContent).toContain(t("sources.ruleReason.resolutionLow"));
+    choose(selects()[1]!, "size-asc");
+    expect(rows()[0]!.textContent).toContain(t("sources.ruleReason.language"));
   });
 
   it("narrows the list by source class and by language", () => {

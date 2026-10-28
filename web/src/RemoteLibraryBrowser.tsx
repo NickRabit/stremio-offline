@@ -30,7 +30,7 @@ import { catalogueRef, useTitleEnrichment, type CatalogueRef } from "./title-enr
 import { SearchResults } from "./SearchEverywhere";
 import { useSearchEverywhere } from "./useSearchEverywhere";
 import type { SaveTarget } from "./save-target";
-import type { Addon, AddonDownloadSettings, LibraryType, LibraryView, LibraryViewPrefs, MediaServerProvider, RemoteBrowseMode, RemoteItem, RemoteItemState, RemoteItemType, RemoteLibrary, RemoteStreamContext, SearchMember, Stream, Subtitle, TileShape, Trailer, UserViews } from "./types";
+import type { Addon, AddonDownloadSettings, LibraryType, LibraryView, LibraryViewPrefs, MediaServerProvider, RemoteBrowseMode, RemoteItem, RemoteItemState, RemoteItemType, RemoteLibrary, RemoteStreamContext, SearchMember, SourceProfile, Stream, Subtitle, TileShape, Trailer, UserViews } from "./types";
 
 interface Props {
   onRootPresenceChange?: (visible: boolean) => void;
@@ -81,6 +81,8 @@ interface Props {
   realDebridConfigured?: boolean;
   /** Search inside this library uses the Search everywhere engine. */
   searchEverywhere: boolean;
+  sourceProfiles?: SourceProfile[] | null;
+  defaultSort?: string;
 }
 
 type Status = { items: RemoteItem[]; cursor?: string; total: number; loading: boolean; error: string };
@@ -234,7 +236,7 @@ const groupEpisodes = (items: RemoteItem[]) => {
   return [...groups.entries()].map(([season, group]) => ({ season, items: group }));
 };
 
-export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLanguage, subtitleLanguage, onError, libraryTileShape, onToggleLibraryShape, views, onPersistPrefs, onOpenChange, compact, onCompactChange, initialTarget, onPersonalChange, uiLanguage, secureMode, onTrailer, onGallery, resetSignal, downloadLibraries, onDownloadQueued, onCatalogueDownload, onNotify, accountScope = "", addons = [], realDebridConfigured = false, searchEverywhere }: Props) {
+export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLanguage, subtitleLanguage, onError, libraryTileShape, onToggleLibraryShape, views, onPersistPrefs, onOpenChange, compact, onCompactChange, initialTarget, onPersonalChange, uiLanguage, secureMode, onTrailer, onGallery, resetSignal, downloadLibraries, onDownloadQueued, onCatalogueDownload, onNotify, accountScope = "", addons = [], realDebridConfigured = false, searchEverywhere, sourceProfiles = null, defaultSort }: Props) {
   useI18n();
   // The listing effect must not restart when the shape changes. It still warms only the
   // picture that shape draws, so the other role is fetched when a tile actually asks for it.
@@ -1701,6 +1703,8 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
             onToggleWatched={() => void toggleWatched()}
             sources={sources}
             defaultSources={sources}
+            sourceProfiles={sourceProfiles}
+            {...(defaultSort ? { defaultSort } : {})}
             {...(addonIdentity ? {
               sourceGroups: { groups: extra.groups, retry: extra.retry },
               onOpenSources: () => setChooserOpen(true),
@@ -1806,6 +1810,8 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
           onOpen: () => setPlayerSourcesOpen(true),
           onSwitch: switchDetailSource,
         }}
+        sourceProfiles={sourceProfiles}
+        {...(defaultSort ? { defaultSort } : {})}
         {...(playing.at !== undefined ? { startAtSeconds: playing.at } : {})}
         onClose={() => {
           cancelHandoff(); addonSubtitleAbort.current?.abort(); setPlayerSourcesOpen(false); setPlaying(null);

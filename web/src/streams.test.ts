@@ -7,7 +7,7 @@ const verdict = (rank: number[], status: SourceRuleVerdict["status"] = "meets"):
   ({ profileId: "balanced", status, reasons: [], rank });
 const names = (list: Stream[]) => list.map((item) => item.name);
 const filters = (overrides: Partial<StreamFilters> = {}): StreamFilters =>
-  ({ addon: "", language: "", sort: "recommended", ...overrides });
+  ({ addon: "", language: "", sort: "rule:balanced", ...overrides });
 
 describe("streamText", () => {
   it("joins every field an addon may have used", () => {
@@ -129,26 +129,45 @@ describe("arrangeStreams", () => {
       .toEqual(["cz-big", "cz-small", "en-big", "unknown"]);
   });
 
-  it("ranks recommended sources by the server verdict instead of language and size", () => {
-    const czechSmall = stream({ name: "czech-small", title: "Czech 1 GB", rule: verdict([0, 1]) });
-    const englishBig = stream({ name: "english-big", title: "English 20 GB", rule: verdict([0, 2]) });
+  it("ranks sources by the active rule verdict instead of language and size", () => {
+    const czechSmall = stream({ name: "czech-small", title: "Czech 1 GB", rules: { balanced: verdict([0, 1]) } });
+    const englishBig = stream({ name: "english-big", title: "English 20 GB", rules: { balanced: verdict([0, 2]) } });
     expect(names(arrangeStreams([englishBig, czechSmall], filters(), "en")))
       .toEqual(["czech-small", "english-big"]);
   });
 
+  it("reorders the same rows when the active rule changes", () => {
+    const first = stream({
+      name: "first",
+      rules: {
+        balanced: verdict([0]),
+        best: { ...verdict([1]), profileId: "best" },
+      },
+    });
+    const second = stream({
+      name: "second",
+      rules: {
+        balanced: verdict([1]),
+        best: { ...verdict([0]), profileId: "best" },
+      },
+    });
+    expect(names(arrangeStreams([first, second], filters(), "en"))).toEqual(["first", "second"]);
+    expect(names(arrangeStreams([first, second], filters({ sort: "rule:best" }), "en"))).toEqual(["second", "first"]);
+  });
+
   it("puts a breaking verdict after one that meets the rules", () => {
-    const breaks = stream({ name: "breaks", rule: verdict([2], "breaks") });
-    const meets = stream({ name: "meets", rule: verdict([1], "meets") });
+    const breaks = stream({ name: "breaks", rules: { balanced: verdict([2], "breaks") } });
+    const meets = stream({ name: "meets", rules: { balanced: verdict([1], "meets") } });
     expect(names(arrangeStreams([breaks, meets], filters(), "cs")))
       .toEqual(["meets", "breaks"]);
   });
 
   it("compares ranks lexicographically and keeps an unruled source after ruled ones", () => {
-    const prefix = stream({ rule: verdict([1]) });
-    const longer = stream({ rule: verdict([1, 0]) });
+    const prefix = stream({ rules: { balanced: verdict([1]) } });
+    const longer = stream({ rules: { balanced: verdict([1, 0]) } });
     const unruled = stream({});
-    expect(compareRuleRank(prefix, longer)).toBeLessThan(0);
-    expect(compareRuleRank(longer, unruled)).toBeLessThan(0);
+    expect(compareRuleRank(prefix, longer, "balanced")).toBeLessThan(0);
+    expect(compareRuleRank(longer, unruled, "balanced")).toBeLessThan(0);
   });
 
   it("respects addon priority inside the preferred language", () => {
@@ -190,8 +209,8 @@ describe("arrangeStreams", () => {
   });
 
   it("keeps size and addon sorting independent of rule ranks", () => {
-    const small = stream({ name: "small", title: "1 GB", addonName: "alpha", rule: verdict([0]) });
-    const large = stream({ name: "large", title: "20 GB", addonName: "beta", rule: verdict([1]) });
+    const small = stream({ name: "small", title: "1 GB", addonName: "alpha", rules: { balanced: verdict([0]) } });
+    const large = stream({ name: "large", title: "20 GB", addonName: "beta", rules: { balanced: verdict([1]) } });
     const priority = new Map([["alpha", 0], ["beta", 1]]);
     // The ranked order proves the feature is active while the explicit sorts still use size and priority.
     expect(names(arrangeStreams([large, small], filters(), "en"))).toEqual(["small", "large"]);
@@ -216,8 +235,8 @@ describe("torrent listing", () => {
   });
 
   it("picks the first playable source from the rule-ranked order", () => {
-    const lower = stream({ name: "lower", rule: verdict([2]) });
-    const best = stream({ name: "best", rule: verdict([0]) });
+    const lower = stream({ name: "lower", rules: { balanced: verdict([2]) } });
+    const best = stream({ name: "best", rules: { balanced: verdict([0]) } });
     expect(pickDefaultStream(arrangeStreams([lower, best], filters(), "en"))?.name).toBe("best");
   });
 
@@ -257,10 +276,10 @@ describe("local copies", () => {
     expect(canQueue(local, true)).toBe(false);
   });
 
-  it("puts local copies first in All with recommended sorting, and keeps named-addon/local filters exclusive", () => {
-    expect(catalogSourceRows([local], [addon], "")).toEqual([local, addon]);
-    expect(catalogSourceRows([local], [addon], "Luna")).toEqual([addon]);
-    expect(catalogSourceRows([local], [addon], LOCAL_SOURCE)).toEqual([local]);
+  it("puts local copies first in All with rule sorting, and keeps named-addon/local filters exclusive", () => {
+    expect(catalogSourceRows([local], [addon], "", "rule:balanced")).toEqual([local, addon]);
+    expect(catalogSourceRows([local], [addon], "Luna", "rule:balanced")).toEqual([addon]);
+    expect(catalogSourceRows([local], [addon], LOCAL_SOURCE, "rule:balanced")).toEqual([local]);
   });
 
   it("ranks local copies with addon sources for size sorts and first for addon priority", () => {
@@ -273,25 +292,25 @@ describe("local copies", () => {
   });
 
   it("picks the local copy when the local entry is the chosen source", () => {
-    expect(pickDefaultStream(catalogSourceRows([local], [addon], LOCAL_SOURCE))).toBe(local);
+    expect(pickDefaultStream(catalogSourceRows([local], [addon], LOCAL_SOURCE, "rule:balanced"))).toBe(local);
   });
 
   it("keeps local copies out of named addon filters while allowing All to include them", () => {
     const visible = visibleCatalogStreams([addon], filters({ addon: "Nope" }), "cs", new Map(), true);
     expect(visible).toEqual([]);
-    expect(catalogSourceRows([local], visible, LOCAL_SOURCE)).toEqual([local]);
-    expect(catalogSourceRows([local], visible, "")).toEqual([local]);
+    expect(catalogSourceRows([local], visible, LOCAL_SOURCE, "rule:balanced")).toEqual([local]);
+    expect(catalogSourceRows([local], visible, "", "rule:balanced")).toEqual([local]);
   });
 
   it("keeps the local rows in their own order, untouched by the addon sort", () => {
     const first = stream({ kind: "library", name: "First", localPath: "lib/1.mkv" });
     const second = stream({ kind: "library", name: "Second", localPath: "lib/2.mkv" });
     const sorted = arrangeStreams([addon], filters({ sort: "size-desc" }), "cs");
-    expect(catalogSourceRows([first, second], sorted, LOCAL_SOURCE).map((item) => item.name)).toEqual(["First", "Second"]);
+    expect(catalogSourceRows([first, second], sorted, LOCAL_SOURCE, "rule:balanced").map((item) => item.name)).toEqual(["First", "Second"]);
   });
 
   it("keeps local copies ineligible for downloads when All includes them", () => {
-    const rows = catalogSourceRows([local], visibleCatalogStreams([addon], filters(), "cs", new Map(), true), "");
+    const rows = catalogSourceRows([local], visibleCatalogStreams([addon], filters(), "cs", new Map(), true), "", "rule:balanced");
     expect(rows[0]).toBe(local);
     expect(canQueue(rows[0], true)).toBe(false);
   });
@@ -303,21 +322,21 @@ describe("pickNextEpisodeStream", () => {
     const english = stream({ name: "english", addonKey: "same", addonName: "Same", title: "English 10 GB" });
     const czech = stream({ name: "czech", addonKey: "same", addonName: "Same", title: "Czech 1 GB" });
     const other = stream({ name: "other", addonKey: "other", addonName: "Other", title: "Czech 20 GB" });
-    expect(pickNextEpisodeStream([english, other, czech], current, "cs", new Map())?.name).toBe("czech");
+    expect(pickNextEpisodeStream([english, other, czech], current, "cs", new Map(), undefined, "rule:balanced")?.name).toBe("czech");
   });
 
-  it("falls back to the normal recommended ranking when the addon has no next episode", () => {
+  it("falls back to the normal rule ranking when the addon has no next episode", () => {
     const current = stream({ addonKey: "gone", addonName: "Gone" });
     const english = stream({ name: "english", addonKey: "one", addonName: "One", title: "English 20 GB" });
     const czech = stream({ name: "czech", addonKey: "two", addonName: "Two", title: "Czech 1 GB" });
-    expect(pickNextEpisodeStream([english, czech], current, "cs", new Map())?.name).toBe("czech");
+    expect(pickNextEpisodeStream([english, czech], current, "cs", new Map(), undefined, "rule:balanced")?.name).toBe("czech");
   });
 
   it("keeps a similarly sized variant once the addon and language match", () => {
     const current = stream({ addonKey: "same", addonName: "Same", title: "Czech 3 GB" });
     const close = stream({ name: "close", addonKey: "same", addonName: "Same", title: "Czech 3.2 GB" });
     const huge = stream({ name: "huge", addonKey: "same", addonName: "Same", title: "Czech 20 GB" });
-    expect(pickNextEpisodeStream([huge, close], current, "cs", new Map())?.name).toBe("close");
+    expect(pickNextEpisodeStream([huge, close], current, "cs", new Map(), undefined, "rule:balanced")?.name).toBe("close");
   });
 });
 
@@ -433,34 +452,34 @@ describe("remote media-server sources", () => {
     expect(canQueue({ ...granted, playable: false }, false)).toBe(false);
   });
 
-  it("orders local, then remote, then addon sources in the recommended All list", () => {
-    expect(catalogSourceRows([local], [addon], "", "recommended", "en", new Map(), undefined, [remote]))
+  it("orders local, then remote, then addon sources in the rule All list", () => {
+    expect(catalogSourceRows([local], [addon], "", "rule:balanced", "en", new Map(), undefined, [remote]))
       .toEqual([local, remote, addon]);
   });
 
   it("interleaves remote and addon sources by rule rank while local copies stay first", () => {
-    const firstAddon = stream({ sourceId: "a2", name: "Addon best", addonName: "Luna", rule: verdict([0]) });
-    const rankedRemote = { ...remote, rule: verdict([1]) };
-    const lastAddon = stream({ sourceId: "a3", name: "Addon last", addonName: "Luna", rule: verdict([2]) });
-    expect(catalogSourceRows([local], [lastAddon, firstAddon], "", "recommended", "en", new Map(), undefined, [rankedRemote]).map((item) => item.name))
+    const firstAddon = stream({ sourceId: "a2", name: "Addon best", addonName: "Luna", rules: { balanced: verdict([0]) } });
+    const rankedRemote = { ...remote, rules: { balanced: verdict([1]) } };
+    const lastAddon = stream({ sourceId: "a3", name: "Addon last", addonName: "Luna", rules: { balanced: verdict([2]) } });
+    expect(catalogSourceRows([local], [lastAddon, firstAddon], "", "rule:balanced", "en", new Map(), undefined, [rankedRemote]).map((item) => item.name))
       .toEqual(["Local", "Addon best", "Remote 1080p", "Addon last"]);
     // Without any verdicts the old class order remains the fallback for an older server.
-    expect(catalogSourceRows([local], [addon], "", "recommended", "en", new Map(), undefined, [remote]))
+    expect(catalogSourceRows([local], [addon], "", "rule:balanced", "en", new Map(), undefined, [remote]))
       .toEqual([local, remote, addon]);
   });
 
   it("keeps a remote library out of a named addon filter", () => {
-    expect(catalogSourceRows([local], [addon], "Luna", "recommended", "en", new Map(), undefined, [remote]))
+    expect(catalogSourceRows([local], [addon], "Luna", "rule:balanced", "en", new Map(), undefined, [remote]))
       .toEqual([addon]);
   });
 
   it("shows a remote library only under its own filter, even against an addon of the same name", () => {
     const collision = stream({ sourceId: "c1", name: "Collision", addonName: "lib_1" });
-    expect(catalogSourceRows([], [collision], remoteSourceFilter("lib_1"), "recommended", "en", new Map(), undefined, [remote]))
+    expect(catalogSourceRows([], [collision], remoteSourceFilter("lib_1"), "rule:balanced", "en", new Map(), undefined, [remote]))
       .toEqual([remote]);
-    expect(catalogSourceRows([], [collision], "lib_1", "recommended", "en", new Map(), undefined, [remote]))
+    expect(catalogSourceRows([], [collision], "lib_1", "rule:balanced", "en", new Map(), undefined, [remote]))
       .toEqual([collision]);
-    expect(catalogSourceRows([], [collision], remoteSourceFilter("lib_2"), "recommended", "en", new Map(), undefined, [remote]))
+    expect(catalogSourceRows([], [collision], remoteSourceFilter("lib_2"), "rule:balanced", "en", new Map(), undefined, [remote]))
       .toEqual([]);
   });
 

@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { SettingsPage } from "./SettingsPage";
 import { setLocale } from "./i18n";
 import { en } from "./i18n/en";
-import type { Session, Settings as AppSettings } from "./types";
+import type { Session, Settings as AppSettings, SourceProfile } from "./types";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -12,17 +12,17 @@ const json = (body: unknown, status = 200) =>
 const settings = (over: Partial<AppSettings> = {}): AppSettings => ({
   concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2,
   uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui",
-  mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true,
+  mergeByName: true, streamSort: "rule:balanced", trackProgress: true, showResumeRow: true,
   libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24,
   tileSize: "medium",
   catalogTileShape: "poster", libraryTileShape: "poster", favoritesTileShape: "poster", resumeTileShape: "poster", followingTileShape: "poster", homeTileShape: "wide", searchTileShape: "poster",
   startView: "catalog", libraryShelf: "resume", realDebridConfigured: false, tmdbConfigured: false, ...over,
 });
 
-const sourceProfiles = [
-  { id: "balanced", nameKey: "rules.preset.balanced", template: "rules", operations: ["downloadToLibrary"] },
-  { id: "best", nameKey: "rules.preset.best", template: "rules", operations: ["downloadToLibrary"] },
-  { id: "my-language", nameKey: "rules.preset.myLanguage", template: "rules", operations: ["downloadToLibrary"] },
+const sourceProfiles: SourceProfile[] = [
+  { id: "balanced", nameKey: "rules.preset.balanced", template: "rules", revision: 1, operations: ["downloadToLibrary", "play"], policy: {} as SourceProfile["policy"] },
+  { id: "best", nameKey: "rules.preset.best", template: "rules", revision: 1, operations: ["downloadToLibrary", "play"], policy: {} as SourceProfile["policy"] },
+  { id: "my-language", nameKey: "rules.preset.myLanguage", template: "rules", revision: 1, operations: ["downloadToLibrary", "play"], policy: {} as SourceProfile["policy"] },
 ];
 
 let root: Root;
@@ -49,12 +49,12 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-const render = async (over: Partial<AppSettings> = {}, restricted = false, role: Session["role"] = "user") => {
+const render = async (over: Partial<AppSettings> = {}, restricted = false, role: Session["role"] = "user", profiles: SourceProfile[] | null = sourceProfiles) => {
   const onSave = vi.fn(() => Promise.resolve());
   await act(async () => {
     root.render(<SettingsPage build={null} restricted={restricted} settings={settings(over)} search={null}
       onSearch={vi.fn()} languages={[{ code: "en", name: "English" }]} libraries={[]}
-      session={{ username: "bob", role }} onSession={vi.fn()} onSave={onSave}
+      session={{ username: "bob", role }} onSession={vi.fn()} onSave={onSave} sourceProfiles={profiles}
       onImported={vi.fn(() => Promise.resolve())} onLibrariesChanged={vi.fn()} onNotify={vi.fn()} onError={vi.fn()}/>);
   });
   return { onSave };
@@ -173,7 +173,6 @@ describe("SettingsPage tabs", () => {
     expect(host.querySelector('select[aria-label="Preferred audio language"]')).toBeNull();
     await selectTab("Playback");
     expect(host.querySelector('select[aria-label="Preferred audio language"]')).not.toBeNull();
-    expect(host.querySelector(`select[aria-label="${en["settings.defaultRulesPlayback"]}"]`)).toBeNull();
     expect(host.querySelector(`select[aria-label="${en["settings.streamSort"]}"]`)).toBeNull();
   });
 });
@@ -225,22 +224,22 @@ describe("SettingsPage Sources tab", () => {
     const defaults = host.querySelector<HTMLElement>(".source-defaults-section")!;
     expect(defaults.textContent).toContain(en["settings.defaultsTitle"]);
     expect(defaults.textContent).toContain(en["settings.defaultsHint"]);
-    expect(defaults.textContent).toContain(en["settings.defaultRulesHint"]);
     expect(defaults.textContent).toContain(en["settings.defaultRulesDownloadsHint"]);
     expect(defaults.textContent).toContain(en["settings.defaultRulesFollowsHint"]);
-    const playback = defaults.querySelector<HTMLSelectElement>(`select[aria-label="${en["settings.defaultRulesPlayback"]}"]`)!;
     const downloads = defaults.querySelector<HTMLSelectElement>(`select[aria-label="${en["settings.defaultRulesDownloads"]}"]`)!;
     const follows = defaults.querySelector<HTMLSelectElement>(`select[aria-label="${en["settings.defaultRulesFollows"]}"]`)!;
-    expect([...playback.options].map((option) => option.textContent)).toEqual([
-      en["rules.preset.balanced"], en["rules.preset.best"], en["rules.preset.myLanguage"],
-    ]);
-    expect(playback.value).toBe("balanced");
+    expect(defaults.querySelectorAll("select")).toHaveLength(2);
     expect(downloads.value).toBe("balanced");
     expect(follows.value).toBe("my-language");
 
     const sourceOrder = host.querySelector<HTMLElement>(".source-order-section")!;
-    expect(sourceOrder.querySelector(`select[aria-label="${en["settings.streamSort"]}"]`)).not.toBeNull();
-    expect(sourceOrder.textContent).toContain(en["settings.streamSortHint"]);
+    const order = sourceOrder.querySelector<HTMLSelectElement>(`select[aria-label="${en["settings.streamSort"]}"]`)!;
+    expect([...order.options].map((option) => option.textContent)).toEqual([
+      en["rules.preset.balanced"], en["rules.preset.best"], en["rules.preset.myLanguage"],
+      en["sources.sortLargest"], en["sources.sortSmallest"], en["sources.sortAddon"],
+    ]);
+    expect(order.value).toBe("rule:balanced");
+    expect(sourceOrder.textContent).toContain(en["settings.defaultRulesHint"]);
     const rules = host.querySelector<HTMLElement>(".source-profiles-section")!;
     expect(rules.textContent).toContain(en["settings.sourceRulesTitle"]);
     expect(rules.textContent).toContain(en["settings.sourceRulesHint"]);
@@ -251,20 +250,20 @@ describe("SettingsPage Sources tab", () => {
     expect(sections.indexOf(sourceOrder)).toBeLessThan(sections.indexOf(rules));
   });
 
-  it("saves each of the three defaults", async () => {
+  it("saves the rule download and follow defaults and the source order", async () => {
     stubSourceProfiles();
     const { onSave } = await render();
     await selectTab("Sources");
 
     const choices = [
-      [en["settings.defaultRulesPlayback"], { defaultRulesProfileId: "best" }],
       [en["settings.defaultRulesDownloads"], { downloadSourceProfile: "best" }],
       [en["settings.defaultRulesFollows"], { followSourceProfile: "best" }],
+      [en["settings.streamSort"], { streamSort: "rule:best" }],
     ] as const;
     for (const [label, patch] of choices) {
       const select = host.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)!;
       await act(async () => {
-        select.value = "best";
+        select.value = label === en["settings.streamSort"] ? "rule:best" : "best";
         select.dispatchEvent(new Event("change", { bubbles: true }));
       });
       expect(onSave).toHaveBeenCalledWith(patch);
@@ -273,17 +272,17 @@ describe("SettingsPage Sources tab", () => {
 
   it("uses stored download and follow defaults", async () => {
     stubSourceProfiles();
-    await render({ downloadSourceProfile: "best", followSourceProfile: "best" });
+    await render({ downloadSourceProfile: "best", followSourceProfile: "best", streamSort: "rule:best" });
     await selectTab("Sources");
     expect(host.querySelector<HTMLSelectElement>(`select[aria-label="${en["settings.defaultRulesDownloads"]}"]`)!.value).toBe("best");
     expect(host.querySelector<HTMLSelectElement>(`select[aria-label="${en["settings.defaultRulesFollows"]}"]`)!.value).toBe("best");
+    expect(host.querySelector<HTMLSelectElement>(`select[aria-label="${en["settings.streamSort"]}"]`)!.value).toBe("rule:best");
   });
 
   it("shows defaults and source order without rules to a non-admin", async () => {
     stubSourceProfiles();
     await render();
     await selectTab("Sources");
-    expect(host.querySelector(`select[aria-label="${en["settings.defaultRulesPlayback"]}"]`)).not.toBeNull();
     expect(host.querySelector(`select[aria-label="${en["settings.defaultRulesDownloads"]}"]`)).not.toBeNull();
     expect(host.querySelector(`select[aria-label="${en["settings.defaultRulesFollows"]}"]`)).not.toBeNull();
     expect(host.querySelector(`select[aria-label="${en["settings.streamSort"]}"]`)).not.toBeNull();
@@ -296,7 +295,7 @@ describe("SettingsPage Sources tab", () => {
     await render({}, true);
     await selectTab("Sources");
     const selects = [...host.querySelectorAll<HTMLSelectElement>(".settings-grid select")];
-    expect(selects).toHaveLength(4);
+    expect(selects).toHaveLength(3);
     expect(selects.every((select) => select.disabled)).toBe(true);
   });
 });

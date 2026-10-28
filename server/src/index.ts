@@ -126,8 +126,8 @@ import { SearchScheduler } from "./search-scheduler.js";
 import { SearchSessionManager, type SearchAuthority } from "./search-session.js";
 import { CatalogSearchManager } from "./search-catalog-session.js";
 import { SearchError } from "./search-contracts.js";
+import { STREAM_SORTS } from "./stream-sort.js";
 
-const STREAM_SORTS = new Set(["recommended", "size-desc", "size-asc", "addon"]);
 const DATA_DIR = process.env.DATA_DIR ?? "/data";
 const DOWNLOAD_DIR = process.env.DOWNLOAD_DIR ?? "/downloads";
 // Before anything reads the state: a v1 file gains its library and qualified keys.

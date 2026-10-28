@@ -1,5 +1,5 @@
 import { sourceLanguages, sourceSize, sourceText } from "@stremio-offline/source-selection";
-import type { Stream } from "./types";
+import type { SourceProfile, Stream } from "./types";
 
 export const streamText = (stream: Stream): string => sourceText(stream);
 
@@ -11,22 +11,41 @@ export function streamLanguages(stream: Stream, titleLanguage?: string): string[
   return sourceLanguages(stream, titleLanguage);
 }
 
-export type StreamSort = "recommended" | "size-desc" | "size-asc" | "addon";
+export type StreamSort = `rule:${string}` | "size-desc" | "size-asc" | "addon";
+export type StreamOrder = StreamSort | "recommended";
 
-export interface StreamFilters { addon: string; language: string; sort: StreamSort }
+export interface StreamFilters { addon: string; language: string; sort: StreamOrder }
 
-export function compareRuleRank(a: Stream, b: Stream): number {
-  if (!a.rule) return b.rule ? 1 : 0;
-  if (!b.rule) return -1;
-  const shared = Math.min(a.rule.rank.length, b.rule.rank.length);
-  for (let index = 0; index < shared; index += 1) {
-    const difference = a.rule.rank[index]! - b.rule.rank[index]!;
-    if (difference) return difference;
+export const sortRuleId = (sort: StreamOrder | string | undefined): string | undefined => {
+  const value = typeof sort === "string" && sort.startsWith("rule:") ? sort.slice("rule:".length) : "";
+  return value || undefined;
+};
+
+export function resolveStreamSort(sort: string, profiles: readonly SourceProfile[] | null): StreamOrder {
+  if (sort === "size-desc" || sort === "size-asc" || sort === "addon") return sort;
+  const ruleId = sortRuleId(sort);
+  if (ruleId && (profiles === null || profiles.length === 0
+    || profiles.some((profile) => profile.template === "rules" && profile.id === ruleId))) {
+    return sort as StreamSort;
   }
-  return a.rule.rank.length - b.rule.rank.length;
+  const firstRule = profiles?.find((profile) => profile.template === "rules");
+  return firstRule ? `rule:${firstRule.id}` : "recommended";
 }
 
-/** Without server verdicts, recommended puts the preferred language first and the largest first within the group. */
+export function compareRuleRank(a: Stream, b: Stream, profileId: string): number {
+  const left = a.rules?.[profileId];
+  const right = b.rules?.[profileId];
+  if (!left) return right ? 1 : 0;
+  if (!right) return -1;
+  const shared = Math.min(left.rank.length, right.rank.length);
+  for (let index = 0; index < shared; index += 1) {
+    const difference = left.rank[index]! - right.rank[index]!;
+    if (difference) return difference;
+  }
+  return left.rank.length - right.rank.length;
+}
+
+/** Without server verdicts, a rule sort puts the preferred language first and the largest first within the group. */
 export function arrangeStreams(streams: Stream[], filters: StreamFilters, preferredLanguage: string, priority: Map<string, number> = new Map(), titleLanguage?: string): Stream[] {
   const list = streams.filter((stream) =>
     (!filters.addon || stream.addonName === filters.addon) &&
@@ -35,11 +54,12 @@ export function arrangeStreams(streams: Stream[], filters: StreamFilters, prefer
   const size = new Map(list.map((stream) => [stream, streamSize(stream)]));
   const decorated = list.map((stream, index) => ({ stream, index }));
   const rank = (stream: Stream) => priority.get(stream.addonName ?? "") ?? Number.MAX_SAFE_INTEGER;
-  const hasRule = list.some((stream) => stream.rule);
+  const ruleId = sortRuleId(filters.sort);
+  const hasRule = Boolean(ruleId && list.some((stream) => stream.rules?.[ruleId]));
   decorated.sort((a, b) => {
     if (filters.sort === "addon") return (rank(a.stream) - rank(b.stream)) || (a.index - b.index);
-    if (filters.sort === "recommended") {
-      if (hasRule) return compareRuleRank(a.stream, b.stream) || (a.index - b.index);
+    if (filters.sort === "recommended" || ruleId) {
+      if (ruleId && hasRule) return compareRuleRank(a.stream, b.stream, ruleId) || (a.index - b.index);
       const preferred = (stream: Stream) => streamLanguages(stream, titleLanguage).includes(preferredLanguage) ? 0 : 1;
       const byLanguage = preferred(a.stream) - preferred(b.stream);
       if (byLanguage) return byLanguage;
@@ -95,10 +115,10 @@ export const remoteFilterId = (filter: string): string | undefined =>
 
 export const isRemoteStream = (stream: Stream): boolean => Boolean(stream.provider || stream.remoteItem);
 
-/** Local files lead the unfiltered recommended and addon-priority lists. Other sorts rank them
- *  with addon rows, while a named addon and the dedicated local filter stay exclusive. */
+/** Local files lead the unfiltered rule and addon-priority lists. Other sorts rank them with
+ *  addon rows, while a named addon and the dedicated local filter stay exclusive. */
 export function catalogSourceRows(
-  local: Stream[], addonStreams: Stream[], filter: string, sort: StreamSort = "recommended",
+  local: Stream[], addonStreams: Stream[], filter: string, sort: StreamOrder,
   preferredLanguage = "en", priority: Map<string, number> = new Map(), titleLanguage?: string,
   remote: Stream[] = [],
 ): Stream[] {
@@ -106,9 +126,16 @@ export function catalogSourceRows(
   const remoteId = remoteFilterId(filter);
   if (remoteId !== undefined) return remote.filter((stream) => stream.libraryId === remoteId);
   if (filter) return addonStreams;
+  const ruleId = sortRuleId(sort);
   if (sort === "recommended") {
     const external = [...remote, ...addonStreams];
-    return [...local, ...(external.some((stream) => stream.rule) ? external.sort(compareRuleRank) : external)];
+    return [...local, ...external];
+  }
+  if (ruleId) {
+    const external = [...remote, ...addonStreams];
+    return [...local, ...(external.some((stream) => stream.rules?.[ruleId])
+      ? external.sort((left, right) => compareRuleRank(left, right, ruleId))
+      : external)];
   }
   if (sort === "addon") return [...local, ...remote, ...arrangeStreams(addonStreams, { addon: "", language: "", sort }, preferredLanguage, priority, titleLanguage)];
   return arrangeStreams([...addonStreams, ...local, ...remote], { addon: "", language: "", sort }, preferredLanguage, priority, titleLanguage);
@@ -116,8 +143,8 @@ export function catalogSourceRows(
 
 /** A new episode should stay with the provider the viewer chose when it can, while still
  * choosing that provider's best language and size variant. */
-export function pickNextEpisodeStream(streams: Stream[], current: Stream | null, preferredLanguage: string, priority: Map<string, number>, titleLanguage?: string): Stream | undefined {
-  const ranked = arrangeStreams(streams.filter((stream) => stream.playable), { addon: "", language: "", sort: "recommended" }, preferredLanguage, priority, titleLanguage);
+export function pickNextEpisodeStream(streams: Stream[], current: Stream | null, preferredLanguage: string, priority: Map<string, number>, titleLanguage: string | undefined, sort: StreamOrder): Stream | undefined {
+  const ranked = arrangeStreams(streams.filter((stream) => stream.playable), { addon: "", language: "", sort }, preferredLanguage, priority, titleLanguage);
   const sameAddon = ranked.filter((stream) => Boolean(current) && (
     (current?.addonKey && stream.addonKey === current.addonKey)
     || (current?.addonName && stream.addonName === current.addonName)

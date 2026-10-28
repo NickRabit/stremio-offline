@@ -29,6 +29,7 @@ import {
 } from "../source-profiles.js";
 import type { DownloadRules } from "../download-rules.js";
 import { memberSettings, publicSettings, type InstanceSettings, type Settings, type State, type StoredSourceProfile, type UserPrefs } from "../store.js";
+import { normalizeStreamSort } from "../stream-sort.js";
 import { verifyTmdbKey } from "../tmdb.js";
 import { clearTrailerCache } from "../trailers.js";
 import type { MetaItem } from "../types.js";
@@ -197,7 +198,12 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
    *  endpoint handed out, and this is where it was read from. */
   const settingsView = (req: express.Request) => {
     const instance = publicSettings(store.settings());
-    return { ...(currentUser(req)?.role === "admin" ? instance : memberSettings(instance)), ...prefsOf(req) };
+    const prefs = prefsOf(req);
+    return {
+      ...(currentUser(req)?.role === "admin" ? instance : memberSettings(instance)),
+      ...prefs,
+      streamSort: normalizeStreamSort(prefs.streamSort, store.sourceProfiles(), prefs.defaultRulesProfileId),
+    };
   };
   const offeredDownloadProfiles = (state: State, actor: UserRecord | undefined) => actor
     ? sourceProfilesForViewer({
@@ -247,8 +253,13 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
     await metaStore.flush();
     const mediaServersView = mediaServers.exportConfiguration(authority);
     res.setHeader("content-disposition", `attachment; filename=stremio-offline-settings-${new Date().toISOString().slice(0, 10)}.json`);
+    const prefs = prefsOf(req);
     res.json(createSettingsBackup(
-      { ...store.settings(), ...prefsOf(req) },
+      {
+        ...store.settings(),
+        ...prefs,
+        streamSort: normalizeStreamSort(prefs.streamSort, store.sourceProfiles(), prefs.defaultRulesProfileId),
+      },
       store.addons(),
       store.libraries(),
       mediaServersView,
@@ -364,6 +375,17 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
         .map((profile) => profile.id));
       if (split.prefs.defaultRulesProfileId && !rulesProfiles.has(split.prefs.defaultRulesProfileId)) {
         delete split.prefs.defaultRulesProfileId;
+      }
+      if (split.prefs.streamSort !== undefined) {
+        const requested = split.prefs.streamSort;
+        const requestedRule = requested.startsWith("rule:") ? requested.slice("rule:".length) : "";
+        const mappedRule = requestedRule ? profileIdMap.get(requestedRule) : undefined;
+        if (mappedRule) split.prefs.streamSort = `rule:${mappedRule}`;
+        split.prefs.streamSort = normalizeStreamSort(
+          split.prefs.streamSort,
+          state.sourceProfiles ?? [],
+          split.prefs.defaultRulesProfileId,
+        );
       }
       const userId = accountIdOf(req);
       if (userId) mutateData(state, userId, (data) => { data.prefs = { ...data.prefs, ...split.prefs }; });
@@ -495,7 +517,14 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       if (req.body.addonRefreshHours !== undefined) state.settings.addonRefreshHours = normalizeRefreshHours(req.body.addonRefreshHours);
       if (req.body.streamSort !== undefined) {
         const value = String(req.body.streamSort);
-        prefs.streamSort = STREAM_SORTS.has(value) ? value : "recommended";
+        const defaultRulesProfileId = postedDefaultRulesProfile === undefined
+          ? prefs.defaultRulesProfileId as string | undefined
+          : postedDefaultRulesProfile as string | null;
+        prefs.streamSort = normalizeStreamSort(
+          STREAM_SORTS.has(value) || value.startsWith("rule:") ? value : "recommended",
+          state.sourceProfiles ?? [],
+          defaultRulesProfileId ?? undefined,
+        );
       }
       if (req.body.tileSize !== undefined) {
         const value = String(req.body.tileSize);

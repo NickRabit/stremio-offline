@@ -30,7 +30,7 @@ import { report } from "./diagnostics";
 import { label, titleLanguage } from "./languages";
 import { locale, localeTag, setLocale, t, useI18n, type Key } from "./i18n";
 import { catalogTypeTag } from "./catalog-labels";
-import { addonNotices, canQueue, catalogSourceRows, filmHasNoSource, isLocalStream, isRemoteStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, remoteFilterId, remoteSourceFilter, repickStream, streamLanguages, visibleCatalogStreams, type StreamSort } from "./streams";
+import { addonNotices, canQueue, catalogSourceRows, filmHasNoSource, isLocalStream, isRemoteStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, remoteFilterId, remoteSourceFilter, repickStream, resolveStreamSort, sortRuleId, streamLanguages, visibleCatalogStreams, type StreamOrder } from "./streams";
 import { providerLabel, SourceFilters, SourceRows, streamLabel } from "./source-rows";
 import { alternativeProgressSaved, sourceProgressOwner, type SourceProgressOwner } from "./source-progress";
 import { panelProgressAddonKey } from "./player-progress";
@@ -67,7 +67,7 @@ import { resolveStartView } from "./start-view";
 import { useLibrarySources } from "./library-sources";
 import { streamGroupLabel } from "./source-rows";
 import { playbackIdentity } from "./playback-identity";
-import type { Addon, BuildInfo, BrowseItem, BrowseLibrary, BrowseResult, DeviceTransfer, DownloadsViewPrefs, FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem, FavoriteRemoteItem, FollowView, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, LibraryViewPrefs, MediaServerProvider, NewEpisode, ProfileSelection, ProgressEntry, RemoteLibrary, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, Stream, Subtitle, Trailer, Video, SearchState } from "./types";
+import type { Addon, BuildInfo, BrowseItem, BrowseLibrary, BrowseResult, DeviceTransfer, DownloadsViewPrefs, FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem, FavoriteRemoteItem, FollowView, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, LibraryViewPrefs, MediaServerProvider, NewEpisode, ProfileSelection, ProgressEntry, RemoteLibrary, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, SourceProfile, Stream, Subtitle, Trailer, Video, SearchState } from "./types";
 
 /** The library choices this browser kept before they moved onto the account. Read once and
  *  handed to the visible libraries; private mode may forbid storage, hence the try/catch. */
@@ -247,6 +247,7 @@ export function App() {
   const [downloads, setDownloads] = useState<DownloadJob[]>([]); const [queueHalt, setQueueHalt] = useState<QueueHalt | null>(null); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState(""); const [playerOpen, setPlayerOpen] = useState(false);
   const [deviceTransfers, setDeviceTransfers] = useState<DeviceTransfer[]>([]);
   const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: locale(), audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, tileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", favoritesTileShape: "poster", resumeTileShape: "poster", followingTileShape: "poster", homeTileShape: "wide", searchTileShape: "poster", startView: "home", libraryShelf: "resume", realDebridConfigured: false, tmdbConfigured: false });
+  const [sourceProfiles, setSourceProfiles] = useState<SourceProfile[] | null>(null);
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [session, setSession] = useState<Session | null | undefined>(undefined);
@@ -712,8 +713,10 @@ export function App() {
     alternativeScopeRef.current = { key: alternativeScope, generation: alternativeScopeRef.current.generation + 1 };
   }
   const [alternativeSave, setAlternativeSave] = useState<{ title: string; kind: "movie" | "series"; stream: Stream; media: Record<string, unknown>; rule?: AddonDownloadSettings; ruleUnavailable?: boolean } | null>(null);
-  const [streamAddon, setStreamAddon] = useState(""); const [streamLanguage, setStreamLanguage] = useState(""); const [streamSort, setStreamSort] = useState<StreamSort>("recommended");
-  useEffect(() => { setStreamSort(settings.streamSort as StreamSort); }, [settings.streamSort]);
+  const defaultStreamSort = useMemo(() => resolveStreamSort(settings.streamSort, sourceProfiles), [settings.streamSort, sourceProfiles]);
+  const defaultRuleId = sortRuleId(defaultStreamSort);
+  const [streamAddon, setStreamAddon] = useState(""); const [streamLanguage, setStreamLanguage] = useState(""); const [streamSort, setStreamSort] = useState<StreamOrder>("recommended");
+  useEffect(() => { setStreamSort(defaultStreamSort); }, [defaultStreamSort]);
   const [submittedQuery, setSubmittedQuery] = useState(""); const [searchScopeValue, setSearchScopeValue] = useState(""); const [searchable, setSearchable] = useState<SearchableCatalog[]>([]); const [typeFilter, setTypeFilter] = useState(""); const [genre, setGenre] = useState(""); const [sort, setSort] = useState("default"); const [searchSort, setSearchSort] = useState("default");
   const [liveState, setLiveState] = useState<LiveSearchState>("idle");
   // One debounce controller for the searchbox. It commits the draft to `submittedQuery`
@@ -1169,7 +1172,7 @@ export function App() {
     setSelectedCatalog(firstCatalog ? `${firstCatalog.addonKey}:${firstCatalog.type}:${firstCatalog.id}` : "");
     setSelected(null); setSelectedVideo(null); setStreams([]); setLocalStreams([]); setLocalLoading(false); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false); setSourcesComplete(false);
     setGalleryIndex(null);
-    setStreamAddon(""); setStreamLanguage(""); setStreamSort(settings.streamSort as StreamSort);
+    setStreamAddon(""); setStreamLanguage(""); setStreamSort(defaultStreamSort);
     setEpisodesOpen(true); setSeason(null); setCatalogReset((value) => value + 1);
   };
   const resetLibrary = () => {
@@ -1424,6 +1427,7 @@ export function App() {
       }
     }).catch(fail);
     api.languages().then(setLanguages).catch(() => undefined);
+    api.sourceProfiles().then(setSourceProfiles).catch(() => setSourceProfiles([]));
     void loadViews();
   }, [ready]);
   // Which addons are worth searching changes as they are switched on and off.
@@ -2559,7 +2563,7 @@ export function App() {
       if (stale()) return false;
       const currentLanguage = playbackPreferences.audioLanguage ?? (currentStream ? streamLanguages(currentStream, metaLanguage)[0] : undefined);
       const preferredLanguage = currentLanguage ?? settings.audioLanguage;
-      let nextStream = pickNextEpisodeStream(nextStreams, currentStream, preferredLanguage, addonPriority, metaLanguage) ?? null;
+      let nextStream = pickNextEpisodeStream(nextStreams, currentStream, preferredLanguage, addonPriority, metaLanguage, defaultStreamSort) ?? null;
       // A listing comes back without the addon that is playing when its request failed or the
       // provider was busy. Asking that one on its own keeps the viewer with the provider they
       // chose instead of moving a binge to another one, in another language.
@@ -2568,7 +2572,7 @@ export function App() {
         if (stale()) return false;
         if (again.length) {
           nextStreams = [...nextStreams, ...again];
-          nextStream = pickNextEpisodeStream(nextStreams, currentStream, preferredLanguage, addonPriority, metaLanguage) ?? nextStream;
+          nextStream = pickNextEpisodeStream(nextStreams, currentStream, preferredLanguage, addonPriority, metaLanguage, defaultStreamSort) ?? nextStream;
         }
       }
       if (currentStream && nextStream && nextStream.addonKey !== currentStream.addonKey) {
@@ -3159,7 +3163,7 @@ export function App() {
       // The viewer keeps the provider and the language they were watching where the next episode
       // has them; only a show whose row is gone moves to the best version there is.
       const preferred = playbackPreferences.audioLanguage ?? (current ? streamLanguages(current, metaLanguage)[0] : undefined) ?? settings.audioLanguage;
-      const nextStream = pickNextEpisodeStream(answer.streams, current, preferred, addonPriority, metaLanguage)
+      const nextStream = pickNextEpisodeStream(answer.streams, current, preferred, addonPriority, metaLanguage, defaultStreamSort)
         ?? answer.streams.find((stream) => stream.playable);
       if (!nextStream?.playable) return false;
       playCatalogueDetail(nextStream, target, false);
@@ -3355,6 +3359,8 @@ export function App() {
             {...(catalogueDetail.libraryFirst ? { libraryFirst: true } : {})}
             onGallery={(images, effective) => presentGallery(images, { type: effective.type, id: effective.id })}
             preferredLanguage={settings.audioLanguage}
+            sourceProfiles={sourceProfiles}
+            defaultSort={defaultStreamSort}
             addonPriority={addonPriority} showTorrents={settings.realDebridConfigured}
             onRead={setDetailRead}
             {...(detailChips ? { chips: detailChips } : {})}
@@ -3523,9 +3529,10 @@ export function App() {
                 value: streamLanguage, onChange: setStreamLanguage,
                 all: { label: t("sources.anyLanguage"), count: languageSources.length },
                 options: streamLangs.map(([code, count]) => ({ value: code, label: label(code), count })),
-              } } : {})} sort={{ value: streamSort, onChange: setStreamSort }}/>
+              } } : {})} sort={{ value: streamSort, onChange: setStreamSort }} profiles={sourceProfiles}/>
               <SourceRows rows={sourceRows} selected={selectedStream} onSelect={setSelectedStream} onPicked={() => { pickedRef.current = true; }}
-                titleLanguage={metaLanguage} onScroll={(event) => compactOnScroll(event, detailCompact, setDetailCompact, true)}
+                titleLanguage={metaLanguage} ruleId={sortRuleId(streamSort) ?? defaultRuleId}
+                onScroll={(event) => compactOnScroll(event, detailCompact, setDetailCompact, true)}
                 probe={(stream) => isLocalStream(stream) && selectedStream === stream
                   ? [...new Set((inspection?.audioTracks ?? []).map((track) => track.language).filter((language): language is string => Boolean(language)))] : []}/>
               {!sourceRows.length && sourcesPending && <div className="no-sources">{t("sources.asking")}</div>}
@@ -3552,6 +3559,7 @@ export function App() {
         {searchReturn && <button type="button" className="search-return" onClick={returnToSearch}><ChevronLeft/> {t("searchAll.backToSearch")}</button>}
         <Heading eyebrow={t("library.eyebrow")} title={t("library.title")}/>
         <RemoteLibraryBrowser onRootPresenceChange={setRemoteRootsPresent} hideRoots={Boolean(browsePath) || Boolean(localDetail)} audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} onError={fail}
+          sourceProfiles={sourceProfiles} defaultSort={defaultStreamSort}
           libraryTileShape={settings.libraryTileShape} onToggleLibraryShape={() => void toggleShape("libraryTileShape")}
           views={views} onPersistPrefs={persistRemotePrefs}
           onOpenChange={(open) => { setRemoteOpen(open); if (!open) setRemoteCompact(false); }}
@@ -3697,6 +3705,7 @@ export function App() {
           accountScope={session!.username} preferredLanguage={settings.audioLanguage}
           onGallery={(images, path, ref) => { setMenuFor(null); presentGallery(images, ref, path); }}
           onPlayAlternative={playAlternative}
+          sourceProfiles={sourceProfiles} defaultSort={defaultStreamSort}
           realDebridConfigured={settings.realDebridConfigured}
           onSaveAlternative={openAlternativeSave}
           onDownloadToDevice={(stream) => void downloadAlternativeToDevice(stream)}
@@ -3818,7 +3827,7 @@ export function App() {
       {view === "downloads" && <Downloads jobs={downloads} deviceTransfers={deviceTransfers} libraries={libraries} halt={queueHalt} admin={session!.role === "admin"} refresh={loadDownloads} onError={fail} onReveal={revealInLibrary} prefs={views.downloads} onPrefs={persistDownloadPrefs}/>}
       {view === "stats" && <StatsPanel key={statsReset} onError={fail}/>}
       {view === "following" && <FollowingPage canRetain={session!.role === "admin"} follows={follows} newEpisodes={newEpisodes} libraries={libraries} shape={settings.followingTileShape} onToggleShape={() => void toggleShape("followingTileShape")} downloadSourceProfileId={settings.downloadSourceProfile} followSourceProfileId={settings.followSourceProfile} onRememberDownloadSourceProfile={rememberSourceProfile} onRememberFollowSourceProfile={rememberFollowSourceProfile} onChanged={applyFollowChange} onOpenSeries={(item) => void openFromCatalog(item)} onNotify={notify}/>}
-      {view === "settings" && <SettingsPage build={buildInfo} restricted={restricted} settings={settings} search={searchState} onSearch={(next) => { if (!next.saveHistory || !next.recent.length) recordIntent.current = null; setSearchState(next); }} languages={languages} libraries={libraries} session={session!} onSession={setSession} onSave={saveSettings} onLibrariesChanged={refreshLibraries} onImported={async (backup) => {
+      {view === "settings" && <SettingsPage build={buildInfo} restricted={restricted} settings={settings} search={searchState} onSearch={(next) => { if (!next.saveHistory || !next.recent.length) recordIntent.current = null; setSearchState(next); }} languages={languages} libraries={libraries} session={session!} onSession={setSession} sourceProfiles={sourceProfiles} onSave={saveSettings} onLibrariesChanged={refreshLibraries} onImported={async (backup) => {
         const restored = await api.importSettings(backup);
         setSettings(restored.settings);
         setSelectedCatalog("");
@@ -3849,6 +3858,8 @@ export function App() {
         onOpen: () => setPlayerSourcesOpen(true),
         onSwitch: switchPlaybackSource,
       }}
+      sourceProfiles={sourceProfiles}
+      defaultSort={defaultStreamSort}
       {...(startAtSeconds !== undefined ? { startAtSeconds } : {})}
       onClose={stopPlayback}/>
     {alternative && <Player open title={alternative.stream.localPath ? alternative.stream.behaviorHints?.filename ?? alternative.title : alternative.title} stream={alternative.stream} subtitles={alternative.subtitles}
@@ -3866,6 +3877,8 @@ export function App() {
         onOpen: () => setAlternativeSourcesOpen(true),
         onSwitch: switchAlternativeSource,
       }}
+      sourceProfiles={sourceProfiles}
+      defaultSort={defaultStreamSort}
       {...(alternative.at !== undefined ? { startAtSeconds: alternative.at } : {})}
       onDownload={async () => {
         // The exact row that is playing is the row that is saved, through the same dialog and the

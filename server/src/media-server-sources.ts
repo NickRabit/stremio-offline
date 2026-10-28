@@ -9,7 +9,7 @@ import { READ_ONLY_MEDIA_CAPABILITIES, type RemoteLibraryRecord } from "./media-
 import { ResourceError, type MediaResources, type ResourceOwner } from "./media-resources.js";
 import { containerExtension, nameExtension } from "./naming.js";
 import { remoteSourceEvidence } from "./source-remote-evidence.js";
-import { defaultRuleSnapshot, ruleVerdicts } from "./source-rule-verdict.js";
+import { ruleSnapshots, ruleVerdictsForProfiles } from "./source-rule-verdict.js";
 import type { Store } from "./store.js";
 import type { DownloadTargetSettings, PublicStream, StreamItem } from "./types.js";
 import type { UserRecord } from "./users.js";
@@ -203,17 +203,17 @@ export class MediaServerSources {
     const secretStamp = this.ownerStamp(owner, authority);
     const sealed = results.flatMap((result) => this.seal(result, owner, secretStamp));
     const listed = this.listed(sealed, owner);
-    const snapshot = defaultRuleSnapshot({
+    const snapshots = ruleSnapshots({
       user: this.currentUser(owner.userId),
       store: this.store,
       preferences: this.store.prefs(owner.userId),
       mediaKind: type === "series" ? "episode" : "movie",
     });
-    if (!snapshot) return listed;
-    const verdicts = ruleVerdicts(snapshot, sealed.map((entry) => entry.candidate));
+    if (!snapshots.length) return listed;
+    const verdicts = ruleVerdictsForProfiles(snapshots, sealed.map((entry) => entry.candidate));
     return listed.map((stream, index) => {
       const verdict = verdicts.get(sealed[index]!.candidate.sourceId);
-      return verdict === undefined ? stream : { ...stream, rule: verdict };
+      return verdict === undefined ? stream : { ...stream, rules: verdict };
     });
   }
 

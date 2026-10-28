@@ -309,7 +309,7 @@ test("a granted member can list and browse, and the list never carries grants or
   });
 });
 
-test("GET /api/remote-libraries/:id/streams attaches the default rule verdict", async () => {
+test("GET /api/remote-libraries/:id/streams attaches every admitting rules verdict", async () => {
   await withHarness(async (harness) => {
     harness.server.items["lib-1"] = [{ ...movie("m1", "Alien"), providerIds: { imdb: "tt1" } }];
     harness.server.detailOf.m1 = { ...movie("m1", "Alien"), providerIds: { imdb: "tt1" } };
@@ -330,12 +330,13 @@ test("GET /api/remote-libraries/:id/streams attaches the default rule verdict", 
     );
     assert.equal(response.status, 200);
     const body = await response.json() as {
-      streams: Array<{ rule?: { profileId: string; status: string; reasons: string[]; rank: number[] } }>;
+      streams: Array<{ rules?: Record<string, { profileId: string; status: string; reasons: string[]; rank: number[] }> }>;
     };
-    assert.equal(body.streams[0]!.rule?.profileId, SOURCE_PROFILE_IDS.balanced);
-    assert.equal(body.streams[0]!.rule?.status, "meets");
-    assert.deepEqual(body.streams[0]!.rule?.reasons, []);
-    assert.ok(body.streams[0]!.rule!.rank.length > 1);
+    const rules = body.streams[0]!.rules!;
+    assert.equal(rules[SOURCE_PROFILE_IDS.balanced]!.status, "meets");
+    assert.deepEqual(rules[SOURCE_PROFILE_IDS.balanced]!.reasons, []);
+    assert.ok(rules[SOURCE_PROFILE_IDS.balanced]!.rank.length > 1);
+    assert.ok(rules[SOURCE_PROFILE_IDS.best]!.profileId);
 
     await harness.store.update((state) => {
       state.sourceProfiles = [];
@@ -347,7 +348,7 @@ test("GET /api/remote-libraries/:id/streams attaches the default rule verdict", 
       { user: BOB },
     );
     const omitted = await noDefault.json() as { streams: Array<Record<string, unknown>> };
-    assert.equal("rule" in omitted.streams[0]!, false);
+    assert.equal("rules" in omitted.streams[0]!, false);
   });
 });
 

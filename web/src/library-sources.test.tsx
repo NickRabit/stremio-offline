@@ -237,7 +237,7 @@ describe("useLibrarySources", () => {
     const entries = librarySourceEntries([], "Local files", latest!.groups, (group) => group.name);
     const addons = entries.filter((entry) => entry.kind === "addon");
     expect(addons.map((entry) => entry.label)).toEqual(["Alpha", "Beta"]);
-    expect(librarySourceRows(addons, "", "", "recommended", "en").map((row) => row.sourceId)).toEqual(["addon-a", "addon-b"]);
+    expect(librarySourceRows(addons, "", "", "rule:balanced", "en").map((row) => row.sourceId)).toEqual(["addon-a", "addon-b"]);
     expect(librarySourceRows(addons, "", "", "addon", "en").map((row) => row.sourceId)).toEqual(["addon-a", "addon-b"]);
   });
 
@@ -434,28 +434,28 @@ describe("librarySourceRows", () => {
   ], (group) => group.name || "Local files");
 
   it("leads with the detail's own rows and keeps each class in its own order", () => {
-    expect(librarySourceRows(entries, "", "", "recommended", "en").map((row) => row.sourceId))
+    expect(librarySourceRows(entries, "", "", "rule:balanced", "en").map((row) => row.sourceId))
       .toEqual(["native", "copy", "other", "add"]);
   });
 
   it("keeps native and local rows first while interleaving remote and addon rows by rule rank", () => {
     const ranked = librarySourceEntries([remote("native", 1)], "Local files", [
       { key: "local", kind: "local", name: "", status: "loaded", streams: [stream("copy", { kind: "library", localPath: "p" })], error: "" },
-      { key: "remote:l2", kind: "remote", name: "Second", provider: "emby", status: "loaded", streams: [stream("remote-mid", { provider: "jellyfin", rule: { profileId: "balanced", status: "meets", reasons: [], rank: [1] } })], error: "" },
+      { key: "remote:l2", kind: "remote", name: "Second", provider: "emby", status: "loaded", streams: [stream("remote-mid", { provider: "jellyfin", rules: { balanced: { profileId: "balanced", status: "meets", reasons: [], rank: [1] } } })], error: "" },
       { key: "addon:a", kind: "addon", name: "Alpha", status: "loaded", streams: [
-        stream("addon-last", { addonName: "Alpha", rule: { profileId: "balanced", status: "breaks", reasons: ["language"], rank: [2] } }),
-        stream("addon-best", { addonName: "Alpha", rule: { profileId: "balanced", status: "meets", reasons: [], rank: [0] } }),
+        stream("addon-last", { addonName: "Alpha", rules: { balanced: { profileId: "balanced", status: "breaks", reasons: ["language"], rank: [2] } } }),
+        stream("addon-best", { addonName: "Alpha", rules: { balanced: { profileId: "balanced", status: "meets", reasons: [], rank: [0] } } }),
       ], error: "" },
     ], (group) => group.name || "Local files");
-    expect(librarySourceRows(ranked, "", "", "recommended", "en").map((row) => row.sourceId))
+    expect(librarySourceRows(ranked, "", "", "rule:balanced", "en").map((row) => row.sourceId))
       .toEqual(["native", "copy", "addon-best", "remote-mid", "addon-last"]);
-    expect(librarySourceRows(entries, "", "", "recommended", "en").map((row) => row.sourceId))
+    expect(librarySourceRows(entries, "", "", "rule:balanced", "en").map((row) => row.sourceId))
       .toEqual(["native", "copy", "other", "add"]);
   });
 
   it("isolates one class, and the class still out contributes nothing yet", () => {
-    expect(librarySourceRows(entries, "addon:b", "", "recommended", "en")).toEqual([]);
-    expect(librarySourceRows(entries, "remote:l2", "", "recommended", "en").map((row) => row.sourceId)).toEqual(["other"]);
+    expect(librarySourceRows(entries, "addon:b", "", "rule:balanced", "en")).toEqual([]);
+    expect(librarySourceRows(entries, "remote:l2", "", "rule:balanced", "en").map((row) => row.sourceId)).toEqual(["other"]);
   });
 
   it("ranks every class together for a named size sort", () => {
@@ -518,18 +518,18 @@ describe("librarySourceRows", () => {
     // The picked source itself still holds its English row; the language menu counts that, while
     // the list beside the source menu is empty.
     expect(choices.languageTotal).toBe(1);
-    expect(librarySourceRows(entries, "addon:b", "cs", "recommended", "en")).toEqual([]);
+    expect(librarySourceRows(entries, "addon:b", "cs", "rule:balanced", "en")).toEqual([]);
   });
 
-  it("keeps the configured provider order in the recommended and by-addon sorts", () => {
+  it("keeps the configured provider order in the rule and by-addon sorts", () => {
     const provider = (key: string, name: string, id: string, size: number) =>
       ({ key, kind: "addon" as const, name, status: "loaded" as const, streams: [stream(id, { addonKey: key, addonName: name, title: `💾 ${size} GB` })], error: "" });
     const ordered = librarySourceEntries([], "Local files", [provider("a", "Alpha", "alpha", 1), provider("b", "Beta", "beta", 5)], (group) => group.name || "Local files");
     // Beta's copy is larger, and Alpha is still first: the plan's order, not the sizes, ranks them.
-    expect(librarySourceRows(ordered, "", "", "recommended", "en").map((row) => row.sourceId)).toEqual(["alpha", "beta"]);
+    expect(librarySourceRows(ordered, "", "", "rule:balanced", "en").map((row) => row.sourceId)).toEqual(["alpha", "beta"]);
     expect(librarySourceRows(ordered, "", "", "addon", "en").map((row) => row.sourceId)).toEqual(["alpha", "beta"]);
     // An explicit map still wins, and a size sort still ranks by size.
-    expect(librarySourceRows(ordered, "", "", "recommended", "en", undefined, new Map([["Beta", 0], ["Alpha", 1]])).map((row) => row.sourceId)).toEqual(["beta", "alpha"]);
+    expect(librarySourceRows(ordered, "", "", "rule:balanced", "en", undefined, new Map([["Beta", 0], ["Alpha", 1]])).map((row) => row.sourceId)).toEqual(["beta", "alpha"]);
     expect(librarySourceRows(ordered, "", "", "size-desc", "en").map((row) => row.sourceId)).toEqual(["beta", "alpha"]);
   });
 });

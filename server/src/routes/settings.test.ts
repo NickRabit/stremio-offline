@@ -15,12 +15,12 @@ import type { AddonRecord } from "../types.js";
 import { emptyUserData, type Role, type UserData, type UserRecord } from "../users.js";
 import { homeCatalogRowId, homeFeedSelectionKey } from "../home.js";
 import { RULE_PRESETS, SOURCE_PROFILE_IDS } from "../source-profiles.js";
+import { STREAM_SORTS } from "../stream-sort.js";
 import { registerSettingsRoutes, type SettingsDeps } from "./settings.js";
 
 const ADA = "usr_00000001";
 const BOB = "usr_00000002";
 const CAROL = "usr_00000003";
-const STREAM_SORTS = new Set(["recommended", "size-desc", "size-asc", "addon"]);
 const sourceAddon = (manifestUrl = "https://source.example/manifest.json"): AddonRecord => ({
   key: "source",
   manifestUrl,
@@ -332,17 +332,50 @@ test("PATCH /api/settings round trips the library shelf and coerces a value it d
   assert.equal((await junk.json() as Record<string, unknown>).libraryShelf, "resume");
 });
 
-test("PATCH /api/settings drops an unknown streamSort and clamps concurrentDownloads", async (t) => {
+test("PATCH /api/settings accepts rule sorts and falls back from an unknown one", async (t) => {
   const harness = await mount();
   t.after(harness.close);
 
+  const rule = await api(harness.base, "/api/settings", {
+    method: "PATCH",
+    user: "bob",
+    body: { streamSort: `rule:${SOURCE_PROFILE_IDS.best}` },
+  });
+  assert.equal(rule.status, 200);
+  assert.equal(harness.state.userData?.[BOB]?.prefs.streamSort, `rule:${SOURCE_PROFILE_IDS.best}`);
+  assert.equal((await rule.json() as Record<string, unknown>).streamSort, `rule:${SOURCE_PROFILE_IDS.best}`);
+
   await api(harness.base, "/api/settings", { method: "PATCH", user: "bob", body: { streamSort: "bogus", concurrentDownloads: 99 } });
-  assert.equal(harness.state.userData?.[BOB]?.prefs.streamSort, "recommended");
+  assert.equal(harness.state.userData?.[BOB]?.prefs.streamSort, `rule:${SOURCE_PROFILE_IDS.balanced}`);
   assert.equal(harness.state.settings.concurrentDownloads, 8);
 
   await api(harness.base, "/api/settings", { method: "PATCH", user: "bob", body: { streamSort: "size-asc", concurrentDownloads: 0 } });
   assert.equal(harness.state.userData?.[BOB]?.prefs.streamSort, "size-asc");
   assert.equal(harness.state.settings.concurrentDownloads, 1);
+});
+
+test("legacy recommended settings read and store as the configured rule", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.state.userData![BOB]!.prefs.defaultRulesProfileId = SOURCE_PROFILE_IDS.smaller;
+  harness.state.userData![BOB]!.prefs.streamSort = "recommended";
+
+  const read = await (await api(harness.base, "/api/settings", { user: "bob" })).json() as Record<string, unknown>;
+  assert.equal(read.streamSort, `rule:${SOURCE_PROFILE_IDS.smaller}`);
+
+  const posted = await api(harness.base, "/api/settings", {
+    method: "PATCH",
+    user: "bob",
+    body: { streamSort: "recommended" },
+  });
+  assert.equal(posted.status, 200);
+  assert.equal(harness.state.userData?.[BOB]?.prefs.streamSort, `rule:${SOURCE_PROFILE_IDS.smaller}`);
+  assert.equal((await posted.json() as Record<string, unknown>).streamSort, `rule:${SOURCE_PROFILE_IDS.smaller}`);
+
+  harness.state.userData![BOB]!.prefs.defaultRulesProfileId = "deleted-rules-profile";
+  harness.state.userData![BOB]!.prefs.streamSort = "recommended";
+  const fallback = await (await api(harness.base, "/api/settings", { user: "bob" })).json() as Record<string, unknown>;
+  assert.equal(fallback.streamSort, `rule:${SOURCE_PROFILE_IDS.balanced}`);
 });
 
 test("POST /api/settings/import puts each key of a flat backup back on the side it belongs to", async (t) => {
@@ -379,6 +412,32 @@ test("POST /api/settings/import puts each key of a flat backup back on the side 
   const body = await response.json() as { remapped: number; settings: Record<string, unknown> };
   assert.equal(body.remapped, 0);
   assert.equal(body.settings.uiLanguage, "cs");
+});
+
+test("settings import accepts a legacy recommended sort and a rule sort", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const backup = (streamSort: string) => ({
+    format: "stremio-offline-settings",
+    version: 2,
+    settings: { streamSort, defaultRulesProfileId: SOURCE_PROFILE_IDS.best },
+    addons: [],
+    libraries: [],
+  });
+
+  assert.equal((await api(harness.base, "/api/settings/import", {
+    method: "POST",
+    user: "ada",
+    body: backup("recommended"),
+  })).status, 200);
+  assert.equal(harness.state.userData?.[ADA]?.prefs.streamSort, `rule:${SOURCE_PROFILE_IDS.best}`);
+
+  assert.equal((await api(harness.base, "/api/settings/import", {
+    method: "POST",
+    user: "ada",
+    body: backup(`rule:${SOURCE_PROFILE_IDS.smaller}`),
+  })).status, 200);
+  assert.equal(harness.state.userData?.[ADA]?.prefs.streamSort, `rule:${SOURCE_PROFILE_IDS.smaller}`);
 });
 
 test("an import keeps the grants and the keys of the addons this instance already has", async (t) => {
@@ -672,19 +731,23 @@ test("PATCH /api/settings round trips the default rules profile and rejects a no
   assert.equal("defaultRulesProfileId" in (harness.state.userData?.[ADA]?.prefs ?? {}), false);
 });
 
-test("the default rules profile travels in a settings backup", async (t) => {
+test("rule source order and the default rules profile travel in a settings backup", async (t) => {
   const source = await mount();
   t.after(source.close);
   await api(source.base, "/api/settings", {
     method: "PATCH",
     user: "ada",
-    body: { defaultRulesProfileId: SOURCE_PROFILE_IDS.balanced },
+    body: {
+      defaultRulesProfileId: SOURCE_PROFILE_IDS.balanced,
+      streamSort: `rule:${SOURCE_PROFILE_IDS.best}`,
+    },
   });
 
   const backup = await (await api(source.base, "/api/settings/export", { user: "ada" })).json() as {
-    settings: { defaultRulesProfileId?: string };
+    settings: { defaultRulesProfileId?: string; streamSort: string };
   };
   assert.equal(backup.settings.defaultRulesProfileId, SOURCE_PROFILE_IDS.balanced);
+  assert.equal(backup.settings.streamSort, `rule:${SOURCE_PROFILE_IDS.best}`);
 
   const restored = await mount();
   t.after(restored.close);
@@ -694,6 +757,7 @@ test("the default rules profile travels in a settings backup", async (t) => {
     body: backup,
   })).status, 200);
   assert.equal(restored.state.userData?.[ADA]?.prefs.defaultRulesProfileId, SOURCE_PROFILE_IDS.balanced);
+  assert.equal(restored.state.userData?.[ADA]?.prefs.streamSort, `rule:${SOURCE_PROFILE_IDS.best}`);
 });
 
 test("GET /api/settings keeps each account's download source profile private", async (t) => {

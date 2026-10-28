@@ -25,7 +25,7 @@ import { subtitleVtt } from "../subtitle-text.js";
 import { shiftVtt } from "../vtt.js";
 import { listedLocalCopyEvidence } from "../local-copy-admission.js";
 import { listedAddonSourceEvidence } from "../source-addon-evidence.js";
-import { defaultRuleSnapshot, ruleVerdicts } from "../source-rule-verdict.js";
+import { ruleSnapshots, ruleVerdictsForProfiles } from "../source-rule-verdict.js";
 import { asyncRoute, routeDisconnectSignal, viewerOf, type RouteContext } from "./context.js";
 
 /** The language the player shows a subtitle under, which is what a file that is not Unicode
@@ -68,7 +68,7 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
    *  setting an ordinary account owns, so a list that ignores it makes that setting a lie. */
   const inOrder = (req: express.Request) =>
     orderedForUser(usable(req), orderFor(currentUser(req), (id) => store.userData(id).addonOrder));
-  const rulesFor = (req: express.Request, type: string) => defaultRuleSnapshot({
+  const rulesFor = (req: express.Request, type: string) => ruleSnapshots({
     user: currentUser(req),
     store,
     preferences: prefsOf(req),
@@ -330,7 +330,7 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
         requireAccess(req, { addonKey });
       }
       if (disconnect.signal.aborted) return;
-      const snapshot = rulesFor(req, String(req.params.type));
+      const snapshots = rulesFor(req, String(req.params.type));
       const candidates = items.map((stream, providerResponseIndex) => {
         const addonKey = stream.addonKey;
         if (typeof addonKey !== "string" || addonKey.length === 0) return undefined;
@@ -341,13 +341,11 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
           available: true,
         });
       });
-      const verdicts = snapshot
-        ? ruleVerdicts(snapshot, candidates.filter((candidate) => candidate !== undefined))
-        : new Map();
+      const verdicts = ruleVerdictsForProfiles(snapshots, candidates.filter((candidate) => candidate !== undefined));
       const listed = mediaResources.listing(items, owner);
       res.setHeader("cache-control", "private, no-store").json(listed.map((stream, index) => {
         const verdict = candidates[index] === undefined ? undefined : verdicts.get(candidates[index].sourceId);
-        return verdict === undefined ? stream : { ...stream, rule: verdict };
+        return verdict === undefined ? stream : { ...stream, rules: verdict };
       }));
     } catch (error) {
       if (disconnect.signal.aborted) return;
@@ -369,15 +367,15 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     })), owner);
     // The listing redacts long path segments as if they were an addon's secrets; the name of the
     // viewer's own file is not one, and it is what the row shows.
-    const snapshot = rulesFor(req, String(req.params.type));
+    const snapshots = rulesFor(req, String(req.params.type));
     const candidates = copies.map((copy, index) => listedLocalCopyEvidence(copy, index));
-    const verdicts = snapshot ? ruleVerdicts(snapshot, candidates) : new Map();
+    const verdicts = ruleVerdictsForProfiles(snapshots, candidates);
     res.setHeader("cache-control", "private, no-store").json(listed.map((stream, index) => {
       const verdict = verdicts.get(candidates[index]!.sourceId);
       return {
         ...stream, behaviorHints: { ...stream.behaviorHints, filename: posixBase(copies[index]!.key) },
         localPath: copies[index]!.path, libraryName: copies[index]!.libraryName,
-        ...(verdict === undefined ? {} : { rule: verdict }),
+        ...(verdict === undefined ? {} : { rules: verdict }),
       };
     }));
   }));
