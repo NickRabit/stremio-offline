@@ -10,7 +10,7 @@ by step, is in [`docs/android-tv-development.md`](../docs/android-tv-development
 ## Requirements
 
 - JDK 17.
-- The Android SDK with platform 35 and build-tools 35.0.0. Point `ANDROID_HOME`
+- The Android SDK with platform 37.0 and build-tools 37.0.0. Point `ANDROID_HOME`
   at it; no `local.properties` is committed.
 
 ```bash
@@ -42,7 +42,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 ## Android TV emulator
 
 ```bash
-sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" \
+sdkmanager "platform-tools" "platforms;android-37.0" "build-tools;37.0.0" \
   "system-images;android-34;android-tv;arm64-v8a"
 avdmanager create avd -n stremio-tv -k "system-images;android-34;android-tv;arm64-v8a" -d tv_1080p
 emulator -avd stremio-tv

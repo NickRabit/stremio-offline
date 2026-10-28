@@ -48,7 +48,7 @@ the first line.
 
 ```bash
 yes | sdkmanager --licenses
-sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0" "emulator" "system-images;android-34;android-tv;arm64-v8a"
+sdkmanager --install "platform-tools" "platforms;android-37.0" "build-tools;37.0.0" "emulator" "system-images;android-34;android-tv;arm64-v8a"
 ```
 
 On an x86-64 machine use `system-images;android-34;android-tv;x86`. The
@@ -174,7 +174,7 @@ The worker's sandbox has no Node or Java, so the reviewer runs the gates
 - [ ] `docker compose up -d --build` brings up a container whose
       `/api/status` answers `{"status":"ok",…}`.
 - [ ] `java -version` under `JAVA_HOME` is 17.
-- [ ] `sdkmanager --list_installed` shows platform 35, build-tools 35.0.0 and
+- [ ] `sdkmanager --list_installed` shows platform 37.0, build-tools 37.0.0 and
       platform-tools.
 - [ ] `./gradlew assembleDebug testDebugUnitTest lintDebug` passes in
       `android-tv/`.

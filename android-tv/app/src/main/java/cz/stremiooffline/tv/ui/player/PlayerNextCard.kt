@@ -64,12 +64,13 @@ fun NextEpisodeOffer(title: String, onPlay: () -> Unit, onDismiss: () -> Unit, f
  */
 @Composable
 fun NextEpisodeCard(title: String, seconds: Int, onPlay: () -> Unit, focus: FocusRequester? = null) {
+  val ownedFocus = remember { FocusRequester() }
   LaunchedEffect(focus) { focus?.let { runCatching { it.requestFocus() } } }
   Column(
     modifier = Modifier
       .width(360.dp)
       .testTag(TagNextCard)
-      .focusRequester(focus ?: FocusRequester())
+      .focusRequester(focus ?: ownedFocus)
       .focusable()
       .onPreviewKeyEvent { event ->
         if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false

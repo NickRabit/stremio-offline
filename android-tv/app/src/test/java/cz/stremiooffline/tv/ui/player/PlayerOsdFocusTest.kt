@@ -4,6 +4,7 @@ package cz.stremiooffline.tv.ui.player
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.input.key.Key
@@ -37,13 +38,14 @@ class PlayerOsdFocusTest {
 
   private fun mount() {
     compose.setContent {
+      val playFocus = remember { FocusRequester() }
       PlayerOverlayShell(
         position = 10.0,
         duration = 100.0,
         playing = false,
         title = "It",
         eyebrow = "Direct play",
-        playFocus = FocusRequester(),
+        playFocus = playFocus,
         initiallyShown = true,
         onSeek = {},
         onTogglePause = {},
@@ -91,13 +93,14 @@ class PlayerOsdFocusTest {
   private fun mountPlaying(playing: () -> Boolean) {
     compose.mainClock.autoAdvance = false
     compose.setContent {
+      val playFocus = remember { FocusRequester() }
       PlayerOverlayShell(
         position = 10.0,
         duration = 100.0,
         playing = playing(),
         title = "It",
         eyebrow = "Direct play",
-        playFocus = FocusRequester(),
+        playFocus = playFocus,
         initiallyShown = true,
         onSeek = {},
         onTogglePause = {},

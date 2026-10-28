@@ -956,7 +956,8 @@ fun CatalogDetailScreen(
         // DOWN drops into the episode row from the action row only; inside an open panel it must
         // reach the next source instead.
         if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown &&
-          isSeries && !pick.sourcesOpen && !ui.series.open && !ui.titleDownload && focus.actionRowFocused
+          isSeries && meta.videos.orEmpty().isNotEmpty() &&
+          !pick.sourcesOpen && !ui.series.open && !ui.titleDownload && focus.actionRowFocused
         ) {
           runCatching { focus.row.requestFocus() }.isSuccess
         } else {

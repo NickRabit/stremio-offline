@@ -193,7 +193,7 @@ fun Shell(
   }
   // A crash the previous run left is worth one line on the way in; sending it is a Settings row.
   val crashContext = LocalContext.current
-  val crashHint = crashContext.getString(R.string.tv_crash_hint)
+  val crashHint = stringResource(R.string.tv_crash_hint)
   LaunchedEffect(Unit) {
     if (AppLog.readCrash(AppLog.crashFile(crashContext.filesDir)) == null) return@LaunchedEffect
     hint = crashHint
