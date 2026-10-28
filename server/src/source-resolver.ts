@@ -1,6 +1,8 @@
 import { allowedAddons } from "./addons.js";
 import { mayDownloadToLibrary, type DownloadResolution, type StreamResolver } from "./downloads.js";
 import { selectDownloadSource, selectTorrentSource } from "./download-selection.js";
+import type { RemoteDownloadReference } from "./media-server-download.js";
+import type { ProviderVersion } from "./media-server-provider.js";
 import { rankStreams } from "./ranking.js";
 import type { MediaInfo } from "./probe.js";
 import type { UserPrefs } from "./store.js";
@@ -16,6 +18,19 @@ export interface SourceResolverDeps {
   listStreams: (addons: AddonRecord[], type: string, id: string) => Promise<StreamItem[]>;
   listSubtitles: (addons: AddonRecord[], type: string, id: string, signal: AbortSignal) => Promise<SubtitleItem[]>;
   inspect: (stream: StreamItem, signal: AbortSignal) => Promise<MediaInfo | undefined>;
+  remoteDownloadCandidates: (input: {
+    ownerUserId: string;
+    libraryId: string;
+    type: "movie" | "series";
+    catalogId: string;
+    nameHint?: string;
+    signal?: AbortSignal;
+  }) => Promise<Array<{
+    reference: RemoteDownloadReference;
+    version: ProviderVersion;
+    libraryName: string;
+    stream: StreamItem;
+  }>>;
 }
 
 interface Authorization {

@@ -1477,6 +1477,59 @@ describe("RemoteLibraryBrowser addon sources", () => {
     expect(document.querySelector(".save-target-card")).toBeNull();
   });
 
+  it("opens the rules route from the save arrow when the film has a catalogue id", async () => {
+    const onCatalogueDownload = vi.fn();
+    await openDetail({ onCatalogueDownload });
+    await openPicker();
+    await selectAddonRow();
+    await click(saveElsewhere());
+    expect(onCatalogueDownload).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceId: "addon-1" }),
+      { type: "movie", id: "tt5000", name: "One", poster: "/poster/1.jpg" },
+    );
+    expect(document.querySelector(".save-target-card")).toBeNull();
+  });
+
+  it("names the selected episode and season for the rules route", async () => {
+    const show: RemoteItem = { id: "show", name: "Show", type: "series", providerIds: { imdb: "tt7000" } };
+    const episode: RemoteItem = { id: "e1", name: "Pilot", type: "episode", season: 1, episode: 2, seriesId: "show", providerIds: { imdb: "tt9999" } };
+    const onCatalogueDownload = vi.fn();
+    browse = (url) => json(page(url.searchParams.get("type") === "episode" ? [episode] : [show]));
+    item = (url) => json({ item: url.pathname.endsWith("/show") ? show : episode, capabilities });
+    sources = () => json({ streams: [] });
+    addonProviders = () => json([{ key: "torrentio", name: "Torrentio" }]);
+    addonStreams = () => json([addonRow("addon-1", "Torrentio 4K")]);
+    await render({ addons: [addonWithRule()], onCatalogueDownload });
+    await click(host.querySelector(".remote-libraries button.library-open")!);
+    await click(tileButtons()[0]!);
+    await flush();
+    await click(tileButtons()[0]!);
+    await flush();
+    await openPicker();
+    await selectAddonRow();
+    await click(saveElsewhere());
+    expect(onCatalogueDownload).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceId: "addon-1" }),
+      expect.objectContaining({
+        type: "series", id: "tt7000", season: 1, episode: 2, videoId: "tt7000:1:2",
+      }),
+    );
+  });
+
+  it("keeps Save elsewhere when the detail has no catalogue id", async () => {
+    const copyable = { ...nativeVersion("ms1", "1080p", 2_000_000_000), capabilities: { ...capabilities, downloadToLibrary: true } };
+    browse = () => json(page([movie("m1", "One")]));
+    sources = () => json({ streams: [copyable] });
+    const onCatalogueDownload = vi.fn();
+    await render({ downloadLibraries: [saveView()], onCatalogueDownload });
+    await click(host.querySelector(".remote-libraries button.library-open")!);
+    await click(tileButtons()[0]!);
+    await flush();
+    await click(saveElsewhere());
+    expect(onCatalogueDownload).not.toHaveBeenCalled();
+    expect(document.querySelector(".save-target-card")).not.toBeNull();
+  });
+
   it("plays an addon row generically: real downloads and no native favorite or episode hand-off", async () => {
     const { onDownloadQueued, onNotify } = await openDetail();
     await openPicker();

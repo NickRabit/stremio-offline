@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { SourceFilters, SourceRows } from "./source-rows";
 import { setLocale, t } from "./i18n";
-import type { Stream } from "./types";
+import type { SourceProfile, Stream } from "./types";
 
 const addonRow = (over: Partial<Stream> = {}): Stream => ({
   sourceId: "a1", kind: "remote", playable: true, name: "FullHD", addonKey: "cineshare", addonName: "Cineshare",
@@ -55,9 +55,67 @@ describe("SourceRows", () => {
     expect(row().querySelector("strong")!.textContent).toBe(t("tv.version"));
   });
 
+  it("explains the reasons a source breaks the default rules", () => {
+    act(() => root.render(<SourceRows rows={[addonRow({ rules: {
+      balanced: {
+        profileId: "balanced", status: "breaks", rank: [2],
+        reasons: ["language", "resolutionLow", "subtitles", "size", "provider", "torrent"],
+      },
+    } })]} selected={null} onSelect={() => {}} ruleId="balanced"/>));
+    expect(row().textContent).toContain(t("sources.ruleBreaks", {
+      reasons: [
+        t("sources.ruleReason.language"),
+        t("sources.ruleReason.resolutionLow"),
+        t("sources.ruleReason.subtitles"),
+        t("sources.ruleReason.size"),
+        t("sources.ruleReason.provider"),
+        t("sources.ruleReason.torrent"),
+      ].join(", "),
+    }));
+  });
+
+  it("does not add a rule note to a source that meets them", () => {
+    act(() => root.render(<SourceRows rows={[addonRow({ rules: {
+      balanced: { profileId: "balanced", status: "meets", reasons: [], rank: [0] },
+    } })]} selected={null} onSelect={() => {}} ruleId="balanced"/>));
+    expect(row().textContent).not.toContain(t("sources.ruleBreaks", { reasons: "" }));
+  });
+
   it("badges a torrent and a playable row by the transport the catalogue names them by", () => {
     render([addonRow({ sourceId: "t1", kind: "torrent", playable: false, addonName: undefined }), addonRow({ sourceId: "p1", playable: false, addonName: undefined })]);
     expect([...host.querySelectorAll("i")].map((node) => node.textContent)).toEqual(["RD", "EXT"]);
+  });
+
+  it("marks listed remote audio as in the file, keeps a guess labelled, and leaves addons unchanged", () => {
+    const remote = addonRow({
+      sourceId: "remote-1",
+      name: "Remote Rules Fixture S01E01",
+      provider: "jellyfin",
+      remoteItem: { libraryId: "rlib_a", itemId: "1", mediaSourceId: "v1", progressKey: "key" },
+      audioLanguages: ["cs", "en"],
+    });
+    const guessed = addonRow({
+      sourceId: "remote-2",
+      name: "Remote Rules Fixture S01E01 CZ",
+      provider: "jellyfin",
+      remoteItem: { libraryId: "rlib_a", itemId: "2", mediaSourceId: "v2", progressKey: "key-2" },
+      audioLanguages: ["cs"],
+      audioLanguagesGuessed: true,
+    });
+    const addon = addonRow({ name: "Remote Rules Fixture S01E01", title: "CZ dabing" });
+    render([remote, guessed, addon]);
+
+    const [inFile, guess, unchangedAddon] = [...host.querySelectorAll("button")];
+    const inFileBadges = [...inFile!.querySelectorAll(".lang-badge")];
+    expect(inFileBadges).toHaveLength(2);
+    expect(inFileBadges.map((badge) => badge.textContent)).toEqual(["CZ", "EN"]);
+    expect(inFileBadges.every((badge) => badge.getAttribute("title") === t("sources.audioInFile"))).toBe(true);
+    const guessedBadges = [...guess!.querySelectorAll(".lang-badge")];
+    expect(guessedBadges.map((badge) => badge.textContent)).toEqual(["CZ"]);
+    expect(guessedBadges[0]!.getAttribute("title")).toBe(t("sources.languageGuess"));
+    const addonBadges = [...unchangedAddon!.querySelectorAll(".lang-badge")];
+    expect(addonBadges.map((badge) => badge.textContent)).toEqual(["CZ"]);
+    expect(addonBadges[0]!.getAttribute("title")).toBe(t("sources.languageGuess"));
   });
 
   it("keeps the focus on the same source when an earlier group inserts its rows", async () => {
@@ -99,14 +157,42 @@ describe("SourceFilters", () => {
     ],
   });
   const options = () => [...host.querySelector("select")!.querySelectorAll("option")].map((option) => option.textContent);
+  const sortOptions = () => {
+    const selects = host.querySelectorAll("select");
+    return [...selects[selects.length - 1]!.querySelectorAll("option")].map((option) => option.textContent);
+  };
+  const profiles: SourceProfile[] = [
+    { id: "balanced", nameKey: "rules.preset.balanced", template: "rules", revision: 1, operations: ["play"], policy: {} as SourceProfile["policy"] },
+    { id: "best", nameKey: "rules.preset.best", template: "rules", revision: 1, operations: ["play"], policy: {} as SourceProfile["policy"] },
+  ];
 
   it("offers no place that answered nothing", () => {
-    act(() => root.render(<SourceFilters visible addon={field("")} sort={{ value: "recommended", onChange: () => {} }}/>));
+    act(() => root.render(<SourceFilters visible addon={field("")} sort={{ value: "rule:balanced", onChange: () => {} }}/>));
     expect(options()).toEqual(["All (5)", "My Pleasure $$$ (5)"]);
   });
 
   it("keeps an empty place that is the current choice", () => {
-    act(() => root.render(<SourceFilters visible addon={field("remote:series")} sort={{ value: "recommended", onChange: () => {} }}/>));
+    act(() => root.render(<SourceFilters visible addon={field("remote:series")} sort={{ value: "rule:balanced", onChange: () => {} }}/>));
     expect(options()).toEqual(["All (5)", "My Pleasure $$$ (5)", "Jellyfin · Series (0)"]);
+  });
+
+  it("lists rule options before the fixed source orders", () => {
+    act(() => root.render(<SourceFilters visible addon={field("")} profiles={profiles} sort={{ value: "rule:balanced", onChange: () => {} }}/>));
+    expect(sortOptions()).toEqual([
+      t("rules.preset.balanced"),
+      t("rules.preset.best"),
+      t("sources.sortLargest"),
+      t("sources.sortSmallest"),
+      t("sources.sortAddon"),
+    ]);
+  });
+
+  it("does not repeat the stored fixed order while profiles are loading", () => {
+    act(() => root.render(<SourceFilters visible addon={field("")} sort={{ value: "size-asc", onChange: () => {} }}/>));
+    expect(sortOptions()).toEqual([
+      t("sources.sortLargest"),
+      t("sources.sortSmallest"),
+      t("sources.sortAddon"),
+    ]);
   });
 });

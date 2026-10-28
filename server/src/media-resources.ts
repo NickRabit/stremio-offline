@@ -1,5 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { INTERNAL_TOKEN } from "./auth.js";
+import { normalizeLanguage } from "./language.js";
 import { isRemoteMediaStream, openRemoteContent } from "./media-server-reference.js";
 import { READ_ONLY_MEDIA_CAPABILITIES, remoteProgressKey } from "./media-server-types.js";
 import type { PublicStream, StreamItem } from "./types.js";
@@ -138,12 +139,25 @@ function normalizedStream(input: StreamItem): StreamItem {
   for (const name of ["host", "connection", "content-length", "transfer-encoding", "x-forwarded-for", "forwarded"]) headers.delete(name);
   const infoHash = infoHashOf(input);
   const fileIdx = Number.isInteger(input.fileIdx) && (input.fileIdx as number) >= 0 ? input.fileIdx : undefined;
+  const languageCodes = (values: unknown): string[] | undefined => {
+    if (!Array.isArray(values)) return undefined;
+    const normalized = [...new Set(values.flatMap((value) => {
+      if (typeof value !== "string") return [];
+      const language = normalizeLanguage(value);
+      return language ? [language] : [];
+    }))];
+    return normalized.length ? normalized : undefined;
+  };
+  const audioLanguages = languageCodes(input.audioLanguages);
   return {
     url: typeof input.url === "string" && !/^magnet:/i.test(input.url) ? input.url : undefined,
     infoHash, fileIdx,
     name: safeSourceText(input.name, input), title: safeSourceText(input.title, input),
     description: safeSourceText(input.description, input), addonKey: input.addonKey,
     addonName: safeSourceText(input.addonName, input),
+    audioLanguages,
+    subtitleLanguages: languageCodes(input.subtitleLanguages),
+    audioLanguagesGuessed: audioLanguages && input.audioLanguagesGuessed === true ? true : undefined,
     behaviorHints: { filename: safeSourceText(input.behaviorHints?.filename, input),
       bingeGroup: safeSourceText(input.behaviorHints?.bingeGroup, input),
       notWebReady: input.behaviorHints?.notWebReady === true,
@@ -320,6 +334,11 @@ export class MediaResources {
       sourceId, kind, playable: kind === "remote" || kind === "library", stableKey: stableSourceKey(record, kind),
       name: record.name, title: record.title, description: record.description,
       addonKey: record.addonKey, addonName: record.addonName,
+      ...(record.audioLanguages?.length ? {
+        audioLanguages: record.audioLanguages,
+        ...(record.audioLanguagesGuessed ? { audioLanguagesGuessed: true as const } : {}),
+      } : {}),
+      ...(record.subtitleLanguages?.length ? { subtitleLanguages: record.subtitleLanguages } : {}),
       behaviorHints: { filename: record.behaviorHints?.filename, videoSize: record.behaviorHints?.videoSize,
         bingeGroup: record.behaviorHints?.bingeGroup },
       subtitles: (stream.subtitles ?? []).filter((item) => isRemoteSubtitleStream(item) || /^https?:\/\//i.test(item.url) || (kind === "library" && item.url.startsWith("file://"))).map((item) => ({

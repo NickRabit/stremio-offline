@@ -34,27 +34,111 @@ object Streams {
 
   /** `titleLanguage` stands in only for a source whose addon admitted it found no language. */
   fun streamLanguages(stream: StreamDto, titleLanguage: String? = null): List<String> {
+    // A media-server version names its own tracks; that wins over a guess from its name.
+    if (stream.audioLanguages.isNotEmpty()) return stream.audioLanguages.distinct()
     val found = (Languages.guessLanguages(streamText(stream)) +
       Languages.bingeGroupLanguages(stream.behaviorHints?.bingeGroup)).distinct()
     if (found.isNotEmpty() || titleLanguage == null || !Languages.leavesLanguageBlank(stream.behaviorHints?.bingeGroup)) return found
     return listOf(titleLanguage)
   }
 
-  enum class StreamSort(val wire: String) {
-    Recommended("recommended"),
-    SizeDesc("size-desc"),
-    SizeAsc("size-asc"),
-    Addon("addon"),
-    ;
+  /**
+   * A rule profile (`rule:<id>`), one of the three fixed orders, or [FirstRule] for the wire value
+   * `recommended`. [FirstRule] is the first profile once that list is known; until then, and when
+   * the account has no profile, sorting keeps the old language-then-priority-then-size formula.
+   */
+  sealed interface StreamSort {
+    val wire: String
+    val isRuleSort: Boolean get() = false
+
+    data class Rule(val profileId: String) : StreamSort {
+      override val wire: String get() = "$RULE_PREFIX$profileId"
+      override val isRuleSort: Boolean get() = true
+    }
+
+    /** An older server's `recommended`: the first rule option, resolved when the profiles arrive. */
+    data object FirstRule : StreamSort {
+      override val wire: String = "recommended"
+      override val isRuleSort: Boolean get() = true
+    }
+
+    data object SizeDesc : StreamSort {
+      override val wire: String = "size-desc"
+    }
+
+    data object SizeAsc : StreamSort {
+      override val wire: String = "size-asc"
+    }
+
+    data object Addon : StreamSort {
+      override val wire: String = "addon"
+    }
 
     companion object {
-      fun of(value: String?): StreamSort = entries.firstOrNull { it.wire == value } ?: Recommended
+      fun of(value: String?): StreamSort {
+        if (value != null && value.startsWith(RULE_PREFIX)) {
+          val id = value.removePrefix(RULE_PREFIX)
+          if (id.isNotEmpty()) return Rule(id)
+        }
+        return when (value) {
+          "size-desc" -> SizeDesc
+          "size-asc" -> SizeAsc
+          "addon" -> Addon
+          else -> FirstRule
+        }
+      }
     }
   }
 
-  data class StreamFilters(val addon: String = "", val language: String = "", val sort: StreamSort = StreamSort.Recommended)
+  private const val RULE_PREFIX = "rule:"
 
-  /** Recommended = the preferred language first, then the addon's priority, then largest first. */
+  data class StreamFilters(val addon: String = "", val language: String = "", val sort: StreamSort = StreamSort.FirstRule)
+
+  /** [FirstRule] becomes the first profile id. It stays unresolved when [profileIds] is empty. */
+  fun resolveRuleSort(sort: StreamSort, profileIds: List<String>): StreamSort {
+    if (sort !is StreamSort.FirstRule) return sort
+    val id = profileIds.firstOrNull { it.isNotBlank() } ?: return sort
+    return StreamSort.Rule(id)
+  }
+
+  /** The profile a rule sort orders and plays by. A size sort, an addon sort and an unresolved
+   *  [StreamSort.FirstRule] have none. */
+  fun ruleIdOf(sort: StreamSort): String? = (sort as? StreamSort.Rule)?.profileId
+
+  /**
+   * Which profile's verdict the row note reads. A rule sort uses that profile. A size or addon
+   * sort uses the account default when that default is itself a rule, and otherwise no profile.
+   */
+  fun noteProfileId(active: StreamSort, accountSort: String?, profileIds: List<String>): String? {
+    val account = resolveRuleSort(StreamSort.of(accountSort), profileIds)
+    return when (val resolved = resolveRuleSort(active, profileIds)) {
+      is StreamSort.Rule -> resolved.profileId
+      StreamSort.SizeDesc, StreamSort.SizeAsc, StreamSort.Addon -> (account as? StreamSort.Rule)?.profileId
+      StreamSort.FirstRule -> null
+    }
+  }
+
+  /** Lexicographic over `rules[profileId].rank`, ascending better. A stream with no verdict for
+   *  [profileId] sorts after every stream that has one; a tie keeps the incoming order. */
+  fun compareRuleRank(a: StreamDto, b: StreamDto, profileId: String): Int {
+    val left = a.rules[profileId]
+    val right = b.rules[profileId]
+    if (left == null && right == null) return 0
+    if (left == null) return 1
+    if (right == null) return -1
+    val leftRank = left.rank
+    val rightRank = right.rank
+    val limit = minOf(leftRank.size, rightRank.size)
+    for (i in 0 until limit) {
+      val cmp = java.lang.Double.compare(leftRank[i], rightRank[i])
+      if (cmp != 0) return cmp
+    }
+    return leftRank.size.compareTo(rightRank.size)
+  }
+
+  /** A rule sort uses that profile's rank when any stream carries a verdict for it. Otherwise, and
+   *  for an unresolved [StreamSort.FirstRule], the preferred language comes first, then the addon's
+   *  priority, then largest first. Size and addon sorts ignore rules. */
   fun arrangeStreams(
     streams: List<StreamDto>,
     filters: StreamFilters,
@@ -66,6 +150,13 @@ object Streams {
       (filters.addon.isEmpty() || stream.addonName == filters.addon) &&
         (filters.language.isEmpty() || streamLanguages(stream, titleLanguage).contains(filters.language))
     }
+    val profileId = (filters.sort as? StreamSort.Rule)?.profileId
+    if (profileId != null && list.any { it.rules[profileId] != null }) {
+      val decorated = list.mapIndexed { index, stream -> stream to index }
+      return decorated.sortedWith { a, b ->
+        compareRuleRank(a.first, b.first, profileId).takeIf { it != 0 } ?: (a.second - b.second)
+      }.map { it.first }
+    }
     val size = list.associateWith { streamSize(it) }
     val rank = { stream: StreamDto -> priority[stream.addonName ?: ""] ?: Int.MAX_VALUE }
     val preferred = { stream: StreamDto -> if (streamLanguages(stream, titleLanguage).contains(preferredLanguage)) 0 else 1 }
@@ -74,7 +165,7 @@ object Streams {
       val left = a.first
       val right = b.first
       if (filters.sort == StreamSort.Addon) return@Comparator (rank(left) - rank(right)).takeIf { it != 0 } ?: (a.second - b.second)
-      if (filters.sort == StreamSort.Recommended) {
+      if (filters.sort.isRuleSort) {
         val byLanguage = preferred(left) - preferred(right)
         if (byLanguage != 0) return@Comparator byLanguage
         val byPriority = rank(left) - rank(right)
@@ -104,12 +195,55 @@ object Streams {
     return if (showTorrents) arranged else arranged.filter { it.kind != "torrent" }
   }
 
-  /** The row the list opens on: the one the viewer last played, when the caller knows its handle,
-   *  and otherwise the first playable row. */
-  fun pickDefaultStream(streams: List<StreamDto>, preferredStableKey: String? = null): StreamDto? =
-    preferredStableKey?.takeIf { it.isNotBlank() }?.let { key -> streams.firstOrNull { it.stableKey == key } }
-      ?: streams.firstOrNull { it.playable }
-      ?: streams.firstOrNull()
+  /** The row Play starts when the viewer has not picked one.
+   *
+   *  The last-played handle wins, including when that row breaks [ruleId]. Otherwise, once a
+   *  playable row carries a verdict for [ruleId], the first playable row that meets the rule, then
+   *  the first playable unverified row. Every playable row breaking the rule is no automatic
+   *  choice. Without a verdict the first playable row wins, then the first row at all.
+   */
+  fun pickDefaultStream(
+    streams: List<StreamDto>,
+    preferredStableKey: String? = null,
+    ruleId: String? = null,
+  ): StreamDto? {
+    preferredStableKey?.takeIf { it.isNotBlank() }?.let { key ->
+      streams.firstOrNull { it.stableKey == key }
+    }?.let { return it }
+    val playable = streams.filter { it.playable }
+    if (ruleId.isNullOrEmpty() || playable.none { it.rules[ruleId] != null }) {
+      return playable.firstOrNull() ?: streams.firstOrNull()
+    }
+    return playable.firstOrNull { it.rules[ruleId]?.status == "meets" }
+      ?: playable.firstOrNull { it.rules[ruleId]?.status == "unverified" }
+  }
+
+  /** The row Play acts on. An explicit pick wins. A remembered automatic row that breaks [ruleId]
+   *  yields to [preferred], which is null when the rule leaves no row to start. */
+  fun selectedPlayRow(
+    explicit: StreamDto?,
+    remembered: StreamDto?,
+    preferred: StreamDto?,
+    ruleId: String?,
+  ): StreamDto? {
+    if (explicit != null) return explicit
+    if (
+      !ruleId.isNullOrEmpty() &&
+      remembered != null &&
+      remembered != preferred &&
+      remembered.rules[ruleId]?.status == "breaks"
+    ) {
+      return preferred
+    }
+    return remembered ?: preferred
+  }
+
+  /** Play opens the sources panel: [ruleId] has a verdict on a playable row and [active] is not a
+   *  row it may start. */
+  fun needsSourceChoice(rows: List<StreamDto>, ruleId: String?, active: StreamDto?): Boolean {
+    if (active != null || ruleId.isNullOrEmpty()) return false
+    return rows.any { it.playable && it.rules[ruleId] != null }
+  }
 
   /** A copy that already exists in one of the viewer's libraries. */
   fun isLocalStream(stream: StreamDto): Boolean = stream.kind == "library"
@@ -183,7 +317,7 @@ object Streams {
   /**
    * The rows a detail already holds, before any supplementary group answers: a native item's own
    * versions, or the copies a library detail was opened on. They are ordinary rows of the list --
-   * they obey the same source choice and the same size sorts -- and they lead the recommended and
+   * they obey the same source choice and the same size sorts -- and they lead the rule and
    * addon-priority orders. [libraryId] names the media-server library they are versions of, so the
    * addon filter can offer that library and choosing it answers with exactly these rows; it is null
    * when the rows are copies on disk, which belong to the Local choice instead.
@@ -196,10 +330,13 @@ object Streams {
 
   /**
    * The list a source panel shows, as the web builds it. [addon] is already filtered and sorted.
-   * The Local choice of the addon filter shows the library copies alone, a named addon shows its
-   * streams alone, and with no addon filter the copies lead the recommended and addon-priority
-   * orders but rank with the addon rows under the size sorts. [origins] are drawn in the same list,
-   * ahead of everything under the recommended order.
+   * The Local choice of the addon filter shows the library copies alone, and a named addon shows
+   * its streams alone. With no addon filter, a rule that carries verdicts sorts the library
+   * copies, the remote versions and the addon rows together by that rank. The server already
+   * puts a local copy first only when the rule uses the viewer's order, so this list does not
+   * prepend one. Without a verdict the copies still lead, then the remote versions, then the
+   * addon rows. Size and addon sorts are unchanged. [origins], the item's own versions, stay
+   * ahead of that merge under a rule sort.
    *
    * [local] is the copies the caller did not already hand over as [origins], so a file the detail
    * holds and the viewer's library both know is one row of the list, not two.
@@ -225,8 +362,17 @@ object Streams {
     remoteFilterLibrary(filters.addon) != null ->
       remote.firstOrNull { it.libraryId == remoteFilterLibrary(filters.addon) }?.streams.orEmpty()
     filters.addon.isNotEmpty() -> addon
-    filters.sort == StreamSort.Recommended || filters.sort == StreamSort.Addon ->
+    filters.sort == StreamSort.Addon ->
       origins.rows + local + remote.flatMap { it.streams } + addon
+    filters.sort.isRuleSort -> {
+      val profileId = ruleIdOf(filters.sort)
+      val merged = local + remote.flatMap { it.streams } + addon
+      origins.rows + if (profileId != null && merged.any { it.rules[profileId] != null }) {
+        merged.sortedWith { a, b -> compareRuleRank(a, b, profileId) }
+      } else {
+        merged
+      }
+    }
     else -> arrangeStreams(
       origins.rows + remote.flatMap { it.streams } + addon + local,
       StreamFilters(sort = filters.sort),

@@ -50,6 +50,7 @@ import cz.stremiooffline.tv.data.RemoteLibraryApi
 import cz.stremiooffline.tv.data.RemoteProviderIdsDto
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.playback.Progress
+import cz.stremiooffline.tv.ui.catalog.BindSourceProfiles
 import cz.stremiooffline.tv.ui.catalog.ActionCaption
 import cz.stremiooffline.tv.ui.catalog.DetailAction
 import cz.stremiooffline.tv.ui.catalog.DetailActionRow
@@ -221,6 +222,7 @@ fun RemoteDetailScreen(
   DisposableEffect(sourceScope) { onDispose { sourceScope.cancel() } }
   // The filters the panel offers, reset with the item the way the catalogue detail resets its own.
   val sourceFilters = remember(identity) { SourceFilterState() }
+  BindSourceProfiles(catalogueApi, sourceFilters)
   val groups = sourceGroups?.state
   // Every row the panel holds: the item's own versions lead, and the player is handed all of them
   // so a switch never shrinks the list to the row it landed on. One row per identity, so a copy the
@@ -891,6 +893,8 @@ fun RemoteDetailScreen(
         default = primary,
         chosen = pickedRow?.takeIf { row -> loadedRows.any { it === row } },
         filters = sourceFilters.filters(groups?.settings?.streamSort),
+        profiles = sourceFilters.profiles,
+        ruleNoteProfileId = sourceFilters.noteProfileId(groups?.settings?.streamSort),
         onFilterSelect = { chip, key -> sourceFilters.select(chip, key) },
         onChoose = { choosePanelRow(it) },
         // The panel only picks: To library on the action row acts on the pick, so no row carries a

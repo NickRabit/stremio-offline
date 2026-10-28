@@ -413,6 +413,27 @@ test("an administrator creates a rules profile that members can see and bulk-adm
   );
 });
 
+test("a rules profile may store local and remote library keys without installed addons", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const parameters = {
+    ...ruleParameters(),
+    addons: {
+      scope: { selected: ["local", "remote:missing-library"] },
+      order: { explicit: ["remote:missing-library", "local"] },
+    },
+  } satisfies DownloadRules;
+
+  const created = await api(harness.base, "/api/admin/source-profiles", {
+    user: ADMIN,
+    method: "POST",
+    body: { name: "Library sources", rules: parameters },
+  });
+
+  assert.equal(created.status, 201);
+  assert.deepEqual((await created.json() as StoredSourceProfile).parameters, parameters);
+});
+
 test("a coded subtitle rule survives materialization over the viewer preference", async (t) => {
   const parameters = ruleParameters();
   parameters.subtitleLanguage = "cs";
@@ -603,6 +624,9 @@ test("deleting a variant clears preferences while follows and queued snapshots k
     state.userData![MEMBER]!.prefs.downloadSourceProfile = VARIANT;
     state.userData![OTHER]!.prefs.downloadSourceProfile = VARIANT;
     state.userData![OTHER]!.prefs.followSourceProfile = VARIANT;
+    state.userData![MEMBER]!.prefs.streamSort = `rule:${VARIANT}`;
+    state.userData![MEMBER]!.prefs.defaultRulesProfileId = VARIANT;
+    state.userData![OTHER]!.prefs.streamSort = "size-desc";
   });
 
   const followStore = new (await import("../follows.js")).FollowStore(harness.dataDir);
@@ -673,6 +697,10 @@ test("deleting a variant clears preferences while follows and queued snapshots k
     Object.hasOwn(harness.store.userData(OTHER).prefs, "followSourceProfile"),
     false,
   );
+  // A source order naming the deleted rules falls back to Balanced; any other order stays.
+  assert.equal(harness.store.userData(MEMBER).prefs.streamSort, `rule:${SOURCE_PROFILE_IDS.balanced}`);
+  assert.equal(Object.hasOwn(harness.store.userData(MEMBER).prefs, "defaultRulesProfileId"), false);
+  assert.equal(harness.store.userData(OTHER).prefs.streamSort, "size-desc");
   assert.deepEqual(followStore.get(follow.id)?.autoDownload?.sourceProfile, {
     profileId: VARIANT,
     revision: 1,

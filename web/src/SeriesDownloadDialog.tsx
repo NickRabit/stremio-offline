@@ -6,7 +6,7 @@ import { inlineLanguageName, t, useI18n } from "./i18n";
 import { SaveTargetFields } from "./SaveTargetFields";
 import type { SaveTarget } from "./save-target";
 import { profileAudioLanguage, profileAudioMode, profileSummary, sourceProfileName } from "./source-profile-copy";
-import type { FollowAutoDownload, FollowPreview, FollowStartMode, FollowView, LibraryView, ProfileSelection, SourceProfile } from "./types";
+import type { FollowAutoDownload, FollowPreview, FollowStartMode, FollowView, LibraryView, ProfileSelection, SourceProfile, Stream } from "./types";
 
 interface Episode { id: string; season?: number; episode?: number; title?: string; released?: string }
 
@@ -29,9 +29,29 @@ const usableProfile = (profile: SourceProfile) => profile.template === "rules"
   && profile.operations.includes("downloadToLibrary")
   && Boolean(sourceProfileName(profile.nameKey, profile.name));
 
+/** What the one-title dialog (opened from the "To library" arrow) last saved with: the selected
+ *  source, or a rules profile id. A per-browser convenience, so a failed storage read just means
+ *  "the selected source". */
+const SINGLE_CHOICE_KEY = "stremio-offline-single-download-choice";
+const EXACT_CHOICE = "exact";
+const readSingleChoice = (): string | null => {
+  try { return window.localStorage.getItem(SINGLE_CHOICE_KEY); } catch { return null; }
+};
+const writeSingleChoice = (value: string) => {
+  try { window.localStorage.setItem(SINGLE_CHOICE_KEY, value); } catch { /* a convenience only */ }
+};
+
+export const resolveSourceProfile = (profiles: readonly SourceProfile[], preferredId: string | undefined, follow: boolean) => {
+  const offered = profiles.filter(usableProfile);
+  const preset = follow ? "rules.preset.myLanguage" : "rules.preset.balanced";
+  return offered.find((profile) => profile.id === preferredId)
+    ?? offered.find((profile) => profile.nameKey === preset)
+    ?? offered[0];
+};
+
 export function SeriesDownloadDialog({ type, label, title, episodes, libraries, follow, canRetain = false,
   downloadSourceProfileId, followSourceProfileId, onRememberDownloadSourceProfile, onRememberFollowSourceProfile,
-  onClose, onSubmit }: {
+  exactSource, onExactSave, onClose, onSubmit }: {
   type: string; label: string; title: string; episodes: Episode[]; libraries: LibraryView[];
   canRetain?: boolean;
   downloadSourceProfileId?: string;
@@ -39,6 +59,8 @@ export function SeriesDownloadDialog({ type, label, title, episodes, libraries, 
   onRememberDownloadSourceProfile?: (profileId: string | null) => Promise<void>;
   onRememberFollowSourceProfile?: (profileId: string | null) => Promise<void>;
   follow?: { followId?: string; initial?: FollowAutoDownload; create?: { metaId: string; name: string; poster?: string; addonKey?: string }; onFollowed?: (follow: FollowView) => void };
+  exactSource?: { stream: Stream; label: string; preferred: boolean };
+  onExactSave?: (target?: SaveTarget) => Promise<void>;
   onClose: () => void;
   onSubmit?: (selection: ProfileSelection, target?: SaveTarget) => Promise<void>;
 }) {
@@ -53,6 +75,9 @@ export function SeriesDownloadDialog({ type, label, title, episodes, libraries, 
   const [profiles, setProfiles] = useState<SourceProfile[]>([]);
   const [profilesState, setProfilesState] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
   const [profileId, setProfileId] = useState("");
+  // The arrow's dialog opens on what was last used there; the first time, on the selected source.
+  const [singleChoice] = useState(() => (exactSource ? readSingleChoice() : null));
+  const [exactSelected, setExactSelected] = useState(Boolean(exactSource && (exactSource.preferred || singleChoice === null || singleChoice === EXACT_CHOICE)));
   const [rememberProfile, setRememberProfile] = useState(false);
   const [graceDays, setGraceDays] = useState(initial?.graceDays ?? (follow ? 2 : 0));
   const [retentionDays, setRetentionDays] = useState<number>(initial?.retention?.afterWatchedDays ?? 0);
@@ -75,7 +100,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, libraries, 
     : t("rules.waitForAudioLanguage", { language: inlineLanguageName(graceLanguage) });
   const defaultProfileId = follow ? followSourceProfileId : downloadSourceProfileId;
   const remember = follow ? onRememberFollowSourceProfile : onRememberDownloadSourceProfile;
-  const showRemember = Boolean(remember) && Boolean(profileId) && profileId !== (defaultProfileId ?? "");
+  const showRemember = !exactSelected && Boolean(remember) && Boolean(profileId) && profileId !== (defaultProfileId ?? "");
   const legacyFollow = Boolean(follow?.followId && initial && !initial.sourceProfile);
   const profilesRequested = useRef(false);
 
@@ -97,11 +122,14 @@ export function SeriesDownloadDialog({ type, label, title, episodes, libraries, 
       if (!offered.length) { setProfilesState("unavailable"); return; }
       const initialId = initial?.sourceProfile?.profileId;
       const modeDefault = follow ? followSourceProfileId : downloadSourceProfileId;
-      const preset = follow ? "rules.preset.myLanguage" : "rules.preset.balanced";
       const legacy = Boolean(follow?.followId && initial && !initial.sourceProfile);
-      const chosen = legacy ? offered[0]! : offered.find((profile) => profile.id === initialId)
-        ?? offered.find((profile) => profile.id === modeDefault)
-        ?? offered.find((profile) => profile.nameKey === preset)
+      const remembered = exactSource && !exactSource.preferred && singleChoice && singleChoice !== EXACT_CHOICE
+        ? offered.find((profile) => profile.id === singleChoice)
+        : undefined;
+      // A remembered rules profile that no longer exists falls back to the selected source.
+      if (exactSource && !exactSource.preferred && singleChoice && singleChoice !== EXACT_CHOICE && !remembered) setExactSelected(true);
+      const chosen = legacy ? offered[0]! : remembered ?? offered.find((profile) => profile.id === initialId)
+        ?? resolveSourceProfile(offered, modeDefault, Boolean(follow))
         ?? offered[0]!;
       setProfileId(chosen.id);
       setProfilesState("ready");
@@ -138,11 +166,18 @@ export function SeriesDownloadDialog({ type, label, title, episodes, libraries, 
   };
 
   const submit = async () => {
-    if (downloading && !selectedProfile) return;
+    if (downloading && !exactSelected && !selectedProfile) return;
     setBusy(true); setError("");
     try {
       if (follow?.create && followMode === "notify") {
         follow.onFollowed?.(await api.follow({ type, id: follow.create.metaId, name: follow.create.name, poster: follow.create.poster, ...(follow.create.addonKey ? { addonKey: follow.create.addonKey } : {}) }));
+        onClose();
+        return;
+      }
+      if (exactSelected && exactSource) {
+        if (!onExactSave) return;
+        await onExactSave(target ?? undefined);
+        writeSingleChoice(EXACT_CHOICE);
         onClose();
         return;
       }
@@ -162,16 +197,28 @@ export function SeriesDownloadDialog({ type, label, title, episodes, libraries, 
           },
         });
         if (created) follow.onFollowed?.(updated);
-      } else if (onSubmit) await onSubmit(selection, target ?? undefined);
+      } else if (onSubmit) {
+        await onSubmit(selection, target ?? undefined);
+        if (exactSource) writeSingleChoice(selectedProfile!.id);
+      }
       if (rememberProfile && showRemember) void Promise.resolve().then(() => remember?.(profileId)).catch(() => undefined);
       onClose();
     } catch (value) { setError(describeError(value)); }
     finally { setBusy(false); }
   };
+  const dialogTitle = creating
+    ? t(isMovie ? "follow.createTitleMovie" : "follow.createTitle")
+    : follow
+      ? t("follow.setupTitle")
+      : isMovie
+        ? t("bulk.titleMovie")
+        : type === "series" && episodes.length === 1
+          ? t("bulk.titleEpisode")
+          : t("bulk.title");
 
   return <div ref={dialog} tabIndex={-1} className="identify-overlay" role="dialog" aria-modal="true" aria-labelledby="bulk-dialog-title" onClick={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
     <div className="panel identify-card dialog-split bulk-card">
-      <div className="identify-head bulk-head"><div><span className="bulk-eyebrow">{label}</span><h2 id="bulk-dialog-title">{creating ? t(isMovie ? "follow.createTitleMovie" : "follow.createTitle") : follow ? t("follow.setupTitle") : t("bulk.title")}</h2></div><button className="icon-button" aria-label={t("common.cancel")} disabled={busy} onClick={onClose}><X/></button></div>
+      <div className="identify-head bulk-head"><div><span className="bulk-eyebrow">{label}</span><h2 id="bulk-dialog-title">{dialogTitle}</h2></div><button className="icon-button" aria-label={t("common.cancel")} disabled={busy} onClick={onClose}><X/></button></div>
       <div className="dialog-body bulk-body">
         {creating && <section className="bulk-section"><div className="bulk-section-head"><Bell/><div><h3>{t("follow.howHeading")}</h3></div></div>
           <div className="bulk-strategy" role="radiogroup" aria-label={t("follow.howHeading")}>{(["notify", "download"] as const).map((mode) => <label key={mode} className={followMode === mode ? "selected" : ""}><input type="radio" name="follow-mode" value={mode} checked={followMode === mode} onChange={() => setFollowMode(mode)}/><span><strong>{t(mode === "notify" ? (isMovie ? "follow.movieNotify" : "follow.modeNotify") : (isMovie ? "follow.movieDownload" : "follow.modeDownload"))}</strong><small>{t(mode === "notify" ? (isMovie ? "follow.movieNotifyHint" : "follow.modeNotifyHint") : (isMovie ? "follow.movieDownloadHint" : "follow.modeDownloadHint"))}</small></span></label>)}</div>
@@ -190,7 +237,10 @@ export function SeriesDownloadDialog({ type, label, title, episodes, libraries, 
             {legacyFollow && <p className="identify-hint follow-warning">{t("rules.legacyFollowNote")}</p>}
             {profilesState === "loading" && <p className="identify-hint">{t("common.loading")}</p>}
             {profilesState === "unavailable" && <p className="identify-hint follow-warning">{t("rules.unavailable")}</p>}
-            {profilesState === "ready" && <div className="bulk-strategy rules-choice" role="radiogroup" aria-label={t("rules.title")}>{profiles.map((profile) => <label key={profile.id} className={profileId === profile.id ? "selected" : ""}><input type="radio" name="download-rules" value={profile.id} checked={profileId === profile.id} onChange={() => { setProfileId(profile.id); setRememberProfile(false); }}/><span><strong>{sourceProfileName(profile.nameKey, profile.name)}</strong><small>{profileSummary(profile, isMovie ? "movie" : "episode")}</small></span></label>)}</div>}
+            {(exactSource || profilesState === "ready") && <div className="bulk-strategy rules-choice" role="radiogroup" aria-label={t("rules.title")}>
+              {exactSource && <label className={exactSelected ? "selected" : ""}><input type="radio" name="download-rules" value="exact-source" checked={exactSelected} onChange={() => { setExactSelected(true); setRememberProfile(false); }}/><span><strong>{t("rules.selectedSource")}</strong><small>{exactSource.label}</small></span></label>}
+              {profilesState === "ready" && profiles.map((profile) => <label key={profile.id} className={!exactSelected && profileId === profile.id ? "selected" : ""}><input type="radio" name="download-rules" value={profile.id} checked={!exactSelected && profileId === profile.id} onChange={() => { setExactSelected(false); setProfileId(profile.id); setRememberProfile(false); }}/><span><strong>{sourceProfileName(profile.nameKey, profile.name)}</strong><small>{profileSummary(profile, isMovie ? "movie" : "episode")}</small></span></label>)}
+            </div>}
             {follow && waitsForAudio && <div className="bulk-language-grid rules-grace"><label><span>{graceLabel}</span><select aria-label={graceLabel} value={graceDays} onChange={(event) => setGraceDays(Number(event.target.value))}><option value={0}>{t("rules.waitNone")}</option>{[1, 2, 3, 7, 14].map((days) => <option key={days} value={days}>{t("rules.waitDays", { count: days })}</option>)}</select></label></div>}
             {showRemember && <label className="bulk-remember-profile"><input type="checkbox" aria-label={t(follow ? "rules.rememberForFollows" : "rules.rememberForDownloads")} checked={rememberProfile} onChange={(event) => setRememberProfile(event.target.checked)}/><span>{t(follow ? "rules.rememberForFollows" : "rules.rememberForDownloads")}</span></label>}
           </section>
@@ -199,7 +249,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, libraries, 
         </>}
         {error && <p className="login-error" role="alert">{error}</p>}
       </div>
-      <footer className="dialog-foot"><p className="identify-hint">{creating && !downloading ? t(isMovie ? "follow.movieNotifyHint" : "follow.modeNotifyHint") : follow ? t("follow.setupHint") : t("bulk.queueHint")}</p><button type="button" disabled={busy} onClick={onClose}>{t("common.cancel")}</button><button type="button" className="primary" disabled={busy || (downloading && (startMissing || profilesState !== "ready" || !selectedProfile))} onClick={() => void submit()}>{busy ? t("save.adding") : creating ? t(downloading ? "follow.followAndDownload" : "follow.followSave") : follow ? t("follow.setupSave") : t("bulk.add")}</button></footer>
+      <footer className="dialog-foot"><p className="identify-hint">{creating && !downloading ? t(isMovie ? "follow.movieNotifyHint" : "follow.modeNotifyHint") : follow ? t("follow.setupHint") : t("bulk.queueHint")}</p><button type="button" disabled={busy} onClick={onClose}>{t("common.cancel")}</button><button type="button" className="primary" disabled={busy || (downloading && (startMissing || (exactSelected ? !onExactSave : profilesState !== "ready" || !selectedProfile)))} onClick={() => void submit()}>{busy ? t("save.adding") : creating ? t(downloading ? "follow.followAndDownload" : "follow.followSave") : follow ? t("follow.setupSave") : t("bulk.add")}</button></footer>
     </div>
   </div>;
 }

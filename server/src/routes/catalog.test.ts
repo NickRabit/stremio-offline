@@ -14,7 +14,7 @@ import { ImageProxy } from "../images.js";
 import type { LibraryMetaRecord, TitleUnit } from "../library-match.js";
 import type { LibraryMetaStore } from "../library-meta-store.js";
 import type { LibraryRecord } from "../libraries.js";
-import type { Store, UserPrefs } from "../store.js";
+import { defaultPrefs, type Store, type StoredSourceProfile, type UserPrefs } from "../store.js";
 import type { AddonRecord, AddonRole, CatalogDefinition, MetaItem } from "../types.js";
 import type { UserRecord } from "../users.js";
 import { metadata, resetImdbTargets } from "../addons.js";
@@ -23,6 +23,7 @@ import { outbound } from "../outbound.js";
 import { setFetchTransport } from "../security.js";
 import { clearTmdbCache, tmdbMeta } from "../tmdb.js";
 import { clearTrailerCache } from "../trailers.js";
+import { RULE_PRESETS, SOURCE_PROFILE_IDS } from "../source-profiles.js";
 import { registerCatalogRoutes, type CatalogDeps } from "./catalog.js";
 
 interface Harness {
@@ -68,13 +69,22 @@ const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null, 
   tmdbApiKey?: string;
   externalIds?: ExternalIdStore;
   imageProxy?: ImageProxy;
+  prefs?: Partial<UserPrefs>;
+  profiles?: readonly StoredSourceProfile[];
+  remoteLibraries?: ReturnType<Store["remoteLibraries"]>;
+  mediaConnections?: ReturnType<Store["mediaConnections"]>;
 } = {}): Promise<Harness> => {
   const viewer = options.viewer === undefined ? admin : options.viewer;
+  const prefs = { ...defaultPrefs(), uiLanguage: "cs" as const, ...options.prefs };
   const lookups: Harness["lookups"] = [];
   const signals: AbortSignal[] = [];
   const store = {
     addons: () => records,
     libraries: () => options.libraries ?? [],
+    sourceProfiles: () => options.profiles ?? [],
+    remoteLibraries: () => options.remoteLibraries ?? [],
+    mediaConnections: () => options.mediaConnections ?? [],
+    users: () => (viewer ? [viewer] : []),
     // The caller's own addon priority, which every chooser list is ordered by.
     userData: (id: string) => ({ addonOrder: options.addonOrder?.[id] ?? [] }),
     settings: () => ({ tmdbApiKey: options.tmdbApiKey }),
@@ -95,7 +105,7 @@ const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null, 
       if (opts?.signal) signals.push(opts.signal);
       return meta;
     }),
-    prefsOf: () => ({ uiLanguage: "cs" }) as UserPrefs,
+    prefsOf: () => prefs,
     libraryTarget: async (value) => value,
     ownerOf: () => ({ userId: "usr_00000001", sid: "session-1", expiresAt: Number.MAX_SAFE_INTEGER }),
     trackMedia: () => undefined,
@@ -1461,6 +1471,54 @@ test("GET /api/streams/:type/:id returns no source from an addon the caller may 
   });
 });
 
+const storedRulePresets = (): StoredSourceProfile[] => RULE_PRESETS.map((preset) => ({
+  id: preset.id,
+  revision: 1,
+  template: preset.template,
+  nameKey: preset.nameKey,
+  parameters: preset.rules,
+  createdAt: "2026-01-01T00:00:00.000Z",
+  updatedAt: "2026-01-01T00:00:00.000Z",
+}));
+
+test("GET /api/streams attaches a verdict for every admitting rules profile", async (t) => {
+  const records = [addon("rule-source", [], { role: "source", resources: ["stream"] })];
+  const harness = await mount(records, null, { profiles: storedRulePresets() });
+  t.after(harness.close);
+
+  await withStubbedAddons(
+    () => json({ streams: [{ url: "https://cdn.example/movie-1080p.mp4", name: "Czech 1080p" }] }),
+    async () => {
+      const listed = await (await api(harness.base, "/api/streams/movie/tt1")).json() as Array<{
+        rules?: Record<string, { profileId: string; status: string; reasons: string[]; rank: number[] }>;
+      }>;
+      const rules = listed[0]!.rules!;
+      assert.deepEqual(Object.keys(rules).sort(), RULE_PRESETS.map((preset) => preset.id).sort());
+      assert.equal(rules[SOURCE_PROFILE_IDS.balanced]!.status, "meets");
+      assert.equal(rules[SOURCE_PROFILE_IDS.smaller]!.status, "breaks");
+      assert.deepEqual(rules[SOURCE_PROFILE_IDS.balanced]!.reasons, []);
+      assert.ok(rules[SOURCE_PROFILE_IDS.balanced]!.rank.length > 1);
+    },
+  );
+});
+
+test("a server with no admitting rules profile omits rules", async (t) => {
+  const records = [addon("rule-source", [], { role: "source", resources: ["stream"] })];
+  const harness = await mount(records, null, {
+    profiles: [],
+    prefs: { defaultRulesProfileId: "deleted-rules-profile" },
+  });
+  t.after(harness.close);
+
+  await withStubbedAddons(
+    () => json({ streams: [{ url: "https://cdn.example/movie-1080p.mp4", name: "Czech 1080p" }] }),
+    async () => {
+      const listed = await (await api(harness.base, "/api/streams/movie/tt1")).json() as Array<Record<string, unknown>>;
+      assert.equal("rules" in listed[0]!, false);
+    },
+  );
+});
+
 const localCopy = (overrides: Partial<Awaited<ReturnType<CatalogDeps["localCopies"]>>[number]> = {}) => ({
   key: "lib_00000001/Heat (1995)/Heat 1995 1080p.mkv",
   libraryId: "lib_00000001",
@@ -1501,6 +1559,23 @@ test("GET /api/local-streams mints one library entry per copy", async (t) => {
   assert.equal((entry.behaviorHints as { videoSize?: number; filename?: string }).filename, "Heat 1995 1080p.mkv");
   assert.equal(typeof entry.sourceId, "string");
   assert.ok(entry.sourceId);
+});
+
+test("GET /api/local-streams attaches a verdict for every admitting rules profile", async (t) => {
+  const harness = await mount([], null, {
+    libraries: [library("lib_00000001")],
+    profiles: storedRulePresets(),
+    localCopies: async () => [localCopy()],
+  });
+  t.after(harness.close);
+
+  const listed = await (await api(harness.base, "/api/local-streams/movie/tt0113277")).json() as Array<{
+    rules?: Record<string, { profileId: string; status: string; rank: number[] }>;
+  }>;
+  const rules = listed[0]!.rules!;
+  assert.deepEqual(Object.keys(rules).sort(), RULE_PRESETS.map((preset) => preset.id).sort());
+  assert.equal(rules[SOURCE_PROFILE_IDS.balanced]!.status, "unverified");
+  assert.ok(rules[SOURCE_PROFILE_IDS.balanced]!.rank.length > 1);
 });
 
 test("the local listing re-checks every library it is about to name", async (t) => {

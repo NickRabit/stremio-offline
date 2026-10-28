@@ -10,7 +10,7 @@ const libraryId = "lib_ab12cd34";
 const settings: Settings = {
   concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2,
   uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui",
-  mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true,
+  mergeByName: true, streamSort: "rule:balanced", trackProgress: true, showResumeRow: true,
   libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24,
   tileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster",
   favoritesTileShape: "poster", resumeTileShape: "poster", followingTileShape: "poster",

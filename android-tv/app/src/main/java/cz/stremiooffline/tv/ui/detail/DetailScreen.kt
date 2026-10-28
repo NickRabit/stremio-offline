@@ -59,6 +59,7 @@ import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.playback.Progress
 import cz.stremiooffline.tv.ui.components.CardRowInset
+import cz.stremiooffline.tv.ui.catalog.BindSourceProfiles
 import cz.stremiooffline.tv.ui.catalog.ActionCaption
 import cz.stremiooffline.tv.ui.catalog.DetailAction
 import cz.stremiooffline.tv.ui.catalog.DetailActionRow
@@ -287,6 +288,7 @@ fun DetailScreen(
   /** True while the save panel is up, so its close can hand the remote back to its opener. */
   var saveWasOpen by remember(detail.gridPath) { mutableStateOf(false) }
   val sourceFilters = remember(detail.gridPath) { SourceFilterState() }
+  BindSourceProfiles(sourcesApi, sourceFilters)
   val save = remember(detail.gridPath) { SourceSaveState() }
 
   val playIndex = current.files.indexOfFirst { !isCompleted(it) }.let { if (it < 0) 0 else it }
@@ -807,6 +809,8 @@ fun DetailScreen(
         default = panelRows.firstOrNull(),
         chosen = pickedRow?.takeIf { row -> loadedRows.any { it === row } },
         filters = sourceFilters.filters(groupState?.settings?.streamSort),
+        profiles = sourceFilters.profiles,
+        ruleNoteProfileId = sourceFilters.noteProfileId(groupState?.settings?.streamSort),
         onFilterSelect = { chip, key -> sourceFilters.select(chip, key) },
         onChoose = { choosePanelRow(it) },
         // The panel only picks: To library on the action row acts on the pick, so no row carries

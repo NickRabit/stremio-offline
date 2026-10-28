@@ -128,12 +128,7 @@ internal fun SeriesDownloadPanel(
     try {
       val loaded = api.sourceProfiles()
       sourceProfiles = loaded
-      if (!ruleTouched) {
-        val offeredNow = loaded.filter(::isOfferedRule)
-        chosenId = offeredNow.firstOrNull { it.id == settings.downloadSourceProfile }?.id
-          ?: offeredNow.firstOrNull { it.nameKey == BALANCED_NAME_KEY }?.id
-          ?: offeredNow.firstOrNull()?.id
-      }
+      if (!ruleTouched) chosenId = defaultOfferedRuleId(loaded, settings.downloadSourceProfile)
       rulesLoaded = true
     } catch (cancelled: CancellationException) {
       throw cancelled
@@ -380,28 +375,37 @@ private fun ColumnScope.SettingsRows(
 
 /** The rules the server offers. Choosing one applies it and returns to the settings. */
 @Composable
-private fun ColumnScope.RuleRows(
+internal fun ColumnScope.RuleRows(
   chosenId: String?,
   profiles: List<SourceProfileDto>,
   uiLanguage: String?,
   openingFocus: FocusRequester,
   rowFocuses: MutableMap<String, FocusRequester>,
   onPick: (String) -> Unit,
+  /** Null keeps the opening focus on the first rule, which is the series screen. */
+  openingId: String? = null,
+  claimOpening: Boolean = true,
 ) {
   profiles.forEachIndexed { index, profile ->
+    val opens = claimOpening && if (openingId == null) index == 0 else profile.id == openingId
     PanelOption(
       text = ruleName(profile),
       supportingText = ruleSummary(profile.policy, uiLanguage),
       selected = profile.id == chosenId,
       onClick = { onPick(profile.id) },
-      modifier = Modifier.panelRow(rowFocuses, seriesRuleTag(profile.id), first = index == 0, opening = openingFocus),
+      modifier = Modifier.panelRow(
+        rowFocuses,
+        seriesRuleTag(profile.id),
+        first = opens,
+        opening = if (opens) openingFocus else null,
+      ),
     )
   }
 }
 
-/** The libraries this account may write a series into, the addon default preselected. */
+/** The libraries this account may write this title into, the addon default preselected. */
 @Composable
-private fun ColumnScope.LibraryRows(
+internal fun ColumnScope.LibraryRows(
   writableLibraries: List<LibraryDto>,
   targetLibrary: String?,
   openingFocus: FocusRequester,
@@ -430,12 +434,12 @@ private fun ColumnScope.LibraryRows(
 
 /** One row that opens a nested list, named by the value it holds today. */
 @Composable
-private fun SettingRow(text: String, value: String, onClick: () -> Unit, modifier: Modifier) {
+internal fun SettingRow(text: String, value: String, onClick: () -> Unit, modifier: Modifier) {
   PanelOption(text = "$text · $value", onClick = onClick, modifier = modifier)
 }
 
 /** The tag, the row's own requester, and -- for the first row of a screen -- the opening one. */
-private fun Modifier.panelRow(
+internal fun Modifier.panelRow(
   focuses: MutableMap<String, FocusRequester>,
   tag: String,
   first: Boolean,
@@ -454,19 +458,27 @@ private fun presetLabel(nameKey: String?): Int? = when (nameKey) {
   else -> null
 }
 
-private fun isOfferedRule(profile: SourceProfileDto): Boolean =
+internal fun isOfferedRule(profile: SourceProfileDto): Boolean =
   "downloadToLibrary" in profile.operations &&
     (presetLabel(profile.nameKey) != null || !profile.name.isNullOrBlank())
 
+/** The account's rule, then Balanced, then the first offered rule. */
+internal fun defaultOfferedRuleId(profiles: List<SourceProfileDto>, remembered: String?): String? {
+  val offered = profiles.filter(::isOfferedRule)
+  return offered.firstOrNull { it.id == remembered }?.id
+    ?: offered.firstOrNull { it.nameKey == BALANCED_NAME_KEY }?.id
+    ?: offered.firstOrNull()?.id
+}
+
 @Composable
-private fun ruleName(profile: SourceProfileDto): String {
+internal fun ruleName(profile: SourceProfileDto): String {
   val label = presetLabel(profile.nameKey)
   return if (label != null) stringResource(label) else profile.name.orEmpty()
 }
 
 /** `720p–1080p · prefer my language · up to ~4 GB per episode`, omitting a part the policy does not carry. */
 @Composable
-private fun ruleSummary(policy: SourceProfilePolicyDto?, uiLanguage: String?): String? {
+internal fun ruleSummary(policy: SourceProfilePolicyDto?, uiLanguage: String?): String? {
   val parts = ruleSummaryParts(policy)
   if (parts.isEmpty()) return null
   val locale = LocalConfiguration.current.locales[0]

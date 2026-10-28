@@ -34,7 +34,7 @@ interface Harness {
   actions: string[];
   moves: Array<{ id: string; direction: number }>;
   viewed: Array<{ id?: string; media?: MediaInfo; target?: string }>;
-  pending: Array<{ selection?: DownloadSelection; ownerUserId?: string; sourceAdmission?: SourceAdmissionSnapshotV1 }>;
+  pending: Array<{ type?: string; videoId?: string; selection?: DownloadSelection; media?: MediaInfo; ownerUserId?: string; sourceAdmission?: SourceAdmissionSnapshotV1 }>;
   setAddonAllowedUsers(key: string, allowedUsers: string[]): void;
   setLibraryVisibleTo(id: string, visibleTo: string[]): void;
   close(): Promise<void>;
@@ -121,7 +121,7 @@ const mount = async (
   const actions: string[] = [];
   const moves: Array<{ id: string; direction: number }> = [];
   const viewed: Array<{ id?: string; media?: MediaInfo; target?: string }> = [];
-  const pending: Array<{ selection?: DownloadSelection; ownerUserId?: string; sourceAdmission?: SourceAdmissionSnapshotV1 }> = [];
+  const pending: Array<{ type?: string; videoId?: string; selection?: DownloadSelection; media?: MediaInfo; ownerUserId?: string; sourceAdmission?: SourceAdmissionSnapshotV1 }> = [];
   const profiles = options.profiles ?? (["recommended", "providerPriority", "travel"] as const).map((template) => ({
     id: SOURCE_PROFILE_IDS[template],
     revision: 1,
@@ -144,9 +144,9 @@ const mount = async (
       if (options.withdrawOnAdd) held.viewer = options.withdrawOnAdd;
       return { id: "job-1", target: "Movies/Film/Film.mkv" };
     },
-    addPending: async (_title: string, source: { selection?: DownloadSelection }, _media: unknown, ownerUserId?: string, follow?: unknown, sourceAdmission?: SourceAdmissionSnapshotV1) => {
+    addPending: async (_title: string, source: { type: string; videoId: string; selection?: DownloadSelection }, media: MediaInfo | undefined, ownerUserId?: string, follow?: unknown, sourceAdmission?: SourceAdmissionSnapshotV1) => {
       assert.equal(follow, undefined);
-      pending.push({ ...source, ownerUserId, sourceAdmission });
+      pending.push({ ...source, media, ownerUserId, sourceAdmission });
       await options.onPending?.(pending.length);
       if (options.skipPending?.(pending.length)) return undefined;
       return { id: "job-1" };
@@ -646,6 +646,102 @@ test("bulk admission materializes every rule preset with the episode size limit"
         : { max: preset.rules.sizeGb.episode.max * 1_000_000_000 },
     );
   }
+});
+
+test("a film queued by a rules profile becomes one lazy movie job with the movie admission", async (t) => {
+  const balanced = RULE_PRESETS.find((preset) => preset.id === SOURCE_PROFILE_IDS.balanced)!;
+  const harness = await mount([streamAddon("stream-addon", { allowedUsers: [BOB] })], {
+    viewer: ordinary,
+    profiles: [{
+      id: balanced.id,
+      revision: 1,
+      template: balanced.template,
+      nameKey: balanced.nameKey,
+      parameters: balanced.rules,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    }],
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/downloads/bulk", {
+    method: "POST",
+    body: {
+      title: "Heat",
+      type: "movie",
+      episodes: [{ id: "tt-film" }],
+      media: { id: "tt-film", metaType: "movie", poster: "heat.jpg", year: "1995" },
+      selection: profileSelection(balanced.id),
+    },
+  });
+  const text = await response.text();
+  assert.equal(response.status, 201, text);
+  assert.deepEqual(JSON.parse(text), { added: 1, skipped: 0 });
+  assert.equal(harness.pending.length, 1);
+  assert.equal(harness.pending[0]?.type, "movie");
+  assert.equal(harness.pending[0]?.videoId, "tt-film");
+  assert.deepEqual(harness.pending[0]?.media, {
+    kind: "movie", title: "Heat", id: "tt-film", metaType: "movie", poster: "heat.jpg", year: 1995,
+  });
+  assert.deepEqual(harness.pending[0]?.sourceAdmission?.profile, {
+    id: balanced.id, revision: 1, template: "rules",
+  });
+  assert.deepEqual(harness.pending[0]?.sourceAdmission?.policy.constraints.bytes, { max: 15_000_000_000 });
+});
+
+test("a film bulk request refuses a legacy source selection", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/downloads/bulk", {
+    method: "POST",
+    body: {
+      title: "Heat",
+      type: "movie",
+      episodes: [{ id: "tt-film" }],
+      media: { id: "tt-film", metaType: "movie" },
+      selection: { addonKeys: ["stream-addon"], audioLanguage: "en" },
+    },
+  });
+  assert.equal(response.status, 400);
+  assert.equal(await keyOf(response), "err.missingDownloadSources");
+  assert.deepEqual(harness.pending, []);
+});
+
+test("a film bulk request refuses more than one entry or episode numbering", async (t) => {
+  const balanced = RULE_PRESETS.find((preset) => preset.id === SOURCE_PROFILE_IDS.balanced)!;
+  const harness = await mount([streamAddon("stream-addon", { allowedUsers: [BOB] })], {
+    viewer: ordinary,
+    profiles: [{
+      id: balanced.id,
+      revision: 1,
+      template: balanced.template,
+      nameKey: balanced.nameKey,
+      parameters: balanced.rules,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    }],
+  });
+  t.after(harness.close);
+
+  for (const entries of [
+    [{ id: "tt-film" }, { id: "tt-second" }],
+    [{ id: "tt-film", season: 1 }],
+    [{ id: "tt-film", episode: 1 }],
+  ]) {
+    const response = await api(harness.base, "/api/downloads/bulk", {
+      method: "POST",
+      body: {
+        title: "Heat",
+        type: "movie",
+        episodes: entries,
+        media: { id: "tt-film", metaType: "movie" },
+        selection: profileSelection(balanced.id),
+      },
+    });
+    assert.equal(response.status, 400);
+    assert.equal(await keyOf(response), "err.invalidRequest");
+  }
+  assert.deepEqual(harness.pending, []);
 });
 
 test("a stored profile revision bump rejects a stale bulk submission", async (t) => {
@@ -1316,6 +1412,41 @@ const sealedNative = (libraryId = remoteLibraryRecord.id, copyKind?: "movie" | "
 /** A remote library Bob is granted, so the owner-bound queue check can pass for him. */
 const remoteLibraryOfType = (type: "movie" | "series" | "mixed", over: Record<string, unknown> = {}) =>
   ({ ...remoteLibraryRecord, type, allowedUsers: [BOB], ...over });
+
+test("a remote-only rules profile queues a film without an addon", async (t) => {
+  const balanced = RULE_PRESETS.find((preset) => preset.id === SOURCE_PROFILE_IDS.balanced)!;
+  const harness = await mount([], {
+    viewer: ordinary,
+    profiles: [{
+      id: balanced.id,
+      revision: 1,
+      template: balanced.template,
+      nameKey: balanced.nameKey,
+      parameters: balanced.rules,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    }],
+    connections: [remoteConnectionRecord],
+    remoteLibraries: [remoteLibraryOfType("movie")],
+  });
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/downloads/bulk", {
+    method: "POST",
+    body: {
+      title: "Heat",
+      type: "movie",
+      episodes: [{ id: "tt-film" }],
+      media: { id: "tt-film", metaType: "movie" },
+      selection: profileSelection(balanced.id),
+    },
+  });
+  assert.equal(response.status, 201, await response.text());
+  assert.equal(harness.pending.length, 1);
+  assert.equal(harness.pending[0]?.type, "movie");
+  assert.deepEqual(harness.pending[0]?.selection?.addonKeys, []);
+  assert.deepEqual(harness.pending[0]?.sourceAdmission?.providerKeys, [`remote:${remoteLibraryRecord.id}`]);
+});
 
 const bobReference: RemoteDownloadReference = { ...remoteReference, ownerUserId: BOB };
 

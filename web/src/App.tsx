@@ -30,8 +30,8 @@ import { report } from "./diagnostics";
 import { label, titleLanguage } from "./languages";
 import { locale, localeTag, setLocale, t, useI18n, type Key } from "./i18n";
 import { catalogTypeTag } from "./catalog-labels";
-import { addonNotices, canQueue, catalogSourceRows, filmHasNoSource, isLocalStream, isRemoteStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, remoteFilterId, remoteSourceFilter, repickStream, streamLanguages, visibleCatalogStreams, type StreamSort } from "./streams";
-import { providerLabel, SourceFilters, SourceRows } from "./source-rows";
+import { addonNotices, canQueue, catalogSourceRows, filmHasNoSource, isLocalStream, isRemoteStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, remoteFilterId, remoteSourceFilter, repickStream, resolveStreamSort, sortRuleId, streamLanguages, visibleCatalogStreams, type StreamOrder } from "./streams";
+import { providerLabel, SourceFilters, SourceRows, streamLabel } from "./source-rows";
 import { alternativeProgressSaved, sourceProgressOwner, type SourceProgressOwner } from "./source-progress";
 import { panelProgressAddonKey } from "./player-progress";
 import { alternativeSaveRequest } from "./alternative-save";
@@ -60,14 +60,14 @@ import type { HomeCard } from "../../server/src/home";
 import { parseHomeCatalogRowId } from "../../server/src/home";
 import { MoreMenu, type MoreItem } from "./MoreMenu";
 import { MediaGallery } from "./MediaGallery";
-import { catalogueGalleryImages, mergeGallery, localGalleryImage, type GalleryImage, type GalleryKind } from "./gallery-images";
+import { catalogueGalleryImages, mergeGallery, localGalleryImage, type GalleryImage } from "./gallery-images";
 import { loadTitleGallery, type CatalogueRef } from "./title-enrichment";
 import { SettingsPage } from "./SettingsPage";
 import { resolveStartView } from "./start-view";
 import { useLibrarySources } from "./library-sources";
 import { streamGroupLabel } from "./source-rows";
 import { playbackIdentity } from "./playback-identity";
-import type { Addon, BuildInfo, BrowseItem, BrowseLibrary, BrowseResult, DeviceTransfer, DownloadsViewPrefs, FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem, FavoriteRemoteItem, FollowView, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, LibraryViewPrefs, MediaServerProvider, NewEpisode, ProfileSelection, ProgressEntry, RemoteLibrary, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, Stream, Subtitle, Trailer, Video, SearchState } from "./types";
+import type { Addon, BuildInfo, BrowseItem, BrowseLibrary, BrowseResult, DeviceTransfer, DownloadsViewPrefs, FavoriteCatalogItem, FavoriteFilter, FavoriteItem, FavoriteLibraryItem, FavoriteRemoteItem, FollowView, LibraryOp, LibraryOpsState, LibrarySort, LibraryView, LibraryViewPrefs, MediaServerProvider, NewEpisode, ProfileSelection, ProgressEntry, RemoteLibrary, ResumeCard, ResumeFilter, UserViews, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, SearchableCatalog, Session, Settings as AppSettings, SettingsPatch, SiteLink, SourceProfile, Stream, Subtitle, Trailer, Video, SearchState } from "./types";
 
 /** The library choices this browser kept before they moved onto the account. Read once and
  *  handed to the visible libraries; private mode may forbid storage, hence the try/catch. */
@@ -243,10 +243,11 @@ export function App() {
   const [libraryReset, setLibraryReset] = useState(0);
   const [episodesOpen, setEpisodesOpen] = useState(true);
   const [season, setSeason] = useState<number | null>(null);
-  const [bulkDownload, setBulkDownload] = useState<{ label: string; title: string; type: string; episodes: Array<{ id: string; season?: number; episode?: number; title?: string }>; media: { id?: string; metaType?: string; poster?: string; background?: string; gallery?: Array<{ url: string; kind: GalleryKind }> } } | null>(null);
+  const [bulkDownload, setBulkDownload] = useState<{ label: string; title: string; type: string; episodes: Array<{ id: string; season?: number; episode?: number; title?: string }>; media: Record<string, unknown>; exactSource?: { stream: Stream; label: string; preferred: boolean }; detail?: CatalogueDetailTarget } | null>(null);
   const [downloads, setDownloads] = useState<DownloadJob[]>([]); const [queueHalt, setQueueHalt] = useState<QueueHalt | null>(null); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState(""); const [playerOpen, setPlayerOpen] = useState(false);
   const [deviceTransfers, setDeviceTransfers] = useState<DeviceTransfer[]>([]);
   const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: locale(), audioLanguage: "en", subtitleLanguage: "en", downloadTitleLanguage: "ui", mergeByName: true, streamSort: "recommended", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, tileSize: "medium", catalogTileShape: "poster", libraryTileShape: "poster", favoritesTileShape: "poster", resumeTileShape: "poster", followingTileShape: "poster", homeTileShape: "wide", searchTileShape: "poster", startView: "home", libraryShelf: "resume", realDebridConfigured: false, tmdbConfigured: false });
+  const [sourceProfiles, setSourceProfiles] = useState<SourceProfile[] | null>(null);
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [session, setSession] = useState<Session | null | undefined>(undefined);
@@ -712,8 +713,10 @@ export function App() {
     alternativeScopeRef.current = { key: alternativeScope, generation: alternativeScopeRef.current.generation + 1 };
   }
   const [alternativeSave, setAlternativeSave] = useState<{ title: string; kind: "movie" | "series"; stream: Stream; media: Record<string, unknown>; rule?: AddonDownloadSettings; ruleUnavailable?: boolean } | null>(null);
-  const [streamAddon, setStreamAddon] = useState(""); const [streamLanguage, setStreamLanguage] = useState(""); const [streamSort, setStreamSort] = useState<StreamSort>("recommended");
-  useEffect(() => { setStreamSort(settings.streamSort as StreamSort); }, [settings.streamSort]);
+  const defaultStreamSort = useMemo(() => resolveStreamSort(settings.streamSort, sourceProfiles), [settings.streamSort, sourceProfiles]);
+  const defaultRuleId = sortRuleId(defaultStreamSort);
+  const [streamAddon, setStreamAddon] = useState(""); const [streamLanguage, setStreamLanguage] = useState(""); const [streamSort, setStreamSort] = useState<StreamOrder>("recommended");
+  useEffect(() => { setStreamSort(defaultStreamSort); }, [defaultStreamSort]);
   const [submittedQuery, setSubmittedQuery] = useState(""); const [searchScopeValue, setSearchScopeValue] = useState(""); const [searchable, setSearchable] = useState<SearchableCatalog[]>([]); const [typeFilter, setTypeFilter] = useState(""); const [genre, setGenre] = useState(""); const [sort, setSort] = useState("default"); const [searchSort, setSearchSort] = useState("default");
   const [liveState, setLiveState] = useState<LiveSearchState>("idle");
   // One debounce controller for the searchbox. It commits the draft to `submittedQuery`
@@ -1169,7 +1172,7 @@ export function App() {
     setSelectedCatalog(firstCatalog ? `${firstCatalog.addonKey}:${firstCatalog.type}:${firstCatalog.id}` : "");
     setSelected(null); setSelectedVideo(null); setStreams([]); setLocalStreams([]); setLocalLoading(false); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false); setSourcesComplete(false);
     setGalleryIndex(null);
-    setStreamAddon(""); setStreamLanguage(""); setStreamSort(settings.streamSort as StreamSort);
+    setStreamAddon(""); setStreamLanguage(""); setStreamSort(defaultStreamSort);
     setEpisodesOpen(true); setSeason(null); setCatalogReset((value) => value + 1);
   };
   const resetLibrary = () => {
@@ -1424,8 +1427,15 @@ export function App() {
       }
     }).catch(fail);
     api.languages().then(setLanguages).catch(() => undefined);
+    api.sourceProfiles().then(setSourceProfiles).catch(() => setSourceProfiles([]));
     void loadViews();
   }, [ready]);
+  /** After an admin changed the rules: the sort options list them, and a deleted default came
+   *  back as Balanced in the settings. */
+  const reloadSourceRules = () => {
+    api.sourceProfiles().then(setSourceProfiles).catch(() => undefined);
+    api.settings().then((next) => setSettings((current: AppSettings) => ({ ...current, ...next }))).catch(() => undefined);
+  };
   // Which addons are worth searching changes as they are switched on and off.
   useEffect(() => { api.searchable().then(setSearchable).catch(() => undefined); }, [addons]);
   // Only a file probe knows the exact languages, so we run one for the chosen stream.
@@ -1925,12 +1935,13 @@ export function App() {
       .then((found) => setAlternative((value) => value && value.scope === scope && alternativeScopeRef.current.generation === scope && value.owner.key === key ? { ...value, subtitles: found } : value))
       .catch(() => undefined);
   };
-  /** Opens the destination dialog for one row a detail offered: the exact copy of a media server
-   *  takes the destination its own library projected and the server re-resolves, an addon answer
-   *  the addon's own rule. The viewer may ask to name the destination instead, which is the whole
-   *  job of the second half of the save button; a copy whose source projected no destination at all
-   *  asks for one rather than queueing a copy the server would refuse. */
-  const openAlternativeSave = (request: { title: string; kind: "movie" | "series"; stream: Stream; media: Record<string, unknown>; choose?: boolean }) => {
+  /** Routes one row a detail saved: an exact catalogue title opens the shared rules dialog, while
+   *  the other paths resolve the row's projected destination, or ask for one when it has none. */
+  const openAlternativeSave = (request: { title: string; kind: "movie" | "series"; stream: Stream; media: Record<string, unknown>; choose?: boolean; catalogueDetail?: CatalogueDetailTarget | null }) => {
+    if (request.catalogueDetail) {
+      openCatalogueDownload(request.catalogueDetail, request.stream, false);
+      return;
+    }
     const save = alternativeSaveRequest(request.title, request.stream, request.media, request.kind);
     if (request.choose || (isRemoteStream(request.stream) && sourceTargetRule(request.stream) === undefined)) {
       setAlternativeSave(save);
@@ -2259,7 +2270,7 @@ export function App() {
   // When a filter removes the chosen source, the pick moves to the first one left -- unless
   // the film is already playing on it, when moving it would restart playback on another source.
   useEffect(() => {
-    const preferred = pickDefaultStream(sourceRows) ?? null;
+    const preferred = pickDefaultStream(sourceRows, sortRuleId(streamSort) ?? defaultRuleId) ?? null;
     const next = repickStream({
       playing: playerOpen, picked: pickedRef.current, pending: pendingSources + (localLoading ? 1 : 0) + remoteLoading,
       // A late local copy or remote group replaces an automatic addon pick; an explicit pick
@@ -2558,7 +2569,7 @@ export function App() {
       if (stale()) return false;
       const currentLanguage = playbackPreferences.audioLanguage ?? (currentStream ? streamLanguages(currentStream, metaLanguage)[0] : undefined);
       const preferredLanguage = currentLanguage ?? settings.audioLanguage;
-      let nextStream = pickNextEpisodeStream(nextStreams, currentStream, preferredLanguage, addonPriority, metaLanguage) ?? null;
+      let nextStream = pickNextEpisodeStream(nextStreams, currentStream, preferredLanguage, addonPriority, metaLanguage, defaultStreamSort) ?? null;
       // A listing comes back without the addon that is playing when its request failed or the
       // provider was busy. Asking that one on its own keeps the viewer with the provider they
       // chose instead of moving a binge to another one, in another language.
@@ -2567,7 +2578,7 @@ export function App() {
         if (stale()) return false;
         if (again.length) {
           nextStreams = [...nextStreams, ...again];
-          nextStream = pickNextEpisodeStream(nextStreams, currentStream, preferredLanguage, addonPriority, metaLanguage) ?? nextStream;
+          nextStream = pickNextEpisodeStream(nextStreams, currentStream, preferredLanguage, addonPriority, metaLanguage, defaultStreamSort) ?? nextStream;
         }
       }
       if (currentStream && nextStream && nextStream.addonKey !== currentStream.addonKey) {
@@ -2627,9 +2638,38 @@ export function App() {
       await loadDownloads(); return true;
     } catch (e) { fail(e); return false; }
   };
-  /** The primary "Save to library" action. A native source whose server projected no destination
-   *  opens the choice dialog instead of submitting a copy the server would refuse, so the viewer
-   *  picks a library themselves; every other source queues straight away, as before. */
+  const openSingleDownload = () => {
+    if (!selected || !selectedStream || (selected.type !== "movie" && selected.type !== "series")) return false;
+    if (selected.type === "series" && (!selectedVideo || selectedVideo.id == null || String(selectedVideo.id).trim() === "")) return false;
+    const episodeId = selectedVideo
+      ? String(selectedVideo.id)
+      : undefined;
+    const detail: CatalogueDetailTarget = {
+      type: selected.type,
+      id: selected.id,
+      name: selected.name,
+      ...(selected.poster ? { poster: selected.poster } : {}),
+      ...(selectedVideo?.season != null ? { season: selectedVideo.season } : {}),
+      ...(selectedVideo?.episode != null ? { episode: selectedVideo.episode } : {}),
+      ...(episodeId ? { videoId: episodeId } : {}),
+      ...(selectedVideo?.title || selectedVideo?.name ? { episodeTitle: selectedVideo.title || selectedVideo.name } : {}),
+    };
+    setBulkDownload({
+      label: videoTitle,
+      title: baseDownloadTitle,
+      type: selected.type,
+      episodes: [selected.type === "movie"
+        ? { id: selected.id }
+        : { id: episodeId!, season: selectedVideo!.season, episode: selectedVideo!.episode, title: selectedVideo!.title || selectedVideo!.name }],
+      media: selectedMedia(),
+      exactSource: { stream: selectedStream, label: streamLabel(selectedStream), preferred: pickedRef.current },
+      detail,
+    });
+    return true;
+  };
+
+  /** A native source whose server projected no destination opens the choice dialog instead of
+   *  submitting a copy the server would refuse; every other source queues straight away. */
   const primarySave = () => {
     if (selectedStream && isRemoteStream(selectedStream) && sourceTargetRule(selectedStream) === undefined) { setSaveTargetOpen(true); return; }
     void enqueue();
@@ -2787,6 +2827,7 @@ export function App() {
    *  its rows can play. The panel's own selection is another title and never answers for it. */
   const [detailRead, setDetailRead] = useState<{ meta: Meta | null; target: CatalogueDetailTarget; pending: boolean; playable: boolean } | null>(null);
   const [detailSource, setDetailSource] = useState<Stream | null>(null);
+  const [detailSourcePicked, setDetailSourcePicked] = useState(false);
   const [catalogueFollow, setCatalogueFollow] = useState<FollowView | null>(null);
   const [detailFollowOpen, setDetailFollowOpen] = useState(false);
   const detailType = catalogueDetail?.type;
@@ -2842,7 +2883,7 @@ export function App() {
     if (!catalogueDetail) detailReturn.current = { view, windowY: window.scrollY, pane: view === "catalog" ? "catalog" : null, paneY: gridRef.current?.scrollTop ?? 0 };
     // Nothing the previous title read survives the next one: the episode it was on, the source it
     // selected, the follow it carried and the saved position drawn beside it all belong to it.
-    setDetailRead(null); setDetailSource(null); setCatalogueFollow(null); setDetailFollowOpen(false);
+    setDetailRead(null); setDetailSource(null); setDetailSourcePicked(false); setCatalogueFollow(null); setDetailFollowOpen(false);
     setCatalogueDetail({
       ...target,
       type: target.type,
@@ -3009,6 +3050,21 @@ export function App() {
       : { kind: "episode", title: detail.name, id: detail.id, metaType: detail.type,
         ...(detail.season != null ? { season: detail.season } : {}), ...(detail.episode != null ? { episode: detail.episode } : {}) };
   };
+  const openCatalogueDownload = (detail: CatalogueDetailTarget, stream: Stream, preferred: boolean) => {
+    if (detail.type === "series" && (!detail.videoId || detail.season == null || detail.episode == null)) return;
+    const media = { ...catalogueMedia(detail), ...(detail.poster ? { poster: detail.poster } : {}) };
+    setBulkDownload({
+      label: detail.episodeTitle ? `${detail.name} · ${detail.episodeTitle}` : detail.name,
+      title: detail.name,
+      type: detail.type,
+      episodes: [detail.type === "movie"
+        ? { id: detail.id }
+        : { id: detail.videoId!, season: detail.season, episode: detail.episode, ...(detail.episodeTitle ? { title: detail.episodeTitle } : {}) }],
+      media,
+      exactSource: { stream, label: streamLabel(stream), preferred },
+      detail,
+    });
+  };
   const queueCatalogueStream = async (detail: CatalogueDetailTarget, stream: Stream, target?: SaveTarget) => {
     if (!canQueue(stream, settings.realDebridConfigured)) return false;
     try {
@@ -3113,7 +3169,7 @@ export function App() {
       // The viewer keeps the provider and the language they were watching where the next episode
       // has them; only a show whose row is gone moves to the best version there is.
       const preferred = playbackPreferences.audioLanguage ?? (current ? streamLanguages(current, metaLanguage)[0] : undefined) ?? settings.audioLanguage;
-      const nextStream = pickNextEpisodeStream(answer.streams, current, preferred, addonPriority, metaLanguage)
+      const nextStream = pickNextEpisodeStream(answer.streams, current, preferred, addonPriority, metaLanguage, defaultStreamSort)
         ?? answer.streams.find((stream) => stream.playable);
       if (!nextStream?.playable) return false;
       playCatalogueDetail(nextStream, target, false);
@@ -3309,10 +3365,12 @@ export function App() {
             {...(catalogueDetail.libraryFirst ? { libraryFirst: true } : {})}
             onGallery={(images, effective) => presentGallery(images, { type: effective.type, id: effective.id })}
             preferredLanguage={settings.audioLanguage}
+            sourceProfiles={sourceProfiles}
+            defaultSort={defaultStreamSort}
             addonPriority={addonPriority} showTorrents={settings.realDebridConfigured}
             onRead={setDetailRead}
             {...(detailChips ? { chips: detailChips } : {})}
-            onSourceChange={setDetailSource}
+            onSourceChange={(stream, explicitlyPicked) => { setDetailSource(stream); setDetailSourcePicked(explicitlyPicked); }}
             {...(detailProgress ? { progress: detailProgress } : {})}
             {...(detailResumeStableKey ? { resumeStableKey: detailResumeStableKey } : {})}
             onClearProgress={() => clearDetailProgress()}
@@ -3321,10 +3379,7 @@ export function App() {
             {...(detailProgress ? { watched: true, watchedLabel: t("mediaServer.markWatched"), onToggleWatched: () => void clearDetailProgress() } : {})}
             onPlay={playCatalogueDetail}
             onSaveToLibrary={(stream, effective) => void queueCatalogueStream(effective, stream)}
-            onSaveElsewhere={(stream, effective) => setCatalogueSave({
-              ...(effective.season != null ? { season: effective.season } : {}),
-              ...alternativeSaveRequest(effective.name, stream, catalogueMedia(effective), effective.type === "series" ? "series" : "movie"),
-            })}
+            onSaveElsewhere={(stream, effective) => openCatalogueDownload(effective, stream, detailSourcePicked)}
             saveSupported={(stream) => canQueue(stream, settings.realDebridConfigured)}
             onDownloadToDevice={(stream, effective) => void downloadCatalogueStream(effective, stream)}/>
         </div>
@@ -3480,9 +3535,10 @@ export function App() {
                 value: streamLanguage, onChange: setStreamLanguage,
                 all: { label: t("sources.anyLanguage"), count: languageSources.length },
                 options: streamLangs.map(([code, count]) => ({ value: code, label: label(code), count })),
-              } } : {})} sort={{ value: streamSort, onChange: setStreamSort }}/>
+              } } : {})} sort={{ value: streamSort, onChange: setStreamSort }} profiles={sourceProfiles}/>
               <SourceRows rows={sourceRows} selected={selectedStream} onSelect={setSelectedStream} onPicked={() => { pickedRef.current = true; }}
-                titleLanguage={metaLanguage} onScroll={(event) => compactOnScroll(event, detailCompact, setDetailCompact, true)}
+                titleLanguage={metaLanguage} ruleId={sortRuleId(streamSort) ?? defaultRuleId}
+                onScroll={(event) => compactOnScroll(event, detailCompact, setDetailCompact, true)}
                 probe={(stream) => isLocalStream(stream) && selectedStream === stream
                   ? [...new Set((inspection?.audioTracks ?? []).map((track) => track.language).filter((language): language is string => Boolean(language)))] : []}/>
               {!sourceRows.length && sourcesPending && <div className="no-sources">{t("sources.asking")}</div>}
@@ -3496,7 +3552,7 @@ export function App() {
               <div className="source-footer"><div className="source-info"><Subtitles/> {t("sources.subtitleCount", { count: selectedLocalPath ? 0 : subtitles.length + (selectedStream?.subtitles?.length || 0) })}
                 {inspection && <> · <b>{t("sources.audioInFile")}</b> {inspection.audioTracks.length ? inspection.audioTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}
                 · <b>{t("sources.subtitlesInFile")}</b> {inspection.subtitleTracks.length ? inspection.subtitleTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}</>}
-              {selectedStream?.playable && !inspection && <> · {t("sources.probing")}</>}</div><div className="action-slot"><div className="actions"><button className="primary" disabled={!canPlay} onClick={startCatalogPlayback}><CirclePlay/> {t("player.play")}</button>{selectedLocalPath ? <button onClick={() => revealLibraryCopy(selectedLocalPath)}><FolderOpen/> {t("library.showInLibrary")}</button> : <div className="split-button"><button disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} onClick={primarySave}><HardDrive/> {t("save.toLibrary")}</button><button className="split-button-toggle" disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} aria-haspopup="dialog" aria-label={t("save.toLibraryElsewhere")} title={t("save.toLibraryElsewhere")} onClick={() => setSaveTargetOpen(true)}><ChevronDown/></button></div>}<button disabled={!canPlay || Boolean(selectedStream && isRemoteStream(selectedStream))} onClick={() => { if (selectedLocalPath) void downloadLibraryFile(selectedLocalPath); else void downloadStreamToDevice(); }}><Download/> {t("save.toDevice")}</button></div></div></div>
+              {selectedStream?.playable && !inspection && <> · {t("sources.probing")}</>}</div><div className="action-slot"><div className="actions"><button className="primary" disabled={!canPlay} onClick={startCatalogPlayback}><CirclePlay/> {t("player.play")}</button>{selectedLocalPath ? <button onClick={() => revealLibraryCopy(selectedLocalPath)}><FolderOpen/> {t("library.showInLibrary")}</button> : <div className="split-button"><button disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} onClick={primarySave}><HardDrive/> {t("save.toLibrary")}</button><button className="split-button-toggle" disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} aria-haspopup="dialog" aria-label={t("save.toLibraryElsewhere")} title={t("save.toLibraryElsewhere")} onClick={() => openSingleDownload()}><ChevronDown/></button></div>}<button disabled={!canPlay || Boolean(selectedStream && isRemoteStream(selectedStream))} onClick={() => { if (selectedLocalPath) void downloadLibraryFile(selectedLocalPath); else void downloadStreamToDevice(); }}><Download/> {t("save.toDevice")}</button></div></div></div>
             </div>}
             </div>
           </> : <Empty icon={<Film/>} title={t("catalog.pickTitle")} text={t("catalog.pickText")}/>}</section></div>
@@ -3509,6 +3565,7 @@ export function App() {
         {searchReturn && <button type="button" className="search-return" onClick={returnToSearch}><ChevronLeft/> {t("searchAll.backToSearch")}</button>}
         <Heading eyebrow={t("library.eyebrow")} title={t("library.title")}/>
         <RemoteLibraryBrowser onRootPresenceChange={setRemoteRootsPresent} hideRoots={Boolean(browsePath) || Boolean(localDetail)} audioLanguage={settings.audioLanguage} subtitleLanguage={settings.subtitleLanguage} onError={fail}
+          sourceProfiles={sourceProfiles} defaultSort={defaultStreamSort}
           libraryTileShape={settings.libraryTileShape} onToggleLibraryShape={() => void toggleShape("libraryTileShape")}
           views={views} onPersistPrefs={persistRemotePrefs}
           onOpenChange={(open) => { setRemoteOpen(open); if (!open) setRemoteCompact(false); }}
@@ -3517,6 +3574,7 @@ export function App() {
           uiLanguage={settings.uiLanguage} secureMode={settings.secureMode} onTrailer={setTrailerOpen}
           onGallery={presentGallery} resetSignal={libraryReset}
           downloadLibraries={libraries} onDownloadQueued={() => { notify(t("downloads.queued")); void loadDownloads(); }}
+          onCatalogueDownload={(stream, detail) => openCatalogueDownload(detail, stream, false)}
           onNotify={notify}
           accountScope={session!.username} addons={addons} realDebridConfigured={settings.realDebridConfigured}
           searchEverywhere={buildInfo?.searchEverywhere === true}/>
@@ -3653,6 +3711,7 @@ export function App() {
           accountScope={session!.username} preferredLanguage={settings.audioLanguage}
           onGallery={(images, path, ref) => { setMenuFor(null); presentGallery(images, ref, path); }}
           onPlayAlternative={playAlternative}
+          sourceProfiles={sourceProfiles} defaultSort={defaultStreamSort}
           realDebridConfigured={settings.realDebridConfigured}
           onSaveAlternative={openAlternativeSave}
           onDownloadToDevice={(stream) => void downloadAlternativeToDevice(stream)}
@@ -3774,7 +3833,7 @@ export function App() {
       {view === "downloads" && <Downloads jobs={downloads} deviceTransfers={deviceTransfers} libraries={libraries} halt={queueHalt} admin={session!.role === "admin"} refresh={loadDownloads} onError={fail} onReveal={revealInLibrary} prefs={views.downloads} onPrefs={persistDownloadPrefs}/>}
       {view === "stats" && <StatsPanel key={statsReset} onError={fail}/>}
       {view === "following" && <FollowingPage canRetain={session!.role === "admin"} follows={follows} newEpisodes={newEpisodes} libraries={libraries} shape={settings.followingTileShape} onToggleShape={() => void toggleShape("followingTileShape")} downloadSourceProfileId={settings.downloadSourceProfile} followSourceProfileId={settings.followSourceProfile} onRememberDownloadSourceProfile={rememberSourceProfile} onRememberFollowSourceProfile={rememberFollowSourceProfile} onChanged={applyFollowChange} onOpenSeries={(item) => void openFromCatalog(item)} onNotify={notify}/>}
-      {view === "settings" && <SettingsPage build={buildInfo} restricted={restricted} settings={settings} search={searchState} onSearch={(next) => { if (!next.saveHistory || !next.recent.length) recordIntent.current = null; setSearchState(next); }} languages={languages} libraries={libraries} session={session!} onSession={setSession} onSave={saveSettings} onLibrariesChanged={refreshLibraries} onImported={async (backup) => {
+      {view === "settings" && <SettingsPage build={buildInfo} restricted={restricted} settings={settings} search={searchState} onSearch={(next) => { if (!next.saveHistory || !next.recent.length) recordIntent.current = null; setSearchState(next); }} languages={languages} libraries={libraries} session={session!} onSession={setSession} sourceProfiles={sourceProfiles} onSourceProfilesChanged={reloadSourceRules} onSave={saveSettings} onLibrariesChanged={refreshLibraries} onImported={async (backup) => {
         const restored = await api.importSettings(backup);
         setSettings(restored.settings);
         setSelectedCatalog("");
@@ -3805,6 +3864,8 @@ export function App() {
         onOpen: () => setPlayerSourcesOpen(true),
         onSwitch: switchPlaybackSource,
       }}
+      sourceProfiles={sourceProfiles}
+      defaultSort={defaultStreamSort}
       {...(startAtSeconds !== undefined ? { startAtSeconds } : {})}
       onClose={stopPlayback}/>
     {alternative && <Player open title={alternative.stream.localPath ? alternative.stream.behaviorHints?.filename ?? alternative.title : alternative.title} stream={alternative.stream} subtitles={alternative.subtitles}
@@ -3822,6 +3883,8 @@ export function App() {
         onOpen: () => setAlternativeSourcesOpen(true),
         onSwitch: switchAlternativeSource,
       }}
+      sourceProfiles={sourceProfiles}
+      defaultSort={defaultStreamSort}
       {...(alternative.at !== undefined ? { startAtSeconds: alternative.at } : {})}
       onDownload={async () => {
         // The exact row that is playing is the row that is saved, through the same dialog and the
@@ -3889,7 +3952,9 @@ export function App() {
     {identifyFrom && <IdentifyDialog path={identifyFrom}
       onClose={() => setIdentifyFrom(null)}
       onApplied={() => { setAppliedSuggestion(identifyFrom); setIdentifyFrom(null); void loadBrowse(browsePath); }}/>}
-    {bulkDownload && <SeriesDownloadDialog type={bulkDownload.type} label={bulkDownload.label} title={bulkDownload.title} episodes={bulkDownload.episodes} libraries={libraries} canRetain={session!.role === "admin"} downloadSourceProfileId={settings.downloadSourceProfile} followSourceProfileId={settings.followSourceProfile} onRememberDownloadSourceProfile={rememberSourceProfile} onRememberFollowSourceProfile={rememberFollowSourceProfile} onClose={() => setBulkDownload(null)} onSubmit={submitBulkDownload}/>}
+    {bulkDownload && <SeriesDownloadDialog type={bulkDownload.type} label={bulkDownload.label} title={bulkDownload.title} episodes={bulkDownload.episodes} libraries={libraries} canRetain={session!.role === "admin"} downloadSourceProfileId={settings.downloadSourceProfile} followSourceProfileId={settings.followSourceProfile} onRememberDownloadSourceProfile={rememberSourceProfile} onRememberFollowSourceProfile={rememberFollowSourceProfile} {...(bulkDownload.exactSource ? { exactSource: bulkDownload.exactSource } : {})} onExactSave={async (target) => {
+      if (bulkDownload.exactSource && bulkDownload.detail) await queueCatalogueStream(bulkDownload.detail, bulkDownload.exactSource.stream, target);
+    }} onClose={() => setBulkDownload(null)} onSubmit={submitBulkDownload}/>}
     {followDialogOpen && detailFollow && <FollowDialog follow={detailFollow} videos={selected?.videos} libraries={libraries} canRetain={session!.role === "admin"} downloadSourceProfileId={settings.downloadSourceProfile} followSourceProfileId={settings.followSourceProfile} onRememberDownloadSourceProfile={rememberSourceProfile} onRememberFollowSourceProfile={rememberFollowSourceProfile} onChanged={(updated) => applyFollowChange(detailFollow.id, updated)} onClose={() => setFollowDialogOpen(false)} onNotify={notify}/>}
     {followStart && <SeriesDownloadDialog type={followStart.type || "series"} label={followStart.name} title={followStart.name} episodes={followStart.type === "movie" ? [{ id: followStart.id }] : toEpisodes(followStart.videos)} libraries={libraries}
       canRetain={session!.role === "admin"}

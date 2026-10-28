@@ -82,6 +82,16 @@
   <string name="sources_any_language">N\'importe lequel</string>
   <string name="sources_of_total">%1$s sur %2$s</string>
   <string name="sources_sort_recommended">Recommandé</string>
+  <string name="sources_rule_breaks">Ne respecte pas les règles : %1$s</string>
+  <string name="sources_rule_reason_language">autre langue</string>
+  <string name="sources_rule_reason_resolution_low">résolution inférieure</string>
+  <string name="sources_rule_reason_resolution_high">résolution supérieure</string>
+  <string name="sources_rule_reason_cinema">copie cinéma (CAM/TS)</string>
+  <string name="sources_rule_reason_subtitles">sans sous-titres</string>
+  <string name="sources_rule_reason_sample">extrait</string>
+  <string name="sources_rule_reason_size">taille hors limites</string>
+  <string name="sources_rule_reason_provider">source absente des règles</string>
+  <string name="sources_rule_reason_torrent">torrents non autorisés</string>
   <string name="sources_sort_largest">Le plus grand en premier</string>
   <string name="sources_sort_smallest">Le plus petit en premier</string>
   <string name="sources_sort_addon">Par priorité du module complémentaire</string>
@@ -224,12 +234,15 @@
   <string name="tv_download_from_episode">À partir de cet épisode</string>
   <string name="tv_download_all_episodes">Tous les épisodes</string>
   <string name="bulk_title">Télécharger la série</string>
+  <string name="bulk_title_movie">Télécharger le film</string>
+  <string name="bulk_title_episode">Télécharger l’épisode</string>
   <string name="bulk_add">Ajouter à la file d\'attente</string>
   <plurals name="bulk_episode_count">
     <item quantity="one">%1$s épisode</item>
     <item quantity="other">%1$s épisodes</item>
   </plurals>
   <string name="rules_title">Règles de téléchargement</string>
+  <string name="rules_selected_source">Source sélectionnée</string>
   <string name="rules_unavailable">Les règles de téléchargement ne sont pas disponibles. Demandez à un administrateur.</string>
   <string name="rules_preset_balanced">Équilibré</string>
   <string name="rules_preset_best">Meilleure qualité</string>

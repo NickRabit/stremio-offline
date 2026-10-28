@@ -17,7 +17,7 @@ import type { ResourceOwner } from "../media-resources.js";
 import type { UserPrefs } from "../store.js";
 import type { DownloadTargetSettings, MetaItem, StreamItem } from "../types.js";
 import { asyncRoute, viewerOf, type RouteContext } from "./context.js";
-import { legacySelectionFromAdmission, materializeSourceProfileAdmission, profileSelectionReference } from "./source-profile-selection.js";
+import { admitsRemoteProviders, legacySelectionFromAdmission, materializeSourceProfileAdmission, profileSelectionReference } from "./source-profile-selection.js";
 
 export interface DownloadsDeps extends RouteContext {
   queue: DownloadQueue;
@@ -122,7 +122,7 @@ const acceptedSelectionMode = <T extends string>(value: unknown, allowed: readon
 /** Parses the lazy download body of a series into a `DownloadSelection`: the addon keys the
  *  caller may use, the strategy, the audio and subtitle rules, the title language and a
  *  concrete target. Shared so the bulk route and a follow's automatic rule cannot drift. */
-export function createSelectionParser(deps: SelectionDeps): (req: express.Request, input: { selection: unknown; target: unknown; metaType: string; parentId?: string; kind?: "movie" | "series" }) => Promise<DownloadSelection> {
+export function createSelectionParser(deps: SelectionDeps): (req: express.Request, input: { selection: unknown; target: unknown; metaType: string; parentId?: string; kind?: "movie" | "series"; remoteProviders?: boolean }) => Promise<DownloadSelection> {
   const { store, currentUser, cachedMeta, prefsOf, defaultDownloadLibrary } = deps;
   const assertMayQueue = mayQueueGuard(deps);
   const explicitTarget = explicitTargetFor(deps);
@@ -141,7 +141,8 @@ export function createSelectionParser(deps: SelectionDeps): (req: express.Reques
     const addonKeys = Array.isArray(rawSelection.addonKeys)
       ? [...new Set(rawSelection.addonKeys.map(String))].filter((key) => usable.some((addon) => addon.key === key && addon.enabled && addon.role !== "catalog"))
       : [];
-    if (!addonKeys.length) throw new AppError("Pick at least one stream addon.", "err.missingDownloadSources");
+    // A rule that reaches a remote library can be satisfied without any addon.
+    if (!addonKeys.length && !input.remoteProviders) throw new AppError("Pick at least one stream addon.", "err.missingDownloadSources");
     const sourceStrategy = acceptedSelectionMode(rawSelection.sourceStrategy, ["largest", "priority"] as const, "priority");
     const audioLanguage = normalizeLanguage(String(rawSelection.audioLanguage ?? ""));
     if (!audioLanguage) throw new AppError("Pick an audio language.", "err.missingAudioLanguage");
@@ -257,30 +258,67 @@ export function registerDownloadRoutes(app: express.Application, deps: Downloads
   app.post("/api/downloads/bulk", asyncRoute(async (req, res) => {
     const owner = currentUser(req);
     const profileReference = profileSelectionReference(req.body.selection);
+    const type = String(req.body.type ?? "series");
+    const movie = type === "movie";
     // A profile admission answers its own operation check, including a distinct 403.
     if (!profileReference.present) assertMayQueue(req);
-    const explicit = await explicitTarget(req, req.body.target, "series");
-    const title = String(req.body.title ?? "").trim() || "Show";
-    const type = String(req.body.type ?? "series");
+    const explicit = await explicitTarget(req, req.body.target, movie ? "movie" : "series");
+    const title = String(req.body.title ?? "").trim() || (movie ? "Movie" : "Show");
     const parent = req.body.media && typeof req.body.media === "object" ? req.body.media as Record<string, unknown> : {};
     const parentId = String(parent.id ?? "").trim() || undefined;
     const poster = posterOf(parent.poster);
     const metaType = String(parent.metaType ?? type).trim() || type;
     const episodes = Array.isArray(req.body.episodes) ? req.body.episodes as Array<Record<string, unknown>> : [];
     if (!episodes.length) throw new AppError("Missing episode list.", "err.missingEpisodes");
+    if (movie) {
+      if (!profileReference.present) throw new AppError("A film can only be downloaded with download rules.", "err.missingDownloadSources");
+      if (String(parent.metaType ?? "") !== "movie") throw new AppError("A film download must carry movie media.", "err.invalidRequest");
+      if (episodes.length !== 1 || episodes.some((episode) => episode.season != null || episode.episode != null)) {
+        throw new AppError("A film download must contain exactly one entry without episode numbering.", "err.invalidRequest");
+      }
+    }
     if (episodes.length > 500) throw new AppError("At most 500 episodes at a time.", "err.tooManyEpisodes");
-    // Every job this route adds carries `media.kind: "episode"`, so the queue reads it as a
-    // series whatever `metaType` the body claims for the title; the door has to agree.
+    const kind = movie ? "movie" : "series";
     const sourceAdmission = !profileReference.present
       ? undefined
-      : materializeSourceProfileAdmission(deps, owner, profileReference.reference, "episode");
+      : materializeSourceProfileAdmission(deps, owner, profileReference.reference, movie ? "movie" : "episode");
     const validatedSelection = await parseSelection(req, {
       selection: sourceAdmission === undefined ? req.body.selection : legacySelectionFromAdmission(sourceAdmission),
+      remoteProviders: admitsRemoteProviders(sourceAdmission),
       target: req.body.target,
       metaType,
       parentId,
-      kind: "series",
+      kind,
     });
+    if (movie) {
+      const videoId = String(episodes[0]!.id ?? "").trim();
+      if (!videoId) throw new AppError("The film entry has no id.", "err.invalidRequest");
+      let jobSelection = validatedSelection;
+      let jobAdmission = sourceAdmission;
+      if (profileReference.present) {
+        jobAdmission = materializeSourceProfileAdmission(deps, owner, profileReference.reference, "movie");
+        jobSelection = {
+          ...legacySelectionFromAdmission(jobAdmission),
+          titleLanguage: validatedSelection.titleLanguage,
+          targetSettings: validatedSelection.targetSettings,
+        };
+        assertMayQueue(req, { libraryId: jobSelection.targetSettings.libraryId ?? defaultDownloadLibrary("movie")?.id });
+      }
+      const rawYear = Number(parent.year);
+      const year = Number.isFinite(rawYear) && rawYear >= 1900 && rawYear <= 2100 ? Math.trunc(rawYear) : undefined;
+      const media: MediaInfo = {
+        kind: "movie", title, id: parentId, metaType, poster,
+        ...(year === undefined ? {} : { year }),
+      };
+      const job = await queue.addPending(title, { type, videoId, selection: jobSelection }, media, owner?.id, undefined, jobAdmission);
+      const added = job ? 1 : 0;
+      const skipped = job ? 0 : 1;
+      log("INFO", "Bulk addition to the queue", { title, added, skipped });
+      res.status(201).json({ added, skipped });
+      return;
+    }
+    // Every job this route adds carries `media.kind: "episode"`, so the queue reads it as a
+    // series whatever `metaType` the body claims for the title; the door has to agree.
     let added = 0, skipped = 0;
     for (const episode of episodes) {
       const videoId = String(episode.id ?? "").trim();

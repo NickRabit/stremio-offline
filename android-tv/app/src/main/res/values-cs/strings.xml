@@ -82,6 +82,16 @@
   <string name="sources_any_language">Libovolný</string>
   <string name="sources_of_total">%1$s z %2$s</string>
   <string name="sources_sort_recommended">Doporučené</string>
+  <string name="sources_rule_breaks">Nesplňuje pravidla: %1$s</string>
+  <string name="sources_rule_reason_language">jiný jazyk</string>
+  <string name="sources_rule_reason_resolution_low">nižší rozlišení</string>
+  <string name="sources_rule_reason_resolution_high">vyšší rozlišení</string>
+  <string name="sources_rule_reason_cinema">kopie z kina (CAM/TS)</string>
+  <string name="sources_rule_reason_subtitles">bez titulků</string>
+  <string name="sources_rule_reason_sample">ukázka</string>
+  <string name="sources_rule_reason_size">velikost mimo rozsah</string>
+  <string name="sources_rule_reason_provider">zdroj není v pravidlech</string>
+  <string name="sources_rule_reason_torrent">torrenty nejsou povolené</string>
   <string name="sources_sort_largest">Od největšího</string>
   <string name="sources_sort_smallest">Od nejmenšího</string>
   <string name="sources_sort_addon">Podle priority doplňku</string>
@@ -228,6 +238,8 @@
   <string name="tv_download_from_episode">Od tohoto dílu dál</string>
   <string name="tv_download_all_episodes">Všechny díly</string>
   <string name="bulk_title">Stažení seriálu</string>
+  <string name="bulk_title_movie">Stažení filmu</string>
+  <string name="bulk_title_episode">Stažení dílu</string>
   <string name="bulk_add">Přidat do fronty</string>
   <plurals name="bulk_episode_count">
     <item quantity="one">1 epizoda</item>
@@ -236,6 +248,7 @@
     <item quantity="other">%1$s epizod</item>
   </plurals>
   <string name="rules_title">Pravidla stahování</string>
+  <string name="rules_selected_source">Vybraný zdroj</string>
   <string name="rules_unavailable">Pravidla stahování nejsou k dispozici. Požádejte správce.</string>
   <string name="rules_preset_balanced">Vyvážené</string>
   <string name="rules_preset_best">Nejlepší kvalita</string>

@@ -88,6 +88,8 @@ export interface UserPrefs {
   downloadSourceProfile?: string;
   /** The source profile one account prefers for a new follow. Absent means no default. */
   followSourceProfile?: string;
+  /** Rules that rank and label playback sources; absent means the balanced preset. */
+  defaultRulesProfileId?: string;
 }
 
 /** The flat shape of the settings file and of the settings backup: the instance's half and

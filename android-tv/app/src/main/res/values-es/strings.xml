@@ -82,6 +82,16 @@
   <string name="sources_any_language">Cualquiera</string>
   <string name="sources_of_total">%1$s de %2$s</string>
   <string name="sources_sort_recommended">Recomendado</string>
+  <string name="sources_rule_breaks">No cumple las reglas: %1$s</string>
+  <string name="sources_rule_reason_language">otro idioma</string>
+  <string name="sources_rule_reason_resolution_low">resolución menor</string>
+  <string name="sources_rule_reason_resolution_high">resolución mayor</string>
+  <string name="sources_rule_reason_cinema">copia de cine (CAM/TS)</string>
+  <string name="sources_rule_reason_subtitles">sin subtítulos</string>
+  <string name="sources_rule_reason_sample">muestra</string>
+  <string name="sources_rule_reason_size">tamaño fuera del rango</string>
+  <string name="sources_rule_reason_provider">fuente no incluida en las reglas</string>
+  <string name="sources_rule_reason_torrent">torrents no permitidos</string>
   <string name="sources_sort_largest">El más grande primero</string>
   <string name="sources_sort_smallest">Lo más pequeño primero</string>
   <string name="sources_sort_addon">Por prioridad adicional</string>
@@ -224,12 +234,15 @@
   <string name="tv_download_from_episode">Desde este episodio</string>
   <string name="tv_download_all_episodes">Todos los episodios</string>
   <string name="bulk_title">Descargar serie</string>
+  <string name="bulk_title_movie">Descargar película</string>
+  <string name="bulk_title_episode">Descargar episodio</string>
   <string name="bulk_add">Añadir a la cola</string>
   <plurals name="bulk_episode_count">
     <item quantity="one">1 episodio</item>
     <item quantity="other">%1$s episodios</item>
   </plurals>
   <string name="rules_title">Reglas de descarga</string>
+  <string name="rules_selected_source">Fuente seleccionada</string>
   <string name="rules_unavailable">Las reglas de descarga no están disponibles. Pídaselas a un administrador.</string>
   <string name="rules_preset_balanced">Equilibrado</string>
   <string name="rules_preset_best">Mejor calidad</string>

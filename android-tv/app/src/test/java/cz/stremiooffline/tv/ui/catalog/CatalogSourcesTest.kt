@@ -5,17 +5,20 @@ package cz.stremiooffline.tv.ui.catalog
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.requestFocus
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
-import androidx.compose.ui.test.requestFocus
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.SettingsResponse
+import cz.stremiooffline.tv.data.SourceRuleVerdictDto
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.StreamSourceDto
 import cz.stremiooffline.tv.ui.FakeTvApi
@@ -221,4 +224,181 @@ class CatalogSourcesTest {
     api.progressListGate!!.complete(Unit)
     compose.waitForIdle()
   }
+
+  @Test
+  fun `Play opens the sources panel when every playable row breaks the rule`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings().copy(streamSort = "rule:p1")
+    api.streamSourcesValues["movie:tt1"] = listOf(source("alpha"))
+    api.addonStreams["movie:tt1|alpha"] = listOf(
+      StreamDto(
+        sourceId = "srcA",
+        kind = "remote",
+        playable = true,
+        title = "English 8 GB",
+        addonName = "Alpha",
+        rules = mapOf(
+          "p1" to SourceRuleVerdictDto(
+            profileId = "p1",
+            status = "breaks",
+            reasons = listOf("size"),
+            rank = listOf(0.0, 2.0),
+          ),
+        ),
+      ),
+      StreamDto(
+        sourceId = "srcB",
+        kind = "remote",
+        playable = true,
+        title = "English 4 GB",
+        addonName = "Alpha",
+        rules = mapOf(
+          "p1" to SourceRuleVerdictDto(
+            profileId = "p1",
+            status = "breaks",
+            reasons = listOf("torrent"),
+            rank = listOf(0.0, 2.0, 1.0),
+          ),
+        ),
+      ),
+    )
+    mount(api)
+    compose.waitUntil(5_000) { api.streamsCompleted.contains("movie:tt1|alpha") }
+    compose.waitForIdle()
+
+    compose.onNodeWithTag(TagCatalogPrimary).assertTextContains("Play")
+    compose.onNodeWithTag(TagSourcesPanel).assertDoesNotExist()
+    compose.onNodeWithTag(TagCatalogPrimary).requestFocus()
+    press(Key.DirectionCenter)
+
+    compose.onNodeWithTag(TagSourcesPanel).assertExists()
+    assertTrue(played.isEmpty())
+  }
+
+  @Test
+  fun `a source that breaks the rules shows the reason labels under the row`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings().copy(streamSort = "rule:p1")
+    api.streamSourcesValues["movie:tt1"] = listOf(source("alpha"))
+    api.addonStreams["movie:tt1|alpha"] = listOf(
+      StreamDto(
+        sourceId = "srcA",
+        kind = "remote",
+        playable = true,
+        title = "English 8 GB",
+        addonName = "Alpha",
+        rules = mapOf(
+          "p1" to SourceRuleVerdictDto(
+            profileId = "p1",
+            status = "breaks",
+            reasons = listOf("language", "unknown", "cinema"),
+            rank = listOf(1.0),
+          ),
+          "other" to SourceRuleVerdictDto(profileId = "other", status = "meets", rank = listOf(0.0)),
+        ),
+      ),
+    )
+    mount(api)
+    compose.waitUntil(5_000) { api.streamsCompleted.contains("movie:tt1|alpha") }
+    compose.waitForIdle()
+
+    focusSources()
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(sourceRowTag(0)).assertIsFocused()
+    compose.onNodeWithTag(sourceRowTag(0))
+      .assertTextContains("Does not meet the rules: other language, cinema copy (CAM/TS)")
+  }
+
+  @Test
+  fun `a source that meets the rules has no rule note`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings().copy(streamSort = "rule:p1")
+    api.streamSourcesValues["movie:tt1"] = listOf(source("alpha"))
+    api.addonStreams["movie:tt1|alpha"] = listOf(
+      StreamDto(
+        sourceId = "srcA",
+        kind = "remote",
+        playable = true,
+        title = "Czech 8 GB",
+        addonName = "Alpha",
+        rules = mapOf(
+          "p1" to SourceRuleVerdictDto(profileId = "p1", status = "meets", rank = listOf(0.0)),
+          "other" to SourceRuleVerdictDto(
+            profileId = "other",
+            status = "breaks",
+            reasons = listOf("language"),
+            rank = listOf(1.0),
+          ),
+        ),
+      ),
+    )
+    mount(api)
+    compose.waitUntil(5_000) { api.streamsCompleted.contains("movie:tt1|alpha") }
+    compose.waitForIdle()
+
+    focusSources()
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(sourceRowTag(0)).assertTextContains("Czech 8 GB")
+    compose.onNodeWithTag(sourceRowTag(0))
+      .assert(hasText("Does not meet the rules", substring = true).not())
+  }
+
+  @Test
+  fun `a size sort keeps the note of an account rule`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings().copy(streamSort = "rule:p1")
+    // The filter bar is offered only once more than one source is on screen.
+    api.streamSourcesValues["movie:tt1"] = listOf(source("alpha"), source("beta"))
+    api.addonStreams["movie:tt1|alpha"] = listOf(breakingRule())
+    api.addonStreams["movie:tt1|beta"] = listOf(
+      breakingRule().copy(sourceId = "srcB", title = "Czech 1 GB", addonName = "Beta"),
+    )
+    mount(api)
+    compose.waitUntil(5_000) {
+      api.streamsCompleted.contains("movie:tt1|alpha") && api.streamsCompleted.contains("movie:tt1|beta")
+    }
+    compose.waitForIdle()
+    focusSources()
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(sourceRowTag(0)).assertTextContains("Does not meet the rules: other language")
+    press(Key.DirectionUp)
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(sourceFilterOptionTag(0)).assertTextContains("Largest first", substring = true)
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(sourceFilterTag("sort")).assertTextContains("Largest first", substring = true)
+    compose.onNodeWithTag(sourceRowTag(0)).assertTextContains("English 8 GB")
+    compose.onNodeWithTag(sourceRowTag(0)).assertTextContains("Does not meet the rules: other language")
+  }
+
+  @Test
+  fun `a size sort with a size account default shows no rule note`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings().copy(streamSort = "size-desc")
+    api.streamSourcesValues["movie:tt1"] = listOf(source("alpha"))
+    api.addonStreams["movie:tt1|alpha"] = listOf(breakingRule())
+    mount(api)
+    compose.waitUntil(5_000) { api.streamsCompleted.contains("movie:tt1|alpha") }
+    compose.waitForIdle()
+    focusSources()
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(sourceRowTag(0)).assertTextContains("English 8 GB")
+    compose.onNodeWithTag(sourceRowTag(0))
+      .assert(hasText("Does not meet the rules", substring = true).not())
+  }
+
+  private fun breakingRule() = StreamDto(
+    sourceId = "srcA",
+    kind = "remote",
+    playable = true,
+    title = "English 8 GB",
+    addonName = "Alpha",
+    rules = mapOf(
+      "p1" to SourceRuleVerdictDto(
+        profileId = "p1",
+        status = "breaks",
+        reasons = listOf("language"),
+        rank = listOf(1.0),
+      ),
+    ),
+  )
 }

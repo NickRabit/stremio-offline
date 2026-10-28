@@ -1,4 +1,5 @@
 import { containerExtension, nameExtension } from "./naming.js";
+import { normalizeLanguage } from "./language.js";
 import {
   ARTWORK_TAG,
   MediaServerError,
@@ -118,6 +119,10 @@ export interface ProviderVersion {
   size?: number;
   durationTicks?: number;
   bitrate?: number;
+  videoWidth?: number;
+  videoHeight?: number;
+  audioLanguages?: Array<string | undefined>;
+  embeddedSubtitleLanguages?: Array<string | undefined>;
   /** External text subtitles the provider offers for this exact file version. */
   externalSubtitles?: Array<{ index: number; language?: string; title?: string }>;
 }
@@ -401,6 +406,56 @@ function readExternalSubtitles(source: Record<string, unknown>): Array<{ index: 
     subtitles.push(subtitle);
   }
   return subtitles;
+}
+
+type MediaStreamFacts = Pick<ProviderVersion,
+  "videoWidth" | "videoHeight" | "audioLanguages" | "embeddedSubtitleLanguages">;
+
+function readMediaStreamFacts(source: Record<string, unknown>): MediaStreamFacts {
+  const raw = source.MediaStreams;
+  if (!Array.isArray(raw)) return {};
+  const audioLanguages: Array<string | undefined> = [];
+  const embeddedSubtitleLanguages: Array<string | undefined> = [];
+  let videoWidth: number | undefined;
+  let videoHeight: number | undefined;
+  let foundVideo = false;
+  for (const entry of raw) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
+    const stream = entry as Record<string, unknown>;
+    if (!foundVideo && stream.Type === "Video") {
+      foundVideo = true;
+      if (typeof stream.Width === "number" && Number.isSafeInteger(stream.Width) && stream.Width > 0) {
+        videoWidth = stream.Width;
+      }
+      if (typeof stream.Height === "number" && Number.isSafeInteger(stream.Height) && stream.Height > 0) {
+        videoHeight = stream.Height;
+      }
+      continue;
+    }
+    if (stream.Type === "Audio") {
+      if (audioLanguages.length >= EXTERNAL_SUBTITLES_MAX) {
+        throw invalidResponse("The media-server version offers too many audio streams.");
+      }
+      audioLanguages.push(normalizeLanguage(
+        typeof stream.Language === "string" ? stream.Language : undefined,
+      ));
+      continue;
+    }
+    if (stream.Type === "Subtitle" && stream.IsExternal !== true) {
+      if (embeddedSubtitleLanguages.length >= EXTERNAL_SUBTITLES_MAX) {
+        throw invalidResponse("The media-server version offers too many embedded subtitle streams.");
+      }
+      embeddedSubtitleLanguages.push(normalizeLanguage(
+        typeof stream.Language === "string" ? stream.Language : undefined,
+      ));
+    }
+  }
+  return {
+    ...(videoWidth === undefined ? {} : { videoWidth }),
+    ...(videoHeight === undefined ? {} : { videoHeight }),
+    ...(audioLanguages.length ? { audioLanguages } : {}),
+    ...(embeddedSubtitleLanguages.length ? { embeddedSubtitleLanguages } : {}),
+  };
 }
 
 /** Standalone music videos use the mixed library layout and the movie playback flow. */
@@ -931,6 +986,7 @@ export function createMediaServerProvider(kind: MediaServerKind, transport: Medi
       if (durationTicks !== undefined) version.durationTicks = durationTicks;
       const bitrate = optionalSafeInt(source.Bitrate);
       if (bitrate !== undefined && bitrate > 0) version.bitrate = bitrate;
+      Object.assign(version, readMediaStreamFacts(source));
       const externalSubtitles = readExternalSubtitles(source);
       if (externalSubtitles.length) version.externalSubtitles = externalSubtitles;
       versions.push(version);

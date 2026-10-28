@@ -376,7 +376,11 @@ const validateTemplatePolicy = (
 ): void => {
   let built: SourcePolicyV1;
   if (template === "rules") {
-    built = rulesPolicy(parseDownloadRules(rulesFromPolicy(policy, mediaKind)), mediaKind);
+    built = rulesPolicy(parseDownloadRules(rulesFromPolicy(policy, mediaKind, {
+      allowProviders: operation === "downloadToLibrary"
+        ? { remote: true }
+        : { remote: true, local: true },
+    })), mediaKind);
   } else {
     const parameters = parametersFromPolicy(template, policy);
     parseTemplateParameters(template, parameters);
@@ -409,6 +413,7 @@ const availableProviderKeys = (
   policy: SourcePolicyV1,
   context: SourceAdmissionContext,
   operation: SourceOperation,
+  template: SourceProfileTemplate,
 ): string[] => {
   const kinds = new Set(policy.constraints.sourceKinds);
   const viewer = { id: context.viewer.id, role: context.viewer.role };
@@ -419,7 +424,10 @@ const availableProviderKeys = (
     keys.push("local");
   }
 
-  if (kinds.has("mediaServerOriginal") && (operation === "play" || operation === "downloadToDevice")) {
+  if (kinds.has("mediaServerOriginal")
+    && (operation === "play"
+      || operation === "downloadToDevice"
+      || (operation === "downloadToLibrary" && template === "rules" && mayDownloadToLibrary(context.viewer)))) {
     for (const library of [...context.remoteLibraries].sort((left, right) => left.order - right.order)) {
       if (remoteLibraryVisibleTo(context.mediaConnections, library, viewer)) {
         keys.push(`remote:${library.id}`);
@@ -438,7 +446,9 @@ const availableProviderKeys = (
     }
   }
 
-  return operation === "downloadToLibrary" ? keys.filter((key) => key.startsWith("addon:")) : keys;
+  return operation === "downloadToLibrary"
+    ? keys.filter((key) => key.startsWith("addon:") || (template === "rules" && key.startsWith("remote:")))
+    : keys;
 };
 
 const policyFor = (
@@ -485,7 +495,7 @@ const materializeAdmission = (
   context: SourceAdmissionContext,
 ): SourceAdmissionSnapshotV1 => {
   const operation = supportsOperation(profile.template, context);
-  const available = availableProviderKeys(storedPolicy, context, operation);
+  const available = availableProviderKeys(storedPolicy, context, operation, profile.template);
   const scoped = sourceAdmissionProviderScope(storedPolicy.scope, available);
   const selected = explicitProviderOrder(scoped, storedPolicy);
   if (selected.length === 0) throw new SourceAdmissionRejected("providerScopeUnavailable");

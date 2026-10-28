@@ -3,8 +3,8 @@ import { t, useI18n } from "./i18n";
 import { librarySourceChoices, librarySourceEntries, librarySourceRows, type LibrarySourceGroup, type LibrarySourcePanel } from "./library-sources";
 import { sourceRowKey } from "./library-detail-sources";
 import { providerLabel, SourceFilters, SourceRows } from "./source-rows";
-import { addonNotices, isLocalStream, noticeText, type StreamSort } from "./streams";
-import type { Stream } from "./types";
+import { addonNotices, isLocalStream, noticeText, resolveStreamSort, sortRuleId, type StreamOrder, type StreamSort } from "./streams";
+import type { SourceProfile, Stream } from "./types";
 
 export interface SourceChooserProps {
   /** The rows the place leads with: the item's own versions, the file on screen, the row the
@@ -22,6 +22,8 @@ export interface SourceChooserProps {
   listClassName?: string;
   /** The viewer's addon order, when the place knows it; else the order the groups arrived in. */
   priority?: Map<string, number>;
+  sourceProfiles?: SourceProfile[] | null;
+  defaultSort?: string;
 }
 
 /** The row of `rows` the place holds: the very object, or the row that names the same source --
@@ -43,11 +45,13 @@ const sameSource = (stream: Stream) => stream.remoteItem || stream.localPath ? s
 /** The one chooser body every place draws: the classes a title offers, the source, language and
  *  order menus over them, and the notices that go with them. The detail's dialog and the
  *  player's panel both render it, so one title reads the same wherever it is offered. */
-export function SourceChooser({ lead, leadLabel, groups: read, panel, selected, onSelect, preferredLanguage, badgeOf, listClassName, priority }: SourceChooserProps) {
+export function SourceChooser({ lead, leadLabel, groups: read, panel, selected, onSelect, preferredLanguage, badgeOf, listClassName, priority, sourceProfiles = null, defaultSort = "recommended" }: SourceChooserProps) {
   useI18n();
   const [filter, setFilter] = useState("");
   const [language, setLanguage] = useState("");
-  const [sort, setSort] = useState<StreamSort>("recommended");
+  const [sort, setSort] = useState<StreamOrder>(() => resolveStreamSort(defaultSort, sourceProfiles));
+  const resolvedSort = resolveStreamSort(sort, sourceProfiles);
+  const defaultRuleId = sortRuleId(resolveStreamSort(defaultSort, sourceProfiles));
   const listRef = useRef<HTMLDivElement | null>(null);
   // A place that leads with the viewer's own copies would name the file it holds twice, once as a
   // lead row and once in the own-copies group: the group drops the rows the lead already holds,
@@ -74,14 +78,16 @@ export function SourceChooser({ lead, leadLabel, groups: read, panel, selected, 
   }, [lead, groups, read]);
   const entries = useMemo(() => librarySourceEntries(shownLead, leadLabel, groups, labelOf), [shownLead, leadLabel, groups]);
   const choices = useMemo(() => librarySourceChoices(entries, filter, language), [entries, filter, language]);
-  // The row the place holds leads the classes the list orders itself -- the recommended and
+  // The row the place holds leads the classes the list orders itself -- the rule and
   // addon-priority orders, the way every player drew the source that was playing. A named size
   // sort ranks it with every other row: the viewer asked for the sizes, not for the row.
   const rows = useMemo(() => {
-    const listed = librarySourceRows(entries, filter, language, sort, preferredLanguage, undefined, priority);
-    const first = sort === "recommended" || sort === "addon" ? rowOf(listed, selected) : null;
+    const listed = librarySourceRows(entries, filter, language, resolvedSort, preferredLanguage, undefined, priority);
+    const first = resolvedSort === "recommended" || sortRuleId(resolvedSort) || resolvedSort === "addon"
+      ? rowOf(listed, selected)
+      : null;
     return first ? [first, ...listed.filter((row) => row !== first)] : listed;
-  }, [entries, filter, language, sort, preferredLanguage, selected, priority]);
+  }, [entries, filter, language, resolvedSort, preferredLanguage, selected, priority]);
   const chosen = rowOf(rows, selected);
   /** A discovery or a group still out: the list is not empty yet, it is still arriving. */
   const pending = groups.some((group) => group.status === "idle" || group.status === "loading");
@@ -94,11 +100,12 @@ export function SourceChooser({ lead, leadLabel, groups: read, panel, selected, 
   return <>
     <SourceFilters visible={groups.length > 0 || lead.length > 1} addon={{
       value: filter, onChange: setFilter, all: { label: t("sources.allSources"), count: choices.total }, options: choices.options,
-    }} {...(choices.languages.length ? { language: {
+    }} profiles={sourceProfiles} {...(choices.languages.length ? { language: {
       value: language, onChange: setLanguage, all: { label: t("sources.anyLanguage"), count: choices.languageTotal }, options: choices.languages,
-    } } : {})} sort={{ value: sort, onChange: setSort }}/>
+    } } : {})} sort={{ value: resolvedSort, onChange: (value: StreamSort) => setSort(value) }}/>
     {notices.map((notice) => <p className="notice" key={notice.sourceId}><b>{notice.addonName}</b> {noticeText(notice)}</p>)}
     <SourceRows className={listClassName ?? "stream-list"} rows={rows} selected={chosen} onSelect={onSelect}
+      ruleId={sortRuleId(resolvedSort) ?? defaultRuleId}
       badgeOf={badgeOf} listRef={listRef}/>
     {pending && <p className="identify-hint" role="status">{t("sources.askingOthers")}</p>}
     {/* One line for the whole list, never one per silent library: seven libraries that found

@@ -124,6 +124,10 @@ export function materializeSourceProfileAdmission(
   }
 }
 
+/** Whether an admission may reach a remote library, so it needs no addon to be queued. */
+export const admitsRemoteProviders = (snapshot: SourceAdmissionSnapshotV1 | undefined): boolean =>
+  snapshot !== undefined && snapshot.providerKeys.some((key) => key.startsWith("remote:"));
+
 export const profileSelectionReference = (
   selection: unknown,
 ): { present: false } | { present: true; reference: unknown } => {
@@ -144,7 +148,10 @@ export const legacySelectionFromAdmission = (snapshot: SourceAdmissionSnapshotV1
     ? undefined
     : subtitles.fallback.code;
   return {
-    addonKeys: snapshot.providerKeys.map((key) => key.slice("addon:".length)),
+    // Only addons travel as legacy keys; remote libraries stay in the admission snapshot alone.
+    addonKeys: snapshot.providerKeys
+      .filter((key) => key.startsWith("addon:"))
+      .map((key) => key.slice("addon:".length)),
     sourceStrategy: "priority" as const,
     audioLanguage: "code" in audio.preferred ? audio.preferred.code : "",
     ...(audioFallback === undefined ? {} : { fallbackAudioLanguage: audioFallback }),

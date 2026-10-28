@@ -23,6 +23,7 @@ import {
   SOURCE_PROFILE_IDS,
   viewerOfProfileAccount,
 } from "./source-profiles.js";
+import { admitsRemoteProviders, legacySelectionFromAdmission } from "./routes/source-profile-selection.js";
 import { parseSourcePolicyV1, type SourcePolicyV1 } from "./source-policy.js";
 import type { StoredSourceProfile } from "./store.js";
 import type { AddonRecord } from "./types.js";
@@ -125,6 +126,18 @@ const storedBuiltIns = (): StoredSourceProfile[] =>
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
   }));
+
+const storedRules = (
+  parameters: StoredSourceProfile["parameters"] = defaultTemplateParameters("rules"),
+): StoredSourceProfile => ({
+  id: SOURCE_PROFILE_IDS.balanced,
+  revision: 1,
+  template: "rules",
+  nameKey: "rules.preset.balanced",
+  parameters,
+  createdAt: "2026-01-01T00:00:00.000Z",
+  updatedAt: "2026-01-01T00:00:00.000Z",
+});
 
 const context = (
   user = account(),
@@ -535,6 +548,60 @@ test("Travel freezes its quality floor, ascending size and local-copy policy", (
   assert.equal(snapshot.policy.nextEpisode, "profile");
 });
 
+test("rules downloads admit visible remote libraries before addons", () => {
+  const firstRemote = remoteLibrary(REMOTE_ONE, [MEMBER]);
+  const secondRemote = { ...remoteLibrary(REMOTE_TWO, [MEMBER]), order: 1 };
+  const snapshot = materializeSourceAdmission(
+    reference(SOURCE_PROFILE_IDS.balanced),
+    context(account(), {
+      profiles: [storedRules()],
+      addons: [addon("first", { allowedUsers: [MEMBER] }), addon("second", { allowedUsers: [MEMBER] })],
+      remoteLibraries: [secondRemote, firstRemote],
+      operation: "downloadToLibrary",
+    }),
+  );
+
+  assert.deepEqual(snapshot.providerKeys, [
+    `remote:${REMOTE_ONE}`,
+    `remote:${REMOTE_TWO}`,
+    "addon:first",
+    "addon:second",
+  ]);
+  assert.deepEqual(
+    snapshot.policy.criteria.find((criterion) => criterion.kind === "providerOrder"),
+    { kind: "providerOrder", keys: snapshot.providerKeys },
+  );
+});
+
+test("other download templates keep their addon-only provider snapshots", () => {
+  for (const profileId of [SOURCE_PROFILE_IDS.travel, SOURCE_PROFILE_IDS.providerPriority]) {
+    const snapshot = materializeSourceAdmission(
+      reference(profileId),
+      context(account(), {
+        addons: [addon("source", { allowedUsers: [MEMBER] })],
+        remoteLibraries: [remoteLibrary(REMOTE_ONE, [MEMBER])],
+        operation: "downloadToLibrary",
+      }),
+    );
+    assert.deepEqual(snapshot.providerKeys, ["addon:source"], profileId);
+  }
+});
+
+test("rules downloads without the copy right keep remote providers out", () => {
+  assert.throws(
+    () => materializeSourceAdmission(
+      reference(SOURCE_PROFILE_IDS.balanced),
+      context(account(MEMBER, "user", { downloadToLibrary: false, downloadToDevice: true }), {
+        profiles: [storedRules()],
+        addons: [addon("source", { allowedUsers: [MEMBER] })],
+        remoteLibraries: [remoteLibrary(REMOTE_ONE, [MEMBER])],
+        operation: "downloadToLibrary",
+      }),
+    ),
+    rejectionCode("operationForbidden"),
+  );
+});
+
 test("Travel snapshot parsing rematerializes only its mutable provider and language fields", () => {
   const materialized = materializeSourceAdmission(
     reference(SOURCE_PROFILE_IDS.travel),
@@ -845,4 +912,186 @@ test("the snapshot type keeps fully materialized policy and provider membership"
   assert.deepEqual(snapshot.providerKeys, ["addon:priority"]);
   assert.equal(snapshot.policy.scope.mode, "selected");
   assert.doesNotMatch(JSON.stringify(snapshot), /"from":"viewer"|"preference":"(audio|subtitle)"/);
+});
+
+test("a rule download reaching only a remote library admits for every audio mode", () => {
+  const base = RULE_PRESETS[0]!.rules;
+  const audios = [
+    { mode: "any", language: "mine", fallback: null },
+    { mode: "prefer", language: "mine", fallback: null },
+    { mode: "prefer", language: "de", fallback: null },
+    { mode: "only", language: "mine", fallback: null },
+  ] as const;
+  for (const audio of audios) {
+    const rules = parseDownloadRules({
+      ...base,
+      audio,
+      preference: audio.mode === "any"
+        ? base.preference.filter((preference) => preference !== "language")
+        : base.preference,
+    });
+    const profile: StoredSourceProfile = {
+      id: "remote-only-rule",
+      revision: 1,
+      template: "rules",
+      name: "Remote only",
+      parameters: rules,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const snapshot = materializeSourceAdmission(reference(profile.id), context(account(), {
+      profiles: [profile],
+      remoteLibraries: [remoteLibrary(REMOTE_ONE, [MEMBER])],
+      operation: "downloadToLibrary",
+      audioLanguage: "cs",
+    }));
+    assert.deepEqual(snapshot.providerKeys, [`remote:${REMOTE_ONE}`], audio.mode);
+    assert.deepEqual(parseSourceAdmissionSnapshotV1(structuredClone(snapshot)), snapshot);
+    // The legacy selection carries no addon and the route lets it through for the remote library.
+    assert.deepEqual(legacySelectionFromAdmission(snapshot).addonKeys, []);
+    assert.equal(admitsRemoteProviders(snapshot), true);
+  }
+});
+
+test("a rules profile admits local, remote and addon providers for playback in every audio mode", () => {
+  const base = RULE_PRESETS[0]!.rules;
+  const audios = [
+    { mode: "any", language: "mine", fallback: null },
+    { mode: "prefer", language: "mine", fallback: null },
+    { mode: "prefer", language: "de", fallback: null },
+    { mode: "only", language: "mine", fallback: null },
+  ] as const;
+  const profileFor = (audio: typeof audios[number]): StoredSourceProfile => ({
+    id: "playback-rule",
+    revision: 1,
+    template: "rules",
+    name: "Playback",
+    parameters: parseDownloadRules({
+      ...base,
+      audio,
+      preference: audio.mode === "any"
+        ? base.preference.filter((preference) => preference !== "language")
+        : base.preference,
+    }),
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  });
+
+  for (const audio of audios) {
+    const profile = profileFor(audio);
+    const input = context(account(), {
+      profiles: [profile],
+      addons: [addon("playback")],
+      libraries: [library("lib_00000001", [MEMBER])],
+      remoteLibraries: [remoteLibrary(REMOTE_ONE, [MEMBER])],
+      operation: "play",
+      audioLanguage: "cs",
+    });
+    const snapshot = materializeSourceAdmission(reference(profile.id), input);
+    assert.deepEqual(snapshot.providerKeys, ["local", `remote:${REMOTE_ONE}`, "addon:playback"], audio.mode);
+    assert.deepEqual(parseSourceAdmissionSnapshotV1(structuredClone(snapshot)), snapshot);
+
+    input.operation = "downloadToLibrary";
+    const download = materializeSourceAdmission(reference(profile.id), input);
+    assert.deepEqual(download.providerKeys, [`remote:${REMOTE_ONE}`, "addon:playback"], audio.mode);
+  }
+});
+
+test("rules select only their listed addons, local library and remote libraries", () => {
+  const addonOnly = parseDownloadRules({
+    ...RULE_PRESETS[0]!.rules,
+    addons: { scope: { selected: ["a1"] }, order: "viewer" },
+  });
+  const input = context(account(), {
+    profiles: [storedRules(addonOnly)],
+    addons: [addon("a1", { allowedUsers: [MEMBER] })],
+    libraries: [library("lib_00000001", [MEMBER])],
+    remoteLibraries: [remoteLibrary(REMOTE_ONE, [MEMBER])],
+    operation: "play",
+  });
+
+  assert.deepEqual(
+    materializeSourceAdmission(reference(SOURCE_PROFILE_IDS.balanced), input).providerKeys,
+    ["addon:a1"],
+  );
+});
+
+test("a selected remote library is admitted for playback and library downloads, never local for downloads", () => {
+  const selected = parseDownloadRules({
+    ...RULE_PRESETS[0]!.rules,
+    addons: { scope: { selected: [`remote:${REMOTE_ONE}`, "a1"] }, order: "viewer" },
+  });
+  const input = context(account(), {
+    profiles: [storedRules(selected)],
+    addons: [addon("a1", { allowedUsers: [MEMBER] })],
+    libraries: [library("lib_00000001", [MEMBER])],
+    remoteLibraries: [remoteLibrary(REMOTE_ONE, [MEMBER])],
+    operation: "play",
+  });
+
+  const play = materializeSourceAdmission(reference(SOURCE_PROFILE_IDS.balanced), input);
+  assert.deepEqual(play.providerKeys, [`remote:${REMOTE_ONE}`, "addon:a1"]);
+  assert.deepEqual(parseSourceAdmissionSnapshotV1(structuredClone(play)), play);
+
+  input.operation = "downloadToLibrary";
+  const download = materializeSourceAdmission(reference(SOURCE_PROFILE_IDS.balanced), input);
+  assert.deepEqual(download.providerKeys, [`remote:${REMOTE_ONE}`, "addon:a1"]);
+  assert.equal(download.providerKeys.includes("local"), false);
+  assert.deepEqual(parseSourceAdmissionSnapshotV1(structuredClone(download)), download);
+});
+
+test("an explicit mixed provider order is preserved for playback and snapshots round-trip", () => {
+  const ordered = parseDownloadRules({
+    ...RULE_PRESETS[0]!.rules,
+    addons: {
+      scope: "all",
+      order: { explicit: ["a1", `remote:${REMOTE_ONE}`, "local"] },
+    },
+  });
+  const snapshot = materializeSourceAdmission(
+    reference(SOURCE_PROFILE_IDS.balanced),
+    context(account(), {
+      profiles: [storedRules(ordered)],
+      addons: [addon("a1", { allowedUsers: [MEMBER] })],
+      libraries: [library("lib_00000001", [MEMBER])],
+      remoteLibraries: [remoteLibrary(REMOTE_ONE, [MEMBER])],
+      operation: "play",
+    }),
+  );
+
+  assert.deepEqual(snapshot.providerKeys, ["addon:a1", `remote:${REMOTE_ONE}`, "local"]);
+  assert.deepEqual(
+    snapshot.policy.criteria.find((criterion) => criterion.kind === "providerOrder"),
+    { kind: "providerOrder", keys: snapshot.providerKeys },
+  );
+  assert.deepEqual(parseSourceAdmissionSnapshotV1(structuredClone(snapshot)), snapshot);
+});
+
+test("materialized all and selected rules round-trip snapshots for every operation", () => {
+  const selected = parseDownloadRules({
+    ...RULE_PRESETS[0]!.rules,
+    addons: {
+      scope: { selected: ["local", `remote:${REMOTE_ONE}`, "a1"] },
+      order: "viewer",
+    },
+  });
+  for (const parameters of [RULE_PRESETS[0]!.rules, selected]) {
+    for (const operation of ["play", "downloadToDevice", "downloadToLibrary"] as const) {
+      const snapshot = materializeSourceAdmission(
+        reference(SOURCE_PROFILE_IDS.balanced),
+        context(account(), {
+          profiles: [storedRules(parameters)],
+          addons: [addon("a1", { allowedUsers: [MEMBER] })],
+          libraries: [library("lib_00000001", [MEMBER])],
+          remoteLibraries: [remoteLibrary(REMOTE_ONE, [MEMBER])],
+          operation,
+        }),
+      );
+      assert.deepEqual(
+        parseSourceAdmissionSnapshotV1(structuredClone(snapshot)),
+        snapshot,
+        `${operation} ${parameters.addons.scope === "all" ? "all" : "selected"}`,
+      );
+    }
+  }
 });

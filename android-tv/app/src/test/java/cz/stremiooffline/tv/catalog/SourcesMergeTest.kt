@@ -30,7 +30,7 @@ class SourcesMergeTest {
     val started = System.nanoTime()
     for (part in parts) {
       accumulated += part
-      visible = Streams.sourceLists(accumulated, addons, Streams.StreamFilters(sort = Streams.StreamSort.Recommended), "cs", true, "cs").visible.size
+      visible = Streams.sourceLists(accumulated, addons, Streams.StreamFilters(sort = Streams.StreamSort.FirstRule), "cs", true, "cs").visible.size
     }
     val elapsedMs = (System.nanoTime() - started) / 1_000_000
 

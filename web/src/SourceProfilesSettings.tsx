@@ -6,7 +6,8 @@ import { useDialogViewport } from "./dialog-viewport";
 import { languageName, t, type Key } from "./i18n";
 import { rulesSummary, sourceProfileName } from "./source-profile-copy";
 import { SettingsSectionHead } from "./settings-ui";
-import type { Addon, AdminSourceProfile, DownloadRules, RulePreference, RuleResolution } from "./types";
+import { providerLabel } from "./source-rows";
+import type { Addon, AdminRemoteLibrary, AdminSourceProfile, DownloadRules, RulePreference, RuleResolution } from "./types";
 
 const RESOLUTIONS: RuleResolution[] = [360, 480, 720, 1080, 2160];
 const PREFERENCES: RulePreference[] = ["language", "resolutionHigher", "resolutionLower", "smaller", "larger", "addonOrder"];
@@ -71,10 +72,15 @@ const move = <T,>(items: readonly T[], index: number, direction: -1 | 1): T[] =>
 };
 
 const readCatalogue = async () => {
-  const [profileAnswer, addons] = await Promise.all([api.adminSourceProfiles(), api.addons()]);
+  const [profileAnswer, addons, remoteLibraries] = await Promise.all([
+    api.adminSourceProfiles(),
+    api.addons(),
+    api.adminRemoteLibraries().catch(() => []),
+  ]);
   return {
     profiles: Array.isArray(profileAnswer?.profiles) ? profileAnswer.profiles.filter((profile) => profile.template === "rules") : [],
     addons: Array.isArray(addons) ? addons : [],
+    remoteLibraries: Array.isArray(remoteLibraries) ? remoteLibraries : [],
   };
 };
 
@@ -103,9 +109,16 @@ function DialogShell({ label, title, busy, onClose, onSubmit, children, footer }
   </div>;
 }
 
-export function SourceProfilesSettings({ languages }: { languages: Array<{ code: string; name: string }> }) {
+export function SourceProfilesSettings({ languages, titleKey = "rules.title", hintKey = "rules.hint", onChanged }: {
+  /** Told after a rule was added, duplicated, edited or deleted, so other lists can reload. */
+  onChanged?: () => void;
+  languages: Array<{ code: string; name: string }>;
+  titleKey?: Key;
+  hintKey?: Key;
+}) {
   const [profiles, setProfiles] = useState<AdminSourceProfile[]>([]);
   const [addons, setAddons] = useState<Addon[]>([]);
+  const [remoteLibraries, setRemoteLibraries] = useState<AdminRemoteLibrary[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -115,18 +128,30 @@ export function SourceProfilesSettings({ languages }: { languages: Array<{ code:
   const [advanced, setAdvanced] = useState(false);
   const [duplicate, setDuplicate] = useState<DuplicateSession | null>(null);
   const [remove, setRemove] = useState<DeleteSession | null>(null);
-  const rows = addonRows(addons);
+  const rows = [
+    { key: "local", name: t("rules.localLibrary") },
+    ...remoteLibraries.filter((library) => library.enabled)
+      .sort((left, right) => left.order - right.order)
+      .map((library) => ({
+        key: `remote:${library.id}`,
+        name: library.provider ? `${providerLabel(library.provider)} · ${library.name}` : library.name,
+      })),
+    ...addonRows(addons),
+  ];
   const keys = rows.map((row) => row.key);
 
   const refresh = async () => {
     const loaded = await readCatalogue();
-    setProfiles(loaded.profiles); setAddons(loaded.addons); setLoadError("");
+    setProfiles(loaded.profiles); setAddons(loaded.addons); setRemoteLibraries(loaded.remoteLibraries); setLoadError("");
     return loaded;
   };
+  const changed = async () => { await refresh(); onChanged?.(); };
   useEffect(() => {
     let stale = false;
     readCatalogue().then((loaded) => {
-      if (!stale) { setProfiles(loaded.profiles); setAddons(loaded.addons); setLoadError(""); }
+      if (!stale) {
+        setProfiles(loaded.profiles); setAddons(loaded.addons); setRemoteLibraries(loaded.remoteLibraries); setLoadError("");
+      }
     }).catch((error) => { if (!stale) setLoadError(describeError(error)); })
       .finally(() => { if (!stale) setLoading(false); });
     return () => { stale = true; };
@@ -154,7 +179,7 @@ export function SourceProfilesSettings({ languages }: { languages: Array<{ code:
         ...(session.builtIn ? {} : { name: session.draft.name.trim() }),
         rules: session.draft.rules,
       });
-      setSession(null); await refresh();
+      setSession(null); await changed();
     } catch (error) {
       setDialogError(describeError(error));
       setCanReload(error instanceof ApiError && error.status === 409 && session.kind === "edit");
@@ -175,14 +200,14 @@ export function SourceProfilesSettings({ languages }: { languages: Array<{ code:
   const saveDuplicate = async () => {
     if (!duplicate || !nameOk(duplicate.name)) return;
     setBusy(true); setDialogError("");
-    try { await api.duplicateAdminSourceProfile(duplicate.id, duplicate.name.trim()); setDuplicate(null); await refresh(); }
+    try { await api.duplicateAdminSourceProfile(duplicate.id, duplicate.name.trim()); setDuplicate(null); await changed(); }
     catch (error) { setDialogError(describeError(error)); }
     finally { setBusy(false); }
   };
   const confirmDelete = async () => {
     if (!remove) return;
     setBusy(true); setDialogError(""); setCanReload(false);
-    try { await api.deleteAdminSourceProfile(remove.id, remove.revision); setRemove(null); await refresh(); }
+    try { await api.deleteAdminSourceProfile(remove.id, remove.revision); setRemove(null); await changed(); }
     catch (error) { setDialogError(describeError(error)); setCanReload(error instanceof ApiError && error.status === 409); }
     finally { setBusy(false); }
   };
@@ -204,14 +229,14 @@ export function SourceProfilesSettings({ languages }: { languages: Array<{ code:
   const orderedRows = explicit.map((key) => rows.find((row) => row.key === key) ?? { key, name: key });
   const setScope = (scope: "all" | "selected") => {
     if (!draft) return;
-    const selected = draft.rules.addons.scope === "all" ? [] : draft.rules.addons.scope.selected;
+    const selected = draft.rules.addons.scope === "all" ? keys : draft.rules.addons.scope.selected;
     const available = scope === "all" ? keys : selected;
     updateRules({ ...draft.rules, addons: {
       scope: scope === "all" ? "all" : { selected },
       order: draft.rules.addons.order === "viewer" ? "viewer" : { explicit: explicit.filter((key) => available.includes(key)) },
     } });
   };
-  const toggleAddon = (key: string) => {
+  const toggleProvider = (key: string) => {
     if (!draft || draft.rules.addons.scope === "all") return;
     const selected = draft.rules.addons.scope.selected.includes(key)
       ? draft.rules.addons.scope.selected.filter((item) => item !== key)
@@ -283,7 +308,7 @@ export function SourceProfilesSettings({ languages }: { languages: Array<{ code:
   };
 
   return <section className="panel settings-section source-profiles-section">
-    <SettingsSectionHead icon={<ListFilter/>} title={t("rules.title")} text={t("rules.hint")}/>
+    <SettingsSectionHead icon={<ListFilter/>} title={t(titleKey)} text={t(hintKey)}/>
     {loading && <p className="identify-hint">{t("common.loading")}</p>}
     {loadError && <p className="login-error" role="alert">{loadError}</p>}
     {!loading && <ul className="source-profile-list">{profiles.map((profile) => {
@@ -318,8 +343,8 @@ export function SourceProfilesSettings({ languages }: { languages: Array<{ code:
         </div>
         {draft.rules.addons.scope !== "all" && <div className="bulk-sources">{rows.map((row) => {
           const checked = draft.rules.addons.scope !== "all" && draft.rules.addons.scope.selected.includes(row.key);
-          return <div key={row.key} className={checked ? "selected" : ""}><label><input type="checkbox" aria-label={row.name} checked={checked} onChange={() => toggleAddon(row.key)}/><span>{row.name}</span></label></div>;
-        })}{!rows.length && <p className="identify-hint">{t("rules.noStreamAddons")}</p>}</div>}
+          return <div key={row.key} className={checked ? "selected" : ""}><label><input type="checkbox" aria-label={row.name} checked={checked} onChange={() => toggleProvider(row.key)}/><span>{row.name}</span></label></div>;
+        })}</div>}
         <div className="bulk-strategy" role="radiogroup" aria-label={t("rules.addonOrder")}>
           <label className={draft.rules.addons.order === "viewer" ? "selected" : ""}><input type="radio" name="download-rules-order" value="viewer" checked={draft.rules.addons.order === "viewer"} onChange={() => setOrder("viewer")}/><span><strong>{t("rules.orderViewer")}</strong></span></label>
           <label className={draft.rules.addons.order !== "viewer" ? "selected" : ""}><input type="radio" name="download-rules-order" value="explicit" checked={draft.rules.addons.order !== "viewer"} onChange={() => setOrder("explicit")}/><span><strong>{t("rules.orderCustom")}</strong></span></label>

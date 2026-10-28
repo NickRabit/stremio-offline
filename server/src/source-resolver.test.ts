@@ -148,6 +148,7 @@ async function harness(options: {
     listStreams: options.listStreams,
     listSubtitles: options.listSubtitles ?? (async () => []),
     inspect: options.inspect,
+    remoteDownloadCandidates: async () => [],
   });
   queue.setResolver(resolver);
   await queue.load();

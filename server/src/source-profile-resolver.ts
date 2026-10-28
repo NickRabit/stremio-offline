@@ -20,6 +20,7 @@ import type {
 import type { RulesContinuationCursorV1 } from "./source-rules.js";
 import {
   verifyRulesAddonStreams,
+  type RemoteRulesCandidate,
   type RulesAddonStreamOutcome,
 } from "./source-rules-execution.js";
 import type { AddonDownloadSettings, AddonRecord, StreamItem, SubtitleItem } from "./types.js";
@@ -84,14 +85,18 @@ export type ProviderPriorityProfileResolution =
   };
 
 type RulesUnselectedOutcome = Exclude<RulesAddonStreamOutcome, { status: "selected" }>;
+type RulesSelectedOutcome = Extract<RulesAddonStreamOutcome, { status: "selected" }>;
+type RulesRemoteSelectedOutcome = Extract<RulesSelectedOutcome, { remoteDownload: unknown }>;
+type RulesAddonSelectedOutcome = Exclude<RulesSelectedOutcome, RulesRemoteSelectedOutcome>;
 
 export type RulesProfileResolution =
   | RulesUnselectedOutcome
-  | (Extract<RulesAddonStreamOutcome, { status: "selected" }> & {
+  | (RulesAddonSelectedOutcome & {
     readonly settings: AddonDownloadSettings;
     readonly streamAddonIdentity: string;
     readonly subtitleAddonIdentity?: string;
-  });
+  })
+  | RulesRemoteSelectedOutcome;
 
 const rulesAccessDenied = (): RulesUnselectedOutcome => ({
   status: "accessDenied",
@@ -202,6 +207,26 @@ const httpUrl = (value: unknown): value is string => {
   }
 };
 
+const abortable = <T>(promise: Promise<T>, signal: AbortSignal): Promise<T> =>
+  new Promise<T>((resolve, reject) => {
+    const stopped = () => reject(new Error("Remote discovery was stopped."));
+    if (signal.aborted) {
+      stopped();
+      return;
+    }
+    signal.addEventListener("abort", stopped, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", stopped);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", stopped);
+        reject(error);
+      },
+    );
+  });
+
 const externalSubtitlesForResolution = (
   stream: StreamItem,
   externalSubtitles: readonly SubtitleItem[],
@@ -219,6 +244,7 @@ const externalSubtitlesForResolution = (
 async function acquireProfileAddons(
   deps: SourceResolverDeps,
   input: AcquiredProfileAddonsInput,
+  allowWithoutAddons = false,
 ): Promise<AcquiredProfileAddons> {
   const { source, snapshot, ownerUserId, signal } = input;
   if (signal.aborted) return { status: "cancelled" };
@@ -243,7 +269,17 @@ async function acquireProfileAddons(
 
   const initial = current();
   if (!initial) return unavailable();
-  if (initial.scopedStreamProviders.length === 0) return { status: "accessDenied" };
+  if (initial.scopedStreamProviders.length === 0) {
+    if (!allowWithoutAddons) return { status: "accessDenied" };
+    return {
+      status: "ready",
+      streams: [],
+      externalSubtitles: [],
+      shouldContinue: () => current() !== undefined,
+      scopeStamp: scopeStampFor(initial.owner.id, snapshot, []),
+      finalize: () => undefined,
+    };
+  }
 
   const streamIdentities = new Map(
     initial.scopedStreamProviders.map((addon) => [addon.key, addonIdentity(addon)]),
@@ -407,12 +443,53 @@ export function createRulesProfileResolver(
       snapshot,
       ownerUserId,
       signal,
-    });
+    }, true);
     if (acquired.status !== "ready") return rulesUnavailable(acquired);
+
+    const remoteKeys = snapshot.providerKeys.filter((key) => key.startsWith("remote:"));
+    const remoteCandidates: RemoteRulesCandidate[] = [];
+    let remoteTemporaryFailures = 0;
+    if (ownerUserId && remoteKeys.length > 0 && (source.type === "movie" || source.type === "series")) {
+      const listing = new Array<RemoteRulesCandidate[] | undefined>(remoteKeys.length);
+      let next = 0;
+      const worker = async () => {
+        while (!signal.aborted) {
+          const index = next++;
+          const providerKey = remoteKeys[index];
+          if (providerKey === undefined) return;
+          const libraryId = providerKey.slice("remote:".length);
+          try {
+            const remoteSignal = AbortSignal.any([signal, AbortSignal.timeout(8_000)]);
+            const candidates = await abortable(deps.remoteDownloadCandidates({
+              ownerUserId,
+              libraryId,
+              type: source.type as "movie" | "series",
+              catalogId: source.videoId,
+              signal: remoteSignal,
+            }), remoteSignal);
+            listing[index] = candidates.map((candidate, candidateIndex) => ({
+              providerKey,
+              reference: candidate.reference,
+              version: candidate.version,
+              stream: candidate.stream,
+              providerResponseIndex: index * 10_000 + candidateIndex,
+            }));
+          } catch {
+            if (signal.aborted) return;
+            remoteTemporaryFailures += 1;
+          }
+        }
+      };
+      await Promise.all([worker(), worker()]);
+      if (signal.aborted) return rulesCancelled();
+      for (const candidates of listing) if (candidates !== undefined) remoteCandidates.push(...candidates);
+    }
 
     const outcome = await verifyRulesAddonStreams({
       snapshot,
       streams: acquired.streams,
+      remoteCandidates,
+      remoteTemporaryFailures,
       externalSubtitles: acquired.externalSubtitles.filter((subtitle) => httpUrl(subtitle.url)),
       ...(source.selection?.titleLanguage === undefined
         ? {}
@@ -427,6 +504,7 @@ export function createRulesProfileResolver(
       tried: source.tried,
     });
     if (outcome.status !== "selected") return outcome;
+    if ("remoteDownload" in outcome) return outcome;
     if (outcome.stream.infoHash !== undefined && !deps.hasRealDebrid()) {
       return rulesAccessDenied();
     }

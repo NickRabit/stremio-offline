@@ -13,6 +13,7 @@ import {
 } from "./source-profiles.js";
 import { parseDownloadRules } from "./download-rules.js";
 import type { StoredSourceProfile } from "./store.js";
+import { STREAM_SORTS } from "./stream-sort.js";
 
 export const BACKUP_FORMAT = "stremio-offline-settings";
 /** 2 adds the library roster, so a rule that names a library survives the trip to another
@@ -22,7 +23,6 @@ export const BACKUP_FORMAT = "stremio-offline-settings";
 export const BACKUP_VERSION = 4;
 const READABLE_VERSIONS = [1, 2, 3, 4];
 const ROLES = new Set<AddonRole>(["catalog", "source", "both"]);
-const STREAM_SORTS = new Set(["recommended", "size-desc", "size-asc", "addon"]);
 const TILE_SIZES = new Set(["compact", "small", "medium", "large"]);
 const TILE_SHAPES = new Set(["poster", "wide"]);
 const START_VIEWS = new Set(["catalog", "home", "library"]);
@@ -127,6 +127,7 @@ function parseSettings(value: unknown): Settings {
   const libraryShelf = String(source.libraryShelf ?? "");
   const downloadSourceProfile = typeof source.downloadSourceProfile === "string" ? source.downloadSourceProfile : "";
   const followSourceProfile = typeof source.followSourceProfile === "string" ? source.followSourceProfile : "";
+  const defaultRulesProfileId = typeof source.defaultRulesProfileId === "string" ? source.defaultRulesProfileId : "";
   // A personal Home arrangement rides in the backup like every other personal setting; a
   // shape that is not the three arrays is dropped rather than failing the whole import.
   const homeLayout = parseHomeLayout(source.homeLayout);
@@ -136,7 +137,9 @@ function parseSettings(value: unknown): Settings {
     downloadSegments: number("downloadSegments", 8),
     uiLanguage, audioLanguage, subtitleLanguage, downloadTitleLanguage,
     mergeByName: boolean("mergeByName"),
-    streamSort: STREAM_SORTS.has(streamSort) ? streamSort : fallback.streamSort,
+    streamSort: STREAM_SORTS.has(streamSort) || streamSort === "recommended" || streamSort.startsWith("rule:")
+      ? streamSort
+      : fallback.streamSort,
     trackProgress: boolean("trackProgress"),
     showResumeRow: boolean("showResumeRow"),
     libraryAutoScan: boolean("libraryAutoScan"),
@@ -156,6 +159,7 @@ function parseSettings(value: unknown): Settings {
     ...(homeLayout ? { homeLayout } : {}),
     ...(downloadSourceProfile ? { downloadSourceProfile } : {}),
     ...(followSourceProfile ? { followSourceProfile } : {}),
+    ...(defaultRulesProfileId ? { defaultRulesProfileId } : {}),
     // Whatever the backup names here is another instance's id; the import maps it onto a local
     // library by root or name, and falls back to the default when it cannot.
     defaultMovieLibrary: typeof source.defaultMovieLibrary === "string" ? source.defaultMovieLibrary : "",

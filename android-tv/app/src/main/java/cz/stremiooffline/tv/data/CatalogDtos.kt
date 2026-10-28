@@ -97,6 +97,15 @@ data class BehaviorHintsDto(
   val bingeGroup: String? = null,
 )
 
+/** One rules profile's verdict for a source. Unknown JSON keys stay ignored. */
+@Serializable
+data class SourceRuleVerdictDto(
+  val profileId: String = "",
+  val status: String = "",
+  val reasons: List<String> = emptyList(),
+  val rank: List<Double> = emptyList(),
+)
+
 /** One `GET /api/streams/:type/:id` entry, the `Stream` shape the web reads. */
 @Serializable
 data class StreamDto(
@@ -129,8 +138,14 @@ data class StreamDto(
   /** Source-owned external subtitles this version carries (an addon's own list, or the SRT a
    *  media server minted for one remote version), each with an opaque id. */
   val subtitles: List<AddonSubtitleDto> = emptyList(),
+  /** A media-server version's own track languages; [audioLanguagesGuessed] when read from its name. */
+  val audioLanguages: List<String> = emptyList(),
+  val subtitleLanguages: List<String> = emptyList(),
+  val audioLanguagesGuessed: Boolean = false,
   /** The same source's handle in every session; the server mints it and the app never computes it. */
   val stableKey: String? = null,
+  /** One verdict per rules profile, keyed by profile id. */
+  val rules: Map<String, SourceRuleVerdictDto> = emptyMap(),
 )
 
 /** One `GET /api/stream-sources/:type/:id` entry: a source addon the streams are asked from. */

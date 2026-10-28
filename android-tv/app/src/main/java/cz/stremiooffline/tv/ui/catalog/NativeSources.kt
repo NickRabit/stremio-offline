@@ -17,6 +17,7 @@ import cz.stremiooffline.tv.data.LibraryDto
 import cz.stremiooffline.tv.data.RemoteLibraryApi
 import cz.stremiooffline.tv.data.RemoteLibraryDto
 import cz.stremiooffline.tv.data.SettingsResponse
+import cz.stremiooffline.tv.data.SourceProfileDto
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.StreamSourceDto
 import cz.stremiooffline.tv.playback.Progress
@@ -474,6 +475,8 @@ fun NativeSourcesPanel(
   default: StreamDto?,
   chosen: StreamDto?,
   filters: Streams.StreamFilters,
+  profiles: List<SourceProfileDto> = emptyList(),
+  ruleNoteProfileId: String? = null,
   onFilterSelect: (chipKey: String, optionKey: String) -> Unit,
   onChoose: (StreamDto) -> Unit,
   onSave: ((StreamDto) -> Unit)?,
@@ -547,12 +550,13 @@ fun NativeSourcesPanel(
     failureText = failureText,
     onRetry = onRetry,
     retryTag = TagRemoteSourcesPanelRetry,
-    filters = if (total > 1) sourceFilterChips(filters, lists.options) else emptyList(),
+    filters = if (total > 1) sourceFilterChips(filters, lists.options, profiles) else emptyList(),
     onFilterSelect = onFilterSelect,
     countText = if (total > 1) stringResource(R.string.sources_of_total, rows.size, total) else null,
     remoteNote = if (!failed && failedAnywhere) failureText else null,
     onSaveToLibrary = onSave,
     canSaveToLibrary = canSave,
+    ruleNoteProfileId = ruleNoteProfileId,
     initialFocus = initialFocus,
   )
 }

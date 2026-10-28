@@ -82,6 +82,16 @@
   <string name="sources_any_language">Qualquer</string>
   <string name="sources_of_total">%1$s de %2$s</string>
   <string name="sources_sort_recommended">Recomendado</string>
+  <string name="sources_rule_breaks">Não cumpre as regras: %1$s</string>
+  <string name="sources_rule_reason_language">outro idioma</string>
+  <string name="sources_rule_reason_resolution_low">resolução menor</string>
+  <string name="sources_rule_reason_resolution_high">resolução maior</string>
+  <string name="sources_rule_reason_cinema">cópia de cinema (CAM/TS)</string>
+  <string name="sources_rule_reason_subtitles">sem legendas</string>
+  <string name="sources_rule_reason_sample">amostra</string>
+  <string name="sources_rule_reason_size">tamanho fora do intervalo</string>
+  <string name="sources_rule_reason_provider">fonte fora das regras</string>
+  <string name="sources_rule_reason_torrent">torrents não permitidos</string>
   <string name="sources_sort_largest">Maior primeiro</string>
   <string name="sources_sort_smallest">O menor primeiro</string>
   <string name="sources_sort_addon">Por prioridade adicional</string>
@@ -224,12 +234,15 @@
   <string name="tv_download_from_episode">A partir deste episódio</string>
   <string name="tv_download_all_episodes">Todos os episódios</string>
   <string name="bulk_title">Baixar série</string>
+  <string name="bulk_title_movie">Baixar filme</string>
+  <string name="bulk_title_episode">Baixar episódio</string>
   <string name="bulk_add">Adicionar à fila</string>
   <plurals name="bulk_episode_count">
     <item quantity="one">%1$s episódio</item>
     <item quantity="other">%1$s episódios</item>
   </plurals>
   <string name="rules_title">Regras de download</string>
+  <string name="rules_selected_source">Fonte selecionada</string>
   <string name="rules_unavailable">As regras de download não estão disponíveis. Peça a um administrador.</string>
   <string name="rules_preset_balanced">Equilibrado</string>
   <string name="rules_preset_best">Melhor qualidade</string>

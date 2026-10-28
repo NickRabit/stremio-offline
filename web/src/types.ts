@@ -158,9 +158,25 @@ export interface Subtitle { subtitleId: string; lang?: string; addonName?: strin
 /** One site worth checking before watching; the interface draws them in its own fixed order. */
 export interface SiteLink { site: "csfd" | "tmdb" | "imdb"; url: string }
 export interface Trailer { youtubeId: string; title?: string; provider: "cinemeta" | "tmdb" }
+export type SourceRuleReason =
+  | "language"
+  | "resolutionLow"
+  | "resolutionHigh"
+  | "cinema"
+  | "subtitles"
+  | "sample"
+  | "size"
+  | "provider"
+  | "torrent";
+export interface SourceRuleVerdict {
+  profileId: string;
+  status: "meets" | "unverified" | "breaks";
+  reasons: SourceRuleReason[];
+  rank: number[];
+}
 export interface Stream {
   sourceId: string; kind: "remote" | "library" | "torrent" | "unsupported"; playable: boolean; localPath?: string; libraryName?: string; name?: string; title?: string; description?: string;
-  subtitles?: Subtitle[]; addonKey?: string; addonName?: string;
+  subtitles?: Subtitle[]; audioLanguages?: string[]; subtitleLanguages?: string[]; audioLanguagesGuessed?: boolean; addonKey?: string; addonName?: string;
   behaviorHints?: { notWebReady?: boolean; filename?: string; videoSize?: number; bingeGroup?: string };
   /** The same source's handle in every session, minted by the server: a position stored with it
    *  resumes from this source again. */
@@ -180,6 +196,7 @@ export interface Stream {
   capabilities?: RemoteCapabilities;
   /** The remote identity a player reports position and favorites against; only a remote source carries one. */
   remoteItem?: RemoteStreamContext;
+  rules?: Record<string, SourceRuleVerdict>;
 }
 
 export type MediaServerProvider = "jellyfin" | "emby";
@@ -421,7 +438,7 @@ export interface ActiveStream {
 }
 export interface Settings {
   concurrentDownloads: number; parallelPerProvider: number; downloadSegments: number; uiLanguage: Locale; audioLanguage: string; subtitleLanguage: string; downloadTitleLanguage: "ui" | string;
-  mergeByName: boolean; streamSort: string; trackProgress: boolean; showResumeRow: boolean; libraryAutoScan: boolean; libraryScanPauseOnDownload: boolean;
+  mergeByName: boolean; streamSort: string; defaultRulesProfileId?: string; trackProgress: boolean; showResumeRow: boolean; libraryAutoScan: boolean; libraryScanPauseOnDownload: boolean;
   secureMode: boolean;
   /** What the server writes down, as opposed to what the log view filters back out. */
   logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";

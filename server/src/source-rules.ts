@@ -48,6 +48,7 @@ export interface VerifyRulesCandidatesInput {
   readonly shouldContinue: () => boolean;
   readonly scopeStamp: unknown;
   readonly hasRealDebrid: boolean;
+  readonly temporaryFailures?: number;
   readonly cursor?: RulesContinuationCursorV1;
   readonly finalTemporaryAttempt?: boolean;
 }
@@ -490,6 +491,9 @@ export async function verifyRulesCandidates(
     || !Array.isArray(input.candidates) || input.candidates.length > MAX_CANDIDATES
     || typeof input.inspect !== "function" || typeof input.shouldContinue !== "function"
     || typeof input.hasRealDebrid !== "boolean"
+    || (input.temporaryFailures !== undefined
+      && (typeof input.temporaryFailures !== "number" || !Number.isSafeInteger(input.temporaryFailures)
+        || input.temporaryFailures < 0))
     || (input.finalTemporaryAttempt !== undefined && typeof input.finalTemporaryAttempt !== "boolean")) {
     return invalid();
   }
@@ -511,7 +515,9 @@ export async function verifyRulesCandidates(
   for (const candidate of input.candidates) {
     const evaluation = evaluateSourceCandidate(snapshot, candidate);
     if (evaluation.status === "excluded") continue;
-    if (candidate.sourceKind === "http") http.push({ candidate, evaluation });
+    if (candidate.sourceKind === "http" || candidate.sourceKind === "mediaServerOriginal") {
+      http.push({ candidate, evaluation });
+    }
     else if (candidate.sourceKind === "torrent") torrents.push({ candidate, evaluation });
   }
 
@@ -574,7 +580,7 @@ export async function verifyRulesCandidates(
   const unresolved = new Set<number>();
   let probesUsed = 0;
   let confirmedRejections = 0;
-  let temporaryFailures = 0;
+  let temporaryFailures = input.temporaryFailures ?? 0;
   let accessDenials = 0;
 
   const rankedVerified = (): RankedCandidate[] =>
@@ -758,5 +764,13 @@ export async function verifyRulesCandidates(
     if (ranked[0]) return selected(ranked[0], observationsValue);
   }
 
+  if (temporaryFailures > 0) {
+    return {
+      status: "temporaryFailure",
+      retryable: true,
+      observations: observationsValue,
+      cursor: cursorForOutcome(),
+    };
+  }
   return { status: "noMatch", retryable: false, observations: observationsValue };
 }

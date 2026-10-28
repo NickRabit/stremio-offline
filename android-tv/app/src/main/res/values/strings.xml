@@ -82,6 +82,16 @@
   <string name="sources_any_language">Any</string>
   <string name="sources_of_total">%1$s of %2$s</string>
   <string name="sources_sort_recommended">Recommended</string>
+  <string name="sources_rule_breaks">Does not meet the rules: %1$s</string>
+  <string name="sources_rule_reason_language">other language</string>
+  <string name="sources_rule_reason_resolution_low">lower resolution</string>
+  <string name="sources_rule_reason_resolution_high">higher resolution</string>
+  <string name="sources_rule_reason_cinema">cinema copy (CAM/TS)</string>
+  <string name="sources_rule_reason_subtitles">no subtitles</string>
+  <string name="sources_rule_reason_sample">sample</string>
+  <string name="sources_rule_reason_size">size out of range</string>
+  <string name="sources_rule_reason_provider">source not in the rules</string>
+  <string name="sources_rule_reason_torrent">torrents not allowed</string>
   <string name="sources_sort_largest">Largest first</string>
   <string name="sources_sort_smallest">Smallest first</string>
   <string name="sources_sort_addon">By addon priority</string>
@@ -224,12 +234,15 @@
   <string name="tv_download_from_episode">From this episode on</string>
   <string name="tv_download_all_episodes">All episodes</string>
   <string name="bulk_title">Download series</string>
+  <string name="bulk_title_movie">Download film</string>
+  <string name="bulk_title_episode">Download episode</string>
   <string name="bulk_add">Add to queue</string>
   <plurals name="bulk_episode_count">
     <item quantity="one">1 episode</item>
     <item quantity="other">%1$s episodes</item>
   </plurals>
   <string name="rules_title">Download rules</string>
+  <string name="rules_selected_source">Selected source</string>
   <string name="rules_unavailable">Download rules are unavailable. Ask an administrator.</string>
   <string name="rules_preset_balanced">Balanced</string>
   <string name="rules_preset_best">Best quality</string>

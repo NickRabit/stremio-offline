@@ -29,6 +29,7 @@ import {
 } from "../source-profiles.js";
 import type { DownloadRules } from "../download-rules.js";
 import { memberSettings, publicSettings, type InstanceSettings, type Settings, type State, type StoredSourceProfile, type UserPrefs } from "../store.js";
+import { normalizeStreamSort } from "../stream-sort.js";
 import { verifyTmdbKey } from "../tmdb.js";
 import { clearTrailerCache } from "../trailers.js";
 import type { MetaItem } from "../types.js";
@@ -95,12 +96,14 @@ const remapProfileAddonKeys = (
     }
   } else {
     const rules = parameters as DownloadRules;
+    const keepKey = (key: string) =>
+      key === "local" || key.startsWith("remote:") || installedKeys.has(key);
     if (rules.addons.scope !== "all") {
-      rules.addons.scope.selected = rules.addons.scope.selected.filter((key) => installedKeys.has(key));
+      rules.addons.scope.selected = rules.addons.scope.selected.filter(keepKey);
       if (!rules.addons.scope.selected.length) return undefined;
     }
     if (rules.addons.order !== "viewer") {
-      rules.addons.order.explicit = rules.addons.order.explicit.filter((key) => installedKeys.has(key));
+      rules.addons.order.explicit = rules.addons.order.explicit.filter(keepKey);
     }
   }
   return { ...structuredClone(profile), parameters };
@@ -195,7 +198,12 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
    *  endpoint handed out, and this is where it was read from. */
   const settingsView = (req: express.Request) => {
     const instance = publicSettings(store.settings());
-    return { ...(currentUser(req)?.role === "admin" ? instance : memberSettings(instance)), ...prefsOf(req) };
+    const prefs = prefsOf(req);
+    return {
+      ...(currentUser(req)?.role === "admin" ? instance : memberSettings(instance)),
+      ...prefs,
+      streamSort: normalizeStreamSort(prefs.streamSort, store.sourceProfiles(), prefs.defaultRulesProfileId),
+    };
   };
   const offeredDownloadProfiles = (state: State, actor: UserRecord | undefined) => actor
     ? sourceProfilesForViewer({
@@ -218,7 +226,7 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       uiLanguage, audioLanguage, subtitleLanguage, downloadTitleLanguage,
       mergeByName, streamSort, trackProgress, showResumeRow,
       tileSize, catalogTileShape, libraryTileShape, favoritesTileShape, resumeTileShape, followingTileShape, homeTileShape, searchTileShape, startView, libraryShelf,
-      homeLayout, downloadSourceProfile, followSourceProfile,
+      homeLayout, downloadSourceProfile, followSourceProfile, defaultRulesProfileId,
       ...instance
     } = flat;
     return {
@@ -231,6 +239,7 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
         ...(homeLayout ? { homeLayout } : {}),
         ...(downloadSourceProfile ? { downloadSourceProfile } : {}),
         ...(followSourceProfile ? { followSourceProfile } : {}),
+        ...(defaultRulesProfileId ? { defaultRulesProfileId } : {}),
       },
     };
   };
@@ -244,8 +253,13 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
     await metaStore.flush();
     const mediaServersView = mediaServers.exportConfiguration(authority);
     res.setHeader("content-disposition", `attachment; filename=stremio-offline-settings-${new Date().toISOString().slice(0, 10)}.json`);
+    const prefs = prefsOf(req);
     res.json(createSettingsBackup(
-      { ...store.settings(), ...prefsOf(req) },
+      {
+        ...store.settings(),
+        ...prefs,
+        streamSort: normalizeStreamSort(prefs.streamSort, store.sourceProfiles(), prefs.defaultRulesProfileId),
+      },
       store.addons(),
       store.libraries(),
       mediaServersView,
@@ -345,17 +359,40 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
             else delete split.prefs[key];
           }
         }
+        const requestedRules = split.prefs.defaultRulesProfileId;
+        if (requestedRules !== undefined) {
+          const mapped = profileIdMap.get(requestedRules);
+          if (mapped) split.prefs.defaultRulesProfileId = mapped;
+          else delete split.prefs.defaultRulesProfileId;
+        }
       }
       const offered = new Set(offeredDownloadProfiles(state, actor).map((profile) => profile.id));
       for (const key of ["downloadSourceProfile", "followSourceProfile"] as const) {
         if (split.prefs[key] && !offered.has(split.prefs[key])) delete split.prefs[key];
+      }
+      const rulesProfiles = new Set((state.sourceProfiles ?? [])
+        .filter((profile) => profile.template === "rules")
+        .map((profile) => profile.id));
+      if (split.prefs.defaultRulesProfileId && !rulesProfiles.has(split.prefs.defaultRulesProfileId)) {
+        delete split.prefs.defaultRulesProfileId;
+      }
+      if (split.prefs.streamSort !== undefined) {
+        const requested = split.prefs.streamSort;
+        const requestedRule = requested.startsWith("rule:") ? requested.slice("rule:".length) : "";
+        const mappedRule = requestedRule ? profileIdMap.get(requestedRule) : undefined;
+        if (mappedRule) split.prefs.streamSort = `rule:${mappedRule}`;
+        split.prefs.streamSort = normalizeStreamSort(
+          split.prefs.streamSort,
+          state.sourceProfiles ?? [],
+          split.prefs.defaultRulesProfileId,
+        );
       }
       const userId = accountIdOf(req);
       if (userId) mutateData(state, userId, (data) => { data.prefs = { ...data.prefs, ...split.prefs }; });
       if (backup.sourceProfiles !== undefined) {
         const live = new Set((state.sourceProfiles ?? []).map((profile) => profile.id));
         for (const data of state.userData ? Object.values(state.userData) : []) {
-          for (const key of ["downloadSourceProfile", "followSourceProfile"] as const) {
+          for (const key of ["downloadSourceProfile", "followSourceProfile", "defaultRulesProfileId"] as const) {
             const selected = data.prefs[key];
             if (typeof selected === "string" && selected && !live.has(selected)) delete data.prefs[key];
           }
@@ -426,11 +463,16 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
     }
     const postedProfile = req.body.downloadSourceProfile;
     const postedFollowProfile = req.body.followSourceProfile;
+    const postedDefaultRulesProfile = req.body.defaultRulesProfileId;
     if (postedProfile !== undefined && postedProfile !== null && typeof postedProfile !== "string") {
       throw new AppError("This source profile is not available to this account.", "err.sourceProfileUnavailable", 400);
     }
     if (postedFollowProfile !== undefined && postedFollowProfile !== null && typeof postedFollowProfile !== "string") {
       throw new AppError("This source profile is not available to this account.", "err.sourceProfileUnavailable", 400);
+    }
+    if (postedDefaultRulesProfile !== undefined && postedDefaultRulesProfile !== null
+      && typeof postedDefaultRulesProfile !== "string") {
+      throw new AppError("These rules are not available.", "err.sourceProfileUnavailable", 400);
     }
     await store.update((state) => {
       // Only when the body reaches the instance half: an ordinary account writing its own
@@ -445,6 +487,11 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       }
       if (postedFollowProfile && !offered.some((profile) => profile.id === postedFollowProfile)) {
         throw new AppError("This source profile is not available to this account.", "err.sourceProfileUnavailable", 400);
+      }
+      if (postedDefaultRulesProfile
+        && !(state.sourceProfiles ?? []).some((profile) =>
+          profile.id === postedDefaultRulesProfile && profile.template === "rules")) {
+        throw new AppError("These rules are not available.", "err.sourceProfileUnavailable", 400);
       }
       if (req.body.concurrentDownloads !== undefined) state.settings.concurrentDownloads = Math.max(1, Math.min(8, Number(req.body.concurrentDownloads) || 1));
       if (req.body.parallelPerProvider !== undefined) state.settings.parallelPerProvider = Math.max(1, Math.min(8, Number(req.body.parallelPerProvider) || 1));
@@ -470,7 +517,14 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       if (req.body.addonRefreshHours !== undefined) state.settings.addonRefreshHours = normalizeRefreshHours(req.body.addonRefreshHours);
       if (req.body.streamSort !== undefined) {
         const value = String(req.body.streamSort);
-        prefs.streamSort = STREAM_SORTS.has(value) ? value : "recommended";
+        const defaultRulesProfileId = postedDefaultRulesProfile === undefined
+          ? prefs.defaultRulesProfileId as string | undefined
+          : postedDefaultRulesProfile as string | null;
+        prefs.streamSort = normalizeStreamSort(
+          STREAM_SORTS.has(value) || value.startsWith("rule:") ? value : "recommended",
+          state.sourceProfiles ?? [],
+          defaultRulesProfileId ?? undefined,
+        );
       }
       if (req.body.tileSize !== undefined) {
         const value = String(req.body.tileSize);
@@ -525,6 +579,10 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       if (postedFollowProfile !== undefined) {
         if (postedFollowProfile) prefs.followSourceProfile = postedFollowProfile;
         else delete prefs.followSourceProfile;
+      }
+      if (postedDefaultRulesProfile !== undefined) {
+        if (postedDefaultRulesProfile) prefs.defaultRulesProfileId = postedDefaultRulesProfile;
+        else delete prefs.defaultRulesProfileId;
       }
       if (realDebridToken !== undefined) state.settings.realDebridToken = realDebridToken;
       if (tmdbApiKey !== undefined) state.settings.tmdbApiKey = tmdbApiKey;

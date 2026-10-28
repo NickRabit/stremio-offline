@@ -53,10 +53,14 @@ import androidx.tv.material3.Text
 import cz.stremiooffline.tv.R
 import cz.stremiooffline.tv.catalog.Languages
 import cz.stremiooffline.tv.catalog.Streams
+import cz.stremiooffline.tv.data.ApiError
+import cz.stremiooffline.tv.data.CatalogApi
+import cz.stremiooffline.tv.data.SourceProfileDto
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.ui.components.FocusButton
 import cz.stremiooffline.tv.ui.components.TvSpinner
 import cz.stremiooffline.tv.ui.theme.Tokens
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.android.awaitFrame
 
 const val TagSourcesPanel = "catalog_sources_panel"
@@ -118,6 +122,8 @@ fun SourcesPanel(
   onSaveToLibrary: ((StreamDto) -> Unit)? = null,
   /** Whether one row may offer that Save at all: the caller marks exactly the rows it wants. */
   canSaveToLibrary: (StreamDto) -> Boolean = { false },
+  /** The rules profile whose break the row names, or null when this sort shows no note. */
+  ruleNoteProfileId: String? = null,
   modifier: Modifier = Modifier,
   initialFocus: FocusRequester? = null,
 ) {
@@ -253,6 +259,7 @@ fun SourcesPanel(
               onSave = save?.let { callback -> { callback(stream) } },
               saveText = saveText,
               saveModifier = Modifier.testTag(sourceSaveTag(index)),
+              ruleNoteProfileId = ruleNoteProfileId,
             )
           }
           // Rows have arrived but more addons still owe one: the list is not final yet.
@@ -466,6 +473,7 @@ internal fun SourceRow(
   onSave: (() -> Unit)? = null,
   saveText: String = "",
   saveModifier: Modifier = Modifier,
+  ruleNoteProfileId: String? = null,
 ) {
   val shape = RoundedCornerShape(8.dp)
   val local = Streams.isLocalStream(stream)
@@ -542,6 +550,9 @@ internal fun SourceRow(
               overflow = TextOverflow.Ellipsis,
             )
             if (meta.isNotEmpty()) Text(meta.joinToString(" · "), color = Tokens.Muted, fontSize = 10.sp, maxLines = 1)
+            sourceRuleBreaksNote(stream, ruleNoteProfileId)?.let { note ->
+              Text(note, color = Tokens.Muted, fontSize = 10.sp, maxLines = 1)
+            }
           }
           // One mark only: the playing row is the playing one, otherwise the picked row, otherwise
           // the default.
@@ -572,6 +583,58 @@ internal fun SourceRow(
   }
 }
 
+/** The labels a break note can name, in the order the verdict listed them. An unknown code is
+ *  dropped. Nothing known is null, so the row draws no note. */
+internal fun ruleBreakNote(
+  reasons: List<String>,
+  language: String,
+  resolutionLow: String,
+  resolutionHigh: String,
+  cinema: String,
+  subtitles: String,
+  sample: String,
+  size: String,
+  provider: String,
+  torrent: String,
+): String? {
+  val known = reasons.mapNotNull { code ->
+    when (code) {
+      "language" -> language
+      "resolutionLow" -> resolutionLow
+      "resolutionHigh" -> resolutionHigh
+      "cinema" -> cinema
+      "subtitles" -> subtitles
+      "sample" -> sample
+      "size" -> size
+      "provider" -> provider
+      "torrent" -> torrent
+      else -> null
+    }
+  }
+  if (known.isEmpty()) return null
+  return known.joinToString(", ")
+}
+
+/** The muted rule-break line of a source row, or null when [profileId] has no breaking verdict. */
+@Composable
+internal fun sourceRuleBreaksNote(stream: StreamDto, profileId: String?): String? {
+  val rule = profileId?.let { stream.rules[it] } ?: return null
+  if (rule.status != "breaks") return null
+  val reasons = ruleBreakNote(
+    rule.reasons,
+    language = stringResource(R.string.sources_rule_reason_language),
+    resolutionLow = stringResource(R.string.sources_rule_reason_resolution_low),
+    resolutionHigh = stringResource(R.string.sources_rule_reason_resolution_high),
+    cinema = stringResource(R.string.sources_rule_reason_cinema),
+    subtitles = stringResource(R.string.sources_rule_reason_subtitles),
+    sample = stringResource(R.string.sources_rule_reason_sample),
+    size = stringResource(R.string.sources_rule_reason_size),
+    provider = stringResource(R.string.sources_rule_reason_provider),
+    torrent = stringResource(R.string.sources_rule_reason_torrent),
+  ) ?: return null
+  return stringResource(R.string.sources_rule_breaks, reasons)
+}
+
 /** One row's headline: the stream's name, or the first line it wrote about itself. */
 internal fun streamLabel(stream: StreamDto): String =
   stream.name ?: stream.title?.split("\n")?.firstOrNull() ?: stream.description?.split("\n")?.firstOrNull() ?: ""
@@ -599,6 +662,7 @@ internal fun chosenSourceCaption(stream: StreamDto): List<String> {
 internal fun sourceFilterChips(
   filters: Streams.StreamFilters,
   options: Streams.SourceFilterOptions,
+  profiles: List<SourceProfileDto> = emptyList(),
 ): List<SourceFilterChip> {
   val sortValue = filters.sort
   val streamAddon = filters.addon
@@ -609,19 +673,26 @@ internal fun sourceFilterChips(
   val allAddonsLabel = stringResource(R.string.sources_all_addons)
   val localLabel = stringResource(R.string.sources_local_filter)
   val anyLanguageLabel = stringResource(R.string.sources_any_language)
-  val sortLabels = listOf(
-    Streams.StreamSort.Recommended to stringResource(R.string.sources_sort_recommended),
-    Streams.StreamSort.SizeDesc to stringResource(R.string.sources_sort_largest),
-    Streams.StreamSort.SizeAsc to stringResource(R.string.sources_sort_smallest),
-    Streams.StreamSort.Addon to stringResource(R.string.sources_sort_addon),
-  )
+  val sortLabels = buildList {
+    for (profile in profiles) {
+      if (profile.id.isBlank()) continue
+      val name = ruleName(profile).ifBlank { profile.id }
+      add(Streams.StreamSort.Rule(profile.id) to name)
+    }
+    add(Streams.StreamSort.SizeDesc to stringResource(R.string.sources_sort_largest))
+    add(Streams.StreamSort.SizeAsc to stringResource(R.string.sources_sort_smallest))
+    add(Streams.StreamSort.Addon to stringResource(R.string.sources_sort_addon))
+  }
+  val valueLabel = sortLabels.firstOrNull { it.first == sortValue }?.second
+    ?: (sortValue as? Streams.StreamSort.Rule)?.profileId
+    ?: ""
   val languageOptions = options.languages
   val chips = buildList {
     add(
       SourceFilterChip(
         key = "sort",
         title = sortingTitle,
-        value = sortLabels.first { it.first == sortValue }.second,
+        value = valueLabel,
         selectedKey = sortValue.wire,
         options = sortLabels.map { SourceFilterOption(it.first.wire, it.second) },
       ),
@@ -675,9 +746,24 @@ internal class SourceFilterState {
   private var addon by mutableStateOf("")
   private var language by mutableStateOf("")
   private var sort by mutableStateOf<Streams.StreamSort?>(null)
+  var profiles by mutableStateOf<List<SourceProfileDto>>(emptyList())
+    private set
+
+  fun replaceProfiles(loaded: List<SourceProfileDto>) {
+    profiles = loaded
+  }
+
+  private fun profileIds(): List<String> = profiles.map { it.id }.filter { it.isNotBlank() }
 
   fun filters(accountSort: String?) =
-    Streams.StreamFilters(addon, language, sort ?: Streams.StreamSort.of(accountSort))
+    Streams.StreamFilters(
+      addon,
+      language,
+      Streams.resolveRuleSort(sort ?: Streams.StreamSort.of(accountSort), profileIds()),
+    )
+
+  fun noteProfileId(accountSort: String?): String? =
+    Streams.noteProfileId(sort ?: Streams.StreamSort.of(accountSort), accountSort, profileIds())
 
   fun select(chip: String, key: String) {
     when (chip) {
@@ -691,5 +777,22 @@ internal class SourceFilterState {
     addon = ""
     language = ""
     sort = null
+  }
+}
+
+/** Loads the account's rules profiles once for [state]. A failure leaves the list empty, so a rule
+ *  sort that is still the older `recommended` value keeps the old ordering formula. */
+@Composable
+internal fun BindSourceProfiles(api: CatalogApi?, state: SourceFilterState) {
+  LaunchedEffect(state, api) {
+    val port = api ?: return@LaunchedEffect
+    val loaded = try {
+      port.sourceProfiles()
+    } catch (cancelled: CancellationException) {
+      throw cancelled
+    } catch (_: ApiError) {
+      emptyList()
+    }
+    state.replaceProfiles(loaded)
   }
 }

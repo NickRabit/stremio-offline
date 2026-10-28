@@ -22,6 +22,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -85,6 +86,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.sync.Mutex
@@ -144,6 +146,8 @@ data class OfferedSources(
   val streams: List<StreamDto> = emptyList(),
   val loading: Boolean = false,
   val remoteFailure: RemoteSourcesFailure? = null,
+  /** The rules profile the player's rows name a break against, or null when the sort shows none. */
+  val ruleNoteProfileId: String? = null,
 )
 
 /** The catalogue title detail: the library's layout for a movie or a series, with sources. */
@@ -183,6 +187,7 @@ fun CatalogDetailScreen(
   // The source filters are not saved: they live while a title or episode is on screen and reset
   // when either changes. A null sort follows the account's `streamSort`.
   val sourceFilters = remember { SourceFilterState() }
+  BindSourceProfiles(api, sourceFilters)
   var favourite by remember { mutableStateOf(false) }
   var favouriteBusy by remember { mutableStateOf(false) }
   var message by remember { mutableStateOf<String?>(null) }
@@ -230,6 +235,7 @@ fun CatalogDetailScreen(
     notice(null)
     save.libraryPanelOpen = false
     ui.series.open = false
+    ui.titleDownload = false
     save.pendingLibraryStream = null
     sourceFilters.reset()
     coroutineScope {
@@ -427,13 +433,20 @@ fun CatalogDetailScreen(
   // The list that is drawn and picked from: the library copies arranged with the addon streams the
   // way the web does (Streams.catalogSourceList); counts and notices keep using the addon streams.
   val rows = lists.rows
-  // The row of the source last played leads, so Resume continues in it.
+  // The row of the source last played leads, so Resume continues in it. A rule with verdicts
+  // then takes a row that meets it; the call lives in Streams so this screen only passes the sort.
   val preferredStream = Streams.pickDefaultStream(
     rows,
     (if (isSeries) entries.firstOrNull { it.key == progressKey }?.stableKey else movieProgress?.stableKey),
+    Streams.ruleIdOf(filters.sort),
   )
   val chosenStream = pick.selectedStream?.takeIf { pick.pickedStream && rows.contains(it) }
-  val activeStream = chosenStream ?: pick.selectedStream?.takeIf { rows.contains(it) } ?: preferredStream
+  val activeStream = Streams.selectedPlayRow(
+    chosenStream,
+    pick.selectedStream?.takeIf { rows.contains(it) },
+    preferredStream,
+    Streams.ruleIdOf(filters.sort),
+  )
   val remoteAsking = remote.pending > 0
   val remoteStreams = remote.groups.flatMap { it.streams }
   val remoteFailedLabels = remote.groups.filter { it.failed }.map { it.label }
@@ -474,8 +487,15 @@ fun CatalogDetailScreen(
 
   // The player's own Sources panel gets the same list, the local copies included, and it keeps
   // growing while the addons answer.
-  LaunchedEffect(rows, anyAsking, remoteFailed, remote.discoveryFailed) {
-    onSources(OfferedSources(rows, anyAsking, if (remoteFailed) RemoteSourcesFailure(remoteFailedLabels, remote.discoveryFailed) else null))
+  LaunchedEffect(rows, anyAsking, remoteFailed, remote.discoveryFailed, filters, settings.streamSort) {
+    onSources(
+      OfferedSources(
+        rows,
+        anyAsking,
+        if (remoteFailed) RemoteSourcesFailure(remoteFailedLabels, remote.discoveryFailed) else null,
+        sourceFilters.noteProfileId(settings.streamSort),
+      ),
+    )
   }
 
   // A switch made inside the player has to carry back: the detail keeps naming the source the
@@ -725,6 +745,10 @@ fun CatalogDetailScreen(
     val stream = preferredStream
     if (stream?.playable == true) {
       play(stream)
+    } else if (Streams.needsSourceChoice(rows, Streams.ruleIdOf(filters.sort), stream)) {
+      notice(null)
+      pick.closeToPlay = true
+      pick.sourcesOpen = true
     } else if (pick.localStreams.isEmpty()) {
       notice(if (offered.isEmpty()) texts.noSources else texts.torrent, CatalogNotice.Failure)
     }
@@ -746,6 +770,12 @@ fun CatalogDetailScreen(
       }
       stream?.playable == true -> play(stream)
       findingSources -> armPendingPlay()
+      // Nothing meets the rule. The panel is the choice; a breaking row is not started.
+      Streams.needsSourceChoice(rows, Streams.ruleIdOf(filters.sort), stream) -> {
+        notice(null)
+        pick.closeToPlay = true
+        pick.sourcesOpen = true
+      }
       // A chosen stream that cannot be played is what the torrent message is for; queuing it is
       // the To library button's job.
       stream != null -> if (pick.localStreams.isEmpty()) notice(texts.torrent, CatalogNotice.Failure)
@@ -798,6 +828,10 @@ fun CatalogDetailScreen(
       }
       pick.pickedStream -> notice(if (stream != null) texts.torrent else emptyText, if (stream != null) CatalogNotice.Failure else emptyKind)
       anyAsking -> Unit
+      Streams.needsSourceChoice(rows, Streams.ruleIdOf(filters.sort), stream) -> {
+        pick.closeToPlay = true
+        pick.sourcesOpen = true
+      }
       else -> if (pick.localStreams.isEmpty()) notice(emptyText, emptyKind)
     }
   }
@@ -922,7 +956,7 @@ fun CatalogDetailScreen(
         // DOWN drops into the episode row from the action row only; inside an open panel it must
         // reach the next source instead.
         if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown &&
-          isSeries && !pick.sourcesOpen && !ui.series.open && focus.actionRowFocused
+          isSeries && !pick.sourcesOpen && !ui.series.open && !ui.titleDownload && focus.actionRowFocused
         ) {
           runCatching { focus.row.requestFocus() }.isSuccess
         } else {
@@ -1035,7 +1069,7 @@ fun CatalogDetailScreen(
           modifier = Modifier
             .focusRequester(focus.libraryOpener)
             .onFocusChanged { focus.toLibraryFocused = it.isFocused },
-        ) { activeStream?.let { queue(it) } } else null,
+        ) { ui.titleDownload = true } else null,
         favourite = catalogAction(
           TagCatalogFavourite,
           stringResource(if (favourite) R.string.favorite_remove else R.string.favorite_add),
@@ -1146,7 +1180,7 @@ fun CatalogDetailScreen(
       // Reopening lands on what the viewer picked; without a pick, on the default.
       val focusIndex = rows.indexOfFirst { it === (chosenStream ?: preferredStream) }.let { if (it >= 0) it else 0 }
       // Like the web, the filter bar is only worth showing once more than one source is offered.
-      val chips = sourceFilterChips(filters, lists.options)
+      val chips = sourceFilterChips(filters, lists.options, sourceFilters.profiles)
       SourcesPanel(
         streams = rows,
         focusIndex = focusIndex,
@@ -1175,6 +1209,7 @@ fun CatalogDetailScreen(
           null
         },
         remoteNote = remoteNotice(remoteFailed, remoteFailedLabels),
+        ruleNoteProfileId = sourceFilters.noteProfileId(settings.streamSort),
         initialFocus = focus.sourcesPanel,
       )
     }
@@ -1260,6 +1295,48 @@ fun CatalogDetailScreen(
           notice(addedText + skippedText, CatalogNotice.Success)
         },
         onClose = { ui.series.open = false },
+      )
+    }
+
+    if (ui.titleDownload && activeStream != null) {
+      TitleDownloadPanel(
+        api = api,
+        type = streamType,
+        title = baseTitle,
+        catalogueId = meta.id,
+        video = if (isSeries) pick.selectedVideo else null,
+        stream = activeStream,
+        // ↓ saves the selected source in one press; the rules sit below it in the same panel.
+        explicitPick = true,
+        media = BulkMediaDto(
+          id = meta.id,
+          metaType = streamType,
+          poster = args.meta.poster ?: meta.poster,
+          background = args.meta.background ?: args.meta.poster ?: meta.background,
+        ),
+        settings = settings,
+        addons = addons,
+        libraries = save.libraries,
+        opener = focus.libraryOpener,
+        openerScope = scope,
+        onUseSelected = {
+          ui.titleDownload = false
+          queue(activeStream)
+          // The library list takes the remote itself. Every other result waits until the button
+          // can hold it again, so an in-flight job is not asked to focus while it is disabled.
+          if (!save.libraryPanelOpen) {
+            scope.launch {
+              snapshotFlow { save.queueBusy }.first { !it }
+              awaitFrame()
+              runCatching { focus.libraryOpener.requestFocus() }
+            }
+          }
+        },
+        onQueued = { added, skipped ->
+          ui.titleDownload = false
+          notice(bulkQueuedText(context.resources, added, skipped), CatalogNotice.Success)
+        },
+        onClose = { ui.titleDownload = false },
       )
     }
   }
@@ -1538,6 +1615,8 @@ private class DetailUiState {
   val forget = ForgetState()
   val series = SeriesDownloadState()
   val caption = ActionCaption()
+  /** The ↓ button's panel for this film or the selected episode. */
+  var titleDownload by mutableStateOf(false)
 }
 
 /** One remote library's matched versions of the open title or episode, and whether it failed. */

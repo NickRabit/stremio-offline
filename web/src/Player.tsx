@@ -16,7 +16,7 @@ import { SourceChooser } from "./SourceChooser";
 import type { LibrarySourceGroup, LibrarySourcePanel } from "./library-sources";
 import { detectCapabilities } from "./capabilities";
 import { t, useI18n, type Key } from "./i18n";
-import type { Capabilities, PlaybackMode, PlaybackSession, Stream, Subtitle, Track } from "./types";
+import type { Capabilities, PlaybackMode, PlaybackSession, SourceProfile, Stream, Subtitle, Track } from "./types";
 
 /** The title's sources as the place that plays it holds them: the rows it leads with, every other
  *  group of the title, and the two actions over them. The host reads the groups through
@@ -40,6 +40,8 @@ interface Props { previousTitle?: string; onPrevious?: () => Promise<boolean>; n
   sources?: PlayerSources;
   /** Where a freshly handed source starts; a switch carries the position it was chosen at. */
   startAtSeconds?: number;
+  sourceProfiles?: SourceProfile[] | null;
+  defaultSort?: string;
 }
 
 const fmt = (seconds: number) => !Number.isFinite(seconds) ? "0:00" : `${Math.floor(seconds / 3600) ? `${Math.floor(seconds / 3600)}:` : ""}${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
@@ -229,7 +231,7 @@ const trackLabel = (track: Track) => {
 const SUBTITLE_DELAY_STEP_S = 0.25;
 const SUBTITLE_DELAY_LIMIT_S = 30;
 
-export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext, autoNext, open, title, stream, subtitles, subtitleLanguage, audioLanguage, onPreferences, progressKey, progressPoster, progressAddonKey, favorite, fromBeginning = false, onToggleFavorite, onDownload, onDeviceDownload, onProgressSaved, onClose, sources, startAtSeconds }: Props) {
+export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext, autoNext, open, title, stream, subtitles, subtitleLanguage, audioLanguage, onPreferences, progressKey, progressPoster, progressAddonKey, favorite, fromBeginning = false, onToggleFavorite, onDownload, onDeviceDownload, onProgressSaved, onClose, sources, startAtSeconds, sourceProfiles = null, defaultSort }: Props) {
   // Subscribes the whole overlay to the language, so a switch behind it redraws every label.
   useI18n();
   const [subtitleIds, setSubtitleIds] = useState<Record<string, string>>({});
@@ -1446,6 +1448,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
           same menus, the same badge, label, provider, size and languages. */}
       <SourceChooser lead={sources.lead} leadLabel={sources.leadLabel} groups={sources.groups} {...(sources.panel ? { panel: sources.panel } : {})}
         selected={stream} onSelect={(row) => void chooseSource(row)} preferredLanguage={audioLanguage}
+        sourceProfiles={sourceProfiles} {...(defaultSort ? { defaultSort } : {})}
         listClassName="stream-list player-source-list"/>
     </div>}
     {settingsOpen && <div id="player-settings" className="player-settings" role="region" aria-label={t("player.settings")}>

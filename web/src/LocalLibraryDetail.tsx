@@ -11,7 +11,8 @@ import { catalogueGalleryImages, mergeGallery, posterAndWide, type GalleryImage 
 import { canQueue, isLocalStream } from "./streams";
 import { useTitleEnrichment, type CatalogueRef } from "./title-enrichment";
 import { playbackIdentity } from "./playback-identity";
-import type { BrowseFile, BrowseFolder, IdentityPreview, Stream, Trailer } from "./types";
+import type { CatalogueDetailTarget } from "./CatalogueTitleDetail";
+import type { BrowseFile, BrowseFolder, IdentityPreview, SourceProfile, Stream, Trailer } from "./types";
 
 export type LocalDetailItem = ({ kind: "folder" } & BrowseFolder) | ({ kind: "file" } & BrowseFile);
 
@@ -26,6 +27,8 @@ export interface AlternativePlay {
   media: Record<string, unknown>;
   kind: "movie" | "series";
   fromBeginning?: boolean;
+  /** The bulk-route target the arrow opens the rules dialog with, when the title is named exactly. */
+  catalogueDetail?: CatalogueDetailTarget;
   /** The viewer asked to name the destination themselves instead of taking the source's own rule,
    *  which is what the second half of the save button does. */
   choose?: boolean;
@@ -64,17 +67,19 @@ interface Props {
   /** Queues an addon or another library's copy; a row of this library's own files is never
    *  offered a second copy of itself. */
   onSaveAlternative?: (request: AlternativePlay) => void;
-  /** The viewer's audio language, which the recommended order of the chooser prefers. */
+  /** The viewer's audio language, which the chooser's legacy fallback order prefers. */
   preferredLanguage?: string;
   /** Whether a debrid token is configured, so a torrent row may be offered a copy at all. */
   realDebridConfigured?: boolean;
+  sourceProfiles?: SourceProfile[] | null;
+  defaultSort?: string;
 }
 
 /** The local counterpart of a remote title's detail: it discovers the exact file and, when the
  *  file or its folder is bound to a title, the other copies of that same title, then hands them to
  *  the shared shell. The catalogue hero, the synopsis and the source picker are the ones a remote
  *  library uses. */
-export function LocalLibraryDetail({ item, favorite, progress, progressRevision = 0, onToggleFavorite, onResetProgress, onToggleWatched, onPlay, onOpenFolder, uiLanguage, secureMode, onTrailer, onGallery, accountScope = "", onPlayAlternative, onSaveAlternative, onDownloadToDevice: downloadToDevice, preferredLanguage, realDebridConfigured = false }: Props) {
+export function LocalLibraryDetail({ item, favorite, progress, progressRevision = 0, onToggleFavorite, onResetProgress, onToggleWatched, onPlay, onOpenFolder, uiLanguage, secureMode, onTrailer, onGallery, accountScope = "", onPlayAlternative, onSaveAlternative, onDownloadToDevice: downloadToDevice, preferredLanguage, realDebridConfigured = false, sourceProfiles = null, defaultSort }: Props) {
   useI18n();
   const [sources, setSources] = useState<Stream[] | null>(null);
   const [error, setError] = useState("");
@@ -243,6 +248,23 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
       episodeTitle: title, ...(catalogue ? { id: bound.id, metaType: "series" } : {}),
     };
   };
+  const catalogueDownloadDetail = (): CatalogueDetailTarget | null => {
+    const bound = identity?.bound;
+    if (!bound) return null;
+    const name = bound.name ?? title;
+    if (bound.type === "movie") {
+      return { type: "movie", id: bound.id, name, ...(item.poster ? { poster: item.poster } : {}) };
+    }
+    if (bound.type !== "series") return null;
+    const season = isFile ? item.season ?? identity?.parsed?.season ?? bound.season : identity?.parsed?.season ?? bound.season;
+    const episode = isFile ? item.episode ?? identity?.parsed?.episode ?? bound.episode : identity?.parsed?.episode ?? bound.episode;
+    if (typeof season !== "number" || !Number.isInteger(season) || season < 0) return null;
+    if (typeof episode !== "number" || !Number.isInteger(episode) || episode < 1) return null;
+    return {
+      type: "series", id: bound.id, name, season, episode, videoId: `${bound.id}:${season}:${episode}`, episodeTitle: title,
+      ...(item.poster ? { poster: item.poster } : {}),
+    };
+  };
   const chips = <TitleChips kind={t(episode ? "episodes.one" : "catalog.oneMovie")} trailer={enrichment.trailer} links={enrichment.links}
     onTrailer={onTrailer} secureMode={secureMode}/>;
   const facts = [item.year, sources?.length === 1 && item.size ? bytes(item.size) : ""].filter(Boolean).join(" · ");
@@ -271,6 +293,8 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
     {...(error ? { sourceError: error } : {})}
     onRetry={() => setNonce((value) => value + 1)}
     onSourceChange={setSelected}
+    sourceProfiles={sourceProfiles}
+    {...(defaultSort ? { defaultSort } : {})}
     {...(saved && saved.sourceKey === selectedKey ? { progress: saved } : {})}
     onClearProgress={clearSelectedProgress}
     {...(catalogue ? { sourceGroups: { groups: extra.groups, retry: extra.retry }, onOpenSources: () => setChooserOpen(true) } : {})}
@@ -279,12 +303,16 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
         stream, title, ...(item.poster ? { poster: item.poster } : {}), catalogue, media: alternativeMedia(),
         kind: identity?.bound?.type === "series" ? "series" : "movie",
       }),
-      // The other half of the split: the destination is chosen by the viewer instead of the
-      // addon's own rule. Without it the shell draws one button that always asks.
-      onSaveElsewhere: (stream: Stream) => onSaveAlternative({
-        stream, title, ...(item.poster ? { poster: item.poster } : {}), catalogue, media: alternativeMedia(),
-        kind: identity?.bound?.type === "series" ? "series" : "movie", choose: true,
-      }),
+      // The other half opens the rules for an exact catalogue title; otherwise it keeps the
+      // destination dialog. Without it the shell draws one button that always asks.
+      onSaveElsewhere: (stream: Stream) => {
+        const detail = catalogueDownloadDetail();
+        onSaveAlternative({
+          stream, title, ...(item.poster ? { poster: item.poster } : {}), catalogue, media: alternativeMedia(),
+          kind: identity?.bound?.type === "series" ? "series" : "movie",
+          ...(detail ? { catalogueDetail: detail } : { choose: true }),
+        });
+      },
       // A file of this library is never queued as a copy of itself, and only a source the server
       // proved the account may copy is offered at all: a click always reaches a real decision.
       saveSupported: (stream: Stream) => canQueue(stream, realDebridConfigured),

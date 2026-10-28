@@ -82,6 +82,16 @@
   <string name="sources_any_language">Irgendein</string>
   <string name="sources_of_total">%1$s von %2$s</string>
   <string name="sources_sort_recommended">Empfohlen</string>
+  <string name="sources_rule_breaks">Erfüllt die Regeln nicht: %1$s</string>
+  <string name="sources_rule_reason_language">andere Sprache</string>
+  <string name="sources_rule_reason_resolution_low">niedrigere Auflösung</string>
+  <string name="sources_rule_reason_resolution_high">höhere Auflösung</string>
+  <string name="sources_rule_reason_cinema">Kinokopie (CAM/TS)</string>
+  <string name="sources_rule_reason_subtitles">keine Untertitel</string>
+  <string name="sources_rule_reason_sample">Ausschnitt</string>
+  <string name="sources_rule_reason_size">Größe außerhalb des Bereichs</string>
+  <string name="sources_rule_reason_provider">Quelle nicht in den Regeln</string>
+  <string name="sources_rule_reason_torrent">Torrents nicht erlaubt</string>
   <string name="sources_sort_largest">Das Größte zuerst</string>
   <string name="sources_sort_smallest">Das Kleinste zuerst</string>
   <string name="sources_sort_addon">Nach Add-on-Priorität</string>
@@ -224,12 +234,15 @@
   <string name="tv_download_from_episode">Ab dieser Folge</string>
   <string name="tv_download_all_episodes">Alle Folgen</string>
   <string name="bulk_title">Serie herunterladen</string>
+  <string name="bulk_title_movie">Film herunterladen</string>
+  <string name="bulk_title_episode">Folge herunterladen</string>
   <string name="bulk_add">Zur Warteschlange hinzufügen</string>
   <plurals name="bulk_episode_count">
     <item quantity="one">1 Folge</item>
     <item quantity="other">%1$s Episoden</item>
   </plurals>
   <string name="rules_title">Download-Regeln</string>
+  <string name="rules_selected_source">Ausgewählte Quelle</string>
   <string name="rules_unavailable">Download-Regeln sind nicht verfügbar. Bitten Sie einen Administrator.</string>
   <string name="rules_preset_balanced">Ausgewogen</string>
   <string name="rules_preset_best">Beste Qualität</string>

@@ -1,9 +1,10 @@
 import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { api } from "./api";
 import { SeriesDownloadDialog } from "./SeriesDownloadDialog";
 import { setLocale } from "./i18n";
-import type { FollowAutoDownload, SourceProfile } from "./types";
+import type { FollowAutoDownload, LibraryView, SourceProfile, Stream } from "./types";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -36,6 +37,12 @@ const best = profile("best", "rules.preset.best");
 const myLanguage = profile("my-language", "rules.preset.myLanguage", "strict");
 const anyLanguage = profile("any-language", "rules.preset.smaller", "preferred", { preference: "audio" }, false);
 const english = profile("english", "rules.preset.best", "preferred", { code: "en" });
+const selectedStream: Stream = { sourceId: "selected-source", kind: "unsupported", playable: true, name: "1080p · English" };
+const movieLibrary: LibraryView = {
+  id: "lib_films", name: "Films", type: "movie", enabled: true, order: 0, addedAt: "2026-01-01T00:00:00.000Z",
+  writeArtwork: false, autoScanMetadata: false, unreachable: false, readOnly: false, writable: true,
+  defaultMovie: true, defaultSeries: false, titles: 0, files: 0, bytes: 0,
+};
 
 let fetchMock: ReturnType<typeof vi.fn>;
 let root: Root;
@@ -49,6 +56,7 @@ beforeEach(() => {
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
+  window.localStorage.clear();
 });
 afterEach(() => { act(() => root.unmount()); host.remove(); vi.unstubAllGlobals(); });
 
@@ -59,6 +67,7 @@ const setupFetch = (profiles: SourceProfile[] | Error) => {
       if (profiles instanceof Error) throw profiles;
       return json({ profiles });
     }
+    if (String(url).startsWith("/api/library/folders")) return json({ path: "", folders: [] });
     if ((init?.method ?? "GET") === "PATCH") return json({});
     if (String(url).startsWith("/api/follows")) return json({ id: "f1", type: "series", metaId: "tt1", name: "Show", enabled: true, downloads: {} });
     return json({});
@@ -236,5 +245,101 @@ describe("SeriesDownloadDialog", () => {
     expect(host.textContent).toContain("720p–1080p · prefer my language · up to ~15 GB per film");
     expect(host.querySelector('input[name="follow-start"]')).toBeNull();
     expect(host.querySelector('select[aria-label="After watching"]')).toBeNull();
+  });
+
+  it("puts the exact source first and preselects it when it was explicitly picked", async () => {
+    setupFetch([balanced, best]);
+    await renderDialog({
+      exactSource: { stream: selectedStream, label: "1080p · English", preferred: true },
+      onRememberDownloadSourceProfile: vi.fn(),
+    });
+    const choices = [...host.querySelectorAll<HTMLInputElement>('input[name="download-rules"]')];
+    expect(choices[0]?.value).toBe("exact-source");
+    expect(choices[0]?.checked).toBe(true);
+    expect(host.textContent).toContain("Selected source");
+    expect(host.textContent).toContain("1080p · English");
+    expect(host.querySelector('input[aria-label="Use as default for manual downloads"]')).toBeNull();
+  });
+
+  it("opens on the selected source the first time, even without an explicit pick", async () => {
+    setupFetch([balanced, best]);
+    await renderDialog({ exactSource: { stream: selectedStream, label: "1080p · English", preferred: false } });
+    const choices = [...host.querySelectorAll<HTMLInputElement>('input[name="download-rules"]')];
+    expect(choices[0]?.value).toBe("exact-source");
+    expect(choices[0]?.checked).toBe(true);
+  });
+
+  it("remembers the last choice of the one-title dialog for the next time", async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    setupFetch([balanced, best]);
+    await renderDialog({ exactSource: { stream: selectedStream, label: "1080p · English", preferred: false }, onSubmit });
+    await act(async () => { host.querySelector<HTMLInputElement>('input[name="download-rules"][value="best"]')!.click(); });
+    await act(async () => { primary().click(); await Promise.resolve(); await Promise.resolve(); });
+    expect(onSubmit).toHaveBeenCalled();
+    act(() => root.unmount());
+    root = createRoot(host);
+
+    setupFetch([balanced, best]);
+    await renderDialog({ exactSource: { stream: selectedStream, label: "1080p · English", preferred: false } });
+    expect(host.querySelector<HTMLInputElement>('input[name="download-rules"][value="exact-source"]')!.checked).toBe(false);
+    expect(selectedProfile()).toBe("best");
+  });
+
+  it("falls back to the selected source when the remembered rules were deleted", async () => {
+    window.localStorage.setItem("stremio-offline-single-download-choice", "gone");
+    setupFetch([balanced, best]);
+    await renderDialog({ exactSource: { stream: selectedStream, label: "1080p · English", preferred: false } });
+    expect(host.querySelector<HTMLInputElement>('input[name="download-rules"][value="exact-source"]')!.checked).toBe(true);
+  });
+
+  it("saves the exact source with the chosen target and does not submit a rule", async () => {
+    const onExactSave = vi.fn().mockResolvedValue(undefined);
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    setupFetch([balanced]);
+    await renderDialog({
+      type: "movie",
+      episodes: [{ id: "tt-film" }],
+      libraries: [movieLibrary],
+      exactSource: { stream: selectedStream, label: "1080p · English", preferred: true },
+      onExactSave,
+      onSubmit,
+    });
+    const somewhereElse = [...host.querySelectorAll<HTMLInputElement>('input[type="radio"]')]
+      .find((input) => input.closest("label")?.textContent?.includes("Somewhere else"))!;
+    await act(async () => { somewhereElse.click(); });
+    await act(async () => { primary().click(); await Promise.resolve(); });
+    expect(onExactSave).toHaveBeenCalledWith(expect.objectContaining({ libraryId: "lib_films" }));
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("submits a film through the bulk API when a rule is selected", async () => {
+    setupFetch([balanced]);
+    await renderDialog({
+      type: "movie",
+      title: "Heat",
+      episodes: [{ id: "tt-film" }],
+      exactSource: { stream: selectedStream, label: "1080p · English", preferred: false },
+      onSubmit: async (selection, target) => {
+        await api.downloadBulk("Heat", "movie", [{ id: "tt-film" }], selection, { id: "tt-film", metaType: "movie" }, target);
+      },
+    });
+    await act(async () => { host.querySelector<HTMLInputElement>('input[name="download-rules"][value="balanced"]')!.click(); });
+    await act(async () => { primary().click(); await Promise.resolve(); await Promise.resolve(); });
+    const bulk = fetchMock.mock.calls.find(([url, init]) => String(url) === "/api/downloads/bulk" && (init as RequestInit | undefined)?.method === "POST")!;
+    expect(JSON.parse(String((bulk[1] as RequestInit).body))).toMatchObject({
+      type: "movie",
+      episodes: [{ id: "tt-film" }],
+      media: { id: "tt-film", metaType: "movie" },
+    });
+  });
+
+  it.each([
+    { type: "movie", episodes: [{ id: "tt-film" }], expected: "Download film" },
+    { type: "series", episodes: [{ id: "tt-show:1:1", season: 1, episode: 1 }], expected: "Download episode" },
+    { type: "series", episodes: [{ id: "tt-show:1:1", season: 1, episode: 1 }, { id: "tt-show:1:2", season: 1, episode: 2 }], expected: "Download series" },
+  ])("uses the one-title title for $expected", async ({ type, episodes, expected }) => {
+    setupFetch([balanced]);
+    await renderDialog({ type, episodes });
+    expect(host.querySelector("h2")?.textContent).toBe(expected);
   });
 });

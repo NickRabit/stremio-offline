@@ -82,6 +82,16 @@
   <string name="sources_any_language">Qualsiasi</string>
   <string name="sources_of_total">%1$s di %2$s</string>
   <string name="sources_sort_recommended">Consigliato</string>
+  <string name="sources_rule_breaks">Non rispetta le regole: %1$s</string>
+  <string name="sources_rule_reason_language">altra lingua</string>
+  <string name="sources_rule_reason_resolution_low">risoluzione inferiore</string>
+  <string name="sources_rule_reason_resolution_high">risoluzione superiore</string>
+  <string name="sources_rule_reason_cinema">copia da cinema (CAM/TS)</string>
+  <string name="sources_rule_reason_subtitles">senza sottotitoli</string>
+  <string name="sources_rule_reason_sample">anteprima</string>
+  <string name="sources_rule_reason_size">dimensione fuori intervallo</string>
+  <string name="sources_rule_reason_provider">fonte non inclusa nelle regole</string>
+  <string name="sources_rule_reason_torrent">torrent non consentiti</string>
   <string name="sources_sort_largest">Prima il più grande</string>
   <string name="sources_sort_smallest">Prima il più piccolo</string>
   <string name="sources_sort_addon">Per priorità del componente aggiuntivo</string>
@@ -224,12 +234,15 @@
   <string name="tv_download_from_episode">Da questo episodio</string>
   <string name="tv_download_all_episodes">Tutti gli episodi</string>
   <string name="bulk_title">Scarica serie</string>
+  <string name="bulk_title_movie">Scarica il film</string>
+  <string name="bulk_title_episode">Scarica l’episodio</string>
   <string name="bulk_add">Aggiungi alla coda</string>
   <plurals name="bulk_episode_count">
     <item quantity="one">1 episodio</item>
     <item quantity="other">%1$s episodi</item>
   </plurals>
   <string name="rules_title">Regole di download</string>
+  <string name="rules_selected_source">Fonte selezionata</string>
   <string name="rules_unavailable">Le regole di download non sono disponibili. Chiedi a un amministratore.</string>
   <string name="rules_preset_balanced">Bilanciato</string>
   <string name="rules_preset_best">Qualità migliore</string>

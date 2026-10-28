@@ -116,6 +116,8 @@ fun PlayerScreen(
   sourcesLoading: Boolean = false,
   /** A remote source group that failed, named in the panel and retryable. */
   sourcesRemoteFailure: RemoteSourcesFailure? = null,
+  /** The rules profile a row's break note follows, as the caller sorted the list. */
+  ruleNoteProfileId: String? = null,
   /** Re-runs only the caller's source discovery, leaving the running session alone. */
   onSourcesRetry: (() -> Unit)? = null,
 ) {
@@ -778,6 +780,7 @@ fun PlayerScreen(
           emptyText = stringResource(R.string.sources_none),
           failureText = stringResource(R.string.tv_load_error),
           remoteNote = remoteFailureNote,
+          ruleNoteProfileId = ruleNoteProfileId,
           onRetry = if (sourcesRemoteFailure != null) onSourcesRetry else null,
           retryTag = if (sourcesRemoteFailure != null) TagRemoteSourcesRetry else null,
           initialFocus = sourcesEntry,

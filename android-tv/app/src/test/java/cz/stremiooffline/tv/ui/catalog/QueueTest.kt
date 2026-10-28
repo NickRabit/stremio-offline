@@ -58,7 +58,7 @@ class QueueTest {
     val api = FakeTvApi()
     api.settingsValue = SettingsResponse(uiLanguage = "en", audioLanguage = "en", realDebridConfigured = true)
     api.streamsValues["movie:tt1"] = listOf(StreamDto(sourceId = "s1", kind = "torrent", playable = false, title = "Czech 8 GB", addonName = "alpha"))
-    // One writable library: the To library button queues straight into it, no panel.
+    // One writable library: the selected source queues straight into it, no library panel.
     api.librariesValue = listOf(LibraryDto(id = "movies", name = "Movies", type = "movie", writable = true))
     return api
   }
@@ -80,13 +80,11 @@ class QueueTest {
     compose.onNodeWithTag(tag).assertIsFocused()
   }
 
-  /** Walks left from the primary action, the way a viewer reaches the actions before To library. */
-  private fun focusFromRight(tag: String) {
-    repeat(6) {
-      if (focused(tag)) return
-      press(Key.DirectionLeft)
-    }
-    compose.onNodeWithTag(tag).assertIsFocused()
+  /** The ↓ button opens the title panel on the source on screen; confirming it runs today's queue. */
+  private fun confirmSelectedSource() {
+    compose.onNodeWithTag(TagTitleDownloadPanel).assertExists()
+    compose.onNodeWithTag(TagTitleDownloadSource).assertIsFocused()
+    press(Key.DirectionCenter)
   }
 
   @Test
@@ -97,6 +95,7 @@ class QueueTest {
 
     focusFromLeft(TagCatalogToLibrary)
     press(Key.DirectionCenter)
+    confirmSelectedSource()
 
     assertEquals(listOf("src-native"), api.queuedSourceIds)
     // The projected destination is the server's own; no target travels and the server resolves
@@ -113,6 +112,7 @@ class QueueTest {
 
     focusFromLeft(TagCatalogToLibrary)
     press(Key.DirectionCenter)
+    confirmSelectedSource()
 
     assertEquals(0, api.downloadCalls)
     compose.onNodeWithTag(TagCatalogLibraryPanel).assertExists()
@@ -127,6 +127,7 @@ class QueueTest {
 
     focusFromLeft(TagCatalogToLibrary)
     press(Key.DirectionCenter)
+    confirmSelectedSource()
 
     assertEquals(0, api.downloadCalls)
     compose.onNodeWithTag(TagCatalogMessage).assertIsDisplayed()
@@ -160,6 +161,7 @@ class QueueTest {
 
     focusFromLeft(TagCatalogToLibrary)
     press(Key.DirectionCenter)
+    confirmSelectedSource()
 
     compose.onNodeWithTag(TagCatalogToLibrary).assert(hasContentDescription("Queued", substring = true))
     compose.onNodeWithText("Waiting for Real-Debrid.").assertIsDisplayed()
@@ -174,6 +176,7 @@ class QueueTest {
 
     focusFromLeft(TagCatalogToLibrary)
     press(Key.DirectionCenter)
+    confirmSelectedSource()
 
     compose.onNodeWithTag(TagCatalogMessage).assertTextContains("This account may not download to the library.")
   }
@@ -190,6 +193,7 @@ class QueueTest {
 
     focusFromLeft(TagCatalogToLibrary)
     press(Key.DirectionCenter)
+    confirmSelectedSource()
     compose.waitForIdle()
 
     compose.onNodeWithTag(TagCatalogMessage).assertTextContains("Choose another one.", substring = true)
@@ -207,6 +211,7 @@ class QueueTest {
 
     focusFromLeft(TagCatalogToLibrary)
     press(Key.DirectionCenter)
+    confirmSelectedSource()
     compose.onNodeWithTag(TagCatalogToLibrary).assertIsNotEnabled()
     press(Key.DirectionCenter)
 
@@ -233,10 +238,11 @@ class QueueTest {
     // Recommended puts the largest first, so srcB is queued.
     focusFromLeft(TagCatalogToLibrary)
     press(Key.DirectionCenter)
+    confirmSelectedSource()
     compose.onNodeWithTag(TagCatalogToLibrary).assert(hasContentDescription("Queued", substring = true))
 
-    // Playing the other source drops the mark: the queued job is not for this one.
-    focusFromRight(TagCatalogSources)
+    // The queue leaves the remote on Play, so the other source is to its right.
+    focusFromLeft(TagCatalogSources)
     press(Key.DirectionCenter)
     compose.onNodeWithTag(sourceRowTag(0)).assertIsFocused()
     press(Key.DirectionDown)
