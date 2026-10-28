@@ -151,6 +151,8 @@ commit.
 The usual target, and the one case with real setup work — folder ownership,
 QuickSync, and Container Manager's single-compose-file limit. It works with or
 without SSH: **[Install on a Synology NAS](docs/install-synology.md)**.
+A single `docker-compose.yml` with QuickSync, a second disk and no `.env` is in
+[One file, no `.env`](docs/install-synology.md#one-file-no-env).
 
 Nothing is built on the NAS: upload `compose.pull.yml` to the project folder as
 `docker-compose.yml`, which is the name Container Manager looks for, and point
