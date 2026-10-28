@@ -662,7 +662,8 @@ for (const [width, height] of [[1440, 900], [390, 844], [844, 390]]) {
     await page.keyboard.press("Escape");
     await detail.locator(".library-detail-save .split-button-toggle").click();
     const foreignSave = page.getByRole("dialog");
-    await foreignSave.getByRole("button", { name: "Do knihovny", exact: true }).click();
+    await expect(foreignSave.getByRole("radio", { name: /Vybraný zdroj/ })).toBeChecked();
+    await foreignSave.getByRole("button", { name: "Přidat do fronty", exact: true }).click();
     await expect(foreignSave).toHaveCount(0);
     expect(copies).toHaveLength(2);
     expect(copies[1]).toMatchObject({ sourceId: "foreign-copy", media: { id: "tt1234567", kind: "movie" } });
