@@ -421,6 +421,13 @@ class SourceAdmissionRuntimeUnavailable extends SourceError {
   }
 }
 
+class RuleSizeError extends SourceError {
+  constructor() {
+    super("The source is outside the rule's size range.");
+    this.name = "RuleSizeError";
+  }
+}
+
 const supportsTravelCursor = (
   job: Pick<DownloadJob, "sourceAdmission" | "stream" | "source">,
   snapshot: SourceAdmissionSnapshotV1 | undefined = job.sourceAdmission,
@@ -2772,12 +2779,28 @@ export class DownloadQueue {
         log("INFO", "The source does not serve ranges, one stream will be used", { id: job.id, httpStatus: response.status });
         return undefined;
       }
+      this.requireRuleSize(job, range.total);
       return range.total;
     } catch (error) {
+      if (error instanceof RuleSizeError) throw error;
       if (controller.signal.aborted) throw error;
       log("WARN", "The source could not be asked about ranges", { id: job.id, reason: error instanceof Error ? error.message : String(error) });
       return undefined;
     } finally { clearTimeout(timer); }
+  }
+
+  private violatedRuleSizeRange(job: DownloadJob, size: number): { min?: number; max?: number } | undefined {
+    if (job.sourceAdmission?.profile.template !== "rules") return undefined;
+    const range = job.sourceAdmission.policy.constraints.bytes;
+    if (!range || (range.min === undefined || size >= range.min) && (range.max === undefined || size <= range.max)) return undefined;
+    return range;
+  }
+
+  private requireRuleSize(job: DownloadJob, size: number) {
+    const range = this.violatedRuleSizeRange(job, size);
+    if (!range) return;
+    log("INFO", "Source outside the rule's size range", { id: job.id, size, range });
+    throw new RuleSizeError();
   }
 
   private async transferSegment(stream: StreamItem, handle: FileHandle, segment: Segment, controller: AbortController, note: (bytes: number) => void) {
@@ -3231,6 +3254,7 @@ export class DownloadQueue {
       // A remote original is fetched over one authenticated sequential stream: no range probe
       // and no segment plan, whatever the account's segment preference says.
       const plan = job.remoteDownload ? undefined : await this.segmentPlan(job, stream, offset, controller);
+      if (job.total) this.requireRuleSize(job, job.total);
       if (job.sourceAdmission && !await this.permissionStillHeld(job, controller.signal)) return;
       if (plan) {
         job.segments = plan;
@@ -3282,7 +3306,12 @@ export class DownloadQueue {
         } else if (offset > 0) {
           offset = 0;
         }
-        job.total = expectedSize(range?.total, (Number(response.headers.get("content-length")) || 0) + offset || undefined, hinted);
+        const sourceSize = expectedSize(range?.total, (Number(response.headers.get("content-length")) || 0) + offset || undefined);
+        if (sourceSize) {
+          if (this.violatedRuleSizeRange(job, sourceSize)) await response.body.cancel().catch(() => undefined);
+          this.requireRuleSize(job, sourceSize);
+        }
+        job.total = expectedSize(sourceSize, hinted);
         start(offset);
         if (job.total) await this.admitStorage(job.total - offset, located.root);
         lastProgressAt = this.now();
