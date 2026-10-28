@@ -3,7 +3,7 @@ import { api, describeError } from "./api";
 import { bytes } from "./settings-ui";
 import { t, useI18n } from "./i18n";
 import { LibraryTitleDetail } from "./LibraryTitleDetail";
-import { sourceIdentity } from "./library-detail-sources";
+import { orderSources, sourceIdentity } from "./library-detail-sources";
 import { useLibrarySources } from "./library-sources";
 import { sourceProgressOwner, versionSavedRow } from "./source-progress";
 import { TitleChips } from "./TitleChips";
@@ -100,6 +100,9 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
   // Nothing is asked about a title without one, and a loose number never stands in for a season.
   const bound = boundRef(identity);
   const catalogue = identity ? sourceRef(identity, item) : null;
+  const folderSource = !isFile && sources?.length
+    ? orderSources(sources.filter((stream) => stream.localPath?.startsWith(`${item.path}/`)))[0]
+    : undefined;
   // Where the selected row's own saved position lives: the file the viewer clicked, the copy's own
   // remote item, or the exact catalogue key of the addon answer. Nothing is guessed from the row
   // the detail was opened on.
@@ -289,6 +292,7 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
     onToggleFavorite={onToggleFavorite}
     {...(!isFile && onOpenFolder ? { onOpenFolder } : {})}
     sources={sources}
+    {...(folderSource ? { preferredSource: folderSource } : {})}
     {...(resumeStableKey ? { resumeStableKey } : {})}
     {...(error ? { sourceError: error } : {})}
     onRetry={() => setNonce((value) => value + 1)}
