@@ -383,6 +383,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const [cursorHidden, setCursorHidden] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
   const controlsTimerRef = useRef<number | undefined>(undefined);
+  const keyboardControlsRef = useRef(false);
   const automaticFullscreenRef = useRef(false);
   useEffect(() => {
     if (!open) { setSettingsOpen(false); setSourcesOpen(false); setSourceFailure(""); setBrowserFullscreen(false); setFullscreenUnavailable(false); setPictureFilled(false); return; }
@@ -1097,16 +1098,17 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const revealControls = () => {
     setControlsVisible(true);
     clearControlsTimer();
-    if (videoRef.current?.paused || buffering || error || scrub !== null) return;
+    if (videoRef.current?.paused || error || scrub !== null) return;
     controlsTimerRef.current = window.setTimeout(() => {
       controlsTimerRef.current = undefined;
-      if (overlayRef.current?.querySelector(".player-settings") || (overlayRef.current?.contains(document.activeElement) && document.activeElement?.matches(":focus-visible"))) return;
+      if (overlayRef.current?.querySelector(".player-settings")
+        || (keyboardControlsRef.current && overlayRef.current?.contains(document.activeElement) && document.activeElement?.matches(":focus-visible"))) return;
       setControlsVisible(false);
     }, 3500);
   };
   useEffect(() => {
     if (!open) { clearControlsTimer(); setControlsVisible(true); return; }
-    if (paused || buffering || error || scrub !== null) { clearControlsTimer(); setControlsVisible(true); return; }
+    if (paused || error || scrub !== null) { clearControlsTimer(); setControlsVisible(true); return; }
     revealControls();
     return clearControlsTimer;
   }, [open, paused, buffering, error, scrub]);
@@ -1290,6 +1292,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => {
+      keyboardControlsRef.current = true;
       if (event.target instanceof HTMLSelectElement) return;
       if (event.target instanceof HTMLInputElement && event.target.type !== "range") return;
       revealControls();
@@ -1321,7 +1324,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     ? `embedded:${session.subtitleTrack}`
     : addonSubtitle ? `addon:${addonSubtitles.indexOf(addonSubtitle)}` : "off";
 
-  return <div ref={overlayRef} className={`player-overlay${nativeSubtitles ? " native-subtitles" : ""}${mobileLandscape ? " mobile-landscape" : ""}${pictureFilled ? " picture-filled" : ""}${controlsVisible ? "" : " controls-hidden"}${cursorHidden ? " cursor-hidden" : ""}`} role="dialog" aria-modal="true" onPointerMove={(event) => { if (event.pointerType !== "touch") revealControls(); }} onPointerDown={(event) => { if (!(event.target as HTMLElement).closest(".player-host")) revealControls(); }} onFocusCapture={revealControls} onBlurCapture={revealControls}>
+  return <div ref={overlayRef} className={`player-overlay${nativeSubtitles ? " native-subtitles" : ""}${mobileLandscape ? " mobile-landscape" : ""}${pictureFilled ? " picture-filled" : ""}${controlsVisible ? "" : " controls-hidden"}${cursorHidden ? " cursor-hidden" : ""}`} role="dialog" aria-modal="true" onPointerMove={(event) => { if (event.pointerType !== "touch") revealControls(); }} onPointerDown={(event) => { keyboardControlsRef.current = false; if (!(event.target as HTMLElement).closest(".player-host")) revealControls(); }} onFocusCapture={revealControls} onBlurCapture={revealControls}>
     <div className="player-head">
       <div><small>{t(session ? MODE_KEY[session.mode] : "player.mode.preparing")}{session?.mode === "transcode" ? ` · ${t(session.hardware ? "player.hardware" : "player.software")}` : ""}</small><strong>{title}</strong></div>
       {onToggleFavorite && <button className={`player-star ${favorite ? "on" : ""}`} aria-label={favorite ? t("favorite.remove") : t("favorite.add")} aria-pressed={Boolean(favorite)} title={favorite ? t("favorite.remove") : t("favorite.add")} onClick={onToggleFavorite}>

@@ -22,13 +22,15 @@ test("player keeps its picture stable and its overlay controls reachable", async
   const overlay = page.locator(".player-overlay");
   const video = overlay.locator("video");
   await expect.poll(() => video.evaluate((element: HTMLVideoElement) => element.currentTime), { timeout: 15_000 }).toBeGreaterThan(0);
-  await video.evaluate((element: HTMLVideoElement) => {
-    element.loop = true;
+  await video.evaluate(async (element: HTMLVideoElement) => {
+    element.playbackRate = 0.1;
+    await element.play();
     const track = element.addTextTrack("subtitles", "Layout", "cs");
     track.addCue(new VTTCue(0, 3600, "First subtitle line\nSecond subtitle line"));
     track.mode = "showing";
   });
-  await overlay.dispatchEvent("pointermove");
+  await overlay.dispatchEvent("pointermove", { pointerType: "mouse" });
+  await expect(overlay).not.toHaveClass(/controls-hidden/);
   const before = await video.boundingBox();
   const close = await overlay.getByRole("button", { name: "Zavřít přehrávač", exact: true }).boundingBox();
   expect(close!.y).toBeLessThan(50);
@@ -40,7 +42,7 @@ test("player keeps its picture stable and its overlay controls reachable", async
   await expect(overlay).toHaveClass(/controls-hidden/, { timeout: 8000 });
   expect(await video.boundingBox()).toEqual(before);
   await expect.poll(async () => (await cues.boundingBox())!.y).toBeGreaterThan(raised!.y);
-  await overlay.dispatchEvent("pointermove");
+  await overlay.dispatchEvent("pointermove", { pointerType: "mouse" });
   await overlay.getByRole("button", { name: "Nastavení přehrávání", exact: true }).click();
   await expect(overlay.locator(".player-settings")).toBeVisible();
   await page.waitForTimeout(3800);
@@ -66,11 +68,11 @@ test("player keeps its picture stable and its overlay controls reachable", async
   await overlay.getByRole("button", { name: "Zavřít nastavení přehrávání" }).click();
   await page.screenshot({ path: `test-results/player-${test.info().project.name}.png` });
   if (await overlay.locator(".fullscreen-action").count()) await overlay.locator(".fullscreen-action").click();
-  await overlay.dispatchEvent("pointermove");
+  await overlay.dispatchEvent("pointermove", { pointerType: "mouse" });
   const maximized = await video.boundingBox();
   await expect(overlay).toHaveClass(/controls-hidden/, { timeout: 8000 });
   expect(await video.boundingBox()).toEqual(maximized);
-  await overlay.dispatchEvent("pointermove");
+  await overlay.dispatchEvent("pointermove", { pointerType: "mouse" });
   await overlay.getByRole("button", { name: "Zavřít přehrávač", exact: true }).click();
   await expect(overlay).toHaveCount(0);
 });
@@ -93,8 +95,8 @@ test("fill-screen toggle is presentation-only, reversible and resets when the pl
   const overlay = page.locator(".player-overlay");
   const video = overlay.locator("video");
   await expect.poll(() => video.evaluate((element: HTMLVideoElement) => element.currentTime), { timeout: 15_000 }).toBeGreaterThan(0);
-  await video.evaluate((element: HTMLVideoElement) => { element.loop = true; });
-  await overlay.dispatchEvent("pointermove");
+  await video.evaluate(async (element: HTMLVideoElement) => { element.loop = true; if (element.ended) await element.play(); });
+  await overlay.dispatchEvent("pointermove", { pointerType: "mouse" });
 
   const fillScreen = overlay.getByRole("button", { name: "Vyplnit obrazovku", exact: true });
   await expect(video).toHaveCSS("object-fit", "contain");
@@ -122,7 +124,7 @@ test("fill-screen toggle is presentation-only, reversible and resets when the pl
   expect(await video.evaluate((element: HTMLVideoElement) => element.dataset.fillMarker)).toBe("kept");
   await expect.poll(() => video.evaluate((element: HTMLVideoElement) => element.currentTime)).toBeGreaterThan(playingBefore);
   await expect(cues).toBeVisible();
-  await overlay.dispatchEvent("pointermove");
+  await overlay.dispatchEvent("pointermove", { pointerType: "mouse" });
   await expect(overlay).not.toHaveClass(/controls-hidden/);
   expect(await cues.boundingBox()).toEqual(cueBox);
 
@@ -137,7 +139,7 @@ test("fill-screen toggle is presentation-only, reversible and resets when the pl
   await expect(overlay).toHaveCount(0);
   await play.click();
   await expect(overlay.locator("video")).toHaveCSS("object-fit", "contain");
-  await overlay.dispatchEvent("pointermove");
+  await overlay.dispatchEvent("pointermove", { pointerType: "mouse" });
   await expect(overlay.getByRole("button", { name: "Vyplnit obrazovku", exact: true })).toHaveAttribute("aria-pressed", "false");
   await overlay.getByRole("button", { name: "Zavřít přehrávač", exact: true }).click();
 });
@@ -154,7 +156,9 @@ test("video clicks dismiss controls and settings; double-click toggles fullscree
   const overlay = page.locator(".player-overlay");
   const video = overlay.locator("video");
   await expect.poll(() => video.evaluate((element: HTMLVideoElement) => element.currentTime), { timeout: 15_000 }).toBeGreaterThan(0);
-  await video.evaluate((element: HTMLVideoElement) => { element.loop = true; });
+  await video.evaluate(async (element: HTMLVideoElement) => { element.playbackRate = 0.1; await element.play(); });
+  await overlay.dispatchEvent("pointermove", { pointerType: "mouse" });
+  await expect(overlay).not.toHaveClass(/controls-hidden/);
   await video.dispatchEvent("click");
   await expect(overlay).toHaveClass(/controls-hidden/);
   await video.dispatchEvent("click");
