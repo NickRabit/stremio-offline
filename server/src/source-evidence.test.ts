@@ -37,6 +37,7 @@ const facts = (overrides: Partial<SourceEvidenceFactsV1> = {}): SourceEvidenceFa
   externalSubtitles: unknown(),
   bytes: unknown(),
   durationSeconds: unknown(),
+  debridReady: unknown(),
   heightPixels: unknown(),
   releaseKind: unknown(),
   sampleOrTrailer: unknown(),

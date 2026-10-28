@@ -422,6 +422,7 @@ export function createTravelProfileResolver(
       inspect: (stream) => deps.inspect(stream, signal),
       shouldContinue: acquired.shouldContinue,
       scopeStamp: acquired.scopeStamp,
+      ...(deps.debridReady === undefined ? {} : { debridReady: deps.debridReady }),
       ...(cursor === undefined ? {} : { cursor }),
       tried: source.tried,
     });
@@ -499,6 +500,7 @@ export function createRulesProfileResolver(
       shouldContinue: acquired.shouldContinue,
       scopeStamp: acquired.scopeStamp,
       hasRealDebrid: deps.hasRealDebrid(),
+      ...(deps.debridReady === undefined ? {} : { debridReady: deps.debridReady }),
       ...(cursor === undefined ? {} : { cursor }),
       ...(finalTemporaryAttempt === undefined ? {} : { finalTemporaryAttempt }),
       tried: source.tried,
@@ -543,6 +545,7 @@ export function createProviderPriorityProfileResolver(
       tried: source.tried,
       episode: source.type === "series",
       hasRealDebrid: deps.hasRealDebrid(),
+      ...(deps.debridReady === undefined ? {} : { debridReady: deps.debridReady }),
       inspect: (stream) => deps.inspect(stream, signal),
       shouldContinue: acquired.shouldContinue,
     });

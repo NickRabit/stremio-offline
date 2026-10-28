@@ -48,6 +48,7 @@ export interface CatalogDeps extends RouteContext {
   ownRecord(relative: string, records: Record<string, LibraryMetaRecord>): LibraryMetaRecord | undefined;
   metaStore: LibraryMetaStore;
   externalIds: ExternalIdStore;
+  debridReady?: (infoHash: string) => boolean;
   subtitleDelay(value: unknown): number;
   mediaSources: MediaServerSources;
   imageProxy?: ImageProxy;
@@ -339,6 +340,7 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
           stream,
           providerResponseIndex,
           available: true,
+          ...(deps.debridReady === undefined ? {} : { debridReady: deps.debridReady }),
         });
       });
       const verdicts = ruleVerdictsForProfiles(snapshots, candidates.filter((candidate) => candidate !== undefined));

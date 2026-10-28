@@ -14,6 +14,7 @@ export interface SourceResolverDeps {
   addons: () => AddonRecord[];
   prefs: (ownerUserId: string) => Pick<UserPrefs, "audioLanguage">;
   hasRealDebrid: () => boolean;
+  debridReady?: (infoHash: string) => boolean;
   serverReady: Promise<void>;
   listStreams: (addons: AddonRecord[], type: string, id: string) => Promise<StreamItem[]>;
   listSubtitles: (addons: AddonRecord[], type: string, id: string, signal: AbortSignal) => Promise<SubtitleItem[]>;

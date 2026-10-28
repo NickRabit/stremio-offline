@@ -1195,6 +1195,78 @@ test("a torrent waits on Real-Debrid then downloads over HTTP without taking a s
   }
 });
 
+test("a torrent downloaded on its first status read is remembered", async () => {
+  const payload = Buffer.alloc(16 * 1024, 7);
+  const { server, port } = await listen((_req, res) => {
+    res.writeHead(200, { "content-length": String(payload.length), "content-type": "video/mp4" });
+    res.end(payload);
+  });
+  const remembered: string[] = [];
+  const { directory, queue } = await tempQueue({
+    rememberDebridReady: (infoHash) => { remembered.push(infoHash); },
+    debrid: {
+      configured: () => true,
+      advance: async (input) => {
+        await input.onFirstStatus?.("downloaded");
+        return {
+          ready: true,
+          torrentId: "rd1",
+          url: `http://127.0.0.1:${port}/movie.mp4`,
+          filename: "Movie.mkv",
+        };
+      },
+    },
+  });
+  try {
+    await queue.add("Film", { infoHash: HASH, fileIdx: 0 });
+    await waitFor(queue, () => queue.list()[0]?.status === "completed");
+    assert.deepEqual(remembered, [HASH]);
+  } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a torrent that reported downloading is not remembered when it later becomes ready", async () => {
+  const payload = Buffer.alloc(16 * 1024, 8);
+  const { server, port } = await listen((_req, res) => {
+    res.writeHead(200, { "content-length": String(payload.length), "content-type": "video/mp4" });
+    res.end(payload);
+  });
+  const remembered: string[] = [];
+  let ready = false;
+  const { directory, queue } = await tempQueue({
+    debridPollMs: 20,
+    rememberDebridReady: (infoHash) => { remembered.push(infoHash); },
+    debrid: {
+      configured: () => true,
+      advance: async (input) => {
+        await input.onFirstStatus?.(ready ? "downloaded" : "downloading");
+        return ready
+          ? {
+            ready: true,
+            torrentId: "rd1",
+            url: `http://127.0.0.1:${port}/movie.mp4`,
+            filename: "Movie.mkv",
+          }
+          : { ready: false, torrentId: "rd1", progress: 10, status: "downloading" };
+      },
+    },
+  });
+  try {
+    await queue.add("Film", { infoHash: HASH, fileIdx: 0 });
+    await waitFor(queue, () => queue.get(queue.list()[0]!.id)?.debridProgress === 10);
+    ready = true;
+    await waitFor(queue, () => queue.list()[0]?.status === "completed");
+    assert.deepEqual(remembered, []);
+  } finally {
+    await queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("the same infoHash is not queued twice", async () => {
   const { directory, queue } = await tempQueue({
     debrid: { configured: () => true, advance: async () => ({ ready: false, torrentId: "rd1", progress: 1, status: "queued" }) },

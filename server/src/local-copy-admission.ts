@@ -81,6 +81,7 @@ const unknownFacts = (size: number): SourceEvidenceFactsV1 => ({
   externalSubtitles: unknownFact(),
   bytes: inspectedFact(size),
   durationSeconds: unknownFact(),
+  debridReady: unknownFact(),
   heightPixels: unknownFact(),
   releaseKind: unknownFact(),
   sampleOrTrailer: unknownFact(),
@@ -103,6 +104,7 @@ const inspectedFacts = (
   durationSeconds: info.duration !== undefined && Number.isFinite(info.duration)
     ? inspectedFact(info.duration)
     : unknownFact(),
+  debridReady: unknownFact(),
   heightPixels: (() => {
     const resolution = videoResolutionClass(info.video?.width, info.video?.height);
     return resolution === undefined ? unknownFact() : inspectedFact(resolution);
