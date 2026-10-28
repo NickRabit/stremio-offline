@@ -20,10 +20,12 @@ What that requires depends on who hands FFmpeg over.
 
 ### Docker image (`ghcr.io/nickrabit/stremio-offline`)
 
-The image is built on Debian (`node:22-trixie-slim`) and installs Debian's
-`ffmpeg` package. Debian builds it with `--enable-gpl` and with **x264** and
-**x265**, so the FFmpeg in the image is licensed **GPL-2.0-or-later**, as are
-x264 and x265. The other packages the image installs keep their Debian licences:
+The image uses an Ubuntu 24.04 runtime and installs Ubuntu's `ffmpeg` package.
+The build stage uses `node:22-trixie-slim` and copies only Node.js and the
+production npm dependencies into the runtime. Ubuntu builds FFmpeg with
+`--enable-gpl`, **x264** and **x265**, so the FFmpeg in the image is licensed
+**GPL-2.0-or-later**, as are x264 and x265. The other packages the image
+installs keep their Ubuntu licences:
 
 - `libva`, `vainfo`, and on amd64 `intel-media-va-driver` and `i965-va-driver`: MIT;
 - `util-linux`: mixed GPL/LGPL/BSD;
@@ -34,16 +36,16 @@ x264 and x265. The other packages the image installs keep their Debian licences:
 - **Exact versions** of an image are listed by
   `docker run --rm --entrypoint dpkg <image> -l ffmpeg 'libx264*' 'libx265*'`.
 - **Corresponding source code** for those exact versions is published by
-  Debian: `apt-get source ffmpeg=<version>` on a Debian system, the package
-  pages at <https://packages.debian.org/source/trixie/ffmpeg>, and the
-  permanent archive at <https://snapshot.debian.org/package/ffmpeg/>, which
-  keeps every version that was ever released. The same applies to x264 and x265.
+  Ubuntu: `apt-get source ffmpeg=<version>` on an Ubuntu system with source
+  repositories enabled, the package pages at
+  <https://packages.ubuntu.com/source/noble/ffmpeg>, and Launchpad, which keeps
+  every published package version. The same applies to x264 and x265.
 
   If a version you received from us is no longer obtainable there, open an
   issue and we will provide its source.
 
 The server's npm dependencies are MIT-licensed and carry their licence files in
-`/app/server/node_modules`. The web interface's bundled packages are listed
+`/app/node_modules`. The web interface's bundled packages are listed
 under [Web interface](#web-interface).
 
 ### Desktop app (macOS)
