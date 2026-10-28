@@ -61,6 +61,58 @@ in the file, that only pulls a newer image. Note that `:latest` is the last
 *released* image, not the last commit; to pin a version, append a commit SHA to
 the image name, for example `:a1b2c3d`.
 
+## One file, no `.env`
+
+If you would rather not keep two files, Container Manager can run a single
+compose file with the values written into it. In **Container Manager → Project
+→ Create**, choose the project folder, pick **Create docker-compose.yml** and
+paste this:
+
+```yaml
+services:
+  stremio-offline:
+    image: nickrabit/stremio-offline:latest
+    container_name: stremio-offline
+    restart: unless-stopped
+    init: true
+    ports:
+      - "8090:8080"
+    environment:
+      TZ: Europe/Prague
+      # Owner of the download folder; see below.
+      PUID: "1026"
+      PGID: "100"
+      # Intel QuickSync. RENDER_GID is the group that owns renderD128; see below.
+      VAAPI_DEVICE: /dev/dri/renderD128
+      RENDER_GID: "937"
+      # The download folder must stay listed, or its library falls outside every grant.
+      LIBRARY_ROOTS: /downloads,/libraries/video
+      # Addons served from your own network (a host or IP, comma-separated).
+      ALLOW_ADDON_HOSTS: ""
+    devices:
+      - /dev/dri:/dev/dri
+    volumes:
+      - /volume1/docker/stremio-offline/data:/data
+      - /volume1/video/downloads:/downloads
+      - /volume1/video:/libraries/video
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+```
+
+Create the data and download folders in File Station first. After the first
+start, run `ls -n /downloads` and `ls -n /dev/dri` in the container's
+**Terminal**: the download folder's two numbers go into `PUID` and `PGID`, the
+group of `renderD128` into `RENDER_GID`. Then **Action → Build** recreates the
+container with them. Without an Intel GPU, remove the `devices` block and both
+VAAPI lines; without a second disk, remove its volume line and `LIBRARY_ROOTS`.
+Every setting left out keeps its default from the
+[configuration reference](configuration.md). The same file is on the
+[Docker Hub page](https://hub.docker.com/r/nickrabit/stremio-offline).
+
 ## With SSH
 
 ```bash

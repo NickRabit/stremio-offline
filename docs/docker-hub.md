@@ -115,8 +115,78 @@ On Linux, `id -u` and `id -g` show the current user's IDs. On a NAS, use
 absolute paths to your shared folders instead of `./data` and `./downloads`.
 The selected user must be able to write to both directories.
 
-The example works without a GPU. Hardware acceleration requires compatible
-hardware, permissions and device configuration; see the guides below.
+The example works without a GPU. Every setting it leaves out has a working
+default; the [configuration reference](https://github.com/NickRabit/stremio-offline/blob/main/docs/configuration.md)
+lists them all.
+
+## Synology with QuickSync and a second disk
+
+On a Synology NAS the minimal example runs, but conversion stays in software,
+which can take every core and make DSM stop responding. This variant adds
+Intel QuickSync, a second shared folder as a library, addons on your own
+network and a health check. In **Container Manager → Project → Create**, choose
+a folder such as `/volume1/docker/stremio-offline` and paste this as the
+project's `docker-compose.yml`:
+
+```yaml
+services:
+  stremio-offline:
+    image: nickrabit/stremio-offline:latest
+    container_name: stremio-offline
+    restart: unless-stopped
+    init: true
+    ports:
+      - "8090:8080"
+    environment:
+      TZ: Europe/Prague
+      # Owner of the download folder; see below.
+      PUID: "1026"
+      PGID: "100"
+      # Intel QuickSync. RENDER_GID is the group that owns renderD128; see below.
+      VAAPI_DEVICE: /dev/dri/renderD128
+      RENDER_GID: "937"
+      # The download folder must stay listed, or its library falls outside every grant.
+      LIBRARY_ROOTS: /downloads,/libraries/video
+      # Addons served from your own network (a host or IP, comma-separated).
+      ALLOW_ADDON_HOSTS: ""
+    devices:
+      - /dev/dri:/dev/dri
+    volumes:
+      - /volume1/docker/stremio-offline/data:/data
+      - /volume1/video/downloads:/downloads
+      - /volume1/video:/libraries/video
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+```
+
+Create the data and download folders in File Station first, then fill in three
+numbers. After the first start, open the container's **Terminal** in Container
+Manager and run:
+
+```bash
+ls -n /downloads
+ls -n /dev/dri
+```
+
+The first command shows the owner of the download folder: put its two numbers
+into `PUID` and `PGID` (Synology user IDs usually start at `1026`, and
+the `users` group is `100`). The second shows the group of
+`renderD128`: put it into `RENDER_GID`. Then use **Action → Build** on the
+project, which recreates the container with the new values. The log line
+`VAAPI is available` confirms QuickSync is in use; a warning in its place names
+what to fix.
+
+Without an Intel GPU, remove the `devices` block and both VAAPI lines, or the
+container will refuse to start. Without a second disk, remove its volume line
+and `LIBRARY_ROOTS`. The
+[Synology guide](https://github.com/NickRabit/stremio-offline/blob/main/docs/install-synology.md)
+covers the same setup with an `.env` file, and
+[hardware acceleration](https://github.com/NickRabit/stremio-offline/blob/main/docs/hardware-acceleration.md)
+explains how to tell the GPU is really working.
 
 ## Persistent data
 
