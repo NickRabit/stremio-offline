@@ -80,7 +80,7 @@ services:
     environment:
       TZ: Europe/Prague
       # Owner of the download folder; see below.
-      PUID: "1026"
+      PUID: "1030"
       PGID: "100"
       # Intel QuickSync. RENDER_GID is the group that owns renderD128; see below.
       VAAPI_DEVICE: /dev/dri/renderD128
