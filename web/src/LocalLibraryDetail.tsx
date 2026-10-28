@@ -11,6 +11,7 @@ import { catalogueGalleryImages, mergeGallery, posterAndWide, type GalleryImage 
 import { canQueue, isLocalStream } from "./streams";
 import { useTitleEnrichment, type CatalogueRef } from "./title-enrichment";
 import { playbackIdentity } from "./playback-identity";
+import type { CatalogueDetailTarget } from "./CatalogueTitleDetail";
 import type { BrowseFile, BrowseFolder, IdentityPreview, Stream, Trailer } from "./types";
 
 export type LocalDetailItem = ({ kind: "folder" } & BrowseFolder) | ({ kind: "file" } & BrowseFile);
@@ -26,6 +27,8 @@ export interface AlternativePlay {
   media: Record<string, unknown>;
   kind: "movie" | "series";
   fromBeginning?: boolean;
+  /** The bulk-route target the arrow opens the rules dialog with, when the title is named exactly. */
+  catalogueDetail?: CatalogueDetailTarget;
   /** The viewer asked to name the destination themselves instead of taking the source's own rule,
    *  which is what the second half of the save button does. */
   choose?: boolean;
@@ -243,6 +246,23 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
       episodeTitle: title, ...(catalogue ? { id: bound.id, metaType: "series" } : {}),
     };
   };
+  const catalogueDownloadDetail = (): CatalogueDetailTarget | null => {
+    const bound = identity?.bound;
+    if (!bound) return null;
+    const name = bound.name ?? title;
+    if (bound.type === "movie") {
+      return { type: "movie", id: bound.id, name, ...(item.poster ? { poster: item.poster } : {}) };
+    }
+    if (bound.type !== "series") return null;
+    const season = isFile ? item.season ?? identity?.parsed?.season ?? bound.season : identity?.parsed?.season ?? bound.season;
+    const episode = isFile ? item.episode ?? identity?.parsed?.episode ?? bound.episode : identity?.parsed?.episode ?? bound.episode;
+    if (typeof season !== "number" || !Number.isInteger(season) || season < 0) return null;
+    if (typeof episode !== "number" || !Number.isInteger(episode) || episode < 1) return null;
+    return {
+      type: "series", id: bound.id, name, season, episode, videoId: `${bound.id}:${season}:${episode}`, episodeTitle: title,
+      ...(item.poster ? { poster: item.poster } : {}),
+    };
+  };
   const chips = <TitleChips kind={t(episode ? "episodes.one" : "catalog.oneMovie")} trailer={enrichment.trailer} links={enrichment.links}
     onTrailer={onTrailer} secureMode={secureMode}/>;
   const facts = [item.year, sources?.length === 1 && item.size ? bytes(item.size) : ""].filter(Boolean).join(" · ");
@@ -279,12 +299,16 @@ export function LocalLibraryDetail({ item, favorite, progress, progressRevision 
         stream, title, ...(item.poster ? { poster: item.poster } : {}), catalogue, media: alternativeMedia(),
         kind: identity?.bound?.type === "series" ? "series" : "movie",
       }),
-      // The other half of the split: the destination is chosen by the viewer instead of the
-      // addon's own rule. Without it the shell draws one button that always asks.
-      onSaveElsewhere: (stream: Stream) => onSaveAlternative({
-        stream, title, ...(item.poster ? { poster: item.poster } : {}), catalogue, media: alternativeMedia(),
-        kind: identity?.bound?.type === "series" ? "series" : "movie", choose: true,
-      }),
+      // The other half opens the rules for an exact catalogue title; otherwise it keeps the
+      // destination dialog. Without it the shell draws one button that always asks.
+      onSaveElsewhere: (stream: Stream) => {
+        const detail = catalogueDownloadDetail();
+        onSaveAlternative({
+          stream, title, ...(item.poster ? { poster: item.poster } : {}), catalogue, media: alternativeMedia(),
+          kind: identity?.bound?.type === "series" ? "series" : "movie",
+          ...(detail ? { catalogueDetail: detail } : { choose: true }),
+        });
+      },
       // A file of this library is never queued as a copy of itself, and only a source the server
       // proved the account may copy is offered at all: a click always reaches a real decision.
       saveSupported: (stream: Stream) => canQueue(stream, realDebridConfigured),

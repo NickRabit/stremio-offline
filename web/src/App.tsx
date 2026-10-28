@@ -1925,12 +1925,13 @@ export function App() {
       .then((found) => setAlternative((value) => value && value.scope === scope && alternativeScopeRef.current.generation === scope && value.owner.key === key ? { ...value, subtitles: found } : value))
       .catch(() => undefined);
   };
-  /** Opens the destination dialog for one row a detail offered: the exact copy of a media server
-   *  takes the destination its own library projected and the server re-resolves, an addon answer
-   *  the addon's own rule. The viewer may ask to name the destination instead, which is the whole
-   *  job of the second half of the save button; a copy whose source projected no destination at all
-   *  asks for one rather than queueing a copy the server would refuse. */
-  const openAlternativeSave = (request: { title: string; kind: "movie" | "series"; stream: Stream; media: Record<string, unknown>; choose?: boolean }) => {
+  /** Routes one row a detail saved: an exact catalogue title opens the shared rules dialog, while
+   *  the other paths resolve the row's projected destination, or ask for one when it has none. */
+  const openAlternativeSave = (request: { title: string; kind: "movie" | "series"; stream: Stream; media: Record<string, unknown>; choose?: boolean; catalogueDetail?: CatalogueDetailTarget | null }) => {
+    if (request.catalogueDetail) {
+      openCatalogueDownload(request.catalogueDetail, request.stream, false);
+      return;
+    }
     const save = alternativeSaveRequest(request.title, request.stream, request.media, request.kind);
     if (request.choose || (isRemoteStream(request.stream) && sourceTargetRule(request.stream) === undefined)) {
       setAlternativeSave(save);
@@ -2657,10 +2658,11 @@ export function App() {
     return true;
   };
 
-  /** The primary "Save to library" action opens the rules dialog for this one title; the
-   *  selected source remains an explicit choice at the top of its rule list. */
+  /** A native source whose server projected no destination opens the choice dialog instead of
+   *  submitting a copy the server would refuse; every other source queues straight away. */
   const primarySave = () => {
-    openSingleDownload();
+    if (selectedStream && isRemoteStream(selectedStream) && sourceTargetRule(selectedStream) === undefined) { setSaveTargetOpen(true); return; }
+    void enqueue();
   };
 
   /** The device action of the panel\u2019s player: the server fetches the row, its own proxy included,
@@ -3364,11 +3366,8 @@ export function App() {
             // and the way to say that episode is seen -- which is that position going away.
             {...(detailProgress ? { watched: true, watchedLabel: t("mediaServer.markWatched"), onToggleWatched: () => void clearDetailProgress() } : {})}
             onPlay={playCatalogueDetail}
-            onSaveToLibrary={(stream, effective) => openCatalogueDownload(effective, stream, detailSourcePicked)}
-            onSaveElsewhere={(stream, effective) => setCatalogueSave({
-              ...(effective.season != null ? { season: effective.season } : {}),
-              ...alternativeSaveRequest(effective.name, stream, catalogueMedia(effective), effective.type === "series" ? "series" : "movie"),
-            })}
+            onSaveToLibrary={(stream, effective) => void queueCatalogueStream(effective, stream)}
+            onSaveElsewhere={(stream, effective) => openCatalogueDownload(effective, stream, detailSourcePicked)}
             saveSupported={(stream) => canQueue(stream, settings.realDebridConfigured)}
             onDownloadToDevice={(stream, effective) => void downloadCatalogueStream(effective, stream)}/>
         </div>
@@ -3540,7 +3539,7 @@ export function App() {
               <div className="source-footer"><div className="source-info"><Subtitles/> {t("sources.subtitleCount", { count: selectedLocalPath ? 0 : subtitles.length + (selectedStream?.subtitles?.length || 0) })}
                 {inspection && <> · <b>{t("sources.audioInFile")}</b> {inspection.audioTracks.length ? inspection.audioTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}
                 · <b>{t("sources.subtitlesInFile")}</b> {inspection.subtitleTracks.length ? inspection.subtitleTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}</>}
-              {selectedStream?.playable && !inspection && <> · {t("sources.probing")}</>}</div><div className="action-slot"><div className="actions"><button className="primary" disabled={!canPlay} onClick={startCatalogPlayback}><CirclePlay/> {t("player.play")}</button>{selectedLocalPath ? <button onClick={() => revealLibraryCopy(selectedLocalPath)}><FolderOpen/> {t("library.showInLibrary")}</button> : <div className="split-button"><button disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} onClick={primarySave}><HardDrive/> {t("save.toLibrary")}</button><button className="split-button-toggle" disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} aria-haspopup="dialog" aria-label={t("save.toLibraryElsewhere")} title={t("save.toLibraryElsewhere")} onClick={() => setSaveTargetOpen(true)}><ChevronDown/></button></div>}<button disabled={!canPlay || Boolean(selectedStream && isRemoteStream(selectedStream))} onClick={() => { if (selectedLocalPath) void downloadLibraryFile(selectedLocalPath); else void downloadStreamToDevice(); }}><Download/> {t("save.toDevice")}</button></div></div></div>
+              {selectedStream?.playable && !inspection && <> · {t("sources.probing")}</>}</div><div className="action-slot"><div className="actions"><button className="primary" disabled={!canPlay} onClick={startCatalogPlayback}><CirclePlay/> {t("player.play")}</button>{selectedLocalPath ? <button onClick={() => revealLibraryCopy(selectedLocalPath)}><FolderOpen/> {t("library.showInLibrary")}</button> : <div className="split-button"><button disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} onClick={primarySave}><HardDrive/> {t("save.toLibrary")}</button><button className="split-button-toggle" disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} aria-haspopup="dialog" aria-label={t("save.toLibraryElsewhere")} title={t("save.toLibraryElsewhere")} onClick={() => openSingleDownload()}><ChevronDown/></button></div>}<button disabled={!canPlay || Boolean(selectedStream && isRemoteStream(selectedStream))} onClick={() => { if (selectedLocalPath) void downloadLibraryFile(selectedLocalPath); else void downloadStreamToDevice(); }}><Download/> {t("save.toDevice")}</button></div></div></div>
             </div>}
             </div>
           </> : <Empty icon={<Film/>} title={t("catalog.pickTitle")} text={t("catalog.pickText")}/>}</section></div>
@@ -3561,6 +3560,7 @@ export function App() {
           uiLanguage={settings.uiLanguage} secureMode={settings.secureMode} onTrailer={setTrailerOpen}
           onGallery={presentGallery} resetSignal={libraryReset}
           downloadLibraries={libraries} onDownloadQueued={() => { notify(t("downloads.queued")); void loadDownloads(); }}
+          onCatalogueDownload={(stream, detail) => openCatalogueDownload(detail, stream, false)}
           onNotify={notify}
           accountScope={session!.username} addons={addons} realDebridConfigured={settings.realDebridConfigured}
           searchEverywhere={buildInfo?.searchEverywhere === true}/>

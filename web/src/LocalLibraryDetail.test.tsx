@@ -561,6 +561,41 @@ describe("LocalLibraryDetail extra sources", () => {
     }));
   });
 
+  it("opens the rules route from the save arrow when the title has a catalogue id", async () => {
+    identityHandler = boundMovie;
+    copies = oneNative;
+    providers = () => json([{ key: "torrentio", name: "Torrentio" }]);
+    addonStreams = () => json([addonRow("addon-1", "Torrentio 4K")]);
+    const onSaveAlternative = vi.fn();
+    await render(folder(), { onSaveAlternative });
+    await openPicker();
+    await click(rows().find((row) => row.textContent?.includes("Torrentio"))!);
+    await click(host.querySelector(".library-detail-save .split-button-toggle"));
+    expect(onSaveAlternative).toHaveBeenCalledWith(expect.objectContaining({
+      stream: expect.objectContaining({ sourceId: "addon-1" }),
+      catalogueDetail: { type: "movie", id: "tt1", name: "Heat" },
+    }));
+  });
+
+  it("names the selected episode's exact video for the rules route", async () => {
+    identityHandler = () => json(identity({
+      path: "Show/S01E02.mkv", kind: "series", bound: { type: "series", id: "tt9", name: "Show" },
+      parsed: { title: "Show", query: "Show", season: 1, episode: 2 },
+    }));
+    providers = () => json([{ key: "torrentio", name: "Torrentio" }]);
+    addonStreams = () => json([addonRow("addon-1", "Torrentio 4K")]);
+    const onSaveAlternative = vi.fn();
+    await render(file({ path: "Show/S01E02.mkv", label: "S01E02.mkv", season: 1, episode: 2 }), { onSaveAlternative });
+    await openPicker();
+    await click(rows().find((row) => row.textContent?.includes("Torrentio"))!);
+    await click(host.querySelector(".library-detail-save .split-button-toggle"));
+    expect(onSaveAlternative).toHaveBeenCalledWith(expect.objectContaining({
+      catalogueDetail: expect.objectContaining({
+        type: "series", id: "tt9", season: 1, episode: 2, videoId: "tt9:1:2",
+      }),
+    }));
+  });
+
   it("reads the title's row for another library's copy, falling back to that copy's own store", async () => {
     identityHandler = boundMovie;
     copies = oneNative;

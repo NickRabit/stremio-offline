@@ -18,6 +18,7 @@ import { sourceProgressOwner, versionSavedRow, type SourceProgressOwner } from "
 import { canQueue, isLocalStream, isRemoteStream } from "./streams";
 import { sourceTargetRule } from "./save-target";
 import { DetailHero, LIBRARY_HERO_EMPTY_GRADIENT, LIBRARY_HERO_GRADIENT, useBackdrop } from "./DetailHero";
+import type { CatalogueDetailTarget } from "./CatalogueTitleDetail";
 import { remoteDetailArtwork } from "./remote-artwork";
 import { RemoteFolderArt, RemoteLibraryArt, RemoteTileArt } from "./remote-mosaic";
 import { pickTileArt } from "./tile-shape";
@@ -68,6 +69,8 @@ interface Props {
   downloadLibraries: LibraryView[];
   /** A copy was queued here: the app refreshes its downloads and shows the toast. */
   onDownloadQueued?: () => void;
+  /** Opens the shared rules dialog for a title with an exact bulk-route target. */
+  onCatalogueDownload?: (stream: Stream, detail: CatalogueDetailTarget) => void;
   /** A short message the app shows, such as a device save that started through the server. */
   onNotify?: (text: string) => void;
   /** The signed-in account: supplementary source state never spans accounts. */
@@ -231,7 +234,7 @@ const groupEpisodes = (items: RemoteItem[]) => {
   return [...groups.entries()].map(([season, group]) => ({ season, items: group }));
 };
 
-export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLanguage, subtitleLanguage, onError, libraryTileShape, onToggleLibraryShape, views, onPersistPrefs, onOpenChange, compact, onCompactChange, initialTarget, onPersonalChange, uiLanguage, secureMode, onTrailer, onGallery, resetSignal, downloadLibraries, onDownloadQueued, onNotify, accountScope = "", addons = [], realDebridConfigured = false, searchEverywhere }: Props) {
+export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLanguage, subtitleLanguage, onError, libraryTileShape, onToggleLibraryShape, views, onPersistPrefs, onOpenChange, compact, onCompactChange, initialTarget, onPersonalChange, uiLanguage, secureMode, onTrailer, onGallery, resetSignal, downloadLibraries, onDownloadQueued, onCatalogueDownload, onNotify, accountScope = "", addons = [], realDebridConfigured = false, searchEverywhere }: Props) {
   useI18n();
   // The listing effect must not restart when the shape changes. It still warms only the
   // picture that shape draws, so the other role is fetched when a tile actually asks for it.
@@ -1288,6 +1291,23 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
   /** The title line a detail's playback and saves are labelled with. */
   const detailTitle = (item: RemoteItem) =>
     item.type === "episode" ? `${series ? `${series.name} · ` : ""}${episodeTitle(item)}` : item.name;
+  const catalogueDownloadDetail = (item: RemoteItem, title: string): CatalogueDetailTarget | null => {
+    if (item.type === "movie") {
+      const ref = catalogueRef("movie", item.providerIds);
+      return ref ? { type: ref.type, id: ref.id, name: title, ...(item.poster ? { poster: item.poster } : {}) } : null;
+    }
+    if (item.type !== "episode" || !series) return null;
+    const ref = catalogueRef("series", series.providerIds);
+    const season = item.season;
+    const episode = item.episode;
+    if (!ref || typeof season !== "number" || !Number.isInteger(season) || season < 0) return null;
+    if (typeof episode !== "number" || !Number.isInteger(episode) || episode < 1) return null;
+    return {
+      type: "series", id: ref.id, name: series.name, season, episode,
+      videoId: `${ref.id}:${season}:${episode}`, episodeTitle: episodeTitle(item),
+      ...(series.poster ?? item.poster ? { poster: series.poster ?? item.poster } : {}),
+    };
+  };
   /** Catalogue artwork only: a provider proxy path never travels into an addon save. */
   const addonArtwork = () => ({
     ...(enrichment.meta?.poster ? { poster: enrichment.meta.poster } : {}),
@@ -1706,10 +1726,13 @@ export function RemoteLibraryBrowser({ onRootPresenceChange, hideRoots, audioLan
             // version, the copy's own projected destination for another library's, the addon's
             // rule for an answer, and nothing at all for a file that is already here.
             onSaveToLibrary={(stream) => saveDetailStream(stream, detail, detailTitle(detail))}
-            // The arrow names the destination: another media server's copy or an addon answer opens
-            // the catalogue's own dialog, and this library's own version opens the one that lists
-            // the versions already read for it.
-            onSaveElsewhere={(stream) => saveDetailStream(stream, detail, detailTitle(detail), undefined, true)}
+            // The arrow opens the shared rules when the item has an exact catalogue identity;
+            // otherwise it keeps the destination dialog this row already used.
+            onSaveElsewhere={(stream) => {
+              const target = catalogueDownloadDetail(detail, detailTitle(detail));
+              if (target && onCatalogueDownload) onCatalogueDownload(stream, target);
+              else saveDetailStream(stream, detail, detailTitle(detail), undefined, true);
+            }}
             // Only a source the server proved may be copied is offered the action, so a click
             // always reaches a real decision instead of a button that does nothing.
             saveSupported={(stream) => canQueue(stream, realDebridConfigured)}
