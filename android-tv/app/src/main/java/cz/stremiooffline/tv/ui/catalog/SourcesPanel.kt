@@ -490,10 +490,22 @@ internal fun SourceRow(
     badge == "RD" -> Tokens.Accent
     else -> Tokens.Muted
   }
-  val meta = buildList {
-    formatSize(Streams.streamSize(stream))?.let(::add)
-    addAll(Streams.streamLanguages(stream, titleLanguage).map { Languages.label(it) })
-  }
+  val resolutionValue = stream.videoFacts?.heightPixels?.takeIf { it > 0 }
+    ?.let { stringResource(R.string.rules_resolution_value, it) }
+  val meta = sourceMeta(
+    stream = stream,
+    titleLanguage = titleLanguage,
+    resolutionValue = resolutionValue,
+    codecLabels = mapOf(
+      "h264" to stringResource(R.string.sources_codec_h264),
+      "hevc" to stringResource(R.string.sources_codec_hevc),
+      "av1" to stringResource(R.string.sources_codec_av1),
+    ),
+    rangeLabels = mapOf(
+      "hdr" to stringResource(R.string.sources_range_hdr),
+      "dolbyVision" to stringResource(R.string.sources_range_dolby_vision),
+    ),
+  )
   val localHint = stringResource(R.string.sources_local_hint)
   val remoteHint = stringResource(R.string.media_server_source_hint)
   val rowModifier = when {
@@ -581,6 +593,21 @@ internal fun SourceRow(
       FocusButton(text = saveText, onClick = onSave, modifier = saveModifier)
     }
   }
+}
+
+internal fun sourceMeta(
+  stream: StreamDto,
+  titleLanguage: String?,
+  resolutionValue: String?,
+  codecLabels: Map<String, String>,
+  rangeLabels: Map<String, String>,
+): List<String> = buildList {
+  formatSize(Streams.streamSize(stream))?.let(::add)
+  addAll(Streams.streamLanguages(stream, titleLanguage).map { Languages.label(it) })
+  val facts = stream.videoFacts
+  if (facts?.heightPixels != null && resolutionValue != null) add(resolutionValue)
+  facts?.codec?.let(codecLabels::get)?.let(::add)
+  facts?.range?.let(rangeLabels::get)?.let(::add)
 }
 
 /** The labels a break note can name, in the order the verdict listed them. An unknown code is

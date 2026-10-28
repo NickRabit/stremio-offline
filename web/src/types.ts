@@ -176,6 +176,11 @@ export interface SourceRuleVerdict {
   reasons: SourceRuleReason[];
   rank: number[];
 }
+export interface VideoFacts {
+  heightPixels?: number;
+  codec?: "h264" | "hevc" | "av1";
+  range?: "hdr" | "dolbyVision";
+}
 export interface Stream {
   sourceId: string; kind: "remote" | "library" | "torrent" | "unsupported"; playable: boolean; localPath?: string; libraryName?: string; name?: string; title?: string; description?: string;
   subtitles?: Subtitle[]; audioLanguages?: string[]; subtitleLanguages?: string[]; audioLanguagesGuessed?: boolean; addonKey?: string; addonName?: string;
@@ -198,6 +203,7 @@ export interface Stream {
   capabilities?: RemoteCapabilities;
   /** The remote identity a player reports position and favorites against; only a remote source carries one. */
   remoteItem?: RemoteStreamContext;
+  videoFacts?: VideoFacts;
   rules?: Record<string, SourceRuleVerdict>;
 }
 

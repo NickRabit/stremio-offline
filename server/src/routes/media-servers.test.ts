@@ -319,6 +319,8 @@ test("GET /api/remote-libraries/:id/streams attaches languages and every admitti
       size: 8_000_000_000,
       videoWidth: 1920,
       videoHeight: 1080,
+      videoCodec: "hevc",
+      videoRange: "dolbyVision",
       audioLanguages: ["cs"],
       embeddedSubtitleLanguages: ["cs"],
     }];
@@ -330,8 +332,16 @@ test("GET /api/remote-libraries/:id/streams attaches languages and every admitti
     );
     assert.equal(response.status, 200);
     const body = await response.json() as {
-      streams: Array<{ rules?: Record<string, { profileId: string; status: string; reasons: string[]; rank: number[] }> }>;
+      streams: Array<{
+        videoFacts?: { heightPixels?: number; codec?: string; range?: string };
+        rules?: Record<string, { profileId: string; status: string; reasons: string[]; rank: number[] }>;
+      }>;
     };
+    assert.deepEqual(body.streams[0]!.videoFacts, {
+      heightPixels: 1080,
+      codec: "hevc",
+      range: "dolbyVision",
+    });
     const rules = body.streams[0]!.rules!;
     assert.equal(rules[SOURCE_PROFILE_IDS.balanced]!.status, "meets");
     assert.deepEqual(rules[SOURCE_PROFILE_IDS.balanced]!.reasons, []);
@@ -375,6 +385,7 @@ test("GET /api/remote-libraries/:id/items/:itemId/sources attaches every rules v
     const body = await response.json() as {
       streams: Array<{
         remoteItem: { mediaSourceId: string };
+        videoFacts?: { heightPixels?: number };
         rules?: Record<string, { profileId: string; status: string; reasons: string[]; rank: number[] }>;
       }>;
     };
@@ -383,6 +394,10 @@ test("GET /api/remote-libraries/:id/items/:itemId/sources attaches every rules v
       assert.deepEqual(Object.keys(stream.rules ?? {}).sort(), profileIds);
     }
     const low = body.streams.find((stream) => stream.remoteItem.mediaSourceId === "360p")!.rules![SOURCE_PROFILE_IDS.balanced]!;
+    assert.deepEqual(
+      body.streams.find((stream) => stream.remoteItem.mediaSourceId === "360p")!.videoFacts,
+      { heightPixels: 360 },
+    );
     assert.equal(low.status, "breaks");
     assert.deepEqual(low.reasons, ["resolutionLow"]);
   });

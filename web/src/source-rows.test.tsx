@@ -83,6 +83,17 @@ describe("SourceRows", () => {
     expect(row().textContent).not.toContain(t("sources.ruleBreaks", { reasons: "" }));
   });
 
+  it("shows the video facts the rules evaluated", () => {
+    render([addonRow({ videoFacts: { heightPixels: 2160, codec: "hevc", range: "dolbyVision" } })]);
+    const facts = row().querySelector(`[title="${t("sources.videoFactsHint")}"]`);
+    expect(facts?.textContent).toBe("2160p · HEVC · Dolby Vision");
+  });
+
+  it("shows no video facts line when the server sent none", () => {
+    render([addonRow()]);
+    expect(row().querySelector(`[title="${t("sources.videoFactsHint")}"]`)).toBeNull();
+  });
+
   it("badges a torrent and a playable row by the transport the catalogue names them by", () => {
     render([addonRow({ sourceId: "t1", kind: "torrent", playable: false, addonName: undefined }), addonRow({ sourceId: "p1", playable: false, addonName: undefined })]);
     expect([...host.querySelectorAll("i")].map((node) => node.textContent)).toEqual(["RD", "EXT"]);

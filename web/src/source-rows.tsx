@@ -140,6 +140,11 @@ export function SourceRows({ rows, selected, onSelect, onPicked, probe, badgeOf,
       const source = local ? stream.libraryName : remote ? [stream.provider ? providerLabel(stream.provider) : "", stream.libraryName].filter(Boolean).join(" · ") : stream.addonName;
       const line = source && source !== badge ? source : "";
       const size = streamSize(stream);
+      const videoFacts = [
+        stream.videoFacts?.heightPixels === undefined ? "" : t("rules.resolutionValue", { height: stream.videoFacts.heightPixels }),
+        stream.videoFacts?.codec ? t(`sources.codec.${stream.videoFacts.codec}`) : "",
+        stream.videoFacts?.range ? t(`sources.range.${stream.videoFacts.range}`) : "",
+      ].filter(Boolean);
       // Only reasons the app can name; a break with none of them says nothing.
       const verdict = ruleId ? stream.rules?.[ruleId] : undefined;
       const ruleReasons = verdict?.status === "breaks"
@@ -155,6 +160,7 @@ export function SourceRows({ rows, selected, onSelect, onPicked, probe, badgeOf,
         <span><strong>{streamLabel(stream)}</strong>{line && <small>{line}</small>}{ruleBreak && <small>{ruleBreak}</small>}</span>
         <span className="stream-meta">{size ? <b>{bytes(size)}</b> : null}
           <small>{languages.map((code) => <em className="lang-badge" key={code} title={audioInFile ? t("sources.audioInFile") : t("sources.languageGuess")}>{label(code)}</em>)}</small>
+          {videoFacts.length > 0 && <small title={t("sources.videoFactsHint")}>{videoFacts.join(" · ")}</small>}
         </span>
         {selected === stream && <Check aria-hidden="true"/>}
       </button>;
