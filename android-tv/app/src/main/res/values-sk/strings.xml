@@ -89,6 +89,9 @@
   <string name="sources_rule_reason_cinema">kópia z kina (CAM/TS)</string>
   <string name="sources_rule_reason_subtitles">bez titulkov</string>
   <string name="sources_rule_reason_sample">ukážka</string>
+  <string name="sources_rule_reason_size">veľkosť mimo rozsahu</string>
+  <string name="sources_rule_reason_provider">zdroj nie je v pravidlách</string>
+  <string name="sources_rule_reason_torrent">torrenty nie sú povolené</string>
   <string name="sources_sort_largest">Najprv najväčší</string>
   <string name="sources_sort_smallest">Najprv najmenší</string>
   <string name="sources_sort_addon">Podľa priority doplnku</string>

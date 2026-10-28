@@ -89,6 +89,9 @@
   <string name="sources_rule_reason_cinema">cópia de cinema (CAM/TS)</string>
   <string name="sources_rule_reason_subtitles">sem legendas</string>
   <string name="sources_rule_reason_sample">amostra</string>
+  <string name="sources_rule_reason_size">tamanho fora do intervalo</string>
+  <string name="sources_rule_reason_provider">fonte fora das regras</string>
+  <string name="sources_rule_reason_torrent">torrents não permitidos</string>
   <string name="sources_sort_largest">Maior primeiro</string>
   <string name="sources_sort_smallest">O menor primeiro</string>
   <string name="sources_sort_addon">Por prioridade adicional</string>

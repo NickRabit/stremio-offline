@@ -88,6 +88,9 @@ sources.ruleReason.resolutionHigh
 sources.ruleReason.cinema
 sources.ruleReason.subtitles
 sources.ruleReason.sample
+sources.ruleReason.size
+sources.ruleReason.provider
+sources.ruleReason.torrent
 sources.sortLargest
 sources.sortSmallest
 sources.sortAddon

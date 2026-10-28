@@ -89,6 +89,9 @@
   <string name="sources_rule_reason_cinema">копия из кинотеатра (CAM/TS)</string>
   <string name="sources_rule_reason_subtitles">без субтитров</string>
   <string name="sources_rule_reason_sample">фрагмент</string>
+  <string name="sources_rule_reason_size">размер вне диапазона</string>
+  <string name="sources_rule_reason_provider">источник не входит в правила</string>
+  <string name="sources_rule_reason_torrent">торренты не разрешены</string>
   <string name="sources_sort_largest">Самый большой первый</string>
   <string name="sources_sort_smallest">Сначала самый маленький</string>
   <string name="sources_sort_addon">По приоритету аддонов</string>
