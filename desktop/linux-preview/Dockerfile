@@ -1,7 +1,7 @@
 # A throwaway Ubuntu desktop for trying the Linux app by hand on a Mac or any Docker host: Xfce on
 # a virtual display, shown in the browser through noVNC. Not a product image; see
 # desktop/scripts/linux-preview.sh.
-FROM --platform=linux/amd64 ubuntu:24.04
+FROM --platform=linux/amd64 ubuntu:26.04
 
 ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8
 # xfce4 with a tray (the app's tray icon shows there), dbus for notifications and the tray,
