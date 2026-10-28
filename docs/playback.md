@@ -70,8 +70,10 @@ each frame opens the file afresh and hosts that count connections stop answering
 
 For a series with a next episode available, finishing an episode offers a
 five-second countdown, **Play now** and **Cancel**. The next episode carries
-your audio and subtitle choices and prefers the current provider while it still
-has a source. The library also offers previous/next-file navigation. Finishing
+your audio and subtitle choices. If you picked the source by hand, it stays
+with that provider while it still has a source; if the active rule picked it, the
+rule picks again, and a library copy of the next episode that meets the rule
+plays from the library. The library also offers previous/next-file navigation. Finishing
 a movie leaves the player open.
 
 ## Keyboard

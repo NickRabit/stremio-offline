@@ -510,6 +510,14 @@ the active rule. Each account also chooses default rules for manual downloads an
 (Settings → Sources). "To library" saves the selected source; its arrow opens the rules dialog
 for that film or episode, which also offers the selected source.
 
+The next episode of a catalogue play chooses the same way while the source playing now was chosen
+by the rule: under a rule sort it ranks that episode's library copies with its addon rows and
+takes the first that meets, then the first unverified, and a library copy plays as a local file.
+A source the viewer picked by hand (a row in the list, or a switch in the player) keeps its
+provider for the following episodes instead, as an explicit pick wins over the rule. Other sorts
+keep the current provider, its best language and the nearest size. A remote library's next
+episode stays in that library (the remote hand-off).
+
 ## Local libraries
 
 Owned local files are a provider class of their own, not an addon. They have no addon manifest,
