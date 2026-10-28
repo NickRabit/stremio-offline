@@ -545,6 +545,46 @@ class StreamsTest {
   }
 
   @Test
+  fun `a size sort breaks a tie as local, then remote, then addon`() {
+    val tied = BehaviorHintsDto(videoSize = 1_000_000_000.0)
+    val origin = remote("own", "rlibA", "iA", "Own").copy(behaviorHints = tied)
+    val localRow = stream(
+      sourceId = "lib1",
+      kind = "library",
+      playable = true,
+      name = "Local",
+      localPath = "/f",
+      behaviorHints = tied,
+    )
+    val remoteRow = remote("r1", "rlibB", "iB", "Remote").copy(behaviorHints = tied)
+    val addonRow = stream(sourceId = "a1", name = "Addon", addonName = "Luna", behaviorHints = tied)
+    val remoteGroups = listOf(Streams.RemoteGroup("rlibB", "emby", "Serial", listOf(remoteRow)))
+    val origins = Streams.Origins(rows = listOf(origin), libraryId = "rlibA", label = "jellyfin · Film")
+    for (sort in listOf(StreamSort.SizeDesc, StreamSort.SizeAsc)) {
+      assertEquals(
+        listOf("own", "lib1", "r1", "a1"),
+        Streams.catalogSourceList(
+          local = listOf(localRow),
+          addon = listOf(addonRow),
+          filters = filters(sort = sort),
+          remote = remoteGroups,
+          origins = origins,
+        ).map { it.sourceId },
+      )
+    }
+    // A real size difference still wins over that tie order.
+    val bigger = stream(sourceId = "a-big", name = "Big", addonName = "Luna", behaviorHints = BehaviorHintsDto(videoSize = 5_000_000_000.0))
+    assertEquals(
+      listOf("a-big", "lib1"),
+      Streams.catalogSourceList(
+        local = listOf(localRow),
+        addon = listOf(bigger),
+        filters = filters(sort = StreamSort.SizeDesc),
+      ).map { it.sourceId },
+    )
+  }
+
+  @Test
   fun `repickStream moves an automatic addon pick to a local copy that lands once every addon finished`() {
     assertEquals(
       Streams.Repick(true, second),
