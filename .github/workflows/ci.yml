@@ -63,7 +63,7 @@ jobs:
   e2e:
     runs-on: ubuntu-24.04
     container:
-      image: mcr.microsoft.com/playwright:v1.56.1-noble
+      image: mcr.microsoft.com/playwright:v1.64.1-noble
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -92,7 +92,7 @@ jobs:
   e2e-browsers:
     runs-on: ubuntu-24.04
     container:
-      image: mcr.microsoft.com/playwright:v1.56.1-noble
+      image: mcr.microsoft.com/playwright:v1.64.1-noble
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -124,7 +124,7 @@ jobs:
   e2e-layout:
     runs-on: ubuntu-24.04
     container:
-      image: mcr.microsoft.com/playwright:v1.56.1-noble
+      image: mcr.microsoft.com/playwright:v1.64.1-noble
     strategy:
       fail-fast: false
       # Keep this list equal to the `name` fields of `viewports` in playwright.config.ts.
