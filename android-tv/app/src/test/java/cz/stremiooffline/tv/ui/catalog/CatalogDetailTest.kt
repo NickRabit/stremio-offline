@@ -478,6 +478,8 @@ class CatalogDetailTest {
 
     focusFromLeft(TagCatalogToLibrary)
     press(Key.DirectionCenter)
+    compose.onNodeWithTag(TagTitleDownloadSource).assertIsFocused()
+    press(Key.DirectionCenter)
 
     assertEquals(listOf("srcA"), api.queuedSourceIds)
     compose.onNodeWithTag(TagCatalogToLibrary).assert(hasContentDescription("Queued", substring = true))

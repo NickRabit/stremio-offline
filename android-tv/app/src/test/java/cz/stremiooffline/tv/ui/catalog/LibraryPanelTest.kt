@@ -75,6 +75,13 @@ class LibraryPanelTest {
     compose.onNodeWithTag(TagCatalogToLibrary).assertIsFocused()
   }
 
+  /** The ↓ button opens the title panel on the source on screen; confirming it runs today's queue. */
+  private fun confirmSelectedSource() {
+    compose.onNodeWithTag(TagTitleDownloadPanel).assertExists()
+    compose.onNodeWithTag(TagTitleDownloadSource).assertIsFocused()
+    press(Key.DirectionCenter)
+  }
+
   @Test
   fun `two writable libraries open a panel on the addon default, and Back returns`() {
     val api = ready(
@@ -95,6 +102,7 @@ class LibraryPanelTest {
 
     focusToLibrary()
     press(Key.DirectionCenter)
+    confirmSelectedSource()
     compose.onNodeWithTag(TagCatalogLibraryPanel).assertExists()
     compose.onNodeWithTag(libraryOptionTag("shows")).assertIsFocused()
 
@@ -117,6 +125,7 @@ class LibraryPanelTest {
 
     focusToLibrary()
     press(Key.DirectionCenter)
+    confirmSelectedSource()
     press(Key.DirectionDown)
     press(Key.DirectionCenter)
     compose.waitForIdle()
@@ -133,6 +142,7 @@ class LibraryPanelTest {
 
     focusToLibrary()
     press(Key.DirectionCenter)
+    confirmSelectedSource()
     compose.waitForIdle()
 
     compose.onNodeWithTag(TagCatalogLibraryPanel).assertDoesNotExist()
@@ -147,6 +157,7 @@ class LibraryPanelTest {
 
     focusToLibrary()
     press(Key.DirectionCenter)
+    confirmSelectedSource()
     compose.waitForIdle()
 
     compose.onNodeWithTag(TagCatalogMessage).assertTextContains(
@@ -170,6 +181,7 @@ class LibraryPanelTest {
 
     focusToLibrary()
     press(Key.DirectionCenter)
+    confirmSelectedSource()
     compose.onNodeWithTag(TagCatalogLibraryPanel).assertExists()
     compose.onNodeWithTag(libraryOptionTag("shows")).assertIsFocused()
   }
@@ -190,6 +202,7 @@ class LibraryPanelTest {
 
     focusToLibrary()
     press(Key.DirectionCenter)
+    confirmSelectedSource()
 
     compose.onNodeWithTag(libraryOptionTag("movies")).assertIsFocused()
     compose.onNodeWithTag(libraryOptionTag("series")).assertDoesNotExist()

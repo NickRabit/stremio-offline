@@ -22,6 +22,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -85,6 +86,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.sync.Mutex
@@ -230,6 +232,7 @@ fun CatalogDetailScreen(
     notice(null)
     save.libraryPanelOpen = false
     ui.series.open = false
+    ui.titleDownload = false
     save.pendingLibraryStream = null
     sourceFilters.reset()
     coroutineScope {
@@ -922,7 +925,7 @@ fun CatalogDetailScreen(
         // DOWN drops into the episode row from the action row only; inside an open panel it must
         // reach the next source instead.
         if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown &&
-          isSeries && !pick.sourcesOpen && !ui.series.open && focus.actionRowFocused
+          isSeries && !pick.sourcesOpen && !ui.series.open && !ui.titleDownload && focus.actionRowFocused
         ) {
           runCatching { focus.row.requestFocus() }.isSuccess
         } else {
@@ -1035,7 +1038,7 @@ fun CatalogDetailScreen(
           modifier = Modifier
             .focusRequester(focus.libraryOpener)
             .onFocusChanged { focus.toLibraryFocused = it.isFocused },
-        ) { activeStream?.let { queue(it) } } else null,
+        ) { ui.titleDownload = true } else null,
         favourite = catalogAction(
           TagCatalogFavourite,
           stringResource(if (favourite) R.string.favorite_remove else R.string.favorite_add),
@@ -1260,6 +1263,48 @@ fun CatalogDetailScreen(
           notice(addedText + skippedText, CatalogNotice.Success)
         },
         onClose = { ui.series.open = false },
+      )
+    }
+
+    if (ui.titleDownload && activeStream != null) {
+      TitleDownloadPanel(
+        api = api,
+        type = streamType,
+        title = baseTitle,
+        catalogueId = meta.id,
+        video = if (isSeries) pick.selectedVideo else null,
+        stream = activeStream,
+        // ↓ saves the selected source in one press; the rules sit below it in the same panel.
+        explicitPick = true,
+        media = BulkMediaDto(
+          id = meta.id,
+          metaType = streamType,
+          poster = args.meta.poster ?: meta.poster,
+          background = args.meta.background ?: args.meta.poster ?: meta.background,
+        ),
+        settings = settings,
+        addons = addons,
+        libraries = save.libraries,
+        opener = focus.libraryOpener,
+        openerScope = scope,
+        onUseSelected = {
+          ui.titleDownload = false
+          queue(activeStream)
+          // The library list takes the remote itself. Every other result waits until the button
+          // can hold it again, so an in-flight job is not asked to focus while it is disabled.
+          if (!save.libraryPanelOpen) {
+            scope.launch {
+              snapshotFlow { save.queueBusy }.first { !it }
+              awaitFrame()
+              runCatching { focus.libraryOpener.requestFocus() }
+            }
+          }
+        },
+        onQueued = { added, skipped ->
+          ui.titleDownload = false
+          notice(bulkQueuedText(context.resources, added, skipped), CatalogNotice.Success)
+        },
+        onClose = { ui.titleDownload = false },
       )
     }
   }
@@ -1538,6 +1583,8 @@ private class DetailUiState {
   val forget = ForgetState()
   val series = SeriesDownloadState()
   val caption = ActionCaption()
+  /** The ↓ button's panel for this film or the selected episode. */
+  var titleDownload by mutableStateOf(false)
 }
 
 /** One remote library's matched versions of the open title or episode, and whether it failed. */
