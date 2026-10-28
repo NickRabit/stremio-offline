@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addonNotices, arrangeStreams, canQueue, catalogSourceRows, compareRuleRank, filmHasNoSource, isLocalStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, remoteSourceFilter, streamBadge, streamLanguages, streamSize, streamText, visibleCatalogStreams, repickStream, type StreamFilters } from "./streams";
+import { addonNotices, arrangeStreams, canQueue, catalogPlaybackChoice, catalogSourceRows, compareRuleRank, filmHasNoSource, isLocalStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, remoteSourceFilter, streamBadge, streamLanguages, streamSize, streamText, visibleCatalogStreams, repickStream, type StreamFilters } from "./streams";
 import type { SourceRuleVerdict, Stream } from "./types";
 
 const stream = (parts: Partial<Stream>): Stream => ({ sourceId: "source", kind: "remote", playable: true, ...parts });
@@ -266,6 +266,14 @@ describe("torrent listing", () => {
     expect(pickDefaultStream([unplayable], "balanced")?.name).toBe("unplayable");
   });
 
+  it("asks the catalogue panel to choose when playable rows exist but none may start automatically", () => {
+    const breaking = stream({ name: "breaking", rules: { balanced: verdict([1], "breaks") } });
+    const unplayable = stream({ name: "unplayable", playable: false });
+    expect(catalogPlaybackChoice(null, [breaking, unplayable])).toEqual({ kind: "choose" });
+    expect(catalogPlaybackChoice(null, [unplayable])).toBeNull();
+    expect(catalogPlaybackChoice(breaking, [breaking])).toEqual({ kind: "play", stream: breaking });
+  });
+
   it("labels torrents as RD, not as a generic external source", () => {
     expect(streamBadge(http)).toBe("HTTP");
     expect(streamBadge(torrent)).toBe("RD");
@@ -317,6 +325,17 @@ describe("local copies", () => {
     expect(catalogSourceRows([small, large], [medium], "", "addon").map((item) => item.name)).toEqual(["Local small", "Local large", "Addon medium"]);
   });
 
+  it("keeps local, remote, addon input order for equal sizes", () => {
+    const local = stream({ kind: "library", name: "Local", localPath: "lib/Film.mkv", behaviorHints: { videoSize: 1000 } });
+    const remote = stream({ name: "Remote", provider: "emby", libraryId: "lib_1", behaviorHints: { videoSize: 1000 } });
+    const addon = stream({ name: "Addon", addonName: "Luna", behaviorHints: { videoSize: 1000 } });
+    const priority = new Map([["Luna", 0]]);
+    expect(names(catalogSourceRows([local], [addon], "", "size-desc", "en", priority, undefined, [remote])))
+      .toEqual(["Local", "Remote", "Addon"]);
+    expect(names(catalogSourceRows([local], [addon], "", "size-asc", "en", priority, undefined, [remote])))
+      .toEqual(["Local", "Remote", "Addon"]);
+  });
+
   it("picks the local copy when the local entry is the chosen source", () => {
     expect(pickDefaultStream(catalogSourceRows([local], [addon], LOCAL_SOURCE, "rule:balanced"))).toBe(local);
   });
@@ -363,6 +382,23 @@ describe("pickNextEpisodeStream", () => {
     const close = stream({ name: "close", addonKey: "same", addonName: "Same", title: "Czech 3.2 GB" });
     const huge = stream({ name: "huge", addonKey: "same", addonName: "Same", title: "Czech 20 GB" });
     expect(pickNextEpisodeStream([huge, close], current, "cs", new Map(), undefined, "rule:balanced")?.name).toBe("close");
+  });
+
+  it("picks the next episode by the active rule instead of by the current addon", () => {
+    const current = stream({ addonKey: "same", addonName: "Same" });
+    const breaking = stream({ name: "same breaking", addonKey: "same", addonName: "Same", rules: { balanced: verdict([0], "breaks") } });
+    const unverified = stream({ name: "other unverified", addonKey: "other", addonName: "Other", rules: { balanced: verdict([1], "unverified") } });
+    const meets = stream({ name: "remote meets", provider: "emby", rules: { balanced: verdict([2], "meets") } });
+    expect(pickNextEpisodeStream([breaking, unverified, meets], current, "cs", new Map(), undefined, "rule:balanced")?.name).toBe("remote meets");
+    expect(pickNextEpisodeStream([breaking], current, "cs", new Map(), undefined, "rule:balanced")).toBeUndefined();
+  });
+
+  it("keeps the current addon and nearest size under explicit sorts even when verdicts exist", () => {
+    const current = stream({ addonKey: "same", addonName: "Same", title: "3 GB" });
+    const close = stream({ name: "close", addonKey: "same", addonName: "Same", title: "3.2 GB", rules: { balanced: verdict([2], "breaks") } });
+    const betterRule = stream({ name: "better rule", addonKey: "other", addonName: "Other", title: "20 GB", rules: { balanced: verdict([0], "meets") } });
+    expect(pickNextEpisodeStream([betterRule, close], current, "cs", new Map(), undefined, "size-desc")?.name).toBe("close");
+    expect(pickNextEpisodeStream([betterRule, close], current, "cs", new Map(), undefined, "addon")?.name).toBe("close");
   });
 });
 
