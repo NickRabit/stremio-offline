@@ -30,7 +30,7 @@ import { report } from "./diagnostics";
 import { label, titleLanguage } from "./languages";
 import { locale, localeTag, setLocale, t, useI18n, type Key } from "./i18n";
 import { catalogTypeTag } from "./catalog-labels";
-import { addonNotices, canQueue, catalogSourceRows, filmHasNoSource, isLocalStream, isRemoteStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, remoteFilterId, remoteSourceFilter, repickStream, resolveStreamSort, sortRuleId, streamLanguages, visibleCatalogStreams, type StreamOrder } from "./streams";
+import { addonNotices, canQueue, catalogPlaybackChoice, catalogSourceRows, filmHasNoSource, isLocalStream, isRemoteStream, LOCAL_SOURCE, noticeText, offeredStreams, pickDefaultStream, pickNextEpisodeStream, remoteFilterId, remoteSourceFilter, repickStream, resolveStreamSort, sortRuleId, streamLanguages, visibleCatalogStreams, type StreamOrder } from "./streams";
 import { providerLabel, SourceFilters, SourceRows, streamLabel } from "./source-rows";
 import { alternativeProgressSaved, sourceProgressOwner, type SourceProgressOwner } from "./source-progress";
 import { panelProgressAddonKey } from "./player-progress";
@@ -771,7 +771,7 @@ export function App() {
   const [pendingSources, setPendingSources] = useState(0);
   const pickedRef = useRef(false); const sourcesRequestRef = useRef(0);
   const linksRequestRef = useRef(0); const trailerRequestRef = useRef(0); const askedLibraryLinks = useRef(new Set<string>()); const askedLibraryTrailers = useRef(new Set<string>());
-  const loadingRef = useRef(false); const requestRef = useRef(0); const itemsRef = useRef<Meta[]>([]); const gridRef = useRef<HTMLDivElement>(null); const browseScrollRef = useRef<HTMLDivElement | null>(null); const libraryPageRef = useRef<HTMLElement | null>(null); const detailRef = useRef<HTMLElement>(null);
+  const loadingRef = useRef(false); const requestRef = useRef(0); const itemsRef = useRef<Meta[]>([]); const gridRef = useRef<HTMLDivElement>(null); const browseScrollRef = useRef<HTMLDivElement | null>(null); const libraryPageRef = useRef<HTMLElement | null>(null); const detailRef = useRef<HTMLElement>(null); const sourceListRef = useRef<HTMLDivElement>(null);
   const searchAbortRef = useRef<AbortController | null>(null);
   const catalogSearchSlotRef = useRef<string | null>(null);
   if (catalogSearchSlotRef.current === null) catalogSearchSlotRef.current = newCatalogSearchSlot();
@@ -2606,13 +2606,21 @@ export function App() {
       ? { kind: "episode", title: baseDownloadTitle, season: selectedVideo.season, episode: selectedVideo.episode, episodeTitle: selectedVideo.title || selectedVideo.name, id: selected?.id, metaType: selected?.type, ...art }
       : { kind: "movie", title: baseDownloadTitle, ...(movieYear ? { year: movieYear } : {}), id: selected?.id, metaType: selected?.type, ...art };
   };
-  const canPlay = Boolean(selectedStream?.playable);
+  const canPlay = catalogPlaybackChoice(selectedStream, sourceRows) !== null;
+  const canSaveToDevice = Boolean(selectedStream?.playable);
   /** When the picked source is a library copy, its path drives Play, To device and Show in library. */
   const selectedLocalPath = selectedStream && isLocalStream(selectedStream) ? selectedStream.localPath : undefined;
   /** A local row plays the library file the way the Library view plays it; every other row
    *  hands its source to the player exactly as before. */
   const startCatalogPlayback = () => {
     if (!selected) return;
+    const playback = catalogPlaybackChoice(selectedStream, sourceRows);
+    if (!playback) return;
+    if (playback.kind === "choose") {
+      sourceListRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+      return;
+    }
+    const stream = playback.stream;
     const anchor = { kind: "catalog" as const, key: `${selected.type || "movie"}:${selected.id}` };
     const catalogue: { type: "movie" | "series"; id: string } | null = selected.type === "movie" || selected.type === "series" ? { type: selected.type, id: videoId ?? selected.id } : null;
     // The panel's own title is the subject of every play it starts, local row or not: the header
@@ -2622,7 +2630,7 @@ export function App() {
     // The panel's own play is never the shared detail's.
     setDetailPlaying(null);
     setPlayingCatalogue(catalogue);
-    if (selectedStream && isLocalStream(selectedStream) && selectedStream.localPath) void playLocal(videoTitle, selectedStream.localPath, selected.poster, Boolean(selectedVideo), anchor, false, catalogue ?? undefined, { key, panel: true });
+    if (isLocalStream(stream) && stream.localPath) void playLocal(videoTitle, stream.localPath, selected.poster, Boolean(selectedVideo), anchor, false, catalogue ?? undefined, { key, panel: true });
     else openPlayer(anchor, subject);
   };
   const enqueue = async (target?: SaveTarget) => {
@@ -3169,8 +3177,7 @@ export function App() {
       // The viewer keeps the provider and the language they were watching where the next episode
       // has them; only a show whose row is gone moves to the best version there is.
       const preferred = playbackPreferences.audioLanguage ?? (current ? streamLanguages(current, metaLanguage)[0] : undefined) ?? settings.audioLanguage;
-      const nextStream = pickNextEpisodeStream(answer.streams, current, preferred, addonPriority, metaLanguage, defaultStreamSort)
-        ?? answer.streams.find((stream) => stream.playable);
+      const nextStream = pickNextEpisodeStream(answer.streams, current, preferred, addonPriority, metaLanguage, defaultStreamSort);
       if (!nextStream?.playable) return false;
       playCatalogueDetail(nextStream, target, false);
       return true;
@@ -3538,6 +3545,7 @@ export function App() {
               } } : {})} sort={{ value: streamSort, onChange: setStreamSort }} profiles={sourceProfiles}/>
               <SourceRows rows={sourceRows} selected={selectedStream} onSelect={setSelectedStream} onPicked={() => { pickedRef.current = true; }}
                 titleLanguage={metaLanguage} ruleId={sortRuleId(streamSort) ?? defaultRuleId}
+                listRef={sourceListRef}
                 onScroll={(event) => compactOnScroll(event, detailCompact, setDetailCompact, true)}
                 probe={(stream) => isLocalStream(stream) && selectedStream === stream
                   ? [...new Set((inspection?.audioTracks ?? []).map((track) => track.language).filter((language): language is string => Boolean(language)))] : []}/>
@@ -3552,7 +3560,7 @@ export function App() {
               <div className="source-footer"><div className="source-info"><Subtitles/> {t("sources.subtitleCount", { count: selectedLocalPath ? 0 : subtitles.length + (selectedStream?.subtitles?.length || 0) })}
                 {inspection && <> · <b>{t("sources.audioInFile")}</b> {inspection.audioTracks.length ? inspection.audioTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}
                 · <b>{t("sources.subtitlesInFile")}</b> {inspection.subtitleTracks.length ? inspection.subtitleTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}</>}
-              {selectedStream?.playable && !inspection && <> · {t("sources.probing")}</>}</div><div className="action-slot"><div className="actions"><button className="primary" disabled={!canPlay} onClick={startCatalogPlayback}><CirclePlay/> {t("player.play")}</button>{selectedLocalPath ? <button onClick={() => revealLibraryCopy(selectedLocalPath)}><FolderOpen/> {t("library.showInLibrary")}</button> : <div className="split-button"><button disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} onClick={primarySave}><HardDrive/> {t("save.toLibrary")}</button><button className="split-button-toggle" disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} aria-haspopup="dialog" aria-label={t("save.toLibraryElsewhere")} title={t("save.toLibraryElsewhere")} onClick={() => openSingleDownload()}><ChevronDown/></button></div>}<button disabled={!canPlay || Boolean(selectedStream && isRemoteStream(selectedStream))} onClick={() => { if (selectedLocalPath) void downloadLibraryFile(selectedLocalPath); else void downloadStreamToDevice(); }}><Download/> {t("save.toDevice")}</button></div></div></div>
+              {selectedStream?.playable && !inspection && <> · {t("sources.probing")}</>}</div><div className="action-slot"><div className="actions"><button className="primary" disabled={!canPlay} onClick={startCatalogPlayback}><CirclePlay/> {t("player.play")}</button>{selectedLocalPath ? <button onClick={() => revealLibraryCopy(selectedLocalPath)}><FolderOpen/> {t("library.showInLibrary")}</button> : <div className="split-button"><button disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} onClick={primarySave}><HardDrive/> {t("save.toLibrary")}</button><button className="split-button-toggle" disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} aria-haspopup="dialog" aria-label={t("save.toLibraryElsewhere")} title={t("save.toLibraryElsewhere")} onClick={() => openSingleDownload()}><ChevronDown/></button></div>}<button disabled={!canSaveToDevice || Boolean(selectedStream && isRemoteStream(selectedStream))} onClick={() => { if (selectedLocalPath) void downloadLibraryFile(selectedLocalPath); else void downloadStreamToDevice(); }}><Download/> {t("save.toDevice")}</button></div></div></div>
             </div>}
             </div>
           </> : <Empty icon={<Film/>} title={t("catalog.pickTitle")} text={t("catalog.pickText")}/>}</section></div>

@@ -299,17 +299,117 @@ test("a local path alone supports playback and a device copy, never a library se
   ]);
 });
 
-test("a remote path alone supports playback and a device copy, never an automatic follow copy", () => {
+test("a remote path alone supports every operation through a rules profile", () => {
   const profiles = sourceProfilesForViewer(catalogue(account(MEMBER, "user"), {
     remoteLibraries: [remoteLibrary([MEMBER])],
   }));
 
   assert.deepEqual(operationIds(profiles), [
-    { id: SOURCE_PROFILE_IDS.balanced, operations: ["play", "downloadToDevice"] },
-    { id: SOURCE_PROFILE_IDS.best, operations: ["play", "downloadToDevice"] },
-    { id: SOURCE_PROFILE_IDS.smaller, operations: ["play", "downloadToDevice"] },
-    { id: SOURCE_PROFILE_IDS.myLanguage, operations: ["play", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.balanced, operations: ["play", "downloadToLibrary", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.best, operations: ["play", "downloadToLibrary", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.smaller, operations: ["play", "downloadToLibrary", "downloadToDevice"] },
+    { id: SOURCE_PROFILE_IDS.myLanguage, operations: ["play", "downloadToLibrary", "downloadToDevice"] },
   ]);
+});
+
+test("selected local and remote providers survive projection and drive their operations", () => {
+  const remote = remoteLibrary([MEMBER]);
+  const base = storedBuiltIns()[0]!;
+  const remoteProfile: StoredSourceProfile = {
+    ...base,
+    id: "00000000-0000-4000-8000-000000000302",
+    name: "Remote only",
+    parameters: {
+      ...base.parameters as DownloadRules,
+      addons: {
+        scope: { selected: [`remote:${remote.id}`] },
+        order: { explicit: [`remote:${remote.id}`] },
+      },
+    },
+  };
+  const localProfile: StoredSourceProfile = {
+    ...base,
+    id: "00000000-0000-4000-8000-000000000303",
+    name: "Local only",
+    parameters: {
+      ...base.parameters as DownloadRules,
+      addons: { scope: { selected: ["local"] }, order: { explicit: ["local"] } },
+    },
+  };
+  const profiles = sourceProfilesForViewer(catalogue(account(MEMBER, "user"), {
+    profiles: [remoteProfile, localProfile],
+    libraries: [library([MEMBER])],
+    remoteLibraries: [remote],
+  }));
+
+  assert.deepEqual(operationIds(profiles), [
+    {
+      id: remoteProfile.id,
+      operations: ["play", "downloadToLibrary", "downloadToDevice"],
+    },
+    {
+      id: localProfile.id,
+      operations: ["play", "downloadToDevice"],
+    },
+  ]);
+  assert.deepEqual(profiles[0]?.policy.scope, {
+    mode: "selected",
+    providerKeys: [`remote:${remote.id}`],
+  });
+  assert.deepEqual(profiles[0]?.policy.criteria.filter((criterion) => criterion.kind === "providerOrder"), [
+    { kind: "providerOrder", keys: [`remote:${remote.id}`] },
+  ]);
+  assert.deepEqual(profiles[1]?.policy.scope, {
+    mode: "selected",
+    providerKeys: ["local"],
+  });
+});
+
+test("explicit provider order intersects addons, local and visible remote libraries", () => {
+  const visibleRemote = remoteLibrary([MEMBER]);
+  const hiddenRemote = {
+    ...remoteLibrary([OTHER]),
+    id: `rlib_${"4".repeat(32)}`,
+  };
+  const profile: StoredSourceProfile = {
+    id: "00000000-0000-4000-8000-000000000304",
+    revision: 1,
+    template: "rules",
+    name: "Visible providers",
+    parameters: {
+      ...storedBuiltIns()[0]!.parameters as DownloadRules,
+      addons: {
+        scope: "all",
+        order: {
+          explicit: [
+            `remote:${hiddenRemote.id}`,
+            `addon:hidden`,
+            "local",
+            `remote:${visibleRemote.id}`,
+            "addon:visible",
+          ],
+        },
+      },
+    },
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const profiles = sourceProfilesForViewer(catalogue(account(MEMBER, "user"), {
+    profiles: [profile],
+    addons: [
+      addon("visible", { allowedUsers: [MEMBER] }),
+      addon("hidden", { allowedUsers: [OTHER] }),
+    ],
+    libraries: [library([MEMBER])],
+    remoteLibraries: [visibleRemote, hiddenRemote],
+  }));
+
+  assert.deepEqual(profiles[0]?.policy.criteria.filter((criterion) => criterion.kind === "providerOrder"), [{
+    kind: "providerOrder",
+    keys: ["local", `remote:${visibleRemote.id}`, "addon:visible"],
+  }]);
+  assert.equal(JSON.stringify(profiles).includes(`remote:${hiddenRemote.id}`), false);
+  assert.equal(JSON.stringify(profiles).includes("addon:hidden"), false);
 });
 
 test("an addon path supports every operation for a member with both download grants", () => {

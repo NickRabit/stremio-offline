@@ -100,6 +100,13 @@ export function pickDefaultStream(streams: Stream[], ruleId?: string): Stream | 
     ?? playable.find((stream) => stream.rules?.[ruleId]?.status === "unverified");
 }
 
+export type CatalogPlaybackChoice = { kind: "play"; stream: Stream } | { kind: "choose" } | null;
+
+export function catalogPlaybackChoice(selected: Stream | null, rows: readonly Stream[]): CatalogPlaybackChoice {
+  if (selected?.playable) return { kind: "play", stream: selected };
+  return rows.some((stream) => stream.playable) ? { kind: "choose" } : null;
+}
+
 /** Whether a film is worth following for its release: only once every addon has answered and
  *  none offered anything playable. While they are still asking, the Follow chip would flash up
  *  and vanish the moment the first source arrived. */
@@ -145,13 +152,17 @@ export function catalogSourceRows(
     return [...local, ...remote, ...addonStreams];
   }
   if (sort === "addon") return [...local, ...remote, ...arrangeStreams(addonStreams, { addon: "", language: "", sort }, preferredLanguage, priority, titleLanguage)];
-  return arrangeStreams([...addonStreams, ...local, ...remote], { addon: "", language: "", sort }, preferredLanguage, priority, titleLanguage);
+  return arrangeStreams([...local, ...remote, ...addonStreams], { addon: "", language: "", sort }, preferredLanguage, priority, titleLanguage);
 }
 
-/** A new episode should stay with the provider the viewer chose when it can, while still
- * choosing that provider's best language and size variant. */
+/** A rule sort with verdicts chooses like Play; other sorts keep the current provider and
+ *  choose its best language and nearest size variant. */
 export function pickNextEpisodeStream(streams: Stream[], current: Stream | null, preferredLanguage: string, priority: Map<string, number>, titleLanguage: string | undefined, sort: StreamOrder): Stream | undefined {
   const ranked = arrangeStreams(streams.filter((stream) => stream.playable), { addon: "", language: "", sort }, preferredLanguage, priority, titleLanguage);
+  const ruleId = sortRuleId(sort);
+  if (ruleId && ranked.some((stream) => stream.rules?.[ruleId])) {
+    return pickDefaultStream(catalogSourceRows([], ranked, "", sort, preferredLanguage, priority, titleLanguage), ruleId);
+  }
   const sameAddon = ranked.filter((stream) => Boolean(current) && (
     (current?.addonKey && stream.addonKey === current.addonKey)
     || (current?.addonName && stream.addonName === current.addonName)

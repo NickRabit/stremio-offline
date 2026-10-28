@@ -15,6 +15,7 @@ import { readMediaBytes } from "../media-playlist.js";
 import { isRemoteMediaStream } from "../media-server-reference.js";
 import type { MediaServerSources } from "../media-server-sources.js";
 import { guardedBody } from "../outbound.js";
+import { titleLanguage } from "../ranking.js";
 import { contentOf } from "../revocation.js";
 import { cancelResponseBody } from "../response-body.js";
 import type { UserPrefs } from "../store.js";
@@ -322,7 +323,20 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     try {
       if (disconnect.signal.aborted) return;
       const owner = ownerOf(req);
-      const items = await streams(inOrder(req), String(req.params.type), String(req.params.id), req.query.addon ? String(req.query.addon) : undefined, true, disconnect.signal);
+      const type = String(req.params.type);
+      const id = String(req.params.id);
+      const snapshots = rulesFor(req, type);
+      const parentId = type === "series" ? /^(.+):\d+:\d+$/.exec(id)?.[1] ?? id : id;
+      const titleMeta = snapshots.length
+        ? cachedMeta(
+            type,
+            parentId,
+            prefsOf(req).uiLanguage,
+            viewerOf(currentUser(req)),
+            { signal: disconnect.signal },
+          ).catch(() => null)
+        : Promise.resolve(null);
+      const items = await streams(inOrder(req), type, id, req.query.addon ? String(req.query.addon) : undefined, true, disconnect.signal);
       if (disconnect.signal.aborted) return;
       // The listing hands out one resource per source, and the addons that answered took as
       // long as they liked: an addon switched off, or a grant withdrawn, while they were
@@ -331,7 +345,7 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
         requireAccess(req, { addonKey });
       }
       if (disconnect.signal.aborted) return;
-      const snapshots = rulesFor(req, String(req.params.type));
+      const metaLanguage = titleLanguage((await titleMeta)?.language);
       const candidates = items.map((stream, providerResponseIndex) => {
         const addonKey = stream.addonKey;
         if (typeof addonKey !== "string" || addonKey.length === 0) return undefined;
@@ -341,6 +355,7 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
           providerResponseIndex,
           available: true,
           ...(deps.debridReady === undefined ? {} : { debridReady: deps.debridReady }),
+          ...(metaLanguage === undefined ? {} : { titleLanguage: metaLanguage }),
         });
       });
       const verdicts = ruleVerdictsForProfiles(snapshots, candidates.filter((candidate) => candidate !== undefined));
@@ -398,7 +413,8 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
       const facts = videoFacts.get(candidates[index]!.sourceId);
       return {
         ...stream, behaviorHints: { ...stream.behaviorHints, filename: posixBase(copies[index]!.key) },
-        localPath: copies[index]!.path, libraryName: copies[index]!.libraryName,
+        localPath: copies[index]!.path, libraryId: copies[index]!.libraryId,
+        libraryName: copies[index]!.libraryName,
         ...(verdict === undefined ? {} : { rules: verdict }),
         ...(facts === undefined ? {} : { videoFacts: facts }),
       };

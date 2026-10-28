@@ -78,7 +78,6 @@ import { LibrarySeenStore } from "./library-seen.js";
 import { localCopies } from "./local-sources.js";
 import {
   findAdequateExistingLocalCopy,
-  hasAdequateExistingLocalCopy,
   type ExistingLocalCopyDeps,
 } from "./local-copy-admission.js";
 import { artworks } from "./artwork-cache.js";
@@ -361,7 +360,7 @@ const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () =
   legacyOwnerId: migratedAdminId,
   ownerAllowed: ownerMayUseQueue,
   existingLocalCopy: ({ ownerUserId, source, sourceAdmission }) =>
-    hasAdequateExistingLocalCopy(
+    findAdequateExistingLocalCopy(
       { ownerUserId, type: source.type, videoId: source.videoId, sourceAdmission },
       existingLocalCopyDeps(),
     ),

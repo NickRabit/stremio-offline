@@ -447,7 +447,8 @@ export function registerFollowRoutes(app: express.Application, deps: FollowDeps)
         ...(episode.download ? {
           download: Object.fromEntries(
             Object.entries(episode.download).filter(([key]) =>
-              key !== "sourceAdmission" && key !== "sourceGraceDays" && key !== "legacyRule"),
+              key !== "sourceAdmission" && key !== "sourceGraceDays" && key !== "legacyRule"
+              && key !== "localCopy"),
           ),
         } : {}),
       }))

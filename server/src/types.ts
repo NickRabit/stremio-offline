@@ -129,6 +129,8 @@ export interface PublicStream {
   addonKey?: string; addonName?: string;
   /** Set on a library copy: the file's wire path, the way the Library view speaks it. */
   localPath?: string;
+  /** The library that holds a local copy or verified remote source. */
+  libraryId?: string;
   /** The display name of the library the copy sits in. */
   libraryName?: string;
   /** Preselected destination for a copy of this source, resolved from the remote library's
@@ -143,7 +145,6 @@ export interface PublicStream {
   /** Present on a verified media-server source: which provider and which attached library.
    *  Derived from the sealed reference, never from caller-supplied stream fields. */
   provider?: "jellyfin" | "emby";
-  libraryId?: string;
   /** What a remote item may still be used for. Always read-only in this stage. */
   capabilities?: RemoteCapabilities;
   remoteItem?: PublicRemoteItem;

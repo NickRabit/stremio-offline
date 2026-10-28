@@ -781,3 +781,21 @@ test("strict torrents do not treat a blank field filled from the title as a lang
   });
   assert.equal(result.status, "noMatch");
 });
+
+test("a torrent without a listed resolution is not selected under a resolution range", async () => {
+  const torrent = candidate(stream("English", {
+    infoHash: "f".repeat(40),
+    fileIdx: 1,
+  }));
+  const result = await verifyRulesCandidates({
+    snapshot: snapshot({ torrents: true, resolution: { min: 720, max: 1080 } }),
+    candidates: [torrent],
+    inspect: async () => {
+      throw new Error("a torrent is chosen from its listing");
+    },
+    shouldContinue: () => true,
+    scopeStamp: "unknown-torrent-resolution",
+    hasRealDebrid: true,
+  });
+  assert.equal(result.status, "noMatch");
+});

@@ -509,6 +509,38 @@ test("invalid create attempts leave the profile catalogue unchanged", async (t) 
   }
 });
 
+test("create and duplicate stop at the documented 50-profile limit", async (t) => {
+  const variants = Array.from({ length: 46 }, (_, index) => ({
+    ...variant(),
+    id: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+    name: `Profile ${index}`,
+  }));
+  const harness = await mount({ variants });
+  t.after(harness.close);
+  assert.equal(harness.store.sourceProfiles().length, 50);
+
+  const created = await api(harness.base, "/api/admin/source-profiles", {
+    user: ADMIN,
+    method: "POST",
+    body: { name: "One too many", rules: ruleParameters() },
+  });
+  assert.equal(created.status, 400);
+  assert.equal(await messageKey(created), "err.sourceProfileInvalid");
+
+  const duplicated = await api(
+    harness.base,
+    `/api/admin/source-profiles/${SOURCE_PROFILE_IDS.balanced}/duplicate`,
+    {
+      user: ADMIN,
+      method: "POST",
+      body: { name: "Another one too many" },
+    },
+  );
+  assert.equal(duplicated.status, 400);
+  assert.equal(await messageKey(duplicated), "err.sourceProfileInvalid");
+  assert.equal(harness.store.sourceProfiles().length, 50);
+});
+
 test("PATCH enforces the revision guard and makes older bulk references stale", async (t) => {
   const harness = await mount({
     variants: [variant()],

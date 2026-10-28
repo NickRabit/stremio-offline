@@ -312,10 +312,10 @@ test("GET /api/source-profiles reports only paths the current member can use", a
   harness.state.remoteLibraries = [remoteLibrary];
   const remote = (await (await api(harness.base, MEMBER)).json()) as { profiles: Array<{ operations: string[] }> };
   assert.deepEqual(remote.profiles.map((profile) => profile.operations), [
-    ["play", "downloadToDevice"],
-    ["play", "downloadToDevice"],
-    ["play", "downloadToDevice"],
-    ["play", "downloadToDevice"],
+    ["play", "downloadToLibrary", "downloadToDevice"],
+    ["play", "downloadToLibrary", "downloadToDevice"],
+    ["play", "downloadToLibrary", "downloadToDevice"],
+    ["play", "downloadToLibrary", "downloadToDevice"],
   ]);
 
   harness.state.remoteLibraries = [];
