@@ -47,7 +47,10 @@ test("the screens are taken against the fixture titles", async ({ page, request 
     const page = await (await request.get("/api/library/browse")).json() as { items: Array<{ path: string; name?: string }> };
     return page.items;
   };
-  await expect.poll(async () => (await listing()).length, { timeout: 60_000, message: "the walk never saw the fixture folders" }).toBe(titles.length);
+  await expect.poll(async () => {
+    const paths = new Set((await listing()).map((item) => item.path));
+    return titles.every((title) => paths.has(title.folder));
+  }, { timeout: 60_000, message: "the walk never saw the fixture folders" }).toBe(true);
 
   for (const title of titles) {
     const matched = await request.post("/api/library/match", { data: { path: title.folder, id: title.id, type: title.type } });
