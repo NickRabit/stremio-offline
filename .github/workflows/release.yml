@@ -30,6 +30,8 @@ jobs:
   image:
     needs: version
     uses: ./.github/workflows/image.yml
+    secrets:
+      DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
     permissions:
       contents: read
       packages: write

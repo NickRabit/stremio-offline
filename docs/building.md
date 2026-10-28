@@ -27,10 +27,32 @@ repository is public, so both architectures get a free native runner and no
 emulation is needed — merges them into one manifest list, and pushes to GHCR as
 `ghcr.io/nickrabit/stremio-offline:latest` and under the commit SHA. It then
 checks that the amd64 image actually contains VAAPI drivers, and fails the job
-otherwise. arm64 is not checked; QuickSync does not run there.
+otherwise. arm64 is not checked; QuickSync does not run there. After verification,
+the same multi-platform image is copied to Docker Hub as
+`nickrabit/stremio-offline`, with the same tags. No second build is needed.
+The workflow checks that the Docker Hub image includes both architectures.
+A Docker Hub failure fails the workflow and prevents creation of the GitHub
+Release; the GHCR image may already be published.
 
-A manual run can also attach a downloadable amd64 tarball instead of pushing to
-GHCR.
+A manual run also publishes to both registries and can additionally attach a
+downloadable amd64 tarball.
+
+### Docker Hub credentials
+
+Create the public `nickrabit/stremio-offline` repository on Docker Hub and add
+`DOCKER_TOKEN` to the GitHub repository's Actions secrets. It must be a Docker
+Hub personal access token for `nickrabit` with **Read, Write & Delete**
+permission. Image publishing needs write permission; the description action
+requires the additional repository-management permission.
+The release workflow explicitly passes this secret to the reusable image
+workflow; manual image runs use the same repository secret. Never commit the
+token to the repository.
+
+The same job updates the short project description and the Docker Hub overview
+from [docs/docker-hub.md](docker-hub.md). Keep this overview focused on Docker
+installation and use absolute links so they work on Docker Hub. The description
+action is pinned to a commit; description updates must succeed for the image
+workflow to finish successfully.
 
 Images are not built on every push: that would waste a run on every commit. Once
 work lands on `main` through pull requests only, adding
@@ -78,7 +100,12 @@ git push origin v0.4.0
 That starts **Release**, which calls **Build image**, so the published version is
 built and tested from the tagged commit. Beside `:latest` and the commit SHA you
 get `:0.4.0` and `:0.4`. Only after a successful build does a GitHub Release
-appear, with notes generated from commit messages.
+appear, with notes generated from commit messages. The same tags are available
+on Docker Hub; replace the image in `compose.pull.yml` to use it:
+
+```yaml
+image: nickrabit/stremio-offline:0.4.0
+```
 
 Pin a version on the NAS or a Mac instead of `:latest`:
 
