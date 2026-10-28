@@ -146,6 +146,8 @@ data class OfferedSources(
   val streams: List<StreamDto> = emptyList(),
   val loading: Boolean = false,
   val remoteFailure: RemoteSourcesFailure? = null,
+  /** The rules profile the player's rows name a break against, or null when the sort shows none. */
+  val ruleNoteProfileId: String? = null,
 )
 
 /** The catalogue title detail: the library's layout for a movie or a series, with sources. */
@@ -185,6 +187,7 @@ fun CatalogDetailScreen(
   // The source filters are not saved: they live while a title or episode is on screen and reset
   // when either changes. A null sort follows the account's `streamSort`.
   val sourceFilters = remember { SourceFilterState() }
+  BindSourceProfiles(api, sourceFilters)
   var favourite by remember { mutableStateOf(false) }
   var favouriteBusy by remember { mutableStateOf(false) }
   var message by remember { mutableStateOf<String?>(null) }
@@ -477,8 +480,15 @@ fun CatalogDetailScreen(
 
   // The player's own Sources panel gets the same list, the local copies included, and it keeps
   // growing while the addons answer.
-  LaunchedEffect(rows, anyAsking, remoteFailed, remote.discoveryFailed) {
-    onSources(OfferedSources(rows, anyAsking, if (remoteFailed) RemoteSourcesFailure(remoteFailedLabels, remote.discoveryFailed) else null))
+  LaunchedEffect(rows, anyAsking, remoteFailed, remote.discoveryFailed, filters, settings.streamSort) {
+    onSources(
+      OfferedSources(
+        rows,
+        anyAsking,
+        if (remoteFailed) RemoteSourcesFailure(remoteFailedLabels, remote.discoveryFailed) else null,
+        sourceFilters.noteProfileId(settings.streamSort),
+      ),
+    )
   }
 
   // A switch made inside the player has to carry back: the detail keeps naming the source the
@@ -1149,7 +1159,7 @@ fun CatalogDetailScreen(
       // Reopening lands on what the viewer picked; without a pick, on the default.
       val focusIndex = rows.indexOfFirst { it === (chosenStream ?: preferredStream) }.let { if (it >= 0) it else 0 }
       // Like the web, the filter bar is only worth showing once more than one source is offered.
-      val chips = sourceFilterChips(filters, lists.options)
+      val chips = sourceFilterChips(filters, lists.options, sourceFilters.profiles)
       SourcesPanel(
         streams = rows,
         focusIndex = focusIndex,
@@ -1178,6 +1188,7 @@ fun CatalogDetailScreen(
           null
         },
         remoteNote = remoteNotice(remoteFailed, remoteFailedLabels),
+        ruleNoteProfileId = sourceFilters.noteProfileId(settings.streamSort),
         initialFocus = focus.sourcesPanel,
       )
     }

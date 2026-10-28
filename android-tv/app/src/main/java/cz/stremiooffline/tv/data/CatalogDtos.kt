@@ -97,7 +97,7 @@ data class BehaviorHintsDto(
   val bingeGroup: String? = null,
 )
 
-/** How one source sits against the viewer's default rules. Unknown JSON keys stay ignored. */
+/** One rules profile's verdict for a source. Unknown JSON keys stay ignored. */
 @Serializable
 data class SourceRuleVerdictDto(
   val profileId: String = "",
@@ -140,7 +140,8 @@ data class StreamDto(
   val subtitles: List<AddonSubtitleDto> = emptyList(),
   /** The same source's handle in every session; the server mints it and the app never computes it. */
   val stableKey: String? = null,
-  val rule: SourceRuleVerdictDto? = null,
+  /** One verdict per rules profile, keyed by profile id. */
+  val rules: Map<String, SourceRuleVerdictDto> = emptyMap(),
 )
 
 /** One `GET /api/stream-sources/:type/:id` entry: a source addon the streams are asked from. */

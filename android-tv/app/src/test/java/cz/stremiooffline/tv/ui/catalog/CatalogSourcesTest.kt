@@ -228,7 +228,7 @@ class CatalogSourcesTest {
   @Test
   fun `a source that breaks the rules shows the reason labels under the row`() {
     val api = FakeTvApi()
-    api.settingsValue = settings()
+    api.settingsValue = settings().copy(streamSort = "rule:p1")
     api.streamSourcesValues["movie:tt1"] = listOf(source("alpha"))
     api.addonStreams["movie:tt1|alpha"] = listOf(
       StreamDto(
@@ -237,11 +237,14 @@ class CatalogSourcesTest {
         playable = true,
         title = "English 8 GB",
         addonName = "Alpha",
-        rule = SourceRuleVerdictDto(
-          profileId = "p1",
-          status = "breaks",
-          reasons = listOf("language", "unknown", "cinema"),
-          rank = listOf(1.0),
+        rules = mapOf(
+          "p1" to SourceRuleVerdictDto(
+            profileId = "p1",
+            status = "breaks",
+            reasons = listOf("language", "unknown", "cinema"),
+            rank = listOf(1.0),
+          ),
+          "other" to SourceRuleVerdictDto(profileId = "other", status = "meets", rank = listOf(0.0)),
         ),
       ),
     )
@@ -259,7 +262,7 @@ class CatalogSourcesTest {
   @Test
   fun `a source that meets the rules has no rule note`() {
     val api = FakeTvApi()
-    api.settingsValue = settings()
+    api.settingsValue = settings().copy(streamSort = "rule:p1")
     api.streamSourcesValues["movie:tt1"] = listOf(source("alpha"))
     api.addonStreams["movie:tt1|alpha"] = listOf(
       StreamDto(
@@ -268,7 +271,15 @@ class CatalogSourcesTest {
         playable = true,
         title = "Czech 8 GB",
         addonName = "Alpha",
-        rule = SourceRuleVerdictDto(profileId = "p1", status = "meets", rank = listOf(0.0)),
+        rules = mapOf(
+          "p1" to SourceRuleVerdictDto(profileId = "p1", status = "meets", rank = listOf(0.0)),
+          "other" to SourceRuleVerdictDto(
+            profileId = "other",
+            status = "breaks",
+            reasons = listOf("language"),
+            rank = listOf(1.0),
+          ),
+        ),
       ),
     )
     mount(api)
@@ -281,4 +292,63 @@ class CatalogSourcesTest {
     compose.onNodeWithTag(sourceRowTag(0))
       .assert(hasText("Does not meet the rules", substring = true).not())
   }
+
+  @Test
+  fun `a size sort keeps the note of an account rule`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings().copy(streamSort = "rule:p1")
+    // The filter bar is offered only once more than one source is on screen.
+    api.streamSourcesValues["movie:tt1"] = listOf(source("alpha"), source("beta"))
+    api.addonStreams["movie:tt1|alpha"] = listOf(breakingRule())
+    api.addonStreams["movie:tt1|beta"] = listOf(
+      breakingRule().copy(sourceId = "srcB", title = "Czech 1 GB", addonName = "Beta"),
+    )
+    mount(api)
+    compose.waitUntil(5_000) {
+      api.streamsCompleted.contains("movie:tt1|alpha") && api.streamsCompleted.contains("movie:tt1|beta")
+    }
+    compose.waitForIdle()
+    focusSources()
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(sourceRowTag(0)).assertTextContains("Does not meet the rules: other language")
+    press(Key.DirectionUp)
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(sourceFilterOptionTag(0)).assertTextContains("Largest first", substring = true)
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(sourceFilterTag("sort")).assertTextContains("Largest first", substring = true)
+    compose.onNodeWithTag(sourceRowTag(0)).assertTextContains("English 8 GB")
+    compose.onNodeWithTag(sourceRowTag(0)).assertTextContains("Does not meet the rules: other language")
+  }
+
+  @Test
+  fun `a size sort with a size account default shows no rule note`() {
+    val api = FakeTvApi()
+    api.settingsValue = settings().copy(streamSort = "size-desc")
+    api.streamSourcesValues["movie:tt1"] = listOf(source("alpha"))
+    api.addonStreams["movie:tt1|alpha"] = listOf(breakingRule())
+    mount(api)
+    compose.waitUntil(5_000) { api.streamsCompleted.contains("movie:tt1|alpha") }
+    compose.waitForIdle()
+    focusSources()
+    press(Key.DirectionCenter)
+    compose.onNodeWithTag(sourceRowTag(0)).assertTextContains("English 8 GB")
+    compose.onNodeWithTag(sourceRowTag(0))
+      .assert(hasText("Does not meet the rules", substring = true).not())
+  }
+
+  private fun breakingRule() = StreamDto(
+    sourceId = "srcA",
+    kind = "remote",
+    playable = true,
+    title = "English 8 GB",
+    addonName = "Alpha",
+    rules = mapOf(
+      "p1" to SourceRuleVerdictDto(
+        profileId = "p1",
+        status = "breaks",
+        reasons = listOf("language"),
+        rank = listOf(1.0),
+      ),
+    ),
+  )
 }

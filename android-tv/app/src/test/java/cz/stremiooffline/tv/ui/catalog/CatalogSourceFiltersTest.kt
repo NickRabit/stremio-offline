@@ -14,6 +14,7 @@ import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
 import cz.stremiooffline.tv.data.MetaDto
 import cz.stremiooffline.tv.data.SettingsResponse
+import cz.stremiooffline.tv.data.SourceProfileDto
 import cz.stremiooffline.tv.data.StreamDto
 import cz.stremiooffline.tv.data.VideoDto
 import cz.stremiooffline.tv.ui.FakeTvApi
@@ -111,8 +112,10 @@ class CatalogSourceFiltersTest {
   @Test
   fun `OK on the sorting chip opens its list with the current choice ticked and focused`() {
     val api = FakeTvApi()
+    api.sourceProfilesValue = listOf(SourceProfileDto(id = "balanced", nameKey = "rules.preset.balanced"))
     twoAddons(api)
     mount(api)
+    compose.waitUntil(5_000) { api.sourceProfilesCalls >= 1 }
     compose.waitForIdle()
 
     openSources()
@@ -121,8 +124,31 @@ class CatalogSourceFiltersTest {
 
     compose.onNodeWithTag(TagSourceFilterOptions).assertExists()
     compose.onNodeWithTag(sourceFilterOptionTag(0)).assertIsFocused()
-    compose.onNodeWithTag(sourceFilterOptionTag(0)).assertTextContains("Recommended", substring = true)
+    compose.onNodeWithTag(sourceFilterOptionTag(0)).assertTextContains("Balanced", substring = true)
     compose.onNodeWithTag(sourceFilterOptionTag(0)).assertTextContains("✓", substring = true)
+  }
+
+  @Test
+  fun `the sort choices list the rule names before the fixed sorts`() {
+    val api = FakeTvApi()
+    api.sourceProfilesValue = listOf(
+      SourceProfileDto(id = "balanced", nameKey = "rules.preset.balanced"),
+      SourceProfileDto(id = "nightly", name = "Nightly"),
+    )
+    twoAddons(api)
+    mount(api)
+    compose.waitUntil(5_000) { api.sourceProfilesCalls >= 1 }
+    compose.waitForIdle()
+
+    openSources()
+    press(Key.DirectionUp)
+    press(Key.DirectionCenter)
+
+    compose.onNodeWithTag(sourceFilterOptionTag(0)).assertTextContains("Balanced", substring = true)
+    compose.onNodeWithTag(sourceFilterOptionTag(1)).assertTextContains("Nightly", substring = true)
+    compose.onNodeWithTag(sourceFilterOptionTag(2)).assertTextContains("Largest first", substring = true)
+    compose.onNodeWithTag(sourceFilterOptionTag(3)).assertTextContains("Smallest first", substring = true)
+    compose.onNodeWithTag(sourceFilterOptionTag(4)).assertTextContains("By addon priority", substring = true)
   }
 
   @Test
@@ -142,8 +168,7 @@ class CatalogSourceFiltersTest {
 
     press(Key.DirectionUp)
     press(Key.DirectionCenter)
-    press(Key.DirectionDown)
-    compose.onNodeWithTag(sourceFilterOptionTag(1)).assertIsFocused()
+    compose.onNodeWithTag(sourceFilterOptionTag(0)).assertTextContains("Largest first", substring = true)
     press(Key.DirectionCenter)
 
     compose.onNodeWithTag(sourceFilterTag("sort")).assertIsFocused()

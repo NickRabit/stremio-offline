@@ -29,6 +29,7 @@ class StreamsTest {
     libraryName: String? = null,
     stableKey: String? = null,
     rule: SourceRuleVerdictDto? = null,
+    rules: Map<String, SourceRuleVerdictDto> = emptyMap(),
   ) = StreamDto(
     sourceId = sourceId,
     kind = kind,
@@ -42,7 +43,7 @@ class StreamsTest {
     localPath = localPath,
     libraryName = libraryName,
     stableKey = stableKey,
-    rule = rule,
+    rules = if (rule == null) rules else rules + (rule.profileId to rule),
   )
 
   private fun verdict(
@@ -57,7 +58,7 @@ class StreamsTest {
   private fun filters(
     addon: String = "",
     language: String = "",
-    sort: StreamSort = StreamSort.Recommended,
+    sort: StreamSort = StreamSort.FirstRule,
   ): StreamFilters = StreamFilters(addon, language, sort)
 
   @Test
@@ -305,7 +306,7 @@ class StreamsTest {
   fun `offeredStreams drops a source the addon sent twice`() {
     val twice = stream(sourceId = "s1", name = "FullHD", title = "Czech 1 GB", addonName = "alpha")
     assertEquals(listOf("s1"), Streams.offeredStreams(listOf(twice, twice)).map { it.sourceId })
-    val lists = Streams.sourceLists(listOf(twice, twice), emptyList(), filters(sort = StreamSort.Recommended), "cs", true, null)
+    val lists = Streams.sourceLists(listOf(twice, twice), emptyList(), filters(sort = StreamSort.FirstRule), "cs", true, null)
     assertEquals(1, lists.offered.size)
     assertEquals(1, lists.visible.size)
   }
@@ -581,7 +582,7 @@ class StreamsTest {
     val english = stream(name = "en-big", title = "English 20 GB", addonName = "alpha", rule = verdict("meets", listOf(1.0, 0.0, -1080.0, 3.0)))
     assertEquals(
       listOf("cz-ranked", "en-big"),
-      names(Streams.arrangeStreams(listOf(english, czech), filters(), "en")),
+      names(Streams.arrangeStreams(listOf(english, czech), filters(sort = StreamSort.of("rule:p1")), "en")),
     )
   }
 
@@ -591,7 +592,7 @@ class StreamsTest {
     val breaks = stream(name = "breaks", title = "Czech 8 GB", addonName = "alpha", rule = verdict("breaks", listOf(1.0), listOf("language")))
     assertEquals(
       listOf("meets", "breaks"),
-      names(Streams.arrangeStreams(listOf(breaks, meets), filters(), "cs")),
+      names(Streams.arrangeStreams(listOf(breaks, meets), filters(sort = StreamSort.of("rule:p1")), "cs")),
     )
   }
 
@@ -601,7 +602,7 @@ class StreamsTest {
     val bare = stream(name = "bare", title = "Czech 20 GB", addonName = "alpha")
     assertEquals(
       listOf("ranked", "bare"),
-      names(Streams.arrangeStreams(listOf(bare, ranked), filters(), "cs")),
+      names(Streams.arrangeStreams(listOf(bare, ranked), filters(sort = StreamSort.of("rule:p1")), "cs")),
     )
   }
 
@@ -639,6 +640,7 @@ class StreamsTest {
     val rows = Streams.catalogSourceList(
       local = listOf(localRow),
       addon = listOf(addonMid, addonBest),
+      filters = filters(sort = StreamSort.of("rule:p1")),
       remote = listOf(Streams.RemoteGroup("rlibB", "emby", "Serial", listOf(remoteBad, remoteGood))),
       origins = Streams.Origins(rows = listOf(origin), libraryId = "rlibA", label = "jellyfin · Film"),
     )
@@ -681,7 +683,7 @@ class StreamsTest {
     val best = stream(name = "best", playable = true, title = "1080p 1 GB", rule = verdict("meets", listOf(0.0)))
     val worse = stream(name = "worse", playable = true, title = "1080p 20 GB", rule = verdict("meets", listOf(1.0)))
     val unplayable = stream(name = "unplayable", playable = false, title = "1080p 50 GB", rule = verdict("meets", listOf(-1.0)))
-    val arranged = Streams.arrangeStreams(listOf(worse, unplayable, best), filters(), "en")
+    val arranged = Streams.arrangeStreams(listOf(worse, unplayable, best), filters(sort = StreamSort.of("rule:p1")), "en")
     assertEquals(listOf("unplayable", "best", "worse"), names(arranged))
     assertEquals("best", Streams.pickDefaultStream(arranged)?.name)
   }
@@ -690,7 +692,7 @@ class StreamsTest {
   fun `pickDefaultStream still opens on the source the viewer last played`() {
     val best = stream(name = "best", playable = true, title = "1080p 1 GB", stableKey = "a:${"1".repeat(24)}", rule = verdict("meets", listOf(0.0)))
     val stored = stream(name = "stored", playable = true, title = "1080p 20 GB", stableKey = "a:${"2".repeat(24)}", rule = verdict("meets", listOf(1.0)))
-    val arranged = Streams.arrangeStreams(listOf(stored, best), filters(), "en")
+    val arranged = Streams.arrangeStreams(listOf(stored, best), filters(sort = StreamSort.of("rule:p1")), "en")
     assertEquals("stored", Streams.pickDefaultStream(arranged, preferredStableKey = stored.stableKey)?.name)
   }
 
@@ -713,6 +715,86 @@ class StreamsTest {
       mediaSourceId = sourceId,
       progressKey = "remote:$libraryId:$itemId",
     ),
-    rule = rule,
+    rules = if (rule == null) emptyMap() else mapOf(rule.profileId to rule),
   )
+
+  @Test
+  fun `of parses a rule id, the fixed sorts and recommended`() {
+    assertEquals(StreamSort.Rule("balanced"), StreamSort.of("rule:balanced"))
+    assertEquals("rule:balanced", StreamSort.Rule("balanced").wire)
+    assertEquals(StreamSort.SizeDesc, StreamSort.of("size-desc"))
+    assertEquals(StreamSort.SizeAsc, StreamSort.of("size-asc"))
+    assertEquals(StreamSort.Addon, StreamSort.of("addon"))
+    assertEquals(StreamSort.FirstRule, StreamSort.of("recommended"))
+    assertEquals(StreamSort.FirstRule, StreamSort.of(null))
+    assertEquals(StreamSort.FirstRule, StreamSort.of("nope"))
+    assertEquals(StreamSort.FirstRule, StreamSort.of("rule:"))
+  }
+
+  @Test
+  fun `recommended resolves to the first profile and stays unresolved without one`() {
+    assertEquals(StreamSort.Rule("best"), Streams.resolveRuleSort(StreamSort.of("recommended"), listOf("", "best", "small")))
+    assertEquals(StreamSort.FirstRule, Streams.resolveRuleSort(StreamSort.of("recommended"), emptyList()))
+    assertEquals(StreamSort.SizeDesc, Streams.resolveRuleSort(StreamSort.SizeDesc, listOf("best")))
+    assertEquals(StreamSort.Rule("kept"), Streams.resolveRuleSort(StreamSort.of("rule:kept"), listOf("best")))
+  }
+
+  @Test
+  fun `two rule sorts order the same streams differently`() {
+    val alpha = stream(
+      name = "alpha",
+      title = "English 1 GB",
+      rules = mapOf(
+        "fast" to verdict("meets", listOf(0.0), profileId = "fast"),
+        "best" to verdict("meets", listOf(1.0), profileId = "best"),
+      ),
+    )
+    val beta = stream(
+      name = "beta",
+      title = "Czech 20 GB",
+      rules = mapOf(
+        "fast" to verdict("meets", listOf(1.0), profileId = "fast"),
+        "best" to verdict("meets", listOf(0.0), profileId = "best"),
+      ),
+    )
+    assertEquals(listOf("alpha", "beta"), names(Streams.arrangeStreams(listOf(beta, alpha), filters(sort = StreamSort.of("rule:fast")), "cs")))
+    assertEquals(listOf("beta", "alpha"), names(Streams.arrangeStreams(listOf(alpha, beta), filters(sort = StreamSort.of("rule:best")), "cs")))
+  }
+
+  @Test
+  fun `a rule sort with no verdict for that profile keeps the old formula`() {
+    val czech = stream(
+      name = "cz-big",
+      title = "Czech 8 GB",
+      addonName = "alpha",
+      rules = mapOf("other" to verdict("meets", listOf(5.0), profileId = "other")),
+    )
+    val english = stream(
+      name = "en-small",
+      title = "English 1 GB",
+      addonName = "beta",
+      rules = mapOf("other" to verdict("meets", listOf(0.0), profileId = "other")),
+    )
+    assertEquals(
+      listOf("cz-big", "en-small"),
+      names(Streams.arrangeStreams(listOf(english, czech), filters(sort = StreamSort.of("rule:mine")), "cs")),
+    )
+    assertEquals(
+      listOf("cz-big", "en-small"),
+      names(Streams.arrangeStreams(listOf(english, czech), filters(sort = StreamSort.of("recommended")), "cs")),
+    )
+  }
+
+  @Test
+  fun `the row note follows the active rule and the account rule on a size sort`() {
+    val ids = listOf("alpha", "beta")
+    assertEquals("beta", Streams.noteProfileId(StreamSort.Rule("beta"), "rule:alpha", ids))
+    assertEquals("alpha", Streams.noteProfileId(StreamSort.of("recommended"), "size-asc", ids))
+    assertEquals("alpha", Streams.noteProfileId(StreamSort.SizeDesc, "rule:alpha", ids))
+    assertEquals("alpha", Streams.noteProfileId(StreamSort.SizeAsc, "recommended", ids))
+    assertEquals("alpha", Streams.noteProfileId(StreamSort.Addon, "recommended", ids))
+    assertNull(Streams.noteProfileId(StreamSort.SizeDesc, "size-desc", ids))
+    assertNull(Streams.noteProfileId(StreamSort.Addon, "addon", ids))
+    assertNull(Streams.noteProfileId(StreamSort.FirstRule, "recommended", emptyList()))
+  }
 }

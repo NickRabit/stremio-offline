@@ -500,6 +500,7 @@ fun Shell(
       sources = sourcesNow.streams,
       sourcesLoading = sourcesNow.loading,
       sourcesRemoteFailure = sourcesNow.remoteFailure,
+      ruleNoteProfileId = sourcesNow.ruleNoteProfileId,
       // The catalogue detail owns its own discovery; its Retry re-reads it through the token, and
       // a library-bound play reloads the loader it is bound to.
       onSourcesRetry = if (openPlayer.catalogue) ({ catalogueSourcesRetry++ }) else ({ librarySourcesRetry++ }),

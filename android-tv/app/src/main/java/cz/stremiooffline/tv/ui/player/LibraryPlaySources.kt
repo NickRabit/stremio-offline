@@ -68,7 +68,10 @@ class LibraryPlaySources(private val api: TvApi) {
     val id = title.videoId?.takeIf { it.isNotBlank() } ?: title.id
     val settings = read { api.settings() } ?: SettingsResponse()
     val addons = read { api.addons() }.orEmpty()
-    val filters = Streams.StreamFilters(sort = Streams.StreamSort.of(settings.streamSort))
+    val profileIds = read { api.sourceProfiles() }.orEmpty().map { it.id }.filter { it.isNotBlank() }
+    val sort = Streams.resolveRuleSort(Streams.StreamSort.of(settings.streamSort), profileIds)
+    val filters = Streams.StreamFilters(sort = sort)
+    val noteProfile = Streams.noteProfileId(sort, settings.streamSort, profileIds)
     val streams = mutableListOf<StreamDto>()
     val local = mutableListOf<StreamDto>()
     // Both halves are asked in parallel, and the panel says it is asking until the last of them
@@ -108,7 +111,7 @@ class LibraryPlaySources(private val api: TvApi) {
       // Nothing has arrived yet: the panel is not offered a still-empty list, so the button does
       // not appear and disappear again around a title whose first source is slow.
       if (rows.isEmpty() && asking && failure == null) return
-      report(OfferedSources(rows, asking, failure))
+      report(OfferedSources(rows, asking, failure, noteProfile))
     }
     coroutineScope {
       // The local lookup is its own child, started before the addons are asked, so a failed

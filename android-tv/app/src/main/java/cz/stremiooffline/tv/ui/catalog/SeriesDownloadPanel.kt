@@ -471,7 +471,7 @@ internal fun defaultOfferedRuleId(profiles: List<SourceProfileDto>, remembered: 
 }
 
 @Composable
-private fun ruleName(profile: SourceProfileDto): String {
+internal fun ruleName(profile: SourceProfileDto): String {
   val label = presetLabel(profile.nameKey)
   return if (label != null) stringResource(label) else profile.name.orEmpty()
 }
