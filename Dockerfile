@@ -8,9 +8,11 @@ RUN npm ci
 COPY packages/source-selection packages/source-selection
 COPY server server
 COPY web web
-RUN npm run build
+RUN npm run build \
+    && npm ci --omit=dev --workspace=@stremio-offline/server \
+    && npm cache clean --force
 
-FROM node:22-trixie-slim AS runtime
+FROM ubuntu:24.04 AS runtime
 # Stamped by the build script and by CI so a running server can say which image it is.
 ARG BUILD_TIME=""
 ARG GIT_COMMIT=""
@@ -23,18 +25,14 @@ WORKDIR /app
 # would be skipped silently and QuickSync would never run on the NAS.
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libva-drm2 vainfo util-linux \
     && if [ "$(dpkg --print-architecture)" = "amd64" ]; then apt-get install -y --no-install-recommends intel-media-va-driver i965-va-driver; fi \
+    && useradd --uid 1001 --create-home node \
     && rm -rf /var/lib/apt/lists/*
+COPY --from=build /usr/local/bin/node /usr/local/bin/node
 COPY package.json package-lock.json ./
 COPY packages/source-selection/package.json packages/source-selection/package.json
 COPY server/package.json server/package.json
 COPY web/package.json web/package.json
-# The server runs through node directly. Keeping npm, npx, Corepack and Yarn in
-# the production image only adds tooling dependencies and their vulnerabilities.
-RUN npm ci --omit=dev --workspace=@stremio-offline/server \
-    && npm cache clean --force \
-    && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
-        /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
-        /usr/local/bin/yarn /usr/local/bin/yarnpkg /opt/yarn-*
+COPY --from=build /app/node_modules /app/node_modules
 COPY --from=build /app/packages/source-selection/dist /app/packages/source-selection/dist
 COPY --from=build /app/server/dist /app/server/dist
 COPY --from=build /app/web/dist /app/web
