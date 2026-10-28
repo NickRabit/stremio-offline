@@ -167,7 +167,9 @@ export type SourceRuleReason =
   | "sample"
   | "size"
   | "provider"
-  | "torrent";
+  | "torrent"
+  | "codec"
+  | "hdr";
 export interface SourceRuleVerdict {
   profileId: string;
   status: "meets" | "unverified" | "breaks";

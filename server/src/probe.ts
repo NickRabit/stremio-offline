@@ -20,7 +20,18 @@ export interface MediaInfo {
   duration?: number;
   /** The whole file's bitrate in bits per second, picture and sound together. */
   bitrate?: number;
-  video?: { codec: string; codecTag?: string; width?: number; height?: number; profile?: string; pixelFormat?: string; dolbyVisionProfile?: number; dolbyVisionEnhancementLayer?: boolean };
+  video?: {
+    codec: string;
+    codecTag?: string;
+    width?: number;
+    height?: number;
+    profile?: string;
+    pixelFormat?: string;
+    transfer?: string;
+    dolbyVision?: boolean;
+    dolbyVisionProfile?: number;
+    dolbyVisionEnhancementLayer?: boolean;
+  };
   audio?: { codec: string; channels?: number };
   audioTracks: Track[];
   subtitleTracks: Track[];
@@ -36,6 +47,7 @@ interface ProbeStream {
   codec_tag_string?: string;
   profile?: string;
   pix_fmt?: string;
+  color_transfer?: string;
   width?: number;
   height?: number;
   channels?: number;
@@ -86,6 +98,11 @@ export const dolbyVisionProfile = (stream?: Pick<ProbeStream, "side_data_list">)
   const profile = Number(dovi?.dv_profile);
   return dovi && Number.isFinite(profile) ? profile : undefined;
 };
+
+export const hasDolbyVisionSideData = (
+  stream?: Pick<ProbeStream, "side_data_list">,
+): boolean => (stream?.side_data_list ?? []).some((side) =>
+  /dovi|dolby vision/i.test(`${String(side.side_data_type ?? "")} ${String(side.name ?? "")}`));
 
 // Playlists name their segments as they please, and ffmpeg refuses the unfamiliar endings by
 // default -- which reads as an unplayable source. Newer ffmpeg split the old single option into
@@ -188,6 +205,8 @@ async function inspect(input: string, limits: string[], timeout: number, stage: 
           height: video.height,
           profile: video.profile,
           pixelFormat: video.pix_fmt,
+          transfer: video.color_transfer,
+          dolbyVision: hasDolbyVisionSideData(video),
           dolbyVisionProfile: dolbyVisionProfile(video),
           dolbyVisionEnhancementLayer: hasDolbyVisionEnhancementLayer(video),
         } : undefined,

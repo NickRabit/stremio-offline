@@ -40,6 +40,8 @@ const facts = (overrides: Partial<SourceEvidenceFactsV1> = {}): SourceEvidenceFa
   heightPixels: unknown(),
   releaseKind: unknown(),
   sampleOrTrailer: unknown(),
+  videoCodec: unknown(),
+  videoRange: unknown(),
   ...overrides,
 });
 
@@ -70,6 +72,8 @@ const snapshot = (options: {
   bytes?: SourcePolicyConstraints["bytes"];
   durationSeconds?: SourcePolicyConstraints["durationSeconds"];
   heightPixels?: SourcePolicyConstraints["heightPixels"];
+  excludeVideoCodecs?: SourcePolicyConstraints["excludeVideoCodecs"];
+  excludeVideoRanges?: SourcePolicyConstraints["excludeVideoRanges"];
   criteria?: SourcePolicyCriterion[];
   existingLocalCopy?: ExistingLocalCopyPolicy;
   template?: SourceProfileTemplate;
@@ -90,6 +94,8 @@ const snapshot = (options: {
         ...(options.bytes === undefined ? {} : { bytes: options.bytes }),
         ...(options.durationSeconds === undefined ? {} : { durationSeconds: options.durationSeconds }),
         ...(options.heightPixels === undefined ? {} : { heightPixels: options.heightPixels }),
+        ...(options.excludeVideoCodecs === undefined ? {} : { excludeVideoCodecs: options.excludeVideoCodecs }),
+        ...(options.excludeVideoRanges === undefined ? {} : { excludeVideoRanges: options.excludeVideoRanges }),
       },
       criteria: options.criteria ?? [],
       nextEpisode: "profile",
@@ -202,6 +208,41 @@ test("rules size ranges exclude known listed sizes outside either bound and pass
     reasons: [{ code: "numericOutsideBounds", field: "bytes" }],
   });
   assert.equal(evaluateSourceCandidate(profile, candidate()).status, "eligible");
+});
+
+test("video exclusions act only on known codecs and ranges", () => {
+  assert.deepEqual(evaluateSourceCandidate(
+    snapshot({ excludeVideoCodecs: ["av1"] }),
+    candidate({ facts: { videoCodec: fact("av1", "listed") } }),
+  ), {
+    status: "excluded",
+    reasons: [{ code: "videoCodecExcluded" }],
+  });
+  assert.equal(evaluateSourceCandidate(
+    snapshot({ excludeVideoCodecs: ["av1"] }),
+    candidate({ facts: { videoCodec: unknown() } }),
+  ).status, "eligible");
+
+  for (const range of ["hdr", "dolbyVision"] as const) {
+    assert.deepEqual(evaluateSourceCandidate(
+      snapshot({ excludeVideoRanges: ["hdr"] }),
+      candidate({ facts: { videoRange: fact(range, "providerMetadata") } }),
+    ), {
+      status: "excluded",
+      reasons: [{ code: "videoRangeExcluded" }],
+    });
+  }
+  assert.deepEqual(evaluateSourceCandidate(
+    snapshot({ excludeVideoRanges: ["dolbyVision"] }),
+    candidate({ facts: { videoRange: fact("dolbyVision", "inspected") } }),
+  ), {
+    status: "excluded",
+    reasons: [{ code: "videoRangeExcluded" }],
+  });
+  assert.equal(evaluateSourceCandidate(
+    snapshot({ excludeVideoRanges: ["dolbyVision"] }),
+    candidate({ facts: { videoRange: fact("hdr", "providerMetadata") } }),
+  ).status, "eligible");
 });
 
 test("audio modes use listing and authoritative track evidence differently", () => {

@@ -7,6 +7,8 @@ export type SubtitleMode = "off" | "optional" | "required";
 export type NextEpisodePolicy = "profile" | "sameProviderThenNearestSize";
 export type ExistingLocalCopyPolicy = "any" | "meetsRequirements";
 export type ReleaseKind = "cam" | "telesync" | "screener";
+export type VideoCodec = "h264" | "hevc" | "av1";
+export type VideoRange = "sdr" | "hdr" | "dolbyVision";
 
 export type LanguageRef =
   | { code: string }
@@ -41,6 +43,8 @@ export interface SourcePolicyConstraints {
   durationSeconds?: SourcePolicyRange;
   heightPixels?: SourcePolicyRange;
   excludeReleaseKinds?: ReleaseKind[];
+  excludeVideoCodecs?: Array<"av1" | "hevc">;
+  excludeVideoRanges?: Array<"dolbyVision" | "hdr">;
 }
 
 export type SourcePolicyCriterion =
@@ -215,7 +219,14 @@ const parseConstraints = (value: unknown): SourcePolicyConstraints => {
   const constraints = objectValue(
     value,
     ["sourceKinds", "audio", "subtitles"],
-    ["bytes", "durationSeconds", "heightPixels", "excludeReleaseKinds"],
+    [
+      "bytes",
+      "durationSeconds",
+      "heightPixels",
+      "excludeReleaseKinds",
+      "excludeVideoCodecs",
+      "excludeVideoRanges",
+    ],
   );
   const kinds = arrayValue(constraints.sourceKinds, 4).map(sourceKind);
   if (kinds.length === 0 || new Set(kinds).size !== kinds.length) return fail();
@@ -236,6 +247,18 @@ const parseConstraints = (value: unknown): SourcePolicyConstraints => {
       .map((kind) => enumValue(kind, ["cam", "telesync", "screener"] as const));
     if (new Set(releaseKinds).size !== releaseKinds.length) return fail();
     parsed.excludeReleaseKinds = releaseKinds;
+  }
+  if (Object.hasOwn(constraints, "excludeVideoCodecs")) {
+    const codecs = arrayValue(constraints.excludeVideoCodecs, 2)
+      .map((codec) => enumValue(codec, ["av1", "hevc"] as const));
+    if (codecs.length === 0 || new Set(codecs).size !== codecs.length) return fail();
+    parsed.excludeVideoCodecs = codecs;
+  }
+  if (Object.hasOwn(constraints, "excludeVideoRanges")) {
+    const ranges = arrayValue(constraints.excludeVideoRanges, 2)
+      .map((range) => enumValue(range, ["dolbyVision", "hdr"] as const));
+    if (ranges.length === 0 || new Set(ranges).size !== ranges.length) return fail();
+    parsed.excludeVideoRanges = ranges;
   }
   return parsed;
 };

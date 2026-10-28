@@ -10,6 +10,7 @@ import {
 export type RuleResolution = 360 | 480 | 720 | 1080 | 2160;
 export type RuleAudioMode = "any" | "prefer" | "only";
 export interface RuleSizeRange { min: number | null; max: number | null }
+export type VideoAvoid = "av1" | "hevc" | "dolbyVision" | "hdr";
 export type RulePreference =
   | "language"
   | "resolutionHigher"
@@ -34,6 +35,7 @@ export interface DownloadRules {
   subtitleLanguage: "mine" | string;
   sizeGb: { episode: RuleSizeRange; movie: RuleSizeRange };
   skipCinema: boolean;
+  videoAvoid: VideoAvoid[];
   preference: RulePreference[];
 }
 
@@ -150,11 +152,13 @@ const languageCode = (value: unknown): string | null => {
   return normalized;
 };
 
+const videoAvoidOrder: readonly VideoAvoid[] = ["av1", "hevc", "dolbyVision", "hdr"];
+
 const parser = (value: unknown): DownloadRules => {
   const input = objectValue(
     value,
     ["addons", "torrents", "resolution", "audio", "subtitles", "skipCinema", "preference"],
-    ["sizeGb", "maxSizeGb", "subtitleLanguage"],
+    ["sizeGb", "maxSizeGb", "subtitleLanguage", "videoAvoid"],
   );
   const hasSizeRange = Object.hasOwn(input, "sizeGb");
   const hasLegacyMaximum = Object.hasOwn(input, "maxSizeGb");
@@ -240,6 +244,12 @@ const parser = (value: unknown): DownloadRules => {
       ? "mine"
       : languageCode(input.subtitleLanguage) ?? fail();
   if (subtitles === "off" && subtitleLanguage !== "mine") return fail();
+  const videoAvoidInput = Object.hasOwn(input, "videoAvoid")
+    ? arrayValue(input.videoAvoid, 0, Number.MAX_SAFE_INTEGER)
+      .map((value) => enumValue(value, videoAvoidOrder))
+    : [];
+  const videoAvoidSet = new Set(videoAvoidInput);
+  const videoAvoid = videoAvoidOrder.filter((value) => videoAvoidSet.has(value));
 
   const parsed: DownloadRules = {
     addons: { scope, order },
@@ -250,6 +260,7 @@ const parser = (value: unknown): DownloadRules => {
     subtitleLanguage,
     sizeGb: sizes,
     skipCinema: input.skipCinema,
+    videoAvoid,
     preference: preferences,
   };
   return structuredClone(parsed);
@@ -343,6 +354,20 @@ export function rulesPolicy(
       ...(rules.skipCinema
         ? { excludeReleaseKinds: ["cam", "telesync", "screener"] }
         : {}),
+      ...(rules.videoAvoid.some((value) => value === "av1" || value === "hevc")
+        ? {
+            excludeVideoCodecs: rules.videoAvoid.filter(
+              (value): value is "av1" | "hevc" => value === "av1" || value === "hevc",
+            ),
+          }
+        : {}),
+      ...(rules.videoAvoid.some((value) => value === "dolbyVision" || value === "hdr")
+        ? {
+            excludeVideoRanges: rules.videoAvoid.filter(
+              (value): value is "dolbyVision" | "hdr" => value === "dolbyVision" || value === "hdr",
+            ),
+          }
+        : {}),
     },
     criteria,
     nextEpisode: "profile",
@@ -377,6 +402,23 @@ const releaseKinds = (policy: SourcePolicyV1): ReleaseKind[] | undefined => {
   if (kinds === undefined) return undefined;
   if (!sameArray(kinds, ["cam", "telesync", "screener"])) return fail();
   return kinds;
+};
+
+const avoidedVideo = (policy: SourcePolicyV1): VideoAvoid[] => {
+  const codecs = policy.constraints.excludeVideoCodecs;
+  const ranges = policy.constraints.excludeVideoRanges;
+  if (codecs !== undefined
+    && (codecs.length === 0 || new Set(codecs).size !== codecs.length
+      || codecs.some((codec) => codec !== "av1" && codec !== "hevc"))) {
+    return fail();
+  }
+  if (ranges !== undefined
+    && (ranges.length === 0 || new Set(ranges).size !== ranges.length
+      || ranges.some((range) => range !== "dolbyVision" && range !== "hdr"))) {
+    return fail();
+  }
+  return videoAvoidOrder.filter((value) => codecs?.includes(value as "av1" | "hevc")
+    || ranges?.includes(value as "dolbyVision" | "hdr"));
 };
 
 const materializeForComparison = (
@@ -505,6 +547,7 @@ export function rulesFromPolicy(
       : null,
   });
   releaseKinds(policy);
+  const videoAvoid = avoidedVideo(policy);
   const rules = parseDownloadRules({
     addons: { scope, order },
     torrents: policy.constraints.sourceKinds.includes("torrent"),
@@ -529,6 +572,7 @@ export function rulesFromPolicy(
       movie: sizeRange(kind === "movie"),
     },
     skipCinema: policy.constraints.excludeReleaseKinds !== undefined,
+    videoAvoid,
     preference,
   });
   const comparison = policy.scope.mode === "allAvailable"

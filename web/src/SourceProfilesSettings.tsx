@@ -10,6 +10,7 @@ import { providerLabel } from "./source-rows";
 import type { Addon, AdminRemoteLibrary, AdminSourceProfile, DownloadRules, RulePreference, RuleResolution } from "./types";
 
 const RESOLUTIONS: RuleResolution[] = [360, 480, 720, 1080, 2160];
+const VIDEO_AVOID_ORDER = ["av1", "hevc", "dolbyVision", "hdr"] as const;
 const PREFERENCES: RulePreference[] = ["language", "resolutionHigher", "resolutionLower", "smaller", "larger", "addonOrder"];
 const PREFERENCE_LABEL: Record<RulePreference, Key> = {
   language: "rules.preference.language",
@@ -38,6 +39,7 @@ const blankRules = (): DownloadRules => ({
   subtitles: "ifAvailable", subtitleLanguage: "mine", sizeGb: {
     episode: { min: null, max: 4 }, movie: { min: null, max: 15 },
   }, skipCinema: true,
+  videoAvoid: [],
   preference: ["language", "resolutionHigher", "addonOrder", "smaller"],
 });
 const draftFrom = (profile: AdminSourceProfile): Draft => ({
@@ -125,6 +127,7 @@ export function SourceProfilesSettings({ languages, titleKey = "rules.title", hi
   const [dialogError, setDialogError] = useState("");
   const [canReload, setCanReload] = useState(false);
   const [session, setSession] = useState<EditorSession | null>(null);
+  const [dolbyVisionBeforeHdr, setDolbyVisionBeforeHdr] = useState(false);
   const [advanced, setAdvanced] = useState(false);
   const [duplicate, setDuplicate] = useState<DuplicateSession | null>(null);
   const [remove, setRemove] = useState<DeleteSession | null>(null);
@@ -162,10 +165,12 @@ export function SourceProfilesSettings({ languages, titleKey = "rules.title", hi
   const updateRules = (rules: DownloadRules) => { if (session) updateDraft({ ...session.draft, rules }); };
   const openCreate = () => {
     setDialogError(""); setCanReload(false); setAdvanced(false);
+    setDolbyVisionBeforeHdr(false);
     setSession({ kind: "create", builtIn: false, draft: { name: "", rules: blankRules() } });
   };
   const openEdit = (profile: AdminSourceProfile) => {
     setDialogError(""); setCanReload(false); setAdvanced(false);
+    setDolbyVisionBeforeHdr(profile.parameters?.videoAvoid.includes("dolbyVision") ?? false);
     setSession({ kind: "edit", id: profile.id, revision: profile.revision, builtIn: profile.nameKey !== undefined, draft: draftFrom(profile) });
   };
 
@@ -261,6 +266,28 @@ export function SourceProfilesSettings({ languages, titleKey = "rules.title", hi
       ? draft.rules.preference.filter((item) => item !== preference)
       : draft.rules.preference.length < 4 ? [...draft.rules.preference, preference] : draft.rules.preference;
     updateRules({ ...draft.rules, preference: preferenceOrder });
+  };
+  const setVideoAvoid = (value: DownloadRules["videoAvoid"][number], checked: boolean) => {
+    if (!draft) return;
+    let selected = new Set(draft.rules.videoAvoid);
+    if (value === "hdr") {
+      if (checked) {
+        setDolbyVisionBeforeHdr(selected.has("dolbyVision"));
+        selected.add("dolbyVision");
+        selected.add("hdr");
+      } else {
+        selected.delete("hdr");
+        if (!dolbyVisionBeforeHdr) selected.delete("dolbyVision");
+      }
+    } else if (checked) {
+      selected.add(value);
+    } else {
+      selected.delete(value);
+    }
+    updateRules({
+      ...draft.rules,
+      videoAvoid: VIDEO_AVOID_ORDER.filter((entry) => selected.has(entry)),
+    });
   };
   const setAudioMode = (mode: DownloadRules["audio"]["mode"]) => {
     if (!draft) return;
@@ -369,6 +396,11 @@ export function SourceProfilesSettings({ languages, titleKey = "rules.title", hi
         </div>
         {!validRange(draft.rules.sizeGb.episode) || !validRange(draft.rules.sizeGb.movie) ? <p className="login-error" role="alert">{t("rules.sizeMinAboveMax")}</p> : null}
         <label className="rules-check"><input type="checkbox" aria-label={t("rules.skipCinema")} checked={draft.rules.skipCinema} onChange={(event) => updateRules({ ...draft.rules, skipCinema: event.target.checked })}/><span>{t("rules.skipCinema")}</span></label>
+        <span className="rules-subheading">{t("rules.videoAvoid")}</span>
+        <label className="rules-check"><input type="checkbox" aria-label={t("rules.avoidAv1")} checked={draft.rules.videoAvoid.includes("av1")} onChange={(event) => setVideoAvoid("av1", event.target.checked)}/><span>{t("rules.avoidAv1")}</span></label>
+        <label className="rules-check"><input type="checkbox" aria-label={t("rules.avoidHevc")} checked={draft.rules.videoAvoid.includes("hevc")} onChange={(event) => setVideoAvoid("hevc", event.target.checked)}/><span>{t("rules.avoidHevc")}</span></label>
+        <label className="rules-check"><input type="checkbox" aria-label={t("rules.avoidDolbyVision")} checked={draft.rules.videoAvoid.includes("hdr") || draft.rules.videoAvoid.includes("dolbyVision")} disabled={draft.rules.videoAvoid.includes("hdr")} onChange={(event) => setVideoAvoid("dolbyVision", event.target.checked)}/><span>{t("rules.avoidDolbyVision")}</span></label>
+        <label className="rules-check"><input type="checkbox" aria-label={t("rules.avoidHdr")} checked={draft.rules.videoAvoid.includes("hdr")} onChange={(event) => setVideoAvoid("hdr", event.target.checked)}/><span>{t("rules.avoidHdr")}</span></label>
       </fieldset>
       <fieldset className="rules-fieldset"><legend>{t("rules.language")}</legend>
         <div className="bulk-language-grid">

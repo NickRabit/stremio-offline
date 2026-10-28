@@ -10,6 +10,7 @@ import {
   type RemoteLibraryType,
 } from "./media-server-types.js";
 import type { MediaServerTransport } from "./media-server-security.js";
+import type { VideoCodec, VideoRange } from "./source-policy.js";
 
 /** Facts read from a remote account policy. This is not an authorization decision: an unknown
  *  field is not proof of permission, and `hasAdditionalRestrictions` is never exhaustive. */
@@ -121,6 +122,8 @@ export interface ProviderVersion {
   bitrate?: number;
   videoWidth?: number;
   videoHeight?: number;
+  videoCodec?: VideoCodec | "other";
+  videoRange?: VideoRange;
   audioLanguages?: Array<string | undefined>;
   embeddedSubtitleLanguages?: Array<string | undefined>;
   /** External text subtitles the provider offers for this exact file version. */
@@ -409,7 +412,27 @@ function readExternalSubtitles(source: Record<string, unknown>): Array<{ index: 
 }
 
 type MediaStreamFacts = Pick<ProviderVersion,
-  "videoWidth" | "videoHeight" | "audioLanguages" | "embeddedSubtitleLanguages">;
+  "videoWidth" | "videoHeight" | "videoCodec" | "videoRange" | "audioLanguages" | "embeddedSubtitleLanguages">;
+
+const providerVideoCodec = (value: unknown): VideoCodec | "other" | undefined => {
+  if (typeof value !== "string" || value.trim() === "") return undefined;
+  const codec = value.trim().toLowerCase();
+  if (codec === "hevc" || codec === "h265") return "hevc";
+  if (codec === "av1") return "av1";
+  if (codec === "h264" || codec === "avc") return "h264";
+  return "other";
+};
+
+const providerVideoRange = (stream: Record<string, unknown>): VideoRange | undefined => {
+  const value = [stream.VideoRangeType, stream.VideoRange, stream.ExtendedVideoType]
+    .filter((entry): entry is string => typeof entry === "string")
+    .join(" ")
+    .toLowerCase();
+  if (/dovi|dolby\s*vision/.test(value)) return "dolbyVision";
+  if (/hdr|hlg/.test(value)) return "hdr";
+  if (/sdr/.test(value)) return "sdr";
+  return undefined;
+};
 
 function readMediaStreamFacts(source: Record<string, unknown>): MediaStreamFacts {
   const raw = source.MediaStreams;
@@ -418,6 +441,8 @@ function readMediaStreamFacts(source: Record<string, unknown>): MediaStreamFacts
   const embeddedSubtitleLanguages: Array<string | undefined> = [];
   let videoWidth: number | undefined;
   let videoHeight: number | undefined;
+  let videoCodec: VideoCodec | "other" | undefined;
+  let videoRange: VideoRange | undefined;
   let foundVideo = false;
   for (const entry of raw) {
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
@@ -430,6 +455,8 @@ function readMediaStreamFacts(source: Record<string, unknown>): MediaStreamFacts
       if (typeof stream.Height === "number" && Number.isSafeInteger(stream.Height) && stream.Height > 0) {
         videoHeight = stream.Height;
       }
+      videoCodec = providerVideoCodec(stream.Codec);
+      videoRange = providerVideoRange(stream);
       continue;
     }
     if (stream.Type === "Audio") {
@@ -453,6 +480,8 @@ function readMediaStreamFacts(source: Record<string, unknown>): MediaStreamFacts
   return {
     ...(videoWidth === undefined ? {} : { videoWidth }),
     ...(videoHeight === undefined ? {} : { videoHeight }),
+    ...(videoCodec === undefined ? {} : { videoCodec }),
+    ...(videoRange === undefined ? {} : { videoRange }),
     ...(audioLanguages.length ? { audioLanguages } : {}),
     ...(embeddedSubtitleLanguages.length ? { embeddedSubtitleLanguages } : {}),
   };

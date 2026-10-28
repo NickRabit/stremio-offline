@@ -18,6 +18,7 @@ const rules = (over: Partial<DownloadRules> = {}): DownloadRules => ({
   subtitles: "ifAvailable", subtitleLanguage: "mine", sizeGb: {
     episode: { min: null, max: null }, movie: { min: null, max: null },
   }, skipCinema: true,
+  videoAvoid: [],
   preference: ["language", "addonOrder"], ...over,
 });
 

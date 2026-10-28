@@ -21,6 +21,7 @@ const rules = (over: Partial<DownloadRules> = {}): DownloadRules => ({
   subtitles: "ifAvailable", subtitleLanguage: "mine", sizeGb: {
     episode: { min: null, max: 4 }, movie: { min: null, max: 15 },
   }, skipCinema: true,
+  videoAvoid: [],
   preference: ["language", "resolutionHigher", "addonOrder", "smaller"], ...over,
 });
 const preset: AdminSourceProfile = {
@@ -216,6 +217,8 @@ it("maps every editor field to the exact rules body", async () => {
   await setInput("Film from", "5");
   await setInput("Film to", "12");
   await clickBox("Skip cinema copies (CAM, TS)");
+  await clickBox("AV1");
+  await clickBox("HEVC (H.265)");
   await clickText("Advanced", dialog());
   await clickBox("English");
   await clickBox("Higher resolution");
@@ -236,9 +239,49 @@ it("maps every editor field to the exact rules body", async () => {
       subtitles: "required", subtitleLanguage: "mine", sizeGb: {
         episode: { min: 1.2, max: 2.5 }, movie: { min: 5, max: 12 },
       }, skipCinema: false,
+      videoAvoid: ["av1", "hevc"],
       preference: ["resolutionLower", "larger"],
     },
   }]);
+});
+
+it("HDR implies Dolby Vision and restores its previous unchecked value", async () => {
+  let patched: DownloadRules | undefined;
+  await mount([custom], (_url, method, body) => {
+    if (method === "PATCH") patched = (body as { rules: DownloadRules }).rules;
+    return undefined;
+  });
+  await clickText("Edit", host.querySelector(`[data-profile-id="${CUSTOM}"]`)!);
+  const hdr = dialog().querySelector<HTMLInputElement>('input[aria-label="HDR"]')!;
+  const dolbyVision = dialog().querySelector<HTMLInputElement>('input[aria-label="Dolby Vision"]')!;
+
+  await act(async () => { hdr.click(); });
+  expect(hdr.checked).toBe(true);
+  expect(dolbyVision.checked).toBe(true);
+  expect(dolbyVision.disabled).toBe(true);
+  await act(async () => { hdr.click(); });
+  expect(hdr.checked).toBe(false);
+  expect(dolbyVision.checked).toBe(false);
+  expect(dolbyVision.disabled).toBe(false);
+
+  await act(async () => { hdr.click(); });
+  await clickText("Save", dialog());
+  expect(patched?.videoAvoid).toEqual(["dolbyVision", "hdr"]);
+});
+
+it("unchecking HDR keeps a Dolby Vision choice that was already selected", async () => {
+  const withDolbyVision = { ...custom, parameters: rules({ videoAvoid: ["dolbyVision"] }) };
+  await mount([withDolbyVision]);
+  await clickText("Edit", host.querySelector(`[data-profile-id="${CUSTOM}"]`)!);
+  const hdr = dialog().querySelector<HTMLInputElement>('input[aria-label="HDR"]')!;
+  const dolbyVision = dialog().querySelector<HTMLInputElement>('input[aria-label="Dolby Vision"]')!;
+
+  await act(async () => { hdr.click(); });
+  expect(dolbyVision.checked).toBe(true);
+  expect(dolbyVision.disabled).toBe(true);
+  await act(async () => { hdr.click(); });
+  expect(dolbyVision.checked).toBe(true);
+  expect(dolbyVision.disabled).toBe(false);
 });
 
 it("unchecks a remote library and saves a scope without it", async () => {

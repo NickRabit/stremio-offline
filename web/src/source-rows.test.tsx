@@ -59,7 +59,7 @@ describe("SourceRows", () => {
     act(() => root.render(<SourceRows rows={[addonRow({ rules: {
       balanced: {
         profileId: "balanced", status: "breaks", rank: [2],
-        reasons: ["language", "resolutionLow", "subtitles", "size", "provider", "torrent"],
+        reasons: ["language", "resolutionLow", "subtitles", "size", "provider", "torrent", "codec", "hdr"],
       },
     } })]} selected={null} onSelect={() => {}} ruleId="balanced"/>));
     expect(row().textContent).toContain(t("sources.ruleBreaks", {
@@ -70,6 +70,8 @@ describe("SourceRows", () => {
         t("sources.ruleReason.size"),
         t("sources.ruleReason.provider"),
         t("sources.ruleReason.torrent"),
+        t("sources.ruleReason.codec"),
+        t("sources.ruleReason.hdr"),
       ].join(", "),
     }));
   });
