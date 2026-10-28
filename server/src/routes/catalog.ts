@@ -368,7 +368,7 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
     // The listing redacts long path segments as if they were an addon's secrets; the name of the
     // viewer's own file is not one, and it is what the row shows.
     const snapshots = rulesFor(req, String(req.params.type));
-    const candidates = copies.map((copy, index) => listedLocalCopyEvidence(copy, index));
+    const candidates = copies.map((copy, index) => listedLocalCopyEvidence(copy, index, posixBase(copy.key)));
     const verdicts = ruleVerdictsForProfiles(snapshots, candidates);
     res.setHeader("cache-control", "private, no-store").json(listed.map((stream, index) => {
       const verdict = verdicts.get(candidates[index]!.sourceId);

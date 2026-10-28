@@ -158,7 +158,16 @@ export interface Subtitle { subtitleId: string; lang?: string; addonName?: strin
 /** One site worth checking before watching; the interface draws them in its own fixed order. */
 export interface SiteLink { site: "csfd" | "tmdb" | "imdb"; url: string }
 export interface Trailer { youtubeId: string; title?: string; provider: "cinemeta" | "tmdb" }
-export type SourceRuleReason = "language" | "resolutionLow" | "resolutionHigh" | "cinema" | "subtitles" | "sample";
+export type SourceRuleReason =
+  | "language"
+  | "resolutionLow"
+  | "resolutionHigh"
+  | "cinema"
+  | "subtitles"
+  | "sample"
+  | "size"
+  | "provider"
+  | "torrent";
 export interface SourceRuleVerdict {
   profileId: string;
   status: "meets" | "unverified" | "breaks";

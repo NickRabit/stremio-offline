@@ -2270,7 +2270,7 @@ export function App() {
   // When a filter removes the chosen source, the pick moves to the first one left -- unless
   // the film is already playing on it, when moving it would restart playback on another source.
   useEffect(() => {
-    const preferred = pickDefaultStream(sourceRows) ?? null;
+    const preferred = pickDefaultStream(sourceRows, sortRuleId(streamSort) ?? defaultRuleId) ?? null;
     const next = repickStream({
       playing: playerOpen, picked: pickedRef.current, pending: pendingSources + (localLoading ? 1 : 0) + remoteLoading,
       // A late local copy or remote group replaces an automatic addon pick; an explicit pick

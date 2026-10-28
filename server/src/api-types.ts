@@ -8,7 +8,10 @@ export type SourceRuleReason =
   | "resolutionHigh"
   | "cinema"
   | "subtitles"
-  | "sample";
+  | "sample"
+  | "size"
+  | "provider"
+  | "torrent";
 
 export interface SourceRuleVerdict {
   profileId: string;

@@ -90,8 +90,13 @@ export function visibleCatalogStreams(
   return showTorrents ? arranged : arranged.filter((stream) => stream.kind !== "torrent");
 }
 
-export function pickDefaultStream(streams: Stream[]): Stream | undefined {
-  return streams.find((stream) => stream.playable) ?? streams[0];
+export function pickDefaultStream(streams: Stream[], ruleId?: string): Stream | undefined {
+  const playable = streams.filter((stream) => stream.playable);
+  if (!ruleId || !playable.some((stream) => stream.rules?.[ruleId])) {
+    return playable[0] ?? streams[0];
+  }
+  return playable.find((stream) => stream.rules?.[ruleId]?.status === "meets")
+    ?? playable.find((stream) => stream.rules?.[ruleId]?.status === "unverified");
 }
 
 /** Whether a film is worth following for its release: only once every addon has answered and
@@ -132,10 +137,11 @@ export function catalogSourceRows(
     return [...local, ...external];
   }
   if (ruleId) {
-    const external = [...remote, ...addonStreams];
-    return [...local, ...(external.some((stream) => stream.rules?.[ruleId])
-      ? external.sort((left, right) => compareRuleRank(left, right, ruleId))
-      : external)];
+    const all = [...local, ...remote, ...addonStreams];
+    if (all.some((stream) => stream.rules?.[ruleId])) {
+      return all.sort((left, right) => compareRuleRank(left, right, ruleId));
+    }
+    return [...local, ...remote, ...addonStreams];
   }
   if (sort === "addon") return [...local, ...remote, ...arrangeStreams(addonStreams, { addon: "", language: "", sort }, preferredLanguage, priority, titleLanguage)];
   return arrangeStreams([...addonStreams, ...local, ...remote], { addon: "", language: "", sort }, preferredLanguage, priority, titleLanguage);

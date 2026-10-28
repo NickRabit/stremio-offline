@@ -237,7 +237,24 @@ describe("torrent listing", () => {
   it("picks the first playable source from the rule-ranked order", () => {
     const lower = stream({ name: "lower", rules: { balanced: verdict([2]) } });
     const best = stream({ name: "best", rules: { balanced: verdict([0]) } });
-    expect(pickDefaultStream(arrangeStreams([lower, best], filters(), "en"))?.name).toBe("best");
+    expect(pickDefaultStream(arrangeStreams([lower, best], filters(), "en"), "balanced")?.name).toBe("best");
+  });
+
+  it("picks meets before unverified and never a rule-breaking source automatically", () => {
+    const breaks = stream({ name: "breaks", rules: { balanced: verdict([2], "breaks") } });
+    const unverified = stream({ name: "unverified", rules: { balanced: verdict([1], "unverified") } });
+    const meets = stream({ name: "meets", rules: { balanced: verdict([0]) } });
+
+    expect(pickDefaultStream([unverified, meets], "balanced")?.name).toBe("meets");
+    expect(pickDefaultStream([unverified], "balanced")?.name).toBe("unverified");
+    expect(pickDefaultStream([breaks], "balanced")).toBeUndefined();
+  });
+
+  it("keeps the old fallback when the listing carries no verdicts", () => {
+    const unplayable = stream({ name: "unplayable", playable: false });
+    const playable = stream({ name: "playable" });
+    expect(pickDefaultStream([unplayable, playable], "balanced")?.name).toBe("playable");
+    expect(pickDefaultStream([unplayable], "balanced")?.name).toBe("unplayable");
   });
 
   it("labels torrents as RD, not as a generic external source", () => {
@@ -458,14 +475,23 @@ describe("remote media-server sources", () => {
   });
 
   it("interleaves remote and addon sources by rule rank while local copies stay first", () => {
-    const firstAddon = stream({ sourceId: "a2", name: "Addon best", addonName: "Luna", rules: { balanced: verdict([0]) } });
-    const rankedRemote = { ...remote, rules: { balanced: verdict([1]) } };
-    const lastAddon = stream({ sourceId: "a3", name: "Addon last", addonName: "Luna", rules: { balanced: verdict([2]) } });
-    expect(catalogSourceRows([local], [lastAddon, firstAddon], "", "rule:balanced", "en", new Map(), undefined, [rankedRemote]).map((item) => item.name))
+    const rankedLocal = { ...local, rules: { balanced: verdict([0, 2, 0], "breaks") } };
+    const firstAddon = stream({ sourceId: "a2", name: "Addon best", addonName: "Luna", rules: { balanced: verdict([1, 0, 0]) } });
+    const rankedRemote = { ...remote, rules: { balanced: verdict([1, 0, 1]) } };
+    const lastAddon = stream({ sourceId: "a3", name: "Addon last", addonName: "Luna", rules: { balanced: verdict([1, 2, 0]) } });
+    expect(catalogSourceRows([rankedLocal], [lastAddon, firstAddon], "", "rule:balanced", "en", new Map(), undefined, [rankedRemote]).map((item) => item.name))
       .toEqual(["Local", "Addon best", "Remote 1080p", "Addon last"]);
     // Without any verdicts the old class order remains the fallback for an older server.
     expect(catalogSourceRows([local], [addon], "", "rule:balanced", "en", new Map(), undefined, [remote]))
       .toEqual([local, remote, addon]);
+  });
+
+  it("lets an explicit rule order move local copies among every class", () => {
+    const rankedLocal = { ...local, rules: { balanced: verdict([0, 0, 2]) } };
+    const rankedRemote = { ...remote, rules: { balanced: verdict([0, 0, 1]) } };
+    const rankedAddon = { ...addon, rules: { balanced: verdict([0, 0, 0]) } };
+    expect(catalogSourceRows([rankedLocal], [rankedAddon], "", "rule:balanced", "en", new Map(), undefined, [rankedRemote]))
+      .toEqual([rankedAddon, rankedRemote, rankedLocal]);
   });
 
   it("keeps a remote library out of a named addon filter", () => {

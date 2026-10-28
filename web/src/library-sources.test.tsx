@@ -440,17 +440,27 @@ describe("librarySourceRows", () => {
 
   it("keeps native and local rows first while interleaving remote and addon rows by rule rank", () => {
     const ranked = librarySourceEntries([remote("native", 1)], "Local files", [
-      { key: "local", kind: "local", name: "", status: "loaded", streams: [stream("copy", { kind: "library", localPath: "p" })], error: "" },
-      { key: "remote:l2", kind: "remote", name: "Second", provider: "emby", status: "loaded", streams: [stream("remote-mid", { provider: "jellyfin", rules: { balanced: { profileId: "balanced", status: "meets", reasons: [], rank: [1] } } })], error: "" },
+      { key: "local", kind: "local", name: "", status: "loaded", streams: [stream("copy", { kind: "library", localPath: "p", rules: { balanced: { profileId: "balanced", status: "breaks", reasons: ["size"], rank: [0, 2, 0] } } })], error: "" },
+      { key: "remote:l2", kind: "remote", name: "Second", provider: "emby", status: "loaded", streams: [stream("remote-mid", { provider: "jellyfin", rules: { balanced: { profileId: "balanced", status: "meets", reasons: [], rank: [1, 0, 1] } } })], error: "" },
       { key: "addon:a", kind: "addon", name: "Alpha", status: "loaded", streams: [
-        stream("addon-last", { addonName: "Alpha", rules: { balanced: { profileId: "balanced", status: "breaks", reasons: ["language"], rank: [2] } } }),
-        stream("addon-best", { addonName: "Alpha", rules: { balanced: { profileId: "balanced", status: "meets", reasons: [], rank: [0] } } }),
+        stream("addon-last", { addonName: "Alpha", rules: { balanced: { profileId: "balanced", status: "breaks", reasons: ["language"], rank: [1, 2, 0] } } }),
+        stream("addon-best", { addonName: "Alpha", rules: { balanced: { profileId: "balanced", status: "meets", reasons: [], rank: [1, 0, 0] } } }),
       ], error: "" },
     ], (group) => group.name || "Local files");
     expect(librarySourceRows(ranked, "", "", "rule:balanced", "en").map((row) => row.sourceId))
       .toEqual(["native", "copy", "addon-best", "remote-mid", "addon-last"]);
     expect(librarySourceRows(entries, "", "", "rule:balanced", "en").map((row) => row.sourceId))
       .toEqual(["native", "copy", "other", "add"]);
+  });
+
+  it("keeps native rows first but lets an explicit rule move a local copy last", () => {
+    const ranked = librarySourceEntries([remote("native", 1_000_000_000)], "Local files", [
+      { key: "local", kind: "local", name: "", status: "loaded", streams: [stream("copy", { kind: "library", localPath: "p", rules: { balanced: { profileId: "balanced", status: "meets", reasons: [], rank: [0, 0, 2] } } })], error: "" },
+      { key: "addon:a", kind: "addon", name: "Alpha", status: "loaded", streams: [stream("addon", { addonName: "Alpha", rules: { balanced: { profileId: "balanced", status: "meets", reasons: [], rank: [0, 0, 0] } } })], error: "" },
+      { key: "remote:l2", kind: "remote", name: "Second", provider: "emby", status: "loaded", streams: [stream("remote", { provider: "jellyfin", rules: { balanced: { profileId: "balanced", status: "meets", reasons: [], rank: [0, 0, 1] } } })], error: "" },
+    ], (group) => group.name || "Local files");
+    expect(librarySourceRows(ranked, "", "", "rule:balanced", "en").map((row) => row.sourceId))
+      .toEqual(["native", "addon", "remote", "copy"]);
   });
 
   it("isolates one class, and the class still out contributes nothing yet", () => {

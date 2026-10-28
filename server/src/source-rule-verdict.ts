@@ -8,13 +8,16 @@ import {
 } from "./source-admission.js";
 import type { SourceRuleReason, SourceRuleVerdict } from "./api-types.js";
 import {
+  compareFinalTie,
   evaluateSourceCandidate,
   rankingBytes,
   type SourceEvidenceCandidateV1,
+  type SourceEvidenceReason,
   type SourceEvidenceTier,
   type SourceFact,
 } from "./source-evidence.js";
 import {
+  parseTemplateParameters,
   viewerOfProfileAccount,
 } from "./source-profiles.js";
 import type { Store, UserPrefs } from "./store.js";
@@ -117,10 +120,6 @@ const directionalRank = (
   return Math.max(-UNKNOWN_RANK, Math.min(UNKNOWN_RANK, signed));
 };
 
-const providerOrder = (snapshot: SourceAdmissionSnapshotV1): Map<string, number> => {
-  return new Map(snapshot.providerKeys.map((key, index) => [key, index]));
-};
-
 const playbackEvidence = (candidate: SourceEvidenceCandidateV1): SourceEvidenceCandidateV1 => {
   // A playback listing is the only evidence available for these facts.
   const facts = candidate.facts;
@@ -149,14 +148,15 @@ const playbackEvidence = (candidate: SourceEvidenceCandidateV1): SourceEvidenceC
 };
 
 const reasonFor = (
-  evaluation: ReturnType<typeof evaluateSourceCandidate>,
+  reason: SourceEvidenceReason,
   candidate: SourceEvidenceCandidateV1,
   snapshot: SourceAdmissionSnapshotV1,
 ): SourceRuleReason | undefined => {
-  if (evaluation.status !== "excluded") return undefined;
-  const reason = evaluation.reasons[0];
-  if (!reason) return undefined;
   switch (reason.code) {
+    case "providerOutOfScope":
+      return "provider";
+    case "sourceKindNotAllowed":
+      return "torrent";
     case "audioLanguageUnavailable":
       return "language";
     case "subtitleLanguageUnavailable":
@@ -167,8 +167,12 @@ const reasonFor = (
     case "durationTooShort":
       return "sample";
     case "numericOutsideBounds":
-      if (reason.field !== "heightPixels") return undefined;
-      return heightReason(candidate, snapshot);
+      if (reason.field === "bytes") return "size";
+      return reason.field === "heightPixels" ? heightReason(candidate, snapshot) : undefined;
+    case "operationUnsupported":
+    case "sourceUnavailable":
+    case "notOwnedLocalCopy":
+    case "inspectionRequired":
     default:
       return undefined;
   }
@@ -188,10 +192,16 @@ const rankFor = (
   candidate: SourceEvidenceCandidateV1,
   snapshot: SourceAdmissionSnapshotV1,
   status: SourceRuleVerdict["status"],
+  tie: number,
 ): number[] => {
   const tiers = preferredTier(candidate, snapshot);
-  const providers = providerOrder(snapshot);
-  const rank = [status === "meets" ? 0 : status === "unverified" ? 1 : 2];
+  const viewerOrder = snapshot.policy.criteria.some((criterion) =>
+    criterion.kind === "providerOrder" && "from" in criterion);
+  const localFirst = viewerOrder && candidate.providerKey !== "local" ? 1 : 0;
+  const rank = [
+    localFirst,
+    status === "meets" ? 0 : status === "unverified" ? 1 : 2,
+  ];
   for (const criterion of snapshot.policy.criteria) {
     switch (criterion.kind) {
       case "providerClass": {
@@ -219,12 +229,38 @@ const rankFor = (
         ));
         break;
       }
-      case "providerOrder":
-        rank.push(providers.get(candidate.providerKey) ?? UNKNOWN_RANK);
+      case "providerOrder": {
+        const keys = "keys" in criterion ? criterion.keys : snapshot.providerKeys;
+        rank.push(new Map(keys.map((key, index) => [key, index])).get(candidate.providerKey) ?? UNKNOWN_RANK);
         break;
+      }
     }
   }
+  rank.push(tie);
   return rank;
+};
+
+const tieOrdinals = (
+  snapshot: SourceAdmissionSnapshotV1,
+  candidates: readonly SourceEvidenceCandidateV1[],
+): Map<string, number> => {
+  const ordered = candidates
+    .map((candidate, index) => ({ candidate, index }))
+    .sort((left, right) => {
+      const tie = compareFinalTie(
+        snapshot,
+        {
+          candidate: left.candidate,
+          evaluation: { status: "eligible", reasons: [], audioTier: "unknown", subtitleTier: "unknown" },
+        },
+        {
+          candidate: right.candidate,
+          evaluation: { status: "eligible", reasons: [], audioTier: "unknown", subtitleTier: "unknown" },
+        },
+      );
+      return tie || left.index - right.index;
+    });
+  return new Map(ordered.map((entry, ordinal) => [entry.candidate.sourceId, ordinal]));
 };
 
 export function ruleSnapshots(input: SourceRuleInput): SourceAdmissionSnapshotV1[] {
@@ -252,10 +288,16 @@ export function ruleSnapshots(input: SourceRuleInput): SourceAdmissionSnapshotV1
           mediaKind: input.mediaKind,
         },
       );
-      const { bytes: _ignored, ...constraints } = snapshot.policy.constraints;
+      const viewerOrder = parseTemplateParameters("rules", profile.parameters).addons.order === "viewer";
       return [{
         ...snapshot,
-        policy: { ...snapshot.policy, constraints },
+        policy: {
+          ...snapshot.policy,
+          criteria: snapshot.policy.criteria.map((criterion) =>
+            viewerOrder && criterion.kind === "providerOrder"
+              ? { kind: "providerOrder", from: "viewer" }
+              : criterion),
+        },
       }];
     } catch {
       return [];
@@ -268,25 +310,29 @@ export function ruleVerdicts(
   candidates: readonly SourceEvidenceCandidateV1[],
 ): Map<string, SourceRuleVerdict> {
   const verdicts = new Map<string, SourceRuleVerdict>();
+  const ties = tieOrdinals(snapshot, candidates);
   for (const original of candidates) {
     const candidate = playbackEvidence(original);
     const evaluation = evaluateSourceCandidate(snapshot, candidate);
-    const reason = evaluation.status === "excluded"
-      ? reasonFor(evaluation, candidate, snapshot)
-      : undefined;
+    const reasons = evaluation.status === "excluded"
+      ? evaluation.reasons.flatMap((reason) => {
+          const mapped = reasonFor(reason, candidate, snapshot);
+          return mapped ? [mapped] : [];
+        })
+      : [];
     const status: SourceRuleVerdict["status"] | undefined = evaluation.status === "eligible"
       ? "meets"
       : evaluation.status === "needsInspection"
         ? "unverified"
-        : reason === undefined
+        : reasons.length === 0
           ? undefined
           : "breaks";
     if (status === undefined) continue;
     verdicts.set(candidate.sourceId, {
       profileId: snapshot.profile.id,
       status,
-      reasons: status === "breaks" && reason ? [reason] : [],
-      rank: rankFor(candidate, snapshot, status),
+      reasons: status === "breaks" ? reasons : [],
+      rank: rankFor(candidate, snapshot, status, ties.get(candidate.sourceId) ?? 0),
     });
   }
   return verdicts;

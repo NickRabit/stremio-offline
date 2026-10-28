@@ -10,7 +10,7 @@ import { t, useI18n } from "./i18n";
 import { defaultSource, orderSources, playableSources, sourceIdentity, sourceRowKey } from "./library-detail-sources";
 import { librarySourceEntries, librarySourceRows, type LibrarySourceGroup, type LibrarySourcePanel } from "./library-sources";
 import { providerLabel, streamLabel } from "./source-rows";
-import { isLocalStream, isRemoteStream, resolveStreamSort, streamBadge, streamLanguages, streamSize } from "./streams";
+import { isLocalStream, isRemoteStream, pickDefaultStream, resolveStreamSort, sortRuleId, streamBadge, streamLanguages, streamSize } from "./streams";
 import { label } from "./languages";
 import { bytes } from "./settings-ui";
 import { SourceChooser } from "./SourceChooser";
@@ -151,7 +151,13 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
   const resolvedSort = resolveStreamSort(defaultSort, sourceProfiles);
   const pickable = useMemo(() => librarySourceRows(
     librarySourceEntries(own, nativeSourceLabel ?? t("sources.localFilter"), groups, () => ""), "", "", resolvedSort, preferredLanguage ?? ""), [own, groups, nativeSourceLabel, preferredLanguage, resolvedSort]);
-  const defaultPick = defaultSource(defaultSources === undefined ? own : (defaultSources ?? []));
+  const activeRuleId = sortRuleId(resolvedSort);
+  const ruleAware = Boolean(activeRuleId && pickable.some((stream) => stream.rules?.[activeRuleId]));
+  const defaultPick = defaultSources === null
+    ? null
+    : ruleAware
+      ? pickDefaultStream(pickable, activeRuleId) ?? null
+      : defaultSource(defaultSources === undefined ? own : defaultSources);
   const picked = chosen?.identity === identityKey ? pickable.find((stream) => sourceRowKey(stream) === chosen.key) : undefined;
   // The row this detail was opened on is the selection until the viewer picks another one: later
   // arrivals keep it, and while it is still on its way the default stands in for it.
@@ -162,7 +168,8 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
   // a candidate, so a group still to load can never be selected for it.
   const stored = resumeStableKey ? pickable.find((row) => row.stableKey === resumeStableKey) : undefined;
   const selected = picked ?? seeded ?? stored ?? defaultPick;
-  const multiple = own.length > 1 || sourceGroups != null;
+  const ruleRefusal = Boolean(ruleAware && !selected && pickable.some((stream) => stream.playable));
+  const multiple = own.length > 1 || sourceGroups != null || ruleRefusal;
   const canSave = selected !== null && (saveSupported?.(selected) ?? true);
   // A device save is offered wherever the caller can hand the row to the server: a file of this
   // machine, an addon answer, and a media server's own original, whose projection carries the
@@ -184,6 +191,15 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
   const choose = (stream: Stream) => {
     setChosen({ identity: identityKey, key: sourceRowKey(stream) });
     setPickerOpen(false);
+  };
+  const openPicker = () => {
+    onOpenSources?.();
+    setPickerOpen(true);
+  };
+  const playOrChoose = (fromBeginning?: boolean) => {
+    if (selected && fromBeginning === undefined) onPlay(selected);
+    else if (selected) onPlay(selected, fromBeginning);
+    else if (ruleRefusal) openPicker();
   };
 
   const selectedKey = selected ? sourceIdentity(selected) : null;
@@ -300,14 +316,14 @@ export function LibraryTitleDetail({ identityKey, title, subtitle, poster, backd
     <div className="library-detail-actions">
       <div className="actions library-detail-play">
         {multiple ? <div className="split-button">
-          <button ref={playRef} type="button" className="primary" disabled={!selected} onClick={() => selected && onPlay(selected)}><CirclePlay/> {t("player.play")}</button>
+          <button ref={playRef} type="button" className="primary" disabled={!selected && !ruleRefusal} onClick={() => playOrChoose()}><CirclePlay/> {t("player.play")}</button>
           <button ref={arrowRef} type="button" className="split-button-toggle primary" aria-haspopup="dialog" aria-expanded={pickerOpen}
-            aria-label={t("library.chooseSource")} title={t("library.chooseSource")} onClick={() => { onOpenSources?.(); setPickerOpen(true); }}><ChevronDown/></button>
+            aria-label={t("library.chooseSource")} title={t("library.chooseSource")} onClick={openPicker}><ChevronDown/></button>
         </div>
-          : <button ref={playRef} type="button" className="primary" disabled={!selected} onClick={() => selected && onPlay(selected)}><CirclePlay/> {t("player.play")}</button>}
+          : <button ref={playRef} type="button" className="primary" disabled={!selected && !ruleRefusal} onClick={() => playOrChoose()}><CirclePlay/> {t("player.play")}</button>}
       </div>
       {savedPosition && <button type="button" className="icon-button library-detail-icon-action" aria-label={t("player.playFromStart")} title={t("player.playFromStart")}
-        onClick={() => selected && onPlay(selected, true)}><ListRestart/></button>}
+        onClick={() => playOrChoose(true)}><ListRestart/></button>}
       {/* Beside the position it belongs to, wherever a detail draws it: the two are the pair that
           reads and writes what the store holds for the row on screen. */}
       {onToggleWatched && <button type="button" className="icon-button library-detail-icon-action" aria-pressed={watched} disabled={watchedDisabled ?? false}

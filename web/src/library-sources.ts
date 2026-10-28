@@ -93,10 +93,11 @@ export function librarySourceRows(entries: LibrarySourceEntry[], filter: string,
   }
   const ruleId = sortRuleId(sort);
   if (ruleId) {
-    const external = [...remote, ...addon];
-    return [...native, ...local, ...(external.some((stream) => stream.rules?.[ruleId])
-      ? external.sort((left, right) => compareRuleRank(left, right, ruleId))
-      : [...remote, ...arrangeStreams(addon, { addon: "", language: "", sort: "recommended" }, preferredLanguage, rank, titleLanguage)])];
+    const ruleRows = [...local, ...remote, ...addon];
+    if (ruleRows.some((stream) => stream.rules?.[ruleId])) {
+      return [...native, ...ruleRows.sort((left, right) => compareRuleRank(left, right, ruleId))];
+    }
+    return [...native, ...local, ...remote, ...arrangeStreams(addon, { addon: "", language: "", sort: "recommended" }, preferredLanguage, rank, titleLanguage)];
   }
   if (sort === "addon") return [...native, ...local, ...remote, ...arrangeStreams(addon, { addon: "", language: "", sort }, preferredLanguage, rank, titleLanguage)];
   return arrangeStreams([...native, ...local, ...remote, ...addon], { addon: "", language: "", sort }, preferredLanguage, rank, titleLanguage);

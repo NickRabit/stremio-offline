@@ -86,7 +86,7 @@ const subtitleLanguages = (
   ]);
 };
 
-const addonAudioLanguages = (
+export const listedAudioLanguages = (
   stream: StreamItem,
   titleLanguage: string | undefined,
 ): SourceFact<readonly string[]> => {
@@ -231,7 +231,7 @@ export function listedAddonSourceEvidence(
   const titleLanguage = typeof input.titleLanguage === "string"
     ? normalizeLanguage(input.titleLanguage)
     : undefined;
-  const audioLanguages = addonAudioLanguages(input.stream, identity.kind === "torrent" ? undefined : titleLanguage);
+  const audioLanguages = listedAudioLanguages(input.stream, identity.kind === "torrent" ? undefined : titleLanguage);
   const bytes = addonStreamSize(input.stream);
   const heightPixels = heightFromListing(input.stream);
   const hints = bytes !== undefined && Number.isFinite(bytes) && bytes >= 0

@@ -6,7 +6,7 @@ import { t, useI18n } from "./i18n";
 import { LibraryTitleDetail } from "./LibraryTitleDetail";
 import { useLibrarySources } from "./library-sources";
 import { titleLanguage } from "./languages";
-import { arrangeStreams, catalogSourceRows, isLocalStream, resolveStreamSort } from "./streams";
+import { arrangeStreams, catalogSourceRows, isLocalStream, pickDefaultStream, resolveStreamSort, sortRuleId } from "./streams";
 import type { Meta, SourceProfile, Stream, Video } from "./types";
 
 /** One catalogue title's detail: the same body the libraries draw, hosted for a title that only
@@ -260,8 +260,8 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
     () => ordered === null ? null : [...libraryRows, ...ordered],
     [libraryRows, ordered],
   );
-  /** The first playable row in the merged order, so a library copy leads whenever one exists. */
-  const firstPlayable = detailSources?.find((stream) => stream.playable) ?? null;
+  /** The first playable row the active rule accepts, then the first unverified row. */
+  const firstPlayable = pickDefaultStream(detailSources ?? [], sortRuleId(resolvedSort)) ?? null;
 
   // What this detail holds is the caller's business too: its chips, its saved position and the
   // episode after the one it plays all belong to the title read here.

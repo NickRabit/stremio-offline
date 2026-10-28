@@ -12,6 +12,7 @@ import {
 import { normalizeLanguage } from "./language.js";
 import { localCopies, type LocalCopy } from "./local-sources.js";
 import type { MediaInfo } from "./probe.js";
+import { listedAudioLanguages } from "./source-addon-evidence.js";
 import {
   evaluateSourceCandidate,
   type SourceEvidenceCandidateV1,
@@ -126,6 +127,7 @@ const evidenceCandidate = (
 export function listedLocalCopyEvidence(
   copy: Pick<LocalCopy, "key" | "size">,
   providerResponseIndex: number,
+  filename = path.posix.basename(copy.key),
 ): SourceEvidenceCandidateV1 {
   return {
     sourceId: copy.key,
@@ -137,6 +139,10 @@ export function listedLocalCopyEvidence(
     available: true,
     facts: {
       ...unknownFacts(copy.size),
+      audio: {
+        listed: listedAudioLanguages({ behaviorHints: { filename } }, undefined),
+        tracks: unknownFact(),
+      },
       bytes: { evidence: "listed", value: copy.size },
     },
   };
