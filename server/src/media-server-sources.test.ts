@@ -726,6 +726,28 @@ test("downloadReference captures a durable, session-free handle for the exact ve
   }, { contentDownloading: true });
 });
 
+test("downloadReference keeps the exact version's sealed subtitle indexes without URLs", async () => {
+  await withHarness(async (harness) => {
+    harness.server.versionsOf["item-1"] = [{
+      id: "v1",
+      name: "1080p",
+      externalSubtitles: [
+        { index: 2, language: "eng" },
+        { index: 5, language: "cze" },
+        { index: 7 },
+      ],
+    }];
+    const [first] = await harness.sources.list(harness.adminAuthority, harness.owner, harness.libraryId, "item-1");
+    const reference = await downloadRefOf(harness, first!.sourceId);
+    assert.deepEqual(reference.subtitles, [
+      { index: 2, language: "en" },
+      { index: 5, language: "cs" },
+      { index: 7 },
+    ]);
+    assert.equal(/https?:|media-server:|token|secret|expiresAt|sid/i.test(JSON.stringify(reference)), false);
+  }, { contentDownloading: true });
+});
+
 test("downloadReference refuses a subtitle, a foreign owner and a generic stream", async () => {
   await withHarness(async (harness) => {
     harness.server.versionsOf["item-1"] = [{ id: "v1", name: "1080p", externalSubtitles: [{ index: 2 }] }];

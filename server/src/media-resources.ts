@@ -149,6 +149,15 @@ function normalizedStream(input: StreamItem): StreamItem {
     return normalized.length ? normalized : undefined;
   };
   const audioLanguages = languageCodes(input.audioLanguages);
+  const remoteSubtitles = isRemoteMediaStream(input)
+    ? input.subtitles?.flatMap((subtitle) => {
+        const ref = openRemoteContent(subtitle.url);
+        return ref?.subtitleIndex === undefined ? [] : [{
+          url: subtitle.url,
+          lang: subtitle.lang,
+        }];
+      })
+    : undefined;
   return {
     url: typeof input.url === "string" && !/^magnet:/i.test(input.url) ? input.url : undefined,
     infoHash, fileIdx,
@@ -158,6 +167,7 @@ function normalizedStream(input: StreamItem): StreamItem {
     audioLanguages,
     subtitleLanguages: languageCodes(input.subtitleLanguages),
     audioLanguagesGuessed: audioLanguages && input.audioLanguagesGuessed === true ? true : undefined,
+    ...(remoteSubtitles?.length ? { subtitles: remoteSubtitles } : {}),
     behaviorHints: { filename: safeSourceText(input.behaviorHints?.filename, input),
       bingeGroup: safeSourceText(input.behaviorHints?.bingeGroup, input),
       notWebReady: input.behaviorHints?.notWebReady === true,

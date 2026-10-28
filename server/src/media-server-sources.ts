@@ -335,6 +335,9 @@ export class MediaServerSources {
             accountId: result.identity.accountId,
             itemId: result.identity.itemId,
             mediaSourceId: version.id,
+            ...(version.externalSubtitles?.length
+              ? { subtitles: version.externalSubtitles.map(({ index, language }) => ({ index, ...(language === undefined ? {} : { language }) })) }
+              : {}),
           }),
           version,
           libraryName: result.libraryName,
@@ -390,6 +393,19 @@ export class MediaServerSources {
     await this.authorize(stream, owner, signal, { download: true });
     const ref = openRemoteContent(stream.url);
     if (!ref || ref.subtitleIndex !== undefined) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
+    const subtitles = (stream.subtitles ?? []).flatMap((subtitle) => {
+      const subtitleRef = openRemoteContent(subtitle.url);
+      if (!subtitleRef || subtitleRef.subtitleIndex === undefined
+        || subtitleRef.owner.userId !== ref.owner.userId
+        || subtitleRef.connectionId !== ref.connectionId || subtitleRef.libraryId !== ref.libraryId
+        || subtitleRef.generation !== ref.generation || subtitleRef.provider !== ref.provider
+        || subtitleRef.serverId !== ref.serverId || subtitleRef.accountId !== ref.accountId
+        || subtitleRef.itemId !== ref.itemId || subtitleRef.mediaSourceId !== ref.mediaSourceId) return [];
+      return [{
+        index: subtitleRef.subtitleIndex,
+        ...(subtitle.lang === undefined ? {} : { language: subtitle.lang }),
+      }];
+    });
     return canonicalRemoteDownloadReference({
       schemaVersion: 1,
       ownerUserId: owner.userId,
@@ -401,6 +417,7 @@ export class MediaServerSources {
       accountId: ref.accountId,
       itemId: ref.itemId,
       mediaSourceId: ref.mediaSourceId,
+      ...(subtitles.length ? { subtitles } : {}),
     });
   }
 

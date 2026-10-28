@@ -1,4 +1,5 @@
 import { remoteLibraryVisibleTo, type RemoteAccessSource } from "./media-server-access.js";
+import { normalizeLanguage } from "./language.js";
 import { defaultLibrary, type DefaultLibrarySettings, type LibraryRecord } from "./libraries.js";
 import type { DownloadTargetSettings } from "./types.js";
 import {
@@ -29,15 +30,27 @@ export interface RemoteDownloadReference {
   accountId: string;
   itemId: string;
   mediaSourceId: string;
+  /** The exact version's external subtitle indexes, kept so a completed copy can fetch them
+   *  without relying on a session or a caller-supplied URL. */
+  subtitles?: RemoteDownloadSubtitle[];
+}
+
+export interface RemoteDownloadSubtitle {
+  index: number;
+  language?: string;
 }
 
 const REF_KEYS: readonly string[] = [
   "schemaVersion", "ownerUserId", "connectionId", "libraryId",
   "generation", "provider", "serverId", "accountId", "itemId", "mediaSourceId",
 ];
+const REF_OPTIONAL_KEYS: readonly string[] = ["subtitles"];
 const ID_MAX = MEDIA_SERVER_LIMITS.upstreamId;
 const OWNER_ID_MAX = 512;
 const SEGMENT_BAD = /[/\\?#%\u0000-\u001f\u007f]/;
+const SUBTITLE_INDEX_MAX = 1023;
+const SUBTITLE_MAX = 64;
+const LANGUAGE = /^[\p{L}\p{N}_ -]{1,64}$/u;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -65,12 +78,29 @@ const ownValue = (record: Record<string, unknown>, key: string): unknown => {
   return descriptor && "value" in descriptor ? descriptor.value : undefined;
 };
 
+const isSubtitle = (value: unknown): value is RemoteDownloadSubtitle => {
+  if (!isRecord(value)) return false;
+  const keys = plainKeys(value);
+  if (!keys || !keys.includes("index") || keys.some((key) => key !== "index" && key !== "language")) return false;
+  const index = ownValue(value, "index");
+  const language = ownValue(value, "language");
+  return typeof index === "number" && Number.isSafeInteger(index) && index >= 0 && index <= SUBTITLE_INDEX_MAX
+    && (language === undefined || (typeof language === "string" && LANGUAGE.test(language)));
+};
+
+const isSubtitles = (value: unknown): value is RemoteDownloadSubtitle[] =>
+  Array.isArray(value) && value.length <= SUBTITLE_MAX
+  && value.every(isSubtitle)
+  && new Set(value.map((subtitle) => subtitle.index)).size === value.length;
+
 /** Whether a value is a well-formed reference. Structural only: it proves nothing about the
  *  records behind it, which every caller checks against the live state. */
 export const isRemoteDownloadReference = (value: unknown): value is RemoteDownloadReference => {
   if (!isRecord(value)) return false;
   const keys = plainKeys(value);
-  if (!keys || keys.length !== REF_KEYS.length || !REF_KEYS.every((key) => keys.includes(key))) return false;
+  if (!keys || keys.length < REF_KEYS.length || !REF_KEYS.every((key) => keys.includes(key))
+    || keys.some((key) => !REF_KEYS.includes(key) && !REF_OPTIONAL_KEYS.includes(key))) return false;
+  const subtitles = ownValue(value, "subtitles");
   return ownValue(value, "schemaVersion") === 1
     && isOwnerId(ownValue(value, "ownerUserId"))
     && typeof ownValue(value, "connectionId") === "string" && MEDIA_CONNECTION_ID.test(ownValue(value, "connectionId") as string)
@@ -80,22 +110,42 @@ export const isRemoteDownloadReference = (value: unknown): value is RemoteDownlo
     && isSegmentId(ownValue(value, "serverId"))
     && isSegmentId(ownValue(value, "accountId"))
     && isSegmentId(ownValue(value, "itemId"))
-    && isSegmentId(ownValue(value, "mediaSourceId"));
+    && isSegmentId(ownValue(value, "mediaSourceId"))
+    && (subtitles === undefined || isSubtitles(subtitles));
+};
+
+export const canonicalRemoteDownloadSubtitles = (
+  subtitles: readonly RemoteDownloadSubtitle[] | undefined,
+): RemoteDownloadSubtitle[] | undefined => {
+  if (!subtitles?.length) return undefined;
+  const canonical = new Map<number, RemoteDownloadSubtitle>();
+  for (const subtitle of subtitles) {
+    const language = normalizeLanguage(subtitle.language);
+    canonical.set(subtitle.index, {
+      index: subtitle.index,
+      ...(language === undefined ? {} : { language }),
+    });
+  }
+  return canonical.size ? [...canonical.values()] : undefined;
 };
 
 /** The one canonical, plain shape of a reference: nothing inherited, nothing extra. */
-export const canonicalRemoteDownloadReference = (ref: RemoteDownloadReference): RemoteDownloadReference => ({
-  schemaVersion: 1,
-  ownerUserId: ref.ownerUserId,
-  connectionId: ref.connectionId,
-  libraryId: ref.libraryId,
-  generation: ref.generation,
-  provider: ref.provider,
-  serverId: ref.serverId,
-  accountId: ref.accountId,
-  itemId: ref.itemId,
-  mediaSourceId: ref.mediaSourceId,
-});
+export const canonicalRemoteDownloadReference = (ref: RemoteDownloadReference): RemoteDownloadReference => {
+  const subtitles = canonicalRemoteDownloadSubtitles(ref.subtitles);
+  return {
+    schemaVersion: 1,
+    ownerUserId: ref.ownerUserId,
+    connectionId: ref.connectionId,
+    libraryId: ref.libraryId,
+    generation: ref.generation,
+    provider: ref.provider,
+    serverId: ref.serverId,
+    accountId: ref.accountId,
+    itemId: ref.itemId,
+    mediaSourceId: ref.mediaSourceId,
+    ...(subtitles === undefined ? {} : { subtitles }),
+  };
+};
 
 /** The local identity of the exact version behind a reference, for duplicate detection. */
 export const remoteDownloadKey = (ref: RemoteDownloadReference): string =>

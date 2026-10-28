@@ -169,7 +169,12 @@ test("a sealed address that does not match its reference is refused at admission
   const target = library(downloads);
   const queue = new DownloadQueue(() => 1, () => 1, path.join(dir, "data"), downloads, {
     libraries: () => [target], defaultLibrary: () => target,
-    remoteDownload: { current: () => true, open: async () => new Response(null), revalidate: async () => undefined },
+    remoteDownload: {
+      current: () => true,
+      open: async () => new Response(null),
+      revalidate: async () => undefined,
+      readSubtitle: async () => ({ bytes: new Uint8Array(), contentType: "application/x-subrip" }),
+    },
   });
   try {
     await queue.load();

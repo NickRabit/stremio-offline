@@ -114,7 +114,7 @@ import { remoteDownloadAccessible } from "./media-server-download.js";
 import { MediaServerPersonal } from "./media-server-personal.js";
 import { MediaServerPlaybackReporter } from "./media-server-playing.js";
 import { MediaServerPlaybackGuard, readMediaServerPlaybackConfig } from "./media-server-playback.js";
-import { isRemoteMediaStream } from "./media-server-reference.js";
+import { isRemoteMediaStream, remoteSecretStamp, type RemoteContentRef } from "./media-server-reference.js";
 import { MediaServerSources } from "./media-server-sources.js";
 import { MediaServerSecrets } from "./media-server-secrets.js";
 import { isMediaServerError } from "./media-server-types.js";
@@ -264,6 +264,28 @@ const jobAuthority = (job: DownloadJob): MediaServerAuthority => {
   return authorityFromUser(owner);
 };
 
+/** The owner-only authority for a queued download's background subtitle reads. It repeats the
+ *  account checks the unauthenticated discovery path uses, without inventing a session. */
+const jobDownloadAuthority = (job: DownloadJob): MediaServerAuthority => {
+  const owner = findUserById(store.users(), ownerIdOf(job) ?? "");
+  if (!owner || owner.disabled || owner.mustChangePassword || !mayDownloadToLibrary(owner)) {
+    throw new ResourceError(404, "RESOURCE_NOT_FOUND");
+  }
+  const actor = { id: owner.id, secret: owner.secret };
+  const authority: MediaServerAuthority = {
+    actor,
+    assertCurrent: () => {
+      const current = findUserById(store.users(), actor.id);
+      if (!current || current.disabled || current.mustChangePassword
+        || current.secret !== actor.secret || !mayDownloadToLibrary(current)) {
+        throw new ResourceError(404, "RESOURCE_NOT_FOUND");
+      }
+    },
+  };
+  authority.assertCurrent();
+  return authority;
+};
+
 const playbackAuthority = (actorId: string): MediaServerAuthority | undefined => {
   const owner = findUserById(store.users(), actorId);
   return owner ? authorityFromUser(owner) : undefined;
@@ -288,6 +310,36 @@ const remoteDownloadBackend: RemoteDownloadBackend = {
   },
   open: (job, args, signal) => mediaServers.openDownloadOriginal(jobAuthority(job), job.remoteDownload!, args, signal),
   revalidate: (job, signal) => mediaServers.revalidateDownloadOriginal(jobAuthority(job), job.remoteDownload!, signal),
+  readSubtitle: async (job, subtitle, signal) => {
+    if (!job.remoteDownload?.subtitles?.some((entry) => entry.index === subtitle.index)) {
+      throw new ResourceError(404, "RESOURCE_NOT_FOUND");
+    }
+    const authority = jobDownloadAuthority(job);
+    await mediaServers.revalidateDownloadOriginal(authority, job.remoteDownload, signal);
+    authority.assertCurrent();
+    const owner = findUserById(store.users(), authority.actor.id);
+    if (!owner) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
+    const reference: RemoteContentRef = {
+      provider: job.remoteDownload.provider,
+      serverId: job.remoteDownload.serverId,
+      accountId: job.remoteDownload.accountId,
+      itemId: job.remoteDownload.itemId,
+      connectionId: job.remoteDownload.connectionId,
+      libraryId: job.remoteDownload.libraryId,
+      generation: job.remoteDownload.generation,
+      mediaSourceId: job.remoteDownload.mediaSourceId,
+      subtitleIndex: subtitle.index,
+      owner: {
+        userId: owner.id,
+        sid: `download:${job.id}`,
+        expiresAt: Number.MAX_SAFE_INTEGER,
+        secretStamp: remoteSecretStamp(owner.secret),
+      },
+    };
+    const asset = await mediaServers.readSubtitle(authority, reference, signal);
+    authority.assertCurrent();
+    return asset;
+  },
 };
 const existingLocalCopyDeps = (): ExistingLocalCopyDeps => ({
   users: () => store.users(),
