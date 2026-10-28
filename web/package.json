@@ -1,7 +1,7 @@
 {
   "name": "@stremio-offline/web",
   "private": true,
-  "version": "0.6.2",
+  "version": "0.6.3",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -24,7 +24,7 @@
     "@vitejs/plugin-react": "4.5.2",
     "jsdom": "26.1.0",
     "typescript": "5.8.3",
-    "vite": "6.3.5",
-    "vitest": "3.2.4"
+    "vite": "6.4.5",
+    "vitest": "4.1.12"
   }
 }

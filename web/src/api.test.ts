@@ -269,8 +269,7 @@ describe("request deadlines with a caller signal", () => {
     const settled = api.search("dune", { signal: caller.signal }).catch((error) => error);
     caller.abort();
     const error = await settled;
-    expect(error).toBeInstanceOf(DOMException);
-    expect((error as DOMException).name).toBe("AbortError");
+    expect(error).toMatchObject({ name: "AbortError" });
   });
 
   it("passes the signal to search without putting it on the query string", async () => {

@@ -11,6 +11,15 @@ updates:
         update-types:
           - minor
           - patch
+    ignore:
+      - dependency-name: "@electron/fuses"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: lucide-react
+        update-types: ["version-update:semver-major"]
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
+      - dependency-name: vitest
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: docker
     directories:
@@ -26,6 +35,11 @@ updates:
         update-types:
           - minor
           - patch
+    ignore:
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
+      - dependency-name: ubuntu
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
@@ -38,6 +52,13 @@ updates:
         update-types:
           - minor
           - patch
+    ignore:
+      - dependency-name: actions/setup-java
+        update-types: ["version-update:semver-major"]
+      - dependency-name: actions/setup-node
+        update-types: ["version-update:semver-major"]
+      - dependency-name: android-actions/setup-android
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: gradle
     directory: /android-tv
@@ -50,3 +71,8 @@ updates:
         update-types:
           - minor
           - patch
+    ignore:
+      - dependency-name: androidx.compose:compose-bom
+        update-types: ["version-update:semver-major"]
+      - dependency-name: com.android.application
+        update-types: ["version-update:semver-major"]
