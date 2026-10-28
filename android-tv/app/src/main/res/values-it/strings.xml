@@ -92,6 +92,8 @@
   <string name="sources_rule_reason_size">dimensione fuori intervallo</string>
   <string name="sources_rule_reason_provider">fonte non inclusa nelle regole</string>
   <string name="sources_rule_reason_torrent">torrent non consentiti</string>
+  <string name="sources_rule_reason_codec">codec indesiderato</string>
+  <string name="sources_rule_reason_hdr">HDR / Dolby Vision</string>
   <string name="sources_sort_largest">Prima il più grande</string>
   <string name="sources_sort_smallest">Prima il più piccolo</string>
   <string name="sources_sort_addon">Per priorità del componente aggiuntivo</string>

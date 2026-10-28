@@ -114,6 +114,21 @@ test("a CAM source breaks with a cinema reason", () => {
   assert.deepEqual(verdict.reasons, ["cinema"]);
 });
 
+test("playback reports codec and HDR rule breaks", () => {
+  const codec = addon("codec", {
+    url: "https://cdn.example/codec.mp4",
+    name: "Czech 1080p HEVC",
+  });
+  const hdr = addon("hdr", {
+    url: "https://cdn.example/hdr.mp4",
+    name: "Czech 1080p HDR10",
+  }, "addon:a", 1);
+  const verdicts = ruleVerdicts(snapshot(rule({ videoAvoid: ["hevc", "hdr"] })), [codec, hdr]);
+
+  assert.deepEqual(verdicts.get(codec.sourceId)?.reasons, ["codec"]);
+  assert.deepEqual(verdicts.get(hdr.sourceId)?.reasons, ["hdr"]);
+});
+
 test("playback breaks a known size outside the rule's file-size limit", () => {
   const source = addon("large", {
     url: "https://cdn.example/large-1080p.mp4",
@@ -306,11 +321,13 @@ test("equal sources receive distinct tie ordinals in compareFinalTie order", () 
 
 test("a local file name is listed language evidence", () => {
   const local = listedLocalCopyEvidence({
-    key: "lib_00000001/movie.Czech.1080p.mkv",
+    key: "lib_00000001/movie.Czech.1080p.HEVC.HDR10.mkv",
     size: 10_000_000_000,
-  }, 0, "movie.Czech.1080p.mkv");
+  }, 0, "movie.Czech.1080p.HEVC.HDR10.mkv");
 
   assert.deepEqual(local.facts.audio.listed, { evidence: "listed", value: ["cs"] });
+  assert.deepEqual(local.facts.videoCodec, { evidence: "listed", value: "hevc" });
+  assert.deepEqual(local.facts.videoRange, { evidence: "listed", value: "hdr" });
   const verdict = ruleVerdicts(snapshot(rule({
     audio: { mode: "only", language: "cs", fallback: null },
   })), [local]).get(local.sourceId)!;

@@ -596,6 +596,8 @@ internal fun ruleBreakNote(
   size: String,
   provider: String,
   torrent: String,
+  codec: String,
+  hdr: String,
 ): String? {
   val known = reasons.mapNotNull { code ->
     when (code) {
@@ -608,6 +610,8 @@ internal fun ruleBreakNote(
       "size" -> size
       "provider" -> provider
       "torrent" -> torrent
+      "codec" -> codec
+      "hdr" -> hdr
       else -> null
     }
   }
@@ -631,6 +635,8 @@ internal fun sourceRuleBreaksNote(stream: StreamDto, profileId: String?): String
     size = stringResource(R.string.sources_rule_reason_size),
     provider = stringResource(R.string.sources_rule_reason_provider),
     torrent = stringResource(R.string.sources_rule_reason_torrent),
+    codec = stringResource(R.string.sources_rule_reason_codec),
+    hdr = stringResource(R.string.sources_rule_reason_hdr),
   ) ?: return null
   return stringResource(R.string.sources_rule_breaks, reasons)
 }

@@ -15,7 +15,7 @@ import {
   inspectedAddonSourceEvidence,
   listedAddonSourceEvidence,
 } from "./source-addon-evidence.js";
-import type { SourceEvidenceCandidateV1 } from "./source-evidence.js";
+import { evaluateSourceCandidate, type SourceEvidenceCandidateV1 } from "./source-evidence.js";
 import { verifyRulesAddonStreams } from "./source-rules-execution.js";
 import {
   parseRulesContinuationCursorV1,
@@ -432,6 +432,35 @@ test("unknown size passes, listed size within passes, and listed size over is ex
   assert.equal(result.observations.probesUsed, 0);
   if (result.status === "selected") {
     assert.notEqual(result.selection.candidate.sourceId, over.sourceId);
+  }
+});
+
+test("a download rule skips a known HEVC candidate and selects the next source", async () => {
+  const blocked = candidate(stream("English 1080p HEVC"));
+  const accepted = candidate(stream("English 1080p copy", {
+    url: "https://media.example/accepted.mkv",
+  }));
+  const downloadSnapshot = snapshot({
+    videoAvoid: ["hevc"],
+  });
+  assert.equal(evaluateSourceCandidate(downloadSnapshot, blocked).status, "excluded");
+  assert.equal(evaluateSourceCandidate(downloadSnapshot, accepted).status, "eligible");
+  const result = await verifyRulesCandidates({
+    snapshot: downloadSnapshot,
+    candidates: [blocked, accepted],
+    inspect: async () => {
+      throw new Error("known video rules need no inspection");
+    },
+    shouldContinue: () => true,
+    scopeStamp: "video-avoid",
+    hasRealDebrid: false,
+  });
+
+  assert.equal(result.status, "selected");
+  assert.equal(result.observations.probesUsed, 0);
+  if (result.status === "selected") {
+    assert.equal(result.selection.candidate.sourceId, accepted.sourceId);
+    assert.notEqual(result.selection.candidate.sourceId, blocked.sourceId);
   }
 });
 

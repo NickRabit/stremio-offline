@@ -163,6 +163,10 @@ const reasonFor = (
       return "subtitles";
     case "releaseKindExcluded":
       return "cinema";
+    case "videoCodecExcluded":
+      return "codec";
+    case "videoRangeExcluded":
+      return "hdr";
     case "sampleOrTrailer":
     case "durationTooShort":
       return "sample";

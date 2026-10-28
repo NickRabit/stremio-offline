@@ -310,7 +310,7 @@ test("versions reads bounded video, audio and embedded-subtitle facts from Media
       MediaStreams: [
         null,
         "not-a-stream",
-        { Type: "Video", Width: 1920, Height: 800 },
+        { Type: "Video", Width: 1920, Height: 800, Codec: "hevc", VideoRangeType: "HDR10Plus" },
         { Type: "Video", Width: 3840, Height: 2160 },
         { Type: "Audio", Language: "cze" },
         { Type: "Audio", Language: 42 },
@@ -328,9 +328,52 @@ test("versions reads bounded video, audio and embedded-subtitle facts from Media
     name: "1080p",
     videoWidth: 1920,
     videoHeight: 800,
+    videoCodec: "hevc",
+    videoRange: "hdr",
     audioLanguages: ["cs", undefined, undefined],
     embeddedSubtitleLanguages: ["en", undefined, "de"],
   }]);
+});
+
+test("versions map Jellyfin and Emby video range fields with Dolby Vision priority", async () => {
+  const { provider } = fixture(() => ({
+    MediaSources: [
+      {
+        Id: "jellyfin",
+        Protocol: "File",
+        MediaStreams: [{
+          Type: "Video",
+          Codec: "hevc",
+          VideoRangeType: "DOVIWithHDR10Plus",
+        }],
+      },
+      {
+        Id: "emby",
+        Protocol: "File",
+        MediaStreams: [{
+          Type: "Video",
+          Codec: "av1",
+          VideoRange: "HDR",
+          ExtendedVideoType: "Dolby Vision",
+        }],
+      },
+      {
+        Id: "sdr",
+        Protocol: "File",
+        MediaStreams: [{
+          Type: "Video",
+          Codec: "mpeg4",
+          VideoRangeType: "SDR",
+        }],
+      },
+    ],
+  }));
+
+  assert.deepEqual(await provider.versions("tok", "user-1", "item-1"), [
+    { id: "jellyfin", videoCodec: "hevc", videoRange: "dolbyVision" },
+    { id: "emby", videoCodec: "av1", videoRange: "dolbyVision" },
+    { id: "sdr", videoCodec: "other", videoRange: "sdr" },
+  ]);
 });
 
 test("versions skips malformed stream entries and rejects oversized language arrays", async () => {

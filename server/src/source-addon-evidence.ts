@@ -3,7 +3,7 @@ import { normalizeLanguage } from "./language.js";
 import type { MediaInfo, Track } from "./probe.js";
 import { streamLanguages, streamSize } from "./ranking.js";
 import type { SourceEvidenceCandidateV1, SourceFact } from "./source-evidence.js";
-import type { ReleaseKind } from "./source-policy.js";
+import type { ReleaseKind, VideoCodec, VideoRange } from "./source-policy.js";
 import type { StreamItem, SubtitleItem } from "./types.js";
 import { videoResolutionClass } from "./video-resolution.js";
 
@@ -143,16 +143,80 @@ const listingReleaseKind = (text: string): ReleaseKind | undefined => {
   return undefined;
 };
 
+const VIDEO_CODEC_TOKENS = [
+  ["hevc", ["x265", "h265", "hevc"]],
+  ["av1", ["av1"]],
+  ["h264", ["x264", "h264", "avc"]],
+] as const satisfies readonly (readonly [VideoCodec, readonly string[]])[];
+
+const VIDEO_RANGE_TOKENS = [
+  ["dolbyVision", ["DV", "DoVi", "Dolby Vision"]],
+  ["hdr", ["HDR", "HDR10", "HDR10+", "HLG"]],
+] as const satisfies readonly (readonly [VideoRange, readonly string[]])[];
+
+const escapeToken = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const hasListingToken = (text: string, token: string): boolean =>
+  new RegExp(`(?<![\\p{L}\\p{N}_])${escapeToken(token)}(?![\\p{L}\\p{N}_])`, "iu").test(text);
+
+const listingText = (stream: StreamItem): string => [
+  stream.name,
+  stream.title,
+  stream.description,
+  stream.behaviorHints?.filename,
+].filter((value): value is string => typeof value === "string").join(" ");
+
+export function videoCodecFromListing(stream: StreamItem): SourceFact<VideoCodec | "other" | null> {
+  const text = listingText(stream);
+  for (const [codec, tokens] of VIDEO_CODEC_TOKENS) {
+    if (tokens.some((token) => hasListingToken(text, token))) {
+      return { evidence: "listed", value: codec };
+    }
+  }
+  return unknown();
+}
+
+export function videoRangeFromListing(stream: StreamItem): SourceFact<VideoRange> {
+  const text = listingText(stream);
+  for (const [range, tokens] of VIDEO_RANGE_TOKENS) {
+    if (tokens.some((token) => hasListingToken(text, token))) {
+      return { evidence: "listed", value: range };
+    }
+  }
+  return unknown();
+}
+
 export function releaseKindFromListing(stream: StreamItem): SourceFact<ReleaseKind | null> {
-  const kind = listingReleaseKind([
-    stream.name,
-    stream.title,
-    stream.description,
-    stream.behaviorHints?.filename,
-  ].filter((value): value is string => typeof value === "string").join(" "));
+  const kind = listingReleaseKind(listingText(stream));
   return kind === undefined
     ? { evidence: "listed", value: null }
     : { evidence: "listed", value: kind };
+}
+
+export function inspectedVideoFacts(video: MediaInfo["video"]): {
+  videoCodec: SourceFact<VideoCodec | "other" | null>;
+  videoRange: SourceFact<VideoRange>;
+} {
+  const codec = video?.codec.trim().toLowerCase();
+  const videoCodec: SourceFact<VideoCodec | "other" | null> = codec === undefined || codec === ""
+    ? unknown()
+    : codec === "hevc" || codec === "h265" ? { evidence: "inspected", value: "hevc" }
+      : codec === "av1" ? { evidence: "inspected", value: "av1" }
+        : codec === "h264" || codec === "avc" ? { evidence: "inspected", value: "h264" }
+          : { evidence: "inspected", value: "other" };
+  const codecTag = video?.codecTag?.trim().toLowerCase();
+  const dolbyVision = video?.dolbyVision === true
+    || video?.dolbyVisionProfile !== undefined
+    || video?.dolbyVisionEnhancementLayer === true
+    || codecTag === "dvhe"
+    || codecTag === "dvh1";
+  const transfer = video?.transfer?.trim().toLowerCase();
+  const videoRange: SourceFact<VideoRange> = dolbyVision
+    ? { evidence: "inspected", value: "dolbyVision" }
+    : transfer === "smpte2084" || transfer === "arib-std-b67"
+      ? { evidence: "inspected", value: "hdr" }
+      : unknown();
+  return { videoCodec, videoRange };
 }
 
 const urlOnlyListingFacts = (input: ListedAddonSourceEvidenceInput): unknown => {
@@ -251,6 +315,8 @@ export function listedAddonSourceEvidence(
       : { evidence: "listed", value: heightPixels },
     releaseKind: releaseKindFromListing(input.stream),
     sampleOrTrailer: unknown(),
+    videoCodec: videoCodecFromListing(input.stream),
+    videoRange: videoRangeFromListing(input.stream),
   };
 
   return {
@@ -320,6 +386,7 @@ export function inspectedAddonSourceEvidence(
       heightPixels: inspectedNumber(videoResolutionClass(info.video?.width, info.video?.height)),
       releaseKind: candidate.facts.releaseKind,
       sampleOrTrailer: unknown(),
+      ...inspectedVideoFacts(info.video),
     },
     ...(candidate.hints === undefined ? {} : { hints: { ...candidate.hints } }),
     ...(candidate.continuationIdentity === undefined

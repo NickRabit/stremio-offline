@@ -221,6 +221,29 @@ test("release-kind exclusions parse strictly and stay unique", () => {
   assert.throws(() => parseSourcePolicyV1(input), SourcePolicyValidationError);
 });
 
+test("video exclusions parse only as non-empty unique enums", () => {
+  const input: any = recommended();
+  input.constraints.excludeVideoCodecs = ["hevc", "av1"];
+  input.constraints.excludeVideoRanges = ["hdr", "dolbyVision"];
+  const parsed = parseSourcePolicyV1(input);
+  assert.deepEqual(parsed.constraints.excludeVideoCodecs, ["hevc", "av1"]);
+  assert.deepEqual(parsed.constraints.excludeVideoRanges, ["hdr", "dolbyVision"]);
+
+  input.constraints.excludeVideoCodecs = [];
+  assert.throws(() => parseSourcePolicyV1(input), SourcePolicyValidationError);
+  input.constraints.excludeVideoCodecs = ["hevc", "hevc"];
+  assert.throws(() => parseSourcePolicyV1(input), SourcePolicyValidationError);
+  input.constraints.excludeVideoCodecs = ["h264"];
+  assert.throws(() => parseSourcePolicyV1(input), SourcePolicyValidationError);
+  delete input.constraints.excludeVideoCodecs;
+  input.constraints.excludeVideoRanges = [];
+  assert.throws(() => parseSourcePolicyV1(input), SourcePolicyValidationError);
+  input.constraints.excludeVideoRanges = ["hdr", "hdr"];
+  assert.throws(() => parseSourcePolicyV1(input), SourcePolicyValidationError);
+  input.constraints.excludeVideoRanges = ["sdr"];
+  assert.throws(() => parseSourcePolicyV1(input), SourcePolicyValidationError);
+});
+
 const valid = recommended;
 
 const invalidCases: Array<{ name: string; value: () => unknown }> = [

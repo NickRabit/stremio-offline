@@ -12,7 +12,12 @@ import {
 import { normalizeLanguage } from "./language.js";
 import { localCopies, type LocalCopy } from "./local-sources.js";
 import type { MediaInfo } from "./probe.js";
-import { listedAudioLanguages } from "./source-addon-evidence.js";
+import {
+  inspectedVideoFacts,
+  listedAudioLanguages,
+  videoCodecFromListing,
+  videoRangeFromListing,
+} from "./source-addon-evidence.js";
 import {
   evaluateSourceCandidate,
   type SourceEvidenceCandidateV1,
@@ -79,6 +84,8 @@ const unknownFacts = (size: number): SourceEvidenceFactsV1 => ({
   heightPixels: unknownFact(),
   releaseKind: unknownFact(),
   sampleOrTrailer: unknownFact(),
+  videoCodec: unknownFact(),
+  videoRange: unknownFact(),
 });
 
 const inspectedFacts = (
@@ -102,6 +109,7 @@ const inspectedFacts = (
   })(),
   releaseKind: unknownFact(),
   sampleOrTrailer: unknownFact(),
+  ...inspectedVideoFacts(info.video),
 });
 
 const sidecarLanguage = (name: string): string | undefined => {
@@ -129,6 +137,7 @@ export function listedLocalCopyEvidence(
   providerResponseIndex: number,
   filename = path.posix.basename(copy.key),
 ): SourceEvidenceCandidateV1 {
+  const stream = { behaviorHints: { filename } };
   return {
     sourceId: copy.key,
     providerKey: "local",
@@ -140,10 +149,12 @@ export function listedLocalCopyEvidence(
     facts: {
       ...unknownFacts(copy.size),
       audio: {
-        listed: listedAudioLanguages({ behaviorHints: { filename } }, undefined),
+        listed: listedAudioLanguages(stream, undefined),
         tracks: unknownFact(),
       },
       bytes: { evidence: "listed", value: copy.size },
+      videoCodec: videoCodecFromListing(stream),
+      videoRange: videoRangeFromListing(stream),
     },
   };
 }

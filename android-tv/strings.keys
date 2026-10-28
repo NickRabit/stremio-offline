@@ -91,6 +91,8 @@ sources.ruleReason.sample
 sources.ruleReason.size
 sources.ruleReason.provider
 sources.ruleReason.torrent
+sources.ruleReason.codec
+sources.ruleReason.hdr
 sources.sortLargest
 sources.sortSmallest
 sources.sortAddon

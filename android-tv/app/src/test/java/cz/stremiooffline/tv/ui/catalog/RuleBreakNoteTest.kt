@@ -18,7 +18,14 @@ class RuleBreakNoteTest {
     size = "size out of range",
     provider = "source not in the rules",
     torrent = "torrents not allowed",
+    codec = "unwanted codec",
+    hdr = "HDR / Dolby Vision",
   )
+
+  @Test
+  fun `the video reasons are named`() {
+    assertEquals("unwanted codec, HDR / Dolby Vision", note(listOf("codec", "hdr")))
+  }
 
   @Test
   fun `the three new reasons are named`() {

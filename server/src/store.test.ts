@@ -292,6 +292,7 @@ test("the Stage 3 catalogue migrates once to four rule presets", async () => {
             movie: { min: null, max: null },
           },
           skipCinema: false,
+          videoAvoid: [],
           preference: ["language", "smaller", "addonOrder"],
         },
         createdAt: now,

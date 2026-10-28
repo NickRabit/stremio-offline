@@ -101,6 +101,12 @@ export function remoteSourceEvidence(input: {
         : { evidence: "providerMetadata", value: heightPixels },
       releaseKind: releaseKindFromListing({ name: version.name }),
       sampleOrTrailer: unknown(),
+      videoCodec: version.videoCodec === undefined
+        ? unknown()
+        : { evidence: "providerMetadata", value: version.videoCodec },
+      videoRange: version.videoRange === undefined
+        ? unknown()
+        : { evidence: "providerMetadata", value: version.videoRange },
     },
   };
 }

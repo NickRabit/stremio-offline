@@ -23,6 +23,7 @@ const rules = (overrides: Partial<DownloadRules> = {}): DownloadRules => ({
     movie: { min: null, max: 15 },
   },
   skipCinema: true,
+  videoAvoid: [],
   preference: ["language", "resolutionHigher", "addonOrder", "smaller"],
   ...overrides,
 });
@@ -206,6 +207,31 @@ test("selected library and addon keys round-trip through provider keys", () => {
   assert.deepEqual(rulesFromPolicy(policy, "movie", {
     allowProviders: { remote: true, local: true },
   }), parsed);
+});
+
+test("video avoidance is optional, deduplicated, canonical and round-trips through policy", () => {
+  const { videoAvoid: _videoAvoid, ...legacy } = rules();
+  assert.deepEqual(parseDownloadRules(legacy).videoAvoid, []);
+
+  const parsed = parseDownloadRules(rules({
+    videoAvoid: ["hdr", "av1", "dolbyVision", "hevc", "av1"],
+  }));
+  assert.deepEqual(parsed.videoAvoid, ["av1", "hevc", "dolbyVision", "hdr"]);
+
+  const policy = rulesPolicy(parsed, "movie");
+  assert.deepEqual(policy.constraints.excludeVideoCodecs, ["av1", "hevc"]);
+  assert.deepEqual(policy.constraints.excludeVideoRanges, ["dolbyVision", "hdr"]);
+  const extracted = rulesFromPolicy(policy, "movie");
+  assert.deepEqual(extracted.videoAvoid, parsed.videoAvoid);
+  assert.deepEqual(rulesPolicy(extracted, "movie"), policy);
+
+  const without = rulesPolicy(parseDownloadRules(legacy), "movie");
+  assert.equal(Object.hasOwn(without.constraints, "excludeVideoCodecs"), false);
+  assert.equal(Object.hasOwn(without.constraints, "excludeVideoRanges"), false);
+  const extractedWithout = rulesFromPolicy(without, "movie");
+  assert.deepEqual(extractedWithout.videoAvoid, []);
+  assert.deepEqual(rulesPolicy(extractedWithout, "movie"), without);
+  assert.ok(RULE_PRESETS.every((preset) => preset.rules.videoAvoid.length === 0));
 });
 
 test("rule validation is strict and rejects contradictory choices", () => {

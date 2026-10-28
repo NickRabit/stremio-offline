@@ -118,7 +118,7 @@ export interface SourceRowsProps {
 
 /** One row per source: its class, its name, where it comes from, its size and its languages.
  *  Its own template, so the catalogue list and the library chooser can never drift apart. */
-const RULE_REASONS = new Set(["language", "resolutionLow", "resolutionHigh", "cinema", "subtitles", "sample", "size", "provider", "torrent"]);
+const RULE_REASONS = new Set(["language", "resolutionLow", "resolutionHigh", "cinema", "subtitles", "sample", "size", "provider", "torrent", "codec", "hdr"]);
 
 export function SourceRows({ rows, selected, onSelect, onPicked, probe, badgeOf, titleLanguage, ruleId, className, listRef, onScroll }: SourceRowsProps) {
   useI18n();

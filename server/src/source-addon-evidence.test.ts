@@ -12,6 +12,8 @@ import {
   heightFromListing,
   listedAddonSourceEvidence,
   releaseKindFromListing,
+  videoCodecFromListing,
+  videoRangeFromListing,
   type ListedAddonSourceEvidenceInput,
 } from "./source-addon-evidence.js";
 import {
@@ -92,18 +94,26 @@ const mediaInfo = (input: {
   width?: number;
   height?: number;
   duration?: number;
+  codec?: string;
+  codecTag?: string;
+  transfer?: string;
+  dolbyVision?: boolean;
   audio?: readonly (string | undefined)[];
   subtitles?: readonly (string | undefined)[];
 }): MediaInfo => ({
   container: "matroska",
   ...(input.duration === undefined ? {} : { duration: input.duration }),
-  ...(input.width === undefined && input.height === undefined
+  ...(input.width === undefined && input.height === undefined && input.codec === undefined
+    && input.codecTag === undefined && input.transfer === undefined && input.dolbyVision === undefined
     ? {}
     : {
         video: {
-          codec: "h264",
+          codec: input.codec ?? "h264",
           ...(input.width === undefined ? {} : { width: input.width }),
           ...(input.height === undefined ? {} : { height: input.height }),
+          ...(input.codecTag === undefined ? {} : { codecTag: input.codecTag }),
+          ...(input.transfer === undefined ? {} : { transfer: input.transfer }),
+          ...(input.dolbyVision === undefined ? {} : { dolbyVision: input.dolbyVision }),
         },
       }),
   audioTracks: (input.audio ?? []).map((language, index) => ({
@@ -303,6 +313,28 @@ test("release kinds come from whole listing tokens and unknown text stays listed
   });
 });
 
+test("video codecs and ranges come from whole listing tokens", () => {
+  const cases = [
+    ["Movie.x265.1080p", "hevc", undefined],
+    ["Movie.DV.HDR10.2160p", undefined, "dolbyVision"],
+    ["Movie.AV1.2160p", "av1", undefined],
+    ["Movie.HDR10+.HLG", undefined, "hdr"],
+    ["Movie.1080p", undefined, undefined],
+  ] as const;
+  for (const [title, codec, range] of cases) {
+    assert.deepEqual(
+      videoCodecFromListing({ title }),
+      codec === undefined ? { evidence: "unknown" } : { evidence: "listed", value: codec },
+      title,
+    );
+    assert.deepEqual(
+      videoRangeFromListing({ title }),
+      range === undefined ? { evidence: "unknown" } : { evidence: "listed", value: range },
+      title,
+    );
+  }
+});
+
 test("admission rejects an excluded listed release kind and lets an unknown pass", () => {
   const providerKeys = ["addon:one"];
   const original = travelDefinition.policy;
@@ -406,6 +438,27 @@ test("listing keeps language provenance and inspection replaces only verifiable 
     assert.equal(unavailable.available, false);
     assert.equal(evaluateSourceCandidate(travelSnapshot(["addon:one"]), unavailable).status, "excluded");
   }
+});
+
+test("probe facts map codec, transfer and Dolby Vision tags", () => {
+  const listed = addon({ url: SECRET_URL, title: "English film" });
+  const hevcHdr = inspectedAddonSourceEvidence(listed, mediaInfo({
+    codec: "hevc",
+    transfer: "smpte2084",
+    audio: ["en"],
+  }));
+  assert.deepEqual(hevcHdr.facts.videoCodec, { evidence: "inspected", value: "hevc" });
+  assert.deepEqual(hevcHdr.facts.videoRange, { evidence: "inspected", value: "hdr" });
+
+  const dolbyVision = inspectedAddonSourceEvidence(listed, mediaInfo({
+    codec: "hevc",
+    codecTag: "dvh1",
+    audio: ["en"],
+  }));
+  assert.deepEqual(dolbyVision.facts.videoRange, {
+    evidence: "inspected",
+    value: "dolbyVision",
+  });
 });
 
 test("a probed 1920x800 source satisfies a 1080 resolution minimum", () => {

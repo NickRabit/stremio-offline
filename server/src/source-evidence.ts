@@ -1,6 +1,12 @@
 import { normalizeLanguage } from "./language.js";
 import type { SourceAdmissionSnapshotV1 } from "./source-admission.js";
-import type { ProviderClass, ReleaseKind, SourceKind } from "./source-policy.js";
+import type {
+  ProviderClass,
+  ReleaseKind,
+  SourceKind,
+  VideoCodec,
+  VideoRange,
+} from "./source-policy.js";
 import type { SourceOperation } from "./source-profiles.js";
 
 export type SourceEvidenceLevel = "listed" | "providerMetadata" | "inspected";
@@ -25,6 +31,8 @@ export interface SourceEvidenceFactsV1 {
   readonly heightPixels: SourceFact<number>;
   readonly releaseKind: SourceFact<ReleaseKind | null>;
   readonly sampleOrTrailer: SourceFact<boolean>;
+  readonly videoCodec: SourceFact<VideoCodec | "other" | null>;
+  readonly videoRange: SourceFact<VideoRange>;
 }
 
 export interface SourceEvidenceCandidateV1 {
@@ -55,6 +63,8 @@ export type SourceEvidenceReason =
   | { readonly code: "notOwnedLocalCopy" }
   | { readonly code: "sampleOrTrailer" }
   | { readonly code: "releaseKindExcluded" }
+  | { readonly code: "videoCodecExcluded" }
+  | { readonly code: "videoRangeExcluded" }
   | { readonly code: "durationTooShort" }
   | { readonly code: "numericOutsideBounds"; readonly field: SourceNumericField }
   | { readonly code: "inspectionRequired"; readonly field: SourceNumericField | "audio" | "subtitles" }
@@ -250,6 +260,19 @@ export function evaluateSourceCandidate(
   if (releaseKind.evidence !== "unknown" && releaseKind.value !== null
     && policy.constraints.excludeReleaseKinds?.includes(releaseKind.value)) {
     return excluded({ code: "releaseKindExcluded" });
+  }
+
+  const videoCodec = candidate.facts.videoCodec;
+  if (videoCodec.evidence !== "unknown" && videoCodec.value !== null
+    && policy.constraints.excludeVideoCodecs?.includes(videoCodec.value as "av1" | "hevc")) {
+    return excluded({ code: "videoCodecExcluded" });
+  }
+
+  const videoRange = candidate.facts.videoRange;
+  if (videoRange.evidence !== "unknown"
+    && policy.constraints.excludeVideoRanges?.some((range) =>
+      range === videoRange.value || range === "hdr" && videoRange.value === "dolbyVision")) {
+    return excluded({ code: "videoRangeExcluded" });
   }
 
   const duration = candidate.facts.durationSeconds;

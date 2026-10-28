@@ -119,6 +119,7 @@ const commonPresetRules = {
   subtitles: "ifAvailable",
   subtitleLanguage: "mine",
   skipCinema: true,
+  videoAvoid: [] as DownloadRules["videoAvoid"],
 } as const;
 
 export interface RulePreset {

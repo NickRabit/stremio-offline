@@ -4,7 +4,7 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { codecTag, dolbyVisionProfile, hasDolbyVisionEnhancementLayer, looksUnreachable, pickVariant, playlistArgsFrom, probe } from "./probe.js";
+import { codecTag, dolbyVisionProfile, hasDolbyVisionEnhancementLayer, hasDolbyVisionSideData, looksUnreachable, pickVariant, playlistArgsFrom, probe } from "./probe.js";
 
 test("the picky segment options are passed only to a build that has them", () => {
   assert.deepEqual(
@@ -43,6 +43,13 @@ test("Dolby Vision enhancement layer is recognised from ffprobe side data", () =
     side_data_list: [{ side_data_type: "DOVI configuration record", el_present_flag: 0 }],
   }), false);
   assert.equal(hasDolbyVisionEnhancementLayer({ side_data_list: [] }), false);
+  assert.equal(hasDolbyVisionSideData({
+    side_data_list: [{ side_data_type: "DOVI configuration record", el_present_flag: 0 }],
+  }), true);
+  assert.equal(hasDolbyVisionSideData({
+    side_data_list: [{ name: "Dolby Vision metadata" }],
+  }), true);
+  assert.equal(hasDolbyVisionSideData({ side_data_list: [] }), false);
 });
 
 test("an HLS master is read as one rendition: the tallest, with its own audio", () => {
@@ -79,7 +86,7 @@ setTimeout(() => {
   write(deep ? "deep-done" : "fast-done");
   process.stdout.write(JSON.stringify(deep
     ? { format: { format_name: "matroska", duration: "120" }, streams: [
-        { index: 0, codec_type: "video", codec_name: "hevc", codec_tag_string: "hev1" },
+        { index: 0, codec_type: "video", codec_name: "hevc", codec_tag_string: "hev1", color_transfer: "smpte2084" },
         { index: 1, codec_type: "audio", codec_name: "aac" }] }
     : { format: { format_name: "matroska" }, streams: [{ index: 0, codec_type: "video", codec_name: "h264" }] }));
   process.exit(0);
@@ -155,6 +162,7 @@ test("the video codec tag is kept, a missing fourcc is not", { skip: process.pla
   const info = await probe("https://cdn.example/movie.mp4");
   assert.equal(info?.video?.codec, "hevc");
   assert.equal(info?.video?.codecTag, "hev1");
+  assert.equal(info?.video?.transfer, "smpte2084");
   assert.equal(codecTag("hvc1"), "hvc1");
   assert.equal(codecTag("[0][0][0][0]"), undefined);
   assert.equal(codecTag(undefined), undefined);

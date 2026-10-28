@@ -28,6 +28,8 @@ test("remote evidence maps provider metadata into the shared evidence contract",
     durationTicks: 36_000_000_000,
     videoWidth: 1920,
     videoHeight: 800,
+    videoCodec: "av1",
+    videoRange: "dolbyVision",
     audioLanguages: ["cs", undefined],
     embeddedSubtitleLanguages: ["en"],
     externalSubtitles: [
@@ -52,6 +54,11 @@ test("remote evidence maps provider metadata into the shared evidence contract",
   assert.deepEqual(candidate.facts.bytes, { evidence: "providerMetadata", value: 4_000_000_000 });
   assert.deepEqual(candidate.facts.durationSeconds, { evidence: "providerMetadata", value: 3_600 });
   assert.deepEqual(candidate.facts.heightPixels, { evidence: "providerMetadata", value: 1080 });
+  assert.deepEqual(candidate.facts.videoCodec, { evidence: "providerMetadata", value: "av1" });
+  assert.deepEqual(candidate.facts.videoRange, {
+    evidence: "providerMetadata",
+    value: "dolbyVision",
+  });
   assert.deepEqual(candidate.facts.audio.tracks, { evidence: "providerMetadata", value: ["cs", undefined] });
   assert.deepEqual(candidate.facts.audio.listed, { evidence: "providerMetadata", value: ["cs"] });
   assert.deepEqual(candidate.facts.embeddedSubtitles, { evidence: "providerMetadata", value: ["en"] });
@@ -84,6 +91,8 @@ test("remote evidence leaves absent metadata unknown and uses a stable continuat
   assert.deepEqual(first.facts.bytes, { evidence: "unknown" });
   assert.deepEqual(first.facts.durationSeconds, { evidence: "unknown" });
   assert.deepEqual(first.facts.heightPixels, { evidence: "unknown" });
+  assert.deepEqual(first.facts.videoCodec, { evidence: "unknown" });
+  assert.deepEqual(first.facts.videoRange, { evidence: "unknown" });
   assert.deepEqual(first.facts.audio, {
     listed: { evidence: "unknown" },
     tracks: { evidence: "unknown" },
