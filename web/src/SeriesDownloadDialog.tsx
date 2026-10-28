@@ -29,6 +29,18 @@ const usableProfile = (profile: SourceProfile) => profile.template === "rules"
   && profile.operations.includes("downloadToLibrary")
   && Boolean(sourceProfileName(profile.nameKey, profile.name));
 
+/** What the one-title dialog (opened from the "To library" arrow) last saved with: the selected
+ *  source, or a rules profile id. A per-browser convenience, so a failed storage read just means
+ *  "the selected source". */
+const SINGLE_CHOICE_KEY = "stremio-offline-single-download-choice";
+const EXACT_CHOICE = "exact";
+const readSingleChoice = (): string | null => {
+  try { return window.localStorage.getItem(SINGLE_CHOICE_KEY); } catch { return null; }
+};
+const writeSingleChoice = (value: string) => {
+  try { window.localStorage.setItem(SINGLE_CHOICE_KEY, value); } catch { /* a convenience only */ }
+};
+
 export const resolveSourceProfile = (profiles: readonly SourceProfile[], preferredId: string | undefined, follow: boolean) => {
   const offered = profiles.filter(usableProfile);
   const preset = follow ? "rules.preset.myLanguage" : "rules.preset.balanced";
@@ -63,7 +75,9 @@ export function SeriesDownloadDialog({ type, label, title, episodes, libraries, 
   const [profiles, setProfiles] = useState<SourceProfile[]>([]);
   const [profilesState, setProfilesState] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
   const [profileId, setProfileId] = useState("");
-  const [exactSelected, setExactSelected] = useState(Boolean(exactSource?.preferred));
+  // The arrow's dialog opens on what was last used there; the first time, on the selected source.
+  const [singleChoice] = useState(() => (exactSource ? readSingleChoice() : null));
+  const [exactSelected, setExactSelected] = useState(Boolean(exactSource && (exactSource.preferred || singleChoice === null || singleChoice === EXACT_CHOICE)));
   const [rememberProfile, setRememberProfile] = useState(false);
   const [graceDays, setGraceDays] = useState(initial?.graceDays ?? (follow ? 2 : 0));
   const [retentionDays, setRetentionDays] = useState<number>(initial?.retention?.afterWatchedDays ?? 0);
@@ -109,7 +123,12 @@ export function SeriesDownloadDialog({ type, label, title, episodes, libraries, 
       const initialId = initial?.sourceProfile?.profileId;
       const modeDefault = follow ? followSourceProfileId : downloadSourceProfileId;
       const legacy = Boolean(follow?.followId && initial && !initial.sourceProfile);
-      const chosen = legacy ? offered[0]! : offered.find((profile) => profile.id === initialId)
+      const remembered = exactSource && !exactSource.preferred && singleChoice && singleChoice !== EXACT_CHOICE
+        ? offered.find((profile) => profile.id === singleChoice)
+        : undefined;
+      // A remembered rules profile that no longer exists falls back to the selected source.
+      if (exactSource && !exactSource.preferred && singleChoice && singleChoice !== EXACT_CHOICE && !remembered) setExactSelected(true);
+      const chosen = legacy ? offered[0]! : remembered ?? offered.find((profile) => profile.id === initialId)
         ?? resolveSourceProfile(offered, modeDefault, Boolean(follow))
         ?? offered[0]!;
       setProfileId(chosen.id);
@@ -158,6 +177,7 @@ export function SeriesDownloadDialog({ type, label, title, episodes, libraries, 
       if (exactSelected && exactSource) {
         if (!onExactSave) return;
         await onExactSave(target ?? undefined);
+        writeSingleChoice(EXACT_CHOICE);
         onClose();
         return;
       }
@@ -177,7 +197,10 @@ export function SeriesDownloadDialog({ type, label, title, episodes, libraries, 
           },
         });
         if (created) follow.onFollowed?.(updated);
-      } else if (onSubmit) await onSubmit(selection, target ?? undefined);
+      } else if (onSubmit) {
+        await onSubmit(selection, target ?? undefined);
+        if (exactSource) writeSingleChoice(selectedProfile!.id);
+      }
       if (rememberProfile && showRemember) void Promise.resolve().then(() => remember?.(profileId)).catch(() => undefined);
       onClose();
     } catch (value) { setError(describeError(value)); }
