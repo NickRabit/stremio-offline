@@ -650,8 +650,9 @@ test("a lazy job durably stores a detached materialized Travel snapshot without 
       { followId: "follow-1", episodeKey: "movie", intent: "download" },
       submitted,
     );
-    assert.ok(returned);
-    await waitFor(queue, () => queue.get(returned.id)?.status === "failed");
+    assert.ok(returned && returned.outcome === "queued");
+    const returnedId = returned.job.id;
+    await waitFor(queue, () => queue.get(returnedId)?.status === "failed");
 
     submitted.profile.revision = 99;
     submitted.providerKeys.reverse();
@@ -659,8 +660,8 @@ test("a lazy job durably stores a detached materialized Travel snapshot without 
     const providerOrder = submitted.policy.criteria.find((criterion) => criterion.kind === "providerOrder");
     if (providerOrder && "keys" in providerOrder) providerOrder.keys.length = 0;
 
-    assertPublicViewIsClean(returned as unknown as Record<string, unknown>);
-    for (const view of [queue.get(returned.id)!, queue.list()[0]!, queue.followJobs()[0]!]) {
+    assertPublicViewIsClean(returned.job as unknown as Record<string, unknown>);
+    for (const view of [queue.get(returnedId)!, queue.list()[0]!, queue.followJobs()[0]!]) {
       assertPublicViewIsClean(view as unknown as Record<string, unknown>);
       assert.doesNotMatch(JSON.stringify(view), /queue-private-token/);
     }
@@ -668,7 +669,7 @@ test("a lazy job durably stores a detached materialized Travel snapshot without 
     assert.equal(resolutions, 0, "the legacy resolver is never called for a snapshot-bearing job");
 
     await queue.stop();
-    const stored = (await readJobs(state)).find((job) => job.id === returned.id)!;
+    const stored = (await readJobs(state)).find((job) => job.id === returnedId)!;
     assert.deepEqual(stored.sourceAdmission, canonical);
     assert.equal(canonical.profile.id, SOURCE_PROFILE_IDS.travel);
     assert.equal(canonical.profile.revision, 1);
@@ -706,8 +707,8 @@ test("a canonical Travel cursor is saved, hidden, and restored with its snapshot
       { followId: "follow-cursor", episodeKey: "movie", intent: "download" },
       travelSnapshot(),
     );
-    assert.ok(added);
-    id = added.id;
+    assert.ok(added && added.outcome === "queued");
+    id = added.job.id;
     await waitFor(queue, () => queue.get(id)?.status === "checking");
 
     const submitted = travelCursor();
@@ -2530,7 +2531,10 @@ test("a profile bulk admission skips when the local-copy hook reports an adequat
   const queue = openQueue(data, downloads, {
     existingLocalCopy: async (input) => {
       seen.push(input);
-      return true;
+      return {
+        status: "present",
+        copy: { key: "lib_00000001/Film/Film.mkv", libraryId: "lib_00000001", actualSize: 1 },
+      };
     },
   });
   await queue.load();
@@ -2560,6 +2564,50 @@ test("a profile bulk admission skips when the local-copy hook reports an adequat
   }
 });
 
+test("profile follow admission distinguishes local presence from an unresolved lookup", async () => {
+  const { directory, data, downloads, state } = await setup();
+  const queue = openQueue(data, downloads, {
+    existingLocalCopy: async ({ source }) => {
+      if (source.videoId === "tt00000015") throw new Error("library offline");
+      return {
+        status: "present",
+        copy: { key: "lib_00000001/Film/Film.mkv", libraryId: "lib_00000001", actualSize: 1 },
+      };
+    },
+  });
+  await queue.load();
+  try {
+    const before = await readFile(state, "utf8");
+    const follow = { followId: "f1", episodeKey: "movie", intent: "f1:movie:1" };
+    const present = await queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt00000011" },
+      undefined,
+      QUEUE_OWNER,
+      follow,
+      travelSnapshot(),
+    );
+    assert.deepEqual(present, {
+      outcome: "presentLocally",
+      copy: { key: "lib_00000001/Film/Film.mkv", libraryId: "lib_00000001", actualSize: 1 },
+    });
+    const unresolved = await queue.addPending(
+      "Film",
+      { type: "movie", videoId: "tt00000015" },
+      undefined,
+      QUEUE_OWNER,
+      { ...follow, intent: "f1:movie:2" },
+      travelSnapshot(),
+    );
+    assert.deepEqual(unresolved, { outcome: "unresolved" });
+    assert.deepEqual(internalJobs(queue), []);
+    assert.equal(await readFile(state, "utf8"), before);
+  } finally {
+    await queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("concurrent identical profile admissions run their local-copy checks one at a time", async () => {
   const { directory, data, downloads } = await setup();
   const firstEntered = deferred();
@@ -2577,7 +2625,10 @@ test("concurrent identical profile admissions run their local-copy checks one at
         await releaseFirst.promise;
       }
       active -= 1;
-      return true;
+      return {
+        status: "present",
+        copy: { key: "lib_00000001/Film/Film.mkv", libraryId: "lib_00000001", actualSize: 1 },
+      };
     },
   });
   await queue.load();
@@ -2618,7 +2669,7 @@ test("legacy admission never runs the local-copy hook", async () => {
   const queue = openQueue(data, downloads, {
     existingLocalCopy: async () => {
       calls += 1;
-      return true;
+      return { status: "absent" };
     },
   });
   queue.setResolver(async () => undefined);
@@ -2638,7 +2689,7 @@ test("legacy admission never runs the local-copy hook", async () => {
   }
 });
 
-test("a failed local-copy lookup fails open and persists the profile job", async () => {
+test("a failed local-copy lookup defers the profile admission", async () => {
   const { directory, data, downloads } = await setup();
   const queue = openQueue(data, downloads, {
     existingLocalCopy: async () => {
@@ -2656,8 +2707,8 @@ test("a failed local-copy lookup fails open and persists the profile job", async
       undefined,
       travelSnapshot(),
     );
-    assert.ok(job);
-    assert.equal(queue.list().length, 1);
+    assert.equal(job, undefined);
+    assert.equal(queue.list().length, 0);
   } finally {
     await queue.stop();
     await rm(directory, { recursive: true, force: true });

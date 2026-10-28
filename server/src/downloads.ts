@@ -39,7 +39,10 @@ import { readMediaBytes } from "./media-playlist.js";
 import { preserveDamaged, readStateFile } from "./state-file.js";
 import { subtitleVtt } from "./subtitle-text.js";
 import type { DownloadSnapshot, DownloadStatus, PauseReason, PublicDownload, QueueHalt } from "./api-types.js";
-import type { ExistingLocalCopyReference } from "./local-copy-admission.js";
+import type {
+  ExistingLocalCopyLookupResult,
+  ExistingLocalCopyReference,
+} from "./local-copy-admission.js";
 import {
   parseDownloadSourceAdmissionSnapshotV1,
   SourceAdmissionValidationError,
@@ -353,6 +356,11 @@ export interface QueuedExistingLocalCopyLookup {
   sourceAdmission: SourceAdmissionSnapshotV1;
 }
 
+export type PendingDownloadOutcome =
+  | { outcome: "queued"; job: Omit<PublicDownload, "order"> }
+  | { outcome: "presentLocally"; copy: ExistingLocalCopyReference }
+  | { outcome: "unresolved" };
+
 export interface QueueHooks {
   now?: () => number;
   /** Every configured library, so a qualified target can be turned back into a root. */
@@ -399,11 +407,13 @@ export interface QueueHooks {
    *  permission comes back. Absent in a queue built without accounts: nothing gates it. */
   ownerAllowed?: (job: DownloadJob) => boolean | Promise<boolean>;
   /** A profile admission may skip a bulk download when an acceptable local copy already exists. */
-  existingLocalCopy?: (input: ExistingLocalCopyAdmission) => boolean | Promise<boolean>;
+  existingLocalCopy?: (
+    input: ExistingLocalCopyAdmission,
+  ) => ExistingLocalCopyLookupResult | Promise<ExistingLocalCopyLookupResult>;
   /** A queued profile job may finish by reference when an adequate local copy appeared while it waited. */
   existingLocalCopyForQueue?: (
     input: QueuedExistingLocalCopyLookup,
-  ) => ExistingLocalCopyReference | undefined | Promise<ExistingLocalCopyReference | undefined>;
+  ) => ExistingLocalCopyLookupResult | Promise<ExistingLocalCopyLookupResult>;
   /** Whether an account can see a library. Lets a duplicate in another account's finished
    *  job be reported only when the asker could find that file anyway. */
   ownerSeesLibrary?: (ownerUserId: string | undefined, libraryId: string) => boolean;
@@ -1354,9 +1364,25 @@ export class DownloadQueue {
     source: { type: string; videoId: string; selection?: DownloadSelection },
     media?: MediaInfo,
     ownerUserId?: string,
+    follow?: undefined,
+    sourceAdmissionInput?: unknown,
+  ): Promise<Omit<PublicDownload, "order"> | undefined>;
+  async addPending(
+    title: string,
+    source: { type: string; videoId: string; selection?: DownloadSelection },
+    media: MediaInfo | undefined,
+    ownerUserId: string | undefined,
+    follow: NonNullable<DownloadJob["follow"]>,
+    sourceAdmissionInput?: unknown,
+  ): Promise<PendingDownloadOutcome | undefined>;
+  async addPending(
+    title: string,
+    source: { type: string; videoId: string; selection?: DownloadSelection },
+    media?: MediaInfo,
+    ownerUserId?: string,
     follow?: DownloadJob["follow"],
     sourceAdmissionInput?: unknown,
-  ) {
+  ): Promise<PendingDownloadOutcome | Omit<PublicDownload, "order"> | undefined> {
     if (this.unreadable) throw new AppError("The download queue file could not be read.", "err.queueUnreadable", 503);
     const sourceAdmission = sourceAdmissionInput === undefined
       ? undefined
@@ -1367,18 +1393,27 @@ export class DownloadQueue {
     return this.admit(async () => {
       if (this.jobs.some((job) => job.source?.videoId === source.videoId && job.source?.type === source.type && job.status !== "completed" && job.status !== "failed" && this.ownedBy(job, ownerUserId))) return undefined;
       if (sourceAdmission !== undefined) {
-        let adequate = false;
-        try {
-          adequate = await this.existingLocalCopy?.({
-            ownerUserId,
-            source,
-            media,
-            sourceAdmission,
-          }) === true;
-        } catch {
-          // A lookup that cannot prove a local copy adequate must not block the download.
+        let localCopy: ExistingLocalCopyLookupResult = { status: "absent" };
+        if (this.existingLocalCopy) {
+          try {
+            localCopy = await this.existingLocalCopy({
+              ownerUserId,
+              source,
+              media,
+              sourceAdmission,
+            });
+          } catch {
+            localCopy = { status: "unresolved", reason: "lookupFailed" };
+          }
         }
-        if (adequate) return undefined;
+        if (localCopy.status === "present") {
+          return follow
+            ? { outcome: "presentLocally", copy: localCopy.copy }
+            : undefined;
+        }
+        if (localCopy.status === "unresolved") {
+          return follow ? { outcome: "unresolved" } : undefined;
+        }
       }
       const now = new Date().toISOString();
       const job: DownloadJob = {
@@ -1398,7 +1433,8 @@ export class DownloadQueue {
       };
       await this.admitJob(job);
       this.pump();
-      return this.publicJob(job);
+      const publicJob = this.publicJob(job);
+      return follow ? { outcome: "queued", job: publicJob } : publicJob;
     });
   }
 
@@ -3093,7 +3129,7 @@ export class DownloadQueue {
     job: DownloadJob,
     copy: ExistingLocalCopyReference,
     controller: AbortController,
-    prove: () => ExistingLocalCopyReference | undefined | Promise<ExistingLocalCopyReference | undefined>,
+    prove: () => ExistingLocalCopyLookupResult | Promise<ExistingLocalCopyLookupResult>,
   ): Promise<boolean> {
     const qualified = parseLibraryPath(copy.key);
     if (!qualified || qualified.libraryId !== copy.libraryId
@@ -3127,14 +3163,14 @@ export class DownloadQueue {
     await this.persist({
       apply: async () => {
         if (!this.localCopyCompletionLive(job, controller)) return;
-        let fresh: ExistingLocalCopyReference | undefined;
+        let fresh: ExistingLocalCopyLookupResult;
         try {
           fresh = await prove();
         } catch {
           return;
         }
-        if (!fresh || fresh.key !== copy.key || fresh.libraryId !== copy.libraryId
-          || fresh.actualSize !== copy.actualSize) return;
+        if (fresh.status !== "present" || fresh.copy.key !== copy.key
+          || fresh.copy.libraryId !== copy.libraryId || fresh.copy.actualSize !== copy.actualSize) return;
         if (!this.localCopyCompletionLive(job, controller)) return;
         previous = {
           target: job.target,
@@ -3245,14 +3281,15 @@ export class DownloadQueue {
           media: job.media,
           sourceAdmission: job.sourceAdmission,
         };
-        let copy: ExistingLocalCopyReference | undefined;
+        let lookupResult: ExistingLocalCopyLookupResult;
         try {
-          copy = await lookup(input);
+          lookupResult = await lookup(input);
         } catch {
-          // A local-copy lookup failure leaves the normal resolver path available.
+          lookupResult = { status: "unresolved", reason: "lookupFailed" };
         }
         if (!this.localCopyCompletionLive(job, controller)) return;
-        if (copy && await this.completeFromExistingLocalCopy(job, copy, controller, () => lookup(input))) return;
+        if (lookupResult.status === "present"
+          && await this.completeFromExistingLocalCopy(job, lookupResult.copy, controller, () => lookup(input))) return;
         if (!this.localCopyCompletionLive(job, controller)) return;
         // A permission refusal remains a pause even when the lookup could not establish a copy.
         const refusedAfterLookup = await this.ownerRefusal(job);

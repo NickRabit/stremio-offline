@@ -78,17 +78,29 @@ const fakeQueue = () => {
   let beforeAdd: (() => void) | undefined;
   let nextId = 1;
   let failAdd = false;
+  let addOutcome: "presentLocally" | "unresolved" | undefined;
   const queue: FollowQueue = {
     addPending: async (title, source, _media: MediaInfo | undefined, ownerUserId, follow, sourceAdmission) => {
       const check = beforeAdd;
       beforeAdd = undefined;
       check?.();
       if (failAdd) { failAdd = false; throw new Error("addPending failed"); }
+      if (addOutcome === "presentLocally") {
+        addOutcome = undefined;
+        return {
+          outcome: "presentLocally",
+          copy: { key: "lib_00000001/Show/S01E01.mkv", libraryId: "lib_00000001", actualSize: 42 },
+        };
+      }
+      if (addOutcome === "unresolved") {
+        addOutcome = undefined;
+        return { outcome: "unresolved" };
+      }
       if (jobs.some((job) => job.source?.type === source.type && job.source?.videoId === source.videoId && job.status !== "completed" && job.status !== "failed")) return undefined;
       const job: FakeJob = { id: `job-${nextId++}`, status: "queued", follow, source: { type: source.type, videoId: source.videoId } };
       jobs.push(job);
       added.push({ title, source, ownerUserId, follow, ...(sourceAdmission ? { sourceAdmission } : {}) });
-      return { id: job.id };
+      return { outcome: "queued", job };
     },
     findActiveEpisode: (_ownerUserId, type, videoId) => jobs.find((job) => job.source?.type === type && job.source?.videoId === videoId && job.status !== "completed" && job.status !== "failed"),
     adopt: async (id, follow) => { const job = jobs.find((item) => item.id === id); if (job) job.follow = follow; },
@@ -112,6 +124,7 @@ const fakeQueue = () => {
   return {
     queue, jobs, added, retried, retriedWith, retriedAdmissions, removed, hooks,
     beforeNextAdd: (check: () => void) => { beforeAdd = check; },
+    setNextAddOutcome: (outcome: "presentLocally" | "unresolved") => { addOutcome = outcome; },
     failNextAdd: () => { failAdd = true; },
     complete: (id: string) => { const job = jobs.find((item) => item.id === id); if (job) job.status = "completed"; },
     fail: (id: string, errorKey?: string) => { const job = jobs.find((item) => item.id === id); if (job) { job.status = "failed"; job.errorKey = errorKey; } },
@@ -1012,6 +1025,59 @@ test("a profile admission is reserved with its snapshot before the queue receive
 
   assert.deepEqual(q.added[0]?.sourceAdmission, snapshot);
   assert.deepEqual(store.get(id)!.episodes["1:1"].download?.sourceAdmission, snapshot);
+});
+
+test("a locally present episode completes without a queued job or attention state", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const snapshot = profileAdmission();
+  const service = buildService(store, q, { admitSourceProfile: () => snapshot });
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule({
+    sourceProfile: sourceProfileSnapshot(),
+  }), NOW);
+  q.setNextAddOutcome("presentLocally");
+
+  await service.admit(id);
+
+  const download = store.get(id)!.episodes["1:1"].download!;
+  assert.equal(download.state, "completed");
+  assert.equal(download.reasonKey, undefined);
+  assert.equal(download.nextAttemptAt, undefined);
+  assert.equal(download.jobId, undefined);
+  assert.deepEqual(download.localCopy, {
+    key: "lib_00000001/Show/S01E01.mkv",
+    libraryId: "lib_00000001",
+    actualSize: 42,
+  });
+  assert.equal(q.jobs.length, 0);
+
+  await service.admit(id);
+  assert.equal(store.get(id)!.episodes["1:1"].download?.state, "completed");
+  assert.equal(q.jobs.length, 0, "presence does not enter a retry loop");
+});
+
+test("an unresolved local-copy lookup waits for the next scheduled check", async (t) => {
+  const { store } = await withStore(t);
+  const q = fakeQueue();
+  const snapshot = profileAdmission();
+  const service = buildService(store, q, { admitSourceProfile: () => snapshot });
+  const id = await seedSeries(store, [episode(1, 1, "v1", RELEASED)], rule({
+    sourceProfile: sourceProfileSnapshot(),
+  }), NOW);
+  const scheduled = store.get(id)!.nextCheckAt;
+  q.setNextAddOutcome("unresolved");
+
+  await service.admit(id);
+
+  const download = store.get(id)!.episodes["1:1"].download!;
+  assert.equal(download.state, "waiting");
+  assert.equal(download.reasonKey, undefined);
+  assert.equal(download.jobId, undefined);
+  assert.equal(download.nextAttemptAt, scheduled);
+  assert.equal(q.jobs.length, 0, "an unresolved lookup queues nothing");
+
+  await service.admit(id);
+  assert.equal(q.jobs.length, 0, "the scheduled check, not another admission, retries it");
 });
 
 test("a follow admits from its frozen profile definition after the live catalogue changes", async (t) => {

@@ -2078,6 +2078,8 @@ test("a job's follow survives a save and a load", async () => {
   const { directory, queue } = await tempQueue();
   try {
     const job = await queue.addPending("Show", { type: "series", videoId: "tt1:1:1" }, undefined, "u1", { followId: "f1", episodeKey: "1:1", intent: "f1:1:1:1" });
+    assert.equal(job?.outcome, "queued");
+    assert.ok(job && job.outcome === "queued");
     await queue.stop();
     const downloads = path.join(directory, "downloads");
     const reopened = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), downloads, {
@@ -2086,7 +2088,7 @@ test("a job's follow survives a save and a load", async () => {
     });
     await reopened.load();
     try {
-      assert.deepEqual(reopened.get(job!.id)?.follow, { followId: "f1", episodeKey: "1:1", intent: "f1:1:1:1" });
+      assert.deepEqual(reopened.get(job.job.id)?.follow, { followId: "f1", episodeKey: "1:1", intent: "f1:1:1:1" });
     } finally {
       await reopened.stop();
     }
@@ -2607,11 +2609,14 @@ test("a queued profile job completes by reference from a copy that appeared afte
   const { directory, queue, downloads } = await tempQueue({
     existingLocalCopy: async () => {
       admissionLookups += 1;
-      return false;
+      return { status: "absent" };
     },
     existingLocalCopyForQueue: async (input) => {
       queueAdmissions.push(input);
-      return { key: relative, libraryId: LIBRARY_ID, actualSize: 321 };
+      return {
+        status: "present",
+        copy: { key: relative, libraryId: LIBRARY_ID, actualSize: 321 },
+      };
     },
   });
   const existing = queuedFile(downloads, relative);
@@ -2637,9 +2642,10 @@ test("a queued profile job completes by reference from a copy that appeared afte
       follow,
       queueAdmission(),
     );
-    assert.ok(queued);
-    await waitFor(queue, () => queue.get(queued.id)?.status === "completed");
-    const job = queue.get(queued.id)!;
+    assert.ok(queued && queued.outcome === "queued");
+    const queuedId = queued.job.id;
+    await waitFor(queue, () => queue.get(queuedId)?.status === "completed");
+    const job = queue.get(queuedId)!;
     assert.equal(admissionLookups, 1);
     assert.equal(queueAdmissions[0]?.ownerUserId, "usr_00000001");
     assert.deepEqual(queueAdmissions[0]?.source, { type: "movie", videoId: "tt-existing", tried: [] });
@@ -2681,9 +2687,9 @@ test("a queued profile job completes by reference from a copy that appeared afte
     });
     await reopened.load();
     try {
-      assert.equal(reopened.get(queued.id)?.status, "completed");
-      assert.equal(reopened.get(queued.id)?.reusedLocalCopy, true);
-      assert.equal(reopened.get(queued.id)?.pending, false);
+      assert.equal(reopened.get(queuedId)?.status, "completed");
+      assert.equal(reopened.get(queuedId)?.reusedLocalCopy, true);
+      assert.equal(reopened.get(queuedId)?.pending, false);
       assert.deepEqual(reopened.history(), []);
     } finally {
       await reopened.stop();
@@ -2739,9 +2745,12 @@ test("reuse clears exhausted Travel continuation state instead of failing the qu
     libraries: () => [library],
     defaultLibrary: () => library,
     existingLocalCopyForQueue: async () => ({
-      key: `${LIBRARY_ID}/Film/Existing.mkv`,
-      libraryId: LIBRARY_ID,
-      actualSize: 77,
+      status: "present",
+      copy: {
+        key: `${LIBRARY_ID}/Film/Existing.mkv`,
+        libraryId: LIBRARY_ID,
+        actualSize: 77,
+      },
     }),
   });
   try {
@@ -2788,7 +2797,9 @@ test("a copy revoked while an earlier write is pending is re-proved before reuse
         firstProofEntered.release();
         await releaseFirstProof.promise;
       }
-      return copyPresent ? { key: relative, libraryId: LIBRARY_ID, actualSize: 41 } : undefined;
+      return copyPresent
+        ? { status: "present", copy: { key: relative, libraryId: LIBRARY_ID, actualSize: 41 } }
+        : { status: "absent" };
     },
   });
   const existing = queuedFile(downloads, relative);
@@ -2845,7 +2856,10 @@ test("a cancellation during the queued local-copy lookup prevents reuse completi
     existingLocalCopyForQueue: async () => {
       entered.release();
       await release.promise;
-      return { key: relative, libraryId: LIBRARY_ID, actualSize: 16 };
+      return {
+        status: "present",
+        copy: { key: relative, libraryId: LIBRARY_ID, actualSize: 16 },
+      };
     },
   });
   queue.setResolver(async () => {
@@ -2886,7 +2900,7 @@ test("no queued local-copy proof and a legacy job both keep the normal resolver 
   const { directory, queue } = await tempQueue({
     existingLocalCopyForQueue: async () => {
       lookups += 1;
-      return undefined;
+      return { status: "absent" };
     },
   });
   queue.setTravelResolver(async () => {
@@ -2956,7 +2970,10 @@ test("a failed reuse completion write leaves no completed job in memory", async 
     existingLocalCopyForQueue: async () => {
       entered.release();
       await release.promise;
-      return { key: relative, libraryId: LIBRARY_ID, actualSize: 32 };
+      return {
+        status: "present",
+        copy: { key: relative, libraryId: LIBRARY_ID, actualSize: 32 },
+      };
     },
   });
   try {
