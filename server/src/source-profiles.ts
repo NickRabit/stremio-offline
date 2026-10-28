@@ -117,6 +117,7 @@ const commonPresetRules = {
   addons: { scope: "all", order: "viewer" },
   torrents: true,
   subtitles: "ifAvailable",
+  subtitleLanguage: "mine",
   skipCinema: true,
 } as const;
 
@@ -599,6 +600,7 @@ export function rulesForLegacyVariant(
         fallback: null,
       },
       subtitles: travel.subtitleMode === "optional" ? "ifAvailable" : travel.subtitleMode,
+      subtitleLanguage: "mine",
       sizeGb: {
         episode: { min: null, max: null },
         movie: { min: null, max: null },
@@ -614,6 +616,7 @@ export function rulesForLegacyVariant(
     resolution: { min: null, max: null },
     audio: { mode: "prefer", language: "mine", fallback: null },
     subtitles: provider.subtitleMode === "optional" ? "ifAvailable" : provider.subtitleMode,
+    subtitleLanguage: "mine",
     sizeGb: {
       episode: { min: null, max: null },
       movie: { min: null, max: null },

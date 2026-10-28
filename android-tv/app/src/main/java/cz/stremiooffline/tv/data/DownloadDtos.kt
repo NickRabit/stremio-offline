@@ -74,12 +74,19 @@ data class SourceProfileCriterionDto(
 @Serializable
 data class SourceProfileConstraintsDto(
   val audio: SourceProfileAudioDto? = null,
+  val subtitles: SourceProfileSubtitlesDto? = null,
   val heightPixels: SourceProfileRangeDto? = null,
   val bytes: SourceProfileRangeDto? = null,
 )
 
 @Serializable
 data class SourceProfileAudioDto(
+  val mode: String = "",
+  val preferred: SourceProfileLanguageRefDto? = null,
+)
+
+@Serializable
+data class SourceProfileSubtitlesDto(
   val mode: String = "",
   val preferred: SourceProfileLanguageRefDto? = null,
 )
@@ -98,14 +105,19 @@ data class SourceProfileRangeDto(
 
 internal enum class AudioMode { ANY, PREFER, ONLY }
 
-/** One piece of the one-line rule summary: resolution, then audio, then size. */
+/** One piece of the one-line rule summary: resolution, then audio, then size, then subtitles. */
 internal sealed interface RuleSummaryPart {
   data class Resolution(val min: Long?, val max: Long?) : RuleSummaryPart
   data class Audio(val mode: AudioMode, val language: String?) : RuleSummaryPart
   data class Size(val minBytes: Long?, val maxBytes: Long?) : RuleSummaryPart
+  /** Only a chosen subtitle language is summarised; the viewer's own one and "off" add nothing. */
+  data class Subtitles(val language: String) : RuleSummaryPart
 }
 
-/** Resolution from `heightPixels`, audio from mode/criteria/`preferred`, and `bytes` when set. */
+/**
+ * Resolution from `heightPixels`, audio from mode/criteria/`preferred`, `bytes` when set, and the
+ * subtitle language when the rule names one.
+ */
 internal fun ruleSummaryParts(policy: SourceProfilePolicyDto?): List<RuleSummaryPart> {
   val constraints = policy?.constraints ?: return emptyList()
   val parts = mutableListOf<RuleSummaryPart>()
@@ -125,6 +137,11 @@ internal fun ruleSummaryParts(policy: SourceProfilePolicyDto?): List<RuleSummary
   val bytes = constraints.bytes
   if (bytes != null && (bytes.min != null || bytes.max != null)) {
     parts += RuleSummaryPart.Size(bytes.min, bytes.max)
+  }
+  val subtitles = constraints.subtitles
+  val subtitleCode = subtitles?.preferred?.code?.takeUnless { it.isBlank() }
+  if (subtitles != null && subtitles.mode != "off" && subtitleCode != null) {
+    parts += RuleSummaryPart.Subtitles(subtitleCode)
   }
   return parts
 }

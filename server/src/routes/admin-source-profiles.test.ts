@@ -413,6 +413,32 @@ test("an administrator creates a rules profile that members can see and bulk-adm
   );
 });
 
+test("a coded subtitle rule survives materialization over the viewer preference", async (t) => {
+  const parameters = ruleParameters();
+  parameters.subtitleLanguage = "cs";
+  const harness = await mount({
+    variants: [variant({ parameters })],
+    addons: [addon(ADDON, { allowedUsers: [MEMBER] })],
+    downloads: true,
+  });
+  t.after(harness.close);
+  await harness.store.update((state) => {
+    state.userData![MEMBER]!.prefs.subtitleLanguage = "en";
+  });
+
+  const bulk = await api(harness.base, "/api/downloads/bulk", {
+    user: MEMBER,
+    method: "POST",
+    body: {
+      title: "Show",
+      episodes: [{ id: "ep-1", season: 1, episode: 1 }],
+      selection: { profile: { profileId: VARIANT, revision: 1 } },
+    },
+  });
+  assert.equal(bulk.status, 201);
+  assert.equal(harness.pending[0]?.selection?.subtitleLanguage, "cs");
+});
+
 test("invalid create attempts leave the profile catalogue unchanged", async (t) => {
   const harness = await mount({ variants: [variant()] });
   t.after(harness.close);

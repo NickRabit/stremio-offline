@@ -286,6 +286,7 @@ test("the Stage 3 catalogue migrates once to four rule presets", async () => {
           resolution: { min: 480, max: null },
           audio: { mode: "prefer", language: "mine", fallback: null },
           subtitles: "ifAvailable",
+          subtitleLanguage: "mine",
           sizeGb: {
             episode: { min: null, max: null },
             movie: { min: null, max: null },

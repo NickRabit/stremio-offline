@@ -251,6 +251,7 @@
   <string name="rules_summary_any_language">любой язык</string>
   <string name="rules_summary_prefer_language">предпочтение: %1$s</string>
   <string name="rules_summary_only_language">только %1$s</string>
+  <string name="rules_summary_subtitles_language">субтитры: %1$s</string>
   <string name="rules_summary_range_episode">~%1$s–%2$s ГБ на эпизод</string>
   <string name="rules_summary_from_episode">от ~%1$s ГБ на эпизод</string>
   <string name="rules_summary_join">%1$s · %2$s</string>

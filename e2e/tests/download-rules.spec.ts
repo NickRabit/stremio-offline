@@ -155,6 +155,7 @@ test("an administrator creates, lists and deletes a download rule", async ({ pag
   await editor.getByRole("combobox", { name: "Rozlišení do" }).selectOption("480");
   await editor.getByRole("combobox", { name: "Jazyk zvuku" }).selectOption("en");
   await editor.getByRole("combobox", { name: "Záložní jazyk" }).selectOption("cs");
+  await editor.getByRole("combobox", { name: "Jazyk titulků" }).selectOption("cs");
   await editor.getByRole("spinbutton", { name: "Díl od" }).fill("1.2");
   await editor.getByRole("spinbutton", { name: "Díl do" }).fill("4");
   await editor.getByRole("spinbutton", { name: "Film od" }).fill("5");
@@ -164,7 +165,7 @@ test("an administrator creates, lists and deletes a download rule", async ({ pag
 
   const row = page.locator(".source-profile-row", { hasText: RULES_NAME });
   await expect(row).toBeVisible();
-  await expect(row).toContainText("480p · přednost: angličtina · ~1,2–4 GB na díl");
+  await expect(row).toContainText("480p · přednost: angličtina · ~1,2–4 GB na díl · titulky: čeština");
   await row.getByRole("button", { name: "Smazat", exact: true }).click();
   const confirmation = page.getByRole("dialog", { name: "Smazat pravidla stahování" });
   await expect(confirmation).toContainText(RULES_NAME);

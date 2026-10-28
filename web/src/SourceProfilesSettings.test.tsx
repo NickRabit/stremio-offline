@@ -15,7 +15,7 @@ const CUSTOM = "11111111-1111-4111-8111-111111111111";
 const rules = (over: Partial<DownloadRules> = {}): DownloadRules => ({
   addons: { scope: "all", order: "viewer" }, torrents: true,
   resolution: { min: 720, max: 1080 }, audio: { mode: "prefer", language: "mine", fallback: null },
-  subtitles: "ifAvailable", sizeGb: {
+  subtitles: "ifAvailable", subtitleLanguage: "mine", sizeGb: {
     episode: { min: null, max: 4 }, movie: { min: null, max: 15 },
   }, skipCinema: true,
   preference: ["language", "resolutionHigher", "addonOrder", "smaller"], ...over,
@@ -160,12 +160,37 @@ it("maps every editor field to the exact rules body", async () => {
       addons: { scope: { selected: ["first", "second"] }, order: { explicit: ["second", "first"] } },
       torrents: false, resolution: { min: 480, max: 2160 },
       audio: { mode: "prefer", language: "en", fallback: "cs" },
-      subtitles: "required", sizeGb: {
+      subtitles: "required", subtitleLanguage: "mine", sizeGb: {
         episode: { min: 1.2, max: 2.5 }, movie: { min: 5, max: 12 },
       }, skipCinema: false,
       preference: ["resolutionLower", "larger"],
     },
   }]);
+});
+
+it("renders subtitle language, disables it for off and resets it when subtitles are disabled", async () => {
+  await mount([custom]);
+  await clickText("Edit", host.querySelector(`[data-profile-id="${CUSTOM}"]`)!);
+  const language = dialog().querySelector<HTMLSelectElement>('select[aria-label="Subtitle language"]')!;
+  expect(language).not.toBeNull();
+  expect(language.value).toBe("mine");
+  await setSelect("Subtitle language", "cs");
+  expect(language.value).toBe("cs");
+  await setSelect("Subtitles", "off");
+  expect(language.disabled).toBe(true);
+  expect(language.value).toBe("mine");
+});
+
+it("saves a chosen subtitle language", async () => {
+  let patched: DownloadRules | undefined;
+  await mount([custom], (_url, method, body) => {
+    if (method === "PATCH") patched = (body as { rules: DownloadRules }).rules;
+    return undefined;
+  });
+  await clickText("Edit", host.querySelector(`[data-profile-id="${CUSTOM}"]`)!);
+  await setSelect("Subtitle language", "cs");
+  await clickText("Save", dialog());
+  expect(patched?.subtitleLanguage).toBe("cs");
 });
 
 it("switches to any language and keeps the preference order valid", async () => {

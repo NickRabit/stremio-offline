@@ -245,6 +245,7 @@
   <string name="rules_summary_any_language">toute langue</string>
   <string name="rules_summary_prefer_language">préférer : %1$s</string>
   <string name="rules_summary_only_language">uniquement %1$s</string>
+  <string name="rules_summary_subtitles_language">sous-titres : %1$s</string>
   <string name="rules_summary_range_episode">~%1$s–%2$s Go par épisode</string>
   <string name="rules_summary_from_episode">à partir de ~%1$s Go par épisode</string>
   <string name="rules_summary_join">%1$s · %2$s</string>

@@ -190,4 +190,24 @@ class SeriesDownloadTest {
     assertEquals("angličtina", inlineContentLanguageLabel("en", "cs"))
     assertEquals("English", inlineContentLanguageLabel("en", "en"))
   }
+
+  @Test
+  fun `a chosen subtitle language is the last part, mine and off add nothing`() {
+    fun parts(subtitles: String) = ruleSummaryParts(
+      ApiJson.decodeFromString(
+        SourceProfileDto.serializer(),
+        """{"id":"p","policy":{"constraints":{"audio":{"mode":"preferred","preferred":{"preference":"audio"}},""" +
+          """"subtitles":$subtitles}}}""",
+      ).policy,
+    )
+    assertEquals(
+      listOf(RuleSummaryPart.Audio(AudioMode.ANY, null), RuleSummaryPart.Subtitles("cs")),
+      parts("""{"mode":"optional","preferred":{"code":"cs"}}"""),
+    )
+    assertEquals(
+      listOf(RuleSummaryPart.Audio(AudioMode.ANY, null)),
+      parts("""{"mode":"optional","preferred":{"preference":"subtitle"}}"""),
+    )
+    assertEquals(listOf(RuleSummaryPart.Audio(AudioMode.ANY, null)), parts("""{"mode":"off"}"""))
+  }
 }

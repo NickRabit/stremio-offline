@@ -517,6 +517,10 @@ private fun ruleSummary(policy: SourceProfilePolicyDto?, uiLanguage: String?): S
           formatRuleGigabytes(part.minBytes ?: 0L, locale),
         )
       }
+      is RuleSummaryPart.Subtitles -> stringResource(
+        R.string.rules_summary_subtitles_language,
+        inlineContentLanguageLabel(part.language, uiLanguage),
+      )
     }
   }
   var line = texts.first()

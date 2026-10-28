@@ -245,6 +245,7 @@
   <string name="rules_summary_any_language">qualquer idioma</string>
   <string name="rules_summary_prefer_language">priorizar: %1$s</string>
   <string name="rules_summary_only_language">somente %1$s</string>
+  <string name="rules_summary_subtitles_language">legendas: %1$s</string>
   <string name="rules_summary_range_episode">~%1$s–%2$s GB por episódio</string>
   <string name="rules_summary_from_episode">a partir de ~%1$s GB por episódio</string>
   <string name="rules_summary_join">%1$s · %2$s</string>

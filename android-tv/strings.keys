@@ -235,6 +235,7 @@ rules.summary.upToEpisode
 rules.summary.anyLanguage
 rules.summary.preferLanguage
 rules.summary.onlyLanguage
+rules.summary.subtitlesLanguage
 rules.summary.rangeEpisode
 rules.summary.fromEpisode
 rules.summaryJoin
