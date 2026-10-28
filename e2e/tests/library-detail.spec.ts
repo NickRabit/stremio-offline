@@ -286,8 +286,10 @@ for (const [width, height] of [[1440, 900], [390, 844], [844, 390]]) {
     // The button queues the row through the destination its own source projects; the arrow beside
     // it is the one that asks, which is the dialog this journey is about.
     await detail.locator(".library-detail-save .split-button-toggle").click();
+    // The arrow opens the rules dialog for this title; the picked source is its first, selected choice.
     const save = page.getByRole("dialog");
-    await save.getByRole("button", { name: "Do knihovny", exact: true }).click();
+    await expect(save.getByRole("radio", { name: /Vybraný zdroj/ })).toBeChecked();
+    await save.getByRole("button", { name: "Přidat do fronty", exact: true }).click();
     await expect(save).toHaveCount(0);
     expect(downloads).toHaveLength(1);
     expect(downloads[0]).toMatchObject({ sourceId: "local-detail-addon", media: { id: "tt-detail", kind: "movie" } });
