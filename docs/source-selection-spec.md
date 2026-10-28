@@ -488,6 +488,27 @@ copies), Language (audio, subtitles) and an ordered preference list.
   1920x800 film is 1080p. Listing tags such as `1080p` are already classes.
 - Stored v1 rules (`maxSizeGb`, audio without a language) still parse and are normalised to v2,
   so saved profiles, backups and frozen follow and queue snapshots keep working.
+- **Sources** list addon keys, `local` (the local library — playback only; downloads to a
+  library never take a source from it) and `remote:<libraryId>`, both for the selected scope and
+  the custom order. `scope: "all"` admits every available provider in the default order: local,
+  remote libraries by their `order`, then the viewer's addon order.
+
+### One mechanism for downloads and playback
+
+The same rules drive both. Downloads admit the profile for `downloadToLibrary` (addons and remote
+libraries; an existing local copy that meets the rules skips the download). Playback lists admit
+every rules profile for `play` and attach, per listed source, a verdict per profile
+(`rules: { <profileId>: { status, reasons, rank } }`, `server/src/source-rule-verdict.ts`) — the
+same evidence and evaluation, with the size range left out and no probing, so a fact only an
+inspection could establish leaves the source `unverified`. `rank` compares lexicographically across
+the addon, local and remote listings of one title.
+
+Clients offer the rules themselves as sort options (`streamSort` is `rule:<profileId>`,
+`size-desc`, `size-asc` or `addon`; a stored legacy `recommended` reads as the rule it meant), keep
+local copies first and the in-progress source picked, and let Play take the first playable row of
+the active rule. Each account also chooses default rules for manual downloads and for follows
+(Settings → Sources). "To library" saves the selected source; its arrow opens the rules dialog
+for that film or episode, which also offers the selected source.
 
 ## Local libraries
 
@@ -546,7 +567,14 @@ inside `local` stays the library order, then size, exactly as `localCopies` retu
   trigger a redownload loop. An externally owned file is never deleted by follow retention simply
   because it satisfied presence. Do not expose hidden paths, libraries or markers in public DTOs.
 
-## Remote libraries in future downloads (separate delivery stage)
+## Remote libraries in future downloads
+
+Implemented for rule-based downloads: a remote original the owner may copy is a provider-metadata
+candidate (`server/src/source-remote-evidence.ts`; resolution, audio and subtitle languages, size
+and duration from the media server's `MediaStreams`, never probed), ranked with addon candidates
+by the same rule and staged as an ordinary remote copy. External remote subtitles are not copied
+with it yet. The original design notes follow.
+
 
 Discover by the episode's catalogue identity through existing remote matching. That matching is
 exact today (`remoteIdsMatch`: every IMDb, TMDB or TVDB ID present on both sides must agree,
