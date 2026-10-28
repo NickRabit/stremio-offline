@@ -17,6 +17,10 @@ tv.connectTitle
 tv.serverAddress
 tv.serverFound
 tv.signinNote
+tv.localNetworkTitle
+tv.localNetworkText
+tv.localNetworkDenied
+tv.localNetworkAllow
 tv.errUnreachable
 tv.errIncompatible
 tv.errBadCredentials

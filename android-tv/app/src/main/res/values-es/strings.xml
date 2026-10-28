@@ -18,6 +18,10 @@
   <string name="tv_server_address">Dirección del servidor</string>
   <string name="tv_server_found">Stremio Offline %1$s</string>
   <string name="tv_signin_note">Las cuentas y el primer administrador se crean en la interfaz web. La contraseña nunca se guarda en el televisor.</string>
+  <string name="tv_local_network_title">Acceso a la red local</string>
+  <string name="tv_local_network_text">Stremio Offline necesita acceso a la red local para conectar con tu servidor y reproducir contenido multimedia.</string>
+  <string name="tv_local_network_denied">El acceso a la red local está desactivado. Permite Stremio Offline en los ajustes del sistema y vuelve a intentarlo.</string>
+  <string name="tv_local_network_allow">Permitir acceso</string>
   <string name="tv_err_unreachable">El servidor no responde. Comprueba la dirección y que el servidor esté en marcha.</string>
   <string name="tv_err_incompatible">Esta dirección responde, pero no es un servidor de Stremio Offline.</string>
   <string name="tv_err_bad_credentials">Nombre de usuario o contraseña incorrectos.</string>

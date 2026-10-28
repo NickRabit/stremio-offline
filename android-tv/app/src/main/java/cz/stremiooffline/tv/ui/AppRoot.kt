@@ -166,6 +166,14 @@ class SessionViewModel(private val store: SessionStore) : ViewModel() {
 @Composable
 @Suppress("DEPRECATION")
 fun AppRoot() {
+  LocalNetworkAccessGate {
+    AppContent()
+  }
+}
+
+@Composable
+@Suppress("DEPRECATION")
+private fun AppContent() {
   val context = LocalContext.current
   val store = remember { SessionStore(context.applicationContext) }
   val session = viewModel<SessionViewModel>(factory = SessionViewModel.factory(store))

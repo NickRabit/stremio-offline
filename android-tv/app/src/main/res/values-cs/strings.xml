@@ -18,6 +18,10 @@
   <string name="tv_server_address">Adresa serveru</string>
   <string name="tv_server_found">Stremio Offline %1$s</string>
   <string name="tv_signin_note">Účty i prvního správce založíte ve webovém rozhraní. Heslo se v televizi nikdy neukládá.</string>
+  <string name="tv_local_network_title">Přístup k místní síti</string>
+  <string name="tv_local_network_text">Stremio Offline potřebuje přístup k místní síti, aby se připojilo k vašemu serveru a přehrálo média.</string>
+  <string name="tv_local_network_denied">Přístup k místní síti je vypnutý. Povolte Stremio Offline v nastavení systému a zkuste to znovu.</string>
+  <string name="tv_local_network_allow">Povolit přístup</string>
   <string name="tv_err_unreachable">Server neodpovídá. Zkontrolujte adresu a že server běží.</string>
   <string name="tv_err_incompatible">Na této adrese něco odpovídá, ale není to server Stremio Offline.</string>
   <string name="tv_err_bad_credentials">Nesprávné uživatelské jméno nebo heslo.</string>
