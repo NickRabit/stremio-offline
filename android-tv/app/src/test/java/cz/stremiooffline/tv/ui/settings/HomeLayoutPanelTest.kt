@@ -95,9 +95,9 @@ class HomeLayoutPanelTest {
     compose.waitForIdle()
   }
 
-  /** From the Server row the Home row is the seventh; OK opens the panel on its first row. */
+  /** From the Server row the Home row is the eighth; OK opens the panel on its first row. */
   private fun openPanel() {
-    repeat(6) { press(Key.DirectionDown) }
+    repeat(7) { press(Key.DirectionDown) }
     compose.onNodeWithTag(TagSettingsRowHomeLayout).assertIsFocused()
     press(Key.DirectionCenter)
     compose.onNodeWithTag(TagSettingsPanel).assertExists()
@@ -257,7 +257,7 @@ class HomeLayoutPanelTest {
     compose.onNodeWithTag(TagSettingsRowHomeLayout)
       .assertTextContains(context.getString(R.string.tv_home_layout_unavailable), substring = true)
 
-    repeat(6) { press(Key.DirectionDown) }
+    repeat(7) { press(Key.DirectionDown) }
     compose.onNodeWithTag(TagSettingsRowHomeLayout).assertIsFocused()
     press(Key.DirectionCenter)
     compose.onNodeWithTag(TagSettingsPanel).assertDoesNotExist()
@@ -351,7 +351,7 @@ class HomeLayoutPanelTest {
       .assertTextContains("Home layouts are turned off.", substring = true)
 
     api.homeLayoutFailure = null
-    repeat(6) { press(Key.DirectionDown) }
+    repeat(7) { press(Key.DirectionDown) }
     compose.onNodeWithTag(TagSettingsRowHomeLayout).assertIsFocused()
     press(Key.DirectionCenter)
     compose.onNodeWithTag(homeLayoutRowTag("resume")).assertIsFocused()

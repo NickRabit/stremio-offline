@@ -199,6 +199,8 @@
   <string name="settings_ui_language">Jazyk rozhraní</string>
   <string name="settings_audio_language">Jazyk zvuku</string>
   <string name="settings_subtitle_language">Jazyk titulků</string>
+  <string name="settings_stream_sort">Výchozí řazení zdrojů</string>
+  <string name="settings_default_rules_hint">Podle nich se řadí „Doporučené“ a Přehrát vybere první zdroj, který je splňuje.</string>
   <string name="settings_start_view">Úvodní stránka</string>
   <string name="tv_settings_title">Tato televize</string>
   <string name="tv_account">Účet</string>

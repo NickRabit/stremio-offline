@@ -13,6 +13,7 @@ import cz.stremiooffline.tv.data.ClientLogBundleDto
 import cz.stremiooffline.tv.data.HomeLayoutDto
 import cz.stremiooffline.tv.data.LanguageDto
 import cz.stremiooffline.tv.data.SearchStateDto
+import cz.stremiooffline.tv.data.SourceProfileDto
 import cz.stremiooffline.tv.data.TvApi
 import cz.stremiooffline.tv.diagnostics.AppLog
 import kotlinx.coroutines.CancellationException
@@ -24,6 +25,8 @@ data class SettingsState(
   val uiLanguage: String? = null,
   val audioLanguage: String? = null,
   val subtitleLanguage: String? = null,
+  /** Wire value of the account's default source order: `rule:<id>`, a fixed order, or legacy `recommended`. */
+  val streamSort: String? = null,
   val startView: String? = null,
   val serverVersion: String? = null,
   /** The last write that failed; the screen shows it and the row already holds the old value. */
@@ -82,6 +85,10 @@ class SettingsViewModel(
   var languages by mutableStateOf(emptyList<LanguageDto>())
     private set
 
+  /** Rules profiles `GET /api/source-profiles` offers, in the order the source-order picker lists them. */
+  var sourceProfiles by mutableStateOf(emptyList<SourceProfileDto>())
+    private set
+
   var diagnostics by mutableStateOf<DiagnosticsState>(DiagnosticsState.Idle)
     private set
 
@@ -110,11 +117,13 @@ class SettingsViewModel(
     viewModelScope.launch {
       val settings = runCatching { api.settings() }.getOrNull()
       languages = runCatching { api.languages() }.getOrDefault(emptyList())
+      sourceProfiles = runCatching { api.sourceProfiles() }.getOrDefault(emptyList())
       val version = runCatching { api.serverVersion() }.getOrNull()
       state = SettingsState(
         uiLanguage = settings?.uiLanguage,
         audioLanguage = settings?.audioLanguage,
         subtitleLanguage = settings?.subtitleLanguage,
+        streamSort = settings?.streamSort,
         startView = settings?.startView,
         serverVersion = version,
       )
@@ -316,6 +325,19 @@ class SettingsViewModel(
         answer.subtitleLanguage?.let { state = state.copy(subtitleLanguage = it) }
       } catch (error: ApiError) {
         state = state.copy(subtitleLanguage = before, error = error.failure)
+      }
+    }
+  }
+
+  fun setStreamSort(value: String) {
+    val before = state.streamSort
+    state = state.copy(streamSort = value, error = null)
+    viewModelScope.launch {
+      try {
+        val answer = api.updateSettings("streamSort", value)
+        answer.streamSort?.let { state = state.copy(streamSort = it) }
+      } catch (error: ApiError) {
+        state = state.copy(streamSort = before, error = error.failure)
       }
     }
   }

@@ -195,6 +195,8 @@
   <string name="settings_ui_language">Lingua dell\'interfaccia</string>
   <string name="settings_audio_language">Lingua dell\'audio</string>
   <string name="settings_subtitle_language">Lingua dei sottotitoli</string>
+  <string name="settings_stream_sort">Ordine di origine predefinito</string>
+  <string name="settings_default_rules_hint">«Consigliato» ordina le fonti secondo queste regole e Riproduci sceglie la prima che le rispetta.</string>
   <string name="settings_start_view">Pagina iniziale</string>
   <string name="tv_settings_title">Questa TV</string>
   <string name="tv_account">Account</string>

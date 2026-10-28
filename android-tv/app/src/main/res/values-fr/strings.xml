@@ -195,6 +195,8 @@
   <string name="settings_ui_language">Langue de l\'interface</string>
   <string name="settings_audio_language">Langue audio</string>
   <string name="settings_subtitle_language">Langue des sous-titres</string>
+  <string name="settings_stream_sort">Ordre source par défaut</string>
+  <string name="settings_default_rules_hint">« Recommandé » trie les sources selon ces règles, et Lire choisit la première qui les respecte.</string>
   <string name="settings_start_view">Page de démarrage</string>
   <string name="tv_settings_title">Cette télévision</string>
   <string name="tv_account">Compte</string>
