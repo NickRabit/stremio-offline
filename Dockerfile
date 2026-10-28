@@ -28,7 +28,13 @@ COPY package.json package-lock.json ./
 COPY packages/source-selection/package.json packages/source-selection/package.json
 COPY server/package.json server/package.json
 COPY web/package.json web/package.json
-RUN npm ci --omit=dev --workspace=@stremio-offline/server && npm cache clean --force
+# The server runs through node directly. Keeping npm, npx, Corepack and Yarn in
+# the production image only adds tooling dependencies and their vulnerabilities.
+RUN npm ci --omit=dev --workspace=@stremio-offline/server \
+    && npm cache clean --force \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+        /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
+        /usr/local/bin/yarn /usr/local/bin/yarnpkg /opt/yarn-*
 COPY --from=build /app/packages/source-selection/dist /app/packages/source-selection/dist
 COPY --from=build /app/server/dist /app/server/dist
 COPY --from=build /app/web/dist /app/web
