@@ -651,6 +651,20 @@ class StreamsTest {
   }
 
   @Test
+  fun `catalogSourceList under a rule orders origins among themselves and keeps them first`() {
+    val originWorse = remote("own-worse", "rlibA", "iA", "Own worse", verdict("breaks", listOf(0.0, 2.0, 360.0), listOf("resolutionLow")))
+    val originBest = remote("own-best", "rlibA", "iA", "Own best", verdict("meets", listOf(0.0, 0.0, 1080.0)))
+    val addon = stream(sourceId = "addon", name = "Addon", addonName = "Luna", rule = verdict("meets", listOf(0.0, 0.0, 720.0)))
+    val rows = Streams.catalogSourceList(
+      local = emptyList(),
+      addon = listOf(addon),
+      filters = filters(sort = StreamSort.of("rule:p1")),
+      origins = Streams.Origins(rows = listOf(originWorse, originBest), libraryId = "rlibA", label = "jellyfin · Film"),
+    )
+    assertEquals(listOf("own-best", "own-worse", "addon"), rows.map { it.sourceId })
+  }
+
+  @Test
   fun `a breaking local copy sorts below a meeting addon under an explicit rule and above it under the viewer order`() {
     val origin = remote("own", "rlibA", "iA", "Own", verdict("meets", listOf(0.0, 0.0, 9.0)))
     val breakingLocal = stream(

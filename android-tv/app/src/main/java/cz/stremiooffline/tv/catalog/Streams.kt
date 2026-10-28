@@ -336,7 +336,7 @@ object Streams {
    * puts a local copy first only when the rule uses the viewer's order, so this list does not
    * prepend one. Without a verdict the copies still lead, then the remote versions, then the
    * addon rows. Size and addon sorts are unchanged. [origins], the item's own versions, stay
-   * ahead of that merge under a rule sort.
+   * ahead of that merge under a rule sort and use the same rank order among themselves.
    *
    * [local] is the copies the caller did not already hand over as [origins], so a file the detail
    * holds and the viewer's library both know is one row of the list, not two.
@@ -367,11 +367,14 @@ object Streams {
     filters.sort.isRuleSort -> {
       val profileId = ruleIdOf(filters.sort)
       val merged = local + remote.flatMap { it.streams } + addon
-      origins.rows + if (profileId != null && merged.any { it.rules[profileId] != null }) {
-        merged.sortedWith { a, b -> compareRuleRank(a, b, profileId) }
-      } else {
-        merged
+      val byRule = { rows: List<StreamDto> ->
+        if (profileId != null && rows.any { it.rules[profileId] != null }) {
+          rows.sortedWith { a, b -> compareRuleRank(a, b, profileId) }
+        } else {
+          rows
+        }
       }
+      byRule(origins.rows) + byRule(merged)
     }
     else -> arrangeStreams(
       origins.rows + remote.flatMap { it.streams } + addon + local,

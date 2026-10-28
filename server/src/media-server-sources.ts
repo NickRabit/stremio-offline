@@ -197,12 +197,35 @@ export class MediaServerSources {
     return listed;
   }
 
+  private listedWithRules(
+    results: readonly MediaServerItemVersions[],
+    owner: ResourceOwner,
+    mediaKind: "episode" | "movie",
+    secretStamp: string,
+  ): PublicStream[] {
+    const sealed = results.flatMap((result) => this.seal(result, owner, secretStamp));
+    const listed = this.listed(sealed, owner);
+    const snapshots = ruleSnapshots({
+      user: this.currentUser(owner.userId),
+      store: this.store,
+      preferences: this.store.prefs(owner.userId),
+      mediaKind,
+    });
+    if (!snapshots.length) return listed;
+    const verdicts = ruleVerdictsForProfiles(snapshots, sealed.map((entry) => entry.candidate));
+    return listed.map((stream, index) => {
+      const verdict = verdicts.get(sealed[index]!.candidate.sourceId);
+      return verdict === undefined ? stream : { ...stream, rules: verdict };
+    });
+  }
+
   /** The verified versions of one item as public sources. Each is sealed with the full
    *  identity and the owner stamp, so no later caller can invent provenance. */
   async list(authority: MediaServerAuthority, owner: ResourceOwner, libraryId: string, itemId: string, signal?: AbortSignal): Promise<PublicStream[]> {
     const result = await this.manager.itemVersions(authority, libraryId, itemId, signal);
     const secretStamp = this.ownerStamp(owner, authority);
-    return this.listed(this.seal(result, owner, secretStamp), owner);
+    const mediaKind = result.item.type === "episode" ? "episode" : "movie";
+    return this.listedWithRules([result], owner, mediaKind, secretStamp);
   }
 
   /** The verified sources behind one exact external id, each candidate re-read and re-matched
@@ -219,20 +242,7 @@ export class MediaServerSources {
     }
     const results = await this.manager.matchedVersions(authority, libraryId, type, targetId, signal, nameHint);
     const secretStamp = this.ownerStamp(owner, authority);
-    const sealed = results.flatMap((result) => this.seal(result, owner, secretStamp));
-    const listed = this.listed(sealed, owner);
-    const snapshots = ruleSnapshots({
-      user: this.currentUser(owner.userId),
-      store: this.store,
-      preferences: this.store.prefs(owner.userId),
-      mediaKind: type === "series" ? "episode" : "movie",
-    });
-    if (!snapshots.length) return listed;
-    const verdicts = ruleVerdictsForProfiles(snapshots, sealed.map((entry) => entry.candidate));
-    return listed.map((stream, index) => {
-      const verdict = verdicts.get(sealed[index]!.candidate.sourceId);
-      return verdict === undefined ? stream : { ...stream, rules: verdict };
-    });
+    return this.listedWithRules(results, owner, type === "series" ? "episode" : "movie", secretStamp);
   }
 
   async downloadCandidates(input: {
