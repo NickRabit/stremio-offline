@@ -150,6 +150,34 @@ test("a cached torrent is unrestricted without waiting", async () => {
   assert.equal(calls.includes("POST /torrents/selectFiles/rd1"), false);
 });
 
+test("the first-status callback observes the initial read before file selection", async () => {
+  let reads = 0;
+  const statuses: string[] = [];
+  const fetchImpl: FetchLike = async (url, init) => {
+    const path = String(url).slice(RD_API.length);
+    if (path === "/torrents/addMagnet") return json({ id: "rd1" }, 201);
+    if (path === "/torrents/selectFiles/rd1") return new Response(null, { status: 204 });
+    if (path === "/torrents/info/rd1") {
+      reads += 1;
+      return reads === 1
+        ? json({ id: "rd1", status: "waiting_files_selection", files, links: [] })
+        : json({ id: "rd1", status: "downloaded", files, links: ["https://real-debrid.com/d/ABC"] });
+    }
+    if (path === "/unrestrict/link") {
+      return json({ download: "https://cdn.example/file.mkv", filename: "Movie.mkv" });
+    }
+    return json({ error: "unknown" }, 404);
+  };
+
+  const result = await advanceTorrent("token", HASH, 1, undefined, fetchImpl, {
+    onFirstStatus: (status) => { statuses.push(status); },
+  });
+
+  assert.equal(result.ready, true);
+  assert.deepEqual(statuses, ["waiting_files_selection"]);
+  assert.equal(reads, 2);
+});
+
 test("advanceTorrent exact misses do not select or unrestrict another file", async () => {
   const waiting = fakeRd({ status: "waiting_files_selection" });
   await assert.rejects(

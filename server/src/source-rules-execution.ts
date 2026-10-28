@@ -31,6 +31,7 @@ export interface VerifyRulesAddonStreamsInput {
   readonly shouldContinue: () => boolean;
   readonly scopeStamp: unknown;
   readonly hasRealDebrid: boolean;
+  readonly debridReady?: (infoHash: string) => boolean;
   readonly remoteCandidates?: readonly RemoteRulesCandidate[];
   readonly remoteTemporaryFailures?: number;
   readonly cursor?: RulesContinuationCursorV1;
@@ -234,6 +235,7 @@ export async function verifyRulesAddonStreams(
       available: true,
       ...(input.titleLanguage === undefined ? {} : { titleLanguage: input.titleLanguage }),
       externalSubtitles: input.externalSubtitles,
+      ...(input.debridReady === undefined ? {} : { debridReady: input.debridReady }),
     });
     if (!candidate) continue;
     const key = candidate.continuationIdentity?.key ?? candidate.sourceId;

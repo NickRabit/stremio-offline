@@ -14,6 +14,7 @@ export interface ListedAddonSourceEvidenceInput {
   readonly available: boolean;
   readonly titleLanguage?: string;
   readonly externalSubtitles?: readonly SubtitleItem[];
+  readonly debridReady?: (infoHash: string) => boolean;
 }
 
 type SourceIdentity =
@@ -310,6 +311,9 @@ export function listedAddonSourceEvidence(
     externalSubtitles: subtitleLanguages(input.stream, input.externalSubtitles ?? []),
     bytes: unknown(),
     durationSeconds: unknown(),
+    debridReady: identity.kind === "torrent" && input.debridReady?.(identity.infoHash)
+      ? { evidence: "listed", value: true }
+      : unknown(),
     heightPixels: heightPixels === undefined
       ? unknown()
       : { evidence: "listed", value: heightPixels },

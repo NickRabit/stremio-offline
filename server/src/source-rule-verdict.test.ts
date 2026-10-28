@@ -55,11 +55,13 @@ const addon = (
   stream: StreamItem,
   providerKey = "addon:a",
   providerResponseIndex = 0,
+  debridReady?: (infoHash: string) => boolean,
 ): SourceEvidenceCandidateV1 => listedAddonSourceEvidence({
   providerKey,
   stream,
   providerResponseIndex,
   available: true,
+  ...(debridReady === undefined ? {} : { debridReady }),
 })!;
 
 const compareRanks = (left: number[], right: number[]): number => {
@@ -235,8 +237,8 @@ test("provider rank is local, then remote, then addon and ranks are padded equal
   assert.equal(localVerdict.rank[0], 0);
   assert.equal(remoteVerdict.rank[0], 1);
   assert.equal(addonVerdict.rank[0], 1);
-  assert.ok(localVerdict.rank[4]! < remoteVerdict.rank[4]!);
-  assert.ok(remoteVerdict.rank[4]! < addonVerdict.rank[4]!);
+  assert.ok(localVerdict.rank.at(-1)! < remoteVerdict.rank.at(-1)!);
+  assert.ok(remoteVerdict.rank.at(-1)! < addonVerdict.rank.at(-1)!);
 });
 
 test("an explicit mixed provider order determines the verdict ranks", () => {
@@ -259,10 +261,10 @@ test("an explicit mixed provider order determines the verdict ranks", () => {
   assert.equal(verdicts.get(local.sourceId)!.rank[0], 0);
   assert.equal(verdicts.get(remoteCandidate.sourceId)!.rank[0], 0);
   assert.equal(verdicts.get(addonCandidate.sourceId)!.rank[0], 0);
-  assert.ok(verdicts.get(addonCandidate.sourceId)!.rank[4]!
-    < verdicts.get(remoteCandidate.sourceId)!.rank[4]!);
-  assert.ok(verdicts.get(remoteCandidate.sourceId)!.rank[4]!
-    < verdicts.get(local.sourceId)!.rank[4]!);
+  assert.ok(verdicts.get(addonCandidate.sourceId)!.rank.at(-1)!
+    < verdicts.get(remoteCandidate.sourceId)!.rank.at(-1)!);
+  assert.ok(verdicts.get(remoteCandidate.sourceId)!.rank.at(-1)!
+    < verdicts.get(local.sourceId)!.rank.at(-1)!);
 });
 
 test("viewer provider order keeps a breaking local copy first while an explicit order ranks it last", () => {
@@ -317,6 +319,50 @@ test("equal sources receive distinct tie ordinals in compareFinalTie order", () 
     .map((candidate) => candidate.sourceId);
   assert.deepEqual(ranked, finalTieOrder);
   assert.deepEqual(ranked.map((sourceId) => verdicts.get(sourceId)!.rank.at(-1)), [0, 1, 2]);
+});
+
+test("a remembered-ready torrent wins an otherwise equal playback tie", () => {
+  const unreadyHash = "e".repeat(40);
+  const readyHash = "f".repeat(40);
+  const unready = addon("unready", {
+    infoHash: unreadyHash,
+    fileIdx: 1,
+    name: "Czech 1080p",
+  });
+  const remembered = addon("remembered", {
+    infoHash: readyHash,
+    fileIdx: 1,
+    name: "Czech 1080p",
+  }, "addon:a", 0, (hash) => hash === readyHash);
+  assert.deepEqual(remembered.facts.debridReady, { evidence: "listed", value: true });
+
+  const verdicts = ruleVerdicts(snapshot(rule({ preference: ["language"] })), [unready, remembered]);
+  assert.ok(compareRanks(
+    verdicts.get(remembered.sourceId)!.rank,
+    verdicts.get(unready.sourceId)!.rank,
+  ) < 0);
+  assert.equal(verdicts.get(remembered.sourceId)!.rank.length, verdicts.get(unready.sourceId)!.rank.length);
+});
+
+test("remembered readiness does not beat a higher-resolution torrent in playback", () => {
+  const readyHash = "1".repeat(40);
+  const low = addon("low", {
+    infoHash: readyHash,
+    fileIdx: 1,
+    name: "Czech 720p",
+  }, "addon:a", 0, (hash) => hash === readyHash);
+  const high = addon("high", {
+    infoHash: "2".repeat(40),
+    fileIdx: 1,
+    name: "Czech 1080p",
+  }, "addon:a", 0);
+  assert.deepEqual(low.facts.debridReady, { evidence: "listed", value: true });
+
+  const verdicts = ruleVerdicts(snapshot(rule({ preference: ["resolutionHigher"] })), [low, high]);
+  assert.ok(compareRanks(
+    verdicts.get(high.sourceId)!.rank,
+    verdicts.get(low.sourceId)!.rank,
+  ) < 0);
 });
 
 test("a local file name is listed language evidence", () => {

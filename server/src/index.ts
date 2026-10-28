@@ -38,6 +38,7 @@ import { Store, type State, type UserPrefs, type WatchlistEntry, type StoredProg
 import { emptyUserData, findUserById, forEachUserData, type UserData, type UserRecord } from "./users.js";
 import type { ProgressSeries } from "./progress-series.js";
 import { advanceTorrent } from "./debrid.js";
+import { DebridReadyStore } from "./debrid-ready.js";
 import { tmdbGallery, tmdbMeta, tmdbMovieReleases, tmdbSeasonAirDates, type TmdbConfig } from "./tmdb.js";
 import { createLibraryCandidates } from "./library-candidates.js";
 import { ExternalIdStore } from "./external-ids.js";
@@ -137,6 +138,8 @@ const app = express(); const store = new Store(DATA_DIR, DOWNLOAD_DIR);
 const metaStore = new LibraryMetaStore(DATA_DIR);
 /** The Wikidata ids behind the site links, one answer per title and kept on disk. */
 const externalIds = new ExternalIdStore(DATA_DIR);
+/** Torrent hashes Real-Debrid answered as downloaded on their first status read. */
+const debridReady = new DebridReadyStore(DATA_DIR);
 /** The series each account follows, kept outside the personal state so it survives it. */
 const followStore = new FollowStore(DATA_DIR);
 /** When this app first met each library file, so "Recently added" is not the file's own date. */
@@ -172,6 +175,7 @@ await store.load();
 await mediaServers.initialize();
 await metaStore.load();
 await externalIds.load();
+await debridReady.load();
 await followStore.load(store.sourceProfiles());
 await seen.load();
 if (libraryMigration.migrated) log("INFO", "State migrated to libraries", { libraryId: libraryMigration.libraryId, paths: libraryMigration.paths, artwork: libraryMigration.artwork });
@@ -367,6 +371,7 @@ const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () =
       existingLocalCopyDeps(),
     ),
   remoteDownload: remoteDownloadBackend,
+  rememberDebridReady: (infoHash) => debridReady.remember(infoHash),
   ownerSeesLibrary: (ownerUserId, libraryId) => {
     const owner = ownerUserId ? findUserById(store.users(), ownerUserId) : undefined;
     const library = store.libraries().find((item) => item.id === libraryId);
@@ -436,6 +441,7 @@ const queueResolverDeps: SourceResolverDeps = {
   addons: () => store.addons(),
   prefs: (ownerUserId) => store.prefs(ownerUserId),
   hasRealDebrid: () => Boolean(store.settings().realDebridToken),
+  debridReady: (infoHash) => debridReady.has(infoHash),
   serverReady,
   listStreams: (addons, type, id) => streamCache.list(addons, type, id),
   listSubtitles: (addons, type, id, signal) => subtitles(addons, type, id, false, signal),
@@ -1286,7 +1292,8 @@ registerCatalogRoutes(app, {
   // name the episode a bound file holds.
   libraryUnits: () => libraryUnits({ stale: true }),
   ownRecord: (relative, records) => ownRecord(relative, records),
-  metaStore, externalIds, subtitleDelay, mediaSources: mediaServerSources,
+  metaStore, externalIds, debridReady: (infoHash) => debridReady.has(infoHash),
+  subtitleDelay, mediaSources: mediaServerSources,
 });
 /** `stale` is for a caller that only renders what it gets: it may be answered with the last
  *  walk while the next one runs. Anything that acts on the tree asks for a current one. */
@@ -2459,7 +2466,7 @@ queue.setDebrid({
     input.fileIdx,
     input.torrentId,
     undefined,
-    { exactFile: input.exactFile },
+    { exactFile: input.exactFile, onFirstStatus: input.onFirstStatus },
   ),
 });
 await stats.load();

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  compareDebridReady,
   compareFinalTie,
   evaluateSourceCandidate,
   rankingBytes,
@@ -353,6 +354,8 @@ const comparePreference = (
     }
     if (comparison) return comparison;
   }
+  const readiness = compareDebridReady(left.candidate, right.candidate);
+  if (readiness) return readiness;
   const tie = compareFinalTie(snapshot, eligibleShell(left), eligibleShell(right));
   if (tie) return tie;
   return left.responseOrder - right.responseOrder;

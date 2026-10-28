@@ -214,6 +214,7 @@ export type DebridAdvance =
 
 export interface AdvanceTorrentOptions {
   exactFile?: boolean;
+  onFirstStatus?: (status: string) => void | Promise<void>;
 }
 
 export async function advanceTorrent(
@@ -228,6 +229,7 @@ export async function advanceTorrent(
   if (!id) id = await addMagnet(token, magnetFromHash(infoHash), fetchImpl);
 
   let info = await torrentInfo(token, id, fetchImpl);
+  await options.onFirstStatus?.(info.status);
   if (FAILED.has(info.status)) throw new DebridError("Real-Debrid torrent selhal.", 400, info.status);
 
   // Real-Debrid accepts a file selection only once it has pulled the magnet's

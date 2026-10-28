@@ -24,6 +24,7 @@ export interface VerifyTravelAddonStreamsInput {
   readonly inspect: (stream: StreamItem) => Promise<MediaInfo | undefined>;
   readonly shouldContinue: () => boolean;
   readonly scopeStamp: unknown;
+  readonly debridReady?: (infoHash: string) => boolean;
   readonly cursor?: TravelContinuationCursorV1;
   readonly tried?: readonly string[];
 }
@@ -93,6 +94,7 @@ export async function verifyTravelAddonStreams(
       available: true,
       ...(input.titleLanguage === undefined ? {} : { titleLanguage: input.titleLanguage }),
       externalSubtitles: input.externalSubtitles,
+      ...(input.debridReady === undefined ? {} : { debridReady: input.debridReady }),
     });
     if (candidate) prepared.push({ candidate, stream });
   }

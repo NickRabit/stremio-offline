@@ -319,7 +319,13 @@ export type RulesProfileResolver = (
 ) => Promise<RulesProfileResolution>;
 export interface DebridEngine {
   configured: () => boolean;
-  advance: (input: { infoHash: string; fileIdx?: number; torrentId?: string; exactFile?: boolean }) => Promise<DebridAdvance>;
+  advance: (input: {
+    infoHash: string;
+    fileIdx?: number;
+    torrentId?: string;
+    exactFile?: boolean;
+    onFirstStatus?: (status: string) => void | Promise<void>;
+  }) => Promise<DebridAdvance>;
 }
 
 /** The backend a queued remote copy runs on. It is the only way such a job may open bytes or
@@ -381,6 +387,7 @@ export interface QueueHooks {
   remoteRevalidateTimeoutMs?: number;
   retryDelay?: (retryCount: number, retryAfterMs?: number) => number;
   debrid?: DebridEngine;
+  rememberDebridReady?: (infoHash: string) => void | Promise<void>;
   debridPollMs?: number;
   debridRetryMs?: number;
   debridTimeoutMs?: number;
@@ -649,6 +656,7 @@ export class DownloadQueue {
   private readonly segments: () => number;
   private readonly retryDelay: (retryCount: number, retryAfterMs?: number) => number;
   private debrid?: DebridEngine;
+  private readonly rememberDebridReady?: QueueHooks["rememberDebridReady"];
   private readonly debridPollMs: number;
   private readonly debridRetryMs: number;
   private readonly debridTimeoutMs: number;
@@ -695,6 +703,7 @@ export class DownloadQueue {
     this.segments = hooks.segments ?? (() => 1);
     this.retryDelay = hooks.retryDelay ?? retryDelayMs;
     this.debrid = hooks.debrid;
+    this.rememberDebridReady = hooks.rememberDebridReady;
     this.debridPollMs = hooks.debridPollMs ?? 15_000;
     this.debridRetryMs = hooks.debridRetryMs ?? 30_000;
     this.debridTimeoutMs = hooks.debridTimeoutMs ?? 72 * 60 * 60_000;
@@ -1715,11 +1724,26 @@ export class DownloadQueue {
         return;
       }
       const exactFile = isExecutableDownloadSnapshot(job.sourceAdmission) && typeof job.stream?.fileIdx === "number";
+      const firstStatusRead = job.debrid?.status === undefined;
+      const remember = this.rememberDebridReady;
       const result = await this.debrid.advance({
         infoHash,
         fileIdx: job.stream?.fileIdx,
         torrentId: job.debrid?.torrentId,
         ...(exactFile ? { exactFile: true } : {}),
+        ...(!firstStatusRead || remember === undefined ? {} : {
+          onFirstStatus: async (status: string) => {
+            if (status !== "downloaded") return;
+            try {
+              await remember(infoHash);
+            } catch (error) {
+              log("WARN", "The Real-Debrid readiness could not be remembered", {
+                id: job.id,
+                reason: error instanceof Error ? error.message : String(error),
+              });
+            }
+          },
+        }),
       });
       if (!await this.debridMayContinue(job)) return;
       job.debrid = { torrentId: result.torrentId, progress: result.ready ? 100 : result.progress, status: result.ready ? "downloaded" : result.status };

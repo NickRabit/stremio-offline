@@ -259,6 +259,8 @@ const rankFor = (
       }
     }
   }
+  rank.push(candidate.sourceKind !== "torrent"
+    || (candidate.facts.debridReady.evidence !== "unknown" && candidate.facts.debridReady.value) ? 0 : 1);
   rank.push(tie);
   return rank;
 };
